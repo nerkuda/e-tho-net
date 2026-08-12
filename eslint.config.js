@@ -71,5 +71,9 @@ module.exports = tseslint.config(
         Buffer: 'readonly',
       },
     },
+    rules: {
+      // CommonJS legitimately uses require().
+      '@typescript-eslint/no-require-imports': 'off',
+    },
   },
 );

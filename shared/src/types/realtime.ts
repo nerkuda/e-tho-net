@@ -21,15 +21,8 @@ import type { Link, LinkUpdateInput } from './link.js';
 import type { LinkType } from './link-type.js';
 import type { Comment } from './comment.js';
 import type { Attachment } from './attachment.js';
-import type {
-  Thought,
-  ThoughtUpdateInput,
-} from './thought.js';
-import type {
-  PropertyDefinition,
-  PropertyValueValue,
-  ThoughtType,
-} from './thought-type.js';
+import type { Thought, ThoughtUpdateInput } from './thought.js';
+import type { PropertyDefinition, PropertyValueValue, ThoughtType } from './thought-type.js';
 
 // ---------------------------------------------------------------------------
 // Envelope
@@ -383,18 +376,15 @@ export const REALTIME_EVENT_AUDIENCE = {
 
 /** Messages a client may send over the WebSocket connection. */
 export type RealtimeClientMessage =
-  | { type: 'hello'; client_id: string }
-  | { type: 'resume'; last_seq: number }
-  | { type: 'ping' };
+  { type: 'hello'; client_id: string } | { type: 'resume'; last_seq: number } | { type: 'ping' };
 
 /** Non-event frames the server may send to a client. */
 export type RealtimeServerControlMessage =
-  | { type: 'pong' }
-  | { type: 'resume.stale'; last_seq: number };
+  { type: 'pong' } | { type: 'resume.stale'; last_seq: number };
 
 /** WebSocket close codes used by the gateway (04-realtime.md §2). */
 export const REALTIME_CLOSE_CODES = {
   UNAUTHORIZED: 4401,
   NOT_FOUND: 4404,
 } as const satisfies Record<string, number>;
-export type RealtimeCloseCode = (typeof REALTIME_CLOSE_CODES)[number];
+export type RealtimeCloseCode = (typeof REALTIME_CLOSE_CODES)[keyof typeof REALTIME_CLOSE_CODES];

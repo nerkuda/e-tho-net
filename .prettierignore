@@ -22,3 +22,8 @@ package-lock.json
 # Test / coverage
 coverage/
 .nyc_output/
+
+# Documentation (Markdown tables, ASCII-art, code blocks must not be reformatted)
+docs/
+*.md
+

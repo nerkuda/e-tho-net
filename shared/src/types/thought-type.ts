@@ -5,11 +5,7 @@
  * docs/03-server-api.md §8–9. SQLite 0/1 INTEGER columns surface as `boolean`.
  */
 
-import type {
-  IconKind,
-  PropertyValueType,
-  TypeOwnerType,
-} from '../enums.js';
+import type { IconKind, PropertyValueType, TypeOwnerType } from '../enums.js';
 
 /** User-defined thought type (02-data-model.md §3.3). */
 export interface ThoughtType {

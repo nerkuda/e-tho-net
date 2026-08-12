@@ -58,12 +58,7 @@ export class EtnError extends Error {
   public readonly details?: unknown;
   public readonly requestId?: string;
 
-  constructor(
-    code: EtnErrorCode,
-    message: string,
-    details?: unknown,
-    requestId?: string,
-  ) {
+  constructor(code: EtnErrorCode, message: string, details?: unknown, requestId?: string) {
     super(message);
     this.name = 'EtnError';
     this.code = code;
