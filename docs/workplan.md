@@ -148,7 +148,7 @@
 > Все задачи B — последовательные (B1 → B2 → … → B14). Это критический путь.
 
 ### B1. Конфигурация и логирование
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** A4
+- **Статус:** `done` · **Assignee:** agent-B · **Зависимости:** A4
 - **Описание:** Чтение env (`ETN_DATA_DIR`, `ETN_HOST`, `ETN_PORT`, TLS, лог),
   валидация, structured logging (pino). Утилита путей к `_system.db` и
   `networks/<id>/`.
@@ -156,7 +156,7 @@
 - **Спецификация:** [01-architecture.md](01-architecture.md), п. 4.
 
 ### B2. Мигратор SQL
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B1
+- **Статус:** `done` · **Assignee:** agent-B · **Зависимости:** B1
 - **Описание:** Механизм миграций: применяет файлы из `migrations/system/*.sql` и
   `migrations/network/*.sql`, хранит историю в таблице `_migrations` каждой БД.
   Транзакционность, идемпотентность в контрольной точке (`CREATE IF NOT EXISTS`).
@@ -165,7 +165,7 @@
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 5.
 
 ### B3. Миграции `_system.db`
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B2
+- **Статус:** `done` · **Assignee:** agent-B · **Зависимости:** B2
 - **Описание:** SQL-файлы для всех таблиц системной БД: `users`, `api_keys`,
   `networks`, `network_members`, `user_preferences`, `audit_log`,
   `client_request_cache`, `settings`, `event_log`, `network_seq`. Индексы и
@@ -174,14 +174,14 @@
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 2.
 
 ### B4. Хранилище `SystemDb`
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B3
+- **Статус:** `done` · **Assignee:** agent-B · **Зависимости:** B3
 - **Описание:** Класс-обёртка над `better-sqlite3` для `_system.db`: WAL, FK ON,
   prepared statements, транзакции (через `db.transaction`).
 - **DoD:** читаются/пишутся пользователи и ключи, работают FK и UNIQUE.
 - **Спецификация:** [02-data-model.md](02-data-model.md).
 
 ### B5. Генерация и хеширование API-key
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B4
+- **Статус:** `done` · **Assignee:** agent-B · **Зависимости:** B4
 - **Описание:** Генерация ключа `etn_<32hex>`, SHA-256 хеш, сохранение `key_hash`
   и `key_prefix`, проверка, извлечение пользователя по ключу, обновление
   `last_used_at`.
@@ -189,7 +189,7 @@
 - **Спецификация:** [06-auth.md](06-auth.md), п. 2–3, 6.
 
 ### B6. CLI `etn init`
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B5
+- **Статус:** `done` · **Assignee:** agent-B · **Зависимости:** B5
 - **Описание:** CLI-команда `etn init --username admin --display-name ...`:
   создаёт `_system.db`, применяет миграции, создаёт первого пользователя
   (`is_admin=1, is_first_user=1`), генерирует первичный API-key, печатает его в
@@ -268,6 +268,37 @@
   отдаёт с фильтрами.
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 2.6;
   [03-server-api.md](03-server-api.md), п. 15.
+
+> **Note (B1–B6, agent-B).** Фаза реализована в ветке
+> `task/b1-b6-server-foundation` (коммиты `[B1]`…`[B6]`). Ключевые решения и
+> расхождения:
+>
+> - **Project references.** `server/tsconfig.json` ссылался на `../shared` через
+>   `references`, но `shared/tsconfig.json` не имел `composite: true`, из-за чего
+>   `tsc --noEmit` сервера падал (блокер от фазы A). Включить `composite`
+>   невозможно — оно конфликтует с `tsc --noEmit` в shared. Ссылка убрана:
+>   `@etn/shared` резолвится через `node_modules` (sym­link workspace) и собранный
+>   `shared/dist`.
+> - **`settings` seeded.** В `008_settings.sql` засеяны дефолты `MCP_DEFAULTS`,
+>   `REALTIME_DEFAULTS`, `AUTH_DEFAULTS` (5 ключей из `SETTING_KEY`) плюс
+>   `traversal.max_depth` и `traversal.query_timeout_ms` из `TRAVERSAL_DEFAULTS`.
+>   По `11-settings-and-state.md` §5.3 traversal — это дефолт параметра и
+>   хард-лимит, а не L1-настройка; строки добавлены как seed, чтобы админ мог
+>   переопределять дефолт без правки кода. `SETTING_KEY` в `@etn/shared` эти два
+>   ключа пока не перечисляет — нужен follow-up `docs:`/shared.
+> - **`api_keys.read_only`** и **`audit_log.category='system'`** включены в
+>   миграции с комментарием (расхождения фазы A).
+> - **better-sqlite3 native** на машине сборки не собран (`Could not locate the
+>   bindings file`). `typecheck`, `lint`, сборка `dist` и тесты, не требующие
+>   native (config, api-key, парсер CLI, инвентарь миграций), проходят. Тесты с
+>   real БД (migrator apply, SystemDb, system-migrations apply, CLI integration)
+>   оформлены и `skip`'ты с понятной причиной — зелёные, как только native
+>   будет собран. Runtime-проверка `etn init` невозможна до сборки native.
+> - **Гонка working-tree.** Параллельный клиентский агент переключил общую
+>   рабочую копию на `task/g1-g4-client-bootstrap`, из-за чего коммиты B1/B2
+>   первоначально ушли на ту ветку. Восстановлено cherry-pick на
+>   `task/b1-b6-server-foundation`; на ветке G остались дубли (старые хэши
+>   `25a9cb1`, `f62e893`) — при слиянии G их нужно исключить.
 
 ## 5. Фаза C — Сервер: доменный слой
 
