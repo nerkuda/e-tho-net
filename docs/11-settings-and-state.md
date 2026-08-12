@@ -1,0 +1,456 @@
+# 11. Настройки, состояние клиентов, идентификация и обход графа
+
+> Документ систематизирует ответы на четыре инженерных вопроса:
+> 1. Идентификация клиентов в WebSocket.
+> 2. Состав и уровни настроек (что где хранится).
+> 3. Хранение порядка мыслей per-user/per-focus.
+> 4. Защита от зацикливания при обходе графа.
+>
+> Является **авторитетным** источником по этим темам; остальные документы
+> ссылаются сюда и считаются производными.
+
+## 1. Идентификация клиентов
+
+### 1.1. Client-Id
+
+Каждая **установка** клиента (экземпляр приложения на конкретном компьютере)
+имеет уникальный `Client-Id` — UUID v4.
+
+- Генерируется клиентом **один раз** при первом запуске и хранится в локальном
+  SQLite (`client_meta.client_id`), не связан с user_id и не связан с API-key.
+- Один пользователь может иметь несколько `Client-Id` — по числу установок
+  (компьютеров, профилей ОС, portable-сборок).
+- `Client-Id` передаётся серверу в **каждом** запросе:
+  - REST: заголовок `Client-Id: <uuid>`.
+  - WebSocket: query-параметр `?client_id=<uuid>` при подключении, либо первое
+    сообщение `{type:"hello", client_id: ...}` после open.
+- `Client-Id` не авторизует — авторизация только по API-key. Client-Id — это
+  метка установки для маршрутизации событий и подавления эха.
+
+### 1.2. Координаты подключения
+
+WebSocket-подключение идентифицируется на сервере парой
+`(user_id, client_id, network_id)`. Сервер держит реестр активных подключений:
+
+```
+connections: Map<connectionHandle, { user_id, client_id, network_id, socket }>
+byClient:    Map<(user_id, client_id), Set<connectionHandle>>   # обычно 1, но может быть >1
+byNetwork:   Map<network_id, Set<connectionHandle>>
+```
+
+Случай «один пользователь на разных компьютерах» = разные `client_id` = разные
+записи в `byClient`. Каждый независимо получает события и независимо отслеживает
+свой `last_seq`.
+
+### 1.3. last_seq — per client
+
+- Поток событий один на сеть: монотонный `seq` (см. [04-realtime.md](04-realtime.md)).
+- Каждый клиент читает его в **своём темпе** и хранит свою позицию `last_seq`
+  **локально** (`client_meta.last_seq` per `(client_id, network_id)`).
+- Сервер **не обязан** помнить `last_seq` для каждого клиента. Источник истины —
+  сам клиент.
+- При подключении клиент шлёт `resume { last_seq }`; сервер отдаёт все события
+  сети с `seq > last_seq` в пределах окна `event_log`.
+- После обработки пакета событий клиент обновляет `last_seq` локально.
+- Если `last_seq` старше окна → `resume.stale`, клиент делает full sync
+  (повторный `focus`).
+- Для нового клиента (нет `last_seq`) — full sync, подписка с текущего `seq`.
+
+### 1.4. Подавление эха
+
+Когда клиент А отправляет изменяющий запрос, сервер применяет его и эмитит
+событие. Событие возвращается всем подписчикам сети, **включая автора**.
+
+Чтобы автор не применил собственное изменение дважды:
+- Событие содержит `actor.client_id` и `meta.request_id`.
+- Клиент сравнивает `actor.client_id` со своим `Client-Id` — совпадение →
+  игнорирует (или помечает как подтверждённое).
+- Альтернатива: по `meta.request_id` = `Client-Request-Id` отправленного запроса.
+
+> Замечание: эхо игнорируется только на **прикладном** уровне (не применять
+> изменения к UI-state повторно). На уровне `last_seq` событие всё равно
+> засчитывается — оно ведь фактически прошло.
+
+### 1.5. Несколько клиентов одного пользователя одновременно
+
+Допустим: ноутбук (`client_id=X`) и стационарный (`client_id=Y`) одного
+пользователя открыли одну сеть.
+
+- Оба получают общий поток событий сети.
+- Если X сделал изменение → событие приходит и X (эхо, игнор по client_id), и
+  Y (применяет).
+- Если оба одновременно правят одно и то же поле → обычный механизм конфликта
+  через `If-Match` (см. [04-realtime.md](04-realtime.md), п. 8).
+- Локальные настройки (текущий фокус, search_state) у каждого свои — между ними
+  **не** синхронизируются автоматически.
+- Серверные настройки пользователя (show_inactive, порядок фокуса) —
+  синхронизируются между ними через `audience=user` события (см. п. 4.3).
+
+## 2. Уровни настроек и состояния
+
+Все настройки/состояния распределены по **пяти уровням**. Уровень определяет
+**где** хранится значение и **как** оно синхронизируется.
+
+| Уровень | Где хранится | Синхронизация | Примеры |
+|---------|--------------|---------------|---------|
+| **L1. Системный** | `_system.db`, `settings` | — (только admin меняет) | лимиты MCP, TTL event_log, окно real-time |
+| **L2. Сеть** (без пользователя) | `_system.db` (`networks`) или `data.db` (`network_meta`) | все участники | display_name сети, описание |
+| **L3. Пользователь × сеть** | `data.db`, таблицы `user_*` | через real-time, только тому же `user_id` | show_inactive, выбор сортировки фокуса, ручной порядок, last_viewed_at |
+| **L4. Клиент × пользователь × сеть** | локальный SQLite, `ui_state` | нет (только на этом клиенте) | текущий фокус, текущая сеть, search_state, editor_position, collapsed_groups, layout окна |
+| **L5. Клиент (установка)** | локальный SQLite, `client_meta` | нет | client_id, last_seq, тема, zoom, выбранный профиль |
+
+### 2.1. Полный каталог настроек и состояния
+
+#### L1. Системные (`_system.db.settings`)
+| Ключ | Тип | Default | Назначение |
+|------|-----|---------|-----------|
+| `mcp.max_nodes_per_subgraph` | int | 500 | Лимит узлов для MCP `subgraph` |
+| `mcp.max_writes_per_minute` | int | 60 | Лимит writes для MCP |
+| `realtime.event_log_ttl_hours` | int | 24 | Окно хранения event_log |
+| `realtime.event_log_max_rows` | int | 10000 | Размер окна event_log на сеть |
+| `auth.bad_attempts_per_minute` | int | 10 | Защита от перебора |
+
+#### L2. На уровне сети
+| Где | Ключ | Назначение |
+|-----|------|-----------|
+| `_system.db.networks.display_name` | display_name | Имя сети (меняется) |
+| `_system.db.networks.description` | description | Описание |
+| `_system.db.networks.owner_id` | owner_id | Текущий владелец |
+| `data.db.network_meta.*` (зарезервировано) | — | Будущие: цвет сети, дефолтный тип связи и т.п. |
+
+> На MVP в `data.db` сеть не имеет отдельной таблицы настроек — все метаданные в
+> `_system.db.networks`. Таблица `network_meta` вводится, когда появятся
+> сетевые настройки.
+
+#### L3. Пользователь × сеть (`data.db`)
+| Где | Что | Назначение |
+|-----|-----|-----------|
+| `user_preferences(user_id, key)` | `show_inactive` (bool) | Показывать неактуальные |
+| `user_focus_preferences(user_id, focus_thought_id, dir)` | sort, sort_order | Выбор сортировки зоны фокуса |
+| `user_focus_order(user_id, focus_thought_id, dir, thought_id)` | position | Ручной порядок мыслей в зоне фокуса |
+| `thought_views(user_id, thought_id)` | last_viewed_at | Метка «когда пользователь смотрел» для сортировки |
+
+#### L4. Клиент × пользователь × сеть (`ui_state`)
+| Ключ | Назначение |
+|------|-----------|
+| `current_network_id` | Текущая открытая сеть на этом клиенте |
+| `current_focus_thought_id` | Текущий фокус на этом клиенте (в историю не входит) |
+| `focus_history` | Упорядоченный список последних ≤50 фокус-мыслей (см. п. 2.3) |
+| `cloud_width` | Ширина ячейки/облачка на холсте, px. Лимиты см. п. 2.4. Высота не редактируется (3 строки) |
+| `cloud_gap` | Отступ между ячейками на холсте, px. Лимиты см. п. 2.4 |
+| `search_state` | Последний поисковый запрос (текст, опции, результаты) для восстановления |
+| `editor_position` | left/right/top/bottom/hidden |
+| `editor_collapsed_groups` | `{ [entity_id]: { permanent: bool, chrono: bool, ... } }` |
+| `window_layout` | Размеры панелей, позиция окна |
+| `last_used_link_type_id` | Последний выбранный тип связи в диалоге (UX-помощь) |
+
+#### L5. Клиент (установка) (`client_meta`)
+| Ключ | Назначение |
+|------|-----------|
+| `client_id` | UUID установки |
+| `last_seq` (per network_id) | Позиция в event_log |
+| `theme` | light/dark (когда появятся темы) |
+| `zoom` | Масштаб UI |
+| `active_profile_id` | Текущий server profile |
+
+### 2.2. Принцип выбора уровня
+
+При добавлении новой настройки отвечаем на два вопроса:
+
+1. **Должно ли значение быть одинаковым на всех клиентах этого пользователя в
+   этой сети?** Да → L3. Нет → L4.
+2. **Влияет ли значение на выборку данных с сервера?** Да → обязательно L3
+   (сервер должен знать при запросе). Нет → может быть L3 или L4 по п.1.
+
+`show_inactive` — влияет на выборку → L3.
+`current_focus_thought_id` — на каждом клиенте своё → L4.
+`search_state` — на каждом клиенте своё → L4.
+`focus_history` — на каждом клиенте своё → L4 (см. п. 2.3).
+
+### 2.3. История фокуса (L4)
+
+Каждый клиент ведёт **историю мыслей, побывавших в фокусе**, для быстрого
+возврата. Локальное состояние, между клиентами одного пользователя **не**
+синхронизируется.
+
+**Правила:**
+
+- Текущая фокус-мысль в историю **не входит**. Она попадает туда только в момент
+  **смены** фокуса (когда её сменяет другая мысль).
+- История — упорядоченный список уникальных `thought_id`: более свежие — в начале.
+- При смене фокуса `oldId → newId`:
+  1. Если `newId` уже есть в истории — он оттуда **удаляется** (теперь он фокус,
+     а не элемент истории).
+  2. `oldId` вставляется в начало истории.
+  3. Если размер истории превышает 50 — последний (самый старый) элемент удаляется.
+- Лимит — **50 мыслей** на клиенте на сеть.
+
+**Поведение на примере** `A → B → V → A` (начало: фокус = A, история = `[]`):
+
+| Шаг | Фокус | История (свежие слева) |
+|-----|-------|------------------------|
+| старт | A | `[]` |
+| A → B | B | `[A]` |
+| B → V | V | `[B, A]` |
+| V → A | A | `[V, B]` — A удалена из истории, т.к. стала фокусом |
+
+**Хранение:** отдельная таблица `focus_history` в локальном SQLite клиента —
+см. [07-client-electron.md](07-client-electron.md), п. 3.5. Хранится только
+`thought_id` и порядок (`seq`); метаданные облачка (заголовок, иконка, тип,
+актуальность) тянутся с сервера через `POST /thoughts/resolve` (см.
+[03-server-api.md](03-server-api.md), п. 6.10) — либо берутся из клиентского
+кэша, если мысль уже загружена.
+
+**Отображение в UI:** статус-бар — см. [08-ui-spec.md](08-ui-spec.md), п. 11.1.
+
+**Edge cases:**
+
+- Мысль из истории удалена на сервере (`thought.deleted`) → запись **удаляется**
+  из локальной `focus_history` немедленно.
+- Мысль стала неактивной → запись в `focus_history` остаётся, но **скрывается** из
+  отображения при выключенном `show_inactive` (вместе с неактуальными мыслями на
+  холсте). При включённом — показывается приглушённо.
+- Имена в истории — только актуальные (текущий заголовок), даже если мысль была
+  переименована после попадания в историю.
+- Смена сети — у каждой сети своя история (PK `focus_history` включает
+  `network_id`).
+
+### 2.4. Размеры облачка — системные константы и лимиты
+
+Пользовательские настройки `cloud_width` и `cloud_gap` (L4) ограничены системными
+константами, чтобы исключить nonsensical значения (например, ширину 1 px). Эти
+константы — не настройки, а часть кода приложения; на уровне данных не хранятся.
+
+| Константа | Значение (предлагаемое) | Назначение |
+|-----------|-------------------------|------------|
+| `CLOUD_WIDTH_MIN`  | 120 px | Минимальная ширина облачка |
+| `CLOUD_WIDTH_MAX`  | 400 px | Максимальная ширина облачка |
+| `CLOUD_WIDTH_DEFAULT` | 200 px | Дефолтное значение `cloud_width` для новой установки |
+| `CLOUD_GAP_MIN`    | 4 px  | Минимальный отступ |
+| `CLOUD_GAP_MAX`    | 40 px | Максимальный отступ |
+| `CLOUD_GAP_DEFAULT`| 12 px | Дефолтное значение `cloud_gap` |
+| `FOCUS_FONT_SCALE` | 1.3   | Множитель шрифта заголовка фокус-облачка |
+| `FOCUS_TITLE_MAX_LINES` | 4 | Максимум строк заголовка в фокус-облачке |
+
+- При сохранении `cloud_width`/`cloud_gap` клиент клиппит значение в диапазон
+  `[MIN, MAX]`.
+- Высота облачка (3 строки + эллипсы) — **не** настройка и не константа в пикселях;
+  она вычисляется из CSS: высота шрифта × число строк + отступы + диаметр эллипса.
+- Шрифт простого облачка масштабируется вместе с `cloud_width` по фиксированному
+  правилу (например, линейно в диапазоне `CLOUD_WIDTH_MIN..CLOUD_WIDTH_MAX` между
+  двумя опорными кеглями). Точная формула — на этапе реализации.
+
+## 3. Порядок мыслей per-user/per-focus
+
+### 3.1. Модель
+
+Порядок мыслей в зонах холста (родители/дети) — это упорядочивание **связей**,
+принадлежащих фокус-мысли. Для каждого пользователя этот порядок может быть
+своим; для одного пользователя — одинаковый на всех его клиентах.
+
+Хранится в `data.db` в двух таблицах:
+
+```sql
+-- Выбор сортировки для (пользователь, фокус, направление)
+CREATE TABLE user_focus_preferences (
+  user_id            TEXT NOT NULL,
+  focus_thought_id   TEXT NOT NULL,
+  dir                TEXT NOT NULL,            -- 'children' | 'parents' | 'siblings'
+  sort               TEXT NOT NULL,            -- 'manual' | 'alpha' | 'created' | 'viewed'
+  sort_order         TEXT NOT NULL,            -- 'asc' | 'desc'
+  updated_at         TEXT NOT NULL,
+  PRIMARY KEY (user_id, focus_thought_id, dir)
+);
+
+-- Позиции мыслей при sort='manual' (только для children/parents; siblings ручного порядка не имеют)
+CREATE TABLE user_focus_order (
+  user_id            TEXT NOT NULL,
+  focus_thought_id   TEXT NOT NULL,
+  dir                TEXT NOT NULL,            -- 'children' | 'parents'
+  thought_id         TEXT NOT NULL,            -- ребёнок или родитель фокуса
+  position           INTEGER NOT NULL,
+  updated_at         TEXT NOT NULL,
+  PRIMARY KEY (user_id, focus_thought_id, dir, thought_id)
+);
+
+CREATE INDEX idx_user_focus_order_pos
+  ON user_focus_order (user_id, focus_thought_id, dir, position);
+```
+
+### 3.2. Алгоритм применения
+
+При загрузке зоны холста для фокуса F, направления D, пользователя U:
+
+1. `SELECT sort, sort_order FROM user_focus_preferences WHERE user_id=U AND
+   focus_thought_id=F AND dir=D`. Если записи нет → дефолт `created`/`asc`.
+2. Получить соседей (связи с соответствующей стороны).
+3. В зависимости от `sort`:
+   - `alpha` → `ORDER BY title COLLATE NOCASE`
+   - `created` → `ORDER BY created_at`
+   - `viewed` → `LEFT JOIN thought_views ... ORDER BY last_viewed_at`
+   - `manual` → `LEFT JOIN user_focus_order ... ORDER BY position NULLS LAST,
+     title` (мысли без позиции — в конце по алфавиту).
+4. Применить `sort_order` (asc/desc).
+
+### 3.3. Изменение порядка
+
+- Пользователь меняет выбор сортировки (контекстное меню зоны) →
+  `PUT /networks/{nid}/focus/{tid}/preferences { dir, sort, sort_order }` →
+  upsert в `user_focus_preferences`.
+- Пользователь перетаскивает мысль (ручной порядок) →
+  `POST /networks/{nid}/focus/{tid}/order { dir, ordered_ids: [...] }` →
+  сервер записывает `position = индекс в массиве` для каждого `thought_id` в
+  `user_focus_order`, остальные записи по этому (user, focus, dir) удаляются.
+- При удалении фокус-мысли или её соседа — записи каскадно чистятся (см.
+  триггеры в [02-data-model.md](02-data-model.md)).
+
+### 3.4. Синхронизация между клиентами
+
+Обе таблицы порождают real-time события с `audience = "user"` (см. п. 4.3):
+- `user-focus-preferences.updated { focus_thought_id, dir, sort, sort_order }`
+- `user-focus-order.updated { focus_thought_id, dir, ordered_ids }`
+
+Эти события доставляются **только** подключениям того же `user_id`. Если
+пользователь на ноутбуке перетащил мысль — стационарный клиент того же
+пользователя применит изменение, другие пользователи сети его не получат.
+
+## 4. Real-time с аудиторией
+
+### 4.1. Поле `audience` в событии
+
+Каждое событие в WebSocket получает поле `audience`:
+
+| audience | Доставка |
+|----------|----------|
+| `network` (default) | всем подключениям участников сети |
+| `user` | только подключениям с тем же `user_id` (на всех их клиентах) |
+
+### 4.2. Когда какой
+
+- `network`: всё, что меняет данные сети (мысли, связи, типы, комментарии,
+  вложения, членство, сеть).
+- `user`: изменения в `user_preferences`, `user_focus_preferences`,
+  `user_focus_order`, `thought_views`. Эти данные приватны для пользователя.
+
+### 4.3. Маршрутизация
+
+WebSocket-шлюз при отправке:
+```
+for each conn in byNetwork[network_id]:
+  if event.audience == "user" and conn.user_id != event.user_id:
+    continue
+  if event.actor.client_id == conn.client_id and !event.echo:
+    continue
+  send(event, conn)
+```
+
+### 4.4. События L3 (новые типы)
+
+| type | audience | data |
+|------|----------|------|
+| `user-preference.updated` | user | `{ key, value }` |
+| `user-focus-preferences.updated` | user | `{ focus_thought_id, dir, sort, sort_order }` |
+| `user-focus-order.updated` | user | `{ focus_thought_id, dir, ordered_ids }` |
+| `thought-view.updated` | user | `{ thought_id, last_viewed_at }` |
+
+Эти типы добавляются в перечень событий [04-realtime.md](04-realtime.md), п. 4.
+
+## 5. Защита от зацикливания при обходе графа
+
+### 5.1. Где возникает
+
+Все серверные операции обхода графа:
+- `etn.thoughts.subgraph` (MCP), `etn.thoughts.path`, `etn.thoughts.search` с
+  `in_subtree_of`.
+- REST `GET /search?in=subtree&from_thought_id=...`.
+- REST `GET /thoughts/{id}/neighbors?depth>1`.
+- Сценарии «добавить всех потомков в выделение».
+
+Граф ETN — произвольный направленный, циклы допустимы (A→B→C→A). Все обходы
+должны быть устойчивы.
+
+### 5.2. Реализация
+
+**SQL (рекурсивное CTE с детекцией цикла):**
+
+SQLite поддерживает `WITH RECURSIVE`. Цикл фиксируется через накопление `path` и
+проверку вхождения:
+
+```sql
+-- Все потомки root (по направлениям связей source -> target)
+WITH RECURSIVE
+  descend(id, depth, path) AS (
+    SELECT :root, 0, ',' || :root || ','
+    UNION ALL
+    SELECT t.id, d.depth + 1, d.path || t.id || ','
+    FROM thoughts t
+    JOIN links l ON l.target_id = t.id AND l.active = 1
+    JOIN descend d ON l.source_id = d.id
+    WHERE d.depth < :max_depth
+      AND instr(d.path, ',' || t.id || ',') = 0   -- не был в пути
+  )
+SELECT DISTINCT id FROM descend;
+```
+
+- `path` — строка `,id1,id2,...,` для быстрой проверки `instr`.
+- `max_depth` — обязательный предел (default 20; для MCP — задаётся агентом).
+- `instr(...)=0` отсекает повторные заходы в тот же узел в рамках одного обхода.
+
+**Прикладной уровень (BFS/DFS с visited-set):**
+
+Для сложных операций (например, `subgraph` с фильтрами по типам) обход
+выполняется в TypeScript с `Set<thought_id> visited`:
+
+```ts
+function* traverse(seedIds: string[], opts: TraversalOpts) {
+  const visited = new Set<string>();
+  const queue = seedIds.map(id => ({ id, depth: 0 }));
+  let emitted = 0;
+  while (queue.length) {
+    const { id, depth } = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    if (emitted >= opts.maxNodes) return;
+    emitted++;
+    yield id;
+    if (depth >= opts.maxDepth) continue;
+    for (const child of getNeighbors(id, 'children')) {
+      if (!visited.has(child)) queue.push({ id: child, depth: depth + 1 });
+    }
+  }
+}
+```
+
+Этот паттерн используется во всех обходах — единый helper в доменном слое.
+
+### 5.3. Гарантии и лимиты
+
+| Параметр | Default | Где |
+|----------|---------|-----|
+| `max_depth` (subtree/subgraph) | 20 | параметр запроса, переопределяется агентом |
+| `max_nodes` (subgraph) | `mcp.max_nodes_per_subgraph` (500) | L1-настройка |
+| `query_timeout_ms` | 5000 | хард-лимит на сервере |
+| защита от цикла | visited-set / path-CTE | всегда включена |
+
+При превышении `max_nodes` сервер возвращает частичный результат с
+`meta.truncated = true` и причинами.
+
+### 5.4. Что НЕ считается зацикливанием
+
+- Два разных пути в один узел (алмаз) — корректно обрабатывается visited-set:
+  узел visiting только один раз.
+- Связь A→B и B→A (двунаправленная через две разные связи) — обе обходятся, но
+  каждый узел visited один раз.
+
+## 6. Изменения в остальных документах
+
+(Правки внесены в соответствующие файлы; этот раздел — индекс того, что
+меняется.)
+
+| Документ | Что меняется |
+|----------|--------------|
+| [02-data-model.md](02-data-model.md) | Убрать `home_sort`, `last_viewed_at` из `thoughts`; переопределить `thought_views` (только last_viewed_at per user); добавить `user_focus_preferences`, `user_focus_order` |
+| [03-server-api.md](03-server-api.md) | Добавить endpoints: `PUT /focus/{tid}/preferences`, `POST /focus/{tid}/order`; убрать `focused_thought_id` из `/focus` response (фокус — клиентское) |
+| [04-realtime.md](04-realtime.md) | Расширить описание Client-Id и `last_seq` per client; добавить поле `audience`; добавить события L3 |
+| [07-client-electron.md](07-client-electron.md) | Локальное хранение `client_id`, `last_seq`; переразбить `ui_state` по уровням L4/L5; убрать дублирование серверных настроек |
+| [08-ui-spec.md](08-ui-spec.md) | Раздел «Настройки и их уровни» со ссылкой на этот документ |

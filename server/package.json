@@ -1,0 +1,30 @@
+{
+  "name": "@etn/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "etn": "dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx tests/**/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/websocket": "^10.0.1",
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "better-sqlite3": "^11.1.2",
+    "fastify": "^4.27.0",
+    "undici": "^6.19.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.10",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.5.4"
+  }
+}
