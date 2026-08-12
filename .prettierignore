@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+build/
+out/
+release/
+*.tsbuildinfo
+
+# Databases / runtime data
+*.db
+*.db-wal
+*.db-shm
+etn_data/
+data/
+var/
+
+# Lockfiles (do not reformat)
+package-lock.json
+
+# Test / coverage
+coverage/
+.nyc_output/
