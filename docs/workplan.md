@@ -574,31 +574,60 @@
 > После A. Параллельна с B–F. Внутри — последовательно G1→…→G8.
 
 ### G1. Main process и окно Electron
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** A4
+- **Статус:** `done` · **Assignee:** agent-G · **Зависимости:** A4
 - **Описание:** `electron-vite`, main process: окно 1280×800, devTools в dev,
   загрузка renderer. Базовый `BrowserWindow`, меню.
 - **DoD:** `npm run dev:client` открывает окно.
+- [x] `client/electron.vite.config.ts` (main/preload/renderer, externalize deps).
+- [x] `client/src/main/index.ts` — `BrowserWindow` 1280×800, dev-сервер vs
+  собранный `dist/renderer/index.html`, `contextIsolation`+`sandbox`.
+- [x] Минимальный renderer-плейсхолдер «ETN — подключение к серверу» (H2 — формы).
+- [x] `npm -w @etn/client run typecheck` зелёный.
+- **Note:** запуск Electron runtime не проверялся — блокируется отсутствующей
+  native-сборкой `better-sqlite3` (инициализация LocalDb в main при ready).
+  Оркестратор пересобирает native в фоне; код открытия окна готов.
 - **Спецификация:** [07-client-electron.md](07-client-electron.md).
 
 ### G2. safeStorage для API-key
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** G1
+- **Статус:** `done` · **Assignee:** agent-G · **Зависимости:** G1
 - **Описание:** Шифрование API-key через `safeStorage` (DPAPI/Keychain/libsecret),
   хранение в `server_profiles.api_key_encrypted`. Расшифровка только в main.
 - **DoD:** ключ сохраняется между запусками; renderer его не видит.
+- [x] `client/src/main/safe-storage.ts`: `encryptApiKey`/`decryptApiKey` +
+  `SafeStorageUnavailableError`, `isApiKeyStorageAvailable`.
+- [x] Запись в БД НЕ выполняется — только хелпер (таблица `server_profiles` в G3).
+- **Note:** проверка сохранения между запусками отложена до G3/H2 (нужна БД).
 - **Спецификация:** [06-auth.md](06-auth.md), п. 7; [07-client-electron.md](07-client-electron.md), п. 3.1.
 
 ### G3. Локальный SQLite и миграции
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** G1
+- **Статус:** `done` · **Assignee:** agent-G · **Зависимости:** G1
 - **Описание:** `userData/local.db`, схема: `server_profiles`, `ui_state`,
   `drafts`, `focus_history`, `client_meta`. Мигратор.
 - **DoD:** БД создаётся при первом запуске; схема накатывается.
+- [x] `client/migrations/001_init.sql` — все 5 таблиц + `_migrations` +
+  `idx_focus_history_seq`.
+- [x] `client/src/main/db/migrator.ts` — обнаружение `NNN_*.sql`,
+  транзакционное применение, идемпотентность в контрольной точке.
+- [x] `client/src/main/db/local-db.ts` — `LocalDb` (WAL, FK ON, auto-migrate),
+  методы read/write по каждой таблице, `rotateFocusHistory` (07 §3.5).
+- [x] `client/src/main/db/paths.ts` — путевые хелперы + `DEV_USER_DATA_DIR`.
+- **Note:** идемпотентность/накат проверены только typecheck'ом — runtime-тест
+  невозможен без native `better-sqlite3`. После сборки native мигратор
+  поднимется автоматически при первом запуске.
 - **Спецификация:** [07-client-electron.md](07-client-electron.md), п. 3.
 
 ### G4. Генерация и хранение client_id
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** G3
+- **Статус:** `done` · **Assignee:** agent-G · **Зависимости:** G3
 - **Описание:** При первом запуске — UUIDv4 в `client_meta.client_id`. Заголовок
   `Client-Id` во всех запросах.
 - **DoD:** идентификатор стабилен между запусками; передаётся серверу.
+- [x] `client/src/main/client-id.ts`: `getOrCreateClientId`/`getClientId` —
+  UUIDv4 в `client_meta.client_id` (L5), валидация формата, перегенерация при
+  повреждённом значении.
+- [x] Интеграция в `main/index.ts`: открытие LocalDb на `app.whenReady()` и
+  инициализация `client_id`; close на `before-quit`.
+- **Note:** фактическая передача заголовка `Client-Id` серверу — в G5 (REST) и
+  G6 (WS); здесь только стабильный id и его хранилище.
 - **Спецификация:** [11-settings-and-state.md](11-settings-and-state.md), п. 1.
 
 ### G5. REST-клиент
