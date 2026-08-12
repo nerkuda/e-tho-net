@@ -19,6 +19,7 @@
     "@modelcontextprotocol/sdk": "^1.0.4",
     "better-sqlite3": "^11.1.2",
     "fastify": "^4.27.0",
+    "pino": "^9.14.0",
     "undici": "^6.19.8"
   },
   "devDependencies": {
