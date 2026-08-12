@@ -94,31 +94,35 @@
 > Стартовая точка проекта.
 
 ### A1. Нормализация переносов строк и git attributes
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** —
+- **Статус:** `done` · **Assignee:** agent-A · **Зависимости:** —
 - **Описание:** Создать `.gitattributes` (`* text=auto eol=lf` для согласованности
   CRLF/LF на Windows/Linux). Убедиться, что `.gitignore` корректно исключает
   runtime-данные.
 - **DoD:**
-  - [ ] Создан `.gitattributes`.
-  - [ ] `git status` чист, нет неожиданных modified-файлов из-за CRLF.
+  - [x] Создан `.gitattributes`.
+  - [x] `git status` чист, нет неожиданных modified-файлов из-за CRLF.
 - **Спецификация:** —.
 
 ### A2. Настройка ESLint и Prettier
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** A1
+- **Статус:** `done` · **Assignee:** agent-A · **Зависимости:** A1
 - **Описание:** В корне — `eslint.config.js` (flat config, ESLint 9),
   `.prettierrc`, скрипты `lint`/`format`. Общие правила TypeScript.
 - **DoD:**
-  - [ ] `npm run lint` работает из корня, проверяет все workspace.
-  - [ ] `npm run format` приводит код к единому стилю.
+  - [x] `npm run lint` работает из корня, проверяет все workspace.
+  - [x] `npm run format` приводит код к единому стилю.
+- **Note:** оркестратор дополнил конфиг отключением `no-require-imports` для
+  root CommonJS-файлов и добавил `docs/`/`*.md` в `.prettierignore`.
 - **Спецификация:** —.
 
 ### A3. CI (GitHub Actions)
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** A2
+- **Статус:** `done` · **Assignee:** agent-A · **Зависимости:** A2
 - **Описание:** `.github/workflows/ci.yml` — на push/PR: install, typecheck, lint,
   build, test. Кеширование `node_modules` и `~/.npm`.
 - **DoD:**
-  - [ ] На push в main/PR пайплайн запускается.
-  - [ ] Шаги typecheck, lint, build, test — все зелёные (на пустом проекте).
+  - [x] На push в main/PR пайплайн запускается.
+  - [ ] Шаги typecheck, lint, build, test — все зелёные (проверится на первом
+    реальном пуше; локально все шаги проходят).
+- **Note:** `cache: 'npm'` требует `package-lock.json` в репо — закоммичен.
 - **Спецификация:** —.
 
 ### A4. shared/: базовые типы
@@ -841,7 +845,7 @@
 
 | ID | Что готово | По завершении фазы |
 |----|------------|--------------------|
-| M1 | Каркас + CI зелёный | A |
+| ~~M1~~ | ~~Каркас + CI зелёный~~ — **достигнут локально** (commit `5e3d2a0`). CI на GitHub проверится первым push. | A ✅ |
 | M2 | Сервер отвечает, `etn init` работает, auth | B |
 | M3 | Полный доменный слой и создание сети с HOME | C |
 | M4 | Полный REST + real-time + MCP | D, E, F |
@@ -864,3 +868,31 @@
 - **Эволюция спецификаций.** Любое изменение `docs/` после начала реализации —
   через отдельный коммит с пометкой `docs:` и обновлением затронутых задач в этом
   плане.
+
+### Расхождения, выявленные при реализации (требуют решений)
+
+> Обнаружено агентом-A4 на фазе A. Каждое должно быть закрыто до или в ходе
+> связанной фазы; спецификации править отдельным `docs:`-коммитом.
+
+- **`better-sqlite3` native-сборка.** На машине разработки нет Python в PATH, и
+  node-gyp не собирает расширение. Блокер для запуска кода в фазах B, G3 и далее.
+  Решения: (а) установить Python 3.x и сделать доступным в PATH; (б) проверить
+  наличие prebuilt-binary для текущей пары Node 24/Windows; (в) рассмотреть замену
+  на `node:sqlite` (нативный, Node 22+, экспериментальный). **Решить до B6** — на
+  этапе `etn init` и первого открытия `_system.db`.
+- **`SearchScope` — гранулярный vs REST.** В `03-server-api.md` §12 используется
+  `scope=thoughts|links|chronology|all`, а в `05-mcp-server.md` §4.1 и в shared —
+  `names|texts|links|chronology|all`. Принято: shared хранит гранулярный; REST-слой
+  (D1) маппит legacy-значение `thoughts` → `names,texts`. Обновить `03-server-api.md`.
+- **`EtnErrorCode`.** В shared добавлены `RATE_LIMITED` (HTTP 429, из `06-auth.md`
+  §9) и `PROTECTED_ENTITY` (удаление/изменение `is_protected`), которых нет в
+  таблице кодов `03-server-api.md` §2.1. Обновить таблицу + зафиксировать
+  HTTP-маппинг (429 и 422 соответственно).
+- **`api_keys.read_only`.** Колонки нет в схеме `02-data-model.md` §2.2, но нужна
+  (`06-auth.md` §6.3, MCP §6.3). **B3** должен включить её в миграцию `_system.db`.
+- **`AuditCategory.system`.** В `02-data-model.md` §2.6 перечислены
+  `auth/user/network/membership/data` без `system`, но `etn init` пишет
+  `category=system` (`06-auth.md` §8). Обновить §2.6.
+- **`FocusNeighbor` для UI.** Минимальный набор полей из `03-server-api.md` §6.2
+  не содержит цветов/стилей/`icon_kind`, нужных для рендера облачка (H4/H5). До
+  H4 расширить (либо через `/thoughts/resolve`, либо расширить `FocusNeighbor`).
