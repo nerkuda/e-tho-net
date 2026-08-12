@@ -1,0 +1,15 @@
+# Normalize line endings across platforms (checkout as-is, commit LF).
+# Editor config mirrors .editorconfig: LF everywhere except Windows-only scripts.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets — never normalize
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.db binary
