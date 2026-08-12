@@ -13,6 +13,9 @@
 import { app, BrowserWindow, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { LocalDb } from './db/local-db.js';
+import { defaultMigrationsDir, localDbPath } from './db/paths.js';
+import { getOrCreateClientId } from './client-id.js';
 
 /**
  * Directory of the compiled main bundle (`out/main`). Renderer and preload
@@ -27,6 +30,12 @@ const isDev = !app.isPackaged;
 /** Default window geometry (docs/07-client-electron.md §1, workplan G1). */
 const DEFAULT_WIDTH = 1280;
 const DEFAULT_HEIGHT = 800;
+
+/**
+ * Local SQLite store (G3). Opened once on app ready and closed on quit. Held at
+ * module scope so IPC handlers (G7) and network clients (G5/G6) can share it.
+ */
+let localDb: LocalDb | null = null;
 
 /**
  * Creates and configures the main application window.
@@ -76,6 +85,17 @@ function createWindow(): BrowserWindow {
 app
   .whenReady()
   .then(() => {
+    // Open the local store and ensure the installation has a stable client_id
+    // (G3/G4). The REST client (G5) reads this id to send the `Client-Id` header
+    // on every request; the WebSocket client (G6) sends it on connect.
+    localDb = new LocalDb({
+      dbPath: localDbPath(app.getPath('userData')),
+      // TODO(K1): remap to process.resourcesPath for packaged builds.
+      migrationsDir: defaultMigrationsDir(),
+    });
+    const clientId = getOrCreateClientId(localDb);
+    if (isDev) console.log('[ETN] client_id =', clientId);
+
     createWindow();
 
     app.on('activate', () => {
@@ -89,4 +109,15 @@ app
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+// Release the DB file handle before the process exits so WAL files flush.
+app.on('before-quit', () => {
+  try {
+    localDb?.close();
+  } catch (err: unknown) {
+    console.error('[ETN] Failed to close local DB:', err);
+  } finally {
+    localDb = null;
+  }
 });
