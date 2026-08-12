@@ -1,0 +1,44 @@
+/* Minimal styling for the G1 placeholder screen. Real theming (CSS variables
+   for light/dark) arrives with H1 (08-ui-spec.md §1). */
+:root {
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f6f8;
+  color: #1f2330;
+}
+
+#app {
+  text-align: center;
+}
+
+#app h1 {
+  margin: 0 0 0.5rem;
+  font-size: 2.5rem;
+  letter-spacing: 0.1em;
+}
+
+.status {
+  margin: 0;
+  color: #5b6478;
+}

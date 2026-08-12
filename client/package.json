@@ -13,6 +13,7 @@
     "test": "node --test --import tsx tests/**/*.test.ts"
   },
   "dependencies": {
+    "@etn/shared": "*",
     "better-sqlite3": "^11.1.2"
   },
   "devDependencies": {
