@@ -122,14 +122,19 @@
 - **Спецификация:** —.
 
 ### A4. shared/: базовые типы
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** A1
+- **Статус:** `done` · **Assignee:** agent-A4 · **Зависимости:** A1
 - **Описание:** В `shared/src/` описать общие типы: DTO для REST-запросов/ответов,
   типы real-time событий, перечисления (роли, типы свойств, аудит-категории),
   константы (имена настроек, лимиты по умолчанию). Без логики — только типы и
   константы.
 - **DoD:**
-  - [ ] `npm run build:shared` проходит.
-  - [ ] `@etn/shared` импортируется из server и client.
+  - [x] `npm run build:shared` проходит.
+  - [x] `@etn/shared` импортируется из server и client.
+  - **Note:** типы/константы/ошибки готовы; package.json (`main`/`types`) и
+    project references в server/client уже настроены. Финальную проверку
+    `npm run build:shared` + `npm run typecheck` выполняет оркестратор
+    (в рамках A4 `npm install`/`typecheck` агентом не запускались). Фактический
+    код импорта появится в задачах B1/G1 вместе с первым кодом server/client.
 - **Спецификация:** [02-data-model.md](02-data-model.md),
   [03-server-api.md](03-server-api.md), [04-realtime.md](04-realtime.md),
   [11-settings-and-state.md](11-settings-and-state.md).

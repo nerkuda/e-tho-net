@@ -1,0 +1,130 @@
+/**
+ * Thought types, property definitions and property values.
+ *
+ * Field names mirror docs/02-data-model.md §3.3–3.5 and the REST contract in
+ * docs/03-server-api.md §8–9. SQLite 0/1 INTEGER columns surface as `boolean`.
+ */
+
+import type {
+  IconKind,
+  PropertyValueType,
+  TypeOwnerType,
+} from '../enums.js';
+
+/** User-defined thought type (02-data-model.md §3.3). */
+export interface ThoughtType {
+  id: string;
+  name: string;
+  icon: string | null;
+  fg_color: string | null;
+  bg_color: string | null;
+  font_bold: boolean;
+  font_italic: boolean;
+  font_underline: boolean;
+  font_strike: boolean;
+  /** Free-form description used to give AI agents context about the type. */
+  description: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+}
+
+/** Input accepted by `POST /thought-types` (03-server-api.md §8). */
+export interface ThoughtTypeInput {
+  name: string;
+  icon?: string | null;
+  icon_kind?: IconKind;
+  fg_color?: string | null;
+  bg_color?: string | null;
+  font_bold?: boolean;
+  font_italic?: boolean;
+  font_underline?: boolean;
+  font_strike?: boolean;
+  description?: string | null;
+}
+
+/** Input accepted by `PATCH /thought-types/{id}` (03-server-api.md §8). */
+export interface ThoughtTypeUpdateInput {
+  name?: string;
+  icon?: string | null;
+  icon_kind?: IconKind;
+  fg_color?: string | null;
+  bg_color?: string | null;
+  font_bold?: boolean;
+  font_italic?: boolean;
+  font_underline?: boolean;
+  font_strike?: boolean;
+  description?: string | null;
+}
+
+/**
+ * Property available on a thought/link type — row of `type_properties`
+ * (02-data-model.md §3.4).
+ */
+export interface PropertyDefinition {
+  id: string;
+  owner_type: TypeOwnerType;
+  /** FK to `thought_types.id` or `link_types.id` (polymorphic, no SQL FK). */
+  owner_id: string;
+  key: string;
+  value_type: PropertyValueType;
+  /**
+   * JSON config. Commonly `{ allowed_type_id }` constraining the target of a
+   * `thought_ref` property. Kept as an opaque map; the storage layer persists
+   * it as JSON text.
+   */
+  config: PropertyConfig | null;
+  required: boolean;
+  /** Display order. */
+  position: number;
+}
+
+/** Recognised keys inside a {@link PropertyDefinition.config} JSON blob. */
+export interface PropertyConfig {
+  /** For `value_type = 'thought_ref'`: restrict the referenced thought type. */
+  allowed_type_id?: string;
+  /** Arbitrary extra configuration keys. */
+  [key: string]: unknown;
+}
+
+/** Input accepted by `POST …/types/{id}/properties` (03-server-api.md §8). */
+export interface PropertyDefinitionInput {
+  key: string;
+  value_type: PropertyValueType;
+  config?: PropertyConfig | null;
+  required?: boolean;
+  position?: number;
+}
+
+/** Input accepted by `PATCH …/types/{id}/properties/{prop_id}` (03-server-api.md §8). */
+export interface PropertyDefinitionUpdateInput {
+  value_type?: PropertyValueType;
+  config?: PropertyConfig | null;
+  required?: boolean;
+  position?: number;
+}
+
+/**
+ * Union of all value payloads that may be stored against a property. Exactly
+ * one of the storage columns (`value_text`/`value_date`/`value_number`/
+ * `value_bool`/`value_thought_ref`) is populated; the API exposes a single
+ * `value` field whose runtime type matches {@link PropertyValueType}.
+ */
+export type PropertyValueValue = string | number | boolean | null;
+
+/** A stored property value — polymorphic EAV (02-data-model.md §3.5). */
+export interface PropertyValue {
+  id: string;
+  owner_type: 'thought' | 'link';
+  owner_id: string;
+  property_id: string;
+  /** Value whose runtime type matches the definition's `value_type`. */
+  value: PropertyValueValue;
+  updated_at: string;
+}
+
+/** Body of `PUT …/{id}/properties/{key}` (03-server-api.md §9). */
+export interface PropertyValueInput {
+  value: PropertyValueValue;
+}
