@@ -26,6 +26,7 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { cloudFontSize, cloudHeight } from '../lib/pure.js';
 import { store } from '../state.js';
+import { initLinksOverlay } from './links.js';
 
 /** Zone directions of the canvas (parents/siblings/children). */
 export type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -91,6 +92,7 @@ let focusCloudEl: HTMLElement | null = null;
 let drag: DragState | null = null;
 let suppressNextClick = false;
 let addDialogOpener: ((ctx: AddDialogContext) => void) | null = null;
+let redrawLinks: (() => void) | null = null;
 
 /** Resolved metadata cache (id → ThoughtRef), persistent across focuses. */
 const refCache = new Map<string, ThoughtRef>();
@@ -127,6 +129,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   host.append(top, focusRow, zoneChildren, empty);
   zones = { parents: zoneParents, siblings: zoneSiblings, children: zoneChildren };
   emptyEl = empty;
+  redrawLinks = initLinksOverlay(host).redraw;
 
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
@@ -142,6 +145,17 @@ export function getRef(id: string): ThoughtRef | null {
 /** Returns the currently rendered focus cloud (H6 line anchoring). */
 export function getFocusCloudEl(): HTMLElement | null {
   return focusCloudEl;
+}
+
+/** Returns the rendered cloud of a thought inside a zone (visible window only). */
+export function findZoneCloud(id: string, dir: ZoneDir): HTMLElement | null {
+  if (host === null) return null;
+  return host.querySelector<HTMLElement>(`.zone-${dir} .cloud[data-id="${CSS.escape(id)}"]`);
+}
+
+/** Returns the grouped neighbours currently rendered in a zone (H6 pairing). */
+export function getZoneEntries(dir: ZoneDir): ZoneEntry[] {
+  return zoneData.get(dir) ?? [];
 }
 
 /**
@@ -182,6 +196,7 @@ async function render(): Promise<void> {
   renderZone('siblings', groupByThought(focus.siblings));
   renderZone('children', groupByThought(focus.children));
   scheduleIndicatorLoads();
+  redrawLinks?.();
 }
 
 /**
@@ -360,6 +375,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     const entry = entries[i];
     if (entry !== undefined) grid.append(buildCloud(entry, dir));
   }
+  redrawLinks?.();
 }
 
 // ---------------------------------------------------------------------------

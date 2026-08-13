@@ -677,6 +677,24 @@ textarea {
   pointer-events: none;
 }
 
+.link-tooltip {
+  position: fixed;
+  z-index: 1100;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  max-width: 320px;
+}
+
+.link-tooltip-types {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
 .links-overlay .link-line {
   pointer-events: stroke;
   cursor: pointer;
