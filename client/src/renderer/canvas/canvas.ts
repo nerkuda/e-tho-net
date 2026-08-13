@@ -1,26 +1,29 @@
 /**
- * Canvas engine (H4): virtualized grid zones and thought clouds
- * (08-ui-spec.md §2.1.1, §2.2, §2.2.1).
+ * Canvas engine (H4/H5): virtualized grid zones, thought clouds, the focus
+ * cloud, ellipses and drag gestures (08-ui-spec.md §2.1–2.3, 09-scenarios.md
+ * B1/C4).
  *
  * - Four areas: parents (top-left), siblings (top-right), focus row (center),
- *   children (bottom, full width). Only the grid zones (parents/siblings/
- *   children) are virtualized here; the focus cloud lands in H5.
- * - Grid cells are fixed (`cloud_width` + `cloud_gap`, L4 settings); the number
- *   of columns is recomputed on resize; rows are virtualized: only the visible
- *   window plus overscan is rendered inside a CSS grid translated to the
- *   window offset, over a full-height spacer (spec §2.1.1, §2.5).
- * - A cloud is: icon square + 2-line title (clamped with `…`, full text in the
+ *   children (bottom, full width). Grid zones are virtualized (visible window +
+ *   overscan inside a CSS grid over a full-height spacer, §2.1.1, §2.5).
+ * - A cloud is: icon square + clamped title (2 lines, `…`, full text in the
  *   tooltip) + indicators row (📝/📅/📎) + top/bottom ellipses (§2.2).
+ * - The focus cloud has a variable width and up to 4 title lines (§2.2.2).
  * - Cloud colors/styles come from the thought (own values win) falling back to
  *   the thought type catalogue; inactive thoughts are dimmed (§2.2).
- * - Indicator counts (📝/📅N/📎N) load lazily per visible cloud and are cached;
- *   realtime comment/attachment events invalidate the cache.
+ * - Click on a thought → focus (B1). Dragging from an ellipse: dropped on
+ *   another thought → direct link (C4); otherwise → add-thought dialog (H14
+ *   registers the opener via {@link setAddDialogOpener}).
+ * - Indicator counts load lazily per visible cloud and are cached; realtime
+ *   comment/attachment events invalidate the cache.
  */
 
 import type { FocusNeighbor, FocusResponse, ThoughtRef } from '@etn/shared';
 
+import { setFocus } from '../app.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { notice } from '../lib/notice.js';
 import { cloudFontSize, cloudHeight } from '../lib/pure.js';
 import { store } from '../state.js';
 
@@ -55,6 +58,26 @@ export interface CloudStyle {
 const OVERSCAN_ROWS = 2;
 /** How many indicator fetches may run concurrently. */
 const INDICATOR_CONCURRENCY = 3;
+/** Minimum mouse travel before a press becomes a drag, px. */
+const DRAG_THRESHOLD_PX = 4;
+
+/** Add-thought dialog context produced by an ellipse drag (H14 registers). */
+export interface AddDialogContext {
+  /** The thought the dragged ellipse belongs to (link anchor). */
+  anchorId: string;
+  /** Top ellipse → new parent; bottom ellipse → new child. */
+  direction: 'parent' | 'child';
+}
+
+/** Pending ellipse drag state. */
+interface DragState {
+  anchorId: string;
+  direction: 'parent' | 'child';
+  startX: number;
+  startY: number;
+  active: boolean;
+  hovered: HTMLElement | null;
+}
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -64,6 +87,10 @@ let host: HTMLElement | null = null;
 let zones: Record<'parents' | 'siblings' | 'children', HTMLElement> | null = null;
 let focusRow: HTMLElement | null = null;
 let emptyEl: HTMLElement | null = null;
+let focusCloudEl: HTMLElement | null = null;
+let drag: DragState | null = null;
+let suppressNextClick = false;
+let addDialogOpener: ((ctx: AddDialogContext) => void) | null = null;
 
 /** Resolved metadata cache (id → ThoughtRef), persistent across focuses. */
 const refCache = new Map<string, ThoughtRef>();
@@ -112,6 +139,19 @@ export function getRef(id: string): ThoughtRef | null {
   return refCache.get(id) ?? null;
 }
 
+/** Returns the currently rendered focus cloud (H6 line anchoring). */
+export function getFocusCloudEl(): HTMLElement | null {
+  return focusCloudEl;
+}
+
+/**
+ * Registers the add-thought dialog opener (H14). Called at the end of an
+ * ellipse drag that did not land on another thought.
+ */
+export function setAddDialogOpener(opener: ((ctx: AddDialogContext) => void) | null): void {
+  addDialogOpener = opener;
+}
+
 /** Invalidates cached indicator counts (realtime comment/attachment events). */
 export function invalidateIndicators(id: string | null): void {
   if (id === null) {
@@ -145,13 +185,53 @@ async function render(): Promise<void> {
 }
 
 /**
- * H4 placeholder for the focus row — the real focus cloud (variable width, up
- * to 4 title lines, ellipses) arrives in H5.
+ * Renders the focus cloud (08-ui-spec.md §2.2.2): variable width, up to 4
+ * title lines, ellipses filled when incoming/outgoing links exist.
  */
 function renderFocusRow(focus: FocusResponse): void {
   if (focusRow === null) return;
   clear(focusRow);
-  focusRow.append(el('span', 'muted', `Фокус: ${focus.focused.title}`));
+  const thought = focus.focused;
+  focusCloudEl = null;
+
+  const cloud = div('cloud focus-cloud');
+  cloud.dataset['id'] = thought.id;
+  if (!thought.active) cloud.classList.add('dim');
+  applyCloudStyle(cloud, resolveCloudStyle(thought));
+
+  const parents = groupByThought(focus.parents).length;
+  const children = groupByThought(focus.children).length;
+
+  const topEllipse = div('ellipse');
+  const bottomEllipse = div('ellipse');
+  if (parents > 0) topEllipse.classList.add('filled');
+  if (children > 0) bottomEllipse.classList.add('filled');
+  setTooltip(topEllipse, `Входящие связи: ${parents}`);
+  setTooltip(bottomEllipse, `Исходящие связи: ${children}`);
+  wireEllipseDrag(topEllipse, thought.id, 'parent');
+  wireEllipseDrag(bottomEllipse, thought.id, 'child');
+
+  const body = div('cloud-body');
+  const iconBox = div('cloud-icon');
+  if (thought.icon_kind === 'image' && thought.icon !== null) {
+    const img = el('img');
+    img.src = thought.icon;
+    img.alt = '';
+    iconBox.append(img);
+  } else {
+    iconBox.textContent = thought.icon ?? '💭';
+  }
+  const title = el('div', 'cloud-title', thought.title);
+  setTooltip(title, thought.title.slice(0, 400));
+  body.append(iconBox, title);
+
+  const ind = div('cloud-ind');
+  ind.append(span('📝', 'ind dim'), span('📅', 'ind dim'), span('📎', 'ind dim'));
+
+  cloud.append(topEllipse, body, ind, bottomEllipse);
+  focusRow.append(cloud);
+  focusCloudEl = cloud;
+  queueIndicatorLoad(thought.id);
 }
 
 /** Groups neighbour rows by thought id, attaching cached refs. */
@@ -357,6 +437,8 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   if (dir === 'parents') bottomEllipse.classList.add('filled');
   setTooltip(topEllipse, dir === 'children' ? 'Входящие связи' : 'Входящих связей нет');
   setTooltip(bottomEllipse, dir === 'parents' ? 'Исходящие связи' : 'Исходящих связей нет');
+  wireEllipseDrag(topEllipse, entry.id, 'parent');
+  wireEllipseDrag(bottomEllipse, entry.id, 'child');
 
   const body = div('cloud-body');
   const iconBox = div('cloud-icon');
@@ -379,6 +461,21 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   ind.append(perm, chrono, att);
 
   cloud.append(topEllipse, body, ind, bottomEllipse);
+
+  // Click → focus (B1); Ctrl+click toggles selection (H16); Enter on a
+  // keyboard-focused cloud focuses it (08-ui-spec.md §13).
+  cloud.tabIndex = 0;
+  cloud.addEventListener('click', () => {
+    if (suppressNextClick) {
+      suppressNextClick = false;
+      return;
+    }
+    void setFocus(entry.id);
+  });
+  cloud.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void setFocus(entry.id);
+  });
+
   queueIndicatorLoad(entry.id);
   return cloud;
 }
@@ -463,3 +560,104 @@ export const canvasInternals = {
   refCache,
   indicatorCache,
 };
+
+// ---------------------------------------------------------------------------
+// Ellipse drag (08-ui-spec.md §2.3, 09-scenarios.md C4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wires a mouse-drag gesture on an ellipse. On release:
+ *  - over another thought cloud → direct link creation;
+ *  - anywhere else → the registered add-thought dialog opener.
+ */
+function wireEllipseDrag(
+  ellipse: HTMLElement,
+  anchorId: string,
+  direction: 'parent' | 'child',
+): void {
+  ellipse.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    drag = {
+      anchorId,
+      direction,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+      hovered: null,
+    };
+    window.addEventListener('mousemove', onDragMove);
+    window.addEventListener('mouseup', onDragEnd);
+  });
+}
+
+/** Tracks the drag, highlighting the cloud under the cursor. */
+function onDragMove(event: MouseEvent): void {
+  if (drag === null) return;
+  if (!drag.active) {
+    const dist = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+    if (dist < DRAG_THRESHOLD_PX) return;
+    drag.active = true;
+    document.body.classList.add('dragging');
+    suppressNextClick = true;
+  }
+  const target = document.elementFromPoint(event.clientX, event.clientY);
+  const cloud = target instanceof HTMLElement ? target.closest<HTMLElement>('.cloud') : null;
+  if (drag.hovered !== null && drag.hovered !== cloud) {
+    drag.hovered.classList.remove('drop-target');
+  }
+  drag.hovered = cloud;
+  if (cloud !== null && cloud.dataset['id'] !== drag.anchorId) {
+    cloud.classList.add('drop-target');
+  } else if (cloud !== null) {
+    drag.hovered = null;
+  }
+}
+
+/** Ends the drag: creates a link or opens the add dialog. */
+function onDragEnd(_event: MouseEvent): void {
+  window.removeEventListener('mousemove', onDragMove);
+  window.removeEventListener('mouseup', onDragEnd);
+  if (drag === null) return;
+  const wasActive = drag.active;
+  const anchorId = drag.anchorId;
+  const direction = drag.direction;
+  const hoveredId = drag.hovered?.dataset['id'] ?? null;
+  if (drag.hovered !== null) drag.hovered.classList.remove('drop-target');
+  drag = null;
+  document.body.classList.remove('dragging');
+
+  if (!wasActive) return;
+
+  if (hoveredId !== null && hoveredId !== anchorId) {
+    void createLinkFromDrop(direction, anchorId, hoveredId);
+    return;
+  }
+  if (addDialogOpener !== null) {
+    addDialogOpener({ anchorId, direction });
+  } else {
+    notice('Диалог добавления мыслей ещё не готов.', 'error');
+  }
+}
+
+/** Creates a link between two thoughts after a successful drop (C4). */
+async function createLinkFromDrop(
+  direction: 'parent' | 'child',
+  anchorId: string,
+  droppedId: string,
+): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const sourceId = direction === 'child' ? anchorId : droppedId;
+  const targetId = direction === 'child' ? droppedId : anchorId;
+  try {
+    await etn.links.create(networkId, { source_id: sourceId, target_id: targetId });
+    notice('Связь создана.');
+  } catch (err) {
+    notice(
+      `Не удалось создать связь: ${err instanceof Error ? err.message : String(err)}`,
+      'error',
+    );
+  }
+}

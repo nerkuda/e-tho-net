@@ -738,6 +738,7 @@ textarea {
   border: 1px solid var(--border-strong);
   background: var(--surface);
   margin: 2px 0 0;
+  cursor: grab;
 }
 
 .cloud .ellipse.filled {
@@ -748,6 +749,17 @@ textarea {
 .cloud .ellipse.drag-source {
   background: var(--accent);
   border-color: var(--accent);
+}
+
+.cloud.drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+body.dragging,
+body.dragging .cloud,
+body.dragging .ellipse {
+  cursor: grabbing;
 }
 
 .cloud-body {
