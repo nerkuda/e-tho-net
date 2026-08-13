@@ -482,14 +482,24 @@
 > системные миграции. Новых runtime-зависимостей не потребовалось.
 
 ### C7. Сервис комментариев
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3
+- **Статус:** `done` · **Assignee:** agent-C7 · **Зависимости:** C3
 - **Описание:** CRUD `comments`. Инвариант: один `permanent` на владельца. Рендер
   `body_md` → `body_html` (общий markdown-рендерер с поддержкой картинок, таблиц,
   кода, цитат).
-- **DoD:** создаётся permanent и chronological; второй permanent — 409; HTML
-  кешируется.
+- **DoD:**
+  - [x] создаётся permanent и chronological; второй permanent — 409; HTML кешируется.
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 3.8;
   [03-server-api.md](03-server-api.md), п. 10.
+- **Note:** `server/src/domain/comment-service.ts` + безопасный XSS-free
+  markdown-рендерер `server/src/domain/markdown.ts` (без зависимостей: input
+  HTML-эскейпится до применения правил, URL-ы валидируются по allow-list
+  протоколов, `javascript:`/`data:` (кроме изображений) отбрасываются).
+  Инвариант «один permanent на владельца» проверяется в приложении до INSERT и
+  дублируется partial unique index. Для permanent `valid_from=created_at`,
+  `valid_to=NULL`; для chronological `valid_from` по умолчанию = now, `valid_to`
+  по умолчанию = NULL (бессрочно) — пустая строка нормализуется в NULL. CRUD с
+  `If-Match` (`VERSION_CONFLICT` 409), проверка существования полиморфного
+  владельца (404). Тесты: 16 (7 markdown + 9 service).
 
 ### C8. Сервис вложений
 - **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3
