@@ -34,6 +34,7 @@ import { auditRoutes } from '../routes/audit.js';
 import { createThoughtsRoutes } from '../routes/thoughts.js';
 import { createLinksRoutes } from '../routes/links.js';
 import { createTypesRoutes } from '../routes/types.js';
+import { createPropertiesRoutes } from '../routes/properties.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -184,6 +185,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // Type routes (task D3): thought/link types + type_properties (03-server-api.md §8).
   await app.register(createTypesRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+
+  // Property-value routes (task D4): per-thought/per-link values by key (03-server-api.md §9).
+  await app.register(createPropertiesRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
   app.get('/api/v1/health', async () => {

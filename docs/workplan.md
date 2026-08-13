@@ -638,9 +638,13 @@
   не зафиксирован — выбрано явное имя).
 
 ### D4. Routes /properties
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C6
+- **Статус:** `done` · **Assignee:** agent-D · **Зависимости:** C6
 - **Описание:** Чтение/запись/удаление значений свойств на мыслях и связях.
-- **DoD:** — · **Спецификация:** [03-server-api.md](03-server-api.md), п. 9.
+- **DoD:**
+  - [x] upsert по ключу работает, удаление по ключу работает; ошибки валидации
+    соответствуют спецификации.
+- **Спецификация:** [03-server-api.md](03-server-api.md), п. 9.
+- **Note:** `server/src/routes/properties.ts` (`createPropertiesRoutes`).
 
 ### D5. Routes /comments, /attachments
 - **Статус:** `todo` · **Assignee:** — · **Зависимости:** C7, C8
