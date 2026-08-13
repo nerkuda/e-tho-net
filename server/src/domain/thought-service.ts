@@ -853,13 +853,20 @@ export function focus(
     children: [],
     siblings: [],
   };
+  // Read the orderable zones' sort preferences once; siblings is not orderable.
+  const parentPref = readFocusPref(ndb, userId, thoughtId, 'parents');
+  const childPref = readFocusPref(ndb, userId, thoughtId, 'children');
+  const prefs: Record<FocusDir, { sort: SortKind; order: SortOrder } | null> = {
+    parents: parentPref,
+    children: childPref,
+    siblings: null,
+  };
   for (const dir of dirs) {
-    const pref = readFocusPref(ndb, userId, thoughtId, dir);
     grouped[dir] = getNeighbors(ndb, thoughtId, dir, {
       userId,
       showInactive,
-      sort: pref?.sort,
-      order: pref?.order,
+      sort: prefs[dir]?.sort,
+      order: prefs[dir]?.order,
     });
   }
   return {
@@ -867,5 +874,9 @@ export function focus(
     parents: grouped.parents,
     children: grouped.children,
     siblings: grouped.siblings,
+    sorts: {
+      parents: parentPref?.sort ?? 'created',
+      children: childPref?.sort ?? 'created',
+    },
   };
 }

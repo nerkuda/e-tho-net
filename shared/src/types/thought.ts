@@ -208,4 +208,6 @@ export interface FocusResponse {
   children: FocusNeighbor[];
   /** Thoughts sharing a parent with the focused thought. */
   siblings: FocusNeighbor[];
+  /** Per-zone sort currently applied for this user (siblings is not orderable). */
+  sorts: { parents: SortKind; children: SortKind };
 }

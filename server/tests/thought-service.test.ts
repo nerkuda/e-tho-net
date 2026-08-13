@@ -332,6 +332,8 @@ describe(
             res.siblings.map((n) => n.id),
             [sib],
           );
+          // Per-zone sort defaults to 'created' when no preference is set.
+          assert.deepEqual(res.sorts, { parents: 'created', children: 'created' });
 
           const view = ndb
             .prepare(
