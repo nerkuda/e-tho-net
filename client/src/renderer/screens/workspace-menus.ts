@@ -10,6 +10,7 @@
  */
 
 import { backToNetworks, disconnect, requireNetworkId } from '../app.js';
+import { openAdminPanel } from '../admin/admin.js';
 import { confirmDialog, errorDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -17,6 +18,7 @@ import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { showCreateNetworkDialog } from './networks.js';
+import { showCloudSizeSettings, showVisibilitySettings } from './settings.js';
 import type { NetworkMember, User } from '@etn/shared';
 
 /** Wires the toolbar network menu button. */
@@ -269,11 +271,20 @@ export function wireUserMenu(handles: WorkspaceHandles): void {
 
 /** Builds the user menu items (H18). */
 export function buildUserMenuItems(): MenuItem[] {
-  return [
-    {
-      label: 'Отключиться',
-      danger: true,
-      onClick: () => void disconnect(),
-    },
+  const items: MenuItem[] = [
+    { label: 'Настройки видимости', onClick: () => showVisibilitySettings() },
+    { label: 'Размер облачка', onClick: () => showCloudSizeSettings() },
   ];
+  if (store.state.me?.is_admin === true) {
+    items.push({
+      label: 'Администрирование',
+      onClick: () => openAdminPanel(),
+    });
+  }
+  items.push(MENU_SEPARATOR, {
+    label: 'Отключиться',
+    danger: true,
+    onClick: () => void disconnect(),
+  });
+  return items;
 }
