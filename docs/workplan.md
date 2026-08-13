@@ -302,13 +302,23 @@
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 3–4; [06-auth.md](06-auth.md).
 
 ### B13. Маршруты networks и members
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B9, B12
+- **Статус:** `done` · **Assignee:** agent-B7 · **Зависимости:** B9, B12
 - **Описание:** `GET/POST/PATCH /networks`, `GET/POST/DELETE
   /networks/{id}/members`, `PATCH` для передачи владения,
   `GET/PUT /networks/{id}/preferences[/{key}]`. Создание сети делегирует фазе C
   (C10), но маршрут описывается здесь; пока можно заглушкой, если C10 не готов.
-- **DoD:** владелец управляет членством; админ может управлять любой сетью;
-  preferences читаются/пишутся.
+- **DoD:**
+  - [x] `GET /networks` (с ролью/members_count), `GET/PATCH /networks/:id`,
+    `GET/POST/DELETE /networks/:id/members`, `PATCH members/:uid` (передача
+    владения в одной транзакции), `GET/PUT preferences[/:key]` (`show_inactive`).
+  - [x] Управление членством — owner ИЛИ admin; чтение данных и свои preferences
+    — любой участник (`requireNetworkMember`); non-member → 403.
+  - [x] Кеш членства инвалидируется при add/remove/transfer; все изменения
+    пишутся в `audit_log` (`category=network|membership`).
+- **Note:** `NetworkService` (createNetwork/deleteNetwork) — интерфейс + stub
+  (`throw Not implemented: see task C10`); real impl подключится в C10 без правки
+  routes. Pub/sub emit `member.*`/`network.*` отложен в фазу E3 (нужен `seq` из
+  E2); сейчас invalidation идёт через прямой вызов `app.members.invalidate`.
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 5; [06-auth.md](06-auth.md).
 
 ### B14. audit_log middleware

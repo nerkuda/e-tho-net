@@ -17,7 +17,15 @@ import type Database from 'better-sqlite3';
 import DatabaseConstructor from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 
-import type { ApiKey, AuditCategory, NetworkRole, User } from '@etn/shared';
+import type {
+  ApiKey,
+  AuditCategory,
+  Network,
+  NetworkListItem,
+  NetworkMember,
+  NetworkRole,
+  User,
+} from '@etn/shared';
 import { IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
 
 import type { Logger } from '../logger.js';
@@ -156,6 +164,18 @@ export class SystemDb {
   private readonly stCountOwnedNetworks: Database.Statement;
   private readonly stUpdateUser: Database.Statement;
   private readonly stDeleteUser: Database.Statement;
+  private readonly stInsertNetwork: Database.Statement;
+  private readonly stGetNetworkById: Database.Statement;
+  private readonly stUpdateNetwork: Database.Statement;
+  private readonly stListNetworksForUser: Database.Statement;
+  private readonly stInsertMember: Database.Statement;
+  private readonly stDeleteMember: Database.Statement;
+  private readonly stListMembers: Database.Statement;
+  private readonly stSetMemberRole: Database.Statement;
+  private readonly stSetNetworkOwner: Database.Statement;
+  private readonly stGetPreference: Database.Statement;
+  private readonly stUpsertPreference: Database.Statement;
+  private readonly stListPreferences: Database.Statement;
 
   /**
    * Wrap an already-open connection and prepare all statements. Does not run
@@ -198,6 +218,52 @@ export class SystemDb {
       'UPDATE users SET display_name = ?, is_admin = ?, disabled = ?, updated_at = ? WHERE id = ?',
     );
     this.stDeleteUser = db.prepare('DELETE FROM users WHERE id = ?');
+    this.stInsertNetwork = db.prepare(
+      'INSERT INTO networks (id, display_name, owner_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    this.stGetNetworkById = db.prepare('SELECT * FROM networks WHERE id = ? LIMIT 1');
+    this.stUpdateNetwork = db.prepare(
+      'UPDATE networks SET display_name = ?, description = ?, updated_at = ? WHERE id = ?',
+    );
+    this.stListNetworksForUser = db.prepare(
+      `SELECT n.id AS id, n.display_name AS display_name, n.owner_id AS owner_id,
+              n.description AS description, n.created_at AS created_at, n.updated_at AS updated_at,
+              m.role AS role, ou.display_name AS owner_display_name,
+              (SELECT COUNT(*) FROM network_members WHERE network_id = n.id) AS members_count
+       FROM network_members m
+       JOIN networks n ON n.id = m.network_id
+       JOIN users ou ON ou.id = n.owner_id
+       WHERE m.user_id = ?
+       ORDER BY n.created_at`,
+    );
+    this.stInsertMember = db.prepare(
+      'INSERT INTO network_members (network_id, user_id, role, added_at, added_by) VALUES (?, ?, ?, ?, ?)',
+    );
+    this.stDeleteMember = db.prepare(
+      'DELETE FROM network_members WHERE network_id = ? AND user_id = ?',
+    );
+    this.stListMembers = db.prepare(
+      `SELECT m.network_id AS network_id, m.user_id AS user_id, m.role AS role,
+              m.added_at AS added_at, m.added_by AS added_by, u.display_name AS display_name,
+              u.username AS username
+       FROM network_members m JOIN users u ON u.id = m.user_id
+       WHERE m.network_id = ? ORDER BY m.added_at`,
+    );
+    this.stSetMemberRole = db.prepare(
+      'UPDATE network_members SET role = ? WHERE network_id = ? AND user_id = ?',
+    );
+    this.stSetNetworkOwner = db.prepare(
+      'UPDATE networks SET owner_id = ?, updated_at = ? WHERE id = ?',
+    );
+    this.stGetPreference = db.prepare(
+      'SELECT value, updated_at FROM user_preferences WHERE user_id = ? AND network_id = ? AND key = ? LIMIT 1',
+    );
+    this.stUpsertPreference = db.prepare(
+      'INSERT INTO user_preferences (user_id, network_id, key, value, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, network_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+    );
+    this.stListPreferences = db.prepare(
+      'SELECT key, value, updated_at FROM user_preferences WHERE user_id = ? AND network_id = ? ORDER BY key',
+    );
   }
 
   /** TTL window for cached idempotent responses, in milliseconds. */
@@ -428,6 +494,177 @@ export class SystemDb {
    */
   deleteUser(id: string): void {
     this.stDeleteUser.run(id);
+  }
+
+  // -------------------------------------------------------------------------
+  // Networks & membership (registry rows in `_system.db`; task B13)
+  // -------------------------------------------------------------------------
+
+  /** Insert a network registry row. Per-DB setup is done by NetworkService (C10). */
+  createNetworkRow(
+    id: string,
+    ownerId: string,
+    displayName: string,
+    description: string | null,
+  ): Network {
+    const now = new Date().toISOString();
+    this.stInsertNetwork.run(id, displayName, ownerId, description, now, now);
+    return {
+      id,
+      display_name: displayName,
+      owner_id: ownerId,
+      description,
+      created_at: now,
+      updated_at: now,
+    };
+  }
+
+  /** Fetch a network registry row by id, or `null`. */
+  getNetworkById(id: string): Network | null {
+    const row = this.stGetNetworkById.get(id) as
+      | {
+          id: string;
+          display_name: string;
+          owner_id: string;
+          description: string | null;
+          created_at: string;
+          updated_at: string;
+        }
+      | undefined;
+    if (row === undefined) {
+      return null;
+    }
+    return {
+      id: row.id,
+      display_name: row.display_name,
+      owner_id: row.owner_id,
+      description: row.description,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  /** Patch a network's editable fields (display_name, description). */
+  updateNetwork(id: string, fields: { displayName: string; description: string | null }): void {
+    this.stUpdateNetwork.run(fields.displayName, fields.description, new Date().toISOString(), id);
+  }
+
+  /**
+   * List the networks a user belongs to, with their role and owner reference
+   * (03-server-api.md §5.1). `my_focus_thought_id` is L4 client state and is
+   * always `null` from the server.
+   */
+  listNetworksForUser(userId: string): NetworkListItem[] {
+    const rows = this.stListNetworksForUser.all(userId) as Array<{
+      id: string;
+      display_name: string;
+      owner_id: string;
+      description: string | null;
+      created_at: string;
+      updated_at: string;
+      role: NetworkRole;
+      owner_display_name: string | null;
+      members_count: number;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      display_name: r.display_name,
+      owner: { id: r.owner_id, display_name: r.owner_display_name },
+      role: r.role,
+      members_count: r.members_count,
+      my_focus_thought_id: null,
+    }));
+  }
+
+  /** Add a member row. Caller validates role/owner invariants. */
+  addNetworkMember(networkId: string, userId: string, role: NetworkRole, addedBy: string): void {
+    this.stInsertMember.run(networkId, userId, role, new Date().toISOString(), addedBy);
+  }
+
+  /** Remove a member row. Returns the number of rows deleted (0 if absent). */
+  removeNetworkMember(networkId: string, userId: string): number {
+    const info = this.stDeleteMember.run(networkId, userId);
+    return info.changes;
+  }
+
+  /**
+   * A membership row augmented with the user's display name + username, for the
+   * members-list endpoint (03-server-api.md §5.3).
+   */
+  listNetworkMembers(
+    networkId: string,
+  ): Array<NetworkMember & { username: string; display_name: string | null }> {
+    const rows = this.stListMembers.all(networkId) as Array<{
+      network_id: string;
+      user_id: string;
+      role: NetworkRole;
+      added_at: string;
+      added_by: string;
+      username: string;
+      display_name: string | null;
+    }>;
+    return rows.map((r) => ({
+      network_id: r.network_id,
+      user_id: r.user_id,
+      role: r.role,
+      added_at: r.added_at,
+      added_by: r.added_by,
+      username: r.username,
+      display_name: r.display_name,
+    }));
+  }
+
+  /**
+   * Transfer ownership of a network atomically: demote the current owner to
+   * `member`, promote `newOwnerId` to `owner`, and update `networks.owner_id`.
+   * Both membership rows must already exist. Runs in a single transaction.
+   */
+  transferNetworkOwnership(networkId: string, oldOwnerId: string, newOwnerId: string): void {
+    this.transaction(() => {
+      const now = new Date().toISOString();
+      // Promote the new owner and demote the previous one in one transaction.
+      this.stSetMemberRole.run('owner', networkId, newOwnerId);
+      this.stSetMemberRole.run('member', networkId, oldOwnerId);
+      this.stSetNetworkOwner.run(newOwnerId, now, networkId);
+    });
+  }
+
+  /** Read one user preference for a network, or `null` when unset. */
+  getNetworkPreference(
+    userId: string,
+    networkId: string,
+    key: string,
+  ): { value: unknown; updated_at: string } | null {
+    const row = this.stGetPreference.get(userId, networkId, key) as
+      { value: string; updated_at: string } | undefined;
+    if (row === undefined) {
+      return null;
+    }
+    return { value: JSON.parse(row.value), updated_at: row.updated_at };
+  }
+
+  /** Upsert a user preference (value JSON-encoded). */
+  setNetworkPreference(userId: string, networkId: string, key: string, value: unknown): void {
+    this.stUpsertPreference.run(
+      userId,
+      networkId,
+      key,
+      JSON.stringify(value),
+      new Date().toISOString(),
+    );
+  }
+
+  /** List all preferences of a user in a network. */
+  listNetworkPreferences(
+    userId: string,
+    networkId: string,
+  ): Array<{ key: string; value: unknown; updated_at: string }> {
+    const rows = this.stListPreferences.all(userId, networkId) as Array<{
+      key: string;
+      value: string;
+      updated_at: string;
+    }>;
+    return rows.map((r) => ({ key: r.key, value: JSON.parse(r.value), updated_at: r.updated_at }));
   }
 
   /**
