@@ -74,6 +74,18 @@ type QueryValue = string | number | boolean | undefined | null;
 type QueryRecord = Record<string, QueryValue | QueryValue[]>;
 
 /**
+ * Duplicate candidate returned by `GET /thoughts/duplicates`
+ * (08-ui-spec.md §4.4). Mirrors the server-side `DuplicateHit` shape.
+ */
+export interface DuplicateCandidate {
+  id: string;
+  title: string;
+  synonyms: string[];
+  matched_on: 'title' | 'synonym' | 'partial';
+  matched_synonym?: string;
+}
+
+/**
  * Strongly-typed ETN REST client. Construct one per active server profile and reuse
  * it for the lifetime of the connection (see `NetContext`, task G7).
  *
@@ -1143,6 +1155,22 @@ export class RestClient {
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/mentions`,
     );
+  }
+
+  /**
+   * `GET /networks/{nid}/thoughts/duplicates` — live duplicate lookup powering
+   * the add-thought dialog (H14, docs/03-server-api.md §6.3, 08-ui-spec.md §4.4).
+   */
+  public async findDuplicates(
+    networkId: string,
+    title: string,
+    synonyms: string[] = [],
+  ): Promise<DuplicateCandidate[]> {
+    const q: QueryRecord = { title };
+    if (synonyms.length > 0) q['synonyms'] = synonyms;
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`, {
+      query: q,
+    });
   }
 
   // -------------------------------------------------------------------------

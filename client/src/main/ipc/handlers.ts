@@ -10,11 +10,13 @@
  * forward it).
  */
 
+import { randomUUID } from 'node:crypto';
+
 import type { CurrentUser, FocusDir, Network } from '@etn/shared';
 
 import type { RestClient } from '../net/rest-client.js';
 import type { RealtimeClient } from '../net/ws-client.js';
-import type { LocalDb, ServerProfileRow } from '../db/local-db.js';
+import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 
 /** Shared state owned by the main process, injected into handlers. */
 export interface HandlerDeps {
@@ -27,6 +29,11 @@ export interface HandlerDeps {
   getProfile: () => ServerProfileRow | null;
   /** Connects a profile: builds clients, verifies the key, stores state. */
   connectProfile: (profileId: string) => Promise<CurrentUser>;
+  /**
+   * Creates a server profile (key encrypted via `safeStorage`), activates it and
+   * connects (H2). Implemented in `register.ts`, which owns safeStorage access.
+   */
+  addProfile: (input: { label: string; baseUrl: string; apiKey: string }) => Promise<CurrentUser>;
   /** Drops clients and clears the active network. */
   disconnect: () => void;
   /** Returns the currently open network id (realtime `getNetworkId` source). */
@@ -86,6 +93,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'server.connect',
     bind((profileId: string) => deps.connectProfile(profileId)),
+  );
+  handlers.set(
+    'server.addProfile',
+    bind((input: { label: string; baseUrl: string; apiKey: string }) => deps.addProfile(input)),
   );
   handlers.set(
     'server.disconnect',
@@ -211,6 +222,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string, id: string) => requireRest(deps).listMentions(networkId, id)),
   );
   handlers.set(
+    'thoughts.findDuplicates',
+    bind((networkId: string, title: string, synonyms?: string[]) =>
+      requireRest(deps).findDuplicates(networkId, title, synonyms ?? []),
+    ),
+  );
+  handlers.set(
     'thoughts.setFocusPreferences',
     bind(
       (
@@ -293,6 +310,16 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         expectedVersion,
         force ? { force } : undefined,
       ),
+    ),
+  );
+  handlers.set(
+    'types.listLinkTypes',
+    bind((networkId: string) => requireRest(deps).listLinkTypes(networkId)),
+  );
+  handlers.set(
+    'types.listThoughtTypeProperties',
+    bind((networkId: string, typeId: string) =>
+      requireRest(deps).listThoughtTypeProperties(networkId, typeId),
     ),
   );
 
@@ -513,6 +540,62 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     }),
   );
   handlers.set(
+    'ui.draftSave',
+    bind(
+      (input: {
+        networkId: string;
+        entityType: string;
+        entityId: string;
+        field: string;
+        value: string;
+        baseVersion: number | null;
+      }) => {
+        const profile = deps.getProfile();
+        if (!profile) throw new Error('Not connected: call etn.server.connect first');
+        const id = randomUUID();
+        deps.localDb.upsertDraft({
+          id,
+          profile_id: profile.id,
+          network_id: input.networkId,
+          entity_type: input.entityType,
+          entity_id: input.entityId,
+          field: input.field,
+          value: input.value,
+          base_version: input.baseVersion ?? null,
+          status: 'pending',
+        });
+        return id;
+      },
+    ),
+  );
+  handlers.set(
+    'ui.draftList',
+    bind((networkId: string) => {
+      const profile = deps.getProfile();
+      if (!profile) return [] as DraftRow[];
+      return deps.localDb
+        .listDrafts(profile.id, networkId)
+        .map((row) => ({
+          id: row.id,
+          networkId: row.network_id,
+          entityType: row.entity_type,
+          entityId: row.entity_id,
+          field: row.field,
+          value: row.value,
+          baseVersion: row.base_version,
+          status: row.status,
+          createdAt: row.created_at,
+        }))
+        .filter((row) => row.status === 'pending');
+    }),
+  );
+  handlers.set(
+    'ui.draftDelete',
+    bind((id: string) => {
+      deps.localDb.deleteDraft(id);
+    }),
+  );
+  handlers.set(
     'history.list',
     bind((profileId: string, networkId: string, limit?: number) =>
       deps.localDb
@@ -524,6 +607,17 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'history.push',
     bind((profileId: string, networkId: string, thoughtId: string) => {
       deps.localDb.pushFocusHistory(profileId, networkId, thoughtId);
+    }),
+  );
+  handlers.set(
+    'history.rotate',
+    bind((oldId: string | null, newId: string) => {
+      const profile = deps.getProfile();
+      const networkId = deps.getCurrentNetworkId();
+      if (!profile || !networkId) {
+        throw new Error('Not connected: call etn.server.connect and open a network first');
+      }
+      deps.localDb.rotateFocusHistory(profile.id, networkId, oldId, newId);
     }),
   );
   handlers.set(

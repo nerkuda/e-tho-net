@@ -6,13 +6,15 @@
  * `handlers.ts`. All state lives here — `handlers.ts` stays pure.
  */
 
+import { randomUUID } from 'node:crypto';
 import { ipcMain, type BrowserWindow } from 'electron';
 import { UI_STATE_KEY, type CurrentUser, type Network } from '@etn/shared';
 
 import type { LocalDb, ServerProfileRow } from '../db/local-db.js';
-import { decryptApiKey } from '../safe-storage.js';
+import { decryptApiKey, encryptApiKey } from '../safe-storage.js';
 import { RestClient } from '../net/rest-client.js';
 import { RealtimeClient, normaliseWsUrl } from '../net/ws-client.js';
+import { RealtimeState, applyRealtimeEvent } from '../realtime/applier.js';
 import { createHandlers } from './handlers.js';
 import type { IpcInvokePayload } from './contract.js';
 
@@ -34,6 +36,9 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
   let rt: RealtimeClient | null = null;
   let profile: ServerProfileRow | null = null;
   let currentNetworkId: string | null = null;
+  let currentUser: CurrentUser | null = null;
+  /** G8 applier state: in-memory thought/link cache + echo suppression. */
+  const rtState = new RealtimeState();
 
   const broadcast = (channel: string, payload: unknown): void => {
     const win = opts.getWindow();
@@ -64,13 +69,64 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
       getNetworkId: () => currentNetworkId,
       localDb: opts.localDb,
     });
-    rtClient.onTyped('event', (event) => broadcast('realtime:event', event));
+    rtClient.onTyped('event', (event) => {
+      // G8: apply the event to the local cache, drop own-client echoes, maintain
+      // focus history; only accepted events reach the renderer.
+      const result = applyRealtimeEvent(
+        rtState,
+        {
+          getClientId: () => opts.clientId,
+          getCurrentUserId: () => currentUser?.id ?? p.user_id ?? null,
+          removeFromFocusHistoryEverywhere: (thoughtId: string) => {
+            const nid = currentNetworkId;
+            if (!nid) return;
+            for (const saved of opts.localDb.listProfiles()) {
+              opts.localDb.removeFocusHistory(saved.id, nid, thoughtId);
+            }
+          },
+          getCurrentFocusId: (nid: string) => {
+            if (!profile) return null;
+            return opts.localDb.getUiState(profile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID);
+          },
+        },
+        event,
+      );
+      if (result.applied) broadcast('realtime:event', event);
+    });
     rtClient.onTyped('status', (status) => broadcast('realtime:status', status));
+    rtClient.onTyped('stale', (lastSeq) => broadcast('realtime:stale', lastSeq));
 
     rest = restClient;
     rt = rtClient;
     profile = p;
+    currentUser = me;
     return me;
+  };
+
+  /** H2: save a new profile (key encrypted via safeStorage) and connect it. */
+  const addProfile = async (input: {
+    label: string;
+    baseUrl: string;
+    apiKey: string;
+  }): Promise<CurrentUser> => {
+    const baseUrl = input.baseUrl.trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      throw new Error('Адрес сервера должен начинаться с http:// или https://');
+    }
+    if (input.apiKey.trim() === '') {
+      throw new Error('API-key не может быть пустым.');
+    }
+    const id = randomUUID();
+    const encrypted = encryptApiKey(input.apiKey);
+    opts.localDb.insertProfile({
+      id,
+      label: input.label.trim() || baseUrl,
+      base_url: baseUrl,
+      api_key_encrypted: encrypted,
+      is_active: true,
+    });
+    opts.localDb.setActiveProfile(id);
+    return connectProfile(id);
   };
 
   const disconnect = (): void => {
@@ -83,6 +139,7 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
     rest = null;
     profile = null;
     currentNetworkId = null;
+    currentUser = null;
   };
 
   const openNetwork = async (networkId: string): Promise<Network> => {
@@ -102,6 +159,7 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
     getRealtime: () => rt,
     getProfile: () => profile,
     connectProfile,
+    addProfile,
     disconnect,
     getCurrentNetworkId: () => currentNetworkId,
     openNetwork,
