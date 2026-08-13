@@ -379,14 +379,19 @@
 > E, F параллельно.
 
 ### C1. Хранилище `NetworkDb`
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B4
+- **Статус:** `done` · **Assignee:** agent-C · **Зависимости:** B4
 - **Описание:** Открытие/создание `<network_id>/data.db`, WAL, FK ON, lifecycle
   (открытие по требованию, корректное закрытие). Реестр открытых сетей в памяти.
 - **DoD:** сеть открывается повторно без ошибок; WAL-файлы создаются.
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 3.
+- **Note:** `server/src/db/network-db.ts` — тонкая обёртка (`prepare`/
+  `transaction`/`exec`/`pragma`/`close`) с реестром `Map<networkId, NetworkDb>`;
+  `openNetworkDb` создаёт `networks/<id>/{,attachments/,snapshots/}`, ставит
+  `journal_mode=WAL`, `foreign_keys=ON`, применяет миграции; `closeNetworkDb`/
+  `closeAll` для shutdown; `createInMemoryNetworkDb` для юнит-тестов C3–C6.
 
 ### C2. Миграции `data.db`
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C1
+- **Статус:** `done` · **Assignee:** agent-C · **Зависимости:** C1
 - **Описание:** Все таблицы: `thoughts`, `thought_synonyms`, `thought_types`,
   `link_types`, `type_properties`, `property_values`, `links`, `comments`,
   `attachments`, `user_preferences`, `thought_views`, `user_focus_preferences`,
@@ -394,9 +399,16 @@
   синхронизации.
 - **DoD:** схема накатывается; FTS обновляется триггерами на INSERT/UPDATE/DELETE.
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 3, 3.11.
+- **Note:** 12 идемпотентных файлов `server/migrations/network/001..012`. FTS5
+  rowid зеркалирует `thoughts.rowid`/`comments.rowid`, поэтому триггеры точно
+  удаляют/обновляют строки. Добавлены дополнительные enforcement-индексы: partial
+  UNIQUE `idx_comments_permanent_one` (один permanent на владельца) и
+  `idx_property_values_owner`. Связь `property_values.property_id` имеет реальный
+  FK `ON DELETE CASCADE`. Для нетипизированных связей (NULL в UNIQUE) дубликат
+  дополнительно ловится в приложении (C4).
 
 ### C3. Сервис мыслей
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C2
+- **Статус:** `done` · **Assignee:** agent-C · **Зависимости:** C2
 - **Описание:** `create`, `get`, `update` (с `version`/`If-Match`), `delete`
   (защита `is_protected`), `focus` (обновление `thought_views`, возврат соседей с
   учётом `show_inactive` и сортировок пользователя), `neighbors`. Дедупликация на
@@ -404,29 +416,70 @@
 - **DoD:** CRUD работает; соседи возвращаются в нужном порядке; HOME не удалить.
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 6;
   [02-data-model.md](02-data-model.md).
+- **Note:** `server/src/domain/thought-service.ts`. CRUD с `If-Match`
+  (`VERSION_CONFLICT` 409), `title_norm` = NFC+trim+lowercase, синхронизация
+  синонимов (массив или строка через запятую), опциональная inline parent/child
+  связь в той же транзакции. `focus()` пишет `thought_views` и возвращает соседей
+  с учётом `show_inactive` и сохранённой `user_focus_preferences` (дефолт
+  `created`/`asc` — запись предпочтений добавит C12). `deleteThought` чистит
+  полиморфных владельцев без SQL-FK (comments/attachments/property_values).
+  Запросы соседей полностью параметризованы; `ORDER BY` строится только из
+  enum-валидированных фрагментов. Также добавлен `resolveThoughts` (§6.9).
 
 ### C4. Сервис связей
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3
+- **Статус:** `done` · **Assignee:** agent-C · **Зависимости:** C3
 - **Описание:** `create` (с проверкой `source≠target` и UNIQUE), `update`, `delete`,
   `listByThought` (с группировкой по типам и фильтром `show_inactive`).
 - **DoD:** петель нет, дубликатов нет, связи группируются для редактора.
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 7.
+- **Note:** `server/src/domain/link-service.ts`. Самопетли → 422, дубликаты → 409
+  (проверка NULL-safe через `ifnull`, так что и нетипизированные пары ловятся
+  поверх UNIQUE-индекса). `listLinksByThought` одним параметризованным запросом с
+  `CASE` выбирает «opponent» thought и группирует в `by_type`/`untyped_parents`/
+  `untyped_children` с учётом `show_inactive`.
 
 ### C5. Сервис типов мыслей и связей
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3
+- **Статус:** `done` · **Assignee:** agent-C · **Зависимости:** C3
 - **Описание:** CRUD `thought_types` и `link_types`, включая `description` (для
   AI). Управление свойствами типа (`type_properties`).
 - **DoD:** типы создаются, назначаются мыслям; description сохраняется.
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 8.
+- **Note:** `thought-type-service.ts` + `link-type-service.ts` (CRUD с unique
+  name / unique `(name_forward,name_reverse)`, `If-Match`). Удаление типа в
+  использовании → 422 без `force`, с `force` — `type_id` обнуляется у
+  мыслей/связей. `description` сохраняется. Определения свойств
+  (`type_properties` CRUD + reorder) в `property-service.ts`, owner_type =
+  `thought_type`/`link_type`. **Расхождение:** `ThoughtTypeInput.icon_kind` есть
+  в shared, но в `thought_types` нет колонки `icon_kind` (§3.3) — игнорируется на
+  записи; нужен follow-up shared/docs.
 
 ### C6. Сервис значений свойств
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C5
+- **Статус:** `done` · **Assignee:** agent-C · **Зависимости:** C5
 - **Описание:** `get/set/delete property_values` для мыслей и связей. Валидация по
   `value_type` свойства (text/date/number/bool/thought_ref). При `thought_ref` —
   опциональная проверка типа цели.
 - **DoD:** значения пишутся в нужный `value_*` столбец; типы соблюдаются.
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 3.4–3.5;
   [03-server-api.md](03-server-api.md), п. 9.
+- **Note:** значение валидируется по определению свойства на типе владельца и
+  пишется **только** в соответствующий `value_*` столбец (на upsert все `value_*`
+  сбрасываются в NULL, затем ставится нужный — правило одной колонки держится
+  даже при смене `value_type`). Для `thought_ref` опционально проверяется
+  `config.allowed_type_id`. Имя колонки для интерполяции — фиксированный литерал
+  `value_*`, производный от enum-валидированного `value_type` (не пользовательский
+  ввод).
+
+> **Note (C1–C6, agent-C).** Фаза реализована в ветке `task/c1-c6-domain`
+> (коммиты `[C1]`…`[C6]`). Финальные проверки на Node 22 LTS: `npm run
+> typecheck` (все workspace), `npm run lint`, `npm run format:check`,
+> `npm run build:shared`, `npm -w @etn/server run build` — зелёные;
+> `npm -w @etn/server test` → 95 pass / 0 fail (добавлены наборы NetworkDb,
+> network-migrations, thought-service, link-service, type-services,
+> property-service). better-sqlite3 native собран под Node 22 — тесты с
+> реальной БД выполняются на месте (не skip). Границы с B-агентом соблюдены:
+> не тронуты `http/`, `routes/`, `auth/`, `realtime/`, `cli.ts`, `config.ts`,
+> `logger.ts`, `paths.ts`, `system-db.ts`, `migrator.ts`, `network-service.ts`,
+> системные миграции. Новых runtime-зависимостей не потребовалось.
 
 ### C7. Сервис комментариев
 - **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3
