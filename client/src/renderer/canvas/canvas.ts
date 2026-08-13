@@ -96,6 +96,19 @@ let suppressNextClick = false;
 let addDialogOpener: ((ctx: AddDialogContext) => void) | null = null;
 let redrawLinks: (() => void) | null = null;
 
+/** Selection click hooks (H16): Ctrl+click on clouds and ellipses. */
+export interface SelectionClickHooks {
+  onCloudClick(id: string): void;
+  onEllipseClick(id: string, direction: 'parent' | 'child'): void;
+}
+
+let selectionHooks: SelectionClickHooks | null = null;
+
+/** Registers the selection Ctrl+click hooks (selection module, H16). */
+export function setSelectionClickHooks(next: SelectionClickHooks | null): void {
+  selectionHooks = next;
+}
+
 /** Resolved metadata cache (id → ThoughtRef), persistent across focuses. */
 const refCache = new Map<string, ThoughtRef>();
 /** Indicator cache (id → counts), invalidated on comment/attachment events. */
@@ -506,9 +519,13 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   // keyboard-focused cloud focuses it; right-click opens the context menu (H15).
   cloud.tabIndex = 0;
   cloud.draggable = dir !== 'siblings';
-  cloud.addEventListener('click', () => {
+  cloud.addEventListener('click', (event) => {
     if (suppressNextClick) {
       suppressNextClick = false;
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
+      selectionHooks?.onCloudClick(entry.id);
       return;
     }
     void setFocus(entry.id);
@@ -627,6 +644,12 @@ function wireEllipseDrag(
 ): void {
   ellipse.addEventListener('mousedown', (event) => {
     if (event.button !== 0) return;
+    // Ctrl+click on an ellipse adds all parents/children to the selection (H16).
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      selectionHooks?.onEllipseClick(anchorId, direction);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     drag = {

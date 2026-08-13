@@ -23,6 +23,7 @@ import { mountCanvas } from '../canvas/canvas.js';
 import { mountHistoryBar } from './history-bar.js';
 import { mountEditor } from '../editor/editor.js';
 import { mountSearch } from '../search/search.js';
+import { mountSelection } from '../selection/selection.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -190,6 +191,7 @@ export function buildWorkspace(): HTMLElement {
   mountHistoryBar(historyHost);
   mountEditor(editorHost);
   mountSearch({ input: searchInput, optionsButton: searchOptionsButton, host: searchHost });
+  mountSelection(selectionHost);
 
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
   function refresh(): void {
