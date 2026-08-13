@@ -11,7 +11,7 @@
  * this module only mutates the store.
  */
 
-import type { AnyRealtimeEvent, FocusResponse, Thought } from '@etn/shared';
+import type { FocusResponse, Thought } from '@etn/shared';
 
 import { closeDialog } from './lib/dialog.js';
 import { etn } from './lib/etn.js';
@@ -23,7 +23,8 @@ import {
   parseCloudWidth,
   parseLinkTypeId,
 } from './lib/pure.js';
-import { initRealtime, registerRealtimeHandlers } from './realtime.js';
+import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js';
+import { applyRealtimeToUi } from './realtime-ui.js';
 import { showScreen } from './screens/screens.js';
 import { store } from './state.js';
 
@@ -180,14 +181,14 @@ export function requireNetworkId(): string {
  */
 export async function boot(): Promise<void> {
   initRealtime();
-  registerRealtimeHandlers({
-    onEvent: (_evt: AnyRealtimeEvent) => undefined, // canvas/editor register their own
+  setRealtimeEffects({
     onStale: () => scheduleRefresh(),
     onFocusLost: () => {
       void refreshFocus().catch(() => backToNetworks());
     },
     onNetworkLost: () => backToNetworks(),
   });
+  onRealtimeEvent(applyRealtimeToUi);
 
   const profiles = await etn.server.listProfiles();
   const active = profiles.find((p) => p.isActive);

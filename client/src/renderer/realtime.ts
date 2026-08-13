@@ -4,7 +4,8 @@
  * Subscribes to `etn.realtime.*` and funnels events into the store:
  *  - status → `rtStatus` (🟢/🟡/🔴 indicator, H19 offline blocking);
  *  - events → narrowed via {@link isRealtimeEvent}, described for the status
- *    bar, then handed to the registered application handlers;
+ *    bar, then dispatched to every registered listener (canvas, editor,
+ *    history bar, drafts…);
  *  - `resume.stale` → full re-focus request;
  *  - derived effects: `focus-lost` (focused thought deleted) and
  *    `network-lost` (network deleted or self removed from members).
@@ -19,10 +20,8 @@ import { etn } from './lib/etn.js';
 import { describeEvent, isRealtimeEvent } from './lib/pure.js';
 import { store, type RtStatus } from './state.js';
 
-/** Application-level handlers registered by the app/canvas/editor modules. */
-export interface RealtimeHandlers {
-  /** Apply one accepted event to the UI (DOM patching / debounced refresh). */
-  onEvent: (evt: AnyRealtimeEvent) => void;
+/** Application-level effect callbacks (registered by the app controller). */
+export interface RealtimeEffects {
   /** `resume.stale` — the local event stream is behind; full re-focus needed. */
   onStale: () => void;
   /** The currently focused thought was deleted server-side. */
@@ -31,13 +30,14 @@ export interface RealtimeHandlers {
   onNetworkLost: () => void;
 }
 
-/** Registry of application handlers; content modules merge into it. */
-const handlers: RealtimeHandlers = {
-  onEvent: () => undefined,
+const effects: RealtimeEffects = {
   onStale: () => undefined,
   onFocusLost: () => undefined,
   onNetworkLost: () => undefined,
 };
+
+/** Event listeners — content modules register their own without clobbering. */
+const eventListeners = new Set<(evt: AnyRealtimeEvent) => void>();
 
 let initialized = false;
 let hideTimer: number | null = null;
@@ -46,11 +46,21 @@ let hideTimer: number | null = null;
 const EVENT_TEXT_TTL_MS = 5_000;
 
 /**
- * Registers/overrides application-level realtime handlers. Call at any time;
- * the subscriptions themselves are created once, on first use.
+ * Registers/overrides the derived-effect callbacks (stale/focus-lost/
+ * network-lost). Call at any time; subscriptions are created once.
  */
-export function registerRealtimeHandlers(next: Partial<RealtimeHandlers>): void {
-  Object.assign(handlers, next);
+export function setRealtimeEffects(next: Partial<RealtimeEffects>): void {
+  Object.assign(effects, next);
+}
+
+/**
+ * Subscribes to accepted realtime events. Returns the unsubscribe function.
+ */
+export function onRealtimeEvent(listener: (evt: AnyRealtimeEvent) => void): () => void {
+  eventListeners.add(listener);
+  return () => {
+    eventListeners.delete(listener);
+  };
 }
 
 /** Connects the realtime bridge. Called once at boot. */
@@ -65,7 +75,7 @@ export function initRealtime(): void {
   });
 
   etn.realtime.onStale(() => {
-    handlers.onStale();
+    effects.onStale();
   });
 
   etn.realtime.onEvent((raw: unknown) => {
@@ -76,15 +86,15 @@ export function initRealtime(): void {
 
     // Derived effects (04-realtime.md §7, G8 applier contracts).
     if (evt.type === 'thought.deleted' && store.state.focus?.focused.id === evt.data.id) {
-      handlers.onFocusLost();
+      effects.onFocusLost();
     }
     if (evt.type === 'network.deleted') {
-      handlers.onNetworkLost();
+      effects.onNetworkLost();
     }
     if (evt.type === 'member.removed' && store.state.me?.id === evt.data.user_id) {
-      handlers.onNetworkLost();
+      effects.onNetworkLost();
     }
-    handlers.onEvent(evt);
+    for (const listener of eventListeners) listener(evt);
   });
 }
 
