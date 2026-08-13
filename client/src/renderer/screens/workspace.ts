@@ -21,6 +21,7 @@ import { store, type RtStatus } from '../state.js';
 import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
 import { mountCanvas } from '../canvas/canvas.js';
 import { mountHistoryBar } from './history-bar.js';
+import { mountEditor } from '../editor/editor.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -180,11 +181,12 @@ export function buildWorkspace(): HTMLElement {
   };
   current = handles;
 
-  // Toolbar dropdown menus (H3/H18), the canvas engine (H4) and focus history (H7).
+  // Toolbar dropdown menus (H3/H18), canvas (H4), history (H7), editor (H8).
   wireNetMenu(handles);
   wireUserMenu(handles);
   mountCanvas(canvasHost);
   mountHistoryBar(historyHost);
+  mountEditor(editorHost);
 
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
   function refresh(): void {
@@ -197,6 +199,7 @@ export function buildWorkspace(): HTMLElement {
     setTooltip(statusDot, glyph.text);
     statusLeft.textContent = glyph.glyph;
     applyEditorPosition(body, st.editorPosition);
+    editorHost.classList.toggle('hidden', st.editorPosition === 'hidden');
     focusLabel.textContent = st.focus?.focused.title ?? '—';
     setTooltip(focusLabel, st.focus?.focused.title ?? '');
     eventLabel.textContent = st.lastEvent ?? '';
