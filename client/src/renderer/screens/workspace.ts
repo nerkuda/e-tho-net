@@ -18,12 +18,15 @@
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
 import { store, type RtStatus } from '../state.js';
+import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
   root: HTMLElement;
-  /** Toolbar labels/buttons refreshed from the store. */
+  /** Toolbar buttons/labels refreshed from the store. */
+  netMenuButton: HTMLButtonElement;
   netMenuLabel: HTMLSpanElement;
+  userMenuButton: HTMLButtonElement;
   userMenuLabel: HTMLSpanElement;
   statusDot: HTMLSpanElement;
   /** Search input in the toolbar (H13). */
@@ -155,7 +158,9 @@ export function buildWorkspace(): HTMLElement {
 
   const handles: WorkspaceHandles = {
     root,
+    netMenuButton,
     netMenuLabel,
+    userMenuButton,
     userMenuLabel,
     statusDot,
     searchInput,
@@ -172,6 +177,10 @@ export function buildWorkspace(): HTMLElement {
     refresh,
   };
   current = handles;
+
+  // Toolbar dropdown menus (H3/H18).
+  wireNetMenu(handles);
+  wireUserMenu(handles);
 
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
   function refresh(): void {
