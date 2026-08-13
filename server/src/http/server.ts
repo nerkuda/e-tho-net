@@ -44,6 +44,8 @@ import { createAdminNetworksRoutes } from '../routes/admin-networks.js';
 import type { RouteDeps } from '../routes/helpers.js';
 import { emitDomainEvent } from '../realtime/emit.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
+import { createApiKeyAuthProvider } from '../mcp/auth.js';
+import { createMcpHttpEndpoint } from '../mcp/http.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
 /** Interval between rate-limiter cleanup sweeps (06-auth.md §9), in milliseconds. */
@@ -248,6 +250,24 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   });
 
   app.get('/api/v1/version', async () => VERSION_PAYLOAD);
+
+  // --- MCP StreamableHTTP endpoint (phase F, 05-mcp-server.md §2) -----------
+  // Mounted when ETN_MCP_ENABLED=1; agents authenticate with the same
+  // API-keys as REST (Bearer). With ETN_MCP_PORT set, the entry point
+  // additionally serves the endpoint on a dedicated listener (see index.ts).
+  if (config.mcp.enabled) {
+    const mcpHttp = createMcpHttpEndpoint({
+      systemDb,
+      dataDir: config.dataDir,
+      pubsub,
+      authProvider: createApiKeyAuthProvider(systemDb),
+      logger,
+    });
+    await mcpHttp.register(app);
+    app.decorate('mcpHttp', mcpHttp);
+    app.addHook('onClose', () => mcpHttp.close());
+    logger.info('MCP endpoint enabled: /mcp (StreamableHTTP)');
+  }
 
   return app;
 }

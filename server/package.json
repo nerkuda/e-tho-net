@@ -22,7 +22,8 @@
     "fastify": "^4.27.0",
     "pino": "^9.14.0",
     "undici": "^6.19.8",
-    "ws": "^8.21.3"
+    "ws": "^8.21.3",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.10",

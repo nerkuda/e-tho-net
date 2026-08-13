@@ -38,6 +38,7 @@ const TEST_CONFIG: ServerConfig = {
   port: 0,
   tls: null,
   logLevel: 'silent',
+  mcp: { enabled: false, port: null },
 };
 
 /** Seed user + key material. */

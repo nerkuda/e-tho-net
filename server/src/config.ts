@@ -2,7 +2,8 @@
  * Server configuration: reads and validates the `ETN_*` environment variables.
  *
  * Required: `ETN_DATA_DIR` (absolute path to the data root). Optional: `ETN_HOST`,
- * `ETN_PORT`, `ETN_TLS_CERT`/`ETN_TLS_KEY` (both-or-neither), `ETN_LOG_LEVEL`.
+ * `ETN_PORT`, `ETN_TLS_CERT`/`ETN_TLS_KEY` (both-or-neither), `ETN_LOG_LEVEL`,
+ * `ETN_MCP_ENABLED`, `ETN_MCP_PORT`.
  *
  * A bad configuration raises {@link ConfigError} with a human-readable message;
  * the CLI/server entry point surfaces it to the operator at startup.
@@ -20,6 +21,23 @@ export interface TlsConfig {
   key: string;
 }
 
+/** MCP (Model Context Protocol) endpoint configuration (docs/05-mcp-server.md §2). */
+export interface McpConfig {
+  /**
+   * Whether the StreamableHTTP MCP endpoint (`/mcp`) is mounted on the HTTP
+   * server (`ETN_MCP_ENABLED=1`). When disabled, MCP agents still work through
+   * the stdio CLI command `etn mcp`.
+   */
+  enabled: boolean;
+  /**
+   * Dedicated TCP port for the MCP HTTP endpoint (`ETN_MCP_PORT`). When set,
+   * a second plain-HTTP listener is started on this port serving only `/mcp`
+   * (isolating agent traffic from the REST API); when `null` the endpoint is
+   * served on the main `ETN_PORT` listener.
+   */
+  port: number | null;
+}
+
 /** Fully-validated server configuration. */
 export interface ServerConfig {
   /** Absolute path to the data directory (`ETN_DATA_DIR`). */
@@ -32,6 +50,8 @@ export interface ServerConfig {
   tls: TlsConfig | null;
   /** pino log level (`ETN_LOG_LEVEL`). */
   logLevel: string;
+  /** MCP endpoint configuration (`ETN_MCP_ENABLED`, `ETN_MCP_PORT`). */
+  mcp: McpConfig;
 }
 
 /**
@@ -113,5 +133,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     tls = { cert: tlsCert, key: tlsKey };
   }
 
-  return { dataDir, host, port, tls, logLevel };
+  // --- ETN_MCP_ENABLED / ETN_MCP_PORT (docs/05-mcp-server.md §2) ---
+  const mcpEnabledRaw = env.ETN_MCP_ENABLED?.trim().toLowerCase() ?? '';
+  const mcpEnabled = ['1', 'true', 'yes', 'on'].includes(mcpEnabledRaw);
+  let mcpPort: number | null = null;
+  const mcpPortRaw = env.ETN_MCP_PORT?.trim();
+  if (mcpPortRaw !== undefined && mcpPortRaw !== '') {
+    const parsed = Number.parseInt(mcpPortRaw, 10);
+    if (!Number.isInteger(parsed) || parsed < PORT_MIN || parsed > PORT_MAX) {
+      throw new ConfigError(
+        `ETN_MCP_PORT must be an integer in [${PORT_MIN}, ${PORT_MAX}], got: ${JSON.stringify(mcpPortRaw)}`,
+      );
+    }
+    mcpPort = parsed;
+  }
+
+  return { dataDir, host, port, tls, logLevel, mcp: { enabled: mcpEnabled, port: mcpPort } };
 }
