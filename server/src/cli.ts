@@ -24,6 +24,7 @@ import { ConfigError, loadConfig, type ServerConfig } from './config.js';
 import { logger } from './logger.js';
 import { SystemDb } from './db/system-db.js';
 import { generateApiKey } from './auth/api-key.js';
+import { runStdioMcp } from './mcp/stdio.js';
 
 /** Error for CLI usage problems (missing/unknown arguments). */
 export class CliError extends Error {
@@ -91,6 +92,8 @@ const HELP_GLOBAL = `Использование: etn <команда> [опци�
 Команды:
   init    Первичная инициализация сервера: создаёт _system.db, первого
           администратора и первичный API-key.
+  mcp     MCP-сервер в stdio-режиме (для локальных AI-агентов). API-key —
+          через ETN_API_KEY или --api-key.
 
 Переменные окружения:
   ETN_DATA_DIR       Каталог данных сервера (обязательный).
@@ -99,6 +102,9 @@ const HELP_GLOBAL = `Использование: etn <команда> [опци�
   ETN_TLS_CERT,
   ETN_TLS_KEY        Сертификат и ключ для HTTPS/WSS (оба или ни одного).
   ETN_LOG_LEVEL      Уровень логирования (по умолчанию info).
+  ETN_MCP_ENABLED    1 — поднять HTTP-эндпоинт MCP /mcp на основном сервере.
+  ETN_MCP_PORT       Опционально: отдельный порт только для /mcp.
+  ETN_API_KEY        API-key для "etn mcp" (если не передан --api-key).
 
 Запустите: etn <команда> --help для справки по команде.`;
 
@@ -106,6 +112,40 @@ const HELP_INIT = `Использование: etn init --username <логин> 
 
 Создаёт корневого администратора и первичный API-key. Повторный запуск
 завершается ошибкой «уже инициализировано».`;
+
+const HELP_MCP = `Использование: etn mcp [--api-key <ключ>]
+
+Запускает MCP-сервер в stdio-режиме для локального AI-агента (например,
+Claude Desktop или IDE-агент). API-key берётся из --api-key или из
+переменной окружения ETN_API_KEY — без ключа запуск отклоняется.`;
+
+/** Parsed arguments for the `mcp` subcommand. */
+export interface McpArgs {
+  apiKey: string | null;
+}
+
+/**
+ * Parse `mcp` subcommand arguments. Accepts `--api-key`/`--api-key=...` and
+ * `--help`/`-h`. The key may also come from `ETN_API_KEY` (checked by the
+ * caller, which knows the env).
+ */
+export function parseMcpArgs(tokens: string[]): McpArgs {
+  let apiKey: string | null = null;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === undefined) break;
+    if (t === '--api-key') {
+      apiKey = tokens[++i] ?? null;
+    } else if (t.startsWith('--api-key=')) {
+      apiKey = t.slice('--api-key='.length);
+    } else if (t === '--help' || t === '-h') {
+      throw new CliError(HELP_MCP);
+    } else {
+      throw new CliError(`Неизвестный аргумент: ${t}`);
+    }
+  }
+  return { apiKey: apiKey?.trim() || null };
+}
 
 /** Print the global help text. */
 function printGlobalHelp(): void {
@@ -213,6 +253,34 @@ export async function main(opts: MainOptions = {}): Promise<number> {
       return 1;
     }
     return runInit(parsed, config);
+  }
+
+  if (command === 'mcp') {
+    let parsed: McpArgs;
+    try {
+      parsed = parseMcpArgs(tokens.slice(1));
+    } catch (err) {
+      console.error((err as Error).message);
+      return 1;
+    }
+    let config: ServerConfig;
+    try {
+      config = loadConfig(env);
+    } catch (err) {
+      console.error(
+        err instanceof ConfigError ? `Ошибка конфигурации: ${err.message}` : (err as Error).message,
+      );
+      return 1;
+    }
+    const apiKey = parsed.apiKey ?? env.ETN_API_KEY?.trim() ?? null;
+    try {
+      // Logger is built inside runStdioMcp (stderr-bound) to keep stdout clean.
+      await runStdioMcp({ dataDir: config.dataDir, apiKey });
+      return 0;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
   }
 
   console.error(`Неизвестная команда: ${command}`);

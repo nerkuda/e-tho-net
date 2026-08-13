@@ -45,6 +45,7 @@ const TEST_CONFIG: ServerConfig = {
   port: 0,
   tls: null,
   logLevel: 'silent',
+  mcp: { enabled: false, port: null },
 };
 
 /** A seeded user with a usable API-key. */

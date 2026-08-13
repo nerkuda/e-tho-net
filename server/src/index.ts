@@ -8,11 +8,13 @@
  */
 
 import { fileURLToPath } from 'node:url';
+import http from 'node:http';
 
 import { ConfigError, loadConfig } from './config.js';
 import { SystemDb } from './db/system-db.js';
 import { createServer } from './http/server.js';
 import { logger } from './logger.js';
+import { handleMcpNodeRequest } from './mcp/http.js';
 
 /** Run the server against `env`/`argv`. Exported for tests. */
 export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -48,8 +50,34 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     `ETN server listening on ${config.tls !== null ? 'https' : 'http'}://${config.host}:${config.port}`,
   );
 
+  // Dedicated MCP listener (05-mcp-server.md §2): when ETN_MCP_ENABLED=1 and
+  // ETN_MCP_PORT is set, /mcp is additionally served on its own port so agent
+  // traffic stays isolated from the REST API.
+  const mcpListener: http.Server | null =
+    config.mcp.enabled && config.mcp.port !== null
+      ? http.createServer((req, res) => {
+          void handleMcpNodeRequest(app.mcpHttp, req, res).catch((err: unknown) => {
+            logger.error({ err }, 'mcp: dedicated listener failed');
+            if (!res.headersSent) {
+              res.writeHead(500, { 'content-type': 'application/json' });
+            }
+            res.end(
+              JSON.stringify({ error: { code: 'INTERNAL', message: 'MCP endpoint failure' } }),
+            );
+          });
+        })
+      : null;
+  if (mcpListener !== null) {
+    mcpListener.listen(config.mcp.port as number, config.host, () => {
+      logger.info(`ETN MCP endpoint listening on http://${config.host}:${config.mcp.port}/mcp`);
+    });
+  }
+
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Shutting down ETN server');
+    if (mcpListener !== null) {
+      await new Promise<void>((resolve) => mcpListener.close(() => resolve()));
+    }
     await app.close();
     systemDb.close();
     logger.info('ETN server stopped');

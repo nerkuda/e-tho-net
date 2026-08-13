@@ -89,4 +89,33 @@ describe('loadConfig', () => {
       (err: unknown) => err instanceof ConfigError && /ETN_LOG_LEVEL/.test(err.message),
     );
   });
+
+  it('MCP endpoint is disabled by default', () => {
+    const cfg = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data' });
+    assert.equal(cfg.mcp.enabled, false);
+    assert.equal(cfg.mcp.port, null);
+  });
+
+  it('accepts ETN_MCP_ENABLED and ETN_MCP_PORT', () => {
+    const cfg = loadConfig({
+      ETN_DATA_DIR: '/tmp/etn-data',
+      ETN_MCP_ENABLED: '1',
+      ETN_MCP_PORT: '8787',
+    });
+    assert.equal(cfg.mcp.enabled, true);
+    assert.equal(cfg.mcp.port, 8787);
+  });
+
+  it('accepts ETN_MCP_ENABLED=true without a dedicated port', () => {
+    const cfg = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_MCP_ENABLED: 'true' });
+    assert.equal(cfg.mcp.enabled, true);
+    assert.equal(cfg.mcp.port, null);
+  });
+
+  it('throws on invalid ETN_MCP_PORT', () => {
+    assert.throws(
+      () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_MCP_PORT: 'abc' }),
+      (err: unknown) => err instanceof ConfigError && /ETN_MCP_PORT/.test(err.message),
+    );
+  });
 });

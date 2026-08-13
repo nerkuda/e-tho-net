@@ -36,6 +36,7 @@ const TEST_CONFIG: ServerConfig = {
   port: 0,
   tls: null,
   logLevel: 'silent',
+  mcp: { enabled: false, port: null },
 };
 
 async function buildApp(): Promise<{ app: FastifyInstance; sys: SystemDb; adminKey: string }> {
