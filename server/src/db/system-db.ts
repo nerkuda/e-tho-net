@@ -17,7 +17,7 @@ import type Database from 'better-sqlite3';
 import DatabaseConstructor from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 
-import type { ApiKey, AuditCategory, User } from '@etn/shared';
+import type { ApiKey, AuditCategory, NetworkRole, User } from '@etn/shared';
 
 import type { Logger } from '../logger.js';
 import { systemDbPath, systemMigrationsDir } from '../paths.js';
@@ -137,6 +137,7 @@ export class SystemDb {
   private readonly stTouchKeyUsed: Database.Statement;
   private readonly stInsertAudit: Database.Statement;
   private readonly stCountFirstUser: Database.Statement;
+  private readonly stGetMemberRole: Database.Statement;
 
   /**
    * Wrap an already-open connection and prepare all statements. Does not run
@@ -158,6 +159,9 @@ export class SystemDb {
       'INSERT INTO audit_log (ts, actor_user_id, network_id, category, action, target_type, target_id, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.stCountFirstUser = db.prepare('SELECT COUNT(*) AS c FROM users WHERE is_first_user = 1');
+    this.stGetMemberRole = db.prepare(
+      'SELECT role FROM network_members WHERE user_id = ? AND network_id = ? LIMIT 1',
+    );
   }
 
   /**
@@ -284,6 +288,15 @@ export class SystemDb {
   hasFirstUser(): boolean {
     const row = this.stCountFirstUser.get() as { c: number };
     return row.c > 0;
+  }
+
+  /**
+   * Look up a user's role within a network, or `null` when they are not a
+   * member (02-data-model.md §2.4). Used by the access-control layer (task B9).
+   */
+  getMemberRole(userId: string, networkId: string): NetworkRole | null {
+    const row = this.stGetMemberRole.get(userId, networkId) as { role: NetworkRole } | undefined;
+    return row?.role ?? null;
   }
 
   /**

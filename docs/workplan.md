@@ -235,11 +235,20 @@
 - **Спецификация:** [06-auth.md](06-auth.md), п. 3–5, 9.
 
 ### B9. Access-control middleware
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B8
+- **Статус:** `done` · **Assignee:** agent-B7 · **Зависимости:** B8
 - **Описание:** Хелперы `requireAuth`, `requireAdmin`, `requireNetworkMember(role?)`
   с кешем членства (in-memory, сбрасывается на события member.*). Логика: админ
   может управлять членством, но не читать данные сети без членства.
-- **DoD:** роли проверяются; несанкционированный доступ → 403.
+- **DoD:**
+  - [x] `requireAuth`/`requireAdmin`/`requireNetworkMember(role?)` работают;
+    несанкционированный доступ → 403.
+  - [x] In-memory кеш `NetworkMembersService` по `(user_id, network_id)` с
+    `invalidate()`; admins без членства отвергаются на чтение данных сети
+    (06-auth.md §4.3).
+- **Note:** `SystemDb.getMemberRole` добавлен для запроса членства. Guards
+  повторно проверяют `request.auth` (защита от route без auth-preHandler).
+  Связь invalidation ↔ pub/sub (`member.*`) подключается в B13 (routes вызывают
+  `app.members.invalidate` при изменении членства).
 - **Спецификация:** [06-auth.md](06-auth.md), п. 4–5.
 
 ### B10. Pub/sub по network_id

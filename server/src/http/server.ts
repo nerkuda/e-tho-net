@@ -22,6 +22,8 @@ import type { SystemDb } from '../db/system-db.js';
 import type { Logger } from '../logger.js';
 import { createAuthPreHandler, ensureAuthDecorator } from '../auth/auth-middleware.js';
 import { AuthRateLimiter } from '../auth/rate-limiter.js';
+import { createAccessControl } from '../auth/access-control.js';
+import { NetworkMembersService } from '../domain/network-members-service.js';
 import { normaliseError } from './errors.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -121,6 +123,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   const cleanupTimer = setInterval(() => rateLimiter.cleanup(), RATE_LIMITER_CLEANUP_MS);
   cleanupTimer.unref?.();
   app.addHook('onClose', () => clearInterval(cleanupTimer));
+
+  // --- Access control (task B9) --------------------------------------------
+  const members = new NetworkMembersService(systemDb);
+  app.decorate('members', members);
+  app.decorate('accessControl', createAccessControl(members));
 
   // --- Error handler (03-server-api.md §2) ---------------------------------
   app.setErrorHandler((err, req, reply) => {
