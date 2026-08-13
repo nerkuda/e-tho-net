@@ -1168,11 +1168,9 @@ export class RestClient {
   ): Promise<DuplicateCandidate[]> {
     const q: QueryRecord = { title };
     if (synonyms.length > 0) q['synonyms'] = synonyms;
-    return this.request(
-      'GET',
-      `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`,
-      { query: q },
-    );
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`, {
+      query: q,
+    });
   }
 
   // -------------------------------------------------------------------------

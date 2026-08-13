@@ -86,11 +86,7 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
           },
           getCurrentFocusId: (nid: string) => {
             if (!profile) return null;
-            return opts.localDb.getUiState(
-              profile.id,
-              nid,
-              UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID,
-            );
+            return opts.localDb.getUiState(profile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID);
           },
         },
         event,

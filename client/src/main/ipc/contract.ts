@@ -49,6 +49,7 @@ import type {
   ThoughtUpdateInput,
   User,
   UserFocusPreferences,
+  UserPreferenceEntry,
   VersionResponse,
 } from '@etn/shared';
 
@@ -145,7 +146,7 @@ export interface EtnApi {
     addMember(id: string, userId: string): Promise<NetworkMember>;
     removeMember(id: string, userId: string): Promise<void>;
     transferOwnership(id: string, userId: string): Promise<void>;
-    getPreferences(id: string): Promise<Record<string, unknown>>;
+    getPreferences(id: string): Promise<UserPreferenceEntry[]>;
     setPreference(id: string, key: string, value: unknown): Promise<void>;
   };
   thoughts: {
@@ -171,11 +172,7 @@ export interface EtnApi {
     search(networkId: string, request: SearchRequest): Promise<SearchResponse>;
     mentions(networkId: string, id: string): Promise<MentionHit[]>;
     /** `GET /thoughts/duplicates` — live duplicate candidates for the add dialog (H14). */
-    findDuplicates(
-      networkId: string,
-      title: string,
-      synonyms?: string[],
-    ): Promise<DuplicateHit[]>;
+    findDuplicates(networkId: string, title: string, synonyms?: string[]): Promise<DuplicateHit[]>;
     setFocusPreferences(
       networkId: string,
       focusId: string,

@@ -96,9 +96,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'server.addProfile',
-    bind(
-      (input: { label: string; baseUrl: string; apiKey: string }) => deps.addProfile(input),
-    ),
+    bind((input: { label: string; baseUrl: string; apiKey: string }) => deps.addProfile(input)),
   );
   handlers.set(
     'server.disconnect',
