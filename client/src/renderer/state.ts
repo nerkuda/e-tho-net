@@ -17,6 +17,7 @@ import {
   type Link,
   type LinkType,
   type Network,
+  type SortKind,
   type ThoughtType,
 } from '@etn/shared';
 
@@ -74,6 +75,10 @@ export interface AppState {
   lastEvent: string | null;
   /** Editor target; `null` means "follow the focused thought". */
   editorTarget: EditorTarget | null;
+  /** Per-zone sort of the open focus (drag-reorder is only allowed on `manual`). */
+  zoneSorts: { parents: SortKind; children: SortKind };
+  /** Display order of orderable zones (deduped neighbour ids of the open focus). */
+  zoneOrder: { parents: string[]; children: string[] };
   /** L4 `last_used_link_type_id` (add dialog default). */
   lastUsedLinkTypeId: string | null;
 }
@@ -100,6 +105,8 @@ const initial: AppState = {
   rtStatus: 'idle',
   lastEvent: null,
   editorTarget: null,
+  zoneSorts: { parents: 'created', children: 'created' },
+  zoneOrder: { parents: [], children: [] },
   lastUsedLinkTypeId: null,
 };
 

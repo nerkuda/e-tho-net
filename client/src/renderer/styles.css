@@ -836,6 +836,22 @@ textarea {
   outline-offset: 2px;
 }
 
+/* Cloud drag-n-drop targets (drag-cloud.ts): link onto a cloud / its top
+   ellipse, or move/reorder into a zone. */
+.cloud.drop-target-link {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.ellipse.drop-target-link {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.zone.drop-target-move {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+  outline-offset: -2px;
+}
+
 body.dragging,
 body.dragging .cloud,
 body.dragging .ellipse {

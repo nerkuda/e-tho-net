@@ -120,6 +120,21 @@ export async function openNetwork(networkId: string): Promise<void> {
 }
 
 /**
+ * Derives the per-zone sort and display order from a focus response, so the
+ * cloud drag module can decide reorder-vs-bounce-back and rebuild an order.
+ */
+function zoneStateFromFocus(response: FocusResponse): {
+  zoneSorts: FocusResponse['sorts'];
+  zoneOrder: { parents: string[]; children: string[] };
+} {
+  const order = (arr: typeof response.parents): string[] => [...new Set(arr.map((n) => n.id))];
+  return {
+    zoneSorts: response.sorts,
+    zoneOrder: { parents: order(response.parents), children: order(response.children) },
+  };
+}
+
+/**
  * Focuses a thought (H5): fetches the focus response, rotates local history
  * (H7) and persists the L4 current-focus key.
  */
@@ -127,7 +142,7 @@ export async function setFocus(id: string): Promise<void> {
   const networkId = requireNetworkId();
   const oldId = store.state.focus?.focused.id ?? null;
   const response = await etn.thoughts.focus(networkId, id);
-  store.update({ focus: response, editorTarget: null });
+  store.update({ focus: response, editorTarget: null, ...zoneStateFromFocus(response) });
   if (oldId !== null && oldId !== id) {
     void etn.history.rotate(oldId, id).catch(() => undefined);
   }
@@ -143,7 +158,7 @@ export async function refreshFocus(): Promise<void> {
   const focusId = store.state.focus?.focused.id;
   if (networkId === null || focusId === undefined) return;
   const response: FocusResponse = await etn.thoughts.focus(networkId, focusId);
-  store.update({ focus: response });
+  store.update({ focus: response, ...zoneStateFromFocus(response) });
 }
 
 /** Coalesces consecutive refresh requests into one call. */

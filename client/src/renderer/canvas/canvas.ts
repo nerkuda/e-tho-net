@@ -28,7 +28,8 @@ import { cloudFontSize, cloudHeight } from '../lib/pure.js';
 import { store } from '../state.js';
 import { initLinksOverlay } from './links.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
-import { showThoughtContextMenu, showZoneContextMenu, wireCloudReorder } from './context-menu.js';
+import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
+import { wireCloudDrag } from './drag-cloud.js';
 
 /** Zone directions of the canvas (parents/siblings/children). */
 export type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -149,11 +150,12 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   // Add-thought dialog (H14) and external file/URL drops (08-ui-spec.md §7).
   mountAddDialog();
   wireZoneExternalDrops({ parents: zoneParents, children: zoneChildren });
-  zoneSiblings.addEventListener('dragover', (event) => {
-    event.preventDefault(); // siblings are a forbidden drop target
-    zoneSiblings.classList.add('drop-forbidden');
+  // Internal cloud drag-n-drop (move / link / reorder / copy) — one delegation
+  // point on the canvas host; siblings are handled there as a non-target.
+  wireCloudDrag(host, {
+    getZoneEl: (dir) => zones?.[dir] ?? null,
+    getZoneOrder: (dir) => store.state.zoneOrder[dir],
   });
-  zoneSiblings.addEventListener('dragleave', () => zoneSiblings.classList.remove('drop-forbidden'));
 
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
@@ -164,6 +166,14 @@ export function mountCanvas(canvasHost: HTMLElement): void {
 /** Returns the cached metadata for a thought id, or null. */
 export function getRef(id: string): ThoughtRef | null {
   return refCache.get(id) ?? null;
+}
+
+/**
+ * Drops the cached metadata for a thought so the next render re-resolves it
+ * (icon/type/colors). Called on realtime `thought.updated`/`thought.deleted`.
+ */
+export function invalidateRef(id: string): void {
+  refCache.delete(id);
 }
 
 /** Returns the currently rendered focus cloud (H6 line anchoring). */
@@ -338,14 +348,12 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
     if (host?.isConnected === true) void renderZoneContent(dir);
   }).observe(zone);
 
-  // Zone context menu (sorting, H15) and manual drag-reorder (parents/children).
+  // Zone context menu (sorting, H15). Cloud drag-n-drop is wired once on the
+  // canvas host in mountCanvas.
   zone.addEventListener('contextmenu', (event) => {
     event.preventDefault();
     showZoneContextMenu(event, dir);
   });
-  if (dir !== 'siblings') {
-    wireCloudReorder(zone, dir, () => Array.from(zone.querySelectorAll<HTMLElement>('.cloud')));
-  }
 
   return zone;
 }
@@ -503,8 +511,11 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   } else {
     iconBox.textContent = ref?.icon ?? '💭';
   }
-  const title = el('div', 'cloud-title', ref?.title ?? '—');
-  setTooltip(title, ref?.title ?? '');
+  // Prefer the live neighbour title (fresh from the focus response) over the
+  // cached ref, which can lag behind after a rename until re-resolved.
+  const cloudTitle = entry.links[0]?.title ?? ref?.title ?? '—';
+  const title = el('div', 'cloud-title', cloudTitle);
+  setTooltip(title, cloudTitle);
   body.append(iconBox, title);
 
   const ind = div('cloud-ind');
