@@ -516,13 +516,27 @@
   `version` — update без `If-Match` (last-write-wins). Тесты: 9.
 
 ### C9. Сервис поиска (FTS5)
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C2
+- **Статус:** `done` · **Assignee:** agent-C7 · **Зависимости:** C2
 - **Описание:** Поиск по четырём группам (имена/тексты/связи/хронология) с
   фильтрами (subtree, scope, типы мыслей/связей, show_inactive). Snippet с
   `<mark>`-подсветкой. Список упоминаний для мысли.
-- **DoD:** поиск работает по всем 4 группам; фильтры применяются.
+- **DoD:**
+  - [x] поиск работает по всем 4 группам; фильтры применяются.
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 12–13;
   [02-data-model.md](02-data-model.md), п. 3.11.
+- **Note:** `server/src/domain/search-service.ts`. FTS5 используется только для
+  `MATCH` и `ORDER BY rank`; подсветка `<mark>` делается в JS по `title`/`body_md`
+  из JOIN (FTS5 `snippet()` в этой схеме возвращает UNINDEXED payload-колонку
+  вместо `text` — особенность сборки, обойдена детерминированным
+  highlighter-ом). Фильтр `in=subtree` — recursive CTE с path-циклозащитой
+  (inline, без зависимости от C11). `scope` гранулярный (`names|texts|links|
+  chronology|all`); legacy-маппинг `thoughts`→`names,texts` — на уровне REST-слоя
+  (D1). `findDuplicates` (title/synonym/partial с приоритетом) и `findMentions`
+  (MATCH title+synonyms через OR, исключая self). `resolveThoughts`
+  реэкспортирован из thought-service. Тесты: 12. **Расхождение/вопрос:** для
+  `total_in_group` делается отдельный COUNT-запрос (window-агрегат нельзя со
+  `snippet()`, но теперь snippet в JS — можно было бы вернуть к window; оставлено
+  2 запроса как более читаемое).
 
 ### C10. Создание мыслесети с HOME
 - **Статус:** `todo` · **Assignee:** — · **Зависимости:** C1, B13
