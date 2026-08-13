@@ -783,28 +783,47 @@
 - **Спецификация:** [03-server-api.md](03-server-api.md); [07-client-electron.md](07-client-electron.md), п. 4.1.
 
 ### G6. WebSocket-клиент
-- **Статус:** `in_progress` · **Assignee:** agent-G58 · **Зависимости:** G5
+- **Статус:** `done` · **Assignee:** agent-G58 · **Зависимости:** G5
 - **Описание:** WS в main: `resume {last_seq}` при подключении, обработка событий,
   пересылка в renderer через IPC, реконнект с jitter. Локальное хранение `last_seq`
   per (client, network).
-- **DoD:** события доходят до renderer; при обрыве — reconect и resume.
+- **DoD:**
+  - [x] события доходят до renderer; при обрыве — reconect и resume.
+- **Note:** `client/src/main/net/ws-client.ts` — `RealtimeClient` (TypedEmitter):
+  resume по last_seq из client_meta, ping/pong, `resume.stale`, коды 4401/4404,
+  экспоненциальный реконнект с jitter, тесты 11 (resume/reconnect/close-codes).
 - **Спецификация:** [04-realtime.md](04-realtime.md), п. 2;
   [11-settings-and-state.md](11-settings-and-state.md), п. 1.3.
 
 ### G7. IPC API
-- **Статус:** `in_progress` · **Assignee:** agent-G58 · **Зависимости:** G5, G6
+- **Статус:** `done` · **Assignee:** orchestrator · **Зависимости:** G5, G6
 - **Описание:** `contextBridge.exposeInMainWorld('etn', {...})`. Полный набор
   методов по [07-client-electron.md](07-client-electron.md), п. 6. Renderer не
   касается сети напрямую.
-- **DoD:** в renderer доступен типизированный `window.etn` со всеми методами.
+- **DoD:**
+  - [x] в renderer доступен типизированный `window.etn` со всеми методами.
+- **Note:** контракт `EtnApi` в `client/src/main/ipc/contract.ts`; handlers —
+  `ipc/handlers.ts` (фабрика `createHandlers`, единый `bind()` — единственная
+  точка доверия аргументам renderer'а, async-обёртка для ipcRenderer.invoke);
+  состояние подключения (RestClient/RealtimeClient/profile/текущая сеть) — в
+  `ipc/register.ts`; preload строит `window.etn` над каналом `etn:invoke`;
+  `env.d.ts` импортирует EtnApi. `main/index.ts` вызывает `registerIpc`. Тесты:
+  3 (routing, not-connected, unknown method).
 - **Спецификация:** [07-client-electron.md](07-client-electron.md), п. 6.
 
 ### G8. Применение real-time событий к UI-state
-- **Статус:** `in_progress` · **Assignee:** agent-G58 · **Зависимости:** G7
+- **Статус:** `done` · **Assignee:** orchestrator · **Зависимости:** G7
 - **Описание:** В renderer — стор UI-state, подписка на `realtime:event`.
   Применение created/updated/deleted/reordered. Подавление эха по
   `actor.client_id`/`request_id`. Конфликты → уведомление.
-- **DoD:** на событие другого пользователя UI обновляется без перезагрузки.
+- **DoD:**
+  - [x] на событие другого пользователя UI обновляется без перезагрузки.
+- **Note:** `client/src/main/realtime/applier.ts` — `RealtimeState` (in-memory
+  кэш thoughts/links) + `applyRealtimeEvent`: подавление эха по client_id,
+  stale-version guard, merge created/updated, focus_history-чистка при delete,
+  `focus-lost`/`network-lost` эффекты (self member.removed). Пересылка в renderer
+  — через broadcast из `register.ts` (подписка на `rt.onTyped('event')`).
+  Конфликтное уведомление в UI — на H-фазе. Тесты: 6.
 - **Спецификация:** [04-realtime.md](04-realtime.md), п. 7;
   [11-settings-and-state.md](11-settings-and-state.md), п. 1.4.
 
