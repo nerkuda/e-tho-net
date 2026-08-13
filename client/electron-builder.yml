@@ -1,0 +1,49 @@
+# electron-builder configuration for the ETN desktop client (task K1,
+# docs/07-client-electron.md §9).
+#
+# Build: `npm -w @etn/client run package` (electron-vite build + electron-builder).
+
+appId: dev.etn.app
+productName: ETN
+directories:
+  output: release
+  buildResources: build
+
+# electron-vite outputs to `out/`; pack main/preload/renderer from there.
+files:
+  - out/**/*
+  - package.json
+
+# Native module — rebuilt for Electron ABI by electron-builder automatically.
+asarUnpack:
+  - '**/*.node'
+
+# Windows: NSIS installer.
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+# macOS: dmg (arm64 + x64), hardened runtime for update signing.
+mac:
+  target:
+    - dmg
+  category: public.app-category.productivity
+  notarize: false
+
+# Linux: AppImage + deb.
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Utility
+
+# Auto-update source (task K4): GitHub Releases. The updater only acts in
+# packaged builds; DEV_MODE builds skip checks.
+publish:
+  provider: github
+  owner: etn-project
+  repo: etn

@@ -17,6 +17,7 @@ import { LocalDb } from './db/local-db.js';
 import { defaultMigrationsDir, localDbPath } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
 import { registerIpc } from './ipc/register.js';
+import { initAutoUpdater } from './updater.js';
 
 /**
  * Directory of the compiled main bundle (`out/main`). Renderer and preload
@@ -106,6 +107,9 @@ app
     });
 
     createWindow();
+
+    // Auto-update (K4): quiet check in packaged builds; inert in dev.
+    void initAutoUpdater(!isDev, () => BrowserWindow.getAllWindows()[0] ?? null);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
