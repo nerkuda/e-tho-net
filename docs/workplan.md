@@ -669,14 +669,23 @@
 - **Описание:** `GET /admin/networks`, `DELETE /admin/networks/{id}`,
   `PATCH /admin/networks/{id}/members`, `GET /admin/audit`.
 - **DoD:** — · **Спецификация:** [03-server-api.md](03-server-api.md), п. 4.2, 15.
+- **Note:** `GET /admin/audit` уже есть (B14). `GET/PATCH/DELETE /admin/networks`
+  — вне состава ветки `task/d1-d8-rest-routes`; коммит `[D7]` этой ветки
+  относится к другому содержанию (эндпоинт дубликатов, см. Note в D1).
 
 ### D8. Интеграционные тесты REST
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** D1–D7
+- **Статус:** `done` · **Assignee:** agent-D · **Зависимости:** D1–D7
 - **Описание:** Сквозные HTTP-тесты на ключевые сценарии (создание сети, добавление
   мыслей с дедупликацией через UI-диалог на уровне API, конфликты версий,
   роли/доступ).
-- **DoD:** все тесты зелёные; покрытие критичных путей.
+- **DoD:**
+  - [x] все тесты зелёные; покрытие критичных путей.
 - **Спецификация:** [09-scenarios.md](09-scenarios.md).
+- **Note:** `server/tests/routes-thoughts.test.ts`, `routes-links.test.ts`,
+  `routes-comments-attachments.test.ts`, `routes-search-export.test.ts` +
+  общий хелпер `server/tests/rest-helpers.ts` (реальная сеть через
+  `POST /networks`, контекст с HOME). Дедупликация диалога покрыта через
+  `GET /thoughts/duplicates` (см. Note в D1).
 
 ## 7. Фаза E — Сервер: real-time (WebSocket)
 
