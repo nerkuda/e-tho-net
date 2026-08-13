@@ -141,6 +141,7 @@ export async function showCreateNetworkDialog(): Promise<void> {
         {
           label: 'Создать',
           primary: true,
+          keepOpen: true,
           onClick: (close) => {
             void (async () => {
               if (creating) return;

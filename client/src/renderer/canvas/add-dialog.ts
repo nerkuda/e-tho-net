@@ -377,6 +377,7 @@ export function openAddDialog(ctx: {
         // In batch mode this inserts everything; the label keeps it simple.
         label: 'Добавить',
         primary: true,
+        keepOpen: true,
         onClick: () => {
           if (multi) void insertAll();
           else void insertSingle();

@@ -306,6 +306,7 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
               {
                 label: 'Удалить',
                 danger: true,
+                keepOpen: true,
                 onClick: (close: () => void) => {
                   void (async () => {
                     if (
@@ -333,6 +334,7 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
         {
           label: 'Сохранить',
           primary: true,
+          keepOpen: true,
           onClick: (close) => {
             void (async () => {
               const validTo = toInput.value === '' ? null : toInput.value;

@@ -12,8 +12,16 @@ export interface DialogButton {
   label: string;
   primary?: boolean;
   danger?: boolean;
-  /** Called on click; receives the close function. */
+  /**
+   * Called on click; receives the close function. By default a click also
+   * closes the dialog right after this returns (so "Отмена"/"Закрыть"/simple
+   * OK buttons need no extra handling). Set {@link keepOpen} when the button
+   * must stay open — e.g. validation or async work that decides whether to
+   * close — and call the passed `close` yourself on success.
+   */
   onClick?: (close: () => void) => void;
+  /** Keep the dialog open after {@link onClick} (validation/async flows). */
+  keepOpen?: boolean;
 }
 
 /** Options of {@link showDialog}. */
@@ -62,7 +70,12 @@ export function showDialog(opts: DialogOptions): () => void {
     for (const item of opts.buttons) {
       const btn = button(
         item.label,
-        () => item.onClick?.(close),
+        () => {
+          item.onClick?.(close);
+          // Default: a click dismisses the dialog. Buttons that need to stay
+          // open (validation/async) set `keepOpen: true` and close themselves.
+          if (item.keepOpen !== true) close();
+        },
         ['dialog-btn', item.primary === true ? 'primary' : '', item.danger === true ? 'danger' : '']
           .filter((c) => c !== '')
           .join(' '),

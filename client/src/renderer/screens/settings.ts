@@ -49,6 +49,7 @@ export function showVisibilitySettings(): void {
       { label: 'Закрыть', primary: true },
       {
         label: 'Сохранить',
+        keepOpen: true,
         onClick: () => {
           void (async () => {
             try {
@@ -99,6 +100,7 @@ export function showCloudSizeSettings(): void {
       { label: 'Закрыть', primary: true },
       {
         label: 'Сохранить',
+        keepOpen: true,
         onClick: () => {
           void (async () => {
             const width = clip(

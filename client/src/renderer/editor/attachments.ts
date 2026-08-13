@@ -230,6 +230,7 @@ function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
         {
           label: 'Добавить',
           primary: true,
+          keepOpen: true,
           onClick: (close) => {
             void (async () => {
               const kind = kindFile.checked ? 'file' : 'url';
