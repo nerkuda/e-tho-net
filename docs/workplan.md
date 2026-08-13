@@ -665,13 +665,18 @@
   В `export-service` у job хранится `format` (для MIME-типа скачивания).
 
 ### D7. Маршруты admin: сети и аудит
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B14
+- **Статус:** `done` · **Assignee:** orchestrator · **Зависимости:** B14
 - **Описание:** `GET /admin/networks`, `DELETE /admin/networks/{id}`,
   `PATCH /admin/networks/{id}/members`, `GET /admin/audit`.
-- **DoD:** — · **Спецификация:** [03-server-api.md](03-server-api.md), п. 4.2, 15.
-- **Note:** `GET /admin/audit` уже есть (B14). `GET/PATCH/DELETE /admin/networks`
-  — вне состава ветки `task/d1-d8-rest-routes`; коммит `[D7]` этой ветки
-  относится к другому содержанию (эндпоинт дубликатов, см. Note в D1).
+- **DoD:**
+  - [x] admin управляет любой сетью; `network.deleted` эмитится до удаления
+    registry-строки (FK event_log).
+- **Спецификация:** [03-server-api.md](03-server-api.md), п. 4.2, 15.
+- **Note:** `routes/admin-networks.ts` + `SystemDb.listAllNetworks()`.
+  `GET /admin/audit` уже был (B14). Эмиссия realtime событий во все
+  D-маршруты (E3-wiring) сделана оркестратором коммитом `8ad36fd`:
+  thought/link/type/property/comment/attachment.*, thought-view.updated,
+  user-focus-* (audience=user).
 
 ### D8. Интеграционные тесты REST
 - **Статус:** `done` · **Assignee:** agent-D · **Зависимости:** D1–D7
