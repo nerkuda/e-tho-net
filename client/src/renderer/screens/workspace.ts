@@ -19,6 +19,7 @@
 import { div, el, setTooltip, span } from '../lib/dom.js';
 import { store, type RtStatus } from '../state.js';
 import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
+import { mountCanvas } from '../canvas/canvas.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -178,9 +179,10 @@ export function buildWorkspace(): HTMLElement {
   };
   current = handles;
 
-  // Toolbar dropdown menus (H3/H18).
+  // Toolbar dropdown menus (H3/H18) and the canvas engine (H4).
   wireNetMenu(handles);
   wireUserMenu(handles);
+  mountCanvas(canvasHost);
 
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
   function refresh(): void {
