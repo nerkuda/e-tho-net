@@ -606,12 +606,18 @@
 > После C. Задачи D1–D8 можно вести параллельно между собой.
 
 ### D1. Routes /thoughts
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3, C12
+- **Статус:** `done` · **Assignee:** agent-D · **Зависимости:** C3, C12
 - **Описание:** Все эндпоинты раздела 6: CRUD, focus, neighbors, search, batch,
   resolve, focus-preferences, focus-order.
-- **DoD:** end-to-end CRUD через HTTP работает, статусы ошибок соответствуют
-  спецификации.
+- **DoD:**
+  - [x] end-to-end CRUD через HTTP работает, статусы ошибок соответствуют
+    спецификации.
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 6.
+- **Note:** `server/src/routes/thoughts.ts` (`createThoughtsRoutes`). Поиск и
+  дедупликация (§12, D7) — в отдельных задачах. В `thought-service.getNeighbors`
+  добавлен фильтр `type_id` (§6.7), в `link-service` — `findLinksBetween`
+  (для batch `unlink_from_focus`). Общий хелпер парсинга тела/If-Match —
+  `server/src/routes/helpers.ts`.
 
 ### D2. Routes /links
 - **Статус:** `todo` · **Assignee:** — · **Зависимости:** C4

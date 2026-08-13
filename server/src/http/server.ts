@@ -31,6 +31,7 @@ import { meRoutes } from '../routes/me.js';
 import { usersRoutes } from '../routes/users.js';
 import { createNetworksRoutes } from '../routes/networks.js';
 import { auditRoutes } from '../routes/audit.js';
+import { createThoughtsRoutes } from '../routes/thoughts.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -171,6 +172,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     { prefix: '/api/v1' },
   );
   await app.register(auditRoutes, { prefix: '/api/v1' });
+
+  // Thought routes (task D1): CRUD, focus, neighbours, batch, resolve,
+  // mentions, focus preferences/order (03-server-api.md §6).
+  await app.register(createThoughtsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
   app.get('/api/v1/health', async () => {

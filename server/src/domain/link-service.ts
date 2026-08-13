@@ -146,6 +146,33 @@ function getLinkOrThrow(ndb: NetworkDb, id: string): Link {
   return link;
 }
 
+/**
+ * List every link between two thoughts (either direction excluded — this is a
+ * directed lookup from `sourceId` to `targetId`). Backs the
+ * `unlink_from_focus` batch operation (03-server-api.md §6.6).
+ *
+ * @param typeId - when provided, only links of that type are returned;
+ *   `null` matches untyped links only, `undefined` (default) matches any type.
+ */
+export function findLinksBetween(
+  ndb: NetworkDb,
+  sourceId: string,
+  targetId: string,
+  typeId?: string | null,
+): Link[] {
+  const rows =
+    typeId === undefined
+      ? (ndb
+          .prepare('SELECT * FROM links WHERE source_id = ? AND target_id = ?')
+          .all(sourceId, targetId) as LinkRow[])
+      : (ndb
+          .prepare(
+            `SELECT * FROM links WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ?`,
+          )
+          .all(sourceId, targetId, NULL_TYPE_SENTINEL, typeIdOrSentinel(typeId)) as LinkRow[]);
+  return rows.map(rowToLink);
+}
+
 // ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------
