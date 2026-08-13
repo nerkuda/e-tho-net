@@ -145,6 +145,27 @@ describe('Realtime applier (G8)', () => {
     assert.equal(state.getThought('t1'), null);
   });
 
+  it('prunes focus history on own-client thought.deleted despite echo suppression', () => {
+    // Regression: deleting a thought from this client must still remove it from
+    // the local focus history. The cache write is echo-suppressed, but the
+    // history prune is a local sync that must run for own echoes too.
+    const state = new RealtimeState();
+    state.setThought(thought('t1', 'Mine'));
+    let historyCleanups = 0;
+    const result = applyRealtimeEvent(
+      state,
+      makeHooks({
+        removeFromFocusHistoryEverywhere: () => {
+          historyCleanups++;
+        },
+      }),
+      envelope('thought.deleted', { id: 't1' }, 'my-client'),
+    );
+    assert.equal(result.applied, false); // echo: cache mutation + forwarding skipped
+    assert.equal(state.getThought('t1')?.title, 'Mine'); // not removed from cache
+    assert.equal(historyCleanups, 1); // but history pruned regardless of actor
+  });
+
   it('reports network-lost on self member.removed', () => {
     const state = new RealtimeState();
     const result = applyRealtimeEvent(

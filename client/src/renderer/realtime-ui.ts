@@ -16,7 +16,7 @@
 import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { scheduleRefresh } from './app.js';
-import { invalidateIndicators } from './canvas/canvas.js';
+import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { store } from './state.js';
 
@@ -37,6 +37,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
   switch (evt.type) {
     case 'thought.deleted':
       invalidateIndicators(evt.data.id);
+      invalidateRef(evt.data.id);
       invalidateHistoryBar();
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
       break;
@@ -46,6 +47,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       break;
 
     case 'thought.updated':
+      invalidateRef(evt.data.id);
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
       break;
 

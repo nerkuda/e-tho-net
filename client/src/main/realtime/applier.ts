@@ -80,6 +80,14 @@ export function applyRealtimeEvent(
   hooks: ApplierHooks,
   event: AnyRealtimeEvent,
 ): ApplyResult {
+  // A deleted thought must leave the local focus history no matter who removed
+  // it — including this client's own echoes (echo suppression below skips the
+  // rest of the handling for own writes, but the history prune is a local
+  // sync, not a cache mutation).
+  if (event.type === 'thought.deleted') {
+    hooks.removeFromFocusHistoryEverywhere(event.data.id);
+  }
+
   // Echo suppression (11-settings-and-state.md §1.4): never re-apply own writes.
   if (event.actor.client_id && event.actor.client_id === hooks.getClientId()) {
     return { applied: false, effect: 'none' };
@@ -101,8 +109,8 @@ export function applyRealtimeEvent(
       return { applied: true, effect: 'none' };
     }
     case 'thought.deleted': {
+      // Focus-history prune already ran above (it must run for own echoes too).
       state.deleteThought(event.data.id);
-      hooks.removeFromFocusHistoryEverywhere(event.data.id);
       const effect =
         hooks.getCurrentFocusId(event.network_id) === event.data.id ? 'focus-lost' : 'none';
       return { applied: true, effect };
