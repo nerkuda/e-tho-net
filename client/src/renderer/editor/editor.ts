@@ -29,6 +29,11 @@ import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
+import { registerCommentGroups } from './comments.js';
+import { registerAttachmentGroup } from './attachments.js';
+import { registerPropertiesGroup } from './properties.js';
+import { registerLinksGroup } from './links-group.js';
+import { registerMentionsGroup } from './mentions.js';
 
 /** What the editor currently edits. */
 export interface EditorContext {
@@ -50,6 +55,11 @@ let lastSignature = '';
 /** Registers an editor group builder (H9–H12). */
 export function registerGroupBuilder(builder: GroupBuilder): void {
   groupBuilders.push(builder);
+}
+
+/** Opens a link in the editor without changing the focus (H6/H11). */
+export function openLinkInEditor(link: Link): void {
+  store.update({ editorTarget: { kind: 'link', id: link.id, link } });
 }
 
 /** Current editor context: the picked link or the focused thought. */
@@ -101,6 +111,13 @@ export function mountEditor(editorHost: HTMLElement): void {
     store.update({ collapsedGroups: { ...map, [entityId]: entity } });
     persistCollapsed();
   });
+
+  // Editor groups (H9–H12).
+  registerCommentGroups();
+  registerAttachmentGroup();
+  registerPropertiesGroup();
+  registerLinksGroup();
+  registerMentionsGroup();
 
   // Clicking a link line on the canvas opens the link here (H6 ↔ H8).
   setLinkEditorOpener((link) => {
