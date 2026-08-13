@@ -60,7 +60,12 @@ function createWindow(): BrowserWindow {
       // dev (`electron-vite dev`) and packaged builds both work without config
       // forks.
       preload: path.join(__dirname, '../preload/index.mjs'),
-      sandbox: true,
+      // sandbox disabled: Electron's sandbox uses a restricted loader that
+      // cannot import ESM preload scripts. Keeping `contextIsolation: true` +
+      // `nodeIntegration: false` + a trusted first-party preload preserves the
+      // meaningful security boundary — the renderer still cannot reach Node or
+      // the preload context directly, only the curated `window.etn` surface.
+      sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
     },
