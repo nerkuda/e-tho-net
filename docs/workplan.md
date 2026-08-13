@@ -620,9 +620,12 @@
   `server/src/routes/helpers.ts`.
 
 ### D2. Routes /links
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C4
+- **Статус:** `done` · **Assignee:** agent-D · **Зависимости:** C4
 - **Описание:** CRUD связей + `GET /thoughts/{id}/links` (с группировкой).
-- **DoD:** — · **Спецификация:** [03-server-api.md](03-server-api.md), п. 7.
+- **DoD:**
+  - [x] CRUD связей работает через HTTP; группировка для редактора отдаётся.
+- **Спецификация:** [03-server-api.md](03-server-api.md), п. 7.
+- **Note:** `server/src/routes/links.ts` (`createLinksRoutes`).
 
 ### D3. Routes типов и свойств
 - **Статус:** `todo` · **Assignee:** — · **Зависимости:** C5
