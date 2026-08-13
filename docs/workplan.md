@@ -757,15 +757,33 @@
 - **Спецификация:** [11-settings-and-state.md](11-settings-and-state.md), п. 1.
 
 ### G5. REST-клиент
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** G2, G4
+- **Статус:** `done` · **Assignee:** agent-G58 · **Зависимости:** G2, G4
 - **Описание:** Обёртка над `undici`/fetch в main процессе: Bearer, Client-Id,
   Client-Request-Id на изменяющих запросах, retry на 5xx, таймауты, типизированные
   методы по всем ресурсам.
 - **DoD:** из main можно вызывать любой endpoint из [03-server-api.md](03-server-api.md).
+- [x] `client/src/main/net/rest-client.ts` — `RestClient` (fetch-based, без новых
+  runtime-deps): Bearer + Client-Id на каждом запросе; `Client-Request-Id` и
+  `If-Match` (опционально) на изменяющих; retry 5xx/сети (3 попытки, full-jitter);
+  таймаут ответа 30 с (AbortSignal); `EtnError` из канонического `{error}` тела.
+- [x] Методы по всем разделам 03-server-api.md §3–16: me/keys, admin users+keys,
+  admin networks/audit, networks+members+preferences, thoughts (CRUD/focus/
+  neighbors/batch/resolve/focus-preferences/order), links (+grouped), types
+  (thought/link + property definitions), property values (thought/link), comments,
+  attachments, search, mentions, export/jobs, health/version.
+- [x] Тесты (`client/tests/rest-client.test.ts`, 15 cases): заголовки, query
+  (включая массивы и `undefined`), парсинг envelope/`meta`/204, `EtnError` для
+  канонического и не-канонического тела, отсутствие retry на 4xx, retry на 5xx и
+  сетевых ошибках (3 попытки).
+- **Note:** используется встроенный `fetch` (Node 20+/Electron main) — `undici` не
+  добавлялся. `baseUrl` тримит trailing slash; пути `encodeURIComponent`-ятся;
+  массивы query повторяются (`type_id=a&type_id=b`). API-key резолвится лениво в
+  каждой попытке (устойчивость к ротации ключа). Для health/version (`/health`,
+  `/version`) — отдельный путь без префикса `/api/v1` и без auth-заголовка.
 - **Спецификация:** [03-server-api.md](03-server-api.md); [07-client-electron.md](07-client-electron.md), п. 4.1.
 
 ### G6. WebSocket-клиент
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** G5
+- **Статус:** `in_progress` · **Assignee:** agent-G58 · **Зависимости:** G5
 - **Описание:** WS в main: `resume {last_seq}` при подключении, обработка событий,
   пересылка в renderer через IPC, реконнект с jitter. Локальное хранение `last_seq`
   per (client, network).
@@ -774,7 +792,7 @@
   [11-settings-and-state.md](11-settings-and-state.md), п. 1.3.
 
 ### G7. IPC API
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** G5, G6
+- **Статус:** `in_progress` · **Assignee:** agent-G58 · **Зависимости:** G5, G6
 - **Описание:** `contextBridge.exposeInMainWorld('etn', {...})`. Полный набор
   методов по [07-client-electron.md](07-client-electron.md), п. 6. Renderer не
   касается сети напрямую.
@@ -782,7 +800,7 @@
 - **Спецификация:** [07-client-electron.md](07-client-electron.md), п. 6.
 
 ### G8. Применение real-time событий к UI-state
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** G7
+- **Статус:** `in_progress` · **Assignee:** agent-G58 · **Зависимости:** G7
 - **Описание:** В renderer — стор UI-state, подписка на `realtime:event`.
   Применение created/updated/deleted/reordered. Подавление эха по
   `actor.client_id`/`request_id`. Конфликты → уведомление.
