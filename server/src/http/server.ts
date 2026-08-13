@@ -33,6 +33,7 @@ import { createNetworksRoutes } from '../routes/networks.js';
 import { auditRoutes } from '../routes/audit.js';
 import { createThoughtsRoutes } from '../routes/thoughts.js';
 import { createLinksRoutes } from '../routes/links.js';
+import { createTypesRoutes } from '../routes/types.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -180,6 +181,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // Link routes (task D2): CRUD + grouped editor listing (03-server-api.md §7).
   await app.register(createLinksRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+
+  // Type routes (task D3): thought/link types + type_properties (03-server-api.md §8).
+  await app.register(createTypesRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
   app.get('/api/v1/health', async () => {

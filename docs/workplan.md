@@ -628,9 +628,14 @@
 - **Note:** `server/src/routes/links.ts` (`createLinksRoutes`).
 
 ### D3. Routes типов и свойств
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C5
+- **Статус:** `done` · **Assignee:** agent-D · **Зависимости:** C5
 - **Описание:** Эндпоинты для `thought-types`, `link-types` и их свойств.
-- **DoD:** — · **Спецификация:** [03-server-api.md](03-server-api.md), п. 8.
+- **DoD:**
+  - [x] CRUD типов и их свойств работает через HTTP; force-delete работает.
+- **Спецификация:** [03-server-api.md](03-server-api.md), п. 8.
+- **Note:** `server/src/routes/types.ts` (`createTypesRoutes`). Reorder свойств —
+  `PUT …/types/:id/properties/reorder { ordered_ids }` (в спецификации §8 путь
+  не зафиксирован — выбрано явное имя).
 
 ### D4. Routes /properties
 - **Статус:** `todo` · **Assignee:** — · **Зависимости:** C6
