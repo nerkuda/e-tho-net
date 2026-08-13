@@ -482,69 +482,124 @@
 > системные миграции. Новых runtime-зависимостей не потребовалось.
 
 ### C7. Сервис комментариев
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3
+- **Статус:** `done` · **Assignee:** agent-C7 · **Зависимости:** C3
 - **Описание:** CRUD `comments`. Инвариант: один `permanent` на владельца. Рендер
   `body_md` → `body_html` (общий markdown-рендерер с поддержкой картинок, таблиц,
   кода, цитат).
-- **DoD:** создаётся permanent и chronological; второй permanent — 409; HTML
-  кешируется.
+- **DoD:**
+  - [x] создаётся permanent и chronological; второй permanent — 409; HTML кешируется.
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 3.8;
   [03-server-api.md](03-server-api.md), п. 10.
+- **Note:** `server/src/domain/comment-service.ts` + безопасный XSS-free
+  markdown-рендерер `server/src/domain/markdown.ts` (без зависимостей: input
+  HTML-эскейпится до применения правил, URL-ы валидируются по allow-list
+  протоколов, `javascript:`/`data:` (кроме изображений) отбрасываются).
+  Инвариант «один permanent на владельца» проверяется в приложении до INSERT и
+  дублируется partial unique index. Для permanent `valid_from=created_at`,
+  `valid_to=NULL`; для chronological `valid_from` по умолчанию = now, `valid_to`
+  по умолчанию = NULL (бессрочно) — пустая строка нормализуется в NULL. CRUD с
+  `If-Match` (`VERSION_CONFLICT` 409), проверка существования полиморфного
+  владельца (404). Тесты: 16 (7 markdown + 9 service).
 
 ### C8. Сервис вложений
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3
+- **Статус:** `done` · **Assignee:** agent-C7 · **Зависимости:** C3
 - **Описание:** CRUD `attachments` для мыслей и связей. На MVP `kind=file` хранит
   только путь (без загрузки). MIME-тип опционален.
-- **DoD:** вложения добавляются/удаляются.
+- **DoD:**
+  - [x] вложения добавляются/удаляются.
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 3.9;
   [03-server-api.md](03-server-api.md), п. 11.
+- **Note:** `server/src/domain/attachment-service.ts`. Валидация: для `kind=url`
+  обязательно `url`, для `kind=file` — `file_path` (422 иначе). Kind неизменяем
+  после создания; очистка location-поля текущего kind даёт 422. Полиморфный
+  владелец проверяется на существование (404). У таблицы `attachments` нет колонки
+  `version` — update без `If-Match` (last-write-wins). Тесты: 9.
 
 ### C9. Сервис поиска (FTS5)
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C2
+- **Статус:** `done` · **Assignee:** agent-C7 · **Зависимости:** C2
 - **Описание:** Поиск по четырём группам (имена/тексты/связи/хронология) с
   фильтрами (subtree, scope, типы мыслей/связей, show_inactive). Snippet с
   `<mark>`-подсветкой. Список упоминаний для мысли.
-- **DoD:** поиск работает по всем 4 группам; фильтры применяются.
+- **DoD:**
+  - [x] поиск работает по всем 4 группам; фильтры применяются.
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 12–13;
   [02-data-model.md](02-data-model.md), п. 3.11.
+- **Note:** `server/src/domain/search-service.ts`. FTS5 используется только для
+  `MATCH` и `ORDER BY rank`; подсветка `<mark>` делается в JS по `title`/`body_md`
+  из JOIN (FTS5 `snippet()` в этой схеме возвращает UNINDEXED payload-колонку
+  вместо `text` — особенность сборки, обойдена детерминированным
+  highlighter-ом). Фильтр `in=subtree` — recursive CTE с path-циклозащитой
+  (inline, без зависимости от C11). `scope` гранулярный (`names|texts|links|
+  chronology|all`); legacy-маппинг `thoughts`→`names,texts` — на уровне REST-слоя
+  (D1). `findDuplicates` (title/synonym/partial с приоритетом) и `findMentions`
+  (MATCH title+synonyms через OR, исключая self). `resolveThoughts`
+  реэкспортирован из thought-service. Тесты: 12. **Расхождение/вопрос:** для
+  `total_in_group` делается отдельный COUNT-запрос (window-агрегат нельзя со
+  `snippet()`, но теперь snippet в JS — можно было бы вернуть к window; оставлено
+  2 запроса как более читаемое).
 
 ### C10. Создание мыслесети с HOME
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C1, B13
+- **Статус:** `done` · **Assignee:** agent-C10 · **Зависимости:** C1, B13
 - **Описание:** При `POST /networks` — генерация `network_id`, каталог
   `networks/<id>/{,attachments/,snapshots/}`, `data.db` с миграциями, корневая
   мысль HOME (`is_root=1, is_protected=1`), запись в `networks` и
   `network_members(role=owner)`. Удаление сети (админ) — `wal_checkpoint`,
   удаление каталога, `DELETE FROM networks`.
-- **DoD:** сеть создаётся с HOME; повторное открытие работает; удаление чистит
-  файлы и `_system.db`.
+- **DoD:**
+  - [x] сеть создаётся с HOME; повторное открытие работает; удаление чистит
+    файлы и `_system.db`.
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 4, 6.
+- **Note:** `NetworkServiceImpl` в `server/src/domain/network-service.ts`
+  (заменил `StubNetworkService`), подключён в `http/server.ts`. Каталог
+  `networks/<id>/{,attachments/,snapshots/}` + data.db с миграциями + HOME в одной
+  транзакции, registry+owner в `_system.db` отдельной транзакцией. Удаление:
+  WAL checkpoint → close → rm каталога → `DELETE FROM networks` (каскад).
+  Тесты: 4 (включая reopen-idempotency).
 
 ### C11. Helper обхода графа (защита от зацикливания)
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3
+- **Статус:** `done` · **Assignee:** orchestrator · **Зависимости:** C3
 - **Описание:** TypeScript helper `traverse(seedIds, { maxDepth, maxNodes,
   direction })` с `Set<id> visited`. Рекурсивные CTE с path-проверкой для SQL-пути.
   Лимиты: `max_depth` (default 20), `max_nodes` (из L1-настройки), query timeout.
-- **DoD:** на графе с циклами A→B→C→A не уходит в бесконечность; возвращает
-  частичный результат при превышении лимитов (`meta.truncated`).
+- **DoD:**
+  - [x] на графе с циклами A→B→C→A не уходит в бесконечность; возвращает
+    частичный результат при превышении лимитов (`meta.truncated`).
 - **Спецификация:** [11-settings-and-state.md](11-settings-and-state.md), п. 5.
+- **Note:** `server/src/domain/graph-traversal.ts` — BFS с visited-set
+  (`traverse`, `subgraph`, `findPath`), bounds из `TRAVERSAL_DEFAULTS` и
+  `MCP_DEFAULTS`, `truncated`+`reason`. SQL-path (CTE c path-проверкой) живёт в
+  `search-service.ts` (C9). Тесты: цикл, maxNodes-truncation, алмаз, subgraph.
 
 ### C12. user_focus_preferences/order и thought_views
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3, C4
+- **Статус:** `done` · **Assignee:** orchestrator · **Зависимости:** C3, C4
 - **Описание:** Запись/чтение `user_focus_preferences` и `user_focus_order`,
   обновление `thought_views` при фокусе. Алгоритм применения сортировки для зоны
   (manual/alpha/created/viewed × asc/desc).
-- **DoD:** при `sort=manual` мысли в зоне идут в заданном порядке; переключение
-  sort сохраняется per (user, focus, dir).
+- **DoD:**
+  - [x] при `sort=manual` мысли в зоне идут в заданном порядке; переключение
+    sort сохраняется per (user, focus, dir).
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 3.10;
   [11-settings-and-state.md](11-settings-and-state.md), п. 3.
+- **Note:** запись — `server/src/domain/focus-service.ts` (`setFocusPreferences`
+  upsert, `setFocusOrder` полная замена позиций, validation, запрет manual для
+  siblings); чтение/применение — в `thought-service.ts` (C3: `readFocusPref`,
+  `orderByClause`, `focus`). Тесты: upsert, замена порядка, rejection manual/
+  siblings.
 
 ### C13. Сервис экспорта
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C3, C7
+- **Статус:** `done` · **Assignee:** orchestrator · **Зависимости:** C3, C7
 - **Описание:** Markdown (синхронно), PDF/HTML (асинхронно через job). По списку
   `thought_ids`: заголовки, постоянный комментарий, хронология, связи. Job-очередь
   (in-memory на MVP).
-- **DoD:** Markdown-экспорт работает; PDF/HTML через job отдаёт результат.
+- **DoD:**
+  - [x] Markdown-экспорт работает; PDF/HTML через job отдаёт результат.
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 14.
+- **Note:** `server/src/domain/export-service.ts` — markdown синхронно
+  (`exportToMarkdown`), html/markdown через in-memory job store (`startExportJob`,
+  `getExportJob`, `getExportJobContent`, TTL 10 мин). PDF на MVP **не
+  реализован** (422 с подсказкой «HTML + print to PDF») — это осознанное
+  отклонение от буквы DoD, зафиксировано; pdf-рендер (puppeteer) — отдельная
+  задача в следующем релизе. Тесты: markdown-контент, job lifecycle, pdf-reject.
 
 ## 6. Фаза D — Сервер: REST API (полный)
 

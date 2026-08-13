@@ -1,14 +1,17 @@
 /**
  * Integration tests for /networks routes (task B13) via app.inject.
  *
- * Requires the `better-sqlite3` native binding; skipped otherwise. Because the
- * real NetworkService (task C10) is a stub that throws, networks + memberships
- * are seeded directly into `_system.db`, then GET/PATCH/members/preferences
- * flows are exercised.
+ * Requires the `better-sqlite3` native binding; skipped otherwise. Most flows
+ * seed networks + memberships directly into `_system.db` and exercise
+ * GET/PATCH/members/preferences; the POST test (updated in C10) drives the real
+ * {@link NetworkServiceImpl} against a throwaway data directory.
  */
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import DatabaseConstructor from 'better-sqlite3';
@@ -169,20 +172,52 @@ describe(
       }
     });
 
-    it('POST /networks hits the C10 stub (500 until C10)', async () => {
-      const { app, sys, admin } = await buildApp();
+    it('POST /networks creates a real network (C10)', async () => {
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-post-'));
+      const db: Database.Database = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, systemMigrationsDir());
+      const sys = new SystemDb(db);
+      const adminId = randomUUID();
+      sys.createUser({
+        id: adminId,
+        username: 'admin',
+        displayName: 'Admin',
+        isAdmin: true,
+        isFirstUser: true,
+      });
+      const gen = generateApiKey();
+      sys.createApiKey({
+        id: randomUUID(),
+        userId: adminId,
+        label: 'primary',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+      });
+      const app = await createServer({
+        config: { ...TEST_CONFIG, dataDir },
+        systemDb: sys,
+        logger: createLogger('silent'),
+      });
       try {
         const res = await app.inject({
           method: 'POST',
           url: '/api/v1/networks',
-          headers: { authorization: `Bearer ${admin.key}` },
+          headers: { authorization: `Bearer ${gen.key}` },
           payload: { display_name: 'Brand new' },
         });
-        assert.equal(res.statusCode, 500);
-        assert.equal(res.json().error.code, 'INTERNAL');
+        assert.equal(res.statusCode, 201);
+        const created = res.json().data as { id: string; display_name: string; owner_id: string };
+        assert.equal(created.display_name, 'Brand new');
+        assert.equal(created.owner_id, adminId);
+        // The per-network directory and data.db were created on disk.
+        assert.ok(fs.existsSync(path.join(dataDir, 'networks', created.id, 'data.db')));
+        // The owner membership was recorded in _system.db.
+        assert.equal(sys.getMemberRole(adminId, created.id), 'owner');
       } finally {
         await app.close();
         sys.close();
+        fs.rmSync(dataDir, { recursive: true, force: true });
       }
     });
 

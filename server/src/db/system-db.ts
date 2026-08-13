@@ -552,6 +552,16 @@ export class SystemDb {
   }
 
   /**
+   * Delete a network registry row (task C10, docs/02-data-model.md §6). Cascades
+   * to `network_members` and server-side `user_preferences` via FK ON DELETE
+   * CASCADE. Callers (NetworkService) must already have WAL-checkpointed and
+   * removed the per-network directory.
+   */
+  deleteNetworkRow(id: string): void {
+    this.db.prepare('DELETE FROM networks WHERE id = ?').run(id);
+  }
+
+  /**
    * List the networks a user belongs to, with their role and owner reference
    * (03-server-api.md §5.1). `my_focus_thought_id` is L4 client state and is
    * always `null` from the server.
