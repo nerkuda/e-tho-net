@@ -20,8 +20,13 @@ import websocketPlugin from '@fastify/websocket';
 import type { ServerConfig } from '../config.js';
 import type { SystemDb } from '../db/system-db.js';
 import type { Logger } from '../logger.js';
+import { createAuthPreHandler, ensureAuthDecorator } from '../auth/auth-middleware.js';
+import { AuthRateLimiter } from '../auth/rate-limiter.js';
 import { normaliseError } from './errors.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
+
+/** Interval between rate-limiter cleanup sweeps (06-auth.md §9), in milliseconds. */
+const RATE_LIMITER_CLEANUP_MS = 60_000;
 
 /** Dependencies injected into {@link createServer}. */
 export interface ServerDeps {
@@ -61,7 +66,7 @@ export function resolveRequestId(req: FastifyRequest): string {
  *   entry point) to bind.
  */
 export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
-  const { config, logger } = deps;
+  const { config, systemDb, logger } = deps;
 
   const httpsOptions =
     config.tls !== null
@@ -106,6 +111,16 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   });
   // WebSocket plugin: registered now so phase E can attach routes; no routes yet.
   await app.register(websocketPlugin);
+
+  // --- Auth infrastructure (task B8) ---------------------------------------
+  ensureAuthDecorator(app);
+  const rateLimiter = new AuthRateLimiter();
+  app.decorate('rateLimiter', rateLimiter);
+  app.decorate('authPreHandler', createAuthPreHandler({ systemDb, rateLimiter, logger }));
+  // Periodic eviction of expired failure/ban entries.
+  const cleanupTimer = setInterval(() => rateLimiter.cleanup(), RATE_LIMITER_CLEANUP_MS);
+  cleanupTimer.unref?.();
+  app.addHook('onClose', () => clearInterval(cleanupTimer));
 
   // --- Error handler (03-server-api.md §2) ---------------------------------
   app.setErrorHandler((err, req, reply) => {

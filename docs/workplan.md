@@ -217,12 +217,21 @@
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 1–2.
 
 ### B8. Auth middleware
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B7, B5
+- **Статус:** `done` · **Assignee:** agent-B7 · **Зависимости:** B7, B5
 - **Описание:** Fastify preHandler: проверка `Authorization: Bearer`, поиск по
   `key_hash`, контекст запроса (`user`, `key_id`, `client_id` из заголовка
   `Client-Id`). Защита от перебора (счётчик 401, 429).
-- **DoD:** без ключа → 401; с невалидным — 401; с валидным — `request.user`
-  заполнен.
+- **DoD:**
+  - [x] без ключа → 401; с невалидным — 401; с валидным — `request.auth`
+    заполнен.
+  - [x] Защита от перебора: in-memory `AuthRateLimiter` по `(ip, key_prefix)`,
+    threshold 10/мин → бан 5 мин, запрос-нарушитель получает 429 + `Retry-After`.
+  - [x] `last_used_at` обновляется асинхронно (`setImmediate`), не блокируя
+    запрос; неудачные auth пишутся в `audit_log` (`category=auth`).
+- **Note:** контекст живёт в `request.auth` (тип {@link AuthContext}) вместо
+  `request.user` из ТЗ — чтобы не конфликтовать со встроенным декоратором
+  Fastify и явно отличать «identity» от domain-сущности User. Все
+  middleware/routes используют `request.auth`.
 - **Спецификация:** [06-auth.md](06-auth.md), п. 3–5, 9.
 
 ### B9. Access-control middleware
