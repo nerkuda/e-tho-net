@@ -125,8 +125,11 @@ source ~/.bashrc
 # перезапустите PowerShell, чтобы переменная подхватилась
 ```
 
-Через `.env`-файл в корне проекта ( server читает его автоматически при запуске
-через `node` — скопируйте `.env.example` в `.env`):
+Через `.env`-файл в корне проекта — удобно хранить конфигурацию рядом с кодом.
+
+> **Важно:** сервер не читает `.env` автоматически. Чтобы значения из файла
+> попали в процесс, запускайте Node с флагом `--env-file=.env` (см. §5).
+> Node 22 поддерживает этот флаг без отдельных библиотек.
 
 ```bash
 cp .env.example .env      # bash
@@ -134,22 +137,55 @@ cp .env.example .env      # bash
 ```powershell
 Copy-Item .env.example .env   # PowerShell
 ```
-Затем отредактируйте `.env` любым текстовым редактором.
+
+Отредактируйте `.env` любым текстовым редактором. **Пути в `.env` указывайте с
+прямыми слешами** — они работают на любой ОС и не конфликтуют с экранированием:
+
+```env
+# Linux/macOS
+ETN_DATA_DIR=/var/lib/etn
+
+# Windows — прямой слеш, надёжно
+ETN_DATA_DIR=C:/zSpace/ETN_data
+
+# Если в пути есть пробелы — возьмите значение в двойные кавычки
+ETN_DATA_DIR="C:/Program Files/ETN/data"
+```
+
+Запуск с `.env` — см. §5.
 
 ## 5. Запуск
+
+Три равнозначных способа задать конфигурацию при запуске — выберите один.
+
+**А. Через `.env`-файл** (значения подгружаются флагом Node):
+
+```bash
+# bash
+node --env-file=.env server/dist/index.js
+```
+```powershell
+# PowerShell
+node --env-file=.env server/dist/index.js
+```
+
+**Б. Переменная на команду** (разово, без сохранения):
 
 ```bash
 # bash
 ETN_DATA_DIR=/var/lib/etn node server/dist/index.js
-# или (если переменная уже задана):
-node server/dist/index.js
 ```
 ```powershell
-# PowerShell (переменная задаётся на сессию, затем запуск)
-$env:ETN_DATA_DIR = "C:\etn\data"
+# PowerShell
+$env:ETN_DATA_DIR = "C:/zSpace/ETN_data"
 node server/dist/index.js
-# или одной строкой, без сохранения переменной в сессии:
-$env:ETN_DATA_DIR = "C:\etn\data"; node server/dist/index.js
+```
+
+**В. Переменная уже задана** в системе (через `SetEnvironmentVariable`,
+сервис nssm/systemd, или `.bashrc`):
+
+```bash
+node server/dist/index.js    # bash и PowerShell — одинаково
 ```
 
 Проверка:
