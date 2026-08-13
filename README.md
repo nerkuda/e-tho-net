@@ -18,7 +18,7 @@ real-time, MCP, аутентификация, клиент, UI, сценарии
 
 ## Стек
 
-- **Сервер:** Node.js 20+, TypeScript, Fastify, better-sqlite3, WebSocket.
+- **Сервер:** Node.js 20+ (**рекомендуется 22 LTS** — для него у better-sqlite3 есть готовая prebuilt-binary; на Node 24 потребуется Python в PATH для компиляции), TypeScript, Fastify, better-sqlite3, WebSocket.
 - **Клиент:** Electron, TypeScript.
 - **Хранилище:** SQLite — одна `_system.db` + `networks/<id>/data.db` на сеть.
 - **MCP:** `@modelcontextprotocol/sdk`.

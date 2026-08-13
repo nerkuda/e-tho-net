@@ -934,12 +934,12 @@
 > Обнаружено агентом-A4 на фазе A. Каждое должно быть закрыто до или в ходе
 > связанной фазы; спецификации править отдельным `docs:`-коммитом.
 
-- **`better-sqlite3` native-сборка.** На машине разработки нет Python в PATH, и
-  node-gyp не собирает расширение. Блокер для запуска кода в фазах B, G3 и далее.
-  Решения: (а) установить Python 3.x и сделать доступным в PATH; (б) проверить
-  наличие prebuilt-binary для текущей пары Node 24/Windows; (в) рассмотреть замену
-  на `node:sqlite` (нативный, Node 22+, экспериментальный). **Решить до B6** — на
-  этапе `etn init` и первого открытия `_system.db`.
+- **~~`better-sqlite3` native-сборка~~ — РЕШЕНО.** На машине разработки изначально
+  стоял Node 24, для которого нет prebuilt-binary → node-gyp требовал Python.
+  Решение: переход на Node 22 LTS (`nvm use 22`, см. `.nvmrc`). Для Node 22
+  prebuilt скачивается автоматически при `npm install`, Python не нужен ни нам, ни
+  конечным пользователям. Smoke-тест `etn init` проходит end-to-end после B6.
+  В `docs/install-server.md` (J2) зафиксировать Node 22 LTS как требование.
 - **`SearchScope` — гранулярный vs REST.** В `03-server-api.md` §12 используется
   `scope=thoughts|links|chronology|all`, а в `05-mcp-server.md` §4.1 и в shared —
   `names|texts|links|chronology|all`. Принято: shared хранит гранулярный; REST-слой
