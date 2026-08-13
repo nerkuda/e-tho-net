@@ -181,6 +181,7 @@ export class SystemDb {
   private readonly stGetPreference: Database.Statement;
   private readonly stUpsertPreference: Database.Statement;
   private readonly stListPreferences: Database.Statement;
+  private readonly stGetSetting: Database.Statement;
   private readonly stNextNetworkSeq: Database.Statement;
   private readonly stInsertEvent: Database.Statement;
   private readonly stReadEventsAfter: Database.Statement;
@@ -275,6 +276,7 @@ export class SystemDb {
     this.stListPreferences = db.prepare(
       'SELECT key, value, updated_at FROM user_preferences WHERE user_id = ? AND network_id = ? ORDER BY key',
     );
+    this.stGetSetting = db.prepare('SELECT value FROM settings WHERE key = ? LIMIT 1');
     this.stNextNetworkSeq = db.prepare(
       'INSERT INTO network_seq (network_id, last_seq) VALUES (?, 1) ON CONFLICT(network_id) DO UPDATE SET last_seq = last_seq + 1 RETURNING last_seq',
     );
@@ -728,6 +730,22 @@ export class SystemDb {
       updated_at: string;
     }>;
     return rows.map((r) => ({ key: r.key, value: JSON.parse(r.value), updated_at: r.updated_at }));
+  }
+
+  // -------------------------------------------------------------------------
+  // L1 server-wide settings (docs/11-settings-and-state.md §2.1, task F6)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Read the raw stored value of an L1 setting, or `null` when unset. Values
+   * are JSON-encoded per migration `008_settings.sql`; numeric settings are
+   * stored without quotes, so callers that need a number should try
+   * `JSON.parse` first and fall back to the raw string (see the MCP limits
+   * resolver in `mcp/limits.ts`).
+   */
+  getSetting(key: string): string | null {
+    const row = this.stGetSetting.get(key) as { value: string } | undefined;
+    return row?.value ?? null;
   }
 
   // -------------------------------------------------------------------------
