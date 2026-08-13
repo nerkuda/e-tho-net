@@ -24,6 +24,7 @@ import { createAuthPreHandler, ensureAuthDecorator } from '../auth/auth-middlewa
 import { AuthRateLimiter } from '../auth/rate-limiter.js';
 import { createAccessControl } from '../auth/access-control.js';
 import { NetworkMembersService } from '../domain/network-members-service.js';
+import { PubSub } from '../realtime/pubsub.js';
 import { normaliseError } from './errors.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -128,6 +129,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   const members = new NetworkMembersService(systemDb);
   app.decorate('members', members);
   app.decorate('accessControl', createAccessControl(members));
+
+  // --- Real-time pub/sub (task B10) ----------------------------------------
+  const pubsub = new PubSub();
+  app.decorate('pubsub', pubsub);
 
   // --- Error handler (03-server-api.md §2) ---------------------------------
   app.setErrorHandler((err, req, reply) => {

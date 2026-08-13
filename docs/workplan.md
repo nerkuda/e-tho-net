@@ -252,10 +252,16 @@
 - **Спецификация:** [06-auth.md](06-auth.md), п. 4–5.
 
 ### B10. Pub/sub по network_id
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B4
+- **Статус:** `done` · **Assignee:** agent-B7 · **Зависимости:** B4
 - **Описание:** `EventEmitter` с каналами по `network_id`, типизированные события
   из `@etn/shared`. Подписка для WebSocket-шлюза (фаза E) и для внутренних нужд.
-- **DoD:** emit/test проходят, слушатели получают события.
+- **DoD:**
+  - [x] `publish(networkId, event)` / `subscribe(networkId, listener, filter?)` /
+    `unsubscribe`, события типизированы через `RealtimeEvent`/`AnyRealtimeEvent`.
+  - [x] Listener-фильтры по `type`/`audience`; бросающий listener не рвёт
+    доставку другим; `network_id` mismatch отвергается.
+- **Note:** только интерфейс брокера; WS-доставка — фаза E. Зарегистрирован как
+  `app.pubsub` в `createServer`.
 - **Спецификация:** [01-architecture.md](01-architecture.md), п. 5.
 
 ### B11. Идемпотентность через `Client-Request-Id`
