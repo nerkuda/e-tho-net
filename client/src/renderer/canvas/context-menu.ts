@@ -1,0 +1,402 @@
+/**
+ * Context menus and zone sorting (H15, 08-ui-spec.md §2.6, §2.7).
+ *
+ * - thought context menu (right-click on a cloud): add parent/child/sibling,
+ *   toggle activity, reorder (manual zones), change type, change icon, add
+ *   attachment (focus + editor), open editor, add to selection (H16),
+ *   copy/cut/paste (link creation), delete;
+ * - zone context menu: sort by alpha/created/viewed × asc/desc and manual
+ *   (parents/children only) → `thoughts.setFocusPreferences`;
+ * - drag-reorder: dragging a cloud to another position switches the zone to
+ *   manual order via `thoughts.setFocusOrder`.
+ *
+ * Registration happens through canvas hooks (`setCloudContextMenuHandler`,
+ * `setZoneContextMenuHandler`, `setCloudDragHandlers`).
+ */
+
+import type { FocusDir } from '@etn/shared';
+
+import { scheduleRefresh, requireNetworkId } from '../app.js';
+import { openAddDialog } from './add-dialog.js';
+import { store } from '../state.js';
+import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
+import { etn } from '../lib/etn.js';
+import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
+import { notice } from '../lib/notice.js';
+import { setFocus } from '../app.js';
+
+/** Zone direction (parents/siblings/children). */
+type ZoneDir = 'parents' | 'siblings' | 'children';
+
+/** Entry shown in a cloud menu. */
+interface CloudMenuTarget {
+  id: string;
+  title: string;
+  dir: ZoneDir;
+}
+
+/** The thought/type clipboard (copy/cut/paste). */
+let clipboard: { id: string; cut: boolean } | null = null;
+
+/** Thought ids that may be reordered (parents/children only). */
+type OrderableDir = 'parents' | 'children';
+
+/** Hook signature: the selection module (H16) registers an adder here. */
+let addToSelectionHook: ((id: string) => void) | null = null;
+
+/** Registers the "add to selection" hook (H16). */
+export function setAddToSelectionHook(next: ((id: string) => void) | null): void {
+  addToSelectionHook = next;
+}
+
+/** Opens the thought context menu at the event position. */
+export function showThoughtContextMenu(event: MouseEvent, target: CloudMenuTarget): void {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  showMenuAt(event.clientX, event.clientY, buildThoughtMenuItems(networkId, target));
+}
+
+/** Builds the thought menu items (08-ui-spec.md §2.6). */
+function buildThoughtMenuItems(networkId: string, target: CloudMenuTarget): MenuItem[] {
+  const focus = store.state.focus;
+  const isFocus = focus?.focused.id === target.id;
+  const focusHasParent = focus !== null && focus.parents.length > 0;
+  const siblingParentId = focus?.parents[0]?.id;
+
+  return [
+    {
+      label: 'Добавить',
+      submenu: [
+        {
+          label: 'вверх (родитель)',
+          onClick: () => openAddDialog({ anchorId: target.id, direction: 'parent' }),
+        },
+        {
+          label: 'вниз (ребёнок)',
+          onClick: () => openAddDialog({ anchorId: target.id, direction: 'child' }),
+        },
+        {
+          label: 'налево (родственник)',
+          disabled: !focusHasParent || siblingParentId === undefined,
+          onClick: () => {
+            if (siblingParentId !== undefined) {
+              openAddDialog({ anchorId: siblingParentId, direction: 'child' });
+            }
+          },
+        },
+      ],
+    },
+    {
+      label: 'Изменить активность',
+      onClick: () => void toggleActive(networkId, target.id),
+    },
+    {
+      label: 'Изменить порядок',
+      disabled: target.dir === 'siblings' || !isFocus,
+      submenu: [
+        {
+          label: 'сдвинуть вверх / первым',
+          onClick: () => void moveInZone(networkId, target.id, target.dir as OrderableDir, -1),
+        },
+        {
+          label: 'сдвинуть вниз / последним',
+          onClick: () => void moveInZone(networkId, target.id, target.dir as OrderableDir, 1),
+        },
+      ],
+    },
+    {
+      label: 'Изменить тип',
+      submenu: buildTypeMenu(networkId, target.id),
+    },
+    {
+      label: 'Изменить иконку',
+      onClick: () => void changeIcon(networkId, target.id),
+    },
+    {
+      label: 'Добавить вложение',
+      onClick: () => {
+        void setFocus(target.id);
+      },
+    },
+    MENU_SEPARATOR,
+    {
+      label: 'Открыть редактор',
+      onClick: () => void setFocus(target.id),
+    },
+    {
+      label: 'Добавить к выделению',
+      onClick: () => addToSelectionHook?.(target.id),
+    },
+    {
+      label: 'Копировать',
+      onClick: () => {
+        clipboard = { id: target.id, cut: false };
+        notice(`Скопировано: «${target.title}»`);
+      },
+    },
+    {
+      label: 'Вырезать',
+      onClick: () => {
+        clipboard = { id: target.id, cut: true };
+        notice(`Вырезано: «${target.title}»`);
+      },
+    },
+    {
+      label: 'Вставить',
+      disabled: clipboard === null,
+      onClick: () => void pasteTo(networkId, target.id),
+    },
+    MENU_SEPARATOR,
+    {
+      label: 'Удалить',
+      danger: true,
+      onClick: () => void deleteThought(networkId, target),
+    },
+  ];
+}
+
+/** Type-change submenu (types + clear). */
+function buildTypeMenu(networkId: string, thoughtId: string): MenuItem[] {
+  const items: MenuItem[] = store.state.thoughtTypes.map((type) => ({
+    label: type.name,
+    onClick: () => void changeType(networkId, thoughtId, type.id),
+  }));
+  items.push({ label: 'очистить тип', onClick: () => void changeType(networkId, thoughtId, null) });
+  return items;
+}
+
+/** Toggles the active flag. */
+async function toggleActive(networkId: string, id: string): Promise<void> {
+  try {
+    const thought = await etn.thoughts.get(networkId, id);
+    if (thought.is_protected && thought.is_root) {
+      notice('HOME-мысль нельзя деактивировать.', 'error');
+      return;
+    }
+    await etn.thoughts.update(networkId, id, { active: !thought.active }, thought.version);
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Изменить активность', err);
+  }
+}
+
+/** Changes the thought type. */
+async function changeType(networkId: string, id: string, typeId: string | null): Promise<void> {
+  try {
+    const thought = await etn.thoughts.get(networkId, id);
+    await etn.thoughts.update(networkId, id, { type_id: typeId }, thought.version);
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Изменить тип', err);
+  }
+}
+
+/** Prompts for a new emoji icon. */
+async function changeIcon(networkId: string, id: string): Promise<void> {
+  const current = await etn.thoughts.get(networkId, id).catch(() => null);
+  const value = await promptDialog('Изменить иконку', 'Эмодзи', current?.icon ?? '');
+  if (value === null) return;
+  try {
+    const thought = await etn.thoughts.get(networkId, id);
+    await etn.thoughts.update(
+      networkId,
+      id,
+      { icon: value.trim() === '' ? null : value.trim(), icon_kind: 'emoji' },
+      thought.version,
+    );
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Изменить иконку', err);
+  }
+}
+
+/** Pastes the clipboard as a source linked to the target thought. */
+async function pasteTo(networkId: string, targetId: string): Promise<void> {
+  if (clipboard === null) return;
+  try {
+    await etn.links.create(networkId, {
+      source_id: clipboard.id,
+      target_id: targetId,
+    });
+    if (clipboard.cut) clipboard = null;
+    notice('Связь создана.');
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Вставить', err);
+  }
+}
+
+/** Deletes a thought after confirmation. */
+async function deleteThought(networkId: string, target: CloudMenuTarget): Promise<void> {
+  if (!(await confirmDialog('Удалить мысль', `Удалить «${target.title}»?`, true))) return;
+  try {
+    const thought = await etn.thoughts.get(networkId, target.id);
+    await etn.thoughts.remove(networkId, target.id, thought.version);
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Удалить мысль', err);
+  }
+}
+
+/** Moves a thought one step in its zone (manual order). */
+async function moveInZone(
+  networkId: string,
+  id: string,
+  dir: OrderableDir,
+  delta: number,
+): Promise<void> {
+  const focus = store.state.focus;
+  if (focus === null) return;
+  const list = dir === 'parents' ? focus.parents : focus.children;
+  const ids = [...new Set(list.map((n) => n.id))];
+  const index = ids.indexOf(id);
+  if (index < 0) return;
+  const targetIndex = Math.max(0, Math.min(ids.length - 1, index + delta));
+  if (targetIndex === index) return;
+  ids.splice(index, 1);
+  ids.splice(targetIndex, 0, id);
+  try {
+    await etn.thoughts.setFocusOrder(networkId, focus.focused.id, { dir, ordered_ids: ids });
+    await etn.thoughts.setFocusPreferences(networkId, focus.focused.id, {
+      dir,
+      sort: 'manual',
+      order: 'asc',
+    });
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Изменить порядок', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Zone sort menu
+// ---------------------------------------------------------------------------
+
+/** Opens the zone context menu (sorting, 08-ui-spec.md §2.7). */
+export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
+  const networkId = store.state.networkId;
+  const focus = store.state.focus;
+  if (networkId === null || focus === null) return;
+  const manual = dir !== 'siblings';
+
+  const sortItem = (
+    label: string,
+    sort: 'alpha' | 'created' | 'viewed',
+    order: 'asc' | 'desc',
+  ): MenuItem => ({
+    label,
+    onClick: () => void setZoneSort(networkId, focus.focused.id, dir, sort, order),
+  });
+
+  showMenuAt(event.clientX, event.clientY, [
+    {
+      label: 'Сортировка',
+      submenu: [
+        sortItem('по алфавиту (возр)', 'alpha', 'asc'),
+        sortItem('по алфавиту (убыв)', 'alpha', 'desc'),
+        sortItem('по дате создания (возр)', 'created', 'asc'),
+        sortItem('по дате создания (убыв)', 'created', 'desc'),
+        sortItem('по дате просмотра (возр)', 'viewed', 'asc'),
+        sortItem('по дате просмотра (убыв)', 'viewed', 'desc'),
+        {
+          label: 'ручной',
+          disabled: !manual,
+          onClick: () => {
+            if (manual) void setZoneSort(networkId, focus.focused.id, dir, 'manual', 'asc');
+          },
+        },
+      ],
+    },
+  ]);
+}
+
+/** Applies a zone sort preference and refreshes the zone. */
+async function setZoneSort(
+  networkId: string,
+  focusId: string,
+  dir: ZoneDir,
+  sort: 'manual' | 'alpha' | 'created' | 'viewed',
+  order: 'asc' | 'desc',
+): Promise<void> {
+  try {
+    await etn.thoughts.setFocusPreferences(networkId, focusId, {
+      dir: dir as FocusDir,
+      sort,
+      order,
+    });
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Сортировка', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Drag-reorder (manual order)
+// ---------------------------------------------------------------------------
+
+/** Wires HTML5 drag-reorder on orderable zones (parents/children). */
+export function wireCloudReorder(
+  zone: HTMLElement,
+  dir: OrderableDir,
+  cloudEls: () => HTMLElement[],
+): void {
+  zone.addEventListener('dragstart', (event) => {
+    const cloud = (event.target as HTMLElement).closest<HTMLElement>('.cloud');
+    if (cloud === null) return;
+    const id = cloud.dataset['id'];
+    if (id === undefined) return;
+    const transfer = event.dataTransfer;
+    if (transfer !== null) {
+      transfer.setData('text/plain', `${dir}:${id}`);
+      transfer.effectAllowed = 'move';
+    }
+  });
+
+  zone.addEventListener('dragover', (event) => {
+    const transfer = event.dataTransfer;
+    if (transfer !== null) {
+      if (!transfer.types.includes('text/plain')) return;
+      event.preventDefault();
+      transfer.dropEffect = 'move';
+    }
+  });
+
+  zone.addEventListener('drop', (event) => {
+    const payload = event.dataTransfer?.getData('text/plain') ?? '';
+    const [dirFrom, id] = payload.split(':') as [string | undefined, string | undefined];
+    if (dirFrom === undefined || id === undefined || dirFrom !== dir) return;
+    event.preventDefault();
+    const ids = cloudEls()
+      .map((cloud) => cloud.dataset['id'])
+      .filter((cloudId): cloudId is string => cloudId !== undefined);
+    // Dropped at the end (empty zone area) keeps the current position.
+    const over = (event.target as HTMLElement).closest<HTMLElement>('.cloud');
+    if (over === null) return;
+    const overId = over.dataset['id'];
+    if (overId === undefined) return;
+    const from = ids.indexOf(id);
+    const to = ids.indexOf(overId);
+    if (from < 0 || to < 0 || from === to) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, id);
+    void commitOrder(dir, ids);
+  });
+}
+
+/** Commits a manual order for a zone. */
+async function commitOrder(dir: OrderableDir, ids: string[]): Promise<void> {
+  const networkId = requireNetworkId();
+  const focus = store.state.focus;
+  if (focus === null) return;
+  try {
+    await etn.thoughts.setFocusOrder(networkId, focus.focused.id, { dir, ordered_ids: ids });
+    await etn.thoughts.setFocusPreferences(networkId, focus.focused.id, {
+      dir,
+      sort: 'manual',
+      order: 'asc',
+    });
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Изменить порядок', err);
+  }
+}

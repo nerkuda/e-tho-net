@@ -28,6 +28,7 @@ import { cloudFontSize, cloudHeight } from '../lib/pure.js';
 import { store } from '../state.js';
 import { initLinksOverlay } from './links.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
+import { showThoughtContextMenu, showZoneContextMenu, wireCloudReorder } from './context-menu.js';
 
 /** Zone directions of the canvas (parents/siblings/children). */
 export type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -256,6 +257,10 @@ function renderFocusRow(focus: FocusResponse): void {
   cloud.append(topEllipse, body, ind, bottomEllipse);
   focusRow.append(cloud);
   focusCloudEl = cloud;
+  cloud.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    showThoughtContextMenu(event, { id: thought.id, title: thought.title, dir: 'siblings' });
+  });
   queueIndicatorLoad(thought.id);
 }
 
@@ -319,6 +324,15 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
   new ResizeObserver(() => {
     if (host?.isConnected === true) void renderZoneContent(dir);
   }).observe(zone);
+
+  // Zone context menu (sorting, H15) and manual drag-reorder (parents/children).
+  zone.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    showZoneContextMenu(event, dir);
+  });
+  if (dir !== 'siblings') {
+    wireCloudReorder(zone, dir, () => Array.from(zone.querySelectorAll<HTMLElement>('.cloud')));
+  }
 
   return zone;
 }
@@ -489,8 +503,9 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   cloud.append(topEllipse, body, ind, bottomEllipse);
 
   // Click → focus (B1); Ctrl+click toggles selection (H16); Enter on a
-  // keyboard-focused cloud focuses it (08-ui-spec.md §13).
+  // keyboard-focused cloud focuses it; right-click opens the context menu (H15).
   cloud.tabIndex = 0;
+  cloud.draggable = dir !== 'siblings';
   cloud.addEventListener('click', () => {
     if (suppressNextClick) {
       suppressNextClick = false;
@@ -500,6 +515,15 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   });
   cloud.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') void setFocus(entry.id);
+  });
+  cloud.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showThoughtContextMenu(event, {
+      id: entry.id,
+      title: entry.ref?.title ?? entry.id,
+      dir,
+    });
   });
 
   queueIndicatorLoad(entry.id);
