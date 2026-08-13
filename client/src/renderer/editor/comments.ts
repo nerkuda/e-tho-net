@@ -87,7 +87,11 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
     } else {
       renderHtml(view, permanent.body_html);
     }
-    const editButton = button('Редактировать', () => showEdit(permanent?.body_md ?? ''), 'link-btn');
+    const editButton = button(
+      'Редактировать',
+      () => showEdit(permanent?.body_md ?? ''),
+      'link-btn',
+    );
     view.append(editButton);
   }
 
@@ -119,7 +123,12 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
           body_md: textarea.value,
         });
       } else {
-        await etn.comments.update(networkId, permanent.id, { body_md: textarea.value }, permanent.version);
+        await etn.comments.update(
+          networkId,
+          permanent.id,
+          { body_md: textarea.value },
+          permanent.version,
+        );
       }
       invalidateIndicators(ctx.ownerId);
       showView();
@@ -301,6 +310,9 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
 
 /** One-line preview of a comment body. */
 function shortText(markdown: string): string {
-  const plain = markdown.replace(/[#*_>`[\]]/g, '').replace(/\s+/g, ' ').trim();
+  const plain = markdown
+    .replace(/[#*_>`[\]]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   return plain.length > 80 ? `${plain.slice(0, 80)}…` : plain;
 }

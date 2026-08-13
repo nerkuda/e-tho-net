@@ -157,17 +157,22 @@ function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
     info.append(meta);
     item.append(info);
     item.append(
-      button('✕', () => {
-        void (async () => {
-          try {
-            await etn.attachments.remove(networkId, attachment.id);
-            invalidateIndicators(ctx.ownerId);
-            await reload();
-          } catch (err) {
-            notice(`Не удалось удалить: ${errText(err)}`, 'error');
-          }
-        })();
-      }, 'btn small', 'Удалить вложение'),
+      button(
+        '✕',
+        () => {
+          void (async () => {
+            try {
+              await etn.attachments.remove(networkId, attachment.id);
+              invalidateIndicators(ctx.ownerId);
+              await reload();
+            } catch (err) {
+              notice(`Не удалось удалить: ${errText(err)}`, 'error');
+            }
+          })();
+        },
+        'btn small',
+        'Удалить вложение',
+      ),
     );
     return item;
   }

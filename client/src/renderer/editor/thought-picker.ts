@@ -63,9 +63,13 @@ export function pickThoughtRef(networkId: string, _allowedTypeId?: string): Prom
         title.title = hit.title;
         row.append(title, span(KIND_LABELS[hit.matched_on] ?? hit.matched_on, 'dup-kind'));
         row.append(
-          button('использовать', () => {
-            finish(hit.id);
-          }, 'btn small'),
+          button(
+            'использовать',
+            () => {
+              finish(hit.id);
+            },
+            'btn small',
+          ),
         );
         list.append(row);
       }

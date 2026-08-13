@@ -75,9 +75,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         etn.types.listThoughtTypeProperties(networkId, typedId),
         etn.properties.get(networkId, 'thought', thoughtId),
       ]);
-      const refIds = values
-        .map((v) => v.value)
-        .filter((v): v is string => typeof v === 'string');
+      const refIds = values.map((v) => v.value).filter((v): v is string => typeof v === 'string');
       if (refIds.length > 0) {
         const resolved = await etn.thoughts.resolve(networkId, refIds.slice(0, 100));
         for (const ref of resolved) refTitles.set(ref.id, ref.title);
@@ -117,7 +115,10 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   }
 
   /** Builds the value editor cell for one property. */
-  function buildEditorCell(definition: PropertyDefinition, current: PropertyValue | undefined): HTMLElement {
+  function buildEditorCell(
+    definition: PropertyDefinition,
+    current: PropertyValue | undefined,
+  ): HTMLElement {
     const cell = el('td');
     const stored = current?.value ?? null;
 
@@ -189,11 +190,15 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         row.style.marginBottom = '0';
         row.append(
           input,
-          button('выбрать', () => {
-            void pickThoughtRef(networkId, definition.config?.allowed_type_id).then((id) => {
-              if (id !== null) save(id);
-            });
-          }, 'btn small'),
+          button(
+            'выбрать',
+            () => {
+              void pickThoughtRef(networkId, definition.config?.allowed_type_id).then((id) => {
+                if (id !== null) save(id);
+              });
+            },
+            'btn small',
+          ),
         );
         if (stored !== null) {
           row.append(button('✕', () => save(null), 'btn small', 'Очистить значение'));
