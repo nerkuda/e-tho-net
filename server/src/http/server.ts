@@ -25,6 +25,8 @@ import { AuthRateLimiter } from '../auth/rate-limiter.js';
 import { createAccessControl } from '../auth/access-control.js';
 import { NetworkMembersService } from '../domain/network-members-service.js';
 import { PubSub } from '../realtime/pubsub.js';
+import { startEventLogCleanup } from '../realtime/event-log-cleanup.js';
+import { RealtimeGateway, type RealtimeGatewayOptions } from '../realtime/gateway.js';
 import { createIdempotencyMiddleware, registerIdempotencyHooks } from './idempotency.js';
 import { normaliseError } from './errors.js';
 import { meRoutes } from '../routes/me.js';
@@ -45,6 +47,8 @@ export interface ServerDeps {
   systemDb: SystemDb;
   /** Application logger (pino). */
   logger: Logger;
+  /** Optional WebSocket gateway tuning (mainly for tests). */
+  realtimeOptions?: Partial<RealtimeGatewayOptions>;
 }
 
 /** Name of the reply header carrying the correlation id for every request. */
@@ -152,6 +156,17 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // --- Real-time pub/sub (task B10) ----------------------------------------
   const pubsub = new PubSub();
   app.decorate('pubsub', pubsub);
+
+  // --- Real-time WebSocket gateway + event-log retention (tasks E1–E6) ------
+  const gateway = new RealtimeGateway({
+    systemDb,
+    pubsub,
+    logger,
+    options: deps.realtimeOptions,
+  });
+  gateway.register(app);
+  const stopEventLogCleanup = startEventLogCleanup(systemDb, logger);
+  app.addHook('onClose', () => stopEventLogCleanup());
 
   // --- Idempotency (task B11) ----------------------------------------------
   app.decorateRequest('idempotency', null);
