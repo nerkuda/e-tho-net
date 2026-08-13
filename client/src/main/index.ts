@@ -16,6 +16,7 @@ import path from 'node:path';
 import { LocalDb } from './db/local-db.js';
 import { defaultMigrationsDir, localDbPath } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
+import { registerIpc } from './ipc/register.js';
 
 /**
  * Directory of the compiled main bundle (`out/main`). Renderer and preload
@@ -95,6 +96,14 @@ app
     });
     const clientId = getOrCreateClientId(localDb);
     if (isDev) console.log('[ETN] client_id =', clientId);
+
+    // Wire the renderer bridge (G7): single `etn:invoke` channel + realtime
+    // event/status broadcast to whichever window is front-most.
+    registerIpc({
+      localDb,
+      clientId,
+      getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    });
 
     createWindow();
 
