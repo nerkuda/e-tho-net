@@ -27,6 +27,8 @@ import { NetworkMembersService } from '../domain/network-members-service.js';
 import { PubSub } from '../realtime/pubsub.js';
 import { createIdempotencyMiddleware, registerIdempotencyHooks } from './idempotency.js';
 import { normaliseError } from './errors.js';
+import { meRoutes } from '../routes/me.js';
+import { usersRoutes } from '../routes/users.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
 /** Interval between rate-limiter cleanup sweeps (06-auth.md §9), in milliseconds. */
@@ -88,6 +90,19 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     ...httpsOptions,
   });
 
+  // --- Error handler (03-server-api.md §2) ---------------------------------
+  // Registered before any plugin/route so encapsulated child contexts inherit
+  // the canonical { error: { code, message, details?, request_id? } } shape.
+  app.setErrorHandler((err, req, reply) => {
+    const { statusCode, body, internalMessage } = normaliseError(err, req.id);
+    if (statusCode >= 500) {
+      logger.error({ err, request_id: req.id }, internalMessage);
+    } else {
+      logger.warn({ request_id: req.id, statusCode }, internalMessage);
+    }
+    reply.code(statusCode).send(body);
+  });
+
   // Correlation id on every request: surface it back via X-Request-Id so
   // clients/logs can tie a response to its origin.
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -140,16 +155,13 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.decorate('idempotency', createIdempotencyMiddleware(systemDb, logger));
   registerIdempotencyHooks(app, systemDb, logger);
 
-  // --- Error handler (03-server-api.md §2) ---------------------------------
-  app.setErrorHandler((err, req, reply) => {
-    const { statusCode, body, internalMessage } = normaliseError(err, req.id);
-    if (statusCode >= 500) {
-      logger.error({ err, request_id: req.id }, internalMessage);
-    } else {
-      logger.warn({ request_id: req.id, statusCode }, internalMessage);
-    }
-    reply.code(statusCode).send(body);
-  });
+  // --- Shared dependencies for routes (tasks B12+) -------------------------
+  app.decorate('systemDb', systemDb);
+  app.decorate('appLogger', logger);
+
+  // --- Route plugins (tasks B12+) ------------------------------------------
+  await app.register(meRoutes, { prefix: '/api/v1' });
+  await app.register(usersRoutes, { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
   app.get('/api/v1/health', async () => {

@@ -149,6 +149,13 @@ export class SystemDb {
   private readonly stFindCache: Database.Statement;
   private readonly stSaveCache: Database.Statement;
   private readonly stPurgeCache: Database.Statement;
+  private readonly stListUsers: Database.Statement;
+  private readonly stListKeysByUser: Database.Statement;
+  private readonly stGetKeyById: Database.Statement;
+  private readonly stDisableKey: Database.Statement;
+  private readonly stCountOwnedNetworks: Database.Statement;
+  private readonly stUpdateUser: Database.Statement;
+  private readonly stDeleteUser: Database.Statement;
 
   /**
    * Wrap an already-open connection and prepare all statements. Does not run
@@ -180,6 +187,17 @@ export class SystemDb {
       'INSERT OR REPLACE INTO client_request_cache (request_id, user_id, ts, status, body) VALUES (?, ?, ?, ?, ?)',
     );
     this.stPurgeCache = db.prepare('DELETE FROM client_request_cache WHERE ts < ?');
+    this.stListUsers = db.prepare('SELECT * FROM users ORDER BY created_at');
+    this.stListKeysByUser = db.prepare(
+      'SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at',
+    );
+    this.stGetKeyById = db.prepare('SELECT * FROM api_keys WHERE id = ? LIMIT 1');
+    this.stDisableKey = db.prepare('UPDATE api_keys SET disabled = 1 WHERE id = ?');
+    this.stCountOwnedNetworks = db.prepare('SELECT COUNT(*) AS c FROM networks WHERE owner_id = ?');
+    this.stUpdateUser = db.prepare(
+      'UPDATE users SET display_name = ?, is_admin = ?, disabled = ?, updated_at = ? WHERE id = ?',
+    );
+    this.stDeleteUser = db.prepare('DELETE FROM users WHERE id = ?');
   }
 
   /** TTL window for cached idempotent responses, in milliseconds. */
@@ -355,6 +373,61 @@ export class SystemDb {
   purgeExpiredCache(olderThanIso: string): number {
     const info = this.stPurgeCache.run(olderThanIso);
     return info.changes;
+  }
+
+  /** List all users ordered by creation time (admin view, task B12). */
+  listUsers(): User[] {
+    const rows = this.stListUsers.all() as UserRow[];
+    return rows.map(rowToUser);
+  }
+
+  /** List the API-keys owned by `userId` (display only — no secret, task B12). */
+  listApiKeysByUser(userId: string): ApiKey[] {
+    const rows = this.stListKeysByUser.all(userId) as ApiKeyRow[];
+    return rows.map(rowToApiKey);
+  }
+
+  /** Fetch a single API-key by id, or `null` (for ownership checks on revoke). */
+  getApiKeyById(keyId: string): ApiKey | null {
+    const row = this.stGetKeyById.get(keyId) as ApiKeyRow | undefined;
+    return row ? rowToApiKey(row) : null;
+  }
+
+  /** Disable (revoke) an API-key by id. Idempotent for already-disabled keys. */
+  disableApiKey(keyId: string): void {
+    this.stDisableKey.run(keyId);
+  }
+
+  /** Count networks currently owned by `userId` (DELETE-user guard, 06-auth.md §4.3). */
+  countOwnedNetworks(userId: string): number {
+    const row = this.stCountOwnedNetworks.get(userId) as { c: number };
+    return row.c;
+  }
+
+  /**
+   * Patch a user's mutable fields. Callers enforce the invariants
+   * (first-user demotion, etc.) before calling — this method only persists.
+   */
+  updateUser(
+    id: string,
+    params: { displayName: string | null; isAdmin: boolean; disabled: boolean },
+  ): void {
+    this.stUpdateUser.run(
+      params.displayName,
+      params.isAdmin ? 1 : 0,
+      params.disabled ? 1 : 0,
+      new Date().toISOString(),
+      id,
+    );
+  }
+
+  /**
+   * Delete a user. Cascades to `api_keys` and `network_members` (FK ON DELETE
+   * CASCADE); callers must first transfer ownership of any owned networks
+   * (`networks.owner_id` is `ON DELETE RESTRICT`).
+   */
+  deleteUser(id: string): void {
+    this.stDeleteUser.run(id);
   }
 
   /**

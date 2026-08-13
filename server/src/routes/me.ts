@@ -1,0 +1,129 @@
+/**
+ * Self-service user & API-key routes (task B12, 03-server-api.md §3).
+ *
+ *   GET    /api/v1/me              — current user (no secrets)
+ *   GET    /api/v1/me/keys         — list own keys (prefix only)
+ *   POST   /api/v1/me/keys         — create a key, full key returned once (201)
+ *   DELETE /api/v1/me/keys/:id     — revoke an own key (204)
+ *
+ * Registered under the `/api/v1` prefix by the server factory. The auth
+ * preHandler runs first; the idempotency preHandler is attached to the
+ * mutating endpoints so client retries are safe.
+ */
+
+import { randomUUID } from 'node:crypto';
+
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
+
+import type { ApiKeyWithSecret, CreateApiKeyInput } from '@etn/shared';
+
+import { EtnError } from '@etn/shared';
+
+import { generateApiKey, hashApiKey } from '../auth/api-key.js';
+import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
+
+/** Body of `POST /me/keys`. */
+type CreateKeyBody = CreateApiKeyInput;
+
+/** Path params for `DELETE /me/keys/:id`. */
+interface KeyIdParams {
+  id: string;
+}
+
+/** Build the public DTO of an existing key (no secret). */
+function keyPublicDto(k: {
+  id: string;
+  user_id: string;
+  label: string | null;
+  prefix: string;
+  read_only: boolean;
+  disabled: boolean;
+  created_at: string;
+  last_used_at: string | null;
+}) {
+  return {
+    id: k.id,
+    user_id: k.user_id,
+    label: k.label,
+    prefix: k.prefix,
+    read_only: k.read_only,
+    disabled: k.disabled,
+    created_at: k.created_at,
+    last_used_at: k.last_used_at,
+  };
+}
+
+/** `/api/v1/me*` route plugin. */
+export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
+  app.get('/me', { preHandler: [app.authPreHandler] }, async (req: FastifyRequest, reply) => {
+    const user = req.auth!.user;
+    sendSuccess(reply, {
+      id: user.id,
+      username: user.username,
+      display_name: user.display_name,
+      is_admin: user.is_admin,
+    });
+  });
+
+  app.get('/me/keys', { preHandler: [app.authPreHandler] }, async (req: FastifyRequest, reply) => {
+    const keys = app.systemDb.listApiKeysByUser(req.auth!.user.id);
+    const data = keys.map(keyPublicDto);
+    sendList(reply, data, data.length, 0, data.length);
+  });
+
+  app.post(
+    '/me/keys',
+    { preHandler: [app.authPreHandler, app.idempotency.preHandler] },
+    async (req: FastifyRequest, reply) => {
+      const body = (req.body ?? {}) as CreateKeyBody;
+      const label = typeof body.label === 'string' ? body.label.trim() || null : null;
+      const readOnly = body.read_only === true;
+
+      const gen = generateApiKey();
+      const apiKey = app.systemDb.createApiKey({
+        id: randomUUID(),
+        userId: req.auth!.user.id,
+        label,
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+        readOnly,
+      });
+      app.systemDb.insertAuditLog({
+        actorUserId: req.auth!.user.id,
+        category: 'user',
+        action: 'api_key.create',
+        targetType: 'api_key',
+        targetId: apiKey.id,
+        details: { label, read_only: readOnly, self: true },
+      });
+      const dto: ApiKeyWithSecret = { ...keyPublicDto(apiKey), key: gen.key };
+      sendCreated(reply, dto);
+    },
+  );
+
+  app.delete(
+    '/me/keys/:id',
+    { preHandler: [app.authPreHandler, app.idempotency.preHandler] },
+    async (req: FastifyRequest, reply) => {
+      const { id: keyId } = req.params as KeyIdParams;
+      const key = app.systemDb.getApiKeyById(keyId);
+      if (key === null) {
+        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+      }
+      if (key.user_id !== req.auth!.user.id) {
+        // Do not leak ownership: treat a foreign key as not-found.
+        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+      }
+      app.systemDb.disableApiKey(keyId);
+      app.systemDb.insertAuditLog({
+        actorUserId: req.auth!.user.id,
+        category: 'user',
+        action: 'api_key.revoke',
+        targetType: 'api_key',
+        targetId: keyId,
+        details: { self: true },
+      });
+      reply.code(204).send();
+    },
+  );
+};

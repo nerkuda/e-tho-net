@@ -282,11 +282,23 @@
   [02-data-model.md](02-data-model.md), п. 2.7.
 
 ### B12. Маршруты auth
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B8
+- **Статус:** `done` · **Assignee:** agent-B7 · **Зависимости:** B8
 - **Описание:** `GET /me`, `/me/keys` (CRUD), `/admin/users` (CRUD + key gen),
   `/admin/users/{id}/keys`. Полный ключ возвращается только при создании.
-- **DoD:** пользователь видит свои данные; админ управляет пользователями и
-  ключами; первый пользователь не удаляется.
+- **DoD:**
+  - [x] `GET /me`, `/me/keys`, `POST /me/keys` (ключ один раз), `DELETE /me/keys/:id`.
+  - [x] `/admin/users` CRUD + `/admin/users/:id/keys` (gen/revoke), всё через
+    `requireAdmin`; полный ключ возвращается один раз при создании.
+  - [x] Первый пользователь не удаляется/не понижается (422 `PROTECTED_ENTITY`);
+    пользователь, владеющий сетями, не удаляется (422).
+  - [x] Все admin-операции пишут в `audit_log` (`category=user`); дубликат
+    username → 409 `DUPLICATE`.
+- **Note:** запись аудита идёт через `SystemDb.insertAuditLog` напрямую
+  (метод с B4); полноценный `recordAudit` helper вынесен в B14. Зависимость
+  `@fastify/cors` понижена до `^9.0.1` (v10 требует Fastify 5, а у нас 4.29).
+  Важный фикс: `setErrorHandler` обязан регистрироваться **до** route-плагинов,
+  иначе encapsulated child-конtekсты наследуют дефолтный формат Fastify и
+  `EtnError` сериализуется как `{statusCode,code,error,message}` 500.
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 3–4; [06-auth.md](06-auth.md).
 
 ### B13. Маршруты networks и members

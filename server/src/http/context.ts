@@ -8,6 +8,9 @@
 
 import type { ApiKey, User } from '@etn/shared';
 
+import type { SystemDb } from '../db/system-db.js';
+import type { Logger } from '../logger.js';
+
 /**
  * Identity and key material attached to an authenticated request.
  * Mirrors the `request.user = { user, key_id, client_id }` contract from task
@@ -35,6 +38,12 @@ declare module 'fastify' {
      * preHandler has run.
      */
     auth: AuthContext | null;
+  }
+  interface FastifyInstance {
+    /** The `_system.db` accessor shared by all routes. */
+    systemDb: SystemDb;
+    /** Shared application logger. */
+    appLogger: Logger;
   }
 }
 
