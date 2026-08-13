@@ -18,6 +18,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 
 import type {
+  AnyRealtimeEvent,
   ApiKey,
   AuditCategory,
   AuditLogEntry,
@@ -26,6 +27,8 @@ import type {
   NetworkListItem,
   NetworkMember,
   NetworkRole,
+  RealtimeActor,
+  RealtimeMeta,
   User,
 } from '@etn/shared';
 import { IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
@@ -178,6 +181,12 @@ export class SystemDb {
   private readonly stGetPreference: Database.Statement;
   private readonly stUpsertPreference: Database.Statement;
   private readonly stListPreferences: Database.Statement;
+  private readonly stNextNetworkSeq: Database.Statement;
+  private readonly stInsertEvent: Database.Statement;
+  private readonly stReadEventsAfter: Database.Statement;
+  private readonly stMinEventSeq: Database.Statement;
+  private readonly stPruneEvents: Database.Statement;
+  private readonly stListEventLogNetworks: Database.Statement;
 
   /**
    * Wrap an already-open connection and prepare all statements. Does not run
@@ -266,6 +275,22 @@ export class SystemDb {
     this.stListPreferences = db.prepare(
       'SELECT key, value, updated_at FROM user_preferences WHERE user_id = ? AND network_id = ? ORDER BY key',
     );
+    this.stNextNetworkSeq = db.prepare(
+      'INSERT INTO network_seq (network_id, last_seq) VALUES (?, 1) ON CONFLICT(network_id) DO UPDATE SET last_seq = last_seq + 1 RETURNING last_seq',
+    );
+    this.stInsertEvent = db.prepare(
+      'INSERT INTO event_log (network_id, seq, ts, type, data) VALUES (?, ?, ?, ?, ?)',
+    );
+    this.stReadEventsAfter = db.prepare(
+      'SELECT seq, ts, type, data FROM event_log WHERE network_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?',
+    );
+    this.stMinEventSeq = db.prepare('SELECT MIN(seq) AS s FROM event_log WHERE network_id = ?');
+    this.stPruneEvents = db.prepare(
+      `DELETE FROM event_log
+       WHERE network_id = ? AND ts < ?
+         AND seq NOT IN (SELECT seq FROM event_log WHERE network_id = ? ORDER BY seq DESC LIMIT ?)`,
+    );
+    this.stListEventLogNetworks = db.prepare('SELECT DISTINCT network_id FROM event_log');
   }
 
   /** TTL window for cached idempotent responses, in milliseconds. */
@@ -677,6 +702,124 @@ export class SystemDb {
       updated_at: string;
     }>;
     return rows.map((r) => ({ key: r.key, value: JSON.parse(r.value), updated_at: r.updated_at }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Real-time event log & per-network sequence (task E2, 04-realtime.md §3, §5–6)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Atomically increment (or seed) the per-network real-time sequence counter
+   * and return the newly assigned `seq` (04-realtime.md §3, §5). The first
+   * event of a network gets `seq` 1. Callers (the domain emit helper) run this
+   * and {@link appendEvent} inside one transaction so `(commit, seq)` stay
+   * consistent.
+   */
+  nextNetworkSeq(networkId: string): number {
+    const row = this.stNextNetworkSeq.get(networkId) as { last_seq: number };
+    return row.last_seq;
+  }
+
+  /**
+   * Append a serialised event to `event_log`. `dataJson` holds the full event
+   * document (actor, audience, meta, payload — see migration 009_event_log.sql),
+   * `type`/`seq`/`ts` are stored in dedicated columns for indexed replay.
+   *
+   * @param ts - optional ISO-8601 timestamp; defaults to "now" so callers that
+   *   built the live event envelope first can keep the stored `ts` identical.
+   */
+  appendEvent(networkId: string, seq: number, type: string, dataJson: string, ts?: string): void {
+    this.stInsertEvent.run(networkId, seq, ts ?? new Date().toISOString(), type, dataJson);
+  }
+
+  /**
+   * Replay events with `seq > afterSeq` in ascending order, capped at `limit`
+   * (04-realtime.md §6). The returned envelopes are reconstructed from the
+   * stored columns + `data` JSON; the caller is responsible for re-applying
+   * audience filtering (11-settings-and-state.md §4.3).
+   */
+  readEventsAfter(networkId: string, afterSeq: number, limit: number): AnyRealtimeEvent[] {
+    const rows = this.stReadEventsAfter.all(networkId, afterSeq, limit) as Array<{
+      seq: number;
+      ts: string;
+      type: string;
+      data: string;
+    }>;
+    return rows.map((r) => SystemDb.rowToEvent(networkId, r));
+  }
+
+  /**
+   * Smallest retained `seq` for a network, or `null` when the log is empty.
+   * Used by the gateway to detect `resume.stale` (a gap between the client's
+   * `last_seq` and the retained window).
+   */
+  getMinEventSeq(networkId: string): number | null {
+    const row = this.stMinEventSeq.get(networkId) as { s: number | null };
+    return row.s;
+  }
+
+  /**
+   * Drop events outside the retention window (04-realtime.md §6): rows older
+   * than `ttlHours`, while always keeping the `keepRows` most recent per
+   * network. Returns the number of removed rows. Driven by the periodic
+   * cleanup job (see `server/src/realtime/event-log-cleanup.ts`).
+   */
+  pruneOldEvents(networkId: string, keepRows: number, ttlHours: number): number {
+    const cutoff = new Date(Date.now() - ttlHours * 3_600_000).toISOString();
+    const info = this.stPruneEvents.run(networkId, cutoff, networkId, keepRows);
+    return info.changes;
+  }
+
+  /** Ids of every network that currently has retained events (cleanup job). */
+  listEventLogNetworkIds(): string[] {
+    const rows = this.stListEventLogNetworks.all() as Array<{ network_id: string }>;
+    return rows.map((r) => r.network_id);
+  }
+
+  /** Rebuild a full event envelope from an `event_log` row. */
+  private static rowToEvent(
+    networkId: string,
+    row: { seq: number; ts: string; type: string; data: string },
+  ): AnyRealtimeEvent {
+    const parsed: unknown = JSON.parse(row.data);
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error(`event_log: corrupt data for network ${networkId} seq ${row.seq}`);
+    }
+    const p = parsed as Record<string, unknown>;
+    if (!SystemDb.isActor(p.actor)) {
+      throw new Error(`event_log: missing actor for network ${networkId} seq ${row.seq}`);
+    }
+    if (p.audience !== 'network' && p.audience !== 'user') {
+      throw new Error(`event_log: bad audience for network ${networkId} seq ${row.seq}`);
+    }
+    if (!('data' in p)) {
+      throw new Error(`event_log: missing payload for network ${networkId} seq ${row.seq}`);
+    }
+    const meta = p.meta;
+    // `AnyRealtimeEvent` is a discriminated union; assembling a `type` from a
+    // runtime string cannot be proven by the compiler, so cast the rebuilt
+    // envelope (shape-validated above) into the union type.
+    return {
+      type: row.type as AnyRealtimeEvent['type'],
+      seq: row.seq,
+      ts: row.ts,
+      actor: p.actor,
+      network_id: networkId,
+      audience: p.audience,
+      data: p.data as AnyRealtimeEvent['data'],
+      ...(typeof meta === 'object' && meta !== null ? { meta: meta as RealtimeMeta } : {}),
+    } as unknown as AnyRealtimeEvent;
+  }
+
+  /** Structural check for a serialised {@link RealtimeActor}. */
+  private static isActor(v: unknown): v is RealtimeActor {
+    if (typeof v !== 'object' || v === null) {
+      return false;
+    }
+    const a = v as Record<string, unknown>;
+    return (
+      typeof a.user_id === 'string' && (typeof a.client_id === 'string' || a.client_id === null)
+    );
   }
 
   // -------------------------------------------------------------------------

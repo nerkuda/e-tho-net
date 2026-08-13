@@ -34,6 +34,7 @@ import { EtnError, PREF_KEY } from '@etn/shared';
 import type { NetworkService } from '../domain/network-service.js';
 import { sendEtnError } from '../http/errors.js';
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
+import { emitDomainEvent } from '../realtime/emit.js';
 
 /** Route params carrying a network id. */
 interface NetworkIdParams {
@@ -202,6 +203,18 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
           targetId: network.id,
           details: { display_name: displayName, description },
         });
+        // Real-time (E3, 04-realtime.md §4.6): broadcast only changed fields.
+        emitDomainEvent(
+          { systemDb: app.systemDb, pubsub: app.pubsub },
+          network.id,
+          'network.updated',
+          {
+            ...(displayName !== network.display_name ? { display_name: displayName } : {}),
+            ...(description !== network.description ? { description } : {}),
+          },
+          { user_id: req.auth!.user.id, client_id: req.auth!.clientId },
+          { meta: { request_id: req.id } },
+        );
         const updated = app.systemDb.getNetworkById(network.id);
         sendSuccess(reply, networkDto(updated!));
       },
@@ -258,6 +271,15 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
           targetType: 'user',
           targetId: userId,
         });
+        // Real-time (E3, 04-realtime.md §4.6): existing members see the new one.
+        emitDomainEvent(
+          { systemDb: app.systemDb, pubsub: app.pubsub },
+          networkId,
+          'member.added',
+          { user_id: userId, role: 'member', added_by: addedBy },
+          { user_id: addedBy, client_id: req.auth!.clientId },
+          { meta: { request_id: req.id } },
+        );
         sendCreated(reply, { network_id: networkId, user_id: userId, role: 'member' });
       },
     );
@@ -295,6 +317,16 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
           targetType: 'user',
           targetId: uid,
         });
+        // Real-time (E3, 04-realtime.md §4.6): if the removed user is the
+        // current one, clients close the network locally.
+        emitDomainEvent(
+          { systemDb: app.systemDb, pubsub: app.pubsub },
+          networkId,
+          'member.removed',
+          { user_id: uid },
+          { user_id: req.auth!.user.id, client_id: req.auth!.clientId },
+          { meta: { request_id: req.id } },
+        );
         reply.code(204).send();
       },
     );
@@ -347,6 +379,25 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
           targetId: uid,
           details: { role: 'owner' },
         });
+        // Real-time (E3, 04-realtime.md §4.6): the transfer changes the roles
+        // of two users, so two role_changed events go out — every client can
+        // update both affected member rows without extra lookups.
+        emitDomainEvent(
+          { systemDb: app.systemDb, pubsub: app.pubsub },
+          networkId,
+          'member.role_changed',
+          { user_id: uid, role: 'owner' },
+          { user_id: req.auth!.user.id, client_id: req.auth!.clientId },
+          { meta: { request_id: req.id } },
+        );
+        emitDomainEvent(
+          { systemDb: app.systemDb, pubsub: app.pubsub },
+          networkId,
+          'member.role_changed',
+          { user_id: network.owner_id, role: 'member' },
+          { user_id: req.auth!.user.id, client_id: req.auth!.clientId },
+          { meta: { request_id: req.id } },
+        );
         reply.code(204).send();
       },
     );
@@ -376,6 +427,16 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
         }
         const body = (req.body ?? {}) as { value?: unknown };
         app.systemDb.setNetworkPreference(req.auth!.user.id, networkId, key, body.value);
+        // Real-time (E3, 11-settings-and-state.md §4.4): private per-user
+        // settings — audience is derived as 'user' from the event catalogue.
+        emitDomainEvent(
+          { systemDb: app.systemDb, pubsub: app.pubsub },
+          networkId,
+          'user-preference.updated',
+          { key, value: body.value },
+          { user_id: req.auth!.user.id, client_id: req.auth!.clientId },
+          { meta: { request_id: req.id } },
+        );
         sendSuccess(reply, { key, value: body.value });
       },
     );
