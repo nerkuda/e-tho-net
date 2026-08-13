@@ -5,11 +5,34 @@
 
 ## 1. Установка
 
+### Готовый установщик (для конечных пользователей)
+
 1. Скачайте установщик для вашей ОС из релизов проекта (Windows: `ETN-Setup-*.exe`;
    macOS: `ETN-*.dmg`; Linux: `ETN-*.AppImage` или `.deb`).
 2. Установите обычным способом.
 
-Для разработки: `npm install && npm run dev:client` в корне монорепо.
+### Из исходников (для разработчиков)
+
+```bash
+git clone <репозиторий ETN>
+cd etn
+npm install                        # все workspace
+npm -w @etn/client run rebuild:native   # ОДНОРАЗОВО: пересобрать better-sqlite3
+                                   # под Electron ABI (вместо Node ABI)
+npm run dev:client                 # запуск
+```
+
+> **Важно: шаг `rebuild:native` обязателен.** По умолчанию `npm install`
+> скачивает `better-sqlite3`, собранный под Node.js. Electron использует другой
+> ABI — без пересборки клиент падает при запуске с ошибкой
+> *«module was compiled against a different Node.js version»*. Скрипт
+> `rebuild:native` (через `@electron/rebuild`) решает это за один запуск.
+> Повторять надо после каждого `npm install` (если версия electron или
+> better-sqlite3 изменилась).
+
+Если rebuild падает с `EPERM: unlink better_sqlite3.node` — закройте все
+запущенные процессы Electron/ETN и повторите. На Windows файл бывает
+заблокирован живым процессом.
 
 ## 2. Первый запуск и подключение
 

@@ -55,7 +55,11 @@ function createWindow(): BrowserWindow {
     autoHideMenuBar: true,
     backgroundColor: '#f5f6f8',
     webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
+      // electron-vite emits the preload bundle as `.mjs` (package "type":"module")
+      // into `out/preload/`. Resolve it relative to `out/main/` at runtime so
+      // dev (`electron-vite dev`) and packaged builds both work without config
+      // forks.
+      preload: path.join(__dirname, '../preload/index.mjs'),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
