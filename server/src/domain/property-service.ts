@@ -1,13 +1,16 @@
 /**
- * Property service — type-property definitions (task C5).
+ * Property service (tasks C5 + C6).
  *
- * Defines which properties a thought type or link type exposes (`type_properties`,
- * docs/02-data-model.md §3.4). Shared by {@link './thought-type-service.js'} and
- * {@link './link-type-service.js'} through the `owner_type` parameter.
+ * Two concerns live here, both keyed by `owner_type`:
+ *   * **Type-property definitions** (`type_properties`, C5) — which properties a
+ *     thought type or link type exposes. Shared by {@link
+ *     './thought-type-service.js'} and {@link './link-type-service.js'}.
+ *   * **Property values** (`property_values`, C6) — the actual values stored on
+ *     individual thoughts/links. See {@link setPropertyValue} and friends below.
  *
- * The companion value API (`property_values`) is added in task C6 — definitions
- * are the natural entry point there, since validating a value requires reading
- * its definition.
+ * The two are deliberately in one module: `property_values.property_id`
+ * references `type_properties.id`, and validating a value requires reading its
+ * definition, so the definitions are the natural entry point for the value API.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -19,7 +22,10 @@ import {
   type PropertyDefinition,
   type PropertyDefinitionInput,
   type PropertyDefinitionUpdateInput,
+  type PropertyOwnerType,
   type PropertyValueType,
+  type PropertyValue,
+  type PropertyValueValue,
   type TypeOwnerType,
 } from '@etn/shared';
 
@@ -248,5 +254,308 @@ export function reorderTypeProperties(
     );
     orderedPropertyIds.forEach((propId, index) => stmt.run(index, propId, ownerType, ownerId));
     return listTypeProperties(ndb, ownerType, ownerId);
+  });
+}
+
+// ===========================================================================
+// Property values (C6)
+// ===========================================================================
+//
+// Stored in `property_values` as polymorphic EAV (owner_type = 'thought' |
+// 'link'). Exactly one value_* column is populated per row, chosen by the
+// definition's value_type; the rest stay NULL (docs/02-data-model.md §3.5).
+
+/** Raw `property_values` row. */
+interface PropertyValueRow {
+  id: string;
+  owner_type: string;
+  owner_id: string;
+  property_id: string;
+  value_text: string | null;
+  value_date: string | null;
+  value_number: number | null;
+  value_bool: number | null;
+  value_thought_ref: string | null;
+  updated_at: string;
+}
+
+/**
+ * Map a stored row back into the typed {@link PropertyValue.value} according to
+ * the definition's `value_type`, reading only the matching column.
+ */
+function readValue(row: PropertyValueRow, valueType: PropertyValueType): PropertyValueValue {
+  switch (valueType) {
+    case 'text':
+      return row.value_text;
+    case 'date':
+      return row.value_date;
+    case 'number':
+      return row.value_number;
+    case 'bool':
+      return row.value_bool === null ? null : row.value_bool === 1;
+    case 'thought_ref':
+      return row.value_thought_ref;
+  }
+}
+
+/** The table that holds the owner row for a given value owner_type. */
+function ownerTable(ownerType: PropertyOwnerType): 'thoughts' | 'links' {
+  return ownerType === 'thought' ? 'thoughts' : 'links';
+}
+
+/**
+ * Find the property definition governing `(ownerType, ownerId, key)` by walking
+ * from the owner thought/link to its type and that type's properties. Returns
+ * `null` when the owner has no type or the type defines no such property.
+ */
+function resolveDefinition(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  key: string,
+): PropertyDefinition | null {
+  const row = ndb
+    .prepare(`SELECT type_id AS tid FROM ${ownerTable(ownerType)} WHERE id = ?`)
+    .get(ownerId) as { tid: string | null } | undefined;
+  if (!row || !row.tid) {
+    return null;
+  }
+  const defOwnerType: TypeOwnerType = ownerType === 'thought' ? 'thought_type' : 'link_type';
+  return getTypePropertyByKey(ndb, defOwnerType, row.tid, key);
+}
+
+/**
+ * List all stored property values of an owner (docs/03-server-api.md §9). Each
+ * value is returned with the runtime type matching its definition's value_type.
+ */
+export function getPropertyValues(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+): PropertyValue[] {
+  const rows = ndb
+    .prepare('SELECT * FROM property_values WHERE owner_type = ? AND owner_id = ?')
+    .all(ownerType, ownerId) as PropertyValueRow[];
+  const out: PropertyValue[] = [];
+  for (const row of rows) {
+    const def = getTypeProperty(ndb, row.property_id);
+    // Skip orphaned values whose definition was deleted — should not happen
+    // (the FK cascades), but stay defensive.
+    if (!def) continue;
+    out.push({
+      id: row.id,
+      owner_type: ownerType,
+      owner_id: ownerId,
+      property_id: row.property_id,
+      value: readValue(row, def.value_type),
+      updated_at: row.updated_at,
+    });
+  }
+  return out;
+}
+
+/**
+ * Validate `value` against the definition's `value_type` and return the column
+ * name + raw SQL value to write.
+ *
+ * The returned `column` is always one of the fixed `value_*` literals derived
+ * from `value_type` (never user input), which is what makes it safe to splice
+ * into the upsert statement. For `thought_ref`, when the definition's config
+ * names an `allowed_type_id`, the referenced thought must be of that type.
+ *
+ * @returns the column name and the raw SQL value (or `null` to clear).
+ */
+function validateAndCoerce(
+  ndb: NetworkDb,
+  def: PropertyDefinition,
+  value: PropertyValueValue,
+): { column: string; raw: string | number | null } {
+  // `value_type` is an enum member (validated on definition write), so the
+  // interpolated column is one of five fixed literals.
+  const column = `value_${def.value_type}`;
+  if (value === null) {
+    return { column, raw: null };
+  }
+  switch (def.value_type) {
+    case 'text':
+      if (typeof value !== 'string') {
+        throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects text`, {
+          key: def.key,
+          expected: 'text',
+        });
+      }
+      return { column, raw: value };
+    case 'date':
+      if (typeof value !== 'string') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `property "${def.key}" expects an ISO-8601 date string`,
+          {
+            key: def.key,
+            expected: 'date',
+          },
+        );
+      }
+      return { column, raw: value };
+    case 'number':
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects a number`, {
+          key: def.key,
+          expected: 'number',
+        });
+      }
+      return { column, raw: value };
+    case 'bool':
+      if (typeof value !== 'boolean') {
+        throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects a boolean`, {
+          key: def.key,
+          expected: 'bool',
+        });
+      }
+      return { column, raw: value ? 1 : 0 };
+    case 'thought_ref': {
+      if (typeof value !== 'string') {
+        throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects a thought id`, {
+          key: def.key,
+          expected: 'thought_ref',
+        });
+      }
+      const target = ndb.prepare('SELECT type_id FROM thoughts WHERE id = ?').get(value) as
+        { type_id: string | null } | undefined;
+      if (!target) {
+        throw new EtnError('VALIDATION_ERROR', `referenced thought ${value} does not exist`, {
+          key: def.key,
+          ref: value,
+        });
+      }
+      const allowed = def.config?.allowed_type_id;
+      if (allowed && target.type_id !== allowed) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `thought ${value} is not of the required type ${allowed}`,
+          { key: def.key, ref: value, allowed_type_id: allowed, actual_type_id: target.type_id },
+        );
+      }
+      return { column, raw: value };
+    }
+  }
+}
+
+/**
+ * Upsert a property value addressed by key (docs/03-server-api.md §9).
+ *
+ * The value is validated against the property definition found on the owner's
+ * type and written **only** to the matching `value_*` column; the other value
+ * columns are set to NULL. Passing `null` clears the value.
+ *
+ * Throws:
+ *   * `NOT_FOUND` (404) if the owner or its type has no such property;
+ *   * `VALIDATION_ERROR` (422) if the value does not match `value_type` (or, for
+ *     `thought_ref`, references a missing/wrong-typed thought).
+ */
+export function setPropertyValue(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  key: string,
+  value: PropertyValueValue,
+): PropertyValue {
+  if (ownerType !== 'thought' && ownerType !== 'link') {
+    throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
+      field: 'owner_type',
+    });
+  }
+  return ndb.transaction(() => {
+    // Ensure the owner exists.
+    const owner = ndb.prepare(`SELECT 1 FROM ${ownerTable(ownerType)} WHERE id = ?`).get(ownerId);
+    if (!owner) {
+      throw new EtnError('NOT_FOUND', `${ownerType} ${ownerId} not found`, {
+        entity: ownerType,
+        id: ownerId,
+      });
+    }
+    const def = resolveDefinition(ndb, ownerType, ownerId, key);
+    if (!def) {
+      throw new EtnError('NOT_FOUND', `property "${key}" is not defined on this owner's type`, {
+        owner_type: ownerType,
+        owner_id: ownerId,
+        key,
+      });
+    }
+
+    const { column, raw } = validateAndCoerce(ndb, def, value);
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    // Upsert: write the raw value into the matching column on INSERT, and on
+    // conflict reset every value_* column before copying the matching one back,
+    // so the single-column rule holds even if value_type changed since the last
+    // write. `column` is a fixed `value_*` literal derived from value_type.
+    ndb
+      .prepare(
+        `INSERT INTO property_values (id, owner_type, owner_id, property_id, ${column}, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(owner_type, owner_id, property_id) DO UPDATE SET
+           value_text = NULL,
+           value_date = NULL,
+           value_number = NULL,
+           value_bool = NULL,
+           value_thought_ref = NULL,
+           ${column} = excluded.${column},
+           updated_at = excluded.updated_at`,
+      )
+      .run(id, ownerType, ownerId, def.id, raw, now);
+
+    const stored = ndb
+      .prepare(
+        'SELECT * FROM property_values WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+      )
+      .get(ownerType, ownerId, def.id) as PropertyValueRow;
+    return {
+      id: stored.id,
+      owner_type: ownerType,
+      owner_id: ownerId,
+      property_id: def.id,
+      value: readValue(stored, def.value_type),
+      updated_at: stored.updated_at,
+    };
+  });
+}
+
+/**
+ * Delete a stored property value addressed by key. Throws `NOT_FOUND` (404) if
+ * the property is undefined or no value is stored for that key.
+ */
+export function deletePropertyValue(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  key: string,
+): void {
+  if (ownerType !== 'thought' && ownerType !== 'link') {
+    throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
+      field: 'owner_type',
+    });
+  }
+  ndb.transaction(() => {
+    const def = resolveDefinition(ndb, ownerType, ownerId, key);
+    if (!def) {
+      throw new EtnError('NOT_FOUND', `property "${key}" is not defined on this owner's type`, {
+        owner_type: ownerType,
+        owner_id: ownerId,
+        key,
+      });
+    }
+    const result = ndb
+      .prepare(
+        'DELETE FROM property_values WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+      )
+      .run(ownerType, ownerId, def.id);
+    if (result.changes === 0) {
+      throw new EtnError('NOT_FOUND', `no value stored for property "${key}"`, {
+        owner_type: ownerType,
+        owner_id: ownerId,
+        key,
+      });
+    }
   });
 }
