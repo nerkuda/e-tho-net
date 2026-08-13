@@ -27,6 +27,7 @@ import { notice } from '../lib/notice.js';
 import { cloudFontSize, cloudHeight } from '../lib/pure.js';
 import { store } from '../state.js';
 import { initLinksOverlay } from './links.js';
+import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
 
 /** Zone directions of the canvas (parents/siblings/children). */
 export type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -130,6 +131,15 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   zones = { parents: zoneParents, siblings: zoneSiblings, children: zoneChildren };
   emptyEl = empty;
   redrawLinks = initLinksOverlay(host).redraw;
+
+  // Add-thought dialog (H14) and external file/URL drops (08-ui-spec.md §7).
+  mountAddDialog();
+  wireZoneExternalDrops({ parents: zoneParents, children: zoneChildren });
+  zoneSiblings.addEventListener('dragover', (event) => {
+    event.preventDefault(); // siblings are a forbidden drop target
+    zoneSiblings.classList.add('drop-forbidden');
+  });
+  zoneSiblings.addEventListener('dragleave', () => zoneSiblings.classList.remove('drop-forbidden'));
 
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
