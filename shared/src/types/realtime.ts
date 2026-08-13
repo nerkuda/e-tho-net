@@ -380,7 +380,7 @@ export type RealtimeClientMessage =
 
 /** Non-event frames the server may send to a client. */
 export type RealtimeServerControlMessage =
-  { type: 'pong' } | { type: 'resume.stale'; last_seq: number };
+  { type: 'ping' } | { type: 'pong' } | { type: 'resume.stale'; last_seq: number };
 
 /** WebSocket close codes used by the gateway (04-realtime.md §2). */
 export const REALTIME_CLOSE_CODES = {

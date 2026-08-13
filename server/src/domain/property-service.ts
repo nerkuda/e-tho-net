@@ -530,13 +530,13 @@ export function deletePropertyValue(
   ownerType: PropertyOwnerType,
   ownerId: string,
   key: string,
-): void {
+): { property_id: string } {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
       field: 'owner_type',
     });
   }
-  ndb.transaction(() => {
+  return ndb.transaction(() => {
     const def = resolveDefinition(ndb, ownerType, ownerId, key);
     if (!def) {
       throw new EtnError('NOT_FOUND', `property "${key}" is not defined on this owner's type`, {
@@ -557,5 +557,8 @@ export function deletePropertyValue(
         key,
       });
     }
+    // Return the property_id so routes can emit `property-value.deleted`
+    // (task E3 wiring) without a second lookup.
+    return { property_id: def.id };
   });
 }

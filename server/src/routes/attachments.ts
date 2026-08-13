@@ -143,6 +143,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const input = parseAttachmentBody(requestBody(req), req.id);
           const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
           const attachment = createAttachment(ndb, ownerType, id, input, req.auth!.user.id);
+          deps.emit(req, networkId, 'attachment.created', { attachment });
           sendCreated(reply, attachment, { request_id: req.id });
         },
       );
@@ -159,6 +160,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const changes = parseAttachmentUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const attachment = updateAttachment(ndb, id, changes);
+        deps.emit(req, networkId, 'attachment.updated', { id, changes });
         sendSuccess(reply, attachment);
       },
     );
@@ -170,6 +172,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as AttachmentIdParams;
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         deleteAttachment(ndb, id);
+        deps.emit(req, networkId, 'attachment.deleted', { id });
         reply.code(204).send();
       },
     );

@@ -288,6 +288,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseThoughtTypeBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const type = createThoughtType(ndb, input, req.auth!.user.id);
+        deps.emit(req, networkId, 'thought-type.created', { type });
         sendCreated(reply, type, {
           version: type.version,
           updated_at: type.updated_at,
@@ -305,6 +306,11 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const changes = parseThoughtTypeUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const type = updateThoughtType(ndb, id, changes, expectedVersion);
+        deps.emit(req, networkId, 'thought-type.updated', {
+          id,
+          changes,
+          version: type.version,
+        });
         sendSuccess(reply, type, {
           version: type.version,
           updated_at: type.updated_at,
@@ -323,6 +329,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const force = queryBoolean(query.force, 'force', req.id) === true;
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         deleteThoughtType(ndb, id, expectedVersion, { force, actorUserId: req.auth!.user.id });
+        deps.emit(req, networkId, 'thought-type.deleted', { id });
         reply.code(204).send();
       },
     );
@@ -350,6 +357,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseLinkTypeBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const type = createLinkType(ndb, input, req.auth!.user.id);
+        deps.emit(req, networkId, 'link-type.created', { type });
         sendCreated(reply, type, {
           version: type.version,
           updated_at: type.updated_at,
@@ -367,6 +375,11 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const changes = parseLinkTypeUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const type = updateLinkType(ndb, id, changes, expectedVersion);
+        deps.emit(req, networkId, 'link-type.updated', {
+          id,
+          changes,
+          version: type.version,
+        });
         sendSuccess(reply, type, {
           version: type.version,
           updated_at: type.updated_at,
@@ -385,6 +398,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const force = queryBoolean(query.force, 'force', req.id) === true;
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         deleteLinkType(ndb, id, expectedVersion, { force, actorUserId: req.auth!.user.id });
+        deps.emit(req, networkId, 'link-type.deleted', { id });
         reply.code(204).send();
       },
     );
@@ -414,6 +428,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           const input = parseTypePropertyBody(requestBody(req), req.id);
           const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
           const prop = createTypeProperty(ndb, ownerType, id, input);
+          deps.emit(req, networkId, 'property-definition.created', { definition: prop });
           sendCreated(reply, prop, { request_id: req.id });
         },
       );
@@ -426,6 +441,10 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           const changes = parseTypePropertyUpdateBody(requestBody(req), req.id);
           const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
           const prop = updateTypeProperty(ndb, propertyId, changes);
+          deps.emit(req, networkId, 'property-definition.updated', {
+            id: propertyId,
+            changes,
+          });
           sendSuccess(reply, prop, { request_id: req.id });
         },
       );
@@ -437,6 +456,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           const { networkId, propertyId } = req.params as TypePropertyParams;
           const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
           deleteTypeProperty(ndb, propertyId);
+          deps.emit(req, networkId, 'property-definition.deleted', { id: propertyId });
           reply.code(204).send();
         },
       );

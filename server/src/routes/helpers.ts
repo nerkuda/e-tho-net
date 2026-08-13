@@ -11,16 +11,36 @@
 
 import type { FastifyRequest } from 'fastify';
 
-import { EtnError } from '@etn/shared';
+import {
+  EtnError,
+  type RealtimeAudience,
+  type RealtimeEventMap,
+  type RealtimeEventType,
+} from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { openNetworkDb } from '../db/network-db.js';
 import type { Logger } from '../logger.js';
 
+/**
+ * Emitter signature used by phase-D routes: derive the actor from the request
+ * (auth context + `Client-Id`) and emit the catalogue-typed event after a
+ * successful mutation (docs/04-realtime.md §4–5, task E3).
+ */
+export type RouteEmit = <E extends RealtimeEventType>(
+  req: FastifyRequest,
+  networkId: string,
+  type: E,
+  data: RealtimeEventMap[E],
+  options?: { audience?: RealtimeAudience },
+) => void;
+
 /** Dependencies injected into the phase-D route plugin factories. */
 export interface RouteDeps {
   /** Absolute ETN data directory (used to open `networks/<id>/data.db`). */
   dataDir: string;
+  /** Emit a realtime event for the acting request (task E3 wiring). */
+  emit: RouteEmit;
 }
 
 /** Open (or reuse) the network database for a route request. */

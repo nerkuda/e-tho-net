@@ -80,9 +80,7 @@ function startServer(): Promise<{
  * created before calling `connect()`. The returned socket has a `messages` array
  * collecting every text frame the client sends (e.g. the `resume` handshake).
  */
-function nextConnection(
-  server: WebSocketServer,
-): Promise<WebSocket & { messages: string[] }> {
+function nextConnection(server: WebSocketServer): Promise<WebSocket & { messages: string[] }> {
   return new Promise((resolve) => {
     server.once('connection', (ws) => {
       const messages: string[] = [];
@@ -120,7 +118,10 @@ describe('RealtimeClient — handshake & resume', () => {
     await wait(20);
 
     const resumes = ws.messages.map((m) => JSON.parse(m) as { type: string; last_seq: number });
-    assert.ok(resumes.some((m) => m.type === 'resume' && m.last_seq === 41), `${JSON.stringify(resumes)}`);
+    assert.ok(
+      resumes.some((m) => m.type === 'resume' && m.last_seq === 41),
+      `${JSON.stringify(resumes)}`,
+    );
     client.disconnect();
   });
 
@@ -145,17 +146,19 @@ describe('RealtimeClient — handshake & resume', () => {
     teardowns.push(close);
     const db = makeFakeDb({});
 
-    const connInfo = new Promise<{ url: string; auth: string | undefined; cid: string | undefined }>(
-      (resolve) => {
-        server.once('connection', (_ws, req) => {
-          resolve({
-            url: req.url ?? '',
-            auth: req.headers['authorization'],
-            cid: req.headers['client-id'],
-          });
+    const connInfo = new Promise<{
+      url: string;
+      auth: string | undefined;
+      cid: string | undefined;
+    }>((resolve) => {
+      server.once('connection', (_ws, req) => {
+        resolve({
+          url: req.url ?? '',
+          auth: req.headers['authorization'],
+          cid: req.headers['client-id'],
         });
-      },
-    );
+      });
+    });
 
     const client = makeClient(url, db, 'net-xyz');
     client.connect();
@@ -224,7 +227,10 @@ describe('RealtimeClient — events & last_seq', () => {
     await wait(30);
 
     const replies = ws.messages.map((m) => JSON.parse(m) as { type: string });
-    assert.ok(replies.some((m) => m.type === 'pong'), JSON.stringify(replies));
+    assert.ok(
+      replies.some((m) => m.type === 'pong'),
+      JSON.stringify(replies),
+    );
     client.disconnect();
   });
 
@@ -324,7 +330,10 @@ describe('RealtimeClient — close codes & reconnect', () => {
     await wait(80);
 
     assert.ok(resumes.includes(33), `expected resume with last_seq=33, got ${resumes.join(',')}`);
-    assert.ok(connections.length >= 2, `expected a reconnect, saw ${connections.length} connections`);
+    assert.ok(
+      connections.length >= 2,
+      `expected a reconnect, saw ${connections.length} connections`,
+    );
     client.disconnect();
   });
 });

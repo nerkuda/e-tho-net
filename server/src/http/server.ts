@@ -40,6 +40,9 @@ import { createPropertiesRoutes } from '../routes/properties.js';
 import { createCommentsRoutes } from '../routes/comments.js';
 import { createAttachmentsRoutes } from '../routes/attachments.js';
 import { createSearchRoutes } from '../routes/search.js';
+import { createAdminNetworksRoutes } from '../routes/admin-networks.js';
+import type { RouteDeps } from '../routes/helpers.js';
+import { emitDomainEvent } from '../realtime/emit.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -193,26 +196,51 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     { prefix: '/api/v1' },
   );
   await app.register(auditRoutes, { prefix: '/api/v1' });
+  // Admin network routes (task D7, 03-server-api.md §4.2).
+  await app.register(
+    createAdminNetworksRoutes(new NetworkServiceImpl(systemDb, config.dataDir, logger)),
+    { prefix: '/api/v1' },
+  );
+
+  // Real-time event emission for phase-D routes (task E3): derive the actor
+  // from the request auth context and publish catalogue-typed events.
+  const routeDeps: RouteDeps = {
+    dataDir: config.dataDir,
+    emit: (req, networkId, type, data, options) => {
+      const auth = req.auth;
+      emitDomainEvent(
+        { systemDb, pubsub },
+        networkId,
+        type,
+        data,
+        { user_id: auth?.user.id ?? '', client_id: auth?.clientId ?? null },
+        {
+          ...(options?.audience !== undefined ? { audience: options.audience } : {}),
+          meta: { request_id: req.id },
+        },
+      );
+    },
+  };
 
   // Thought routes (task D1): CRUD, focus, neighbours, batch, resolve,
   // mentions, focus preferences/order (03-server-api.md §6).
-  await app.register(createThoughtsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+  await app.register(createThoughtsRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Link routes (task D2): CRUD + grouped editor listing (03-server-api.md §7).
-  await app.register(createLinksRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+  await app.register(createLinksRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Type routes (task D3): thought/link types + type_properties (03-server-api.md §8).
-  await app.register(createTypesRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+  await app.register(createTypesRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Property-value routes (task D4): per-thought/per-link values by key (03-server-api.md §9).
-  await app.register(createPropertiesRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+  await app.register(createPropertiesRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Comment and attachment routes (task D5, 03-server-api.md §10–11).
-  await app.register(createCommentsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
-  await app.register(createAttachmentsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+  await app.register(createCommentsRoutes(routeDeps), { prefix: '/api/v1' });
+  await app.register(createAttachmentsRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Search, export and job routes (task D6, 03-server-api.md §12, §14).
-  await app.register(createSearchRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+  await app.register(createSearchRoutes(routeDeps), { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
   app.get('/api/v1/health', async () => {

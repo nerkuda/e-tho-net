@@ -33,6 +33,7 @@ import {
 import {
   createComment,
   deleteComment,
+  getComment,
   listComments,
   updateComment,
 } from '../domain/comment-service.js';
@@ -125,6 +126,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const input = parseCommentBody(requestBody(req), req.id);
           const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
           const comment = createComment(ndb, ownerType, id, input, req.auth!.user.id);
+          deps.emit(req, networkId, 'comment.created', { comment });
           sendCreated(reply, comment, {
             version: comment.version,
             updated_at: comment.updated_at,
@@ -146,6 +148,11 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const changes = parseCommentUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const comment = updateComment(ndb, id, changes, expectedVersion, req.auth!.user.id);
+        deps.emit(req, networkId, 'comment.updated', {
+          id,
+          changes,
+          version: comment.version,
+        });
         sendSuccess(reply, comment, {
           version: comment.version,
           updated_at: comment.updated_at,
@@ -161,7 +168,15 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as CommentIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const existing = getComment(ndb, id);
         deleteComment(ndb, id, expectedVersion);
+        if (existing) {
+          deps.emit(req, networkId, 'comment.deleted', {
+            owner_type: existing.owner_type,
+            owner_id: existing.owner_id,
+            id,
+          });
+        }
         reply.code(204).send();
       },
     );

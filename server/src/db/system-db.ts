@@ -613,6 +613,32 @@ export class SystemDb {
     }));
   }
 
+  /** List every network on the server (admin view, 03-server-api.md §4.2). */
+  listAllNetworks(): Network[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, display_name, description, owner_id, created_at, updated_at
+           FROM networks
+          ORDER BY created_at ASC`,
+      )
+      .all() as Array<{
+      id: string;
+      display_name: string;
+      description: string | null;
+      owner_id: string;
+      created_at: string;
+      updated_at: string;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      display_name: r.display_name,
+      description: r.description,
+      owner_id: r.owner_id,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    }));
+  }
+
   /** Add a member row. Caller validates role/owner invariants. */
   addNetworkMember(networkId: string, userId: string, role: NetworkRole, addedBy: string): void {
     this.stInsertMember.run(networkId, userId, role, new Date().toISOString(), addedBy);

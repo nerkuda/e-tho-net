@@ -92,6 +92,7 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseLinkCreateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const link = createLink(ndb, input, req.auth!.user.id);
+        deps.emit(req, networkId, 'link.created', { link });
         sendCreated(reply, link, {
           version: link.version,
           updated_at: link.updated_at,
@@ -123,6 +124,11 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
         const changes = parseLinkUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const link = updateLink(ndb, id, changes, expectedVersion, req.auth!.user.id);
+        deps.emit(req, networkId, 'link.updated', {
+          id,
+          changes,
+          version: link.version,
+        });
         sendSuccess(reply, link, {
           version: link.version,
           updated_at: link.updated_at,
@@ -139,6 +145,7 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         deleteLink(ndb, id, expectedVersion);
+        deps.emit(req, networkId, 'link.deleted', { id });
         reply.code(204).send();
       },
     );

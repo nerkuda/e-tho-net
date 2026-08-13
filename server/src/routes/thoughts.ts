@@ -296,6 +296,10 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const showInactive = resolveShowInactive(app, req, networkId, override);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const response = focus(ndb, req.auth!.user.id, id, { showInactive });
+        deps.emit(req, networkId, 'thought-view.updated', {
+          thought_id: id,
+          last_viewed_at: new Date().toISOString(),
+        });
         sendSuccess(reply, response);
       },
     );
@@ -310,6 +314,22 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseThoughtCreateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const thought = createThought(ndb, input, req.auth!.user.id);
+        deps.emit(req, networkId, 'thought.created', { thought });
+        if (input.create_link) {
+          const link = findLinksBetween(
+            ndb,
+            input.create_link.direction === 'parent'
+              ? thought.id
+              : input.create_link.target_thought_id,
+            input.create_link.direction === 'parent'
+              ? input.create_link.target_thought_id
+              : thought.id,
+            input.create_link.type_id,
+          )[0];
+          if (link) {
+            deps.emit(req, networkId, 'link.created', { link });
+          }
+        }
         sendCreated(reply, thought, {
           version: thought.version,
           updated_at: thought.updated_at,
@@ -329,6 +349,11 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const changes = parseThoughtUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const thought = updateThought(ndb, id, changes, expectedVersion, req.auth!.user.id);
+        deps.emit(req, networkId, 'thought.updated', {
+          id,
+          changes,
+          version: thought.version,
+        });
         sendSuccess(reply, thought, {
           version: thought.version,
           updated_at: thought.updated_at,
@@ -347,6 +372,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         deleteThought(ndb, id, expectedVersion);
+        deps.emit(req, networkId, 'thought.deleted', { id });
         reply.code(204).send();
       },
     );
@@ -514,29 +540,55 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         for (const id of ids) {
           try {
             switch (op) {
-              case 'set_type':
-                updateThought(ndb, id, { type_id: setTypeId }, undefined, userId);
+              case 'set_type': {
+                const updated = updateThought(ndb, id, { type_id: setTypeId }, undefined, userId);
+                deps.emit(req, networkId, 'thought.updated', {
+                  id,
+                  changes: { type_id: setTypeId },
+                  version: updated.version,
+                });
                 break;
-              case 'clear_type':
-                updateThought(ndb, id, { type_id: null }, undefined, userId);
+              }
+              case 'clear_type': {
+                const updated = updateThought(ndb, id, { type_id: null }, undefined, userId);
+                deps.emit(req, networkId, 'thought.updated', {
+                  id,
+                  changes: { type_id: null },
+                  version: updated.version,
+                });
                 break;
-              case 'set_active':
-                updateThought(ndb, id, { active: true }, undefined, userId);
+              }
+              case 'set_active': {
+                const updated = updateThought(ndb, id, { active: true }, undefined, userId);
+                deps.emit(req, networkId, 'thought.updated', {
+                  id,
+                  changes: { active: true },
+                  version: updated.version,
+                });
                 break;
-              case 'set_inactive':
-                updateThought(ndb, id, { active: false }, undefined, userId);
+              }
+              case 'set_inactive': {
+                const updated = updateThought(ndb, id, { active: false }, undefined, userId);
+                deps.emit(req, networkId, 'thought.updated', {
+                  id,
+                  changes: { active: false },
+                  version: updated.version,
+                });
                 break;
+              }
               case 'delete':
                 deleteThought(ndb, id, undefined);
+                deps.emit(req, networkId, 'thought.deleted', { id });
                 break;
               case 'link_to_focus': {
                 const [sourceId, targetId] =
                   direction === 'parent' ? [id, focusThoughtId!] : [focusThoughtId!, id];
-                createLink(
+                const link = createLink(
                   ndb,
                   { source_id: sourceId, target_id: targetId, type_id: linkTypeForCreate },
                   userId,
                 );
+                deps.emit(req, networkId, 'link.created', { link });
                 break;
               }
               case 'unlink_from_focus': {
@@ -548,6 +600,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                 }
                 for (const link of found) {
                   deleteLink(ndb, link.id, undefined);
+                  deps.emit(req, networkId, 'link.deleted', { id: link.id });
                 }
                 break;
               }
@@ -654,6 +707,12 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         };
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const result = setFocusPreferences(ndb, req.auth!.user.id, fid, input);
+        deps.emit(req, networkId, 'user-focus-preferences.updated', {
+          focus_thought_id: fid,
+          dir: input.dir,
+          sort: input.sort,
+          sort_order: input.order,
+        });
         sendSuccess(reply, result);
       },
     );
@@ -682,6 +741,11 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         };
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         setFocusOrder(ndb, req.auth!.user.id, fid, input);
+        deps.emit(req, networkId, 'user-focus-order.updated', {
+          focus_thought_id: fid,
+          dir: input.dir,
+          ordered_ids: orderedIds,
+        });
         sendSuccess(reply, { focus_thought_id: fid, dir: input.dir, ordered_ids: orderedIds });
       },
     );
