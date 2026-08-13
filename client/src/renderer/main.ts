@@ -7,6 +7,7 @@
  */
 
 import { boot, initKeyboard } from './app.js';
+import { initDrafts } from './drafts.js';
 import { div, el } from './lib/dom.js';
 import { initScreens } from './screens/screens.js';
 
@@ -17,6 +18,7 @@ if (!(appRoot instanceof HTMLElement)) {
 
 initScreens(appRoot);
 initKeyboard();
+initDrafts();
 
 void boot().catch((err: unknown) => {
   // Catastrophic boot failure (local DB unavailable) — render a static message.

@@ -15,9 +15,18 @@
 import type { Comment } from '@etn/shared';
 
 import { invalidateIndicators } from '../canvas/canvas.js';
+import {
+  canSave,
+  clearDraft,
+  findDraft,
+  offlineNotice,
+  saveDraft,
+  type DraftKind,
+} from '../drafts.js';
 import { confirmDialog, errorDialog, field, showDialog } from '../lib/dialog.js';
 import { button, clear, div, el, errText, fmtDate, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
 import { registerGroupBuilder, type EditorContext } from './editor.js';
 
@@ -64,6 +73,39 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
   box.append(view, editBox);
   void reload();
 
+  // --- drafts (H19) ---------------------------------------------------------
+  let draftId: string | null = null;
+  let draftTimer: number | null = null;
+  let draftBaseVersion: number | null = null;
+  let draftKind: DraftKind = 'comment-new';
+  let permanentCommentId: string | null = null;
+
+  /** Mirrors the textarea content into the local draft store (debounced). */
+  function scheduleDraft(): void {
+    if (draftTimer !== null) window.clearTimeout(draftTimer);
+    draftTimer = window.setTimeout(() => {
+      void (async () => {
+        const value =
+          draftKind === 'comment-new'
+            ? JSON.stringify({
+                ownerType: ctx.ownerType,
+                ownerId: ctx.ownerId,
+                bodyMd: textarea.value,
+              })
+            : textarea.value;
+        draftId = await saveDraft({
+          networkId,
+          entityType: draftKind,
+          entityId: draftKind === 'comment-new' ? ctx.ownerId : (permanentCommentId ?? ctx.ownerId),
+          field: 'body_md',
+          value,
+          baseVersion: draftBaseVersion,
+        });
+      })();
+    }, 800);
+  }
+  textarea.addEventListener('input', scheduleDraft);
+
   /** Loads the permanent comment into the view. */
   async function reload(): Promise<void> {
     view.replaceChildren(el('span', 'muted', 'Загрузка…'));
@@ -75,11 +117,15 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       view.replaceChildren(span(`Не удалось загрузить: ${errText(err)}`, 'error-text'));
       return;
     }
+    permanentCommentId = permanent?.id ?? null;
+    draftBaseVersion = permanent?.version ?? null;
+    draftKind = permanent === null ? 'comment-new' : 'comment';
     view.replaceChildren();
     if (permanent === null) {
       view.append(span('Постоянного комментария нет.', 'muted'));
       const editButton = button('Добавить', () => showEdit(''), 'link-btn');
       view.append(editButton);
+      await restoreDraftIfAny(ctx.ownerId);
       return;
     }
     if (permanent.body_html === '') {
@@ -93,6 +139,22 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       'link-btn',
     );
     view.append(editButton);
+    await restoreDraftIfAny(permanent.id);
+  }
+
+  /** Prefills the editor with a saved draft if one exists for the comment. */
+  async function restoreDraftIfAny(entityId: string): Promise<void> {
+    const update = await findDraft(networkId, 'comment', entityId);
+    const created = await findDraft(networkId, 'comment-new', ctx.ownerId);
+    const hit = update ?? created;
+    if (hit !== null) {
+      draftId = hit.id;
+      draftBaseVersion = null; // version unknown after a restart — retry as create/update
+      draftKind = created !== null ? 'comment-new' : 'comment';
+      const body = created !== null ? safeParseBody(created.value) : hit.value;
+      showEdit(body);
+      notice('Восстановлен несохранённый черновик комментария.');
+    }
   }
 
   function showView(): void {
@@ -110,11 +172,17 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
 
   /** Saves the edited markdown (create or update). */
   async function save(): Promise<void> {
+    if (!canSave()) {
+      offlineNotice();
+      return;
+    }
     try {
       const comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
       const permanent = comments.find((c) => c.kind === 'permanent');
       if (permanent === undefined) {
         if (textarea.value.trim() === '') {
+          await clearDraft(draftId);
+          draftId = null;
           showView();
           return;
         }
@@ -130,6 +198,8 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
           permanent.version,
         );
       }
+      await clearDraft(draftId);
+      draftId = null;
       invalidateIndicators(ctx.ownerId);
       showView();
     } catch (err) {
@@ -315,4 +385,14 @@ function shortText(markdown: string): string {
     .replace(/\s+/g, ' ')
     .trim();
   return plain.length > 80 ? `${plain.slice(0, 80)}…` : plain;
+}
+
+/** Extracts `bodyMd` from a `comment-new` draft JSON value. */
+function safeParseBody(value: string): string {
+  try {
+    const parsed = JSON.parse(value) as { bodyMd?: unknown };
+    return typeof parsed.bodyMd === 'string' ? parsed.bodyMd : '';
+  } catch {
+    return '';
+  }
 }

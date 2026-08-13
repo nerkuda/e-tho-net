@@ -23,6 +23,7 @@ import {
 
 import { refreshFocus, requireNetworkId } from '../app.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
+import { canSave, clearDraft, findDraft, offlineNotice, saveDraft } from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -212,12 +213,12 @@ function isVersionConflict(err: unknown): boolean {
 /**
  * Saves thought header fields. On success the store focus is patched with the
  * updated entity; on a version conflict the focus is refetched and the user is
- * notified (09-scenarios.md F2).
+ * notified (09-scenarios.md F2). Resolves `true` on success.
  */
-async function saveThought(patch: ThoughtUpdateInput): Promise<void> {
+async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
   const networkId = requireNetworkId();
   const focus = store.state.focus;
-  if (focus === null) return;
+  if (focus === null) return false;
   try {
     const updated = await etn.thoughts.update(
       networkId,
@@ -226,6 +227,7 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<void> {
       focus.focused.version,
     );
     store.update({ focus: { ...focus, focused: updated } });
+    return true;
   } catch (err) {
     if (isVersionConflict(err)) {
       await refreshFocus().catch(() => undefined);
@@ -233,6 +235,7 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<void> {
     } else {
       notice(`Не удалось сохранить: ${errText(err)}`, 'error');
     }
+    return false;
   }
 }
 
@@ -264,15 +267,53 @@ async function saveLink(
 /** Builds the thought header form (08-ui-spec.md §6.2). */
 function buildThoughtHeader(thought: Thought): HTMLElement {
   const box = div('editor-fields');
+  const networkId = requireNetworkId();
 
   const titleInput = el('input', 'text-input');
   titleInput.type = 'text';
   titleInput.value = thought.title;
   titleInput.maxLength = 400;
+
+  // Draft mirroring (H19): the in-progress title is saved locally and cleared
+  // after a successful send; an existing draft restores the unsaved value.
+  let titleDraftId: string | null = null;
+  let titleDraftTimer: number | null = null;
+  titleInput.addEventListener('input', () => {
+    if (titleDraftTimer !== null) window.clearTimeout(titleDraftTimer);
+    titleDraftTimer = window.setTimeout(() => {
+      void saveDraft({
+        networkId,
+        entityType: 'thought',
+        entityId: thought.id,
+        field: 'title',
+        value: titleInput.value,
+        baseVersion: thought.version,
+      }).then((id) => {
+        titleDraftId = id;
+      });
+    }, 800);
+  });
+  void findDraft(networkId, 'thought', thought.id).then((hit) => {
+    if (hit !== null && titleInput.value !== hit.value) {
+      titleInput.value = hit.value;
+      titleDraftId = hit.id;
+      notice('Восстановлен несохранённый черновик заголовка.');
+    }
+  });
+
   const commitTitle = (): void => {
     const value = titleInput.value.trim();
-    if (value !== '' && value !== thought.title) void saveThought({ title: value });
-    else if (value === '') titleInput.value = thought.title;
+    if (value === '' || value === thought.title) {
+      titleInput.value = thought.title;
+      return;
+    }
+    if (!canSave()) {
+      offlineNotice();
+      return;
+    }
+    void saveThought({ title: value }).then((ok) => {
+      if (ok) void clearDraft(titleDraftId);
+    });
   };
   titleInput.addEventListener('blur', commitTitle);
   titleInput.addEventListener('keydown', (e) => {
