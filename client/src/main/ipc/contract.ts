@@ -28,11 +28,13 @@ import type {
   HealthResponse,
   Link,
   LinkCreateInput,
+  LinkType,
   LinkUpdateInput,
   MentionHit,
   Network,
   NetworkListItem,
   NetworkMember,
+  PropertyDefinition,
   SearchRequest,
   SearchResponse,
   Thought,
@@ -49,6 +51,8 @@ import type {
   UserFocusPreferences,
   VersionResponse,
 } from '@etn/shared';
+
+import type { DraftStatus } from '../db/local-db.js';
 
 /** Payload of the single `etn:invoke` channel used by the preload bridge. */
 export interface IpcInvokePayload {
@@ -67,6 +71,50 @@ export interface FocusHistoryEntry {
   visitedAt: string;
 }
 
+/** How a duplicate candidate matched the proposed title (add-thought dialog). */
+export type DuplicateMatchKind = 'title' | 'synonym' | 'partial';
+
+/**
+ * A duplicate candidate returned by `GET /thoughts/duplicates`
+ * (03-server-api.md §6.3, 08-ui-spec.md §4.4). Mirrors the server-side
+ * `DuplicateHit` from the search service.
+ */
+export interface DuplicateHit {
+  id: string;
+  title: string;
+  synonyms: string[];
+  matched_on: DuplicateMatchKind;
+  /** Synonym text that matched, when `matched_on === 'synonym'`. */
+  matched_synonym?: string;
+}
+
+/** Input accepted by {@link EtnApi.ui.draftSave} (H19, drafts). */
+export interface DraftSaveInput {
+  networkId: string;
+  /** e.g. `comment`, `thought`, `link` — the entity being edited. */
+  entityType: string;
+  entityId: string;
+  /** Field being edited, e.g. `body_md`, `title`. */
+  field: string;
+  /** JSON-encoded value being edited. */
+  value: string;
+  /** Server version the edit started from (`If-Match` on retry), or `null`. */
+  baseVersion: number | null;
+}
+
+/** A stored draft row returned to the renderer (H19, offline safety net). */
+export interface DraftRecord {
+  id: string;
+  networkId: string;
+  entityType: string;
+  entityId: string;
+  field: string;
+  value: string | null;
+  baseVersion: number | null;
+  status: DraftStatus;
+  createdAt: string;
+}
+
 /** The full `window.etn` surface (docs/07-client-electron.md §6). */
 export interface EtnApi {
   server: {
@@ -79,6 +127,11 @@ export interface EtnApi {
         isActive: boolean;
       }>
     >;
+    /**
+     * Creates a server profile, encrypts the API-key via `safeStorage`, activates
+     * it and connects. Returns the current user on success (H2).
+     */
+    addProfile(input: { label: string; baseUrl: string; apiKey: string }): Promise<CurrentUser>;
     connect(profileId: string): Promise<CurrentUser>;
     disconnect(): Promise<void>;
     getStatus(): Promise<ServerStatus>;
@@ -117,6 +170,12 @@ export interface EtnApi {
     resolve(networkId: string, ids: string[]): Promise<ThoughtRef[]>;
     search(networkId: string, request: SearchRequest): Promise<SearchResponse>;
     mentions(networkId: string, id: string): Promise<MentionHit[]>;
+    /** `GET /thoughts/duplicates` — live duplicate candidates for the add dialog (H14). */
+    findDuplicates(
+      networkId: string,
+      title: string,
+      synonyms?: string[],
+    ): Promise<DuplicateHit[]>;
     setFocusPreferences(
       networkId: string,
       focusId: string,
@@ -151,6 +210,10 @@ export interface EtnApi {
       expectedVersion: number,
       force?: boolean,
     ): Promise<void>;
+    /** `GET /link-types` — link type catalogue (line labels on the canvas, H6). */
+    listLinkTypes(networkId: string): Promise<LinkType[]>;
+    /** `GET /thought-types/{id}/properties` — property definitions of a type (H11). */
+    listThoughtTypeProperties(networkId: string, typeId: string): Promise<PropertyDefinition[]>;
   };
   properties: {
     get(networkId: string, ownerType: 'thought' | 'link', ownerId: string): Promise<unknown>;
@@ -224,14 +287,28 @@ export interface EtnApi {
   realtime: {
     onEvent(cb: (event: unknown) => void): () => void;
     onStatusChange(cb: (status: string) => void): () => void;
+    /** `resume.stale` — event-log window exceeded; the UI must fully re-focus. */
+    onStale(cb: (lastSeq: number) => void): () => void;
   };
   ui: {
     getState(networkId: string, key: string): Promise<string | null>;
     setState(networkId: string, key: string, value: string): Promise<void>;
+    /** Saves an edit draft in the local DB; returns the draft id (H19). */
+    draftSave(input: DraftSaveInput): Promise<string>;
+    /** Lists drafts of the active profile for a network (H19 retry). */
+    draftList(networkId: string): Promise<DraftRecord[]>;
+    /** Deletes a draft (H19 — on successful send). */
+    draftDelete(id: string): Promise<void>;
   };
   history: {
     list(profileId: string, networkId: string, limit?: number): Promise<FocusHistoryEntry[]>;
     push(profileId: string, networkId: string, thoughtId: string): Promise<void>;
+    /**
+     * Rotates focus history on a focus change `oldId → newId` in one local
+     * transaction (11-settings-and-state.md §2.3, H7). Uses the active profile
+     * and the currently open network.
+     */
+    rotate(oldId: string | null, newId: string): Promise<void>;
   };
   system: {
     health(): Promise<HealthResponse>;

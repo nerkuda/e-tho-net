@@ -25,6 +25,7 @@ function buildApi(): EtnApi {
   return {
     server: {
       listProfiles: () => invoke('server.listProfiles'),
+      addProfile: (input) => invoke('server.addProfile', input),
       connect: (profileId) => invoke('server.connect', profileId),
       disconnect: () => invoke('server.disconnect'),
       getStatus: () => invoke('server.getStatus'),
@@ -55,6 +56,8 @@ function buildApi(): EtnApi {
       resolve: (networkId, ids) => invoke('thoughts.resolve', networkId, ids),
       search: (networkId, request) => invoke('thoughts.search', networkId, request),
       mentions: (networkId, id) => invoke('thoughts.mentions', networkId, id),
+      findDuplicates: (networkId, title, synonyms) =>
+        invoke('thoughts.findDuplicates', networkId, title, synonyms),
       setFocusPreferences: (networkId, focusId, input) =>
         invoke('thoughts.setFocusPreferences', networkId, focusId, input),
       setFocusOrder: (networkId, focusId, input) =>
@@ -76,6 +79,9 @@ function buildApi(): EtnApi {
         invoke('types.updateThoughtType', networkId, id, input, expectedVersion),
       removeThoughtType: (networkId, id, expectedVersion, force) =>
         invoke('types.removeThoughtType', networkId, id, expectedVersion, force),
+      listLinkTypes: (networkId) => invoke('types.listLinkTypes', networkId),
+      listThoughtTypeProperties: (networkId, typeId) =>
+        invoke('types.listThoughtTypeProperties', networkId, typeId),
     },
     properties: {
       get: (networkId, ownerType, ownerId) =>
@@ -133,15 +139,24 @@ function buildApi(): EtnApi {
         ipcRenderer.on('realtime:status', listener);
         return () => ipcRenderer.removeListener('realtime:status', listener);
       },
+      onStale(cb) {
+        const listener = (_event: unknown, lastSeq: number): void => cb(lastSeq);
+        ipcRenderer.on('realtime:stale', listener);
+        return () => ipcRenderer.removeListener('realtime:stale', listener);
+      },
     },
     ui: {
       getState: (networkId, key) => invoke('ui.getState', networkId, key),
       setState: (networkId, key, value) => invoke('ui.setState', networkId, key, value),
+      draftSave: (input) => invoke('ui.draftSave', input),
+      draftList: (networkId) => invoke('ui.draftList', networkId),
+      draftDelete: (id) => invoke('ui.draftDelete', id),
     },
     history: {
       list: (profileId, networkId, limit) => invoke('history.list', profileId, networkId, limit),
       push: (profileId, networkId, thoughtId) =>
         invoke('history.push', profileId, networkId, thoughtId),
+      rotate: (oldId, newId) => invoke('history.rotate', oldId, newId),
     },
     system: {
       health: () => invoke('system.health'),
