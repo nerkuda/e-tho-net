@@ -37,6 +37,7 @@ import { createTypesRoutes } from '../routes/types.js';
 import { createPropertiesRoutes } from '../routes/properties.js';
 import { createCommentsRoutes } from '../routes/comments.js';
 import { createAttachmentsRoutes } from '../routes/attachments.js';
+import { createSearchRoutes } from '../routes/search.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -194,6 +195,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Comment and attachment routes (task D5, 03-server-api.md §10–11).
   await app.register(createCommentsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
   await app.register(createAttachmentsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+
+  // Search, export and job routes (task D6, 03-server-api.md §12, §14).
+  await app.register(createSearchRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
   app.get('/api/v1/health', async () => {

@@ -655,8 +655,14 @@
 - **Note:** `server/src/routes/comments.ts`, `server/src/routes/attachments.ts`.
 
 ### D6. Routes /export и /jobs
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C13
-- **DoD:** — · **Спецификация:** [03-server-api.md](03-server-api.md), п. 14.
+- **Статус:** `done` · **Assignee:** agent-D · **Зависимости:** C13
+- **DoD:**
+  - [x] экспорт запускается (202 + job_id), статус и скачивание результата
+    работают; поиск с фильтрами работает.
+- **Спецификация:** [03-server-api.md](03-server-api.md), п. 14.
+- **Note:** `server/src/routes/search.ts` (`createSearchRoutes`) — поиск §12,
+  экспорт §14 и /jobs. Legacy-маппинг `scope=thoughts`→`names,texts` — здесь.
+  В `export-service` у job хранится `format` (для MIME-типа скачивания).
 
 ### D7. Маршруты admin: сети и аудит
 - **Статус:** `todo` · **Assignee:** — · **Зависимости:** B14
