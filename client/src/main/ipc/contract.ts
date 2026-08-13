@@ -35,6 +35,7 @@ import type {
   NetworkListItem,
   NetworkMember,
   PropertyDefinition,
+  PropertyValue,
   SearchRequest,
   SearchResponse,
   Thought,
@@ -213,7 +214,7 @@ export interface EtnApi {
     listThoughtTypeProperties(networkId: string, typeId: string): Promise<PropertyDefinition[]>;
   };
   properties: {
-    get(networkId: string, ownerType: 'thought' | 'link', ownerId: string): Promise<unknown>;
+    get(networkId: string, ownerType: 'thought' | 'link', ownerId: string): Promise<PropertyValue[]>;
     set(
       networkId: string,
       ownerType: 'thought' | 'link',
