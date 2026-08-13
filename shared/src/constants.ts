@@ -11,6 +11,13 @@
 // Cloud sizing (11-settings-and-state.md §2.4)
 // ---------------------------------------------------------------------------
 
+/**
+ * Custom MIME type carried by an internal canvas cloud drag (HTML5 DnD). Used to
+ * distinguish a dragged thought cloud from an external file/URL drop on the same
+ * zone, so the external-drop handler does not spawn a junk thought.
+ */
+export const CLOUD_DRAG_MIME = 'application/x-etn-cloud';
+
 /** Minimum cloud width in pixels. */
 export const CLOUD_WIDTH_MIN = 120;
 /** Maximum cloud width in pixels. */
