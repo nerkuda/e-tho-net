@@ -10,6 +10,7 @@
  *   POST   /networks/:networkId/thoughts/batch                — bulk operations
  *   POST   /networks/:networkId/thoughts/resolve              — bulk light metadata
  *   GET    /networks/:networkId/thoughts/:id/mentions         — mentions of a thought
+ *   GET    /networks/:networkId/thoughts/duplicates           — duplicate candidates
  *   PUT    /networks/:networkId/thoughts/:fid/focus-preferences — per-zone sort choice
  *   POST   /networks/:networkId/thoughts/:fid/focus-order     — manual zone order
  *
@@ -56,7 +57,7 @@ import {
 } from './helpers.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
 import { createLink, deleteLink, findLinksBetween } from '../domain/link-service.js';
-import { findMentions } from '../domain/search-service.js';
+import { findDuplicates, findMentions } from '../domain/search-service.js';
 import {
   createThought,
   deleteThought,
@@ -597,6 +598,32 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const mentions = findMentions(ndb, id);
         sendList(reply, mentions, mentions.length, 0, mentions.length);
+      },
+    );
+
+    // --- Duplicate candidates (add-thought dialog, 03-server-api.md §6.3,
+    //     08-ui-spec.md §4.4; MCP find_duplicates) ---------------------------
+
+    app.get(
+      '/networks/:networkId/thoughts/duplicates',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as NetworkIdParams;
+        const query = req.query as Record<string, unknown>;
+        const title = queryStrings(query.title)[0];
+        if (title === undefined || title.trim() === '') {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'Параметр title обязателен и не может быть пустым.',
+            { field: 'title' },
+            req.id,
+          );
+        }
+        // Synonyms: repeatable ?synonyms=a&synonyms=b or a comma-separated value.
+        const synonyms = queryStrings(query.synonyms).flatMap((value) => value.split(','));
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const hits = findDuplicates(ndb, title, synonyms);
+        sendList(reply, hits, hits.length, 0, hits.length);
       },
     );
 
