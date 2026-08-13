@@ -154,6 +154,11 @@ export function backToNetworks(): void {
   showScreen('networks');
 }
 
+/** Switches to the network list after a successful connect (H2). */
+export function openNetworkScreen(): void {
+  showScreen('networks');
+}
+
 /** Disconnects the profile and returns to onboarding (H18 user menu). */
 export async function disconnect(): Promise<void> {
   await etn.server.disconnect();
