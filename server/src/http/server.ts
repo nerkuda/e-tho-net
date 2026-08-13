@@ -31,6 +31,13 @@ import { meRoutes } from '../routes/me.js';
 import { usersRoutes } from '../routes/users.js';
 import { createNetworksRoutes } from '../routes/networks.js';
 import { auditRoutes } from '../routes/audit.js';
+import { createThoughtsRoutes } from '../routes/thoughts.js';
+import { createLinksRoutes } from '../routes/links.js';
+import { createTypesRoutes } from '../routes/types.js';
+import { createPropertiesRoutes } from '../routes/properties.js';
+import { createCommentsRoutes } from '../routes/comments.js';
+import { createAttachmentsRoutes } from '../routes/attachments.js';
+import { createSearchRoutes } from '../routes/search.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -171,6 +178,26 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     { prefix: '/api/v1' },
   );
   await app.register(auditRoutes, { prefix: '/api/v1' });
+
+  // Thought routes (task D1): CRUD, focus, neighbours, batch, resolve,
+  // mentions, focus preferences/order (03-server-api.md §6).
+  await app.register(createThoughtsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+
+  // Link routes (task D2): CRUD + grouped editor listing (03-server-api.md §7).
+  await app.register(createLinksRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+
+  // Type routes (task D3): thought/link types + type_properties (03-server-api.md §8).
+  await app.register(createTypesRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+
+  // Property-value routes (task D4): per-thought/per-link values by key (03-server-api.md §9).
+  await app.register(createPropertiesRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+
+  // Comment and attachment routes (task D5, 03-server-api.md §10–11).
+  await app.register(createCommentsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+  await app.register(createAttachmentsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+
+  // Search, export and job routes (task D6, 03-server-api.md §12, §14).
+  await app.register(createSearchRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
   app.get('/api/v1/health', async () => {

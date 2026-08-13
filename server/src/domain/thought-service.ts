@@ -622,6 +622,8 @@ export interface NeighborOptions {
   limit?: number;
   /** Number of neighbours to skip. */
   offset?: number;
+  /** Restrict neighbours to thoughts of this type (03-server-api.md §6.7). */
+  typeId?: string;
 }
 
 /** Read a user's sort preference for a (focus, dir) zone, or null if unset. */
@@ -763,6 +765,12 @@ function buildNeighborsQuery(
   } else {
     where.push('(l.active = 1 OR ?)', '(t.active = 1 OR ?)');
     params.push(showInactive, showInactive);
+  }
+  // Optional thought-type filter (03-server-api.md §6.7). Pushed after the
+  // clauses above so the bind order stays aligned with `where`.
+  if (opts.typeId !== undefined) {
+    where.push('t.type_id = ?');
+    params.push(opts.typeId);
   }
 
   const sqlParts = [select, 'FROM links l', ...joins.map((j) => j.trimStart())];

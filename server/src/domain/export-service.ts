@@ -22,6 +22,8 @@ import { listComments } from './comment-service.js';
 interface ExportJobEntry extends ExportJob {
   /** Rendered document body (markdown or html) once `done`. */
   content?: string;
+  /** Requested output format (stored so the download route can pick a MIME type). */
+  format?: ExportFormat;
   /** Wall-clock ms when the job reached a terminal state (for TTL sweep). */
   finishedAt?: number;
 }
@@ -139,6 +141,7 @@ export function startExportJob(
     status: 'done',
     download_url: `/api/v1/jobs/${jobId}/download`,
     content,
+    format,
     finishedAt: Date.now(),
   };
   jobs.set(jobId, entry);
@@ -152,15 +155,21 @@ export function getExportJob(jobId: string): ExportJob | null {
   return entry ? toPublicJob(entry) : null;
 }
 
-/** Rendered content of a finished export job, or `null` (not ready/unknown). */
+/**
+ * Rendered content of a finished export job, or `null` (not ready/unknown).
+ *
+ * @param format - preferred output format; falls back to the format stored
+ *   with the job when omitted (the REST download route does not know it).
+ */
 export function getExportJobContent(
   jobId: string,
-  format: ExportFormat,
+  format?: ExportFormat,
 ): { body: string; contentType: string } | null {
   sweepJobs();
   const entry = jobs.get(jobId);
   if (!entry || entry.status !== 'done' || entry.content === undefined) return null;
+  const effectiveFormat = format ?? entry.format ?? 'markdown';
   const contentType =
-    format === 'html' ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8';
+    effectiveFormat === 'html' ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8';
   return { body: entry.content, contentType };
 }
