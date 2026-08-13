@@ -200,11 +200,20 @@
 - **Спецификация:** [06-auth.md](06-auth.md), п. 8.
 
 ### B7. Fastify bootstrap, health, version, ошибки
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B6
+- **Статус:** `done` · **Assignee:** agent-B7 · **Зависимости:** B6
 - **Описание:** Запуск Fastify, плагины (`@fastify/websocket`, CORS, error handler
   в стандартном формате `{ error: { code, message, details, request_id } }),
   `GET /api/v1/health`, `GET /api/v1/version`. Чтение TLS-конфигурации.
-- **DoD:** `/health` отвечает 200, ошибки в едином формате.
+- **DoD:**
+  - [x] `/health` отвечает 200, ошибки в едином формате.
+  - [x] `@fastify/cors` + `@fastify/websocket` зарегистрированы.
+  - [x] Единый `setErrorHandler` → `{ error: { code, message, details?, request_id? } }`.
+  - [x] `index.ts` — точка входа: config → SystemDb → hasFirstUser guard → listen.
+- **Note:** добавлена зависимость `@fastify/cors@^10.0.2` (Fastify 4 compatible;
+  v11 требует Fastify 5). `request_id` = `Client-Request-Id` заголовок или свежий
+  UUID, дублируется в ответном `X-Request-Id`. `/version` возвращает расширенный
+  payload (`version`, `api`, `min_client`, `client_compatibility`), удовлетворяющий
+  и shared `VersionResponse`, и формату из ТЗ B7.
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 1–2.
 
 ### B8. Auth middleware

@@ -1,0 +1,70 @@
+/**
+ * ETN server entry point (task B7).
+ *
+ * Reads configuration from the environment, opens `_system.db`, refuses to
+ * start when the server has not been initialised (no first admin exists — see
+ * docs/06-auth.md §8), builds the Fastify instance and binds it to
+ * `ETN_HOST:ETN_PORT`. Handles graceful shutdown on SIGINT/SIGTERM.
+ */
+
+import { fileURLToPath } from 'node:url';
+
+import { ConfigError, loadConfig } from './config.js';
+import { SystemDb } from './db/system-db.js';
+import { createServer } from './http/server.js';
+import { logger } from './logger.js';
+
+/** Run the server against `env`/`argv`. Exported for tests. */
+export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  let config;
+  try {
+    config = loadConfig(env);
+  } catch (err) {
+    const msg = err instanceof ConfigError ? err.message : (err as Error).message;
+    logger.fatal({ err }, `Configuration error: ${msg}`);
+    throw err;
+  }
+
+  logger.info(
+    { dataDir: config.dataDir, host: config.host, port: config.port, tls: config.tls !== null },
+    'Starting ETN server',
+  );
+
+  const systemDb = SystemDb.open(config.dataDir, logger);
+
+  if (!systemDb.hasFirstUser()) {
+    systemDb.close();
+    const msg =
+      'Server is not initialised: no first administrator exists. ' +
+      'Run `etn init --username <login> [--display-name "<name>"]` first (docs/06-auth.md §8).';
+    logger.fatal(msg);
+    throw new Error(msg);
+  }
+
+  const app = await createServer({ config, systemDb, logger });
+
+  await app.listen({ host: config.host, port: config.port });
+  logger.info(
+    `ETN server listening on ${config.tls !== null ? 'https' : 'http'}://${config.host}:${config.port}`,
+  );
+
+  const shutdown = async (signal: string): Promise<void> => {
+    logger.info({ signal }, 'Shutting down ETN server');
+    await app.close();
+    systemDb.close();
+    logger.info('ETN server stopped');
+    process.exit(0);
+  };
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+}
+
+// Run when invoked directly as the process entry point.
+const invokedScript = process.argv[1];
+const thisFile = fileURLToPath(import.meta.url);
+if (invokedScript === thisFile) {
+  startServer().catch((err) => {
+    logger.fatal({ err }, err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}
