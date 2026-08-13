@@ -33,6 +33,10 @@ import {
 
 import type { AnyRealtimeEvent } from '@etn/shared';
 
+import { searchInternals } from '../src/renderer/search/search.js';
+
+const { scopesFor, mergeResponses, DEFAULT_OPTIONS } = searchInternals;
+
 describe('clip', () => {
   it('clamps into the range', () => {
     assert.equal(clip(5, 0, 10), 5);
@@ -164,5 +168,44 @@ describe('describeEvent', () => {
   it('produces a Russian label for known events', () => {
     assert.ok(describeEvent(evt('thought.updated'), 'Мысль').includes('изменена мысль'));
     assert.ok(describeEvent(evt('link.created')).includes('создана связь'));
+  });
+});
+
+describe('search scope resolution (H13)', () => {
+  it('maps no restrictions to all', () => {
+    assert.deepEqual(scopesFor({ ...DEFAULT_OPTIONS }), ['all']);
+  });
+
+  it('maps group filters to granular scopes', () => {
+    assert.deepEqual(scopesFor({ ...DEFAULT_OPTIONS, onlyThoughts: true }), ['names', 'texts']);
+    assert.deepEqual(scopesFor({ ...DEFAULT_OPTIONS, onlyLinks: true }), ['links']);
+    assert.deepEqual(scopesFor({ ...DEFAULT_OPTIONS, onlyChrono: true }), ['chronology']);
+    assert.deepEqual(scopesFor({ ...DEFAULT_OPTIONS, onlyThoughts: true, onlyLinks: true }), [
+      'names',
+      'texts',
+      'links',
+    ]);
+  });
+
+  it('merges partial responses', () => {
+    const merged = mergeResponses([
+      {
+        by_names: [{ thought_id: 'a', title: 'A', snippet: 'A', highlights: [] }],
+        by_texts: [],
+        by_links: [],
+        by_chrono: [],
+        meta: { total_in_group: { names: 1, texts: 0, links: 0, chronology: 0 } },
+      },
+      {
+        by_names: [],
+        by_texts: [],
+        by_links: [{ link_id: 'l1', type_name: 'T', snippet: 'S', highlights: [] }],
+        by_chrono: [],
+        meta: { total_in_group: { names: 0, texts: 0, links: 1, chronology: 0 } },
+      },
+    ]);
+    assert.equal(merged.by_names.length, 1);
+    assert.equal(merged.by_links.length, 1);
+    assert.equal(merged.meta.total_in_group.links, 1);
   });
 });

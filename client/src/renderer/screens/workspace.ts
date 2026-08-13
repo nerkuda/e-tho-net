@@ -22,6 +22,7 @@ import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
 import { mountCanvas } from '../canvas/canvas.js';
 import { mountHistoryBar } from './history-bar.js';
 import { mountEditor } from '../editor/editor.js';
+import { mountSearch } from '../search/search.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -181,12 +182,14 @@ export function buildWorkspace(): HTMLElement {
   };
   current = handles;
 
-  // Toolbar dropdown menus (H3/H18), canvas (H4), history (H7), editor (H8).
+  // Toolbar dropdown menus (H3/H18), canvas (H4), history (H7), editor (H8),
+  // search (H13).
   wireNetMenu(handles);
   wireUserMenu(handles);
   mountCanvas(canvasHost);
   mountHistoryBar(historyHost);
   mountEditor(editorHost);
+  mountSearch({ input: searchInput, optionsButton: searchOptionsButton, host: searchHost });
 
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
   function refresh(): void {
