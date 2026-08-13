@@ -647,8 +647,12 @@
 - **Note:** `server/src/routes/properties.ts` (`createPropertiesRoutes`).
 
 ### D5. Routes /comments, /attachments
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** C7, C8
-- **DoD:** — · **Спецификация:** [03-server-api.md](03-server-api.md), п. 10–11.
+- **Статус:** `done` · **Assignee:** agent-D · **Зависимости:** C7, C8
+- **DoD:**
+  - [x] CRUD комментариев и вложений работает через HTTP для обоих типов
+    владельцев (thought/link).
+- **Спецификация:** [03-server-api.md](03-server-api.md), п. 10–11.
+- **Note:** `server/src/routes/comments.ts`, `server/src/routes/attachments.ts`.
 
 ### D6. Routes /export и /jobs
 - **Статус:** `todo` · **Assignee:** — · **Зависимости:** C13

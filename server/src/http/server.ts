@@ -35,6 +35,8 @@ import { createThoughtsRoutes } from '../routes/thoughts.js';
 import { createLinksRoutes } from '../routes/links.js';
 import { createTypesRoutes } from '../routes/types.js';
 import { createPropertiesRoutes } from '../routes/properties.js';
+import { createCommentsRoutes } from '../routes/comments.js';
+import { createAttachmentsRoutes } from '../routes/attachments.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -188,6 +190,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // Property-value routes (task D4): per-thought/per-link values by key (03-server-api.md §9).
   await app.register(createPropertiesRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+
+  // Comment and attachment routes (task D5, 03-server-api.md §10–11).
+  await app.register(createCommentsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
+  await app.register(createAttachmentsRoutes({ dataDir: config.dataDir }), { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
   app.get('/api/v1/health', async () => {
