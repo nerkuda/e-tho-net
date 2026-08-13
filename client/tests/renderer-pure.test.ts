@@ -15,6 +15,12 @@ import {
   CLOUD_WIDTH_DEFAULT,
   CLOUD_WIDTH_MAX,
   CLOUD_WIDTH_MIN,
+  EDITOR_H_DEFAULT,
+  EDITOR_H_MAX,
+  EDITOR_H_MIN,
+  EDITOR_W_DEFAULT,
+  EDITOR_W_MAX,
+  EDITOR_W_MIN,
 } from '@etn/shared';
 
 import {
@@ -29,6 +35,7 @@ import {
   parseCollapsedGroups,
   parseLinkTypeId,
   parseTitleWithSynonyms,
+  parseWindowLayout,
 } from '../src/renderer/lib/pure.js';
 
 import type { AnyRealtimeEvent } from '@etn/shared';
@@ -70,6 +77,32 @@ describe('cloud geometry', () => {
     assert.equal(parseCloudGap('0'), CLOUD_GAP_MIN);
     assert.equal(parseCloudGap('1000'), CLOUD_GAP_MAX);
     assert.equal(parseCloudGap('20'), 20);
+  });
+});
+
+describe('parseWindowLayout', () => {
+  it('falls back to defaults for missing/invalid input', () => {
+    assert.deepEqual(parseWindowLayout(null), { w: EDITOR_W_DEFAULT, h: EDITOR_H_DEFAULT });
+    assert.deepEqual(parseWindowLayout(''), { w: EDITOR_W_DEFAULT, h: EDITOR_H_DEFAULT });
+    assert.deepEqual(parseWindowLayout('not json'), { w: EDITOR_W_DEFAULT, h: EDITOR_H_DEFAULT });
+  });
+
+  it('parses a {w,h} JSON object and clamps to editor constants', () => {
+    assert.deepEqual(parseWindowLayout('{"w":500,"h":400}'), { w: 500, h: 400 });
+    assert.deepEqual(parseWindowLayout('{"w":10,"h":10}'), { w: EDITOR_W_MIN, h: EDITOR_H_MIN });
+    assert.deepEqual(parseWindowLayout('{"w":99999,"h":99999}'), {
+      w: EDITOR_W_MAX,
+      h: EDITOR_H_MAX,
+    });
+  });
+
+  it('keeps a valid dimension when the other is missing/invalid', () => {
+    assert.deepEqual(parseWindowLayout('{"w":450}'), { w: 450, h: EDITOR_H_DEFAULT });
+    assert.deepEqual(parseWindowLayout('{"h":250}'), { w: EDITOR_W_DEFAULT, h: 250 });
+    assert.deepEqual(parseWindowLayout('{"w":"abc","h":300}'), {
+      w: EDITOR_W_DEFAULT,
+      h: 300,
+    });
   });
 });
 

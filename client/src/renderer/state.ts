@@ -10,6 +10,8 @@
 import {
   CLOUD_GAP_DEFAULT,
   CLOUD_WIDTH_DEFAULT,
+  EDITOR_H_DEFAULT,
+  EDITOR_W_DEFAULT,
   type CurrentUser,
   type FocusResponse,
   type Link,
@@ -52,6 +54,12 @@ export interface AppState {
   cloudGap: number;
   /** L4 `editor_position`. */
   editorPosition: EditorPosition;
+  /** Last visible editor dock (restored when the editor is un-hidden). */
+  lastEditorPosition: Exclude<EditorPosition, 'hidden'>;
+  /** L4 `window_layout` editor width (left/right dock), px. */
+  editorW: number;
+  /** L4 `window_layout` editor height (top/bottom dock), px. */
+  editorH: number;
   /** L4 `editor_collapsed_groups`, keyed by entity id. */
   collapsedGroups: Record<string, Record<string, boolean>>;
   /** Selection panel contents (ordered ids). */
@@ -82,6 +90,9 @@ const initial: AppState = {
   cloudWidth: CLOUD_WIDTH_DEFAULT,
   cloudGap: CLOUD_GAP_DEFAULT,
   editorPosition: 'right',
+  lastEditorPosition: 'right',
+  editorW: EDITOR_W_DEFAULT,
+  editorH: EDITOR_H_DEFAULT,
   collapsedGroups: {},
   selection: [],
   linkTypes: [],

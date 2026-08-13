@@ -42,9 +42,11 @@ let localDb: LocalDb | null = null;
 /**
  * Creates and configures the main application window.
  *
- * Security posture: `contextIsolation` on, `nodeIntegration` off, `sandbox` on —
+ * Security posture: `contextIsolation` on, `nodeIntegration` off, `sandbox` off —
  * the renderer has no direct Node access and reaches the main process only
- * through the preload `contextBridge` (see `src/preload/index.ts`).
+ * through the preload `contextBridge` (see `src/preload/index.ts`). `sandbox` is
+ * disabled because Electron's sandboxed loader cannot import the ESM preload
+ * bundle; see the inline comment at the `sandbox` field below.
  */
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({

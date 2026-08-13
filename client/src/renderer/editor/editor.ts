@@ -194,10 +194,28 @@ async function openPositionMenu(): Promise<void> {
 export async function setEditorPosition(
   position: 'left' | 'right' | 'top' | 'bottom' | 'hidden',
 ): Promise<void> {
-  store.update({ editorPosition: position });
+  // Remember the last *visible* dock so un-hiding the editor restores it.
+  if (position === 'hidden') {
+    store.update({ editorPosition: 'hidden' });
+  } else {
+    store.update({ editorPosition: position, lastEditorPosition: position });
+  }
   const networkId = store.state.networkId;
   if (networkId !== null) {
     await etn.ui.setState(networkId, UI_STATE_KEY.EDITOR_POSITION, position).catch(() => undefined);
+  }
+}
+
+/**
+ * Toggles the editor visibility: shows it at its last dock when hidden, or hides
+ * it when visible. Backed by the toolbar "View" menu — the only way back once
+ * the editor (and its own header dropdown) is hidden.
+ */
+export async function toggleEditorVisibility(): Promise<void> {
+  if (store.state.editorPosition === 'hidden') {
+    await setEditorPosition(store.state.lastEditorPosition);
+  } else {
+    await setEditorPosition('hidden');
   }
 }
 

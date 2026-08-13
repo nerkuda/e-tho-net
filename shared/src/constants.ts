@@ -25,6 +25,20 @@ export const CLOUD_GAP_MAX = 40;
 /** Default gap between clouds for a fresh client installation. */
 export const CLOUD_GAP_DEFAULT = 12;
 
+/** Minimum editor width (left/right dock) in pixels. */
+export const EDITOR_W_MIN = 240;
+/** Maximum editor width (left/right dock) in pixels. */
+export const EDITOR_W_MAX = 720;
+/** Default editor width for a fresh client installation. */
+export const EDITOR_W_DEFAULT = 340;
+
+/** Minimum editor height (top/bottom dock) in pixels. */
+export const EDITOR_H_MIN = 120;
+/** Maximum editor height (top/bottom dock) in pixels. */
+export const EDITOR_H_MAX = 700;
+/** Default editor height for a fresh client installation. */
+export const EDITOR_H_DEFAULT = 300;
+
 /** Font-size multiplier applied to the focused cloud title. */
 export const FOCUS_FONT_SCALE = 1.3;
 /** Maximum number of lines rendered inside the focused cloud. */

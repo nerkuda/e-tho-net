@@ -14,6 +14,12 @@ import {
   CLOUD_WIDTH_DEFAULT,
   CLOUD_WIDTH_MAX,
   CLOUD_WIDTH_MIN,
+  EDITOR_H_DEFAULT,
+  EDITOR_H_MAX,
+  EDITOR_H_MIN,
+  EDITOR_W_DEFAULT,
+  EDITOR_W_MAX,
+  EDITOR_W_MIN,
   REALTIME_EVENT_TYPES,
   type AnyRealtimeEvent,
   type RealtimeEventType,
@@ -80,6 +86,44 @@ export function parseCloudGap(raw: string | null): number {
   const num = raw === null ? Number.NaN : Number(raw);
   if (!Number.isFinite(num)) return CLOUD_GAP_DEFAULT;
   return clip(Math.round(num), CLOUD_GAP_MIN, CLOUD_GAP_MAX);
+}
+
+/** Result of parsing the L4 `window_layout` value: editor panel sizes. */
+export interface ParsedEditorSize {
+  /** Editor width when docked left/right, px. */
+  w: number;
+  /** Editor height when docked top/bottom, px. */
+  h: number;
+}
+
+/**
+ * Parses the L4 `window_layout` value (JSON `{"w":<px>,"h":<px>}`), clipped to
+ * the editor size constants. Missing/invalid fields fall back to the defaults,
+ * so a partially-stored value or an older single-number format still loads.
+ */
+export function parseWindowLayout(raw: string | null): ParsedEditorSize {
+  const fallback: ParsedEditorSize = { w: EDITOR_W_DEFAULT, h: EDITOR_H_DEFAULT };
+  if (raw === null || raw === '') return fallback;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed === 'object' && parsed !== null) {
+      const obj = parsed as Record<string, unknown>;
+      const wNum = Number(obj['w']);
+      const hNum = Number(obj['h']);
+      return {
+        w: Number.isFinite(wNum) ? clip(Math.round(wNum), EDITOR_W_MIN, EDITOR_W_MAX) : fallback.w,
+        h: Number.isFinite(hNum) ? clip(Math.round(hNum), EDITOR_H_MIN, EDITOR_H_MAX) : fallback.h,
+      };
+    }
+    // Legacy single-number form: treat as width.
+    const single = Number(parsed);
+    if (Number.isFinite(single)) {
+      return { w: clip(Math.round(single), EDITOR_W_MIN, EDITOR_W_MAX), h: fallback.h };
+    }
+  } catch {
+    /* fall through to fallback */
+  }
+  return fallback;
 }
 
 // ---------------------------------------------------------------------------

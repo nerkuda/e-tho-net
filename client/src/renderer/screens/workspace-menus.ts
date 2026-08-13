@@ -16,6 +16,7 @@ import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
+import { toggleEditorVisibility } from '../editor/editor.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { showCreateNetworkDialog } from './networks.js';
 import { showCloudSizeSettings, showVisibilitySettings } from './settings.js';
@@ -80,6 +81,7 @@ async function networkSettingsDialog(): Promise<void> {
       {
         label: 'Сохранить',
         primary: true,
+        keepOpen: true,
         onClick: (close) => {
           void (async () => {
             try {
@@ -287,4 +289,27 @@ export function buildUserMenuItems(): MenuItem[] {
     onClick: () => void disconnect(),
   });
   return items;
+}
+
+/** Wires the toolbar "View" menu button (08-ui-spec.md §8). */
+export function wireViewMenu(handles: WorkspaceHandles): void {
+  handles.viewMenuButton.addEventListener('click', (event) => {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    showMenuAt(rect.right - 200, rect.bottom + 4, buildViewMenuItems());
+  });
+}
+
+/**
+ * Builds the "View" menu items from the current state. Intended as a home for
+ * workspace-layout commands; the first one toggles the editor panel — the only
+ * way back once the editor (and its own header dropdown) is hidden.
+ */
+export function buildViewMenuItems(): MenuItem[] {
+  const hidden = store.state.editorPosition === 'hidden';
+  return [
+    {
+      label: hidden ? 'Показать редактор' : 'Скрыть редактор',
+      onClick: () => void toggleEditorVisibility(),
+    },
+  ];
 }

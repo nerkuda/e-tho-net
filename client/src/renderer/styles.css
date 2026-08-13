@@ -34,6 +34,7 @@
   --toolbar-h: 46px;
   --statusbar-h: 32px;
   --editor-w: 340px;
+  --editor-h: 300px;
 
   /* cloud geometry (L4 defaults, 11-settings-and-state.md §2.4) */
   --cloud-width: 200px;
@@ -417,6 +418,7 @@ textarea {
 }
 
 .workspace-body {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -449,8 +451,7 @@ textarea {
 
 .workspace-body[data-editor-pos='top'] > .editor {
   order: 1;
-  flex: 0 0 auto;
-  max-height: 45%;
+  flex: 0 0 var(--editor-h);
   border-bottom: 1px solid var(--border);
   border-right: none;
   width: auto;
@@ -458,8 +459,7 @@ textarea {
 
 .workspace-body[data-editor-pos='bottom'] > .editor {
   order: 3;
-  flex: 0 0 auto;
-  max-height: 45%;
+  flex: 0 0 var(--editor-h);
   border-top: 1px solid var(--border);
   border-right: none;
   width: auto;
@@ -473,6 +473,68 @@ textarea {
 
 .workspace-body[data-editor-pos='top'] > .selection-panel {
   order: 1;
+}
+
+/* --- editor resizer: draggable splitter between canvas and editor (08-ui-spec
+   §6.1). Absolutely positioned on the canvas/editor seam; its coordinate is
+   expressed through the same --editor-w / --editor-h variables that size the
+   editor, so it tracks the panel live during a drag. ------------------------- */
+
+.editor-resizer {
+  position: absolute;
+  z-index: 5;
+  background: var(--border);
+  transition: background 0.12s ease;
+  touch-action: none;
+}
+.editor-resizer:hover,
+.editor-resizer.dragging {
+  background: var(--accent);
+}
+
+/* While dragging: no text selection and a split cursor over the whole body. */
+.workspace-body.resizing {
+  user-select: none;
+}
+.workspace-body.resizing[data-editor-pos='left'],
+.workspace-body.resizing[data-editor-pos='right'] {
+  cursor: col-resize;
+}
+.workspace-body.resizing[data-editor-pos='top'],
+.workspace-body.resizing[data-editor-pos='bottom'] {
+  cursor: row-resize;
+}
+
+/* Vertical splitter (editor docked left/right). */
+.workspace-body[data-editor-pos='right'] > .editor-resizer {
+  top: 0;
+  bottom: 0;
+  right: calc(var(--editor-w) - 3px);
+  width: 6px;
+  cursor: col-resize;
+}
+.workspace-body[data-editor-pos='left'] > .editor-resizer {
+  top: 0;
+  bottom: 0;
+  left: calc(var(--editor-w) - 3px);
+  width: 6px;
+  cursor: col-resize;
+}
+
+/* Horizontal splitter (editor docked top/bottom). */
+.workspace-body[data-editor-pos='top'] > .editor-resizer {
+  left: 0;
+  right: 0;
+  top: calc(var(--editor-h) - 3px);
+  height: 6px;
+  cursor: row-resize;
+}
+.workspace-body[data-editor-pos='bottom'] > .editor-resizer {
+  left: 0;
+  right: 0;
+  bottom: calc(var(--editor-h) - 3px);
+  height: 6px;
+  cursor: row-resize;
 }
 
 .statusbar {

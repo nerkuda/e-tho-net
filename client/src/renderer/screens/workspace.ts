@@ -18,10 +18,11 @@
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
 import { store, type RtStatus } from '../state.js';
-import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
+import { wireNetMenu, wireUserMenu, wireViewMenu } from './workspace-menus.js';
 import { mountCanvas } from '../canvas/canvas.js';
 import { mountHistoryBar } from './history-bar.js';
 import { mountEditor } from '../editor/editor.js';
+import { mountEditorResizer } from './editor-resizer.js';
 import { mountSearch } from '../search/search.js';
 import { mountSelection } from '../selection/selection.js';
 
@@ -33,7 +34,8 @@ export interface WorkspaceHandles {
   netMenuLabel: HTMLSpanElement;
   userMenuButton: HTMLButtonElement;
   userMenuLabel: HTMLSpanElement;
-  statusDot: HTMLSpanElement;
+  /** Toolbar dropdown for workspace-layout commands (show/hide editor, …). */
+  viewMenuButton: HTMLButtonElement;
   /** Search input in the toolbar (H13). */
   searchInput: HTMLInputElement;
   searchOptionsButton: HTMLButtonElement;
@@ -112,8 +114,12 @@ export function buildWorkspace(): HTMLElement {
   userMenuButton.append(userMenuLabel, span('▾', 'tb-caret'));
   setTooltip(userMenuButton, 'Меню пользователя');
 
-  const statusDot = span('⚪', 'status-dot');
-  setTooltip(statusDot, 'Состояние соединения');
+  // Workspace-layout commands menu (replaces the duplicated status dot — the
+  // connection indicator lives in the status bar). First command toggles the
+  // editor panel, which is otherwise unreachable once hidden.
+  const viewMenuButton = el('button', 'tb-btn tb-icon', '☰');
+  viewMenuButton.type = 'button';
+  setTooltip(viewMenuButton, 'Вид');
 
   toolbar.append(
     netMenuButton,
@@ -121,7 +127,7 @@ export function buildWorkspace(): HTMLElement {
     searchOptionsButton,
     spacer,
     userMenuButton,
-    statusDot,
+    viewMenuButton,
   );
 
   // --- search drop panel -----------------------------------------------------
@@ -132,7 +138,10 @@ export function buildWorkspace(): HTMLElement {
   const selectionHost = div('selection-panel hidden');
   const canvasHost = div('canvas');
   const editorHost = div('editor hidden');
-  body.append(selectionHost, canvasHost, editorHost);
+  // Draggable splitter between canvas and editor (08-ui-spec.md §6.1). Positioned
+  // absolutely on the canvas/editor seam via the --editor-w/--editor-h variables.
+  const editorResizer = div('editor-resizer hidden');
+  body.append(selectionHost, canvasHost, editorHost, editorResizer);
 
   // --- status bar ------------------------------------------------------------
   const statusbar = div('statusbar');
@@ -167,7 +176,7 @@ export function buildWorkspace(): HTMLElement {
     netMenuLabel,
     userMenuButton,
     userMenuLabel,
-    statusDot,
+    viewMenuButton,
     searchInput,
     searchOptionsButton,
     searchHost,
@@ -187,9 +196,11 @@ export function buildWorkspace(): HTMLElement {
   // search (H13).
   wireNetMenu(handles);
   wireUserMenu(handles);
+  wireViewMenu(handles);
   mountCanvas(canvasHost);
   mountHistoryBar(historyHost);
   mountEditor(editorHost);
+  mountEditorResizer(editorResizer, body);
   mountSearch({ input: searchInput, optionsButton: searchOptionsButton, host: searchHost });
   mountSelection(selectionHost);
 
@@ -200,11 +211,13 @@ export function buildWorkspace(): HTMLElement {
     const user = st.me?.display_name ?? st.me?.username ?? '—';
     userMenuLabel.textContent = `👤 ${user}`;
     const glyph = statusGlyph(st.rtStatus);
-    statusDot.textContent = glyph.glyph;
-    setTooltip(statusDot, glyph.text);
     statusLeft.textContent = glyph.glyph;
     applyEditorPosition(body, st.editorPosition);
-    editorHost.classList.toggle('hidden', st.editorPosition === 'hidden');
+    const editorHidden = st.editorPosition === 'hidden';
+    editorHost.classList.toggle('hidden', editorHidden);
+    editorResizer.classList.toggle('hidden', editorHidden);
+    body.style.setProperty('--editor-w', `${st.editorW}px`);
+    body.style.setProperty('--editor-h', `${st.editorH}px`);
     focusLabel.textContent = st.focus?.focused.title ?? '—';
     setTooltip(focusLabel, st.focus?.focused.title ?? '');
     eventLabel.textContent = st.lastEvent ?? '';

@@ -22,6 +22,7 @@ import {
   parseCloudGap,
   parseCloudWidth,
   parseLinkTypeId,
+  parseWindowLayout,
 } from './lib/pure.js';
 import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js';
 import { applyRealtimeToUi } from './realtime-ui.js';
@@ -63,7 +64,7 @@ export async function openNetwork(networkId: string): Promise<void> {
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
 
-  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw] =
+  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw] =
     await Promise.all([
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
@@ -71,11 +72,14 @@ export async function openNetwork(networkId: string): Promise<void> {
       etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_COLLAPSED_GROUPS),
       etn.ui.getState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID),
       etn.ui.getState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID),
+      etn.ui.getState(networkId, UI_STATE_KEY.WINDOW_LAYOUT),
     ]);
 
   const editorPosition = (
     ['left', 'right', 'top', 'bottom', 'hidden'].includes(posRaw ?? '') ? posRaw : 'right'
   ) as 'left' | 'right' | 'top' | 'bottom' | 'hidden';
+
+  const editorSize = parseWindowLayout(layoutRaw);
 
   const [linkTypes, thoughtTypes] = await Promise.all([
     etn.types.listLinkTypes(networkId),
@@ -89,6 +93,8 @@ export async function openNetwork(networkId: string): Promise<void> {
     cloudWidth: parseCloudWidth(cloudWidthRaw),
     cloudGap: parseCloudGap(cloudGapRaw),
     editorPosition,
+    editorW: editorSize.w,
+    editorH: editorSize.h,
     collapsedGroups: parseCollapsedGroups(collapsedRaw),
     linkTypes,
     thoughtTypes,
