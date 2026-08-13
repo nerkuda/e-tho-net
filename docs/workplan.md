@@ -322,12 +322,23 @@
 - **Спецификация:** [03-server-api.md](03-server-api.md), п. 5; [06-auth.md](06-auth.md).
 
 ### B14. audit_log middleware
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B4
+- **Статус:** `done` · **Assignee:** agent-B7 · **Зависимости:** B4
 - **Описание:** Хелпер для записи в `audit_log` (категория, действие, цель,
   details). Применяется в admin-операциях, изменениях членства, auth-событиях.
   Позже используется в C/D.
-- **DoD:** действия админа и auth-события журналируются; `GET /admin/audit`
-  отдаёт с фильтрами.
+- **DoD:**
+  - [x] `recordAudit(systemDb, {actorUserId?, networkId?, category, action,
+    targetType?, targetId?, details?})` — типизированный helper (тонкая обёртка
+    над `SystemDb.insertAuditLog`, catch-on-failure по умолчанию).
+  - [x] `GET /admin/audit` с фильтрами `actor`/`network`/`category`/`from`/`to`/
+    `limit`(default 50, cap 500)/`offset`, admin only, newest first + total.
+  - [x] Неудачные auth (401, 429) журналируются в `auth-middleware` (B8);
+    admin/key/network/membership операции — в routes (B12/B13).
+- **Note:** в B12/B13 audit уже пишется напрямую через `SystemDb.insertAuditLog`
+  (метод с B4) — это эквивалент `recordAudit`; helper добавлен как канонический
+  entry-point для будущих слоёв (C/D, MCP F6). `queryAudit`/`countAudit`
+  SystemDb используют динамический WHERE (prepared-on-demand, кешируется
+  better-sqlite3).
 - **Спецификация:** [02-data-model.md](02-data-model.md), п. 2.6;
   [03-server-api.md](03-server-api.md), п. 15.
 

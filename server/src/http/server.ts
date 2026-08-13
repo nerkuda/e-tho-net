@@ -30,6 +30,7 @@ import { normaliseError } from './errors.js';
 import { meRoutes } from '../routes/me.js';
 import { usersRoutes } from '../routes/users.js';
 import { createNetworksRoutes } from '../routes/networks.js';
+import { auditRoutes } from '../routes/audit.js';
 import { StubNetworkService } from '../domain/network-service.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -166,6 +167,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   await app.register(usersRoutes, { prefix: '/api/v1' });
   // Real NetworkService (directory + data.db + HOME) arrives in task C10.
   await app.register(createNetworksRoutes(new StubNetworkService()), { prefix: '/api/v1' });
+  await app.register(auditRoutes, { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
   app.get('/api/v1/health', async () => {

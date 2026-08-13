@@ -20,6 +20,8 @@ import { mkdirSync } from 'node:fs';
 import type {
   ApiKey,
   AuditCategory,
+  AuditLogEntry,
+  AuditQuery,
   Network,
   NetworkListItem,
   NetworkMember,
@@ -665,6 +667,82 @@ export class SystemDb {
       updated_at: string;
     }>;
     return rows.map((r) => ({ key: r.key, value: JSON.parse(r.value), updated_at: r.updated_at }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Audit-log query (task B14, 03-server-api.md §15)
+  // -------------------------------------------------------------------------
+
+  /** Raw audit row shape. */
+  private static readonly MAX_AUDIT_LIMIT = 500;
+
+  /** Build the WHERE clause + bind params for an {@link AuditQuery}. */
+  private static auditFilter(query: AuditQuery): { where: string; params: string[] } {
+    const clauses: string[] = [];
+    const params: string[] = [];
+    if (query.actor !== undefined) {
+      clauses.push('actor_user_id = ?');
+      params.push(query.actor);
+    }
+    if (query.network !== undefined) {
+      clauses.push('network_id = ?');
+      params.push(query.network);
+    }
+    if (query.category !== undefined) {
+      clauses.push('category = ?');
+      params.push(query.category);
+    }
+    if (query.from !== undefined) {
+      clauses.push('ts >= ?');
+      params.push(query.from);
+    }
+    if (query.to !== undefined) {
+      clauses.push('ts <= ?');
+      params.push(query.to);
+    }
+    return { where: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '', params };
+  }
+
+  /**
+   * Query the audit log with optional filters, newest first. `limit` defaults
+   * to 50 and is capped at 500; `offset` defaults to 0.
+   */
+  queryAudit(query: AuditQuery): AuditLogEntry[] {
+    const { where, params } = SystemDb.auditFilter(query);
+    const limit = Math.min(Math.max(query.limit ?? 50, 1), SystemDb.MAX_AUDIT_LIMIT);
+    const offset = Math.max(query.offset ?? 0, 0);
+    const sql = `SELECT id, ts, actor_user_id, network_id, category, action, target_type, target_id, details
+                 FROM audit_log ${where} ORDER BY ts DESC LIMIT ? OFFSET ?`;
+    const rows = this.db.prepare(sql).all(...params, limit, offset) as Array<{
+      id: number;
+      ts: string;
+      actor_user_id: string | null;
+      network_id: string | null;
+      category: AuditCategory;
+      action: string;
+      target_type: string | null;
+      target_id: string | null;
+      details: string | null;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      ts: r.ts,
+      actor_user_id: r.actor_user_id,
+      network_id: r.network_id,
+      category: r.category,
+      action: r.action,
+      target_type: r.target_type,
+      target_id: r.target_id,
+      details: r.details === null ? null : JSON.parse(r.details),
+    }));
+  }
+
+  /** Count rows matching the same filter (for pagination metadata). */
+  countAudit(query: AuditQuery): number {
+    const { where, params } = SystemDb.auditFilter(query);
+    const sql = `SELECT COUNT(*) AS c FROM audit_log ${where}`;
+    const row = this.db.prepare(sql).get(...params) as { c: number };
+    return row.c;
   }
 
   /**
