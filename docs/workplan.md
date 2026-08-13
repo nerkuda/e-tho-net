@@ -265,12 +265,19 @@
 - **Спецификация:** [01-architecture.md](01-architecture.md), п. 5.
 
 ### B11. Идемпотентность через `Client-Request-Id`
-- **Статус:** `todo` · **Assignee:** — · **Зависимости:** B4
+- **Статус:** `done` · **Assignee:** agent-B7 · **Зависимости:** B4
 - **Описание:** Middleware: если есть заголовок `Client-Request-Id`, после
   успешной обработки кешировать ответ в `client_request_cache` (TTL 10 мин).
   Повторный запрос с тем же id — вернуть кешированный. Очистка по джобе.
-- **DoD:** повторный запрос с тем же id возвращает тот же ответ без
-  повторного выполнения.
+- **DoD:**
+  - [x] Повторный запрос с тем же `Client-Request-Id` (тот же пользователь)
+    возвращает сохранённый status+body **без** повторного выполнения обработчика.
+  - [x] Кеш user-scoped (`(request_id, user_id)`); не-2xx ответы не кешируются;
+    GET и запросы без заголовка игнорируются.
+  - [x] TTL-очистка через `setInterval` (5 мин), зарегистрирована в `createServer`.
+- **Note:** `preHandler` ставится после auth (нужен `user_id`); `onSend`-hook
+  глобален и сохраняет только первые (non-replay) 2xx. Методы SystemDb:
+  `findCachedResponse`, `saveCachedResponse`, `purgeExpiredCache`.
 - **Спецификация:** [01-architecture.md](01-architecture.md), п. 6;
   [02-data-model.md](02-data-model.md), п. 2.7.
 

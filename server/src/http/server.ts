@@ -25,6 +25,7 @@ import { AuthRateLimiter } from '../auth/rate-limiter.js';
 import { createAccessControl } from '../auth/access-control.js';
 import { NetworkMembersService } from '../domain/network-members-service.js';
 import { PubSub } from '../realtime/pubsub.js';
+import { createIdempotencyMiddleware, registerIdempotencyHooks } from './idempotency.js';
 import { normaliseError } from './errors.js';
 import { HEALTH_STARTED_AT, HEALTH_RESPONSE, VERSION_PAYLOAD } from '../version.js';
 
@@ -133,6 +134,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // --- Real-time pub/sub (task B10) ----------------------------------------
   const pubsub = new PubSub();
   app.decorate('pubsub', pubsub);
+
+  // --- Idempotency (task B11) ----------------------------------------------
+  app.decorateRequest('idempotency', null);
+  app.decorate('idempotency', createIdempotencyMiddleware(systemDb, logger));
+  registerIdempotencyHooks(app, systemDb, logger);
 
   // --- Error handler (03-server-api.md §2) ---------------------------------
   app.setErrorHandler((err, req, reply) => {

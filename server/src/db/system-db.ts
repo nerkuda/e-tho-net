@@ -18,6 +18,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 
 import type { ApiKey, AuditCategory, NetworkRole, User } from '@etn/shared';
+import { IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
 
 import type { Logger } from '../logger.js';
 import { systemDbPath, systemMigrationsDir } from '../paths.js';
@@ -120,6 +121,13 @@ export interface ApiKeyWithUser {
   user: User;
 }
 
+/** A still-fresh cached idempotent response (02-data-model.md §2.7). */
+export interface CachedResponse {
+  status: number;
+  /** JSON-encoded body as stored. */
+  body: string | null;
+}
+
 /**
  * Typed accessor for `_system.db`.
  *
@@ -138,6 +146,9 @@ export class SystemDb {
   private readonly stInsertAudit: Database.Statement;
   private readonly stCountFirstUser: Database.Statement;
   private readonly stGetMemberRole: Database.Statement;
+  private readonly stFindCache: Database.Statement;
+  private readonly stSaveCache: Database.Statement;
+  private readonly stPurgeCache: Database.Statement;
 
   /**
    * Wrap an already-open connection and prepare all statements. Does not run
@@ -162,7 +173,17 @@ export class SystemDb {
     this.stGetMemberRole = db.prepare(
       'SELECT role FROM network_members WHERE user_id = ? AND network_id = ? LIMIT 1',
     );
+    this.stFindCache = db.prepare(
+      'SELECT status, body, ts FROM client_request_cache WHERE request_id = ? AND user_id = ? LIMIT 1',
+    );
+    this.stSaveCache = db.prepare(
+      'INSERT OR REPLACE INTO client_request_cache (request_id, user_id, ts, status, body) VALUES (?, ?, ?, ?, ?)',
+    );
+    this.stPurgeCache = db.prepare('DELETE FROM client_request_cache WHERE ts < ?');
   }
+
+  /** TTL window for cached idempotent responses, in milliseconds. */
+  private static readonly TTL_MS = IDEMPOTENCY_TTL_MINUTES * 60_000;
 
   /**
    * Open (or create) `_system.db` under `dataDir`, enable WAL and foreign keys,
@@ -297,6 +318,43 @@ export class SystemDb {
   getMemberRole(userId: string, networkId: string): NetworkRole | null {
     const row = this.stGetMemberRole.get(userId, networkId) as { role: NetworkRole } | undefined;
     return row?.role ?? null;
+  }
+
+  /**
+   * Find a still-fresh cached response for `(requestId, userId)`
+   * (02-data-model.md §2.7, 01-architecture.md §6). Returns `null` when no row
+   * exists, the row belongs to a different user, or it has exceeded the
+   * {@link IDEMPOTENCY_TTL_MINUTES} window.
+   */
+  findCachedResponse(requestId: string, userId: string): CachedResponse | null {
+    const row = this.stFindCache.get(requestId, userId) as
+      { status: number; body: string | null; ts: string } | undefined;
+    if (row === undefined) {
+      return null;
+    }
+    const ageMs = Date.now() - Date.parse(row.ts);
+    if (Number.isNaN(ageMs) || ageMs > SystemDb.TTL_MS) {
+      return null;
+    }
+    return { status: row.status, body: row.body };
+  }
+
+  /**
+   * Persist a successful (2xx) response so a retried request with the same
+   * `Client-Request-Id` replays it instead of re-executing the handler
+   * (01-architecture.md §6).
+   */
+  saveCachedResponse(requestId: string, userId: string, status: number, body: string | null): void {
+    this.stSaveCache.run(requestId, userId, new Date().toISOString(), status, body);
+  }
+
+  /**
+   * Delete cache rows whose `ts` predates `olderThan` (ISO-8601). Returns the
+   * number of removed rows. Driven by the periodic cleanup job in task B11.
+   */
+  purgeExpiredCache(olderThanIso: string): number {
+    const info = this.stPurgeCache.run(olderThanIso);
+    return info.changes;
   }
 
   /**
