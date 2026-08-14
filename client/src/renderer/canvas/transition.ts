@@ -9,8 +9,9 @@
  *     the old focus shrinks into its neighbour slot, the rest glide to place;
  *   * clouds that vanished are ghost-cloned at their old spot and fade out;
  *   * clouds that appeared fade in;
- *   * the link overlays fade out for the move and back in after it, masking
- *     the line re-geometry.
+ *   * the link overlays hide instantly for the whole move (also dropping
+ *     pointer events) and are redrawn synchronously AFTER the clouds land,
+ *     against the settled layout — mid-flight line geometry is never shown.
  *
  * Everything together stays well under 1 s and is skipped entirely for
  * `prefers-reduced-motion: reduce`. The ghosts layer ignores pointer events,
@@ -94,18 +95,19 @@ export function playFocusTransition(
   }
   const beforeMap = new Map(before.map((s) => [s.id, s]));
 
-  // Link geometry must be computed against the FINAL, untransformed cloud
-  // positions. Depending on rAF ordering was not enough: the debounced redraw
-  // could land after the FLIP animations applied their first keyframe and
-  // capture mid-flight geometry — leaving lines pointing "nowhere" after the
-  // clouds landed. So: hide the overlays instantly, redraw synchronously,
-  // THEN start the animations and fade the overlays back in after the move.
+  // Link lines are NOT drawn at transition start: any mid-flight measurement
+  // (transform keyframes, scroll clamping, late indicator patches) risks
+  // stale geometry that never refreshes. Instead the overlays hide instantly
+  // (and stop catching pointer events), the clouds fly, and the lines are
+  // redrawn synchronously AFTER the move against the settled layout — the
+  // latest transition wins.
+  const gen = ++transitionGeneration;
   const overlays = host.querySelectorAll<SVGSVGElement>('[class*="links-overlay"]');
   for (const svg of overlays) {
     svg.style.transition = 'none';
     svg.style.opacity = '0';
+    svg.style.pointerEvents = 'none';
   }
-  drawNow?.();
 
   // Survivors glide from their old position (FLIP).
   for (const [id, el] of afterEls) {
@@ -157,19 +159,29 @@ export function playFocusTransition(
     window.setTimeout(() => ghosts.remove(), GHOST_MS + 80);
   }
 
-  // Fade the overlays back in once the clouds have landed, then clean up.
-  if (overlays.length > 0) {
+  // The clouds have landed (MOVE_MS < LINKS_BACK_MS): redraw the lines against
+  // the settled layout, then fade the overlays back in and clean up. A newer
+  // transition supersedes these timeouts entirely.
+  if (overlays.length > 0 || drawNow !== undefined) {
     window.setTimeout(() => {
+      if (gen !== transitionGeneration) return;
+      drawNow?.();
       for (const svg of overlays) {
         svg.style.transition = 'opacity 250ms ease-in';
         svg.style.opacity = '1';
+        svg.style.pointerEvents = '';
       }
       window.setTimeout(() => {
+        if (gen !== transitionGeneration) return;
         for (const svg of overlays) {
           svg.style.transition = '';
           svg.style.opacity = '';
+          svg.style.pointerEvents = '';
         }
       }, 260);
     }, LINKS_BACK_MS);
   }
 }
+
+/** Generation of the latest started transition — only it may restore overlays. */
+let transitionGeneration = 0;
