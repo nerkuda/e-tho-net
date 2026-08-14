@@ -16,14 +16,13 @@
 
 import type { FocusDir, Link } from '@etn/shared';
 
-import { scheduleRefresh, requireNetworkId } from '../app.js';
+import { onThoughtDeleted, scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { openAddDialog } from './add-dialog.js';
 import { patchFocusEdge, store } from '../state.js';
 import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
-import { setFocus } from '../app.js';
 
 /** Zone direction (parents/siblings/children). */
 type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -315,7 +314,9 @@ async function deleteThought(networkId: string, target: CloudMenuTarget): Promis
   try {
     const thought = await etn.thoughts.get(networkId, target.id);
     await etn.thoughts.remove(networkId, target.id, thought.version);
-    scheduleRefresh();
+    // No realtime echo to the actor (04-realtime.md §5) — clean up locally:
+    // history, caches, and (for the focused thought) the next focus (L4).
+    await onThoughtDeleted(target.id);
   } catch (err) {
     errorDialog('Удалить мысль', err);
   }

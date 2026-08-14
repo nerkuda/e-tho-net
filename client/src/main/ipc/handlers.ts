@@ -638,6 +638,17 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     }),
   );
   handlers.set(
+    'history.remove',
+    bind((thoughtId: string) => {
+      const profile = deps.getProfile();
+      const networkId = deps.getCurrentNetworkId();
+      if (!profile || !networkId) {
+        throw new Error('Not connected: call etn.server.connect and open a network first');
+      }
+      deps.localDb.removeFocusHistory(profile.id, networkId, thoughtId);
+    }),
+  );
+  handlers.set(
     'system.health',
     bind(() => requireRest(deps).getHealth()),
   );

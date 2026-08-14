@@ -26,6 +26,8 @@ import {
 } from './lib/pure.js';
 import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js';
 import { applyRealtimeToUi } from './realtime-ui.js';
+import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
+import { invalidateHistoryBar } from './screens/history-bar.js';
 import { showScreen } from './screens/screens.js';
 import { store } from './state.js';
 
@@ -201,6 +203,83 @@ export function requireNetworkId(): string {
 }
 
 /**
+ * Actor-side cleanup after deleting a thought (workplan L4). The server never
+ * echoes `thought.deleted` to the acting client (04-realtime.md §5), so the
+ * deleting client mirrors the applier's handling locally:
+ *
+ *   * the thought leaves the local focus history (after the rotation that
+ *     `setFocus` performs), caches and the selection;
+ *   * when the deleted thought was the focus, the focus moves to the freshest
+ *     surviving history entry (the "previous" thought) or, failing that, to
+ *     the protected root thought (HOME);
+ *   * otherwise the canvas just refreshes (the thought leaves its zone).
+ */
+export async function onThoughtDeleted(deletedId: string): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const wasFocus = store.state.focus?.focused.id === deletedId;
+  if (store.state.selection.includes(deletedId)) {
+    store.update({ selection: store.state.selection.filter((id) => id !== deletedId) });
+  }
+  if (wasFocus) {
+    const nextId = await pickFocusAfterDeletion(networkId, deletedId);
+    if (nextId !== null) {
+      try {
+        await setFocus(nextId);
+      } catch {
+        // The picked thought vanished between validation and focus — HOME is
+        // undeletable, fall back to it.
+        try {
+          await setFocus((await findRootThought(networkId)).id);
+        } catch {
+          // Nothing focusable — leave the UI as is (server will reconcile).
+        }
+      }
+    }
+  } else {
+    scheduleRefresh();
+  }
+  // setFocus's rotation pushes the deleted id (as the old focus) back into the
+  // history — prune it afterwards so it never lingers in «последние».
+  await etn.history.remove(deletedId).catch(() => undefined);
+  invalidateIndicators(deletedId);
+  invalidateRef(deletedId);
+  invalidateHistoryBar();
+}
+
+/**
+ * Picks the next focus after the focused thought was deleted: the freshest
+ * history entry that still exists, else the protected root (HOME).
+ */
+async function pickFocusAfterDeletion(
+  networkId: string,
+  deletedId: string,
+): Promise<string | null> {
+  const profileId = store.state.profileId;
+  if (profileId !== null) {
+    try {
+      const entries = await etn.history.list(profileId, networkId, 10);
+      for (const entry of entries) {
+        if (entry.thoughtId === deletedId) continue;
+        try {
+          await etn.thoughts.get(networkId, entry.thoughtId);
+          return entry.thoughtId;
+        } catch {
+          // Stale history entry — try the next one.
+        }
+      }
+    } catch {
+      // History unavailable — fall back to HOME.
+    }
+  }
+  try {
+    return (await findRootThought(networkId)).id;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Boot: initialise realtime plumbing, then route to onboarding (no active
  * profile) or to the network list (active profile connects successfully).
  */
@@ -209,7 +288,10 @@ export async function boot(): Promise<void> {
   setRealtimeEffects({
     onStale: () => scheduleRefresh(),
     onFocusLost: () => {
-      void refreshFocus().catch(() => backToNetworks());
+      // Another user deleted our focused thought — same recovery as the
+      // local delete: previous from the history, else HOME.
+      const deletedId = store.state.focus?.focused.id;
+      if (deletedId !== undefined) void onThoughtDeleted(deletedId);
     },
     onNetworkLost: () => backToNetworks(),
   });

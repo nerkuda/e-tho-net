@@ -324,6 +324,12 @@ export interface EtnApi {
      * and the currently open network.
      */
     rotate(oldId: string | null, newId: string): Promise<void>;
+    /**
+     * Drops a thought from the focus history of the active profile/network —
+     * the actor-side companion of the applier's prune on `thought.deleted`
+     * (the server sends no realtime echo to the deleting client, L4).
+     */
+    remove(thoughtId: string): Promise<void>;
   };
   system: {
     health(): Promise<HealthResponse>;

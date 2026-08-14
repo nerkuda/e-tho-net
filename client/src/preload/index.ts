@@ -159,6 +159,7 @@ function buildApi(): EtnApi {
       push: (profileId, networkId, thoughtId) =>
         invoke('history.push', profileId, networkId, thoughtId),
       rotate: (oldId, newId) => invoke('history.rotate', oldId, newId),
+      remove: (thoughtId) => invoke('history.remove', thoughtId),
     },
     system: {
       health: () => invoke('system.health'),
