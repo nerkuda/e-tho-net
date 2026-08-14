@@ -30,7 +30,12 @@ let wired = false;
 export function registerPropertiesGroup(): void {
   registerGroupBuilder((ctx) => {
     if (ctx.ownerType !== 'thought') return null;
-    return { id: 'properties', title: 'Свойства', buildBody: () => buildPropertiesBody(ctx) };
+    return {
+      id: 'properties',
+      title: 'Свойства',
+      loadCount: () => countProperties(ctx),
+      buildBody: () => buildPropertiesBody(ctx),
+    };
   });
   if (!wired) {
     wired = true;
@@ -39,6 +44,19 @@ export function registerPropertiesGroup(): void {
         currentReload?.();
       }
     });
+  }
+}
+
+/** Counts the type's property definitions for the group badge (thoughts only). */
+async function countProperties(ctx: EditorContext): Promise<string | undefined> {
+  const typeId = ctx.thought?.type_id ?? null;
+  if (typeId === null) return undefined;
+  const networkId = requireNetworkId();
+  try {
+    const defs = await etn.types.listThoughtTypeProperties(networkId, typeId);
+    return `(${defs.length})`;
+  } catch {
+    return undefined;
   }
 }
 

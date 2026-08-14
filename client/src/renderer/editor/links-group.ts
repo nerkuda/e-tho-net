@@ -21,13 +21,33 @@ import { registerGroupBuilder, type EditorContext } from './editor.js';
 export function registerLinksGroup(): void {
   registerGroupBuilder((ctx) => {
     if (ctx.ownerType === 'thought') {
-      return { id: 'links', title: 'Связи', buildBody: () => buildLinksBody(ctx) };
+      return {
+        id: 'links',
+        title: 'Связи',
+        loadCount: () => countLinks(ctx),
+        buildBody: () => buildLinksBody(ctx),
+      };
     }
     if (ctx.ownerType === 'link' && ctx.link !== null) {
-      return { id: 'links', title: 'Связи', buildBody: () => buildLinkEndpointsBody(ctx) };
+      return { id: 'links', title: 'Связи', count: '(2)', buildBody: () => buildLinkEndpointsBody(ctx) };
     }
     return null;
   });
+}
+
+/** Counts a thought's links for the group badge. */
+async function countLinks(ctx: EditorContext): Promise<string | undefined> {
+  const networkId = requireNetworkId();
+  try {
+    const grouped = await etn.links.listByThought(networkId, ctx.ownerId);
+    const n =
+      grouped.by_type.reduce((sum, g) => sum + g.items.length, 0) +
+      grouped.untyped_parents.length +
+      grouped.untyped_children.length;
+    return `(${n})`;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Builds the links group body for a thought (grouped by type, untyped by direction). */

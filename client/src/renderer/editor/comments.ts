@@ -48,6 +48,8 @@ export function registerCommentGroups(): void {
   registerGroupBuilder((ctx) => ({
     id: 'chrono',
     title: 'Хронологические комментарии',
+    defaultCollapsed: true,
+    loadCount: () => countChronological(ctx),
     buildBody: () => buildChronoBody(ctx),
   }));
 }
@@ -161,6 +163,17 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
 // Chronological comments
 // ---------------------------------------------------------------------------
 
+/** Counts chronological comments for the group badge. */
+async function countChronological(ctx: EditorContext): Promise<string | undefined> {
+  const networkId = requireNetworkId();
+  try {
+    const comments = await etn.comments.list(networkId, ctx.ownerType, ctx.ownerId);
+    return `(${comments.filter((c) => c.kind === 'chronological').length})`;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Builds the chronological-comments group body (table + dialog). */
 function buildChronoBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
@@ -224,9 +237,6 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
     titleInput.type = 'text';
     titleInput.value = existing?.title ?? '';
     titleInput.maxLength = 200;
-    const text = el('textarea', 'textarea-input');
-    text.rows = 6;
-    text.value = existing?.body_md ?? '';
     const fromInput = el('input', 'text-input');
     fromInput.type = 'date';
     fromInput.value = existing?.valid_from.slice(0, 10) ?? todayIso();
@@ -234,10 +244,40 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
     toInput.type = 'date';
     toInput.value = existing?.valid_to?.slice(0, 10) ?? todayIso();
     const errorLine = span('', 'error-text');
+    // Existing comment: HTML view ↔ markdown edit (autosaves body_md); a new
+    // comment uses a plain textarea committed together with the dialog.
+    let currentMd = existing?.body_md ?? '';
+    let textWidget: HTMLElement;
+    if (existing !== null) {
+      const commentId = existing.id;
+      let version = existing.version;
+      textWidget = createMarkdownField({
+        md: existing.body_md,
+        html: existing.body_html,
+        onInput: (md) => {
+          currentMd = md;
+        },
+        onSave: async (md) => {
+          const updated = await etn.comments.update(networkId, commentId, { body_md: md }, version);
+          version = updated.version;
+          currentMd = md;
+          invalidateIndicators(ctx.ownerId);
+          return updated.body_html;
+        },
+      });
+    } else {
+      const area = el('textarea', 'textarea-input') as HTMLTextAreaElement;
+      area.rows = 6;
+      area.value = currentMd;
+      area.addEventListener('input', () => {
+        currentMd = area.value;
+      });
+      textWidget = area;
+    }
     const body = div('form-stack');
     body.append(
       field('Заголовок', titleInput),
-      field('Текст (markdown)', text),
+      field('Текст', textWidget),
       field('Дата начала', fromInput),
       field('Дата окончания (пусто = бессрочно)', toInput),
       errorLine,
@@ -288,11 +328,11 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
               try {
                 if (existing === null) {
                   await etn.comments.create(networkId, ctx.ownerType, ctx.ownerId, {
-                    kind: 'chronological',
-                    title: titleInput.value.trim() || null,
-                    body_md: text.value,
-                    valid_from: fromInput.value,
-                    valid_to: validTo,
+                      kind: 'chronological',
+                      title: titleInput.value.trim() || null,
+                      body_md: currentMd,
+                      valid_from: fromInput.value,
+                      valid_to: validTo,
                   });
                 } else {
                   await etn.comments.update(
@@ -300,7 +340,7 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
                     existing.id,
                     {
                       title: titleInput.value.trim() || null,
-                      body_md: text.value,
+                      body_md: currentMd,
                       valid_from: fromInput.value,
                       valid_to: validTo,
                     },

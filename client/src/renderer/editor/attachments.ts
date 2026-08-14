@@ -27,8 +27,21 @@ export function registerAttachmentGroup(): void {
   registerGroupBuilder((ctx) => ({
     id: 'attachments',
     title: 'Вложения',
+    defaultCollapsed: true,
+    loadCount: () => countAttachments(ctx),
     buildBody: () => buildAttachmentsBody(ctx),
   }));
+}
+
+/** Counts attachments for the group badge. */
+async function countAttachments(ctx: EditorContext): Promise<string | undefined> {
+  const networkId = requireNetworkId();
+  try {
+    const items = await etn.attachments.list(networkId, ctx.ownerType, ctx.ownerId);
+    return `(${items.length})`;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Builds the attachments group body (drop zone + list). */

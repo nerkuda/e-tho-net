@@ -26,8 +26,12 @@ export interface GroupSpec {
   /** Stable group id, e.g. `permanent`, `chrono`, `attachments`. */
   id: string;
   title: string;
-  /** Optional count badge text. */
+  /** Optional count badge text (static). */
   count?: string;
+  /** Resolves the count badge text asynchronously (shown when no static count). */
+  loadCount?: () => Promise<string | undefined>;
+  /** Collapsed when there is no saved per-entity preference (default: expanded). */
+  defaultCollapsed?: boolean;
   /** Extra header buttons (right side). */
   actions?: HTMLElement[];
   /** Builds the body content; may be async (loading placeholders inside). */
@@ -36,17 +40,22 @@ export interface GroupSpec {
 
 /**
  * Builds a collapsible group section. The body is built lazily on first
- * expansion; async builders render a placeholder until resolved.
+ * expansion; async builders render a placeholder until resolved. A `loadCount`
+ * promise updates the count badge once resolved (even while collapsed).
  */
 export function groupSection(spec: GroupSpec, entityId: string): HTMLElement {
-  let collapsed = store.state.collapsedGroups[entityId]?.[spec.id] === true;
+  const saved = store.state.collapsedGroups[entityId]?.[spec.id];
+  let collapsed = saved === undefined ? spec.defaultCollapsed === true : saved;
+  let built = !collapsed;
 
   const root = div('group');
   const header = div('group-header');
   const caret = span(collapsed ? '▸' : '▾', 'group-caret');
   const title = span(spec.title, 'group-title');
   header.append(caret, title);
-  if (spec.count !== undefined) header.append(span(spec.count, 'group-count'));
+  const countBadge = span(spec.count ?? '', 'group-count');
+  if (spec.count === undefined) countBadge.classList.add('hidden');
+  header.append(countBadge);
   const actionsBox = div('group-actions');
   if (spec.actions !== undefined) {
     for (const action of spec.actions) actionsBox.append(action);
@@ -54,8 +63,17 @@ export function groupSection(spec: GroupSpec, entityId: string): HTMLElement {
   header.append(actionsBox);
   root.append(header);
 
+  // Async count badge: resolved independently of expansion.
+  if (spec.count === undefined && spec.loadCount !== undefined) {
+    void Promise.resolve(spec.loadCount()).then((c) => {
+      if (c !== undefined && c !== null) {
+        countBadge.textContent = c;
+        countBadge.classList.remove('hidden');
+      }
+    });
+  }
+
   let body: HTMLElement | null = null;
-  let built = false;
 
   const apply = (): void => {
     caret.textContent = collapsed ? '▸' : '▾';
@@ -83,9 +101,6 @@ export function groupSection(spec: GroupSpec, entityId: string): HTMLElement {
     apply();
   });
 
-  if (!collapsed) {
-    built = true;
-    apply();
-  }
+  apply();
   return root;
 }

@@ -511,10 +511,3 @@ function openLinkSettings(link: Link): void {
   });
 }
 
-/** Standard editor field: label above the control. */
-function editorField(label: string, control: HTMLElement): HTMLElement {
-  const box = div('editor-field');
-  box.append(el('label', 'field-label', label));
-  box.append(control);
-  return box;
-}
