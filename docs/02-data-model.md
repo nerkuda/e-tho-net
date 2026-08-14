@@ -165,12 +165,38 @@ TTL: 10 минут. Очистка по джобе.
 | `active` | INTEGER NOT NULL DEFAULT 1 | 0 — неактуальная |
 | `is_protected` | INTEGER NOT NULL DEFAULT 0 | 1 — системная мысль (HOME); нельзя удалить |
 | `is_root` | INTEGER NOT NULL DEFAULT 0 | 1 — корневая мысль сети (HOME) |
-| `fg_color` | TEXT | Цвет текста |
-| `bg_color` | TEXT | Цвет фона облачка |
-| `font_bold` | INTEGER NOT NULL DEFAULT 0 | |
-| `font_italic` | INTEGER NOT NULL DEFAULT 0 | |
-| `font_underline` | INTEGER NOT NULL DEFAULT 0 | |
-| `font_strike` | INTEGER NOT NULL DEFAULT 0 | |
+| `fg_color` | TEXT | Цвет текста. `NULL` — наследуется от типа (или дефолт приложения) |
+| `bg_color` | TEXT | Цвет фона облачка. `NULL` — наследуется от типа (или дефолт приложения) |
+| `font_bold` | INTEGER | `0`/`1` — явное значение; `NULL` — наследуется от типа (см. §3.1.1) |
+| `font_italic` | INTEGER | `NULL` — наследуется от типа |
+| `font_underline` | INTEGER | `NULL` — наследуется от типа |
+| `font_strike` | INTEGER | `NULL` — наследуется от типа |
+
+> Семантика `NULL` для визуальных полей: иконки/цвета/`font_*` — **«наследуется от
+> типа мысли»**. Не-`NULL` значение трактуется как **ручная настройка**, которая
+> имеет приоритет над типом и сохраняется при смене типа. Кнопка «Сброс» в диалоге
+> настроек выставляет все эти поля в `NULL`, возвращая мысль к виду типа. Подробно
+> модель наследования описана в §3.1.1.
+
+#### 3.1.1. Наследование визуального стиля от типа
+
+При разрешении стиля облачка (`resolveCloudStyle`) каждое поле вычисляется как:
+
+```
+value(thought) ?? value(thought.type) ?? default(app)
+```
+
+- `icon` / `icon_kind`: мысль наследует иконку **и `icon_kind`** от типа, если
+  своя не задана (`NULL`).
+- `fg_color` / `bg_color`: `NULL` → цвет типа → дефолт.
+- `font_*`: `NULL` → значение типа → `false` (дефолт).
+
+**Смена типа мысли** (`PATCH { type_id }`) меняет только те визуальные поля,
+которые не были заданы вручную (`NULL`): они начинают наследоваться от нового
+типа. Ручные (`не-NULL`) настройки сохраняются. Свойства прежнего типа
+**скрываются**, но их значения в `property_values` **не очищаются** — при
+возврате прежнего типа они снова отображаются (значения привязаны к
+`property_id` определения на типе, которое не удаляется).
 | `version` | INTEGER NOT NULL DEFAULT 1 | Версия для разрешения конфликтов |
 | `created_at` | TEXT NOT NULL | |
 | `created_by` | TEXT NOT NULL | user_id |
@@ -208,9 +234,10 @@ TTL: 10 минут. Очистка по джобе.
 | `id` | TEXT PK | UUID |
 | `name` | TEXT NOT NULL UNIQUE | |
 | `icon` | TEXT | Иконка типа по умолчанию |
+| `icon_kind` | TEXT NOT NULL DEFAULT `'emoji'` | `'emoji'` \| `'image'` — вид иконки по умолчанию |
 | `fg_color` | TEXT | Цвет текста по умолчанию |
 | `bg_color` | TEXT | Цвет фона облачка по умолчанию |
-| `font_bold`/`font_italic`/`font_underline`/`font_strike` | INTEGER | Стили по умолчанию |
+| `font_bold`/`font_italic`/`font_underline`/`font_strike` | INTEGER | Стили по умолчанию (`NULL` — наследуется от дефолта приложения) |
 | `description` | TEXT | Комментарий типа (для AI и пользователя) |
 | `version` | INTEGER NOT NULL DEFAULT 1 | |
 | `created_at` / `updated_at` / `created_by` | ... | |
@@ -262,10 +289,19 @@ TTL: 10 минут. Очистка по джобе.
 | `source_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | Мысль-источник |
 | `target_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | Мысль-назначение |
 | `type_id` | TEXT FK → link_types.id ON DELETE SET NULL | Тип связи |
+| `color` | TEXT | Переопределение цвета линии. `NULL` — наследуется от типа связи |
+| `style` | TEXT | Переопределение стиля (`'solid'`/`'dashed'`/`'dotted'`). `NULL` — от типа |
+| `width` | INTEGER | Переопределение толщины. `NULL` — от типа |
 | `active` | INTEGER NOT NULL DEFAULT 1 | |
 | `version` | INTEGER NOT NULL DEFAULT 1 | |
 | `created_at` / `updated_at` / `created_by` / `updated_by` | | |
 | UNIQUE | `(source_id, target_id, type_id)` | Запрет дублирования связей того же типа между той же парой |
+
+> Стиль линии связи разрешается как `link.color ?? link.type.color`,
+> `link.style ?? link.type.style`, `link.width ?? link.type.width`. `NULL`
+> (значение по умолчанию) — «наследовать от типа связи», не-`NULL` — ручной
+> override конкретной связи (виден на холсте). Кнопка «Сброс» в диалоге настроек
+> связи выставляет эти поля в `NULL`.
 
 > Ручной порядок отображения связей — per-user, хранится в `user_focus_order`
 > (см. п. 3.10.4), а не в самой связи.
