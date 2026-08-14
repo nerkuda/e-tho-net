@@ -56,7 +56,6 @@ let svgHit: SVGSVGElement | null = null;
 let svgTop: SVGSVGElement | null = null;
 let popover: HTMLElement | null = null;
 let opener: LinkEditorOpener | null = null;
-let drawQueued = false;
 /** Bundle key currently under the cursor (transient). */
 let hoveredKey: string | null = null;
 /** Endpoint ellipses currently highlighted, to clear on the next redraw. */
@@ -100,14 +99,34 @@ export function setLinkEditorOpener(next: LinkEditorOpener | null): void {
   opener = next;
 }
 
+/** rAF draw request state: queued flag + generation to cancel stale frames. */
+let drawQueued = false;
+let drawGeneration = 0;
+
 /** Requests an rAF-debounced redraw of all link lines. */
 export function requestDraw(): void {
   if (drawQueued || svg === null) return;
   drawQueued = true;
+  const gen = ++drawGeneration;
   window.requestAnimationFrame(() => {
+    if (gen !== drawGeneration) return; // superseded by a synchronous draw
     drawQueued = false;
     draw();
   });
+}
+
+/**
+ * Redraws all link lines synchronously, cancelling any pending rAF. Callers
+ * that must draw against a known DOM state (the focus transition measures
+ * final cloud positions BEFORE starting the FLIP animations) need this — the
+ * rAF variant would run after the animations apply their first keyframe and
+ * capture mid-flight geometry.
+ */
+export function drawLinksNow(): void {
+  if (svg === null) return;
+  drawGeneration++; // invalidate a queued rAF draw
+  drawQueued = false;
+  draw();
 }
 
 // ---------------------------------------------------------------------------

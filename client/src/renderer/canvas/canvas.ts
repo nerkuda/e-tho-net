@@ -26,7 +26,7 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { cloudFontSize, cloudHeight } from '../lib/pure.js';
 import { store } from '../state.js';
-import { initLinksOverlay } from './links.js';
+import { initLinksOverlay, drawLinksNow } from './links.js';
 import {
   captureClouds,
   playFocusTransition,
@@ -275,7 +275,7 @@ async function render(): Promise<void> {
   lastFocusId = focus.focused.id;
   scheduleIndicatorLoads();
   if (snapshot !== null) {
-    playFocusTransition(host, snapshot, redrawLinks ?? undefined);
+    playFocusTransition(host, snapshot, drawLinksNow);
   } else {
     redrawLinks?.();
   }

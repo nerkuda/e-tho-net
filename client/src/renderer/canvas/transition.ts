@@ -75,10 +75,10 @@ const LINKS_BACK_MS = 450;
 export function playFocusTransition(
   host: HTMLElement,
   before: CloudSnapshot[],
-  redrawLinks?: () => void,
+  drawNow?: () => void,
 ): void {
   if (prefersReducedMotion()) {
-    redrawLinks?.();
+    drawNow?.();
     return;
   }
 
@@ -94,10 +94,18 @@ export function playFocusTransition(
   }
   const beforeMap = new Map(before.map((s) => [s.id, s]));
 
-  // Redraw the links FIRST, while the clouds still sit at their final,
-  // untransformed positions (rAF callbacks run before animation styles apply).
-  // The overlay fade below masks the geometry until the clouds have landed.
-  redrawLinks?.();
+  // Link geometry must be computed against the FINAL, untransformed cloud
+  // positions. Depending on rAF ordering was not enough: the debounced redraw
+  // could land after the FLIP animations applied their first keyframe and
+  // capture mid-flight geometry — leaving lines pointing "nowhere" after the
+  // clouds landed. So: hide the overlays instantly, redraw synchronously,
+  // THEN start the animations and fade the overlays back in after the move.
+  const overlays = host.querySelectorAll<SVGSVGElement>('[class*="links-overlay"]');
+  for (const svg of overlays) {
+    svg.style.transition = 'none';
+    svg.style.opacity = '0';
+  }
+  drawNow?.();
 
   // Survivors glide from their old position (FLIP).
   for (const [id, el] of afterEls) {
@@ -149,12 +157,7 @@ export function playFocusTransition(
     window.setTimeout(() => ghosts.remove(), GHOST_MS + 80);
   }
 
-  // Mask the link re-geometry: lines fade out for the move, back in after it.
-  const overlays = host.querySelectorAll<SVGSVGElement>('[class*="links-overlay"]');
-  for (const svg of overlays) {
-    svg.style.transition = 'opacity 120ms ease-out';
-    svg.style.opacity = '0';
-  }
+  // Fade the overlays back in once the clouds have landed, then clean up.
   if (overlays.length > 0) {
     window.setTimeout(() => {
       for (const svg of overlays) {
