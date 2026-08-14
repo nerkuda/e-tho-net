@@ -353,15 +353,23 @@ DELETE /api/v1/networks/{nid}/comments/{id}   If-Match
 GET    /api/v1/networks/{nid}/thoughts/{id}/attachments
 POST   /api/v1/networks/{nid}/thoughts/{id}/attachments
        { kind: "url"|"file", url?|file_path?, title?, description?, mime_type? }
+       # Для kind="url" сервер (best-effort, таймауты 4 c) загружает страницу,
+       # заполняет пустой title из <title> и сохраняет favicon в icon (data: URL,
+       # ≤64 КиБ). Недоступность сети не ломает создание.
 POST   /api/v1/networks/{nid}/thoughts/{id}/attachments/file
        { title?, mime_type, data_base64 }
        # Сервер сохраняет бинарник (≤10 МиБ) в networks/<nid>/attachments/
        # рядом с data.db и создаёт kind="file" вложение с file_path на копию.
        → 201 { data: Attachment }
 PATCH  /api/v1/networks/{nid}/attachments/{id}
+       { url?|file_path?|title?|description?|mime_type?|position?|icon?|
+         owner_type?, owner_id? }
+       # owner_type/owner_id переносят вложение к другому владельцу
+       # (404, если новый владелец не существует). icon — только data: URL.
 DELETE /api/v1/networks/{nid}/attachments/{id}
+       # Удаляет и серверную копию файла, если file_path лежит в
+       # networks/<nid>/attachments/; клиентские пути не трогает.
 # Аналогично для /links/{id}/attachments
-# Для url с пустым title сервер НЕ ходит в интернет на MVP — title задаётся клиентом.
 ```
 
 ## 12. Поиск
