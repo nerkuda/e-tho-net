@@ -12,6 +12,8 @@ export interface ThoughtType {
   id: string;
   name: string;
   icon: string | null;
+  /** Kind of the default icon (thoughts without their own icon inherit it). */
+  icon_kind: IconKind;
   fg_color: string | null;
   bg_color: string | null;
   font_bold: boolean;

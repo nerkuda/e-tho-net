@@ -36,10 +36,11 @@ function ref(overrides: Partial<ThoughtRef> = {}): ThoughtRef {
     active: true,
     fg_color: null,
     bg_color: null,
-    font_bold: false,
-    font_italic: false,
-    font_underline: false,
-    font_strike: false,
+    // null = "inherit from the type" (02-data-model.md §3.1.1).
+    font_bold: null,
+    font_italic: null,
+    font_underline: null,
+    font_strike: null,
     ...overrides,
   };
 }
@@ -49,6 +50,7 @@ function type(overrides: Partial<ThoughtType>): ThoughtType {
     id: 'type1',
     name: 'Тип',
     icon: null,
+    icon_kind: 'emoji',
     fg_color: null,
     bg_color: null,
     font_bold: false,
@@ -103,6 +105,15 @@ describe('resolveCloudStyle', () => {
     const style = resolveCloudStyle(ref({ type_id: 'type1' }));
     assert.equal(style.italic, true);
     assert.equal(style.strike, true);
+    store.update({ thoughtTypes: [] });
+  });
+
+  it('a manual false overrides a true type default', () => {
+    // The null-coalesce model (unlike the old OR) lets a thought explicitly
+    // turn OFF a font flag the type enables (02-data-model.md §3.1.1).
+    store.update({ thoughtTypes: [type({ font_bold: true })] });
+    const style = resolveCloudStyle(ref({ type_id: 'type1', font_bold: false }));
+    assert.equal(style.bold, false);
     store.update({ thoughtTypes: [] });
   });
 });

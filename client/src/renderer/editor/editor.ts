@@ -22,6 +22,7 @@ import {
 } from '@etn/shared';
 
 import { refreshFocus, requireNetworkId } from '../app.js';
+import { resolveCloudStyle } from '../canvas/canvas.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { canSave, clearDraft, findDraft, offlineNotice, saveDraft } from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
@@ -422,6 +423,9 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   });
 
   const toggles = div('font-toggles');
+  // The toggles reflect the *resolved* style (own value, else the type's default)
+  // so an inherited flag still shows its effective state.
+  const style = resolveCloudStyle(thought);
   const fontToggle = (
     glyph: string,
     title: string,
@@ -436,15 +440,10 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     setTooltip(btn, title);
     toggles.append(btn);
   };
-  fontToggle('Ж', 'Жирный', thought.font_bold, (v) => void saveThought({ font_bold: v }));
-  fontToggle('Н', 'Курсив', thought.font_italic, (v) => void saveThought({ font_italic: v }));
-  fontToggle(
-    'П',
-    'Подчёркнутый',
-    thought.font_underline,
-    (v) => void saveThought({ font_underline: v }),
-  );
-  fontToggle('З', 'Зачёркнутый', thought.font_strike, (v) => void saveThought({ font_strike: v }));
+  fontToggle('Ж', 'Жирный', style.bold, (v) => void saveThought({ font_bold: v }));
+  fontToggle('Н', 'Курсив', style.italic, (v) => void saveThought({ font_italic: v }));
+  fontToggle('П', 'Подчёркнутый', style.underline, (v) => void saveThought({ font_underline: v }));
+  fontToggle('З', 'Зачёркнутый', style.strike, (v) => void saveThought({ font_strike: v }));
 
   row2.append(fgColor, bgColor, toggles);
   box.append(editorField('Цвет и стиль', row2));

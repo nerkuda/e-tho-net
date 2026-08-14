@@ -12,14 +12,14 @@
 
 import { scheduleRefresh, requireNetworkId } from '../app.js';
 import { setAddToSelectionHook } from '../canvas/context-menu.js';
-import { setSelectionClickHooks } from '../canvas/canvas.js';
+import { applyThoughtIcon, setSelectionClickHooks } from '../canvas/canvas.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
-import type { ExportFormat } from '@etn/shared';
+import type { ExportFormat, ThoughtRef } from '@etn/shared';
 
 /** Panel chrome the selection module renders into. */
 let host: HTMLElement | null = null;
@@ -77,17 +77,24 @@ async function renderList(ids: string[]): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   listHost.replaceChildren(el('span', 'muted', 'Загрузка…'));
-  let refs = new Map<string, { title: string; icon: string | null }>();
+  let refs = new Map<string, ThoughtRef>();
   try {
     const resolved = await etn.thoughts.resolve(networkId, ids.slice(0, 100));
-    refs = new Map(resolved.map((r) => [r.id, { title: r.title, icon: r.icon }]));
+    refs = new Map(resolved.map((r) => [r.id, r]));
   } catch {
     // ids shown as-is
   }
   listHost.replaceChildren();
   for (const id of ids) {
     const item = div('selection-item');
-    item.append(span(refs.get(id)?.icon ?? '💭'));
+    const iconBox = span('');
+    const ref = refs.get(id);
+    if (ref !== undefined) {
+      applyThoughtIcon(iconBox, ref);
+    } else {
+      iconBox.textContent = '💭';
+    }
+    item.append(iconBox);
     const title = el('span', 'sel-title', refs.get(id)?.title ?? id);
     item.append(title);
     item.append(

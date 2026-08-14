@@ -365,10 +365,10 @@ async function copyThought(dragged: DraggedCloud, dest: CopyDest): Promise<void>
       active: orig.active,
       fg_color: orig.fg_color,
       bg_color: orig.bg_color,
-      font_bold: orig.font_bold,
-      font_italic: orig.font_italic,
-      font_underline: orig.font_underline,
-      font_strike: orig.font_strike,
+      font_bold: orig.font_bold ?? undefined,
+      font_italic: orig.font_italic ?? undefined,
+      font_underline: orig.font_underline ?? undefined,
+      font_strike: orig.font_strike ?? undefined,
       create_link: createLink,
     }).catch(async (err: unknown) => {
       // The link may already exist (409 DUPLICATE) — fall back to a bare copy.
@@ -382,10 +382,10 @@ async function copyThought(dragged: DraggedCloud, dest: CopyDest): Promise<void>
           active: orig.active,
           fg_color: orig.fg_color,
           bg_color: orig.bg_color,
-          font_bold: orig.font_bold,
-          font_italic: orig.font_italic,
-          font_underline: orig.font_underline,
-          font_strike: orig.font_strike,
+          font_bold: orig.font_bold ?? undefined,
+          font_italic: orig.font_italic ?? undefined,
+          font_underline: orig.font_underline ?? undefined,
+          font_strike: orig.font_strike ?? undefined,
         });
       }
       throw err;

@@ -28,6 +28,14 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 
+import {
+  FONT_BOLD_BIT,
+  FONT_ITALIC_BIT,
+  FONT_STRIKE_BIT,
+  FONT_UNDERLINE_BIT,
+  readFont,
+} from './font-style.js';
+
 // ---------------------------------------------------------------------------
 // Row shapes & conversion
 // ---------------------------------------------------------------------------
@@ -88,12 +96,14 @@ interface IncidentLinkRow {
   other_font_italic: number;
   other_font_underline: number;
   other_font_strike: number;
+  other_font_manual: number;
   /** 'parent' — opponent is the link source; 'child' — opponent is the target. */
   side: 'parent' | 'child';
 }
 
 /** Build a {@link ThoughtRef} for the opponent thought of an incident link. */
 function incidentRowToRef(row: IncidentLinkRow): ThoughtRef {
+  const fm = row.other_font_manual;
   return {
     id: row.other_id,
     title: row.other_title,
@@ -103,10 +113,10 @@ function incidentRowToRef(row: IncidentLinkRow): ThoughtRef {
     active: row.other_active === 1,
     fg_color: row.other_fg_color,
     bg_color: row.other_bg_color,
-    font_bold: row.other_font_bold === 1,
-    font_italic: row.other_font_italic === 1,
-    font_underline: row.other_font_underline === 1,
-    font_strike: row.other_font_strike === 1,
+    font_bold: readFont(fm, FONT_BOLD_BIT, row.other_font_bold),
+    font_italic: readFont(fm, FONT_ITALIC_BIT, row.other_font_italic),
+    font_underline: readFont(fm, FONT_UNDERLINE_BIT, row.other_font_underline),
+    font_strike: readFont(fm, FONT_STRIKE_BIT, row.other_font_strike),
   };
 }
 
@@ -449,6 +459,7 @@ export function listLinksByThought(
               t.fg_color AS other_fg_color, t.bg_color AS other_bg_color,
               t.font_bold AS other_font_bold, t.font_italic AS other_font_italic,
               t.font_underline AS other_font_underline, t.font_strike AS other_font_strike,
+              t.font_manual AS other_font_manual,
               CASE WHEN l.target_id = ? THEN 'parent' ELSE 'child' END AS side
        FROM links l
        LEFT JOIN link_types lt ON lt.id = l.type_id

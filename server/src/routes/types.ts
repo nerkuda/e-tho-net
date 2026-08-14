@@ -31,11 +31,13 @@ import {
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import {
+  assertImageIcon,
   fieldBoolean,
   fieldNullableString,
   fieldString,
   fieldStringArray,
   openRouteNetworkDb,
+  parseIconKind,
   parseIfMatch,
   queryBoolean,
   requestBody,
@@ -85,9 +87,15 @@ function parseThoughtTypeBody(body: Record<string, unknown>, requestId: string):
       requestId,
     );
   }
+  const icon = fieldNullableString(body, 'icon', requestId);
+  const iconKind = parseIconKind(fieldNullableString(body, 'icon_kind', requestId), requestId);
+  if (iconKind === 'image') {
+    assertImageIcon(icon, requestId);
+  }
   return {
     name,
-    icon: fieldNullableString(body, 'icon', requestId),
+    icon,
+    icon_kind: iconKind,
     fg_color: fieldNullableString(body, 'fg_color', requestId),
     bg_color: fieldNullableString(body, 'bg_color', requestId),
     font_bold: fieldBoolean(body, 'font_bold', requestId),
@@ -109,6 +117,12 @@ function parseThoughtTypeUpdateBody(
   }
   if (body.icon !== undefined) {
     changes.icon = fieldNullableString(body, 'icon', requestId);
+  }
+  if (body.icon_kind !== undefined) {
+    changes.icon_kind = parseIconKind(fieldNullableString(body, 'icon_kind', requestId), requestId);
+  }
+  if (changes.icon_kind === 'image') {
+    assertImageIcon(changes.icon, requestId);
   }
   if (body.fg_color !== undefined) {
     changes.fg_color = fieldNullableString(body, 'fg_color', requestId);

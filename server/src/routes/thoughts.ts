@@ -24,14 +24,12 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import {
   EtnError,
   FOCUS_DIRS,
-  ICON_KINDS,
   PREF_KEY,
   SORT_KINDS,
   SORT_ORDERS,
   type FocusDir,
   type FocusOrderInput,
   type FocusPreferencesInput,
-  type IconKind,
   type SortKind,
   type SortOrder,
   type ThoughtBatchFailure,
@@ -42,12 +40,15 @@ import {
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import {
+  assertImageIcon,
   fieldBoolean,
+  fieldNullableBoolean,
   fieldNullableString,
   fieldString,
   fieldStringArray,
   fieldStringOrArray,
   openRouteNetworkDb,
+  parseIconKind,
   parseIfMatch,
   queryBoolean,
   queryInt,
@@ -108,22 +109,6 @@ function toSynonymArray(value: string[] | string | undefined): string[] | undefi
   return Array.isArray(value) ? value : value.split(',');
 }
 
-/** Validate the optional `icon_kind` field against the shared enum. */
-function parseIconKind(value: string | null | undefined, requestId: string): IconKind | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  if (!(ICON_KINDS as readonly string[]).includes(value)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'Недопустимый icon_kind.',
-      { field: 'icon_kind', allowed: ICON_KINDS },
-      requestId,
-    );
-  }
-  return value as IconKind;
-}
-
 /** Parse and validate the body of `POST /thoughts`. */
 function parseThoughtCreateBody(
   body: Record<string, unknown>,
@@ -180,12 +165,18 @@ function parseThoughtCreateBody(
     };
   }
 
+  const icon = fieldNullableString(body, 'icon', requestId);
+  const iconKind = parseIconKind(fieldNullableString(body, 'icon_kind', requestId), requestId);
+  if (iconKind === 'image') {
+    assertImageIcon(icon, requestId);
+  }
+
   return {
     title,
     synonyms: toSynonymArray(fieldStringOrArray(body, 'synonyms', requestId)),
     type_id: fieldNullableString(body, 'type_id', requestId),
-    icon: fieldNullableString(body, 'icon', requestId),
-    icon_kind: parseIconKind(fieldNullableString(body, 'icon_kind', requestId), requestId),
+    icon,
+    icon_kind: iconKind,
     active: fieldBoolean(body, 'active', requestId),
     fg_color: fieldNullableString(body, 'fg_color', requestId),
     bg_color: fieldNullableString(body, 'bg_color', requestId),
@@ -218,6 +209,10 @@ function parseThoughtUpdateBody(
   if (body.icon_kind !== undefined) {
     changes.icon_kind = parseIconKind(fieldNullableString(body, 'icon_kind', requestId), requestId);
   }
+  // An image icon must be a valid data/http(s) URL within the size limit.
+  if (changes.icon_kind === 'image') {
+    assertImageIcon(changes.icon, requestId);
+  }
   if (body.active !== undefined) {
     changes.active = fieldBoolean(body, 'active', requestId);
   }
@@ -227,17 +222,18 @@ function parseThoughtUpdateBody(
   if (body.bg_color !== undefined) {
     changes.bg_color = fieldNullableString(body, 'bg_color', requestId);
   }
+  // font_* accept null ("inherit from type"); the service flips the manual bit.
   if (body.font_bold !== undefined) {
-    changes.font_bold = fieldBoolean(body, 'font_bold', requestId);
+    changes.font_bold = fieldNullableBoolean(body, 'font_bold', requestId);
   }
   if (body.font_italic !== undefined) {
-    changes.font_italic = fieldBoolean(body, 'font_italic', requestId);
+    changes.font_italic = fieldNullableBoolean(body, 'font_italic', requestId);
   }
   if (body.font_underline !== undefined) {
-    changes.font_underline = fieldBoolean(body, 'font_underline', requestId);
+    changes.font_underline = fieldNullableBoolean(body, 'font_underline', requestId);
   }
   if (body.font_strike !== undefined) {
-    changes.font_strike = fieldBoolean(body, 'font_strike', requestId);
+    changes.font_strike = fieldNullableBoolean(body, 'font_strike', requestId);
   }
   return changes;
 }

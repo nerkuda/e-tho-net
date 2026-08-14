@@ -7,10 +7,11 @@
  * in the editor (focus stays on the thought).
  */
 
-import type { ThoughtLinksGrouped } from '@etn/shared';
+import type { ThoughtLinksGrouped, ThoughtRef } from '@etn/shared';
 
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { applyThoughtIcon } from '../canvas/canvas.js';
 import { requireNetworkId } from '../app.js';
 import { openLinkInEditor, registerGroupBuilder, type EditorContext } from './editor.js';
 
@@ -76,12 +77,13 @@ function buildLinksBody(ctx: EditorContext): HTMLElement {
   /** Builds one clickable link row (opens the link in the editor). */
   function linkRow(
     link: { id: string; type_id: string | null; active: boolean },
-    other: { title: string; active: boolean; icon: string | null },
+    other: ThoughtRef,
     outgoing: boolean,
   ): HTMLElement {
     const row = div('link-group-item');
     const arrow = span(outgoing ? '→' : '←', 'muted');
-    const icon = span(other.icon ?? '💭');
+    const icon = span('');
+    applyThoughtIcon(icon, other);
     const title = el('span', undefined, other.title);
     title.style.flex = '1';
     title.style.overflow = 'hidden';

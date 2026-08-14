@@ -13,6 +13,8 @@ import type { FastifyRequest } from 'fastify';
 
 import {
   EtnError,
+  ICON_KINDS,
+  type IconKind,
   type RealtimeAudience,
   type RealtimeEventMap,
   type RealtimeEventType,
@@ -143,6 +145,82 @@ export function fieldBoolean(
     );
   }
   return value;
+}
+
+/**
+ * Read an optional boolean-or-null field; wrong type → 422. Like
+ * {@link fieldBoolean} but also accepts `null` (used for "inherit from type"
+ * style fields, 02-data-model.md §3.1.1).
+ */
+export function fieldNullableBoolean(
+  obj: Record<string, unknown>,
+  key: string,
+  requestId?: string,
+): boolean | null | undefined {
+  const value = obj[key];
+  if (value === undefined || value === null) {
+    return value as boolean | null | undefined;
+  }
+  if (typeof value !== 'boolean') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `${key} должен быть логическим значением или null.`,
+      { field: key },
+      requestId,
+    );
+  }
+  return value;
+}
+
+/** Validate the optional `icon_kind` field against the shared enum. */
+export function parseIconKind(
+  value: string | null | undefined,
+  requestId?: string,
+): IconKind | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!(ICON_KINDS as readonly string[]).includes(value)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Недопустимый icon_kind.',
+      { field: 'icon_kind', allowed: ICON_KINDS },
+      requestId,
+    );
+  }
+  return value as IconKind;
+}
+
+/** Maximum inline image-icon size (decoded), 256 KiB (08-ui-spec.md §6.8). */
+export const ICON_MAX_BYTES = 256 * 1024;
+
+/**
+ * Validate an `image`-kind icon value: an `http(s)://` URL or a `data:image/…`
+ * URL within {@link ICON_MAX_BYTES}. Only meaningful when `icon_kind = 'image'`.
+ */
+export function assertImageIcon(icon: string | null | undefined, requestId?: string): void {
+  if (icon === undefined || icon === null || icon === '') return;
+  if (/^https?:\/\//i.test(icon)) return;
+  const match = /^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/i.exec(icon);
+  if (match === null) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'icon должен быть data:image URL или http(s) URL.',
+      { field: 'icon' },
+      requestId,
+    );
+  }
+  const b64 = match[1] ?? '';
+  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+  const bytes = Math.floor((b64.length * 3) / 4) - padding;
+  if (bytes > ICON_MAX_BYTES) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Файл иконки слишком большой (${bytes} байт; лимит ${ICON_MAX_BYTES}).`,
+      { field: 'icon', limit: ICON_MAX_BYTES },
+      requestId,
+    );
+  }
 }
 
 /** Read an optional array of strings; wrong shape → 422. */

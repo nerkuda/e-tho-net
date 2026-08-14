@@ -20,7 +20,7 @@ import { button, div, clear, el, setTooltip } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
-import { resolveCloudStyle } from '../canvas/canvas.js';
+import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 
 /** Max title length inside a history mini-cloud. */
 const TITLE_LIMIT = 40;
@@ -145,7 +145,12 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
     if (style.bg !== null) chip.style.background = style.bg;
     chip.classList.toggle('font-italic', style.italic);
   }
-  const icon = el('span', 'hc-icon', ref?.icon ?? '💭');
+  const icon = el('span', 'hc-icon');
+  if (ref !== undefined) {
+    applyThoughtIcon(icon, ref);
+  } else {
+    icon.textContent = '💭';
+  }
   const title = el('span', 'hc-title', (ref?.title ?? id).slice(0, TITLE_LIMIT));
   setTooltip(chip, ref?.title ?? id);
   chip.append(icon, title);

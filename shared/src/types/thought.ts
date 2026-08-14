@@ -24,10 +24,14 @@ export interface Thought {
   is_root: boolean;
   fg_color: string | null;
   bg_color: string | null;
-  font_bold: boolean;
-  font_italic: boolean;
-  font_underline: boolean;
-  font_strike: boolean;
+  /**
+   * Font-style flags. `null` means "inherit from the thought's type" (see
+   * 02-data-model.md §3.1.1); `true`/`false` is an explicit manual value.
+   */
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
   /** Synonyms (from `thought_synonyms`), included on single-thought reads. */
   synonyms: string[];
   version: number;
@@ -79,10 +83,14 @@ export interface ThoughtUpdateInput {
   active?: boolean;
   fg_color?: string | null;
   bg_color?: string | null;
-  font_bold?: boolean;
-  font_italic?: boolean;
-  font_underline?: boolean;
-  font_strike?: boolean;
+  /**
+   * `null` clears the manual setting (the field is inherited from the type);
+   * `true`/`false` sets an explicit manual value (02-data-model.md §3.1.1).
+   */
+  font_bold?: boolean | null;
+  font_italic?: boolean | null;
+  font_underline?: boolean | null;
+  font_strike?: boolean | null;
 }
 
 /** Operators accepted by `POST /thoughts/batch` (03-server-api.md §6.6). */
@@ -137,10 +145,11 @@ export interface ThoughtRef {
   active: boolean;
   fg_color: string | null;
   bg_color: string | null;
-  font_bold: boolean;
-  font_italic: boolean;
-  font_underline: boolean;
-  font_strike: boolean;
+  /** Manual (`true`/`false`) or `null` = inherit from the type (§3.1.1). */
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
 }
 
 /** Per-user view mark, drives the "viewed" sort (02-data-model.md §3.10.2). */

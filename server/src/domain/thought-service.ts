@@ -39,6 +39,13 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
+import {
+  FONT_BOLD_BIT,
+  FONT_ITALIC_BIT,
+  FONT_STRIKE_BIT,
+  FONT_UNDERLINE_BIT,
+  readFont,
+} from './font-style.js';
 
 // ---------------------------------------------------------------------------
 // Row shapes & conversion
@@ -61,6 +68,8 @@ interface ThoughtRow {
   font_italic: number;
   font_underline: number;
   font_strike: number;
+  /** Bitmap of manual font_* fields (02-data-model.md §3.1.1). */
+  font_manual: number;
   version: number;
   created_at: string;
   created_by: string;
@@ -82,6 +91,7 @@ interface NeighborRow {
 
 /** Convert a raw row + synonyms into a {@link Thought}. */
 function rowToThought(row: ThoughtRow, synonyms: string[]): Thought {
+  const fm = row.font_manual;
   return {
     id: row.id,
     title: row.title,
@@ -93,10 +103,10 @@ function rowToThought(row: ThoughtRow, synonyms: string[]): Thought {
     is_root: row.is_root === 1,
     fg_color: row.fg_color,
     bg_color: row.bg_color,
-    font_bold: row.font_bold === 1,
-    font_italic: row.font_italic === 1,
-    font_underline: row.font_underline === 1,
-    font_strike: row.font_strike === 1,
+    font_bold: readFont(fm, FONT_BOLD_BIT, row.font_bold),
+    font_italic: readFont(fm, FONT_ITALIC_BIT, row.font_italic),
+    font_underline: readFont(fm, FONT_UNDERLINE_BIT, row.font_underline),
+    font_strike: readFont(fm, FONT_STRIKE_BIT, row.font_strike),
     synonyms,
     version: row.version,
     created_at: row.created_at,
@@ -120,7 +130,9 @@ function rowToThoughtRef(row: {
   font_italic: number;
   font_underline: number;
   font_strike: number;
+  font_manual: number;
 }): ThoughtRef {
+  const fm = row.font_manual;
   return {
     id: row.id,
     title: row.title,
@@ -130,10 +142,10 @@ function rowToThoughtRef(row: {
     active: row.active === 1,
     fg_color: row.fg_color,
     bg_color: row.bg_color,
-    font_bold: row.font_bold === 1,
-    font_italic: row.font_italic === 1,
-    font_underline: row.font_underline === 1,
-    font_strike: row.font_strike === 1,
+    font_bold: readFont(fm, FONT_BOLD_BIT, row.font_bold),
+    font_italic: readFont(fm, FONT_ITALIC_BIT, row.font_italic),
+    font_underline: readFont(fm, FONT_UNDERLINE_BIT, row.font_underline),
+    font_strike: readFont(fm, FONT_STRIKE_BIT, row.font_strike),
   };
 }
 
@@ -286,7 +298,7 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
   const rows = ndb
     .prepare(
       `SELECT id, title, type_id, icon, icon_kind, active, fg_color, bg_color,
-              font_bold, font_italic, font_underline, font_strike
+              font_bold, font_italic, font_underline, font_strike, font_manual
        FROM thoughts WHERE id IN (${placeholders})`,
     )
     .all(...capped) as Array<{
@@ -302,6 +314,7 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
     font_italic: number;
     font_underline: number;
     font_strike: number;
+    font_manual: number;
   }>;
   return rows.map(rowToThoughtRef);
 }
@@ -386,13 +399,19 @@ export function createThought(
   const iconKind: IconKind = input.icon_kind ?? 'emoji';
 
   return ndb.transaction(() => {
+    // Bitmap of manually-provided font_* fields (those absent stay inherited).
+    const fontManual =
+      (input.font_bold !== undefined ? FONT_BOLD_BIT : 0) |
+      (input.font_italic !== undefined ? FONT_ITALIC_BIT : 0) |
+      (input.font_underline !== undefined ? FONT_UNDERLINE_BIT : 0) |
+      (input.font_strike !== undefined ? FONT_STRIKE_BIT : 0);
     ndb
       .prepare(
         `INSERT INTO thoughts (id, title, title_norm, type_id, icon, icon_kind, active,
                              is_protected, is_root, fg_color, bg_color,
-                             font_bold, font_italic, font_underline, font_strike,
+                             font_bold, font_italic, font_underline, font_strike, font_manual,
                              version, created_at, created_by, updated_at, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -408,6 +427,7 @@ export function createThought(
         input.font_italic ? 1 : 0,
         input.font_underline ? 1 : 0,
         input.font_strike ? 1 : 0,
+        fontManual,
         now,
         actorUserId,
         now,
@@ -492,21 +512,35 @@ export function updateThought(
       sets.push('bg_color = ?');
       args.push(changes.bg_color);
     }
-    if (changes.font_bold !== undefined) {
-      sets.push('font_bold = ?');
-      args.push(changes.font_bold ? 1 : 0);
-    }
-    if (changes.font_italic !== undefined) {
-      sets.push('font_italic = ?');
-      args.push(changes.font_italic ? 1 : 0);
-    }
-    if (changes.font_underline !== undefined) {
-      sets.push('font_underline = ?');
-      args.push(changes.font_underline ? 1 : 0);
-    }
-    if (changes.font_strike !== undefined) {
-      sets.push('font_strike = ?');
-      args.push(changes.font_strike ? 1 : 0);
+    // Font-style changes use the manual bitmap: null clears the bit (inherit
+    // from type), true/false sets the bit and the stored value (02-data-model.md
+    // §3.1.1). Reconstruct the current bitmap from the DTO (font_* !== null ⇒
+    // the bit was on), then apply each incoming change.
+    let fontManual =
+      (current.font_bold !== null ? FONT_BOLD_BIT : 0) |
+      (current.font_italic !== null ? FONT_ITALIC_BIT : 0) |
+      (current.font_underline !== null ? FONT_UNDERLINE_BIT : 0) |
+      (current.font_strike !== null ? FONT_STRIKE_BIT : 0);
+    let anyFont = false;
+    const applyFont = (bit: number, change: boolean | null | undefined, col: string): void => {
+      if (change === undefined) return;
+      anyFont = true;
+      if (change === null) {
+        // Clear the bit; leave the stored value untouched (ignored while off).
+        fontManual &= ~bit;
+        return;
+      }
+      fontManual |= bit;
+      sets.push(`${col} = ?`);
+      args.push(change ? 1 : 0);
+    };
+    applyFont(FONT_BOLD_BIT, changes.font_bold, 'font_bold');
+    applyFont(FONT_ITALIC_BIT, changes.font_italic, 'font_italic');
+    applyFont(FONT_UNDERLINE_BIT, changes.font_underline, 'font_underline');
+    applyFont(FONT_STRIKE_BIT, changes.font_strike, 'font_strike');
+    if (anyFont) {
+      sets.push('font_manual = ?');
+      args.push(fontManual);
     }
 
     const now = new Date().toISOString();

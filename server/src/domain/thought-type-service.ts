@@ -7,16 +7,13 @@
  * type are managed through {@link './property-service.js'} (`owner_type =
  * 'thought_type'`); this module re-exports nothing for them — callers use the
  * property service directly with the type id.
- *
- * Note: `ThoughtTypeInput.icon_kind` from `@etn/shared` is ignored on write
- * because `thought_types` has no `icon_kind` column (docs/02-data-model.md §3.3
- * lists only `icon`). Flagged for a follow-up shared/docs alignment.
  */
 
 import { randomUUID } from 'node:crypto';
 
 import {
   EtnError,
+  type IconKind,
   type ThoughtType,
   type ThoughtTypeInput,
   type ThoughtTypeUpdateInput,
@@ -29,6 +26,7 @@ interface ThoughtTypeRow {
   id: string;
   name: string;
   icon: string | null;
+  icon_kind: string;
   fg_color: string | null;
   bg_color: string | null;
   font_bold: number | null;
@@ -48,6 +46,7 @@ function rowToThoughtType(row: ThoughtTypeRow): ThoughtType {
     id: row.id,
     name: row.name,
     icon: row.icon,
+    icon_kind: row.icon_kind as IconKind,
     fg_color: row.fg_color,
     bg_color: row.bg_color,
     font_bold: row.font_bold === 1,
@@ -116,15 +115,16 @@ export function createThoughtType(
     }
     ndb
       .prepare(
-        `INSERT INTO thought_types (id, name, icon, fg_color, bg_color,
+        `INSERT INTO thought_types (id, name, icon, icon_kind, fg_color, bg_color,
                                      font_bold, font_italic, font_underline, font_strike,
                                      description, version, created_at, updated_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
       )
       .run(
         id,
         name,
         input.icon ?? null,
+        input.icon_kind ?? 'emoji',
         input.fg_color ?? null,
         input.bg_color ?? null,
         input.font_bold ? 1 : null,
@@ -187,6 +187,7 @@ export function updateThoughtType(
     };
     optStr(changes.name, 'name');
     optStr(changes.icon, 'icon');
+    optStr(changes.icon_kind, 'icon_kind');
     optStr(changes.fg_color, 'fg_color');
     optStr(changes.bg_color, 'bg_color');
     optStr(changes.description, 'description');

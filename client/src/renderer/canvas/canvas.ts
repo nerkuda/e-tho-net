@@ -18,7 +18,7 @@
  *   comment/attachment events invalidate the cache.
  */
 
-import type { FocusNeighbor, FocusResponse, ThoughtRef } from '@etn/shared';
+import type { FocusNeighbor, FocusResponse, IconKind, ThoughtRef } from '@etn/shared';
 
 import { setFocus } from '../app.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
@@ -470,10 +470,12 @@ export function resolveCloudStyle(
   return {
     fg: thought.fg_color ?? type?.fg_color ?? null,
     bg: thought.bg_color ?? type?.bg_color ?? null,
-    bold: thought.font_bold || (type?.font_bold ?? false),
-    italic: thought.font_italic || (type?.font_italic ?? false),
-    underline: thought.font_underline || (type?.font_underline ?? false),
-    strike: thought.font_strike || (type?.font_strike ?? false),
+    // font_* use null-coalesce (NOT OR): a manual `false` must override a `true`
+    // type default, which `||` would wrongly collapse (02-data-model.md §3.1.1).
+    bold: thought.font_bold ?? (type?.font_bold ?? false),
+    italic: thought.font_italic ?? (type?.font_italic ?? false),
+    underline: thought.font_underline ?? (type?.font_underline ?? false),
+    strike: thought.font_strike ?? (type?.font_strike ?? false),
   };
 }
 
@@ -485,6 +487,49 @@ function applyCloudStyle(cloud: HTMLElement, style: CloudStyle): void {
   cloud.classList.toggle('font-italic', style.italic);
   cloud.classList.toggle('font-underline', style.underline);
   cloud.classList.toggle('font-strike', style.strike);
+}
+
+/**
+ * Resolves a thought's icon: its own icon wins, else the thought-type's default
+ * icon, else none (the caller falls back to 💬). Returns the icon value together
+ * with its kind (02-data-model.md §3.1.1).
+ */
+export function resolveThoughtIcon(thought: {
+  icon: string | null;
+  icon_kind: IconKind;
+  type_id: string | null;
+}): { icon: string | null; kind: IconKind } {
+  if (thought.icon !== null) {
+    return { icon: thought.icon, kind: thought.icon_kind };
+  }
+  const type =
+    thought.type_id !== null
+      ? store.state.thoughtTypes.find((t) => t.id === thought.type_id)
+      : undefined;
+  if (type?.icon !== null && type?.icon !== undefined) {
+    return { icon: type.icon, kind: type.icon_kind };
+  }
+  return { icon: null, kind: 'emoji' };
+}
+
+/**
+ * Renders a thought's resolved icon into an element: an `<img>` for an
+ * `image`-kind icon, otherwise the glyph (own/type default, else 💬).
+ */
+export function applyThoughtIcon(
+  iconBox: HTMLElement,
+  thought: { icon: string | null; icon_kind: IconKind; type_id: string | null },
+): void {
+  const ic = resolveThoughtIcon(thought);
+  iconBox.replaceChildren();
+  if (ic.kind === 'image' && ic.icon !== null) {
+    const img = el('img');
+    img.src = ic.icon;
+    img.alt = '';
+    iconBox.append(img);
+  } else {
+    iconBox.textContent = ic.icon ?? '💭';
+  }
 }
 
 /** Builds one zone cloud element. */
@@ -526,14 +571,7 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
 
   const body = div('cloud-body');
   const iconBox = div('cloud-icon');
-  if (ref?.icon_kind === 'image' && ref.icon !== null) {
-    const img = el('img');
-    img.src = ref.icon;
-    img.alt = '';
-    iconBox.append(img);
-  } else {
-    iconBox.textContent = ref?.icon ?? '💭';
-  }
+  applyThoughtIcon(iconBox, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
   // Prefer the live neighbour title (fresh from the focus response) over the
   // cached ref, which can lag behind after a rename until re-resolved.
   const cloudTitle = entry.links[0]?.title ?? ref?.title ?? '—';

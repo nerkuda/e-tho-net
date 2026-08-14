@@ -29,6 +29,7 @@ const EXPECTED_FILES = [
   '010_user_state.sql',
   '011_fts.sql',
   '012_embeddings.sql',
+  '013_thought_style_inheritance.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -113,6 +114,19 @@ describe(
         const res2 = runMigrations(db, networkMigrationsDir());
         assert.equal(res2.applied.length, 0);
         assert.equal(res2.skipped.length, EXPECTED_FILES.length);
+
+        // 013 style-inheritance columns: thoughts.font_manual bitmap and
+        // thought_types.icon_kind (02-data-model.md §3.1.1, §3.3).
+        const thoughtCols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('thoughts') as { name: string }[]
+        ).map((r) => r.name);
+        assert.ok(thoughtCols.includes('font_manual'), 'missing thoughts.font_manual');
+        const typeCols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('thought_types') as {
+            name: string;
+          }[]
+        ).map((r) => r.name);
+        assert.ok(typeCols.includes('icon_kind'), 'missing thought_types.icon_kind');
       } finally {
         db.close();
       }
