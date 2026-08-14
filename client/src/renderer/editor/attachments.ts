@@ -75,11 +75,18 @@ function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
 
   /** Handles a drop of files and/or URLs. */
   async function handleDrop(event: DragEvent): Promise<void> {
-    const urls = (event.dataTransfer?.getData('text/uri-list') ?? '')
+    const dt = event.dataTransfer;
+    // uri-list lines may carry "#" comments; keep only real entries.
+    const urls = (dt?.getData('text/uri-list') ?? '')
       .split(/[\r\n]+/)
       .map((s) => s.trim())
-      .filter((s) => s !== '');
-    const files = event.dataTransfer?.files;
+      .filter((s) => s !== '' && !s.startsWith('#'));
+    // Fallback: some sources drop only text/plain (e.g. a bare URL string).
+    if (urls.length === 0) {
+      const plain = dt?.getData('text/plain')?.trim() ?? '';
+      if (plain !== '' && isHttpUrl(plain)) urls.push(plain);
+    }
+    const files = dt?.files;
     let added = 0;
     for (const url of urls) {
       if (!isHttpUrl(url)) continue;
@@ -90,7 +97,7 @@ function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
         notice('Не удалось добавить вложение.', 'error');
       }
     }
-    if (files !== undefined) {
+    if (files !== undefined && files.length > 0) {
       for (const file of Array.from(files)) {
         // Electron exposes the OS path on dropped File objects (Electron ≤31).
         const path = (file as File & { path?: string }).path ?? file.name;
@@ -111,7 +118,14 @@ function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
     if (added > 0) {
       invalidateIndicators(ctx.ownerId);
       await reload();
+      return;
     }
+    // Nothing was recognised — say so instead of failing silently (otherwise a
+    // drop of, say, plain text looks like the zone does not react at all).
+    notice(
+      'Перетащены нераспознанные данные. Поддерживаются файлы и http(s)-ссылки.',
+      'error',
+    );
   }
 
   /** Renders the attachment list. */
