@@ -36,6 +36,9 @@ var/
 *.swo
 *~
 
+# Agent workspace (ZCode)
+.zcode/
+
 # OS
 .DS_Store
 Thumbs.db
