@@ -1467,6 +1467,20 @@ body.dragging .ellipse {
   color: var(--accent);
 }
 
+/* Ctrl-hover image magnifier (08-ui-spec.md §13, L2). */
+.image-zoom-popup {
+  position: fixed;
+  z-index: 2000;
+  max-width: 70vw;
+  max-height: 70vh;
+  object-fit: contain;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+
 /* Built-in attachment viewer (images / text, 08-ui-spec §6.5). */
 .attachment-viewer {
   max-height: 60vh;

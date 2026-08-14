@@ -9,6 +9,7 @@
 import { boot, initKeyboard } from './app.js';
 import { initDrafts } from './drafts.js';
 import { div, el } from './lib/dom.js';
+import { initImageZoom } from './lib/image-zoom.js';
 import { initScreens } from './screens/screens.js';
 
 const appRoot = document.querySelector('#app');
@@ -19,6 +20,7 @@ if (!(appRoot instanceof HTMLElement)) {
 initScreens(appRoot);
 initKeyboard();
 initDrafts();
+initImageZoom();
 
 void boot().catch((err: unknown) => {
   // Catastrophic boot failure (local DB unavailable) — render a static message.

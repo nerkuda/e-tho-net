@@ -41,6 +41,7 @@ import {
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
 
 import { searchInternals } from '../src/renderer/search/search.js';
+import { zoomable } from '../src/renderer/lib/image-zoom.js';
 import { patchFocusEdge, store } from '../src/renderer/state.js';
 
 const { scopesFor, mergeResponses, DEFAULT_OPTIONS, isSearchableQuery, nextNavIndex } =
@@ -370,5 +371,17 @@ describe('patchFocusEdge (instant link repaint; no realtime echo to actor)', () 
     patchFocusEdge(mkLink({ id: 'l9', source_id: 'x', target_id: 'y' }));
     assert.deepEqual(store.state.focus?.edges ?? [], []);
     store.update({ focus: null });
+  });
+});
+
+describe('zoomable (Ctrl-hover magnifier predicate)', () => {
+  it('zooms only loaded images displayed smaller than natural', () => {
+    assert.equal(zoomable({ w: 512, h: 512 }, { w: 44, h: 44 }), true);
+    assert.equal(zoomable({ w: 512, h: 512 }, { w: 512, h: 256 }), true);
+    // Already at natural size — nothing to magnify.
+    assert.equal(zoomable({ w: 32, h: 32 }, { w: 44, h: 44 }), false);
+    assert.equal(zoomable({ w: 512, h: 512 }, { w: 512, h: 512 }), false);
+    // Not loaded yet (natural 0).
+    assert.equal(zoomable({ w: 0, h: 0 }, { w: 44, h: 44 }), false);
   });
 });
