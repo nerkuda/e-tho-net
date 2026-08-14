@@ -266,7 +266,7 @@ TTL: 10 минут. Очистка по джобе.
 | `owner_id` | TEXT NOT NULL | FK на thought_types.id или link_types.id (без SQL-FK, полиморфно) |
 | `key` | TEXT NOT NULL | Имя свойства |
 | `value_type` | TEXT NOT NULL | `'text'` \| `'date'` \| `'number'` \| `'bool'` \| `'thought_ref'` |
-| `config` | TEXT | JSON: например, для `thought_ref` — ограничение на тип мысли-цели |
+| `config` | TEXT | JSON: например, для `thought_ref` — ограничение на тип мысли-цели (`allowed_type_id`); `default_value` — значение по умолчанию свойства (L6, не задаётся для `thought_ref`) |
 | `required` | INTEGER NOT NULL DEFAULT 0 | |
 | `position` | INTEGER NOT NULL DEFAULT 0 | Порядок отображения |
 | UNIQUE | `(owner_type, owner_id, key)` | |

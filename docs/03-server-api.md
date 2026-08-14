@@ -315,13 +315,25 @@ POST   /api/v1/networks/{nid}/thought-types
 PATCH  /api/v1/networks/{nid}/thought-types/{id}     If-Match
 DELETE /api/v1/networks/{nid}/thought-types/{id}     If-Match
        # 422 если есть мысли с этим типом и не передан ?force=1
-       # при force=1 → type_id мыслям обнуляется
+       # при force=1 → type_id мыслям обнуляется, определения свойств типа
+       # и все их значения удаляются (каскад, L6)
 
-GET/POST/PATCH/DELETE /api/v1/networks/{nid}/link-types  (аналогично)
+GET/POST/PATCH/DELETE /api/v1/networks/{nid}/link-types  (аналогично:
+       # при force=1 → связи остаются без типа, свойства и значения удаляются)
 ```
 
 Свойства типов: `/thought-types/{id}/properties` и `/link-types/{id}/properties`
-(CRUD `type_properties`).
+(CRUD `type_properties`):
+
+```
+GET    …/types/{id}/properties                       — список определений
+POST   …/types/{id}/properties                       { key, value_type, config?, required?, position? }
+PATCH  …/types/{id}/properties/{propertyId}          { value_type?, config?, required?, position? }
+DELETE …/types/{id}/properties/{propertyId}          # значения свойства удаляются каскадом
+PUT    …/types/{id}/properties/reorder               { ordered_ids: [...] } → position = index
+# config — JSON; config.default_value хранит значение по умолчанию (L6).
+# key (имя) не меняется после создания — значения адресуются по нему у владельцев.
+```
 
 ## 9. Свойства
 
