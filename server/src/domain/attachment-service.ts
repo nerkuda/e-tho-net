@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -44,6 +44,7 @@ interface AttachmentRow {
   title: string | null;
   description: string | null;
   position: number;
+  icon: string | null;
   created_at: string;
   created_by: string;
 }
@@ -60,6 +61,7 @@ function rowToAttachment(row: AttachmentRow): Attachment {
     file_size: row.file_size,
     mime_type: row.mime_type,
     title: row.title,
+    icon: row.icon,
     description: row.description,
     position: row.position,
     created_at: row.created_at,
@@ -216,7 +218,7 @@ export function createAttachment(
 /** Maximum decoded size of an uploaded attachment file, 10 MiB. */
 export const ATTACHMENT_FILE_MAX_BYTES = 10 * 1024 * 1024;
 
-/** Extension by image MIME type (for naming stored upload files). */
+/** Extension by MIME type (for naming stored upload files). */
 const UPLOAD_MIME_EXT: Record<string, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -224,6 +226,12 @@ const UPLOAD_MIME_EXT: Record<string, string> = {
   'image/gif': 'gif',
   'image/bmp': 'bmp',
   'image/svg+xml': 'svg',
+  'text/plain': 'txt',
+  'text/markdown': 'md',
+  'text/html': 'html',
+  'text/csv': 'csv',
+  'application/json': 'json',
+  'application/pdf': 'pdf',
 };
 
 /** Sanitizes a title into a safe file-name base (no path separators). */
@@ -290,8 +298,8 @@ export function createAttachmentFile(
   const ext = UPLOAD_MIME_EXT[mime] ?? (mime.split('/')[1] ?? 'bin').replace(/[^a-z0-9]/g, '');
   const stamp = new Date();
   const pad = (n: number): string => String(n).padStart(2, '0');
-  const base = safeNameBase(nullable(input.title ?? null) ?? 'image');
-  const name = `${base === '' ? 'image' : base}-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}-${randomUUID().slice(0, 4)}.${ext}`;
+  const base = safeNameBase(nullable(input.title ?? null) ?? 'file');
+  const name = `${base === '' ? 'file' : base}-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}-${randomUUID().slice(0, 4)}.${ext}`;
   const filePath = path.join(dir, name);
   writeFileSync(filePath, buffer);
 
@@ -361,6 +369,36 @@ export function updateAttachment(
       sets.push('title = ?');
       args.push(nullable(changes.title));
     }
+    if (changes.icon !== undefined) {
+      const icon = nullable(changes.icon);
+      if (icon !== null && !icon.startsWith('data:')) {
+        throw new EtnError('VALIDATION_ERROR', 'icon must be a data: URL', {
+          field: 'icon',
+        });
+      }
+      sets.push('icon = ?');
+      args.push(icon);
+    }
+    // Moving the attachment to another owner: both fields must describe the
+    // target consistently; the new owner must exist (no SQL FK on the table).
+    if (changes.owner_type !== undefined || changes.owner_id !== undefined) {
+      const nextType =
+        changes.owner_type !== undefined
+          ? validateOwnerType(changes.owner_type)
+          : current.owner_type;
+      const nextId =
+        changes.owner_id !== undefined ? nullable(changes.owner_id) : current.owner_id;
+      if (nextId === null) {
+        throw new EtnError('VALIDATION_ERROR', 'owner_id cannot be empty', {
+          field: 'owner_id',
+        });
+      }
+      if (nextType !== current.owner_type || nextId !== current.owner_id) {
+        ensureOwnerExists(ndb, nextType, nextId);
+        sets.push('owner_type = ?', 'owner_id = ?');
+        args.push(nextType, nextId);
+      }
+    }
     if (changes.description !== undefined) {
       sets.push('description = ?');
       args.push(nullable(changes.description));
@@ -384,10 +422,143 @@ export function updateAttachment(
 
 /**
  * Delete an attachment (docs/03-server-api.md §11). Throws `NOT_FOUND` (404).
+ *
+ * When the attachment is `kind='file'` and its `file_path` points **inside the
+ * network's `attachments/` directory** (a server-stored upload), the stored
+ * file is removed together with the row. Client-local paths (drag-and-drop of
+ * OS files keeps them on the user's machine) are never touched.
  */
 export function deleteAttachment(ndb: NetworkDb, id: string): void {
   ndb.transaction(() => {
-    getAttachmentOrThrow(ndb, id);
+    const current = getAttachmentOrThrow(ndb, id);
     ndb.prepare('DELETE FROM attachments WHERE id = ?').run(id);
+    if (current.kind === 'file' && current.file_path !== null) {
+      const storedDir = path.resolve(path.dirname(ndb.dbPath), 'attachments');
+      const resolved = path.resolve(current.file_path);
+      if (resolved.startsWith(storedDir + path.sep) && existsSync(resolved)) {
+        try {
+          rmSync(resolved);
+        } catch {
+          // File cleanup is best-effort; the row is already gone.
+        }
+      }
+    }
   });
+}
+
+// ---------------------------------------------------------------------------
+// URL enrichment (title + favicon), workplan L1
+// ---------------------------------------------------------------------------
+
+/** Fetch timeout for page/icon requests. */
+const ENRICH_TIMEOUT_MS = 4000;
+/** Max bytes of HTML read for title/favicon extraction. */
+const ENRICH_HTML_MAX_BYTES = 512 * 1024;
+/** Max favicon bytes stored as a `data:` URL. */
+const FAVICON_MAX_BYTES = 64 * 1024;
+
+/** Extract `<title>` text from an HTML document (null when absent/empty). */
+export function extractHtmlTitle(html: string): string | null {
+  const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+  if (match === null || match[1] === undefined) return null;
+  const decoded = match[1]
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return decoded === '' ? null : decoded.slice(0, 300);
+}
+
+/**
+ * Resolve the favicon URL declared by `link rel=…icon…` elements, falling back
+ * to `/favicon.ico` at the site root. Returns an absolute URL or null.
+ */
+export function extractFaviconUrl(html: string, baseUrl: string): string | null {
+  const attr = (tag: string, name: string): string => {
+    const m = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(tag);
+    return (m?.[2] ?? m?.[3] ?? m?.[4] ?? '').trim();
+  };
+  for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
+    const rel = attr(tag, 'rel').toLowerCase();
+    const relOk = rel
+      .split(/\s+/)
+      .some((r) => r === 'icon' || r === 'shortcut' || r === 'apple-touch-icon');
+    if (!relOk) continue;
+    const href = attr(tag, 'href');
+    if (href === '') continue;
+    try {
+      return new URL(href, baseUrl).toString();
+    } catch {
+      // malformed href — try the next link tag
+    }
+  }
+  try {
+    return new URL('/favicon.ico', baseUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Best-effort enrichment of a URL attachment (03-server-api.md §11): fetch the
+ * page, fill the missing `title` from `<title>` and store the site favicon as
+ * a `data:` URL in `icon`. Network failures are silently ignored — the
+ * attachment stays as created.
+ */
+export async function enrichUrlAttachment(
+  ndb: NetworkDb,
+  attachment: Attachment,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Attachment> {
+  if (attachment.kind !== 'url' || attachment.url === null) return attachment;
+  const changes: { title?: string; icon?: string | null } = {};
+  try {
+    const res = await fetchImpl(attachment.url, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(ENRICH_TIMEOUT_MS),
+      headers: { 'user-agent': 'ETN-attachment-enricher' },
+    });
+    if (res.ok && (res.headers.get('content-type') ?? '').includes('text/html')) {
+      const html = (await res.text()).slice(0, ENRICH_HTML_MAX_BYTES);
+      if (attachment.title === null) {
+        const title = extractHtmlTitle(html);
+        if (title !== null) changes.title = title;
+      }
+      const iconUrl = extractFaviconUrl(html, attachment.url);
+      if (iconUrl !== null) {
+        const icon = await fetchFavicon(fetchImpl, iconUrl);
+        if (icon !== null) changes.icon = icon;
+      }
+    }
+  } catch {
+    return attachment;
+  }
+  if (changes.title === undefined && changes.icon === undefined) return attachment;
+  try {
+    return updateAttachment(ndb, attachment.id, changes);
+  } catch {
+    return attachment;
+  }
+}
+
+/** Fetch a favicon and encode it as a `data:` URL (null when unusable). */
+async function fetchFavicon(fetchImpl: typeof fetch, url: string): Promise<string | null> {
+  try {
+    const res = await fetchImpl(url, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(ENRICH_TIMEOUT_MS),
+      headers: { 'user-agent': 'ETN-attachment-enricher' },
+    });
+    if (!res.ok) return null;
+    const mime = (res.headers.get('content-type') ?? '').split(';')[0]!.trim();
+    if (!mime.startsWith('image/')) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0 || buf.length > FAVICON_MAX_BYTES) return null;
+    return `data:${mime};base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
+  }
 }

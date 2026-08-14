@@ -166,6 +166,8 @@ function buildApi(): EtnApi {
       export: (networkId, request) => invoke('system.export', networkId, request),
       getJob: (jobId) => invoke('system.getJob', jobId),
       pickImage: () => invoke('system.pickImage'),
+      openPath: (filePath: string) => invoke('system.openPath', filePath),
+      openExternal: (url: string) => invoke('system.openExternal', url),
     },
   };
 }

@@ -1,12 +1,16 @@
 /**
- * Editor group: attachments (H10, 08-ui-spec.md §6.5; 09-scenarios.md D3).
+ * Editor group: attachments (H10, 08-ui-spec.md §6.5; 09-scenarios.md D3, L1).
  *
- * - list with image thumbnails (URL attachments) / icons for files, title,
- *   kind and location metadata, per-item delete;
+ * - list with previews: server-stored image files render via `etnimg:`,
+ *   URL attachments show the server-fetched favicon (`icon`), image URLs show
+ *   the picture itself; other files show a glyph;
+ * - per-item context menu (08-ui-spec.md §6.5): открыть в программе по
+ *   умолчанию / показать (картинки, тексты, markdown) / назначить иконкой
+ *   мысли (картинки, только для владельца-мысли) / перенести в мысль /
+ *   удалить (сервер удаляет и файл серверного хранения);
  * - «Добавить вложение» dialog: kind (url/file), url/path, title,
  *   description → `attachments.add`;
- * - drag-and-drop of files and URLs onto the drop zone (multiple files and
- *   URLs are accepted and added one by one).
+ * - drag-and-drop of files and URLs onto the drop zone.
  *
  * Applies to both thoughts and links; the canvas 📎 indicator cache is
  * invalidated after every change.
@@ -14,12 +18,16 @@
 
 import type { Attachment } from '@etn/shared';
 
-import { invalidateIndicators } from '../canvas/canvas.js';
-import { field, showDialog } from '../lib/dialog.js';
+import { invalidateIndicators, invalidateRef } from '../canvas/canvas.js';
+import { confirmDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, isHttpUrl, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
+import { store } from '../state.js';
+import { pickThoughtRef } from './thought-picker.js';
+import { etnimgUrl } from './markdown-field.js';
 import { registerGroupBuilder, type EditorContext } from './editor.js';
 
 /** Registers the attachments group for the editor. */
@@ -42,6 +50,23 @@ async function countAttachments(ctx: EditorContext): Promise<string | undefined>
   } catch {
     return undefined;
   }
+}
+
+/** True for image files (server-stored or client-local). */
+function isImageFile(a: Attachment): boolean {
+  return a.kind === 'file' && (a.mime_type ?? '').startsWith('image/');
+}
+
+/** True for URL attachments pointing at common image formats. */
+function isImageUrl(url: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg|bmp|avif)(\?.*)?$/i.test(url);
+}
+
+/** True for text/markdown files viewable in the built-in viewer (L1). */
+function isViewableText(a: Attachment): boolean {
+  if (a.kind !== 'file') return false;
+  if ((a.mime_type ?? '').startsWith('text/')) return true;
+  return /\.(txt|md|markdown)$/i.test(a.file_path ?? '');
 }
 
 /** Builds the attachments group body (drop zone + list). */
@@ -150,20 +175,37 @@ function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
     box.closest('.group')?.dispatchEvent(new CustomEvent('etn:refresh-count'));
   }
 
-  /** Builds one attachment row (thumbnail/icon + title + meta + delete). */
+  /** Builds the preview square of one attachment row. */
+  function buildThumb(attachment: Attachment): HTMLElement {
+    // Server-stored image file → the picture itself over etnimg:.
+    if (isImageFile(attachment) && attachment.file_path !== null) {
+      return imgThumb(etnimgUrl(attachment.file_path), '🖼');
+    }
+    if (attachment.kind === 'url') {
+      const url = attachment.url ?? '';
+      // Image URL → the picture; otherwise the server-fetched favicon.
+      if (isImageUrl(url)) return imgThumb(url, '🔗');
+      if (attachment.icon !== null) return imgThumb(attachment.icon, '🔗');
+      return span('🔗', 'attachment-thumb');
+    }
+    return span('📄', 'attachment-thumb');
+  }
+
+  /** An <img> preview falling back to a glyph when the source fails. */
+  function imgThumb(src: string, fallbackGlyph: string): HTMLElement {
+    const img = el('img', 'attachment-thumb');
+    img.src = src;
+    img.alt = '';
+    img.addEventListener('error', () => {
+      img.replaceWith(span(fallbackGlyph, 'attachment-thumb'));
+    });
+    return img;
+  }
+
+  /** Builds one attachment row (preview + title + meta; menu on right-click). */
   function buildAttachmentItem(attachment: Attachment): HTMLElement {
     const item = div('attachment-item');
-    if (attachment.kind === 'url' && isImageUrl(attachment.url ?? '')) {
-      const img = el('img', 'attachment-thumb');
-      img.src = attachment.url ?? '';
-      img.alt = '';
-      img.addEventListener('error', () => {
-        img.replaceWith(span('🔗', 'attachment-thumb'));
-      });
-      item.append(img);
-    } else {
-      item.append(span(attachment.kind === 'url' ? '🔗' : '📄', 'attachment-thumb'));
-    }
+    item.append(buildThumb(attachment));
     const info = div('attachment-info');
     info.style.flex = '1';
     info.style.minWidth = '0';
@@ -185,25 +227,163 @@ function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
     );
     info.append(meta);
     item.append(info);
-    item.append(
-      button(
-        '✕',
-        () => {
-          void (async () => {
-            try {
-              await etn.attachments.remove(networkId, attachment.id);
-              invalidateIndicators(ctx.ownerId);
-              await reload();
-            } catch (err) {
-              notice(`Не удалось удалить: ${errText(err)}`, 'error');
-            }
-          })();
-        },
-        'btn small',
-        'Удалить вложение',
-      ),
-    );
+    item.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      showAttachmentMenu(attachment, event);
+    });
+    item.addEventListener('dblclick', () => {
+      // Double-click opens the default viewer (image/text) like the menu does.
+      void openDefault(attachment);
+    });
     return item;
+  }
+
+  /** Opens the attachment in the OS default app / browser (L1). */
+  async function openDefault(attachment: Attachment): Promise<void> {
+    try {
+      if (attachment.kind === 'file' && attachment.file_path !== null) {
+        const err = await etn.system.openPath(attachment.file_path);
+        if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
+      } else if (attachment.kind === 'url' && attachment.url !== null) {
+        await etn.system.openExternal(attachment.url);
+      }
+    } catch (err) {
+      notice(`Не удалось открыть: ${errText(err)}`, 'error');
+    }
+  }
+
+  /** Shows the built-in viewer (images / text / markdown, L1). */
+  function showViewer(attachment: Attachment): void {
+    const title = attachment.title ?? 'Просмотр вложения';
+    if (isImageFile(attachment) && attachment.file_path !== null) {
+      showImageViewer(etnimgUrl(attachment.file_path), title);
+      return;
+    }
+    if (attachment.kind === 'url' && isImageUrl(attachment.url ?? '')) {
+      showImageViewer(attachment.url ?? '', title);
+      return;
+    }
+    if (isViewableText(attachment)) {
+      void showTextViewer(attachment, title);
+    }
+  }
+
+  /** Image viewer dialog. */
+  function showImageViewer(src: string, title: string): void {
+    const img = el('img', 'attachment-viewer-img');
+    img.src = src;
+    img.alt = title;
+    const body = div('attachment-viewer');
+    body.append(img);
+    showDialog({ title, body, width: 720, buttons: [{ label: 'Закрыть', primary: true }] });
+  }
+
+  /** Text/markdown viewer dialog (content fetched over etnimg:). */
+  async function showTextViewer(attachment: Attachment, title: string): Promise<void> {
+    try {
+      const res = await fetch(etnimgUrl(attachment.file_path ?? ''));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = (await res.text()).slice(0, 200_000);
+      const pre = el('pre', 'attachment-viewer-text', text);
+      const body = div('attachment-viewer');
+      body.append(pre);
+      showDialog({ title, body, width: 720, buttons: [{ label: 'Закрыть', primary: true }] });
+    } catch {
+      notice('Не удалось прочитать файл.', 'error');
+    }
+  }
+
+  /** «Назначить иконкой мысли» — image files on a thought owner (L1). */
+  async function assignAsThoughtIcon(attachment: Attachment): Promise<void> {
+    const thought = ctx.thought;
+    if (thought === null || attachment.file_path === null) return;
+    try {
+      const updated = await etn.thoughts.update(networkId, thought.id, {
+        icon: etnimgUrl(attachment.file_path),
+        icon_kind: 'image',
+      }, thought.version);
+      const focus = store.state.focus;
+      if (focus !== null && focus.focused.id === updated.id) {
+        store.update({ focus: { ...focus, focused: updated } });
+      }
+      invalidateRef(thought.id);
+      notice('Иконка мысли обновлена.');
+    } catch (err) {
+      notice(`Не удалось назначить иконку: ${errText(err)}`, 'error');
+    }
+  }
+
+  /** «Перенести в мысль» — moves the attachment to another owner (L1). */
+  async function moveToThought(attachment: Attachment): Promise<void> {
+    const targetId = await pickThoughtRef(networkId);
+    if (targetId === null || targetId === attachment.owner_id) return;
+    try {
+      await etn.attachments.update(networkId, attachment.id, {
+        owner_type: 'thought',
+        owner_id: targetId,
+      });
+      invalidateIndicators(attachment.owner_id);
+      invalidateIndicators(targetId);
+      await reload();
+    } catch (err) {
+      notice(`Не удалось перенести: ${errText(err)}`, 'error');
+    }
+  }
+
+  /** «Удалить» — removes the row (and the server-stored file). */
+  async function removeAttachment(attachment: Attachment): Promise<void> {
+    const name = attachment.title ?? attachment.url ?? attachment.file_path ?? '—';
+    const ok = await confirmDialog(
+      'Удалить вложение',
+      `Удалить вложение «${name}»?` +
+        (attachment.kind === 'file' ? ' Серверная копия файла будет удалена.' : ''),
+      true,
+    );
+    if (!ok) return;
+    try {
+      await etn.attachments.remove(networkId, attachment.id);
+      invalidateIndicators(attachment.owner_id);
+      await reload();
+    } catch (err) {
+      notice(`Не удалось удалить: ${errText(err)}`, 'error');
+    }
+  }
+
+  /** Builds the attachment context menu at the cursor position (L1). */
+  function showAttachmentMenu(attachment: Attachment, event: MouseEvent): void {
+    const items: MenuItem[] = [];
+    const hasTarget =
+      (attachment.kind === 'file' && attachment.file_path !== null) ||
+      (attachment.kind === 'url' && attachment.url !== null);
+    if (hasTarget) {
+      items.push({
+        label: 'Открыть в программе по умолчанию',
+        onClick: () => void openDefault(attachment),
+      });
+    }
+    const viewable =
+      isImageFile(attachment) ||
+      isViewableText(attachment) ||
+      (attachment.kind === 'url' && isImageUrl(attachment.url ?? ''));
+    if (viewable) {
+      items.push({ label: 'Показать', onClick: () => showViewer(attachment) });
+    }
+    if (ctx.ownerType === 'thought' && isImageFile(attachment)) {
+      items.push({
+        label: 'Назначить иконкой мысли',
+        onClick: () => void assignAsThoughtIcon(attachment),
+      });
+    }
+    items.push({
+      label: 'Перенести в мысль…',
+      onClick: () => void moveToThought(attachment),
+    });
+    items.push({
+      label: 'Удалить…',
+      danger: true,
+      onClick: () => void removeAttachment(attachment),
+    });
+    showMenuAt(event.clientX, event.clientY, items);
   }
 
   /** Opens the add-attachment dialog. */
@@ -291,9 +471,4 @@ function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
 
   void reload();
   return box;
-}
-
-/** True for URLs pointing at common image formats (thumbnail preview). */
-function isImageUrl(url: string): boolean {
-  return /\.(png|jpe?g|gif|webp|svg|bmp|avif)(\?.*)?$/i.test(url);
 }

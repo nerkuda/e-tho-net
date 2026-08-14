@@ -20,8 +20,13 @@ export interface Attachment {
   file_path: string | null;
   file_size: number | null;
   mime_type: string | null;
-  /** Title; for URLs this is the page title (client-provided on MVP). */
+  /** Title; for URLs auto-filled with the page `<title>` when reachable. */
   title: string | null;
+  /**
+   * Preview icon as a `data:` URL — the site favicon for URL attachments
+   * (auto-fetched on creation, best-effort). `null` when unavailable.
+   */
+  icon: string | null;
   description: string | null;
   /** Display order. */
   position: number;
@@ -62,4 +67,9 @@ export interface AttachmentUpdateInput {
   title?: string | null;
   description?: string | null;
   position?: number;
+  /** Preview icon (`data:` URL); `null` clears it. */
+  icon?: string | null;
+  /** Move the attachment to another owner (both fields must be supplied). */
+  owner_type?: AttachmentOwnerType;
+  owner_id?: string;
 }

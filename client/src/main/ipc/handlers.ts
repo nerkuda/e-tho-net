@@ -656,6 +656,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((jobId: string) => requireRest(deps).getJob(jobId)),
   );
   handlers.set('system.pickImage', bind(() => pickImageFile()));
+  handlers.set('system.openPath', bind((filePath: string) => openPathShell(filePath)));
+  handlers.set('system.openExternal', bind((url: string) => openExternalShell(url)));
 
   return handlers;
 }
@@ -714,3 +716,26 @@ async function pickImageFile(): Promise<string | null> {
 
 // Re-export for the registration module's convenience.
 export type { HandlerDeps as IpcHandlerDeps };
+
+/** Opens a local file with the OS default application; returns the OS error. */
+async function openPathShell(filePath: string): Promise<string> {
+  const { shell } = await import('electron');
+  if (typeof filePath !== 'string' || filePath.trim() === '') {
+    return 'Пустой путь к файлу.';
+  }
+  return shell.openPath(filePath);
+}
+
+/** Opens an external URL in the default browser (http/https only). */
+async function openExternalShell(url: string): Promise<void> {
+  const { shell } = await import('electron');
+  if (typeof url !== 'string') return;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+  await shell.openExternal(parsed.toString());
+}

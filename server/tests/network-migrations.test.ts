@@ -31,6 +31,7 @@ const EXPECTED_FILES = [
   '012_embeddings.sql',
   '013_thought_style_inheritance.sql',
   '014_link_style_override.sql',
+  '015_attachments_icon.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -136,6 +137,14 @@ describe(
         assert.ok(linkCols.includes('color'), 'missing links.color');
         assert.ok(linkCols.includes('style'), 'missing links.style');
         assert.ok(linkCols.includes('width'), 'missing links.width');
+
+        // 015 attachment preview icon (02-data-model.md §3.9, workplan L1).
+        const attCols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('attachments') as {
+            name: string;
+          }[]
+        ).map((r) => r.name);
+        assert.ok(attCols.includes('icon'), 'missing attachments.icon');
       } finally {
         db.close();
       }

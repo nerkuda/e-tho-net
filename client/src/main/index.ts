@@ -109,6 +109,10 @@ const ETNIMG_TYPES: Record<string, string> = {
   gif: 'image/gif',
   bmp: 'image/bmp',
   svg: 'image/svg+xml',
+  // Text attachments («Показать» in the attachment context menu, L1).
+  txt: 'text/plain; charset=utf-8',
+  md: 'text/plain; charset=utf-8',
+  markdown: 'text/plain; charset=utf-8',
 };
 
 /**

@@ -116,17 +116,16 @@ export function createMarkdownField(opts: {
     }
   });
 
-  // Pasting an image (screenshot / copied image file) saves it as an
-  // attachment of the owner entity and inserts the markdown reference.
+  // Pasting files (screenshots / copied files) saves them as server-stored
+  // attachments of the owner entity and inserts a markdown reference at the
+  // caret: images embed as `![alt](etnimg:…)`, other files as a link.
   area.addEventListener('paste', (event) => {
     const owner = opts.attachmentsOwner;
     if (owner === undefined) return;
     const files = event.clipboardData?.files;
     if (files === undefined || files.length === 0) return;
-    const images = Array.from(files).filter((f) => f.type.startsWith('image/'));
-    if (images.length === 0) return;
     event.preventDefault();
-    void insertClipboardImages(area, owner, images);
+    void insertClipboardFiles(area, owner, Array.from(files));
   });
 
   view.addEventListener('dblclick', showEdit);
@@ -148,26 +147,27 @@ export function editMarkdownField(root: HTMLElement, md?: string): void {
 }
 
 /**
- * Uploads pasted images to the server (which stores them under the network's
+ * Uploads pasted files to the server (which stores them under the network's
  * `attachments/` directory next to `data.db`) and inserts markdown references
- * at the caret.
+ * at the caret: `![alt](…)` for images, `[name](…)` links for other files.
  */
-async function insertClipboardImages(
+async function insertClipboardFiles(
   area: HTMLTextAreaElement,
   owner: AttachmentsOwner,
-  images: File[],
+  files: File[],
 ): Promise<void> {
   const networkId = requireNetworkId();
-  for (const file of images) {
+  for (const file of files) {
     const dataUrl = await readFileAsDataUrl(file);
     const comma = dataUrl.indexOf(',');
     const dataBase64 = comma === -1 ? '' : dataUrl.slice(comma + 1);
-    const title = file.name.trim() !== '' ? file.name.trim() : 'image';
+    const title = file.name.trim() !== '' ? file.name.trim() : 'file';
+    const mime = file.type || guessMimeFromName(file.name) || 'application/octet-stream';
     let attachment;
     try {
       attachment = await etn.attachments.uploadFile(networkId, owner.ownerType, owner.ownerId, {
         title,
-        mime_type: file.type || 'image/png',
+        mime_type: mime,
         data_base64: dataBase64,
       });
     } catch {
@@ -177,8 +177,30 @@ async function insertClipboardImages(
     invalidateIndicators(owner.ownerId);
     const filePath = attachment.file_path;
     if (filePath === null || filePath === '') continue;
-    insertAtCaret(area, `![${sanitizeAlt(title)}](${etnimgUrl(filePath)})`);
+    const url = etnimgUrl(filePath);
+    const ref = mime.startsWith('image/')
+      ? `![${sanitizeAlt(title)}](${url})`
+      : `[${sanitizeAlt(title)}](${url})`;
+    insertAtCaret(area, ref);
   }
+}
+
+/** Rough MIME guess for clipboard files without a type (by extension). */
+function guessMimeFromName(name: string): string | null {
+  const ext = name.toLowerCase().split('.').pop() ?? '';
+  const map: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    webp: 'image/webp',
+    gif: 'image/gif',
+    bmp: 'image/bmp',
+    svg: 'image/svg+xml',
+    txt: 'text/plain',
+    md: 'text/markdown',
+    pdf: 'application/pdf',
+  };
+  return map[ext] ?? null;
 }
 
 /** Reads a File into a `data:` URL. */
@@ -196,7 +218,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
  * privileged protocol served by the Electron main process (works both from the
  * dev http origin and from the packaged file:// page, unlike raw file://).
  */
-function etnimgUrl(filePath: string): string {
+export function etnimgUrl(filePath: string): string {
   const segments = filePath.replace(/\\/g, '/').split('/').filter((s) => s !== '');
   const encoded = segments.map((seg, i) => {
     // A Windows drive segment ("C:") becomes the URL host — a bare letter,

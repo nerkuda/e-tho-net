@@ -1433,6 +1433,15 @@ body.dragging .ellipse {
   font-size: 11px;
 }
 
+/* Attachment rows open the context menu on right-click (08-ui-spec §6.5). */
+.attachment-item {
+  cursor: context-menu;
+}
+
+.attachment-item:hover {
+  background: var(--surface-2);
+}
+
 .attachment-thumb {
   width: 44px;
   height: 44px;
@@ -1456,6 +1465,33 @@ body.dragging .ellipse {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* Built-in attachment viewer (images / text, 08-ui-spec §6.5). */
+.attachment-viewer {
+  max-height: 60vh;
+  overflow: auto;
+  text-align: center;
+}
+
+.attachment-viewer-img {
+  max-width: 100%;
+  max-height: 55vh;
+  object-fit: contain;
+}
+
+.attachment-viewer-text {
+  display: block;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
 }
 
 .prop-table td .prop-editor {

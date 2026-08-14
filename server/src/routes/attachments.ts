@@ -34,6 +34,7 @@ import {
   createAttachment,
   createAttachmentFile,
   deleteAttachment,
+  enrichUrlAttachment,
   listAttachments,
   updateAttachment,
 } from '../domain/attachment-service.js';
@@ -143,8 +144,28 @@ function parseAttachmentUpdateBody(
   if (body.description !== undefined) {
     changes.description = fieldNullableString(body, 'description', requestId);
   }
+  if (body.icon !== undefined) {
+    changes.icon = fieldNullableString(body, 'icon', requestId);
+  }
   if (body.position !== undefined) {
     changes.position = optionalIntField(body, 'position', requestId);
+  }
+  if (body.owner_type !== undefined || body.owner_id !== undefined) {
+    if (body.owner_type !== undefined) {
+      const t = fieldString(body, 'owner_type', requestId);
+      if (t !== 'thought' && t !== 'link') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'owner_type должен быть thought|link.',
+          { field: 'owner_type' },
+          requestId,
+        );
+      }
+      changes.owner_type = t;
+    }
+    if (body.owner_id !== undefined) {
+      changes.owner_id = fieldString(body, 'owner_id', requestId) ?? '';
+    }
   }
   return changes;
 }
@@ -174,7 +195,12 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const { networkId, id } = req.params as OwnerParams;
           const input = parseAttachmentBody(requestBody(req), req.id);
           const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
-          const attachment = createAttachment(ndb, ownerType, id, input, req.auth!.user.id);
+          let attachment = createAttachment(ndb, ownerType, id, input, req.auth!.user.id);
+          // URL attachments are enriched (page title + favicon) before the
+          // response/event so clients render a filled row at once (L1).
+          if (attachment.kind === 'url') {
+            attachment = await enrichUrlAttachment(ndb, attachment);
+          }
           deps.emit(req, networkId, 'attachment.created', { attachment });
           sendCreated(reply, attachment, { request_id: req.id });
         },

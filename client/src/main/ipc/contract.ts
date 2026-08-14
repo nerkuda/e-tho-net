@@ -16,6 +16,7 @@ import type {
   Attachment,
   AttachmentFileInput,
   AttachmentInput,
+  AttachmentUpdateInput,
   Comment,
   CommentInput,
   CurrentUser,
@@ -269,7 +270,7 @@ export interface EtnApi {
       ownerId: string,
       input: AttachmentFileInput,
     ): Promise<Attachment>;
-    update(networkId: string, id: string, input: Partial<AttachmentInput>): Promise<Attachment>;
+    update(networkId: string, id: string, input: AttachmentUpdateInput): Promise<Attachment>;
     remove(networkId: string, id: string): Promise<void>;
   };
   admin: {
@@ -335,5 +336,12 @@ export interface EtnApi {
      * is too large / unreadable.
      */
     pickImage(): Promise<string | null>;
+    /**
+     * Opens a local file with the OS default application (`shell.openPath`).
+     * Resolves an error message string when the OS refuses (empty on success).
+     */
+    openPath(path: string): Promise<string>;
+    /** Opens an external URL in the default browser (`shell.openExternal`). */
+    openExternal(url: string): Promise<void>;
   };
 }

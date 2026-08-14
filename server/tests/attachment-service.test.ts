@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -20,6 +20,9 @@ import {
   createAttachment,
   createAttachmentFile,
   deleteAttachment,
+  enrichUrlAttachment,
+  extractFaviconUrl,
+  extractHtmlTitle,
   listAttachments,
   updateAttachment,
 } from '../src/domain/attachment-service.js';
@@ -245,6 +248,144 @@ describe(
         const a = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://x' }, USER);
         deleteAttachment(ndb, a.id);
         assert.equal(listAttachments(ndb, 'thought', t).length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('deleteAttachment removes the server-stored file but not client-local paths', () => {
+      const ndb = createInMemoryNetworkDb();
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
+      try {
+        const t = seedThought(ndb);
+        // A client-local path outside the network attachments dir.
+        const local = path.join(tmp, 'local.txt');
+        writeFileSync(local, 'keep me');
+        const localAtt = createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'file', file_path: local, title: 'local' },
+          USER,
+        );
+        deleteAttachment(ndb, localAtt.id);
+        assert.ok(existsSync(local), 'client-local file must survive attachment deletion');
+
+        // A server-stored upload (inside the network attachments dir).
+        const stored = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          {
+            title: 'pic',
+            mime_type: 'image/png',
+            data_base64: Buffer.from('fakepng').toString('base64'),
+          },
+          USER,
+        );
+        assert.ok(stored.file_path !== null && existsSync(stored.file_path));
+        deleteAttachment(ndb, stored.id);
+        assert.ok(stored.file_path !== null && !existsSync(stored.file_path));
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+        ndb.close();
+      }
+    });
+
+    it('updateAttachment moves the attachment to another owner', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t1 = seedThought(ndb, 'One');
+        const t2 = seedThought(ndb, 'Two');
+        const a = createAttachment(ndb, 'thought', t1, { kind: 'url', url: 'https://x' }, USER);
+        const moved = updateAttachment(ndb, a.id, { owner_type: 'thought', owner_id: t2 });
+        assert.equal(moved.owner_id, t2);
+        assert.equal(listAttachments(ndb, 'thought', t1).length, 0);
+        assert.equal(listAttachments(ndb, 'thought', t2).length, 1);
+        // Moving to a missing owner → NOT_FOUND, attachment stays put.
+        assert.throws(
+          () => updateAttachment(ndb, a.id, { owner_id: randomUUID() }),
+          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+        );
+        assert.equal(listAttachments(ndb, 'thought', t2).length, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('updateAttachment validates the icon data: URL', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const a = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://x' }, USER);
+        assert.throws(
+          () => updateAttachment(ndb, a.id, { icon: 'https://evil/x.png' }),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        const withIcon = updateAttachment(ndb, a.id, { icon: 'data:image/png;base64,AAA' });
+        assert.equal(withIcon.icon, 'data:image/png;base64,AAA');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('extractHtmlTitle/extractFaviconUrl parse page metadata', () => {
+      const html =
+        '<html><head><link rel="shortcut icon" href="/f.ico">' +
+        '<link rel="alternate" href="/feed"><title>  Привет &amp; мир </title></head></html>';
+      assert.equal(extractHtmlTitle(html), 'Привет & мир');
+      assert.equal(extractHtmlTitle('<html></html>'), null);
+      assert.equal(extractFaviconUrl(html, 'https://site.ru/a/b.html'), 'https://site.ru/f.ico');
+      assert.equal(
+        extractFaviconUrl('<html></html>', 'https://site.ru/a/b.html'),
+        'https://site.ru/favicon.ico',
+      );
+      // apple-touch-icon is accepted too.
+      assert.equal(
+        extractFaviconUrl(
+          '<link rel="apple-touch-icon" href="https://cdn.x/i.png">',
+          'https://site.ru/',
+        ),
+        'https://cdn.x/i.png',
+      );
+    });
+
+    it('enrichUrlAttachment fills title and favicon (stubbed fetch)', async () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const a = createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'url', url: 'https://site.ru/page' },
+          USER,
+        );
+        const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+        const stub = (async (url: string | URL | Request): Promise<Response> => {
+          const u = String(url);
+          if (u === 'https://site.ru/page') {
+            return new Response(
+              '<html><head><link rel="icon" href="/i.png"><title>Страница</title></head></html>',
+              { headers: { 'content-type': 'text/html; charset=utf-8' } },
+            );
+          }
+          if (u === 'https://site.ru/i.png') {
+            return new Response(png, { headers: { 'content-type': 'image/png' } });
+          }
+          return new Response('no', { status: 404 });
+        }) as typeof fetch;
+        const enriched = await enrichUrlAttachment(ndb, a, stub);
+        assert.equal(enriched.title, 'Страница');
+        assert.equal(enriched.icon, `data:image/png;base64,${png.toString('base64')}`);
+        // Enrichment is skipped on network errors without breaking creation.
+        const failing = (async () => {
+          throw new Error('offline');
+        }) as typeof fetch;
+        const b = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://y.ru' }, USER);
+        const untouched = await enrichUrlAttachment(ndb, b, failing);
+        assert.equal(untouched.title, null);
+        assert.equal(untouched.icon, null);
       } finally {
         ndb.close();
       }
