@@ -110,7 +110,7 @@ nvm use 22                              # активировать Node 22 (nvm-
 npm install                             # после checkout / смены ветки
 npm -w @etn/client run rebuild:native   # один раз после install (см. §4)
 
-npm run dev:server                      # сервер (tsx watch)
+npm run dev:server                      # сервер (tsx watch; подхватывает корневой .env через --env-file-if-exists)
 npm run dev:client                      # Electron-клиент (electron-vite)
 
 npm run typecheck                       # типы всех workspace
