@@ -22,6 +22,7 @@
  */
 
 import { setFocus } from '../app.js';
+import { applyThoughtIcon } from '../canvas/canvas.js';
 import { openLinkInEditor } from '../editor/editor.js';
 import { pickThoughtRef } from '../editor/thought-picker.js';
 import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
@@ -135,6 +136,24 @@ export function mountSearch(next: SearchChrome): void {
   // Keep the dropdown anchored to the input while the toolbar/window resizes.
   window.addEventListener('resize', positionPanel);
   new ResizeObserver(positionPanel).observe(input);
+
+  // Close the panel on any click outside it (the input and the gear keep it
+  // open) and on Escape while it is visible, even if the input lost focus.
+  document.addEventListener('pointerdown', (event) => {
+    if (host.classList.contains('hidden')) return;
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    if (host.contains(target) || input.contains(target) || optionsButton.contains(target)) {
+      return;
+    }
+    hidePanel();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !host.classList.contains('hidden')) {
+      if (searchTimer !== null) window.clearTimeout(searchTimer);
+      hidePanel();
+    }
+  });
 }
 
 /** Anchors the drop panel: left edge under the search input, below the toolbar. */
@@ -351,6 +370,13 @@ async function run(): Promise<void> {
   }
 }
 
+/** Builds a hit icon element from the thought's own icon (💭 fallback). */
+function thoughtIconEl(hit: { icon: string | null; icon_kind: import('@etn/shared').IconKind }): HTMLElement {
+  const icon = span('');
+  applyThoughtIcon(icon, { icon: hit.icon, icon_kind: hit.icon_kind, type_id: null });
+  return icon;
+}
+
 /** Renders the four result groups. */
 function renderResults(response: SearchResponse | null): void {
   if (chrome === null) return;
@@ -365,7 +391,7 @@ function renderResults(response: SearchResponse | null): void {
     key: 'names' | 'texts' | 'links' | 'chronology';
     title: string;
     hits: Array<{
-      kind: string;
+      iconEl: HTMLElement;
       title: string;
       snippet: string;
       /** Stable row key for selection restore + keyboard navigation. */
@@ -377,7 +403,7 @@ function renderResults(response: SearchResponse | null): void {
       key: 'names',
       title: 'Найдено по именам',
       hits: response.by_names.map((hit) => ({
-        kind: '💭',
+        iconEl: thoughtIconEl(hit),
         title: hit.title,
         snippet: hit.snippet,
         key: `thought:${hit.thought_id}`,
@@ -388,7 +414,7 @@ function renderResults(response: SearchResponse | null): void {
       key: 'texts',
       title: 'Найдено по текстам',
       hits: response.by_texts.map((hit) => ({
-        kind: '💭',
+        iconEl: thoughtIconEl(hit),
         title: hit.title,
         snippet: hit.snippet,
         key: `thought:${hit.thought_id}`,
@@ -399,7 +425,7 @@ function renderResults(response: SearchResponse | null): void {
       key: 'links',
       title: 'Найдено связей',
       hits: response.by_links.map((hit) => ({
-        kind: '🔗',
+        iconEl: span('🔗'),
         title: hit.type_name,
         snippet: hit.snippet,
         key: `link:${hit.link_id}`,
@@ -410,7 +436,7 @@ function renderResults(response: SearchResponse | null): void {
       key: 'chronology',
       title: 'Найдено в хронологии',
       hits: response.by_chrono.map((hit) => ({
-        kind: '📅',
+        iconEl: span('📅'),
         title: hit.valid_from.slice(0, 10),
         snippet: hit.snippet,
         key: `chrono:${hit.owner}:${hit.owner_id}`,
@@ -441,7 +467,6 @@ function renderResults(response: SearchResponse | null): void {
       for (const hit of group.hits) {
         const row = div('search-hit');
         row.dataset['key'] = hit.key;
-        const icon = span(hit.kind);
         const info = div('search-hit-info');
         info.style.flex = '1';
         info.style.minWidth = '0';
@@ -449,7 +474,7 @@ function renderResults(response: SearchResponse | null): void {
         const snippet = el('div', 'hit-snippet');
         renderHtml(snippet, hit.snippet);
         info.append(title, snippet);
-        row.append(icon, info);
+        row.append(hit.iconEl, info);
         row.addEventListener('click', () => {
           lastSelectedKey = hit.key;
           applySelection(hit.key, true);

@@ -244,7 +244,9 @@ describe('search scope resolution (H13)', () => {
   it('merges partial responses', () => {
     const merged = mergeResponses([
       {
-        by_names: [{ thought_id: 'a', title: 'A', snippet: 'A', highlights: [] }],
+        by_names: [
+          { thought_id: 'a', title: 'A', icon: null, icon_kind: 'emoji', snippet: 'A', highlights: [] },
+        ],
         by_texts: [],
         by_links: [],
         by_chrono: [],
