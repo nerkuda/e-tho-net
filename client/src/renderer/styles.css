@@ -932,7 +932,9 @@ body.dragging .ellipse {
   align-items: center;
   padding: 2px 8px 4px;
   font-size: calc(var(--cloud-font) * 0.82);
-  color: var(--text-dim);
+  /* Same colour as the title (inherited from .cloud): theme accents could be
+     invisible on a user-picked dark cloud background. */
+  color: inherit;
   min-height: calc(var(--cloud-font) * 1.2);
 }
 
@@ -942,11 +944,11 @@ body.dragging .ellipse {
 }
 
 .cloud-ind .ind.dim {
-  color: var(--text-faint);
+  opacity: 0.45;
 }
 
 .cloud-ind .ind.active {
-  color: var(--accent);
+  opacity: 1;
   font-weight: 600;
 }
 
