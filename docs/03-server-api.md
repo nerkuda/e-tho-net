@@ -348,6 +348,11 @@ DELETE /api/v1/networks/{nid}/comments/{id}   If-Match
 GET    /api/v1/networks/{nid}/thoughts/{id}/attachments
 POST   /api/v1/networks/{nid}/thoughts/{id}/attachments
        { kind: "url"|"file", url?|file_path?, title?, description?, mime_type? }
+POST   /api/v1/networks/{nid}/thoughts/{id}/attachments/file
+       { title?, mime_type, data_base64 }
+       # Сервер сохраняет бинарник (≤10 МиБ) в networks/<nid>/attachments/
+       # рядом с data.db и создаёт kind="file" вложение с file_path на копию.
+       → 201 { data: Attachment }
 PATCH  /api/v1/networks/{nid}/attachments/{id}
 DELETE /api/v1/networks/{nid}/attachments/{id}
 # Аналогично для /links/{id}/attachments
