@@ -18,7 +18,7 @@ import type { FocusDir, Link } from '@etn/shared';
 
 import { scheduleRefresh, requireNetworkId } from '../app.js';
 import { openAddDialog } from './add-dialog.js';
-import { store } from '../state.js';
+import { patchFocusEdge, store } from '../state.js';
 import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -98,7 +98,15 @@ async function openLinkSettings(networkId: string, linkId: string): Promise<void
 async function toggleLinkActive(networkId: string, linkId: string): Promise<void> {
   try {
     const link = await etn.links.get(networkId, linkId);
-    await etn.links.update(networkId, linkId, { active: !link.active }, link.version);
+    const updated = await etn.links.update(
+      networkId,
+      linkId,
+      { active: !link.active },
+      link.version,
+    );
+    // Repaint at once (no realtime echo to the actor, 04-realtime.md §5);
+    // the debounced refresh reconciles the neighbour zones.
+    patchFocusEdge(updated);
     scheduleRefresh();
   } catch (err) {
     errorDialog('Изменить актуальность', err);
@@ -111,6 +119,8 @@ async function deleteLink(networkId: string, linkId: string): Promise<void> {
   try {
     const link = await etn.links.get(networkId, linkId);
     await etn.links.remove(networkId, linkId, link.version);
+    // Drop the line at once; the debounced refresh reconciles the zones.
+    patchFocusEdge({ ...link, active: false });
     // If the deleted link was open in the editor, drop the editor target.
     const target = store.state.editorTarget;
     if (target !== null && target.kind === 'link' && target.id === linkId) {

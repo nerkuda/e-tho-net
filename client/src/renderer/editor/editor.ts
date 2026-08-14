@@ -22,7 +22,7 @@ import {
   type ThoughtUpdateInput,
 } from '@etn/shared';
 
-import { refreshFocus, requireNetworkId } from '../app.js';
+import { refreshFocus, requireNetworkId, scheduleRefresh } from '../app.js';
 import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
@@ -31,7 +31,7 @@ import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js
 import { etn } from '../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
-import { store } from '../state.js';
+import { patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { registerCommentGroups } from './comments.js';
 import { registerAttachmentGroup } from './attachments.js';
@@ -273,11 +273,18 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
   }
 }
 
-/** Saves link header fields (type/style/active). */
+/** Saves link header fields (type/style/colour/width/active). */
 async function saveLink(link: Link, patch: LinkUpdateInput): Promise<void> {
   const networkId = requireNetworkId();
   try {
     const updated = await etn.links.update(networkId, link.id, patch, link.version);
+    // Repaint the line at once — the actor gets no realtime echo
+    // (04-realtime.md §5), so the focus edges are patched from the response.
+    patchFocusEdge(updated);
+    if (patch.active !== undefined) {
+      // Activity changes the neighbour zones too — reconcile from server truth.
+      scheduleRefresh();
+    }
     const target = store.state.editorTarget;
     if (target !== null && target.kind === 'link' && target.id === link.id) {
       store.update({ editorTarget: { kind: 'link', id: updated.id, link: updated } });

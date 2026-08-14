@@ -38,9 +38,10 @@ import {
   parseWindowLayout,
 } from '../src/renderer/lib/pure.js';
 
-import type { AnyRealtimeEvent } from '@etn/shared';
+import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
 
 import { searchInternals } from '../src/renderer/search/search.js';
+import { patchFocusEdge, store } from '../src/renderer/state.js';
 
 const { scopesFor, mergeResponses, DEFAULT_OPTIONS, isSearchableQuery, nextNavIndex } =
   searchInternals;
@@ -260,5 +261,112 @@ describe('search scope resolution (H13)', () => {
     assert.equal(merged.by_names.length, 1);
     assert.equal(merged.by_links.length, 1);
     assert.equal(merged.meta.total_in_group.links, 1);
+  });
+});
+
+describe('patchFocusEdge (instant link repaint; no realtime echo to actor)', () => {
+  const mkThought = (id: string): Thought => ({
+    id,
+    title: id,
+    type_id: null,
+    icon: null,
+    icon_kind: 'emoji',
+    active: true,
+    is_protected: false,
+    is_root: false,
+    fg_color: null,
+    bg_color: null,
+    font_bold: null,
+    font_italic: null,
+    font_underline: null,
+    font_strike: null,
+    synonyms: [],
+    version: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  });
+
+  const mkLink = (over: Partial<Link>): Link => ({
+    id: 'l1',
+    source_id: 'f',
+    target_id: 'c',
+    type_id: null,
+    color: null,
+    style: null,
+    width: null,
+    active: true,
+    version: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    ...over,
+  });
+
+  const edge = (over: Partial<FocusEdge>): FocusEdge => ({
+    id: 'l1',
+    source_id: 'f',
+    target_id: 'c',
+    type_id: null,
+    color: null,
+    style: null,
+    width: null,
+    ...over,
+  });
+
+  /** Seeds a focus: FOCUS f with child c and the given edges. */
+  const seedFocus = (edges: FocusEdge[]): void => {
+    store.update({
+      focus: {
+        focused: mkThought('f'),
+        parents: [],
+        children: [
+          {
+            id: 'c',
+            title: 'c',
+            type_id: null,
+            icon: null,
+            active: true,
+            link_id: 'l1',
+            link_type_id: null,
+            link_active: true,
+            has_incoming: true,
+            has_outgoing: false,
+          },
+        ],
+        siblings: [],
+        edges,
+        sorts: { parents: 'created', children: 'created' },
+      } satisfies FocusResponse,
+    });
+  };
+
+  it('recolors the edge in place from the update response', () => {
+    seedFocus([edge({}), edge({ id: 'l2', source_id: 'c', target_id: 'f' })]);
+    patchFocusEdge(mkLink({ color: '#ff0000', width: 3 }));
+    const edges = store.state.focus?.edges ?? [];
+    assert.equal(edges.length, 2);
+    assert.deepEqual(edges[0], edge({ color: '#ff0000', width: 3 }));
+    assert.equal(edges[1]?.id, 'l2', 'sibling edge untouched, order preserved');
+    store.update({ focus: null });
+  });
+
+  it('removes the edge when the link is deactivated', () => {
+    seedFocus([edge({})]);
+    patchFocusEdge(mkLink({ active: false }));
+    assert.deepEqual(store.state.focus?.edges ?? [], []);
+    store.update({ focus: null });
+  });
+
+  it('re-adds a reactivated edge when both endpoints are visible', () => {
+    seedFocus([]);
+    patchFocusEdge(mkLink({ active: true }));
+    assert.deepEqual(store.state.focus?.edges ?? [], [edge({})]);
+    store.update({ focus: null });
+  });
+
+  it('ignores a link whose endpoints are not on the canvas', () => {
+    seedFocus([]);
+    patchFocusEdge(mkLink({ id: 'l9', source_id: 'x', target_id: 'y' }));
+    assert.deepEqual(store.state.focus?.edges ?? [], []);
+    store.update({ focus: null });
   });
 });

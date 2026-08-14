@@ -13,6 +13,7 @@ import {
   EDITOR_H_DEFAULT,
   EDITOR_W_DEFAULT,
   type CurrentUser,
+  type FocusEdge,
   type FocusResponse,
   type Link,
   type LinkType,
@@ -155,6 +156,53 @@ class Store {
 
 /** The single renderer store instance. */
 export const store = new Store();
+
+/**
+ * Applies an updated link to the focus edges so the canvas repaints the line
+ * instantly. The server never echoes realtime events to the acting client
+ * (04-realtime.md §5) — the REST response is the only immediate feedback, so
+ * without this the old colour/width would stay until the next focus fetch.
+ *
+ * The canvas shows the active-only neighbourhood (focus is requested without
+ * `show_inactive`): a deactivated link loses its edge, a reactivated one gains
+ * it back when both endpoints are visible.
+ */
+export function patchFocusEdge(link: Link): void {
+  const focus = store.state.focus;
+  if (focus === null) return;
+  const has = focus.edges.some((e) => e.id === link.id);
+  if (!link.active) {
+    if (!has) return;
+    store.update({
+      focus: { ...focus, edges: focus.edges.filter((e) => e.id !== link.id) },
+    });
+    return;
+  }
+  const edge: FocusEdge = {
+    id: link.id,
+    source_id: link.source_id,
+    target_id: link.target_id,
+    type_id: link.type_id,
+    color: link.color,
+    style: link.style,
+    width: link.width,
+  };
+  if (has) {
+    store.update({
+      focus: { ...focus, edges: focus.edges.map((e) => (e.id === link.id ? edge : e)) },
+    });
+    return;
+  }
+  const visible = new Set([
+    focus.focused.id,
+    ...focus.parents.map((n) => n.id),
+    ...focus.children.map((n) => n.id),
+    ...focus.siblings.map((n) => n.id),
+  ]);
+  if (visible.has(link.source_id) && visible.has(link.target_id)) {
+    store.update({ focus: { ...focus, edges: [...focus.edges, edge] } });
+  }
+}
 
 /** Helper: current network id, or throws for callers that require an open network. */
 export function requireNetworkId(): string {
