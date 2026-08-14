@@ -141,7 +141,7 @@ function buildLinkEndpointsBody(ctx: EditorContext): HTMLElement {
 function linkRow(other: ThoughtRef, outgoing: boolean, onOpen: () => void): HTMLElement {
   const row = div('link-group-item');
   const arrow = span(outgoing ? '→' : '←', 'muted');
-  const icon = span('');
+  const icon = span('', 'mini-icon');
   applyThoughtIcon(icon, other);
   const title = el('span', 'link-item-title', other.title);
   if (!other.active) title.classList.add('muted');
@@ -154,7 +154,7 @@ function linkRow(other: ThoughtRef, outgoing: boolean, onOpen: () => void): HTML
 function endpointRow(label: string, other: ThoughtRef, onOpen: () => void): HTMLElement {
   const row = div('link-group-item');
   row.append(span(label, 'muted link-item-label'));
-  const icon = span('');
+  const icon = span('', 'mini-icon');
   applyThoughtIcon(icon, other);
   const title = el('span', 'link-item-title', other.title);
   if (!other.active) title.classList.add('muted');

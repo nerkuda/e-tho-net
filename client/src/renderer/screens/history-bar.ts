@@ -149,7 +149,7 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
     if (style.bg !== null) chip.style.background = style.bg;
     chip.classList.toggle('font-italic', style.italic);
   }
-  const icon = el('span', 'hc-icon');
+  const icon = el('span', 'mini-icon');
   if (ref !== undefined) {
     applyThoughtIcon(icon, ref);
   } else {

@@ -87,7 +87,7 @@ async function renderList(ids: string[]): Promise<void> {
   listHost.replaceChildren();
   for (const id of ids) {
     const item = div('selection-item');
-    const iconBox = span('');
+    const iconBox = span('', 'mini-icon');
     const ref = refs.get(id);
     if (ref !== undefined) {
       applyThoughtIcon(iconBox, ref);

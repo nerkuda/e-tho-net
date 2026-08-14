@@ -372,7 +372,7 @@ async function run(): Promise<void> {
 
 /** Builds a hit icon element from the thought's own icon (💭 fallback). */
 function thoughtIconEl(hit: { icon: string | null; icon_kind: import('@etn/shared').IconKind }): HTMLElement {
-  const icon = span('');
+  const icon = span('', 'mini-icon');
   applyThoughtIcon(icon, { icon: hit.icon, icon_kind: hit.icon_kind, type_id: null });
   return icon;
 }
