@@ -142,10 +142,14 @@ export async function setFocus(id: string): Promise<void> {
   const networkId = requireNetworkId();
   const oldId = store.state.focus?.focused.id ?? null;
   const response = await etn.thoughts.focus(networkId, id);
-  store.update({ focus: response, editorTarget: null, selectedLinkId: null, ...zoneStateFromFocus(response) });
+  // Rotate the local history BEFORE the store update: the history bar re-renders
+  // from store changes, and a fire-and-forget rotate here loses the race — the
+  // bar showed a pre-rotation snapshot (the new focus still listed, the
+  // previous one missing). Awaiting the local SQLite write costs nothing.
   if (oldId !== null && oldId !== id) {
-    void etn.history.rotate(oldId, id).catch(() => undefined);
+    await etn.history.rotate(oldId, id).catch(() => undefined);
   }
+  store.update({ focus: response, editorTarget: null, selectedLinkId: null, ...zoneStateFromFocus(response) });
   void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
 }
 

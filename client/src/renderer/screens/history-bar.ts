@@ -69,7 +69,11 @@ async function render(): Promise<void> {
   const ids = entries.map((entry) => entry.thoughtId);
 
   const refs = ids.length > 0 ? await resolveRefs(networkId, ids) : new Map();
+  const focusedId = store.state.focus?.focused.id ?? null;
   const visible = ids.filter((id) => {
+    // The current focus is not a "recent" — it enters the list only after the
+    // user moves focus away (rotate pushes it then).
+    if (id === focusedId) return false;
     const ref = refs.get(id);
     return store.state.showInactive || ref === undefined || ref.active;
   });
