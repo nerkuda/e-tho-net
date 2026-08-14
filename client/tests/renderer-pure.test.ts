@@ -42,7 +42,8 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { searchInternals } from '../src/renderer/search/search.js';
 
-const { scopesFor, mergeResponses, DEFAULT_OPTIONS, isSearchableQuery } = searchInternals;
+const { scopesFor, mergeResponses, DEFAULT_OPTIONS, isSearchableQuery, nextNavIndex } =
+  searchInternals;
 
 describe('clip', () => {
   it('clamps into the range', () => {
@@ -226,6 +227,17 @@ describe('search scope resolution (H13)', () => {
     assert.equal(isSearchableQuery('   '.trim()), false);
     assert.equal(isSearchableQuery('три'), true);
     assert.equal(isSearchableQuery('query'), true);
+  });
+
+  it('navigates rows from either end and clamps at the edges', () => {
+    assert.equal(nextNavIndex(null, 3, 1), 0);
+    assert.equal(nextNavIndex(null, 3, -1), 2);
+    assert.equal(nextNavIndex(1, 3, 1), 2);
+    assert.equal(nextNavIndex(2, 3, 1), 2);
+    assert.equal(nextNavIndex(1, 3, -1), 0);
+    assert.equal(nextNavIndex(0, 3, -1), 0);
+    assert.equal(nextNavIndex(9, 3, 1), 0);
+    assert.equal(nextNavIndex(null, 0, 1), null);
   });
 
   it('merges partial responses', () => {

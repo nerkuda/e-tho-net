@@ -9,6 +9,11 @@
  *   panel again;
  * - the server search runs for queries of 3+ characters: debounced 250 ms while
  *   typing or on Enter; shorter queries only show a hint;
+ * - empty result groups render collapsed; ↑/↓ walk group headers and hits,
+ *   Enter toggles a group header or activates a hit (hiding the panel); the
+ *   next activation re-highlights the last chosen hit;
+ * - the panel is a bordered dropdown: left edge aligned with the search input
+ *   (JS-anchored), right margin 10% and max height 50% of the window;
  * - options: subtree (subroot via the thought picker, default = current
  *   focus), group checkboxes (мысли/связи/хронология), thought/link type
  *   multi-select, show_inactive (default = the network preference);
@@ -68,6 +73,10 @@ let options: SearchOptions = { ...DEFAULT_OPTIONS };
 let lastResults: SearchResponse | null = null;
 let searchTimer: number | null = null;
 let restored = false;
+/** `data-key` of the hit activated last — re-highlighted on the next activation. */
+let lastSelectedKey: string | null = null;
+/** Flat navigation index over group headers + hits of expanded groups. */
+let cursor: number | null = null;
 
 /** Mounts the search panel (called from the workspace builder). */
 export function mountSearch(next: SearchChrome): void {
@@ -82,16 +91,19 @@ export function mountSearch(next: SearchChrome): void {
   host.append(optionsRow, results);
 
   optionsButton.addEventListener('click', () => {
+    positionPanel();
     host.classList.remove('hidden');
     optionsRow.classList.toggle('hidden');
   });
 
   input.addEventListener('focus', () => {
+    positionPanel();
     host.classList.remove('hidden');
     if (!restored) {
       restored = true;
       void restoreState();
     }
+    applySelection(lastSelectedKey, true);
   });
   input.addEventListener('input', () => {
     if (searchTimer !== null) window.clearTimeout(searchTimer);
@@ -101,13 +113,129 @@ export function mountSearch(next: SearchChrome): void {
     if (event.key === 'Enter') {
       event.preventDefault();
       if (searchTimer !== null) window.clearTimeout(searchTimer);
-      void run();
+      const rows = collectNavRows();
+      const row = cursor === null ? undefined : rows[cursor];
+      if (row !== undefined) {
+        row.el.click();
+      } else {
+        void run();
+      }
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const rows = collectNavRows();
+      if (rows.length === 0) return;
+      event.preventDefault();
+      moveCursor(event.key === 'ArrowDown' ? 1 : -1);
     } else if (event.key === 'Escape') {
       if (searchTimer !== null) window.clearTimeout(searchTimer);
-      host.classList.add('hidden');
+      hidePanel();
       input.blur();
     }
   });
+
+  // Keep the dropdown anchored to the input while the toolbar/window resizes.
+  window.addEventListener('resize', positionPanel);
+  new ResizeObserver(positionPanel).observe(input);
+}
+
+/** Anchors the drop panel: left edge under the search input, below the toolbar. */
+function positionPanel(): void {
+  if (chrome === null) return;
+  const root = chrome.host.parentElement;
+  if (root === null) return;
+  const rootRect = root.getBoundingClientRect();
+  const inputRect = chrome.input.getBoundingClientRect();
+  const toolbar = chrome.input.closest('.toolbar');
+  if (toolbar === null) return;
+  chrome.host.style.left = `${Math.max(0, inputRect.left - rootRect.left)}px`;
+  chrome.host.style.top = `${toolbar.getBoundingClientRect().bottom - rootRect.top + 6}px`;
+}
+
+/** Hides the drop panel (query, results and the selected row are kept). */
+function hidePanel(): void {
+  if (chrome !== null) chrome.host.classList.add('hidden');
+  cursor = null;
+}
+
+/** One keyboard-navigable row: a group header or a hit of an expanded group. */
+interface NavRow {
+  el: HTMLElement;
+  kind: 'header' | 'hit';
+}
+
+/** Collects navigable rows from the results DOM (headers + visible hits). */
+function collectNavRows(): NavRow[] {
+  if (chrome === null) return [];
+  const resultsBox = chrome.host.querySelector<HTMLElement>('.search-results');
+  if (resultsBox === null) return [];
+  const rows: NavRow[] = [];
+  for (const group of Array.from(resultsBox.children)) {
+    if (!(group instanceof HTMLElement)) continue;
+    const header = group.querySelector<HTMLElement>(':scope > .search-group-header');
+    const body = group.querySelector<HTMLElement>(':scope > .search-group-body');
+    if (header !== null) rows.push({ el: header, kind: 'header' });
+    if (body !== null && !body.classList.contains('hidden')) {
+      for (const hit of Array.from(body.querySelectorAll(':scope > .search-hit'))) {
+        if (hit instanceof HTMLElement) rows.push({ el: hit, kind: 'hit' });
+      }
+    }
+  }
+  return rows;
+}
+
+/** Pure index math for ↑/↓ navigation (null cursor enters from either end). */
+export function nextNavIndex(cursor: number | null, count: number, delta: 1 | -1): number | null {
+  if (count === 0) return null;
+  const base = cursor === null || cursor >= count ? (delta === 1 ? -1 : count) : cursor;
+  return Math.min(count - 1, Math.max(0, base + delta));
+}
+
+/** Moves the keyboard cursor by one row and repaints the selection. */
+function moveCursor(delta: 1 | -1): void {
+  const rows = collectNavRows();
+  const next = nextNavIndex(cursor, rows.length, delta);
+  if (next === null) return;
+  cursor = next;
+  rows.forEach((row, i) => row.el.classList.toggle('selected', i === cursor));
+  rows[next]?.el.scrollIntoView({ block: 'nearest' });
+}
+
+/** Highlights the hit row with the given key (and syncs the cursor index). */
+function applySelection(key: string | null, scroll: boolean): void {
+  if (chrome === null) return;
+  const resultsBox = chrome.host.querySelector<HTMLElement>('.search-results');
+  if (resultsBox === null) return;
+  for (const node of Array.from(resultsBox.querySelectorAll('.selected'))) {
+    node.classList.remove('selected');
+  }
+  if (key === null) {
+    cursor = null;
+    return;
+  }
+  const row = resultsBox.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
+  if (row === null) {
+    cursor = null;
+    return;
+  }
+  row.classList.add('selected');
+  const rows = collectNavRows();
+  cursor = rows.findIndex((r) => r.el === row);
+  if (scroll) row.scrollIntoView({ block: 'nearest' });
+}
+
+/**
+ * After a group toggle, keeps the cursor valid: if the selected row became
+ * hidden with the collapsed group, the selection moves to that group header.
+ */
+function syncCursorAfterToggle(header: HTMLElement): void {
+  const rows = collectNavRows();
+  const selected = rows.find((r) => r.el.classList.contains('selected'));
+  if (selected !== undefined) {
+    cursor = rows.indexOf(selected);
+    return;
+  }
+  const idx = rows.findIndex((r) => r.el === header);
+  cursor = idx >= 0 ? idx : null;
+  rows.forEach((row, i) => row.el.classList.toggle('selected', i === cursor));
 }
 
 /** Restores the previous query and options from L4 `search_state`. */
@@ -236,7 +364,14 @@ function renderResults(response: SearchResponse | null): void {
   const groups: Array<{
     key: 'names' | 'texts' | 'links' | 'chronology';
     title: string;
-    hits: Array<{ kind: string; title: string; snippet: string; open: () => void }>;
+    hits: Array<{
+      kind: string;
+      title: string;
+      snippet: string;
+      /** Stable row key for selection restore + keyboard navigation. */
+      key: string;
+      open: () => void;
+    }>;
   }> = [
     {
       key: 'names',
@@ -245,6 +380,7 @@ function renderResults(response: SearchResponse | null): void {
         kind: '💭',
         title: hit.title,
         snippet: hit.snippet,
+        key: `thought:${hit.thought_id}`,
         open: () => void setFocus(hit.thought_id),
       })),
     },
@@ -255,6 +391,7 @@ function renderResults(response: SearchResponse | null): void {
         kind: '💭',
         title: hit.title,
         snippet: hit.snippet,
+        key: `thought:${hit.thought_id}`,
         open: () => void setFocus(hit.thought_id),
       })),
     },
@@ -265,6 +402,7 @@ function renderResults(response: SearchResponse | null): void {
         kind: '🔗',
         title: hit.type_name,
         snippet: hit.snippet,
+        key: `link:${hit.link_id}`,
         open: () => void openLinkHit(hit.link_id),
       })),
     },
@@ -275,6 +413,7 @@ function renderResults(response: SearchResponse | null): void {
         kind: '📅',
         title: hit.valid_from.slice(0, 10),
         snippet: hit.snippet,
+        key: `chrono:${hit.owner}:${hit.owner_id}`,
         open: () => void openChronoHit(hit.owner, hit.owner_id),
       })),
     },
@@ -282,22 +421,26 @@ function renderResults(response: SearchResponse | null): void {
 
   for (const group of groups) {
     const total = response.meta.total_in_group[group.key];
+    const empty = total === 0 || group.hits.length === 0;
     const section = div('search-group');
     const header = div('search-group-header');
-    const caret = span('▾', 'group-caret');
+    const caret = span(empty ? '▸' : '▾', 'group-caret');
     const label = span(`${group.title} (${total})`, 'group-title');
     header.append(caret, label);
     const body = div('search-group-body');
+    if (empty) body.classList.add('hidden');
     header.addEventListener('click', () => {
       const collapsed = body.classList.toggle('hidden');
       caret.textContent = collapsed ? '▸' : '▾';
+      syncCursorAfterToggle(header);
     });
     section.append(header, body);
-    if (total === 0 || group.hits.length === 0) {
+    if (empty) {
       body.append(el('p', 'muted', 'Ничего не найдено.'));
     } else {
       for (const hit of group.hits) {
         const row = div('search-hit');
+        row.dataset['key'] = hit.key;
         const icon = span(hit.kind);
         const info = div('search-hit-info');
         info.style.flex = '1';
@@ -307,12 +450,21 @@ function renderResults(response: SearchResponse | null): void {
         renderHtml(snippet, hit.snippet);
         info.append(title, snippet);
         row.append(icon, info);
-        row.addEventListener('click', hit.open);
+        row.addEventListener('click', () => {
+          lastSelectedKey = hit.key;
+          applySelection(hit.key, true);
+          hidePanel();
+          // A synthetic Enter click keeps focus in the input; leave it so the
+          // canvas/editor receives the following keystrokes.
+          if (chrome !== null) chrome.input.blur();
+          hit.open();
+        });
         body.append(row);
       }
     }
     resultsBox.append(section);
   }
+  applySelection(lastSelectedKey, false);
 }
 
 /** Opens a link hit: focuses the source thought, opens the link editor. */
@@ -459,4 +611,5 @@ export const searchInternals = {
   DEFAULT_OPTIONS,
   isSearchableQuery,
   MIN_QUERY_LENGTH,
+  nextNavIndex,
 };
