@@ -446,6 +446,13 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     const entry = entries[i];
     if (entry !== undefined) grid.append(buildCloud(entry, dir));
   }
+  // Request indicators only AFTER the clouds are in the DOM: a cached value is
+  // applied synchronously and would otherwise patch nothing (the focus row
+  // loads it after mounting for the same reason).
+  for (let i = first; i < last; i++) {
+    const entry = entries[i];
+    if (entry !== undefined) queueIndicatorLoad(entry.id);
+  }
   redrawLinks?.();
 }
 
@@ -621,7 +628,6 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
     });
   });
 
-  queueIndicatorLoad(entry.id);
   return cloud;
 }
 
@@ -692,6 +698,10 @@ function applyIndicators(id: string, info: IndicatorInfo): void {
       perm.classList.add('active');
       perm.title = 'Есть постоянный комментарий';
     } else {
+      // Explicitly dim: this may re-patch a previously active cell (the
+      // permanent comment was deleted while the cloud stayed rendered).
+      perm.classList.add('dim');
+      perm.classList.remove('active');
       perm.title = 'Постоянного комментария нет';
     }
     chrono.textContent = `📅${info.chrono}`;
