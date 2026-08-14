@@ -922,6 +922,10 @@ export function focus(
     source_id: l.source_id,
     target_id: l.target_id,
     type_id: l.type_id,
+    // Per-link line-style override (null = inherit from the type); 08-ui-spec.md §6.9.
+    color: l.color,
+    style: l.style,
+    width: l.width,
   }));
   // Whether each visible thought has any incoming/outgoing link at all —
   // drives the top/bottom ellipse fill so chains are visible off-screen.

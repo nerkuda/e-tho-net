@@ -5,6 +5,7 @@
  * docs/03-server-api.md §7. SQLite 0/1 INTEGER columns surface as `boolean`.
  */
 
+import type { LinkStyle } from '../enums.js';
 import type { ThoughtRef } from './thought.js';
 
 /** A directed link between two thoughts (02-data-model.md §3.6). */
@@ -15,6 +16,12 @@ export interface Link {
   /** Thought the link points at. */
   target_id: string;
   type_id: string | null;
+  /** Override of the type's line colour; `null` = inherit from the type. */
+  color: string | null;
+  /** Override of the type's dash style; `null` = inherit from the type. */
+  style: LinkStyle | null;
+  /** Override of the type's line width; `null` = inherit from the type. */
+  width: number | null;
   active: boolean;
   version: number;
   /** ISO-8601 UTC. */
@@ -31,6 +38,9 @@ export interface LinkCreateInput {
   source_id: string;
   target_id: string;
   type_id?: string | null;
+  color?: string | null;
+  style?: LinkStyle | null;
+  width?: number | null;
   active?: boolean;
 }
 
@@ -38,6 +48,9 @@ export interface LinkCreateInput {
  *  `changes` payload of `link.updated` real-time events. */
 export interface LinkUpdateInput {
   type_id?: string | null;
+  color?: string | null;
+  style?: LinkStyle | null;
+  width?: number | null;
   active?: boolean;
 }
 

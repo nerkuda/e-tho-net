@@ -214,10 +214,27 @@ function edgesFromNeighbours(focus: FocusResponse): FocusEdge[] {
   const fid = focus.focused.id;
   const edges: FocusEdge[] = [];
   for (const n of focus.parents) {
-    edges.push({ id: n.link_id, source_id: n.id, target_id: fid, type_id: n.link_type_id });
+    edges.push({
+      id: n.link_id,
+      source_id: n.id,
+      target_id: fid,
+      type_id: n.link_type_id,
+      // Override unknown in this fallback; inherit from the type.
+      color: null,
+      style: null,
+      width: null,
+    });
   }
   for (const n of focus.children) {
-    edges.push({ id: n.link_id, source_id: fid, target_id: n.id, type_id: n.link_type_id });
+    edges.push({
+      id: n.link_id,
+      source_id: fid,
+      target_id: n.id,
+      type_id: n.link_type_id,
+      color: null,
+      style: null,
+      width: null,
+    });
   }
   return edges;
 }
@@ -364,22 +381,37 @@ function drawTopLine(
   svgTop.append(line);
 }
 
-/** Stroke styling for a bundle (one shared type, else default). */
+/** Stroke styling for a bundle: per-link override wins, else the type default. */
 function linkStyle(bundle: Bundle): { color: string; width: number; dash: string } {
-  const types = new Set(bundle.edges.map((e) => e.type_id));
-  if (types.size === 1) {
-    const typeId = bundle.edges[0]?.type_id ?? null;
-    const type: LinkType | undefined =
-      typeId !== null ? store.state.linkTypes.find((t) => t.id === typeId) : undefined;
-    if (type !== undefined) {
-      return {
-        color: type.color ?? DEFAULT_COLOR,
-        width: type.width,
-        dash: type.style === 'dashed' ? '6 4' : type.style === 'dotted' ? '2 4' : 'none',
-      };
-    }
+  const edges = bundle.edges;
+  if (edges.length === 0) {
+    return { color: DEFAULT_COLOR, width: BASE_WIDTH, dash: 'none' };
   }
-  return { color: DEFAULT_COLOR, width: BASE_WIDTH, dash: 'none' };
+  // Resolve one edge: its own override (color/style/width) wins over the type
+  // default (08-ui-spec.md §6.9). All edges of a bundle must agree, else the
+  // bundle is heterogeneous and falls back to the default stroke.
+  const resolve = (edge: FocusEdge) => {
+    const type =
+      edge.type_id !== null ? store.state.linkTypes.find((t) => t.id === edge.type_id) : undefined;
+    const color = edge.color ?? type?.color ?? null;
+    const style = edge.style ?? type?.style ?? 'solid';
+    const width = edge.width ?? type?.width ?? null;
+    return { color, style, width };
+  };
+  const first = resolve(edges[0]!);
+  const allAgree = edges.every((edge) => {
+    const s = resolve(edge);
+    return s.color === first.color && s.style === first.style && s.width === first.width;
+  });
+  if (!allAgree) {
+    return { color: DEFAULT_COLOR, width: BASE_WIDTH, dash: 'none' };
+  }
+  const dash = first.style === 'dashed' ? '6 4' : first.style === 'dotted' ? '2 4' : 'none';
+  return {
+    color: first.color ?? DEFAULT_COLOR,
+    width: first.width ?? BASE_WIDTH,
+    dash,
+  };
 }
 
 /** Highlights the bottom ellipse of the source and the top ellipse of the target. */

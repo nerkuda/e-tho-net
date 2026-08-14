@@ -19,6 +19,7 @@ import {
   type IconKind,
   type Link,
   type LinkCreateInput,
+  type LinkStyle,
   type LinkUpdateInput,
   type ThoughtLinkItem,
   type ThoughtLinksGrouped,
@@ -46,6 +47,9 @@ interface LinkRow {
   source_id: string;
   target_id: string;
   type_id: string | null;
+  color: string | null;
+  style: string | null;
+  width: number | null;
   active: number;
   version: number;
   created_at: string;
@@ -61,6 +65,9 @@ function rowToLink(row: LinkRow): Link {
     source_id: row.source_id,
     target_id: row.target_id,
     type_id: row.type_id,
+    color: row.color,
+    style: row.style as LinkStyle | null,
+    width: row.width,
     active: row.active === 1,
     version: row.version,
     created_at: row.created_at,
@@ -76,6 +83,9 @@ interface IncidentLinkRow {
   source_id: string;
   target_id: string;
   type_id: string | null;
+  color: string | null;
+  style: string | null;
+  width: number | null;
   active: number;
   version: number;
   created_at: string;
@@ -292,15 +302,18 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
     const now = new Date().toISOString();
     ndb
       .prepare(
-        `INSERT INTO links (id, source_id, target_id, type_id, active, version,
+        `INSERT INTO links (id, source_id, target_id, type_id, color, style, width, active, version,
                             created_at, updated_at, created_by, updated_by)
-         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
       )
       .run(
         id,
         input.source_id,
         input.target_id,
         typeId,
+        input.color ?? null,
+        input.style ?? null,
+        input.width ?? null,
         input.active === false ? 0 : 1,
         now,
         now,
@@ -348,6 +361,18 @@ export function updateLink(
       newTypeId = changes.type_id;
       sets.push('type_id = ?');
       args.push(changes.type_id);
+    }
+    if (changes.color !== undefined) {
+      sets.push('color = ?');
+      args.push(changes.color);
+    }
+    if (changes.style !== undefined) {
+      sets.push('style = ?');
+      args.push(changes.style);
+    }
+    if (changes.width !== undefined) {
+      sets.push('width = ?');
+      args.push(changes.width);
     }
     if (changes.active !== undefined) {
       sets.push('active = ?');
@@ -450,7 +475,8 @@ export function listLinksByThought(
   const showInactive = opts.showInactive === true ? 1 : 0;
   const rows = ndb
     .prepare(
-      `SELECT l.id, l.source_id, l.target_id, l.type_id, l.active, l.version,
+      `SELECT l.id, l.source_id, l.target_id, l.type_id, l.color, l.style, l.width,
+              l.active, l.version,
               l.created_at, l.updated_at, l.created_by, l.updated_by,
               lt.name_forward, lt.name_reverse,
               CASE WHEN l.target_id = ? THEN l.source_id ELSE l.target_id END AS other_id,

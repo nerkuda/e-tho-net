@@ -18,10 +18,12 @@ import { EtnError, type LinkCreateInput, type LinkUpdateInput } from '@etn/share
 import { sendCreated, sendSuccess } from '../http/responses.js';
 import {
   fieldBoolean,
+  fieldNullableInt,
   fieldNullableString,
   fieldString,
   openRouteNetworkDb,
   parseIfMatch,
+  parseLinkStyle,
   queryBoolean,
   queryStrings,
   requestBody,
@@ -63,6 +65,9 @@ function parseLinkCreateBody(body: Record<string, unknown>, requestId: string): 
     source_id: sourceId,
     target_id: targetId,
     type_id: fieldNullableString(body, 'type_id', requestId),
+    color: fieldNullableString(body, 'color', requestId),
+    style: parseLinkStyle(fieldNullableString(body, 'style', requestId), requestId),
+    width: fieldNullableInt(body, 'width', requestId),
     active: fieldBoolean(body, 'active', requestId),
   };
 }
@@ -72,6 +77,15 @@ function parseLinkUpdateBody(body: Record<string, unknown>, requestId: string): 
   const changes: LinkUpdateInput = {};
   if (body.type_id !== undefined) {
     changes.type_id = fieldNullableString(body, 'type_id', requestId);
+  }
+  if (body.color !== undefined) {
+    changes.color = fieldNullableString(body, 'color', requestId);
+  }
+  if (body.style !== undefined) {
+    changes.style = parseLinkStyle(fieldNullableString(body, 'style', requestId), requestId);
+  }
+  if (body.width !== undefined) {
+    changes.width = fieldNullableInt(body, 'width', requestId);
   }
   if (body.active !== undefined) {
     changes.active = fieldBoolean(body, 'active', requestId);

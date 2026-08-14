@@ -14,7 +14,9 @@ import type { FastifyRequest } from 'fastify';
 import {
   EtnError,
   ICON_KINDS,
+  LINK_STYLES,
   type IconKind,
+  type LinkStyle,
   type RealtimeAudience,
   type RealtimeEventMap,
   type RealtimeEventType,
@@ -193,6 +195,46 @@ export function parseIconKind(
 
 /** Maximum inline image-icon size (decoded), 256 KiB (08-ui-spec.md §6.8). */
 export const ICON_MAX_BYTES = 256 * 1024;
+
+/** Validate the optional link line `style` against the shared enum. */
+export function parseLinkStyle(
+  value: string | null | undefined,
+  requestId?: string,
+): LinkStyle | null | undefined {
+  if (value === undefined || value === null) {
+    return value as LinkStyle | null | undefined;
+  }
+  if (!(LINK_STYLES as readonly string[]).includes(value)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Недопустимый style связи.',
+      { field: 'style', allowed: LINK_STYLES },
+      requestId,
+    );
+  }
+  return value as LinkStyle;
+}
+
+/** Read an optional integer-or-null field; wrong type → 422. */
+export function fieldNullableInt(
+  obj: Record<string, unknown>,
+  key: string,
+  requestId?: string,
+): number | null | undefined {
+  const value = obj[key];
+  if (value === undefined || value === null) {
+    return value as number | null | undefined;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `${key} должен быть целым числом или null.`,
+      { field: key },
+      requestId,
+    );
+  }
+  return value;
+}
 
 /**
  * Validate an `image`-kind icon value: an `http(s)://` URL or a `data:image/…`

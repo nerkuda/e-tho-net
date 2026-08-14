@@ -8,7 +8,7 @@
  */
 
 import type { EtnErrorCode } from '../errors.js';
-import type { FocusDir, IconKind, SortKind, SortOrder } from '../enums.js';
+import type { FocusDir, IconKind, LinkStyle, SortKind, SortOrder } from '../enums.js';
 
 /** A thought entity (02-data-model.md §3.1, 03-server-api.md §6.1). */
 export interface Thought {
@@ -222,6 +222,12 @@ export interface FocusEdge {
   source_id: string;
   target_id: string;
   type_id: string | null;
+  /** Per-link override of the type's colour; `null` = inherit from the type. */
+  color: string | null;
+  /** Per-link override of the type's dash style; `null` = inherit. */
+  style: LinkStyle | null;
+  /** Per-link override of the type's width; `null` = inherit. */
+  width: number | null;
 }
 
 /** Response of `POST /thoughts/{id}/focus` (03-server-api.md §6.2). */

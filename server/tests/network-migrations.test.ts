@@ -30,6 +30,7 @@ const EXPECTED_FILES = [
   '011_fts.sql',
   '012_embeddings.sql',
   '013_thought_style_inheritance.sql',
+  '014_link_style_override.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -127,6 +128,14 @@ describe(
           }[]
         ).map((r) => r.name);
         assert.ok(typeCols.includes('icon_kind'), 'missing thought_types.icon_kind');
+
+        // 014 link line-style override columns (02-data-model.md §3.6).
+        const linkCols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('links') as { name: string }[]
+        ).map((r) => r.name);
+        assert.ok(linkCols.includes('color'), 'missing links.color');
+        assert.ok(linkCols.includes('style'), 'missing links.style');
+        assert.ok(linkCols.includes('width'), 'missing links.width');
       } finally {
         db.close();
       }
