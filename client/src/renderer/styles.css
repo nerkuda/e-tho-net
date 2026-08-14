@@ -1366,9 +1366,12 @@ body.dragging .ellipse {
   color: var(--text-dim);
 }
 
-/* Markdown view/edit field (08-ui-spec.md §6.4). */
+/* Markdown view/edit field (08-ui-spec.md §6.4): height follows the content
+   (min 5 lines); the editor panel itself provides scrolling. */
 .md-field-view {
   min-height: calc(1.55em * 5);
+  max-height: none;
+  overflow: visible;
   cursor: text;
 }
 

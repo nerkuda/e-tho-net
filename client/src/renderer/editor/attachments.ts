@@ -132,6 +132,8 @@ function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
     for (const attachment of attachments) {
       list.append(buildAttachmentItem(attachment));
     }
+    // Tell the group header to refresh its count badge.
+    box.closest('.group')?.dispatchEvent(new CustomEvent('etn:refresh-count'));
   }
 
   /** Builds one attachment row (thumbnail/icon + title + meta + delete). */

@@ -229,6 +229,8 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
     table.append(tbody);
     clear(tableWrap);
     tableWrap.append(table);
+    // Tell the group header to refresh its count badge (08-ui-spec.md §6.3).
+    box.closest('.group')?.dispatchEvent(new CustomEvent('etn:refresh-count'));
   }
 
   /** Opens the add/edit dialog for a chronological comment. */
@@ -244,13 +246,16 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
     toInput.type = 'date';
     toInput.value = existing?.valid_to?.slice(0, 10) ?? todayIso();
     const errorLine = span('', 'error-text');
-    // Existing comment: HTML view ↔ markdown edit (autosaves body_md); a new
-    // comment uses a plain textarea committed together with the dialog.
+    // The text is a markdown-field in both modes: double-click edits, leaving
+    // the field autosaves body_md and returns to the HTML view. For a NEW
+    // comment the first non-empty blur creates it (with the current dates), so
+    // «Сохранить» afterwards just updates the metadata. `commentId`/`version`
+    // are shared with the dialog buttons so autosaves never desync the version.
     let currentMd = existing?.body_md ?? '';
+    let commentId: string | null = existing?.id ?? null;
+    let version = existing?.version ?? 0;
     let textWidget: HTMLElement;
     if (existing !== null) {
-      const commentId = existing.id;
-      let version = existing.version;
       textWidget = createMarkdownField({
         md: existing.body_md,
         html: existing.body_html,
@@ -258,7 +263,9 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
           currentMd = md;
         },
         onSave: async (md) => {
-          const updated = await etn.comments.update(networkId, commentId, { body_md: md }, version);
+          const cid = commentId;
+          if (cid === null) return '';
+          const updated = await etn.comments.update(networkId, cid, { body_md: md }, version);
           version = updated.version;
           currentMd = md;
           invalidateIndicators(ctx.ownerId);
@@ -266,13 +273,37 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
         },
       });
     } else {
-      const area = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-      area.rows = 6;
-      area.value = currentMd;
-      area.addEventListener('input', () => {
-        currentMd = area.value;
+      textWidget = createMarkdownField({
+        md: '',
+        html: '',
+        onInput: (md) => {
+          currentMd = md;
+        },
+        onSave: async (md) => {
+          if (md.trim() === '') return '';
+          let html: string;
+          if (commentId === null) {
+            const created = await etn.comments.create(networkId, ctx.ownerType, ctx.ownerId, {
+              kind: 'chronological',
+              title: titleInput.value.trim() || null,
+              body_md: md,
+              valid_from: fromInput.value,
+              valid_to: toInput.value === '' ? null : toInput.value,
+            });
+            commentId = created.id;
+            version = created.version;
+            html = created.body_html;
+          } else {
+            const updated = await etn.comments.update(networkId, commentId, { body_md: md }, version);
+            version = updated.version;
+            html = updated.body_html;
+          }
+          invalidateIndicators(ctx.ownerId);
+          return html;
+        },
       });
-      textWidget = area;
+      // A new comment starts in edit mode.
+      editMarkdownField(textWidget);
     }
     const body = div('form-stack');
     body.append(
@@ -304,7 +335,11 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
                       )
                     ) {
                       try {
-                        await etn.comments.remove(networkId, existing.id, existing.version);
+                        // `version` (not `existing.version`): an autosave of the
+                        // text may have bumped it while the dialog was open.
+                        if (commentId !== null) {
+                          await etn.comments.remove(networkId, commentId, version);
+                        }
                         invalidateIndicators(ctx.ownerId);
                         close();
                         await reload();
@@ -326,26 +361,28 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
             void (async () => {
               const validTo = toInput.value === '' ? null : toInput.value;
               try {
-                if (existing === null) {
-                  await etn.comments.create(networkId, ctx.ownerType, ctx.ownerId, {
-                      kind: 'chronological',
-                      title: titleInput.value.trim() || null,
-                      body_md: currentMd,
-                      valid_from: fromInput.value,
-                      valid_to: validTo,
-                  });
-                } else {
+                // The text may already be autosaved (and the comment created)
+                // by the markdown field; then only the metadata is updated.
+                if (commentId !== null) {
                   await etn.comments.update(
                     networkId,
-                    existing.id,
+                    commentId,
                     {
                       title: titleInput.value.trim() || null,
                       body_md: currentMd,
                       valid_from: fromInput.value,
                       valid_to: validTo,
                     },
-                    existing.version,
+                    version,
                   );
+                } else {
+                  await etn.comments.create(networkId, ctx.ownerType, ctx.ownerId, {
+                    kind: 'chronological',
+                    title: titleInput.value.trim() || null,
+                    body_md: currentMd,
+                    valid_from: fromInput.value,
+                    valid_to: validTo,
+                  });
                 }
                 invalidateIndicators(ctx.ownerId);
                 close();

@@ -63,15 +63,19 @@ export function groupSection(spec: GroupSpec, entityId: string): HTMLElement {
   header.append(actionsBox);
   root.append(header);
 
-  // Async count badge: resolved independently of expansion.
-  if (spec.count === undefined && spec.loadCount !== undefined) {
+  // Async count badge: resolved independently of expansion, and re-resolved
+  // when the group body reports a change (e.g. an item was added/removed).
+  const updateCount = (): void => {
+    if (spec.count !== undefined || spec.loadCount === undefined) return;
     void Promise.resolve(spec.loadCount()).then((c) => {
       if (c !== undefined && c !== null) {
         countBadge.textContent = c;
         countBadge.classList.remove('hidden');
       }
     });
-  }
+  };
+  updateCount();
+  root.addEventListener('etn:refresh-count', updateCount);
 
   let body: HTMLElement | null = null;
 

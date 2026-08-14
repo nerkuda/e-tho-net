@@ -220,12 +220,18 @@ export function setAddDialogOpener(opener: ((ctx: AddDialogContext) => void) | n
   addDialogOpener = opener;
 }
 
-/** Invalidates cached indicator counts (realtime comment/attachment events). */
+/**
+ * Invalidates cached indicator counts and re-fetches them, patching the
+ * rendered clouds (called after comment/attachment changes and realtime events).
+ */
 export function invalidateIndicators(id: string | null): void {
   if (id === null) {
+    const ids = [...indicatorCache.keys()];
     indicatorCache.clear();
+    for (const known of ids) queueIndicatorLoad(known);
   } else {
     indicatorCache.delete(id);
+    queueIndicatorLoad(id);
   }
 }
 
@@ -625,7 +631,14 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
 
 /** Enqueues an indicator fetch for a thought (deduplicated, cached). */
 function queueIndicatorLoad(id: string): void {
-  if (indicatorCache.has(id) || indicatorQueue.includes(id)) return;
+  // Clouds are rebuilt on scroll/resize (virtualized zones); a cached value
+  // must be re-applied to the fresh DOM instead of being skipped.
+  const cached = indicatorCache.get(id);
+  if (cached !== undefined) {
+    applyIndicators(id, cached);
+    return;
+  }
+  if (indicatorQueue.includes(id)) return;
   indicatorQueue.push(id);
   scheduleIndicatorLoads();
 }
@@ -681,11 +694,11 @@ function applyIndicators(id: string, info: IndicatorInfo): void {
     } else {
       perm.title = 'Постоянного комментария нет';
     }
-    chrono.textContent = `📅 ${info.chrono}`;
+    chrono.textContent = `📅${info.chrono}`;
     chrono.classList.toggle('dim', info.chrono === 0);
     chrono.classList.toggle('active', info.chrono > 0);
     chrono.title = `Хронологических комментариев: ${info.chrono}`;
-    att.textContent = `📎 ${info.attachments}`;
+    att.textContent = `📎${info.attachments}`;
     att.classList.toggle('dim', info.attachments === 0);
     att.classList.toggle('active', info.attachments > 0);
     att.title = `Вложений: ${info.attachments}`;
