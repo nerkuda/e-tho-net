@@ -908,6 +908,20 @@ export function focus(
       order: prefs[dir]?.order,
     });
   }
+  // Zone exclusivity (08-ui-spec.md §2.1): a thought may appear in at most one
+  // zone. Priority: focus (never a neighbour) > parents > children > siblings —
+  // e.g. a thought that is both a child of the focus and of a focus's parent is
+  // listed in «Низ» only. Also collapses duplicate rows from parallel links of
+  // different types. Edges still cover all visible thoughts, so links to a
+  // thought's other roles keep drawing.
+  const taken = new Set<string>([thoughtId]);
+  for (const dir of dirs) {
+    grouped[dir] = grouped[dir].filter((n) => {
+      if (taken.has(n.id)) return false;
+      taken.add(n.id);
+      return true;
+    });
+  }
   // Every active link among the visible thoughts (focus + parents + children +
   // siblings) — for the canvas to draw links between any two visible clouds,
   // not only those incident to the focus.

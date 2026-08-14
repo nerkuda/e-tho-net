@@ -364,6 +364,49 @@ describe(
         }
       });
 
+      it('keeps zone membership exclusive: focus > parents > children > siblings', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          // Graph: P -> FOCUS; FOCUS -> DUP (also P -> DUP: child of a parent);
+          // P -> SIB (plain sibling); P2 -> FOCUS where P2 is also a sibling
+          // (P -> P2) — parents must win over both other zones.
+          const p = seedThought(ndb, { title: 'Parent' });
+          const focusId = seedThought(ndb, { title: 'Focus' });
+          const dup = seedThought(ndb, { title: 'DupChildAndSibling' });
+          const sib = seedThought(ndb, { title: 'Sibling' });
+          const p2 = seedThought(ndb, { title: 'ParentAndSibling' });
+          seedLink(ndb, p, focusId);
+          seedLink(ndb, focusId, dup);
+          seedLink(ndb, p, dup);
+          seedLink(ndb, p, sib);
+          seedLink(ndb, p, p2);
+          seedLink(ndb, p2, focusId);
+
+          const res = focus(ndb, USER, focusId);
+          assert.deepEqual(
+            res.parents.map((n) => n.id).sort(),
+            [p, p2].sort(),
+            'parents win over children/siblings',
+          );
+          assert.deepEqual(
+            res.children.map((n) => n.id),
+            [dup],
+            'child of focus + of a parent stays in children only',
+          );
+          assert.deepEqual(
+            res.siblings.map((n) => n.id),
+            [sib],
+            'siblings get only thoughts claimed by no other zone',
+          );
+          // No thought (including the focus) appears in two zones.
+          const all = [...res.parents, ...res.children, ...res.siblings].map((n) => n.id);
+          assert.equal(new Set(all).size, all.length);
+          assert.ok(!all.includes(focusId));
+        } finally {
+          ndb.close();
+        }
+      });
+
       it('getNeighbors honours the dir parameter', () => {
         const ndb = createInMemoryNetworkDb();
         try {
