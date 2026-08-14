@@ -69,6 +69,19 @@ function isViewableText(a: Attachment): boolean {
   return /\.(txt|md|markdown)$/i.test(a.file_path ?? '');
 }
 
+/** Thought-icon size limit, mirrors the server (`assertImageIcon`). */
+const THOUGHT_ICON_MAX_BYTES = 256 * 1024;
+
+/** Reads a Blob into a `data:` URL (FileReader — no Buffer in the renderer). */
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => resolve(String(reader.result)));
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('read failed')));
+    reader.readAsDataURL(blob);
+  });
+}
+
 /** Builds the attachments group body (drop zone + list). */
 function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
@@ -293,13 +306,36 @@ function buildAttachmentsBody(ctx: EditorContext): HTMLElement {
     }
   }
 
-  /** «Назначить иконкой мысли» — image files on a thought owner (L1). */
+  /**
+   * «Назначить иконкой мысли» — image files on a thought owner (L1). The
+   * thought icon must be a self-contained `data:image` URL (the server rejects
+   * machine-local `etnimg:` paths — other clients cannot resolve them), so the
+   * stored file is read back through the etnimg protocol and inlined, subject
+   * to the same 256 KiB limit as the icon dialog.
+   */
   async function assignAsThoughtIcon(attachment: Attachment): Promise<void> {
     const thought = ctx.thought;
     if (thought === null || attachment.file_path === null) return;
+    let dataUrl: string;
+    try {
+      const res = await fetch(etnimgUrl(attachment.file_path));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      if (blob.size > THOUGHT_ICON_MAX_BYTES) {
+        notice(
+          `Картинка слишком большая для иконки (${blob.size} Б; лимит ${THOUGHT_ICON_MAX_BYTES} Б).`,
+          'error',
+        );
+        return;
+      }
+      dataUrl = await blobToDataUrl(blob);
+    } catch {
+      notice('Не удалось прочитать файл вложения.', 'error');
+      return;
+    }
     try {
       const updated = await etn.thoughts.update(networkId, thought.id, {
-        icon: etnimgUrl(attachment.file_path),
+        icon: dataUrl,
         icon_kind: 'image',
       }, thought.version);
       const focus = store.state.focus;
