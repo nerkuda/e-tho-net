@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 
-import type { CurrentUser, FocusDir, Network } from '@etn/shared';
+import type { CurrentUser, FocusDir, Network, TypeOwnerType } from '@etn/shared';
 
 import type { RestClient } from '../net/rest-client.js';
 import type { RealtimeClient } from '../net/ws-client.js';
@@ -318,9 +318,74 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string) => requireRest(deps).listLinkTypes(networkId)),
   );
   handlers.set(
-    'types.listThoughtTypeProperties',
-    bind((networkId: string, typeId: string) =>
-      requireRest(deps).listThoughtTypeProperties(networkId, typeId),
+    'types.createLinkType',
+    bind((networkId: string, input: Parameters<RestClient['createLinkType']>[1]) =>
+      requireRest(deps).createLinkType(networkId, input),
+    ),
+  );
+  handlers.set(
+    'types.updateLinkType',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        input: Parameters<RestClient['updateLinkType']>[2],
+        expectedVersion: number,
+      ) => requireRest(deps).updateLinkType(networkId, id, input, expectedVersion),
+    ),
+  );
+  handlers.set(
+    'types.removeLinkType',
+    bind((networkId: string, id: string, expectedVersion: number, force?: boolean) =>
+      requireRest(deps).deleteLinkType(
+        networkId,
+        id,
+        expectedVersion,
+        force ? { force } : undefined,
+      ),
+    ),
+  );
+  handlers.set(
+    'types.listTypeProperties',
+    bind(
+      (networkId: string, ownerType: TypeOwnerType, typeId: string) =>
+        requireRest(deps).listTypeProperties(networkId, ownerType, typeId),
+    ),
+  );
+  handlers.set(
+    'types.createTypeProperty',
+    bind(
+      (
+        networkId: string,
+        ownerType: TypeOwnerType,
+        typeId: string,
+        input: Parameters<RestClient['createTypeProperty']>[3],
+      ) => requireRest(deps).createTypeProperty(networkId, ownerType, typeId, input),
+    ),
+  );
+  handlers.set(
+    'types.updateTypeProperty',
+    bind(
+      (
+        networkId: string,
+        ownerType: TypeOwnerType,
+        typeId: string,
+        propertyId: string,
+        input: Parameters<RestClient['updateTypeProperty']>[4],
+      ) =>
+        requireRest(deps).updateTypeProperty(networkId, ownerType, typeId, propertyId, input),
+    ),
+  );
+  handlers.set(
+    'types.removeTypeProperty',
+    bind((networkId: string, ownerType: TypeOwnerType, typeId: string, propertyId: string) =>
+      requireRest(deps).deleteTypeProperty(networkId, ownerType, typeId, propertyId),
+    ),
+  );
+  handlers.set(
+    'types.reorderTypeProperties',
+    bind((networkId: string, ownerType: TypeOwnerType, typeId: string, orderedIds: string[]) =>
+      requireRest(deps).reorderTypeProperties(networkId, ownerType, typeId, orderedIds),
     ),
   );
 

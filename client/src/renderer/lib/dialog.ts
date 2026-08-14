@@ -1,7 +1,9 @@
 /**
  * Modal dialog infrastructure (08-ui-spec.md §4, §6.6).
  *
- * One dialog at a time; Escape/backdrop click closes. `promptDialog` and
+ * Dialogs form a stack: opening one on top of another (a type editor over the
+ * type list, a confirmation over an editor) keeps the lower dialog open, and
+ * Escape / backdrop click / × close only the topmost one. `promptDialog` and
  * `confirmDialog` are convenience wrappers for the most common inputs.
  */
 
@@ -34,23 +36,20 @@ export interface DialogOptions {
   onMount?: (close: () => void) => void;
 }
 
-let overlay: HTMLDivElement | null = null;
+/** Open dialogs, bottom first. */
+let stack: HTMLDivElement[] = [];
 
-/** Closes the currently open dialog (no-op when none). */
+/** Closes the topmost open dialog (no-op when none). */
 export function closeDialog(): void {
-  if (overlay !== null) {
-    overlay.remove();
-    overlay = null;
-  }
+  const top = stack.pop();
+  top?.remove();
 }
 
 /**
- * Shows a modal dialog. Returns its close function. Only one dialog may be
- * open at a time — opening a new one closes the previous.
+ * Shows a modal dialog. Returns its close function. Opening while another
+ * dialog is open stacks the new one on top; the lower dialog stays mounted.
  */
 export function showDialog(opts: DialogOptions): () => void {
-  closeDialog();
-
   const backdrop = div('dialog-backdrop');
   const box = div('dialog-box');
   if (opts.width !== undefined) box.style.width = `${opts.width}px`;
@@ -86,17 +85,21 @@ export function showDialog(opts: DialogOptions): () => void {
   }
 
   const close = (): void => {
-    closeDialog();
+    const index = stack.indexOf(backdrop);
+    if (index >= 0) stack.splice(index, 1);
+    backdrop.remove();
   };
   const onKey = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') close();
+    // Lower dialogs ignore Escape even though they see the event too —
+    // same-target capture listeners run in registration order.
+    if (event.key === 'Escape' && stack[stack.length - 1] === backdrop) close();
   };
   window.addEventListener('keydown', onKey, true);
 
   backdrop.append(box);
   document.body.append(backdrop);
-  overlay = backdrop;
-  overlay.addEventListener('remove', () => {
+  stack.push(backdrop);
+  backdrop.addEventListener('remove', () => {
     window.removeEventListener('keydown', onKey, true);
   });
   opts.onMount?.(close);

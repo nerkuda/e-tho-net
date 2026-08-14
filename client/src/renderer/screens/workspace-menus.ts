@@ -20,6 +20,7 @@ import { toggleEditorVisibility } from '../editor/editor.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { showCreateNetworkDialog } from './networks.js';
 import { showCloudSizeSettings, showVisibilitySettings } from './settings.js';
+import { showLinkTypesDialog, showThoughtTypesDialog } from './type-manager.js';
 import type { NetworkMember, User } from '@etn/shared';
 
 /** Wires the toolbar network menu button. */
@@ -302,7 +303,8 @@ export function wireViewMenu(handles: WorkspaceHandles): void {
 /**
  * Builds the "View" menu items from the current state. Intended as a home for
  * workspace-layout commands; the first one toggles the editor panel — the only
- * way back once the editor (and its own header dropdown) is hidden.
+ * way back once the editor (and its own header dropdown) is hidden. The type
+ * catalogues (L6) open from here too.
  */
 export function buildViewMenuItems(): MenuItem[] {
   const hidden = store.state.editorPosition === 'hidden';
@@ -311,5 +313,8 @@ export function buildViewMenuItems(): MenuItem[] {
       label: hidden ? 'Показать редактор' : 'Скрыть редактор',
       onClick: () => void toggleEditorVisibility(),
     },
+    MENU_SEPARATOR,
+    { label: 'Типы мыслей', onClick: () => showThoughtTypesDialog() },
+    { label: 'Типы связей', onClick: () => showLinkTypesDialog() },
   ];
 }

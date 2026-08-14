@@ -1,15 +1,21 @@
 /**
- * Settings dialogs for thought/link visual style (08-ui-spec.md §6.9).
+ * Settings dialogs for thought/link visual style (08-ui-spec.md §6.9; type
+ * editors reuse them, L6).
  *
  * - Thought: text/background colours + four font-style toggles.
  * - Link: line colour, dash style, width.
+ *
+ * Both exist in a "type" mode (opts.mode = 'type'): the title says so and the
+ * «Сброс» button resets to the plain defaults instead of nulling the entity's
+ * manual overrides (a type's font flags are NOT NULL; a link type has no
+ * per-link override semantics).
  *
  * Both expose a «Сброс» button that nulls every manual override so the entity is
  * shown with its type's defaults again (02-data-model.md §3.1.1, §3.6). Each
  * control commits its change immediately through the caller-provided `onApply`.
  */
 
-import { LINK_STYLES, type LinkStyle, type LinkUpdateInput, type ThoughtUpdateInput } from '@etn/shared';
+import { LINK_STYLES, type LinkStyle } from '@etn/shared';
 
 import { showDialog } from '../lib/dialog.js';
 import { button, div, el, setTooltip } from '../lib/dom.js';
@@ -24,6 +30,27 @@ export interface ResolvedThoughtStyle {
   strike: boolean;
 }
 
+/**
+ * Style patch shared by the thought header (`ThoughtUpdateInput`) and the
+ * thought-type editor (`ThoughtTypeUpdateInput`) — the common field subset.
+ */
+export interface ThoughtStylePatch {
+  icon?: string | null;
+  fg_color?: string | null;
+  bg_color?: string | null;
+  font_bold?: boolean | null;
+  font_italic?: boolean | null;
+  font_underline?: boolean | null;
+  font_strike?: boolean | null;
+}
+
+/** Line-style patch shared by the link header and the link-type editor. */
+export interface LinkStylePatch {
+  color?: string | null;
+  style?: LinkStyle | null;
+  width?: number | null;
+}
+
 /** Wraps a control with a small caption. */
 function colorField(caption: string, input: HTMLElement): HTMLElement {
   const wrap = div('style-color-field');
@@ -34,9 +61,11 @@ function colorField(caption: string, input: HTMLElement): HTMLElement {
 /** Opens the thought settings dialog (colours + font style + reset). */
 export function showThoughtStyleDialog(opts: {
   resolved: ResolvedThoughtStyle;
-  onApply: (patch: ThoughtUpdateInput) => Promise<boolean>;
+  onApply: (patch: ThoughtStylePatch) => Promise<boolean>;
+  /** `'type'` — editing a thought type: title + plain-default reset (L6). */
+  mode?: 'thought' | 'type';
 }): void {
-  const { resolved, onApply } = opts;
+  const { resolved, onApply, mode = 'thought' } = opts;
   const body = div('form-stack');
 
   const fgInput = el('input', 'color-input');
@@ -75,7 +104,7 @@ export function showThoughtStyleDialog(opts: {
   body.append(toggles);
 
   showDialog({
-    title: 'Настройки мысли',
+    title: mode === 'type' ? 'Настройки типа мысли' : 'Настройки мысли',
     body,
     buttons: [
       {
@@ -83,6 +112,20 @@ export function showThoughtStyleDialog(opts: {
         danger: true,
         keepOpen: true,
         onClick: (close) => {
+          if (mode === 'type') {
+            // A type's font flags are NOT NULL — reset to plain defaults.
+            void onApply({
+              fg_color: null,
+              bg_color: null,
+              font_bold: false,
+              font_italic: false,
+              font_underline: false,
+              font_strike: false,
+            }).then((ok) => {
+              if (ok) close();
+            });
+            return;
+          }
           // Null every manual style → inherit from the type.
           void onApply({
             icon: null,
@@ -105,9 +148,11 @@ export function showThoughtStyleDialog(opts: {
 /** Opens the link settings dialog (line colour/style/width + reset). */
 export function showLinkStyleDialog(opts: {
   resolved: { color: string | null; style: LinkStyle; width: number };
-  onApply: (patch: LinkUpdateInput) => Promise<void>;
+  onApply: (patch: LinkStylePatch) => Promise<void>;
+  /** `'type'` — editing a link type: title + plain-default reset (L6). */
+  mode?: 'link' | 'type';
 }): void {
-  const { resolved, onApply } = opts;
+  const { resolved, onApply, mode = 'link' } = opts;
   const body = div('form-stack');
 
   const colorInput = el('input', 'color-input');
@@ -144,7 +189,7 @@ export function showLinkStyleDialog(opts: {
   body.append(colorField('Толщина', widthInput));
 
   showDialog({
-    title: 'Настройки связи',
+    title: mode === 'type' ? 'Настройки типа связи' : 'Настройки связи',
     body,
     buttons: [
       {
@@ -152,6 +197,11 @@ export function showLinkStyleDialog(opts: {
         danger: true,
         keepOpen: true,
         onClick: (close) => {
+          if (mode === 'type') {
+            // A link type has no per-link override semantics — plain defaults.
+            void onApply({ color: null, style: 'solid', width: 1 }).then(() => close());
+            return;
+          }
           // Null every override → inherit from the link type.
           void onApply({ color: null, style: null, width: null }).then(() => close());
         },

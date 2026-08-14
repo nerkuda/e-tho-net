@@ -235,7 +235,11 @@ export interface DeleteLinkTypeOptions {
  * Delete a link type (docs/03-server-api.md §8).
  *
  * Throws `NOT_FOUND` (404), `VERSION_CONFLICT` (409), or `VALIDATION_ERROR`
- * (422) when links still reference the type without `force`.
+ * (422) when links still reference the type without `force`. The links
+ * themselves stay — with `force` their `type_id` is nulled first.
+ *
+ * The type's property definitions are deleted along with it; stored values
+ * cascade via the `property_values.property_id` FK (ON DELETE CASCADE).
  */
 export function deleteLinkType(
   ndb: NetworkDb,
@@ -266,6 +270,9 @@ export function deleteLinkType(
     if (usage.c > 0) {
       ndb.prepare('UPDATE links SET type_id = NULL WHERE type_id = ?').run(id);
     }
+    ndb
+      .prepare("DELETE FROM type_properties WHERE owner_type = 'link_type' AND owner_id = ?")
+      .run(id);
     ndb.prepare('DELETE FROM link_types WHERE id = ?').run(id);
   });
 }

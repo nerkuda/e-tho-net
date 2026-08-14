@@ -228,6 +228,9 @@ export interface DeleteThoughtTypeOptions {
  *   * `VALIDATION_ERROR` (422) if thoughts still reference the type and `force`
  *     is not set. With `force`, those thoughts' `type_id` is set to NULL (and
  *     their `updated_at`/`updated_by` refreshed) before the type row is removed.
+ *
+ * The type's property definitions are deleted along with it; stored values
+ * cascade via the `property_values.property_id` FK (ON DELETE CASCADE).
  */
 export function deleteThoughtType(
   ndb: NetworkDb,
@@ -263,6 +266,9 @@ export function deleteThoughtType(
         )
         .run(now, opts.actorUserId ?? 'system', id);
     }
+    ndb
+      .prepare("DELETE FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?")
+      .run(id);
     ndb.prepare('DELETE FROM thought_types WHERE id = ?').run(id);
   });
 }

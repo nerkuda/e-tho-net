@@ -31,6 +31,7 @@ import {
   getTypeProperty,
   listTypeProperties,
   reorderTypeProperties,
+  setPropertyValue,
   updateTypeProperty,
 } from '../src/domain/property-service.js';
 import {
@@ -131,6 +132,26 @@ describe(
           ndb.close();
         }
       });
+
+      it('deleting a type cascades its property definitions and stored values', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const tt = createThoughtType(ndb, { name: 'Cascade' }, USER);
+          createTypeProperty(ndb, 'thought_type', tt.id, { key: 'author', value_type: 'text' });
+          const thoughtId = seedThought(ndb, tt.id);
+          setPropertyValue(ndb, 'thought', thoughtId, 'author', 'Jane');
+
+          deleteThoughtType(ndb, tt.id, 1, { force: true, actorUserId: USER });
+
+          assert.equal(listTypeProperties(ndb, 'thought_type', tt.id).length, 0);
+          const leftover = ndb.prepare('SELECT COUNT(*) AS c FROM property_values').get() as {
+            c: number;
+          };
+          assert.equal(leftover.c, 0);
+        } finally {
+          ndb.close();
+        }
+      });
     });
 
     describe('link types', () => {
@@ -206,6 +227,34 @@ describe(
           assert.equal(getLinkType(ndb, lt.id), null);
           const link = ndb.prepare('SELECT type_id FROM links').get() as { type_id: string | null };
           assert.equal(link.type_id, null);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('deleting a link type cascades its property definitions and values', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const lt = createLinkType(ndb, { name_forward: 'f', name_reverse: 'r' }, USER);
+          createTypeProperty(ndb, 'link_type', lt.id, { key: 'weight', value_type: 'number' });
+          const a = seedThought(ndb);
+          const b = seedThought(ndb);
+          const linkId = randomUUID();
+          ndb
+            .prepare(
+              `INSERT INTO links (id, source_id, target_id, type_id, active, version, created_at, updated_at, created_by, updated_by)
+               VALUES (?, ?, ?, ?, 1, 1, '2024', '2024', 'u', 'u')`,
+            )
+            .run(linkId, a, b, lt.id);
+          setPropertyValue(ndb, 'link', linkId, 'weight', 5);
+
+          deleteLinkType(ndb, lt.id, 1, { force: true });
+
+          assert.equal(listTypeProperties(ndb, 'link_type', lt.id).length, 0);
+          const leftover = ndb.prepare('SELECT COUNT(*) AS c FROM property_values').get() as {
+            c: number;
+          };
+          assert.equal(leftover.c, 0);
         } finally {
           ndb.close();
         }

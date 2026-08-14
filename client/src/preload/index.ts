@@ -80,8 +80,21 @@ function buildApi(): EtnApi {
       removeThoughtType: (networkId, id, expectedVersion, force) =>
         invoke('types.removeThoughtType', networkId, id, expectedVersion, force),
       listLinkTypes: (networkId) => invoke('types.listLinkTypes', networkId),
-      listThoughtTypeProperties: (networkId, typeId) =>
-        invoke('types.listThoughtTypeProperties', networkId, typeId),
+      createLinkType: (networkId, input) => invoke('types.createLinkType', networkId, input),
+      updateLinkType: (networkId, id, input, expectedVersion) =>
+        invoke('types.updateLinkType', networkId, id, input, expectedVersion),
+      removeLinkType: (networkId, id, expectedVersion, force) =>
+        invoke('types.removeLinkType', networkId, id, expectedVersion, force),
+      listTypeProperties: (networkId, ownerType, typeId) =>
+        invoke('types.listTypeProperties', networkId, ownerType, typeId),
+      createTypeProperty: (networkId, ownerType, typeId, input) =>
+        invoke('types.createTypeProperty', networkId, ownerType, typeId, input),
+      updateTypeProperty: (networkId, ownerType, typeId, propertyId, input) =>
+        invoke('types.updateTypeProperty', networkId, ownerType, typeId, propertyId, input),
+      removeTypeProperty: (networkId, ownerType, typeId, propertyId) =>
+        invoke('types.removeTypeProperty', networkId, ownerType, typeId, propertyId),
+      reorderTypeProperties: (networkId, ownerType, typeId, orderedIds) =>
+        invoke('types.reorderTypeProperties', networkId, ownerType, typeId, orderedIds),
     },
     properties: {
       get: (networkId, ownerType, ownerId) =>

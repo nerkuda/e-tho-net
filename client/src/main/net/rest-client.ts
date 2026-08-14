@@ -28,6 +28,7 @@ import {
   type ApiSuccess,
   type EtnErrorBody,
   type EtnErrorCode,
+  type TypeOwnerType,
 } from '@etn/shared';
 
 /** Maximum total attempts (initial + retries) for a transient failure. */
@@ -821,53 +822,82 @@ export class RestClient {
     );
   }
 
-  /** `GET /networks/{nid}/thought-types/{id}/properties`. */
-  public async listThoughtTypeProperties(
+  /** URL path of a type-kind collection (`thought-types` / `link-types`). */
+  private static typeCollectionPath(networkId: string, ownerType: TypeOwnerType): string {
+    const kind = ownerType === 'thought_type' ? 'thought-types' : 'link-types';
+    return `/networks/${encodeURIComponent(networkId)}/${kind}`;
+  }
+
+  /** `GET /networks/{nid}/{kind}-types/{id}/properties` — list definitions. */
+  public async listTypeProperties(
     networkId: string,
+    ownerType: TypeOwnerType,
     typeId: string,
   ): Promise<import('@etn/shared').PropertyDefinition[]> {
     return this.request(
       'GET',
-      `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(typeId)}/properties`,
+      `${RestClient.typeCollectionPath(networkId, ownerType)}/${encodeURIComponent(typeId)}/properties`,
     );
   }
 
-  /** `POST /networks/{nid}/thought-types/{id}/properties`. */
-  public async createThoughtTypeProperty(
+  /** `POST /networks/{nid}/{kind}-types/{id}/properties` — create a definition. */
+  public async createTypeProperty(
     networkId: string,
+    ownerType: TypeOwnerType,
     typeId: string,
     input: import('@etn/shared').PropertyDefinitionInput,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').PropertyDefinition> {
     return this.request(
       'POST',
-      `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(typeId)}/properties`,
+      `${RestClient.typeCollectionPath(networkId, ownerType)}/${encodeURIComponent(typeId)}/properties`,
       { body: input, requestOptions: opts },
     );
   }
 
-  /** `GET /networks/{nid}/link-types/{id}/properties`. */
-  public async listLinkTypeProperties(
+  /** `PATCH …/types/{id}/properties/{propId}` — update a definition. */
+  public async updateTypeProperty(
     networkId: string,
+    ownerType: TypeOwnerType,
     typeId: string,
-  ): Promise<import('@etn/shared').PropertyDefinition[]> {
-    return this.request(
-      'GET',
-      `/networks/${encodeURIComponent(networkId)}/link-types/${encodeURIComponent(typeId)}/properties`,
-    );
-  }
-
-  /** `POST /networks/{nid}/link-types/{id}/properties`. */
-  public async createLinkTypeProperty(
-    networkId: string,
-    typeId: string,
-    input: import('@etn/shared').PropertyDefinitionInput,
+    propertyId: string,
+    input: import('@etn/shared').PropertyDefinitionUpdateInput,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').PropertyDefinition> {
     return this.request(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/link-types/${encodeURIComponent(typeId)}/properties`,
+      'PATCH',
+      `${RestClient.typeCollectionPath(networkId, ownerType)}/${encodeURIComponent(typeId)}/properties/${encodeURIComponent(propertyId)}`,
       { body: input, requestOptions: opts },
+    );
+  }
+
+  /** `DELETE …/types/{id}/properties/{propId}` — delete a definition (+values). */
+  public async deleteTypeProperty(
+    networkId: string,
+    ownerType: TypeOwnerType,
+    typeId: string,
+    propertyId: string,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `${RestClient.typeCollectionPath(networkId, ownerType)}/${encodeURIComponent(typeId)}/properties/${encodeURIComponent(propertyId)}`,
+      { requestOptions: opts },
+    );
+  }
+
+  /** `PUT …/types/{id}/properties/reorder` — assign positions by id order. */
+  public async reorderTypeProperties(
+    networkId: string,
+    ownerType: TypeOwnerType,
+    typeId: string,
+    orderedIds: string[],
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').PropertyDefinition[]> {
+    return this.request(
+      'PUT',
+      `${RestClient.typeCollectionPath(networkId, ownerType)}/${encodeURIComponent(typeId)}/properties/reorder`,
+      { body: { ordered_ids: orderedIds }, requestOptions: opts },
     );
   }
 

@@ -31,12 +31,16 @@ import type {
   Link,
   LinkCreateInput,
   LinkType,
+  LinkTypeInput,
+  LinkTypeUpdateInput,
   LinkUpdateInput,
   MentionHit,
   Network,
   NetworkListItem,
   NetworkMember,
   PropertyDefinition,
+  PropertyDefinitionInput,
+  PropertyDefinitionUpdateInput,
   PropertyValue,
   SearchRequest,
   SearchResponse,
@@ -50,6 +54,7 @@ import type {
   ThoughtTypeInput,
   ThoughtTypeUpdateInput,
   ThoughtUpdateInput,
+  TypeOwnerType,
   User,
   UserFocusPreferences,
   UserPreferenceEntry,
@@ -212,8 +217,50 @@ export interface EtnApi {
     ): Promise<void>;
     /** `GET /link-types` — link type catalogue (line labels on the canvas, H6). */
     listLinkTypes(networkId: string): Promise<LinkType[]>;
-    /** `GET /thought-types/{id}/properties` — property definitions of a type (H11). */
-    listThoughtTypeProperties(networkId: string, typeId: string): Promise<PropertyDefinition[]>;
+    createLinkType(networkId: string, input: LinkTypeInput): Promise<LinkType>;
+    updateLinkType(
+      networkId: string,
+      id: string,
+      input: LinkTypeUpdateInput,
+      expectedVersion: number,
+    ): Promise<LinkType>;
+    removeLinkType(
+      networkId: string,
+      id: string,
+      expectedVersion: number,
+      force?: boolean,
+    ): Promise<void>;
+    /** Property definitions of a type (L6); `ownerType` picks the type kind. */
+    listTypeProperties(
+      networkId: string,
+      ownerType: TypeOwnerType,
+      typeId: string,
+    ): Promise<PropertyDefinition[]>;
+    createTypeProperty(
+      networkId: string,
+      ownerType: TypeOwnerType,
+      typeId: string,
+      input: PropertyDefinitionInput,
+    ): Promise<PropertyDefinition>;
+    updateTypeProperty(
+      networkId: string,
+      ownerType: TypeOwnerType,
+      typeId: string,
+      propertyId: string,
+      input: PropertyDefinitionUpdateInput,
+    ): Promise<PropertyDefinition>;
+    removeTypeProperty(
+      networkId: string,
+      ownerType: TypeOwnerType,
+      typeId: string,
+      propertyId: string,
+    ): Promise<void>;
+    reorderTypeProperties(
+      networkId: string,
+      ownerType: TypeOwnerType,
+      typeId: string,
+      orderedIds: string[],
+    ): Promise<PropertyDefinition[]>;
   };
   properties: {
     get(

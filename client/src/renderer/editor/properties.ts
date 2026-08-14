@@ -53,7 +53,7 @@ async function countProperties(ctx: EditorContext): Promise<string | undefined> 
   if (typeId === null) return undefined;
   const networkId = requireNetworkId();
   try {
-    const defs = await etn.types.listThoughtTypeProperties(networkId, typeId);
+    const defs = await etn.types.listTypeProperties(networkId, 'thought_type', typeId);
     return `(${defs.length})`;
   } catch {
     return undefined;
@@ -90,7 +90,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     let values: PropertyValue[];
     try {
       [definitions, values] = await Promise.all([
-        etn.types.listThoughtTypeProperties(networkId, typedId),
+        etn.types.listTypeProperties(networkId, 'thought_type', typedId),
         etn.properties.get(networkId, 'thought', thoughtId),
       ]);
       const refIds = values.map((v) => v.value).filter((v): v is string => typeof v === 'string');
