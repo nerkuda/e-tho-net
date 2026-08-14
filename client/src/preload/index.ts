@@ -164,6 +164,8 @@ function buildApi(): EtnApi {
       export: (networkId, request) => invoke('system.export', networkId, request),
       getJob: (jobId) => invoke('system.getJob', jobId),
       pickImage: () => invoke('system.pickImage'),
+      saveClipboardImage: (dataUrl, suggestedName) =>
+        invoke('system.saveClipboardImage', dataUrl, suggestedName),
     },
   };
 }

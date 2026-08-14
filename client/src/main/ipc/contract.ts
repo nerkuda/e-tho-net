@@ -323,5 +323,11 @@ export interface EtnApi {
      * is too large / unreadable.
      */
     pickImage(): Promise<string | null>;
+    /**
+     * Saves a base64 `data:image/…` URL (e.g. a clipboard paste) as a file under
+     * the app's `attachments/` directory and resolves its absolute path.
+     * Resolves `null` for an invalid/oversized payload.
+     */
+    saveClipboardImage(dataUrl: string, suggestedName: string): Promise<string | null>;
   };
 }

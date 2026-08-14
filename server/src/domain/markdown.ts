@@ -38,7 +38,9 @@ function escapeHtml(input: string): string {
  * accepted. Returns the cleaned URL string when safe, or `null` when the URL is
  * rejected (caller renders it as plain text).
  *
- * @param allowData - when true, `data:` is accepted (used for inline images).
+ * @param allowData - when true, `data:` and `file:` are accepted (used for
+ *   inline images; `file:` covers images pasted from the clipboard and stored
+ *   as local attachment files).
  */
 function safeUrl(rawUrl: string, allowData: boolean): string | null {
   const url = rawUrl.trim();
@@ -50,7 +52,9 @@ function safeUrl(rawUrl: string, allowData: boolean): string | null {
   const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(url);
   if (schemeMatch) {
     const scheme = schemeMatch[1]!.toLowerCase();
-    const allowed = allowData ? ['http', 'https', 'mailto', 'data'] : ['http', 'https', 'mailto'];
+    const allowed = allowData
+      ? ['http', 'https', 'mailto', 'data', 'file']
+      : ['http', 'https', 'mailto'];
     if (!allowed.includes(scheme)) return null;
   }
   return url;

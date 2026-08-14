@@ -94,6 +94,16 @@ describe('markdown renderer', () => {
     assert.ok(html.includes('click'));
   });
 
+  it('allows file:// URLs for images but not for links', () => {
+    // Images pasted from the clipboard reference local attachment files.
+    const img = renderMarkdown('![alt](file:///C:/pics/img%201.png)');
+    assert.ok(img.includes('<img src="file:///C:/pics/img%201.png" alt="alt"'));
+    // A file:// link stays plain text (allow-list applies to links strictly).
+    const link = renderMarkdown('[x](file:///C:/secrets.txt)');
+    assert.ok(!link.includes('href="file'));
+    assert.ok(link.includes('x'));
+  });
+
   it('renders a GFM table', () => {
     const html = renderMarkdown('| a | b |\n| --- | --- |\n| 1 | 2 |');
     assert.ok(html.includes('<table>'));

@@ -121,6 +121,7 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
     field = createMarkdownField({
       md: permanent?.body_md ?? '',
       html: permanent?.body_html ?? '',
+      attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
       onInput: (md) => scheduleDraft(md),
       onSave: async (md) => {
         let html: string;
@@ -259,6 +260,7 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
       textWidget = createMarkdownField({
         md: existing.body_md,
         html: existing.body_html,
+        attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
         onInput: (md) => {
           currentMd = md;
         },
@@ -276,6 +278,7 @@ function buildChronoBody(ctx: EditorContext): HTMLElement {
       textWidget = createMarkdownField({
         md: '',
         html: '',
+        attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
         onInput: (md) => {
           currentMd = md;
         },
