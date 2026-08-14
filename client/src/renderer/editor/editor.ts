@@ -22,9 +22,10 @@ import {
 } from '@etn/shared';
 
 import { refreshFocus, requireNetworkId } from '../app.js';
-import { resolveCloudStyle } from '../canvas/canvas.js';
+import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { canSave, clearDraft, findDraft, offlineNotice, saveDraft } from '../drafts.js';
+import { promptDialog } from '../lib/dialog.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -36,6 +37,7 @@ import { registerAttachmentGroup } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
 import { registerLinksGroup } from './links-group.js';
 import { registerMentionsGroup } from './mentions.js';
+import { showThoughtStyleDialog } from './style-dialog.js';
 
 /** What the editor currently edits. */
 export interface EditorContext {
@@ -52,6 +54,7 @@ const groupBuilders: GroupBuilder[] = [];
 let host: HTMLElement | null = null;
 let scrollBox: HTMLElement | null = null;
 let positionButton: HTMLButtonElement | null = null;
+let titleEl: HTMLElement | null = null;
 let lastSignature = '';
 
 /** Registers an editor group builder (H9–H12). */
@@ -99,10 +102,10 @@ export function mountEditor(editorHost: HTMLElement): void {
   host.replaceChildren();
 
   const header = div('editor-header');
-  const title = span('Редактор', 'editor-title');
+  titleEl = span('', 'editor-title');
   positionButton = button('▾', () => void openPositionMenu(), 'btn small');
   setTooltip(positionButton, 'Положение редактора');
-  header.append(title, positionButton);
+  header.append(titleEl, positionButton);
   scrollBox = div('editor-scroll');
   host.append(header, scrollBox);
 
@@ -137,6 +140,11 @@ export function mountEditor(editorHost: HTMLElement): void {
 async function render(): Promise<void> {
   if (host === null || scrollBox === null || positionButton === null) return;
   const ctx = currentEditorContext();
+
+  // Panel title reflects what is selected (08-ui-spec.md §6.2).
+  if (titleEl !== null) {
+    titleEl.textContent = ctx === null ? '' : ctx.ownerType === 'link' ? 'Связь' : 'Мысль';
+  }
 
   const signature =
     ctx === null
@@ -284,21 +292,38 @@ async function saveLink(
 // Thought header
 // ---------------------------------------------------------------------------
 
-/** Builds the thought header form (08-ui-spec.md §6.2). */
+/** Builds the thought header form (08-ui-spec.md §6.2.1). */
 function buildThoughtHeader(thought: Thought): HTMLElement {
   const box = div('editor-fields');
   const networkId = requireNetworkId();
 
-  const titleInput = el('input', 'text-input');
-  titleInput.type = 'text';
-  titleInput.value = thought.title;
-  titleInput.maxLength = 400;
+  // Top row: clickable icon box + large multiline title (no field labels —
+  // placeholders only, 08-ui-spec.md §6.2).
+  const topRow = div('editor-top-row');
+
+  const iconBox = el('button', 'editor-icon-box') as HTMLButtonElement;
+  iconBox.type = 'button';
+  applyThoughtIcon(iconBox, thought);
+  setTooltip(iconBox, 'Изменить иконку');
+  iconBox.addEventListener('click', () => void changeThoughtIcon(thought));
+
+  const titleArea = el('textarea', 'editor-title-input') as HTMLTextAreaElement;
+  titleArea.value = thought.title;
+  titleArea.maxLength = 400;
+  titleArea.rows = 1;
+  titleArea.placeholder = 'Заголовок';
+  const resizeTitle = (): void => {
+    titleArea.style.height = 'auto';
+    // CSS caps the visible height at ~5 lines (max-height + overflow).
+    titleArea.style.height = `${titleArea.scrollHeight}px`;
+  };
 
   // Draft mirroring (H19): the in-progress title is saved locally and cleared
   // after a successful send; an existing draft restores the unsaved value.
   let titleDraftId: string | null = null;
   let titleDraftTimer: number | null = null;
-  titleInput.addEventListener('input', () => {
+  titleArea.addEventListener('input', () => {
+    resizeTitle();
     if (titleDraftTimer !== null) window.clearTimeout(titleDraftTimer);
     titleDraftTimer = window.setTimeout(() => {
       void saveDraft({
@@ -306,7 +331,7 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
         entityType: 'thought',
         entityId: thought.id,
         field: 'title',
-        value: titleInput.value,
+        value: titleArea.value,
         baseVersion: thought.version,
       }).then((id) => {
         titleDraftId = id;
@@ -314,17 +339,19 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     }, 800);
   });
   void findDraft(networkId, 'thought', thought.id).then((hit) => {
-    if (hit !== null && titleInput.value !== hit.value) {
-      titleInput.value = hit.value;
+    if (hit !== null && titleArea.value !== hit.value) {
+      titleArea.value = hit.value;
       titleDraftId = hit.id;
+      resizeTitle();
       notice('Восстановлен несохранённый черновик заголовка.');
     }
   });
 
   const commitTitle = (): void => {
-    const value = titleInput.value.trim();
+    const value = titleArea.value.trim();
     if (value === '' || value === thought.title) {
-      titleInput.value = thought.title;
+      titleArea.value = thought.title;
+      resizeTitle();
       return;
     }
     if (!canSave()) {
@@ -335,18 +362,23 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
       if (ok) void clearDraft(titleDraftId);
     });
   };
-  titleInput.addEventListener('blur', commitTitle);
-  titleInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+  titleArea.addEventListener('blur', commitTitle);
+  // Enter inserts a newline; Ctrl/Cmd+Enter commits.
+  titleArea.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      titleInput.blur();
+      titleArea.blur();
     }
   });
-  box.append(editorField('Заголовок', titleInput));
 
-  const synonymsInput = el('input', 'text-input');
+  topRow.append(iconBox, titleArea);
+  box.append(topRow);
+
+  // Synonyms (single line, comma-separated).
+  const synonymsInput = el('input', 'text-input synonyms-input');
   synonymsInput.type = 'text';
   synonymsInput.value = thought.synonyms.join(', ');
+  synonymsInput.placeholder = 'Синонимы (через запятую)';
   const commitSynonyms = (): void => {
     const synonyms = synonymsInput.value
       .split(',')
@@ -361,10 +393,10 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
       synonymsInput.blur();
     }
   });
-  box.append(editorField('Синонимы (через запятую)', synonymsInput));
+  box.append(synonymsInput);
 
-  // Row: type + icon + active.
-  const row1 = div('editor-header-row');
+  // Bottom row: type + settings (⚙) + active toggle.
+  const row = div('editor-header-row');
 
   const typeSelect = el('select', 'select-input');
   const typePlaceholder = el('option', undefined, 'без типа');
@@ -380,15 +412,8 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     void saveThought({ type_id: typeSelect.value === '' ? null : typeSelect.value });
   });
 
-  const iconInput = el('input', 'text-input icon-input');
-  iconInput.type = 'text';
-  iconInput.value = thought.icon ?? '';
-  iconInput.maxLength = 8;
-  iconInput.placeholder = 'эмодзи';
-  iconInput.addEventListener('blur', () => {
-    const value = iconInput.value.trim();
-    void saveThought({ icon: value === '' ? null : value, icon_kind: 'emoji' });
-  });
+  const settingsBtn = button('⚙', () => openThoughtSettings(thought), 'icon-btn');
+  setTooltip(settingsBtn, 'Цвет и стиль');
 
   const activeLabel = el('label', 'checkbox-row');
   const activeCheck = el('input');
@@ -398,57 +423,41 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   activeCheck.addEventListener('change', () => {
     void saveThought({ active: activeCheck.checked });
   });
-  activeLabel.append(activeCheck, span('активна'));
+  activeLabel.append(activeCheck, span('актуально'));
 
-  row1.append(typeSelect, iconInput, activeLabel);
-  box.append(editorField('Тип / иконка / активность', row1));
+  row.append(typeSelect, settingsBtn, activeLabel);
+  box.append(row);
 
-  // Row: colors + font toggles.
-  const row2 = div('editor-header-row');
-
-  const fgColor = el('input', 'color-input');
-  fgColor.type = 'color';
-  fgColor.value = thought.fg_color ?? '#20242d';
-  fgColor.title = 'Цвет текста';
-  fgColor.addEventListener('change', () => {
-    void saveThought({ fg_color: fgColor.value });
-  });
-
-  const bgColor = el('input', 'color-input');
-  bgColor.type = 'color';
-  bgColor.value = thought.bg_color ?? '#ffffff';
-  bgColor.title = 'Цвет фона';
-  bgColor.addEventListener('change', () => {
-    void saveThought({ bg_color: bgColor.value });
-  });
-
-  const toggles = div('font-toggles');
-  // The toggles reflect the *resolved* style (own value, else the type's default)
-  // so an inherited flag still shows its effective state.
-  const style = resolveCloudStyle(thought);
-  const fontToggle = (
-    glyph: string,
-    title: string,
-    on: boolean,
-    apply: (value: boolean) => void,
-  ): void => {
-    const btn = button(
-      glyph,
-      () => apply(!btn.classList.contains('on')),
-      `font-toggle${on ? ' on' : ''}`,
-    );
-    setTooltip(btn, title);
-    toggles.append(btn);
-  };
-  fontToggle('Ж', 'Жирный', style.bold, (v) => void saveThought({ font_bold: v }));
-  fontToggle('Н', 'Курсив', style.italic, (v) => void saveThought({ font_italic: v }));
-  fontToggle('П', 'Подчёркнутый', style.underline, (v) => void saveThought({ font_underline: v }));
-  fontToggle('З', 'Зачёркнутый', style.strike, (v) => void saveThought({ font_strike: v }));
-
-  row2.append(fgColor, bgColor, toggles);
-  box.append(editorField('Цвет и стиль', row2));
-
+  // The title height depends on layout; size it once mounted.
+  queueMicrotask(resizeTitle);
   return box;
+}
+
+/** Opens the thought settings dialog (colours + font style + reset). */
+function openThoughtSettings(thought: Thought): void {
+  const style = resolveCloudStyle(thought);
+  void showThoughtStyleDialog({
+    resolved: {
+      fg: style.fg,
+      bg: style.bg,
+      bold: style.bold,
+      italic: style.italic,
+      underline: style.underline,
+      strike: style.strike,
+    },
+    onApply: (patch) => saveThought(patch),
+  });
+}
+
+/**
+ * Changes the thought icon. Interim implementation: a simple emoji prompt; the
+ * full Emoji/File/URL dialog (08-ui-spec.md §6.8) replaces this in a follow-up.
+ */
+async function changeThoughtIcon(thought: Thought): Promise<void> {
+  const value = await promptDialog('Иконка', 'Эмодзи', thought.icon ?? '');
+  if (value === null) return;
+  const v = value.trim();
+  await saveThought({ icon: v === '' ? null : v, icon_kind: 'emoji' });
 }
 
 /** Builds the link header form (type + active). */

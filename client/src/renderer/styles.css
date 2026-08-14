@@ -1107,6 +1107,94 @@ body.dragging .ellipse {
   font-weight: 700;
 }
 
+/* Thought header: icon box + large multiline title (08-ui-spec.md §6.2.1). */
+.editor-top-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.editor-icon-box {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  line-height: 1;
+  padding: 0;
+  overflow: hidden;
+}
+
+.editor-icon-box:hover {
+  border-color: var(--accent);
+}
+
+.editor-icon-box img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.editor-title-input {
+  flex: 1 1 auto;
+  font-size: 1.5em;
+  font-weight: 700;
+  line-height: 1.25;
+  resize: none;
+  overflow: hidden;
+  /* Cap the visible height at ~5 lines of the large font. */
+  max-height: calc(1.5em * 1.25 * 5 + 8px);
+  min-height: calc(1.5em * 1.25);
+  font-family: inherit;
+}
+
+.synonyms-input {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.icon-btn {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+}
+
+.icon-btn:hover {
+  border-color: var(--accent);
+}
+
+/* Settings dialog (08-ui-spec.md §6.9). */
+.style-colors {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.style-color-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.style-color-caption {
+  font-size: 12px;
+  color: var(--text-muted, var(--text));
+}
+
 .group {
   border: 1px solid var(--border);
   border-radius: var(--radius);
