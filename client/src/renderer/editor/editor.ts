@@ -17,6 +17,7 @@ import {
   EtnError,
   UI_STATE_KEY,
   type Link,
+  type LinkUpdateInput,
   type Thought,
   type ThoughtUpdateInput,
 } from '@etn/shared';
@@ -37,7 +38,7 @@ import { registerPropertiesGroup } from './properties.js';
 import { registerLinksGroup } from './links-group.js';
 import { registerMentionsGroup } from './mentions.js';
 import { showIconDialog } from './icon-dialog.js';
-import { showThoughtStyleDialog } from './style-dialog.js';
+import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 
 /** What the editor currently edits. */
 export interface EditorContext {
@@ -267,11 +268,8 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
   }
 }
 
-/** Saves link header fields (type/active). */
-async function saveLink(
-  link: Link,
-  patch: { type_id?: string | null; active?: boolean },
-): Promise<void> {
+/** Saves link header fields (type/style/active). */
+async function saveLink(link: Link, patch: LinkUpdateInput): Promise<void> {
   const networkId = requireNetworkId();
   try {
     const updated = await etn.links.update(networkId, link.id, patch, link.version);
@@ -465,10 +463,8 @@ function changeThoughtIcon(thought: Thought): void {
 function buildLinkHeader(link: Link): HTMLElement {
   const box = div('editor-fields');
 
-  const typeName = store.state.linkTypes.find((t) => t.id === link.type_id);
-  const titleLine = el('p', 'muted', `Связь ${typeName?.name_forward ?? 'без типа'}`);
-  titleLine.style.margin = '0 0 10px';
-  box.append(titleLine);
+  // Single row: link type + settings (⚙) + active toggle (08-ui-spec.md §6.2.2).
+  const row = div('editor-header-row');
 
   const typeSelect = el('select', 'select-input');
   const typePlaceholder = el('option', undefined, 'без типа');
@@ -483,7 +479,9 @@ function buildLinkHeader(link: Link): HTMLElement {
   typeSelect.addEventListener('change', () => {
     void saveLink(link, { type_id: typeSelect.value === '' ? null : typeSelect.value });
   });
-  box.append(editorField('Тип связи', typeSelect));
+
+  const settingsBtn = button('⚙', () => openLinkSettings(link), 'icon-btn');
+  setTooltip(settingsBtn, 'Цвет и стиль линии');
 
   const activeLabel = el('label', 'checkbox-row');
   const activeCheck = el('input');
@@ -492,10 +490,25 @@ function buildLinkHeader(link: Link): HTMLElement {
   activeCheck.addEventListener('change', () => {
     void saveLink(link, { active: activeCheck.checked });
   });
-  activeLabel.append(activeCheck, span('активна'));
-  box.append(activeLabel);
+  activeLabel.append(activeCheck, span('актуально'));
+
+  row.append(typeSelect, settingsBtn, activeLabel);
+  box.append(row);
 
   return box;
+}
+
+/** Opens the link settings dialog (line colour/style/width + reset). */
+function openLinkSettings(link: Link): void {
+  const type = store.state.linkTypes.find((t) => t.id === link.type_id);
+  void showLinkStyleDialog({
+    resolved: {
+      color: link.color ?? type?.color ?? null,
+      style: link.style ?? type?.style ?? 'solid',
+      width: link.width ?? type?.width ?? 1,
+    },
+    onApply: (patch) => saveLink(link, patch),
+  });
 }
 
 /** Standard editor field: label above the control. */

@@ -1453,6 +1453,18 @@ body.dragging .ellipse {
   background: var(--surface-2);
 }
 
+.link-item-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-item-label {
+  font-size: 12px;
+  min-width: 70px;
+}
+
 .mention-item {
   padding: 4px 2px;
   cursor: pointer;
