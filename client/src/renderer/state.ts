@@ -65,6 +65,8 @@ export interface AppState {
   collapsedGroups: Record<string, Record<string, boolean>>;
   /** Selection panel contents (ordered ids). */
   selection: string[];
+  /** Link id highlighted on the canvas (sticky until a click elsewhere). */
+  selectedLinkId: string | null;
   /** Link type catalogue of the open network (H6 line labels). */
   linkTypes: LinkType[];
   /** Thought type catalogue of the open network (editor header). */
@@ -100,6 +102,7 @@ const initial: AppState = {
   editorH: EDITOR_H_DEFAULT,
   collapsedGroups: {},
   selection: [],
+  selectedLinkId: null,
   linkTypes: [],
   thoughtTypes: [],
   rtStatus: 'idle',
@@ -141,6 +144,7 @@ class Store {
       networkId: null,
       focus: null,
       selection: [],
+  selectedLinkId: null,
       editorTarget: null,
       linkTypes: [],
       thoughtTypes: [],

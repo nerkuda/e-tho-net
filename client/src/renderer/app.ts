@@ -142,7 +142,7 @@ export async function setFocus(id: string): Promise<void> {
   const networkId = requireNetworkId();
   const oldId = store.state.focus?.focused.id ?? null;
   const response = await etn.thoughts.focus(networkId, id);
-  store.update({ focus: response, editorTarget: null, ...zoneStateFromFocus(response) });
+  store.update({ focus: response, editorTarget: null, selectedLinkId: null, ...zoneStateFromFocus(response) });
   if (oldId !== null && oldId !== id) {
     void etn.history.rotate(oldId, id).catch(() => undefined);
   }

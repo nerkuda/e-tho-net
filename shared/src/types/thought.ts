@@ -196,6 +196,23 @@ export interface FocusNeighbor {
   link_id: string;
   link_type_id: string | null;
   link_active: boolean;
+  /** Whether the neighbour has ANY incoming link (drives the top ellipse fill). */
+  has_incoming: boolean;
+  /** Whether the neighbour has ANY outgoing link (drives the bottom ellipse fill). */
+  has_outgoing: boolean;
+}
+
+/**
+ * A link among the visible thoughts of a focus response (03-server-api.md §6.2).
+ * Unlike {@link FocusNeighbor} (which only carries the link to the focus), this
+ * lists every active link between any two visible thoughts — including
+ * neighbour↔neighbour — so the canvas can draw all visible links.
+ */
+export interface FocusEdge {
+  id: string;
+  source_id: string;
+  target_id: string;
+  type_id: string | null;
 }
 
 /** Response of `POST /thoughts/{id}/focus` (03-server-api.md §6.2). */
@@ -208,6 +225,8 @@ export interface FocusResponse {
   children: FocusNeighbor[];
   /** Thoughts sharing a parent with the focused thought. */
   siblings: FocusNeighbor[];
+  /** Every active link among the visible thoughts (focus + parents + children + siblings). */
+  edges: FocusEdge[];
   /** Per-zone sort currently applied for this user (siblings is not orderable). */
   sorts: { parents: SortKind; children: SortKind };
 }

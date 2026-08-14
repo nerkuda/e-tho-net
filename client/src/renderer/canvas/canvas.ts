@@ -156,6 +156,18 @@ export function mountCanvas(canvasHost: HTMLElement): void {
     getZoneEl: (dir) => zones?.[dir] ?? null,
     getZoneOrder: (dir) => store.state.zoneOrder[dir],
   });
+  // A click not on a link line clears the sticky link selection and returns the
+  // editor to the focused thought (editorTarget=null → editor follows the focus).
+  host.addEventListener('click', (event) => {
+    const t = event.target as HTMLElement | null;
+    const onLine = t?.closest('.link-hit, .link-line') ?? null;
+    if (
+      onLine === null &&
+      (store.state.selectedLinkId !== null || store.state.editorTarget !== null)
+    ) {
+      store.update({ selectedLinkId: null, editorTarget: null });
+    }
+  });
 
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
@@ -185,6 +197,14 @@ export function getFocusCloudEl(): HTMLElement | null {
 export function findZoneCloud(id: string, dir: ZoneDir): HTMLElement | null {
   if (host === null) return null;
   return host.querySelector<HTMLElement>(`.zone-${dir} .cloud[data-id="${CSS.escape(id)}"]`);
+}
+
+/** Returns the rendered cloud of a thought anywhere on the canvas (focus or any
+ *  zone, visible window only) — used by the link overlay to find both endpoints. */
+export function findCloudAnywhere(id: string): HTMLElement | null {
+  if (focusCloudEl !== null && focusCloudEl.dataset['id'] === id) return focusCloudEl;
+  if (host === null) return null;
+  return host.querySelector<HTMLElement>(`.cloud[data-id="${CSS.escape(id)}"]`);
 }
 
 /** Returns the grouped neighbours currently rendered in a zone (H6 pairing). */
@@ -490,14 +510,17 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   );
   applyCloudStyle(cloud, style);
 
-  // Ellipses: parents link OUT of themselves (bottom filled), children link IN
-  // (top filled); siblings carry no link info from the focus response.
+  // Ellipses are filled by whether the thought has ANY incoming/outgoing link
+  // (so a chain continues off-screen), not by which zone it sits in.
+  const neighbor = entry.links[0];
   const topEllipse = div('ellipse');
   const bottomEllipse = div('ellipse');
-  if (dir === 'children') topEllipse.classList.add('filled');
-  if (dir === 'parents') bottomEllipse.classList.add('filled');
-  setTooltip(topEllipse, dir === 'children' ? 'Входящие связи' : 'Входящих связей нет');
-  setTooltip(bottomEllipse, dir === 'parents' ? 'Исходящие связи' : 'Исходящих связей нет');
+  const hasIn = neighbor?.has_incoming === true;
+  const hasOut = neighbor?.has_outgoing === true;
+  if (hasIn) topEllipse.classList.add('filled');
+  if (hasOut) bottomEllipse.classList.add('filled');
+  setTooltip(topEllipse, hasIn ? 'Есть входящие связи' : 'Входящих связей нет');
+  setTooltip(bottomEllipse, hasOut ? 'Есть исходящие связи' : 'Исходящих связей нет');
   wireEllipseDrag(topEllipse, entry.id, 'parent');
   wireEllipseDrag(bottomEllipse, entry.id, 'child');
 

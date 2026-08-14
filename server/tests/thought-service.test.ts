@@ -335,6 +335,13 @@ describe(
           // Per-zone sort defaults to 'created' when no preference is set.
           assert.deepEqual(res.sorts, { parents: 'created', children: 'created' });
 
+          // Edges among visible thoughts include focus↔neighbour and
+          // neighbour↔neighbour (P→SIB). C2 is inactive and hidden, so its edge
+          // is absent until showInactive.
+          const pairs = (r: typeof res) =>
+            r.edges.map((e) => `${e.source_id}->${e.target_id}`).sort();
+          assert.deepEqual(pairs(res), [`${p}->${focusId}`, `${focusId}->${c1}`, `${p}->${sib}`].sort());
+
           const view = ndb
             .prepare(
               'SELECT last_viewed_at FROM thought_views WHERE user_id = ? AND thought_id = ?',
@@ -345,6 +352,13 @@ describe(
           // showInactive surfaces the inactive child.
           const resAll = focus(ndb, USER, focusId, { showInactive: true });
           assert.deepEqual(resAll.children.map((n) => n.id).sort(), [c1, c2].sort());
+          // With C2 visible, its edge from the focus is included too.
+          assert.deepEqual(pairs(resAll), [
+            `${p}->${focusId}`,
+            `${focusId}->${c1}`,
+            `${focusId}->${c2}`,
+            `${p}->${sib}`,
+          ].sort());
         } finally {
           ndb.close();
         }

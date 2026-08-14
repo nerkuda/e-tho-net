@@ -153,7 +153,9 @@ POST /api/v1/networks/{nid}/thoughts/{id}/focus
 → 200 { data: { focused: {...},
                 parents:  [ ... ],      # источники связей (active-фильтр по pref)
                 children: [ ... ],      # назначения связей
-                siblings: [ ... ] } }   # мысли с тем же родителем
+                siblings: [ ... ],      # мысли с тем же родителем
+                edges:    [ ... ],      # все active-связи среди видимых мыслей
+                sorts:    { parents: "...", children: "..." } } }
 # Фокус-мысль как «последняя просмотренная» НЕ сохраняется сервером — это
 # клиентское состояние (L4 в [11-settings-and-state.md](11-settings-and-state.md)).
 ```
@@ -163,6 +165,17 @@ POST /api/v1/networks/{nid}/thoughts/{id}/focus
 { "id": "...", "title": "...", "type_id": "...", "icon": "...",
   "active": 1, "link_id": "...", "link_type_id": "...", "link_active": 1 }
 ```
+
+`edges` — все active-связи (с учётом `show_inactive`), у которых **оба конца** входят в
+множество `{focused} ∪ parents ∪ children ∪ siblings`. В отличие от `parents`/`children`
+(несут только связь с фокусом), здесь — связи между любыми двумя видимыми мыслями,
+включая сосед↔сосед; нужны холсту для отрисовки всех видимых связей:
+```json
+{ "id": "...", "source_id": "...", "target_id": "...", "type_id": "..." }
+```
+
+`sorts` — текущая сортировка порядка¬ble-зон для пользователя (`manual`/`alpha`/`created`/`viewed`),
+с дефолтом `created`; siblings порядка не имеют.
 
 ### 6.3. Создание
 ```

@@ -38,6 +38,8 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 
+import { getEdgesAmong, getLinkDirections } from './link-service.js';
+
 // ---------------------------------------------------------------------------
 // Row shapes & conversion
 // ---------------------------------------------------------------------------
@@ -146,6 +148,9 @@ function rowToNeighbor(row: NeighborRow): FocusNeighbor {
     link_id: row.link_id,
     link_type_id: row.link_type_id,
     link_active: row.link_active === 1,
+    // Placeholder; `focus()` overwrites these from `getLinkDirections`.
+    has_incoming: false,
+    has_outgoing: false,
   };
 }
 
@@ -869,11 +874,34 @@ export function focus(
       order: prefs[dir]?.order,
     });
   }
+  // Every active link among the visible thoughts (focus + parents + children +
+  // siblings) — for the canvas to draw links between any two visible clouds,
+  // not only those incident to the focus.
+  const visibleIds = [
+    thoughtId,
+    ...grouped.parents.map((n) => n.id),
+    ...grouped.children.map((n) => n.id),
+    ...grouped.siblings.map((n) => n.id),
+  ];
+  const edges = getEdgesAmong(ndb, visibleIds, showInactive).map((l) => ({
+    id: l.id,
+    source_id: l.source_id,
+    target_id: l.target_id,
+    type_id: l.type_id,
+  }));
+  // Whether each visible thought has any incoming/outgoing link at all —
+  // drives the top/bottom ellipse fill so chains are visible off-screen.
+  const directions = getLinkDirections(ndb, visibleIds);
+  const annotate = (n: FocusNeighbor): FocusNeighbor => {
+    const d = directions.get(n.id) ?? { has_in: false, has_out: false };
+    return { ...n, has_incoming: d.has_in, has_outgoing: d.has_out };
+  };
   return {
     focused,
-    parents: grouped.parents,
-    children: grouped.children,
-    siblings: grouped.siblings,
+    parents: grouped.parents.map(annotate),
+    children: grouped.children.map(annotate),
+    siblings: grouped.siblings.map(annotate),
+    edges,
     sorts: {
       parents: parentPref?.sort ?? 'created',
       children: childPref?.sort ?? 'created',

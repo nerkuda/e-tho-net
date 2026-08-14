@@ -120,9 +120,10 @@ export function mountEditor(editorHost: HTMLElement): void {
   registerLinksGroup();
   registerMentionsGroup();
 
-  // Clicking a link line on the canvas opens the link here (H6 ↔ H8).
+  // Clicking a link line on the canvas opens the link here (H6 ↔ H8) and marks
+  // it as the sticky canvas selection.
   setLinkEditorOpener((link) => {
-    store.update({ editorTarget: { kind: 'link', id: link.id, link } });
+    store.update({ editorTarget: { kind: 'link', id: link.id, link }, selectedLinkId: link.id });
   });
 
   store.subscribe(() => {

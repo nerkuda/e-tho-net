@@ -173,6 +173,52 @@ export function findLinksBetween(
   return rows.map(rowToLink);
 }
 
+/**
+ * Returns every link whose both ends are in `ids` (the visible thoughts of a
+ * focus response), optionally including inactive ones. Used to draw all links
+ * among the visible clouds — not just those incident to the focus.
+ */
+export function getEdgesAmong(ndb: NetworkDb, ids: string[], showInactive: boolean): Link[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = ndb
+    .prepare(
+      `SELECT * FROM links
+       WHERE source_id IN (${placeholders}) AND target_id IN (${placeholders})
+         AND (active = 1 OR ?)`,
+    )
+    .all(...ids, ...ids, showInactive ? 1 : 0) as LinkRow[];
+  return rows.map(rowToLink);
+}
+
+/**
+ * For each id, whether it has any active incoming / outgoing link at all —
+ * drives the top/bottom ellipse fill of a cloud so the user can see that a
+ * thought continues the chain even when its other links are off-screen.
+ */
+export function getLinkDirections(
+  ndb: NetworkDb,
+  ids: string[],
+): Map<string, { has_in: boolean; has_out: boolean }> {
+  const result = new Map<string, { has_in: boolean; has_out: boolean }>();
+  if (ids.length === 0) return result;
+  for (const id of ids) result.set(id, { has_in: false, has_out: false });
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = ndb
+    .prepare(
+      `SELECT source_id, target_id FROM links WHERE active = 1
+         AND (source_id IN (${placeholders}) OR target_id IN (${placeholders}))`,
+    )
+    .all(...ids, ...ids) as Array<{ source_id: string; target_id: string }>;
+  for (const row of rows) {
+    const src = result.get(row.source_id);
+    if (src !== undefined) src.has_out = true;
+    const tgt = result.get(row.target_id);
+    if (tgt !== undefined) tgt.has_in = true;
+  }
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------

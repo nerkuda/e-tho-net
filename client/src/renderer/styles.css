@@ -732,45 +732,73 @@ textarea {
   z-index: 1;
 }
 
+/* Three link layers:
+ *   .links-overlay       — visual lines, UNDER the clouds, never interactive;
+ *   .links-overlay-hit   — transparent wide hit lines, ABOVE the clouds,
+ *                          capture mouse for hover/click (this is how lines
+ *                          under the clouds stay interactive);
+ *   .links-overlay-top   — the hovered/selected line redrawn on top.
+ */
 .links-overlay {
   position: absolute;
   inset: 0;
-  z-index: 3;
+  z-index: 0;
+  pointer-events: none;
+}
+.links-overlay-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+.links-overlay-top {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
   pointer-events: none;
 }
 
-.link-tooltip {
+/* Wide invisible hit target for a line. */
+.links-overlay-hit .link-hit {
+  pointer-events: stroke;
+  cursor: pointer;
+  stroke: transparent;
+  fill: none;
+}
+/* The highlighted copy on the top overlay never captures pointer events. */
+.link-line-active {
+  pointer-events: none;
+}
+
+/* Endpoint ellipses of the hovered/selected link. */
+/* Endpoint ellipses of the hovered/selected link: orange outline (does not
+   override `.filled`, which marks that a link direction exists at all). */
+.ellipse.link-end {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 2px rgba(201, 138, 6, 0.35);
+}
+
+/* Popover for the hovered/selected link: type name + comment/attachment counts. */
+.link-popover {
   position: fixed;
   z-index: 1100;
   pointer-events: none;
+  transform: translate(-50%, calc(-100% - 10px));
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-sm);
   padding: 6px 10px;
   font-size: 12px;
+  white-space: nowrap;
   max-width: 320px;
 }
-
-.link-tooltip-types {
+.link-popover-types {
   font-weight: 600;
   margin-bottom: 2px;
 }
-
-.links-overlay .link-line {
-  pointer-events: stroke;
-  cursor: pointer;
-}
-
-.links-overlay .link-line:hover {
-  stroke-opacity: 1;
-}
-
-.link-label-bg {
-  fill: var(--surface);
-  stroke: var(--border);
-  stroke-width: 0.5;
-  rx: 4;
+.link-popover-counts {
+  color: var(--text-dim);
 }
 
 .link-label-text {
@@ -784,6 +812,7 @@ textarea {
 
 .cloud {
   position: relative;
+  z-index: 1;
   width: var(--cloud-width);
   display: flex;
   flex-direction: column;
