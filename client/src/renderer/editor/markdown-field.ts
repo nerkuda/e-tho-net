@@ -147,7 +147,11 @@ export function editMarkdownField(root: HTMLElement, md?: string): void {
   area.focus();
 }
 
-/** Saves pasted images as attachments and inserts markdown refs at the caret. */
+/**
+ * Uploads pasted images to the server (which stores them under the network's
+ * `attachments/` directory next to `data.db`) and inserts markdown references
+ * at the caret.
+ */
 async function insertClipboardImages(
   area: HTMLTextAreaElement,
   owner: AttachmentsOwner,
@@ -155,33 +159,25 @@ async function insertClipboardImages(
 ): Promise<void> {
   const networkId = requireNetworkId();
   for (const file of images) {
-    // A copied FILE may carry its OS path (Electron ≤31) — attach it as-is;
-    // a raw bitmap (screenshot) is persisted through the main process.
-    const existingPath = (file as File & { path?: string }).path;
-    let filePath: string | null = existingPath ?? null;
-    if (filePath === null) {
-      const dataUrl = await readFileAsDataUrl(file);
-      filePath = await etn.system.saveClipboardImage(dataUrl, file.name);
-    }
-    if (filePath === null || filePath === '') {
-      notice('Не удалось сохранить изображение из буфера.', 'error');
-      continue;
-    }
-    const title = file.name.trim() !== '' ? file.name.trim() : pathBaseName(filePath);
+    const dataUrl = await readFileAsDataUrl(file);
+    const comma = dataUrl.indexOf(',');
+    const dataBase64 = comma === -1 ? '' : dataUrl.slice(comma + 1);
+    const title = file.name.trim() !== '' ? file.name.trim() : 'image';
+    let attachment;
     try {
-      await etn.attachments.add(networkId, owner.ownerType, owner.ownerId, {
-        kind: 'file',
-        file_path: filePath,
-        file_size: file.size,
-        mime_type: file.type || null,
+      attachment = await etn.attachments.uploadFile(networkId, owner.ownerType, owner.ownerId, {
         title,
+        mime_type: file.type || 'image/png',
+        data_base64: dataBase64,
       });
-      invalidateIndicators(owner.ownerId);
     } catch {
       notice('Не удалось добавить вложение.', 'error');
       continue;
     }
-    insertAtCaret(area, `![${sanitizeAlt(title)}](${fileUrl(filePath)})`);
+    invalidateIndicators(owner.ownerId);
+    const filePath = attachment.file_path;
+    if (filePath === null || filePath === '') continue;
+    insertAtCaret(area, `![${sanitizeAlt(title)}](${etnimgUrl(filePath)})`);
   }
 }
 
@@ -195,19 +191,20 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-/** Absolute path → `file:///` URL with each segment percent-encoded. */
-function fileUrl(filePath: string): string {
+/**
+ * Absolute server file path → `etnimg://` URL. The `etnimg` scheme is a
+ * privileged protocol served by the Electron main process (works both from the
+ * dev http origin and from the packaged file:// page, unlike raw file://).
+ */
+function etnimgUrl(filePath: string): string {
   const segments = filePath.replace(/\\/g, '/').split('/').filter((s) => s !== '');
-  const encoded = segments.map((seg, i) =>
-    i === 0 && /^[a-zA-Z]:$/.test(seg) ? seg : encodeURIComponent(seg),
-  );
-  return `file:///${encoded.join('/')}`;
-}
-
-/** Last path segment. */
-function pathBaseName(p: string): string {
-  const parts = p.replace(/\\/g, '/').split('/');
-  return parts[parts.length - 1] ?? 'image';
+  const encoded = segments.map((seg, i) => {
+    // A Windows drive segment ("C:") becomes the URL host — a bare letter,
+    // because ':' would parse as a port separator.
+    if (i === 0 && /^[a-zA-Z]:$/.test(seg)) return seg[0]!.toLowerCase();
+    return encodeURIComponent(seg);
+  });
+  return `etnimg://${encoded.join('/')}`;
 }
 
 /** Markdown image alt text must not contain brackets. */

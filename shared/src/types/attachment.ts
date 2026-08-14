@@ -41,6 +41,18 @@ export interface AttachmentInput {
   position?: number;
 }
 
+/**
+ * Input accepted by `POST …/{id}/attachments/file` (03-server-api.md §11): the
+ * server decodes `data_base64` and stores the file under the network's
+ * `attachments/` directory (next to `data.db`), returning a `kind = 'file'`
+ * attachment whose `file_path` points at the stored copy.
+ */
+export interface AttachmentFileInput {
+  title?: string | null;
+  mime_type: string;
+  data_base64: string;
+}
+
 /** Input accepted by `PATCH /attachments/{id}` (03-server-api.md §11). */
 export interface AttachmentUpdateInput {
   url?: string | null;

@@ -4,16 +4,21 @@
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { EtnError } from '@etn/shared';
 
 import DatabaseConstructor from 'better-sqlite3';
 
-import { createInMemoryNetworkDb } from '../src/db/network-db.js';
-import type { NetworkDb } from '../src/db/network-db.js';
+import { createInMemoryNetworkDb, NetworkDb } from '../src/db/network-db.js';
+import { runMigrations } from '../src/db/migrator.js';
+import { networkMigrationsDir } from '../src/paths.js';
 import {
   createAttachment,
+  createAttachmentFile,
   deleteAttachment,
   listAttachments,
   updateAttachment,
@@ -91,6 +96,55 @@ describe(
         assert.equal(a.url, null);
         assert.equal(a.mime_type, 'application/pdf');
         assert.equal(a.file_size, 123);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('createAttachmentFile stores the payload in attachments/ next to data.db', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-test', path.join(tmp, 'data.db'));
+      try {
+        const t = seedThought(ndb);
+        const a = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          { title: 'Фото 1', mime_type: 'image/png', data_base64: Buffer.from('fake-png').toString('base64') },
+          USER,
+        );
+        assert.equal(a.kind, 'file');
+        assert.ok(a.file_path !== null);
+        assert.equal(path.dirname(a.file_path), path.join(tmp, 'attachments'));
+        assert.ok(a.file_path.endsWith('.png'), a.file_path);
+        assert.equal(a.file_size, 'fake-png'.length);
+        assert.equal(a.title, 'Фото 1');
+        assert.ok(existsSync(a.file_path));
+        assert.equal(readFileSync(a.file_path).toString(), 'fake-png');
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('createAttachmentFile rejects a bad payload (422)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        assert.throws(
+          () =>
+            createAttachmentFile(
+              ndb,
+              'thought',
+              t,
+              { mime_type: 'image/png', data_base64: '!!not-base64!!' },
+              USER,
+            ),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
       } finally {
         ndb.close();
       }

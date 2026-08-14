@@ -94,13 +94,18 @@ describe('markdown renderer', () => {
     assert.ok(html.includes('click'));
   });
 
-  it('allows file:// URLs for images but not for links', () => {
-    // Images pasted from the clipboard reference local attachment files.
+  it('allows file:// and etnimg:// URLs for images but not for links', () => {
+    // Images pasted from the clipboard reference local attachment files —
+    // file:// directly, or via the client's etnimg:// protocol (which also
+    // loads from the dev http origin).
     const img = renderMarkdown('![alt](file:///C:/pics/img%201.png)');
     assert.ok(img.includes('<img src="file:///C:/pics/img%201.png" alt="alt"'));
-    // A file:// link stays plain text (allow-list applies to links strictly).
-    const link = renderMarkdown('[x](file:///C:/secrets.txt)');
+    const etnimg = renderMarkdown('![alt](etnimg://c/pics/img%201.png)');
+    assert.ok(etnimg.includes('<img src="etnimg://c/pics/img%201.png" alt="alt"'));
+    // Such URLs stay plain text in link position (allow-list is strict there).
+    const link = renderMarkdown('[x](file:///C:/secrets.txt) [y](etnimg://c/s.txt)');
     assert.ok(!link.includes('href="file'));
+    assert.ok(!link.includes('href="etnimg'));
     assert.ok(link.includes('x'));
   });
 

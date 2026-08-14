@@ -1081,6 +1081,34 @@ export class RestClient {
     );
   }
 
+  /** `POST /networks/{nid}/thoughts/{id}/attachments/file`. */
+  public async uploadThoughtAttachmentFile(
+    networkId: string,
+    thoughtId: string,
+    input: import('@etn/shared').AttachmentFileInput,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Attachment> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/attachments/file`,
+      { body: input, requestOptions: opts },
+    );
+  }
+
+  /** `POST /networks/{nid}/links/{id}/attachments/file`. */
+  public async uploadLinkAttachmentFile(
+    networkId: string,
+    linkId: string,
+    input: import('@etn/shared').AttachmentFileInput,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Attachment> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(linkId)}/attachments/file`,
+      { body: input, requestOptions: opts },
+    );
+  }
+
   /** `POST /networks/{nid}/links/{id}/attachments`. */
   public async createLinkAttachment(
     networkId: string,

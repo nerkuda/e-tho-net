@@ -15,6 +15,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
+  type AttachmentFileInput,
   type AttachmentInput,
   type AttachmentKind,
   type AttachmentOwnerType,
@@ -31,6 +32,7 @@ import {
 } from './helpers.js';
 import {
   createAttachment,
+  createAttachmentFile,
   deleteAttachment,
   listAttachments,
   updateAttachment,
@@ -84,6 +86,36 @@ function parseAttachmentBody(body: Record<string, unknown>, requestId: string): 
     title: fieldNullableString(body, 'title', requestId),
     description: fieldNullableString(body, 'description', requestId),
     position: optionalIntField(body, 'position', requestId),
+  };
+}
+
+/** Parse and validate the body of `POST …/attachments/file`. */
+function parseAttachmentFileBody(
+  body: Record<string, unknown>,
+  requestId: string,
+): AttachmentFileInput {
+  const mimeType = fieldString(body, 'mime_type', requestId);
+  if (mimeType === undefined || mimeType === '') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'mime_type обязателен.',
+      { field: 'mime_type' },
+      requestId,
+    );
+  }
+  const data = fieldString(body, 'data_base64', requestId);
+  if (data === undefined || data === '') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'data_base64 обязателен.',
+      { field: 'data_base64' },
+      requestId,
+    );
+  }
+  return {
+    title: fieldNullableString(body, 'title', requestId),
+    mime_type: mimeType,
+    data_base64: data,
   };
 }
 
@@ -143,6 +175,25 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const input = parseAttachmentBody(requestBody(req), req.id);
           const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
           const attachment = createAttachment(ndb, ownerType, id, input, req.auth!.user.id);
+          deps.emit(req, networkId, 'attachment.created', { attachment });
+          sendCreated(reply, attachment, { request_id: req.id });
+        },
+      );
+
+      // File upload: the payload is stored under the network's attachments/
+      // directory (next to data.db); the response carries the stored path.
+      app.post(
+        `${pathBase}/attachments/file`,
+        {
+          preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler],
+          // 10 MiB decoded ≈ 13.4 MiB base64 — allow headroom over the default 1 MiB.
+          bodyLimit: 16 * 1024 * 1024,
+        },
+        async (req: FastifyRequest, reply) => {
+          const { networkId, id } = req.params as OwnerParams;
+          const input = parseAttachmentFileBody(requestBody(req), req.id);
+          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const attachment = createAttachmentFile(ndb, ownerType, id, input, req.auth!.user.id);
           deps.emit(req, networkId, 'attachment.created', { attachment });
           sendCreated(reply, attachment, { request_id: req.id });
         },

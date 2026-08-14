@@ -11,8 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
+import { readFileSync, statSync } from 'node:fs';
 
 import type { CurrentUser, FocusDir, Network } from '@etn/shared';
 
@@ -433,6 +432,22 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'attachments.uploadFile',
+    bind(
+      (
+        networkId: string,
+        ownerType: 'thought' | 'link',
+        ownerId: string,
+        input: Parameters<RestClient['uploadThoughtAttachmentFile']>[2],
+      ) => {
+        const rest = requireRest(deps);
+        return ownerType === 'thought'
+          ? rest.uploadThoughtAttachmentFile(networkId, ownerId, input)
+          : rest.uploadLinkAttachmentFile(networkId, ownerId, input);
+      },
+    ),
+  );
+  handlers.set(
     'attachments.update',
     bind((networkId: string, id: string, input: Parameters<RestClient['updateAttachment']>[2]) =>
       requireRest(deps).updateAttachment(networkId, id, input),
@@ -641,10 +656,6 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((jobId: string) => requireRest(deps).getJob(jobId)),
   );
   handlers.set('system.pickImage', bind(() => pickImageFile()));
-  handlers.set(
-    'system.saveClipboardImage',
-    bind((dataUrl: string, suggestedName: string) => saveClipboardImageFile(dataUrl, suggestedName)),
-  );
 
   return handlers;
 }
@@ -696,52 +707,6 @@ async function pickImageFile(): Promise<string | null> {
     const ext = filePath.toLowerCase().split('.').pop() ?? '';
     const mime = IMAGE_MIME[ext] ?? 'application/octet-stream';
     return `data:${mime};base64,${buf.toString('base64')}`;
-  } catch {
-    return null;
-  }
-}
-
-/** Maximum decoded size of a pasted image (screenshot-friendly), 10 MiB. */
-const PASTE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-
-/** Extension by image MIME type (for naming saved paste files). */
-const PASTE_MIME_EXT: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-  'image/bmp': 'bmp',
-};
-
-/**
- * Saves a base64 `data:image/…` URL from the clipboard as a file under
- * `<userData>/attachments/` and resolves its absolute path (null when the
- * payload is invalid or too large). Used by the comment editor to attach
- * pasted images.
- */
-async function saveClipboardImageFile(
-  dataUrl: string,
-  suggestedName: string,
-): Promise<string | null> {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl);
-  if (match === null) return null;
-  const mime = match[1]!.toLowerCase();
-  const b64 = match[2]!;
-  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
-  const bytes = Math.floor((b64.length * 3) / 4) - padding;
-  if (bytes <= 0 || bytes > PASTE_IMAGE_MAX_BYTES) return null;
-  try {
-    const { app } = await import('electron');
-    const dir = path.join(app.getPath('userData'), 'attachments');
-    mkdirSync(dir, { recursive: true });
-    const stamp = new Date();
-    const pad = (n: number): string => String(n).padStart(2, '0');
-    const ext = PASTE_MIME_EXT[mime] ?? 'png';
-    const base = suggestedName.trim().replace(/[^\w\- а-яёА-ЯЁ.]/g, '').replace(/\.[^.]*$/, '');
-    const name = `${base === '' ? 'image' : base}-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}-${randomUUID().slice(0, 4)}.${ext}`;
-    const filePath = path.join(dir, name);
-    writeFileSync(filePath, Buffer.from(b64, 'base64'));
-    return filePath;
   } catch {
     return null;
   }

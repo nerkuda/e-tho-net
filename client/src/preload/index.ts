@@ -106,6 +106,8 @@ function buildApi(): EtnApi {
         invoke('attachments.list', networkId, ownerType, ownerId),
       add: (networkId, ownerType, ownerId, input) =>
         invoke('attachments.add', networkId, ownerType, ownerId, input),
+      uploadFile: (networkId, ownerType, ownerId, input) =>
+        invoke('attachments.uploadFile', networkId, ownerType, ownerId, input),
       update: (networkId, id, input) => invoke('attachments.update', networkId, id, input),
       remove: (networkId, id) => invoke('attachments.remove', networkId, id),
     },
@@ -164,8 +166,6 @@ function buildApi(): EtnApi {
       export: (networkId, request) => invoke('system.export', networkId, request),
       getJob: (jobId) => invoke('system.getJob', jobId),
       pickImage: () => invoke('system.pickImage'),
-      saveClipboardImage: (dataUrl, suggestedName) =>
-        invoke('system.saveClipboardImage', dataUrl, suggestedName),
     },
   };
 }

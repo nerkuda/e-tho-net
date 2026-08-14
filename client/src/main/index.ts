@@ -10,8 +10,9 @@
  * The API-key never leaves this process: renderer talks to data exclusively over
  * IPC (G7).
  */
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, protocol, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { LocalDb } from './db/local-db.js';
 import { defaultMigrationsDir, localDbPath } from './db/paths.js';
@@ -28,6 +29,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** `true` when launched via `electron-vite dev`, `false` once packaged. */
 const isDev = !app.isPackaged;
+
+// Local-image protocol (`etnimg://c/pics/img.png`): serves attachment files
+// from disk. Registered as privileged/secure so BOTH the dev http origin and
+// the packaged file:// page may load these images — a plain file:// URL is
+// blocked for http pages ("Not allowed to load local resource").
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'etnimg', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
 
 /** Default window geometry (docs/07-client-electron.md §1, workplan G1). */
 const DEFAULT_WIDTH = 1280;
@@ -88,7 +97,52 @@ function createWindow(): BrowserWindow {
     void win.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
-  return win;
+    return win;
+}
+
+/** Content types for files served over the `etnimg` protocol. */
+const ETNIMG_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+};
+
+/**
+ * Serves `etnimg://<drive>/<path…>` from the local filesystem (read-only).
+ * The URL host is a single drive letter (Windows) or the first path segment
+ * (absolute POSIX path); `..`/`.` segments are rejected.
+ */
+function registerEtnimgProtocol(): void {
+  protocol.handle('etnimg', (request) => {
+    const url = new URL(request.url);
+    const host = decodeURIComponent(url.hostname).toLowerCase();
+    const segments = decodeURIComponent(url.pathname)
+      .split('/')
+      .filter((s) => s !== '' && s !== '.' && s !== '..');
+    if (host === '' || !/^[a-z]$/.test(host) || segments.length === 0) {
+      return new Response('bad etnimg path', { status: 400 });
+    }
+    const filePath = path.join(`${host}:`, ...segments);
+    try {
+      const stat = statSync(filePath);
+      if (!stat.isFile()) {
+        return new Response('not a file', { status: 404 });
+      }
+      const ext = filePath.toLowerCase().split('.').pop() ?? '';
+      return new Response(readFileSync(filePath), {
+        headers: {
+          'Content-Type': ETNIMG_TYPES[ext] ?? 'application/octet-stream',
+          'Cache-Control': 'max-age=3600',
+        },
+      });
+    } catch {
+      return new Response('not found', { status: 404 });
+    }
+  });
 }
 
 /**
@@ -108,6 +162,8 @@ app
     });
     const clientId = getOrCreateClientId(localDb);
     if (isDev) console.log('[ETN] client_id =', clientId);
+
+    registerEtnimgProtocol();
 
     // Wire the renderer bridge (G7): single `etn:invoke` channel + realtime
     // event/status broadcast to whichever window is front-most.

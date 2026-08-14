@@ -14,12 +14,15 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 
 import {
   ATTACHMENT_KINDS,
   ATTACHMENT_OWNER_TYPES,
   EtnError,
   type Attachment,
+  type AttachmentFileInput,
   type AttachmentInput,
   type AttachmentKind,
   type AttachmentOwnerType,
@@ -208,6 +211,103 @@ export function createAttachment(
       );
     return getAttachmentOrThrow(ndb, id);
   });
+}
+
+/** Maximum decoded size of an uploaded attachment file, 10 MiB. */
+export const ATTACHMENT_FILE_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Extension by image MIME type (for naming stored upload files). */
+const UPLOAD_MIME_EXT: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/bmp': 'bmp',
+  'image/svg+xml': 'svg',
+};
+
+/** Sanitizes a title into a safe file-name base (no path separators). */
+function safeNameBase(title: string): string {
+  const cleaned = title
+    .replace(/[\\/:*?"<>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.slice(0, 60);
+}
+
+/**
+ * Store an uploaded file and attach it (docs/03-server-api.md §11).
+ *
+ * The payload (base64) is decoded and written under the network's
+ * `attachments/` directory — the same directory that hosts `data.db` — so the
+ * stored copy lives and is backed up together with the database. The created
+ * attachment is `kind='file'` with `file_path` pointing at the stored copy.
+ *
+ * Throws:
+ *   * `VALIDATION_ERROR` (422) for a bad base64 payload, unknown/oversized
+ *     content or a missing mime_type;
+ *   * `NOT_FOUND` (404) if the owner does not exist.
+ */
+export function createAttachmentFile(
+  ndb: NetworkDb,
+  ownerType: AttachmentOwnerType,
+  ownerId: string,
+  input: AttachmentFileInput,
+  actorUserId: string,
+): Attachment {
+  const ot = validateOwnerType(ownerType);
+  const mime = input.mime_type.trim().toLowerCase();
+  if (mime === '') {
+    throw new EtnError('VALIDATION_ERROR', 'mime_type is required', { field: 'mime_type' });
+  }
+  const b64 = input.data_base64.replace(/^data:[^,]*,/, '').trim();
+  if (b64 === '' || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) {
+    throw new EtnError('VALIDATION_ERROR', 'data_base64 must be base64 content', {
+      field: 'data_base64',
+    });
+  }
+  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+  const bytes = Math.floor((b64.length * 3) / 4) - padding;
+  if (bytes <= 0 || bytes > ATTACHMENT_FILE_MAX_BYTES) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `file exceeds the ${ATTACHMENT_FILE_MAX_BYTES} byte limit (${bytes})`,
+      { field: 'data_base64', limit: ATTACHMENT_FILE_MAX_BYTES },
+    );
+  }
+  const buffer = Buffer.from(b64, 'base64');
+  if (buffer.length !== bytes) {
+    throw new EtnError('VALIDATION_ERROR', 'data_base64 is not valid base64', {
+      field: 'data_base64',
+    });
+  }
+
+  // Ensure the owner exists before touching the filesystem.
+  ensureOwnerExists(ndb, ot, ownerId);
+
+  const dir = path.join(path.dirname(ndb.dbPath), 'attachments');
+  mkdirSync(dir, { recursive: true });
+  const ext = UPLOAD_MIME_EXT[mime] ?? (mime.split('/')[1] ?? 'bin').replace(/[^a-z0-9]/g, '');
+  const stamp = new Date();
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  const base = safeNameBase(nullable(input.title ?? null) ?? 'image');
+  const name = `${base === '' ? 'image' : base}-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}-${randomUUID().slice(0, 4)}.${ext}`;
+  const filePath = path.join(dir, name);
+  writeFileSync(filePath, buffer);
+
+  return createAttachment(
+    ndb,
+    ot,
+    ownerId,
+    {
+      kind: 'file',
+      file_path: filePath,
+      file_size: buffer.length,
+      mime_type: mime,
+      title: nullable(input.title ?? null),
+    },
+    actorUserId,
+  );
 }
 
 /**

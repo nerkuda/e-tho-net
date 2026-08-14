@@ -1335,7 +1335,9 @@ body.dragging .ellipse {
 }
 
 .comment-view img {
+  /* Scale proportionally to the comment field width (08-ui-spec.md §6.4). */
   max-width: 100%;
+  height: auto;
 }
 
 .comment-view table {

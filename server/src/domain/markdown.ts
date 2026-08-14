@@ -38,9 +38,10 @@ function escapeHtml(input: string): string {
  * accepted. Returns the cleaned URL string when safe, or `null` when the URL is
  * rejected (caller renders it as plain text).
  *
- * @param allowData - when true, `data:` and `file:` are accepted (used for
- *   inline images; `file:` covers images pasted from the clipboard and stored
- *   as local attachment files).
+ * @param allowData - when true, `data:`, `file:` and the app's `etnimg:` scheme
+ *   are accepted (used for inline images; `file:`/`etnimg:` cover images pasted
+ *   from the clipboard and stored as local attachment files — `etnimg:` is
+ *   served by the Electron client and also works on its dev http origin).
  */
 function safeUrl(rawUrl: string, allowData: boolean): string | null {
   const url = rawUrl.trim();
@@ -53,7 +54,7 @@ function safeUrl(rawUrl: string, allowData: boolean): string | null {
   if (schemeMatch) {
     const scheme = schemeMatch[1]!.toLowerCase();
     const allowed = allowData
-      ? ['http', 'https', 'mailto', 'data', 'file']
+      ? ['http', 'https', 'mailto', 'data', 'file', 'etnimg']
       : ['http', 'https', 'mailto'];
     if (!allowed.includes(scheme)) return null;
   }

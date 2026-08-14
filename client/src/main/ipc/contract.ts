@@ -14,6 +14,7 @@
 import type {
   ApiKey,
   Attachment,
+  AttachmentFileInput,
   AttachmentInput,
   Comment,
   CommentInput,
@@ -257,6 +258,17 @@ export interface EtnApi {
       ownerId: string,
       input: AttachmentInput,
     ): Promise<Attachment>;
+    /**
+     * Uploads a base64 payload; the server stores it under the network's
+     * `attachments/` directory and returns the created `kind='file'` attachment
+     * whose `file_path` points at the stored copy.
+     */
+    uploadFile(
+      networkId: string,
+      ownerType: 'thought' | 'link',
+      ownerId: string,
+      input: AttachmentFileInput,
+    ): Promise<Attachment>;
     update(networkId: string, id: string, input: Partial<AttachmentInput>): Promise<Attachment>;
     remove(networkId: string, id: string): Promise<void>;
   };
@@ -323,11 +335,5 @@ export interface EtnApi {
      * is too large / unreadable.
      */
     pickImage(): Promise<string | null>;
-    /**
-     * Saves a base64 `data:image/…` URL (e.g. a clipboard paste) as a file under
-     * the app's `attachments/` directory and resolves its absolute path.
-     * Resolves `null` for an invalid/oversized payload.
-     */
-    saveClipboardImage(dataUrl: string, suggestedName: string): Promise<string | null>;
   };
 }
