@@ -42,7 +42,7 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { searchInternals } from '../src/renderer/search/search.js';
 
-const { scopesFor, mergeResponses, DEFAULT_OPTIONS } = searchInternals;
+const { scopesFor, mergeResponses, DEFAULT_OPTIONS, isSearchableQuery } = searchInternals;
 
 describe('clip', () => {
   it('clamps into the range', () => {
@@ -218,6 +218,14 @@ describe('search scope resolution (H13)', () => {
       'texts',
       'links',
     ]);
+  });
+
+  it('starts the server search only from 3 characters', () => {
+    assert.equal(isSearchableQuery(''), false);
+    assert.equal(isSearchableQuery('аб'), false);
+    assert.equal(isSearchableQuery('   '.trim()), false);
+    assert.equal(isSearchableQuery('три'), true);
+    assert.equal(isSearchableQuery('query'), true);
   });
 
   it('merges partial responses', () => {

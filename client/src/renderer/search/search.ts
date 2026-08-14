@@ -4,8 +4,11 @@
  * - toolbar input + options gear + drop panel with four collapsible result
  *   groups («Найдено по именам/текстам/связям/в хронологии»), snippets render
  *   server `<mark>` highlights via innerHTML;
- * - activation restores the previous `search_state` (text + options) from L4
- *   ui_state; searching runs on Enter and debounced 250 ms while typing;
+ * - activation (Ctrl+F / focus / gear) reveals the drop panel and restores the
+ *   previous `search_state` (text + options) from L4 ui_state; Escape hides the
+ *   panel again;
+ * - the server search runs for queries of 3+ characters: debounced 250 ms while
+ *   typing or on Enter; shorter queries only show a hint;
  * - options: subtree (subroot via the thought picker, default = current
  *   focus), group checkboxes (мысли/связи/хронология), thought/link type
  *   multi-select, show_inactive (default = the network preference);
@@ -32,6 +35,14 @@ export interface SearchOptions {
   typeIds: string[];
   linkTypeIds: string[];
   showInactive: boolean;
+}
+
+/** Minimum trimmed query length for a server search (08-ui-spec.md §3.1). */
+export const MIN_QUERY_LENGTH = 3;
+
+/** Whether the query is long enough to hit the server. */
+export function isSearchableQuery(q: string): boolean {
+  return q.length >= MIN_QUERY_LENGTH;
 }
 
 const DEFAULT_OPTIONS: SearchOptions = {
@@ -71,10 +82,12 @@ export function mountSearch(next: SearchChrome): void {
   host.append(optionsRow, results);
 
   optionsButton.addEventListener('click', () => {
+    host.classList.remove('hidden');
     optionsRow.classList.toggle('hidden');
   });
 
   input.addEventListener('focus', () => {
+    host.classList.remove('hidden');
     if (!restored) {
       restored = true;
       void restoreState();
@@ -89,6 +102,10 @@ export function mountSearch(next: SearchChrome): void {
       event.preventDefault();
       if (searchTimer !== null) window.clearTimeout(searchTimer);
       void run();
+    } else if (event.key === 'Escape') {
+      if (searchTimer !== null) window.clearTimeout(searchTimer);
+      host.classList.add('hidden');
+      input.blur();
     }
   });
 }
@@ -171,7 +188,7 @@ async function run(): Promise<void> {
   if (chrome === null) return;
   const networkId = store.state.networkId;
   const q = chrome.input.value.trim();
-  if (networkId === null || q === '') {
+  if (networkId === null || !isSearchableQuery(q)) {
     renderResults(null);
     return;
   }
@@ -213,7 +230,7 @@ function renderResults(response: SearchResponse | null): void {
   if (resultsBox === null) return;
   resultsBox.replaceChildren();
   if (response === null) {
-    resultsBox.append(el('p', 'muted', 'Введите запрос и нажмите Enter.'));
+    resultsBox.append(el('p', 'muted', 'Введите запрос (минимум 3 символа).'));
     return;
   }
   const groups: Array<{
@@ -436,4 +453,10 @@ function rebuildOptionsRow(): void {
 }
 
 /** Test seam. */
-export const searchInternals = { scopesFor, mergeResponses, DEFAULT_OPTIONS };
+export const searchInternals = {
+  scopesFor,
+  mergeResponses,
+  DEFAULT_OPTIONS,
+  isSearchableQuery,
+  MIN_QUERY_LENGTH,
+};
