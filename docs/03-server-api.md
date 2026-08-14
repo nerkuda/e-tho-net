@@ -160,6 +160,11 @@ POST /api/v1/networks/{nid}/thoughts/{id}/focus
 # клиентское состояние (L4 в [11-settings-and-state.md](11-settings-and-state.md)).
 ```
 
+Зоны **взаимоисключающи**: мысль встречается не более чем в одной из
+`parents`/`children`/`siblings` (приоритет: фокус > parents > children >
+siblings; [08-ui-spec.md](08-ui-spec.md) §2.1). `edges` от этого не зависят —
+они строятся по всем видимым мыслям, даже если мысль попала в другую зону.
+
 Каждый элемент в `parents`/`children`/`siblings`:
 ```json
 { "id": "...", "title": "...", "type_id": "...", "icon": "...",
