@@ -112,9 +112,12 @@ async function toggleLinkActive(networkId: string, linkId: string): Promise<void
   }
 }
 
-/** Deletes a link after a confirmation. */
-async function deleteLink(networkId: string, linkId: string): Promise<void> {
-  if (!(await confirmDialog('Удалить связь', 'Удалить связь?', true))) return;
+/**
+ * Deletes a link after a confirmation. Shared by the canvas link menu and the
+ * editor's links group. Resolves `true` when the link was actually deleted.
+ */
+export async function deleteLink(networkId: string, linkId: string): Promise<boolean> {
+  if (!(await confirmDialog('Удалить связь', 'Удалить связь?', true))) return false;
   try {
     const link = await etn.links.get(networkId, linkId);
     await etn.links.remove(networkId, linkId, link.version);
@@ -126,8 +129,10 @@ async function deleteLink(networkId: string, linkId: string): Promise<void> {
       store.update({ editorTarget: null, selectedLinkId: null });
     }
     scheduleRefresh();
+    return true;
   } catch (err) {
     errorDialog('Удалить связь', err);
+    return false;
   }
 }
 
@@ -308,17 +313,25 @@ async function pasteTo(networkId: string, targetId: string): Promise<void> {
   }
 }
 
-/** Deletes a thought after confirmation. */
-async function deleteThought(networkId: string, target: CloudMenuTarget): Promise<void> {
-  if (!(await confirmDialog('Удалить мысль', `Удалить «${target.title}»?`, true))) return;
+/**
+ * Deletes a thought after confirmation. Shared by the canvas thought menu and
+ * the editor's links group. Resolves `true` when it was actually deleted.
+ */
+export async function deleteThought(
+  networkId: string,
+  target: { id: string; title: string },
+): Promise<boolean> {
+  if (!(await confirmDialog('Удалить мысль', `Удалить «${target.title}»?`, true))) return false;
   try {
     const thought = await etn.thoughts.get(networkId, target.id);
     await etn.thoughts.remove(networkId, target.id, thought.version);
     // No realtime echo to the actor (04-realtime.md §5) — clean up locally:
     // history, caches, and (for the focused thought) the next focus (L4).
     await onThoughtDeleted(target.id);
+    return true;
   } catch (err) {
     errorDialog('Удалить мысль', err);
+    return false;
   }
 }
 
