@@ -27,6 +27,11 @@ import { notice } from '../lib/notice.js';
 import { cloudFontSize, cloudHeight } from '../lib/pure.js';
 import { store } from '../state.js';
 import { initLinksOverlay } from './links.js';
+import {
+  captureClouds,
+  playFocusTransition,
+  prefersReducedMotion,
+} from './transition.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
 import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
@@ -249,6 +254,13 @@ async function render(): Promise<void> {
   }
   emptyEl?.classList.add('hidden');
 
+  // Focus-change choreography (08-ui-spec.md §2.8): snapshot the old clouds
+  // before the rebuild, then FLIP/ghost them after it. Other re-renders
+  // (edits, selection, realtime refresh of the same focus) are not animated.
+  const focusChanged = focus.focused.id !== lastFocusId;
+  const snapshot =
+    focusChanged && !prefersReducedMotion() ? captureClouds(host) : null;
+
   // The focused thought is always fresh in the focus response — refresh the
   // neighbour cache so its (possibly just-edited) style, icon and title show
   // correctly when it later appears in a zone instead of the focus row.
@@ -260,9 +272,17 @@ async function render(): Promise<void> {
   renderZone('parents', groupByThought(focus.parents));
   renderZone('siblings', groupByThought(focus.siblings));
   renderZone('children', groupByThought(focus.children));
+  lastFocusId = focus.focused.id;
   scheduleIndicatorLoads();
-  redrawLinks?.();
+  if (snapshot !== null) {
+    playFocusTransition(host, snapshot, redrawLinks ?? undefined);
+  } else {
+    redrawLinks?.();
+  }
 }
+
+/** Focus id of the last render — gates the transition choreography (§2.8). */
+let lastFocusId: string | null = null;
 
 /**
  * Renders the focus cloud (08-ui-spec.md §2.2.2): variable width, up to 4

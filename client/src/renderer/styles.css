@@ -826,6 +826,14 @@ textarea {
   transition: box-shadow 80ms ease;
 }
 
+/* Fade-out ghosts of clouds removed by a focus change (08-ui-spec §2.8). */
+.cloud-ghosts {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+
 .cloud:hover {
   box-shadow: 0 2px 10px rgba(24, 32, 48, 0.16);
 }

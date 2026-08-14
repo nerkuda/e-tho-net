@@ -41,6 +41,7 @@ import {
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
 
 import { searchInternals } from '../src/renderer/search/search.js';
+import { flipTransform } from '../src/renderer/canvas/transition.js';
 import { zoomable } from '../src/renderer/lib/image-zoom.js';
 import { patchFocusEdge, store } from '../src/renderer/state.js';
 
@@ -383,5 +384,22 @@ describe('zoomable (Ctrl-hover magnifier predicate)', () => {
     assert.equal(zoomable({ w: 512, h: 512 }, { w: 512, h: 512 }), false);
     // Not loaded yet (natural 0).
     assert.equal(zoomable({ w: 0, h: 0 }, { w: 44, h: 44 }), false);
+  });
+});
+
+describe('flipTransform (focus transition, 08-ui-spec §2.8)', () => {
+  it('computes the start transform from the old rect to the new one', () => {
+    assert.deepEqual(
+      flipTransform(
+        { left: 0, top: 0, width: 200, height: 100 },
+        { left: 100, top: 50, width: 100, height: 50 },
+      ),
+      { dx: -100, dy: -50, sx: 2, sy: 2 },
+    );
+    // A zero-size target must not divide by zero.
+    assert.deepEqual(
+      flipTransform({ left: 10, top: 10, width: 44, height: 44 }, { left: 0, top: 0, width: 0, height: 0 }),
+      { dx: 10, dy: 10, sx: 44, sy: 44 },
+    );
   });
 });
