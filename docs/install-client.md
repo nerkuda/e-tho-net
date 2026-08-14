@@ -16,19 +16,26 @@
 ```bash
 git clone <репозиторий ETN>
 cd etn
-npm install                        # все workspace
-npm -w @etn/client run rebuild:native   # ОДНОРАЗОВО: пересобрать better-sqlite3
-                                   # под Electron ABI (вместо Node ABI)
-npm run dev:client                 # запуск
+npm install                            # все workspace
+npm -w @etn/client run rebuild:native  # ОДНОРАЗОВО: скачать better-sqlite3
+                                       # под Electron ABI (вместо Node ABI)
+npm run dev:client                     # запуск
 ```
 
-> **Важно: шаг `rebuild:native` обязателен.** По умолчанию `npm install`
-> скачивает `better-sqlite3`, собранный под Node.js. Electron использует другой
-> ABI — без пересборки клиент падает при запуске с ошибкой
-> *«module was compiled against a different Node.js version»*. Скрипт
-> `rebuild:native` (через `@electron/rebuild`) решает это за один запуск.
-> Повторять надо после каждого `npm install` (если версия electron или
-> better-sqlite3 изменилась).
+> **Шаг `rebuild:native` обязателен для клиента.** Electron и Node.js — разные
+> ABI; `better-sqlite3` после `npm install` собран под Node, и без пересборки
+> клиент падает с *«module was compiled against a different Node.js version»*.
+>
+> Скрипт качает готовую prebuilt-binary под Electron (через `prebuild-install`) —
+> **Python не нужен**. Повторять после каждого `npm install`, если версия
+> `electron` или `better-sqlite3` сменилась.
+>
+> **Сервер и клиент можно запускать одновременно.** В `package.json` пакета
+> зафиксированы разные версии `better-sqlite3` для `@etn/server` и `@etn/client`,
+> поэтому npm workspaces держит **две копии**: `server/node_modules/better-sqlite3`
+> (под Node, для сервера) и корневую `node_modules/better-sqlite3` (под Electron,
+> для клиента). `rebuild:native` пересобирает только клиентскую копию и сервера
+> не касается.
 
 Если rebuild падает с `EPERM: unlink better_sqlite3.node` — закройте все
 запущенные процессы Electron/ETN и повторите. На Windows файл бывает
