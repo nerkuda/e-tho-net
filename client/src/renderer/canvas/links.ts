@@ -23,6 +23,7 @@ import { div, el } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
 import { findCloudAnywhere } from './canvas.js';
+import { showLinkContextMenu } from './context-menu.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -357,6 +358,7 @@ function drawHitLine(
     }
   });
   hit.addEventListener('click', (event) => void onLineClick(bundle, event));
+  hit.addEventListener('contextmenu', (event) => onLineContextMenu(bundle, event));
   svgHit.append(hit);
 }
 
@@ -555,6 +557,30 @@ async function onLineClick(bundle: Bundle, event: MouseEvent): Promise<void> {
 function selectLink(linkId: string): void {
   store.update({ selectedLinkId: linkId });
   drawActive();
+}
+
+/**
+ * Right-click on a link bundle: opens the link context menu (properties /
+ * activity / delete). For a multi-link bundle the user first picks the link.
+ */
+function onLineContextMenu(bundle: Bundle, event: MouseEvent): void {
+  event.preventDefault();
+  event.stopPropagation();
+  if (bundle.edges.length === 1) {
+    const edge = bundle.edges[0];
+    if (edge !== undefined) showLinkContextMenu(event, edge.id);
+    return;
+  }
+  const items: MenuItem[] = bundle.edges.map((edge) => {
+    const type =
+      edge.type_id !== null ? store.state.linkTypes.find((t) => t.id === edge.type_id) : undefined;
+    return {
+      label: type?.name_forward ?? 'Связь без типа',
+      onClick: () => showLinkContextMenu(event, edge.id),
+    };
+  });
+  closeMenu();
+  showMenuAt(event.clientX, event.clientY, items);
 }
 
 /** Test seam. */

@@ -14,7 +14,7 @@
  * `setZoneContextMenuHandler`, `setCloudDragHandlers`).
  */
 
-import type { FocusDir } from '@etn/shared';
+import type { FocusDir, Link } from '@etn/shared';
 
 import { scheduleRefresh, requireNetworkId } from '../app.js';
 import { openAddDialog } from './add-dialog.js';
@@ -47,6 +47,79 @@ let addToSelectionHook: ((id: string) => void) | null = null;
 /** Registers the "add to selection" hook (H16). */
 export function setAddToSelectionHook(next: ((id: string) => void) | null): void {
   addToSelectionHook = next;
+}
+
+/** Hook signature: the editor registers the link-settings dialog opener here. */
+let linkSettingsHook: ((link: Link) => void) | null = null;
+
+/** Registers the link settings dialog opener (editor mount does this). */
+export function setLinkSettingsOpener(next: ((link: Link) => void) | null): void {
+  linkSettingsHook = next;
+}
+
+/** Opens the link context menu at the event position (08-ui-spec.md §2.6). */
+export function showLinkContextMenu(event: MouseEvent, linkId: string): void {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  showMenuAt(event.clientX, event.clientY, buildLinkMenuItems(networkId, linkId));
+}
+
+/** Builds the link menu items: properties / activity / delete. */
+function buildLinkMenuItems(networkId: string, linkId: string): MenuItem[] {
+  return [
+    {
+      label: 'Изменить свойства',
+      onClick: () => void openLinkSettings(networkId, linkId),
+    },
+    {
+      label: 'Изменить актуальность',
+      onClick: () => void toggleLinkActive(networkId, linkId),
+    },
+    MENU_SEPARATOR,
+    {
+      label: 'Удалить',
+      danger: true,
+      onClick: () => void deleteLink(networkId, linkId),
+    },
+  ];
+}
+
+/** Opens the link settings dialog (colour/style/width + reset). */
+async function openLinkSettings(networkId: string, linkId: string): Promise<void> {
+  try {
+    const link = await etn.links.get(networkId, linkId);
+    linkSettingsHook?.(link);
+  } catch (err) {
+    errorDialog('Изменить свойства', err);
+  }
+}
+
+/** Toggles the link's active flag; inactive links hide with "hide inactive". */
+async function toggleLinkActive(networkId: string, linkId: string): Promise<void> {
+  try {
+    const link = await etn.links.get(networkId, linkId);
+    await etn.links.update(networkId, linkId, { active: !link.active }, link.version);
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Изменить актуальность', err);
+  }
+}
+
+/** Deletes a link after a confirmation. */
+async function deleteLink(networkId: string, linkId: string): Promise<void> {
+  if (!(await confirmDialog('Удалить связь', 'Удалить связь?', true))) return;
+  try {
+    const link = await etn.links.get(networkId, linkId);
+    await etn.links.remove(networkId, linkId, link.version);
+    // If the deleted link was open in the editor, drop the editor target.
+    const target = store.state.editorTarget;
+    if (target !== null && target.kind === 'link' && target.id === linkId) {
+      store.update({ editorTarget: null, selectedLinkId: null });
+    }
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Удалить связь', err);
+  }
 }
 
 /** Opens the thought context menu at the event position. */

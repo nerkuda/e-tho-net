@@ -24,6 +24,7 @@ import {
 
 import { refreshFocus, requireNetworkId } from '../app.js';
 import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
+import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { canSave, clearDraft, findDraft, offlineNotice, saveDraft } from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
@@ -130,6 +131,10 @@ export function mountEditor(editorHost: HTMLElement): void {
   setLinkEditorOpener((link) => {
     store.update({ editorTarget: { kind: 'link', id: link.id, link }, selectedLinkId: link.id });
   });
+
+  // The link context menu ("Изменить свойства") opens the same settings dialog
+  // as the editor's ⚙ button.
+  setLinkSettingsOpener(openLinkSettings);
 
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
