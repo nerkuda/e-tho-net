@@ -28,6 +28,7 @@ import {
   EtnError,
   SEARCH_SCOPES,
   TRAVERSAL_DEFAULTS,
+  type IconKind,
   type MentionHit,
   type SearchChronoHit,
   type SearchLinkHit,
@@ -272,20 +273,27 @@ function searchNames(
   ).c;
   const rows = ndb
     .prepare(
-      `SELECT f.thought_id AS thought_id, t.title AS title
+      `SELECT f.thought_id AS thought_id, t.title AS title, t.icon AS icon, t.icon_kind AS icon_kind
        FROM fts_thought_names f
        JOIN thoughts t ON t.id = f.thought_id
        WHERE ${where}
        ORDER BY rank
        LIMIT ? OFFSET ?`,
     )
-    .all(...params, f.limit, f.offset) as Array<{ thought_id: string; title: string }>;
+    .all(...params, f.limit, f.offset) as Array<{
+    thought_id: string;
+    title: string;
+    icon: string | null;
+    icon_kind: string;
+  }>;
   return {
     hits: rows.map((r) => {
       const snippet = makeSnippet(r.title, f.terms);
       return {
         thought_id: r.thought_id,
         title: r.title,
+        icon: r.icon,
+        icon_kind: r.icon_kind as IconKind,
         snippet,
         highlights: [snippet],
       };
@@ -323,7 +331,8 @@ function searchTexts(
   ).c;
   const rows = ndb
     .prepare(
-      `SELECT c.id AS comment_id, f.thought_id AS thought_id, t.title AS title, c.body_md AS body
+      `SELECT c.id AS comment_id, f.thought_id AS thought_id, t.title AS title,
+              c.body_md AS body, t.icon AS icon, t.icon_kind AS icon_kind
        FROM fts_thought_texts f
        JOIN comments c ON c.rowid = f.rowid
        JOIN thoughts t ON t.id = f.thought_id
@@ -336,6 +345,8 @@ function searchTexts(
     thought_id: string;
     title: string;
     body: string;
+    icon: string | null;
+    icon_kind: string;
   }>;
   return {
     hits: rows.map((r) => {
@@ -343,6 +354,8 @@ function searchTexts(
       return {
         thought_id: r.thought_id,
         title: r.title,
+        icon: r.icon,
+        icon_kind: r.icon_kind as IconKind,
         snippet,
         comment_id: r.comment_id,
         highlights: [snippet],

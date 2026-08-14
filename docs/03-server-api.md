@@ -376,15 +376,16 @@ GET /api/v1/networks/{nid}/search?q=<text>&...
   show_inactive=true|false             # default: из preferences.show_inactive
   limit=50&offset=0
 → 200 { data: {
-  by_names:   [ {thought_id, title, snippet, highlights: [...]} ],
-  by_texts:   [ {thought_id, title, snippet, comment_id, highlights} ],
+  by_names:   [ {thought_id, title, icon, icon_kind, snippet, highlights: [...]} ],
+  by_texts:   [ {thought_id, title, icon, icon_kind, snippet, comment_id, highlights} ],
   by_links:   [ {link_id, type_name, snippet, highlights} ],
   by_chrono:  [ {owner: "thought"|"link", owner_id, comment_id, valid_from, valid_to, snippet, highlights} ]
 }, meta: { total_in_group: {...} } }
 ```
 
 Сервер возвращает **snippets** с подсветкой `<mark>...</mark>` вокруг матчей; клиент
-рендерит их в соответствии с темой.
+рендерит их в соответствии с темой. `icon`/`icon_kind` в `by_names`/`by_texts` —
+иконка найденной мысли (клиент показывает её в списке результатов).
 
 ## 13. Упоминания (для редактора)
 

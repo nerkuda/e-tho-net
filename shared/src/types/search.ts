@@ -5,7 +5,7 @@
  * highlights produced by the server.
  */
 
-import type { SearchGroup, SearchScope } from '../enums.js';
+import type { IconKind, SearchGroup, SearchScope } from '../enums.js';
 
 /** Query parameters of `GET /search` (03-server-api.md §12). */
 export interface SearchRequest {
@@ -31,6 +31,9 @@ export interface SearchRequest {
 export interface SearchNameHit {
   thought_id: string;
   title: string;
+  /** The thought's icon (rendered in the results list). */
+  icon: string | null;
+  icon_kind: IconKind;
   snippet: string;
   highlights: string[];
 }
@@ -39,6 +42,9 @@ export interface SearchNameHit {
 export interface SearchTextHit {
   thought_id: string;
   title: string;
+  /** The thought's icon (rendered in the results list). */
+  icon: string | null;
+  icon_kind: IconKind;
   snippet: string;
   comment_id: string;
   highlights: string[];
