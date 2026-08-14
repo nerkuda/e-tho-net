@@ -317,5 +317,11 @@ export interface EtnApi {
     version(): Promise<VersionResponse>;
     export(networkId: string, request: ExportRequest): Promise<{ job_id: string }>;
     getJob(jobId: string): Promise<ExportJob>;
+    /**
+     * Opens the OS file picker for an image and returns its contents as a
+     * `data:` URL (≤256 KiB). Resolves `null` when the user cancels or the file
+     * is too large / unreadable.
+     */
+    pickImage(): Promise<string | null>;
   };
 }

@@ -11,6 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 
 import type { CurrentUser, FocusDir, Network } from '@etn/shared';
 
@@ -638,8 +639,61 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'system.getJob',
     bind((jobId: string) => requireRest(deps).getJob(jobId)),
   );
+  handlers.set('system.pickImage', bind(() => pickImageFile()));
 
   return handlers;
+}
+
+/** Maximum inline image-icon size (decoded), mirrors the server limit. */
+const ICON_MAX_BYTES = 256 * 1024;
+
+/** Maps a file extension to its MIME type (for `data:` URLs). */
+const IMAGE_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  bmp: 'image/bmp',
+};
+
+/**
+ * Opens the OS file picker for an image and returns its contents as a `data:`
+ * URL within {@link ICON_MAX_BYTES}. Resolves `null` on cancel, oversized or
+ * unreadable files (08-ui-spec.md §6.8).
+ */
+async function pickImageFile(): Promise<string | null> {
+  // electron is imported lazily so this module stays loadable in the Node test
+  // runner (which resolves `electron` to a stub without the named exports).
+  const { BrowserWindow, dialog } = await import('electron');
+  const win = BrowserWindow.getFocusedWindow();
+  // Inline options in each branch so the showOpenDialog overload resolves.
+  const result =
+    win !== null
+      ? await dialog.showOpenDialog(win, {
+          title: 'Выбрать изображение',
+          properties: ['openFile'],
+          filters: [{ name: 'Изображения', extensions: Object.keys(IMAGE_MIME) }],
+        })
+      : await dialog.showOpenDialog({
+          title: 'Выбрать изображение',
+          properties: ['openFile'],
+          filters: [{ name: 'Изображения', extensions: Object.keys(IMAGE_MIME) }],
+        });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const filePath = result.filePaths[0];
+  if (filePath === undefined) return null;
+  try {
+    const size = statSync(filePath).size;
+    if (size > ICON_MAX_BYTES) return null;
+    const buf = readFileSync(filePath);
+    const ext = filePath.toLowerCase().split('.').pop() ?? '';
+    const mime = IMAGE_MIME[ext] ?? 'application/octet-stream';
+    return `data:${mime};base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
+  }
 }
 
 // Re-export for the registration module's convenience.

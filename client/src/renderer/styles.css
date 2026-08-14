@@ -1195,6 +1195,90 @@ body.dragging .ellipse {
   color: var(--text-muted, var(--text));
 }
 
+/* Icon picker dialog (08-ui-spec.md §6.8). */
+.icon-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.icon-tab {
+  flex: 1 1 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.icon-tab.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.emoji-cell {
+  aspect-ratio: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+}
+
+.emoji-cell:hover {
+  background: var(--accent-soft);
+}
+
+.icon-source-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.icon-source-row .text-input {
+  flex: 1 1 auto;
+}
+
+.icon-preview {
+  width: 96px;
+  height: 96px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.icon-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.icon-preview-error {
+  border-color: var(--danger, #c0392b);
+}
+
+.icon-preview-bad {
+  font-size: 28px;
+  color: var(--danger, #c0392b);
+}
+
 .group {
   border: 1px solid var(--border);
   border-radius: var(--radius);

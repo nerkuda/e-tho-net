@@ -25,7 +25,6 @@ import { refreshFocus, requireNetworkId } from '../app.js';
 import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { canSave, clearDraft, findDraft, offlineNotice, saveDraft } from '../drafts.js';
-import { promptDialog } from '../lib/dialog.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -37,6 +36,7 @@ import { registerAttachmentGroup } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
 import { registerLinksGroup } from './links-group.js';
 import { registerMentionsGroup } from './mentions.js';
+import { showIconDialog } from './icon-dialog.js';
 import { showThoughtStyleDialog } from './style-dialog.js';
 
 /** What the editor currently edits. */
@@ -450,14 +450,15 @@ function openThoughtSettings(thought: Thought): void {
 }
 
 /**
- * Changes the thought icon. Interim implementation: a simple emoji prompt; the
- * full Emoji/File/URL dialog (08-ui-spec.md §6.8) replaces this in a follow-up.
+ * Opens the icon picker (Emoji/File/URL, 08-ui-spec.md §6.8). The picked value
+ * is saved through `saveThought`; «Очистить» nulls the icon so the type default
+ * shows through.
  */
-async function changeThoughtIcon(thought: Thought): Promise<void> {
-  const value = await promptDialog('Иконка', 'Эмодзи', thought.icon ?? '');
-  if (value === null) return;
-  const v = value.trim();
-  await saveThought({ icon: v === '' ? null : v, icon_kind: 'emoji' });
+function changeThoughtIcon(thought: Thought): void {
+  void showIconDialog({
+    current: { icon: thought.icon, kind: thought.icon_kind },
+    onPick: (result) => saveThought({ icon: result.icon, icon_kind: result.kind }),
+  });
 }
 
 /** Builds the link header form (type + active). */

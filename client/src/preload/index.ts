@@ -163,6 +163,7 @@ function buildApi(): EtnApi {
       version: () => invoke('system.version'),
       export: (networkId, request) => invoke('system.export', networkId, request),
       getJob: (jobId) => invoke('system.getJob', jobId),
+      pickImage: () => invoke('system.pickImage'),
     },
   };
 }
