@@ -1366,6 +1366,20 @@ body.dragging .ellipse {
   color: var(--text-dim);
 }
 
+/* Markdown view/edit field (08-ui-spec.md §6.4). */
+.md-field-view {
+  min-height: calc(1.55em * 5);
+  cursor: text;
+}
+
+.md-field-area {
+  width: 100%;
+  min-height: calc(1.55em * 5);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .table-list {
   width: 100%;
   border-collapse: collapse;
