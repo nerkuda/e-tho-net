@@ -249,6 +249,11 @@ async function render(): Promise<void> {
   }
   emptyEl?.classList.add('hidden');
 
+  // The focused thought is always fresh in the focus response — refresh the
+  // neighbour cache so its (possibly just-edited) style, icon and title show
+  // correctly when it later appears in a zone instead of the focus row.
+  refCache.set(focus.focused.id, focus.focused);
+
   // Enrich neighbour metadata (colors/fonts/icon_kind are not in FocusNeighbor).
   await enrichRefs(focus);
   renderFocusRow(focus);
