@@ -1,8 +1,9 @@
 /**
- * Unit tests for the link-overlay grouping helper
- * (client/src/renderer/canvas/links.ts). The DOM/SVG rendering is covered by
- * manual/E2E checks; this pins down the directed-pair bundling that drives the
- * line-per-pair rendering.
+ * Unit tests for the link-overlay helpers
+ * (client/src/renderer/canvas/links.ts): directed-pair bundling that drives
+ * the line-per-pair rendering, and the endpoint-visibility geometry that
+ * hides lines to clouds clipped outside a zone's scroll window. The DOM/SVG
+ * rendering itself is covered by manual/E2E checks.
  */
 
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ import type { FocusEdge } from '@etn/shared';
 
 import { linksInternals } from '../src/renderer/canvas/links.js';
 
-const { groupBundles } = linksInternals;
+const { groupBundles, rectFitsInside } = linksInternals;
 
 function edge(id: string, sourceId: string, targetId: string, typeId: string | null = null): FocusEdge {
   return { id, source_id: sourceId, target_id: targetId, type_id: typeId };
@@ -57,5 +58,30 @@ describe('groupBundles (link overlay)', () => {
 
   it('returns an empty list for no edges', () => {
     assert.deepEqual(groupBundles([]), []);
+  });
+});
+
+describe('rectFitsInside (visibility of link endpoints)', () => {
+  const zone = { left: 0, right: 300, top: 0, bottom: 200 };
+
+  it('a cloud fully inside the zone scroll window is visible', () => {
+    assert.equal(rectFitsInside({ left: 12, right: 100, top: 10, bottom: 90 }, zone), true);
+  });
+
+  it('a cloud clipped by the zone edge (overscan row) is not visible', () => {
+    assert.equal(rectFitsInside({ left: 12, right: 100, top: 150, bottom: 260 }, zone), false);
+    assert.equal(rectFitsInside({ left: 12, right: 100, top: -40, bottom: 60 }, zone), false);
+    assert.equal(rectFitsInside({ left: 250, right: 360, top: 10, bottom: 90 }, zone), false);
+  });
+
+  it('tolerates sub-pixel layout rounding but not real overflow', () => {
+    assert.equal(
+      rectFitsInside({ left: 0.4, right: 300.6, top: -0.4, bottom: 200.4 }, zone),
+      true,
+    );
+    assert.equal(
+      rectFitsInside({ left: 0.4, right: 300.6, top: -0.4, bottom: 205 }, zone),
+      false,
+    );
   });
 });

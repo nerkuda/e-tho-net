@@ -2,9 +2,12 @@
  * SVG link overlay (H6, 08-ui-spec.md §2.4):
  *
  * Draws every link among the visible thoughts (focus + parents + children +
- * siblings), sourced from `focus.edges`. Each directed pair (source→target) is
- * one line from the source's bottom ellipse to the target's top ellipse; several
- * links of the same pair render as a thicker line with a count badge.
+ * siblings), sourced from `focus.edges`. Only pairs whose both clouds fully
+ * fit their zone's visible scroll window get a line — clouds clipped by the
+ * virtualized overscan carry no lines until scrolled into view (§2.5). Each
+ * directed pair (source→target) is one line from the source's bottom ellipse
+ * to the target's top ellipse; several links of the same pair render as a
+ * thicker line with a count badge.
  *
  * Layering: the base overlay sits **under** the clouds; the link currently
  * hovered or sticky-selected is re-rendered in a top overlay **above** the
@@ -155,6 +158,10 @@ function draw(): void {
     const src = findCloudAnywhere(bundle.sourceId);
     const tgt = findCloudAnywhere(bundle.targetId);
     if (src === null || tgt === null) continue;
+    // Virtualized zones also render overscan rows clipped outside the scroll
+    // window (08-ui-spec.md §2.5) — a line ending at such a cloud floats over
+    // other zones and misleads. Draw only between fully visible clouds.
+    if (!isCloudVisible(src) || !isCloudVisible(tgt)) continue;
     const from = ellipsePoint(src, 'bottom', hostRect);
     const to = ellipsePoint(tgt, 'top', hostRect);
     drawVisualLine(bundle, from, to);
@@ -189,7 +196,7 @@ function drawActive(): void {
   if (active !== null) {
     const src = findCloudAnywhere(active.sourceId);
     const tgt = findCloudAnywhere(active.targetId);
-    if (src !== null && tgt !== null) {
+    if (src !== null && tgt !== null && isCloudVisible(src) && isCloudVisible(tgt)) {
       const from = ellipsePoint(src, 'bottom', hostRect);
       const to = ellipsePoint(tgt, 'top', hostRect);
       drawTopLine(active, from, to);
@@ -208,6 +215,43 @@ function clearSvg(): void {
       while (layer.firstChild !== null) layer.removeChild(layer.firstChild);
     }
   }
+}
+
+/**
+ * True when the cloud is fully inside its zone's visible (clipped) scroll
+ * window. Clouds rendered into the overscan rows stick out of the clipped
+ * zone (08-ui-spec.md §2.5) and must not carry link lines until they fully
+ * fit. Clouds outside any zone (the focus row) are always visible.
+ */
+function isCloudVisible(cloud: HTMLElement): boolean {
+  const zone = cloud.closest('.zone');
+  if (zone === null) return true;
+  return rectFitsInside(cloud.getBoundingClientRect(), zone.getBoundingClientRect());
+}
+
+/** Layout rounding tolerance for the nested-rect check, px. */
+const VISIBILITY_EPSILON_PX = 1;
+
+/** Pure geometry: `inner` fully inside `outer` (within `epsilon` per side). */
+function rectFitsInside(
+  inner: DOMRectLike,
+  outer: DOMRectLike,
+  epsilon = VISIBILITY_EPSILON_PX,
+): boolean {
+  return (
+    inner.left >= outer.left - epsilon &&
+    inner.right <= outer.right + epsilon &&
+    inner.top >= outer.top - epsilon &&
+    inner.bottom <= outer.bottom + epsilon
+  );
+}
+
+/** Minimal rect shape for {@link rectFitsInside} (DOMRect in the renderer). */
+interface DOMRectLike {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
 }
 
 /** Groups edges into directed bundles by `source>target`. */
@@ -603,4 +647,4 @@ function onLineContextMenu(bundle: Bundle, event: MouseEvent): void {
 }
 
 /** Test seam. */
-export const linksInternals = { ellipsePoint, linkStyle, groupBundles };
+export const linksInternals = { ellipsePoint, linkStyle, groupBundles, rectFitsInside };
