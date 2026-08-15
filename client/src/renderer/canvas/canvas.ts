@@ -313,14 +313,9 @@ function renderFocusRow(focus: FocusResponse): void {
 
   const body = div('cloud-body');
   const iconBox = div('cloud-icon');
-  if (thought.icon_kind === 'image' && thought.icon !== null) {
-    const img = el('img');
-    img.src = thought.icon;
-    img.alt = '';
-    iconBox.append(img);
-  } else {
-    iconBox.textContent = thought.icon ?? '💭';
-  }
+  // Same resolution as zone clouds: the thought's own icon wins, else the
+  // thought type's default icon (so a typed focus shows the type icon too).
+  applyThoughtIcon(iconBox, thought);
   const title = el('div', 'cloud-title', thought.title);
   setTooltip(title, thought.title.slice(0, 400));
   body.append(iconBox, title);
