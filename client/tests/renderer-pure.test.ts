@@ -43,7 +43,7 @@ import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '
 import { searchInternals } from '../src/renderer/search/search.js';
 import { flipTransform } from '../src/renderer/canvas/transition.js';
 import { zoomable } from '../src/renderer/lib/image-zoom.js';
-import { patchFocusEdge, store } from '../src/renderer/state.js';
+import { focusEdgesSignature, patchFocusEdge, store } from '../src/renderer/state.js';
 
 const { scopesFor, mergeResponses, DEFAULT_OPTIONS, isSearchableQuery, nextNavIndex } =
   searchInternals;
@@ -372,6 +372,79 @@ describe('patchFocusEdge (instant link repaint; no realtime echo to actor)', () 
     patchFocusEdge(mkLink({ id: 'l9', source_id: 'x', target_id: 'y' }));
     assert.deepEqual(store.state.focus?.edges ?? [], []);
     store.update({ focus: null });
+  });
+});
+
+describe('focusEdgesSignature (editor «Связи» re-render guard)', () => {
+  const thought = (id: string): Thought => ({
+    id,
+    title: id,
+    type_id: null,
+    icon: null,
+    icon_kind: 'emoji',
+    active: true,
+    is_protected: false,
+    is_root: false,
+    fg_color: null,
+    bg_color: null,
+    font_bold: null,
+    font_italic: null,
+    font_underline: null,
+    font_strike: null,
+    synonyms: [],
+    version: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  });
+
+  const edge = (over: Partial<FocusEdge>): FocusEdge => ({
+    id: 'l1',
+    source_id: 'f',
+    target_id: 'c',
+    type_id: null,
+    color: null,
+    style: null,
+    width: null,
+    ...over,
+  });
+
+  const emptyFocus: FocusResponse = {
+    focused: thought('f'),
+    parents: [],
+    children: [],
+    siblings: [],
+    edges: [],
+    sorts: { parents: 'created', children: 'created' },
+  };
+
+  it('is empty for a null focus and a focus without edges', () => {
+    assert.equal(focusEdgesSignature(null), '');
+    assert.equal(focusEdgesSignature({ ...emptyFocus, edges: [] }), '');
+  });
+
+  it('changes when an edge is added, removed or retyped', () => {
+    const base = { ...emptyFocus, edges: [edge({})] };
+    const withSecond = {
+      ...emptyFocus,
+      edges: [edge({}), edge({ id: 'l2', source_id: 'f', target_id: 's' })],
+    };
+    const retyped = { ...emptyFocus, edges: [edge({ type_id: 't1' })] };
+    const sig = focusEdgesSignature(base);
+    assert.notEqual(focusEdgesSignature(withSecond), sig);
+    assert.notEqual(focusEdgesSignature(retyped), sig);
+    assert.notEqual(focusEdgesSignature(emptyFocus), sig);
+  });
+
+  it('is order-insensitive so a no-op refresh does not re-render the editor', () => {
+    const a = focusEdgesSignature({
+      ...emptyFocus,
+      edges: [edge({}), edge({ id: 'l2', source_id: 'f', target_id: 's' })],
+    });
+    const b = focusEdgesSignature({
+      ...emptyFocus,
+      edges: [edge({ id: 'l2', source_id: 'f', target_id: 's' }), edge({})],
+    });
+    assert.equal(a, b);
   });
 });
 

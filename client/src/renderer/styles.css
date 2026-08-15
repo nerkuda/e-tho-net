@@ -890,10 +890,12 @@ textarea {
   outline-offset: -2px;
 }
 
+/* Ellipse link-drag gesture (canvas.ts): a link cursor over the whole window —
+   including elements that carry their own cursor — so the drag is always
+   visible; the pressed ellipse also lights up (.drag-source above). */
 body.dragging,
-body.dragging .cloud,
-body.dragging .ellipse {
-  cursor: grabbing;
+body.dragging * {
+  cursor: crosshair !important;
 }
 
 .cloud-body {

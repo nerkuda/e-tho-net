@@ -25,6 +25,7 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { store } from '../state.js';
+import { requestZoneAnimation } from './canvas.js';
 
 type OrderableDir = 'parents' | 'children';
 type ZoneDir = 'parents' | 'children' | 'siblings';
@@ -283,6 +284,7 @@ async function linkToThought(draggedId: string, targetId: string, mode: LinkMode
       await etn.links.remove(networkId, reverse.id, fresh.version);
     }
     await etn.links.create(networkId, { source_id: sourceId, target_id: destId, type_id: typeId });
+    requestZoneAnimation();
     scheduleRefresh();
   } catch (err) {
     if (isDupError(err)) return; // race: link appeared meanwhile — treat as no-op
@@ -315,6 +317,7 @@ async function moveFocusDirection(draggedId: string, toDir: OrderableDir): Promi
       if (!isDupError(err)) noticeErr('Переместить мысль', err);
     }
   }
+  requestZoneAnimation();
   scheduleRefresh();
 }
 

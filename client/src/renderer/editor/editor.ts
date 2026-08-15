@@ -32,7 +32,7 @@ import { etn } from '../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
-import { patchFocusEdge, store } from '../state.js';
+import { focusEdgesSignature, patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { registerCommentGroups } from './comments.js';
 import { registerAttachmentGroup } from './attachments.js';
@@ -156,7 +156,8 @@ async function render(): Promise<void> {
   const signature =
     ctx === null
       ? 'null'
-      : `${ctx.ownerType}|${ctx.ownerId}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}|${store.state.editorPosition}`;
+      : `${ctx.ownerType}|${ctx.ownerId}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}` +
+        `|${focusEdgesSignature(store.state.focus)}|${store.state.editorPosition}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
 

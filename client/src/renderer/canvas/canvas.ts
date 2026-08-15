@@ -20,7 +20,7 @@
 
 import type { FocusNeighbor, FocusResponse, IconKind, ThoughtRef } from '@etn/shared';
 
-import { setFocus } from '../app.js';
+import { scheduleRefresh, setFocus } from '../app.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -86,6 +86,12 @@ interface DragState {
   startY: number;
   active: boolean;
   hovered: HTMLElement | null;
+  /** The pressed ellipse — lights up as the drag source (`.drag-source`). */
+  sourceEl: HTMLElement;
+  /** Its cloud, made un-draggable for the gesture (restored on release). */
+  sourceCloud: HTMLElement | null;
+  /** Whether `sourceCloud` was draggable before the press. */
+  wasDraggable: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,10 +262,13 @@ async function render(): Promise<void> {
 
   // Focus-change choreography (08-ui-spec.md §2.8): snapshot the old clouds
   // before the rebuild, then FLIP/ghost them after it. Other re-renders
-  // (edits, selection, realtime refresh of the same focus) are not animated.
+  // (edits, selection, realtime refresh of the same focus) are not animated —
+  // except when a link-affecting change requested the zone transition so a
+  // thought that changed zones visibly flows there (§2.1 exclusivity).
   const focusChanged = focus.focused.id !== lastFocusId;
-  const snapshot =
-    focusChanged && !prefersReducedMotion() ? captureClouds(host) : null;
+  const animate = (focusChanged || zoneAnimationPending) && !prefersReducedMotion();
+  zoneAnimationPending = false;
+  const snapshot = animate ? captureClouds(host) : null;
 
   // The focused thought is always fresh in the focus response — refresh the
   // neighbour cache so its (possibly just-edited) style, icon and title show
@@ -283,6 +292,19 @@ async function render(): Promise<void> {
 
 /** Focus id of the last render — gates the transition choreography (§2.8). */
 let lastFocusId: string | null = null;
+
+/** Set by {@link requestZoneAnimation}; consumed by the next render. */
+let zoneAnimationPending = false;
+
+/**
+ * Requests the FLIP transition choreography for the next render even though
+ * the focused thought stays the same — called after link-affecting changes
+ * (ellipse drop, cloud link/move) so a thought that changed zones glides to
+ * its new place instead of teleporting.
+ */
+export function requestZoneAnimation(): void {
+  zoneAnimationPending = true;
+}
 
 /**
  * Renders the focus cloud (08-ui-spec.md §2.2.2): variable width, up to 4
@@ -767,6 +789,12 @@ function wireEllipseDrag(
     }
     event.preventDefault();
     event.stopPropagation();
+    // A zone cloud is HTML5-draggable for the whole-cloud DnD (drag-cloud.ts);
+    // an ellipse press must run THIS mouse gesture instead, so keep the native
+    // drag from hijacking it and restore the flag on release.
+    const sourceCloud = ellipse.closest<HTMLElement>('.cloud');
+    const wasDraggable = sourceCloud?.draggable ?? false;
+    if (sourceCloud !== null && wasDraggable) sourceCloud.draggable = false;
     drag = {
       anchorId,
       direction,
@@ -774,6 +802,9 @@ function wireEllipseDrag(
       startY: event.clientY,
       active: false,
       hovered: null,
+      sourceEl: ellipse,
+      sourceCloud,
+      wasDraggable,
     };
     window.addEventListener('mousemove', onDragMove);
     window.addEventListener('mouseup', onDragEnd);
@@ -787,6 +818,7 @@ function onDragMove(event: MouseEvent): void {
     const dist = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
     if (dist < DRAG_THRESHOLD_PX) return;
     drag.active = true;
+    drag.sourceEl.classList.add('drag-source');
     document.body.classList.add('dragging');
     suppressNextClick = true;
   }
@@ -813,6 +845,8 @@ function onDragEnd(_event: MouseEvent): void {
   const direction = drag.direction;
   const hoveredId = drag.hovered?.dataset['id'] ?? null;
   if (drag.hovered !== null) drag.hovered.classList.remove('drop-target');
+  drag.sourceEl.classList.remove('drag-source');
+  if (drag.sourceCloud !== null && drag.wasDraggable) drag.sourceCloud.draggable = true;
   drag = null;
   document.body.classList.remove('dragging');
 
@@ -841,8 +875,17 @@ async function createLinkFromDrop(
   const targetId = direction === 'child' ? droppedId : anchorId;
   try {
     await etn.links.create(networkId, { source_id: sourceId, target_id: targetId });
+    // The acting client gets no realtime echo (04-realtime.md §5) — refresh
+    // explicitly so the new edge, the zone move and the editor's «Связи»
+    // update, and animate the thought flowing into its new zone.
+    requestZoneAnimation();
+    scheduleRefresh();
     notice('Связь создана.');
   } catch (err) {
+    if ((err as { code?: string } | null)?.code === 'DUPLICATE') {
+      notice('Такая связь уже существует.');
+      return;
+    }
     notice(
       `Не удалось создать связь: ${err instanceof Error ? err.message : String(err)}`,
       'error',

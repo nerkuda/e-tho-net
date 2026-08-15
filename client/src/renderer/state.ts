@@ -210,3 +210,18 @@ export function requireNetworkId(): string {
   if (id === null) throw new Error('Сеть не открыта.');
   return id;
 }
+
+/**
+ * Content signature of the visible link set around the focus. Creating,
+ * deleting or retyping a link changes it even though the focused thought's
+ * own version does not — the editor includes it in its render-signature
+ * guard so the «Связи» group rebuilds after link drops and realtime link
+ * events (the group body re-fetches links from the server per re-render).
+ */
+export function focusEdgesSignature(focus: FocusResponse | null): string {
+  if (focus === null) return '';
+  return focus.edges
+    .map((e) => `${e.id}:${e.source_id}>${e.target_id}:${e.type_id ?? '-'}`)
+    .sort()
+    .join(',');
+}
