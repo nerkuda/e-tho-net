@@ -453,7 +453,8 @@ textarea {
 
 .tb-caret {
   color: var(--text-faint);
-  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .toolbar-spacer {
@@ -480,6 +481,51 @@ textarea {
   font-size: 14px;
   line-height: 1;
   margin-left: 2px;
+}
+
+/* Connection status light (L13): a CSS dot coloured by state class
+   (ok/warn/bad) with a soft glow — replaces the emoji indicator. */
+.status-light {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--text-faint);
+}
+
+.status-light.ok {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent);
+}
+
+.status-light.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 25%, transparent);
+}
+
+.status-light.bad {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+/* Inline SVG chrome icons (L13, lib/icons.ts): colour follows the host text
+   colour (currentColor); layout-neutral sizing. */
+.icon {
+  flex: none;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Chevron caret of collapsible groups: rotated when collapsed (L13). */
+.group-caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  transition: transform 0.12s ease;
+}
+
+.group-caret.collapsed {
+  transform: rotate(-90deg);
 }
 
 .workspace-body {
@@ -1713,6 +1759,9 @@ body.dragging * {
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -1861,11 +1910,6 @@ body.dragging * {
   margin-left: auto;
   display: flex;
   gap: 6px;
-}
-
-.group-caret {
-  color: var(--text-faint);
-  font-size: 10px;
 }
 
 .group-body {

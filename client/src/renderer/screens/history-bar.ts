@@ -16,8 +16,9 @@
  */
 
 import { setFocus } from '../app.js';
-import { button, div, clear, el, setTooltip } from '../lib/dom.js';
+import { button, div, clear, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
@@ -86,15 +87,11 @@ async function render(): Promise<void> {
     return;
   }
 
-  const back = button(
-    '←',
-    () => {
-      const first = visible[0];
-      if (first !== undefined) void setFocus(first);
-    },
-    'history-back',
-    'Назад к предыдущей мысли',
-  );
+  const back = button('', () => {
+    const first = visible[0];
+    if (first !== undefined) void setFocus(first);
+  }, 'history-back', 'Назад к предыдущей мысли');
+  back.append(svgIcon('arrow-left', 13));
   host.append(back);
 
   const shown = visible.slice(0, 3);
@@ -106,7 +103,7 @@ async function render(): Promise<void> {
 
   if (rest.length > 0) {
     const more = button(
-      `▾ ${rest.length}`,
+      '',
       () => {
         const items: MenuItem[] = rest.map((id) => {
           const ref = refs.get(id);
@@ -121,6 +118,7 @@ async function render(): Promise<void> {
       'history-more',
       'Остальная история',
     );
+    more.append(svgIcon('chevron-down', 11), span(` ${rest.length}`));
     host.append(more);
   }
 }

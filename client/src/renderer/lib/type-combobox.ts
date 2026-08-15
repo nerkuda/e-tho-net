@@ -15,6 +15,7 @@
 import type { IconKind, LinkStyle } from '@etn/shared';
 
 import { applyFontFlags, div, el, span } from './dom.js';
+import { svgIcon } from './icons.js';
 
 /** One selectable row of the combobox. */
 export interface TypeOption {
@@ -60,7 +61,8 @@ export function createTypeCombobox(opts: {
   input.type = 'text';
   input.autocomplete = 'off';
   input.placeholder = opts.placeholder ?? '';
-  const caret = span('▾', 'type-combo-caret');
+  const caret = span('', 'type-combo-caret');
+  caret.append(svgIcon('chevron-down', 12));
   root.append(iconBox, input, caret);
 
   // Lives in document.body while open (fixed positioning, above dialogs).

@@ -8,6 +8,7 @@
  */
 
 import { button, div, el, errText } from './dom.js';
+import { svgIcon } from './icons.js';
 
 /** A dialog footer button. */
 export interface DialogButton {
@@ -56,7 +57,8 @@ export function showDialog(opts: DialogOptions): () => void {
 
   const header = div('dialog-header');
   header.append(el('span', 'dialog-title', opts.title));
-  const closeBtn = button('×', () => close(), 'dialog-close', 'Закрыть (Esc)');
+  const closeBtn = button('', () => close(), 'dialog-close', 'Закрыть (Esc)');
+  closeBtn.append(svgIcon('x', 14));
   header.append(closeBtn);
   box.append(header);
 

@@ -33,6 +33,7 @@ import { setLinkEditorOpener } from '../canvas/links.js';
 import { canSave, clearDraft, findDraft, offlineNotice, saveDraft } from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
@@ -161,7 +162,8 @@ export function mountEditor(editorHost: HTMLElement): void {
 
   const header = div('editor-header');
   titleEl = span('', 'editor-title');
-  positionButton = button('▾', () => void openPositionMenu(), 'btn small');
+  positionButton = button('', () => void openPositionMenu(), 'btn small');
+  positionButton.append(svgIcon('chevron-down', 12));
   setTooltip(positionButton, 'Положение редактора');
   header.append(titleEl, positionButton);
   scrollBox = div('editor-scroll');
@@ -573,8 +575,8 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     onChange: (typeId) => void saveThought({ type_id: typeId }),
   });
 
-  const settingsBtn = button('⚙', () => openThoughtSettings(thought), 'icon-btn');
-  setTooltip(settingsBtn, 'Цвет и стиль');
+  const settingsBtn = button('', () => openThoughtSettings(thought), 'icon-btn', 'Цвет и стиль');
+  settingsBtn.append(svgIcon('settings', 14));
 
   const activeLabel = el('label', 'checkbox-row');
   const activeCheck = el('input');
@@ -643,8 +645,8 @@ function buildLinkHeader(link: Link): HTMLElement {
     onChange: (typeId) => void saveLink(link, { type_id: typeId }),
   });
 
-  const settingsBtn = button('⚙', () => openLinkSettings(link), 'icon-btn');
-  setTooltip(settingsBtn, 'Цвет и стиль линии');
+  const settingsBtn = button('', () => openLinkSettings(link), 'icon-btn', 'Цвет и стиль линии');
+  settingsBtn.append(svgIcon('settings', 14));
 
   const activeLabel = el('label', 'checkbox-row');
   const activeCheck = el('input');

@@ -13,6 +13,7 @@
  */
 
 import { div, el, span } from '../lib/dom.js';
+import { svgIcon } from '../lib/icons.js';
 import { store } from '../state.js';
 
 /** Callback fired when a group is collapsed/expanded (persistence hook). */
@@ -69,7 +70,10 @@ export function groupSection(spec: GroupSpec, entityId: string): HTMLElement {
   const root = div('group');
   if (spec.compact === true) root.classList.add('compact');
   const header = div('group-header');
-  const caret = span(collapsed ? '▸' : '▾', 'group-caret');
+  // Chevron caret (L13): collapsed rotates it to point right.
+  const caret = span('', 'group-caret');
+  caret.append(svgIcon('chevron-down', 11));
+  caret.classList.toggle('collapsed', collapsed);
   const title = span(spec.title, 'group-title');
   header.append(caret, title);
   const lazy = spec.lazyCount === true && spec.count === undefined;
@@ -112,7 +116,7 @@ export function groupSection(spec: GroupSpec, entityId: string): HTMLElement {
   let body: HTMLElement | null = null;
 
   const apply = (): void => {
-    caret.textContent = collapsed ? '▸' : '▾';
+    caret.classList.toggle('collapsed', collapsed);
     if (body !== null) body.remove();
     body = null;
     if (collapsed || !built) return;

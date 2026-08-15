@@ -33,6 +33,7 @@ import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { applyThoughtIcon } from '../canvas/canvas.js';
 import { confirmDialog, errorDialog, showDialog, type DialogButton } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
+import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
@@ -197,8 +198,8 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   nameInput.value = type?.name ?? '';
   nameInput.maxLength = 200;
   nameInput.placeholder = 'Название типа (обязательно)';
-  const settingsBtn = button('⚙', openStyle, 'icon-btn');
-  setTooltip(settingsBtn, 'Настройки типа');
+  const settingsBtn = button('', openStyle, 'icon-btn', 'Настройки типа');
+  settingsBtn.append(svgIcon('settings', 14));
   topRow.append(iconBox, nameInput, settingsBtn);
   body.append(topRow);
 
@@ -933,8 +934,8 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
   reverseInput.value = type?.name_reverse ?? '';
   reverseInput.maxLength = 200;
   reverseInput.placeholder = 'От назначения к источнику (обязательно)';
-  const settingsBtn = button('⚙', openStyle, 'icon-btn');
-  setTooltip(settingsBtn, 'Настройки типа');
+  const settingsBtn = button('', openStyle, 'icon-btn', 'Настройки типа');
+  settingsBtn.append(svgIcon('settings', 14));
   namesRow.append(forwardInput, reverseInput, settingsBtn);
   body.append(namesRow);
 

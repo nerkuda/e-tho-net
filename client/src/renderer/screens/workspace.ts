@@ -17,6 +17,7 @@
  */
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
+import { svgIcon } from '../lib/icons.js';
 import { store, type RtStatus } from '../state.js';
 import { wireNetMenu, wireUserMenu, wireViewMenu } from './workspace-menus.js';
 import { mountCanvas } from '../canvas/canvas.js';
@@ -64,17 +65,17 @@ export function getWorkspace(): WorkspaceHandles | null {
   return current;
 }
 
-/** Status indicator glyph + tooltip per realtime status (08-ui-spec.md §11). */
-export function statusGlyph(status: RtStatus): { glyph: string; text: string } {
+/** Status indicator colour class + tooltip per realtime status (§11, L13). */
+export function statusGlyph(status: RtStatus): { cls: string; text: string } {
   switch (status) {
     case 'connected':
-      return { glyph: '🟢', text: 'Подключено' };
+      return { cls: 'ok', text: 'Подключено' };
     case 'connecting':
-      return { glyph: '🟡', text: 'Подключение…' };
+      return { cls: 'warn', text: 'Подключение…' };
     case 'reconnecting':
-      return { glyph: '🟡', text: 'Переподключение…' };
+      return { cls: 'warn', text: 'Переподключение…' };
     default:
-      return { glyph: '🔴', text: 'Нет соединения' };
+      return { cls: 'bad', text: 'Нет соединения' };
   }
 }
 
@@ -93,8 +94,8 @@ export function buildWorkspace(): HTMLElement {
 
   const netMenuButton = el('button', 'tb-btn', '');
   netMenuButton.type = 'button';
-  const netMenuLabel = span('📂 —', 'tb-label');
-  netMenuButton.append(netMenuLabel, span('▾', 'tb-caret'));
+  const netMenuLabel = span('—', 'tb-label');
+  netMenuButton.append(svgIcon('network'), netMenuLabel, svgIcon('chevron-down', 12));
   setTooltip(netMenuButton, 'Меню сети');
 
   const searchInput = el('input', 'search-input');
@@ -102,23 +103,25 @@ export function buildWorkspace(): HTMLElement {
   searchInput.placeholder = 'Поиск… (Ctrl+F)';
   setTooltip(searchInput, 'Поиск по сети');
 
-  const searchOptionsButton = el('button', 'tb-btn tb-icon', '⚙');
+  const searchOptionsButton = el('button', 'tb-btn tb-icon', '');
   searchOptionsButton.type = 'button';
+  searchOptionsButton.append(svgIcon('settings'));
   setTooltip(searchOptionsButton, 'Опции поиска');
 
   const spacer = div('toolbar-spacer');
 
   const userMenuButton = el('button', 'tb-btn', '');
   userMenuButton.type = 'button';
-  const userMenuLabel = span('👤 —', 'tb-label');
-  userMenuButton.append(userMenuLabel, span('▾', 'tb-caret'));
+  const userMenuLabel = span('—', 'tb-label');
+  userMenuButton.append(svgIcon('user'), userMenuLabel, svgIcon('chevron-down', 12));
   setTooltip(userMenuButton, 'Меню пользователя');
 
   // Workspace-layout commands menu (replaces the duplicated status dot — the
   // connection indicator lives in the status bar). First command toggles the
   // editor panel, which is otherwise unreachable once hidden.
-  const viewMenuButton = el('button', 'tb-btn tb-icon', '☰');
+  const viewMenuButton = el('button', 'tb-btn tb-icon', '');
   viewMenuButton.type = 'button';
+  viewMenuButton.append(svgIcon('menu'));
   setTooltip(viewMenuButton, 'Вид');
 
   toolbar.append(
@@ -146,7 +149,7 @@ export function buildWorkspace(): HTMLElement {
   // --- status bar ------------------------------------------------------------
   const statusbar = div('statusbar');
 
-  const statusLeft = span(statusGlyph(store.state.rtStatus).glyph, 'status-dot');
+  const statusLeft = span('', 'status-light');
   const historyHost = div('history-bar');
   const focusLabel = span('—', 'sb-item sb-focus');
   const sbSpacer = div('sb-spacer');
@@ -154,7 +157,8 @@ export function buildWorkspace(): HTMLElement {
   const zoomLabel = span('', 'sb-item sb-zoom');
   const eventLabel = span('', 'sb-item sb-event');
   const conflictHost = div('sb-conflict hidden');
-  conflictHost.append(span('⚠ изменено другим пользователем'));
+  const conflictText = span('изменено другим пользователем');
+  conflictHost.append(svgIcon('alert', 14), conflictText);
   const showConflictButton = el('button', 'link-btn', 'показать');
   showConflictButton.type = 'button';
   conflictHost.append(showConflictButton);
@@ -209,11 +213,12 @@ export function buildWorkspace(): HTMLElement {
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
   function refresh(): void {
     const st = store.state;
-    netMenuLabel.textContent = `📂 ${st.network?.display_name ?? '—'}`;
+    netMenuLabel.textContent = st.network?.display_name ?? '—';
     const user = st.me?.display_name ?? st.me?.username ?? '—';
-    userMenuLabel.textContent = `👤 ${user}`;
+    userMenuLabel.textContent = user;
     const glyph = statusGlyph(st.rtStatus);
-    statusLeft.textContent = glyph.glyph;
+    statusLeft.className = `status-light ${glyph.cls}`;
+    setTooltip(statusLeft, glyph.text);
     applyEditorPosition(body, st.editorPosition);
     const editorHidden = st.editorPosition === 'hidden';
     editorHost.classList.toggle('hidden', editorHidden);
@@ -222,7 +227,7 @@ export function buildWorkspace(): HTMLElement {
     body.style.setProperty('--editor-h', `${st.editorH}px`);
     focusLabel.textContent = st.focus?.focused.title ?? '—';
     setTooltip(focusLabel, st.focus?.focused.title ?? '');
-    zoomLabel.textContent = `🔍 ${Math.round(st.canvasZoom * 100)}%`;
+    zoomLabel.replaceChildren(svgIcon('search', 12), span(` ${Math.round(st.canvasZoom * 100)}%`));
     eventLabel.textContent = st.lastEvent ?? '';
   }
 
