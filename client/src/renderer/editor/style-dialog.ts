@@ -87,20 +87,28 @@ export function showThoughtStyleDialog(opts: {
     glyph: string,
     title: string,
     on: boolean,
-    apply: (value: boolean) => void,
+    apply: (value: boolean) => Promise<boolean>,
   ): void => {
     const btn = button(
       glyph,
-      () => apply(!btn.classList.contains('on')),
+      () => {
+        const next = !btn.classList.contains('on');
+        // Press optimistically; revert when the save fails so the button
+        // never shows a state that was not stored.
+        btn.classList.toggle('on', next);
+        void apply(next).then((ok) => {
+          if (!ok) btn.classList.toggle('on', !next);
+        });
+      },
       `font-toggle${on ? ' on' : ''}`,
     );
     setTooltip(btn, title);
     toggles.append(btn);
   };
-  fontToggle('Ж', 'Жирный', resolved.bold, (v) => void onApply({ font_bold: v }));
-  fontToggle('Н', 'Курсив', resolved.italic, (v) => void onApply({ font_italic: v }));
-  fontToggle('П', 'Подчёркнутый', resolved.underline, (v) => void onApply({ font_underline: v }));
-  fontToggle('З', 'Зачёркнутый', resolved.strike, (v) => void onApply({ font_strike: v }));
+  fontToggle('Ж', 'Жирный', resolved.bold, (v) => onApply({ font_bold: v }));
+  fontToggle('Н', 'Курсив', resolved.italic, (v) => onApply({ font_italic: v }));
+  fontToggle('П', 'Подчёркнутый', resolved.underline, (v) => onApply({ font_underline: v }));
+  fontToggle('З', 'Зачёркнутый', resolved.strike, (v) => onApply({ font_strike: v }));
   body.append(toggles);
 
   showDialog({
