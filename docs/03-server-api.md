@@ -288,7 +288,8 @@ POST /api/v1/networks/{nid}/thoughts/resolve
 POST   /api/v1/networks/{nid}/links
        { source_id, target_id, type_id?, active? }
 GET    /api/v1/networks/{nid}/links/{id}
-PATCH  /api/v1/networks/{nid}/links/{id}    If-Match   { type_id?, active? }
+PATCH  /api/v1/networks/{nid}/links/{id}    If-Match
+       { source_id?, target_id?, type_id?, active? }
 DELETE /api/v1/networks/{nid}/links/{id}    If-Match
 ```
 
@@ -296,6 +297,10 @@ DELETE /api/v1/networks/{nid}/links/{id}    If-Match
 - `source_id <> target_id` → 422.
 - `(source_id, target_id, type_id)` UNIQUE → 409 `DUPLICATE`.
 - `type_id` может быть NULL (нетипизированная связь).
+- PATCH: `source_id`/`target_id` передаются **только вместе** — смена концов
+  инвертирует связь (источник ⇄ назначение). Оба конца должны существовать
+  (404), петля → 422, дубль в новом направлении (с учётом `type_id`) → 409.
+  Инвариант UNIQUE проверяется для результирующей пары.
 
 ### 7.2. Связи мысли (для редактора)
 ```
