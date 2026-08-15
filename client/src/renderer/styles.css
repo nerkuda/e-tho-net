@@ -918,6 +918,14 @@ body.resizing-h {
   top: 0;
   display: grid;
   gap: var(--cloud-gap);
+  /* The inline virtualization `translateY` makes this grid a stacking
+   * context — without its own z-index the clouds would flatten into the
+   * z=0 band and the link hit overlay (later in the DOM) would sit ABOVE
+   * them again. z=1 lifts the whole context above the hit layer; the grid
+   * box itself ignores the pointer so link stretches visible between clouds
+   * stay clickable — clouds re-enable it (pointer-events on .cloud). */
+  z-index: 1;
+  pointer-events: none;
 }
 
 .canvas-focus-row {
@@ -928,6 +936,9 @@ body.resizing-h {
   padding: 10px 14px;
   position: relative;
   z-index: 1;
+  /* The row box spans the whole canvas width — it must not shield the link
+   * hit layer around the focus cloud; the cloud itself re-enables events. */
+  pointer-events: none;
 }
 
 /* Three link layers:
@@ -1025,6 +1036,9 @@ body.resizing-h {
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   user-select: none;
+  /* Re-enables the pointer inside the pointer-transparent zone grids and
+   * focus row (the clouds must keep their own hover/click/drag). */
+  pointer-events: auto;
   /* NB: no overflow clip — the on-frame ellipses stick half-outside (L12). */
   transition: box-shadow 0.12s ease, border-color 0.12s ease;
 }
