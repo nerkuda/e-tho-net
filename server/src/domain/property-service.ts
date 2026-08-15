@@ -188,10 +188,102 @@ export function createTypeProperty(
   });
 }
 
+/** A plain ISO date (YYYY-MM-DD, optionally with a time tail). */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}($|T)/;
+
+/**
+ * Try to convert a stored value to a new value type (L6). Returns the column +
+ * raw SQL value to rewrite, or `null` when the value cannot be represented —
+ * the caller then clears it. Deliberately conservative: dates never become
+ * numbers, thought refs never convert into anything but text.
+ */
+function convertStoredValue(
+  value: string | number | boolean,
+  to: PropertyValueType,
+): { column: string; raw: string | number | null } | null {
+  switch (to) {
+    case 'text':
+    case 'url': {
+      if (typeof value === 'string') return { column: 'value_text', raw: value };
+      if (typeof value === 'number') return { column: 'value_text', raw: String(value) };
+      return { column: 'value_text', raw: value ? 'true' : 'false' };
+    }
+    case 'number': {
+      if (typeof value === 'number') return { column: 'value_number', raw: value };
+      if (typeof value === 'boolean') return { column: 'value_number', raw: value ? 1 : 0 };
+      const trimmed = value.trim();
+      if (trimmed !== '') {
+        const n = Number(trimmed);
+        if (Number.isFinite(n)) return { column: 'value_number', raw: n };
+      }
+      return null;
+    }
+    case 'date': {
+      if (typeof value === 'string' && ISO_DATE_RE.test(value) && !Number.isNaN(Date.parse(value))) {
+        return { column: 'value_date', raw: value.slice(0, 10) };
+      }
+      return null;
+    }
+    case 'bool': {
+      if (typeof value === 'boolean') return { column: 'value_bool', raw: value ? 1 : 0 };
+      if (typeof value === 'number' && (value === 0 || value === 1)) {
+        return { column: 'value_bool', raw: value };
+      }
+      if (typeof value === 'string') {
+        const s = value.trim().toLowerCase();
+        if (s === 'true' || s === 'да' || s === '1') return { column: 'value_bool', raw: 1 };
+        if (s === 'false' || s === 'нет' || s === '0') return { column: 'value_bool', raw: 0 };
+      }
+      return null;
+    }
+    case 'thought_ref':
+      return null;
+  }
+}
+
+/**
+ * Rewrite every stored value of a property whose `value_type` changed (L6):
+ * convertible values move to the new column, the rest are deleted. Runs in the
+ * caller's transaction so a failed migration rolls the type change back.
+ */
+function migratePropertyValues(
+  ndb: NetworkDb,
+  propertyId: string,
+  from: PropertyValueType,
+  to: PropertyValueType,
+): void {
+  const rows = ndb
+    .prepare('SELECT * FROM property_values WHERE property_id = ?')
+    .all(propertyId) as PropertyValueRow[];
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    const value = readValue(row, from);
+    const converted = value === null ? null : convertStoredValue(value, to);
+    if (converted === null) {
+      ndb.prepare('DELETE FROM property_values WHERE id = ?').run(row.id);
+      continue;
+    }
+    ndb
+      .prepare(
+        `UPDATE property_values SET
+           value_text = NULL, value_date = NULL, value_number = NULL,
+           value_bool = NULL, value_thought_ref = NULL,
+           ${converted.column} = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(converted.raw, now, row.id);
+  }
+}
+
 /**
  * Patch a property definition (docs/03-server-api.md §8). Last-write-wins per
  * field. `type_properties` has no `version` column, so there is no If-Match
  * guard here.
+ *
+ * Changing `value_type` rewrites every stored value of the property in the same
+ * transaction: values that fit the new type are converted, the rest are
+ * cleared. Changing `key` keeps stored values attached (they reference the
+ * property id, not the key).
  */
 export function updateTypeProperty(
   ndb: NetworkDb,
@@ -202,30 +294,56 @@ export function updateTypeProperty(
   if (!current) {
     throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'type_property', id });
   }
-  const sets: string[] = [];
-  const args: unknown[] = [];
-  if (changes.value_type !== undefined) {
-    sets.push('value_type = ?');
-    args.push(validateValueType(changes.value_type));
-  }
-  if (changes.config !== undefined) {
-    sets.push('config = ?');
-    args.push(changes.config === null ? null : JSON.stringify(changes.config));
-  }
-  if (changes.required !== undefined) {
-    sets.push('required = ?');
-    args.push(changes.required ? 1 : 0);
-  }
-  if (changes.position !== undefined) {
-    sets.push('position = ?');
-    args.push(changes.position);
-  }
-  if (sets.length === 0) {
-    return current;
-  }
-  args.push(id);
-  ndb.prepare(`UPDATE type_properties SET ${sets.join(', ')} WHERE id = ?`).run(...args);
-  return getTypeProperty(ndb, id)!;
+  const nextKey = changes.key !== undefined ? validateKey(changes.key) : undefined;
+  const nextType = changes.value_type !== undefined ? validateValueType(changes.value_type) : undefined;
+
+  return ndb.transaction(() => {
+    if (nextKey !== undefined && nextKey !== current.key) {
+      const dupe = ndb
+        .prepare(
+          'SELECT 1 FROM type_properties WHERE owner_type = ? AND owner_id = ? AND key = ? AND id <> ?',
+        )
+        .get(current.owner_type, current.owner_id, nextKey, id);
+      if (dupe) {
+        throw new EtnError('DUPLICATE', `property "${nextKey}" already exists on this type`, {
+          owner_type: current.owner_type,
+          owner_id: current.owner_id,
+          key: nextKey,
+        });
+      }
+    }
+    if (nextType !== undefined && nextType !== current.value_type) {
+      migratePropertyValues(ndb, id, current.value_type, nextType);
+    }
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    if (nextKey !== undefined) {
+      sets.push('key = ?');
+      args.push(nextKey);
+    }
+    if (nextType !== undefined) {
+      sets.push('value_type = ?');
+      args.push(nextType);
+    }
+    if (changes.config !== undefined) {
+      sets.push('config = ?');
+      args.push(changes.config === null ? null : JSON.stringify(changes.config));
+    }
+    if (changes.required !== undefined) {
+      sets.push('required = ?');
+      args.push(changes.required ? 1 : 0);
+    }
+    if (changes.position !== undefined) {
+      sets.push('position = ?');
+      args.push(changes.position);
+    }
+    if (sets.length === 0) {
+      return current;
+    }
+    args.push(id);
+    ndb.prepare(`UPDATE type_properties SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    return getTypeProperty(ndb, id)!;
+  });
 }
 
 /** Delete a property definition. Cascades to stored values via SQL FK. */
@@ -286,6 +404,7 @@ interface PropertyValueRow {
 function readValue(row: PropertyValueRow, valueType: PropertyValueType): PropertyValueValue {
   switch (valueType) {
     case 'text':
+    case 'url':
       return row.value_text;
     case 'date':
       return row.value_date;
@@ -296,6 +415,15 @@ function readValue(row: PropertyValueRow, valueType: PropertyValueType): Propert
     case 'thought_ref':
       return row.value_thought_ref;
   }
+}
+
+/**
+ * The `value_*` column a value type is stored in. `url` shares `value_text`
+ * with `text` (02-data-model.md §3.4). The literal is derived from the
+ * validated enum, never from user input.
+ */
+function storageColumn(valueType: PropertyValueType): string {
+  return valueType === 'url' ? 'value_text' : `value_${valueType}`;
 }
 
 /** The table that holds the owner row for a given value owner_type. */
@@ -371,17 +499,18 @@ function validateAndCoerce(
   value: PropertyValueValue,
 ): { column: string; raw: string | number | null } {
   // `value_type` is an enum member (validated on definition write), so the
-  // interpolated column is one of five fixed literals.
-  const column = `value_${def.value_type}`;
+  // interpolated column is one of the fixed `value_*` literals.
+  const column = storageColumn(def.value_type);
   if (value === null) {
     return { column, raw: null };
   }
   switch (def.value_type) {
     case 'text':
+    case 'url':
       if (typeof value !== 'string') {
         throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects text`, {
           key: def.key,
-          expected: 'text',
+          expected: def.value_type,
         });
       }
       return { column, raw: value };

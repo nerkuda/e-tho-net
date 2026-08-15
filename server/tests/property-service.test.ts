@@ -22,6 +22,7 @@ import {
   deletePropertyValue,
   getPropertyValues,
   setPropertyValue,
+  updateTypeProperty,
 } from '../src/domain/property-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 
@@ -170,6 +171,65 @@ describe(
         assert.equal(getPropertyValues(ndb, 'thought', thought).length, 0);
         assert.throws(
           () => deletePropertyValue(ndb, 'thought', thought, 'note'),
+          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('stores url values in value_text and validates them as strings', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Site' }, USER);
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'site', value_type: 'url' });
+        const thought = seedTypedThought(ndb, tt.id);
+        setPropertyValue(ndb, 'thought', thought, 'site', 'https://example.com');
+        assert.equal(getPropertyValues(ndb, 'thought', thought)[0]!.value, 'https://example.com');
+        assert.throws(
+          () => setPropertyValue(ndb, 'thought', thought, 'site', 5),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('changing value_type converts fitting values and clears the rest', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Conv' }, USER);
+        const prop = createTypeProperty(ndb, 'thought_type', tt.id, { key: 'num', value_type: 'text' });
+        const a = seedTypedThought(ndb, tt.id);
+        const b = seedTypedThought(ndb, tt.id);
+        setPropertyValue(ndb, 'thought', a, 'num', '42');
+        setPropertyValue(ndb, 'thought', b, 'num', 'not-a-number');
+
+        updateTypeProperty(ndb, prop.id, { value_type: 'number' });
+        const values = new Map(
+          getPropertyValues(ndb, 'thought', a).concat(getPropertyValues(ndb, 'thought', b)).map((v) => [v.owner_id, v.value]),
+        );
+        assert.equal(values.get(a), 42);
+        assert.equal(values.get(b), undefined); // cleared — not convertible
+        assert.equal(getPropertyValues(ndb, 'thought', b).length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('renaming the key keeps stored values attached', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Rename' }, USER);
+        const prop = createTypeProperty(ndb, 'thought_type', tt.id, { key: 'old', value_type: 'text' });
+        const thought = seedTypedThought(ndb, tt.id);
+        setPropertyValue(ndb, 'thought', thought, 'old', 'kept');
+
+        updateTypeProperty(ndb, prop.id, { key: 'new' });
+        // The value is addressed by the new key and still there.
+        assert.equal(getPropertyValues(ndb, 'thought', thought)[0]!.value, 'kept');
+        assert.throws(
+          () => setPropertyValue(ndb, 'thought', thought, 'old', 'x'),
           (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
         );
       } finally {

@@ -244,6 +244,9 @@ function parseTypePropertyUpdateBody(
   requestId: string,
 ): PropertyDefinitionUpdateInput {
   const changes: PropertyDefinitionUpdateInput = {};
+  if (body.key !== undefined) {
+    changes.key = fieldString(body, 'key', requestId);
+  }
   if (body.value_type !== undefined) {
     changes.value_type = fieldString(
       body,

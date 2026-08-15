@@ -97,6 +97,8 @@ export interface PropertyDefinitionInput {
 
 /** Input accepted by `PATCH …/types/{id}/properties/{prop_id}` (03-server-api.md §8). */
 export interface PropertyDefinitionUpdateInput {
+  /** Renames the key; stored values stay attached (they reference prop ids). */
+  key?: string;
   value_type?: PropertyValueType;
   config?: PropertyConfig | null;
   required?: boolean;

@@ -14,8 +14,16 @@
 export const NETWORK_ROLES = ['owner', 'member'] as const;
 export type NetworkRole = (typeof NETWORK_ROLES)[number];
 
-/** Value types accepted by a {@link PropertyDefinition} (02-data-model.md §3.4). */
-export const PROPERTY_VALUE_TYPES = ['text', 'date', 'number', 'bool', 'thought_ref'] as const;
+/** Value types accepted by a {@link PropertyDefinition} (02-data-model.md §3.4).
+ *  `url` (a web address or a file link) is stored in `value_text` like `text`. */
+export const PROPERTY_VALUE_TYPES = [
+  'text',
+  'date',
+  'number',
+  'bool',
+  'thought_ref',
+  'url',
+] as const;
 export type PropertyValueType = (typeof PROPERTY_VALUE_TYPES)[number];
 
 /** Kinds of comments an entity may own (02-data-model.md §3.8). */
