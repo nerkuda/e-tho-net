@@ -76,6 +76,9 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
 
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '320px';
+  // The group machinery builds the body before mounting it into the editor —
+  // start with a placeholder so the first (pre-mount) load never shows a gap.
+  tableWrap.append(el('span', 'muted', 'Загрузка…'));
   box.append(tableWrap);
 
   const refTitles = new Map<string, string>();
@@ -83,8 +86,12 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   void reload();
 
   /** Loads definitions + values and renders the table. */
+  let everMounted = false;
   async function reload(): Promise<void> {
-    if (!box.isConnected) return; // stale body replaced by a newer render
+    // The first reload starts before the group mounts this box — it must
+    // proceed detached. Skip only bodies that were mounted and then replaced
+    // by a newer editor render.
+    if (everMounted && !box.isConnected) return;
     tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let definitions: PropertyDefinition[];
     let values: PropertyValue[];
@@ -102,6 +109,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
       tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
+    if (box.isConnected) everMounted = true;
     if (definitions.length === 0) {
       tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
       return;
