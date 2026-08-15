@@ -142,6 +142,8 @@ byNetwork:   Map<network_id, Set<connectionHandle>>
 | `editor_position` | left/right/top/bottom/hidden |
 | `editor_collapsed_groups` | `{ [entity_id]: { permanent: bool, chrono: bool, ... } }` |
 | `window_layout` | Размеры панелей, позиция окна |
+| `canvas_layout` | Пропорции разделителей зон холста: `{"topSplit": 0…1, "childrenShare": 0…1}` — доля левой зоны верхней полосы (деф. 0.5) и доля высоты холста под нижнюю зону (деф. 0.34). Клиппится в 0.1–0.9 |
+| `canvas_zoom` | Масштаб холста, множитель 0.5–2.0 с шагом 0.05 (деф. 1.0). Лимиты см. п. 2.4 |
 | `last_used_link_type_id` | Последний выбранный тип связи в диалоге (UX-помощь) |
 
 #### L5. Клиент (установка) (`client_meta`)
@@ -150,7 +152,7 @@ byNetwork:   Map<network_id, Set<connectionHandle>>
 | `client_id` | UUID установки |
 | `last_seq` (per network_id) | Позиция в event_log |
 | `theme` | light/dark (когда появятся темы) |
-| `zoom` | Масштаб UI |
+| `zoom` | Масштаб UI (зарезервировано под общий масштаб всего интерфейса; масштаб холста — отдельный L4-ключ `canvas_zoom`, этот ключ не используется) |
 | `active_profile_id` | Текущий server profile |
 
 ### 2.2. Принцип выбора уровня
@@ -231,9 +233,20 @@ byNetwork:   Map<network_id, Set<connectionHandle>>
 | `CLOUD_GAP_DEFAULT`| 12 px | Дефолтное значение `cloud_gap` |
 | `FOCUS_FONT_SCALE` | 1.3   | Множитель шрифта заголовка фокус-облачка |
 | `FOCUS_TITLE_MAX_LINES` | 4 | Максимум строк заголовка в фокус-облачке |
+| `CANVAS_ZOOM_MIN`  | 0.5   | Минимальный масштаб холста |
+| `CANVAS_ZOOM_MAX`  | 2.0   | Максимальный масштаб холста |
+| `CANVAS_ZOOM_STEP` | 0.05  | Шаг изменения масштаба (клавиши `Ctrl+=`/`Ctrl+-`, сетка кратна шагу) |
+| `CANVAS_ZOOM_DEFAULT` | 1.0 | Дефолтный масштаб холста |
 
 - При сохранении `cloud_width`/`cloud_gap` клиент клиппит значение в диапазон
-  `[MIN, MAX]`.
+  `[MIN, MAX]`; `canvas_zoom` — в `[CANVAS_ZOOM_MIN, CANVAS_ZOOM_MAX]` с
+  округлением к сетке, кратной `CANVAS_ZOOM_STEP`.
+- **Масштаб холста (`canvas_zoom`, L9)** — множитель поверх `cloud_width` /
+  `cloud_gap`, которые он не перезаписывает: эффективная ширина облачка =
+  `cloud_width × canvas_zoom`, эффективный отступ = `cloud_gap × canvas_zoom`,
+  шрифт/высота строки/эллипсы/вертикальные отступы масштабируются тем же
+  множителем. Сетка зон и виртуализация (08-ui-spec.md §2.1.1) считаются по
+  эффективным размерам; линии рамки облачка остаются 1 px.
 - Высота облачка (3 строки + эллипсы) — **не** настройка и не константа в пикселях;
   она вычисляется из CSS: высота шрифта × число строк + отступы + диаметр эллипса.
 - Шрифт простого облачка масштабируется вместе с `cloud_width` по фиксированному
