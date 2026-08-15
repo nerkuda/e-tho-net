@@ -58,6 +58,8 @@ let svgHit: SVGSVGElement | null = null;
 /** Top overlay — above the hit layer; carries the hovered/selected line. */
 let svgTop: SVGSVGElement | null = null;
 let popover: HTMLElement | null = null;
+/** Bundle whose popover is open (to refresh counts on invalidation). */
+let activePopoverBundle: Bundle | null = null;
 let opener: LinkEditorOpener | null = null;
 /** Bundle key currently under the cursor (transient). */
 let hoveredKey: string | null = null;
@@ -537,6 +539,7 @@ function showPopover(bundle: Bundle): void {
   hidePopover();
   popover = div('link-popover');
   popover.dataset['key'] = bundle.key;
+  activePopoverBundle = bundle;
   const names = bundle.edges
     .map((edge) => {
       const type =
@@ -554,6 +557,28 @@ function showPopover(bundle: Bundle): void {
 function hidePopover(): void {
   popover?.remove();
   popover = null;
+  activePopoverBundle = null;
+}
+
+/**
+ * Drops the cached popover counts of one link (all links when `linkId` is
+ * null). A popover that is currently open for the affected link re-fetches its
+ * counts at once — the popover stays visible while the link is sticky-selected
+ * and its owner (comments/attachments) changes in the editor or via realtime.
+ */
+export function invalidateLinkCounts(linkId: string | null): void {
+  if (linkId === null) {
+    linkCountsCache.clear();
+  } else {
+    linkCountsCache.delete(linkId);
+  }
+  const bundle = activePopoverBundle;
+  if (popover === null || bundle === null || bundle.edges.length !== 1) return;
+  const edge = bundle.edges[0];
+  if (edge === undefined) return;
+  if (linkId !== null && edge.id !== linkId) return;
+  const counts = popover.querySelector('.link-popover-counts');
+  if (counts instanceof HTMLElement) void loadLinkCounts(bundle, counts);
 }
 
 /** Lazily fetches comment/chronology/attachment counts for a bundle. */

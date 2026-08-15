@@ -26,7 +26,7 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { cloudFontSize, cloudHeight } from '../lib/pure.js';
 import { store } from '../state.js';
-import { initLinksOverlay, drawLinksNow } from './links.js';
+import { initLinksOverlay, drawLinksNow, invalidateLinkCounts } from './links.js';
 import {
   captureClouds,
   playFocusTransition,
@@ -234,6 +234,8 @@ export function setAddDialogOpener(opener: ((ctx: AddDialogContext) => void) | n
 /**
  * Invalidates cached indicator counts and re-fetches them, patching the
  * rendered clouds (called after comment/attachment changes and realtime events).
+ * The link-popover counts cache (links.ts) is dropped for the same id too —
+ * for a link owner the id is the link id, for `null` the whole cache goes.
  */
 export function invalidateIndicators(id: string | null): void {
   if (id === null) {
@@ -244,6 +246,7 @@ export function invalidateIndicators(id: string | null): void {
     indicatorCache.delete(id);
     queueIndicatorLoad(id);
   }
+  invalidateLinkCounts(id);
 }
 
 // ---------------------------------------------------------------------------
