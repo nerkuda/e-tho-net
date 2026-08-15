@@ -52,6 +52,8 @@
   --shadow-focus: 0 4px 18px rgba(47, 111, 237, 0.18);
   --radius: 10px;
   --radius-sm: 8px;
+  /* Cloud cards are rounder than chrome panels (L11). */
+  --radius-cloud: 14px;
 
   /* chrome */
   --toolbar-h: 46px;
@@ -904,7 +906,7 @@ body.resizing-h {
   pointer-events: none;
 }
 
-/* --- cloud ---------------------------------------------------------------- */
+/* --- cloud (L11 visual refresh) ------------------------------------------- */
 
 .cloud {
   position: relative;
@@ -913,12 +915,15 @@ body.resizing-h {
   display: flex;
   flex-direction: column;
   background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-cloud);
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   user-select: none;
-  transition: box-shadow 0.12s ease;
+  /* Clips the children to the rounded corners; the cloud is always shorter
+     than the virtualized grid row, so nothing functional depends on overflow. */
+  overflow: hidden;
+  transition: box-shadow 0.12s ease, border-color 0.12s ease;
 }
 
 /* Fade-out ghosts of clouds removed by a focus change (08-ui-spec §2.8). */
@@ -930,6 +935,7 @@ body.resizing-h {
 }
 
 .cloud:hover {
+  border-color: var(--border-strong);
   box-shadow: var(--shadow-hover);
 }
 
@@ -946,18 +952,23 @@ body.resizing-h {
 .cloud .ellipse {
   align-self: center;
   width: calc(100% - 16px);
-  /* Ellipse thickness scales with the canvas zoom (L9). */
+  /* Ellipse thickness and its top margin scale with the canvas zoom (L9);
+     both feed the cloudHeight() formula in pure.ts. */
   height: calc(8px * var(--cloud-zoom, 1));
   border-radius: 999px;
   border: 1px solid var(--border-strong);
-  background: var(--surface);
-  margin: 2px 0 0;
+  background: transparent;
+  margin: calc(2px * var(--cloud-zoom, 1)) 0 0;
   cursor: grab;
 }
 
 .cloud .ellipse.filled {
   background: var(--ellipse-fill);
   border-color: var(--ellipse-fill-border);
+}
+
+.cloud .ellipse:hover {
+  border-color: var(--accent);
 }
 
 .cloud .ellipse.drag-source {
@@ -995,25 +1006,27 @@ body.dragging * {
 }
 
 .cloud-body {
+  flex: 1 1 auto;
   display: flex;
-  gap: 6px;
-  align-items: flex-start;
+  gap: 8px;
+  align-items: center;
   /* Vertical paddings scale with the canvas zoom (L9), matching the
-   * cloudHeight() formula in pure.ts. */
-  padding: calc(4px * var(--cloud-zoom, 1)) 8px calc(2px * var(--cloud-zoom, 1));
+   * cloudHeight() formula in pure.ts. `flex: 1` absorbs the small slack
+   * between the formula row height and the natural content height, so the
+   * bottom ellipse stays flush with the frame. */
+  padding: calc(5px * var(--cloud-zoom, 1)) 10px calc(2px * var(--cloud-zoom, 1));
 }
 
 .cloud-icon {
   flex: 0 0 auto;
-  width: calc(var(--cloud-font) * 2.2);
-  height: calc(var(--cloud-font) * 2.2);
+  width: calc(var(--cloud-font) * 1.9);
+  height: calc(var(--cloud-font) * 1.9);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: calc(var(--cloud-font) * 1.5);
+  font-size: calc(var(--cloud-font) * 1.15);
   background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   overflow: hidden;
 }
 
@@ -1045,7 +1058,7 @@ body.dragging * {
   flex: 1;
   min-width: 0;
   font-size: var(--cloud-font);
-  line-height: 1.5;
+  line-height: 1.35;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -1058,12 +1071,12 @@ body.dragging * {
   display: flex;
   gap: 10px;
   align-items: center;
-  padding: 2px 8px 4px;
-  font-size: calc(var(--cloud-font) * 0.82);
+  padding: 0 10px calc(4px * var(--cloud-zoom, 1));
+  font-size: calc(var(--cloud-font) * 0.8);
+  line-height: 1.25;
   /* Same colour as the title (inherited from .cloud): theme accents could be
      invisible on a user-picked dark cloud background. */
   color: inherit;
-  min-height: calc(var(--cloud-font) * 1.2);
 }
 
 .cloud-ind .ind {
@@ -1072,7 +1085,7 @@ body.dragging * {
 }
 
 .cloud-ind .ind.dim {
-  opacity: 0.45;
+  opacity: 0.55;
 }
 
 .cloud-ind .ind.active {
@@ -1119,9 +1132,9 @@ body.dragging * {
 }
 
 .cloud.focus-cloud .cloud-icon {
-  width: calc(var(--cloud-font) * 2.9);
-  height: calc(var(--cloud-font) * 2.9);
-  font-size: calc(var(--cloud-font) * 2);
+  width: calc(var(--cloud-font) * 2.3);
+  height: calc(var(--cloud-font) * 2.3);
+  font-size: calc(var(--cloud-font) * 1.55);
 }
 
 .cloud.focus-cloud .ellipse {

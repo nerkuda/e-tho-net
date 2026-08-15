@@ -48,12 +48,14 @@ const CLOUD_FONT_MAX = 16;
 export const CLOUD_PAD = 6;
 /** Height of a single ellipse thickening, px. */
 export const ELLIPSE_HEIGHT = 8;
+/** Top margin of each ellipse inside the cloud, px (zoomed like the height). */
+export const ELLIPSE_MARGIN_TOP = 2;
 /** Cloud border width, px. */
 export const CLOUD_BORDER = 1;
 /** Title line-height factor relative to the font size. */
-const TITLE_LINE_FACTOR = 1.5;
+const TITLE_LINE_FACTOR = 1.35;
 /** Indicators line-height factor relative to the font size. */
-const IND_LINE_FACTOR = 1.2;
+const IND_LINE_FACTOR = 1.1;
 
 /** Clamps a number into `[min, max]`. */
 export function clip(value: number, min: number, max: number): number {
@@ -73,16 +75,18 @@ export function cloudFontSize(width: number, zoom = 1): number {
 
 /**
  * Fixed height of a simple cloud in px: 2 title lines + indicators line +
- * paddings + two ellipses + borders. Not user-editable (11-settings-and-state.md
- * §2.4). The font, paddings and ellipses scale with the canvas zoom; the 1 px
- * borders stay constant (they are constant in CSS too).
+ * paddings + two ellipses (with their top margins) + borders. Not user-editable
+ * (11-settings-and-state.md §2.4). The font, paddings and ellipses scale with
+ * the canvas zoom; the 1 px borders stay constant (they are constant in CSS
+ * too). Stays ~1–3 px above the natural DOM content height — the grid row is
+ * never shorter than the rendered cloud.
  */
 export function cloudHeight(width: number, zoom = 1): number {
   const font = cloudFontSize(width, zoom);
   const title = font * TITLE_LINE_FACTOR * CLOUD_TITLE_LINES;
   const ind = font * IND_LINE_FACTOR;
   const pad = CLOUD_PAD * zoom;
-  const ellipse = ELLIPSE_HEIGHT * zoom;
+  const ellipse = (ELLIPSE_HEIGHT + ELLIPSE_MARGIN_TOP) * zoom;
   return Math.round(title + ind + pad * 2 + ellipse * 2 + CLOUD_BORDER * 2);
 }
 
