@@ -363,6 +363,9 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
   const box = div('form-stack');
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '220px';
+  // The first load often starts before the dialog mounts this box — show the
+  // placeholder up front instead of a blank gap.
+  tableWrap.append(el('span', 'muted', 'Загрузка…'));
   const errorLine = span('', 'error-text');
   box.append(tableWrap, errorLine);
   box.append(
@@ -417,14 +420,19 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
   }
 
   /** Renders the definitions table from the server. */
+  let everMounted = false;
   async function reload(): Promise<void> {
-    if (!box.isConnected) return;
+    // The table is built BEFORE its dialog mounts it, so the first reload runs
+    // while still detached and must proceed. Skip only bodies that were
+    // mounted and then discarded (the dialog closed or a newer body took over).
+    if (everMounted && !box.isConnected) return;
     try {
       defs = await etn.types.listTypeProperties(networkId, 'thought_type', typeId);
     } catch (err) {
       tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
+    if (box.isConnected) everMounted = true;
     const table = el('table', 'table-list prop-table');
     const head = el('thead');
     const headRow = el('tr');
