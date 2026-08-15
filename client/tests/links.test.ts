@@ -13,7 +13,7 @@ import type { FocusEdge } from '@etn/shared';
 
 import { linksInternals } from '../src/renderer/canvas/links.js';
 
-const { groupBundles, rectFitsInside } = linksInternals;
+const { groupBundles, rectFitsInside, edgeGeometry } = linksInternals;
 
 function edge(id: string, sourceId: string, targetId: string, typeId: string | null = null): FocusEdge {
   return { id, source_id: sourceId, target_id: targetId, type_id: typeId };
@@ -58,6 +58,31 @@ describe('groupBundles (link overlay)', () => {
 
   it('returns an empty list for no edges', () => {
     assert.deepEqual(groupBundles([]), []);
+  });
+});
+
+describe('edgeGeometry (Bézier link curves, L14)', () => {
+  it('keeps the curve midpoint on the vertical axis of a straight edge', () => {
+    // Downward edge (0,0)→(0,100): bend = max(24, 45) = 45 → mid exactly (0,50).
+    const geo = edgeGeometry({ x: 0, y: 0 }, { x: 0, y: 100 });
+    assert.equal(geo.mid.x, 0);
+    assert.equal(geo.mid.y, 50);
+    assert.equal(geo.d, 'M 0 0 C 0 45, 0 55, 0 100');
+  });
+
+  it('clamps the bend: floor for short edges, ceiling for long ones', () => {
+    // Short edge: bend floored at 24.
+    assert.equal(edgeGeometry({ x: 0, y: 0 }, { x: 0, y: 10 }).d, 'M 0 0 C 0 24, 0 -14, 0 10');
+    // Long edge: bend capped at 140.
+    assert.equal(edgeGeometry({ x: 0, y: 0 }, { x: 0, y: 1000 }).d, 'M 0 0 C 0 140, 0 860, 0 1000');
+  });
+
+  it('horizontal edges get a gentle S-curve with the midpoint on the chord', () => {
+    const geo = edgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 });
+    assert.equal(geo.mid.x, 50);
+    assert.equal(geo.mid.y, 0);
+    // Control points symmetric around the chord.
+    assert.equal(geo.d, 'M 0 0 C 0 24, 100 -24, 100 0');
   });
 });
 

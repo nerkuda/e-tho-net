@@ -5,9 +5,10 @@
  * siblings), sourced from `focus.edges`. Only pairs whose both clouds fully
  * fit their zone's visible scroll window get a line — clouds clipped by the
  * virtualized overscan carry no lines until scrolled into view (§2.5). Each
- * directed pair (source→target) is one line from the source's bottom ellipse
- * to the target's top ellipse; several links of the same pair render as a
- * thicker line with a count badge.
+ * directed pair (source→target) is one cubic Bézier curve from the source's
+ * bottom ellipse to the target's top ellipse, stroked with a source→target
+ * colour gradient (L14); several links of the same pair render as a thicker
+ * curve with a count badge.
  *
  * Layering: the base overlay sits **under** the clouds; the link currently
  * hovered or sticky-selected is re-rendered in a top overlay **above** the
@@ -25,7 +26,7 @@ import { closeMenu, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { div, el } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
-import { findCloudAnywhere } from './canvas.js';
+import { findCloudAnywhere, getRef } from './canvas.js';
 import { showLinkContextMenu } from './context-menu.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -58,6 +59,10 @@ const LABEL_OFFSET = 8;
  *  inwards from the card edge (L12). */
 const ELLIPSE_TOP_DY = 4;
 const ELLIPSE_BOTTOM_DY = 4;
+/** Bézier bend clamp range, px (L14): keeps short edges visibly curved and
+ *  long edges from growing huge loops. */
+const BEND_MIN = 24;
+const BEND_MAX = 140;
 
 /** A directed pair of thoughts with the links between them. */
 interface Bundle {
@@ -162,6 +167,10 @@ function draw(): void {
   if (svg === null || svgHit === null || svgTop === null || hostEl === null) return;
   clearSvg();
   clearEnds();
+  // Fresh defs for the per-edge gradients (L14); rebuilt with every draw.
+  defsEl = document.createElementNS(SVG_NS, 'defs');
+  gradientSeq = 0;
+  svg.append(defsEl);
   const focus = store.state.focus;
   if (focus === null) {
     hidePopover();
@@ -355,7 +364,100 @@ function ellipsePoint(
   return { x, y };
 }
 
-/** Renders the visible (coloured) line + badge/label on the under-clouds overlay. */
+/** Geometry of one Bézier edge (L14, 08-ui-spec.md §2.4). */
+export interface EdgeGeometry {
+  /** SVG path `d` for the curve. */
+  d: string;
+  /** Point on the curve at t=0.5 — the badge/label anchor. */
+  mid: { x: number; y: number };
+}
+
+/**
+ * Cubic Bézier edge geometry (L14): the control points leave the endpoints
+ * along the attachment normals — the source's bottom ellipse points down,
+ * the target's top ellipse points up. Downward edges become smooth vertical
+ * S-curves, horizontal ones gentle cables; the bend is clamped to
+ * `BEND_MIN..BEND_MAX` so short edges stay visibly curved and long ones
+ * never grow huge loops.
+ */
+export function edgeGeometry(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): EdgeGeometry {
+  const dy = Math.abs(to.y - from.y);
+  const dist = Math.hypot(to.x - from.x, to.y - from.y);
+  const bend = Math.min(BEND_MAX, Math.max(BEND_MIN, Math.max(dy * 0.45, dist * 0.18)));
+  const c1 = { x: from.x, y: from.y + bend };
+  const c2 = { x: to.x, y: to.y - bend };
+  // Cubic Bézier at t = 0.5: (P0 + 3·P1 + 3·P2 + P3) / 8.
+  const mid = {
+    x: (from.x + 3 * c1.x + 3 * c2.x + to.x) / 8,
+    y: (from.y + 3 * c1.y + 3 * c2.y + to.y) / 8,
+  };
+  return {
+    d: `M ${from.x} ${from.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${to.x} ${to.y}`,
+    mid,
+  };
+}
+
+/**
+ * Resolves the "identity colour" of an endpoint thought for the line gradient
+ * (L14): its own background colour, else the thought type's default
+ * background. Null when neither is set — the caller falls back to the line
+ * style colour.
+ */
+function endpointColor(thoughtId: string): string | null {
+  const ref = getRef(thoughtId);
+  if (ref !== null) {
+    if (ref.bg_color !== null) return ref.bg_color;
+    if (ref.type_id !== null) {
+      return store.state.thoughtTypes.find((t) => t.id === ref.type_id)?.bg_color ?? null;
+    }
+  }
+  return null;
+}
+
+/** `defs` element of the base overlay; rebuilt on every draw (L14). */
+let defsEl: SVGDefsElement | null = null;
+/** Sequence for unique gradient ids within one draw. */
+let gradientSeq = 0;
+
+/**
+ * Adds a linear gradient along the edge (source colour → target colour) to
+ * the base overlay defs and returns its `url(#…)` paint reference. One
+ * gradient per bundle: the axis follows that bundle's endpoints
+ * (`userSpaceOnUse`), so a shared gradient would mis-orient on edges with
+ * different directions.
+ */
+function ensureEdgeGradient(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  fromColor: string,
+  toColor: string,
+): string {
+  const grad = document.createElementNS(SVG_NS, 'linearGradient');
+  const id = `etn-lg-${gradientSeq++}`;
+  grad.setAttribute('id', id);
+  grad.setAttribute('gradientUnits', 'userSpaceOnUse');
+  grad.setAttribute('x1', String(from.x));
+  grad.setAttribute('y1', String(from.y));
+  grad.setAttribute('x2', String(to.x));
+  grad.setAttribute('y2', String(to.y));
+  for (const [offset, color] of [
+    ['0%', fromColor],
+    ['100%', toColor],
+  ] as const) {
+    const stop = document.createElementNS(SVG_NS, 'stop');
+    stop.setAttribute('offset', offset);
+    stop.setAttribute('stop-color', color);
+    grad.append(stop);
+  }
+  defsEl?.append(grad);
+  return `url(#${id})`;
+}
+
+/** Renders the visible (coloured) Bézier curve + badge/label on the
+ *  under-clouds overlay (L14). */
 function drawVisualLine(
   bundle: Bundle,
   from: { x: number; y: number },
@@ -368,23 +470,29 @@ function drawVisualLine(
   const zoom = store.state.canvasZoom;
   const lineWidth =
     (count > 1 ? BASE_WIDTH + (count - 1) * EXTRA_WIDTH_PER_LINK : style.width) * zoom;
+  const geo = edgeGeometry(from, to);
 
-  const line = document.createElementNS(SVG_NS, 'line');
+  // Gradient source→target colour (L14): an endpoint's identity colour (own
+  // or type background) wins, else the line style colour. Same colours on
+  // both ends → plain solid stroke, no gradient is built.
+  const fromColor = endpointColor(bundle.sourceId) ?? style.color;
+  const toColor = endpointColor(bundle.targetId) ?? style.color;
+  const stroke = fromColor !== toColor ? ensureEdgeGradient(from, to, fromColor, toColor) : fromColor;
+
+  const line = document.createElementNS(SVG_NS, 'path');
   line.classList.add('link-line');
-  line.setAttribute('x1', String(from.x));
-  line.setAttribute('y1', String(from.y));
-  line.setAttribute('x2', String(to.x));
-  line.setAttribute('y2', String(to.y));
-  line.setAttribute('stroke', style.color);
+  line.setAttribute('d', geo.d);
+  line.setAttribute('stroke', stroke);
   line.setAttribute('stroke-width', String(lineWidth));
   line.setAttribute('stroke-dasharray', style.dash);
   line.setAttribute('stroke-opacity', '0.75');
+  line.setAttribute('fill', 'none');
   line.dataset['key'] = bundle.key;
   line.dataset['links'] = bundle.edges.map((e) => e.id).join(',');
   svg.append(line);
 
-  const midX = (from.x + to.x) / 2;
-  const midY = (from.y + to.y) / 2;
+  const midX = geo.mid.x;
+  const midY = geo.mid.y;
   if (count > 1) {
     const badge = document.createElementNS(SVG_NS, 'circle');
     badge.setAttribute('cx', String(midX));
@@ -401,7 +509,7 @@ function drawVisualLine(
     svg.append(badge, text);
     return;
   }
-  // Single typed link: directional label along the line.
+  // Single typed link: directional label along the curve.
   const typeId = bundle.edges[0]?.type_id ?? null;
   const type = typeId !== null ? store.state.linkTypes.find((t) => t.id === typeId) : undefined;
   if (type !== undefined) {
@@ -441,13 +549,13 @@ function drawHitLine(
   if (svgHit === null) return;
   const count = bundle.edges.length;
   const baseWidth = count > 1 ? BASE_WIDTH + (count - 1) * EXTRA_WIDTH_PER_LINK : linkStyle(bundle).width;
-  const hit = document.createElementNS(SVG_NS, 'line');
+  const hit = document.createElementNS(SVG_NS, 'path');
   hit.classList.add('link-hit');
-  hit.setAttribute('x1', String(from.x));
-  hit.setAttribute('y1', String(from.y));
-  hit.setAttribute('x2', String(to.x));
-  hit.setAttribute('y2', String(to.y));
-  // Wide hit area around the (thinner) visible line, zoom-scaled (L9).
+  // Same Bézier geometry as the visible curve (L14) — the wide invisible
+  // stroke follows the curve, so hover/click stay on the drawn line.
+  hit.setAttribute('d', edgeGeometry(from, to).d);
+  hit.setAttribute('fill', 'none');
+  // Wide hit area around the (thinner) visible curve, zoom-scaled (L9).
   hit.setAttribute('stroke-width', String(Math.max(baseWidth + 10, 14) * store.state.canvasZoom));
   hit.dataset['key'] = bundle.key;
 
@@ -466,7 +574,7 @@ function drawHitLine(
   svgHit.append(hit);
 }
 
-/** Renders the highlighted copy of a line on the above-clouds overlay. */
+/** Renders the highlighted copy of a curve on the above-clouds overlay. */
 function drawTopLine(
   bundle: Bundle,
   from: { x: number; y: number },
@@ -475,12 +583,10 @@ function drawTopLine(
   if (svgTop === null) return;
   const count = bundle.edges.length;
   const baseWidth = count > 1 ? BASE_WIDTH + (count - 1) * EXTRA_WIDTH_PER_LINK : linkStyle(bundle).width;
-  const line = document.createElementNS(SVG_NS, 'line');
+  const line = document.createElementNS(SVG_NS, 'path');
   line.classList.add('link-line', 'link-line-active');
-  line.setAttribute('x1', String(from.x));
-  line.setAttribute('y1', String(from.y));
-  line.setAttribute('x2', String(to.x));
-  line.setAttribute('y2', String(to.y));
+  line.setAttribute('d', edgeGeometry(from, to).d);
+  line.setAttribute('fill', 'none');
   line.setAttribute('stroke', 'var(--warn, #c98a06)');
   line.setAttribute('stroke-width', String(baseWidth * store.state.canvasZoom + 2));
   line.setAttribute('stroke-opacity', '1');
@@ -554,10 +660,10 @@ function ensurePopover(
     showPopover(bundle);
   }
   if (popover !== null) {
-    const midX = hostRect.left + (from.x + to.x) / 2;
-    const midY = hostRect.top + (from.y + to.y) / 2;
-    popover.style.left = `${midX}px`;
-    popover.style.top = `${midY}px`;
+    // Anchor at the curve's t=0.5 point, matching the badge (L14).
+    const mid = edgeGeometry(from, to).mid;
+    popover.style.left = `${hostRect.left + mid.x}px`;
+    popover.style.top = `${hostRect.top + mid.y}px`;
   }
 }
 
@@ -711,4 +817,10 @@ function onLineContextMenu(bundle: Bundle, event: MouseEvent): void {
 }
 
 /** Test seam. */
-export const linksInternals = { ellipsePoint, linkStyle, groupBundles, rectFitsInside };
+export const linksInternals = {
+  ellipsePoint,
+  linkStyle,
+  groupBundles,
+  rectFitsInside,
+  edgeGeometry,
+};
