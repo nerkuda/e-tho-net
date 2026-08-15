@@ -490,13 +490,13 @@ function buildLinkHeader(link: Link): HTMLElement {
   // Single row: link type + settings (⚙) + active toggle (08-ui-spec.md §6.2.2).
   const row = div('editor-header-row');
 
-  // Searchable type picker (L6): rows show forward/reverse names + line colour.
+  // Searchable type picker (L6): rows show forward/reverse names + line look.
   const typeCombo = createTypeCombobox({
     options: () =>
       store.state.linkTypes.map((t) => ({
         id: t.id,
         label: `${t.name_forward} / ${t.name_reverse}`,
-        dot: t.color,
+        line: { color: t.color, style: t.style, width: t.width },
       })),
     value: link.type_id,
     placeholder: 'без типа',

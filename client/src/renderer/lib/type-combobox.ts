@@ -4,11 +4,15 @@
  *
  * The input doubles as the search field — typing filters the list; the rows
  * (and the selected value in the input) carry the type's icon, colours and
- * font style so a needed type is easy to spot among many. Keyboard: ↓/↑ move
- * the active row, Enter picks it, Escape closes the list.
+ * font style so a needed type is easy to spot among many. Link types show a
+ * line swatch (colour/dash/width) instead. Keyboard: ↓/↑ move the active row,
+ * Enter picks it, Escape closes the list.
+ *
+ * The dropdown is mounted in `document.body` with fixed positioning — it must
+ * not be clipped by the host dialog's bounds (08-ui-spec.md §4.2).
  */
 
-import type { IconKind } from '@etn/shared';
+import type { IconKind, LinkStyle } from '@etn/shared';
 
 import { div, el, span } from './dom.js';
 
@@ -28,8 +32,8 @@ export interface TypeOption {
     underline: boolean;
     strike: boolean;
   } | null;
-  /** Optional colour dot (e.g. a link type's line colour). */
-  dot?: string | null;
+  /** Optional line swatch (a link type's line look) shown before the label. */
+  line?: { color: string | null; style: LinkStyle; width: number } | null;
 }
 
 /** The created combobox widget. */
@@ -59,13 +63,12 @@ export function createTypeCombobox(opts: {
   const caret = span('▾', 'type-combo-caret');
   root.append(iconBox, input, caret);
 
+  // Lives in document.body while open (fixed positioning, above dialogs).
   const list = div('type-combo-list hidden');
-  root.append(list);
-
-  let current = opts.value;
   let open = false;
   let activeIndex = -1;
   let rows: TypeOption[] = [];
+  let current = opts.value;
 
   /** Renders an option's icon into a box (emoji glyph or <img>). */
   function renderIcon(box: HTMLElement, opt: TypeOption | null): void {
@@ -93,6 +96,15 @@ export function createTypeCombobox(opts: {
     target.classList.toggle('font-italic', opt.style.italic);
     target.classList.toggle('font-underline', opt.style.underline);
     target.classList.toggle('font-strike', opt.style.strike);
+  }
+
+  /** A small line swatch element for link-type options. */
+  function lineSwatch(line: TypeOption['line']): HTMLElement | null {
+    if (line == null) return null;
+    const swatch = span('', 'type-combo-swatch');
+    const style = line.style === 'dashed' ? 'dashed' : line.style === 'dotted' ? 'dotted' : 'solid';
+    swatch.style.borderTop = `${Math.max(1, Math.min(6, line.width))}px ${style} ${line.color ?? '#9aa3b2'}`;
+    return swatch;
   }
 
   /** The option object for the currently selected id (or the empty entry). */
@@ -127,11 +139,8 @@ export function createTypeCombobox(opts: {
     for (const [index, opt] of rows.entries()) {
       const row = div('type-combo-item');
       if (index === activeIndex) row.classList.add('active');
-      if (opt.dot !== undefined && opt.dot !== null) {
-        const dot = span('', 'type-combo-dot');
-        dot.style.background = opt.dot;
-        row.append(dot);
-      }
+      const swatch = lineSwatch(opt.line);
+      if (swatch !== null) row.append(swatch);
       const icon = span('', 'type-combo-icon');
       renderIcon(icon, opt);
       row.append(icon);
@@ -142,6 +151,23 @@ export function createTypeCombobox(opts: {
       row.addEventListener('click', () => select(opt));
       list.append(row);
     }
+  }
+
+  /** Places the body-mounted list right under the input, flipping up if needed. */
+  function positionList(): void {
+    document.body.append(list);
+    list.classList.remove('hidden');
+    const rect = input.getBoundingClientRect();
+    const listRect = list.getBoundingClientRect();
+    const width = Math.max(rect.width, Math.min(listRect.width, 360));
+    let left = Math.max(6, Math.min(rect.left, window.innerWidth - width - 6));
+    let top = rect.bottom + 2;
+    if (top + listRect.height > window.innerHeight - 6 && rect.top > listRect.height + 6) {
+      top = Math.max(6, rect.top - listRect.height - 2);
+    }
+    list.style.left = `${Math.round(left)}px`;
+    list.style.top = `${Math.round(top)}px`;
+    list.style.width = `${Math.round(width)}px`;
   }
 
   /** Marks the active row after an arrow-key move. */
@@ -156,8 +182,8 @@ export function createTypeCombobox(opts: {
   function openList(): void {
     if (open) return;
     open = true;
-    list.classList.remove('hidden');
     renderList('');
+    positionList();
     input.select();
   }
 
@@ -165,6 +191,7 @@ export function createTypeCombobox(opts: {
     if (!open) return;
     open = false;
     list.classList.add('hidden');
+    list.remove();
     renderValue();
   }
 
@@ -180,9 +207,11 @@ export function createTypeCombobox(opts: {
   input.addEventListener('input', () => {
     if (!open) {
       open = true;
-      list.classList.remove('hidden');
+      renderList(input.value);
+      positionList();
+    } else {
+      renderList(input.value);
     }
-    renderList(input.value);
   });
   input.addEventListener('keydown', (event) => {
     if (event.key === 'ArrowDown') {
@@ -203,23 +232,28 @@ export function createTypeCombobox(opts: {
     }
   });
 
-  // Window-level capture listeners: close on an outside click, and swallow
-  // Escape while the list is open so the host dialog stays mounted (dialog
-  // Escape handlers are window-capture too; ours registers first because the
-  // combobox is built before showDialog). Both self-unsubscribe once the
-  // widget is detached (editor re-renders rebuild comboboxes).
+  // Window-level capture listeners: close on an outside click or any scroll
+  // (the dialog body may scroll under the fixed list), and swallow Escape
+  // while the list is open so the host dialog stays mounted. All self-
+  // unsubscribe once the widget is detached (editor re-renders rebuild
+  // comboboxes).
+  const detach = (): void => {
+    window.removeEventListener('mousedown', onWinDown, true);
+    window.removeEventListener('keydown', onWinKey, true);
+    window.removeEventListener('scroll', onWinScroll, true);
+  };
   const onWinDown = (event: MouseEvent): void => {
     if (!root.isConnected) {
-      window.removeEventListener('mousedown', onWinDown, true);
-      window.removeEventListener('keydown', onWinKey, true);
+      detach();
       return;
     }
-    if (open && event.target instanceof Node && !root.contains(event.target)) closeList();
+    if (open && event.target instanceof Node && !root.contains(event.target) && !list.contains(event.target)) {
+      closeList();
+    }
   };
   const onWinKey = (event: KeyboardEvent): void => {
     if (!root.isConnected) {
-      window.removeEventListener('mousedown', onWinDown, true);
-      window.removeEventListener('keydown', onWinKey, true);
+      detach();
       return;
     }
     if (open && event.key === 'Escape') {
@@ -228,8 +262,16 @@ export function createTypeCombobox(opts: {
       closeList();
     }
   };
+  const onWinScroll = (): void => {
+    if (!root.isConnected) {
+      detach();
+      return;
+    }
+    if (open) closeList();
+  };
   window.addEventListener('mousedown', onWinDown, true);
   window.addEventListener('keydown', onWinKey, true);
+  window.addEventListener('scroll', onWinScroll, true);
 
   renderValue();
   return { root, value: () => current };

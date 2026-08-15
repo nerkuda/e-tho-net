@@ -372,7 +372,7 @@ function drawVisualLine(
     svg.append(badge, text);
     return;
   }
-  // Single typed link: name_forward label along the line.
+  // Single typed link: directional label along the line.
   const typeId = bundle.edges[0]?.type_id ?? null;
   const type = typeId !== null ? store.state.linkTypes.find((t) => t.id === typeId) : undefined;
   if (type !== undefined) {
@@ -382,9 +382,21 @@ function drawVisualLine(
     text.setAttribute('x', String(midX));
     text.setAttribute('y', String(midY + offset));
     text.setAttribute('dominant-baseline', 'middle');
-    text.textContent = type.name_forward;
+    text.textContent = linkLabel(bundle, type);
     svg.append(text);
   }
+}
+
+/**
+ * The type name to label a line with, read from the focused thought (08-ui-spec.md
+ * §2.4): links leaving the focus use `name_forward`, links arriving at it —
+ * `name_reverse` (e.g. «сотрудники» from the company, «место работы» from the
+ * employee). Neighbour↔neighbour lines default to the forward name.
+ */
+function linkLabel(bundle: Bundle, type: LinkType): string {
+  const focusId = store.state.focus?.focused.id;
+  if (focusId !== undefined && focusId === bundle.targetId) return type.name_reverse;
+  return type.name_forward;
 }
 
 /**

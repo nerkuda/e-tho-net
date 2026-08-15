@@ -11,7 +11,12 @@
  *   grouping; clicking either puts it in focus.
  */
 
-import type { Link, ThoughtLinksGrouped, ThoughtRef } from '@etn/shared';
+import type {
+  Link,
+  ThoughtLinksByTypeGroup,
+  ThoughtLinksGrouped,
+  ThoughtRef,
+} from '@etn/shared';
 
 import { requireNetworkId, setFocus } from '../app.js';
 import { applyThoughtIcon } from '../canvas/canvas.js';
@@ -57,8 +62,21 @@ async function countLinks(ctx: EditorContext): Promise<string | undefined> {
   }
 }
 
-/** Builds the links group body for a thought (grouped by type, untyped by direction). */
-function buildLinksBody(ctx: EditorContext): HTMLElement {
+/**
+ * The type-group heading read from the edited thought's point of view (L6):
+ * all links outgoing → `name_forward`, all incoming → `name_reverse`, mixed →
+ * both names.
+ */
+function groupName(ownerId: string, group: ThoughtLinksByTypeGroup): string {
+  const type = store.state.linkTypes.find((t) => t.id === group.type_id);
+  if (type === undefined) return group.type_name;
+  const outgoing = group.items.filter((i) => i.link.source_id === ownerId).length;
+  if (outgoing === group.items.length) return type.name_forward;
+  if (outgoing === 0) return type.name_reverse;
+  return `${type.name_forward} / ${type.name_reverse}`;
+}
+
+/** Builds the links group body for a thought (grouped by type, untyped by direction). */function buildLinksBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
   const box = div('links-body');
   void reload();
@@ -84,7 +102,7 @@ function buildLinksBody(ctx: EditorContext): HTMLElement {
     for (const group of grouped.by_type) {
       count += group.items.length;
       if (group.items.length === 0) continue;
-      const header = el('p', 'muted', `${group.type_name} (${group.items.length})`);
+      const header = el('p', 'muted', `${groupName(ctx.ownerId, group)} (${group.items.length})`);
       header.style.margin = '8px 0 2px';
       box.append(header);
       for (const item of group.items) {
@@ -231,7 +249,7 @@ function pickLinkType(current: string | null): Promise<string | null | undefined
         store.state.linkTypes.map((t) => ({
           id: t.id,
           label: `${t.name_forward} / ${t.name_reverse}`,
-          dot: t.color,
+          line: { color: t.color, style: t.style, width: t.width },
         })),
       value: current,
       placeholder: 'без типа',

@@ -155,10 +155,15 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     };
 
     switch (definition.value_type) {
-      case 'text': {
+      case 'text':
+      case 'url': {
         const input = el('input', 'text-input prop-editor');
         input.type = 'text';
         input.value = typeof stored === 'string' ? stored : '';
+        if (definition.value_type === 'url') {
+          input.placeholder = 'https://… или путь к файлу';
+          input.title = 'URL или путь к файлу';
+        }
         input.addEventListener('blur', () => {
           const next = input.value;
           if (next === '') save(null);
@@ -232,7 +237,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   function typeName(valueType: string): string {
     switch (valueType) {
       case 'text':
-        return 'текст';
+        return 'строка';
       case 'number':
         return 'число';
       case 'date':
@@ -241,6 +246,8 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         return 'да/нет';
       case 'thought_ref':
         return 'мысль';
+      case 'url':
+        return 'URL';
       default:
         return valueType;
     }

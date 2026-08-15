@@ -132,7 +132,7 @@ export function openAddDialog(ctx: {
       store.state.linkTypes.map((t) => ({
         id: t.id,
         label: `${t.name_forward} / ${t.name_reverse}`,
-        dot: t.color,
+        line: { color: t.color, style: t.style, width: t.width },
       })),
     value: linkTypeId,
     placeholder: 'без типа',

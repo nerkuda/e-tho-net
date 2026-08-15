@@ -2173,13 +2173,9 @@ body.dragging .ellipse {
   object-fit: contain;
 }
 
+/* Body-mounted (fixed) so the host dialog never clips it. */
 .type-combo-list {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  min-width: 100%;
-  width: max-content;
-  max-width: 360px;
+  position: fixed;
   max-height: 240px;
   overflow-y: auto;
   background: var(--surface);
@@ -2187,7 +2183,7 @@ body.dragging .ellipse {
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow);
   padding: 4px;
-  z-index: 90;
+  z-index: 950; /* above the dialog stack (dialog-backdrop sits at 900) */
 }
 
 .type-combo-item {
@@ -2205,11 +2201,9 @@ body.dragging .ellipse {
   background: var(--accent-soft);
 }
 
-.type-combo-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 1px solid var(--border-strong);
+.type-combo-swatch {
+  width: 22px;
+  border-top: 2px solid #9aa3b2;
   flex: none;
 }
 
@@ -2220,6 +2214,14 @@ body.dragging .ellipse {
 
 .type-combo-empty {
   margin: 4px 8px;
+}
+
+/* Link-type line swatch in list dialogs (L6). */
+.link-type-swatch {
+  display: inline-block;
+  width: 26px;
+  border-top: 2px solid #9aa3b2;
+  flex: none;
 }
 
 /* Type editors (L6): disabled settings/icon buttons and a stretching name. */

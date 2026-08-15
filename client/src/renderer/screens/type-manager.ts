@@ -21,24 +21,32 @@
  * line-style dialog as the link editor (type mode), description.
  */
 
-import type { LinkType, PropertyDefinition, PropertyValueType, ThoughtType } from '@etn/shared';
+import type {
+  LinkType,
+  PropertyDefinition,
+  PropertyDefinitionUpdateInput,
+  PropertyValueType,
+  ThoughtType,
+} from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { applyThoughtIcon } from '../canvas/canvas.js';
-import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
+import { confirmDialog, errorDialog, showDialog, type DialogButton } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dialog.js';
 
 /** Human-readable property value-type labels. */
 const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
-  text: 'текст',
+  text: 'строка',
   number: 'число',
   date: 'дата',
-  bool: 'да/нет',
-  thought_ref: 'мысль',
+  bool: 'булево',
+  thought_ref: 'ссылка на мысль',
+  url: 'URL (сайт или файл)',
 };
 
 /** Reloads the thought-type catalogue (selects and cloud styles read it). */
@@ -341,13 +349,13 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
 }
 
 // ---------------------------------------------------------------------------
-// Property-definition table (thought-type editor)
+// Property-definition table + property dialog (thought-type editor)
 // ---------------------------------------------------------------------------
 
 /**
- * Builds the property-definition table of a thought type: key, value type,
- * default value (`config.default_value`), reorder and delete (L6). Operations
- * commit immediately through the types API.
+ * Builds the property-definition table of a thought type (L6): key, value
+ * type, default value, reorder and delete. Clicking a row opens the property
+ * dialog; «Добавить свойство» opens it for a new property.
  */
 function buildPropertiesTable(networkId: string, typeId: string, onTouched: () => void): HTMLElement {
   const box = div('form-stack');
@@ -355,26 +363,23 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
   tableWrap.style.maxHeight = '220px';
   const errorLine = span('', 'error-text');
   box.append(tableWrap, errorLine);
-  box.append(button('Добавить свойство', () => void appendDraft(), 'btn small'));
+  box.append(
+    button('Добавить свойство', () => showPropertyDialog(null), 'btn small', 'Новое свойство'),
+  );
 
   let defs: PropertyDefinition[] = [];
 
-  /** Persists a new default into the definition's config. */
-  async function saveDefault(def: PropertyDefinition, value: unknown): Promise<void> {
-    const config: Record<string, unknown> = { ...(def.config ?? {}) };
-    if (value === null || value === '' || value === undefined) {
-      delete config['default_value'];
-    } else {
-      config['default_value'] = value;
-    }
-    try {
-      await etn.types.updateTypeProperty(networkId, 'thought_type', typeId, def.id, {
-        config: config as PropertyDefinition['config'],
-      });
-      await reload();
-    } catch (err) {
-      errorDialog('Значение по умолчанию', err);
-    }
+  /** Opens the property dialog; reloads the table when it commits a change. */
+  function showPropertyDialog(def: PropertyDefinition | null): void {
+    openPropertyDialog({
+      networkId,
+      typeId,
+      def,
+      onDone: () => {
+        onTouched();
+        void reload();
+      },
+    });
   }
 
   /** Moves a definition one slot up/down and persists the new order. */
@@ -402,103 +407,11 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
     if (!ok) return;
     try {
       await etn.types.removeTypeProperty(networkId, 'thought_type', typeId, def.id);
+      onTouched();
       await reload();
     } catch (err) {
       errorDialog('Удалить свойство', err);
     }
-  }
-
-  /** Builds the default-value editor for one definition. */
-  function defaultEditor(def: PropertyDefinition): HTMLElement {
-    const stored = def.config?.default_value ?? null;
-    switch (def.value_type) {
-      case 'text': {
-        const input = el('input', 'text-input prop-editor');
-        input.type = 'text';
-        input.value = typeof stored === 'string' ? stored : '';
-        input.addEventListener('blur', () => void saveDefault(def, input.value.trim()));
-        return input;
-      }
-      case 'number': {
-        const input = el('input', 'text-input prop-editor');
-        input.type = 'number';
-        input.value = typeof stored === 'number' ? String(stored) : '';
-        input.addEventListener('blur', () => {
-          const n = input.value === '' ? null : Number(input.value);
-          if (n === null || Number.isFinite(n)) void saveDefault(def, n);
-        });
-        return input;
-      }
-      case 'date': {
-        const input = el('input', 'text-input prop-editor');
-        input.type = 'date';
-        input.value = typeof stored === 'string' ? stored : '';
-        input.addEventListener('blur', () => void saveDefault(def, input.value === '' ? null : input.value));
-        return input;
-      }
-      case 'bool': {
-        const input = el('input');
-        input.type = 'checkbox';
-        input.checked = stored === true;
-        input.addEventListener('change', () => void saveDefault(def, input.checked));
-        return input;
-      }
-      default:
-        // thought_ref defaults are not supported — a default target makes no
-        // sense across thoughts.
-        return span('—', 'muted');
-    }
-  }
-
-  /** Adds the "new property" draft row on top of the table. */
-  function appendDraft(): void {
-    const row = el('tr', 'prop-draft-row');
-    const keyCell = el('td');
-    const keyInput = el('input', 'text-input prop-editor');
-    keyInput.type = 'text';
-    keyInput.placeholder = 'имя свойства';
-    keyCell.append(keyInput);
-    const typeCell = el('td');
-    const typeSelect = el('select', 'select-input');
-    for (const [value, label] of Object.entries(VALUE_TYPE_LABELS)) {
-      const option = el('option', undefined, label);
-      option.value = value;
-      typeSelect.append(option);
-    }
-    typeCell.append(typeSelect);
-    const actions = el('td');
-    actions.style.whiteSpace = 'nowrap';
-    actions.append(
-      button(
-        'Создать',
-        () => {
-          void (async () => {
-            const key = keyInput.value.trim();
-            if (key === '') {
-              errorLine.textContent = 'Имя свойства обязательно.';
-              return;
-            }
-            errorLine.textContent = '';
-            try {
-              await etn.types.createTypeProperty(networkId, 'thought_type', typeId, {
-                key,
-                value_type: typeSelect.value as PropertyValueType,
-                position: defs.length,
-              });
-              onTouched();
-              await reload();
-            } catch (err) {
-              errorLine.textContent = errText(err);
-            }
-          })();
-        },
-        'btn small',
-      ),
-    );
-    row.append(keyCell, typeCell, el('td'), actions);
-    const table = tableWrap.querySelector('table');
-    table?.querySelector('tbody')?.prepend(row);
-    keyInput.focus();
   }
 
   /** Renders the definitions table from the server. */
@@ -524,13 +437,9 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
     const tbody = el('tbody');
     for (const def of defs) {
       const row = el('tr');
-      // The key identifies stored values — it is fixed after creation.
       row.append(el('td', undefined, def.key));
-      // The value type governs the storage column — fixed after creation too.
       row.append(el('td', 'muted', VALUE_TYPE_LABELS[def.value_type]));
-      const defaultCell = el('td');
-      defaultCell.append(defaultEditor(def));
-      row.append(defaultCell);
+      row.append(el('td', 'muted', formatDefault(def)));
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
       actions.append(
@@ -539,6 +448,11 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
         button('✕', () => void remove(def), 'btn small', 'Удалить свойство'),
       );
       row.append(actions);
+      // Clicking a row (outside its action buttons) edits the property.
+      row.addEventListener('click', (event) => {
+        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
+        showPropertyDialog(def);
+      });
       tbody.append(row);
     }
     table.append(tbody);
@@ -548,6 +462,243 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
 
   void reload();
   return box;
+}
+
+/** Human-readable default value of a definition for the table cell. */
+function formatDefault(def: PropertyDefinition): string {
+  const value = def.config?.default_value ?? null;
+  if (value === null) return '—';
+  if (typeof value === 'boolean') return value ? 'да' : 'нет';
+  return String(value);
+}
+
+/**
+ * Builds an input for the "default value" field matching a value type, reading
+ * its current value into `read()`. Thought-ref defaults are not supported — a
+ * default target makes no sense across thoughts.
+ */
+function defaultInputFor(
+  valueType: PropertyValueType,
+  current: unknown,
+  read: (value: unknown) => void,
+): HTMLElement {
+  switch (valueType) {
+    case 'text':
+    case 'url': {
+      const input = el('input', 'text-input');
+      input.type = 'text';
+      input.value = typeof current === 'string' ? current : '';
+      input.placeholder = valueType === 'url' ? 'https://… или путь к файлу' : 'текст по умолчанию';
+      input.addEventListener('change', () => read(input.value.trim() === '' ? null : input.value.trim()));
+      return input;
+    }
+    case 'number': {
+      const input = el('input', 'text-input');
+      input.type = 'number';
+      input.value = typeof current === 'number' ? String(current) : '';
+      input.addEventListener('change', () => {
+        read(input.value === '' ? null : Number(input.value));
+      });
+      return input;
+    }
+    case 'date': {
+      const input = el('input', 'text-input');
+      input.type = 'date';
+      input.value = typeof current === 'string' ? current : '';
+      input.addEventListener('change', () => read(input.value === '' ? null : input.value));
+      return input;
+    }
+    case 'bool': {
+      const input = el('input');
+      input.type = 'checkbox';
+      input.checked = current === true;
+      input.addEventListener('change', () => read(input.checked));
+      return input;
+    }
+    case 'thought_ref':
+      return span('не задаётся', 'muted');
+  }
+}
+
+/**
+ * The property editor dialog (L6): title, value type, default value.
+ * New: «Добавить» / «Отменить». Existing: «Применить» / «Удалить» / «Отменить».
+ *
+ * Changing the value type asks for confirmation first — the server rewrites
+ * every stored value of the property to the new type and clears those that do
+ * not fit; a notice marks the processing window.
+ */
+function openPropertyDialog(opts: {
+  networkId: string;
+  typeId: string;
+  def: PropertyDefinition | null;
+  onDone: () => void;
+}): void {
+  const { networkId, typeId, def, onDone } = opts;
+  const isNew = def === null;
+  const errorLine = span('', 'error-text');
+
+  const keyInput = el('input', 'text-input');
+  keyInput.type = 'text';
+  keyInput.value = def?.key ?? '';
+  keyInput.maxLength = 200;
+  keyInput.placeholder = 'Заголовок свойства (обязательно)';
+
+  const typeSelect = el('select', 'select-input');
+  for (const [value, label] of Object.entries(VALUE_TYPE_LABELS)) {
+    const option = el('option', undefined, label);
+    option.value = value;
+    typeSelect.append(option);
+  }
+  typeSelect.value = def?.value_type ?? 'text';
+
+  // The default-value input is rebuilt when the value type changes (the
+  // in-progress default does not carry over).
+  let defaultValue: unknown = def?.config?.default_value ?? null;
+  const defaultHost = div('form-row');
+  const renderDefault = (): void => {
+    defaultHost.replaceChildren(
+      defaultInputFor(typeSelect.value as PropertyValueType, defaultValue, (v) => {
+        defaultValue = v;
+      }),
+    );
+  };
+  renderDefault();
+  typeSelect.addEventListener('change', () => {
+    defaultValue = null;
+    renderDefault();
+  });
+
+  const body = div('form-stack');
+  body.append(
+    keyInput,
+    typeSelect,
+    defaultHost,
+    errorLine,
+  );
+
+  /** The config patch with the (possibly cleared) default value. */
+  const configPatch = (): { config: PropertyDefinition['config'] } | {} => {
+    const after = defaultValue === undefined || defaultValue === '' ? null : defaultValue;
+    const config: Record<string, unknown> = { ...(def?.config ?? {}) };
+    if (after === null) {
+      delete config['default_value'];
+    } else {
+      config['default_value'] = after;
+    }
+    return { config: config as PropertyDefinition['config'] };
+  };
+
+  /** Creates the property. */
+  async function create(close: () => void): Promise<void> {
+    const key = keyInput.value.trim();
+    if (key === '') {
+      errorLine.textContent = 'Заголовок свойства обязателен.';
+      return;
+    }
+    try {
+      await etn.types.createTypeProperty(networkId, 'thought_type', typeId, {
+        key,
+        value_type: typeSelect.value as PropertyValueType,
+        ...configPatch(),
+      });
+      onDone();
+      close();
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
+  }
+
+  /** Applies key/value_type/default changes (with confirmation on the type). */
+  async function apply(close: () => void): Promise<void> {
+    if (def === null) return;
+    const key = keyInput.value.trim();
+    if (key === '') {
+      errorLine.textContent = 'Заголовок свойства обязателен.';
+      return;
+    }
+    const nextType = typeSelect.value as PropertyValueType;
+    const changes: PropertyDefinitionUpdateInput = {};
+    if (key !== def.key) changes.key = key;
+    if (nextType !== def.value_type) changes.value_type = nextType;
+
+    const before = def.config?.default_value ?? null;
+    const after = defaultValue === undefined || defaultValue === '' ? null : defaultValue;
+    if (before !== after) {
+      const config: Record<string, unknown> = { ...(def.config ?? {}) };
+      if (after === null) {
+        delete config['default_value'];
+      } else {
+        config['default_value'] = after;
+      }
+      changes.config = config as PropertyDefinition['config'];
+    }
+
+    if (Object.keys(changes).length === 0) {
+      close();
+      return;
+    }
+    if (changes.value_type !== undefined) {
+      const ok = await confirmDialog(
+        'Сменить тип значения',
+        `Сменить тип значения свойства «${def.key}»? Значения этого свойства во всех ` +
+          'мыслях будут преобразованы к новому типу; несовместимые — очищены.',
+        true,
+      );
+      if (!ok) return;
+      notice('Ждите: выполняется обработка значений…');
+    }
+    try {
+      await etn.types.updateTypeProperty(networkId, 'thought_type', typeId, def.id, changes);
+      if (changes.value_type !== undefined) notice('Обработка выполнена.');
+      onDone();
+      close();
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
+  }
+
+  /** Deletes the property after a confirmation. */
+  async function removeDef(close: () => void): Promise<void> {
+    if (def === null) return;
+    const ok = await confirmDialog(
+      'Удалить свойство',
+      `Удалить свойство «${def.key}»? Значения этого свойства у всех мыслей будут удалены.`,
+      true,
+    );
+    if (!ok) return;
+    try {
+      await etn.types.removeTypeProperty(networkId, 'thought_type', typeId, def.id);
+      onDone();
+      close();
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
+  }
+
+  const buttons: DialogButton[] = isNew
+    ? [
+        { label: 'Отменить' },
+        { label: 'Добавить', primary: true, keepOpen: true, onClick: (close) => void create(close) },
+      ]
+    : [
+        { label: 'Отменить' },
+        {
+          label: 'Удалить',
+          danger: true,
+          keepOpen: true,
+          onClick: (close) => void removeDef(close),
+        },
+        { label: 'Применить', primary: true, keepOpen: true, onClick: (close) => void apply(close) },
+      ];
+
+  showDialog({
+    title: isNew ? 'Новое свойство' : `Свойство «${def.key}»`,
+    body,
+    width: 460,
+    buttons,
+    onMount: () => keyInput.focus(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -590,7 +741,12 @@ export function showLinkTypesDialog(): void {
     const tbody = el('tbody');
     for (const type of types) {
       const row = el('tr');
-      const nameCell = el('td', undefined, `${type.name_forward} / ${type.name_reverse}`);
+      const nameCell = el('td');
+      // Line swatch: colour/dash/width of the type (L6 — visible in the list).
+      const swatch = span('', 'link-type-swatch');
+      const dash = type.style === 'dashed' ? 'dashed' : type.style === 'dotted' ? 'dotted' : 'solid';
+      swatch.style.borderTop = `${Math.max(1, Math.min(6, type.width))}px ${dash} ${type.color ?? '#9aa3b2'}`;
+      nameCell.append(swatch, span(` ${type.name_forward} / ${type.name_reverse}`));
       const descCell = el('td', 'muted', (type.description ?? '').slice(0, 120));
       descCell.style.maxWidth = '260px';
       descCell.style.overflow = 'hidden';
