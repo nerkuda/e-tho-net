@@ -579,7 +579,8 @@ function drawHitLine(
   svgHit.append(hit);
 }
 
-/** Renders the highlighted copy of a curve on the above-clouds overlay. */
+/** Renders the highlighted copy of a curve on the above-clouds overlay,
+ *  together with its badge/label highlighted in the selection colour (§2.4). */
 function drawTopLine(
   bundle: Bundle,
   from: { x: number; y: number },
@@ -588,14 +589,55 @@ function drawTopLine(
   if (svgTop === null) return;
   const count = bundle.edges.length;
   const baseWidth = count > 1 ? BASE_WIDTH + (count - 1) * EXTRA_WIDTH_PER_LINK : linkStyle(bundle).width;
+  const zoom = store.state.canvasZoom;
+  const geo = edgeGeometry(from, to);
   const line = document.createElementNS(SVG_NS, 'path');
   line.classList.add('link-line', 'link-line-active');
-  line.setAttribute('d', edgeGeometry(from, to).d);
+  line.setAttribute('d', geo.d);
   line.setAttribute('fill', 'none');
   line.setAttribute('stroke', 'var(--warn, #c98a06)');
-  line.setAttribute('stroke-width', String(baseWidth * store.state.canvasZoom + 2));
+  line.setAttribute('stroke-width', String(baseWidth * zoom + 2));
   line.setAttribute('stroke-opacity', '1');
   svgTop.append(line);
+
+  // The label rides along in the selection colour: a count badge for bundles,
+  // the type name for a single typed link — drawn exactly over the base-layer
+  // copy, so the dim original is fully covered.
+  const midX = geo.mid.x;
+  const midY = geo.mid.y;
+  if (count > 1) {
+    const badge = document.createElementNS(SVG_NS, 'circle');
+    badge.setAttribute('cx', String(midX));
+    badge.setAttribute('cy', String(midY));
+    badge.setAttribute('r', String(BADGE_RADIUS * zoom));
+    badge.setAttribute('fill', 'var(--surface, #fff)');
+    badge.setAttribute('stroke', 'var(--warn, #c98a06)');
+    badge.setAttribute('stroke-width', '2');
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.classList.add('link-label-text');
+    text.setAttribute('fill', 'var(--warn, #c98a06)');
+    text.setAttribute('font-weight', '700');
+    text.setAttribute('x', String(midX));
+    text.setAttribute('y', String(midY + BADGE_TEXT_DY * zoom));
+    text.setAttribute('dominant-baseline', 'middle');
+    text.textContent = String(count);
+    svgTop.append(badge, text);
+    return;
+  }
+  const typeId = bundle.edges[0]?.type_id ?? null;
+  const type = typeId !== null ? store.state.linkTypes.find((t) => t.id === typeId) : undefined;
+  if (type !== undefined) {
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.classList.add('link-label-text');
+    text.setAttribute('fill', 'var(--warn, #c98a06)');
+    text.setAttribute('font-weight', '700');
+    const offset = (from.y < to.y ? LABEL_OFFSET : -LABEL_OFFSET) * zoom;
+    text.setAttribute('x', String(midX));
+    text.setAttribute('y', String(midY + offset));
+    text.setAttribute('dominant-baseline', 'middle');
+    text.textContent = linkLabel(bundle, type);
+    svgTop.append(text);
+  }
 }
 
 /** Stroke styling for a bundle: per-link override wins, else the type default. */
