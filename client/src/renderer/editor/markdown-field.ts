@@ -175,6 +175,15 @@ async function insertClipboardFiles(
       continue;
     }
     invalidateIndicators(owner.ownerId);
+    // Tell the editor chrome the owner's attachment set changed: the
+    // «Вложения» tab (if built) reloads its list, the tab badge re-counts —
+    // without this a paste from the comment field left a stale empty list
+    // until the editor target changed.
+    document.dispatchEvent(
+      new CustomEvent('etn:attachments-changed', {
+        detail: { ownerType: owner.ownerType, ownerId: owner.ownerId },
+      }),
+    );
     const filePath = attachment.file_path;
     if (filePath === null || filePath === '') continue;
     const url = etnimgUrl(filePath);

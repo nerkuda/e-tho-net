@@ -128,6 +128,21 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
   showViewerHint('Выберите вложение для просмотра.');
   void reload();
 
+  // Pastes from OTHER markdown fields (e.g. the permanent comment on the
+  // «Основное» tab) add attachments behind this list's back — reload when the
+  // owner matches. The listener self-unregisters once the pane is gone.
+  const onExternalChange = (event: Event): void => {
+    if (!root.isConnected) {
+      document.removeEventListener('etn:attachments-changed', onExternalChange);
+      return;
+    }
+    const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
+    if (detail?.ownerType === ctx.ownerType && detail?.ownerId === ctx.ownerId) {
+      void reload();
+    }
+  };
+  document.addEventListener('etn:attachments-changed', onExternalChange);
+
   // --- drag & drop ----------------------------------------------------------
   drop.addEventListener('dragover', (event) => {
     event.preventDefault();

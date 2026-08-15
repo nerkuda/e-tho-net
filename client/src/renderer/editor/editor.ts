@@ -193,6 +193,18 @@ export function mountEditor(editorHost: HTMLElement): void {
   // as the editor's ⚙ button.
   setLinkSettingsOpener(openLinkSettings);
 
+  // Pasted-image uploads from any markdown field re-count the «Вложения» tab
+  // badge right away (the tab's own list reloads itself via the same event;
+  // see attachments.ts). Without this the badge showed a stale 0 until the
+  // editor target changed.
+  document.addEventListener('etn:attachments-changed', (event) => {
+    const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
+    const ctx = renderCtx;
+    if (ctx !== null && detail?.ownerType === ctx.ownerType && detail?.ownerId === ctx.ownerId) {
+      refreshTabCount('attachments');
+    }
+  });
+
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
   });
