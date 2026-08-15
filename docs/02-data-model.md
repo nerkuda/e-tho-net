@@ -266,7 +266,7 @@ TTL: 10 минут. Очистка по джобе.
 | `owner_id` | TEXT NOT NULL | FK на thought_types.id или link_types.id (без SQL-FK, полиморфно) |
 | `key` | TEXT NOT NULL | Имя свойства |
 | `value_type` | TEXT NOT NULL | `'text'` \| `'date'` \| `'number'` \| `'bool'` \| `'thought_ref'` \| `'url'` (хранится в `value_text` как `text`) |
-| `config` | TEXT | JSON: например, для `thought_ref` — ограничение на тип мысли-цели (`allowed_type_id`); `default_value` — значение по умолчанию свойства (L6, не задаётся для `thought_ref`) |
+| `config` | TEXT | JSON-конфигурация свойства. Ключи: `default_value` — значение по умолчанию (L6, не задаётся для `thought_ref`); для `value_type = 'text'` — `options` (предустановленный список значений — подсказка ввода, не ограничение) и `multiple` (разрешить несколько значений через запятую); для `value_type = 'thought_ref'` — `allowed_type_id` (легаси-форма: один тип) / `allowed_type_ids` (список типов: поиск при заполнении идёт только по ним; при записи значение проверяется по этому списку). Смена `options` / `allowed_type_ids` никогда не обрабатывает уже сохранённые значения |
 | `required` | INTEGER NOT NULL DEFAULT 0 | |
 | `position` | INTEGER NOT NULL DEFAULT 0 | Порядок отображения |
 | UNIQUE | `(owner_type, owner_id, key)` | |
