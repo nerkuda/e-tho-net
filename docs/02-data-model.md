@@ -265,11 +265,17 @@ TTL: 10 минут. Очистка по джобе.
 | `owner_type` | TEXT NOT NULL | `'thought_type'` \| `'link_type'` |
 | `owner_id` | TEXT NOT NULL | FK на thought_types.id или link_types.id (без SQL-FK, полиморфно) |
 | `key` | TEXT NOT NULL | Имя свойства |
-| `value_type` | TEXT NOT NULL | `'text'` \| `'date'` \| `'number'` \| `'bool'` \| `'thought_ref'` |
+| `value_type` | TEXT NOT NULL | `'text'` \| `'date'` \| `'number'` \| `'bool'` \| `'thought_ref'` \| `'url'` (хранится в `value_text` как `text`) |
 | `config` | TEXT | JSON: например, для `thought_ref` — ограничение на тип мысли-цели (`allowed_type_id`); `default_value` — значение по умолчанию свойства (L6, не задаётся для `thought_ref`) |
 | `required` | INTEGER NOT NULL DEFAULT 0 | |
 | `position` | INTEGER NOT NULL DEFAULT 0 | Порядок отображения |
 | UNIQUE | `(owner_type, owner_id, key)` | |
+
+Смена `value_type` существующего свойства (L6): сервер в той же транзакции
+преобразует все хранимые значения к новому типу (текст↔число/булево/дата —
+по возможности), несовместимые значения удаляются. Ссылки на мысли
+(`thought_ref`) не конвертируются. Значения адресуются по `property_id`, поэтому
+переименование `key` значения не теряет.
 
 ### 3.5. property_values
 

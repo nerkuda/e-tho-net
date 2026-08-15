@@ -328,11 +328,14 @@ GET/POST/PATCH/DELETE /api/v1/networks/{nid}/link-types  (аналогично:
 ```
 GET    …/types/{id}/properties                       — список определений
 POST   …/types/{id}/properties                       { key, value_type, config?, required?, position? }
-PATCH  …/types/{id}/properties/{propertyId}          { value_type?, config?, required?, position? }
+PATCH  …/types/{id}/properties/{propertyId}          { key?, value_type?, config?, required?, position? }
 DELETE …/types/{id}/properties/{propertyId}          # значения свойства удаляются каскадом
 PUT    …/types/{id}/properties/reorder               { ordered_ids: [...] } → position = index
 # config — JSON; config.default_value хранит значение по умолчанию (L6).
-# key (имя) не меняется после создания — значения адресуются по нему у владельцев.
+# value_type: text | date | number | bool | thought_ref | url (url → value_text).
+# PATCH value_type — сервер в той же транзакции преобразует все хранимые
+#   значения свойства к новому типу, несовместимые — удаляет (L6).
+# PATCH key — переименование; хранимые значения остаются привязаны (property_id).
 ```
 
 ## 9. Свойства
