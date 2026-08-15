@@ -64,7 +64,11 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   top.append(toolbar, tableWrap);
 
   const bottom = div('chrono-editor');
-  root.append(top, rowSplitter(() => tableWrap), bottom);
+  root.append(
+    top,
+    rowSplitter(() => tableWrap, { min: 34, max: () => tableWrap.scrollHeight }),
+    bottom,
+  );
 
   let selectedId: string | null = null;
 

@@ -32,7 +32,7 @@ import { applyThoughtIcon } from '../canvas/canvas.js';
 import { deleteLink, deleteThought } from '../canvas/context-menu.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { errorDialog, field, showDialog } from '../lib/dialog.js';
-import { div, el, errText, span } from '../lib/dom.js';
+import { div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
@@ -50,7 +50,7 @@ export function registerLinksTab(): void {
 /** Builds the whole «Связи» tab pane content for the entity. */
 function buildLinksTab(ctx: EditorContext): HTMLElement {
   if (ctx.ownerType === 'link' && ctx.link !== null) {
-    const root = div('links-tab single');
+    const root = div('links-tab');
     root.append(
       groupSection(
         {
@@ -66,53 +66,46 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
   }
 
   const root = div('links-tab');
-  const direct = div('links-panel');
-  direct.append(
-    groupSection(
-      {
-        id: 'links',
-        title: 'Прямые связи',
-        loadCount: () => countLinks(ctx),
-        buildBody: () => buildDirectLinksBody(ctx),
-      },
-      ctx.ownerId,
-    ),
+  const direct = groupSection(
+    {
+      id: 'links',
+      title: 'Прямые связи',
+      loadCount: () => countLinks(ctx),
+      buildBody: () => buildDirectLinksBody(ctx),
+    },
+    ctx.ownerId,
   );
-  const mentions = div('links-panel');
-  mentions.append(
-    groupSection(
-      {
-        id: 'mentions',
-        title: 'Упоминания',
-        lazyCount: true,
-        defaultCollapsed: true,
-        buildBody: () => buildMentionsBody(ctx),
-      },
-      ctx.ownerId,
-    ),
+  const mentions = groupSection(
+    {
+      id: 'mentions',
+      title: 'Упоминания',
+      lazyCount: true,
+      defaultCollapsed: true,
+      buildBody: () => buildMentionsBody(ctx),
+    },
+    ctx.ownerId,
   );
-  const usage = div('links-panel');
-  usage.append(
-    groupSection(
-      {
-        id: 'usage',
-        title: 'Использование',
-        lazyCount: true,
-        defaultCollapsed: true,
-        buildBody: () => buildUsageBody(ctx),
-      },
-      ctx.ownerId,
-    ),
+  const usage = groupSection(
+    {
+      id: 'usage',
+      title: 'Использование',
+      lazyCount: true,
+      defaultCollapsed: true,
+      buildBody: () => buildUsageBody(ctx),
+    },
+    ctx.ownerId,
   );
-  // Splitters resize the scrollable group body above them (the body exists as
-  // a placeholder right away; a collapsed group simply ignores the drag).
-  const bodyOf = (panel: HTMLElement): HTMLElement | null =>
-    panel.querySelector(':scope > .group > .group-body');
+  // Splitters clamp the whole group above them (header + body) — expanded
+  // groups flex-fill the tab, so a clamp must stop the group itself, not just
+  // its body. A collapsed group (no body) is not resizable: its splitter is
+  // inert and never leaves a stale clamp behind (08-ui-spec.md §6.3).
+  const resizable = (group: HTMLElement): HTMLElement | null =>
+    group.querySelector(':scope > .group-body') !== null ? group : null;
   root.append(
     direct,
-    rowSplitter(() => bodyOf(direct)),
+    rowSplitter(() => resizable(direct), { min: 50 }),
     mentions,
-    rowSplitter(() => bodyOf(mentions)),
+    rowSplitter(() => resizable(mentions), { min: 50 }),
     usage,
   );
   return root;
@@ -304,8 +297,10 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
       const kind = span(hit.owner_type === 'thought' ? '💭' : '🔗', 'muted');
       const title = el('span', undefined, hit.title);
       title.style.fontWeight = '600';
-      const snippet = el('div', 'muted', hit.snippet);
-      snippet.style.fontSize = '11px';
+      const snippet = el('div', 'muted mention-snippet');
+      // The snippet carries server-side <mark> highlights around matches —
+      // like the search panel, render it as (escaped, trusted) HTML.
+      renderHtml(snippet, hit.snippet);
       item.append(kind, title, snippet);
       item.addEventListener('click', () => void open(hit));
       box.append(item);

@@ -38,6 +38,7 @@ import { notice } from '../lib/notice.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import { focusEdgesSignature, patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
+import { rowSplitter } from './splitter.js';
 import { registerCommentSections } from './comments.js';
 import { registerAttachmentsTab } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
@@ -262,12 +263,41 @@ async function render(): Promise<void> {
   const built = new Map<EditorTabId, HTMLElement>();
 
   const buildPane = (id: EditorTabId): HTMLElement => {
-    const pane = div(`tab-pane${id === 'main' ? '' : ' fixed'}`);
+    const pane = div('tab-pane fixed');
     if (id === 'main') {
-      for (const section of mainSectionBuilders) {
-        const spec = section(ctx);
-        if (spec !== null) pane.append(groupSection(spec, ctx.ownerId));
+      // Two areas with a single boundary (L7, 08-ui-spec.md §6.3.1): the
+      // table sections on top, the view/edit section filling the rest of the
+      // tab. The last section is always the view/edit one (the permanent
+      // comment; for a link it is the only section and fills the whole tab).
+      const specs = mainSectionBuilders
+        .map((section) => section(ctx))
+        .filter((spec): spec is GroupSpec => spec !== null);
+      if (specs.length === 0) {
+        pane.append(el('p', 'muted', 'Нет содержимого.'));
+        return pane;
       }
+      const topSpecs = specs.slice(0, -1);
+      const bottomSpec = specs[specs.length - 1]!;
+      let top: HTMLElement | null = null;
+      for (const spec of topSpecs) {
+        top = groupSection(spec, ctx.ownerId);
+        top.classList.add('tab-top');
+        pane.append(top);
+      }
+      if (top !== null) {
+        // Resizes the top group's scrollable table (`.prop-wrap`); inert when
+        // the group is collapsed (no body at all, §6.3).
+        const topEl = top;
+        pane.append(
+          rowSplitter(
+            () => topEl.querySelector('.prop-wrap') ?? topEl.querySelector('.group-body'),
+            { min: 34 },
+          ),
+        );
+      }
+      const bottom = div('main-bottom');
+      bottom.append(groupSection(bottomSpec, ctx.ownerId));
+      pane.append(bottom);
       return pane;
     }
     const builder = tabContentBuilders.get(id);

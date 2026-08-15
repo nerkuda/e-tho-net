@@ -1134,7 +1134,9 @@ body.dragging * {
 
 .tab-pane-root {
   flex: 1 1 auto;
-  min-height: 0;
+  /* Keep a floor so a very short editor panel scrolls the tab instead of
+     collapsing the fixed panes to zero height. */
+  min-height: 160px;
   display: flex;
   flex-direction: column;
   padding: 10px;
@@ -1193,6 +1195,43 @@ body.dragging * {
   font-size: 12px;
 }
 
+/* --- Tab «Основное» (L7, §6.3.1): table sections on top, the view/edit
+   section fills the rest of the tab; the splitter redistributes. ---------- */
+
+/* Top areas never grow or shrink on their own — only the splitter sizes them
+   (max-height of the scrollable table inside). */
+.tab-top {
+  flex: 0 0 auto;
+}
+
+.main-bottom {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-bottom > .group {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-bottom > .group > .group-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The comment grows with its area; the group body provides the scroll. */
+.main-bottom .comment-view,
+.chrono-editor .comment-view,
+.attachment-view-frame .comment-view {
+  max-height: none;
+  overflow-y: visible;
+}
+
 /* --- Tab «Вложения» (L7, 08-ui-spec.md §6.5) ------------------------------- */
 
 .attachments-tab {
@@ -1202,6 +1241,7 @@ body.dragging * {
 }
 
 .attachments-top {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1261,21 +1301,39 @@ body.dragging * {
   min-height: 0;
 }
 
-.links-panel {
+/* Groups are direct children of the tab. An expanded group (one that has a
+   body) flex-fills the tab together with the other expanded ones — content
+   occupies the whole remaining height (§6.3); a collapsed group is
+   header-only and does not grow. A splitter clamps the group above it via
+   max-height; unclamped groups absorb the freed space. The compact
+   sub-groups inside the bodies are nested deeper and keep natural height. */
+.links-tab > .group {
+  flex: 0 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.links-tab > .group:has(> .group-body) {
+  flex-grow: 1;
+}
+
+.links-tab > .group > .group-body {
+  flex: 1 1 auto;
   min-height: 0;
-}
-
-.links-panel > .group {
-  margin-bottom: 6px;
-}
-
-/* Top-level group bodies scroll with a default cap of ~15 link rows (§6.7);
-   the compact sub-groups inside flow naturally. */
-.links-tab > .links-panel > .group > .group-body {
   overflow-y: auto;
-  max-height: 420px;
+}
+
+/* Mention snippets carry server-side <mark> highlights (same look as the
+   search panel). */
+.mention-snippet {
+  font-size: 11px;
+}
+
+.mention-item mark {
+  background: #ffe08a;
+  padding: 0 1px;
+  border-radius: 2px;
 }
 
 /* --- Tab «Хроника» (L7, 08-ui-spec.md §6.6) -------------------------------- */
@@ -1287,6 +1345,7 @@ body.dragging * {
 }
 
 .chrono-top {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
