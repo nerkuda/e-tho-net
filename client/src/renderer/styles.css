@@ -931,11 +931,13 @@ body.resizing-h {
 }
 
 /* Three link layers:
- *   .links-overlay       — visual lines, UNDER the clouds, never interactive;
- *   .links-overlay-hit   — transparent wide hit lines, ABOVE the clouds,
- *                          capture mouse for hover/click (this is how lines
- *                          under the clouds stay interactive);
- *   .links-overlay-top   — the hovered/selected line redrawn on top.
+ *   .links-overlay       — visual curves, UNDER the clouds, never interactive;
+ *   .links-overlay-hit   — transparent wide hit curves, also UNDER the clouds:
+ *                          only the visible stretches of a line catch the
+ *                          pointer, so a cloud always receives its own
+ *                          hover/click and links never "surface" through it;
+ *   .links-overlay-top   — the hovered/selected line redrawn (with its label)
+ *                          on top of everything.
  */
 .links-overlay {
   position: absolute;
@@ -946,7 +948,9 @@ body.resizing-h {
 .links-overlay-hit {
   position: absolute;
   inset: 0;
-  z-index: 5;
+  /* Same layer as the visual overlay (both z=0); the hit layer comes later
+   * in the DOM, so it paints above the curves but below the clouds (z=1). */
+  z-index: 0;
   pointer-events: none;
 }
 .links-overlay-top {

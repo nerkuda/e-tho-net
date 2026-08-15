@@ -10,9 +10,12 @@
  * colour gradient (L14); several links of the same pair render as a thicker
  * curve with a count badge.
  *
- * Layering: the base overlay sits **under** the clouds; the link currently
- * hovered or sticky-selected is re-rendered in a top overlay **above** the
- * clouds, with a popover (type name + 📝/📅/📎 counts) and highlighted ellipses
+ * Layering: the base overlay sits **under** the clouds; the wide transparent
+ * hit curves sit under the clouds too — only the visible stretch of a line
+ * is interactive, so hovering a cloud never "surfaces" the links passing
+ * beneath it and cloud hover/click always work. The link currently hovered
+ * or sticky-selected is re-rendered in a top overlay **above** the clouds,
+ * with a popover (type name + 📝/📅/📎 counts) and highlighted ellipses
  * on both endpoints. Click opens the link in the editor (single) or a picker
  * (bundle) and leaves it selected until a click elsewhere.
  *
@@ -76,8 +79,9 @@ interface Bundle {
 let hostEl: HTMLElement | null = null;
 /** Base overlay — under the clouds; carries every visible link line (no input). */
 let svg: SVGSVGElement | null = null;
-/** Hit overlay — above the clouds; carries wide transparent lines that capture
- *  hover/click so the visual lines under the clouds stay interactive. */
+/** Hit overlay — under the clouds with the visual layer; carries wide
+ *  transparent curves that capture hover/click on the VISIBLE stretches of a
+ *  line (the parts hidden behind a cloud stay non-interactive). */
 let svgHit: SVGSVGElement | null = null;
 /** Top overlay — above the hit layer; carries the hovered/selected line. */
 let svgTop: SVGSVGElement | null = null;
@@ -112,8 +116,9 @@ export function initLinksOverlay(host: HTMLElement): { redraw(): void } {
   svgTop.setAttribute('width', '100%');
   svgTop.setAttribute('height', '100%');
   // DOM order is the source of truth for layering: visual overlay FIRST (under
-  // the clouds), then hit + top overlays LAST (above the clouds). z-index alone
-  // is unreliable across the zone/stacking layout.
+  // the clouds), then hit + top overlays LAST. The hit layer shares z=0 with
+  // the visual one and relies on DOM order to sit above the curves — both stay
+  // BELOW the clouds (z=1), keeping every cloud hover/click-able (§2.4).
   host.prepend(svg);
   host.append(svgHit, svgTop);
 
@@ -537,9 +542,9 @@ function linkLabel(bundle: Bundle, type: LinkType): string {
 }
 
 /**
- * Renders a wide transparent line on the above-clouds hit overlay that captures
- * hover/click for the bundle. This is what keeps links interactive even though
- * the visible line is drawn under the clouds.
+ * Renders a wide transparent curve on the hit overlay that captures
+ * hover/click for the bundle. Sits under the clouds with the visual layer,
+ * so only the stretches of the curve not covered by a cloud are interactive.
  */
 function drawHitLine(
   bundle: Bundle,
