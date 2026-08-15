@@ -82,11 +82,14 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   box.append(tableWrap);
 
   const refTitles = new Map<string, string>();
+  // Declared BEFORE the initial reload() call below: reload is a hoisted
+  // function declaration, and reading this from inside it during the call at
+  // the `void reload()` line would hit the temporal dead zone.
+  let everMounted = false;
   currentReload = () => void reload();
   void reload();
 
   /** Loads definitions + values and renders the table. */
-  let everMounted = false;
   async function reload(): Promise<void> {
     // The first reload starts before the group mounts this box — it must
     // proceed detached. Skip only bodies that were mounted and then replaced
@@ -298,6 +301,9 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
 
   return box;
 }
+
+/** Test seam for unit tests. */
+export const propertiesInternals = { buildPropertiesBody };
 
 // ---------------------------------------------------------------------------
 // Predefined text options picker (08-ui-spec.md §6.3)
