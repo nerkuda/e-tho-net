@@ -43,6 +43,10 @@
   --backdrop: rgba(24, 32, 48, 0.35);
   /* Canvas dot-grid colour (L10). */
   --canvas-dot: rgba(24, 32, 48, 0.14);
+  /* Focus band (L12): colour of the horizontal stripe across the focus row
+     and the fade distance towards the canvas top/bottom edges. */
+  --focus-band-color: #1e62be;
+  --focus-band-fade: 180px;
   /* Shadow colours, composed into the shadow tokens below. */
   --shadow-c: rgba(24, 32, 48, 0.16);
   --shadow-sm-c: rgba(24, 32, 48, 0.08);
@@ -717,6 +721,27 @@ textarea {
     var(--bg);
 }
 
+/* Focus band (L12, 08-ui-spec.md §2.1): a horizontal stripe of
+ * --focus-band-color across the focus row, fading out over --focus-band-fade
+ * towards the top and bottom edges. The renderer anchors it via
+ * --focus-band-top/--focus-band-bottom on the host (updateFocusBand in
+ * canvas.ts); the off-screen defaults keep it invisible until then. Painted
+ * as ::before it sits under the zones, clouds and all link layers. */
+.canvas::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent calc(var(--focus-band-top, 9999px) - var(--focus-band-fade, 180px)),
+    var(--focus-band-color) var(--focus-band-top, 9999px),
+    var(--focus-band-color) var(--focus-band-bottom, 0px),
+    transparent calc(var(--focus-band-bottom, 0px) + var(--focus-band-fade, 180px))
+  );
+}
+
 .canvas-empty {
   flex: 1;
   display: flex;
@@ -751,28 +776,57 @@ textarea {
   min-height: 96px;
 }
 
-/* Draggable splitters between canvas zones (08-ui-spec §2.1). Sits above the
- * link overlays (hit=5, top=6) so the 6px grab strip is never covered. */
+/* Draggable splitters between canvas zones (08-ui-spec §2.1, L12): a 4px
+ * transparent grab strip with a 1px hint line, layered UNDER the link
+ * overlays (hit=5, top=6) — lines pass visually over the strip and a line
+ * hover wins the pointer where they cross. */
 .zone-splitter {
-  flex: 0 0 6px;
-  z-index: 7;
-  background: var(--border);
+  position: relative;
+  flex: 0 0 4px;
+  z-index: 1;
+  background: transparent;
   user-select: none;
+  touch-action: none;
+}
+
+.zone-splitter::after {
+  content: '';
+  position: absolute;
+  /* Semi-transparent hint: a crossing link line stays readable through it. */
+  background: color-mix(in srgb, var(--border) 55%, transparent);
+  transition: background 0.12s ease;
+}
+
+.zone-splitter:hover::after,
+.zone-splitter.dragging::after {
+  background: var(--accent);
 }
 
 .zone-splitter:hover,
 .zone-splitter.dragging {
-  background: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .zone-splitter-v {
-  width: 6px;
   cursor: col-resize;
 }
 
+.zone-splitter-v::after {
+  left: 1.5px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
 .zone-splitter-h {
-  height: 6px;
   cursor: row-resize;
+}
+
+.zone-splitter-h::after {
+  top: 1.5px;
+  left: 0;
+  right: 0;
+  height: 1px;
 }
 
 /* While dragging a zone splitter: no text selection and a split cursor. */
@@ -906,23 +960,22 @@ body.resizing-h {
   pointer-events: none;
 }
 
-/* --- cloud (L11 visual refresh) ------------------------------------------- */
+/* --- cloud (L11/L12 visual refresh) ---------------------------------------- */
 
 .cloud {
   position: relative;
   z-index: 1;
   width: var(--cloud-width);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: stretch;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-cloud);
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   user-select: none;
-  /* Clips the children to the rounded corners; the cloud is always shorter
-     than the virtualized grid row, so nothing functional depends on overflow. */
-  overflow: hidden;
+  /* NB: no overflow clip — the on-frame ellipses stick half-outside (L12). */
   transition: box-shadow 0.12s ease, border-color 0.12s ease;
 }
 
@@ -949,17 +1002,26 @@ body.resizing-h {
   font-style: italic;
 }
 
+/* Link-direction ellipses lie ON the cloud frame (L12, 08-ui-spec.md §2.2):
+ * centered on the frame line, half of the 8px thickening outside the card.
+ * The inside halves feed the cloudHeight() formula in pure.ts. */
 .cloud .ellipse {
-  align-self: center;
-  width: calc(100% - 16px);
-  /* Ellipse thickness and its top margin scale with the canvas zoom (L9);
-     both feed the cloudHeight() formula in pure.ts. */
+  position: absolute;
+  left: 8px;
+  right: 8px;
   height: calc(8px * var(--cloud-zoom, 1));
   border-radius: 999px;
   border: 1px solid var(--border-strong);
   background: transparent;
-  margin: calc(2px * var(--cloud-zoom, 1)) 0 0;
   cursor: grab;
+}
+
+.cloud .ellipse-top {
+  top: calc(-4px * var(--cloud-zoom, 1));
+}
+
+.cloud .ellipse-bottom {
+  bottom: calc(-4px * var(--cloud-zoom, 1));
 }
 
 .cloud .ellipse.filled {
@@ -1005,28 +1067,17 @@ body.dragging * {
   cursor: crosshair !important;
 }
 
-.cloud-body {
-  flex: 1 1 auto;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  /* Vertical paddings scale with the canvas zoom (L9), matching the
-   * cloudHeight() formula in pure.ts. `flex: 1` absorbs the small slack
-   * between the formula row height and the natural content height, so the
-   * bottom ellipse stays flush with the frame. */
-  padding: calc(5px * var(--cloud-zoom, 1)) 10px calc(2px * var(--cloud-zoom, 1));
-}
-
+/* Icon spine: a full-height band on the left, the glyph centered in it (L12). */
 .cloud-icon {
   flex: 0 0 auto;
-  width: calc(var(--cloud-font) * 1.9);
-  height: calc(var(--cloud-font) * 1.9);
+  width: calc(var(--cloud-font) * 2.35);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: calc(var(--cloud-font) * 1.15);
+  font-size: calc(var(--cloud-font) * 1.45);
   background: var(--surface-2);
-  border-radius: 999px;
+  border-right: 1px solid var(--border);
+  border-radius: calc(var(--radius-cloud) - 1px) 0 0 calc(var(--radius-cloud) - 1px);
   overflow: hidden;
 }
 
@@ -1054,8 +1105,19 @@ body.dragging * {
   object-fit: contain;
 }
 
+/* Right column: title on top, indicators underneath aligned to its left
+ * edge (L12). Vertical paddings scale with the canvas zoom (L9) and match
+ * the cloudHeight() formula in pure.ts (CLOUD_PAD). */
+.cloud-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: calc(5px * var(--cloud-zoom, 1)) 10px calc(5px * var(--cloud-zoom, 1));
+}
+
 .cloud-title {
-  flex: 1;
   min-width: 0;
   font-size: var(--cloud-font);
   line-height: 1.35;
@@ -1071,7 +1133,7 @@ body.dragging * {
   display: flex;
   gap: 10px;
   align-items: center;
-  padding: 0 10px calc(4px * var(--cloud-zoom, 1));
+  padding: 1px 0 0;
   font-size: calc(var(--cloud-font) * 0.8);
   line-height: 1.25;
   /* Same colour as the title (inherited from .cloud): theme accents could be
@@ -1132,9 +1194,8 @@ body.dragging * {
 }
 
 .cloud.focus-cloud .cloud-icon {
-  width: calc(var(--cloud-font) * 2.3);
-  height: calc(var(--cloud-font) * 2.3);
-  font-size: calc(var(--cloud-font) * 1.55);
+  width: calc(var(--cloud-font) * 2.9);
+  font-size: calc(var(--cloud-font) * 1.9);
 }
 
 .cloud.focus-cloud .ellipse {

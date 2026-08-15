@@ -113,7 +113,7 @@ function computeTarget(event: DragEvent, dragged: DraggedCloud, acc: DragAccesso
   const cloud = el.closest<HTMLElement>('.cloud');
   if (cloud !== null && cloud.dataset['id'] !== undefined && cloud.dataset['id'] !== dragged.id) {
     const targetThoughtId = cloud.dataset['id'];
-    const topEllipse = cloud.querySelector<HTMLElement>('.ellipse');
+    const topEllipse = cloud.querySelector<HTMLElement>('.ellipse-top');
     const overEllipse = el.closest<HTMLElement>('.ellipse');
     if (topEllipse !== null && overEllipse === topEllipse) {
       return {

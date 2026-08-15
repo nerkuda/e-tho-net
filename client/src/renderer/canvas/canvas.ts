@@ -24,7 +24,7 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
-import { cloudGeom } from '../lib/pure.js';
+import { cloudGeom, contrastText } from '../lib/pure.js';
 import { store } from '../state.js';
 import { initLinksOverlay, drawLinksNow, invalidateLinkCounts, LINK_LABEL_FONT_BASE } from './links.js';
 import {
@@ -163,7 +163,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   emptyEl = empty;
   redrawLinks = initLinksOverlay(host).redraw;
   applyCanvasScaleVars(host);
-  mountZoneSplitters({ host, top, focusRow, vertical: zoneSplitterV, horizontal: zoneSplitterH });
+  mountZoneSplitters({ host, top, focusRow, vertical: zoneSplitterV, horizontal: zoneSplitterH, onLayoutChange: updateFocusBand });
 
   // Add-thought dialog (H14) and external file/URL drops (08-ui-spec.md §7).
   mountAddDialog();
@@ -190,6 +190,11 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
   });
+  // The focus band follows the focus row, whose position depends on the zone
+  // shares and the host size — re-anchor it on resizes too (L12).
+  new ResizeObserver(() => {
+    if (host?.isConnected === true) updateFocusBand();
+  }).observe(host);
   void render();
 }
 
@@ -284,6 +289,7 @@ async function render(): Promise<void> {
   const focus = store.state.focus;
   if (focus === null) {
     emptyEl?.classList.remove('hidden');
+    resetFocusBand(host);
     return;
   }
   emptyEl?.classList.add('hidden');
@@ -306,6 +312,7 @@ async function render(): Promise<void> {
   // Enrich neighbour metadata (colors/fonts/icon_kind are not in FocusNeighbor).
   await enrichRefs(focus);
   renderFocusRow(focus);
+  updateFocusBand();
   renderZone('parents', groupByThought(focus.parents));
   renderZone('siblings', groupByThought(focus.siblings));
   renderZone('children', groupByThought(focus.children));
@@ -320,6 +327,26 @@ async function render(): Promise<void> {
 
 /** Focus id of the last render — gates the transition choreography (§2.8). */
 let lastFocusId: string | null = null;
+
+/**
+ * Positions the focus band gradient (L12, 08-ui-spec.md §2.1): writes the
+ * focus-row top/bottom (relative to the canvas host) into the
+ * `--focus-band-*` CSS variables consumed by the host `::before` layer.
+ * Called on every render and on host resizes.
+ */
+function updateFocusBand(): void {
+  if (host === null || focusRow === null) return;
+  const hostRect = host.getBoundingClientRect();
+  const rowRect = focusRow.getBoundingClientRect();
+  host.style.setProperty('--focus-band-top', `${Math.round(rowRect.top - hostRect.top)}px`);
+  host.style.setProperty('--focus-band-bottom', `${Math.round(rowRect.bottom - hostRect.top)}px`);
+}
+
+/** Clears the focus band (no focus → no band; the CSS defaults render it off-screen). */
+function resetFocusBand(h: HTMLElement): void {
+  h.style.removeProperty('--focus-band-top');
+  h.style.removeProperty('--focus-band-bottom');
+}
 
 /** Set by {@link requestZoneAnimation}; consumed by the next render. */
 let zoneAnimationPending = false;
@@ -352,8 +379,8 @@ function renderFocusRow(focus: FocusResponse): void {
   const parents = groupByThought(focus.parents).length;
   const children = groupByThought(focus.children).length;
 
-  const topEllipse = div('ellipse');
-  const bottomEllipse = div('ellipse');
+  const topEllipse = div('ellipse ellipse-top');
+  const bottomEllipse = div('ellipse ellipse-bottom');
   if (parents > 0) topEllipse.classList.add('filled');
   if (children > 0) bottomEllipse.classList.add('filled');
   setTooltip(topEllipse, `Входящие связи: ${parents}`);
@@ -361,19 +388,18 @@ function renderFocusRow(focus: FocusResponse): void {
   wireEllipseDrag(topEllipse, thought.id, 'parent');
   wireEllipseDrag(bottomEllipse, thought.id, 'child');
 
-  const body = div('cloud-body');
   const iconBox = div('cloud-icon');
   // Same resolution as zone clouds: the thought's own icon wins, else the
   // thought type's default icon (so a typed focus shows the type icon too).
   applyThoughtIcon(iconBox, thought);
   const title = el('div', 'cloud-title', thought.title);
   setTooltip(title, thought.title.slice(0, 400));
-  body.append(iconBox, title);
-
   const ind = div('cloud-ind');
   ind.append(span('📝', 'ind dim'), span('📅', 'ind dim'), span('📎', 'ind dim'));
+  const main = div('cloud-main');
+  main.append(title, ind);
 
-  cloud.append(topEllipse, body, ind, bottomEllipse);
+  cloud.append(topEllipse, iconBox, main, bottomEllipse);
   focusRow.append(cloud);
   focusCloudEl = cloud;
   cloud.addEventListener('contextmenu', (event) => {
@@ -561,7 +587,15 @@ export function resolveCloudStyle(
 
 /** Applies a resolved style to a cloud element. */
 function applyCloudStyle(cloud: HTMLElement, style: CloudStyle): void {
-  if (style.fg !== null) cloud.style.color = style.fg;
+  if (style.fg !== null) {
+    cloud.style.color = style.fg;
+  } else if (style.bg !== null) {
+    // Only the background is set — pick a readable text colour for it (L12,
+    // 08-ui-spec.md §2.2); an explicit fg always wins.
+    cloud.style.color = contrastText(style.bg);
+  } else {
+    cloud.style.color = '';
+  }
   if (style.bg !== null) cloud.style.background = style.bg;
   cloud.classList.toggle('font-bold', style.bold);
   cloud.classList.toggle('font-italic', style.italic);
@@ -638,8 +672,8 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   // Ellipses are filled by whether the thought has ANY incoming/outgoing link
   // (so a chain continues off-screen), not by which zone it sits in.
   const neighbor = entry.links[0];
-  const topEllipse = div('ellipse');
-  const bottomEllipse = div('ellipse');
+  const topEllipse = div('ellipse ellipse-top');
+  const bottomEllipse = div('ellipse ellipse-bottom');
   const hasIn = neighbor?.has_incoming === true;
   const hasOut = neighbor?.has_outgoing === true;
   if (hasIn) topEllipse.classList.add('filled');
@@ -649,7 +683,6 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   wireEllipseDrag(topEllipse, entry.id, 'parent');
   wireEllipseDrag(bottomEllipse, entry.id, 'child');
 
-  const body = div('cloud-body');
   const iconBox = div('cloud-icon');
   applyThoughtIcon(iconBox, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
   // Prefer the live neighbour title (fresh from the focus response) over the
@@ -657,7 +690,6 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   const cloudTitle = entry.links[0]?.title ?? ref?.title ?? '—';
   const title = el('div', 'cloud-title', cloudTitle);
   setTooltip(title, cloudTitle);
-  body.append(iconBox, title);
 
   const ind = div('cloud-ind');
   const perm = span('📝', 'ind dim');
@@ -665,7 +697,10 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   const att = span('📎', 'ind dim');
   ind.append(perm, chrono, att);
 
-  cloud.append(topEllipse, body, ind, bottomEllipse);
+  const main = div('cloud-main');
+  main.append(title, ind);
+
+  cloud.append(topEllipse, iconBox, main, bottomEllipse);
 
   // Click → focus (B1); Ctrl+click toggles selection (H16); Enter on a
   // keyboard-focused cloud focuses it; right-click opens the context menu (H15).

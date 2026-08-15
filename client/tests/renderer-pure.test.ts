@@ -33,6 +33,7 @@ import {
   parseAddLines,
   parseCanvasLayout,
   parseCanvasZoom,
+  contrastText,
   parseTheme,
   parseCloudGap,
   parseCloudWidth,
@@ -207,6 +208,22 @@ describe('ui theme (L10)', () => {
     assert.equal(parseTheme('light'), 'light');
     assert.equal(parseTheme('DARK'), 'light');
     assert.equal(parseTheme('dark'), 'dark');
+  });
+});
+
+describe('contrastText (L12: readable text on a custom cloud background)', () => {
+  it('picks white on dark backgrounds and dark on light ones', () => {
+    assert.equal(contrastText('#1E62BE'), '#ffffff');
+    assert.equal(contrastText('#20242d'), '#ffffff');
+    assert.equal(contrastText('#ffffff'), '#1f242d');
+    assert.equal(contrastText('#ffeb00'), '#1f242d');
+    assert.equal(contrastText('#87ceeb'), '#1f242d');
+  });
+
+  it('supports 3-digit hex and falls back to white on garbage', () => {
+    assert.equal(contrastText('#fff'), '#1f242d');
+    assert.equal(contrastText('#03c'), '#ffffff');
+    assert.equal(contrastText('not-a-color'), '#ffffff');
   });
 });
 

@@ -63,6 +63,12 @@ export interface ZoneSplitterHooks {
   vertical: HTMLElement;
   /** The horizontal splitter element (between the focus row and children). */
   horizontal: HTMLElement;
+  /**
+   * Optional: re-anchor canvas decorations whose position depends on the
+   * layout (the focus band, L12). Called after every live share change so
+   * they follow the drag instead of jumping on release.
+   */
+  onLayoutChange?: () => void;
 }
 
 /** Rounds a share to 3 decimals — keeps stored values and CSS vars tidy. */
@@ -119,6 +125,7 @@ function wireVerticalSplitter(hooks: ZoneSplitterHooks): void {
       const minShare = MIN_ZONE_PX / rect.width;
       share = roundShare(Math.min(1 - minShare, Math.max(minShare, (clientX - rect.left) / rect.width)));
       hooks.host.style.setProperty('--zone-top-split', String(share));
+      hooks.onLayoutChange?.();
     },
     () => {
       store.update({ zoneTopSplit: share });
@@ -128,6 +135,7 @@ function wireVerticalSplitter(hooks: ZoneSplitterHooks): void {
   hooks.vertical.addEventListener('dblclick', () => {
     share = CANVAS_TOP_SPLIT_DEFAULT;
     hooks.host.style.setProperty('--zone-top-split', String(share));
+    hooks.onLayoutChange?.();
     store.update({ zoneTopSplit: share });
     schedulePersist();
   });
@@ -152,6 +160,7 @@ function wireHorizontalSplitter(hooks: ZoneSplitterHooks): void {
       const h = Math.min(maxH, Math.max(minH, hostRect.bottom - clientY));
       share = roundShare(h / hostRect.height);
       hooks.host.style.setProperty('--zone-children-share', String(share));
+      hooks.onLayoutChange?.();
     },
     () => {
       store.update({ zoneChildrenShare: share });
@@ -161,6 +170,7 @@ function wireHorizontalSplitter(hooks: ZoneSplitterHooks): void {
   hooks.horizontal.addEventListener('dblclick', () => {
     share = CANVAS_CHILDREN_SHARE_DEFAULT;
     hooks.host.style.setProperty('--zone-children-share', String(share));
+    hooks.onLayoutChange?.();
     store.update({ zoneChildrenShare: share });
     schedulePersist();
   });

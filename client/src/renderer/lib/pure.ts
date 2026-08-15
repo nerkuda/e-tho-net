@@ -44,17 +44,17 @@ export const CLOUD_TITLE_LINES = 2;
 const CLOUD_FONT_MIN = 12;
 const CLOUD_FONT_MAX = 16;
 
-/** Vertical padding of the cloud body, px (both sides). */
-export const CLOUD_PAD = 6;
-/** Height of a single ellipse thickening, px. */
+/** Vertical padding of the cloud main column, px (top and bottom). */
+export const CLOUD_PAD = 5;
+/** Full height of a single ellipse thickening, px. */
 export const ELLIPSE_HEIGHT = 8;
-/** Top margin of each ellipse inside the cloud, px (zoomed like the height). */
-export const ELLIPSE_MARGIN_TOP = 2;
+/** Portion of the ellipse inside the card — half of it lies on the frame. */
+export const ELLIPSE_INSIDE = 4;
 /** Cloud border width, px. */
 export const CLOUD_BORDER = 1;
 /** Title line-height factor relative to the font size. */
 const TITLE_LINE_FACTOR = 1.35;
-/** Indicators line-height factor relative to the font size. */
+/** Indicators line-height factor relative to the font size (incl. 1px gap). */
 const IND_LINE_FACTOR = 1.1;
 
 /** Clamps a number into `[min, max]`. */
@@ -75,19 +75,45 @@ export function cloudFontSize(width: number, zoom = 1): number {
 
 /**
  * Fixed height of a simple cloud in px: 2 title lines + indicators line +
- * paddings + two ellipses (with their top margins) + borders. Not user-editable
- * (11-settings-and-state.md §2.4). The font, paddings and ellipses scale with
- * the canvas zoom; the 1 px borders stay constant (they are constant in CSS
- * too). Stays ~1–3 px above the natural DOM content height — the grid row is
- * never shorter than the rendered cloud.
+ * main-column paddings + the inside halves of the two on-frame ellipses +
+ * borders. Not user-editable (11-settings-and-state.md §2.4). The font,
+ * paddings and ellipses scale with the canvas zoom; the 1 px borders stay
+ * constant (they are constant in CSS too). Stays ~1–3 px above the natural
+ * DOM content height — the grid row is never shorter than the rendered cloud.
  */
 export function cloudHeight(width: number, zoom = 1): number {
   const font = cloudFontSize(width, zoom);
   const title = font * TITLE_LINE_FACTOR * CLOUD_TITLE_LINES;
   const ind = font * IND_LINE_FACTOR;
   const pad = CLOUD_PAD * zoom;
-  const ellipse = (ELLIPSE_HEIGHT + ELLIPSE_MARGIN_TOP) * zoom;
-  return Math.round(title + ind + pad * 2 + ellipse * 2 + CLOUD_BORDER * 2);
+  const ellipseInside = ELLIPSE_INSIDE * zoom;
+  return Math.round(title + ind + pad * 2 + ellipseInside * 2 + CLOUD_BORDER * 2);
+}
+
+/** Near-black readable text colour for {@link contrastText} (L12). */
+const CONTRAST_DARK = '#1f242d';
+
+/**
+ * Picks a readable text colour for an arbitrary user-picked cloud background
+ * (08-ui-spec.md §2.2): white on dark backgrounds, near-black on light ones.
+ * Relative luminance with sRGB linearisation (WCAG). Unparseable input falls
+ * back to white (dark custom backgrounds are the more common case).
+ */
+export function contrastText(bg: string): string {
+  const hex = bg.trim().replace(/^#/, '');
+  const full = hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) {
+    return '#ffffff';
+  }
+  const channel = (part: string): number => {
+    const c = Number.parseInt(part, 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance =
+    0.2126 * channel(full.slice(0, 2)) +
+    0.7152 * channel(full.slice(2, 4)) +
+    0.0722 * channel(full.slice(4, 6));
+  return luminance > 0.35 ? CONTRAST_DARK : '#ffffff';
 }
 
 /** Effective cloud sizes applied by the renderer (zoom-multiplied, px-rounded). */

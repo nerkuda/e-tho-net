@@ -53,9 +53,11 @@ const BADGE_RADIUS = 9;
 const BADGE_TEXT_DY = 3.5;
 /** Label offset from the line midpoint, px at zoom 1. */
 const LABEL_OFFSET = 8;
-/** Y-nudges binding a line end to an ellipse (top/bottom), px at zoom 1. */
-const ELLIPSE_TOP_DY = 6;
-const ELLIPSE_BOTTOM_DY = 5;
+/** Y-offsets from a bounding edge to an ellipse center, px at zoom 1: the
+ *  ellipses lie ON the cloud frame, so the center is half their 8px height
+ *  inwards from the card edge (L12). */
+const ELLIPSE_TOP_DY = 4;
+const ELLIPSE_BOTTOM_DY = 4;
 
 /** A directed pair of thoughts with the links between them. */
 interface Bundle {
@@ -520,8 +522,8 @@ function linkStyle(bundle: Bundle): { color: string; width: number; dash: string
 
 /** Highlights the bottom ellipse of the source and the top ellipse of the target. */
 function highlightEnds(src: HTMLElement, tgt: HTMLElement): void {
-  const srcBottom = src.querySelector<HTMLElement>('.ellipse:last-of-type');
-  const tgtTop = tgt.querySelector<HTMLElement>('.ellipse');
+  const srcBottom = src.querySelector<HTMLElement>('.ellipse-bottom');
+  const tgtTop = tgt.querySelector<HTMLElement>('.ellipse-top');
   highlightedEllipses = [];
   for (const el of [srcBottom, tgtTop]) {
     if (el !== null) {
