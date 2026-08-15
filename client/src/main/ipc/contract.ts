@@ -180,7 +180,13 @@ export interface EtnApi {
     search(networkId: string, request: SearchRequest): Promise<SearchResponse>;
     mentions(networkId: string, id: string): Promise<MentionHit[]>;
     /** `GET /thoughts/duplicates` — live duplicate candidates for the add dialog (H14). */
-    findDuplicates(networkId: string, title: string, synonyms?: string[]): Promise<DuplicateHit[]>;
+    findDuplicates(
+      networkId: string,
+      title: string,
+      synonyms?: string[],
+      /** Optional thought-type filter (thought_ref property pickers). */
+      typeIds?: string[],
+    ): Promise<DuplicateHit[]>;
     setFocusPreferences(
       networkId: string,
       focusId: string,

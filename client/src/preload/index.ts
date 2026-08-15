@@ -56,8 +56,8 @@ function buildApi(): EtnApi {
       resolve: (networkId, ids) => invoke('thoughts.resolve', networkId, ids),
       search: (networkId, request) => invoke('thoughts.search', networkId, request),
       mentions: (networkId, id) => invoke('thoughts.mentions', networkId, id),
-      findDuplicates: (networkId, title, synonyms) =>
-        invoke('thoughts.findDuplicates', networkId, title, synonyms),
+      findDuplicates: (networkId, title, synonyms, typeIds) =>
+        invoke('thoughts.findDuplicates', networkId, title, synonyms, typeIds),
       setFocusPreferences: (networkId, focusId, input) =>
         invoke('thoughts.setFocusPreferences', networkId, focusId, input),
       setFocusOrder: (networkId, focusId, input) =>

@@ -164,12 +164,39 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           input.placeholder = 'https://… или путь к файлу';
           input.title = 'URL или путь к файлу';
         }
-        input.addEventListener('blur', () => {
-          const next = input.value;
-          if (next === '') save(null);
-          else if (next !== stored) save(next);
-        });
-        cell.append(input);
+        // Baseline tracks the last saved value so picker commits and plain
+        // blur commits never fire twice for the same value.
+        let baseline: string | null = typeof stored === 'string' ? stored : null;
+        const commitValue = (value: string): void => {
+          const next = value === '' ? null : value;
+          if (next === baseline) return;
+          baseline = next;
+          save(next);
+        };
+        input.addEventListener('blur', () => commitValue(input.value));
+        // A text property with predefined options (02-data-model.md §3.4)
+        // gets a picker — an input aid, never a restriction: the value stays
+        // freely editable (08-ui-spec.md §6.3).
+        const options =
+          definition.value_type === 'text'
+            ? (definition.config?.options ?? []).filter((o) => o !== '')
+            : [];
+        if (options.length > 0) {
+          const row = div('form-row');
+          row.style.marginBottom = '0';
+          row.append(
+            input,
+            buildValueOptionsCaret(
+              input,
+              options,
+              definition.config?.multiple === true,
+              commitValue,
+            ),
+          );
+          cell.append(row);
+        } else {
+          cell.append(input);
+        }
         break;
       }
       case 'number': {
@@ -209,6 +236,14 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         input.value = typeof stored === 'string' ? (refTitles.get(stored) ?? stored) : '';
         input.readOnly = true;
         input.placeholder = 'выбрать мысль…';
+        // Type filter from the definition config (list form supersedes the
+        // legacy single id); an input aid — stored values are untouched.
+        const filterIds = (
+          definition.config?.allowed_type_ids ??
+          (definition.config?.allowed_type_id !== undefined
+            ? [definition.config.allowed_type_id]
+            : [])
+        ).filter((id) => id !== '');
         const row = div('form-row');
         row.style.marginBottom = '0';
         row.append(
@@ -216,7 +251,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           button(
             'выбрать',
             () => {
-              void pickThoughtRef(networkId, definition.config?.allowed_type_id).then((id) => {
+              void pickThoughtRef(networkId, filterIds).then((id) => {
                 if (id !== null) save(id);
               });
             },
@@ -254,4 +289,115 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   }
 
   return box;
+}
+
+// ---------------------------------------------------------------------------
+// Predefined text options picker (08-ui-spec.md §6.3)
+// ---------------------------------------------------------------------------
+
+/** Splits a stored multi-value string into trimmed non-empty parts. */
+export function splitMultiValue(value: string): string[] {
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+}
+
+/**
+ * Builds the ▾ button that opens a dropdown of a text property's predefined
+ * options under `input` (body-mounted, fixed — the same approach and classes
+ * as the type combobox).
+ *
+ * Single mode: clicking a row fills the input with the option. Multiple mode:
+ * rows are checkboxes; the input holds the comma-joined selection (options
+ * order) and remains hand-editable. The result is committed once, when the
+ * dropdown closes; keyboard-only edits commit on the input's blur as usual.
+ */
+function buildValueOptionsCaret(
+  input: HTMLInputElement,
+  options: string[],
+  multiple: boolean,
+  commit: (value: string) => void,
+): HTMLElement {
+  let list: HTMLDivElement | null = null;
+
+  const close = (): void => {
+    if (list === null) return;
+    list.remove();
+    list = null;
+    window.removeEventListener('mousedown', onOutside, true);
+    commit(input.value);
+  };
+
+  const onOutside = (event: MouseEvent): void => {
+    if (
+      list !== null &&
+      event.target instanceof Node &&
+      !list.contains(event.target) &&
+      event.target !== input
+    ) {
+      close();
+    }
+  };
+
+  const openList = (): void => {
+    if (list !== null) {
+      close();
+      return;
+    }
+    list = div('type-combo-list');
+    const selected = new Set(multiple ? splitMultiValue(input.value) : []);
+    for (const option of options) {
+      const row = div('type-combo-item');
+      if (multiple) {
+        const check = el('input');
+        check.type = 'checkbox';
+        check.checked = selected.has(option);
+        row.append(check);
+      }
+      row.append(el('span', 'type-combo-label', option));
+      // Keep the focus (and selection highlight) in the input — no blur-commit
+      // while the user works inside the dropdown.
+      row.addEventListener('mousedown', (event) => event.preventDefault());
+      row.addEventListener('click', () => {
+        if (!multiple) {
+          input.value = option;
+          close();
+          return;
+        }
+        if (selected.has(option)) selected.delete(option);
+        else selected.add(option);
+        const check = row.querySelector('input');
+        if (check !== null) check.checked = selected.has(option);
+        input.value = options.filter((o) => selected.has(o)).join(', ');
+      });
+      list.append(row);
+    }
+    if (multiple) {
+      const done = button('Готово', () => close(), 'btn small');
+      done.style.margin = '4px';
+      list.append(done);
+    }
+    document.body.append(list);
+    // Place under the input, flipping up when the screen edge interferes.
+    const rect = input.getBoundingClientRect();
+    const listRect = list.getBoundingClientRect();
+    const width = Math.max(rect.width, Math.min(listRect.width, 320));
+    const left = Math.max(6, Math.min(rect.left, window.innerWidth - width - 6));
+    let top = rect.bottom + 2;
+    if (top + listRect.height > window.innerHeight - 6 && rect.top > listRect.height + 6) {
+      top = Math.max(6, rect.top - listRect.height - 2);
+    }
+    list.style.left = `${Math.round(left)}px`;
+    list.style.top = `${Math.round(top)}px`;
+    list.style.width = `${Math.round(width)}px`;
+    window.addEventListener('mousedown', onOutside, true);
+  };
+
+  return button(
+    '▾',
+    openList,
+    'btn small',
+    multiple ? 'Выбрать несколько значений' : 'Выбрать значение из списка',
+  );
 }

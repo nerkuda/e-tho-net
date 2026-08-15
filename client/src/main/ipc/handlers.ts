@@ -224,8 +224,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'thoughts.findDuplicates',
-    bind((networkId: string, title: string, synonyms?: string[]) =>
-      requireRest(deps).findDuplicates(networkId, title, synonyms ?? []),
+    bind((networkId: string, title: string, synonyms?: string[], typeIds?: string[]) =>
+      requireRest(deps).findDuplicates(networkId, title, synonyms ?? [], typeIds ?? []),
     ),
   );
   handlers.set(

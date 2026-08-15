@@ -1217,15 +1217,18 @@ export class RestClient {
 
   /**
    * `GET /networks/{nid}/thoughts/duplicates` — live duplicate lookup powering
-   * the add-thought dialog (H14, docs/03-server-api.md §6.3, 08-ui-spec.md §4.4).
+   * the add-thought dialog (H14, docs/03-server-api.md §6.3, 08-ui-spec.md §4.4)
+   * and the thought_ref property pickers (`type_ids` filter).
    */
   public async findDuplicates(
     networkId: string,
     title: string,
     synonyms: string[] = [],
+    typeIds: string[] = [],
   ): Promise<DuplicateCandidate[]> {
     const q: QueryRecord = { title };
     if (synonyms.length > 0) q['synonyms'] = synonyms;
+    if (typeIds.length > 0) q['type_ids'] = typeIds;
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`, {
       query: q,
     });

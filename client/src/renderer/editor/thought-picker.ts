@@ -5,11 +5,17 @@
  * The input is matched via `thoughts.findDuplicates` (live, debounced); the
  * strongest candidates are listed with their match kind; picking one resolves
  * the promise with the thought id (or `null` on cancel).
+ *
+ * `typeIds` restricts the search to thoughts of the given types — used by
+ * `thought_ref` properties whose definition configures a type filter (the
+ * filter is an input aid: it is only applied while searching, stored values
+ * are never reprocessed when it changes).
  */
 
 import { showDialog } from '../lib/dialog.js';
 import { button, div, el, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { store } from '../state.js';
 
 /** Match-kind labels shown next to candidates. */
 const KIND_LABELS: Record<string, string> = {
@@ -21,7 +27,8 @@ const KIND_LABELS: Record<string, string> = {
 /**
  * Opens the picker dialog. Resolves the chosen thought id, or `null`.
  */
-export function pickThoughtRef(networkId: string, _allowedTypeId?: string): Promise<string | null> {
+export function pickThoughtRef(networkId: string, typeIds?: string[]): Promise<string | null> {
+  const filter = (typeIds ?? []).filter((id) => id !== '');
   return new Promise((resolve) => {
     const input = el('input', 'text-input');
     input.type = 'text';
@@ -32,6 +39,18 @@ export function pickThoughtRef(networkId: string, _allowedTypeId?: string): Prom
     const errorLine = span('', 'error-text');
     const body = div('form-stack');
     body.append(input, hint, list, errorLine);
+
+    // Surface an active type filter so the narrowed result set is not confusing.
+    if (filter.length > 0) {
+      const names = filter
+        .map((id) => store.state.thoughtTypes.find((t) => t.id === id)?.name)
+        .filter((name): name is string => name !== undefined);
+      if (names.length > 0) {
+        const filterLine = el('p', 'muted', `Отбор по типам: ${names.join(', ')}`);
+        filterLine.style.margin = '0 0 6px';
+        body.insertBefore(filterLine, list);
+      }
+    }
 
     let timer: number | null = null;
 
@@ -45,7 +64,7 @@ export function pickThoughtRef(networkId: string, _allowedTypeId?: string): Prom
             return;
           }
           try {
-            const hits = await etn.thoughts.findDuplicates(networkId, query);
+            const hits = await etn.thoughts.findDuplicates(networkId, query, [], filter);
             renderHits(hits);
           } catch (err) {
             errorLine.textContent = err instanceof Error ? err.message : String(err);

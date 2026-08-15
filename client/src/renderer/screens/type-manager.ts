@@ -566,9 +566,96 @@ function openPropertyDialog(opts: {
     );
   };
   renderDefault();
+
+  // Text options («выбирать из списка» + «несколько значений», 08-ui-spec.md
+  // §8.1): an input aid for filling values, never a restriction — arbitrary
+  // typed values stay allowed, and trimming the list never touches stored
+  // values (02-data-model.md §3.4).
+  let choiceOn = def?.value_type === 'text' && (def.config?.options?.length ?? 0) > 0;
+  let multipleOn = def?.config?.multiple === true;
+  let optionsText = choiceOn ? (def?.config?.options ?? []).join('\n') : '';
+  const textExtrasHost = div('form-stack');
+
+  // thought_ref type filter: pick from thoughts of the selected types only.
+  // Changing it later never reprocesses stored values.
+  const typeFilter = new Set<string>(
+    def?.value_type === 'thought_ref'
+      ? (def.config?.allowed_type_ids ??
+          (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : []))
+      : [],
+  );
+  const refFilterHost = div('form-stack');
+
+  const renderTextExtras = (): void => {
+    textExtrasHost.replaceChildren();
+    if (typeSelect.value !== 'text') return;
+    const choiceRow = el('label', 'checkbox-row');
+    const choiceCheck = el('input');
+    choiceCheck.type = 'checkbox';
+    choiceCheck.checked = choiceOn;
+    choiceCheck.addEventListener('change', () => {
+      choiceOn = choiceCheck.checked;
+      renderTextExtras();
+    });
+    choiceRow.append(choiceCheck, span('выбирать из списка'));
+    textExtrasHost.append(choiceRow);
+    if (!choiceOn) return;
+    const area = el('textarea', 'textarea-input');
+    area.value = optionsText;
+    area.rows = 4;
+    area.placeholder = 'Варианты значения — по одному в строке';
+    area.addEventListener('input', () => {
+      optionsText = area.value;
+    });
+    const multiRow = el('label', 'checkbox-row');
+    const multiCheck = el('input');
+    multiCheck.type = 'checkbox';
+    multiCheck.checked = multipleOn;
+    multiCheck.addEventListener('change', () => {
+      multipleOn = multiCheck.checked;
+    });
+    multiRow.append(multiCheck, span('несколько значений (через запятую)'));
+    textExtrasHost.append(area, multiRow);
+  };
+
+  const renderRefFilter = (): void => {
+    refFilterHost.replaceChildren();
+    if (typeSelect.value !== 'thought_ref') return;
+    const label = el('p', 'muted', 'Отбор по типам — поиск идёт только по ним:');
+    label.style.margin = '0';
+    refFilterHost.append(label);
+    const boxEl = div('type-filter-box');
+    const types = store.state.thoughtTypes;
+    if (types.length === 0) {
+      boxEl.append(el('p', 'muted', 'В сети ещё нет типов мыслей.'));
+    }
+    for (const t of types) {
+      const lab = el('label', 'checkbox-row');
+      const check = el('input');
+      check.type = 'checkbox';
+      check.checked = typeFilter.has(t.id);
+      check.addEventListener('change', () => {
+        if (check.checked) typeFilter.add(t.id);
+        else typeFilter.delete(t.id);
+      });
+      lab.append(check, span(t.name));
+      boxEl.append(lab);
+    }
+    refFilterHost.append(boxEl);
+  };
+  renderTextExtras();
+  renderRefFilter();
+
   typeSelect.addEventListener('change', () => {
     defaultValue = null;
+    // The type-specific extras do not carry over to the new value type.
+    choiceOn = false;
+    multipleOn = false;
+    optionsText = '';
+    typeFilter.clear();
     renderDefault();
+    renderTextExtras();
+    renderRefFilter();
   });
 
   const body = div('form-stack');
@@ -576,11 +663,16 @@ function openPropertyDialog(opts: {
     keyInput,
     typeSelect,
     defaultHost,
+    textExtrasHost,
+    refFilterHost,
     errorLine,
   );
 
-  /** The config patch with the (possibly cleared) default value. */
-  const configPatch = (): { config: PropertyDefinition['config'] } | {} => {
+  /**
+   * The config patch: default value + the type-specific extras. Returns
+   * `null` for an empty config so untouched definitions keep `config = null`.
+   */
+  const configPatch = (): { config: PropertyDefinition['config'] | null } => {
     const after = defaultValue === undefined || defaultValue === '' ? null : defaultValue;
     const config: Record<string, unknown> = { ...(def?.config ?? {}) };
     if (after === null) {
@@ -588,7 +680,33 @@ function openPropertyDialog(opts: {
     } else {
       config['default_value'] = after;
     }
-    return { config: config as PropertyDefinition['config'] };
+    if (typeSelect.value === 'text') {
+      const opts = optionsText
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '');
+      if (choiceOn && opts.length > 0) {
+        config['options'] = opts;
+        if (multipleOn) config['multiple'] = true;
+        else delete config['multiple'];
+      } else {
+        delete config['options'];
+        delete config['multiple'];
+      }
+    } else {
+      delete config['options'];
+      delete config['multiple'];
+    }
+    if (typeSelect.value === 'thought_ref') {
+      // The list form supersedes the legacy single `allowed_type_id`.
+      delete config['allowed_type_id'];
+      if (typeFilter.size > 0) config['allowed_type_ids'] = [...typeFilter];
+      else delete config['allowed_type_ids'];
+    } else {
+      delete config['allowed_type_id'];
+      delete config['allowed_type_ids'];
+    }
+    return { config: (Object.keys(config).length === 0 ? null : config) as PropertyDefinition['config'] | null };
   };
 
   /** Creates the property. */
@@ -624,16 +742,9 @@ function openPropertyDialog(opts: {
     if (key !== def.key) changes.key = key;
     if (nextType !== def.value_type) changes.value_type = nextType;
 
-    const before = def.config?.default_value ?? null;
-    const after = defaultValue === undefined || defaultValue === '' ? null : defaultValue;
-    if (before !== after) {
-      const config: Record<string, unknown> = { ...(def.config ?? {}) };
-      if (after === null) {
-        delete config['default_value'];
-      } else {
-        config['default_value'] = after;
-      }
-      changes.config = config as PropertyDefinition['config'];
+    const nextConfig = configPatch().config;
+    if (JSON.stringify(nextConfig ?? {}) !== JSON.stringify(def.config ?? {})) {
+      changes.config = nextConfig;
     }
 
     if (Object.keys(changes).length === 0) {

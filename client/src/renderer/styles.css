@@ -2218,6 +2218,18 @@ body.dragging * {
   margin: 4px 8px;
 }
 
+/* Scrollable thought-type checklist — thought_ref property type filter (L6). */
+.type-filter-box {
+  max-height: 140px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 /* Link-type line swatch in list dialogs (L6). */
 .link-type-swatch {
   display: inline-block;
