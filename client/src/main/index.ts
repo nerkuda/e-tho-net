@@ -104,7 +104,6 @@ function createWindow(theme: 'light' | 'dark'): BrowserWindow {
 
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     void win.loadURL(process.env['ELECTRON_RENDERER_URL']);
-    win.webContents.openDevTools();
   } else {
     void win.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
