@@ -39,6 +39,18 @@ const BASE_WIDTH = 1.5;
 const EXTRA_WIDTH_PER_LINK = 1.2;
 /** Default colour for untyped links. */
 const DEFAULT_COLOR = '#9aa3b2';
+/** Base font size of link labels, px; scaled by the canvas zoom via the
+ *  `--link-label-font` CSS variable (L9). */
+export const LINK_LABEL_FONT_BASE = 11;
+/** Count badge radius at zoom 1, px. */
+const BADGE_RADIUS = 9;
+/** Vertical nudge of the badge count glyph (baseline middle), at zoom 1. */
+const BADGE_TEXT_DY = 3.5;
+/** Label offset from the line midpoint, px at zoom 1. */
+const LABEL_OFFSET = 8;
+/** Y-nudges binding a line end to an ellipse (top/bottom), px at zoom 1. */
+const ELLIPSE_TOP_DY = 6;
+const ELLIPSE_BOTTOM_DY = 5;
 
 /** A directed pair of thoughts with the links between them. */
 interface Bundle {
@@ -319,15 +331,20 @@ function activeBundle(bundles: readonly Bundle[]): Bundle | null {
   return null;
 }
 
-/** Center of an ellipse side, in canvas-host coordinates. */
+/** Center of an ellipse side, in canvas-host coordinates. The ellipse grows
+ *  with the canvas zoom, so do the Y nudges (L9). */
 function ellipsePoint(
   el: HTMLElement,
   side: 'top' | 'bottom',
   hostRect: DOMRect,
 ): { x: number; y: number } {
+  const zoom = store.state.canvasZoom;
   const rect = el.getBoundingClientRect();
   const x = rect.left - hostRect.left + rect.width / 2;
-  const y = side === 'top' ? rect.top - hostRect.top + 6 : rect.bottom - hostRect.top - 5;
+  const y =
+    side === 'top'
+      ? rect.top - hostRect.top + ELLIPSE_TOP_DY * zoom
+      : rect.bottom - hostRect.top - ELLIPSE_BOTTOM_DY * zoom;
   return { x, y };
 }
 
@@ -340,7 +357,10 @@ function drawVisualLine(
   if (svg === null) return;
   const count = bundle.edges.length;
   const style = linkStyle(bundle);
-  const lineWidth = count > 1 ? BASE_WIDTH + (count - 1) * EXTRA_WIDTH_PER_LINK : style.width;
+  // Line widths scale with the canvas zoom (L9).
+  const zoom = store.state.canvasZoom;
+  const lineWidth =
+    (count > 1 ? BASE_WIDTH + (count - 1) * EXTRA_WIDTH_PER_LINK : style.width) * zoom;
 
   const line = document.createElementNS(SVG_NS, 'line');
   line.classList.add('link-line');
@@ -362,13 +382,13 @@ function drawVisualLine(
     const badge = document.createElementNS(SVG_NS, 'circle');
     badge.setAttribute('cx', String(midX));
     badge.setAttribute('cy', String(midY));
-    badge.setAttribute('r', '9');
+    badge.setAttribute('r', String(BADGE_RADIUS * zoom));
     badge.setAttribute('fill', 'var(--surface, #fff)');
     badge.setAttribute('stroke', style.color);
     const text = document.createElementNS(SVG_NS, 'text');
     text.classList.add('link-label-text');
     text.setAttribute('x', String(midX));
-    text.setAttribute('y', String(midY + 3.5));
+    text.setAttribute('y', String(midY + BADGE_TEXT_DY * zoom));
     text.setAttribute('dominant-baseline', 'middle');
     text.textContent = String(count);
     svg.append(badge, text);
@@ -380,7 +400,7 @@ function drawVisualLine(
   if (type !== undefined) {
     const text = document.createElementNS(SVG_NS, 'text');
     text.classList.add('link-label-text');
-    const offset = from.y < to.y ? 8 : -8;
+    const offset = (from.y < to.y ? LABEL_OFFSET : -LABEL_OFFSET) * zoom;
     text.setAttribute('x', String(midX));
     text.setAttribute('y', String(midY + offset));
     text.setAttribute('dominant-baseline', 'middle');
@@ -420,8 +440,8 @@ function drawHitLine(
   hit.setAttribute('y1', String(from.y));
   hit.setAttribute('x2', String(to.x));
   hit.setAttribute('y2', String(to.y));
-  // Wide hit area around the (thinner) visible line.
-  hit.setAttribute('stroke-width', String(Math.max(baseWidth + 10, 14)));
+  // Wide hit area around the (thinner) visible line, zoom-scaled (L9).
+  hit.setAttribute('stroke-width', String(Math.max(baseWidth + 10, 14) * store.state.canvasZoom));
   hit.dataset['key'] = bundle.key;
 
   hit.addEventListener('mouseenter', () => {
@@ -455,7 +475,7 @@ function drawTopLine(
   line.setAttribute('x2', String(to.x));
   line.setAttribute('y2', String(to.y));
   line.setAttribute('stroke', 'var(--warn, #c98a06)');
-  line.setAttribute('stroke-width', String(baseWidth + 2));
+  line.setAttribute('stroke-width', String(baseWidth * store.state.canvasZoom + 2));
   line.setAttribute('stroke-opacity', '1');
   svgTop.append(line);
 }

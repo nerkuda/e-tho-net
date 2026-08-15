@@ -17,8 +17,10 @@ import { closeDialog } from './lib/dialog.js';
 import { etn } from './lib/etn.js';
 import { closeMenu } from './lib/menu.js';
 import { UI_STATE_KEY, PREF_KEY } from '@etn/shared';
+import { applyCanvasZoom } from './canvas/canvas-zoom.js';
 import {
   parseCanvasLayout,
+  parseCanvasZoom,
   parseCollapsedGroups,
   parseCloudGap,
   parseCloudWidth,
@@ -67,7 +69,7 @@ export async function openNetwork(networkId: string): Promise<void> {
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
 
-  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw] =
+  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw] =
     await Promise.all([
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
@@ -77,6 +79,7 @@ export async function openNetwork(networkId: string): Promise<void> {
       etn.ui.getState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID),
       etn.ui.getState(networkId, UI_STATE_KEY.WINDOW_LAYOUT),
       etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_LAYOUT),
+      etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_ZOOM),
     ]);
 
   const editorPosition = (
@@ -97,6 +100,7 @@ export async function openNetwork(networkId: string): Promise<void> {
     showInactive,
     cloudWidth: parseCloudWidth(cloudWidthRaw),
     cloudGap: parseCloudGap(cloudGapRaw),
+    canvasZoom: parseCanvasZoom(canvasZoomRaw),
     editorPosition,
     editorW: editorSize.w,
     editorH: editorSize.h,
@@ -321,7 +325,7 @@ export async function boot(): Promise<void> {
   showScreen('onboarding');
 }
 
-/** Global keyboard shortcuts (08-ui-spec.md §13): Ctrl+F, Escape. */
+/** Global keyboard shortcuts (08-ui-spec.md §13): Ctrl+F, Escape, Ctrl+±/0. */
 export function initKeyboard(): void {
   window.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
@@ -329,10 +333,31 @@ export function initKeyboard(): void {
       closeDialog();
       return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+    if (event.ctrlKey || event.metaKey) {
+      if (event.key.toLowerCase() === 'f') {
+        if (store.state.screen === 'workspace') {
+          event.preventDefault();
+          document.querySelector<HTMLInputElement>('.search-input')?.focus();
+        }
+        return;
+      }
+      // Canvas zoom (L9): '+'/'=' (both main-row layouts), numpad 'Add';
+      // '-'/'Subtract'; '0' resets. Workspace screen only.
       if (store.state.screen === 'workspace') {
-        event.preventDefault();
-        document.querySelector<HTMLInputElement>('.search-input')?.focus();
+        if (event.key === '+' || event.key === '=' || event.key === 'Add') {
+          event.preventDefault();
+          applyCanvasZoom('in');
+          return;
+        }
+        if (event.key === '-' || event.key === 'Subtract') {
+          event.preventDefault();
+          applyCanvasZoom('out');
+          return;
+        }
+        if (event.key === '0') {
+          event.preventDefault();
+          applyCanvasZoom('reset');
+        }
       }
     }
   });

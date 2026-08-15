@@ -24,9 +24,9 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
-import { cloudFontSize, cloudHeight } from '../lib/pure.js';
+import { cloudGeom } from '../lib/pure.js';
 import { store } from '../state.js';
-import { initLinksOverlay, drawLinksNow, invalidateLinkCounts } from './links.js';
+import { initLinksOverlay, drawLinksNow, invalidateLinkCounts, LINK_LABEL_FONT_BASE } from './links.js';
 import {
   captureClouds,
   playFocusTransition,
@@ -162,6 +162,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   zones = { parents: zoneParents, siblings: zoneSiblings, children: zoneChildren };
   emptyEl = empty;
   redrawLinks = initLinksOverlay(host).redraw;
+  applyCanvasScaleVars(host);
   mountZoneSplitters({ host, top, focusRow, vertical: zoneSplitterV, horizontal: zoneSplitterH });
 
   // Add-thought dialog (H14) and external file/URL drops (08-ui-spec.md §7).
@@ -259,9 +260,27 @@ export function invalidateIndicators(id: string | null): void {
 // Rendering
 // ---------------------------------------------------------------------------
 
+/**
+ * Writes the zoom-aware cloud sizing CSS variables onto the canvas host
+ * (L9). The variables cascade to the zones AND the focus row — before L9 the
+ * focus cloud inherited the static `:root` fallbacks instead of the stored
+ * L4 `cloud_width`. The same `cloudGeom` numbers drive the zone grid math, so
+ * CSS and virtualization never diverge.
+ */
+function applyCanvasScaleVars(h: HTMLElement): void {
+  const zoom = store.state.canvasZoom;
+  const geom = cloudGeom(store.state.cloudWidth, store.state.cloudGap, zoom);
+  h.style.setProperty('--cloud-width', `${geom.width}px`);
+  h.style.setProperty('--cloud-gap', `${geom.gap}px`);
+  h.style.setProperty('--cloud-font', `${geom.font}px`);
+  h.style.setProperty('--cloud-zoom', String(zoom));
+  h.style.setProperty('--link-label-font', `${Math.round(LINK_LABEL_FONT_BASE * zoom)}px`);
+}
+
 /** Renders everything from the current store state. */
 async function render(): Promise<void> {
   if (host === null || zones === null || focusRow === null) return;
+  applyCanvasScaleVars(host);
   const focus = store.state.focus;
   if (focus === null) {
     emptyEl?.classList.remove('hidden');
@@ -454,14 +473,11 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   const empty = zone.querySelector<HTMLElement>('.zone-empty');
   if (spacer === null || grid === null || empty === null) return;
 
-  const width = store.state.cloudWidth;
-  const gap = store.state.cloudGap;
-  const cellW = width + gap;
-  const cellH = cloudHeight(width) + gap;
-
-  zone.style.setProperty('--cloud-width', `${width}px`);
-  zone.style.setProperty('--cloud-gap', `${gap}px`);
-  zone.style.setProperty('--cloud-font', `${cloudFontSize(width)}px`);
+  // Effective (zoom-multiplied) sizes; the --cloud-* CSS variables with the
+  // same numbers live on the canvas host (applyCanvasScaleVars).
+  const geom = cloudGeom(store.state.cloudWidth, store.state.cloudGap, store.state.canvasZoom);
+  const cellW = geom.width + geom.gap;
+  const cellH = geom.height + geom.gap;
 
   if (entries.length === 0) {
     spacer.style.height = '0px';
@@ -476,10 +492,10 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   const cols = Math.max(1, Math.floor(avail / cellW));
   const rows = Math.ceil(entries.length / cols);
 
-  grid.style.gridTemplateColumns = `repeat(${cols}, ${width}px)`;
-  grid.style.gridAutoRows = `${cloudHeight(width)}px`;
-  grid.style.columnGap = `${gap}px`;
-  grid.style.rowGap = `${gap}px`;
+  grid.style.gridTemplateColumns = `repeat(${cols}, ${geom.width}px)`;
+  grid.style.gridAutoRows = `${geom.height}px`;
+  grid.style.columnGap = `${geom.gap}px`;
+  grid.style.rowGap = `${geom.gap}px`;
 
   const startRow = Math.max(0, Math.floor(zone.scrollTop / cellH) - OVERSCAN_ROWS);
   const endRow = Math.min(

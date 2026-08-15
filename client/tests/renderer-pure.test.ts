@@ -26,17 +26,20 @@ import {
 import {
   clip,
   cloudFontSize,
+  cloudGeom,
   cloudHeight,
   describeEvent,
   isRealtimeEvent,
   parseAddLines,
   parseCanvasLayout,
+  parseCanvasZoom,
   parseCloudGap,
   parseCloudWidth,
   parseCollapsedGroups,
   parseLinkTypeId,
   parseTitleWithSynonyms,
   parseWindowLayout,
+  zoomStep,
 } from '../src/renderer/lib/pure.js';
 
 import type { AnyRealtimeEvent, FocusEdge, FocusResponse, Link, Thought } from '@etn/shared';
@@ -144,6 +147,54 @@ describe('parseCanvasLayout', () => {
     assert.deepEqual(parseCanvasLayout('{"topSplit":"x","childrenShare":0.5}'), {
       topSplit: 0.5,
       childrenShare: 0.5,
+    });
+  });
+});
+
+describe('canvas zoom', () => {
+  it('parses ui_state zoom with clipping to system constants', () => {
+    assert.equal(parseCanvasZoom(null), 1);
+    assert.equal(parseCanvasZoom('abc'), 1);
+    assert.equal(parseCanvasZoom('0.3'), 0.5);
+    assert.equal(parseCanvasZoom('9'), 2);
+    assert.equal(parseCanvasZoom('1.25'), 1.25);
+  });
+
+  it('steps along the 5% grid, additive, not multiplicative', () => {
+    assert.equal(zoomStep(1, 1), 1.05);
+    assert.equal(zoomStep(1.05, 1), 1.1);
+    assert.equal(zoomStep(1.1, -1), 1.05);
+    // No floating drift: values land exactly on the grid.
+    assert.equal(zoomStep(zoomStep(zoomStep(1, 1), 1), -1), 1.05);
+  });
+
+  it('clamps steps to the zoom range', () => {
+    assert.equal(zoomStep(2, 1), 2);
+    assert.equal(zoomStep(0.5, -1), 0.5);
+    // An out-of-range seed is treated as clipped first.
+    assert.equal(zoomStep(9, -1), 1.95);
+  });
+
+  it('scales font and height proportionally with the zoom', () => {
+    const font1 = cloudFontSize(200);
+    const height1 = cloudHeight(200);
+    assert.equal(cloudFontSize(200, 1.5), Math.round(font1 * 1.5 * 10) / 10);
+    // Borders stay constant (2px total), everything else scales.
+    assert.equal(cloudHeight(200, 2), Math.round((height1 - 2) * 2 + 2));
+  });
+
+  it('cloudGeom rounds effective px sizes and keeps grid-consistent numbers', () => {
+    const geom = cloudGeom(200, 12, 1.05);
+    assert.equal(geom.width, 210);
+    assert.equal(geom.gap, 13);
+    assert.equal(geom.font, cloudFontSize(200, 1.05));
+    assert.equal(geom.height, cloudHeight(200, 1.05));
+    // Zoom 1 keeps the legacy values.
+    assert.deepEqual(cloudGeom(200, 12), {
+      width: 200,
+      gap: 12,
+      font: cloudFontSize(200),
+      height: cloudHeight(200),
     });
   });
 });

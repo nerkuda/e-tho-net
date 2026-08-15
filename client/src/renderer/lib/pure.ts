@@ -12,6 +12,10 @@ import {
   CANVAS_SHARE_MAX,
   CANVAS_SHARE_MIN,
   CANVAS_TOP_SPLIT_DEFAULT,
+  CANVAS_ZOOM_DEFAULT,
+  CANVAS_ZOOM_MAX,
+  CANVAS_ZOOM_MIN,
+  CANVAS_ZOOM_STEP,
   CLOUD_GAP_DEFAULT,
   CLOUD_GAP_MAX,
   CLOUD_GAP_MIN,
@@ -59,23 +63,54 @@ export function clip(value: number, min: number, max: number): number {
 /**
  * Font size of a simple cloud, linearly interpolated between the reference
  * sizes across `CLOUD_WIDTH_MIN..CLOUD_WIDTH_MAX` (11-settings-and-state.md
- * §2.4: fixed scaling rule; the exact formula is left to the implementation).
+ * §2.4: fixed scaling rule; the exact formula is left to the implementation)
+ * and multiplied by the canvas zoom (L9).
  */
-export function cloudFontSize(width: number): number {
+export function cloudFontSize(width: number, zoom = 1): number {
   const t = clip((width - CLOUD_WIDTH_MIN) / (CLOUD_WIDTH_MAX - CLOUD_WIDTH_MIN), 0, 1);
-  return Math.round((CLOUD_FONT_MIN + t * (CLOUD_FONT_MAX - CLOUD_FONT_MIN)) * 10) / 10;
+  return Math.round((CLOUD_FONT_MIN + t * (CLOUD_FONT_MAX - CLOUD_FONT_MIN)) * zoom * 10) / 10;
 }
 
 /**
  * Fixed height of a simple cloud in px: 2 title lines + indicators line +
  * paddings + two ellipses + borders. Not user-editable (11-settings-and-state.md
- * §2.4).
+ * §2.4). The font, paddings and ellipses scale with the canvas zoom; the 1 px
+ * borders stay constant (they are constant in CSS too).
  */
-export function cloudHeight(width: number): number {
-  const font = cloudFontSize(width);
+export function cloudHeight(width: number, zoom = 1): number {
+  const font = cloudFontSize(width, zoom);
   const title = font * TITLE_LINE_FACTOR * CLOUD_TITLE_LINES;
   const ind = font * IND_LINE_FACTOR;
-  return Math.round(title + ind + CLOUD_PAD * 2 + ELLIPSE_HEIGHT * 2 + CLOUD_BORDER * 2);
+  const pad = CLOUD_PAD * zoom;
+  const ellipse = ELLIPSE_HEIGHT * zoom;
+  return Math.round(title + ind + pad * 2 + ellipse * 2 + CLOUD_BORDER * 2);
+}
+
+/** Effective cloud sizes applied by the renderer (zoom-multiplied, px-rounded). */
+export interface CloudGeom {
+  /** Effective cloud width, px. */
+  width: number;
+  /** Effective gap between clouds, px. */
+  gap: number;
+  /** Effective title font size, px. */
+  font: number;
+  /** Effective fixed cloud height, px. */
+  height: number;
+}
+
+/**
+ * Effective cloud geometry for the zone grids and CSS variables: L4
+ * `cloud_width`/`cloud_gap` multiplied by the canvas zoom (L9). The same
+ * numbers feed the CSS (`--cloud-*`) and the virtualized grid math, so the
+ * grid rows never diverge from the rendered DOM heights.
+ */
+export function cloudGeom(width: number, gap: number, zoom = 1): CloudGeom {
+  return {
+    width: Math.round(width * zoom),
+    gap: Math.round(gap * zoom),
+    font: cloudFontSize(width, zoom),
+    height: cloudHeight(width, zoom),
+  };
 }
 
 /** Parses an L4 `cloud_width` value, clipped to the system constants. */
@@ -168,6 +203,29 @@ export function parseCanvasLayout(raw: string | null): ParsedCanvasLayout {
   } catch {
     return fallback;
   }
+}
+
+/** Rounds a zoom value to 2 decimals (the step grid is 0.05). */
+function roundZoom(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/** Parses an L4 `canvas_zoom` value, clipped to the zoom constants. */
+export function parseCanvasZoom(raw: string | null): number {
+  const num = raw === null ? Number.NaN : Number(raw);
+  if (!Number.isFinite(num)) return CANVAS_ZOOM_DEFAULT;
+  return roundZoom(clip(num, CANVAS_ZOOM_MIN, CANVAS_ZOOM_MAX));
+}
+
+/**
+ * One keyboard step of the canvas zoom (L9): moves along the grid of
+ * `CANVAS_ZOOM_STEP` increments (100 → 105 → 110 …, not multiplicative),
+ * clipped to the zoom range. `direction` is +1 (zoom in) or −1 (zoom out).
+ */
+export function zoomStep(zoom: number, direction: 1 | -1): number {
+  const base = clip(zoom, CANVAS_ZOOM_MIN, CANVAS_ZOOM_MAX);
+  const steps = Math.round((base + direction * CANVAS_ZOOM_STEP) / CANVAS_ZOOM_STEP);
+  return roundZoom(clip(steps * CANVAS_ZOOM_STEP, CANVAS_ZOOM_MIN, CANVAS_ZOOM_MAX));
 }
 
 // ---------------------------------------------------------------------------

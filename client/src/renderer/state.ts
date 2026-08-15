@@ -10,6 +10,7 @@
 import {
   CANVAS_CHILDREN_SHARE_DEFAULT,
   CANVAS_TOP_SPLIT_DEFAULT,
+  CANVAS_ZOOM_DEFAULT,
   CLOUD_GAP_DEFAULT,
   CLOUD_WIDTH_DEFAULT,
   EDITOR_H_DEFAULT,
@@ -56,6 +57,8 @@ export interface AppState {
   cloudWidth: number;
   /** L4 `cloud_gap`, px. */
   cloudGap: number;
+  /** L4 `canvas_zoom` multiplier applied to clouds and link labels (L9). */
+  canvasZoom: number;
   /** L4 `editor_position`. */
   editorPosition: EditorPosition;
   /** Last visible editor dock (restored when the editor is un-hidden). */
@@ -103,6 +106,7 @@ const initial: AppState = {
   showInactive: false,
   cloudWidth: CLOUD_WIDTH_DEFAULT,
   cloudGap: CLOUD_GAP_DEFAULT,
+  canvasZoom: CANVAS_ZOOM_DEFAULT,
   editorPosition: 'right',
   lastEditorPosition: 'right',
   editorW: EDITOR_W_DEFAULT,

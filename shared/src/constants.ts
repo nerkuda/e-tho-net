@@ -59,6 +59,15 @@ export const CANVAS_CHILDREN_SHARE_DEFAULT = 0.34;
 export const CANVAS_SHARE_MIN = 0.1;
 export const CANVAS_SHARE_MAX = 0.9;
 
+/** Minimum canvas zoom multiplier (clouds, focus cloud and link labels). */
+export const CANVAS_ZOOM_MIN = 0.5;
+/** Maximum canvas zoom multiplier. */
+export const CANVAS_ZOOM_MAX = 2.0;
+/** Canvas zoom keyboard step; zoom values are kept on a grid multiple of it. */
+export const CANVAS_ZOOM_STEP = 0.05;
+/** Default canvas zoom multiplier. */
+export const CANVAS_ZOOM_DEFAULT = 1.0;
+
 // ---------------------------------------------------------------------------
 // Thought limits
 // ---------------------------------------------------------------------------
@@ -128,6 +137,7 @@ export const UI_STATE_KEY = {
   EDITOR_COLLAPSED_GROUPS: 'editor_collapsed_groups',
   WINDOW_LAYOUT: 'window_layout',
   CANVAS_LAYOUT: 'canvas_layout',
+  CANVAS_ZOOM: 'canvas_zoom',
   LAST_USED_LINK_TYPE_ID: 'last_used_link_type_id',
 } as const satisfies Record<string, string>;
 export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];

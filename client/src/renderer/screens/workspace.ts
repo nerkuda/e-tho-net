@@ -151,6 +151,7 @@ export function buildWorkspace(): HTMLElement {
   const focusLabel = span('—', 'sb-item sb-focus');
   const sbSpacer = div('sb-spacer');
   const countsLabel = span('', 'sb-item sb-counts');
+  const zoomLabel = span('', 'sb-item sb-zoom');
   const eventLabel = span('', 'sb-item sb-event');
   const conflictHost = div('sb-conflict hidden');
   conflictHost.append(span('⚠ изменено другим пользователем'));
@@ -164,6 +165,7 @@ export function buildWorkspace(): HTMLElement {
     focusLabel,
     sbSpacer,
     countsLabel,
+    zoomLabel,
     eventLabel,
     conflictHost,
   );
@@ -220,6 +222,7 @@ export function buildWorkspace(): HTMLElement {
     body.style.setProperty('--editor-h', `${st.editorH}px`);
     focusLabel.textContent = st.focus?.focused.title ?? '—';
     setTooltip(focusLabel, st.focus?.focused.title ?? '');
+    zoomLabel.textContent = `🔍 ${Math.round(st.canvasZoom * 100)}%`;
     eventLabel.textContent = st.lastEvent ?? '';
   }
 
