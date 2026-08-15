@@ -18,6 +18,7 @@ import type { FocusDir, Link } from '@etn/shared';
 
 import { onThoughtDeleted, scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { openAddDialog } from './add-dialog.js';
+import { requestZoneAnimation } from './canvas.js';
 import { patchFocusEdge, store } from '../state.js';
 import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
@@ -63,7 +64,7 @@ export function showLinkContextMenu(event: MouseEvent, linkId: string): void {
   showMenuAt(event.clientX, event.clientY, buildLinkMenuItems(networkId, linkId));
 }
 
-/** Builds the link menu items: properties / activity / delete. */
+/** Builds the link menu items: properties / activity / invert / delete. */
 function buildLinkMenuItems(networkId: string, linkId: string): MenuItem[] {
   return [
     {
@@ -73,6 +74,10 @@ function buildLinkMenuItems(networkId: string, linkId: string): MenuItem[] {
     {
       label: 'Изменить актуальность',
       onClick: () => void toggleLinkActive(networkId, linkId),
+    },
+    {
+      label: 'Инвертировать',
+      onClick: () => void invertLink(networkId, linkId),
     },
     MENU_SEPARATOR,
     {
@@ -109,6 +114,40 @@ async function toggleLinkActive(networkId: string, linkId: string): Promise<void
     scheduleRefresh();
   } catch (err) {
     errorDialog('Изменить актуальность', err);
+  }
+}
+
+/**
+ * Swaps the link's direction: source ⇄ target (08-ui-spec.md §2.4). The line
+ * re-anchors at once; the animated refresh then reconciles the zones — the
+ * former source may leave «Родители» for «Низ» and vice versa.
+ */
+async function invertLink(networkId: string, linkId: string): Promise<void> {
+  try {
+    const link = await etn.links.get(networkId, linkId);
+    const updated = await etn.links.update(
+      networkId,
+      linkId,
+      { source_id: link.target_id, target_id: link.source_id },
+      link.version,
+    );
+    // No realtime echo to the actor (04-realtime.md §5) — patch locally. Both
+    // store updates render synchronously BEFORE the animation flag is armed,
+    // so the flag is consumed by the debounced zone-reconciling refresh only.
+    patchFocusEdge(updated);
+    const target = store.state.editorTarget;
+    if (target !== null && target.kind === 'link' && target.id === linkId) {
+      store.update({ editorTarget: { kind: 'link', id: updated.id, link: updated } });
+    }
+    requestZoneAnimation();
+    scheduleRefresh();
+    notice('Связь инвертирована.');
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === 'DUPLICATE') {
+      notice('В обратном направлении такая связь уже существует.', 'error');
+      return;
+    }
+    errorDialog('Инвертировать связь', err);
   }
 }
 
