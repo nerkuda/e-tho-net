@@ -151,18 +151,18 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     const cell = el('td');
     const stored = current?.value ?? null;
 
-    const save = (value: unknown | null): void => {
-      void (async () => {
-        try {
-          if (value === null) {
-            await etn.properties.remove(networkId, 'thought', thoughtId, definition.key);
-          } else {
-            await etn.properties.set(networkId, 'thought', thoughtId, definition.key, value);
-          }
-        } catch (err) {
-          cell.append(span(` Ошибка: ${errText(err)}`, 'error-text'));
+    const save = async (value: unknown | null): Promise<boolean> => {
+      try {
+        if (value === null) {
+          await etn.properties.remove(networkId, 'thought', thoughtId, definition.key);
+        } else {
+          await etn.properties.set(networkId, 'thought', thoughtId, definition.key, value);
         }
-      })();
+        return true;
+      } catch (err) {
+        cell.append(span(` Ошибка: ${errText(err)}`, 'error-text'));
+        return false;
+      }
     };
 
     switch (definition.value_type) {
@@ -182,7 +182,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           const next = value === '' ? null : value;
           if (next === baseline) return;
           baseline = next;
-          save(next);
+          void save(next);
         };
         input.addEventListener('blur', () => commitValue(input.value));
         // A text property with predefined options (02-data-model.md §3.4)
@@ -216,8 +216,8 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         input.value = typeof stored === 'number' ? String(stored) : '';
         input.addEventListener('blur', () => {
           const next = input.value === '' ? null : Number(input.value);
-          if (next === null) save(null);
-          else if (next !== stored && Number.isFinite(next)) save(next);
+          if (next === null) void save(null);
+          else if (next !== stored && Number.isFinite(next)) void save(next);
         });
         cell.append(input);
         break;
@@ -227,8 +227,8 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         input.type = 'date';
         input.value = typeof stored === 'string' ? stored.slice(0, 10) : '';
         input.addEventListener('blur', () => {
-          if (input.value === '') save(null);
-          else save(input.value);
+          if (input.value === '') void save(null);
+          else void save(input.value);
         });
         cell.append(input);
         break;
@@ -237,7 +237,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         const input = el('input');
         input.type = 'checkbox';
         input.checked = stored === true;
-        input.addEventListener('change', () => save(input.checked));
+        input.addEventListener('change', () => void save(input.checked));
         cell.append(input);
         break;
       }
@@ -262,15 +262,29 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           button(
             'выбрать',
             () => {
-              void pickThoughtRef(networkId, filterIds).then((id) => {
-                if (id !== null) save(id);
+              void pickThoughtRef(networkId, filterIds).then(async (id) => {
+                // No realtime echo to the actor (04-realtime.md §5) — reload
+                // the table after a successful save so the resolved title and
+                // the clear button appear at once.
+                if (id !== null && (await save(id))) void reload();
               });
             },
             'btn small',
           ),
         );
         if (stored !== null) {
-          row.append(button('✕', () => save(null), 'btn small', 'Очистить значение'));
+          row.append(
+            button(
+              '✕',
+              () => {
+                void save(null).then((ok) => {
+                  if (ok) void reload();
+                });
+              },
+              'btn small',
+              'Очистить значение',
+            ),
+          );
         }
         cell.append(row);
         break;

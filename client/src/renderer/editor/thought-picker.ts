@@ -97,9 +97,12 @@ export function pickThoughtRef(networkId: string, typeIds?: string[]): Promise<s
 
     const finish = (id: string | null): void => {
       resolve(id);
+      // Picking (or cancelling) settles the dialog, not just the promise —
+      // without this the picker stays open after «использовать».
+      closeSelf();
     };
 
-    showDialog({
+    const closeSelf = showDialog({
       title: 'Выбор мысли',
       body,
       width: 440,
