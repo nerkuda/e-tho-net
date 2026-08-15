@@ -25,7 +25,7 @@ import type { LinkType, PropertyDefinition, PropertyValueType, ThoughtType } fro
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { applyThoughtIcon } from '../canvas/canvas.js';
-import { confirmDialog, errorDialog, field, showDialog } from '../lib/dialog.js';
+import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
@@ -161,11 +161,12 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   const errorLine = span('', 'error-text');
   const body = div('form-stack');
 
-  // Icon + required name.
+  // Top row: icon · name · settings (⚙). The icon and ⚙ stay visible but
+  // inert until the new type is actually created («Создать и продолжить»).
   const topRow = div('editor-top-row');
   const iconBox = el('button', 'editor-icon-box') as HTMLButtonElement;
   iconBox.type = 'button';
-  setTooltip(iconBox, 'Изменить иконку');
+  setTooltip(iconBox, 'Иконка типа');
   const renderIcon = (): void => {
     applyThoughtIcon(iconBox, {
       icon: current?.icon ?? null,
@@ -186,15 +187,32 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   nameInput.value = type?.name ?? '';
   nameInput.maxLength = 200;
   nameInput.placeholder = 'Название типа (обязательно)';
-  topRow.append(iconBox, nameInput);
+  const settingsBtn = button('⚙', openStyle, 'icon-btn');
+  setTooltip(settingsBtn, 'Настройки типа');
+  topRow.append(iconBox, nameInput, settingsBtn);
   body.append(topRow);
 
-  // Description ("комментарий": type purpose, usage rules).
+  // Comment (type description / usage rules) — placeholder only, no label.
   const descArea = el('textarea', 'textarea-input');
   descArea.value = type?.description ?? '';
   descArea.rows = 3;
   descArea.placeholder = 'Комментарий: описание типа, правила применения…';
-  body.append(field('Комментарий', descArea));
+  body.append(descArea);
+
+  body.append(errorLine);
+
+  // Property table — always visible; a placeholder row until the type exists.
+  const propsHost = div('form-stack');
+  body.append(propsHost);
+  renderProps();
+
+  if (type === null) {
+    const actions = div('form-row');
+    actions.append(
+      button('Создать и продолжить', () => void commitNew(), 'btn', 'Создать тип и продолжить'),
+    );
+    body.append(actions);
+  }
 
   /** Applies an immediate patch (icon, style) to the existing type. */
   async function patchType(
@@ -230,15 +248,6 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
     }
   }
 
-  // Style (⚙) and the property table exist only for a saved type.
-  const extra = div('form-stack');
-  if (type !== null) {
-    const settingsBtn = button('⚙ Свойства типа…', () => openStyle(), 'btn small');
-    extra.append(settingsBtn);
-    extra.append(buildPropertiesTable(networkId, type.id, onChanged));
-  }
-  body.append(extra);
-
   function openStyle(): void {
     if (current === null) return;
     showThoughtStyleDialog({
@@ -255,58 +264,78 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
     });
   }
 
-  body.append(errorLine);
+  /** Shows the property table, or a hint while the type is not created yet. */
+  function renderProps(): void {
+    propsHost.replaceChildren();
+    const label = el('p', 'muted', 'Свойства типа');
+    label.style.margin = '8px 0 2px';
+    propsHost.append(label);
+    if (current !== null) {
+      propsHost.append(buildPropertiesTable(networkId, current.id, onChanged));
+    } else {
+      propsHost.append(el('p', 'muted', 'Свойства станут доступны после создания типа.'));
+    }
+    settingsBtn.disabled = current === null;
+    iconBox.disabled = current === null;
+  }
 
-  const createNew = type === null;
+  /** Creates the type and unlocks the icon, settings and properties. */
+  async function commitNew(): Promise<void> {
+    const name = nameInput.value.trim();
+    if (name === '') {
+      errorLine.textContent = 'Название типа обязательно.';
+      return;
+    }
+    const description = descArea.value.trim();
+    try {
+      current = await etn.types.createThoughtType(networkId, {
+        name,
+        description: description === '' ? null : description,
+      });
+      await refreshThoughtTypes();
+      onChanged();
+      errorLine.textContent = '';
+      renderProps();
+      nameInput.focus();
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
+  }
+
+  /** Autosaves the name/description of an existing type on blur. */
+  async function saveNameDesc(): Promise<void> {
+    if (current === null) return;
+    const name = nameInput.value.trim();
+    if (name === '') {
+      nameInput.value = current.name;
+      errorLine.textContent = 'Название не может быть пустым — возвращено прежнее.';
+      return;
+    }
+    const description = descArea.value.trim();
+    const nextDesc = description === '' ? null : description;
+    if (name === current.name && nextDesc === current.description) return;
+    try {
+      current = await etn.types.updateThoughtType(
+        networkId,
+        current.id,
+        { name, description: nextDesc },
+        current.version,
+      );
+      await refreshThoughtTypes();
+      onChanged();
+      errorLine.textContent = '';
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
+  }
+  nameInput.addEventListener('blur', () => void saveNameDesc());
+  descArea.addEventListener('blur', () => void saveNameDesc());
+
   showDialog({
-    title: createNew ? 'Новый тип мысли' : 'Тип мысли',
+    title: type === null ? 'Новый тип мысли' : 'Тип мысли',
     body,
     width: 560,
-    buttons: [
-      { label: 'Отмена' },
-      {
-        label: createNew ? 'Создать' : 'Сохранить',
-        primary: true,
-        keepOpen: true,
-        onClick: (close) => {
-          void (async () => {
-            const name = nameInput.value.trim();
-            if (name === '') {
-              errorLine.textContent = 'Название типа обязательно.';
-              return;
-            }
-            const description = descArea.value.trim();
-            try {
-              if (createNew) {
-                const created = await etn.types.createThoughtType(networkId, {
-                  name,
-                  description: description === '' ? null : description,
-                });
-                await refreshThoughtTypes();
-                onChanged();
-                close();
-                // Continue in the full editor (icon, style, properties).
-                showThoughtTypeEditor(created, onChanged);
-                return;
-              }
-              if (current !== null) {
-                current = await etn.types.updateThoughtType(
-                  networkId,
-                  current.id,
-                  { name, description: description === '' ? null : description },
-                  current.version,
-                );
-              }
-              await refreshThoughtTypes();
-              onChanged();
-              close();
-            } catch (err) {
-              errorLine.textContent = errText(err);
-            }
-          })();
-        },
-      },
-    ],
+    buttons: [{ label: 'Закрыть', primary: true }],
     onMount: () => nameInput.focus(),
   });
 }
@@ -322,12 +351,10 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
  */
 function buildPropertiesTable(networkId: string, typeId: string, onTouched: () => void): HTMLElement {
   const box = div('form-stack');
-  const label = el('p', 'muted', 'Свойства типа');
-  label.style.margin = '8px 0 2px';
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '220px';
   const errorLine = span('', 'error-text');
-  box.append(label, tableWrap, errorLine);
+  box.append(tableWrap, errorLine);
   box.append(button('Добавить свойство', () => void appendDraft(), 'btn small'));
 
   let defs: PropertyDefinition[] = [];
@@ -616,25 +643,40 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
   const errorLine = span('', 'error-text');
   const body = div('form-stack');
 
+  // Top row: forward · reverse names · settings (⚙). The ⚙ stays visible but
+  // inert until the new type is created («Создать и продолжить»).
+  const namesRow = div('form-row type-editor-row');
   const forwardInput = el('input', 'text-input');
   forwardInput.type = 'text';
   forwardInput.value = type?.name_forward ?? '';
   forwardInput.maxLength = 200;
   forwardInput.placeholder = 'От источника к назначению (обязательно)';
-  body.append(field('Имя (вперёд)', forwardInput));
-
   const reverseInput = el('input', 'text-input');
   reverseInput.type = 'text';
   reverseInput.value = type?.name_reverse ?? '';
   reverseInput.maxLength = 200;
   reverseInput.placeholder = 'От назначения к источнику (обязательно)';
-  body.append(field('Имя (назад)', reverseInput));
+  const settingsBtn = button('⚙', openStyle, 'icon-btn');
+  setTooltip(settingsBtn, 'Настройки типа');
+  namesRow.append(forwardInput, reverseInput, settingsBtn);
+  body.append(namesRow);
 
+  // Comment (type description / usage rules) — placeholder only, no label.
   const descArea = el('textarea', 'textarea-input');
   descArea.value = type?.description ?? '';
   descArea.rows = 3;
   descArea.placeholder = 'Комментарий: описание типа, правила применения…';
-  body.append(field('Комментарий', descArea));
+  body.append(descArea);
+
+  body.append(errorLine);
+
+  if (type === null) {
+    const actions = div('form-row');
+    actions.append(
+      button('Создать и продолжить', () => void commitNew(), 'btn', 'Создать тип и продолжить'),
+    );
+    body.append(actions);
+  }
 
   /** Applies an immediate line-style patch to the existing type. */
   async function patchStyle(
@@ -660,11 +702,6 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
     }
   }
 
-  if (type !== null) {
-    const settingsBtn = button('⚙ Свойства связи…', openStyle, 'btn small');
-    body.append(settingsBtn);
-  }
-
   function openStyle(): void {
     if (current === null) return;
     showLinkStyleDialog({
@@ -678,63 +715,76 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
     });
   }
 
-  body.append(errorLine);
+  /** Creates the type and unlocks the settings button. */
+  async function commitNew(): Promise<void> {
+    const nameForward = forwardInput.value.trim();
+    const nameReverse = reverseInput.value.trim();
+    if (nameForward === '' || nameReverse === '') {
+      errorLine.textContent = 'Оба имени обязательны.';
+      return;
+    }
+    const description = descArea.value.trim();
+    try {
+      current = await etn.types.createLinkType(networkId, {
+        name_forward: nameForward,
+        name_reverse: nameReverse,
+        description: description === '' ? null : description,
+      });
+      await refreshLinkTypes();
+      onChanged();
+      errorLine.textContent = '';
+      settingsBtn.disabled = false;
+      forwardInput.focus();
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
+  }
 
-  const createNew = type === null;
+  /** Autosaves the names/description of an existing type on blur. */
+  async function saveFields(): Promise<void> {
+    if (current === null) return;
+    const nameForward = forwardInput.value.trim();
+    const nameReverse = reverseInput.value.trim();
+    if (nameForward === '' || nameReverse === '') {
+      forwardInput.value = current.name_forward;
+      reverseInput.value = current.name_reverse;
+      errorLine.textContent = 'Оба имени обязательны — возвращены прежние.';
+      return;
+    }
+    const description = descArea.value.trim();
+    const nextDesc = description === '' ? null : description;
+    if (
+      nameForward === current.name_forward &&
+      nameReverse === current.name_reverse &&
+      nextDesc === current.description
+    ) {
+      return;
+    }
+    try {
+      current = await etn.types.updateLinkType(
+        networkId,
+        current.id,
+        { name_forward: nameForward, name_reverse: nameReverse, description: nextDesc },
+        current.version,
+      );
+      await refreshLinkTypes();
+      onChanged();
+      errorLine.textContent = '';
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
+  }
+  forwardInput.addEventListener('blur', () => void saveFields());
+  reverseInput.addEventListener('blur', () => void saveFields());
+  descArea.addEventListener('blur', () => void saveFields());
+
+  settingsBtn.disabled = type === null;
+
   showDialog({
-    title: createNew ? 'Новый тип связи' : 'Тип связи',
+    title: type === null ? 'Новый тип связи' : 'Тип связи',
     body,
-    width: 520,
-    buttons: [
-      { label: 'Отмена' },
-      {
-        label: createNew ? 'Создать' : 'Сохранить',
-        primary: true,
-        keepOpen: true,
-        onClick: (close) => {
-          void (async () => {
-            const nameForward = forwardInput.value.trim();
-            const nameReverse = reverseInput.value.trim();
-            if (nameForward === '' || nameReverse === '') {
-              errorLine.textContent = 'Оба имени обязательны.';
-              return;
-            }
-            const description = descArea.value.trim();
-            try {
-              if (createNew) {
-                const created = await etn.types.createLinkType(networkId, {
-                  name_forward: nameForward,
-                  name_reverse: nameReverse,
-                  description: description === '' ? null : description,
-                });
-                await refreshLinkTypes();
-                onChanged();
-                close();
-                showLinkTypeEditor(created, onChanged);
-                return;
-              }
-              if (current !== null) {
-                current = await etn.types.updateLinkType(
-                  networkId,
-                  current.id,
-                  {
-                    name_forward: nameForward,
-                    name_reverse: nameReverse,
-                    description: description === '' ? null : description,
-                  },
-                  current.version,
-                );
-              }
-              await refreshLinkTypes();
-              onChanged();
-              close();
-            } catch (err) {
-              errorLine.textContent = errText(err);
-            }
-          })();
-        },
-      },
-    ],
+    width: 560,
+    buttons: [{ label: 'Закрыть', primary: true }],
     onMount: () => forwardInput.focus(),
   });
 }

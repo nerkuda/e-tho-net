@@ -20,6 +20,7 @@ import { errorDialog, field, showDialog } from '../lib/dialog.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
+import { createTypeCombobox } from '../lib/type-combobox.js';
 import { patchFocusEdge, store } from '../state.js';
 import { registerGroupBuilder, type EditorContext } from './editor.js';
 
@@ -205,14 +206,10 @@ async function removeThought(other: ThoughtRef, onChanged: () => void): Promise<
 async function changeLinkType(link: Link, onChanged: () => void): Promise<void> {
   const networkId = requireNetworkId();
   const value = await pickLinkType(link.type_id);
-  if (value === null || value === (link.type_id ?? '')) return;
+  // `undefined` — cancelled; `null` — "no type".
+  if (value === undefined || value === link.type_id) return;
   try {
-    const updated = await etn.links.update(
-      networkId,
-      link.id,
-      { type_id: value === '' ? null : value },
-      link.version,
-    );
+    const updated = await etn.links.update(networkId, link.id, { type_id: value }, link.version);
     // Repaint the line at once — the actor gets no realtime echo
     // (04-realtime.md §5); the group body reloads via the callback.
     patchFocusEdge(updated);
@@ -223,33 +220,41 @@ async function changeLinkType(link: Link, onChanged: () => void): Promise<void> 
 }
 
 /**
- * Link-type picker dialog: a select over `store.state.linkTypes` plus a
- * "без типа" entry. Resolves the type id, `''` for "no type", or `null` when
- * cancelled — mirroring the link editor header select.
+ * Link-type picker dialog (searchable, L6): resolves the type id, `null` for
+ * "no type", or `undefined` when cancelled.
  */
-function pickLinkType(current: string | null): Promise<string | null> {
+function pickLinkType(current: string | null): Promise<string | null | undefined> {
   return new Promise((resolve) => {
-    const select = el('select', 'select-input');
-    const none = el('option', undefined, 'без типа');
-    none.value = '';
-    select.append(none);
-    for (const type of store.state.linkTypes) {
-      const option = el('option', undefined, `${type.name_forward} / ${type.name_reverse}`);
-      option.value = type.id;
-      select.append(option);
-    }
-    select.value = current ?? '';
+    let picked: string | null | undefined = undefined;
+    const combo = createTypeCombobox({
+      options: () =>
+        store.state.linkTypes.map((t) => ({
+          id: t.id,
+          label: `${t.name_forward} / ${t.name_reverse}`,
+          dot: t.color,
+        })),
+      value: current,
+      placeholder: 'без типа',
+      emptyLabel: 'без типа',
+      onChange: (typeId) => {
+        picked = typeId;
+      },
+    });
 
     const body = div('form-stack');
-    body.append(field('Тип связи', select));
+    body.append(field('Тип связи', combo.root));
     showDialog({
       title: 'Изменить тип связи',
       body,
       buttons: [
-        { label: 'Отмена', onClick: () => resolve(null) },
-        { label: 'OK', primary: true, onClick: () => resolve(select.value) },
+        { label: 'Отмена', onClick: () => resolve(undefined) },
+        {
+          label: 'OK',
+          primary: true,
+          onClick: () => resolve(picked ?? current),
+        },
       ],
-      onMount: () => select.focus(),
+      onMount: () => combo.root.querySelector('input')?.focus(),
     });
   });
 }

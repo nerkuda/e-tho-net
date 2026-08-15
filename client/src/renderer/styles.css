@@ -2131,3 +2131,111 @@ body.dragging .ellipse {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ---------------------------------------------------------------------------
+ * Type combobox (L6): searchable type picker
+ * ------------------------------------------------------------------------- */
+
+.type-combo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.type-combo-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.type-combo-caret {
+  color: var(--text-faint);
+  pointer-events: none;
+  flex: none;
+}
+
+.type-combo-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  flex: none;
+  overflow: hidden;
+}
+
+.type-combo-icon img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.type-combo-list {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: 360px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 4px;
+  z-index: 90;
+}
+
+.type-combo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.type-combo-item:hover,
+.type-combo-item.active {
+  background: var(--accent-soft);
+}
+
+.type-combo-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  flex: none;
+}
+
+.type-combo-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.type-combo-empty {
+  margin: 4px 8px;
+}
+
+/* Type editors (L6): disabled settings/icon buttons and a stretching name. */
+.editor-top-row .text-input,
+.type-editor-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.icon-btn:disabled,
+.editor-icon-box:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.icon-btn:disabled:hover,
+.editor-icon-box:disabled:hover {
+  border-color: var(--border-strong);
+}

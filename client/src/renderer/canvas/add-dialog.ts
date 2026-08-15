@@ -18,6 +18,7 @@ import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { parseAddLines, parseTitleWithSynonyms } from '../lib/pure.js';
+import { createTypeCombobox } from '../lib/type-combobox.js';
 import { CLOUD_DRAG_MIME, UI_STATE_KEY } from '@etn/shared';
 import { store } from '../state.js';
 import { requireNetworkId } from '../app.js';
@@ -98,30 +99,62 @@ export function openAddDialog(ctx: {
   input.rows = 2;
   input.placeholder = 'Введите название или вставьте список…';
 
-  const linkTypeSelect = el('select', 'select-input');
-  const linkTypePlaceholder = el('option', undefined, 'без типа');
-  linkTypePlaceholder.value = '';
-  linkTypeSelect.append(linkTypePlaceholder);
-  for (const type of store.state.linkTypes) {
-    const option = el('option', undefined, type.name_forward);
-    option.value = type.id;
-    linkTypeSelect.append(option);
-  }
-  linkTypeSelect.value = store.state.lastUsedLinkTypeId ?? '';
-  linkTypeSelect.addEventListener('change', () => {
-    store.update({ lastUsedLinkTypeId: linkTypeSelect.value === '' ? null : linkTypeSelect.value });
-    void etn.ui
-      .setState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID, linkTypeSelect.value)
-      .catch(() => undefined);
+  // Type of the created thought(s) — searchable picker over the catalogue
+  // (L6): rows carry the type's icon and style.
+  let newThoughtTypeId: string | null = null;
+  const thoughtTypeCombo = createTypeCombobox({
+    options: () =>
+      store.state.thoughtTypes.map((t) => ({
+        id: t.id,
+        label: t.name,
+        icon: { icon: t.icon, kind: t.icon_kind },
+        style: {
+          fg: t.fg_color,
+          bg: t.bg_color,
+          bold: t.font_bold,
+          italic: t.font_italic,
+          underline: t.font_underline,
+          strike: t.font_strike,
+        },
+      })),
+    value: null,
+    placeholder: 'без типа',
+    emptyLabel: 'без типа',
+    onChange: (typeId) => {
+      newThoughtTypeId = typeId;
+    },
+  });
+
+  // Type of the created link(s), remembered as the last used one.
+  let linkTypeId: string | null = store.state.lastUsedLinkTypeId;
+  const linkTypeCombo = createTypeCombobox({
+    options: () =>
+      store.state.linkTypes.map((t) => ({
+        id: t.id,
+        label: `${t.name_forward} / ${t.name_reverse}`,
+        dot: t.color,
+      })),
+    value: linkTypeId,
+    placeholder: 'без типа',
+    emptyLabel: 'без типа',
+    onChange: (typeId) => {
+      linkTypeId = typeId;
+      store.update({ lastUsedLinkTypeId: typeId });
+      void etn.ui
+        .setState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID, typeId ?? '')
+        .catch(() => undefined);
+    },
   });
 
   const candidates = div('dup-list');
   const errorLine = span('', 'error-text');
 
   const body = div('form-stack');
+  const typeRow = div('field');
+  typeRow.append(el('label', 'field-label', 'Тип'), thoughtTypeCombo.root);
   const linkRow = div('field');
-  linkRow.append(el('label', 'field-label', 'Тип связи'), linkTypeSelect);
-  body.append(modeRow, lineList, input, linkRow, candidates, errorLine);
+  linkRow.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
+  body.append(modeRow, lineList, input, typeRow, linkRow, candidates, errorLine);
 
   const directionText =
     ctx.anchorId === null
@@ -279,7 +312,7 @@ export function openAddDialog(ctx: {
       await etn.links.create(networkId, {
         source_id: source,
         target_id: target,
-        type_id: linkTypeSelect.value === '' ? null : linkTypeSelect.value,
+        type_id: linkTypeId,
       });
       notice('Связь создана.');
       scheduleRefresh();
@@ -294,13 +327,14 @@ export function openAddDialog(ctx: {
     await etn.thoughts.create(networkId, {
       title,
       synonyms,
+      type_id: newThoughtTypeId,
       create_link:
         ctx.anchorId === null
           ? undefined
           : {
               direction: ctx.direction,
               target_thought_id: ctx.anchorId,
-              type_id: linkTypeSelect.value === '' ? null : linkTypeSelect.value,
+              type_id: linkTypeId,
             },
     });
   }
@@ -351,7 +385,7 @@ export function openAddDialog(ctx: {
           await etn.links.create(networkId, {
             source_id: source,
             target_id: target,
-            type_id: linkTypeSelect.value === '' ? null : linkTypeSelect.value,
+            type_id: linkTypeId,
           });
         } else {
           await createNew(line.title, line.synonyms);

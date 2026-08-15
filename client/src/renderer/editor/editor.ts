@@ -31,6 +31,7 @@ import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js
 import { etn } from '../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import { createTypeCombobox } from '../lib/type-combobox.js';
 import { patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { registerCommentGroups } from './comments.js';
@@ -261,6 +262,9 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
       focus.focused.version,
     );
     store.update({ focus: { ...focus, focused: updated } });
+    // A type change re-skins the focus cloud (type icon/colours) — reconcile
+    // the whole focus from the server so nothing lags behind the patch.
+    if (patch.type_id !== undefined) scheduleRefresh();
     return true;
   } catch (err) {
     if (isVersionConflict(err)) {
@@ -408,18 +412,26 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   // Bottom row: type + settings (⚙) + active toggle.
   const row = div('editor-header-row');
 
-  const typeSelect = el('select', 'select-input');
-  const typePlaceholder = el('option', undefined, 'без типа');
-  typePlaceholder.value = '';
-  typeSelect.append(typePlaceholder);
-  for (const type of store.state.thoughtTypes) {
-    const option = el('option', undefined, type.name);
-    option.value = type.id;
-    typeSelect.append(option);
-  }
-  typeSelect.value = thought.type_id ?? '';
-  typeSelect.addEventListener('change', () => {
-    void saveThought({ type_id: typeSelect.value === '' ? null : typeSelect.value });
+  // Searchable type picker (L6): rows carry the type's icon and style.
+  const typeCombo = createTypeCombobox({
+    options: () =>
+      store.state.thoughtTypes.map((t) => ({
+        id: t.id,
+        label: t.name,
+        icon: { icon: t.icon, kind: t.icon_kind },
+        style: {
+          fg: t.fg_color,
+          bg: t.bg_color,
+          bold: t.font_bold,
+          italic: t.font_italic,
+          underline: t.font_underline,
+          strike: t.font_strike,
+        },
+      })),
+    value: thought.type_id,
+    placeholder: 'без типа',
+    emptyLabel: 'без типа',
+    onChange: (typeId) => void saveThought({ type_id: typeId }),
   });
 
   const settingsBtn = button('⚙', () => openThoughtSettings(thought), 'icon-btn');
@@ -435,7 +447,7 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   });
   activeLabel.append(activeCheck, span('актуально'));
 
-  row.append(typeSelect, settingsBtn, activeLabel);
+  row.append(typeCombo.root, settingsBtn, activeLabel);
   box.append(row);
 
   // The title height depends on layout; size it once mounted.
@@ -478,18 +490,18 @@ function buildLinkHeader(link: Link): HTMLElement {
   // Single row: link type + settings (⚙) + active toggle (08-ui-spec.md §6.2.2).
   const row = div('editor-header-row');
 
-  const typeSelect = el('select', 'select-input');
-  const typePlaceholder = el('option', undefined, 'без типа');
-  typePlaceholder.value = '';
-  typeSelect.append(typePlaceholder);
-  for (const type of store.state.linkTypes) {
-    const option = el('option', undefined, `${type.name_forward} / ${type.name_reverse}`);
-    option.value = type.id;
-    typeSelect.append(option);
-  }
-  typeSelect.value = link.type_id ?? '';
-  typeSelect.addEventListener('change', () => {
-    void saveLink(link, { type_id: typeSelect.value === '' ? null : typeSelect.value });
+  // Searchable type picker (L6): rows show forward/reverse names + line colour.
+  const typeCombo = createTypeCombobox({
+    options: () =>
+      store.state.linkTypes.map((t) => ({
+        id: t.id,
+        label: `${t.name_forward} / ${t.name_reverse}`,
+        dot: t.color,
+      })),
+    value: link.type_id,
+    placeholder: 'без типа',
+    emptyLabel: 'без типа',
+    onChange: (typeId) => void saveLink(link, { type_id: typeId }),
   });
 
   const settingsBtn = button('⚙', () => openLinkSettings(link), 'icon-btn');
@@ -504,7 +516,7 @@ function buildLinkHeader(link: Link): HTMLElement {
   });
   activeLabel.append(activeCheck, span('актуально'));
 
-  row.append(typeSelect, settingsBtn, activeLabel);
+  row.append(typeCombo.root, settingsBtn, activeLabel);
   box.append(row);
 
   return box;
