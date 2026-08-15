@@ -1,5 +1,5 @@
 /**
- * Editor (H8–H12, 08-ui-spec.md §6): header + collapsible groups.
+ * Editor shell (H8–H12, 08-ui-spec.md §6): header + tabs (L7).
  *
  * H8 ships the shell and the header:
  *  - position switcher (left/right/top/bottom/hidden → L4 `editor_position`);
@@ -8,9 +8,13 @@
  *    `thoughts.update` with `If-Match`;
  *  - link header (when a link is picked): type + active via `links.update`.
  *
- * H9–H12 register group builders via {@link registerGroupBuilder}; the editor
- * renders every registered group for the current entity inside collapsible
- * sections whose state persists per entity (L4 `editor_collapsed_groups`).
+ * L7 turns the group stack below the header into tabs (08-ui-spec.md §6.3):
+ * «Основное», «Вложения (N)», «Связи», «Хроника (N)». A tab's content is
+ * built lazily on first activation and cached for the lifetime of one editor
+ * render (a signature change rebuilds everything). The active tab survives
+ * focus changes. Modules register tab content builders (`registerTabContent`),
+ * tab badge counters (`registerTabCount`) and «Основное» sections
+ * (`registerMainSection` — collapsible groups).
  */
 
 import {
@@ -34,11 +38,10 @@ import { notice } from '../lib/notice.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import { focusEdgesSignature, patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
-import { registerCommentGroups } from './comments.js';
-import { registerAttachmentGroup } from './attachments.js';
+import { registerCommentSections } from './comments.js';
+import { registerAttachmentsTab } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
-import { registerLinksGroup } from './links-group.js';
-import { registerMentionsGroup } from './mentions.js';
+import { registerLinksTab } from './links-tab.js';
 import { showIconDialog } from './icon-dialog.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 
@@ -50,19 +53,46 @@ export interface EditorContext {
   link: Link | null;
 }
 
-/** Group builder signature — H9–H12 modules register these. */
-export type GroupBuilder = (ctx: EditorContext) => GroupSpec | null;
+/** Editor tab ids (08-ui-spec.md §6.3). */
+export type EditorTabId = 'main' | 'attachments' | 'links' | 'chrono';
 
-const groupBuilders: GroupBuilder[] = [];
-let host: HTMLElement | null = null;
-let scrollBox: HTMLElement | null = null;
-let positionButton: HTMLButtonElement | null = null;
-let titleEl: HTMLElement | null = null;
-let lastSignature = '';
+/** Builds the content of one tab for the current entity. */
+export type TabContentBuilder = (ctx: EditorContext) => HTMLElement;
 
-/** Registers an editor group builder (H9–H12). */
-export function registerGroupBuilder(builder: GroupBuilder): void {
-  groupBuilders.push(builder);
+/** Resolves a tab's `(N)` badge count for the current entity. */
+export type TabCountLoader = (ctx: EditorContext) => Promise<number | undefined>;
+
+/** Builds one collapsible group of the «Основное» tab (or null to skip). */
+export type MainSectionBuilder = (ctx: EditorContext) => GroupSpec | null;
+
+/** Static tab bar definition; badges come from registered count loaders. */
+const TABS: Array<{ id: EditorTabId; title: string; counted: boolean }> = [
+  { id: 'main', title: 'Основное', counted: false },
+  { id: 'attachments', title: 'Вложения', counted: true },
+  { id: 'links', title: 'Связи', counted: false },
+  { id: 'chrono', title: 'Хроника', counted: true },
+];
+
+const tabContentBuilders = new Map<EditorTabId, TabContentBuilder>();
+const tabCountLoaders = new Map<EditorTabId, TabCountLoader>();
+const mainSectionBuilders: MainSectionBuilder[] = [];
+
+/** The active tab — module-level so it survives focus/entity changes (L7). */
+let activeTab: EditorTabId = 'main';
+
+/** Registers a tab content builder (L7). */
+export function registerTabContent(id: EditorTabId, builder: TabContentBuilder): void {
+  tabContentBuilders.set(id, builder);
+}
+
+/** Registers a tab badge counter (L7). */
+export function registerTabCount(id: EditorTabId, loader: TabCountLoader): void {
+  tabCountLoaders.set(id, loader);
+}
+
+/** Registers a collapsible section of the «Основное» tab (L7). */
+export function registerMainSection(builder: MainSectionBuilder): void {
+  mainSectionBuilders.push(builder);
 }
 
 /** Opens a link in the editor without changing the focus (H6/H11). */
@@ -99,6 +129,30 @@ function persistCollapsed(): void {
   }, 300);
 }
 
+let host: HTMLElement | null = null;
+let scrollBox: HTMLElement | null = null;
+let positionButton: HTMLButtonElement | null = null;
+let titleEl: HTMLElement | null = null;
+let lastSignature = '';
+
+/** Badge spans of the current render, per counted tab (for refreshTabCount). */
+const tabCountSpans = new Map<EditorTabId, HTMLElement>();
+/** The context of the current render (for refreshTabCount). */
+let renderCtx: EditorContext | null = null;
+
+/**
+ * Re-resolves one tab's badge count after an in-tab mutation (e.g. an
+ * attachment was added) and updates the tab title at once.
+ */
+export function refreshTabCount(id: EditorTabId): void {
+  const badge = tabCountSpans.get(id);
+  const loader = tabCountLoaders.get(id);
+  if (badge === undefined || loader === undefined || renderCtx === null) return;
+  void Promise.resolve(loader(renderCtx)).then((n) => {
+    if (n !== undefined) badge.textContent = `(${n})`;
+  });
+}
+
 /** Mounts the editor into the workspace editor host. */
 export function mountEditor(editorHost: HTMLElement): void {
   host = editorHost;
@@ -120,12 +174,11 @@ export function mountEditor(editorHost: HTMLElement): void {
     persistCollapsed();
   });
 
-  // Editor groups (H9–H12).
-  registerCommentGroups();
-  registerAttachmentGroup();
+  // Editor sections and tabs (H9–H12, L7).
   registerPropertiesGroup();
-  registerLinksGroup();
-  registerMentionsGroup();
+  registerCommentSections();
+  registerAttachmentsTab();
+  registerLinksTab();
 
   // Clicking a link line on the canvas opens the link here (H6 ↔ H8) and marks
   // it as the sticky canvas selection.
@@ -162,6 +215,8 @@ async function render(): Promise<void> {
   lastSignature = signature;
 
   clear(scrollBox);
+  tabCountSpans.clear();
+  renderCtx = ctx;
 
   if (ctx === null) {
     const empty = div('editor-empty');
@@ -176,12 +231,65 @@ async function render(): Promise<void> {
     scrollBox.append(buildLinkHeader(ctx.link));
   }
 
-  const groups = div('editor-groups');
-  for (const builder of groupBuilders) {
-    const spec = builder(ctx);
-    if (spec !== null) groups.append(groupSection(spec, ctx.ownerId));
+  // --- tab bar (L7) ---------------------------------------------------------
+  const tabBar = div('editor-tabs');
+  const buttons = new Map<EditorTabId, HTMLButtonElement>();
+  for (const def of TABS) {
+    const tab = el('button', 'editor-tab') as HTMLButtonElement;
+    tab.type = 'button';
+    tab.append(span(def.title, 'editor-tab-title'));
+    if (def.counted) {
+      const badge = span('', 'editor-tab-count hidden');
+      tab.append(badge);
+      tabCountSpans.set(def.id, badge);
+      const loader = tabCountLoaders.get(def.id);
+      if (loader !== undefined) {
+        void Promise.resolve(loader(ctx)).then((n) => {
+          if (n !== undefined && tab.isConnected) {
+            badge.textContent = `(${n})`;
+            badge.classList.remove('hidden');
+          }
+        });
+      }
+    }
+    tab.addEventListener('click', () => activateTab(def.id));
+    buttons.set(def.id, tab);
+    tabBar.append(tab);
   }
-  scrollBox.append(groups);
+
+  // --- tab panes (lazily built, cached for this render) ---------------------
+  const paneHost = div('tab-pane-root');
+  const built = new Map<EditorTabId, HTMLElement>();
+
+  const buildPane = (id: EditorTabId): HTMLElement => {
+    const pane = div(`tab-pane${id === 'main' ? '' : ' fixed'}`);
+    if (id === 'main') {
+      for (const section of mainSectionBuilders) {
+        const spec = section(ctx);
+        if (spec !== null) pane.append(groupSection(spec, ctx.ownerId));
+      }
+      return pane;
+    }
+    const builder = tabContentBuilders.get(id);
+    pane.append(builder !== undefined ? builder(ctx) : el('p', 'muted', 'Нет содержимого.'));
+    return pane;
+  };
+
+  function activateTab(id: EditorTabId): void {
+    activeTab = id;
+    for (const [tabId, tab] of buttons) {
+      tab.classList.toggle('active', tabId === id);
+    }
+    let pane = built.get(id);
+    if (pane === undefined) {
+      pane = buildPane(id);
+      built.set(id, pane);
+    }
+    paneHost.replaceChildren(pane);
+  }
+
+  scrollBox.append(tabBar, paneHost);
+  activateTab(activeTab);
 }
 
 // ---------------------------------------------------------------------------
@@ -535,4 +643,3 @@ function openLinkSettings(link: Link): void {
     onApply: (patch) => saveLink(link, patch),
   });
 }
-

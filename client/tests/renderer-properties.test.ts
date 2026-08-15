@@ -143,7 +143,8 @@ describe('editor properties group body (DOM-shimmed)', () => {
     assert.ok(table !== undefined, 'table replaced the loading placeholder');
     assert.match(table.className, /table-list/);
 
-    const tbody = table.children[1];
+    // Headerless table (L7, 08-ui-spec.md §6.3.1): the tbody is the first child.
+    const tbody = table.children[0];
     assert.ok(tbody !== undefined, 'tbody present');
     assert.equal(tbody.children.length, 2, 'one row per property definition');
     // The text property with options carries the picker caret button.

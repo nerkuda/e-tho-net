@@ -22,16 +22,16 @@ import { onRealtimeEvent } from '../realtime.js';
 import { button, div, el, errText, positionBodyDropdown, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { requireNetworkId } from '../app.js';
-import { registerGroupBuilder, type EditorContext } from './editor.js';
+import { registerMainSection, type EditorContext } from './editor.js';
 import { pickThoughtRef, wireThoughtRefSearch } from './thought-picker.js';
 
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
 let wired = false;
 
-/** Registers the properties group (thoughts only). */
+/** Registers the properties section of the «Основное» tab (thoughts only). */
 export function registerPropertiesGroup(): void {
-  registerGroupBuilder((ctx) => {
+  registerMainSection((ctx) => {
     if (ctx.ownerType !== 'thought') return null;
     return {
       id: 'properties',
@@ -77,10 +77,9 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   // Guarded above; the fallback is unreachable but keeps closure typing honest.
   const typedId: string = typeId;
 
-  const tableWrap = div('admin-table-wrap');
-  tableWrap.style.maxHeight = '320px';
-  // The group machinery builds the body before mounting it into the editor —
-  // start with a placeholder so the first (pre-mount) load never shows a gap.
+  const tableWrap = div('admin-table-wrap prop-wrap');
+  // No column headers and at most five visible rows — vertical scroll beyond
+  // that (08-ui-spec.md §6.3.1).
   tableWrap.append(el('span', 'muted', 'Загрузка…'));
   box.append(tableWrap);
 
@@ -123,11 +122,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
 
     const valueByProp = new Map(values.map((v) => [v.property_id, v]));
     const table = el('table', 'table-list prop-table');
-    const head = el('thead');
-    const headRow = el('tr');
-    headRow.append(el('th', undefined, 'Свойство'), el('th', undefined, 'Значение'));
-    head.append(headRow);
-    table.append(head);
+    // Headerless table (08-ui-spec.md §6.3.1): rows only.
     const tbody = el('tbody');
     for (const definition of definitions) {
       const value = valueByProp.get(definition.id);
