@@ -14,7 +14,7 @@
 
 import type { IconKind, LinkStyle } from '@etn/shared';
 
-import { div, el, span } from './dom.js';
+import { applyFontFlags, div, el, span } from './dom.js';
 
 /** One selectable row of the combobox. */
 export interface TypeOption {
@@ -88,14 +88,16 @@ export function createTypeCombobox(opts: {
   function applyStyle(target: HTMLElement, opt: TypeOption | null): void {
     target.style.color = '';
     target.style.background = '';
-    target.classList.remove('font-bold', 'font-italic', 'font-underline', 'font-strike');
-    if (opt?.style == null) return;
-    if (opt.style.fg !== null) target.style.color = opt.style.fg;
-    if (opt.style.bg !== null) target.style.background = opt.style.bg;
-    target.classList.toggle('font-bold', opt.style.bold);
-    target.classList.toggle('font-italic', opt.style.italic);
-    target.classList.toggle('font-underline', opt.style.underline);
-    target.classList.toggle('font-strike', opt.style.strike);
+    const s = opt?.style;
+    applyFontFlags(target, {
+      bold: s?.bold ?? false,
+      italic: s?.italic ?? false,
+      underline: s?.underline ?? false,
+      strike: s?.strike ?? false,
+    });
+    if (s == null) return;
+    if (s.fg !== null) target.style.color = s.fg;
+    if (s.bg !== null) target.style.background = s.bg;
   }
 
   /** A small line swatch element for link-type options. */

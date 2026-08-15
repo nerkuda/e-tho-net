@@ -32,7 +32,7 @@ import type {
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { applyThoughtIcon } from '../canvas/canvas.js';
 import { confirmDialog, errorDialog, showDialog, type DialogButton } from '../lib/dialog.js';
-import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
@@ -68,10 +68,12 @@ function applyTypeStyle(
 ): void {
   if (t.fg_color !== null) target.style.color = t.fg_color;
   if (t.bg_color !== null) target.style.background = t.bg_color;
-  target.classList.toggle('font-bold', t.font_bold);
-  target.classList.toggle('font-italic', t.font_italic);
-  target.classList.toggle('font-underline', t.font_underline);
-  target.classList.toggle('font-strike', t.font_strike);
+  applyFontFlags(target, {
+    bold: t.font_bold,
+    italic: t.font_italic,
+    underline: t.font_underline,
+    strike: t.font_strike,
+  });
 }
 
 // ---------------------------------------------------------------------------

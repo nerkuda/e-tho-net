@@ -89,6 +89,33 @@ export function isHttpUrl(text: string): boolean {
   return /^https?:\/\//i.test(text.trim());
 }
 
+/** The four font-style flags of a thought/thought-type (02-data-model.md §3.1.1). */
+export interface FontFlags {
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+}
+
+/**
+ * Applies font flags to a flat (non-canvas) element via inline styles. The
+ * `font-bold`/… utility classes only exist scoped to `.cloud … .cloud-title`
+ * (styles.css), so type lists and combobox rows must style themselves inline —
+ * exactly like their colours do.
+ */
+export function applyFontFlags(target: HTMLElement, flags: FontFlags): void {
+  target.style.fontWeight = flags.bold ? 'bold' : '';
+  target.style.fontStyle = flags.italic ? 'italic' : '';
+  target.style.textDecorationLine =
+    flags.underline && flags.strike
+      ? 'underline line-through'
+      : flags.underline
+        ? 'underline'
+        : flags.strike
+          ? 'line-through'
+          : '';
+}
+
 /**
  * Placeholder for a value: replaces missing inputs with a default and avoids
  * `null`/`undefined` in typed code paths.
