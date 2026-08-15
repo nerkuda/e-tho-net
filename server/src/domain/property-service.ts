@@ -557,12 +557,21 @@ function validateAndCoerce(
           ref: value,
         });
       }
-      const allowed = def.config?.allowed_type_id;
-      if (allowed && target.type_id !== allowed) {
+      // Type filter: the list form supersedes the legacy single allowed_type_id.
+      // Only writes are checked — already stored values are never reprocessed
+      // when the filter changes (02-data-model.md §3.4).
+      const allowedIds = (
+        def.config?.allowed_type_ids ??
+        (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
+      ).filter((id) => id !== '');
+      if (
+        allowedIds.length > 0 &&
+        (target.type_id === null || !allowedIds.includes(target.type_id))
+      ) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `thought ${value} is not of the required type ${allowed}`,
-          { key: def.key, ref: value, allowed_type_id: allowed, actual_type_id: target.type_id },
+          `thought ${value} is not of a required type`,
+          { key: def.key, ref: value, allowed_type_ids: allowedIds, actual_type_id: target.type_id },
         );
       }
       return { column, raw: value };

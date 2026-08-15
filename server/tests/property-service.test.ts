@@ -154,6 +154,54 @@ describe(
       }
     });
 
+    it('thought_ref enforces the allowed_type_ids list from config', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const author = createThoughtType(ndb, { name: 'AuthorL' }, USER);
+        const editor = createThoughtType(ndb, { name: 'EditorL' }, USER);
+        const book = createThoughtType(ndb, { name: 'BookL' }, USER);
+        createTypeProperty(ndb, 'thought_type', book.id, {
+          key: 'author',
+          value_type: 'thought_ref',
+          config: { allowed_type_ids: [author.id, editor.id] },
+        });
+        const goodAuthor = seedTypedThought(ndb, author.id);
+        const goodEditor = seedTypedThought(ndb, editor.id);
+        const wrongType = seedTypedThought(ndb, book.id);
+        const bookThought = seedTypedThought(ndb, book.id);
+
+        // Both listed types pass.
+        setPropertyValue(ndb, 'thought', bookThought, 'author', goodAuthor);
+        setPropertyValue(ndb, 'thought', bookThought, 'author', goodEditor);
+        // A type outside the list is rejected.
+        assert.throws(
+          () => setPropertyValue(ndb, 'thought', bookThought, 'author', wrongType),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('thought_ref with an empty filter list accepts any type', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const ta = createThoughtType(ndb, { name: 'AnyA' }, USER);
+        const tb = createThoughtType(ndb, { name: 'AnyB' }, USER);
+        createTypeProperty(ndb, 'thought_type', ta.id, {
+          key: 'ref',
+          value_type: 'thought_ref',
+          config: { allowed_type_ids: [] },
+        });
+        const owner = seedTypedThought(ndb, ta.id);
+        const other = seedTypedThought(ndb, tb.id);
+        setPropertyValue(ndb, 'thought', owner, 'ref', other);
+        assert.equal(getPropertyValues(ndb, 'thought', owner)[0]!.value, other);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('upserts on repeated set and deletes', () => {
       const ndb = createInMemoryNetworkDb();
       try {

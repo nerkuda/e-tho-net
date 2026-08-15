@@ -670,8 +670,11 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         // Synonyms: repeatable ?synonyms=a&synonyms=b or a comma-separated value.
         const synonyms = queryStrings(query.synonyms).flatMap((value) => value.split(','));
+        // Optional thought-type filter (thought_ref property pickers): repeatable
+        // ?type_ids=… or a comma-separated value.
+        const typeIds = queryStrings(query.type_ids).flatMap((value) => value.split(','));
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
-        const hits = findDuplicates(ndb, title, synonyms);
+        const hits = findDuplicates(ndb, title, synonyms, typeIds);
         sendList(reply, hits, hits.length, 0, hits.length);
       },
     );

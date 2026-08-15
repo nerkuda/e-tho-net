@@ -608,14 +608,26 @@ function norm(value: string): string {
  *
  * @param title - proposed thought title.
  * @param synonyms - optional proposed synonyms.
+ * @param typeIds - optional thought-type filter (property `thought_ref`
+ *   pickers): only thoughts of these types are returned.
  */
 export function findDuplicates(
   ndb: NetworkDb,
   title: string,
   synonyms: string[] = [],
+  typeIds: string[] = [],
 ): DuplicateHit[] {
   const titleTerms = [title.trim(), ...synonyms.map((s) => s.trim())].filter((t) => t !== '');
   if (titleTerms.length === 0) return [];
+
+  // Type filter (thought_ref pickers): parameterised IN-list applied to every
+  // query below. The direct thoughts queries use `type_id`, the synonym join
+  // aliases the table as `t`.
+  const types = [...new Set(typeIds.filter((t) => t !== ''))];
+  const typeDirect =
+    types.length > 0 ? ` AND type_id IN (${types.map(() => '?').join(',')})` : '';
+  const typeJoin = types.length > 0 ? ` AND t.type_id IN (${types.map(() => '?').join(',')})` : '';
+  const typeArgs = types;
 
   const byId = new Map<string, DuplicateHit>();
 
@@ -640,8 +652,8 @@ export function findDuplicates(
     const n = norm(term);
     // Exact title_norm match (strongest).
     const titleRows = ndb
-      .prepare('SELECT id, title FROM thoughts WHERE title_norm = ?')
-      .all(n) as Array<{ id: string; title: string }>;
+      .prepare(`SELECT id, title FROM thoughts WHERE title_norm = ?${typeDirect}`)
+      .all(n, ...typeArgs) as Array<{ id: string; title: string }>;
     for (const r of titleRows) {
       ensure(r).matched_on = 'title';
     }
@@ -650,9 +662,9 @@ export function findDuplicates(
       .prepare(
         `SELECT ts.thought_id AS id, t.title AS title, ts.synonym AS synonym
          FROM thought_synonyms ts JOIN thoughts t ON t.id = ts.thought_id
-         WHERE ts.synonym_norm = ?`,
+         WHERE ts.synonym_norm = ?${typeJoin}`,
       )
-      .all(n) as Array<{ id: string; title: string; synonym: string }>;
+      .all(n, ...typeArgs) as Array<{ id: string; title: string; synonym: string }>;
     for (const r of synRows) {
       const hit = ensure(r);
       if (hit.matched_on !== 'title') {
@@ -662,8 +674,8 @@ export function findDuplicates(
     }
     // Partial (LIKE) — lowest priority; ensure() defaults to 'partial'.
     const partialRows = ndb
-      .prepare('SELECT id, title FROM thoughts WHERE title_norm LIKE ?')
-      .all(`%${n}%`) as Array<{ id: string; title: string }>;
+      .prepare(`SELECT id, title FROM thoughts WHERE title_norm LIKE ?${typeDirect}`)
+      .all(`%${n}%`, ...typeArgs) as Array<{ id: string; title: string }>;
     for (const r of partialRows) {
       ensure(r);
     }

@@ -267,6 +267,34 @@ describe(
       }
     });
 
+    it('findDuplicates filters candidates by thought types (thought_ref pickers)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // thought_types rows must exist before they can be referenced (FK).
+        for (const [id, name] of [
+          ['type-a', 'A'],
+          ['type-b', 'B'],
+        ] as const) {
+          ndb
+            .prepare(
+              `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
+               VALUES (?, ?, 1, '2024', '2024', 'u')`,
+            )
+            .run(id, name);
+        }
+        const a = seedThought(ndb, 'Cats', { type_id: 'type-a' });
+        seedThought(ndb, 'Cats again', { type_id: 'type-b' });
+        const filtered = findDuplicates(ndb, 'cats', [], ['type-a']);
+        assert.deepEqual(filtered.map((h) => h.id), [a]);
+        // Without the filter both candidates are returned.
+        assert.equal(findDuplicates(ndb, 'cats').length, 2);
+        // An unknown type id filters everything out.
+        assert.equal(findDuplicates(ndb, 'cats', [], ['type-zzz']).length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('findMentions finds the title in other comments', () => {
       const ndb = createInMemoryNetworkDb();
       try {

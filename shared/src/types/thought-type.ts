@@ -80,8 +80,19 @@ export interface PropertyDefinition {
 
 /** Recognised keys inside a {@link PropertyDefinition.config} JSON blob. */
 export interface PropertyConfig {
-  /** For `value_type = 'thought_ref'`: restrict the referenced thought type. */
+  /** For `value_type = 'thought_ref'`: restrict the referenced thought type
+   *  (legacy single form; superseded by `allowed_type_ids`). */
   allowed_type_id?: string;
+  /** For `value_type = 'thought_ref'`: restrict picking to thoughts of these
+   *  type ids (absent/empty = any type). Stored values are never reprocessed
+   *  when the filter changes. */
+  allowed_type_ids?: string[];
+  /** For `value_type = 'text'`: predefined values to pick from — an input aid,
+   *  not a restriction: arbitrary typed values stay allowed. */
+  options?: string[];
+  /** For `value_type = 'text'` with `options`: allow several comma-separated
+   *  values to be picked. */
+  multiple?: boolean;
   /** Arbitrary extra configuration keys. */
   [key: string]: unknown;
 }
