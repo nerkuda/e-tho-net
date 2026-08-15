@@ -382,6 +382,15 @@ export interface EtnApi {
     /** Deletes a draft (H19 — on successful send). */
     draftDelete(id: string): Promise<void>;
   };
+  meta: {
+    /**
+     * Reads an L5 `client_meta` key — installation-scoped state such as the
+     * UI theme (`CLIENT_META_KEY.THEME`, L10). Works without a connection.
+     */
+    get(key: string): Promise<string | null>;
+    /** Upserts an L5 `client_meta` key. */
+    set(key: string, value: string): Promise<void>;
+  };
   history: {
     list(profileId: string, networkId: string, limit?: number): Promise<FocusHistoryEntry[]>;
     push(profileId: string, networkId: string, thoughtId: string): Promise<void>;

@@ -171,6 +171,10 @@ function buildApi(): EtnApi {
       draftList: (networkId) => invoke('ui.draftList', networkId),
       draftDelete: (id) => invoke('ui.draftDelete', id),
     },
+    meta: {
+      get: (key) => invoke('meta.get', key),
+      set: (key, value) => invoke('meta.set', key, value),
+    },
     history: {
       list: (profileId, networkId, limit) => invoke('history.list', profileId, networkId, limit),
       push: (profileId, networkId, thoughtId) =>

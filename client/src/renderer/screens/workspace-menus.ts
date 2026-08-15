@@ -17,6 +17,7 @@ import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import { toggleEditorVisibility } from '../editor/editor.js';
+import { toggleTheme } from '../lib/theme.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { showCreateNetworkDialog } from './networks.js';
 import { showCloudSizeSettings, showVisibilitySettings } from './settings.js';
@@ -312,6 +313,11 @@ export function buildViewMenuItems(): MenuItem[] {
     {
       label: hidden ? 'Показать редактор' : 'Скрыть редактор',
       onClick: () => void toggleEditorVisibility(),
+    },
+    {
+      label: 'Тёмная тема',
+      checked: store.state.theme === 'dark',
+      onClick: () => toggleTheme(),
     },
     MENU_SEPARATOR,
     { label: 'Типы мыслей', onClick: () => showThoughtTypesDialog() },

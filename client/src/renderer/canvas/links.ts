@@ -37,8 +37,13 @@ export type LinkEditorOpener = (link: import('@etn/shared').Link) => void;
 const BASE_WIDTH = 1.5;
 /** Extra width per additional link between the same directed pair. */
 const EXTRA_WIDTH_PER_LINK = 1.2;
-/** Default colour for untyped links. */
-const DEFAULT_COLOR = '#9aa3b2';
+/**
+ * Default colour for untyped links. Themed token (`--link-default` in
+ * styles.css, L10); SVG presentation attributes resolve CSS variables in
+ * Chromium, and lines are redrawn on the store update the theme toggle
+ * performs.
+ */
+const DEFAULT_COLOR = 'var(--link-default, #9aa3b2)';
 /** Base font size of link labels, px; scaled by the canvas zoom via the
  *  `--link-label-font` CSS variable (L9). */
 export const LINK_LABEL_FONT_BASE = 11;

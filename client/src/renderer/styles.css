@@ -1,10 +1,12 @@
 /*
- * ETN client stylesheet (phase H, light theme).
+ * ETN client stylesheet (phase H; light + dark themes, L10).
  *
  * CSS variables in :root are the single source of truth for colors/sizes
- * (08-ui-spec.md §13); a future dark theme swaps the variable block only.
- * Cloud geometry defaults (--cloud-width/--cloud-gap/--cloud-font) are
- * overridden at runtime from L4 ui_state by the canvas module.
+ * (08-ui-spec.md §13); the dark theme swaps the variable block only via the
+ * [data-theme='dark'] selector on the document root. No hex colours outside
+ * these two blocks — components reference tokens. Cloud geometry defaults
+ * (--cloud-width/--cloud-gap/--cloud-font) are overridden at runtime from L4
+ * ui_state by the canvas module.
  */
 
 :root {
@@ -20,15 +22,36 @@
   --text-dim: #5c6675;
   --text-faint: #8a93a3;
   --accent: #2f6fed;
+  /* Hover tone for accent-filled controls (primary buttons, focus ellipse). */
+  --accent-strong: #245cc9;
   --accent-soft: #e4ecfd;
   --danger: #d64545;
   --danger-soft: #fdeaea;
   --ok: #2f9e44;
+  --ok-soft: #e6f4ea;
   --warn: #c98a06;
-  --shadow: 0 8px 28px rgba(24, 32, 48, 0.16);
-  --shadow-sm: 0 1px 4px rgba(24, 32, 48, 0.08);
-  --radius: 8px;
-  --radius-sm: 6px;
+  --warn-strong: #9a6b00;
+  --warn-soft: #fdf0dc;
+  --warn-glow: rgba(201, 138, 6, 0.35);
+  /* Search/mention highlight (<mark>). */
+  --mark-bg: #ffe08a;
+  /* Default (untyped) link line colour; also read by links.ts. */
+  --link-default: #9aa3b2;
+  /* Filled link-direction ellipse of a non-focus cloud. */
+  --ellipse-fill: #9dbcf2;
+  --ellipse-fill-border: #5b87d9;
+  --backdrop: rgba(24, 32, 48, 0.35);
+  /* Canvas dot-grid colour (L10). */
+  --canvas-dot: rgba(24, 32, 48, 0.14);
+  /* Shadow colours, composed into the shadow tokens below. */
+  --shadow-c: rgba(24, 32, 48, 0.16);
+  --shadow-sm-c: rgba(24, 32, 48, 0.08);
+  --shadow: 0 8px 28px var(--shadow-c);
+  --shadow-sm: 0 1px 4px var(--shadow-sm-c);
+  --shadow-hover: 0 2px 10px var(--shadow-c);
+  --shadow-focus: 0 4px 18px rgba(47, 111, 237, 0.18);
+  --radius: 10px;
+  --radius-sm: 8px;
 
   /* chrome */
   --toolbar-h: 46px;
@@ -50,6 +73,41 @@
     Arial,
     sans-serif;
   font-size: 13px;
+}
+
+/* Dark theme (L10, 08-ui-spec.md §13): swap tokens only. */
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0e1116;
+  --surface: #161b23;
+  --surface-2: #1f2630;
+  --border: #29303d;
+  --border-strong: #3a4353;
+  --text: #e6e9f0;
+  --text-dim: #9aa3b5;
+  --text-faint: #67707f;
+  --accent: #5b8cff;
+  --accent-strong: #7ba1ff;
+  --accent-soft: #22304d;
+  --danger: #e06a6a;
+  --danger-soft: #3a2226;
+  --ok: #4cb763;
+  --ok-soft: #17281c;
+  --warn: #d9a13c;
+  --warn-strong: #e8b45a;
+  --warn-soft: #322712;
+  --warn-glow: rgba(217, 161, 60, 0.35);
+  --mark-bg: rgba(250, 204, 21, 0.28);
+  --link-default: #6b7587;
+  --ellipse-fill: #2f4a7d;
+  --ellipse-fill-border: #4a6db3;
+  --backdrop: rgba(0, 0, 0, 0.5);
+  --canvas-dot: rgba(255, 255, 255, 0.07);
+  --shadow-c: rgba(0, 0, 0, 0.55);
+  --shadow-sm-c: rgba(0, 0, 0, 0.35);
+  --shadow-hover: 0 4px 16px var(--shadow-c);
+  --shadow-focus: 0 4px 24px rgba(91, 140, 255, 0.28);
 }
 
 * {
@@ -146,7 +204,7 @@ textarea {
 }
 
 .btn.primary:hover {
-  background: #245cc9;
+  background: var(--accent-strong);
 }
 
 .btn.danger {
@@ -341,8 +399,8 @@ textarea {
 }
 
 .role-badge.owner {
-  background: #fdf0dc;
-  color: #9a6b00;
+  background: var(--warn-soft);
+  color: var(--warn-strong);
 }
 
 /* ---------------------------------------------------------------------------
@@ -649,7 +707,12 @@ textarea {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg);
+  /* Dot-grid backdrop (L10, 08-ui-spec.md §13): a faint 24px point lattice
+     over the base colour gives the canvas a sense of space and a visual cue
+     for the zoom level. The zones themselves stay transparent. */
+  background:
+    radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
+    var(--bg);
 }
 
 .canvas-empty {
@@ -808,7 +871,7 @@ body.resizing-h {
    override `.filled`, which marks that a link direction exists at all). */
 .ellipse.link-end {
   border-color: var(--warn);
-  box-shadow: 0 0 0 2px rgba(201, 138, 6, 0.35);
+  box-shadow: 0 0 0 2px var(--warn-glow);
 }
 
 /* Popover for the hovered/selected link: type name + comment/attachment counts. */
@@ -855,7 +918,7 @@ body.resizing-h {
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   user-select: none;
-  transition: box-shadow 80ms ease;
+  transition: box-shadow 0.12s ease;
 }
 
 /* Fade-out ghosts of clouds removed by a focus change (08-ui-spec §2.8). */
@@ -867,7 +930,7 @@ body.resizing-h {
 }
 
 .cloud:hover {
-  box-shadow: 0 2px 10px rgba(24, 32, 48, 0.16);
+  box-shadow: var(--shadow-hover);
 }
 
 .cloud.selected {
@@ -893,8 +956,8 @@ body.resizing-h {
 }
 
 .cloud .ellipse.filled {
-  background: #9dbcf2;
-  border-color: #5b87d9;
+  background: var(--ellipse-fill);
+  border-color: var(--ellipse-fill-border);
 }
 
 .cloud .ellipse.drag-source {
@@ -1046,7 +1109,7 @@ body.dragging * {
   max-width: calc(100% - 28px);
   border-color: var(--accent);
   border-width: 2px;
-  box-shadow: 0 4px 18px rgba(47, 111, 237, 0.18);
+  box-shadow: var(--shadow-focus);
   cursor: default;
 }
 
@@ -1067,7 +1130,7 @@ body.dragging * {
 
 .cloud.focus-cloud .ellipse.filled {
   background: var(--accent);
-  border-color: #245cc9;
+  border-color: var(--accent-strong);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1375,7 +1438,8 @@ body.dragging * {
 }
 
 .mention-item mark {
-  background: #ffe08a;
+  background: var(--mark-bg);
+  color: var(--text);
   padding: 0 1px;
   border-radius: 2px;
 }
@@ -1682,12 +1746,12 @@ body.dragging * {
 }
 
 .icon-preview-error {
-  border-color: var(--danger, #c0392b);
+  border-color: var(--danger);
 }
 
 .icon-preview-bad {
   font-size: 28px;
-  color: var(--danger, #c0392b);
+  color: var(--danger);
 }
 
 .group {
@@ -2040,7 +2104,8 @@ body.dragging * {
 }
 
 .search-hit mark {
-  background: #ffe08a;
+  background: var(--mark-bg);
+  color: var(--text);
   padding: 0 1px;
   border-radius: 2px;
 }
@@ -2191,7 +2256,7 @@ body.dragging * {
   position: fixed;
   inset: 0;
   z-index: 900;
-  background: rgba(24, 32, 48, 0.35);
+  background: var(--backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2265,7 +2330,7 @@ body.dragging * {
 }
 
 .dialog-btn.primary:hover {
-  background: #245cc9;
+  background: var(--accent-strong);
 }
 
 .dialog-btn.danger {
@@ -2438,7 +2503,7 @@ body.dragging * {
 }
 
 .badge.ok {
-  background: #e6f4ea;
+  background: var(--ok-soft);
   color: var(--ok);
 }
 
@@ -2448,8 +2513,8 @@ body.dragging * {
 }
 
 .badge.warn {
-  background: #fdf0dc;
-  color: #9a6b00;
+  background: var(--warn-soft);
+  color: var(--warn-strong);
 }
 
 /* ---------------------------------------------------------------------------
@@ -2584,7 +2649,7 @@ body.dragging * {
 
 .type-combo-swatch {
   width: 22px;
-  border-top: 2px solid #9aa3b2;
+  border-top: 2px solid var(--link-default);
   flex: none;
 }
 
@@ -2613,7 +2678,7 @@ body.dragging * {
 .link-type-swatch {
   display: inline-block;
   width: 26px;
-  border-top: 2px solid #9aa3b2;
+  border-top: 2px solid var(--link-default);
   flex: none;
 }
 
@@ -2633,4 +2698,73 @@ body.dragging * {
 .icon-btn:disabled:hover,
 .editor-icon-box:disabled:hover {
   border-color: var(--border-strong);
+}
+
+/* ---------------------------------------------------------------------------
+ * Micro-interactions (L10, 08-ui-spec.md §13)
+ * ------------------------------------------------------------------------- */
+
+/* Gentle colour transitions for hover/active states of interactive elements.
+ * Transform is deliberately NOT transitioned: cloud transforms belong to the
+ * FLIP focus choreography (§2.8), and hover shifts would fight it. */
+.btn,
+.tb-btn,
+.menu-item,
+.dialog-btn,
+.dialog-close,
+.history-cloud,
+.history-more,
+.editor-tab,
+.admin-tab,
+.icon-tab,
+.emoji-cell,
+.link-group-item,
+.selection-item,
+.search-hit,
+.search-group-header,
+.group-header,
+.attachment-item,
+.mention-item,
+.type-combo-item,
+.icon-btn,
+.font-toggle,
+.editor-icon-box,
+.row-splitter,
+.profile-item,
+.network-item {
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .tb-btn,
+  .menu-item,
+  .dialog-btn,
+  .dialog-close,
+  .history-cloud,
+  .history-more,
+  .editor-tab,
+  .admin-tab,
+  .icon-tab,
+  .emoji-cell,
+  .link-group-item,
+  .selection-item,
+  .search-hit,
+  .search-group-header,
+  .group-header,
+  .attachment-item,
+  .mention-item,
+  .type-combo-item,
+  .icon-btn,
+  .font-toggle,
+  .editor-icon-box,
+  .row-splitter,
+  .profile-item,
+  .network-item {
+    transition: none;
+  }
 }

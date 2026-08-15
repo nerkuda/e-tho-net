@@ -38,6 +38,9 @@ export type EditorTarget =
 /** Realtime connection status as reported by the main process. */
 export type RtStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
 
+/** UI theme (L5 `client_meta.theme`, L10). */
+export type Theme = 'light' | 'dark';
+
 /** Shared renderer state snapshot. */
 export interface AppState {
   screen: Screen;
@@ -83,6 +86,8 @@ export interface AppState {
   thoughtTypes: ThoughtType[];
   /** Realtime status (🟢/🟡/🔴 indicator, H19 offline blocking). */
   rtStatus: RtStatus;
+  /** UI theme applied to the document root (L5 `client_meta.theme`, L10). */
+  theme: Theme;
   /** Last realtime event description for the status bar (auto-hides). */
   lastEvent: string | null;
   /** Editor target; `null` means "follow the focused thought". */
@@ -119,6 +124,7 @@ const initial: AppState = {
   linkTypes: [],
   thoughtTypes: [],
   rtStatus: 'idle',
+  theme: 'light',
   lastEvent: null,
   editorTarget: null,
   zoneSorts: { parents: 'created', children: 'created' },

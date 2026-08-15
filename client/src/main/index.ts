@@ -14,6 +14,7 @@ import { app, BrowserWindow, protocol, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { CLIENT_META_KEY } from '@etn/shared';
 import { LocalDb } from './db/local-db.js';
 import { defaultMigrationsDir, localDbPath } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
@@ -48,23 +49,34 @@ const DEFAULT_HEIGHT = 800;
  */
 let localDb: LocalDb | null = null;
 
+/** Window background per theme; matches the `--bg` tokens in styles.css (L10). */
+const THEME_BG: Record<'light' | 'dark', string> = {
+  light: '#eef0f4',
+  dark: '#0e1116',
+};
+
+/** Reads the stored L5 theme, defaulting to light. */
+function storedTheme(db: LocalDb): 'light' | 'dark' {
+  return db.getMeta(CLIENT_META_KEY.THEME) === 'dark' ? 'dark' : 'light';
+}
+
 /**
  * Creates and configures the main application window.
  *
  * Security posture: `contextIsolation` on, `nodeIntegration` off, `sandbox` off —
  * the renderer has no direct Node access and reaches the main process only
- * through the preload `contextBridge` (see `src/preload/index.ts`). `sandbox` is
- * disabled because Electron's sandboxed loader cannot import the ESM preload
+ * through the preload `contextBridge` (see `src/preload/index.ts`). `sandbox`
+ * is disabled because Electron's sandboxed loader cannot import the ESM preload
  * bundle; see the inline comment at the `sandbox` field below.
  */
-function createWindow(): BrowserWindow {
+function createWindow(theme: 'light' | 'dark'): BrowserWindow {
   const win = new BrowserWindow({
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
     title: 'ETN',
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#f5f6f8',
+    backgroundColor: THEME_BG[theme],
     webPreferences: {
       // electron-vite emits the preload bundle as `.mjs` (package "type":"module")
       // into `out/preload/`. Resolve it relative to `out/main/` at runtime so
@@ -177,13 +189,17 @@ app
       getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
     });
 
-    createWindow();
+    // Window background follows the stored theme so the very first paint
+    // already matches (the renderer applies data-theme on boot, L10).
+    const theme = storedTheme(localDb);
+
+    createWindow(theme);
 
     // Auto-update (K4): quiet check in packaged builds; inert in dev.
     void initAutoUpdater(!isDev, () => BrowserWindow.getAllWindows()[0] ?? null);
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      if (BrowserWindow.getAllWindows().length === 0) createWindow(theme);
     });
   })
   .catch((err: unknown) => {

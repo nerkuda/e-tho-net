@@ -210,6 +210,14 @@ function roundZoom(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+/** UI themes (L10, `client_meta.theme`). */
+export type ThemeName = 'light' | 'dark';
+
+/** Parses an L5 `theme` value; anything but `'dark'` falls back to light. */
+export function parseTheme(raw: string | null): ThemeName {
+  return raw === 'dark' ? 'dark' : 'light';
+}
+
 /** Parses an L4 `canvas_zoom` value, clipped to the zoom constants. */
 export function parseCanvasZoom(raw: string | null): number {
   const num = raw === null ? Number.NaN : Number(raw);

@@ -624,6 +624,18 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((id: string) => requireRest(deps).deleteMyKey(id)),
   );
 
+  // --- meta (L5 client_meta: installation-scoped state, e.g. the UI theme) ---
+  handlers.set(
+    'meta.get',
+    bind((key: string) => deps.localDb.getMeta(key)),
+  );
+  handlers.set(
+    'meta.set',
+    bind((key: string, value: string) => {
+      deps.localDb.setMeta(key, value);
+    }),
+  );
+
   // --- ui / history / system ---------------------------------------------------
   handlers.set(
     'ui.getState',

@@ -29,6 +29,7 @@ import {
 } from './lib/pure.js';
 import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js';
 import { applyRealtimeToUi } from './realtime-ui.js';
+import { initTheme } from './lib/theme.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { showScreen } from './screens/screens.js';
@@ -293,6 +294,9 @@ async function pickFocusAfterDeletion(
  * profile) or to the network list (active profile connects successfully).
  */
 export async function boot(): Promise<void> {
+  // Theme first (L10): the attribute must be on the root before any screen
+  // mounts, otherwise the first paint flashes in the light theme.
+  await initTheme();
   initRealtime();
   setRealtimeEffects({
     onStale: () => scheduleRefresh(),
