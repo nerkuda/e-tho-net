@@ -3,10 +3,13 @@
  *
  * Thought-only. When the thought has a type with property definitions, a table
  * of value editors is rendered per `value_type`:
- *  - text/number/date → inputs, saved on blur (empty → remove);
+ *  - text/number/date → inputs, saved on blur (empty → remove); a text value
+ *    with predefined options also gets a suggestion dropdown that filters as
+ *    the user types (an input aid, never a restriction);
  *  - bool → checkbox;
- *  - thought_ref → picker over the duplicate-search dialog, stores the
- *    referenced thought id (titles resolved via `thoughts.resolve`).
+ *  - thought_ref → editable field doubling as a live candidate search (plus
+ *    the duplicate-search dialog picker); stores the referenced thought id,
+ *    titles resolved via `thoughts.resolve`.
  *
  * Values are written with `properties.set`, cleared with `properties.remove`;
  * realtime `property-value.*` events reload the table when the open entity is
@@ -16,11 +19,11 @@
 import type { PropertyDefinition, PropertyValue } from '@etn/shared';
 
 import { onRealtimeEvent } from '../realtime.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { button, div, el, errText, positionBodyDropdown, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { requireNetworkId } from '../app.js';
 import { registerGroupBuilder, type EditorContext } from './editor.js';
-import { pickThoughtRef } from './thought-picker.js';
+import { pickThoughtRef, wireThoughtRefSearch } from './thought-picker.js';
 
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
@@ -193,6 +196,9 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
             ? (definition.config?.options ?? []).filter((o) => o !== '')
             : [];
         if (options.length > 0) {
+          const revertValue = (): void => {
+            input.value = baseline ?? '';
+          };
           const row = div('form-row');
           row.style.marginBottom = '0';
           row.append(
@@ -202,6 +208,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
               options,
               definition.config?.multiple === true,
               commitValue,
+              revertValue,
             ),
           );
           cell.append(row);
@@ -244,9 +251,10 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
       case 'thought_ref': {
         const input = el('input', 'text-input prop-editor');
         input.type = 'text';
-        input.value = typeof stored === 'string' ? (refTitles.get(stored) ?? stored) : '';
-        input.readOnly = true;
-        input.placeholder = 'выбрать мысль…';
+        input.autocomplete = 'off';
+        const storedId = typeof stored === 'string' ? stored : null;
+        input.value = storedId !== null ? (refTitles.get(storedId) ?? storedId) : '';
+        input.placeholder = 'введите название для поиска…';
         // Type filter from the definition config (list form supersedes the
         // legacy single id); an input aid — stored values are untouched.
         const filterIds = (
@@ -255,6 +263,19 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
             ? [definition.config.allowed_type_id]
             : [])
         ).filter((id) => id !== '');
+        // The field doubles as a live search: typing lists candidates (with
+        // the type filter applied); only a picked candidate writes the value.
+        // The modal picker stays as an alternative way to choose.
+        wireThoughtRefSearch(input, {
+          networkId,
+          typeIds: filterIds,
+          // No realtime echo to the actor (04-realtime.md §5) — reload the
+          // table after a successful save so the resolved title and the clear
+          // button appear at once.
+          onPick: async (id) => {
+            if (await save(id)) void reload();
+          },
+        });
         const row = div('form-row');
         row.style.marginBottom = '0';
         row.append(
@@ -263,9 +284,6 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
             'выбрать',
             () => {
               void pickThoughtRef(networkId, filterIds).then(async (id) => {
-                // No realtime echo to the actor (04-realtime.md §5) — reload
-                // the table after a successful save so the resolved title and
-                // the clear button appear at once.
                 if (id !== null && (await save(id))) void reload();
               });
             },
@@ -332,29 +350,52 @@ export function splitMultiValue(value: string): string[] {
 }
 
 /**
- * Builds the ▾ button that opens a dropdown of a text property's predefined
- * options under `input` (body-mounted, fixed — the same approach and classes
- * as the type combobox).
+ * The fragment the user is currently typing: the whole input in single mode,
+ * the part after the last comma in multiple mode. Lowercased for matching.
+ */
+export function autocompleteFragment(text: string, multiple: boolean): string {
+  const fragment = multiple ? text.slice(Math.max(text.lastIndexOf(',') + 1, 0)) : text;
+  return fragment.trim().toLowerCase();
+}
+
+/**
+ * Options containing the typed fragment (case-insensitive); an empty fragment
+ * shows the full catalogue.
+ */
+export function filterOptionsByFragment(options: string[], fragment: string): string[] {
+  if (fragment === '') return options;
+  return options.filter((option) => option.toLowerCase().includes(fragment));
+}
+
+/**
+ * Wires the predefined-options dropdown of a text property to its input and
+ * builds the ▾ button (body-mounted, fixed — the same approach and classes as
+ * the type combobox).
  *
- * Single mode: clicking a row fills the input with the option. Multiple mode:
- * rows are checkboxes; the input holds the comma-joined selection (options
- * order) and remains hand-editable. The result is committed once, when the
- * dropdown closes; keyboard-only edits commit on the input's blur as usual.
+ * The list opens both on the caret and on typing: rows narrow to options
+ * containing the typed fragment — an input aid, never a restriction. Single
+ * mode: clicking a row fills the input with the option. Multiple mode: rows
+ * are checkboxes; the input holds the comma-joined selection (options order)
+ * and stays hand-editable. The result is committed once, when the dropdown
+ * closes; Escape reverts to the last committed value instead. Keyboard-only
+ * edits (list never opened) commit on the input's blur as usual.
  */
 function buildValueOptionsCaret(
   input: HTMLInputElement,
   options: string[],
   multiple: boolean,
   commit: (value: string) => void,
+  revert: () => void,
 ): HTMLElement {
   let list: HTMLDivElement | null = null;
 
-  const close = (): void => {
+  const close = (mode: 'commit' | 'revert'): void => {
     if (list === null) return;
     list.remove();
     list = null;
     window.removeEventListener('mousedown', onOutside, true);
-    commit(input.value);
+    if (mode === 'revert') revert();
+    else commit(input.value);
   };
 
   const onOutside = (event: MouseEvent): void => {
@@ -364,18 +405,17 @@ function buildValueOptionsCaret(
       !list.contains(event.target) &&
       event.target !== input
     ) {
-      close();
+      close('commit');
     }
   };
 
-  const openList = (): void => {
-    if (list !== null) {
-      close();
-      return;
-    }
-    list = div('type-combo-list');
+  function renderRows(): void {
+    if (list === null) return;
+    const fragment = autocompleteFragment(input.value, multiple);
+    const visible = filterOptionsByFragment(options, fragment);
     const selected = new Set(multiple ? splitMultiValue(input.value) : []);
-    for (const option of options) {
+    list.replaceChildren();
+    for (const option of visible) {
       const row = div('type-combo-item');
       if (multiple) {
         const check = el('input');
@@ -390,7 +430,7 @@ function buildValueOptionsCaret(
       row.addEventListener('click', () => {
         if (!multiple) {
           input.value = option;
-          close();
+          close('commit');
           return;
         }
         if (selected.has(option)) selected.delete(option);
@@ -401,30 +441,44 @@ function buildValueOptionsCaret(
       });
       list.append(row);
     }
+    if (visible.length === 0) {
+      list.append(el('p', 'muted type-combo-empty', 'Совпадений нет.'));
+    }
     if (multiple) {
-      const done = button('Готово', () => close(), 'btn small');
+      const done = button('Готово', () => close('commit'), 'btn small');
       done.style.margin = '4px';
       list.append(done);
     }
-    document.body.append(list);
-    // Place under the input, flipping up when the screen edge interferes.
-    const rect = input.getBoundingClientRect();
-    const listRect = list.getBoundingClientRect();
-    const width = Math.max(rect.width, Math.min(listRect.width, 320));
-    const left = Math.max(6, Math.min(rect.left, window.innerWidth - width - 6));
-    let top = rect.bottom + 2;
-    if (top + listRect.height > window.innerHeight - 6 && rect.top > listRect.height + 6) {
-      top = Math.max(6, rect.top - listRect.height - 2);
+  }
+
+  const openList = (): void => {
+    if (list !== null) {
+      renderRows();
+      return;
     }
-    list.style.left = `${Math.round(left)}px`;
-    list.style.top = `${Math.round(top)}px`;
-    list.style.width = `${Math.round(width)}px`;
+    list = div('type-combo-list');
+    renderRows();
+    document.body.append(list);
+    positionBodyDropdown(list, input);
     window.addEventListener('mousedown', onOutside, true);
   };
 
+  // Typing (re)opens the list with rows narrowed to the typed fragment; the
+  // caret shows the full catalogue (an empty fragment matches everything).
+  input.addEventListener('input', openList);
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && list !== null) {
+      event.stopPropagation();
+      close('revert');
+    }
+  });
+
   return button(
     '▾',
-    openList,
+    () => {
+      if (list !== null) close('commit');
+      else openList();
+    },
     'btn small',
     multiple ? 'Выбрать несколько значений' : 'Выбрать значение из списка',
   );

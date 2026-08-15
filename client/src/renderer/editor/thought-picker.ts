@@ -13,7 +13,7 @@
  */
 
 import { showDialog } from '../lib/dialog.js';
-import { button, div, el, span } from '../lib/dom.js';
+import { button, div, el, positionBodyDropdown, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
 
@@ -110,5 +110,120 @@ export function pickThoughtRef(networkId: string, typeIds?: string[]): Promise<s
       onMount: () => input.focus(),
     });
     search();
+  });
+}
+
+/**
+ * Wires an inline candidate search to a `thought_ref` value input: typing runs
+ * the same live duplicate search as the dialog picker (honouring the type
+ * filter) and shows the candidates in a body-mounted dropdown; clicking one
+ * calls `onPick` with the thought id.
+ *
+ * The typed text itself is never a value — on blur the field falls back to the
+ * title it showed when the search started, so only an explicitly picked
+ * candidate (here or via the dialog picker) changes the stored value.
+ */
+export function wireThoughtRefSearch(
+  input: HTMLInputElement,
+  opts: {
+    networkId: string;
+    /** Thought-type filter of the property definition (input aid). */
+    typeIds?: string[];
+    onPick: (id: string) => void | Promise<void>;
+  },
+): void {
+  const filter = (opts.typeIds ?? []).filter((id) => id !== '');
+  const original = input.value;
+  let list: HTMLDivElement | null = null;
+  let timer: number | null = null;
+  let seq = 0;
+
+  const close = (): void => {
+    if (list === null) return;
+    list.remove();
+    list = null;
+    window.removeEventListener('mousedown', onOutside, true);
+  };
+
+  const onOutside = (event: MouseEvent): void => {
+    if (
+      list !== null &&
+      event.target instanceof Node &&
+      !list.contains(event.target) &&
+      event.target !== input
+    ) {
+      close();
+    }
+  };
+
+  /** Optional dropdown header naming the active type filter. */
+  const filterHint = (): HTMLElement | null => {
+    if (filter.length === 0) return null;
+    const names = filter
+      .map((id) => store.state.thoughtTypes.find((t) => t.id === id)?.name)
+      .filter((name): name is string => name !== undefined);
+    if (names.length === 0) return null;
+    return el('p', 'muted type-combo-empty', `Отбор по типам: ${names.join(', ')}`);
+  };
+
+  function renderHits(hits: Array<{ id: string; title: string; matched_on: string }>): void {
+    if (list === null) return;
+    list.replaceChildren();
+    const hint = filterHint();
+    if (hint !== null) list.append(hint);
+    for (const hit of hits) {
+      const row = div('type-combo-item');
+      const title = el('span', 'type-combo-label', hit.title);
+      title.title = hit.title;
+      title.style.flex = '1';
+      row.append(title, span(KIND_LABELS[hit.matched_on] ?? hit.matched_on, 'dup-kind'));
+      // Keep the focus in the input — no blur-restore while picking.
+      row.addEventListener('mousedown', (event) => event.preventDefault());
+      row.addEventListener('click', () => {
+        input.value = hit.title;
+        close();
+        void opts.onPick(hit.id);
+      });
+      list.append(row);
+    }
+    if (hits.length === 0) list.append(el('p', 'muted', 'Совпадений нет.'));
+    positionBodyDropdown(list, input);
+  }
+
+  async function search(): Promise<void> {
+    const query = input.value.trim();
+    if (query === '' || !input.isConnected) {
+      close();
+      return;
+    }
+    const run = ++seq;
+    try {
+      const hits = await etn.thoughts.findDuplicates(opts.networkId, query, [], filter);
+      // A newer keystroke (or an editor re-render) may have won the race.
+      if (run !== seq || !input.isConnected) return;
+      if (list === null) {
+        list = div('type-combo-list');
+        document.body.append(list);
+        window.addEventListener('mousedown', onOutside, true);
+      }
+      renderHits(hits);
+    } catch {
+      // Transient search errors (offline blips) leave the field as is.
+    }
+  }
+
+  input.addEventListener('input', () => {
+    if (timer !== null) window.clearTimeout(timer);
+    timer = window.setTimeout(() => void search(), 200);
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && list !== null) {
+      event.stopPropagation();
+      close();
+    }
+  });
+  input.addEventListener('blur', () => {
+    close();
+    input.value = original;
   });
 }

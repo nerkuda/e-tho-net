@@ -123,3 +123,27 @@ export function applyFontFlags(target: HTMLElement, flags: FontFlags): void {
 export function orDefault<T>(value: T | null | undefined, fallback: T): T {
   return value ?? fallback;
 }
+
+/**
+ * Places a body-mounted, fixed-position dropdown under `anchor`, flipping up
+ * when the bottom screen edge interferes — the shared placement of the
+ * property-value pickers (08-ui-spec.md §6.3). The list is never narrower than
+ * the anchor and never wider than `maxWidth`.
+ */
+export function positionBodyDropdown(
+  list: HTMLElement,
+  anchor: HTMLElement,
+  maxWidth = 320,
+): void {
+  const rect = anchor.getBoundingClientRect();
+  const listRect = list.getBoundingClientRect();
+  const width = Math.max(rect.width, Math.min(listRect.width, maxWidth));
+  const left = Math.max(6, Math.min(rect.left, window.innerWidth - width - 6));
+  let top = rect.bottom + 2;
+  if (top + listRect.height > window.innerHeight - 6 && rect.top > listRect.height + 6) {
+    top = Math.max(6, rect.top - listRect.height - 2);
+  }
+  list.style.left = `${Math.round(left)}px`;
+  list.style.top = `${Math.round(top)}px`;
+  list.style.width = `${Math.round(width)}px`;
+}

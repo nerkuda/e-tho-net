@@ -61,6 +61,9 @@ class ShimElement {
   }
 }
 
+/** Memoized properties module for the pure-helper tests. */
+let loadedModule: any = null;
+
 /** Installs the DOM/window shims and imports the module against fixtures. */
 async function buildWithFixtures(): Promise<ShimElement> {
   (globalThis as any).document = {
@@ -147,5 +150,52 @@ describe('editor properties group body (DOM-shimmed)', () => {
     const textCell = tbody.children[0]?.children[1];
     const buttons = textCell?.children[0]?.children.filter((c) => c.tagName === 'button') ?? [];
     assert.equal(buttons.length, 1, 'options picker caret rendered');
+    // The thought_ref property is an editable search field plus the dialog
+    // picker button (no readonly display).
+    const refCell = tbody.children[1]?.children[1];
+    const refRow = refCell?.children[0];
+    const refInput = refRow?.children.find((c) => c.tagName === 'input');
+    const refButtons = refRow?.children.filter((c) => c.tagName === 'button') ?? [];
+    assert.ok(refInput !== undefined, 'thought_ref input rendered');
+    assert.notEqual(refInput?.readOnly, true, 'thought_ref input is editable');
+    assert.equal(refButtons.length, 1, 'dialog picker button rendered');
+  });
+});
+
+describe('property value autocomplete helpers (pure)', () => {
+  /** Imports the module (once) with the DOM shims installed. */
+  async function loadPropsModule(): Promise<any> {
+    if (loadedModule === null) {
+      (globalThis as any).document = {
+        createElement: (tag: string) => new ShimElement(tag),
+      };
+      (globalThis as any).window = { etn: {} };
+      loadedModule = await import('../src/renderer/editor/properties.js');
+    }
+    return loadedModule;
+  }
+
+  it('autocompleteFragment: whole input in single mode, tail after the last comma otherwise', async () => {
+    const { autocompleteFragment } = await loadPropsModule();
+    assert.equal(autocompleteFragment('Москва', false), 'москва');
+    assert.equal(autocompleteFragment('  СПб ', false), 'спб');
+    assert.equal(autocompleteFragment('Москва,  СПб', true), 'спб');
+    assert.equal(autocompleteFragment('Москва,', true), '');
+    assert.equal(autocompleteFragment('Москва', true), 'москва');
+  });
+
+  it('filterOptionsByFragment: case-insensitive substring, empty fragment shows all', async () => {
+    const { filterOptionsByFragment } = await loadPropsModule();
+    const options = ['Москва', 'СПб', 'Нижний Новгород'];
+    assert.deepEqual(filterOptionsByFragment(options, ''), options);
+    assert.deepEqual(filterOptionsByFragment(options, 'спб'), ['СПб']);
+    assert.deepEqual(filterOptionsByFragment(options, 'ниж'), ['Нижний Новгород']);
+    assert.deepEqual(filterOptionsByFragment(options, 'нет такого'), []);
+  });
+
+  it('splitMultiValue keeps trimmed non-empty parts only', async () => {
+    const { splitMultiValue } = await loadPropsModule();
+    assert.deepEqual(splitMultiValue('a, b ,, в '), ['a', 'b', 'в']);
+    assert.deepEqual(splitMultiValue(''), []);
   });
 });
