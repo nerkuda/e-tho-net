@@ -14,6 +14,9 @@
 import type {
   ApiKey,
   Attachment,
+  AttachmentContent,
+  AttachmentContentUpdateInput,
+  AttachmentContentUpdateResult,
   AttachmentFileInput,
   AttachmentInput,
   AttachmentUpdateInput,
@@ -54,6 +57,7 @@ import type {
   ThoughtTypeInput,
   ThoughtTypeUpdateInput,
   ThoughtUpdateInput,
+  ThoughtUsage,
   TypeOwnerType,
   User,
   UserFocusPreferences,
@@ -179,6 +183,8 @@ export interface EtnApi {
     resolve(networkId: string, ids: string[]): Promise<ThoughtRef[]>;
     search(networkId: string, request: SearchRequest): Promise<SearchResponse>;
     mentions(networkId: string, id: string): Promise<MentionHit[]>;
+    /** `GET /thoughts/{id}/usage` — thoughts referencing this one via thought_ref (L7). */
+    usage(networkId: string, id: string): Promise<ThoughtUsage>;
     /** `GET /thoughts/duplicates` — live duplicate candidates for the add dialog (H14). */
     findDuplicates(
       networkId: string,
@@ -325,6 +331,14 @@ export interface EtnApi {
     ): Promise<Attachment>;
     update(networkId: string, id: string, input: AttachmentUpdateInput): Promise<Attachment>;
     remove(networkId: string, id: string): Promise<void>;
+    /** `GET /attachments/{id}/content` — text (+ rendered html) of a text-like file (L7). */
+    getContent(networkId: string, id: string): Promise<AttachmentContent>;
+    /** `PUT /attachments/{id}/content` — overwrites a text-like file (L7). */
+    updateContent(
+      networkId: string,
+      id: string,
+      input: AttachmentContentUpdateInput,
+    ): Promise<AttachmentContentUpdateResult>;
   };
   admin: {
     listUsers(): Promise<User[]>;

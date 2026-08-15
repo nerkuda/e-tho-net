@@ -58,6 +58,7 @@ import {
 } from './helpers.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
 import { createLink, deleteLink, findLinksBetween } from '../domain/link-service.js';
+import { findThoughtUsage } from '../domain/property-service.js';
 import { findDuplicates, findMentions } from '../domain/search-service.js';
 import {
   createThought,
@@ -647,6 +648,18 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const mentions = findMentions(ndb, id);
         sendList(reply, mentions, mentions.length, 0, mentions.length);
+      },
+    );
+
+    // --- Usage: reverse thought_ref lookup (03-server-api.md §9.1, L7) ------
+
+    app.get(
+      '/networks/:networkId/thoughts/:id/usage',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as ThoughtIdParams;
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        sendSuccess(reply, findThoughtUsage(ndb, id));
       },
     );
 

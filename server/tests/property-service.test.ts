@@ -20,6 +20,7 @@ import type { NetworkDb } from '../src/db/network-db.js';
 import {
   createTypeProperty,
   deletePropertyValue,
+  findThoughtUsage,
   getPropertyValues,
   setPropertyValue,
   updateTypeProperty,
@@ -280,6 +281,53 @@ describe(
           () => setPropertyValue(ndb, 'thought', thought, 'old', 'x'),
           (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
         );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findThoughtUsage groups referencing thoughts by property (L7)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const person = createThoughtType(ndb, { name: 'Person' }, USER);
+        const book = createThoughtType(ndb, { name: 'BookU' }, USER);
+        createTypeProperty(ndb, 'thought_type', book.id, { key: 'author', value_type: 'thought_ref' });
+        createTypeProperty(ndb, 'thought_type', book.id, { key: 'editor', value_type: 'thought_ref' });
+        const target = seedTypedThought(ndb, person.id);
+        const other = seedTypedThought(ndb, person.id);
+        const b1 = seedTypedThought(ndb, book.id);
+        const b2 = seedTypedThought(ndb, book.id);
+
+        setPropertyValue(ndb, 'thought', b1, 'author', target);
+        setPropertyValue(ndb, 'thought', b2, 'author', target);
+        setPropertyValue(ndb, 'thought', b1, 'editor', target);
+        setPropertyValue(ndb, 'thought', b2, 'editor', other);
+
+        const usage = findThoughtUsage(ndb, target);
+        assert.equal(usage.total, 3);
+        assert.equal(usage.groups.length, 2);
+        assert.deepEqual(
+          usage.groups.map((g) => g.key),
+          ['author', 'editor'],
+          'groups sorted by property key',
+        );
+        const authorGroup = usage.groups[0]!;
+        assert.deepEqual(
+          authorGroup.thoughts.map((t) => t.id).sort(),
+          [b1, b2].sort(),
+        );
+        const editorGroup = usage.groups[1]!;
+        assert.equal(editorGroup.thoughts.length, 1);
+        assert.equal(editorGroup.thoughts[0]!.id, b1);
+        // Refs carry display fields for the client rows.
+        assert.equal(authorGroup.thoughts[0]!.title, 'T');
+        assert.equal(typeof authorGroup.property_id, 'string');
+
+        // The other referenced thought sees only its own reference.
+        const otherUsage = findThoughtUsage(ndb, other);
+        assert.equal(otherUsage.total, 1);
+        assert.equal(otherUsage.groups[0]!.key, 'editor');
+        assert.equal(otherUsage.groups[0]!.thoughts[0]!.id, b2);
       } finally {
         ndb.close();
       }

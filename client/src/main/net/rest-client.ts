@@ -1183,6 +1183,31 @@ export class RestClient {
     );
   }
 
+  /** `GET /networks/{nid}/attachments/{id}/content` — text content (L7). */
+  public async getAttachmentContent(
+    networkId: string,
+    id: string,
+  ): Promise<import('@etn/shared').AttachmentContent> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/attachments/${encodeURIComponent(id)}/content`,
+    );
+  }
+
+  /** `PUT /networks/{nid}/attachments/{id}/content` — overwrite a text file (L7). */
+  public async updateAttachmentContent(
+    networkId: string,
+    id: string,
+    input: import('@etn/shared').AttachmentContentUpdateInput,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').AttachmentContentUpdateResult> {
+    return this.request(
+      'PUT',
+      `/networks/${encodeURIComponent(networkId)}/attachments/${encodeURIComponent(id)}/content`,
+      { body: input, requestOptions: opts },
+    );
+  }
+
   // -------------------------------------------------------------------------
   // §12–13 Search & mentions
   // -------------------------------------------------------------------------
@@ -1212,6 +1237,17 @@ export class RestClient {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/mentions`,
+    );
+  }
+
+  /** `GET /networks/{nid}/thoughts/{id}/usage` — reverse thought_ref lookup (L7). */
+  public async getThoughtUsage(
+    networkId: string,
+    thoughtId: string,
+  ): Promise<import('@etn/shared').ThoughtUsage> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/usage`,
     );
   }
 

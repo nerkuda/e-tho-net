@@ -23,8 +23,11 @@ import {
   enrichUrlAttachment,
   extractFaviconUrl,
   extractHtmlTitle,
+  getAttachment,
+  getAttachmentContent,
   listAttachments,
   updateAttachment,
+  updateAttachmentContent,
 } from '../src/domain/attachment-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
@@ -388,6 +391,127 @@ describe(
         assert.equal(untouched.icon, null);
       } finally {
         ndb.close();
+      }
+    });
+
+    it('getAttachmentContent returns text, markdown html and truncation (L7)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-content', path.join(tmp, 'data.db'));
+      try {
+        const t = seedThought(ndb);
+        const md = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          {
+            title: 'Заметка',
+            mime_type: 'text/markdown',
+            data_base64: Buffer.from('# Заголовок\n\nтекст').toString('base64'),
+          },
+          USER,
+        );
+        const mdContent = getAttachmentContent(ndb, md.id);
+        assert.equal(mdContent.text, '# Заголовок\n\nтекст');
+        assert.ok(mdContent.html !== null && mdContent.html.includes('<h1'));
+        assert.equal(mdContent.truncated, false);
+
+        const txt = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          { title: 'Лог', mime_type: 'text/plain', data_base64: Buffer.from('строка').toString('base64') },
+          USER,
+        );
+        const txtContent = getAttachmentContent(ndb, txt.id);
+        assert.equal(txtContent.text, 'строка');
+        assert.equal(txtContent.html, null, 'plain text is not markdown-rendered');
+
+        // Non-text attachments report no text.
+        const png = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          { mime_type: 'image/png', data_base64: Buffer.from('fakepng').toString('base64') },
+          USER,
+        );
+        const pngContent = getAttachmentContent(ndb, png.id);
+        assert.equal(pngContent.text, null);
+        assert.equal(pngContent.html, null);
+
+        // Long content is cut at the 200 000-character cap.
+        writeFileSync(txt.file_path!, 'x'.repeat(200_001), 'utf8');
+        const bigContent = getAttachmentContent(ndb, txt.id);
+        assert.equal(bigContent.text?.length, 200_000);
+        assert.equal(bigContent.truncated, true);
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('updateAttachmentContent rewrites the file and refreshes the row (L7)', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-content2', path.join(tmp, 'data.db'));
+      try {
+        const t = seedThought(ndb);
+        const md = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          {
+            title: 'Черновик',
+            mime_type: 'text/markdown',
+            data_base64: Buffer.from('старый текст').toString('base64'),
+          },
+          USER,
+        );
+
+        const result = updateAttachmentContent(ndb, md.id, {
+          data_base64: Buffer.from('# Новый\n\nтекст').toString('base64'),
+        });
+        assert.ok(result.html !== null && result.html.includes('<h1'));
+        assert.equal(readFileSync(md.file_path!, 'utf8'), '# Новый\n\nтекст');
+        const refreshed = getAttachment(ndb, md.id);
+        assert.ok(refreshed !== null);
+        assert.equal(refreshed.file_size, Buffer.byteLength('# Новый\n\nтекст', 'utf8'));
+
+        // Non-text and url attachments cannot be rewritten.
+        const png = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          { mime_type: 'image/png', data_base64: Buffer.from('fakepng').toString('base64') },
+          USER,
+        );
+        assert.throws(
+          () =>
+            updateAttachmentContent(ndb, png.id, {
+              data_base64: Buffer.from('x').toString('base64'),
+            }),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        const url = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://x' }, USER);
+        assert.throws(
+          () =>
+            updateAttachmentContent(ndb, url.id, {
+              data_base64: Buffer.from('x').toString('base64'),
+            }),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        // Bad base64 → 422.
+        assert.throws(
+          () => updateAttachmentContent(ndb, md.id, { data_base64: '!!not-base64!!' }),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
       }
     });
   },

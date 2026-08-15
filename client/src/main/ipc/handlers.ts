@@ -223,6 +223,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string, id: string) => requireRest(deps).listMentions(networkId, id)),
   );
   handlers.set(
+    'thoughts.usage',
+    bind((networkId: string, id: string) => requireRest(deps).getThoughtUsage(networkId, id)),
+  );
+  handlers.set(
     'thoughts.findDuplicates',
     bind((networkId: string, title: string, synonyms?: string[], typeIds?: string[]) =>
       requireRest(deps).findDuplicates(networkId, title, synonyms ?? [], typeIds ?? []),
@@ -521,6 +525,22 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'attachments.remove',
     bind((networkId: string, id: string) => requireRest(deps).deleteAttachment(networkId, id)),
+  );
+  handlers.set(
+    'attachments.getContent',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).getAttachmentContent(networkId, id),
+    ),
+  );
+  handlers.set(
+    'attachments.updateContent',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        input: Parameters<RestClient['updateAttachmentContent']>[2],
+      ) => requireRest(deps).updateAttachmentContent(networkId, id, input),
+    ),
   );
 
   // --- admin -----------------------------------------------------------------

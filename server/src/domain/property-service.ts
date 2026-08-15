@@ -26,10 +26,13 @@ import {
   type PropertyValueType,
   type PropertyValue,
   type PropertyValueValue,
+  type ThoughtUsage,
+  type ThoughtUsageGroup,
   type TypeOwnerType,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { rowToThoughtRef } from './thought-service.js';
 
 // ===========================================================================
 // Type-property definitions (C5)
@@ -480,6 +483,57 @@ export function getPropertyValues(
     });
   }
   return out;
+}
+
+/**
+ * Reverse `thought_ref` lookup (docs/03-server-api.md §9.1): every thought
+ * whose property values reference `thoughtId`, grouped by property. Only
+ * values on thoughts are searched (`owner_type = 'thought'`). Groups are
+ * ordered by property name, items by the owner's normalized title.
+ */
+export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsage {
+  const rows = ndb
+    .prepare(
+      `SELECT pv.property_id AS property_id, tp.key AS property_key,
+              t.id, t.title, t.type_id, t.icon, t.icon_kind, t.active,
+              t.fg_color, t.bg_color, t.font_bold, t.font_italic,
+              t.font_underline, t.font_strike, t.font_manual
+       FROM property_values pv
+       JOIN type_properties tp ON tp.id = pv.property_id
+       JOIN thoughts t ON t.id = pv.owner_id
+       WHERE pv.owner_type = 'thought' AND pv.value_thought_ref = ?
+       ORDER BY tp.key COLLATE NOCASE, t.title_norm COLLATE NOCASE`,
+    )
+    .all(thoughtId) as Array<{
+    property_id: string;
+    property_key: string;
+    id: string;
+    title: string;
+    type_id: string | null;
+    icon: string | null;
+    icon_kind: string;
+    active: number;
+    fg_color: string | null;
+    bg_color: string | null;
+    font_bold: number;
+    font_italic: number;
+    font_underline: number;
+    font_strike: number;
+    font_manual: number;
+  }>;
+
+  const groups: ThoughtUsageGroup[] = [];
+  const byProperty = new Map<string, ThoughtUsageGroup>();
+  for (const row of rows) {
+    let group = byProperty.get(row.property_id);
+    if (group === undefined) {
+      group = { property_id: row.property_id, key: row.property_key, thoughts: [] };
+      byProperty.set(row.property_id, group);
+      groups.push(group);
+    }
+    group.thoughts.push(rowToThoughtRef(row));
+  }
+  return { total: rows.length, groups };
 }
 
 /**

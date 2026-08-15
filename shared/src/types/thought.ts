@@ -152,6 +152,24 @@ export interface ThoughtRef {
   font_strike: boolean | null;
 }
 
+/**
+ * One group of the usage response: thoughts referencing the target thought
+ * through one `thought_ref` property (03-server-api.md §9.1).
+ */
+export interface ThoughtUsageGroup {
+  property_id: string;
+  /** Property name (`type_properties.key`). */
+  key: string;
+  thoughts: ThoughtRef[];
+}
+
+/** Response of `GET /thoughts/{id}/usage` (03-server-api.md §9.1). */
+export interface ThoughtUsage {
+  /** Total number of referencing values across all groups. */
+  total: number;
+  groups: ThoughtUsageGroup[];
+}
+
 /** Per-user view mark, drives the "viewed" sort (02-data-model.md §3.10.2). */
 export interface ThoughtView {
   user_id: string;

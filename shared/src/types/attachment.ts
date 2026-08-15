@@ -73,3 +73,32 @@ export interface AttachmentUpdateInput {
   owner_type?: AttachmentOwnerType;
   owner_id?: string;
 }
+
+/**
+ * Response of `GET /attachments/{id}/content` (03-server-api.md §11): the
+ * content of a text-like file attachment for the built-in viewer/editor.
+ * `text` is `null` for non-text attachments; `html` carries the server
+ * markdown render for `.md` files.
+ */
+export interface AttachmentContent {
+  mime_type: string | null;
+  text: string | null;
+  html: string | null;
+  /** True when `text` was cut at the 200 000-character limit. */
+  truncated: boolean;
+}
+
+/**
+ * Input accepted by `PUT /attachments/{id}/content` (03-server-api.md §11):
+ * overwrites the file of a text-like `kind = 'file'` attachment (≤10 MiB
+ * decoded). An optional `mime_type` updates the stored row.
+ */
+export interface AttachmentContentUpdateInput {
+  mime_type?: string;
+  data_base64: string;
+}
+
+/** Response of `PUT /attachments/{id}/content`: the fresh markdown render. */
+export interface AttachmentContentUpdateResult {
+  html: string | null;
+}

@@ -35,8 +35,11 @@ import {
   createAttachmentFile,
   deleteAttachment,
   enrichUrlAttachment,
+  getAttachment,
+  getAttachmentContent,
   listAttachments,
   updateAttachment,
+  updateAttachmentContent,
 } from '../domain/attachment-service.js';
 
 /** Route params for a network + owner id. */
@@ -251,6 +254,50 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         deleteAttachment(ndb, id);
         deps.emit(req, networkId, 'attachment.deleted', { id });
         reply.code(204).send();
+      },
+    );
+
+    // Text content of a file attachment for the built-in viewer/editor (L7,
+    // 03-server-api.md §11). GET returns text (+ rendered html for markdown);
+    // PUT overwrites the file.
+    app.get(
+      '/networks/:networkId/attachments/:id/content',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as AttachmentIdParams;
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        sendSuccess(reply, getAttachmentContent(ndb, id));
+      },
+    );
+
+    app.put(
+      '/networks/:networkId/attachments/:id/content',
+      {
+        preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler],
+        bodyLimit: 16 * 1024 * 1024,
+      },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as AttachmentIdParams;
+        const body = requestBody(req);
+        const data = fieldString(body, 'data_base64', req.id);
+        if (data === undefined || data === '') {
+          throw new EtnError('VALIDATION_ERROR', 'data_base64 обязателен.', {
+            field: 'data_base64',
+          }, req.id);
+        }
+        const mime = fieldString(body, 'mime_type', req.id);
+        const input = { data_base64: data, mime_type: mime };
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const result = updateAttachmentContent(ndb, id, input);
+        const updated = getAttachment(ndb, id);
+        deps.emit(req, networkId, 'attachment.updated', {
+          id,
+          changes: {
+            file_size: updated?.file_size ?? null,
+            mime_type: updated?.mime_type ?? null,
+          },
+        });
+        sendSuccess(reply, result, { request_id: req.id });
       },
     );
   };

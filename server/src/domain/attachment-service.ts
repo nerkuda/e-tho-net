@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -22,6 +22,9 @@ import {
   ATTACHMENT_OWNER_TYPES,
   EtnError,
   type Attachment,
+  type AttachmentContent,
+  type AttachmentContentUpdateInput,
+  type AttachmentContentUpdateResult,
   type AttachmentFileInput,
   type AttachmentInput,
   type AttachmentKind,
@@ -30,6 +33,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { renderMarkdown } from './markdown.js';
 
 /** Raw `attachments` row shape. */
 interface AttachmentRow {
@@ -443,6 +447,128 @@ export function deleteAttachment(ndb: NetworkDb, id: string): void {
         }
       }
     }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Text content of file attachments (built-in viewer/editor, L7,
+// docs/03-server-api.md §11)
+// ---------------------------------------------------------------------------
+
+/** Hard cap on the text returned by `GET …/content` (matches the client). */
+const CONTENT_TEXT_MAX_CHARS = 200_000;
+
+/**
+ * True when the attachment is a `kind='file'` whose content is text-like:
+ * `text/*` mime or a `.txt`/`.md`/`.markdown` path. Mirrors the client-side
+ * `isViewableText` check (attachments.ts).
+ */
+function isTextLikeFile(a: Attachment): boolean {
+  if (a.kind !== 'file' || a.file_path === null) return false;
+  if ((a.mime_type ?? '').startsWith('text/')) return true;
+  return /\.(txt|md|markdown)$/i.test(a.file_path);
+}
+
+/** True for markdown files (server-rendered `html` in the content response). */
+function isMarkdownFile(a: Attachment): boolean {
+  const mime = (a.mime_type ?? '').toLowerCase();
+  if (mime === 'text/markdown' || mime === 'text/md') return true;
+  return /\.(md|markdown)$/i.test(a.file_path ?? '');
+}
+
+/**
+ * Read the content of a text-like attachment (docs/03-server-api.md §11):
+ * the text (truncated at {@link CONTENT_TEXT_MAX_CHARS}) and, for markdown
+ * files, the server-rendered html. Non-text attachments return `text: null`.
+ *
+ * Throws `NOT_FOUND` (404) for a missing attachment and `VALIDATION_ERROR`
+ * (422) when the backing file cannot be read.
+ */
+export function getAttachmentContent(ndb: NetworkDb, id: string): AttachmentContent {
+  const a = getAttachmentOrThrow(ndb, id);
+  if (!isTextLikeFile(a)) {
+    return { mime_type: a.mime_type, text: null, html: null, truncated: false };
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(a.file_path!, 'utf8');
+  } catch {
+    throw new EtnError('VALIDATION_ERROR', 'файл вложения недоступен для чтения', {
+      field: 'file_path',
+    });
+  }
+  const truncated = raw.length > CONTENT_TEXT_MAX_CHARS;
+  const text = truncated ? raw.slice(0, CONTENT_TEXT_MAX_CHARS) : raw;
+  const html = isMarkdownFile(a) ? renderMarkdown(text) : null;
+  return { mime_type: a.mime_type, text, html, truncated };
+}
+
+/**
+ * Overwrite the file of a text-like attachment (docs/03-server-api.md §11).
+ * Decodes `data_base64` (≤10 MiB), writes it to `file_path` and refreshes
+ * `file_size`/`mime_type` in the row. Last-write-wins (no version column).
+ *
+ * Throws `NOT_FOUND` (404), `VALIDATION_ERROR` (422) for a non-text
+ * attachment, a bad payload or an unwritable file.
+ */
+export function updateAttachmentContent(
+  ndb: NetworkDb,
+  id: string,
+  input: AttachmentContentUpdateInput,
+): AttachmentContentUpdateResult {
+  return ndb.transaction(() => {
+    const current = getAttachmentOrThrow(ndb, id);
+    if (!isTextLikeFile(current)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'контент доступен только для текстовых вложений',
+        { field: 'id' },
+      );
+    }
+
+    const b64 = input.data_base64.replace(/^data:[^,]*,/, '').trim();
+    if (b64 === '' || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) {
+      throw new EtnError('VALIDATION_ERROR', 'data_base64 must be base64 content', {
+        field: 'data_base64',
+      });
+    }
+    const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+    const bytes = Math.floor((b64.length * 3) / 4) - padding;
+    if (bytes < 0 || bytes > ATTACHMENT_FILE_MAX_BYTES) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `file exceeds the ${ATTACHMENT_FILE_MAX_BYTES} byte limit (${bytes})`,
+        { field: 'data_base64', limit: ATTACHMENT_FILE_MAX_BYTES },
+      );
+    }
+    const buffer = Buffer.from(b64, 'base64');
+    if (buffer.length !== bytes) {
+      throw new EtnError('VALIDATION_ERROR', 'data_base64 is not valid base64', {
+        field: 'data_base64',
+      });
+    }
+
+    try {
+      writeFileSync(current.file_path!, buffer);
+    } catch {
+      throw new EtnError('VALIDATION_ERROR', 'не удалось записать файл вложения', {
+        field: 'file_path',
+      });
+    }
+
+    const nextMime =
+      input.mime_type !== undefined && input.mime_type.trim() !== ''
+        ? input.mime_type.trim().toLowerCase()
+        : current.mime_type;
+    ndb
+      .prepare('UPDATE attachments SET file_size = ?, mime_type = ? WHERE id = ?')
+      .run(buffer.length, nextMime, id);
+
+    const text = buffer.toString('utf8');
+    const html = isMarkdownFile({ ...current, mime_type: nextMime })
+      ? renderMarkdown(text)
+      : null;
+    return { html };
   });
 }
 

@@ -116,8 +116,12 @@ function rowToThought(row: ThoughtRow, synonyms: string[]): Thought {
   };
 }
 
-/** Convert a raw row into a lightweight {@link ThoughtRef}. */
-function rowToThoughtRef(row: {
+/**
+ * Convert a raw row into a lightweight {@link ThoughtRef}. The row must carry
+ * the display columns shared by every `SELECT` that builds refs; reused by
+ * other domain modules (e.g. the property usage lookup).
+ */
+export function rowToThoughtRef(row: {
   id: string;
   title: string;
   type_id: string | null;

@@ -56,6 +56,7 @@ function buildApi(): EtnApi {
       resolve: (networkId, ids) => invoke('thoughts.resolve', networkId, ids),
       search: (networkId, request) => invoke('thoughts.search', networkId, request),
       mentions: (networkId, id) => invoke('thoughts.mentions', networkId, id),
+      usage: (networkId, id) => invoke('thoughts.usage', networkId, id),
       findDuplicates: (networkId, title, synonyms, typeIds) =>
         invoke('thoughts.findDuplicates', networkId, title, synonyms, typeIds),
       setFocusPreferences: (networkId, focusId, input) =>
@@ -123,6 +124,9 @@ function buildApi(): EtnApi {
         invoke('attachments.uploadFile', networkId, ownerType, ownerId, input),
       update: (networkId, id, input) => invoke('attachments.update', networkId, id, input),
       remove: (networkId, id) => invoke('attachments.remove', networkId, id),
+      getContent: (networkId, id) => invoke('attachments.getContent', networkId, id),
+      updateContent: (networkId, id, input) =>
+        invoke('attachments.updateContent', networkId, id, input),
     },
     admin: {
       listUsers: () => invoke('admin.listUsers'),
