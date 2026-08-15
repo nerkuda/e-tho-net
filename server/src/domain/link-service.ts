@@ -330,11 +330,15 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
 
 /**
  * Patch a link (docs/03-server-api.md §7.1). Last-write-wins per field.
+ * `source_id`/`target_id` must be provided together — swapping them inverts
+ * the link's direction.
  *
  * Throws:
  *   * `NOT_FOUND` (404) if the link does not exist;
  *   * `VERSION_CONFLICT` (409) if `expectedVersion` is set and does not match;
- *   * `DUPLICATE` (409) if changing `type_id` produces a pair that already exists.
+ *   * `VALIDATION_ERROR` (422) for a one-sided endpoint change or a self-loop;
+ *   * `DUPLICATE` (409) if changing the endpoints or `type_id` produces a pair
+ *     that already exists.
  */
 export function updateLink(
   ndb: NetworkDb,
@@ -354,8 +358,47 @@ export function updateLink(
       });
     }
 
+    // Endpoint change (inversion): both ids must arrive together and both
+    // thoughts must exist; a self-loop is rejected exactly as on create.
+    const endpointsChanging =
+      changes.source_id !== undefined || changes.target_id !== undefined;
+    if (endpointsChanging) {
+      if (changes.source_id === undefined || changes.target_id === undefined) {
+        throw new EtnError('VALIDATION_ERROR', 'source_id and target_id must change together', {
+          link_id: id,
+        });
+      }
+      if (changes.source_id === changes.target_id) {
+        throw new EtnError('VALIDATION_ERROR', 'a link cannot connect a thought to itself', {
+          source_id: changes.source_id,
+        });
+      }
+      for (const [role, endpointId] of [
+        ['source', changes.source_id],
+        ['target', changes.target_id],
+      ] as const) {
+        const exists = ndb.prepare('SELECT 1 FROM thoughts WHERE id = ?').get(endpointId);
+        if (!exists) {
+          throw new EtnError('NOT_FOUND', `${role} thought ${endpointId} not found`, {
+            entity: 'thought',
+            id: endpointId,
+          });
+        }
+      }
+    }
+    const newSourceId = changes.source_id ?? current.source_id;
+    const newTargetId = changes.target_id ?? current.target_id;
+
     const sets: string[] = [];
     const args: unknown[] = [];
+    if (changes.source_id !== undefined) {
+      sets.push('source_id = ?');
+      args.push(changes.source_id);
+    }
+    if (changes.target_id !== undefined) {
+      sets.push('target_id = ?');
+      args.push(changes.target_id);
+    }
     let newTypeId = current.type_id;
     if (changes.type_id !== undefined) {
       newTypeId = changes.type_id;
@@ -379,7 +422,7 @@ export function updateLink(
       args.push(changes.active ? 1 : 0);
     }
 
-    // If type_id is changing, verify the new type exists and no duplicate results.
+    // If type_id is changing, verify the new type exists.
     if (changes.type_id !== undefined && newTypeId !== null) {
       const lt = ndb.prepare('SELECT 1 FROM link_types WHERE id = ?').get(newTypeId);
       if (!lt) {
@@ -389,23 +432,18 @@ export function updateLink(
         });
       }
     }
-    if (changes.type_id !== undefined) {
+    // Duplicate guard for the resulting pair: direction or type may have changed.
+    if (changes.type_id !== undefined || endpointsChanging) {
       const dup = ndb
         .prepare(
           `SELECT 1 FROM links WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ?
            AND id <> ? LIMIT 1`,
         )
-        .get(
-          current.source_id,
-          current.target_id,
-          NULL_TYPE_SENTINEL,
-          typeIdOrSentinel(newTypeId),
-          id,
-        );
+        .get(newSourceId, newTargetId, NULL_TYPE_SENTINEL, typeIdOrSentinel(newTypeId), id);
       if (dup) {
         throw new EtnError('DUPLICATE', 'an equivalent link already exists', {
-          source_id: current.source_id,
-          target_id: current.target_id,
+          source_id: newSourceId,
+          target_id: newTargetId,
           type_id: newTypeId,
         });
       }

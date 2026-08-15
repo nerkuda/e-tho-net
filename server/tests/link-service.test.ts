@@ -173,6 +173,83 @@ describe(
       }
     });
 
+    it('updateLink swaps the endpoints (inversion) and bumps the version', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        const b = seedThought(ndb, 'B');
+        const link = createLink(ndb, { source_id: a, target_id: b }, USER);
+        const inverted = updateLink(
+          ndb,
+          link.id,
+          { source_id: link.target_id, target_id: link.source_id },
+          link.version,
+          USER,
+        );
+        assert.equal(inverted.source_id, b);
+        assert.equal(inverted.target_id, a);
+        assert.equal(inverted.version, 2);
+        const stored = getLink(ndb, link.id);
+        assert.equal(stored?.source_id, b);
+        assert.equal(stored?.target_id, a);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('updateLink rejects a one-sided endpoint change', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        const b = seedThought(ndb, 'B');
+        const link = createLink(ndb, { source_id: a, target_id: b }, USER);
+        assert.throws(
+          () => updateLink(ndb, link.id, { source_id: b }, link.version, USER),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('updateLink rejects an inversion onto an existing reverse duplicate', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        const b = seedThought(ndb, 'B');
+        const link = createLink(ndb, { source_id: a, target_id: b }, USER);
+        createLink(ndb, { source_id: b, target_id: a }, USER);
+        assert.throws(
+          () =>
+            updateLink(
+              ndb,
+              link.id,
+              { source_id: link.target_id, target_id: link.source_id },
+              link.version,
+              USER,
+            ),
+          (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('updateLink rejects an endpoint change to an unknown thought', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        const b = seedThought(ndb, 'B');
+        const link = createLink(ndb, { source_id: a, target_id: b }, USER);
+        assert.throws(
+          () => updateLink(ndb, link.id, { source_id: 'missing', target_id: a }, link.version, USER),
+          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('deleteLink honors If-Match', () => {
       const ndb = createInMemoryNetworkDb();
       try {

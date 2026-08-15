@@ -3,7 +3,7 @@
  *
  *   POST   /networks/:networkId/links                      — create a directed link
  *   GET    /networks/:networkId/links/:id                  — fetch one
- *   PATCH  /networks/:networkId/links/:id                  — update type/active (If-Match)
+ *   PATCH  /networks/:networkId/links/:id                  — update endpoints/type/active (If-Match)
  *   DELETE /networks/:networkId/links/:id                  — delete (If-Match)
  *   GET    /networks/:networkId/thoughts/:id/links?group=type — grouped editor view
  *
@@ -75,6 +75,21 @@ function parseLinkCreateBody(body: Record<string, unknown>, requestId: string): 
 /** Parse and validate the body of `PATCH /links/:id`. */
 function parseLinkUpdateBody(body: Record<string, unknown>, requestId: string): LinkUpdateInput {
   const changes: LinkUpdateInput = {};
+  // Endpoints change together (swapping them inverts the link's direction).
+  if (body.source_id !== undefined || body.target_id !== undefined) {
+    const sourceId = fieldString(body, 'source_id', requestId);
+    const targetId = fieldString(body, 'target_id', requestId);
+    if (sourceId === undefined || targetId === undefined) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'source_id и target_id меняются вместе.',
+        { field: 'source_id' },
+        requestId,
+      );
+    }
+    changes.source_id = sourceId;
+    changes.target_id = targetId;
+  }
   if (body.type_id !== undefined) {
     changes.type_id = fieldNullableString(body, 'type_id', requestId);
   }

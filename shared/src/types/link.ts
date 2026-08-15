@@ -47,6 +47,11 @@ export interface LinkCreateInput {
 /** Input accepted by `PATCH /links/{id}` (03-server-api.md §7.1). Also the
  *  `changes` payload of `link.updated` real-time events. */
 export interface LinkUpdateInput {
+  /** New source thought id — must arrive together with `target_id` (swapping
+   *  the endpoints inverts the link's direction). */
+  source_id?: string;
+  /** New target thought id — must arrive together with `source_id`. */
+  target_id?: string;
   type_id?: string | null;
   color?: string | null;
   style?: LinkStyle | null;
