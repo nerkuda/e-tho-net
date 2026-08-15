@@ -151,7 +151,7 @@ byNetwork:   Map<network_id, Set<connectionHandle>>
 |------|-----------|
 | `client_id` | UUID установки |
 | `last_seq` (per network_id) | Позиция в event_log |
-| `theme` | light/dark (когда появятся темы) |
+| `theme` | `light`/`dark` — тема интерфейса (L10), per-installation: действует на всех экранах и на фон окна; переключается в меню «Вид» |
 | `zoom` | Масштаб UI (зарезервировано под общий масштаб всего интерфейса; масштаб холста — отдельный L4-ключ `canvas_zoom`, этот ключ не используется) |
 | `active_profile_id` | Текущий server profile |
 
