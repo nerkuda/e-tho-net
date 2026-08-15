@@ -18,6 +18,7 @@ import { etn } from './lib/etn.js';
 import { closeMenu } from './lib/menu.js';
 import { UI_STATE_KEY, PREF_KEY } from '@etn/shared';
 import {
+  parseCanvasLayout,
   parseCollapsedGroups,
   parseCloudGap,
   parseCloudWidth,
@@ -66,7 +67,7 @@ export async function openNetwork(networkId: string): Promise<void> {
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
 
-  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw] =
+  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw] =
     await Promise.all([
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
@@ -75,6 +76,7 @@ export async function openNetwork(networkId: string): Promise<void> {
       etn.ui.getState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID),
       etn.ui.getState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID),
       etn.ui.getState(networkId, UI_STATE_KEY.WINDOW_LAYOUT),
+      etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_LAYOUT),
     ]);
 
   const editorPosition = (
@@ -82,6 +84,7 @@ export async function openNetwork(networkId: string): Promise<void> {
   ) as 'left' | 'right' | 'top' | 'bottom' | 'hidden';
 
   const editorSize = parseWindowLayout(layoutRaw);
+  const canvasLayout = parseCanvasLayout(canvasLayoutRaw);
 
   const [linkTypes, thoughtTypes] = await Promise.all([
     etn.types.listLinkTypes(networkId),
@@ -97,6 +100,8 @@ export async function openNetwork(networkId: string): Promise<void> {
     editorPosition,
     editorW: editorSize.w,
     editorH: editorSize.h,
+    zoneTopSplit: canvasLayout.topSplit,
+    zoneChildrenShare: canvasLayout.childrenShare,
     collapsedGroups: parseCollapsedGroups(collapsedRaw),
     linkTypes,
     thoughtTypes,

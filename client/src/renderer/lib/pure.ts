@@ -8,6 +8,10 @@
  */
 
 import {
+  CANVAS_CHILDREN_SHARE_DEFAULT,
+  CANVAS_SHARE_MAX,
+  CANVAS_SHARE_MIN,
+  CANVAS_TOP_SPLIT_DEFAULT,
   CLOUD_GAP_DEFAULT,
   CLOUD_GAP_MAX,
   CLOUD_GAP_MIN,
@@ -124,6 +128,46 @@ export function parseWindowLayout(raw: string | null): ParsedEditorSize {
     /* fall through to fallback */
   }
   return fallback;
+}
+
+/** Result of parsing the L4 `canvas_layout` value: zone splitter shares. */
+export interface ParsedCanvasLayout {
+  /** Share of the top strip width given to the parents zone, 0..1. */
+  topSplit: number;
+  /** Share of the canvas height given to the children zone, 0..1. */
+  childrenShare: number;
+}
+
+/** Clips a zone share into the stored range, rounding to 3 decimals. */
+function clipShare(value: number): number {
+  return Math.round(clip(value, CANVAS_SHARE_MIN, CANVAS_SHARE_MAX) * 1000) / 1000;
+}
+
+/**
+ * Parses the L4 `canvas_layout` value (JSON
+ * `{"topSplit":<0..1>,"childrenShare":<0..1>}`), clipped to the share range.
+ * Missing/invalid fields fall back to the defaults, so a partially stored
+ * value still loads (08-ui-spec.md §2.1).
+ */
+export function parseCanvasLayout(raw: string | null): ParsedCanvasLayout {
+  const fallback: ParsedCanvasLayout = {
+    topSplit: CANVAS_TOP_SPLIT_DEFAULT,
+    childrenShare: CANVAS_CHILDREN_SHARE_DEFAULT,
+  };
+  if (raw === null || raw === '') return fallback;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== 'object' || parsed === null) return fallback;
+    const obj = parsed as Record<string, unknown>;
+    const top = Number(obj['topSplit']);
+    const children = Number(obj['childrenShare']);
+    return {
+      topSplit: Number.isFinite(top) ? clipShare(top) : fallback.topSplit,
+      childrenShare: Number.isFinite(children) ? clipShare(children) : fallback.childrenShare,
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 // ---------------------------------------------------------------------------

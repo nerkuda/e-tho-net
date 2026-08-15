@@ -51,6 +51,14 @@ export const FOCUS_FONT_SCALE = 1.3;
 /** Maximum number of lines rendered inside the focused cloud. */
 export const FOCUS_TITLE_MAX_LINES = 4;
 
+/** Default share of the top strip width given to the parents zone (08-ui-spec §2.1). */
+export const CANVAS_TOP_SPLIT_DEFAULT = 0.5;
+/** Default share of the canvas height given to the children zone (08-ui-spec §2.1). */
+export const CANVAS_CHILDREN_SHARE_DEFAULT = 0.34;
+/** Clip range for the zone layout shares stored in the L4 `canvas_layout` key. */
+export const CANVAS_SHARE_MIN = 0.1;
+export const CANVAS_SHARE_MAX = 0.9;
+
 // ---------------------------------------------------------------------------
 // Thought limits
 // ---------------------------------------------------------------------------
@@ -119,6 +127,7 @@ export const UI_STATE_KEY = {
   EDITOR_POSITION: 'editor_position',
   EDITOR_COLLAPSED_GROUPS: 'editor_collapsed_groups',
   WINDOW_LAYOUT: 'window_layout',
+  CANVAS_LAYOUT: 'canvas_layout',
   LAST_USED_LINK_TYPE_ID: 'last_used_link_type_id',
 } as const satisfies Record<string, string>;
 export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];

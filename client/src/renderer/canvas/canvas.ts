@@ -35,6 +35,7 @@ import {
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
 import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
+import { mountZoneSplitters } from './zone-splitters.js';
 
 /** Zone directions of the canvas (parents/siblings/children). */
 export type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -144,19 +145,24 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   const top = div('canvas-top');
   const zoneParents = buildZone('parents');
   const zoneSiblings = buildZone('siblings');
-  top.append(zoneParents, zoneSiblings);
+  const zoneSplitterV = div('zone-splitter zone-splitter-v');
+  top.append(zoneParents, zoneSplitterV, zoneSiblings);
 
   focusRow = div('canvas-focus-row');
 
   const zoneChildren = buildZone('children');
+  // Draggable zone splitters (08-ui-spec.md §2.1): vertical inside the top
+  // strip, horizontal between the focus row and the children zone.
+  const zoneSplitterH = div('zone-splitter zone-splitter-h');
 
   const empty = div('canvas-empty');
   empty.textContent = 'Нет открытой сети';
 
-  host.append(top, focusRow, zoneChildren, empty);
+  host.append(top, focusRow, zoneSplitterH, zoneChildren, empty);
   zones = { parents: zoneParents, siblings: zoneSiblings, children: zoneChildren };
   emptyEl = empty;
   redrawLinks = initLinksOverlay(host).redraw;
+  mountZoneSplitters({ host, top, focusRow, vertical: zoneSplitterV, horizontal: zoneSplitterH });
 
   // Add-thought dialog (H14) and external file/URL drops (08-ui-spec.md §7).
   mountAddDialog();

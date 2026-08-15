@@ -676,17 +676,49 @@ textarea {
 }
 
 .zone-parents {
-  border-right: 1px solid var(--border);
+  flex: 0 0 calc(100% * var(--zone-top-split, 0.5));
 }
 
-.zone-siblings {
-  border-left: 1px solid var(--border);
-}
+/* The siblings zone takes the rest of the top strip. */
 
 .zone-children {
-  flex: 0 0 34%;
+  flex: 0 0 calc(100% * var(--zone-children-share, 0.34));
   min-height: 96px;
-  border-top: 1px solid var(--border);
+}
+
+/* Draggable splitters between canvas zones (08-ui-spec §2.1). Sits above the
+ * link overlays (hit=5, top=6) so the 6px grab strip is never covered. */
+.zone-splitter {
+  flex: 0 0 6px;
+  z-index: 7;
+  background: var(--border);
+  user-select: none;
+}
+
+.zone-splitter:hover,
+.zone-splitter.dragging {
+  background: var(--accent);
+}
+
+.zone-splitter-v {
+  width: 6px;
+  cursor: col-resize;
+}
+
+.zone-splitter-h {
+  height: 6px;
+  cursor: row-resize;
+}
+
+/* While dragging a zone splitter: no text selection and a split cursor. */
+body.resizing-v {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.resizing-h {
+  cursor: row-resize;
+  user-select: none;
 }
 
 .zone.drag-over {

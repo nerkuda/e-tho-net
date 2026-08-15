@@ -8,6 +8,8 @@
  */
 
 import {
+  CANVAS_CHILDREN_SHARE_DEFAULT,
+  CANVAS_TOP_SPLIT_DEFAULT,
   CLOUD_GAP_DEFAULT,
   CLOUD_WIDTH_DEFAULT,
   EDITOR_H_DEFAULT,
@@ -62,6 +64,10 @@ export interface AppState {
   editorW: number;
   /** L4 `window_layout` editor height (top/bottom dock), px. */
   editorH: number;
+  /** L4 `canvas_layout` share of the top strip width for the parents zone. */
+  zoneTopSplit: number;
+  /** L4 `canvas_layout` share of the canvas height for the children zone. */
+  zoneChildrenShare: number;
   /** L4 `editor_collapsed_groups`, keyed by entity id. */
   collapsedGroups: Record<string, Record<string, boolean>>;
   /** Selection panel contents (ordered ids). */
@@ -101,6 +107,8 @@ const initial: AppState = {
   lastEditorPosition: 'right',
   editorW: EDITOR_W_DEFAULT,
   editorH: EDITOR_H_DEFAULT,
+  zoneTopSplit: CANVAS_TOP_SPLIT_DEFAULT,
+  zoneChildrenShare: CANVAS_CHILDREN_SHARE_DEFAULT,
   collapsedGroups: {},
   selection: [],
   selectedLinkId: null,

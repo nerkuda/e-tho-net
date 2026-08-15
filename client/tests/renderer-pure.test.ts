@@ -30,6 +30,7 @@ import {
   describeEvent,
   isRealtimeEvent,
   parseAddLines,
+  parseCanvasLayout,
   parseCloudGap,
   parseCloudWidth,
   parseCollapsedGroups,
@@ -106,6 +107,43 @@ describe('parseWindowLayout', () => {
     assert.deepEqual(parseWindowLayout('{"w":"abc","h":300}'), {
       w: EDITOR_W_DEFAULT,
       h: 300,
+    });
+  });
+});
+
+describe('parseCanvasLayout', () => {
+  it('falls back to defaults for missing/invalid input', () => {
+    assert.deepEqual(parseCanvasLayout(null), { topSplit: 0.5, childrenShare: 0.34 });
+    assert.deepEqual(parseCanvasLayout(''), { topSplit: 0.5, childrenShare: 0.34 });
+    assert.deepEqual(parseCanvasLayout('not json'), { topSplit: 0.5, childrenShare: 0.34 });
+    assert.deepEqual(parseCanvasLayout('42'), { topSplit: 0.5, childrenShare: 0.34 });
+  });
+
+  it('parses shares and clamps them into the stored range', () => {
+    assert.deepEqual(parseCanvasLayout('{"topSplit":0.7,"childrenShare":0.2}'), {
+      topSplit: 0.7,
+      childrenShare: 0.2,
+    });
+    assert.deepEqual(parseCanvasLayout('{"topSplit":0.01,"childrenShare":0.99}'), {
+      topSplit: 0.1,
+      childrenShare: 0.9,
+    });
+    // Rounded to 3 decimals.
+    assert.deepEqual(parseCanvasLayout('{"topSplit":0.66666,"childrenShare":0.34}'), {
+      topSplit: 0.667,
+      childrenShare: 0.34,
+    });
+  });
+
+  it('keeps a valid share when the other is missing/invalid', () => {
+    assert.deepEqual(parseCanvasLayout('{"topSplit":0.6}'), { topSplit: 0.6, childrenShare: 0.34 });
+    assert.deepEqual(parseCanvasLayout('{"childrenShare":0.5}'), {
+      topSplit: 0.5,
+      childrenShare: 0.5,
+    });
+    assert.deepEqual(parseCanvasLayout('{"topSplit":"x","childrenShare":0.5}'), {
+      topSplit: 0.5,
+      childrenShare: 0.5,
     });
   });
 });
