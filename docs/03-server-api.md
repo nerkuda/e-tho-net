@@ -353,6 +353,17 @@ DELETE /api/v1/networks/{nid}/thoughts/{id}/properties/{key}
 # PUT — upsert; валидация по определению свойства в типе.
 ```
 
+### 9.1. Использование мысли (обратный поиск по thought_ref)
+
+```
+GET /api/v1/networks/{nid}/thoughts/{id}/usage
+# Все мысли, в свойствах которых (value_type="thought_ref") использована
+# данная мысль. Группировка по свойствам, сортировка по имени свойства,
+# затем по заголовку мысли.
+→ 200 { data: { total: <число ссылок>,
+                groups: [ { property_id, key, thoughts: [ThoughtRef] } ] } }
+```
+
 ## 10. Комментарии
 
 ```
@@ -388,7 +399,22 @@ PATCH  /api/v1/networks/{nid}/attachments/{id}
        # (404, если новый владелец не существует). icon — только data: URL.
 DELETE /api/v1/networks/{nid}/attachments/{id}
        # Удаляет и серверную копию файла, если file_path лежит в
-       # networks/<nid>/attachments/; клиентские пути не трогает.
+       # networks/{nid}/attachments/; клиентские пути не трогает.
+GET    /api/v1/networks/{nid}/attachments/{id}/content
+       # Контент текстового вложения (kind="file", mime text/* или расширение
+       # .txt/.md/.markdown) для встроенного просмотра/редактирования в клиенте:
+       # text — содержимое (≤200 000 символов, truncated=true при обрезке),
+       # html — markdown-рендер (тот же безопасный рендерер, что у комментариев;
+       # null для не-markdown). Для прочих вложений text=null, html=null.
+→ 200 { data: { mime_type, text: string|null, html: string|null, truncated: boolean } }
+PUT    /api/v1/networks/{nid}/attachments/{id}/content
+       { data_base64, mime_type? }
+       # Перезаписывает файл текстового вложения (≤10 МиБ decoded) по file_path
+       # и обновляет file_size/mime_type. Только kind="file" и только
+       # text-подобные вложения (mime text/* или .txt/.md/.markdown), иначе
+       # 422 VALIDATION_ERROR. Версионности нет (last-write-wins, как у PATCH).
+       # Эмитит attachment.updated.
+→ 200 { data: { html: string|null } }   # markdown-рендер нового содержимого
 # Аналогично для /links/{id}/attachments
 ```
 
