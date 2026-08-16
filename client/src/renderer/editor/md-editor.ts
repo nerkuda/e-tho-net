@@ -7,17 +7,15 @@
  * changing the document model.
  */
 
-import {
-  autocompletion,
-  completionKeymap,
-  completionStatus,
-} from '@codemirror/autocomplete';
+import { completionKeymap, completionStatus } from '@codemirror/autocomplete';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { EditorState } from '@codemirror/state';
 import { drawSelection, EditorView, keymap } from '@codemirror/view';
+
+import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 
 /** Callbacks of the editor (the field orchestrates view/edit modes). */
 export interface MdEditorCallbacks {
@@ -107,9 +105,13 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         }),
         // The markdown keymap (Enter/Backspace list handling) must outrank
         // the default keymap below.
-        markdown({ base: markdownLanguage, addKeymap: true }),
+        markdown({
+          base: markdownLanguage,
+          addKeymap: true,
+          extensions: [wikiLinkLanguage()],
+        }),
         keymap.of([...historyKeymap, ...completionKeymap, ...defaultKeymap]),
-        autocompletion(),
+        wikiLinkAutocompletion(),
         mdTheme,
       ],
     }),
