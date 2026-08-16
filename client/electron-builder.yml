@@ -45,5 +45,5 @@ linux:
 # packaged builds; DEV_MODE builds skip checks.
 publish:
   provider: github
-  owner: etn-project
-  repo: etn
+  owner: nerkuda
+  repo: e-tho-net
