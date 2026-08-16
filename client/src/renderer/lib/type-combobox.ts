@@ -245,9 +245,22 @@ export function createTypeCombobox(opts: {
     window.removeEventListener('mousedown', onWinDown, true);
     window.removeEventListener('keydown', onWinKey, true);
     window.removeEventListener('scroll', onWinScroll, true);
+    window.removeEventListener('etn:editor-rebuild', onRebuild);
+    // The list lives in document.body — drop it together with the widget,
+    // otherwise a re-render that destroys the host DOM leaves it behind as
+    // a fixed-position ghost that no handler can close.
+    if (list.isConnected) list.remove();
+  };
+  const onRebuild = (): void => {
+    if (!root.isConnected) {
+      detach();
+      return;
+    }
+    if (open) closeList();
   };
   const onWinDown = (event: MouseEvent): void => {
     if (!root.isConnected) {
+      closeList();
       detach();
       return;
     }
@@ -257,6 +270,7 @@ export function createTypeCombobox(opts: {
   };
   const onWinKey = (event: KeyboardEvent): void => {
     if (!root.isConnected) {
+      closeList();
       detach();
       return;
     }
@@ -268,6 +282,7 @@ export function createTypeCombobox(opts: {
   };
   const onWinScroll = (): void => {
     if (!root.isConnected) {
+      closeList();
       detach();
       return;
     }
@@ -276,6 +291,9 @@ export function createTypeCombobox(opts: {
   window.addEventListener('mousedown', onWinDown, true);
   window.addEventListener('keydown', onWinKey, true);
   window.addEventListener('scroll', onWinScroll, true);
+  // The editor rebuilds its DOM while keeping the window alive (e.g. a header
+  // save bumps the thought version) — close before the old DOM is destroyed.
+  window.addEventListener('etn:editor-rebuild', onRebuild);
 
   renderValue();
   return { root, value: () => current };

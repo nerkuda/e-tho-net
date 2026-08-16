@@ -237,6 +237,13 @@ async function render(): Promise<void> {
   if (signature === lastSignature) return;
   lastSignature = signature;
 
+  // Body-mounted widgets (type-combobox dropdowns) must close before the old
+  // DOM is destroyed — otherwise their fixed-position lists stay behind as
+  // ghosts that neither Escape nor an outside click can dismiss (e.g. Tab
+  // from an edited title into the type field opens the list, then the header
+  // save bumps the version and re-renders the editor).
+  window.dispatchEvent(new Event('etn:editor-rebuild'));
+
   clear(scrollBox);
   tabCountSpans.clear();
   renderCtx = ctx;
