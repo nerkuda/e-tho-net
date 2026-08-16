@@ -28,6 +28,11 @@ jobs:
         # npm install (not ci) — lockfile may be stale or absent at project start.
         run: npm install
 
+      - name: Build @etn/shared
+        # server/client typecheck resolves @etn/shared from shared/dist, which
+        # is gitignored — build it before typechecking.
+        run: npm run build:shared
+
       - name: Typecheck
         run: npm run typecheck
 
