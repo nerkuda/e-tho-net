@@ -23,6 +23,8 @@ import {
 
 import { renderMarkdown } from '@etn/markdown';
 
+import { renderMermaidBlocks } from './md-mermaid.js';
+
 /** Корневой класс всех виджетов live preview. */
 export const MD_WIDGET_CLASS = 'md-widget';
 
@@ -57,6 +59,9 @@ class HtmlWidget extends WidgetType {
     // HTML из @etn/markdown экранируется по построению (тот же контракт,
     // что и у серверного body_html).
     box.innerHTML = this.html;
+    // Mermaid-блоки рендерятся асинхронно после монтирования виджета (M7).
+    // Без requestAnimationFrame: в фоновом окне Electron он не тикает.
+    renderMermaidBlocks(box);
     return box;
   }
 

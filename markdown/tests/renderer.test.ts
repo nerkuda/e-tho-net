@@ -177,6 +177,13 @@ test('незакрытый fence закрывается на EOF', () => {
   assert.match(renderMarkdown('```ts\nconst a = 1;'), /language-ts/);
 });
 
+test('```mermaid отдаётся блоком pre.mermaid для клиентского рендера (M7)', () => {
+  const html = renderMarkdown('```mermaid\ngraph TD;\nA-->B;\n```');
+  assert.match(html, /<pre class="mermaid"><code>/);
+  assert.ok(html.includes('graph TD;'));
+  assert.ok(!html.includes('hljs-'));
+});
+
 // ---------------------------------------------------------------------------
 // Ограничения входа
 // ---------------------------------------------------------------------------

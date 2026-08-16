@@ -43,6 +43,7 @@
     "@lezer/markdown": "^1.7.2",
     "better-sqlite3": "11.10.0",
     "electron-updater": "^6.3.9",
+    "mermaid": "^11.16.1",
     "ws": "^8.21.3"
   },
   "devDependencies": {

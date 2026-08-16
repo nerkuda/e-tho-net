@@ -2174,6 +2174,18 @@ body.dragging * {
   max-width: 100%;
 }
 
+/* Mermaid (M7): отрендеренная диаграмма внутри блока кода. */
+.comment-view pre.mermaid.mermaid-rendered {
+  background: var(--surface);
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.comment-view pre.mermaid.mermaid-rendered svg {
+  max-width: 100%;
+  height: auto;
+}
+
 /* Подсветка fenced-кода в просмотре (M4): токены highlight.js из единого
    рендерера; фон блока задаёт `.comment-view pre`. */
 .comment-view code.hljs {

@@ -16,6 +16,7 @@ import { div, renderHtml } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
+import { renderMermaidBlocks } from './md-mermaid.js';
 
 /** Owner entity for pasted-image attachments ('thought' | 'link'). */
 export interface AttachmentsOwner {
@@ -68,6 +69,7 @@ export function createMarkdownField(opts: {
     view.replaceChildren();
     if (currentHtml.trim() !== '') {
       renderHtml(view, currentHtml);
+      renderMermaidBlocks(view);
     }
   };
 

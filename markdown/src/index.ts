@@ -28,7 +28,7 @@ export { WIKI_LINK_CLASS, WIKI_LINK_TARGET_ATTR } from './wiki-link.js';
  * `body_html` of every comment once when this value differs from the stored
  * one (see `markdown-sweep.ts`).
  */
-export const MD_RENDER_VERSION = 'markdown-it/1';
+export const MD_RENDER_VERSION = 'markdown-it/2';
 
 /** Default input cap (256 KiB) to bound rendering work for a single document. */
 export const DEFAULT_MAX_LENGTH = 256 * 1024;
@@ -78,6 +78,11 @@ function escapeHtml(input: string): string {
 /** Render one fenced code block: highlight.js when the language is known. */
 function highlightFence(code: string, lang: string): string {
   const safeLang = lang !== '' && PLAIN_LANG_RE.test(lang) ? lang : '';
+  if (safeLang === 'mermaid') {
+    // Диаграммы рендерит клиент (mermaid.js) — сервер отдаёт только блок
+    // с пометкой, чтобы просмотр и live preview вели себя одинаково (M7).
+    return `<pre class="mermaid"><code>${escapeHtml(code)}</code></pre>`;
+  }
   const language = safeLang !== '' && hljs.getLanguage(safeLang) !== undefined ? safeLang : '';
   if (language === '') {
     return `<pre><code class="hljs">${escapeHtml(code)}</code></pre>`;
