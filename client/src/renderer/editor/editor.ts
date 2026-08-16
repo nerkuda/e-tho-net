@@ -514,7 +514,14 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     }, 800);
   });
   void findDraft(networkId, 'thought', thought.id).then((hit) => {
-    if (hit !== null && titleArea.value !== hit.value) {
+    if (hit === null) return;
+    if (hit.value === thought.title) {
+      // The debounced draft fired after the blur save — the text is already
+      // on the server; drop the stale draft instead of restoring it.
+      void clearDraft(hit.id);
+      return;
+    }
+    if (titleArea.value !== hit.value) {
       titleArea.value = hit.value;
       titleDraftId = hit.id;
       resizeTitle();
@@ -523,6 +530,10 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   });
 
   const commitTitle = (): void => {
+    // The blur save settles the edit — the pending debounce must not mirror
+    // it into a stale draft afterwards.
+    if (titleDraftTimer !== null) window.clearTimeout(titleDraftTimer);
+    titleDraftTimer = null;
     const value = titleArea.value.trim();
     if (value === '' || value === thought.title) {
       titleArea.value = thought.title;

@@ -6,7 +6,10 @@
  * server-produced `body_html`; edit mode uses a textarea over `body_md`; save
  * creates or updates the permanent comment (`If-Match` on update). Applies to
  * thoughts and links; the canvas 📝 indicator cache is invalidated after every
- * change. Chronological comments live in the «Хроника» tab (chrono-tab.ts).
+ * change. The field always opens in view mode — a saved draft never forces
+ * editing (stale drafts whose text matches the saved value are dropped);
+ * editing starts on double-click only (08-ui-spec.md §6.4). Chronological
+ * comments live in the «Хроника» tab (chrono-tab.ts).
  */
 
 import type { Comment } from '@etn/shared';
@@ -20,10 +23,9 @@ import {
 } from '../drafts.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
 import { registerMainSection, type EditorContext } from './editor.js';
-import { createMarkdownField, editMarkdownField } from './markdown-field.js';
+import { createMarkdownField } from './markdown-field.js';
 import { registerChronoTab } from './chrono-tab.js';
 
 /** Registers the permanent-comment section and the «Хроника» tab (L7). */
@@ -71,19 +73,32 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
     }, 800);
   };
 
-  /** Re-opens the editor with a saved draft if one exists. */
-  async function restoreDraftIfAny(): Promise<void> {
+  /**
+   * Drops stale drafts whose text already matches the saved value — they are
+   * left behind when the debounced draft save fires after the blur save (the
+   * field is rebuilt by then, so the draft is never cleared). Real drafts are
+   * left alone: they are re-sent by the retry loop on reconnect (H19).
+   * The editor never forces edit mode for a newly opened entity — the comment
+   * always opens in view mode (08-ui-spec.md §6.4), editing starts on a
+   * double-click only.
+   */
+  async function cleanupStaleDrafts(): Promise<void> {
     if (field === null) return;
     const update = await findDraft(networkId, 'comment', permanent?.id ?? ctx.ownerId);
     const created = await findDraft(networkId, 'comment-new', ctx.ownerId);
-    const hit = update ?? created;
-    if (hit === null) return;
-    draftId = hit.id;
-    draftKind = created !== null ? 'comment-new' : 'comment';
-    const body = created !== null ? safeParseBody(created.value) : hit.value;
-    editMarkdownField(field, body);
-    notice('Восстановлен несохранённый черновик комментария.');
+    if (update !== null && permanent !== null && update.value === permanent.body_md) {
+      await clearDraft(update.id);
+    }
+    if (created !== null && permanent !== null && safeParseBody(created.value) === permanent.body_md) {
+      await clearDraft(created.id);
+    }
   }
+
+  /** Cancels the pending draft mirror (save/cancel paths must not fire it). */
+  const cancelDraftTimer = (): void => {
+    if (draftTimer !== null) window.clearTimeout(draftTimer);
+    draftTimer = null;
+  };
 
   void (async () => {
     let comments: Comment[];
@@ -102,6 +117,9 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
       onInput: (md) => scheduleDraft(md),
       onSave: async (md) => {
+        // The blur save settles the edit — the pending debounce must not
+        // mirror it into a stale draft afterwards.
+        cancelDraftTimer();
         let html: string;
         if (permanent === null) {
           if (md.trim() === '') {
@@ -130,9 +148,18 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
         invalidateIndicators(ctx.ownerId);
         return html;
       },
+      onCancel: () => {
+        // Esc: the edit is dropped — neither the pending timer nor the saved
+        // draft mirror of the cancelled text is wanted.
+        cancelDraftTimer();
+        if (draftId !== null) {
+          void clearDraft(draftId);
+          draftId = null;
+        }
+      },
     });
     box.replaceChildren(field);
-    await restoreDraftIfAny();
+    await cleanupStaleDrafts();
   })();
 
   return box;

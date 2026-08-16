@@ -32,6 +32,11 @@ export function createMarkdownField(opts: {
   /** Live text changes (e.g. to mirror a draft). */
   onInput?: (md: string) => void;
   /**
+   * Fired when Esc cancels a non-empty edit — the caller may drop its draft
+   * mirror of the cancelled text.
+   */
+  onCancel?: () => void;
+  /**
    * When set, pasting an image from the clipboard saves it as an attachment of
    * this entity and inserts the markdown image reference at the caret.
    */
@@ -110,6 +115,9 @@ export function createMarkdownField(opts: {
   area.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
+      // The user cancelled an edit in progress — let the caller drop its
+      // draft mirror (an unchanged field leaves the draft alone).
+      if (area.value !== currentMd) opts.onCancel?.();
       // Revert to the saved text so the blur handler treats it as unchanged.
       area.value = currentMd;
       area.blur();

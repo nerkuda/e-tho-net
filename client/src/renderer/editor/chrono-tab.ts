@@ -73,7 +73,9 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   let selectedId: string | null = null;
 
   void reload();
-  startNew();
+  // The tab opens with an empty editor area — a comment is picked by a click
+  // on a table row, a new one starts via «Добавить» (08-ui-spec.md §6.6).
+  showEmptyEditor();
 
   /** Loads and renders the chronological table. */
   async function reload(keepSelection = true): Promise<void> {
@@ -142,6 +144,16 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   function startNew(): void {
     selectedId = null;
     buildEditor(null, true);
+  }
+
+  /** Shows an empty editor area — nothing is selected yet (§6.6). */
+  function showEmptyEditor(): void {
+    selectedId = null;
+    const hint = el('p', 'muted', 'Выберите комментарий из списка или нажмите «Добавить».');
+    hint.style.margin = '0';
+    const body = div('chrono-editor-body');
+    body.append(hint);
+    bottom.replaceChildren(body);
   }
 
   /**
