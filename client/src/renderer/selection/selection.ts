@@ -150,13 +150,14 @@ export function toggleSelection(ids: string[]): void {
 }
 
 /**
- * Adds ids to the selection; ids already present are skipped (no duplicates,
- * 08-ui-spec.md §5.1).
+ * Adds ids to the selection; duplicates — both against the list already stored
+ * and inside the batch itself (a shared parent of several selected thoughts
+ * arrives once per thought) — are skipped (08-ui-spec.md §5.1).
  */
 export function addToSelection(ids: string[]): void {
   if (ids.length === 0) return;
   const current = new Set(store.state.selection);
-  const fresh = ids.filter((id) => !current.has(id));
+  const fresh = [...new Set(ids)].filter((id) => !current.has(id));
   if (fresh.length === 0) return;
   store.update({ selection: [...store.state.selection, ...fresh] });
 }
