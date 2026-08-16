@@ -17,7 +17,14 @@
     "rebuild:native": "node scripts/rebuild-native.mjs"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.9",
     "@etn/shared": "*",
+    "@lezer/highlight": "^1.2.3",
     "better-sqlite3": "11.10.0",
     "electron-updater": "^6.3.9",
     "ws": "^8.21.3"

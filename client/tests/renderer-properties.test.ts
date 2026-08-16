@@ -64,11 +64,21 @@ class ShimElement {
 /** Memoized properties module for the pure-helper tests. */
 let loadedModule: any = null;
 
-/** Installs the DOM/window shims and imports the module against fixtures. */
-async function buildWithFixtures(): Promise<ShimElement> {
+/**
+ * Minimal `document` shim. `documentElement.style` covers CodeMirror 6's
+ * import-time browser probing (the markdown editor is imported through the
+ * editor chain).
+ */
+function shimDocument(): void {
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
+    documentElement: { style: {} },
   };
+}
+
+/** Installs the DOM/window shims and imports the module against fixtures. */
+async function buildWithFixtures(): Promise<ShimElement> {
+  shimDocument();
   (globalThis as any).window = {
     etn: {
       types: {
@@ -167,9 +177,7 @@ describe('property value autocomplete helpers (pure)', () => {
   /** Imports the module (once) with the DOM shims installed. */
   async function loadPropsModule(): Promise<any> {
     if (loadedModule === null) {
-      (globalThis as any).document = {
-        createElement: (tag: string) => new ShimElement(tag),
-      };
+      shimDocument();
       (globalThis as any).window = { etn: {} };
       loadedModule = await import('../src/renderer/editor/properties.js');
     }

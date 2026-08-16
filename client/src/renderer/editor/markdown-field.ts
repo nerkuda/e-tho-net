@@ -1,11 +1,10 @@
 /**
  * A reusable markdown view/edit field (08-ui-spec.md §6.4, §6.6).
  *
- * Shows server-rendered HTML by default; a double-click switches to a markdown
- * textarea. Leaving the field (blur) commits the change through `onSave` (which
- * returns the freshly rendered HTML) and returns to the view; `Esc` cancels,
- * restoring the previous text. The field auto-sizes to its content with a
- * minimum height of `minRows` lines.
+ * Shows server-rendered HTML by default; a double-click switches to a
+ * CodeMirror 6 markdown editor (task M2). Leaving the field (blur) commits the
+ * change through `onSave` (which returns the freshly rendered HTML) and
+ * returns to the view; `Esc` cancels, restoring the previous text.
  *
  * `onSave` may be omitted (e.g. a "new" form whose text is committed together
  * with the rest of the dialog): blur then just switches back to the view.
@@ -13,15 +12,24 @@
 
 import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
-import { div, el, renderHtml } from '../lib/dom.js';
+import { div, renderHtml } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
+import { createMdEditor, type MdEditor } from './md-editor.js';
 
 /** Owner entity for pasted-image attachments ('thought' | 'link'). */
 export interface AttachmentsOwner {
   ownerType: 'thought' | 'link';
   ownerId: string;
 }
+
+/** Internal control surface of a built field (WeakMap keyed by root). */
+interface MarkdownFieldHandle {
+  showEdit(md?: string): void;
+  set(md: string, html: string): void;
+}
+
+const handles = new WeakMap<HTMLElement, MarkdownFieldHandle>();
 
 /** Builds a markdown view/edit field. */
 export function createMarkdownField(opts: {
@@ -43,15 +51,18 @@ export function createMarkdownField(opts: {
   attachmentsOwner?: AttachmentsOwner;
   minRows?: number;
 }): HTMLElement {
-  const minRows = opts.minRows ?? 5;
   const root = div('md-field');
   const view = div('md-field-view comment-view');
-  const area = el('textarea', 'md-field-area textarea-input') as HTMLTextAreaElement;
-  area.rows = minRows;
+  const area = div('md-field-area');
+  area.tabIndex = -1;
   area.setAttribute('aria-label', 'Текст комментария');
 
   let currentMd = opts.md;
   let currentHtml = opts.html;
+  let cancelled = false;
+  /** Guards against a focusout fired while the editor is being rebuilt. */
+  let mounting = false;
+  let editor: MdEditor | null = null;
 
   const renderView = (): void => {
     view.replaceChildren();
@@ -66,35 +77,24 @@ export function createMarkdownField(opts: {
     renderView();
   };
 
-  const showEdit = (): void => {
-    view.classList.add('hidden');
-    area.classList.remove('hidden');
-    area.value = currentMd;
-    resize();
-    area.focus();
-    // Place the caret at the end.
-    area.setSelectionRange(area.value.length, area.value.length);
-  };
-
-  const resize = (): void => {
-    area.style.height = 'auto';
-    area.style.height = `${area.scrollHeight}px`;
-  };
-
-  area.addEventListener('input', () => {
-    resize();
-    opts.onInput?.(area.value);
-  });
-
-  area.addEventListener('blur', () => {
-    const md = area.value;
+  const commitOrRevert = (): void => {
+    if (mounting || editor === null) return;
+    const md = editor.getValue();
+    if (cancelled) {
+      // Esc: the edit is dropped; restore the saved text so the field returns
+      // to the view unchanged.
+      if (md !== currentMd) opts.onCancel?.();
+      editor.setValue(currentMd);
+      showView();
+      return;
+    }
     if (md === currentMd) {
       showView();
       return;
     }
     if (opts.onSave === undefined) {
       // No autosave: without a client renderer we cannot preview unsaved md.
-      area.value = currentMd;
+      editor.setValue(currentMd);
       showView();
       return;
     }
@@ -107,36 +107,63 @@ export function createMarkdownField(opts: {
       })
       .catch(() => {
         // Save failed: revert.
-        area.value = currentMd;
+        editor?.setValue(currentMd);
         showView();
       });
-  });
+  };
 
-  area.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      // The user cancelled an edit in progress — let the caller drop its
-      // draft mirror (an unchanged field leaves the draft alone).
-      if (area.value !== currentMd) opts.onCancel?.();
-      // Revert to the saved text so the blur handler treats it as unchanged.
-      area.value = currentMd;
-      area.blur();
-    }
-  });
+  /** Mounts a fresh editor for the current markdown. */
+  const mountEditor = (): void => {
+    mounting = true;
+    editor?.destroy();
+    cancelled = false;
+    editor = createMdEditor(currentMd, {
+      onInput: (md) => opts.onInput?.(md),
+      onEscape: () => {
+        cancelled = true;
+        editor?.blur();
+      },
+      onBlur: () => commitOrRevert(),
+    });
+    // Pasting files (screenshots / copied files) saves them as server-stored
+    // attachments of the owner entity and inserts a markdown reference at the
+    // caret: images embed as `![alt](etnimg:…)`, other files as a link.
+    editor.dom.addEventListener('paste', (event) => {
+      const owner = opts.attachmentsOwner;
+      if (owner === undefined || editor === null) return;
+      const files = event.clipboardData?.files;
+      if (files === undefined || files.length === 0) return;
+      event.preventDefault();
+      void insertClipboardFiles(editor, owner, Array.from(files));
+    });
+    area.replaceChildren(editor.dom);
+    mounting = false;
+    editor.focusToEnd();
+  };
 
-  // Pasting files (screenshots / copied files) saves them as server-stored
-  // attachments of the owner entity and inserts a markdown reference at the
-  // caret: images embed as `![alt](etnimg:…)`, other files as a link.
-  area.addEventListener('paste', (event) => {
-    const owner = opts.attachmentsOwner;
-    if (owner === undefined) return;
-    const files = event.clipboardData?.files;
-    if (files === undefined || files.length === 0) return;
-    event.preventDefault();
-    void insertClipboardFiles(area, owner, Array.from(files));
-  });
+  const showEdit = (md?: string): void => {
+    if (md !== undefined) currentMd = md;
+    view.classList.add('hidden');
+    area.classList.remove('hidden');
+    mountEditor();
+  };
 
-  view.addEventListener('dblclick', showEdit);
+  // Programmatic focus (e.g. the editor rebuild refocus, editor.ts) lands on
+  // the wrapper and is delegated to the editor.
+  area.addEventListener('focus', () => editor?.focus());
+  view.addEventListener('dblclick', () => showEdit());
+
+  handles.set(root, {
+    showEdit,
+    set: (md, html) => {
+      currentMd = md;
+      currentHtml = html;
+      renderView();
+      if (editor !== null && !area.classList.contains('hidden')) {
+        editor.setValue(md);
+      }
+    },
+  });
 
   root.append(view, area);
   showView();
@@ -145,13 +172,12 @@ export function createMarkdownField(opts: {
 
 /** Switches an already-built field into edit mode (e.g. to restore a draft). */
 export function editMarkdownField(root: HTMLElement, md?: string): void {
-  const view = root.querySelector<HTMLElement>('.md-field-view');
-  const area = root.querySelector<HTMLTextAreaElement>('.md-field-area');
-  if (view === null || area === null) return;
-  view.classList.add('hidden');
-  area.classList.remove('hidden');
-  if (md !== undefined) area.value = md;
-  area.focus();
+  handles.get(root)?.showEdit(md);
+}
+
+/** Updates an already-built field's content (e.g. after an external change). */
+export function setMarkdownField(root: HTMLElement, md: string, html: string): void {
+  handles.get(root)?.set(md, html);
 }
 
 /**
@@ -160,7 +186,7 @@ export function editMarkdownField(root: HTMLElement, md?: string): void {
  * at the caret: `![alt](…)` for images, `[name](…)` links for other files.
  */
 async function insertClipboardFiles(
-  area: HTMLTextAreaElement,
+  editor: MdEditor,
   owner: AttachmentsOwner,
   files: File[],
 ): Promise<void> {
@@ -198,7 +224,7 @@ async function insertClipboardFiles(
     const ref = mime.startsWith('image/')
       ? `![${sanitizeAlt(title)}](${url})`
       : `[${sanitizeAlt(title)}](${url})`;
-    insertAtCaret(area, ref);
+    editor.insertAtCaret(ref);
   }
 }
 
@@ -249,28 +275,4 @@ export function etnimgUrl(filePath: string): string {
 /** Markdown image alt text must not contain brackets. */
 function sanitizeAlt(text: string): string {
   return text.replace(/[[\]]/g, '').trim() || 'изображение';
-}
-
-/** Inserts text at the caret and fires `input` (resize + onInput listeners). */
-function insertAtCaret(area: HTMLTextAreaElement, text: string): void {
-  const start = area.selectionStart ?? area.value.length;
-  const end = area.selectionEnd ?? start;
-  const prefix = start > 0 && area.value[start - 1] !== '\n' ? '\n' : '';
-  area.setRangeText(`${prefix}${text}`, start, end, 'end');
-  area.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
-/** Updates an already-built field's content (e.g. after an external change). */
-export function setMarkdownField(
-  root: HTMLElement,
-  md: string,
-  html: string,
-): void {
-  const view = root.querySelector<HTMLElement>('.md-field-view');
-  const area = root.querySelector<HTMLTextAreaElement>('.md-field-area');
-  if (view !== null) {
-    view.replaceChildren();
-    if (html.trim() !== '') renderHtml(view, html);
-  }
-  if (area !== null) area.value = md;
 }
