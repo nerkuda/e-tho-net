@@ -1071,11 +1071,14 @@ body.resizing-h {
 
 /* Link-direction ellipses lie ON the cloud frame (L12, 08-ui-spec.md §2.2):
  * centered on the frame line, half of the 4px thickening outside the card.
- * Compact by request: 4px tall, a quarter of the cloud width wide (the inside
- * halves feed the cloudHeight() formula in pure.ts). */
+ * Compact by request: 4px tall, a quarter of the cloud width wide, centered
+ * horizontally on the cloud (the inside halves feed the cloudHeight()
+ * formula in pure.ts). */
 .cloud .ellipse {
   position: absolute;
-  left: 8px;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
   width: 25%;
   height: calc(4px * var(--cloud-zoom, 1));
   border-radius: 999px;
@@ -2820,8 +2823,12 @@ body.dragging * {
 
 /* In the tree the ellipses expand/fold levels — a pointer, not a drag handle.
  * The 25% canvas width would be oversized on the double-wide tree clouds, so
- * the tree keeps fixed-size knobs instead. */
+ * the tree keeps fixed-size knobs at the left edge instead of the centered
+ * canvas position. */
 .st-row .cloud .ellipse {
+  left: 8px;
+  right: auto;
+  margin: 0;
   width: 36px;
   height: calc(8px * var(--cloud-zoom, 1));
   cursor: pointer;
