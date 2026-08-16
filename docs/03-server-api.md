@@ -445,7 +445,14 @@ POST   /api/v1/networks/{nid}/thoughts/{id}/comments
 PATCH  /api/v1/networks/{nid}/comments/{id}   If-Match
 DELETE /api/v1/networks/{nid}/comments/{id}   If-Match
 # 409 если попытка создать второй permanent для того же владельца.
-# Сервер рендерит body_html из body_md через общий markdown-рендерер.
+# Сервер рендерит body_html из body_md через ЕДИНЫЙ markdown-рендерер
+# @etn/markdown (markdown-it): GFM-таблицы, wiki-ссылки [[имя|алиас]],
+# размеры картинок ![alt|600px](url) / ![alt|50%](url), подсветка
+# fenced-кода (highlight.js). XSS-безопасность: html:false (raw HTML
+# экранируется), allow-list протоколов (http/https/mailto; для картинок
+# дополнительно data:/file:/etnimg:), лимит длины 256 КиБ. При смене версии
+# рендера сервер один раз при старте перерендеривает кеш body_html всех
+# комментариев (маркер в L1-настройке md.render_version).
 # Аналогично для /links/{id}/comments
 ```
 
