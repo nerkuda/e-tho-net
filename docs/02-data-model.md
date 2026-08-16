@@ -162,6 +162,7 @@ TTL: 10 минут. Очистка по джобе.
 | `type_id` | TEXT FK → thought_types.id ON DELETE SET NULL | Тип мысли |
 | `icon` | TEXT | Эмодзи или путь/URL картинки |
 | `icon_kind` | TEXT NOT NULL DEFAULT `'emoji'` | `'emoji'` \| `'image'` |
+| `icon_attachment_id` | TEXT | Id вложения-картинки этой мысли, чей оригинал показывается по `Ctrl+наведению` на иконку (L16). `NULL` — обычная иконка без вложения-источника |
 | `active` | INTEGER NOT NULL DEFAULT 1 | 0 — неактуальная |
 | `is_protected` | INTEGER NOT NULL DEFAULT 0 | 1 — системная мысль (HOME); нельзя удалить |
 | `is_root` | INTEGER NOT NULL DEFAULT 0 | 1 — корневая мысль сети (HOME) |

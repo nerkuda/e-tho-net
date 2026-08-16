@@ -209,9 +209,14 @@ POST /api/v1/networks/{nid}/thoughts
 ```
 PATCH /api/v1/networks/{nid}/thoughts/{id}
 If-Match: <version>
-{ title?, synonyms?, type_id?, icon?, icon_kind?, active?,
+{ title?, synonyms?, type_id?, icon?, icon_kind?, icon_attachment_id?, active?,
   fg_color?, bg_color?, font_bold?, font_italic?, font_underline?, font_strike? }
 → 200 { data: {..., version: N+1} }
+# icon_attachment_id (L16) — вложение-картинка этой мысли, чей оригинал
+# показывается по Ctrl+наведению на иконку; 422 если вложение не найдено,
+# не является файлом-картинкой или принадлежит другой мысли. Смена иконки
+# на эмодзи/URL или её очистка (без явного icon_attachment_id) сбрасывает
+# ссылку в NULL; удаление и перенос вложения — тоже.
 # 422 если is_protected=1 и попытка удалить (через DELETE) или сменить active у is_root.
 ```
 
