@@ -477,6 +477,24 @@ UNIQUE на `(name_forward, name_reverse)`.
 Алгоритм применения сортировки и поведения при изменении порядка —
 см. [11-settings-and-state.md](11-settings-and-state.md), п. 3.
 
+#### 3.10.5. saved_filters
+
+Именованные отборы вида «Структуры мыслей» (08-ui-spec.md §15): критерии +
+сортировка, сохранённые пользователем для повторного применения. Уровень L3 —
+одинаковы на всех клиентах пользователя, синхронизируются событиями
+`saved-filter.*` (`audience=user`, см. [04-realtime.md](04-realtime.md) п. 4.8).
+
+| Столбец | Тип | Описание |
+|---------|-----|----------|
+| `id` | TEXT NOT NULL | UUID |
+| `user_id` | TEXT NOT NULL | Владелец (только свои отборы доступны через API) |
+| `name` | TEXT NOT NULL | Имя отбора (уникально в пределах пользователя) |
+| `definition` | TEXT NOT NULL | JSON: `{ keywords?, type_ids?, link_type_ids?, properties?, show_inactive?, sort, order }` (03-server-api.md §6.10/§18) |
+| `created_at` | TEXT NOT NULL | |
+| `updated_at` | TEXT NOT NULL | |
+| PRIMARY KEY | `(id)` | |
+| UNIQUE | `(user_id, name)` | Повторное имя → 409 `DUPLICATE` |
+
 ### 3.11. Полнотекстовый поиск (FTS5)
 
 Четыре FTS-таблицы покрывают сценарий поиска (см. [08-ui-spec.md](08-ui-spec.md),

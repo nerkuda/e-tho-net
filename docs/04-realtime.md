@@ -124,6 +124,9 @@ Header: Authorization: Bearer <API-key>
 | `user-focus-preferences.updated` | `{ focus_thought_id, dir, sort, sort_order }` | Выбор сортировки зоны фокуса |
 | `user-focus-order.updated` | `{ focus_thought_id, dir, ordered_ids }` | Ручной порядок мыслей зоны фокуса |
 | `thought-view.updated` | `{ thought_id, last_viewed_at }` | Метка просмотра для сортировки |
+| `saved-filter.created` | полный объект отбора | Сохранённый отбор «Структур» (03-server-api.md §18) |
+| `saved-filter.updated` | полный объект отбора | Переименование/изменение определения |
+| `saved-filter.deleted` | `{ id }` | Удаление сохранённого отбора |
 
 Эти события доставляются только подключениям того же `user_id` (на всех его
 клиентах). Другие участники сети их не получают. См.

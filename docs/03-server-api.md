@@ -281,6 +281,63 @@ POST /api/v1/networks/{nid}/thoughts/resolve
 # где нужен массовый «облегчённый» набор облачков без полных связей/комментариев.
 ```
 
+### 6.10. Отбор мыслей для «Структур» (L15)
+```
+POST /api/v1/networks/{nid}/thoughts/query
+{
+  keywords?: "счет* -вод*",       # мини-синтаксис, см. ниже; AND по словам
+  type_ids?: ["..."],             # типы мыслей (OR внутри списка)
+  link_type_ids?: ["..."],        # мысль имеет active-связь любого из типов
+                                  # в любом направлении (source или target)
+  properties?: [                  # все условия объединяются по AND
+    { property_id: "...", op: "contains"|"eq"|"gt"|"lt"|"in"|"not_in",
+      value: "..." | 42 | true | ["Москва", "Воронеж"] }
+  ],
+  show_inactive?: false,          # как в focus/поиске
+  sort: "alpha"|"created"|"viewed",
+  order: "asc"|"desc",
+  limit: 100, offset: 0           # limit клампится в 1..100
+}
+→ 200 { data: [ ThoughtRef... ], meta: { total, limit, offset } }
+```
+
+- **Пустой фильтр** (нет `keywords`, `type_ids`, `link_type_ids` и `properties`)
+  возвращает ровно одну мысль — HOME (`is_root=1`), `meta.total=1`.
+- **Мини-синтаксис keywords**: слова разделяются пробелами, порядок любой,
+  все обязательны (AND). `*` внутри слова — любое количество любых символов
+  (`счет*` → подстрока с префиксом «счет»); слово без `*` — точная подстрока.
+  `-слово` — исключение: слова не должно быть ни в названии, ни в синонимах.
+  Пример: `счет* -вод*` соответствует «Счетчик электричества», но не
+  «счета за воду». Реализация — параметризованный `LIKE … ESCAPE '\'` по
+  нормализованным `title_norm`/`synonym_norm` (`%`, `_`, `\` экранируются).
+- **Операции свойств** применяются к колонке типа значения определения
+  (`value_text/value_number/value_date/value_bool/value_thought_ref`); допустимые
+  `op` зависят от `value_type`: text/url — `contains|eq|in|not_in`;
+  number/date — `eq|gt|lt`; bool — `eq`; thought_ref — `eq|in|not_in`.
+  `in`/`not_in` принимают массив значений (OR внутри списка).
+- Сортировка: `alpha` — по заголовку (NOCASE), `created` — по `created_at`,
+  `viewed` — по `thought_views.last_viewed_at` текущего пользователя
+  (NULL — последними при `asc`).
+
+### 6.11. Иерархия одного уровня (для дерева «Структур»)
+```
+GET /api/v1/networks/{nid}/thoughts/{id}/hierarchy
+    ?dir=parents|children&show_inactive=&exclude_ids=id1,id2,...
+→ 200 { data: {
+     neighbors: [ ThoughtRef... ],   # родители (источники связей) или дети (цели)
+     edges:     [ { id, source_id, target_id, type_id, color, style, width } ],
+                                      # active-связи между {id} и соседями
+     truncated: false                 # true — соседей больше лимита (100)
+   } }
+```
+
+- Соседи исключаются по `exclude_ids` **до** применения лимита — так клиент
+  убирает повторы в пределах ветки раскрытия (дедуп per-ветка, 08-ui-spec.md
+  §15.5): например, дети A = {Б, В}; при раскрытии Б с `exclude_ids=[A,Б,В]`
+  из детей {В, Г} вернётся только Г.
+- До 1000 id в `exclude_ids`; сортировка соседей — `alpha asc` (дерево
+  показывает единый стабильный порядок).
+
 ## 7. Связи
 
 ### 7.1. CRUD
@@ -486,3 +543,28 @@ GET /api/v1/version     → версия сервера и совместимы�
   вне поддерживаемого диапазона — клиент блокирует работу и показывает сообщение.
 - Все изменения API идут под новым minor/major в `/api/v1` с возможным выкатом
   `/api/v2` параллельно. На MVP — только `v1`.
+
+## 18. Сохранённые отборы («Структуры мыслей», L3)
+
+Именованные отборы критериев + сортировки (см. §6.10), хранятся per-user в
+network-БД (`saved_filters`, [02-data-model.md](02-data-model.md) §3.10.5) и
+синхронизируются между клиентами пользователя событиями `saved-filter.*`
+(`audience=user`). Пользователь видит и меняет **только свои** отборы;
+публикация другим пользователям — вне MVP.
+
+```
+GET    /api/v1/networks/{nid}/saved-filters
+       → 200 { data: [ { id, name, definition, created_at, updated_at } ] }  # по имени (alpha)
+POST   /api/v1/networks/{nid}/saved-filters        # Client-Request-Id
+       { name: "Мои счета", definition: { keywords?, type_ids?, link_type_ids?,
+         properties?, show_inactive?, sort, order } }
+       → 201 { data: { id, name, definition, created_at, updated_at } }
+       # 409 DUPLICATE при повторном имени; definition валидируется как в §6.10
+PATCH  /api/v1/networks/{nid}/saved-filters/{fid}  # Client-Request-Id; только свой
+       { name?, definition? }                      # 409 при конфликте имени
+DELETE /api/v1/networks/{nid}/saved-filters/{fid}  # только свой
+```
+
+События после мутаций: `saved-filter.created/updated` (полный объект),
+`saved-filter.deleted` (`{ id }`) — [04-realtime.md](04-realtime.md) п. 4.8.
+
