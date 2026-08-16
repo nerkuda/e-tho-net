@@ -181,6 +181,12 @@ describe(
             result.items.map((t) => t.id),
             [home],
           );
+          // The page carries the direction flags — the tree fills the root
+          // ellipses right after the query, before any expansion.
+          assert.deepEqual(result.directions[home], {
+            has_incoming: false,
+            has_outgoing: false,
+          });
         } finally {
           ndb.close();
         }
@@ -294,6 +300,10 @@ describe(
             result.items.map((t) => t.id).sort(),
             [src, tgt].sort(),
           );
+          // Direction flags of the page reflect the actual links: src has an
+          // outgoing link, tgt an incoming one.
+          assert.equal(result.directions[src]?.has_outgoing, true);
+          assert.equal(result.directions[tgt]?.has_incoming, true);
         } finally {
           ndb.close();
         }

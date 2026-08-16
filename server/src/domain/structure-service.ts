@@ -35,6 +35,7 @@ import {
   type StructurePropertyOp,
   type StructurePropertyValue,
   type StructureQueryRequest,
+  type StructureDirectionFlags,
   type StructureSort,
   type ThoughtRef,
   type HierarchyResponse,
@@ -251,10 +252,12 @@ function validateFilterName(name: string, requestId?: string): string {
 // Query
 // ---------------------------------------------------------------------------
 
-/** Result of {@link queryThoughts}: the page plus the unrestricted match count. */
+/** Result of {@link queryThoughts}: the page, the unrestricted match count and
+ * the link-direction flags of the page (ellipse fill in the tree). */
 export interface StructureQueryResult {
   items: ThoughtRef[];
   total: number;
+  directions: StructureDirectionFlags;
 }
 
 /** Convert a condition scalar to the SQL parameter of its value column. */
@@ -288,6 +291,15 @@ function sqlScalar(
   }
 }
 
+/** Reads the link-direction flags of the given thoughts as a plain record. */
+function directionsOf(ndb: NetworkDb, ids: string[]): StructureDirectionFlags {
+  const out: StructureDirectionFlags = {};
+  for (const [id, d] of getLinkDirections(ndb, ids)) {
+    out[id] = { has_incoming: d.has_in, has_outgoing: d.has_out };
+  }
+  return out;
+}
+
 /**
  * Filter thoughts by the structure criteria (docs/03-server-api.md §6.10).
  *
@@ -305,8 +317,9 @@ export function queryThoughts(
     const row = ndb
       .prepare(`SELECT ${REF_COLUMNS} FROM thoughts t WHERE t.is_root = 1 LIMIT 1`)
       .get() as ThoughtRefRow | undefined;
-    if (!row) return { items: [], total: 0 };
-    return { items: [rowToThoughtRef(row)], total: 1 };
+    if (!row) return { items: [], total: 0, directions: {} };
+    const home = rowToThoughtRef(row);
+    return { items: [home], total: 1, directions: directionsOf(ndb, [home.id]) };
   }
 
   const showInactive = req.show_inactive === true ? 1 : 0;
@@ -425,7 +438,10 @@ export function queryThoughts(
   const rows = ndb
     .prepare(`SELECT ${REF_COLUMNS} ${baseSql} ${orderBy} LIMIT ? OFFSET ?`)
     .all(...joinParams, ...params, limit, offset) as Array<ThoughtRefRow>;
-  return { items: rows.map(rowToThoughtRef), total };
+  const items = rows.map(rowToThoughtRef);
+  // The tree fills the root ellipses from these flags right after the query —
+  // without them the fill would only appear after the first expansion.
+  return { items, total, directions: directionsOf(ndb, items.map((i) => i.id)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -488,12 +504,7 @@ export function getHierarchy(
   // Whether each visible thought has active incoming/outgoing links at all —
   // in the tree these mean "has parents/children to expand", so the ellipses
   // can be filled exactly like on the canvas.
-  const directions = getLinkDirections(ndb, visibleIds);
-  const dirMap: Record<string, { has_incoming: boolean; has_outgoing: boolean }> = {};
-  for (const [id, d] of directions) {
-    dirMap[id] = { has_incoming: d.has_in, has_outgoing: d.has_out };
-  }
-  return { neighbors, edges, truncated, directions: dirMap };
+  return { neighbors, edges, truncated, directions: directionsOf(ndb, visibleIds) };
 }
 
 // ---------------------------------------------------------------------------

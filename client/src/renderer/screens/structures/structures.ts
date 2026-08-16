@@ -42,10 +42,14 @@ import {
   type TreeRow,
 } from './layout.js';
 import {
+  applyPanelWidth,
   buildConditions,
+  FILTER_W_MAX,
+  FILTER_W_MIN,
   getFilterState,
   mountFilterPanel,
   setFilterState,
+  setPanelWidth,
   type FilterState,
 } from './filter-panel.js';
 
@@ -138,6 +142,11 @@ function parseFilterState(raw: string): FilterState {
       sort: parsed.sort === 'alpha' || parsed.sort === 'created' || parsed.sort === 'viewed' ? parsed.sort : 'created',
       order: parsed.order === 'asc' || parsed.order === 'desc' ? parsed.order : 'asc',
       savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,
+      panelWidth:
+        typeof parsed.panelWidth === 'number' &&
+        Number.isFinite(parsed.panelWidth)
+          ? parsed.panelWidth
+          : null,
     };
   } catch {
     return getFilterState();
@@ -190,12 +199,18 @@ async function applyQuery(reset: boolean): Promise<void> {
       resultIds = result.items.map((r) => r.id);
       expansion = new Map();
       hierarchy.clear();
+      // Stale expansion data must not leak into the fresh tree.
+      directions.clear();
+      edges.clear();
     } else {
       const known = new Set(resultIds);
       resultIds = [...resultIds, ...result.items.map((r) => r.id).filter((id) => !known.has(id))];
     }
     total = result.total;
     for (const ref of result.items) refs.set(ref.id, ref);
+    // The page carries its own direction flags — the root ellipses are filled
+    // right after the query, without waiting for the first expansion (§15.4).
+    for (const [id, flags] of Object.entries(result.directions)) directions.set(id, flags);
     renderTree();
   } catch (err) {
     notice(`Ошибка отбора: ${errText(err)}`, 'error');
@@ -344,9 +359,12 @@ export function mountStructures(hostEl: HTMLElement): void {
   host.classList.add('hidden');
 
   const panel = div('st-filter');
+  const splitter = div('st-splitter');
   const results = div('st-results');
-  host.append(panel, results);
+  host.append(panel, splitter, results);
   resultsHost = results;
+  applyPanelWidth();
+  wirePanelSplitter(splitter, panel);
 
   results.addEventListener('click', (event) => {
     // A click on the empty area drops the sticky link selection and returns
@@ -392,6 +410,52 @@ export function mountStructures(hostEl: HTMLElement): void {
   if (store.state.activeView === 'structures') void ensureInitialised();
 }
 
+/**
+ * Draggable splitter on the panel/results seam (§15.2): pointer drag resizes
+ * the filter panel (clamped to {@link FILTER_W_MIN}..{@link FILTER_W_MAX}),
+ * the result tree takes the rest. The width is kept in the filter state and
+ * persisted to L4 `structures_state` via the panel's persist callback.
+ */
+function wirePanelSplitter(splitter: HTMLElement, panel: HTMLElement): void {
+  let dragging = false;
+  let startX = 0;
+  let startW = 0;
+
+  const onMove = (event: PointerEvent): void => {
+    if (!dragging) return;
+    const width = Math.min(FILTER_W_MAX, Math.max(FILTER_W_MIN, startW + (event.clientX - startX)));
+    panel.style.setProperty('--st-filter-w', `${width}px`);
+    setPanelWidth(width);
+  };
+  const onUp = (event: PointerEvent): void => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove('dragging');
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    try {
+      splitter.releasePointerCapture(event.pointerId);
+    } catch {
+      /* capture already released */
+    }
+  };
+
+  splitter.addEventListener('pointerdown', (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    dragging = true;
+    startX = event.clientX;
+    startW = getFilterState().panelWidth ?? panel.clientWidth;
+    splitter.classList.add('dragging');
+    try {
+      splitter.setPointerCapture(event.pointerId);
+    } catch {
+      /* capture unavailable — window listeners still track the drag */
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
+}
+
 /** Signature of the inputs the tree rendering depends on (redundant rebuilds). */
 let lastRenderSignature = '';
 function renderSignature(): string {
@@ -417,8 +481,18 @@ function renderTree(): void {
   clear(resultsHost);
 
   const selection = new Set(store.state.selection);
+  // Every filter-result root opens its own framed branch (§15.5): the root row,
+  // its parents and its descendants stay visually together, so deep expansions
+  // remain attributable to their root.
+  let branch: HTMLElement | null = null;
+  let branchRootId: string | null = null;
   for (const row of rows) {
-    resultsHost.append(buildRow(row, selection));
+    if (branch === null || row.rootId !== branchRootId) {
+      branch = div('st-branch');
+      branchRootId = row.rootId;
+      resultsHost.append(branch);
+    }
+    branch.append(buildRow(row, selection));
   }
 
   if (total === 0) {
@@ -441,7 +515,7 @@ function renderTree(): void {
   updateBand();
 }
 
-/** Builds one tree row: connector column + a cloud at the indent level. */
+/** Builds one tree row: connector column + the root triangle + a cloud. */
 function buildRow(row: TreeRow, selection: Set<string>): HTMLElement {
   const rowEl = div('st-row');
   rowEl.dataset['key'] = row.key;
@@ -451,6 +525,7 @@ function buildRow(row: TreeRow, selection: Set<string>): HTMLElement {
   if (row.via !== null) {
     rowEl.append(buildConnector(row));
   }
+  if (row.root) rowEl.append(div('st-root-marker'));
   rowEl.append(buildCloud(row, selection));
   return rowEl;
 }
@@ -548,6 +623,7 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
 function buildConnector(row: TreeRow): HTMLElement {
   const connector = div('st-connector');
   if (row.via?.role === 'parent') connector.classList.add('st-up');
+  if (row.via?.first === true) connector.classList.add('st-first');
   if (row.via === null) return connector;
 
   const links = pairLinks(row.via.otherId, row.thoughtId);
@@ -611,8 +687,13 @@ function updateBand(): void {
     resultsHost.style.setProperty('--st-band-bottom', '0px');
     return;
   }
-  resultsHost.style.setProperty('--st-band-top', `${row.offsetTop}px`);
-  resultsHost.style.setProperty('--st-band-bottom', `${row.offsetTop + row.offsetHeight}px`);
+  // The rows sit inside .st-branch frames (their own offset parent), so the
+  // band is anchored via viewport rects relative to the scrolling host.
+  const rowRect = row.getBoundingClientRect();
+  const hostRect = resultsHost.getBoundingClientRect();
+  const top = rowRect.top - hostRect.top + resultsHost.scrollTop;
+  resultsHost.style.setProperty('--st-band-top', `${top}px`);
+  resultsHost.style.setProperty('--st-band-bottom', `${top + rowRect.height}px`);
 }
 
 // ---------------------------------------------------------------------------

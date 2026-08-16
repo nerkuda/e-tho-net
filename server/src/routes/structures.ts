@@ -139,7 +139,9 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const query = parseQueryBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const result = queryThoughts(ndb, req.auth!.user.id, query, req.id);
-        sendList(reply, result.items, result.total, query.offset, query.limit);
+        sendList(reply, result.items, result.total, query.offset, query.limit, {
+          directions: result.directions,
+        });
       },
     );
 

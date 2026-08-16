@@ -21,14 +21,18 @@ export interface TreeRow {
   thoughtId: string;
   /** The filter-result root this branch belongs to. */
   rootId: string;
+  /** True for the filter-result rows themselves (marked with a triangle, §15.5). */
+  root: boolean;
   /** Horizontal level; the row's left padding = indent × level width. */
   indent: number;
   /**
    * How this row attaches to its tree partner: `child` — the row hangs below
    * its partner (came from a children expansion); `parent` — the row sits above
    * its partner (came from a parents expansion). `null` for root rows.
+   * `first` marks the first parent of a group: its connector line starts at the
+   * row's middle (later parents continue the line drawn by the row above).
    */
-  via: { otherId: string; role: 'child' | 'parent' } | null;
+  via: { otherId: string; role: 'child' | 'parent'; first?: boolean } | null;
 }
 
 /** Serves the neighbour ids of an expanded node (from the hierarchy cache). */
@@ -80,12 +84,21 @@ export function flattenStructuresTree(
     const flags = expansion.get(key);
     let selfIndent = indent;
     if (flags?.parents === true) {
+      let first = true;
       for (const p of neighborsOf(key, thoughtId, 'parents')) {
-        emit(parentKey(key, p), p, indent, rootId, { otherId: thoughtId, role: 'parent' }, depth + 1);
+        emit(
+          parentKey(key, p),
+          p,
+          indent,
+          rootId,
+          { otherId: thoughtId, role: 'parent', first },
+          depth + 1,
+        );
+        first = false;
       }
       selfIndent = indent + 1;
     }
-    rows.push({ key, thoughtId, rootId, indent: selfIndent, via });
+    rows.push({ key, thoughtId, rootId, root: via === null, indent: selfIndent, via });
     if (flags?.children === true) {
       for (const c of neighborsOf(key, thoughtId, 'children')) {
         emit(childKey(key, c), c, selfIndent + 1, rootId, { otherId: thoughtId, role: 'child' }, depth + 1);

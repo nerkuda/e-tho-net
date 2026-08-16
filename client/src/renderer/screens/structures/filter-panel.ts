@@ -33,6 +33,10 @@ export interface PropertyConditionState {
   values: string[];
 }
 
+/** Filter-panel width limits, px (the splitter drag clamps to this range). */
+export const FILTER_W_MIN = 230;
+export const FILTER_W_MAX = 420;
+
 /** Full filter-panel state (persisted as the L4 `structures_state` JSON). */
 export interface FilterState {
   keywords: string;
@@ -42,6 +46,8 @@ export interface FilterState {
   sort: StructureSort;
   order: SortOrder;
   savedFilterId: string | null;
+  /** Panel width set by the splitter drag (px), null until first drag. */
+  panelWidth: number | null;
 }
 
 /** Callbacks the panel fires into the host module. */
@@ -94,6 +100,7 @@ function defaultState(): FilterState {
     sort: 'created',
     order: 'asc',
     savedFilterId: null,
+    panelWidth: null,
   };
 }
 
@@ -136,6 +143,22 @@ export function getFilterState(): FilterState {
 export function setFilterState(next: FilterState): void {
   state = { ...defaultState(), ...next };
   renderPanel();
+}
+
+/** Records the splitter-dragged panel width for the L4 persist. */
+export function setPanelWidth(width: number): void {
+  state.panelWidth = width;
+}
+
+/**
+ * Applies the persisted/splitter panel width to the DOM: sets the `--st-filter-w`
+ * variable the CSS uses, or clears it to fall back to the default 33%.
+ */
+export function applyPanelWidth(): void {
+  if (host === null) return;
+  const width = state.panelWidth;
+  if (width === null) host.style.removeProperty('--st-filter-w');
+  else host.style.setProperty('--st-filter-w', `${Math.round(width)}px`);
 }
 
 /** Wire property conditions built from the panel rows (typed conversion). */
@@ -239,6 +262,7 @@ function block(title: string): { box: HTMLElement; body: HTMLElement } {
 function renderPanel(): void {
   if (host === null) return;
   clear(host);
+  applyPanelWidth();
 
   // --- keywords -------------------------------------------------------------
   const kw = block('Ключевые слова');
@@ -655,6 +679,7 @@ function applySavedFilter(filter: SavedFilter): void {
     sort: def.sort,
     order: def.order,
     savedFilterId: filter.id,
+    panelWidth: state.panelWidth,
   });
   if (saveNameInput !== null) saveNameInput.value = filter.name;
   callbacks?.onApply();

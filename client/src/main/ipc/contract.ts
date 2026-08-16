@@ -53,6 +53,7 @@ import type {
   SearchRequest,
   SearchResponse,
   StructureQueryRequest,
+  StructureQueryResponse,
   Thought,
   ThoughtBatchInput,
   ThoughtBatchResult,
@@ -212,7 +213,7 @@ export interface EtnApi {
     query(
       networkId: string,
       request: StructureQueryRequest,
-    ): Promise<{ items: ThoughtRef[]; total: number }>;
+    ): Promise<StructureQueryResponse>;
     /**
      * `GET /thoughts/{id}/hierarchy` — one-level parents/children with
      * per-branch dedup via `excludeIds`.

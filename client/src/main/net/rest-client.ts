@@ -1276,20 +1276,24 @@ export class RestClient {
 
   /**
    * `POST /networks/{nid}/thoughts/query` — filter thoughts for the structures
-   * view. Returns the page items plus the unrestricted `total` from the list
-   * envelope meta (read via {@link lastMeta}, same call).
+   * view. Returns the page items, the unrestricted `total` and the direction
+   * flags of the page from the list envelope meta (read via {@link lastMeta},
+   * same call).
    */
   public async queryStructureThoughts(
     networkId: string,
     request: import('@etn/shared').StructureQueryRequest,
-  ): Promise<{ items: import('@etn/shared').ThoughtRef[]; total: number }> {
+  ): Promise<import('@etn/shared').StructureQueryResponse> {
     const items = await this.request<import('@etn/shared').ThoughtRef[]>(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
       { body: request },
     );
-    const total = (this.lastMeta as { total?: number } | undefined)?.total;
-    return { items, total: typeof total === 'number' ? total : items.length };
+    const meta = this.lastMeta as
+      | { total?: number; directions?: import('@etn/shared').StructureDirectionFlags }
+      | undefined;
+    const total = typeof meta?.total === 'number' ? meta.total : items.length;
+    return { items, total, directions: meta?.directions ?? {} };
   }
 
   /**

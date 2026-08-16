@@ -38,12 +38,27 @@ export interface StructureFilter {
   show_inactive?: boolean;
 }
 
-/** Filter + paging of `POST /thoughts/query`; the response is `ApiList<ThoughtRef>`. */
+/** Filter + paging of `POST /thoughts/query` (the list envelope of §6.10). */
 export interface StructureQueryRequest extends StructureFilter {
   sort: StructureSort;
   order: SortOrder;
   limit: number;
   offset: number;
+}
+
+/**
+ * Per-thought link direction flags: `has_incoming` — the thought has active
+ * parents, `has_outgoing` — active children. In the structures tree these
+ * drive the ellipse fill exactly like on the canvas focus row.
+ */
+export type StructureDirectionFlags = Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
+
+/** Result of `POST /thoughts/query` as consumed by the client (§6.10). */
+export interface StructureQueryResponse {
+  items: ThoughtRef[];
+  total: number;
+  /** Direction flags of every returned item (rides in the list envelope `meta`). */
+  directions: StructureDirectionFlags;
 }
 
 /** Response of `GET /thoughts/{id}/hierarchy` (03-server-api.md §6.11). */
@@ -57,7 +72,7 @@ export interface HierarchyResponse {
   /** Whether each visible thought (node + neighbors) has active incoming/outgoing
    *  links — in the tree these mean "has parents/children to expand"; drives the
    *  ellipse fill exactly like on the canvas. */
-  directions: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
+  directions: StructureDirectionFlags;
 }
 
 /** Persisted criteria of a saved filter: filter + sort/order (03-server-api.md §18). */

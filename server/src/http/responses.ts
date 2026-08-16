@@ -28,6 +28,9 @@ export function sendSuccess<T>(
 
 /**
  * Send a list response `{ data: [...], meta: { total, offset, limit } }`.
+ *
+ * @param metaExtra - Extra fields merged into `meta` (e.g. the structures
+ *   query attaches `directions` to its page, 03-server-api.md §6.10).
  */
 export function sendList<T>(
   reply: FastifyReply,
@@ -35,8 +38,10 @@ export function sendList<T>(
   total: number,
   offset: number,
   limit: number,
+  metaExtra?: Record<string, unknown>,
 ): void {
   const body: ApiList<T> = { data, meta: { total, offset, limit } };
+  if (metaExtra !== undefined) Object.assign(body.meta, metaExtra);
   reply.code(200).send(body);
 }
 
