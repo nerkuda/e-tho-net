@@ -298,11 +298,15 @@ POST /api/v1/networks/{nid}/thoughts/query
   order: "asc"|"desc",
   limit: 100, offset: 0           # limit клампится в 1..100
 }
-→ 200 { data: [ ThoughtRef... ], meta: { total, limit, offset } }
+→ 200 { data: [ ThoughtRef... ], meta: { total, limit, offset, directions } }
 ```
 
 - **Пустой фильтр** (нет `keywords`, `type_ids`, `link_type_ids` и `properties`)
   возвращает ровно одну мысль — HOME (`is_root=1`), `meta.total=1`.
+- `meta.directions` — `{ "<thought_id>": { has_incoming, has_outgoing }, ... }`
+  для всех мыслей страницы: наличие active входящих/исходящих связей. Клиент
+  закрашивает эллипсы корней дерева сразу после отбора (та же семантика, что
+  у `directions` в §6.11).
 - **Мини-синтаксис keywords**: слова разделяются пробелами, порядок любой,
   все обязательны (AND). `*` внутри слова — любое количество любых символов
   (`счет*` → подстрока с префиксом «счет»); слово без `*` — точная подстрока.
