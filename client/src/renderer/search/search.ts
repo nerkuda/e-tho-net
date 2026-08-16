@@ -10,8 +10,9 @@
  * - the server search runs for queries of 3+ characters: debounced 250 ms while
  *   typing or on Enter; shorter queries only show a hint;
  * - empty result groups render collapsed; ↑/↓ walk group headers and hits,
- *   Enter toggles a group header or activates a hit (hiding the panel); the
- *   next activation re-highlights the last chosen hit;
+ *   Ctrl+↑/↓ jump to the first/last row, Enter (or Ctrl+Enter) toggles a group
+ *   header or activates a hit (hiding the panel); the next activation
+ *   re-highlights the last chosen hit;
  * - the panel is a bordered dropdown: left edge aligned with the search input
  *   (JS-anchored), right margin 10% and max height 50% of the window;
  * - options: subtree (subroot via the thought picker, default = current
@@ -121,6 +122,15 @@ export function mountSearch(next: SearchChrome): void {
       } else {
         void run();
       }
+    } else if (event.ctrlKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      // Ctrl+↑/↓ jump to the first/last row (Enter — with or without Ctrl —
+      // activates the selected row above).
+      const rows = collectNavRows();
+      if (rows.length === 0) return;
+      event.preventDefault();
+      cursor = event.key === 'ArrowUp' ? 0 : rows.length - 1;
+      rows.forEach((row, i) => row.el.classList.toggle('selected', i === cursor));
+      rows[cursor]!.el.scrollIntoView({ block: 'nearest' });
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       const rows = collectNavRows();
       if (rows.length === 0) return;

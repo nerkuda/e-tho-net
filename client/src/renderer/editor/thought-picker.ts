@@ -24,6 +24,13 @@ const KIND_LABELS: Record<string, string> = {
   partial: 'частично',
 };
 
+/** Pure index math for ↑/↓ over a candidate list (same rule as the toolbar search). */
+function navIndex(cursor: number | null, count: number, delta: 1 | -1): number | null {
+  if (count === 0) return null;
+  const base = cursor === null || cursor >= count ? (delta === 1 ? -1 : count) : cursor;
+  return Math.min(count - 1, Math.max(0, base + delta));
+}
+
 /**
  * Opens the picker dialog. Resolves the chosen thought id, or `null`.
  */
@@ -53,6 +60,8 @@ export function pickThoughtRef(networkId: string, typeIds?: string[]): Promise<s
     }
 
     let timer: number | null = null;
+    /** Keyboard cursor over the candidate rows (↑/↓, Ctrl+↑/↓, Ctrl+Enter). */
+    let cursor: number | null = null;
 
     const search = (): void => {
       if (timer !== null) window.clearTimeout(timer);
@@ -61,6 +70,7 @@ export function pickThoughtRef(networkId: string, typeIds?: string[]): Promise<s
           const query = input.value.trim();
           if (query === '') {
             list.replaceChildren();
+            cursor = null;
             return;
           }
           try {
@@ -74,8 +84,52 @@ export function pickThoughtRef(networkId: string, typeIds?: string[]): Promise<s
     };
     input.addEventListener('input', search);
 
+    const candidateRows = (): HTMLElement[] =>
+      Array.from(list.querySelectorAll<HTMLElement>('.dup-item'));
+
+    const paintSelection = (): void => {
+      const rows = candidateRows();
+      rows.forEach((row, i) => row.classList.toggle('selected', i === cursor));
+      if (cursor !== null) rows[cursor]?.scrollIntoView({ block: 'nearest' });
+    };
+
+    const moveCursor = (delta: 1 | -1): void => {
+      const next = navIndex(cursor, candidateRows().length, delta);
+      if (next === null) return;
+      cursor = next;
+      paintSelection();
+    };
+
+    /** Ctrl+Enter: activates the selected row (the first one when none), like «использовать». */
+    const activateCursor = (): void => {
+      const rows = candidateRows();
+      rows[cursor ?? 0]?.querySelector<HTMLButtonElement>('button')?.click();
+    };
+
+    input.addEventListener('keydown', (event) => {
+      if (event.ctrlKey && event.key === 'ArrowUp') {
+        if (candidateRows().length === 0) return;
+        event.preventDefault();
+        cursor = 0;
+        paintSelection();
+      } else if (event.ctrlKey && event.key === 'ArrowDown') {
+        if (candidateRows().length === 0) return;
+        event.preventDefault();
+        cursor = candidateRows().length - 1;
+        paintSelection();
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (candidateRows().length === 0) return;
+        event.preventDefault();
+        moveCursor(event.key === 'ArrowDown' ? 1 : -1);
+      } else if (event.ctrlKey && event.key === 'Enter') {
+        event.preventDefault();
+        activateCursor();
+      }
+    });
+
     function renderHits(hits: Array<{ id: string; title: string; matched_on: string }>): void {
       list.replaceChildren();
+      cursor = null;
       for (const hit of hits) {
         const row = div('dup-item');
         const title = el('span', 'dup-title', hit.title);
@@ -137,6 +191,8 @@ export function wireThoughtRefSearch(
   let list: HTMLDivElement | null = null;
   let timer: number | null = null;
   let seq = 0;
+  /** Keyboard cursor over the dropdown rows (↑/↓, Ctrl+↑/↓, Ctrl+Enter). */
+  let cursor: number | null = null;
 
   const close = (): void => {
     if (list === null) return;
@@ -169,6 +225,7 @@ export function wireThoughtRefSearch(
   function renderHits(hits: Array<{ id: string; title: string; matched_on: string }>): void {
     if (list === null) return;
     list.replaceChildren();
+    cursor = null;
     const hint = filterHint();
     if (hint !== null) list.append(hint);
     for (const hit of hits) {
@@ -217,9 +274,38 @@ export function wireThoughtRefSearch(
     timer = window.setTimeout(() => void search(), 200);
   });
   input.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && list !== null) {
+    if (list === null) return;
+    if (event.key === 'Escape') {
       event.stopPropagation();
       close();
+      return;
+    }
+    const rows = Array.from(list.querySelectorAll<HTMLElement>('.type-combo-item'));
+    const paintRows = (): void => {
+      rows.forEach((row, i) => row.classList.toggle('active', i === cursor));
+      if (cursor !== null) rows[cursor]?.scrollIntoView({ block: 'nearest' });
+    };
+    if (event.ctrlKey && event.key === 'ArrowUp') {
+      if (rows.length === 0) return;
+      event.preventDefault();
+      cursor = 0;
+      paintRows();
+    } else if (event.ctrlKey && event.key === 'ArrowDown') {
+      if (rows.length === 0) return;
+      event.preventDefault();
+      cursor = rows.length - 1;
+      paintRows();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (rows.length === 0) return;
+      event.preventDefault();
+      const next = navIndex(cursor, rows.length, event.key === 'ArrowDown' ? 1 : -1);
+      if (next === null) return;
+      cursor = next;
+      paintRows();
+    } else if (event.ctrlKey && event.key === 'Enter') {
+      if (rows.length === 0) return;
+      event.preventDefault();
+      rows[cursor ?? 0]?.click();
     }
   });
   input.addEventListener('blur', () => {

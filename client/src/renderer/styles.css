@@ -3050,6 +3050,11 @@ body.dragging * {
   font-size: 12px;
 }
 
+/* Keyboard selection (↑/↓, Ctrl+↑/↓, Ctrl+Enter in the thought picker). */
+.dup-item.selected {
+  background: var(--accent-soft);
+}
+
 .dup-item .dup-title {
   flex: 1;
   overflow: hidden;
