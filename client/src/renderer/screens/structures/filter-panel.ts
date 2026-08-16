@@ -407,7 +407,7 @@ const checkSearch: Record<CheckKind, string> = { thoughtTypes: '', linkTypes: ''
 /** Fixed height of one checklist row, px (must match the CSS row height). */
 const CHECK_ROW_H = 22;
 /** Minimum column width of a checklist, px (columns fill the panel width). */
-const CHECK_COL_W = 170;
+const CHECK_COL_W = 85;
 /** Column gap, px (must match the CSS column-gap). */
 const CHECK_COL_GAP = 14;
 /** Drag range of the checklist height grips, px. */
