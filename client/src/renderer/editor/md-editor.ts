@@ -11,6 +11,7 @@ import { completionKeymap, completionStatus } from '@codemirror/autocomplete';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { languages } from '@codemirror/language-data';
 import { tags } from '@lezer/highlight';
 import { EditorState } from '@codemirror/state';
 import { drawSelection, EditorView, keymap } from '@codemirror/view';
@@ -53,6 +54,37 @@ const mdHighlightStyle = HighlightStyle.define([
   { tag: tags.url, color: 'var(--accent)' },
   { tag: tags.meta, color: 'var(--text-dim)' },
 ]);
+
+/**
+ * Fenced-code languages offered in the editor (task M4). The full
+ * `language-data` registry autoloads ~40 packages — only the installed set is
+ * kept, so a missing language falls back to plain text instead of a failed
+ * dynamic import.
+ */
+const CODE_LANG_ALIASES = new Set([
+  'javascript',
+  'js',
+  'jsx',
+  'typescript',
+  'ts',
+  'python',
+  'py',
+  'json',
+  'html',
+  'css',
+  'sql',
+  'xml',
+  'yaml',
+  'yml',
+  'rust',
+  'rs',
+  'go',
+  'java',
+  'cpp',
+  'c++',
+  'php',
+]);
+const codeLanguages = languages.filter((l) => l.alias?.some((a) => CODE_LANG_ALIASES.has(a)));
 
 const mdTheme = EditorView.theme({
   '&': { backgroundColor: 'transparent', fontSize: '13px' },
@@ -108,6 +140,7 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         markdown({
           base: markdownLanguage,
           addKeymap: true,
+          codeLanguages,
           extensions: [wikiLinkLanguage()],
         }),
         keymap.of([...historyKeymap, ...completionKeymap, ...defaultKeymap]),

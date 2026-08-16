@@ -70,6 +70,23 @@
   --cloud-gap: 12px;
   --cloud-font: 13px;
 
+  /* highlight.js palette (M4): токены подсветки fenced-кода в просмотре */
+  --hljs-comment: #6e7781;
+  --hljs-keyword: #cf222e;
+  --hljs-string: #0a3069;
+  --hljs-number: #0550ae;
+  --hljs-literal: #0550ae;
+  --hljs-title: #8250df;
+  --hljs-builtin: #953800;
+  --hljs-attr: #953800;
+  --hljs-type: #116329;
+  --hljs-tag: #116329;
+  --hljs-meta: #0550ae;
+  --hljs-symbol: #8250df;
+  --hljs-section: #0550ae;
+  --hljs-addition: #1a7f37;
+  --hljs-deletion: #82071e;
+
   font-family:
     system-ui,
     -apple-system,
@@ -114,6 +131,23 @@
   --shadow-sm-c: rgba(0, 0, 0, 0.35);
   --shadow-hover: 0 4px 16px var(--shadow-c);
   --shadow-focus: 0 4px 24px rgba(91, 140, 255, 0.28);
+
+  /* highlight.js palette (M4) */
+  --hljs-comment: #8b949e;
+  --hljs-keyword: #ff7b72;
+  --hljs-string: #a5d6ff;
+  --hljs-number: #79c0ff;
+  --hljs-literal: #79c0ff;
+  --hljs-title: #d2a8ff;
+  --hljs-builtin: #ffa657;
+  --hljs-attr: #ffa657;
+  --hljs-type: #7ee787;
+  --hljs-tag: #7ee787;
+  --hljs-meta: #79c0ff;
+  --hljs-symbol: #d2a8ff;
+  --hljs-section: #79c0ff;
+  --hljs-addition: #3fb950;
+  --hljs-deletion: #f85149;
 }
 
 * {
@@ -2119,6 +2153,68 @@ body.dragging * {
 
 .wiki-link:hover {
   text-decoration: underline;
+}
+
+/* Подсветка fenced-кода в просмотре (M4): токены highlight.js из единого
+   рендерера; фон блока задаёт `.comment-view pre`. */
+.comment-view code.hljs {
+  background: transparent;
+  padding: 0;
+}
+
+.comment-view .hljs-comment {
+  color: var(--hljs-comment);
+  font-style: italic;
+}
+
+.comment-view .hljs-keyword,
+.comment-view .hljs-selector-tag,
+.comment-view .hljs-doctag {
+  color: var(--hljs-keyword);
+}
+
+.comment-view .hljs-string,
+.comment-view .hljs-regexp,
+.comment-view .hljs-quote,
+.comment-view .hljs-addition {
+  color: var(--hljs-string);
+}
+
+.comment-view .hljs-number,
+.comment-view .hljs-literal,
+.comment-view .hljs-meta,
+.comment-view .hljs-section {
+  color: var(--hljs-number);
+}
+
+.comment-view .hljs-title,
+.comment-view .hljs-symbol,
+.comment-view .hljs-function .hljs-title {
+  color: var(--hljs-title);
+}
+
+.comment-view .hljs-built_in,
+.comment-view .hljs-attr,
+.comment-view .hljs-attribute {
+  color: var(--hljs-builtin);
+}
+
+.comment-view .hljs-type,
+.comment-view .hljs-tag,
+.comment-view .hljs-name {
+  color: var(--hljs-type);
+}
+
+.comment-view .hljs-deletion {
+  color: var(--hljs-deletion);
+}
+
+.comment-view .hljs-emphasis {
+  font-style: italic;
+}
+
+.comment-view .hljs-strong {
+  font-weight: 700;
 }
 
 /* Markdown view/edit field (08-ui-spec.md §6.4): height follows the content
