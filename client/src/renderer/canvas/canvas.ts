@@ -629,11 +629,21 @@ export function resolveThoughtIcon(thought: {
 
 /**
  * Renders a thought's resolved icon into an element: an `<img>` for an
- * `image`-kind icon, otherwise the glyph (own/type default, else 💬).
+ * `image`-kind icon, otherwise the glyph (own/type default, else 💬). When the
+ * icon is backed by an attachment (L16), the `<img>` carries the thought and
+ * attachment ids so the Ctrl-hover magnifier shows the attachment's full
+ * picture instead of the icon-sized preview.
  */
 export function applyThoughtIcon(
   iconBox: HTMLElement,
-  thought: { icon: string | null; icon_kind: IconKind; type_id: string | null },
+  thought: {
+    icon: string | null;
+    icon_kind: IconKind;
+    type_id: string | null;
+    /** Thought id — required together with {@link icon_attachment_id} for zoom. */
+    id?: string;
+    icon_attachment_id?: string | null;
+  },
 ): void {
   const ic = resolveThoughtIcon(thought);
   iconBox.replaceChildren();
@@ -641,6 +651,10 @@ export function applyThoughtIcon(
     const img = el('img');
     img.src = ic.icon;
     img.alt = '';
+    if (thought.id !== undefined && (thought.icon_attachment_id ?? null) !== null) {
+      img.dataset['zoomThought'] = thought.id;
+      img.dataset['zoomAttachment'] = thought.icon_attachment_id ?? '';
+    }
     iconBox.append(img);
   } else {
     iconBox.textContent = ic.icon ?? '💭';

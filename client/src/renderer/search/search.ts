@@ -381,9 +381,20 @@ async function run(): Promise<void> {
 }
 
 /** Builds a hit icon element from the thought's own icon (💭 fallback). */
-function thoughtIconEl(hit: { icon: string | null; icon_kind: import('@etn/shared').IconKind }): HTMLElement {
+function thoughtIconEl(hit: {
+  thought_id: string;
+  icon: string | null;
+  icon_kind: import('@etn/shared').IconKind;
+  icon_attachment_id: string | null;
+}): HTMLElement {
   const icon = span('', 'mini-icon');
-  applyThoughtIcon(icon, { icon: hit.icon, icon_kind: hit.icon_kind, type_id: null });
+  applyThoughtIcon(icon, {
+    id: hit.thought_id,
+    icon: hit.icon,
+    icon_kind: hit.icon_kind,
+    type_id: null,
+    icon_attachment_id: hit.icon_attachment_id,
+  });
   return icon;
 }
 

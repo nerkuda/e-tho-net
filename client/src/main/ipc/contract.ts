@@ -89,6 +89,16 @@ export interface FocusHistoryEntry {
   visitedAt: string;
 }
 
+/**
+ * Result of the system image picker (workplan L16): the ORIGINAL file as a
+ * `data:` URL plus its meta, so the caller can upload it as an attachment and
+ * derive an icon-sized preview from it.
+ */
+export type PickImageResult =
+  | { status: 'ok'; dataUrl: string; name: string; mime: string; size: number }
+  | { status: 'cancel' }
+  | { status: 'error'; message: string };
+
 /** Which view's visit history a `history.*` call addresses (L15, 11 §2.3.1). */
 export type HistoryScope = 'focus' | 'structures';
 
@@ -466,11 +476,11 @@ export interface EtnApi {
     export(networkId: string, request: ExportRequest): Promise<{ job_id: string }>;
     getJob(jobId: string): Promise<ExportJob>;
     /**
-     * Opens the OS file picker for an image and returns its contents as a
-     * `data:` URL (≤256 KiB). Resolves `null` when the user cancels or the file
-     * is too large / unreadable.
+     * Opens the OS file picker for an image and returns the original file as a
+     * `data:` URL with its name/mime/size (≤ the attachment upload limit). The
+     * caller decides how to fit it into the icon limit (workplan L16).
      */
-    pickImage(): Promise<string | null>;
+    pickImage(): Promise<PickImageResult>;
     /**
      * Opens a local file with the OS default application (`shell.openPath`).
      * Resolves an error message string when the OS refuses (empty on success).

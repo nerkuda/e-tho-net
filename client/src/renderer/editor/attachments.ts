@@ -22,6 +22,7 @@ import { invalidateIndicators, invalidateRef } from '../canvas/canvas.js';
 import { confirmDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, isHttpUrl, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { ICON_MAX_BYTES, dataUrlBytes, makeIconPreview } from '../lib/image-preview.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
@@ -76,9 +77,6 @@ function isMarkdownFile(a: Attachment): boolean {
   if (mime === 'text/markdown' || mime === 'text/md') return true;
   return /\.(md|markdown)$/i.test(a.file_path ?? '');
 }
-
-/** Thought-icon size limit, mirrors the server (`assertImageIcon`). */
-const THOUGHT_ICON_MAX_BYTES = 256 * 1024;
 
 /** Reads a Blob into a `data:` URL (FileReader — no Buffer in the renderer). */
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -421,11 +419,13 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
   }
 
   /**
-   * «Назначить иконкой мысли» — image files on a thought owner (L1). The
-   * thought icon must be a self-contained `data:image` URL (the server rejects
-   * machine-local `etnimg:` paths — other clients cannot resolve them), so the
-   * stored file is read back through the etnimg protocol and inlined, subject
-   * to the same 256 KiB limit as the icon dialog.
+   * «Назначить иконкой мысли» — image files on a thought owner (L1, L16). The
+   * thought icon must be a self-contained `data:image` URL ≤256 KiB (the server
+   * rejects machine-local `etnimg:` paths — other clients cannot resolve them),
+   * so the stored file is read back through the etnimg protocol and inlined;
+   * files over the limit become a downscaled preview instead of being rejected.
+   * `icon_attachment_id` links the icon to the attachment so Ctrl-hover shows
+   * the full picture.
    */
   async function assignAsThoughtIcon(attachment: Attachment): Promise<void> {
     const thought = ctx.thought;
@@ -435,22 +435,24 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       const res = await fetch(etnimgUrl(attachment.file_path));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
-      if (blob.size > THOUGHT_ICON_MAX_BYTES) {
-        notice(
-          `Картинка слишком большая для иконки (${blob.size} Б; лимит ${THOUGHT_ICON_MAX_BYTES} Б).`,
-          'error',
-        );
-        return;
-      }
       dataUrl = await blobToDataUrl(blob);
     } catch {
       notice('Не удалось прочитать файл вложения.', 'error');
       return;
     }
+    if (dataUrlBytes(dataUrl) > ICON_MAX_BYTES) {
+      try {
+        dataUrl = await makeIconPreview(dataUrl);
+      } catch {
+        notice('Не удалось подготовить превью иконки.', 'error');
+        return;
+      }
+    }
     try {
       const updated = await etn.thoughts.update(networkId, thought.id, {
         icon: dataUrl,
         icon_kind: 'image',
+        icon_attachment_id: attachment.id,
       }, thought.version);
       const focus = store.state.focus;
       if (focus !== null && focus.focused.id === updated.id) {

@@ -27,7 +27,7 @@ import {
 } from '@etn/shared';
 
 import { refreshFocus, requireNetworkId, scheduleRefresh } from '../app.js';
-import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
+import { applyThoughtIcon, invalidateIndicators, resolveCloudStyle } from '../canvas/canvas.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { inNeighbourhood } from '../realtime-ui.js';
@@ -46,7 +46,7 @@ import { registerCommentSections } from './comments.js';
 import { registerAttachmentsTab } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
 import { registerLinksTab } from './links-tab.js';
-import { showIconDialog } from './icon-dialog.js';
+import { showIconDialog, type IconPickResult } from './icon-dialog.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 
 /** What the editor currently edits. */
@@ -714,12 +714,55 @@ function openThoughtSettings(thought: Thought): void {
 /**
  * Opens the icon picker (Emoji/File/URL, 08-ui-spec.md §6.8). The picked value
  * is saved through `saveThought`; «Очистить» nulls the icon so the type default
- * shows through.
+ * shows through. A File pick (L16) first uploads the original into the
+ * thought's attachments — the icon becomes a ≤256 KiB preview and
+ * `icon_attachment_id` points at the stored attachment so Ctrl-hover shows the
+ * full picture.
  */
 function changeThoughtIcon(thought: Thought): void {
   void showIconDialog({
     current: { icon: thought.icon, kind: thought.icon_kind },
-    onPick: (result) => saveThought({ icon: result.icon, icon_kind: result.kind }),
+    onPick: (result) => savePickedIcon(thought, result),
+  });
+}
+
+/** Persists a picked icon; file picks store the original as an attachment (L16). */
+async function savePickedIcon(thought: Thought, result: IconPickResult): Promise<boolean> {
+  const networkId = requireNetworkId();
+  let attachmentId: string | null = null;
+  if (result.source !== undefined) {
+    const comma = result.source.dataUrl.indexOf(',');
+    const dataBase64 = comma === -1 ? '' : result.source.dataUrl.slice(comma + 1);
+    try {
+      const attachment = await etn.attachments.uploadFile(
+        networkId,
+        'thought',
+        thought.id,
+        {
+          title: result.source.name.trim() !== '' ? result.source.name.trim() : 'file',
+          mime_type: result.source.mime,
+          data_base64: dataBase64,
+        },
+      );
+      attachmentId = attachment.id;
+    } catch (err) {
+      notice(`Не удалось загрузить файл во вложения: ${errText(err)}`, 'error');
+      return false;
+    }
+    // The attachments tab (if built) reloads and the 📎 indicator repaints —
+    // same notification path as a paste from the comment field.
+    invalidateIndicators(thought.id);
+    document.dispatchEvent(
+      new CustomEvent('etn:attachments-changed', {
+        detail: { ownerType: 'thought', ownerId: thought.id },
+      }),
+    );
+  }
+  // `icon_attachment_id: null` clears a stale link on emoji/URL/clear picks.
+  return saveThought({
+    icon: result.icon,
+    icon_kind: result.kind,
+    icon_attachment_id: attachmentId,
   });
 }
 

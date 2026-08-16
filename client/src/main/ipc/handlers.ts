@@ -18,6 +18,7 @@ import type { CurrentUser, FocusDir, Network, TypeOwnerType } from '@etn/shared'
 import type { RestClient } from '../net/rest-client.js';
 import type { RealtimeClient } from '../net/ws-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
+import type { PickImageResult } from './contract.js';
 
 /** Shared state owned by the main process, injected into handlers. */
 export interface HandlerDeps {
@@ -848,8 +849,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   return handlers;
 }
 
-/** Maximum inline image-icon size (decoded), mirrors the server limit. */
-const ICON_MAX_BYTES = 256 * 1024;
+/** Maximum picked image size — mirrors the server's attachment upload limit. */
+const PICK_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
 /** Maps a file extension to its MIME type (for `data:` URLs). */
 const IMAGE_MIME: Record<string, string> = {
@@ -863,11 +864,12 @@ const IMAGE_MIME: Record<string, string> = {
 };
 
 /**
- * Opens the OS file picker for an image and returns its contents as a `data:`
- * URL within {@link ICON_MAX_BYTES}. Resolves `null` on cancel, oversized or
- * unreadable files (08-ui-spec.md §6.8).
+ * Opens the OS file picker for an image and returns the ORIGINAL file as a
+ * `data:` URL with its name/mime/size (08-ui-spec.md §6.8, workplan L16). The
+ * icon-sized preview is the renderer's job — files up to the attachment limit
+ * are accepted; bigger/unreadable ones resolve an error message.
  */
-async function pickImageFile(): Promise<string | null> {
+async function pickImageFile(): Promise<PickImageResult> {
   // electron is imported lazily so this module stays loadable in the Node test
   // runner (which resolves `electron` to a stub without the named exports).
   const { BrowserWindow, dialog } = await import('electron');
@@ -885,18 +887,30 @@ async function pickImageFile(): Promise<string | null> {
           properties: ['openFile'],
           filters: [{ name: 'Изображения', extensions: Object.keys(IMAGE_MIME) }],
         });
-  if (result.canceled || result.filePaths.length === 0) return null;
+  if (result.canceled || result.filePaths.length === 0) return { status: 'cancel' };
   const filePath = result.filePaths[0];
-  if (filePath === undefined) return null;
+  if (filePath === undefined) return { status: 'cancel' };
   try {
     const size = statSync(filePath).size;
-    if (size > ICON_MAX_BYTES) return null;
+    if (size > PICK_IMAGE_MAX_BYTES) {
+      return {
+        status: 'error',
+        message: `Файл больше ${PICK_IMAGE_MAX_BYTES / (1024 * 1024)} МБ — лимит вложения.`,
+      };
+    }
     const buf = readFileSync(filePath);
     const ext = filePath.toLowerCase().split('.').pop() ?? '';
     const mime = IMAGE_MIME[ext] ?? 'application/octet-stream';
-    return `data:${mime};base64,${buf.toString('base64')}`;
+    const name = filePath.split(/[\\/]/).pop() ?? 'file';
+    return {
+      status: 'ok',
+      dataUrl: `data:${mime};base64,${buf.toString('base64')}`,
+      name,
+      mime,
+      size,
+    };
   } catch {
-    return null;
+    return { status: 'error', message: 'Не удалось прочитать файл.' };
   }
 }
 

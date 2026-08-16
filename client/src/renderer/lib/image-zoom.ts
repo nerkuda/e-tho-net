@@ -1,5 +1,5 @@
 /**
- * Ctrl-hover image magnifier (08-ui-spec.md §13, workplan L2).
+ * Ctrl-hover image magnifier (08-ui-spec.md §13, workplan L2, L16).
  *
  * Holding Ctrl while hovering any rendered image icon (history bar, search
  * results, attachment/link lists, editor headers, markdown pictures — any
@@ -7,13 +7,52 @@
  * 70% of the window width/height. Purely visual: the popup ignores pointer
  * events, so it never disturbs hover/click handling underneath.
  *
+ * Thought icons backed by an attachment (L16) carry `data-zoom-thought` /
+ * `data-zoom-attachment` (set by `applyThoughtIcon`): the popup then shows the
+ * attachment's full picture instead of the icon-sized preview, resolving the
+ * attachment's file lazily and caching it for a minute.
+ *
  * One delegated listener set on the document — no per-list wiring.
  */
 
+import { etnimgUrl } from '../editor/markdown-field.js';
+import { etn } from './etn.js';
 import { el } from './dom.js';
+import { store } from '../state.js';
 
 /** Cursor offset from the pointer to the popup corner (px). */
 const POPUP_OFFSET = 14;
+
+/** How long a resolved attachment file path is cached (ms). */
+const ATTACH_PATH_TTL_MS = 60_000;
+
+/** Attachment id → file path (null = missing), cached per thought (L16). */
+const attachPathCache = new Map<string, { path: string | null; at: number }>();
+
+/**
+ * Resolves the file path of the attachment backing a thought icon. Falls back
+ * to `null` (the popup keeps showing the icon preview) when the attachment is
+ * gone, not an image or the request fails.
+ */
+async function resolveIconAttachment(
+  thoughtId: string,
+  attachmentId: string,
+): Promise<string | null> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return null;
+  const key = `${networkId}:${thoughtId}:${attachmentId}`;
+  const hit = attachPathCache.get(key);
+  if (hit !== undefined && Date.now() - hit.at < ATTACH_PATH_TTL_MS) return hit.path;
+  let path: string | null = null;
+  try {
+    const list = await etn.attachments.list(networkId, 'thought', thoughtId);
+    path = list.find((a) => a.id === attachmentId)?.file_path ?? null;
+  } catch {
+    path = null;
+  }
+  attachPathCache.set(key, { path, at: Date.now() });
+  return path;
+}
 
 /**
  * True when enlarging makes sense: the image has loaded and at least one side
@@ -62,7 +101,12 @@ export function initImageZoom(): void {
   };
 
   const show = (img: HTMLImageElement): void => {
+    const zoomThought = img.dataset['zoomThought'];
+    const zoomAttachment = img.dataset['zoomAttachment'];
+    const hasZoomSource =
+      zoomThought !== undefined && zoomThought !== '' && zoomAttachment !== '';
     if (
+      !hasZoomSource &&
       !zoomable(
         { w: img.naturalWidth, h: img.naturalHeight },
         { w: img.width, h: img.height },
@@ -74,6 +118,22 @@ export function initImageZoom(): void {
     popup.src = img.currentSrc || img.src;
     popup.classList.remove('hidden');
     place();
+    // Attachment-backed icon (L16): swap the icon-sized preview for the full
+    // picture once its file path resolves.
+    if (hasZoomSource && zoomThought !== undefined && zoomAttachment !== undefined) {
+      void resolveIconAttachment(zoomThought, zoomAttachment).then((filePath) => {
+        if (current !== img || filePath === null || filePath === '') return;
+        popup.src = etnimgUrl(filePath);
+        // The full picture can differ in size from the preview — re-place it.
+        popup.addEventListener(
+          'load',
+          () => {
+            if (current === img) place();
+          },
+          { once: true },
+        );
+      });
+    }
   };
 
   // Hover enters an image with Ctrl held — magnify; leaving it — hide.
