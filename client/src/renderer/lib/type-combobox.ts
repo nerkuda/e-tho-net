@@ -164,7 +164,7 @@ export function createTypeCombobox(opts: {
     const rect = input.getBoundingClientRect();
     const listRect = list.getBoundingClientRect();
     const width = Math.max(rect.width, Math.min(listRect.width, 360));
-    let left = Math.max(6, Math.min(rect.left, window.innerWidth - width - 6));
+    const left = Math.max(6, Math.min(rect.left, window.innerWidth - width - 6));
     let top = rect.bottom + 2;
     if (top + listRect.height > window.innerHeight - 6 && rect.top > listRect.height + 6) {
       top = Math.max(6, rect.top - listRect.height - 2);

@@ -161,7 +161,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     toInput.type = 'date';
     toInput.value = existing?.valid_to?.slice(0, 10) ?? '';
 
-    let currentMd = existing?.body_md ?? '';
     let commentId: string | null = existing?.id ?? null;
     let version = existing?.version ?? 0;
 
@@ -204,9 +203,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       md: existing?.body_md ?? '',
       html: existing?.body_html ?? '',
       attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
-      onInput: (md) => {
-        currentMd = md;
-      },
       onSave: async (md) => {
         if (md.trim() === '' && commentId === null) return '';
         let html: string;
@@ -227,7 +223,6 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
           version = updated.version;
           html = updated.body_html;
         }
-        currentMd = md;
         invalidateIndicators(ctx.ownerId);
         await reload();
         return html;

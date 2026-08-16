@@ -55,6 +55,25 @@ module.exports = tseslint.config(
   },
 
   {
+    // Node.js ESM scripts (e.g. client/scripts/rebuild-native.mjs).
+    files: ['**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        Buffer: 'readonly',
+        global: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+      },
+    },
+  },
+
+  {
     // Root-level CommonJS scripts (this config file, future build helpers).
     files: ['*.js', '*.cjs'],
     languageOptions: {

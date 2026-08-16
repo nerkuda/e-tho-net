@@ -21,7 +21,7 @@ import {
 
 import { buildValueOptionsCaret } from '../../editor/properties.js';
 import { pickThoughtRef, wireThoughtRefSearch } from '../../editor/thought-picker.js';
-import { clear, div, el, errText, setTooltip } from '../../lib/dom.js';
+import { clear, div, el, setTooltip } from '../../lib/dom.js';
 import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
@@ -449,7 +449,6 @@ function renderCheckItems(
   onChange: (ids: string[]) => void,
   kind: CheckKind,
 ): void {
-  const scrollTop = list.scrollTop;
   clear(list);
   const checked = new Set(getChecked());
   const needle = checkSearch[kind].trim().toLowerCase();

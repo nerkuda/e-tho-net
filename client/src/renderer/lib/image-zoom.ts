@@ -15,10 +15,6 @@ import { el } from './dom.js';
 /** Cursor offset from the pointer to the popup corner (px). */
 const POPUP_OFFSET = 14;
 
-/** Share of the window the popup may occupy at most (08-ui-spec.md §13). */
-const POPUP_MAX_VW = 70;
-const POPUP_MAX_VH = 70;
-
 /**
  * True when enlarging makes sense: the image has loaded and at least one side
  * is displayed smaller than its natural size.

@@ -26,7 +26,6 @@ import {
 import { applyCanvasScaleVars, applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canvas/canvas.js';
 import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
-import { openLinkInEditor } from '../../editor/editor.js';
 import { invalidateHistoryBar } from '../history-bar.js';
 import { clear, div, el, setTooltip } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
@@ -53,9 +52,6 @@ import {
   setPanelWidth,
   type FilterState,
 } from './filter-panel.js';
-
-/** Horizontal step of one indent level, px (connector column + padding). */
-const LEVEL_WIDTH = 34;
 
 // ---------------------------------------------------------------------------
 // Module state

@@ -28,11 +28,9 @@ import {
 
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import {
-  fieldBoolean,
   fieldString,
   openRouteNetworkDb,
   queryBoolean,
-  queryInt,
   requestBody,
   type RouteDeps,
 } from './helpers.js';

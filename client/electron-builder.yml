@@ -5,6 +5,10 @@
 
 appId: dev.etn.app
 productName: ETN
+# Pinned to the same version as devDependencies.electron — electron-builder
+# cannot detect the version from node_modules when electron is hoisted to the
+# workspace root (npm workspaces), so it must be stated explicitly.
+electronVersion: 31.7.7
 directories:
   output: release
   buildResources: build

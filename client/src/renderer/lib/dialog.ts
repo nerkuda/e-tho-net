@@ -38,7 +38,7 @@ export interface DialogOptions {
 }
 
 /** Open dialogs, bottom first. */
-let stack: HTMLDivElement[] = [];
+const stack: HTMLDivElement[] = [];
 
 /** Closes the topmost open dialog (no-op when none). */
 export function closeDialog(): void {
