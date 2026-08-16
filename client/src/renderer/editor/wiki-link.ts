@@ -45,13 +45,20 @@ const wikiLinkMarkdownExt: MarkdownExtension = {
   parseInline: [
     {
       name: 'WikiLink',
+      // До правила Link: иначе `[[мысль|алиас]]` разбирается как
+      // ссылка-ссылка (LinkReference), и wiki-узел не создаётся.
+      before: 'Link',
       parse(cx, next, pos) {
         if (next !== 91 /* [ */ || cx.char(pos + 1) !== 91) return -1;
-        const end = cx.text.indexOf(']]', pos + 2);
-        if (end === -1) return -1;
+        // cx.text — только текущий инлайн-блок, позиции — документальные:
+        // ищем «]]» в координатах блока, результат переводим обратно.
+        const rel = cx.text.indexOf(']]', pos - cx.offset + 2);
+        if (rel === -1) return -1;
+        const end = cx.offset + rel;
         const content = cx.slice(pos + 2, end);
         if (content === '' || content.includes('\n') || content.includes('\r')) return -1;
-        return cx.addElement(cx.elt('WikiLink', pos, end));
+        // Узел покрывает обе закрывающие скобки.
+        return cx.addElement(cx.elt('WikiLink', pos, end + 2));
       },
     },
   ],
@@ -138,6 +145,9 @@ export function initWikiLinkNavigation(): void {
     const target = event.target as Element | null;
     const link = target?.closest?.(`.${WIKI_LINK_CLASS}`);
     if (!(link instanceof HTMLElement)) return;
+    // Внутри редактора клик раскрывает исходник блока (M6), а не переходит;
+    // снятые со страницы виджеты (клик уже раскрыл блок) тоже пропускаются.
+    if (!link.isConnected || link.closest('.cm-editor') !== null) return;
     const name = link.getAttribute(WIKI_LINK_TARGET_ATTR);
     if (name === null || name === '') return;
     void openWikiTarget(name);

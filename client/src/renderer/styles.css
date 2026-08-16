@@ -2155,6 +2155,25 @@ body.dragging * {
   text-decoration: underline;
 }
 
+/* Виджеты live preview (M6): блоки в редакторе отображаются как в просмотре. */
+.cm-editor .md-widget {
+  margin: 2px 0;
+}
+
+.cm-editor .md-widget.md-hr {
+  border: none;
+  border-top: 1px solid var(--border-strong);
+  margin: 6px 0;
+}
+
+.cm-editor .md-widget.wiki-link {
+  cursor: pointer;
+}
+
+.cm-editor .md-widget img {
+  max-width: 100%;
+}
+
 /* Подсветка fenced-кода в просмотре (M4): токены highlight.js из единого
    рендерера; фон блока задаёт `.comment-view pre`. */
 .comment-view code.hljs {
