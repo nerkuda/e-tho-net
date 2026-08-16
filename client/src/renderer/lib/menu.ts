@@ -62,11 +62,13 @@ function buildMenu(items: MenuItem[]): HTMLDivElement {
       item.onClick?.();
     });
     row.addEventListener('mouseenter', () => {
-      if (item.disabled === true || item.submenu === undefined) return;
-      // Close previously opened submenus of this list.
+      // Moving the highlight to ANY row closes this list's open submenu —
+      // including disabled/leaf rows (hovering them must not leave the old
+      // submenu hanging, 08-ui-spec.md §2.6).
       for (const existing of Array.from(root.querySelectorAll(':scope > .menu-sub'))) {
         existing.remove();
       }
+      if (item.disabled === true || item.submenu === undefined) return;
       const sub = buildMenu(item.submenu);
       sub.classList.add('menu-sub');
       root.append(sub);

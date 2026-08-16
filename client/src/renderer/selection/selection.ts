@@ -15,7 +15,7 @@
  *   per-entity calls (style, "only parent", property values).
  */
 
-import { scheduleRefresh, requireNetworkId } from '../app.js';
+import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { setAddToSelectionHook, showSelectionThoughtContextMenu } from '../canvas/context-menu.js';
 import { applyThoughtIcon, setSelectionClickHooks } from '../canvas/canvas.js';
 import { pickThoughtRef } from '../editor/thought-picker.js';
@@ -114,11 +114,9 @@ async function renderList(ids: string[]): Promise<void> {
     removeBtn.addEventListener('click', (event) => event.stopPropagation());
     item.append(removeBtn);
     item.addEventListener('click', () => {
-      // Click on the row focuses the thought; it stays in the selection.
-      void etn.thoughts
-        .focus(networkId, id)
-        .then(() => undefined)
-        .catch(() => undefined);
+      // Click on the row focuses the thought (canvas + editor repaint); it
+      // stays in the selection.
+      void setFocus(id).catch(() => undefined);
     });
     // Same context menu as a canvas cloud, minus the selection toggle (§5.1).
     item.addEventListener('contextmenu', (event) => {
