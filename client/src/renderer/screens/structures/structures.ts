@@ -27,6 +27,7 @@ import { applyCanvasScaleVars, applyCloudStyle, applyThoughtIcon, resolveCloudSt
 import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
 import { openLinkInEditor } from '../../editor/editor.js';
+import { invalidateHistoryBar } from '../history-bar.js';
 import { clear, div, el, setTooltip } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
@@ -382,6 +383,10 @@ export function mountStructures(hostEl: HTMLElement): void {
   mountFilterPanel(panel, {
     onApply: () => {
       persistFilterState();
+      // A new filter may make the old structures-history entries unopenable —
+      // drop the whole view history and refresh the bar (§15.9).
+      void etn.history.clear('structures');
+      invalidateHistoryBar();
       void applyQuery(true);
     },
     onStatePersist: () => persistFilterState(),

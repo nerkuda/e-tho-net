@@ -453,6 +453,12 @@ export interface EtnApi {
      * (the server sends no realtime echo to the deleting client, L4).
      */
     remove(thoughtId: string, scope?: HistoryScope): Promise<void>;
+    /**
+     * Clears the whole visit history of one view of the active
+     * profile/network — the structures view clears its history when a new
+     * filter is applied (§15.9).
+     */
+    clear(scope?: HistoryScope): Promise<void>;
   };
   system: {
     health(): Promise<HealthResponse>;

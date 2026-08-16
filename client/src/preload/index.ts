@@ -194,6 +194,7 @@ function buildApi(): EtnApi {
         invoke('history.push', profileId, networkId, thoughtId, scope),
       rotate: (oldId, newId, scope) => invoke('history.rotate', oldId, newId, scope),
       remove: (thoughtId, scope) => invoke('history.remove', thoughtId, scope),
+      clear: (scope) => invoke('history.clear', scope),
     },
     system: {
       health: () => invoke('system.health'),

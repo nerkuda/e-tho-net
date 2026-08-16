@@ -363,6 +363,17 @@ export class LocalDb {
       .run(profileId, networkId, thoughtId);
   }
 
+  /** Drops the whole visit history of one view (profile × network). */
+  public clearFocusHistory(
+    profileId: string,
+    networkId: string,
+    scope: HistoryScope = 'focus',
+  ): void {
+    this.db
+      .prepare(`DELETE FROM ${historyTable(scope)} WHERE profile_id = ? AND network_id = ?`)
+      .run(profileId, networkId);
+  }
+
   /**
    * Returns the ordered list of history `thought_id`s, freshest first.
    * Defaults to {@link FOCUS_HISTORY_LIMIT} entries.
