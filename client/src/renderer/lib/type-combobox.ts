@@ -208,6 +208,13 @@ export function createTypeCombobox(opts: {
 
   input.addEventListener('focus', openList);
   input.addEventListener('click', openList);
+  input.addEventListener('blur', () => {
+    // The caret left the field by any means (Tab onwards, click elsewhere,
+    // window switch) — the dropdown follows and closes by itself. Clicking a
+    // row keeps the focus in the input (mousedown preventDefault), so a pick
+    // never fires this.
+    if (open) closeList();
+  });
   input.addEventListener('input', () => {
     if (!open) {
       open = true;

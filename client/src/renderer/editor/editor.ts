@@ -237,6 +237,13 @@ async function render(): Promise<void> {
   if (signature === lastSignature) return;
   lastSignature = signature;
 
+  // Remember what had the focus: the rebuild destroys the old DOM, and a
+  // field focused at that moment (e.g. the type picker reached by Tab from
+  // the title) must get the focus back on the fresh render — otherwise the
+  // caret is lost and its dropdown stays closed.
+  const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const refocus = activeEl !== null && scrollBox.contains(activeEl) ? activeEl : null;
+
   // Body-mounted widgets (type-combobox dropdowns) must close before the old
   // DOM is destroyed — otherwise their fixed-position lists stay behind as
   // ghosts that neither Escape nor an outside click can dismiss (e.g. Tab
@@ -349,6 +356,33 @@ async function render(): Promise<void> {
 
   scrollBox.append(tabBar, paneHost);
   activateTab(activeTab);
+
+  if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
+}
+
+/** Field classes the editor can refocus after a rebuild (specific, not generic). */
+const REFOCUS_MARKERS = new Set([
+  'editor-title-input',
+  'synonyms-input',
+  'type-combo-input',
+  'editor-icon-box',
+  'md-field-area',
+  'chrono-meta-input',
+]);
+
+/** Re-focuses the freshly built field that had the focus before the rebuild. */
+function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
+  const marker = [...prev.classList].find((c) => REFOCUS_MARKERS.has(c));
+  if (marker === undefined) return;
+  // The header fields live outside the tab panes; tab content matches within
+  // the (single) active pane so a links-tab combobox does not steal the focus
+  // from the header one (and vice versa).
+  const pane = prev.closest('.tab-pane');
+  const scope = pane !== null ? (root.querySelector<HTMLElement>('.tab-pane') ?? root) : root;
+  const next = scope.querySelector<HTMLElement>(`.${marker}`);
+  if (next === null || next.isConnected === false) return;
+  if (next.classList.contains('hidden')) return;
+  next.focus();
 }
 
 // ---------------------------------------------------------------------------
