@@ -27,7 +27,9 @@ jobs:
       - run: npm install
       - run: npm run build
       - name: Package with electron-builder
-        run: npm -w @etn/client run package
+        # `--publish never`: artifacts are attached to the release by the
+        # github-release job below, not by electron-builder itself.
+        run: npm -w @etn/client run package -- --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
