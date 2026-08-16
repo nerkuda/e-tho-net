@@ -32,6 +32,7 @@ import { applyRealtimeToUi } from './realtime-ui.js';
 import { initTheme } from './lib/theme.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
+import { invalidateStructuresThought } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
 import { store } from './state.js';
 
@@ -70,7 +71,7 @@ export async function openNetwork(networkId: string): Promise<void> {
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
 
-  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw] =
+  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw, activeViewRaw] =
     await Promise.all([
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
@@ -81,6 +82,7 @@ export async function openNetwork(networkId: string): Promise<void> {
       etn.ui.getState(networkId, UI_STATE_KEY.WINDOW_LAYOUT),
       etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_LAYOUT),
       etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_ZOOM),
+      etn.ui.getState(networkId, UI_STATE_KEY.ACTIVE_VIEW),
     ]);
 
   const editorPosition = (
@@ -111,9 +113,12 @@ export async function openNetwork(networkId: string): Promise<void> {
     linkTypes,
     thoughtTypes,
     lastUsedLinkTypeId: parseLinkTypeId(linkTypeRaw),
+    activeView: activeViewRaw === 'structures' ? 'structures' : 'map',
     focus: null,
     selection: [],
     editorTarget: null,
+    structuresActiveThoughtId: null,
+    structuresActiveThought: null,
   });
 
   showScreen('workspace');
@@ -250,11 +255,14 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
     scheduleRefresh();
   }
   // setFocus's rotation pushes the deleted id (as the old focus) back into the
-  // history — prune it afterwards so it never lingers in «последние».
+  // history — prune it afterwards so it never lingers in «последние». Both
+  // per-view histories (focus + structures, L15 §15.9).
   await etn.history.remove(deletedId).catch(() => undefined);
+  await etn.history.remove(deletedId, 'structures').catch(() => undefined);
   invalidateIndicators(deletedId);
   invalidateRef(deletedId);
   invalidateHistoryBar();
+  invalidateStructuresThought(deletedId);
 }
 
 /**
@@ -339,7 +347,9 @@ export function initKeyboard(): void {
     }
     if (event.ctrlKey || event.metaKey) {
       if (event.key.toLowerCase() === 'f') {
-        if (store.state.screen === 'workspace') {
+        // Ctrl+F focuses the canvas search row — hidden in the structures
+        // view (§15.1), so the shortcut does nothing there.
+        if (store.state.screen === 'workspace' && store.state.activeView === 'map') {
           event.preventDefault();
           document.querySelector<HTMLInputElement>('.search-input')?.focus();
         }

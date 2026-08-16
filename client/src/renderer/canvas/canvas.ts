@@ -266,13 +266,14 @@ export function invalidateIndicators(id: string | null): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Writes the zoom-aware cloud sizing CSS variables onto the canvas host
- * (L9). The variables cascade to the zones AND the focus row — before L9 the
+ * Writes the zoom-aware cloud sizing CSS variables onto a host (L9). On the
+ * canvas host they cascade to the zones AND the focus row — before L9 the
  * focus cloud inherited the static `:root` fallbacks instead of the stored
  * L4 `cloud_width`. The same `cloudGeom` numbers drive the zone grid math, so
- * CSS and virtualization never diverge.
+ * CSS and virtualization never diverge. The structures view (L15) applies the
+ * same variables to its own host so its clouds match the canvas scale.
  */
-function applyCanvasScaleVars(h: HTMLElement): void {
+export function applyCanvasScaleVars(h: HTMLElement): void {
   const zoom = store.state.canvasZoom;
   const geom = cloudGeom(store.state.cloudWidth, store.state.cloudGap, zoom);
   h.style.setProperty('--cloud-width', `${geom.width}px`);
@@ -585,8 +586,8 @@ export function resolveCloudStyle(
   };
 }
 
-/** Applies a resolved style to a cloud element. */
-function applyCloudStyle(cloud: HTMLElement, style: CloudStyle): void {
+/** Applies a resolved style to a cloud element (also used by the structures tree, L15). */
+export function applyCloudStyle(cloud: HTMLElement, style: CloudStyle): void {
   if (style.fg !== null) {
     cloud.style.color = style.fg;
   } else if (style.bg !== null) {

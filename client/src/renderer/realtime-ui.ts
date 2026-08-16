@@ -18,6 +18,11 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 import { scheduleRefresh } from './app.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
+import {
+  invalidateStructuresThought,
+  scheduleStructuresRefresh,
+} from './screens/structures/structures.js';
+import { invalidateSavedFilters } from './screens/structures/filter-panel.js';
 import { store } from './state.js';
 
 /** True when the thought id participates in the current focus neighbourhood. */
@@ -39,16 +44,19 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       invalidateIndicators(evt.data.id);
       invalidateRef(evt.data.id);
       invalidateHistoryBar();
+      invalidateStructuresThought(evt.data.id);
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
       break;
 
     case 'thought.created':
       if (inNeighbourhood(evt.data.thought.id)) scheduleRefresh();
+      scheduleStructuresRefresh();
       break;
 
     case 'thought.updated':
       invalidateRef(evt.data.id);
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
+      scheduleStructuresRefresh();
       break;
 
     case 'thought.reordered':
@@ -58,6 +66,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'property-value.set':
     case 'property-value.deleted':
       scheduleRefresh();
+      scheduleStructuresRefresh();
       break;
 
     case 'comment.created':
@@ -91,12 +100,21 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       if (evt.data.key === 'show_inactive') {
         store.update({ showInactive: evt.data.value === true });
         scheduleRefresh();
+        scheduleStructuresRefresh();
       }
       break;
 
     case 'user-focus-preferences.updated':
     case 'user-focus-order.updated':
       if (evt.data.focus_thought_id === store.state.focus?.focused.id) scheduleRefresh();
+      break;
+
+    case 'saved-filter.created':
+    case 'saved-filter.updated':
+    case 'saved-filter.deleted':
+      // The user's other client changed a saved filter (audience=user) — the
+      // local list re-syncs from the server (§15.3).
+      invalidateSavedFilters();
       break;
 
     case 'network.updated': {

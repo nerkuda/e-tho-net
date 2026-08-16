@@ -176,10 +176,18 @@ export async function deleteLink(networkId: string, linkId: string): Promise<boo
 }
 
 /** Opens the thought context menu at the event position. */
-export function showThoughtContextMenu(event: MouseEvent, target: CloudMenuTarget): void {
+export function showThoughtContextMenu(
+  event: MouseEvent,
+  target: CloudMenuTarget,
+  opts: { openHandler?: (id: string) => void } = {},
+): void {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  showMenuAt(event.clientX, event.clientY, buildThoughtMenuItems(networkId, target));
+  showMenuAt(
+    event.clientX,
+    event.clientY,
+    buildThoughtMenuItems(networkId, target, { openHandler: opts.openHandler }),
+  );
 }
 
 /**
@@ -201,7 +209,7 @@ export function showSelectionThoughtContextMenu(event: MouseEvent, target: Cloud
 function buildThoughtMenuItems(
   networkId: string,
   target: CloudMenuTarget,
-  opts: { hideSelectionCommand?: boolean } = {},
+  opts: { hideSelectionCommand?: boolean; openHandler?: (id: string) => void } = {},
 ): MenuItem[] {
   const focus = store.state.focus;
   const isFocus = focus?.focused.id === target.id;
@@ -269,15 +277,21 @@ function buildThoughtMenuItems(
       onClick: () => void changeIcon(networkId, target.id),
     },
     {
+      // In the structures view (L15) both commands open the editor without
+      // switching the canvas focus; on the canvas they focus the thought.
       label: 'Добавить вложение',
       onClick: () => {
-        void setFocus(target.id);
+        if (opts.openHandler !== undefined) opts.openHandler(target.id);
+        else void setFocus(target.id);
       },
     },
     MENU_SEPARATOR,
     {
       label: 'Открыть редактор',
-      onClick: () => void setFocus(target.id),
+      onClick: () => {
+        if (opts.openHandler !== undefined) opts.openHandler(target.id);
+        else void setFocus(target.id);
+      },
     },
     ...selectionItem,
     {

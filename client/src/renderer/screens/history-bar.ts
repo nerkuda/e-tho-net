@@ -1,9 +1,12 @@
 /**
- * Focus history in the status bar (H7, 08-ui-spec.md §11.1,
+ * Visit history in the status bar (H7, 08-ui-spec.md §11.1/§15.9,
  * 11-settings-and-state.md §2.3, 09-scenarios.md B4):
  *
  * `[ ← ] [облачко₁] [облачко₂] [облачко₃] [▾ N]`
  *
+ * - each view has its own local history (L4): the map keeps thoughts that were
+ *   in the canvas focus, the structures keep thoughts opened in the editor —
+ *   the bar shows the history of the ACTIVE view (L15);
  * - the three freshest thoughts render as mini clouds (icon + ~40-char title,
  *   colors from the thought/type, dimmed when inactive);
  * - `▾ N` opens a dropdown with the remaining entries; N = 0 hides the button;
@@ -11,8 +14,8 @@
  * - entries are resolved via `thoughts.resolve` (id → metadata); deleted
  *   thoughts were already pruned locally by the main-process applier, and
  *   inactive thoughts are hidden while `show_inactive` is off;
- * - clicking an entry is a normal focus switch: the current thought rotates
- *   into history and the clicked one becomes the focus (app.setFocus).
+ * - clicking an entry switches the focus (map view) or opens the thought in
+ *   the editor without moving the canvas focus (structures view).
  */
 
 import { setFocus } from '../app.js';
@@ -22,6 +25,7 @@ import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
+import { openStructuresThought } from './structures/structures.js';
 
 /** Max title length inside a history mini-cloud. */
 const TITLE_LIMIT = 40;
@@ -51,12 +55,30 @@ export function invalidateHistoryBar(): void {
   if (host?.isConnected === true) void render();
 }
 
+/** Opens a history entry in the way its view implies (§15.9). */
+function openEntry(id: string): void {
+  if (store.state.activeView === 'structures') {
+    void openStructuresThought(id);
+  } else {
+    void setFocus(id);
+  }
+}
+
+/** The id excluded from the list as "current": the view's active thought. */
+function currentId(): string | null {
+  if (store.state.activeView === 'structures') {
+    return store.state.structuresActiveThoughtId;
+  }
+  return store.state.focus?.focused.id ?? null;
+}
+
 /** Re-renders the history bar from the local history + server metadata. */
 async function render(): Promise<void> {
   if (host === null) return;
   const profileId = store.state.profileId;
   const networkId = store.state.networkId;
-  const signature = `${profileId ?? ''}|${networkId ?? ''}|${store.state.focus?.focused.id ?? ''}|${String(store.state.showInactive)}`;
+  const view = store.state.activeView;
+  const signature = `${profileId ?? ''}|${networkId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
 
@@ -65,16 +87,21 @@ async function render(): Promise<void> {
     return;
   }
 
-  const entries = await etn.history.list(profileId, networkId, HISTORY_LIMIT);
+  const entries = await etn.history.list(
+    profileId,
+    networkId,
+    HISTORY_LIMIT,
+    view === 'structures' ? 'structures' : 'focus',
+  );
   if (host === null || !host.isConnected) return;
   const ids = entries.map((entry) => entry.thoughtId);
 
   const refs = ids.length > 0 ? await resolveRefs(networkId, ids) : new Map();
-  const focusedId = store.state.focus?.focused.id ?? null;
+  const activeId = currentId();
   const visible = ids.filter((id) => {
-    // The current focus is not a "recent" — it enters the list only after the
-    // user moves focus away (rotate pushes it then).
-    if (id === focusedId) return false;
+    // The current thought is not a "recent" — it enters the list only after
+    // the user moves away from it.
+    if (id === activeId) return false;
     const ref = refs.get(id);
     return store.state.showInactive || ref === undefined || ref.active;
   });
@@ -82,14 +109,14 @@ async function render(): Promise<void> {
   clear(host);
   if (visible.length === 0) {
     const empty = div('history-empty');
-    empty.textContent = 'нет предыдущих мыслей';
+    empty.textContent = view === 'structures' ? 'нет открытых мыслей' : 'нет предыдущих мыслей';
     host.append(empty);
     return;
   }
 
   const back = button('', () => {
     const first = visible[0];
-    if (first !== undefined) void setFocus(first);
+    if (first !== undefined) openEntry(first);
   }, 'history-back', 'Назад к предыдущей мысли');
   back.append(svgIcon('arrow-left', 13));
   host.append(back);
@@ -109,7 +136,7 @@ async function render(): Promise<void> {
           const ref = refs.get(id);
           return {
             label: `${ref?.icon ?? '💭'} ${ref?.title ?? id}`.slice(0, TITLE_LIMIT),
-            onClick: () => void setFocus(id),
+            onClick: () => openEntry(id),
           };
         });
         const rect = more.getBoundingClientRect();
@@ -156,6 +183,6 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
   const title = el('span', 'hc-title', (ref?.title ?? id).slice(0, TITLE_LIMIT));
   setTooltip(chip, ref?.title ?? id);
   chip.append(icon, title);
-  chip.addEventListener('click', () => void setFocus(id));
+  chip.addEventListener('click', () => openEntry(id));
   return chip;
 }

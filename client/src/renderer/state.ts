@@ -22,16 +22,20 @@ import {
   type LinkType,
   type Network,
   type SortKind,
+  type Thought,
   type ThoughtType,
 } from '@etn/shared';
 
 /** Top-level screens of the application. */
 export type Screen = 'onboarding' | 'networks' | 'workspace';
 
+/** Workspace views (L15, 08-ui-spec.md §15.1): the map canvas / the structures. */
+export type WorkspaceView = 'map' | 'structures';
+
 /** Editor dock position (L4 `editor_position`, 08-ui-spec.md §6.1). */
 export type EditorPosition = 'left' | 'right' | 'top' | 'bottom' | 'hidden';
 
-/** What the editor currently shows: the focused thought or a picked link. */
+/** What the editor currently shows: a picked thought/link or the focused thought. */
 export type EditorTarget =
   { kind: 'thought'; id: string } | { kind: 'link'; id: string; link: Link };
 
@@ -98,6 +102,12 @@ export interface AppState {
   zoneOrder: { parents: string[]; children: string[] };
   /** L4 `last_used_link_type_id` (add dialog default). */
   lastUsedLinkTypeId: string | null;
+  /** Active workspace view (L4 `active_view`, 08-ui-spec.md §15.1). */
+  activeView: WorkspaceView;
+  /** The thought opened in the editor from the structures view (its band), L15. */
+  structuresActiveThoughtId: string | null;
+  /** Full entity of {@link AppState.structuresActiveThoughtId} (editor header). */
+  structuresActiveThought: Thought | null;
 }
 
 /** Initial snapshot. */
@@ -130,6 +140,9 @@ const initial: AppState = {
   zoneSorts: { parents: 'created', children: 'created' },
   zoneOrder: { parents: [], children: [] },
   lastUsedLinkTypeId: null,
+  activeView: 'map',
+  structuresActiveThoughtId: null,
+  structuresActiveThought: null,
 };
 
 /**
@@ -163,11 +176,13 @@ class Store {
       networkId: null,
       focus: null,
       selection: [],
-  selectedLinkId: null,
+      selectedLinkId: null,
       editorTarget: null,
       linkTypes: [],
       thoughtTypes: [],
       lastEvent: null,
+      structuresActiveThoughtId: null,
+      structuresActiveThought: null,
     });
   }
 }

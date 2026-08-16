@@ -23,7 +23,9 @@ export type IconName =
   | 'arrow-left'
   | 'search'
   | 'alert'
-  | 'x';
+  | 'x'
+  | 'mindmap'
+  | 'tree';
 
 /**
  * Trusted static inner-SVG markup per icon (lucide geometry, MIT). Assigned
@@ -50,6 +52,17 @@ const PATHS: Record<IconName, string> = {
   alert:
     '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  // View switcher (L15, 08-ui-spec.md §15.1): the canvas map (central hub with
+  // satellite clouds) and the structures tree (explorer-style hierarchy).
+  mindmap:
+    '<circle cx="12" cy="12" r="3"/><circle cx="4.5" cy="5" r="2"/><circle cx="19.5" cy="5" r="2"/>' +
+    '<circle cx="4.5" cy="19" r="2"/><circle cx="19.5" cy="19" r="2"/>' +
+    '<path d="M9.9 10.2 6 7.2"/><path d="m14.1 10.2 3.9-3"/><path d="M9.9 13.8 6 16.8"/>' +
+    '<path d="m14.1 13.8 3.9 3"/>',
+  tree:
+    '<rect x="9" y="3" width="6" height="4" rx="1"/><rect x="3" y="17" width="6" height="4" rx="1"/>' +
+    '<rect x="15" y="17" width="6" height="4" rx="1"/><path d="M12 7v6"/><path d="M6 13h12"/>' +
+    '<path d="M6 13v4"/><path d="M18 13v4"/>',
 };
 
 /**

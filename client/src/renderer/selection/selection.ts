@@ -288,8 +288,12 @@ async function addNeighborsOfAll(dir: 'children' | 'parents'): Promise<void> {
   addToSelection(added);
 }
 
-/** Adds children/parents of one thought to the selection (Ctrl+ellipse). */
-async function addNeighborsOf(id: string, direction: 'parent' | 'child'): Promise<void> {
+/** Adds children/parents of one thought to the selection (Ctrl+ellipse).
+ *  Also used by the structures view tree (L15, 08-ui-spec.md §15.8). */
+export async function addNeighborsOf(
+  id: string,
+  direction: 'parent' | 'child',
+): Promise<void> {
   const added: string[] = [];
   await collectNeighbors(id, direction === 'parent' ? 'parents' : 'children', added);
   addToSelection(added);

@@ -26,6 +26,7 @@ import { mountEditor } from '../editor/editor.js';
 import { mountEditorResizer } from './editor-resizer.js';
 import { mountSearch } from '../search/search.js';
 import { mountSelection } from '../selection/selection.js';
+import { mountStructures, setActiveView } from './structures/structures.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -37,6 +38,9 @@ export interface WorkspaceHandles {
   userMenuLabel: HTMLSpanElement;
   /** Toolbar dropdown for workspace-layout commands (show/hide editor, …). */
   viewMenuButton: HTMLButtonElement;
+  /** View switcher segment (L15): map / structures. */
+  mapViewButton: HTMLButtonElement;
+  structuresViewButton: HTMLButtonElement;
   /** Search input in the toolbar (H13). */
   searchInput: HTMLInputElement;
   searchOptionsButton: HTMLButtonElement;
@@ -46,6 +50,8 @@ export interface WorkspaceHandles {
   selectionHost: HTMLElement;
   /** Center canvas (H4–H6). */
   canvasHost: HTMLElement;
+  /** Structures view host (L15, 08-ui-spec.md §15). */
+  structuresHost: HTMLElement;
   /** Editor container (H8–H12). */
   editorHost: HTMLElement;
   /** Status bar cells. */
@@ -98,6 +104,21 @@ export function buildWorkspace(): HTMLElement {
   netMenuButton.append(svgIcon('network'), netMenuLabel, svgIcon('chevron-down', 12));
   setTooltip(netMenuButton, 'Меню сети');
 
+  // View switcher (L15, 08-ui-spec.md §15.1): immediately after the network
+  // menu. The pressed button marks the active view; the map keeps the search
+  // input, the structures replace canvas + search with their own space.
+  const mapViewButton = el('button', 'tb-btn tb-icon view-btn', '');
+  mapViewButton.type = 'button';
+  mapViewButton.append(svgIcon('mindmap'));
+  setTooltip(mapViewButton, 'Карта мыслей');
+  mapViewButton.addEventListener('click', () => setActiveView('map'));
+
+  const structuresViewButton = el('button', 'tb-btn tb-icon view-btn', '');
+  structuresViewButton.type = 'button';
+  structuresViewButton.append(svgIcon('tree'));
+  setTooltip(structuresViewButton, 'Структуры мыслей');
+  structuresViewButton.addEventListener('click', () => setActiveView('structures'));
+
   const searchInput = el('input', 'search-input');
   searchInput.type = 'text';
   searchInput.placeholder = 'Поиск… (Ctrl+F)';
@@ -126,6 +147,8 @@ export function buildWorkspace(): HTMLElement {
 
   toolbar.append(
     netMenuButton,
+    mapViewButton,
+    structuresViewButton,
     searchInput,
     searchOptionsButton,
     spacer,
@@ -140,11 +163,12 @@ export function buildWorkspace(): HTMLElement {
   const body = div('workspace-body');
   const selectionHost = div('selection-panel hidden');
   const canvasHost = div('canvas');
+  const structuresHost = div('structures hidden');
   const editorHost = div('editor hidden');
   // Draggable splitter between canvas and editor (08-ui-spec.md §6.1). Positioned
   // absolutely on the canvas/editor seam via the --editor-w/--editor-h variables.
   const editorResizer = div('editor-resizer hidden');
-  body.append(selectionHost, canvasHost, editorHost, editorResizer);
+  body.append(selectionHost, canvasHost, structuresHost, editorHost, editorResizer);
 
   // --- status bar ------------------------------------------------------------
   const statusbar = div('statusbar');
@@ -183,11 +207,14 @@ export function buildWorkspace(): HTMLElement {
     userMenuButton,
     userMenuLabel,
     viewMenuButton,
+    mapViewButton,
+    structuresViewButton,
     searchInput,
     searchOptionsButton,
     searchHost,
     selectionHost,
     canvasHost,
+    structuresHost,
     editorHost,
     historyHost,
     focusLabel,
@@ -199,7 +226,7 @@ export function buildWorkspace(): HTMLElement {
   current = handles;
 
   // Toolbar dropdown menus (H3/H18), canvas (H4), history (H7), editor (H8),
-  // search (H13).
+  // search (H13), structures view (L15).
   wireNetMenu(handles);
   wireUserMenu(handles);
   wireViewMenu(handles);
@@ -209,6 +236,7 @@ export function buildWorkspace(): HTMLElement {
   mountEditorResizer(editorResizer, body);
   mountSearch({ input: searchInput, optionsButton: searchOptionsButton, host: searchHost });
   mountSelection(selectionHost);
+  mountStructures(structuresHost);
 
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
   function refresh(): void {
@@ -229,6 +257,16 @@ export function buildWorkspace(): HTMLElement {
     setTooltip(focusLabel, st.focus?.focused.title ?? '');
     zoomLabel.replaceChildren(svgIcon('search', 12), span(` ${Math.round(st.canvasZoom * 100)}%`));
     eventLabel.textContent = st.lastEvent ?? '';
+
+    // View switcher (L15): the structures view replaces the canvas and the
+    // search row; editor, resizer, status bar and selection panel are shared.
+    const structuresActive = st.activeView === 'structures';
+    mapViewButton.classList.toggle('active', !structuresActive);
+    structuresViewButton.classList.toggle('active', structuresActive);
+    canvasHost.classList.toggle('hidden', structuresActive);
+    structuresHost.classList.toggle('hidden', !structuresActive);
+    searchInput.classList.toggle('hidden', structuresActive);
+    searchOptionsButton.classList.toggle('hidden', structuresActive);
   }
 
   store.subscribe(() => {

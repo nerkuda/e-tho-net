@@ -102,11 +102,19 @@ export function openLinkInEditor(link: Link): void {
   store.update({ editorTarget: { kind: 'link', id: link.id, link } });
 }
 
-/** Current editor context: the picked link or the focused thought. */
+/** Current editor context: a picked thought/link, else the focused thought. */
 export function currentEditorContext(): EditorContext | null {
   const target = store.state.editorTarget;
   if (target !== null && target.kind === 'link') {
     return { ownerType: 'link', ownerId: target.id, thought: null, link: target.link };
+  }
+  if (target !== null && target.kind === 'thought') {
+    // Opened from the structures view (L15): the full entity rides along in
+    // the store; until it arrives the editor falls back to the focus.
+    const thought = store.state.structuresActiveThought;
+    if (thought !== null && thought.id === target.id) {
+      return { ownerType: 'thought', ownerId: target.id, thought, link: null };
+    }
   }
   const focus = store.state.focus;
   if (focus === null) return null;
