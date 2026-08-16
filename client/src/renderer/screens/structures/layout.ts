@@ -29,10 +29,8 @@ export interface TreeRow {
    * How this row attaches to its tree partner: `child` — the row hangs below
    * its partner (came from a children expansion); `parent` — the row sits above
    * its partner (came from a parents expansion). `null` for root rows.
-   * `first` marks the first parent of a group: its connector line starts at the
-   * row's middle (later parents continue the line drawn by the row above).
    */
-  via: { otherId: string; role: 'child' | 'parent'; first?: boolean } | null;
+  via: { otherId: string; role: 'child' | 'parent' } | null;
 }
 
 /** Serves the neighbour ids of an expanded node (from the hierarchy cache). */
@@ -84,17 +82,15 @@ export function flattenStructuresTree(
     const flags = expansion.get(key);
     let selfIndent = indent;
     if (flags?.parents === true) {
-      let first = true;
       for (const p of neighborsOf(key, thoughtId, 'parents')) {
         emit(
           parentKey(key, p),
           p,
           indent,
           rootId,
-          { otherId: thoughtId, role: 'parent', first },
+          { otherId: thoughtId, role: 'parent' },
           depth + 1,
         );
-        first = false;
       }
       selfIndent = indent + 1;
     }

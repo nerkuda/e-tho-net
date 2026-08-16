@@ -2658,57 +2658,44 @@ body.dragging * {
   border-color: var(--accent);
 }
 
-/* Connector column (§15.6): vertical guide + horizontal stub towards the
- * cloud, with the source → target type label above the line. */
-.st-connector {
-  position: relative;
-  flex: 0 0 30px;
-  align-self: stretch;
-  margin-right: 6px;
+/* Link lines (§15.6): one absolute line per parent→child pair, drawn over the
+ * tree. The vertical starts at the parent cloud's bottom-left corner and
+ * reaches the child's left edge (classic directory tree). The label stays
+ * hidden until hover, when the whole line highlights (--warn) and the
+ * source → target type name appears — no overlapping labels. Several parents
+ * of one thought: lines are appended in row order, so lower rows paint over
+ * the upper ones. */
+.st-link-line {
+  position: absolute;
+  z-index: 2;
   cursor: pointer;
-  min-height: 20px;
 }
 
-.st-connector::before {
-  content: '';
+.st-link-v,
+.st-link-h {
   position: absolute;
-  left: 9px;
-  top: -12px;
-  bottom: 50%;
+  background: var(--link-default);
+  border-radius: 2px;
+}
+
+.st-link-v {
+  left: 0;
+  top: 0;
   width: 2px;
-  border-radius: 2px;
-  background: var(--link-default);
+  height: 100%;
 }
 
-/* Parent connectors (§15.6): the block of parents forms ONE continuous rail
- * from the first parent down to the expanded node — every parent row draws the
- * line through its full height, only the first parent starts at the row's
- * middle (no line above it). This mirrors the child connectors, where each
- * row's line clearly reaches its own cloud. */
-.st-connector.st-up::before {
-  top: -12px;
-  bottom: -12px;
-}
-
-.st-connector.st-up.st-first::before {
-  top: 50%;
-}
-
-.st-connector::after {
-  content: '';
-  position: absolute;
-  left: 9px;
-  top: 50%;
-  width: 21px;
+.st-link-h {
+  left: 0;
+  top: calc(100% - 1px);
+  width: 100%;
   height: 2px;
-  border-radius: 2px;
-  background: var(--link-default);
 }
 
 .st-link-label {
   position: absolute;
-  left: 0;
-  bottom: calc(50% + 4px);
+  left: 8px;
+  bottom: 12px;
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2716,18 +2703,25 @@ body.dragging * {
   font-size: var(--link-label-font, 11px);
   line-height: 1.2;
   color: var(--text-dim);
+  background: var(--surface);
+  border-radius: 4px;
+  padding: 1px 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  pointer-events: none;
   user-select: none;
 }
 
-.st-connector:hover::before,
-.st-connector:hover::after,
-.st-connector.st-selected::before,
-.st-connector.st-selected::after {
+.st-link-line:hover .st-link-v,
+.st-link-line:hover .st-link-h,
+.st-link-line.st-selected .st-link-v,
+.st-link-line.st-selected .st-link-h {
   background: var(--warn);
 }
 
-.st-connector:hover .st-link-label,
-.st-connector.st-selected .st-link-label {
+.st-link-line:hover .st-link-label,
+.st-link-line.st-selected .st-link-label {
+  opacity: 1;
   color: var(--warn-strong);
   font-weight: 600;
 }

@@ -370,7 +370,7 @@ export function mountStructures(hostEl: HTMLElement): void {
     // A click on the empty area drops the sticky link selection and returns
     // the editor to the focused thought (same as the canvas, §2.5).
     const target = event.target as HTMLElement;
-    if (target.closest('.st-cloud, .st-connector, .st-more, button') !== null) return;
+    if (target.closest('.st-cloud, .st-link-line, .st-more, button') !== null) return;
     store.update({
       selectedLinkId: null,
       editorTarget: null,
@@ -513,17 +513,19 @@ function renderTree(): void {
   resultsHost.append(counter);
 
   updateBand();
+  drawLinks();
 }
 
-/** Builds one tree row: connector column + the root triangle + a cloud. */
+/** Builds one tree row: the root triangle (for filter results) + a cloud. */
 function buildRow(row: TreeRow, selection: Set<string>): HTMLElement {
   const rowEl = div('st-row');
   rowEl.dataset['key'] = row.key;
   rowEl.dataset['id'] = row.thoughtId;
   rowEl.style.setProperty('--st-indent', String(row.indent));
-
   if (row.via !== null) {
-    rowEl.append(buildConnector(row));
+    // The link lines are drawn over the tree from these attributes (drawLinks).
+    rowEl.dataset['via'] = row.via.otherId;
+    rowEl.dataset['role'] = row.via.role;
   }
   if (row.root) rowEl.append(div('st-root-marker'));
   rowEl.append(buildCloud(row, selection));
@@ -616,45 +618,90 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
 }
 
 /**
- * Builds the connector between a row and its tree partner (§15.6): a vertical
- * guide line in the indent column with the link-type label read
- * source → target; several links collapse into a ×N badge opening a picker.
+ * Draws one link line per parent→child pair over the tree (§15.6), absolute
+ * in the results host: the vertical starts at the parent cloud's bottom-left
+ * corner and reaches the child's left edge. Lines are appended in row order,
+ * so the links of lower rows paint over the links of the rows above — exactly
+ * how several parents of one thought overlap. A line is a single element, so
+ * hovering it highlights the whole link at once (--warn) and reveals the
+ * source → target label, which otherwise stays hidden (no label collisions).
  */
-function buildConnector(row: TreeRow): HTMLElement {
-  const connector = div('st-connector');
-  if (row.via?.role === 'parent') connector.classList.add('st-up');
-  if (row.via?.first === true) connector.classList.add('st-first');
-  if (row.via === null) return connector;
+function drawLinks(): void {
+  if (resultsHost === null) return;
+  resultsHost.querySelectorAll('.st-link-line').forEach((l) => l.remove());
+  const hostRect = resultsHost.getBoundingClientRect();
+  const scrollLeft = resultsHost.scrollLeft;
+  const scrollTop = resultsHost.scrollTop;
 
-  const links = pairLinks(row.via.otherId, row.thoughtId);
-  if (links.length === 0) return connector;
-
-  const selected = store.state.selectedLinkId;
-  if (selected !== null && links.some((l) => l.id === selected)) {
-    connector.classList.add('st-selected');
-  }
-
-  const label = el('span', 'st-link-label', connectorLabel(links));
-  connector.append(label);
-
-  connector.addEventListener('click', (event) => {
-    event.stopPropagation();
-    onConnectorClick(event, links);
-  });
-  connector.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (links.length === 1) {
-      showLinkContextMenu(event, links[0]!.id);
-    } else {
-      const items: MenuItem[] = links.map((edge) => ({
-        label: `Связь: ${linkLabel(edge)}`,
-        onClick: () => showLinkContextMenuAt(event, edge.id),
-      }));
-      showMenuAt(event.clientX, event.clientY, items);
+  for (const branch of resultsHost.querySelectorAll<HTMLElement>('.st-branch')) {
+    const rows = [...branch.querySelectorAll<HTMLElement>('.st-row')];
+    const rowsById = new Map<string, HTMLElement>();
+    for (const rowEl of rows) {
+      const id = rowEl.dataset['id'];
+      if (id !== undefined) rowsById.set(id, rowEl);
     }
-  });
-  return connector;
+    const drawn = new Set<string>();
+    for (const rowEl of rows) {
+      const selfId = rowEl.dataset['id'];
+      const viaId = rowEl.dataset['via'];
+      const role = rowEl.dataset['role'];
+      if (selfId === undefined || viaId === undefined) continue;
+      if (role !== 'child' && role !== 'parent') continue;
+      const parentId = role === 'child' ? viaId : selfId;
+      const childId = role === 'child' ? selfId : viaId;
+      const pairKey = `${parentId}|${childId}`;
+      if (drawn.has(pairKey)) continue;
+      drawn.add(pairKey);
+
+      const parentCloud =
+        rowsById.get(parentId)?.querySelector<HTMLElement>('.st-cloud') ?? null;
+      const childCloud =
+        rowsById.get(childId)?.querySelector<HTMLElement>('.st-cloud') ?? null;
+      if (parentCloud === null || childCloud === null) continue;
+
+      const pr = parentCloud.getBoundingClientRect();
+      const cr = childCloud.getBoundingClientRect();
+      const x = pr.left - hostRect.left + scrollLeft + 5;
+      const yTop = pr.bottom - hostRect.top + scrollTop;
+      const yMid = cr.top - hostRect.top + scrollTop + cr.height / 2;
+      const xEnd = cr.left - hostRect.left + scrollLeft;
+      if (yMid <= yTop) continue; // the child cannot sit above its parent
+
+      const line = div('st-link-line');
+      line.style.left = `${x}px`;
+      line.style.top = `${yTop}px`;
+      line.style.width = `${Math.max(2, xEnd - x)}px`;
+      line.style.height = `${yMid - yTop}px`;
+
+      const links = pairLinks(parentId, childId);
+      if (links.length > 0) {
+        const selected = store.state.selectedLinkId;
+        if (selected !== null && links.some((l) => l.id === selected)) {
+          line.classList.add('st-selected');
+        }
+        const label = el('span', 'st-link-label', connectorLabel(links));
+        line.append(label);
+        line.addEventListener('click', (event) => {
+          event.stopPropagation();
+          onConnectorClick(event, links);
+        });
+        line.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (links.length === 1) {
+            showLinkContextMenu(event, links[0]!.id);
+          } else {
+            const items: MenuItem[] = links.map((edge) => ({
+              label: `Связь: ${linkLabel(edge)}`,
+              onClick: () => showLinkContextMenuAt(event, edge.id),
+            }));
+            showMenuAt(event.clientX, event.clientY, items);
+          }
+        });
+      }
+      resultsHost.append(line);
+    }
+  }
 }
 
 /** Re-shows the link context menu at remembered coordinates (multi-link pick). */

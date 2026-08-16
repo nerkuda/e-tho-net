@@ -121,18 +121,6 @@ describe('flattenStructuresTree', () => {
     );
   });
 
-  it('marks the first parent of a group (connector rail start) and the rest', () => {
-    const lookupMany: NeighbourLookup = (_key, thoughtId, dir) => {
-      if (thoughtId === 'a' && dir === 'parents') return ['p1', 'p2'];
-      return lookup(_key, thoughtId, dir);
-    };
-    const rows = flattenStructuresTree(['a'], new Map([['a', { parents: true }]]), lookupMany);
-    const parentRows = rows.filter((r) => r.via?.role === 'parent');
-    assert.equal(parentRows.length, 2);
-    assert.equal(parentRows[0]?.via?.first, true);
-    assert.equal(parentRows[1]?.via?.first, false);
-  });
-
   it('marks each row with its root branch (per-branch dedup scope)', () => {
     const expansion: ExpansionMap = new Map([['a', { children: true }]]);
     const rows = flattenStructuresTree(['a', 'b'], expansion, lookup);
