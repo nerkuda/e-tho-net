@@ -1085,6 +1085,14 @@ body.resizing-h {
   border: 1px solid var(--border-strong);
   background: transparent;
   cursor: grab;
+  /* The hover growth animates like the other hover transitions (L10). */
+  transition:
+    height 0.12s ease,
+    top 0.12s ease,
+    bottom 0.12s ease,
+    border-width 0.12s ease,
+    border-color 0.12s ease,
+    background 0.12s ease;
 }
 
 .cloud .ellipse-top {
@@ -1100,11 +1108,29 @@ body.resizing-h {
   border-color: var(--ellipse-fill-border);
 }
 
-/* Hovering an ellipse highlights it (the link overlay lights up its links
- * via setEllipseHover, 08-ui-spec.md §2.4). */
+/* Hovering an ellipse (or a link's highlighted endpoint) grows it to double
+ * height — the center stays on the frame line — and thickens the orange
+ * outline by 1px (the link overlay lights up the ellipse's links via
+ * setEllipseHover, 08-ui-spec.md §2.4). */
+.cloud .ellipse:hover,
+.cloud .ellipse.link-end {
+  height: calc(8px * var(--cloud-zoom, 1));
+  border-width: 2px;
+}
+
 .cloud .ellipse:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.cloud .ellipse-top:hover,
+.cloud .ellipse-top.link-end {
+  top: calc(-4px * var(--cloud-zoom, 1));
+}
+
+.cloud .ellipse-bottom:hover,
+.cloud .ellipse-bottom.link-end {
+  bottom: calc(-4px * var(--cloud-zoom, 1));
 }
 
 .cloud .ellipse.drag-source {
@@ -3536,7 +3562,8 @@ body.dragging * {
   .editor-icon-box,
   .row-splitter,
   .profile-item,
-  .network-item {
+  .network-item,
+  .cloud .ellipse {
     transition: none;
   }
 }

@@ -57,11 +57,6 @@ const BADGE_RADIUS = 9;
 const BADGE_TEXT_DY = 3.5;
 /** Label offset from the line midpoint, px at zoom 1. */
 const LABEL_OFFSET = 8;
-/** Y-offsets from a bounding edge to an ellipse center, px at zoom 1: the
- *  ellipses lie ON the cloud frame, so the center is half their 4px height
- *  inwards from the card edge (L12). */
-const ELLIPSE_TOP_DY = 2;
-const ELLIPSE_BOTTOM_DY = 2;
 /** Bézier bend clamp range, px (L14): keeps short edges visibly curved and
  *  long edges from growing huge loops. */
 const BEND_MIN = 24;
@@ -386,20 +381,21 @@ function activeBundle(bundles: readonly Bundle[]): Bundle | null {
   return null;
 }
 
-/** Center of an ellipse side, in canvas-host coordinates. The ellipse grows
- *  with the canvas zoom, so do the Y nudges (L9). */
+/** Center of an ellipse side, in canvas-host coordinates. The ellipse lies on
+ *  the cloud frame and grows (2× on hover, 08-ui-spec.md §2.4), so its center
+ *  is read from the live rect: half the current height inwards from the
+ *  bounding edge (L9) — links always hit the ellipse center. */
 function ellipsePoint(
   el: HTMLElement,
   side: 'top' | 'bottom',
   hostRect: DOMRect,
 ): { x: number; y: number } {
-  const zoom = store.state.canvasZoom;
   const rect = el.getBoundingClientRect();
   const x = rect.left - hostRect.left + rect.width / 2;
   const y =
     side === 'top'
-      ? rect.top - hostRect.top + ELLIPSE_TOP_DY * zoom
-      : rect.bottom - hostRect.top - ELLIPSE_BOTTOM_DY * zoom;
+      ? rect.top - hostRect.top + rect.height / 2
+      : rect.bottom - hostRect.top - rect.height / 2;
   return { x, y };
 }
 
