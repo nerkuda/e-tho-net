@@ -38,6 +38,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 
+import { getAttachment } from './attachment-service.js';
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
 import {
   FONT_BOLD_BIT,
@@ -59,6 +60,7 @@ interface ThoughtRow {
   type_id: string | null;
   icon: string | null;
   icon_kind: string;
+  icon_attachment_id: string | null;
   active: number;
   is_protected: number;
   is_root: number;
@@ -98,6 +100,7 @@ function rowToThought(row: ThoughtRow, synonyms: string[]): Thought {
     type_id: row.type_id,
     icon: row.icon,
     icon_kind: row.icon_kind as IconKind,
+    icon_attachment_id: row.icon_attachment_id,
     active: row.active === 1,
     is_protected: row.is_protected === 1,
     is_root: row.is_root === 1,
@@ -127,6 +130,8 @@ export function rowToThoughtRef(row: {
   type_id: string | null;
   icon: string | null;
   icon_kind: string;
+  /** Optional — SELECTs that do not carry the column yield `null`. */
+  icon_attachment_id?: string | null;
   active: number;
   fg_color: string | null;
   bg_color: string | null;
@@ -143,6 +148,7 @@ export function rowToThoughtRef(row: {
     type_id: row.type_id,
     icon: row.icon,
     icon_kind: row.icon_kind as IconKind,
+    icon_attachment_id: row.icon_attachment_id ?? null,
     active: row.active === 1,
     fg_color: row.fg_color,
     bg_color: row.bg_color,
@@ -301,7 +307,8 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
   const placeholders = capped.map(() => '?').join(',');
   const rows = ndb
     .prepare(
-      `SELECT id, title, type_id, icon, icon_kind, active, fg_color, bg_color,
+      `SELECT id, title, type_id, icon, icon_kind, icon_attachment_id, active,
+              fg_color, bg_color,
               font_bold, font_italic, font_underline, font_strike, font_manual
        FROM thoughts WHERE id IN (${placeholders})`,
     )
@@ -311,6 +318,7 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
     type_id: string | null;
     icon: string | null;
     icon_kind: string;
+    icon_attachment_id: string | null;
     active: number;
     fg_color: string | null;
     bg_color: string | null;
@@ -503,6 +511,39 @@ export function updateThought(
     if (changes.icon_kind !== undefined) {
       sets.push('icon_kind = ?');
       args.push(changes.icon_kind);
+    }
+    // Icon ← attachment link (L16). A non-null value must reference an image
+    // file attachment owned by THIS thought; replacing the icon with an
+    // emoji/URL/cleared icon without an explicit link drops the old reference.
+    const clearsAttachment =
+      changes.icon_kind === 'emoji' ||
+      changes.icon === null ||
+      (changes.icon !== undefined &&
+        changes.icon !== null &&
+        changes.icon_attachment_id === undefined);
+    if (changes.icon_attachment_id !== undefined) {
+      const attachmentId = changes.icon_attachment_id;
+      if (attachmentId !== null) {
+        const attachment = getAttachment(ndb, attachmentId);
+        if (
+          attachment === null ||
+          attachment.kind !== 'file' ||
+          !(attachment.mime_type ?? '').startsWith('image/') ||
+          attachment.owner_type !== 'thought' ||
+          attachment.owner_id !== id
+        ) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'icon_attachment_id должен указывать на картинку-вложение этой мысли.',
+            { field: 'icon_attachment_id', attachment_id: attachmentId },
+          );
+        }
+      }
+      sets.push('icon_attachment_id = ?');
+      args.push(attachmentId);
+    } else if (clearsAttachment) {
+      sets.push('icon_attachment_id = ?');
+      args.push(null);
     }
     if (changes.active !== undefined) {
       sets.push('active = ?');

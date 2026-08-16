@@ -99,6 +99,7 @@ interface IncidentLinkRow {
   other_type_id: string | null;
   other_icon: string | null;
   other_icon_kind: string;
+  other_icon_attachment_id: string | null;
   other_active: number;
   other_fg_color: string | null;
   other_bg_color: string | null;
@@ -120,6 +121,7 @@ function incidentRowToRef(row: IncidentLinkRow): ThoughtRef {
     type_id: row.other_type_id,
     icon: row.other_icon,
     icon_kind: row.other_icon_kind as IconKind,
+    icon_attachment_id: row.other_icon_attachment_id,
     active: row.other_active === 1,
     fg_color: row.other_fg_color,
     bg_color: row.other_bg_color,
@@ -519,7 +521,8 @@ export function listLinksByThought(
               lt.name_forward, lt.name_reverse,
               CASE WHEN l.target_id = ? THEN l.source_id ELSE l.target_id END AS other_id,
               t.title AS other_title, t.type_id AS other_type_id, t.icon AS other_icon,
-              t.icon_kind AS other_icon_kind, t.active AS other_active,
+              t.icon_kind AS other_icon_kind, t.icon_attachment_id AS other_icon_attachment_id,
+              t.active AS other_active,
               t.fg_color AS other_fg_color, t.bg_color AS other_bg_color,
               t.font_bold AS other_font_bold, t.font_italic AS other_font_italic,
               t.font_underline AS other_font_underline, t.font_strike AS other_font_strike,

@@ -210,6 +210,9 @@ function parseThoughtUpdateBody(
   if (body.icon_kind !== undefined) {
     changes.icon_kind = parseIconKind(fieldNullableString(body, 'icon_kind', requestId), requestId);
   }
+  if (body.icon_attachment_id !== undefined) {
+    changes.icon_attachment_id = fieldNullableString(body, 'icon_attachment_id', requestId);
+  }
   // An image icon must be a valid data/http(s) URL within the size limit.
   if (changes.icon_kind === 'image') {
     assertImageIcon(changes.icon, requestId);

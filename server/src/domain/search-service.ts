@@ -273,7 +273,8 @@ function searchNames(
   ).c;
   const rows = ndb
     .prepare(
-      `SELECT f.thought_id AS thought_id, t.title AS title, t.icon AS icon, t.icon_kind AS icon_kind
+      `SELECT f.thought_id AS thought_id, t.title AS title, t.icon AS icon,
+              t.icon_kind AS icon_kind, t.icon_attachment_id AS icon_attachment_id
        FROM fts_thought_names f
        JOIN thoughts t ON t.id = f.thought_id
        WHERE ${where}
@@ -285,6 +286,7 @@ function searchNames(
     title: string;
     icon: string | null;
     icon_kind: string;
+    icon_attachment_id: string | null;
   }>;
   return {
     hits: rows.map((r) => {
@@ -294,6 +296,7 @@ function searchNames(
         title: r.title,
         icon: r.icon,
         icon_kind: r.icon_kind as IconKind,
+        icon_attachment_id: r.icon_attachment_id,
         snippet,
         highlights: [snippet],
       };
@@ -332,7 +335,8 @@ function searchTexts(
   const rows = ndb
     .prepare(
       `SELECT c.id AS comment_id, f.thought_id AS thought_id, t.title AS title,
-              c.body_md AS body, t.icon AS icon, t.icon_kind AS icon_kind
+              c.body_md AS body, t.icon AS icon, t.icon_kind AS icon_kind,
+              t.icon_attachment_id AS icon_attachment_id
        FROM fts_thought_texts f
        JOIN comments c ON c.rowid = f.rowid
        JOIN thoughts t ON t.id = f.thought_id
@@ -347,6 +351,7 @@ function searchTexts(
     body: string;
     icon: string | null;
     icon_kind: string;
+    icon_attachment_id: string | null;
   }>;
   return {
     hits: rows.map((r) => {
@@ -356,6 +361,7 @@ function searchTexts(
         title: r.title,
         icon: r.icon,
         icon_kind: r.icon_kind as IconKind,
+        icon_attachment_id: r.icon_attachment_id,
         snippet,
         comment_id: r.comment_id,
         highlights: [snippet],

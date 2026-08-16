@@ -495,7 +495,8 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
   const rows = ndb
     .prepare(
       `SELECT pv.property_id AS property_id, tp.key AS property_key,
-              t.id, t.title, t.type_id, t.icon, t.icon_kind, t.active,
+              t.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,
+              t.active,
               t.fg_color, t.bg_color, t.font_bold, t.font_italic,
               t.font_underline, t.font_strike, t.font_manual
        FROM property_values pv
@@ -512,6 +513,7 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     type_id: string | null;
     icon: string | null;
     icon_kind: string;
+    icon_attachment_id: string | null;
     active: number;
     fg_color: string | null;
     bg_color: string | null;

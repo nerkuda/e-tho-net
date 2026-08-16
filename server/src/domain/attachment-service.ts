@@ -385,6 +385,7 @@ export function updateAttachment(
     }
     // Moving the attachment to another owner: both fields must describe the
     // target consistently; the new owner must exist (no SQL FK on the table).
+    let moved = false;
     if (changes.owner_type !== undefined || changes.owner_id !== undefined) {
       const nextType =
         changes.owner_type !== undefined
@@ -401,6 +402,7 @@ export function updateAttachment(
         ensureOwnerExists(ndb, nextType, nextId);
         sets.push('owner_type = ?', 'owner_id = ?');
         args.push(nextType, nextId);
+        moved = true;
       }
     }
     if (changes.description !== undefined) {
@@ -420,6 +422,13 @@ export function updateAttachment(
     }
     args.push(id);
     ndb.prepare(`UPDATE attachments SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    // An owner move orphans any thought icon backed by this attachment (L16) —
+    // drop the dangling reference; the icon preview itself stays.
+    if (moved) {
+      ndb
+        .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
+        .run(id);
+    }
     return getAttachmentOrThrow(ndb, id);
   });
 }
@@ -436,6 +445,11 @@ export function deleteAttachment(ndb: NetworkDb, id: string): void {
   ndb.transaction(() => {
     const current = getAttachmentOrThrow(ndb, id);
     ndb.prepare('DELETE FROM attachments WHERE id = ?').run(id);
+    // Thoughts may reference this attachment as the backing picture of their
+    // icon (L16) — drop the dangling reference; the icon preview itself stays.
+    ndb
+      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
+      .run(id);
     if (current.kind === 'file' && current.file_path !== null) {
       const storedDir = path.resolve(path.dirname(ndb.dbPath), 'attachments');
       const resolved = path.resolve(current.file_path);

@@ -17,6 +17,7 @@ import DatabaseConstructor from 'better-sqlite3';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
+import { createAttachment } from '../src/domain/attachment-service.js';
 import {
   addSynonyms,
   createThought,
@@ -237,6 +238,133 @@ describe(
         } finally {
           ndb.close();
         }
+      });
+
+      describe('icon_attachment_id (L16)', () => {
+        /** An image file attachment owned by the given thought. */
+        const seedIconAttachment = (ndb: NetworkDb, thoughtId: string): string =>
+          createAttachment(
+            ndb,
+            'thought',
+            thoughtId,
+            { kind: 'file', file_path: 'pic.png', mime_type: 'image/png' },
+            USER,
+          ).id;
+
+        it('accepts an image attachment of the same thought', () => {
+          const ndb = createInMemoryNetworkDb();
+          try {
+            const t = createThought(ndb, { title: 'T' }, USER);
+            const attachmentId = seedIconAttachment(ndb, t.id);
+            const updated = updateThought(
+              ndb,
+              t.id,
+              {
+                icon: 'data:image/png;base64,AAAA',
+                icon_kind: 'image',
+                icon_attachment_id: attachmentId,
+              },
+              t.version,
+              USER,
+            );
+            assert.equal(updated.icon_attachment_id, attachmentId);
+          } finally {
+            ndb.close();
+          }
+        });
+
+        it('rejects an attachment owned by another thought', () => {
+          const ndb = createInMemoryNetworkDb();
+          try {
+            const a = createThought(ndb, { title: 'A' }, USER);
+            const b = createThought(ndb, { title: 'B' }, USER);
+            const attachmentId = seedIconAttachment(ndb, b.id);
+            assert.throws(
+              () =>
+                updateThought(
+                  ndb,
+                  a.id,
+                  { icon: 'data:image/png;base64,AAAA', icon_attachment_id: attachmentId },
+                  a.version,
+                  USER,
+                ),
+              (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+            );
+          } finally {
+            ndb.close();
+          }
+        });
+
+        it('rejects a non-image attachment', () => {
+          const ndb = createInMemoryNetworkDb();
+          try {
+            const t = createThought(ndb, { title: 'T' }, USER);
+            const attachmentId = createAttachment(
+              ndb,
+              'thought',
+              t.id,
+              { kind: 'file', file_path: 'notes.txt', mime_type: 'text/plain' },
+              USER,
+            ).id;
+            assert.throws(
+              () =>
+                updateThought(
+                  ndb,
+                  t.id,
+                  { icon: 'data:image/png;base64,AAAA', icon_attachment_id: attachmentId },
+                  t.version,
+                  USER,
+                ),
+              (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+            );
+          } finally {
+            ndb.close();
+          }
+        });
+
+        it('clears the link when the icon becomes an emoji', () => {
+          const ndb = createInMemoryNetworkDb();
+          try {
+            const t = createThought(ndb, { title: 'T' }, USER);
+            const attachmentId = seedIconAttachment(ndb, t.id);
+            updateThought(
+              ndb,
+              t.id,
+              { icon: 'data:image/png;base64,AAAA', icon_attachment_id: attachmentId },
+              t.version,
+              USER,
+            );
+            const updated = updateThought(ndb, t.id, { icon: '🔧', icon_kind: 'emoji' }, 2, USER);
+            assert.equal(updated.icon_attachment_id, null);
+          } finally {
+            ndb.close();
+          }
+        });
+
+        it('clears the link when the icon is replaced without one', () => {
+          const ndb = createInMemoryNetworkDb();
+          try {
+            const t = createThought(ndb, { title: 'T' }, USER);
+            const attachmentId = seedIconAttachment(ndb, t.id);
+            updateThought(
+              ndb,
+              t.id,
+              { icon: 'data:image/png;base64,AAAA', icon_attachment_id: attachmentId },
+              t.version,
+              USER,
+            );
+            const updated = updateThought(
+              ndb,
+              t.id,
+              { icon: 'https://example.com/icon.png', icon_kind: 'image' },
+              2,
+              USER,
+            );
+            assert.equal(updated.icon_attachment_id, null);
+          } finally {
+            ndb.close();
+          }
+        });
       });
     });
 

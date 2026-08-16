@@ -48,7 +48,8 @@ import { getThoughtOrThrow, rowToThoughtRef } from './thought-service.js';
 
 /** Display columns every thought-ref SELECT must carry (see `resolveThoughts`). */
 const REF_COLUMNS =
-  't.id, t.title, t.type_id, t.icon, t.icon_kind, t.active, t.fg_color, t.bg_color,' +
+  't.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,' +
+  ' t.active, t.fg_color, t.bg_color,' +
   ' t.font_bold, t.font_italic, t.font_underline, t.font_strike, t.font_manual';
 
 /** Row shape accepted by {@link rowToThoughtRef}. */

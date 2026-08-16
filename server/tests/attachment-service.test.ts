@@ -256,6 +256,55 @@ describe(
       }
     });
 
+    it('clears a thought icon reference when the attachment is deleted (L16)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const a = createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'file', file_path: 'pic.png', mime_type: 'image/png' },
+          USER,
+        );
+        ndb
+          .prepare('UPDATE thoughts SET icon_attachment_id = ? WHERE id = ?')
+          .run(a.id, t);
+        deleteAttachment(ndb, a.id);
+        const row = ndb
+          .prepare('SELECT icon_attachment_id FROM thoughts WHERE id = ?')
+          .get(t) as { icon_attachment_id: string | null };
+        assert.equal(row.icon_attachment_id, null);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('clears a thought icon reference when the attachment moves (L16)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t1 = seedThought(ndb, 'One');
+        const t2 = seedThought(ndb, 'Two');
+        const a = createAttachment(
+          ndb,
+          'thought',
+          t1,
+          { kind: 'file', file_path: 'pic.png', mime_type: 'image/png' },
+          USER,
+        );
+        ndb
+          .prepare('UPDATE thoughts SET icon_attachment_id = ? WHERE id = ?')
+          .run(a.id, t1);
+        updateAttachment(ndb, a.id, { owner_type: 'thought', owner_id: t2 });
+        const row = ndb
+          .prepare('SELECT icon_attachment_id FROM thoughts WHERE id = ?')
+          .get(t1) as { icon_attachment_id: string | null };
+        assert.equal(row.icon_attachment_id, null);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('deleteAttachment removes the server-stored file but not client-local paths', () => {
       const ndb = createInMemoryNetworkDb();
       const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));

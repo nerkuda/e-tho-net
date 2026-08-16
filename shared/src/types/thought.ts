@@ -17,6 +17,12 @@ export interface Thought {
   type_id: string | null;
   icon: string | null;
   icon_kind: IconKind;
+  /**
+   * Id of the attachment (image file of this thought) whose full picture
+   * Ctrl-hover shows over the icon; the icon itself stays a self-contained
+   * preview (workplan L16). `null` — the icon has no backing attachment.
+   */
+  icon_attachment_id: string | null;
   active: boolean;
   /** Protected thoughts (HOME) cannot be deleted. */
   is_protected: boolean;
@@ -80,6 +86,8 @@ export interface ThoughtUpdateInput {
   type_id?: string | null;
   icon?: string | null;
   icon_kind?: IconKind;
+  /** Attachment shown by Ctrl-hover over the icon; `null` clears the link (L16). */
+  icon_attachment_id?: string | null;
   active?: boolean;
   fg_color?: string | null;
   bg_color?: string | null;
@@ -142,6 +150,8 @@ export interface ThoughtRef {
   type_id: string | null;
   icon: string | null;
   icon_kind: IconKind;
+  /** Backing attachment of the icon for Ctrl-hover zoom (L16); `null` — none. */
+  icon_attachment_id: string | null;
   active: boolean;
   fg_color: string | null;
   bg_color: string | null;

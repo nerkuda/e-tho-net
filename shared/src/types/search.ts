@@ -34,6 +34,8 @@ export interface SearchNameHit {
   /** The thought's icon (rendered in the results list). */
   icon: string | null;
   icon_kind: IconKind;
+  /** Backing attachment of the icon for Ctrl-hover zoom (L16); `null` — none. */
+  icon_attachment_id: string | null;
   snippet: string;
   highlights: string[];
 }
@@ -45,6 +47,8 @@ export interface SearchTextHit {
   /** The thought's icon (rendered in the results list). */
   icon: string | null;
   icon_kind: IconKind;
+  /** Backing attachment of the icon for Ctrl-hover zoom (L16); `null` — none. */
+  icon_attachment_id: string | null;
   snippet: string;
   comment_id: string;
   highlights: string[];
