@@ -16,7 +16,7 @@
  */
 
 import { scheduleRefresh, requireNetworkId } from '../app.js';
-import { setAddToSelectionHook } from '../canvas/context-menu.js';
+import { setAddToSelectionHook, showSelectionThoughtContextMenu } from '../canvas/context-menu.js';
 import { applyThoughtIcon, setSelectionClickHooks } from '../canvas/canvas.js';
 import { pickThoughtRef } from '../editor/thought-picker.js';
 import { showThoughtStyleDialog, type ThoughtStylePatch } from '../editor/style-dialog.js';
@@ -109,22 +109,26 @@ async function renderList(ids: string[]): Promise<void> {
     item.append(iconBox);
     const title = el('span', 'sel-title', refs.get(id)?.title ?? id);
     item.append(title);
-    item.append(
-      button(
-        '✕',
-        () => {
-          toggleSelection([id]);
-        },
-        'btn small',
-        'Убрать из выделения',
-      ),
-    );
+    const removeBtn = button('✕', () => toggleSelection([id]), 'btn small', 'Убрать из выделения');
+    // Keep the row click (focus) from firing alongside the removal.
+    removeBtn.addEventListener('click', (event) => event.stopPropagation());
+    item.append(removeBtn);
     item.addEventListener('click', () => {
-      // click on title focuses; ✕ stops propagation via its own handler
+      // Click on the row focuses the thought; it stays in the selection.
       void etn.thoughts
         .focus(networkId, id)
         .then(() => undefined)
         .catch(() => undefined);
+    });
+    // Same context menu as a canvas cloud, minus the selection toggle (§5.1).
+    item.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showSelectionThoughtContextMenu(event, {
+        id,
+        title: refs.get(id)?.title ?? id,
+        dir: 'siblings',
+      });
     });
     listHost.append(item);
   }
@@ -145,10 +149,16 @@ export function toggleSelection(ids: string[]): void {
   if (changed) store.update({ selection: [...current] });
 }
 
-/** Adds ids without deduplication (spec §5.1: duplicates are fine). */
+/**
+ * Adds ids to the selection; ids already present are skipped (no duplicates,
+ * 08-ui-spec.md §5.1).
+ */
 export function addToSelection(ids: string[]): void {
   if (ids.length === 0) return;
-  store.update({ selection: [...store.state.selection, ...ids] });
+  const current = new Set(store.state.selection);
+  const fresh = ids.filter((id) => !current.has(id));
+  if (fresh.length === 0) return;
+  store.update({ selection: [...store.state.selection, ...fresh] });
 }
 
 /** Clears the selection list (the panel hides itself on empty). */

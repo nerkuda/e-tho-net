@@ -14,13 +14,14 @@
 import type { PropertyDefinition, PropertyValueType, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
+import { buildValueOptionsCaret } from '../editor/properties.js';
+import { pickThoughtRef, wireThoughtRefSearch } from '../editor/thought-picker.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { createTypeCombobox, type TypeOption } from '../lib/type-combobox.js';
 import { showDialog } from '../lib/dialog.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
-import { pickThoughtRef } from '../editor/thought-picker.js';
 
 /** A value editor state row kept until «Применить». */
 interface PropertyRowState {
@@ -239,6 +240,21 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       table,
     );
   })();
+  /** Titles of picked thought_ref values (resolved once, then cached). */
+  const refTitles = new Map<string, string>();
+
+  /** Resolves a thought title for a thought_ref input. */
+  async function ensureRefTitle(id: string): Promise<void> {
+    if (refTitles.has(id)) return;
+    try {
+      const resolved = await etn.thoughts.resolve(networkId, [id]);
+      const title = resolved[0]?.title;
+      if (title !== undefined) refTitles.set(id, title);
+    } catch {
+      // The raw id is shown when resolve fails.
+    }
+  }
+
   /** Builds the value editor cell for one property row. */
   function buildValueCell(state: PropertyRowState): HTMLTableCellElement {
     const cell = el('td');
@@ -247,11 +263,38 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     if (valueType === 'text' || valueType === 'url') {
       const input = el('input', 'text-input prop-editor');
       input.type = 'text';
-      if (valueType === 'url') input.placeholder = 'https://…';
-      input.addEventListener('input', () => {
+      if (valueType === 'url') {
+        input.placeholder = 'https://… или путь к файлу';
+        input.title = 'URL или путь к файлу';
+      }
+      input.addEventListener('blur', () => {
         state.value = input.value.trim() === '' ? null : input.value;
       });
-      cell.append(input);
+      // A text property with predefined options gets the same picker as the
+      // editor's properties table (08-ui-spec.md §6.3).
+      const options =
+        valueType === 'text' ? (def.config?.options ?? []).filter((o) => o !== '') : [];
+      if (options.length > 0) {
+        const row = div('form-row');
+        row.style.marginBottom = '0';
+        row.append(
+          input,
+          buildValueOptionsCaret(
+            input,
+            options,
+            def.config?.multiple === true,
+            (value) => {
+              state.value = value === '' ? null : value;
+            },
+            () => {
+              input.value = '';
+            },
+          ),
+        );
+        cell.append(row);
+      } else {
+        cell.append(input);
+      }
       return cell;
     }
     if (valueType === 'number') {
@@ -274,8 +317,14 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       return cell;
     }
     if (valueType === 'bool') {
+      // Unlike the editor's checkbox, a select — the dialog needs an explicit
+      // "leave unchanged" state ('—') next to да/нет.
       const select = el('select', 'select-input');
-      select.append(el('option', undefined, '—'), el('option', undefined, 'да'), el('option', undefined, 'нет'));
+      select.append(
+        el('option', undefined, '—'),
+        el('option', undefined, 'да'),
+        el('option', undefined, 'нет'),
+      );
       select.value = '';
       select.addEventListener('change', () => {
         state.value = select.value === '' ? null : select.value === 'да';
@@ -283,42 +332,63 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       cell.append(select);
       return cell;
     }
-    // thought_ref: a read-only title field filled via the picker dialog.
-    const input = el('input', 'text-input prop-editor');
-    input.type = 'text';
-    input.readOnly = true;
-    input.placeholder = 'выбрать мысль…';
-    const row = div('form-row');
-    row.style.marginBottom = '0';
-    row.append(
-      input,
-      button(
-        'выбрать',
-        () => {
-          void pickThoughtRef(networkId).then(async (id) => {
-            if (id === null) return;
-            state.value = id;
-            try {
-              const resolved = await etn.thoughts.resolve(networkId, [id]);
-              input.value = resolved[0]?.title ?? id;
-            } catch {
-              input.value = id;
-            }
-          });
+    // thought_ref: the field doubles as a live candidate search (with the
+    // definition's type filter), exactly like the editor's properties table;
+    // only a picked candidate becomes the value.
+    const rebuild = (): void => {
+      cell.replaceChildren();
+      const input = el('input', 'text-input prop-editor');
+      input.type = 'text';
+      input.autocomplete = 'off';
+      const storedId = typeof state.value === 'string' ? state.value : null;
+      input.value = storedId !== null ? (refTitles.get(storedId) ?? storedId) : '';
+      input.placeholder = 'введите название для поиска…';
+      const filterIds = (
+        def.config?.allowed_type_ids ??
+        (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
+      ).filter((id) => id !== '');
+      wireThoughtRefSearch(input, {
+        networkId,
+        typeIds: filterIds,
+        onPick: async (id) => {
+          state.value = id;
+          await ensureRefTitle(id);
+          rebuild();
         },
-        'btn small',
-      ),
-      button(
-        '✕',
-        () => {
-          state.value = null;
-          input.value = '';
-        },
-        'btn small',
-        'Очистить значение',
-      ),
-    );
-    cell.append(row);
+      });
+      const row = div('form-row');
+      row.style.marginBottom = '0';
+      row.append(
+        input,
+        button(
+          'выбрать',
+          () => {
+            void pickThoughtRef(networkId, filterIds).then(async (id) => {
+              if (id === null) return;
+              state.value = id;
+              await ensureRefTitle(id);
+              rebuild();
+            });
+          },
+          'btn small',
+        ),
+      );
+      if (storedId !== null) {
+        row.append(
+          button(
+            '✕',
+            () => {
+              state.value = null;
+              rebuild();
+            },
+            'btn small',
+            'Очистить значение',
+          ),
+        );
+      }
+      cell.append(row);
+    };
+    rebuild();
     return cell;
   }
 }

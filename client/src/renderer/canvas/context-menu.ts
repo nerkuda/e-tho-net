@@ -182,12 +182,42 @@ export function showThoughtContextMenu(event: MouseEvent, target: CloudMenuTarge
   showMenuAt(event.clientX, event.clientY, buildThoughtMenuItems(networkId, target));
 }
 
+/**
+ * Opens the thought context menu for a selection-list entry (08-ui-spec.md
+ * §5.1): the same commands as on the canvas, except the add/remove-selection
+ * toggle — the entry is already selected.
+ */
+export function showSelectionThoughtContextMenu(event: MouseEvent, target: CloudMenuTarget): void {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  showMenuAt(
+    event.clientX,
+    event.clientY,
+    buildThoughtMenuItems(networkId, target, { hideSelectionCommand: true }),
+  );
+}
+
 /** Builds the thought menu items (08-ui-spec.md §2.6). */
-function buildThoughtMenuItems(networkId: string, target: CloudMenuTarget): MenuItem[] {
+function buildThoughtMenuItems(
+  networkId: string,
+  target: CloudMenuTarget,
+  opts: { hideSelectionCommand?: boolean } = {},
+): MenuItem[] {
   const focus = store.state.focus;
   const isFocus = focus?.focused.id === target.id;
   const focusHasParent = focus !== null && focus.parents.length > 0;
   const siblingParentId = focus?.parents[0]?.id;
+  const inSelection = store.state.selection.includes(target.id);
+
+  const selectionItem: MenuItem[] =
+    opts.hideSelectionCommand === true
+      ? []
+      : [
+          {
+            label: inSelection ? 'Убрать из выделенных' : 'Добавить к выделению',
+            onClick: () => addToSelectionHook?.(target.id),
+          },
+        ];
 
   return [
     {
@@ -249,10 +279,7 @@ function buildThoughtMenuItems(networkId: string, target: CloudMenuTarget): Menu
       label: 'Открыть редактор',
       onClick: () => void setFocus(target.id),
     },
-    {
-      label: 'Добавить к выделению',
-      onClick: () => addToSelectionHook?.(target.id),
-    },
+    ...selectionItem,
     {
       label: 'Копировать',
       onClick: () => {

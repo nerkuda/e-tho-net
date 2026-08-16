@@ -374,8 +374,11 @@ export function filterOptionsByFragment(options: string[], fragment: string): st
  * and stays hand-editable. The result is committed once, when the dropdown
  * closes; Escape reverts to the last committed value instead. Keyboard-only
  * edits (list never opened) commit on the input's blur as usual.
+ *
+ * Also reused by the selection panel's property-values dialog: there `commit`
+ * writes the value into the dialog state instead of saving it immediately.
  */
-function buildValueOptionsCaret(
+export function buildValueOptionsCaret(
   input: HTMLInputElement,
   options: string[],
   multiple: boolean,
