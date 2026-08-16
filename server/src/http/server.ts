@@ -35,6 +35,7 @@ import { createNetworksRoutes } from '../routes/networks.js';
 import { auditRoutes } from '../routes/audit.js';
 import { createThoughtsRoutes } from '../routes/thoughts.js';
 import { createLinksRoutes } from '../routes/links.js';
+import { createStructuresRoutes } from '../routes/structures.js';
 import { createTypesRoutes } from '../routes/types.js';
 import { createPropertiesRoutes } from '../routes/properties.js';
 import { createCommentsRoutes } from '../routes/comments.js';
@@ -230,6 +231,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // Link routes (task D2): CRUD + grouped editor listing (03-server-api.md §7).
   await app.register(createLinksRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Structures-view routes (L15): filter query, hierarchy expansion and saved
+  // filters (03-server-api.md §6.10, §6.11, §18).
+  await app.register(createStructuresRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Type routes (task D3): thought/link types + type_properties (03-server-api.md §8).
   await app.register(createTypesRoutes(routeDeps), { prefix: '/api/v1' });

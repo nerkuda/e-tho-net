@@ -32,6 +32,7 @@ const EXPECTED_FILES = [
   '013_thought_style_inheritance.sql',
   '014_link_style_override.sql',
   '015_attachments_icon.sql',
+  '016_saved_filters.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -50,6 +51,7 @@ const EXPECTED_TABLES = [
   'thought_views',
   'user_focus_preferences',
   'user_focus_order',
+  'saved_filters',
   'embeddings',
 ];
 

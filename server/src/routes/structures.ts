@@ -1,0 +1,249 @@
+/**
+ * Structures-view routes (L15, 03-server-api.md §6.10, §6.11, §18).
+ *
+ *   POST   /networks/:networkId/thoughts/query        — filter thoughts (paged)
+ *   GET    /networks/:networkId/thoughts/:id/hierarchy — one-level parents/children
+ *   GET    /networks/:networkId/saved-filters          — list own saved filters
+ *   POST   /networks/:networkId/saved-filters          — create (idempotent)
+ *   PATCH  /networks/:networkId/saved-filters/:fid     — rename / redefine (idempotent)
+ *   DELETE /networks/:networkId/saved-filters/:fid     — delete
+ *
+ * The query/hierarchy handlers are read-only (no idempotency pre-handler);
+ * saved-filter mutations emit `saved-filter.*` events with audience=user so
+ * the user's other clients refresh their lists.
+ */
+
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
+
+import {
+  EtnError,
+  STRUCTURES_PAGE_SIZE,
+  STRUCTURES_QUERY_MAX_LIMIT,
+  STRUCTURE_SORTS,
+  SORT_ORDERS,
+  type StructureQueryRequest,
+  type StructureSort,
+  type SortOrder,
+} from '@etn/shared';
+
+import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
+import {
+  fieldBoolean,
+  fieldString,
+  openRouteNetworkDb,
+  queryBoolean,
+  queryInt,
+  requestBody,
+  type RouteDeps,
+} from './helpers.js';
+import {
+  createSavedFilter,
+  deleteSavedFilter,
+  getHierarchy,
+  listSavedFilters,
+  parseSavedFilterDefinition,
+  parseStructureFilter,
+  queryThoughts,
+  updateSavedFilter,
+} from '../domain/structure-service.js';
+
+/** Route params for `:networkId`. */
+interface NetworkIdParams {
+  networkId: string;
+}
+
+/** Route params for a network + thought id. */
+interface ThoughtIdParams {
+  networkId: string;
+  id: string;
+}
+
+/** Route params for a network + saved-filter id. */
+interface SavedFilterIdParams {
+  networkId: string;
+  fid: string;
+}
+
+/** Validate `sort` against the shared enum tuple. */
+function parseSort(value: unknown, requestId?: string): StructureSort {
+  if (typeof value !== 'string' || !(STRUCTURE_SORTS as readonly string[]).includes(value)) {
+    throw new EtnError('VALIDATION_ERROR', 'Недопустимый sort.', {
+      field: 'sort',
+      allowed: STRUCTURE_SORTS,
+    }, requestId);
+  }
+  return value as StructureSort;
+}
+
+/** Validate `order` against the shared enum tuple. */
+function parseOrder(value: unknown, requestId?: string): SortOrder {
+  if (typeof value !== 'string' || !(SORT_ORDERS as readonly string[]).includes(value)) {
+    throw new EtnError('VALIDATION_ERROR', 'Недопустимый order.', {
+      field: 'order',
+      allowed: SORT_ORDERS,
+    }, requestId);
+  }
+  return value as SortOrder;
+}
+
+/** Parse the body of `POST /thoughts/query` into a typed request. */
+function parseQueryBody(body: Record<string, unknown>, requestId: string): StructureQueryRequest {
+  const filter = parseStructureFilter(body, requestId);
+  const sort = parseSort(body['sort'] ?? 'created', requestId);
+  const order = parseOrder(body['order'] ?? 'asc', requestId);
+  const limitRaw = body['limit'];
+  const limit =
+    typeof limitRaw === 'number' && Number.isInteger(limitRaw)
+      ? limitRaw
+      : STRUCTURES_PAGE_SIZE;
+  const offsetRaw = body['offset'];
+  const offset =
+    typeof offsetRaw === 'number' && Number.isInteger(offsetRaw) ? offsetRaw : 0;
+  if (limit < 1 || limit > STRUCTURES_QUERY_MAX_LIMIT) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `limit должен быть целым числом 1..${STRUCTURES_QUERY_MAX_LIMIT}.`,
+      { field: 'limit' },
+      requestId,
+    );
+  }
+  if (offset < 0) {
+    throw new EtnError('VALIDATION_ERROR', 'offset должен быть целым числом ≥ 0.', {
+      field: 'offset',
+    }, requestId);
+  }
+  return { ...filter, sort, order, limit, offset };
+}
+
+/** Parse the `exclude_ids` query parameter: a comma-separated id list. */
+function parseExcludeIds(value: unknown): string[] {
+  if (typeof value !== 'string' || value === '') return [];
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+}
+
+/** `/api/v1/networks*` structures routes plugin factory. */
+export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
+  return async (app: FastifyInstance) => {
+    const { requireNetworkMember } = app.accessControl;
+
+    // --- Filter query (03-server-api.md §6.10) -------------------------------
+
+    app.post(
+      '/networks/:networkId/thoughts/query',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as NetworkIdParams;
+        const query = parseQueryBody(requestBody(req), req.id);
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const result = queryThoughts(ndb, req.auth!.user.id, query, req.id);
+        sendList(reply, result.items, result.total, query.offset, query.limit);
+      },
+    );
+
+    // --- One-level hierarchy expansion (03-server-api.md §6.11) --------------
+
+    app.get(
+      '/networks/:networkId/thoughts/:id/hierarchy',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as ThoughtIdParams;
+        const query = req.query as Record<string, unknown>;
+        const dir = query['dir'];
+        if (dir !== 'parents' && dir !== 'children') {
+          throw new EtnError('VALIDATION_ERROR', 'dir должен быть parents или children.', {
+            field: 'dir',
+          }, req.id);
+        }
+        const showInactive =
+          queryBoolean(query['show_inactive'], 'show_inactive', req.id) ?? false;
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const data = getHierarchy(ndb, id, dir, {
+          showInactive,
+          excludeIds: parseExcludeIds(query['exclude_ids']),
+        });
+        sendSuccess(reply, data);
+      },
+    );
+
+    // --- Saved filters (03-server-api.md §18) --------------------------------
+
+    app.get(
+      '/networks/:networkId/saved-filters',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as NetworkIdParams;
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        sendSuccess(reply, listSavedFilters(ndb, req.auth!.user.id));
+      },
+    );
+
+    app.post(
+      '/networks/:networkId/saved-filters',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as NetworkIdParams;
+        const body = requestBody(req);
+        const name = fieldString(body, 'name', req.id);
+        if (name === undefined) {
+          throw new EtnError('VALIDATION_ERROR', 'name обязателен.', { field: 'name' }, req.id);
+        }
+        const definitionRaw = body['definition'];
+        if (typeof definitionRaw !== 'object' || definitionRaw === null) {
+          throw new EtnError('VALIDATION_ERROR', 'definition обязателен.', {
+            field: 'definition',
+          }, req.id);
+        }
+        const definition = parseSavedFilterDefinition(
+          definitionRaw as Record<string, unknown>,
+          req.id,
+        );
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const filter = createSavedFilter(ndb, req.auth!.user.id, name, definition);
+        deps.emit(req, networkId, 'saved-filter.created', { filter }, { audience: 'user' });
+        sendCreated(reply, filter, { request_id: req.id });
+      },
+    );
+
+    app.patch(
+      '/networks/:networkId/saved-filters/:fid',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, fid } = req.params as SavedFilterIdParams;
+        const body = requestBody(req);
+        const name = fieldString(body, 'name', req.id);
+        let definition;
+        const definitionRaw = body['definition'];
+        if (definitionRaw !== undefined) {
+          if (typeof definitionRaw !== 'object' || definitionRaw === null) {
+            throw new EtnError('VALIDATION_ERROR', 'definition должен быть объектом.', {
+              field: 'definition',
+            }, req.id);
+          }
+          definition = parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
+        }
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const filter = updateSavedFilter(ndb, req.auth!.user.id, fid, {
+          ...(name !== undefined ? { name } : {}),
+          ...(definition !== undefined ? { definition } : {}),
+        });
+        deps.emit(req, networkId, 'saved-filter.updated', { filter }, { audience: 'user' });
+        sendSuccess(reply, filter, { request_id: req.id });
+      },
+    );
+
+    app.delete(
+      '/networks/:networkId/saved-filters/:fid',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, fid } = req.params as SavedFilterIdParams;
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        deleteSavedFilter(ndb, req.auth!.user.id, fid);
+        deps.emit(req, networkId, 'saved-filter.deleted', { id: fid }, { audience: 'user' });
+        sendSuccess(reply, { id: fid });
+      },
+    );
+  };
+}

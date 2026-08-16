@@ -54,6 +54,10 @@ export interface HierarchyResponse {
   edges: FocusEdge[];
   /** true — more neighbors were dropped by the per-node limit. */
   truncated: boolean;
+  /** Whether each visible thought (node + neighbors) has active incoming/outgoing
+   *  links — in the tree these mean "has parents/children to expand"; drives the
+   *  ellipse fill exactly like on the canvas. */
+  directions: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
 }
 
 /** Persisted criteria of a saved filter: filter + sort/order (03-server-api.md §18). */
