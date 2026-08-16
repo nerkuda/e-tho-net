@@ -30,6 +30,7 @@ import { refreshFocus, requireNetworkId, scheduleRefresh } from '../app.js';
 import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
+import { inNeighbourhood } from '../realtime-ui.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
 import { canSave, clearDraft, findDraft, offlineNotice, saveDraft } from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
@@ -469,8 +470,14 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
     // re-renders, the results list reloads) — the actor gets no realtime echo,
     // so both stores are patched from the save response.
     const focus = store.state.focus;
-    if (focus !== null && focus.focused.id === ctx.ownerId) {
-      store.update({ focus: { ...focus, focused: updated } });
+    if (focus !== null) {
+      if (focus.focused.id === ctx.ownerId) {
+        store.update({ focus: { ...focus, focused: updated } });
+      } else if (inNeighbourhood(ctx.ownerId)) {
+        // The thought is visible on the canvas as a focus neighbour — refetch
+        // the focus so its icon/type/colours repaint right away.
+        scheduleRefresh();
+      }
     }
     if (
       store.state.editorTarget?.kind === 'thought' &&
@@ -512,6 +519,9 @@ async function saveLink(link: Link, patch: LinkUpdateInput): Promise<void> {
     if (target !== null && target.kind === 'link' && target.id === link.id) {
       store.update({ editorTarget: { kind: 'link', id: updated.id, link: updated } });
     }
+    // The structures results list is server-rendered; reload it so the saved
+    // link type/style show up right away (the actor gets no realtime echo).
+    scheduleStructuresRefresh();
   } catch (err) {
     if (isVersionConflict(err)) {
       notice('⚠ Связь изменена другим пользователем.', 'error');

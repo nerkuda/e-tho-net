@@ -26,7 +26,7 @@ import { invalidateSavedFilters } from './screens/structures/filter-panel.js';
 import { store } from './state.js';
 
 /** True when the thought id participates in the current focus neighbourhood. */
-function inNeighbourhood(id: string): boolean {
+export function inNeighbourhood(id: string): boolean {
   const focus = store.state.focus;
   if (focus === null) return false;
   return (
