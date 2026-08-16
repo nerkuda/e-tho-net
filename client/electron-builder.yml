@@ -45,6 +45,11 @@ linux:
     - deb
   category: Utility
   maintainer: В. Зайцев <nerkuda@users.noreply.github.com>
+  # Default artifact name uses the npm package name (@etn/client) which
+  # breaks the deb output path; the executable name must also be filesystem-
+  # and desktop-friendly.
+  artifactName: ${productName}-${version}.${ext}
+  executableName: etn
 
 # Auto-update source (task K4): GitHub Releases. The updater only acts in
 # packaged builds; DEV_MODE builds skip checks.
