@@ -33,7 +33,7 @@ const EXPECTED_FILES = [
   '014_link_style_override.sql',
   '015_attachments_icon.sql',
   '016_saved_filters.sql',
-  '017_thought_icon_attachment.sql',
+  '016_thought_icon_attachment.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -149,7 +149,7 @@ describe(
         ).map((r) => r.name);
         assert.ok(attCols.includes('icon'), 'missing attachments.icon');
 
-        // 017 icon ← attachment link (02-data-model.md §3.1, workplan L16).
+        // 016b icon ← attachment link (02-data-model.md §3.1, workplan L16).
         assert.ok(
           thoughtCols.includes('icon_attachment_id'),
           'missing thoughts.icon_attachment_id',
