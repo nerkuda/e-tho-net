@@ -2527,6 +2527,24 @@ body.dragging * {
   cursor: pointer;
 }
 
+/* Thought-ref value row: live-search input + «выбрать» button (§15.3). */
+.st-f-ref-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex: 1 1 140px;
+}
+
+.st-f-ref-row .st-f-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.st-f-ref-pick {
+  white-space: nowrap;
+  border-style: solid;
+}
+
 .st-f-add,
 .st-f-remove {
   border: 1px dashed var(--border-strong);

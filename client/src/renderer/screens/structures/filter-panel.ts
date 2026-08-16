@@ -9,6 +9,7 @@
  */
 
 import {
+  type PropertyConfig,
   type PropertyDefinition,
   type PropertyValueType,
   type SavedFilter,
@@ -18,7 +19,8 @@ import {
   type StructureSort,
 } from '@etn/shared';
 
-import { pickThoughtRef } from '../../editor/thought-picker.js';
+import { buildValueOptionsCaret } from '../../editor/properties.js';
+import { pickThoughtRef, wireThoughtRefSearch } from '../../editor/thought-picker.js';
 import { clear, div, el, errText, setTooltip } from '../../lib/dom.js';
 import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
@@ -595,6 +597,7 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
     const nextId = propSelect.value;
     const nextType = propertyDefs.get(nextId)?.def.value_type ?? 'text';
     const ops = OPS_BY_TYPE[nextType];
+    // A different property starts with one empty value.
     state.properties[index] = {
       propertyId: nextId,
       op: ops.some((o) => o.op === cond.op) ? cond.op : ops[0]!.op,
@@ -617,13 +620,16 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
   }
   opSelect.value = cond.op;
   opSelect.addEventListener('change', () => {
-    state.properties[index] = { ...cond, op: opSelect.value as StructurePropertyOp, values: [''] };
+    // The row may have been edited since this closure was built — read the
+    // live state as the base (a different op starts with one empty value).
+    const live = state.properties[index] ?? cond;
+    state.properties[index] = { ...live, op: opSelect.value as StructurePropertyOp, values: [''] };
     callbacks?.onStatePersist();
     renderConditions();
   });
 
   // Value editor.
-  const valueBox = buildValueEditor(cond, def?.value_type ?? 'text', index);
+  const valueBox = buildValueEditor(cond, def, index);
 
   const remove = el('button', 'st-f-remove', '×');
   remove.type = 'button';
@@ -637,19 +643,30 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
   return row;
 }
 
-/** Builds the value editor for the condition's current value type. */
+/**
+ * Builds the value editor for the condition's current value type (§15.3).
+ *
+ * The editor mirrors the thought editor (§6.3): text properties with
+ * predefined options get the options dropdown, `thought_ref` gets the live
+ * candidate search plus the dialog picker. Every handler reads the CURRENT
+ * condition row from the state (`live()`), never the closure-captured one —
+ * the «+ значение» button must not lose values typed into earlier rows.
+ */
 function buildValueEditor(
   cond: PropertyConditionState,
-  valueType: PropertyValueType,
+  def: { value_type: PropertyValueType; config?: PropertyConfig | null } | undefined,
   index: number,
 ): HTMLElement {
+  const valueType = def?.value_type ?? 'text';
   const box = div('st-f-values');
   const isList = cond.op === 'in' || cond.op === 'not_in';
+  const live = (): PropertyConditionState => state.properties[index] ?? cond;
   const setValue = (i: number, v: string): void => {
-    const values = [...cond.values];
+    const current = live();
+    const values = [...current.values];
     while (values.length <= i) values.push('');
     values[i] = v;
-    state.properties[index] = { ...cond, values };
+    state.properties[index] = { ...current, values };
     callbacks?.onStatePersist();
   };
 
@@ -657,14 +674,14 @@ function buildValueEditor(
     if (valueType === 'number') {
       const input = el('input', 'st-f-input') as HTMLInputElement;
       input.type = 'number';
-      input.value = cond.values[i] ?? '';
+      input.value = live().values[i] ?? '';
       input.addEventListener('input', () => setValue(i, input.value));
       return input;
     }
     if (valueType === 'date') {
       const input = el('input', 'st-f-input') as HTMLInputElement;
       input.type = 'date';
-      input.value = cond.values[i] ?? '';
+      input.value = live().values[i] ?? '';
       input.addEventListener('input', () => setValue(i, input.value));
       return input;
     }
@@ -675,17 +692,36 @@ function buildValueEditor(
       const no = el('option', '', 'нет') as HTMLOptionElement;
       no.value = 'false';
       select.append(yes, no);
-      select.value = cond.values[i] === 'false' ? 'false' : 'true';
+      select.value = live().values[i] === 'false' ? 'false' : 'true';
       select.addEventListener('change', () => setValue(i, select.value));
       return select;
     }
     if (valueType === 'thought_ref') {
-      return buildThoughtRefEditor(cond, index, i);
+      return buildThoughtRefEditor(def, index, i);
     }
     const input = el('input', 'st-f-input') as HTMLInputElement;
     input.type = 'text';
-    input.value = cond.values[i] ?? '';
+    input.value = live().values[i] ?? '';
     input.addEventListener('input', () => setValue(i, input.value));
+    // Text properties with predefined options get the picker dropdown — an
+    // input aid, never a restriction (same as the thought editor, §6.3).
+    const options = (def?.config?.options ?? []).filter((o) => o !== '');
+    if (options.length > 0) {
+      const row = div('st-f-value-row');
+      row.append(
+        input,
+        buildValueOptionsCaret(
+          input,
+          options,
+          false,
+          (value) => setValue(i, value),
+          () => {
+            input.value = live().values[i] ?? '';
+          },
+        ),
+      );
+      return row;
+    }
     return input;
   };
 
@@ -697,25 +733,27 @@ function buildValueEditor(
   // List editor: one row per value + the «+» button (OR inside the list).
   const renderList = (): void => {
     clear(box);
-    const values = cond.values.length > 0 ? cond.values : [''];
+    const values = live().values.length > 0 ? live().values : [''];
     values.forEach((_, i) => {
       const line = div('st-f-value-row');
-      const editor = valueType === 'thought_ref' ? buildThoughtRefEditor(cond, index, i) : addScalar(i);
+      line.append(addScalar(i));
       const rm = el('button', 'st-f-remove', '×');
       rm.type = 'button';
       rm.addEventListener('click', () => {
-        const next = cond.values.filter((_, j) => j !== i);
-        state.properties[index] = { ...cond, values: next.length > 0 ? next : [''] };
+        const current = live();
+        const next = current.values.filter((_, j) => j !== i);
+        state.properties[index] = { ...current, values: next.length > 0 ? next : [''] };
         callbacks?.onStatePersist();
         renderList();
       });
-      line.append(editor, rm);
+      line.append(rm);
       box.append(line);
     });
     const add = el('button', 'st-f-add', '+ значение');
     add.type = 'button';
     add.addEventListener('click', () => {
-      state.properties[index] = { ...cond, values: [...cond.values, ''] };
+      const current = live();
+      state.properties[index] = { ...current, values: [...current.values, ''] };
       callbacks?.onStatePersist();
       renderList();
     });
@@ -725,38 +763,91 @@ function buildValueEditor(
   return box;
 }
 
-/** Thought-ref value chip: pick a thought via the shared picker (§15.3). */
+/**
+ * Thought-ref value editor, same as the thought editor (§6.3): the field
+ * doubles as a live candidate search and a dialog picker button; only an
+ * explicitly picked thought writes the value (its id), the field shows the
+ * thought's title.
+ */
 function buildThoughtRefEditor(
-  cond: PropertyConditionState,
+  def: { config?: PropertyConfig | null } | undefined,
   index: number,
   valueIndex: number,
 ): HTMLElement {
-  const currentId = cond.values[valueIndex] ?? '';
-  const chip = el('button', 'st-f-input st-f-ref') as HTMLButtonElement;
-  chip.type = 'button';
-  const id = currentId === '' ? null : currentId;
-  const title = id !== null ? (refTitles.get(id) ?? 'Мысль…') : 'Выбрать мысль…';
-  chip.textContent = title;
-  setTooltip(chip, title);
-  chip.addEventListener('click', async () => {
-    const networkId = store.state.networkId;
-    if (networkId === null) return;
-    const picked = await pickThoughtRef(networkId);
-    if (picked === null) return;
-    try {
-      const [ref] = await etn.thoughts.resolve(networkId, [picked]);
-      if (ref !== undefined) refTitles.set(ref.id, ref.title);
-    } catch {
-      // Title stays unknown — the chip falls back to the generic label.
-    }
-    const values = [...cond.values];
+  const networkId = store.state.networkId;
+  const row = div('st-f-ref-row');
+  const live = (): PropertyConditionState => state.properties[index]!;
+  const setValue = (v: string): void => {
+    const current = live();
+    const values = [...current.values];
     while (values.length <= valueIndex) values.push('');
-    values[valueIndex] = picked;
-    state.properties[index] = { ...cond, values };
+    values[valueIndex] = v;
+    state.properties[index] = { ...current, values };
     callbacks?.onStatePersist();
-    chip.textContent = refTitles.get(picked) ?? 'Мысль…';
-  });
-  return chip;
+  };
+
+  const input = el('input', 'st-f-input') as HTMLInputElement;
+  input.type = 'text';
+  input.autocomplete = 'off';
+  input.placeholder = 'введите название для поиска…';
+
+  const storedId = live().values[valueIndex] ?? '';
+  if (storedId !== '') {
+    const title = refTitles.get(storedId) ?? 'Мысль…';
+    input.value = title;
+    if (networkId !== null && !refTitles.has(storedId)) {
+      // The stored id may have no title cached (restored from a saved
+      // filter) — resolve it asynchronously.
+      void etn.thoughts
+        .resolve(networkId, [storedId])
+        .then((refs) => {
+          const ref = refs[0];
+          if (ref !== undefined) {
+            refTitles.set(ref.id, ref.title);
+            if (input.isConnected) input.value = ref.title;
+          }
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  if (networkId !== null) {
+    const filterIds = (
+      def?.config?.allowed_type_ids ??
+      (def?.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
+    ).filter((id) => id !== '');
+    wireThoughtRefSearch(input, {
+      networkId,
+      typeIds: filterIds,
+      onPick: (id) => {
+        refTitles.set(id, input.value);
+        setValue(id);
+      },
+    });
+    const pick = el('button', 'st-f-add st-f-ref-pick', 'выбрать') as HTMLButtonElement;
+    pick.type = 'button';
+    pick.addEventListener('click', () => {
+      void pickThoughtRef(networkId, filterIds).then(async (id) => {
+        if (id === null) return;
+        try {
+          const [ref] = await etn.thoughts.resolve(networkId, [id]);
+          if (ref !== undefined) {
+            refTitles.set(ref.id, ref.title);
+            input.value = ref.title;
+          } else {
+            input.value = 'Мысль…';
+          }
+        } catch {
+          input.value = 'Мысль…';
+        }
+        setValue(id);
+      });
+    });
+    row.append(input, pick);
+  } else {
+    row.append(input);
+  }
+  return row;
 }
 
 // ---------------------------------------------------------------------------
