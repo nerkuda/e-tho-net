@@ -48,6 +48,9 @@ export interface FilterState {
   savedFilterId: string | null;
   /** Panel width set by the splitter drag (px), null until first drag. */
   panelWidth: number | null;
+  /** Checklist heights set by the group grips (px), null until dragged. */
+  typeListHeight: number | null;
+  linkTypeListHeight: number | null;
 }
 
 /** Callbacks the panel fires into the host module. */
@@ -101,6 +104,8 @@ function defaultState(): FilterState {
     order: 'asc',
     savedFilterId: null,
     panelWidth: null,
+    typeListHeight: null,
+    linkTypeListHeight: null,
   };
 }
 
@@ -122,8 +127,6 @@ let catalogueSignature = '';
 
 // DOM anchors rebuilt in renderPanel().
 let keywordsInput: HTMLInputElement | null = null;
-let thoughtTypesBox: HTMLElement | null = null;
-let linkTypesBox: HTMLElement | null = null;
 let conditionsBox: HTMLElement | null = null;
 let sortSelect: HTMLSelectElement | null = null;
 let orderSelect: HTMLSelectElement | null = null;
@@ -286,32 +289,30 @@ function renderPanel(): void {
 
   // --- thought types --------------------------------------------------------
   const tt = block('Типы мыслей');
-  thoughtTypesBox = div('st-f-checks');
-  renderCheckList(
-    thoughtTypesBox,
+  renderCheckGroup(
+    tt.body,
     store.state.thoughtTypes.map((t) => ({ id: t.id, label: t.name })),
     () => state.typeIds,
     (ids) => {
       state.typeIds = ids;
       callbacks?.onStatePersist();
     },
+    'thoughtTypes',
   );
-  tt.body.append(thoughtTypesBox);
   host.append(tt.box);
 
   // --- link types -----------------------------------------------------------
   const lt = block('Типы связей');
-  linkTypesBox = div('st-f-checks');
-  renderCheckList(
-    linkTypesBox,
+  renderCheckGroup(
+    lt.body,
     store.state.linkTypes.map((t) => ({ id: t.id, label: t.name_forward })),
     () => state.linkTypeIds,
     (ids) => {
       state.linkTypeIds = ids;
       callbacks?.onStatePersist();
     },
+    'linkTypes',
   );
-  lt.body.append(linkTypesBox);
   host.append(lt.box);
 
   // --- property conditions --------------------------------------------------
@@ -392,35 +393,170 @@ function renderPanel(): void {
   renderSavedList();
 }
 
-/** Renders a checkbox list; reads/writes the checked ids via the getters. */
-function renderCheckList(
+// ---------------------------------------------------------------------------
+// Type checklists (§15.3)
+// ---------------------------------------------------------------------------
+
+/** Which checklist a group's search text / height belongs to. */
+type CheckKind = 'thoughtTypes' | 'linkTypes';
+
+/** Live search text of the two checklists (survives panel re-renders). */
+const checkSearch: Record<CheckKind, string> = { thoughtTypes: '', linkTypes: '' };
+/** Fixed height of one checklist row, px (must match the CSS row height). */
+const CHECK_ROW_H = 22;
+/** Minimum column width of a checklist, px (columns fill the panel width). */
+const CHECK_COL_W = 170;
+/** Column gap, px (must match the CSS column-gap). */
+const CHECK_COL_GAP = 14;
+/** Drag range of the checklist height grips, px. */
+const CHECK_H_MIN = 60;
+const CHECK_H_MAX = 420;
+
+/** Persisted height of the given checklist (null — the CSS default). */
+function checkHeight(kind: CheckKind): number | null {
+  return kind === 'thoughtTypes' ? state.typeListHeight : state.linkTypeListHeight;
+}
+
+/** Records the grip-dragged checklist height for the L4 persist. */
+function setCheckHeight(kind: CheckKind, height: number): void {
+  if (kind === 'thoughtTypes') state.typeListHeight = height;
+  else state.linkTypeListHeight = height;
+  callbacks?.onStatePersist();
+}
+
+/**
+ * Recomputes the column count of a checklist for its current height and width:
+ * as many columns as fit the panel width; when the items need more columns
+ * than that, the last column overflows downward and the list scrolls
+ * vertically (`column-fill: auto`).
+ */
+function applyCheckColumns(list: HTMLElement): void {
+  const rowsPerCol = Math.max(1, Math.floor(list.clientHeight / CHECK_ROW_H));
+  const needed = Math.ceil(list.children.length / rowsPerCol);
+  const maxCols = Math.max(1, Math.floor((list.clientWidth + CHECK_COL_GAP) / (CHECK_COL_W + CHECK_COL_GAP)));
+  const count = Math.max(1, Math.min(needed, maxCols));
+  list.style.columnCount = String(count);
+  list.style.columnFill = needed > count ? 'auto' : 'balance';
+}
+
+/** Renders only the checklist rows (search, grip and clear button survive). */
+function renderCheckItems(
+  list: HTMLElement,
+  items: Array<{ id: string; label: string }>,
+  getChecked: () => string[],
+  onChange: (ids: string[]) => void,
+  kind: CheckKind,
+): void {
+  const scrollTop = list.scrollTop;
+  clear(list);
+  const checked = new Set(getChecked());
+  const needle = checkSearch[kind].trim().toLowerCase();
+  const matches = items.filter((i) => i.label.toLowerCase().includes(needle));
+  const byAlpha = (a: { label: string }, b: { label: string }): number =>
+    a.label.localeCompare(b.label, 'ru');
+  // Checked items first, the rest alphabetically (§15.3).
+  const sorted = [
+    ...matches.filter((i) => checked.has(i.id)).sort(byAlpha),
+    ...matches.filter((i) => !checked.has(i.id)).sort(byAlpha),
+  ];
+  if (sorted.length === 0) {
+    list.append(el('div', 'st-f-empty', 'Ничего не найдено'));
+  }
+  for (const item of sorted) {
+    const line = el('label', 'st-f-check');
+    line.dataset['id'] = item.id;
+    const input = el('input') as HTMLInputElement;
+    input.type = 'checkbox';
+    input.checked = checked.has(item.id);
+    const label = el('span', '', item.label);
+    line.append(input, label);
+    list.append(line);
+  }
+  if (list.isConnected) applyCheckColumns(list);
+  else requestAnimationFrame(() => applyCheckColumns(list));
+}
+
+/**
+ * Renders one checklist group: a search box filtering as you type, a
+ * multi-column checklist (checked first, then alphabetical), a height grip on
+ * the group's bottom border and a «Очистить» button dropping every check.
+ */
+function renderCheckGroup(
   box: HTMLElement,
   items: Array<{ id: string; label: string }>,
   getChecked: () => string[],
   onChange: (ids: string[]) => void,
+  kind: CheckKind,
 ): void {
   clear(box);
-  if (items.length === 0) {
-    const empty = el('div', 'st-f-empty', '—');
-    box.append(empty);
-    return;
-  }
-  const checkedSet = new Set(getChecked());
-  for (const item of items) {
-    const line = el('label', 'st-f-check');
-    const input = el('input') as HTMLInputElement;
-    input.type = 'checkbox';
-    input.checked = checkedSet.has(item.id);
-    input.addEventListener('change', () => {
-      const next = new Set(getChecked());
-      if (input.checked) next.add(item.id);
-      else next.delete(item.id);
-      onChange([...next]);
-    });
-    const label = el('span', '', item.label);
-    line.append(input, label);
-    box.append(line);
-  }
+  box.classList.add('st-f-group');
+
+  const search = el('input', 'st-f-input st-f-search') as HTMLInputElement;
+  search.type = 'text';
+  search.placeholder = 'Найти…';
+  search.value = checkSearch[kind];
+  search.addEventListener('input', () => {
+    checkSearch[kind] = search.value;
+    renderCheckItems(list, items, getChecked, onChange, kind);
+  });
+  box.append(search);
+
+  const list = div('st-f-checks');
+  const height = checkHeight(kind);
+  if (height !== null) list.style.setProperty('--st-checks-h', `${height}px`);
+  box.append(list);
+  renderCheckItems(list, items, getChecked, onChange, kind);
+
+  const grip = div('st-f-grip');
+  setTooltip(grip, 'Изменить высоту списка');
+  grip.addEventListener('pointerdown', (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    const startY = event.clientY;
+    const startH = checkHeight(kind) ?? 132;
+    grip.setPointerCapture(event.pointerId);
+    grip.classList.add('dragging');
+    const onMove = (ev: PointerEvent): void => {
+      const h = Math.min(CHECK_H_MAX, Math.max(CHECK_H_MIN, startH + (ev.clientY - startY)));
+      setCheckHeight(kind, h);
+      list.style.setProperty('--st-checks-h', `${h}px`);
+      applyCheckColumns(list);
+    };
+    const onUp = (): void => {
+      grip.removeEventListener('pointermove', onMove);
+      grip.removeEventListener('pointerup', onUp);
+      grip.classList.remove('dragging');
+    };
+    grip.addEventListener('pointermove', onMove);
+    grip.addEventListener('pointerup', onUp);
+  });
+  box.append(grip);
+
+  const clearBtn = el('button', 'st-f-clear', 'Очистить');
+  clearBtn.type = 'button';
+  clearBtn.disabled = getChecked().length === 0;
+  clearBtn.addEventListener('click', () => {
+    if (getChecked().length === 0) return;
+    onChange([]);
+    renderCheckItems(list, items, getChecked, onChange, kind);
+    clearBtn.disabled = true;
+  });
+  box.append(clearBtn);
+
+  // One delegated handler for every checkbox: re-sorts the list (checked
+  // items jump to the top) and keeps the «Очистить» state in sync.
+  box.addEventListener('change', (event) => {
+    const input = event.target as HTMLInputElement;
+    if (input.type !== 'checkbox') return;
+    const line = input.closest<HTMLElement>('.st-f-check');
+    const id = line?.dataset['id'];
+    if (id === undefined) return;
+    const next = new Set(getChecked());
+    if (input.checked) next.add(id);
+    else next.delete(id);
+    onChange([...next]);
+    renderCheckItems(list, items, getChecked, onChange, kind);
+    clearBtn.disabled = getChecked().length === 0;
+  });
 }
 
 /** Renders the property condition rows. */
@@ -680,6 +816,8 @@ function applySavedFilter(filter: SavedFilter): void {
     order: def.order,
     savedFilterId: filter.id,
     panelWidth: state.panelWidth,
+    typeListHeight: state.typeListHeight,
+    linkTypeListHeight: state.linkTypeListHeight,
   });
   if (saveNameInput !== null) saveNameInput.value = filter.name;
   callbacks?.onApply();

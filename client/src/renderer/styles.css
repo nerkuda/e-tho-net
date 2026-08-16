@@ -2416,21 +2416,71 @@ body.dragging * {
   font-size: 13px;
 }
 
-.st-f-checks {
+/* Type/link-type checklist groups (§15.3): search box, multi-column list
+ * (column-count set by the panel JS), height grip and «Очистить». */
+.st-f-group {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  max-height: 132px;
+  gap: 6px;
+}
+
+.st-f-search {
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.st-f-checks {
+  height: var(--st-checks-h, 132px);
   overflow-y: auto;
+  column-gap: 14px;
+  padding-right: 4px;
 }
 
 .st-f-check {
   display: flex;
   align-items: center;
   gap: 6px;
+  height: 22px;
   font-size: 13px;
   cursor: pointer;
   user-select: none;
+  break-inside: avoid;
+}
+
+/* Height grip on the group's bottom border (§15.3). */
+.st-f-grip {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+  cursor: ns-resize;
+  transition: background 0.15s;
+}
+
+.st-f-grip:hover,
+.st-f-grip.dragging {
+  background: var(--warn);
+}
+
+.st-f-clear {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.st-f-clear:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.st-f-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .st-f-conds {

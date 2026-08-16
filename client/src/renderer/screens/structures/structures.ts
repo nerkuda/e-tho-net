@@ -148,6 +148,14 @@ function parseFilterState(raw: string): FilterState {
         Number.isFinite(parsed.panelWidth)
           ? parsed.panelWidth
           : null,
+      typeListHeight:
+        typeof parsed.typeListHeight === 'number' && Number.isFinite(parsed.typeListHeight)
+          ? parsed.typeListHeight
+          : null,
+      linkTypeListHeight:
+        typeof parsed.linkTypeListHeight === 'number' && Number.isFinite(parsed.linkTypeListHeight)
+          ? parsed.linkTypeListHeight
+          : null,
     };
   } catch {
     return getFilterState();
