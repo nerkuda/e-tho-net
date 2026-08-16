@@ -318,6 +318,8 @@ POST /api/v1/networks/{nid}/thoughts/query
 - Сортировка: `alpha` — по заголовку (NOCASE), `created` — по `created_at`,
   `viewed` — по `thought_views.last_viewed_at` текущего пользователя
   (NULL — последними при `asc`).
+- Условие с несуществующим `property_id` игнорируется: определение свойства
+  могло быть удалено после сохранения отбора — остальные условия применяются.
 
 ### 6.11. Иерархия одного уровня (для дерева «Структур»)
 ```
@@ -327,7 +329,10 @@ GET /api/v1/networks/{nid}/thoughts/{id}/hierarchy
      neighbors: [ ThoughtRef... ],   # родители (источники связей) или дети (цели)
      edges:     [ { id, source_id, target_id, type_id, color, style, width } ],
                                       # active-связи между {id} и соседями
-     truncated: false                 # true — соседей больше лимита (100)
+     truncated: false,                # true — соседей больше лимита (100)
+     directions: { "<thought_id>": { has_incoming, has_outgoing }, ... }
+                                      # наличие active входящих/исходящих связей
+                                      # у узла и соседей — закраска эллипсов дерева
    } }
 ```
 
