@@ -28,6 +28,7 @@ import type { FocusEdge, FocusResponse, LinkType } from '@etn/shared';
 import { closeMenu, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { div, el } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { ELLIPSE_INSIDE } from '../lib/pure.js';
 import { store } from '../state.js';
 import { findCloudAnywhere, getRef } from './canvas.js';
 import { showLinkContextMenu } from './context-menu.js';
@@ -381,21 +382,27 @@ function activeBundle(bundles: readonly Bundle[]): Bundle | null {
   return null;
 }
 
-/** Center of an ellipse side, in canvas-host coordinates. The ellipse lies on
- *  the cloud frame and grows (2× on hover, 08-ui-spec.md §2.4), so its center
- *  is read from the live rect: half the current height inwards from the
- *  bounding edge (L9) — links always hit the ellipse center. */
+/**
+ * Attachment point of a link on a cloud, in canvas-host coordinates. The
+ * argument is the CLOUD (not its ellipse): the ellipses lie on the frame with
+ * half of their height outside the card, and a line starts at the OUTER edge
+ * of the source's bottom ellipse — `ELLIPSE_INSIDE` px below the frame — and
+ * ends at the OUTER edge of the target's top ellipse — `ELLIPSE_INSIDE` px
+ * above it (08-ui-spec.md §2.2/§2.4). Fixed offsets keep lines stable while
+ * an ellipse grows on hover.
+ */
 function ellipsePoint(
   el: HTMLElement,
   side: 'top' | 'bottom',
   hostRect: DOMRect,
 ): { x: number; y: number } {
+  const zoom = store.state.canvasZoom;
   const rect = el.getBoundingClientRect();
   const x = rect.left - hostRect.left + rect.width / 2;
   const y =
     side === 'top'
-      ? rect.top - hostRect.top + rect.height / 2
-      : rect.bottom - hostRect.top - rect.height / 2;
+      ? rect.top - hostRect.top - ELLIPSE_INSIDE * zoom
+      : rect.bottom - hostRect.top + ELLIPSE_INSIDE * zoom;
   return { x, y };
 }
 
