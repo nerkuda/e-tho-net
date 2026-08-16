@@ -12,6 +12,7 @@ import http from 'node:http';
 
 import { ConfigError, loadConfig } from './config.js';
 import { SystemDb } from './db/system-db.js';
+import { sweepCommentHtml } from './domain/markdown-sweep.js';
 import { createServer } from './http/server.js';
 import { logger } from './logger.js';
 import { handleMcpNodeRequest } from './mcp/http.js';
@@ -42,6 +43,10 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     logger.fatal(msg);
     throw new Error(msg);
   }
+
+  // Re-render the cached comment HTML once when the rendering pipeline version
+  // changed (task M1, @etn/markdown).
+  sweepCommentHtml(config.dataDir, systemDb, logger);
 
   const app = await createServer({ config, systemDb, logger });
 

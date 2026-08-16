@@ -43,8 +43,11 @@ etn/
 │   ├── scripts/rebuild-native.mjs  # пересборка better-sqlite3 под Electron (см. §4)
 │   └── out/     #   сборка electron-vite — НЕ коммитить
 ├── shared/      # @etn/shared  — общие типы, DTO, константы, коды ошибок
+├── markdown/    # @etn/markdown — ЕДИНЫЙ markdown→HTML рендерер (markdown-it):
+│   │            #   wiki-ссылки, размеры картинок, подсветка; используют server (body_html)
+│   │            #   и client (виджеты live preview). Менять рендеринг — только здесь.
 ├── .nvmrc       # Node 22 LTS
-└── package.json # npm workspaces: shared, server, client
+└── package.json # npm workspaces: shared, markdown, server, client
 ```
 
 ### Где что искать (типичные темы баг-фиксов)
@@ -188,6 +191,9 @@ npm run build                           # сборка всех workspace
   `npm -w @etn/server run build`).
 - **Изменения `shared/`** требуют `npm -w @etn/shared run build` — client/server
   читают `shared/dist`, а не `src`.
+- **Изменения `markdown/`** требуют `npm -w @etn/markdown run build` — server и
+  client читают `markdown/dist`. Смена `MD_RENDER_VERSION` заставляет сервер при
+  старте перерендерить кеш `body_html` всех комментариев (sweep).
 - **Связи/облачка «не работают» после правок рендера** — проверь три слоя в
   `links.ts` и DOM-порядок (`initLinksOverlay`: визуал через `prepend`, hit/top
   через `append`), а не только `z-index`.

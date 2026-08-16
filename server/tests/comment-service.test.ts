@@ -19,7 +19,7 @@ import {
   listComments,
   updateComment,
 } from '../src/domain/comment-service.js';
-import { renderMarkdown } from '../src/domain/markdown.js';
+import { renderMarkdown } from '@etn/markdown';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -73,13 +73,15 @@ describe('markdown renderer', () => {
     assert.ok(html.includes('<strong>bold</strong>'));
     assert.ok(html.includes('<em>italic</em>'));
     assert.ok(html.includes('<code>code</code>'));
-    assert.ok(html.includes('<ul><li>a</li><li>b</li></ul>'));
+    assert.ok(html.includes('<li>a</li>'));
+    assert.ok(html.includes('<li>b</li>'));
   });
 
   it('renders a fenced code block with a language class', () => {
     const html = renderMarkdown('```ts\nconst x = 1;\n```');
-    assert.ok(html.includes('<pre><code class="language-ts">'));
-    assert.ok(html.includes('const x = 1;'));
+    assert.ok(html.includes('<pre><code class="hljs language-ts">'));
+    assert.ok(html.includes('hljs-keyword'));
+    assert.ok(html.includes('const'));
   });
 
   it('renders images and links with allow-listed URLs', () => {

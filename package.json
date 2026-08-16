@@ -5,16 +5,17 @@
   "description": "ETN — The Endless Thought Network. Self-hosted graph-of-thoughts application.",
   "workspaces": [
     "shared",
+    "markdown",
     "server",
     "client"
   ],
   "scripts": {
-    "build:shared": "npm -w @etn/shared run build",
+    "build:shared": "npm -w @etn/shared run build && npm -w @etn/markdown run build",
     "dev:server": "npm -w @etn/server run dev",
     "dev:client": "npm -w @etn/client run dev",
     "build": "npm run build:shared && npm -w @etn/server run build && npm -w @etn/client run build",
-    "typecheck": "npm -w @etn/server run typecheck && npm -w @etn/client run typecheck && npm -w @etn/shared run typecheck",
-    "test": "npm -w @etn/server test && npm -w @etn/client test",
+    "typecheck": "npm -w @etn/server run typecheck && npm -w @etn/client run typecheck && npm -w @etn/shared run typecheck && npm -w @etn/markdown run typecheck",
+    "test": "npm -w @etn/server test && npm -w @etn/client test && npm -w @etn/markdown test",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

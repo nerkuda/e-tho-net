@@ -182,6 +182,8 @@ export class SystemDb {
   private readonly stUpsertPreference: Database.Statement;
   private readonly stListPreferences: Database.Statement;
   private readonly stGetSetting: Database.Statement;
+  private readonly stSetSetting: Database.Statement;
+  private readonly stListNetworkIds: Database.Statement;
   private readonly stNextNetworkSeq: Database.Statement;
   private readonly stInsertEvent: Database.Statement;
   private readonly stReadEventsAfter: Database.Statement;
@@ -277,6 +279,10 @@ export class SystemDb {
       'SELECT key, value, updated_at FROM user_preferences WHERE user_id = ? AND network_id = ? ORDER BY key',
     );
     this.stGetSetting = db.prepare('SELECT value FROM settings WHERE key = ? LIMIT 1');
+    this.stSetSetting = db.prepare(
+      'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+    );
+    this.stListNetworkIds = db.prepare('SELECT id FROM networks ORDER BY id');
     this.stNextNetworkSeq = db.prepare(
       'INSERT INTO network_seq (network_id, last_seq) VALUES (?, 1) ON CONFLICT(network_id) DO UPDATE SET last_seq = last_seq + 1 RETURNING last_seq',
     );
@@ -746,6 +752,21 @@ export class SystemDb {
   getSetting(key: string): string | null {
     const row = this.stGetSetting.get(key) as { value: string } | undefined;
     return row?.value ?? null;
+  }
+
+  /**
+   * Write (upsert) an L1 server-wide setting. Values are JSON-encoded per
+   * migration `008_settings.sql`; plain strings are acceptable too
+   * (`getSetting` returns them verbatim).
+   */
+  setSetting(key: string, value: string): void {
+    this.stSetSetting.run(key, value, new Date().toISOString());
+  }
+
+  /** Ids of all networks known to the system DB (any owner). */
+  listAllNetworkIds(): string[] {
+    const rows = this.stListNetworkIds.all() as Array<{ id: string }>;
+    return rows.map((r) => r.id);
   }
 
   // -------------------------------------------------------------------------

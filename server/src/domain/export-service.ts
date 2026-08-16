@@ -14,6 +14,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { EtnError, type ExportFormat, type ExportJob } from '@etn/shared';
+import { renderMarkdown } from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getThoughtOrThrow } from './thought-service.js';
@@ -96,22 +97,8 @@ export function exportToMarkdown(ndb: NetworkDb, thoughtIds: string[]): string {
 
 /** Wrap the Markdown document into a printable standalone HTML page. */
 function markdownToHtml(markdown: string): string {
-  // MVP renderer: line-based HTML. A real markdown→HTML pipeline
-  // (domain/markdown.ts) plugs in here in a follow-up without changing the API.
-  const escape = (s: string): string =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const body = markdown
-    .split('\n')
-    .map((line) => {
-      if (line.startsWith('# ')) return `<h1>${escape(line.slice(2))}</h1>`;
-      if (line.startsWith('## ')) return `<h2>${escape(line.slice(3))}</h2>`;
-      if (line.startsWith('### ')) return `<h3>${escape(line.slice(4))}</h3>`;
-      if (line.startsWith('- ')) return `<li>${escape(line.slice(2))}</li>`;
-      if (line === '---') return '<hr>';
-      if (line === '') return '';
-      return `<p>${escape(line)}</p>`;
-    })
-    .join('\n');
+  // Unified pipeline (task M1): the same renderer as the cached comment HTML.
+  const body = renderMarkdown(markdown, { maxLength: Infinity });
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>ETN export</title></head><body>${body}</body></html>`;
 }
 

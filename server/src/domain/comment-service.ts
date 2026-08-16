@@ -27,8 +27,9 @@ import {
   type CommentUpdateInput,
 } from '@etn/shared';
 
+import { renderMarkdown } from '@etn/markdown';
+
 import type { NetworkDb } from '../db/network-db.js';
-import { renderMarkdown } from './markdown.js';
 
 /** Raw `comments` row shape (dates as strings, no booleans). */
 interface CommentRow {

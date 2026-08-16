@@ -1,0 +1,196 @@
+/**
+ * Unit tests of the unified markdown renderer (task M1). Pure — no DOM, no DB.
+ */
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  DEFAULT_MAX_LENGTH,
+  parseAltSize,
+  renderMarkdown,
+  WIKI_LINK_CLASS,
+  WIKI_LINK_TARGET_ATTR,
+} from '../src/index.js';
+
+// ---------------------------------------------------------------------------
+// Basics
+// ---------------------------------------------------------------------------
+
+test('базовые конструкции: заголовки, emphasis, списки, таблицы', () => {
+  const html = renderMarkdown(
+    [
+      '# Заголовок',
+      '',
+      'Текст с **жирным**, *курсивом* и ~~зачёркиванием~~.',
+      '',
+      '- раз',
+      '- два',
+      '',
+      '| А | Б |',
+      '|---|---|',
+      '| 1 | 2 |',
+    ].join('\n'),
+  );
+  assert.match(html, /<h1>Заголовок<\/h1>/);
+  assert.match(html, /<strong>жирным<\/strong>/);
+  assert.match(html, /<em>курсивом<\/em>/);
+  assert.match(html, /<s>зачёркиванием<\/s>/);
+  assert.match(html, /<ul>/);
+  assert.match(html, /<li>раз<\/li>/);
+  assert.match(html, /<table>/);
+  assert.match(html, /<th>А<\/th>/);
+});
+
+test('raw HTML экранируется и не проходит насквозь', () => {
+  const html = renderMarkdown('<script>alert(1)</script> <img src=x onerror=alert(1)>');
+  assert.ok(!html.includes('<script>'));
+  assert.ok(!html.includes('<img'));
+  assert.match(html, /&lt;script&gt;/);
+});
+
+test('CRLF нормализуется', () => {
+  assert.match(renderMarkdown('# а\r\n\r\nтекст'), /<h1>а<\/h1>/);
+});
+
+// ---------------------------------------------------------------------------
+// Wiki-ссылки
+// ---------------------------------------------------------------------------
+
+test('[[имя]] рендерится как span с целевым именем', () => {
+  const html = renderMarkdown('см. [[Мысль о главном]]');
+  assert.ok(
+    html.includes(
+      `<span class="${WIKI_LINK_CLASS}" ${WIKI_LINK_TARGET_ATTR}="Мысль о главном">Мысль о главном</span>`,
+    ),
+    html,
+  );
+});
+
+test('[[имя|синоним]] показывает синоним, цель — имя', () => {
+  const html = renderMarkdown('[[имя мысли|синоним]]');
+  assert.ok(
+    html.includes(`class="${WIKI_LINK_CLASS}" ${WIKI_LINK_TARGET_ATTR}="имя мысли">синоним</span>`),
+    html,
+  );
+});
+
+test('алиас экранируется, в т.ч. HTML-инъекция в имени', () => {
+  const html = renderMarkdown('[[<b>x</b>|a"b]]');
+  assert.ok(!html.includes('<b>'));
+  assert.ok(html.includes(WIKI_LINK_TARGET_ATTR + '="&lt;b&gt;x&lt;/b&gt;"'));
+  assert.ok(html.includes('>a&quot;b</span>'));
+});
+
+test('пробелы вокруг имени и алиаса обрезаются', () => {
+  const html = renderMarkdown('[[ имя | метка ]]');
+  assert.ok(html.includes(WIKI_LINK_TARGET_ATTR + '="имя"'));
+  assert.ok(html.includes('>метка</span>'));
+});
+
+test('незакрытая, пустая и многострочная wiki-ссылка — обычный текст', () => {
+  for (const source of ['[[незакрыто', '[[]]', '[[а\nб]]', '[[|алиас]]']) {
+    assert.ok(!renderMarkdown(source).includes(WIKI_LINK_CLASS), source);
+  }
+});
+
+test('[[…]] внутри code span и fenced-блока не интерпретируется', () => {
+  assert.ok(renderMarkdown('`[[x]]`').includes('<code>[[x]]</code>'));
+  const fenced = renderMarkdown('```\n[[x]]\n```');
+  assert.ok(fenced.includes('[[x]]'));
+  assert.ok(!fenced.includes(WIKI_LINK_CLASS));
+});
+
+test('обычные [текст](url) ссылки не задеваются', () => {
+  assert.match(renderMarkdown('[пример](https://example.com)'), /<a href="https:\/\/example\.com">/);
+});
+
+// ---------------------------------------------------------------------------
+// Ссылки и протоколы
+// ---------------------------------------------------------------------------
+
+test('javascript: в ссылках и картинках отклоняется', () => {
+  assert.ok(!renderMarkdown('[x](javascript:alert(1))').includes('href='));
+  assert.ok(!renderMarkdown('![x](javascript:alert(1))').includes('<img'));
+});
+
+test('data:/etnimg: разрешены только для картинок', () => {
+  assert.ok(renderMarkdown('![x](data:image/png;base64,AAAA)').includes('<img'));
+  assert.ok(renderMarkdown('![x](etnimg://c/a.png)').includes('<img src="etnimg://c/a.png"'));
+  assert.ok(!renderMarkdown('[x](etnimg://c/a.png)').includes('href='));
+});
+
+// ---------------------------------------------------------------------------
+// Размеры картинок
+// ---------------------------------------------------------------------------
+
+test('parseAltSize: px, px+высота, проценты, не-размер', () => {
+  assert.deepEqual(parseAltSize('фото|600px'), { alt: 'фото', style: 'width:600px' });
+  assert.deepEqual(parseAltSize('фото|600x400'), { alt: 'фото', style: 'width:600px;height:400px' });
+  assert.deepEqual(parseAltSize('фото|50%'), { alt: 'фото', style: 'width:50%' });
+  assert.deepEqual(parseAltSize('фото|не_размер'), { alt: 'фото|не_размер', style: null });
+  assert.deepEqual(parseAltSize('без размера'), { alt: 'без размера', style: null });
+});
+
+test('![alt|600px](url) получает width в style', () => {
+  const html = renderMarkdown('![alt|600px](https://e.com/a.png)');
+  assert.ok(html.includes('alt="alt"'), html);
+  assert.ok(html.includes('style="width:600px"'), html);
+});
+
+test('![alt|50%](url) и 600x400', () => {
+  assert.ok(renderMarkdown('![alt|50%](https://e.com/a.png)').includes('style="width:50%"'));
+  assert.ok(
+    renderMarkdown('![alt|600x400](https://e.com/a.png)').includes(
+      'style="width:600px;height:400px"',
+    ),
+  );
+});
+
+test('невалидный URL картинки — простой текст, без <img>', () => {
+  assert.ok(!renderMarkdown('![alt](ftp://e.com/a.png)').includes('<img'));
+});
+
+// ---------------------------------------------------------------------------
+// Блоки кода и подсветка
+// ---------------------------------------------------------------------------
+
+test('известный язык подсвечивается highlight.js', () => {
+  const html = renderMarkdown('```ts\nconst x = 1;\n```');
+  assert.match(html, /<pre><code class="hljs language-ts">/);
+  assert.ok(html.includes('hljs-keyword'), html);
+});
+
+test('неизвестный язык — экранированный plain-блок', () => {
+  const html = renderMarkdown('```zzz\n<x>\n```');
+  assert.ok(!html.includes('<x>'));
+  assert.match(html, /<pre><code class="hljs">/);
+});
+
+test('код без языка — экранированный блок', () => {
+  const html = renderMarkdown('```\n<b>\n```');
+  assert.ok(!html.includes('<b>'));
+  assert.match(html, /&lt;b&gt;/);
+});
+
+test('незакрытый fence закрывается на EOF', () => {
+  assert.match(renderMarkdown('```ts\nconst a = 1;'), /language-ts/);
+});
+
+// ---------------------------------------------------------------------------
+// Ограничения входа
+// ---------------------------------------------------------------------------
+
+test('лимит длины: превышение бросает ошибку', () => {
+  assert.throws(() => renderMarkdown('x'.repeat(DEFAULT_MAX_LENGTH + 1)));
+  assert.doesNotThrow(() => renderMarkdown('x'.repeat(DEFAULT_MAX_LENGTH)));
+});
+
+test('лимит длины можно поднять (экспорт документов)', () => {
+  assert.doesNotThrow(() => renderMarkdown('x'.repeat(DEFAULT_MAX_LENGTH + 10), { maxLength: Infinity }));
+});
+
+test('не-строка бросает ошибку', () => {
+  assert.throws(() => renderMarkdown(null));
+  assert.throws(() => renderMarkdown(123));
+});

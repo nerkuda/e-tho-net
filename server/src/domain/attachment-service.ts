@@ -32,8 +32,9 @@ import {
   type AttachmentUpdateInput,
 } from '@etn/shared';
 
+import { renderMarkdown } from '@etn/markdown';
+
 import type { NetworkDb } from '../db/network-db.js';
-import { renderMarkdown } from './markdown.js';
 
 /** Raw `attachments` row shape. */
 interface AttachmentRow {
