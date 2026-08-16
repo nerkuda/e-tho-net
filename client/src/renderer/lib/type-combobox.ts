@@ -6,7 +6,9 @@
  * (and the selected value in the input) carry the type's icon, colours and
  * font style so a needed type is easy to spot among many. Link types show a
  * line swatch (colour/dash/width) instead. Keyboard: ↓/↑ move the active row,
- * Enter picks it, Escape closes the list.
+ * Enter picks it, Escape closes the list (the caret stays in the input). The
+ * list scrolls on its own (wheel, scrollbar, active-row scrollIntoView) and
+ * closes on blur, an outside click, a scroll elsewhere, or Escape.
  *
  * The dropdown is mounted in `document.body` with fixed positioning — it must
  * not be clipped by the host dialog's bounds (08-ui-spec.md §4.2).
@@ -243,11 +245,11 @@ export function createTypeCombobox(opts: {
     }
   });
 
-  // Window-level capture listeners: close on an outside click or any scroll
-  // (the dialog body may scroll under the fixed list), and swallow Escape
-  // while the list is open so the host dialog stays mounted. All self-
-  // unsubscribe once the widget is detached (editor re-renders rebuild
-  // comboboxes).
+  // Window-level capture listeners: close on an outside click or on a scroll
+  // outside the list (the dialog body may scroll under the fixed list), and
+  // swallow Escape while the list is open so the host dialog stays mounted.
+  // The list's own scrolling never closes it. All self-unsubscribe once the
+  // widget is detached (editor re-renders rebuild comboboxes).
   const detach = (): void => {
     window.removeEventListener('mousedown', onWinDown, true);
     window.removeEventListener('keydown', onWinKey, true);
@@ -287,12 +289,16 @@ export function createTypeCombobox(opts: {
       closeList();
     }
   };
-  const onWinScroll = (): void => {
+  const onWinScroll = (event: Event): void => {
     if (!root.isConnected) {
       closeList();
       detach();
       return;
     }
+    // The list scrolling itself (wheel over it, its own scrollbar, the active
+    // row's scrollIntoView) is normal list behaviour — only scrolling
+    // elsewhere (the editor/dialog body under the fixed list) closes it.
+    if (event.target instanceof Node && list.contains(event.target)) return;
     if (open) closeList();
   };
   window.addEventListener('mousedown', onWinDown, true);
