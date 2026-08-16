@@ -1843,6 +1843,101 @@ body.dragging * {
   overflow-y: auto;
 }
 
+/* Full emoji set grouped by category (§6.8, L17): collapsible <details>. */
+.emoji-groups {
+  max-height: 330px;
+  overflow-y: auto;
+}
+
+.emoji-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  background: var(--surface);
+}
+
+.emoji-group-title {
+  cursor: pointer;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  user-select: none;
+  list-style: none;
+}
+
+.emoji-group-title::-webkit-details-marker {
+  display: none;
+}
+
+.emoji-group-title::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.emoji-group[open] .emoji-group-title {
+  color: var(--text);
+}
+
+.emoji-group[open] .emoji-group-title::before {
+  transform: rotate(90deg);
+}
+
+.emoji-group-title:hover {
+  color: var(--text);
+}
+
+.emoji-group .emoji-grid {
+  padding: 0 4px 4px;
+  max-height: 220px;
+}
+
+.icon-section-title {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.icon-type-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.icon-type-cell {
+  aspect-ratio: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.icon-type-cell img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.icon-type-cell:hover {
+  background: var(--accent-soft);
+}
+
+.icon-pick-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
 .emoji-cell {
   aspect-ratio: 1;
   border: none;

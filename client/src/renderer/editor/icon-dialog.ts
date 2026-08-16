@@ -1,25 +1,32 @@
 /**
  * Icon picker dialog (08-ui-spec.md §6.8).
  *
- * Three tabs: Emoji (a click-to-pick grid), File (system file picker → `data:`
- * URL) and URL (typed URL). The File/URL tabs show a live preview square and an
- * OK button that is enabled only when the image loads. «Очистить» clears the
- * thought's own icon (the type default then shows through).
+ * Tabs:
+ *  - «Эмодзи» — the FULL emoji set (Unicode 16.0, generated `emoji-data.ts`)
+ *    grouped by CLDR categories; groups are collapsible; a click on a glyph
+ *    applies it immediately.
+ *  - «Файл» — a grid of the icons used by thought types (quick picks) and the
+ *    system file picker with a live preview; no text input. The bottom
+ *    «Применить» runs the L16 flow: the original file is carried to the caller
+ *    (uploaded as an attachment for thought owners) and the icon itself is a
+ *    ≤256 KiB preview.
+ *  - «URL» — a typed URL with a live preview; «Применить» stores the URL.
  *
- * A File pick (workplan L16) carries the ORIGINAL file alongside the icon: the
- * picker accepts images up to the attachment limit, the dialog shrinks the
- * icon itself to the ≤256 KiB preview, and the caller (for thought owners)
- * uploads the original as an attachment — Ctrl-hover over the icon then shows
- * the full picture.
+ * Bottom buttons: «Очистить» (clears the entity's own icon so the type default
+ * shows through), «Отменить» (close without changes) and «Применить» (enabled
+ * only when the active tab has a valid selection — a picked file or a loaded
+ * URL).
  */
 
-import type { IconKind } from '@etn/shared';
+import type { IconKind, ThoughtType } from '@etn/shared';
 
 import { showDialog } from '../lib/dialog.js';
 import { button, div, el } from '../lib/dom.js';
+import { EMOJI_GROUPS } from '../lib/emoji-data.js';
 import { etn } from '../lib/etn.js';
 import { dataUrlBytes, ICON_MAX_BYTES, makeIconPreview } from '../lib/image-preview.js';
 import { notice } from '../lib/notice.js';
+import { store } from '../state.js';
 
 /** The original picked file, carried to the caller for the attachment upload. */
 export interface IconPickSource {
@@ -36,17 +43,6 @@ export interface IconPickResult {
   source?: IconPickSource;
 }
 
-/** A compact grid of commonly useful emojis (08-ui-spec.md §6.8). */
-const EMOJIS = [
-  '💬', '💭', '💡', '📌', '⭐', '❤️', '🔥', '✅', '❌', '⚠️',
-  '👤', '👥', '🏠', '🏢', '🏫', '🌍', '📍', '🎯', '🧭', '🔑',
-  '📚', '📝', '📄', '📁', '📂', '🗓️', '📈', '📊', '🔧', '⚙️',
-  '💻', '🖥️', '📱', '🔗', '📨', '✉️', '📞', '🛒', '💰', '💳',
-  '🎨', '🎵', '🎬', '📷', '🔬', '🧪', '🏥', '🚗', '✈️', '🚀',
-  '🌱', '🌳', '🐾', '🐶', '🐱', '🐦', '🍎', '🍞', '☕', '🍷',
-  '🎁', '🏆', '⚽', '🎮', '🧩', '⚛️', '🌀', '⚜️', '♾️', '❓',
-];
-
 type Tab = 'emoji' | 'file' | 'url';
 
 /** Opens the icon picker. `onPick` should persist the result and return success. */
@@ -61,10 +57,8 @@ export function showIconDialog(opts: {
 
   // Tab switcher.
   const tabsBar = div('icon-tabs');
-  const mkTab = (id: Tab, label: string): HTMLButtonElement => {
-    const btn = button(label, () => switchTab(id), 'icon-tab');
-    return btn;
-  };
+  const mkTab = (id: Tab, label: string): HTMLButtonElement =>
+    button(label, () => switchTab(id), 'icon-tab');
   const emojiTab = mkTab('emoji', 'Эмодзи');
   const fileTab = mkTab('file', 'Файл');
   const urlTab = mkTab('url', 'URL');
@@ -74,151 +68,258 @@ export function showIconDialog(opts: {
   const content = div('icon-content');
   body.append(content);
 
-  // Shared File/URL controls state.
-  let pendingValue = ''; // text typed in the file/url input
-  let validValue: string | null = null; // an image value that loaded successfully
-  let fileSource: IconPickSource | null = null; // original of a picked file (L16)
-  let inputEl: HTMLInputElement | null = null;
-  let okBtn: HTMLButtonElement | null = null;
-  let previewEl: HTMLDivElement | null = null;
+  // Per-tab selection state (survives tab switches, reset per dialog open).
+  let urlValue = ''; // text typed on the URL tab
+  let urlValid: string | null = null; // a URL that loaded successfully
+  let urlInputEl: HTMLInputElement | null = null;
+  let urlPreviewEl: HTMLDivElement | null = null;
+  let fileDataUrl: string | null = null; // a picked file that loaded
+  let fileSource: IconPickSource | null = null;
+  let filePreviewEl: HTMLDivElement | null = null;
+  let applyBtn: HTMLButtonElement | null = null;
 
-  /** Validates a string as a loadable image; updates preview + OK state. */
-  function validateImage(value: string): void {
-    if (previewEl === null || okBtn === null) return;
-    validValue = null;
-    okBtn.disabled = true;
-    previewEl.replaceChildren();
-    previewEl.classList.remove('icon-preview-error');
-    const v = value.trim();
-    if (v === '') return;
-    const img = el('img');
-    img.alt = '';
-    img.addEventListener('load', () => {
-      if (inputEl !== null && inputEl.value.trim() === v) {
-        validValue = v;
-        okBtn?.removeAttribute('disabled');
-      }
-    });
-    img.addEventListener('error', () => {
-      if (inputEl !== null && inputEl.value.trim() === v) {
-        validValue = null;
-        okBtn?.setAttribute('disabled', 'disabled');
-        previewEl?.replaceChildren(el('span', 'icon-preview-bad', '✕'));
-        previewEl?.classList.add('icon-preview-error');
-      }
-    });
-    img.src = v;
-    previewEl.append(img);
+  /** Enables the bottom «Применить» only when the active tab has a selection. */
+  function refreshApply(): void {
+    if (applyBtn === null) return;
+    const enabled =
+      tab === 'file' ? fileDataUrl !== null : tab === 'url' ? urlValid !== null : false;
+    if (enabled) applyBtn.removeAttribute('disabled');
+    else applyBtn.setAttribute('disabled', 'disabled');
   }
 
-  /**
-   * Picks a file via the OS dialog and fills the input + preview (L16). The
-   * original file is kept as {@link fileSource} — files up to the attachment
-   * limit are accepted; the icon itself is shrunk to ≤256 KiB on commit.
-   */
-  async function pickFile(): Promise<void> {
-    const picked = await etn.system.pickImage();
-    if (picked.status === 'cancel') return;
-    if (picked.status === 'error') {
-      if (inputEl !== null) inputEl.value = '';
-      if (previewEl !== null) {
-        previewEl.replaceChildren(el('span', 'icon-preview-bad', '✕'));
-        previewEl.classList.add('icon-preview-error');
-      }
-      notice(picked.message, 'error');
-      return;
-    }
-    fileSource = { dataUrl: picked.dataUrl, mime: picked.mime, name: picked.name };
-    if (inputEl !== null) {
-      inputEl.value = picked.dataUrl;
-      validateImage(picked.dataUrl);
-    }
-  }
+  // --- emoji tab ------------------------------------------------------------
 
-  /**
-   * Commits the validated image value. A picked file over the icon limit is
-   * downscaled to a preview first — the original travels in `source` so the
-   * caller can store it as an attachment (L16).
-   */
-  async function commitImage(close: () => void): Promise<void> {
-    if (validValue === null) return;
-    let icon = validValue;
-    if (fileSource !== null && dataUrlBytes(validValue) > ICON_MAX_BYTES) {
-      try {
-        icon = await makeIconPreview(validValue);
-      } catch {
-        notice('Не удалось подготовить превью иконки.', 'error');
-        return;
-      }
-    }
-    const ok = await onPick({ icon, kind: 'image', source: fileSource ?? undefined });
-    if (ok) close();
-  }
-
-  /** Builds the emoji grid tab content. */
+  /** Builds the collapsible emoji groups (full set, lazy cell rendering). */
   function buildEmojiGrid(close: () => void): HTMLElement {
-    const grid = div('emoji-grid');
-    for (const glyph of EMOJIS) {
-      const cell = button(glyph, () => {
-        void onPick({ icon: glyph, kind: 'emoji' }).then((ok) => {
-          if (ok) close();
-        });
-      }, 'emoji-cell');
+    const root = div('emoji-groups');
+    EMOJI_GROUPS.forEach((group, index) => {
+      const details = el('details', 'emoji-group');
+      if (index === 0) details.open = true;
+      const summary = el('summary', 'emoji-group-title', `${group.name} · ${group.items.length}`);
+      const grid = div('emoji-grid');
+      details.append(summary, grid);
+      const populate = (): void => {
+        if (grid.childElementCount > 0) return;
+        for (const glyph of group.items) {
+          grid.append(
+            button(glyph, () => {
+              void onPick({ icon: glyph, kind: 'emoji' }).then((ok) => {
+                if (ok) close();
+              });
+            }, 'emoji-cell'),
+          );
+        }
+      };
+      if (details.open) populate();
+      // Build cells on first expand — 1900+ glyphs would be wasteful upfront.
+      details.addEventListener('toggle', () => {
+        if (details.open) populate();
+      });
+      root.append(details);
+    });
+    return root;
+  }
+
+  // --- file tab -------------------------------------------------------------
+
+  /** Applies a thought type's icon immediately (same UX as the emoji grid). */
+  function applyTypeIcon(type: ThoughtType): void {
+    void onPick({ icon: type.icon, kind: type.icon_kind }).then((ok) => {
+      if (ok) close();
+    });
+  }
+
+  /** Grid of the icons used by thought types (quick picks on the File tab). */
+  function buildTypeIconsGrid(): HTMLElement {
+    const grid = div('icon-type-grid');
+    const types = store.state.thoughtTypes.filter((t) => t.icon !== null && t.icon !== '');
+    if (types.length === 0) {
+      grid.append(el('p', 'muted', 'Типы мыслей с иконками не заданы.'));
+      return grid;
+    }
+    for (const type of types) {
+      const cell = button('', () => applyTypeIcon(type), 'icon-type-cell');
+      cell.title = `Иконка типа «${type.name}»`;
+      if (type.icon_kind === 'image' && type.icon !== null) {
+        const img = el('img');
+        img.src = type.icon;
+        img.alt = '';
+        cell.append(img);
+      } else {
+        cell.textContent = type.icon ?? '💭';
+      }
       grid.append(cell);
     }
     return grid;
   }
 
-  /** Builds the File/URL tab (shared; `withPicker` adds the «Выбрать» button). */
-  function buildSourceTab(close: () => void, withPicker: boolean): HTMLElement {
-    const box = div('icon-source');
-    const row = div('icon-source-row');
-    inputEl = el('input', 'text-input') as HTMLInputElement;
-    inputEl.type = 'text';
-    inputEl.value = pendingValue;
-    inputEl.placeholder = withPicker ? 'путь к файлу или data: URL' : 'URL изображения';
-    inputEl.addEventListener('input', () => {
-      pendingValue = inputEl?.value ?? '';
-      fileSource = null; // manually edited value is not a picked file
-      validateImage(pendingValue);
+  /** Renders the picked file in the preview square (or an error marker). */
+  function showFilePreview(dataUrl: string): void {
+    if (filePreviewEl === null) return;
+    filePreviewEl.replaceChildren();
+    filePreviewEl.classList.remove('icon-preview-error');
+    const img = el('img');
+    img.alt = '';
+    img.addEventListener('load', () => {
+      fileDataUrl = dataUrl;
+      refreshApply();
     });
-    row.append(inputEl);
-    if (withPicker) {
-      const pickBtn = button('Выбрать', () => void pickFile(), 'btn small');
-      row.append(pickBtn);
+    img.addEventListener('error', () => {
+      fileDataUrl = null;
+      refreshApply();
+      filePreviewEl?.replaceChildren(el('span', 'icon-preview-bad', '✕'));
+      filePreviewEl?.classList.add('icon-preview-error');
+    });
+    img.src = dataUrl;
+    filePreviewEl.append(img);
+  }
+
+  /** Picks a file via the OS dialog and shows its preview (L16). */
+  async function pickFile(): Promise<void> {
+    const picked = await etn.system.pickImage();
+    if (picked.status === 'cancel') return;
+    fileDataUrl = null;
+    fileSource = null;
+    refreshApply();
+    if (picked.status === 'error') {
+      if (filePreviewEl !== null) {
+        filePreviewEl.replaceChildren(el('span', 'icon-preview-bad', '✕'));
+        filePreviewEl.classList.add('icon-preview-error');
+      }
+      notice(picked.message, 'error');
+      return;
     }
-    box.append(row);
+    fileSource = { dataUrl: picked.dataUrl, mime: picked.mime, name: picked.name };
+    showFilePreview(picked.dataUrl);
+  }
 
-    previewEl = div('icon-preview');
-    box.append(previewEl);
-
-    okBtn = button('ОК', () => void commitImage(close), 'btn primary');
-    okBtn.setAttribute('disabled', 'disabled');
-    box.append(okBtn);
-
-    // Validate the prefilled value once laid out.
-    queueMicrotask(() => validateImage(pendingValue));
+  /** Builds the File tab: type-icon grid + «Выбрать файл…» + preview. */
+  function buildFileTab(): HTMLElement {
+    const box = div('icon-source');
+    box.append(el('div', 'icon-section-title', 'Иконки типов мыслей'), buildTypeIconsGrid());
+    const pickRow = div('icon-pick-row');
+    pickRow.append(button('Выбрать файл…', () => void pickFile(), 'btn small'));
+    box.append(pickRow);
+    filePreviewEl = div('icon-preview');
+    box.append(filePreviewEl);
+    if (fileDataUrl !== null) showFilePreview(fileDataUrl);
+    else filePreviewEl.append(el('span', 'muted', 'Файл не выбран'));
     return box;
   }
 
-  /** Re-renders the active tab. */
+  // --- url tab --------------------------------------------------------------
+
+  /** Shows a loaded URL in the preview square. */
+  function showUrlPreview(url: string): void {
+    if (urlPreviewEl === null) return;
+    urlPreviewEl.replaceChildren();
+    urlPreviewEl.classList.remove('icon-preview-error');
+    const img = el('img');
+    img.alt = '';
+    img.addEventListener('error', () => {
+      urlPreviewEl?.replaceChildren(el('span', 'icon-preview-bad', '✕'));
+      urlPreviewEl?.classList.add('icon-preview-error');
+    });
+    img.src = url;
+    urlPreviewEl.append(img);
+  }
+
+  /** Validates typed URL text as a loadable image; updates preview + Apply. */
+  function validateUrl(value: string): void {
+    urlValid = null;
+    refreshApply();
+    if (urlPreviewEl === null) return;
+    urlPreviewEl.replaceChildren();
+    urlPreviewEl.classList.remove('icon-preview-error');
+    const v = value.trim();
+    if (v === '') {
+      urlPreviewEl.append(el('span', 'muted', 'Предпросмотр'));
+      return;
+    }
+    const img = el('img');
+    img.alt = '';
+    img.addEventListener('load', () => {
+      if (urlInputEl !== null && urlInputEl.value.trim() === v) {
+        urlValid = v;
+        refreshApply();
+      }
+    });
+    img.addEventListener('error', () => {
+      if (urlInputEl !== null && urlInputEl.value.trim() === v) {
+        urlPreviewEl?.replaceChildren(el('span', 'icon-preview-bad', '✕'));
+        urlPreviewEl?.classList.add('icon-preview-error');
+      }
+    });
+    img.src = v;
+    urlPreviewEl.append(img);
+  }
+
+  /** Builds the URL tab: typed URL + live preview (no per-tab OK). */
+  function buildUrlTab(): HTMLElement {
+    const box = div('icon-source');
+    const row = div('icon-source-row');
+    urlInputEl = el('input', 'text-input') as HTMLInputElement;
+    urlInputEl.type = 'text';
+    urlInputEl.value = urlValue;
+    urlInputEl.placeholder = 'URL изображения';
+    urlInputEl.addEventListener('input', () => {
+      urlValue = urlInputEl?.value ?? '';
+      validateUrl(urlValue);
+    });
+    row.append(urlInputEl);
+    box.append(row);
+
+    urlPreviewEl = div('icon-preview');
+    box.append(urlPreviewEl);
+    if (urlValid !== null) showUrlPreview(urlValid);
+    else urlPreviewEl.append(el('span', 'muted', 'Предпросмотр'));
+    return box;
+  }
+
+  // --- apply ----------------------------------------------------------------
+
+  /** Applies the active tab's selection (file or URL) — the bottom button. */
+  async function applySelection(close: () => void): Promise<void> {
+    if (tab === 'file') {
+      if (fileDataUrl === null || fileSource === null) return;
+      let icon = fileDataUrl;
+      if (dataUrlBytes(icon) > ICON_MAX_BYTES) {
+        try {
+          icon = await makeIconPreview(icon);
+        } catch {
+          notice('Не удалось подготовить превью иконки.', 'error');
+          return;
+        }
+      }
+      const ok = await onPick({ icon, kind: 'image', source: fileSource });
+      if (ok) close();
+      return;
+    }
+    if (tab === 'url' && urlValid !== null) {
+      const ok = await onPick({ icon: urlValid, kind: 'image' });
+      if (ok) close();
+    }
+  }
+
+  // --- tabs -----------------------------------------------------------------
+
+  /** Re-renders the active tab (selections survive across switches). */
   function renderContent(close: () => void): void {
     content.replaceChildren();
-    inputEl = null;
-    okBtn = null;
-    previewEl = null;
-    validValue = null;
-    fileSource = null;
+    urlInputEl = null;
+    urlPreviewEl = null;
+    filePreviewEl = null;
     for (const t of [emojiTab, fileTab, urlTab]) {
       t.classList.toggle('active', t === activeTabBtn());
     }
     if (tab === 'emoji') {
       content.append(buildEmojiGrid(close));
     } else if (tab === 'file') {
-      content.append(buildSourceTab(close, true));
+      content.append(buildFileTab());
     } else {
-      content.append(buildSourceTab(close, false));
+      content.append(buildUrlTab());
     }
+    refreshApply();
   }
 
   function activeTabBtn(): HTMLButtonElement {
@@ -227,8 +328,8 @@ export function showIconDialog(opts: {
 
   function switchTab(next: Tab): void {
     if (tab === next) return;
-    // Preserve typed text between File/URL tabs.
-    if (inputEl !== null) pendingValue = inputEl.value;
+    // Preserve the typed URL text between switches.
+    if (urlInputEl !== null) urlValue = urlInputEl.value;
     tab = next;
     renderContent(close);
   }
@@ -236,17 +337,28 @@ export function showIconDialog(opts: {
   const close = showDialog({
     title: 'Иконка',
     body,
+    width: 520,
     buttons: [
       {
         label: 'Очистить',
         danger: true,
-        onClick: () => {
+        keepOpen: true,
+        onClick: (c) => {
           void onPick({ icon: null, kind: 'emoji' }).then((ok) => {
-            if (ok) close();
+            if (ok) c();
           });
         },
       },
-      { label: 'Закрыть', primary: true },
+      { label: 'Отменить' },
+      {
+        label: 'Применить',
+        primary: true,
+        keepOpen: true,
+        onClick: (c) => void applySelection(c),
+        ref: (el) => {
+          applyBtn = el;
+        },
+      },
     ],
   });
 

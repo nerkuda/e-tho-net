@@ -25,6 +25,8 @@ export interface DialogButton {
   onClick?: (close: () => void) => void;
   /** Keep the dialog open after {@link onClick} (validation/async flows). */
   keepOpen?: boolean;
+  /** Receives the rendered button element (e.g. to toggle `disabled`). */
+  ref?: (el: HTMLButtonElement) => void;
 }
 
 /** Options of {@link showDialog}. */
@@ -81,6 +83,7 @@ export function showDialog(opts: DialogOptions): () => void {
           .filter((c) => c !== '')
           .join(' '),
       );
+      item.ref?.(btn);
       footer.append(btn);
     }
     box.append(footer);
