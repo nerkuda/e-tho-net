@@ -3,23 +3,31 @@
  *
  * - Ctrl+click toggles a cloud in the selection; Ctrl+click on an ellipse adds
  *   all parents/children of that thought;
- * - panel (left) appears while the selection is non-empty: list of titles,
- *   «Добавить» (children/parents of everything selected), «Изменить» (type,
- *   activity, delete, link to focus, clear), «Экспортировать» (markdown/html/
- *   pdf via the async job API + polling download);
- * - group operations go through `thoughts.batch`.
+ * - panel (left) appears while the selection is non-empty: list of titles plus
+ *   a top menu bar with three menus:
+ *   - «Выделение» — grow the list (children/parents of everything selected, a
+ *     picked thought) and clear it;
+ *   - «Действия» — focus-link operations (`link_to_focus`/`unlink_from_focus`,
+ *     "focus as the only parent"), export (markdown/pdf/html via the async job
+ *     API + polling download) and delete;
+ *   - «Свойства» — activity, visual style, type and property values;
+ * - group operations go through `thoughts.batch` unless the server API forces
+ *   per-entity calls (style, "only parent", property values).
  */
 
 import { scheduleRefresh, requireNetworkId } from '../app.js';
 import { setAddToSelectionHook } from '../canvas/context-menu.js';
 import { applyThoughtIcon, setSelectionClickHooks } from '../canvas/canvas.js';
+import { pickThoughtRef } from '../editor/thought-picker.js';
+import { showThoughtStyleDialog, type ThoughtStylePatch } from '../editor/style-dialog.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
-import type { ExportFormat, ThoughtRef } from '@etn/shared';
+import { pickLinkType, pickThoughtType, showSelectionPropertiesDialog } from './dialogs.js';
+import type { ExportFormat } from '@etn/shared';
 
 /** Panel chrome the selection module renders into. */
 let host: HTMLElement | null = null;
@@ -34,14 +42,18 @@ export function mountSelection(selectionHost: HTMLElement): void {
   const title = span('Выделение', 'selection-title');
   const clearButton = button('✕', () => clearSelection(), 'btn small', 'Очистить список');
   header.append(title, clearButton);
+  const menuBar = div('selection-menu');
+  const menus: Array<[string, () => MenuItem[]]> = [
+    ['Выделение', buildSelectionMenu],
+    ['Действия', buildActionsMenu],
+    ['Свойства', buildPropertiesMenu],
+  ];
+  for (const [label, build] of menus) {
+    const btn = button(label, () => openMenuBelow(btn, build()), 'selection-menu-btn');
+    menuBar.append(btn);
+  }
   listHost = div('selection-list');
-  const actions = div('selection-actions');
-  actions.append(
-    button('Добавить', () => void openAddMenu(actions), 'btn small'),
-    button('Изменить', () => void openEditMenu(actions), 'btn small'),
-    button('Экспортировать', () => void openExportMenu(actions), 'btn small'),
-  );
-  host.append(header, listHost, actions);
+  host.append(header, menuBar, listHost);
 
   // Ctrl+click wiring (spec §5.1).
   setAddToSelectionHook((id) => toggleSelection([id]));
@@ -77,7 +89,7 @@ async function renderList(ids: string[]): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   listHost.replaceChildren(el('span', 'muted', 'Загрузка…'));
-  let refs = new Map<string, ThoughtRef>();
+  let refs = new Map<string, import('@etn/shared').ThoughtRef>();
   try {
     const resolved = await etn.thoughts.resolve(networkId, ids.slice(0, 100));
     refs = new Map(resolved.map((r) => [r.id, r]));
@@ -139,7 +151,7 @@ export function addToSelection(ids: string[]): void {
   store.update({ selection: [...store.state.selection, ...ids] });
 }
 
-/** Clears the selection list. */
+/** Clears the selection list (the panel hides itself on empty). */
 function clearSelection(): void {
   store.update({ selection: [] });
 }
@@ -148,123 +160,113 @@ function clearSelection(): void {
 // Menus
 // ---------------------------------------------------------------------------
 
-/** «Добавить» menu: children/parents of everything selected. */
-async function openAddMenu(anchor: HTMLElement): Promise<void> {
-  const items: MenuItem[] = [
+/** Opens a menu right below its menu-bar button. */
+function openMenuBelow(anchor: HTMLElement, items: MenuItem[]): void {
+  const rect = anchor.getBoundingClientRect();
+  showMenuAt(rect.left, rect.bottom + 2, items);
+}
+
+/** «Выделение» menu: grow and clear the selection list. */
+function buildSelectionMenu(): MenuItem[] {
+  return [
     {
-      label: 'добавить назначения связей (детей)',
+      label: 'Добавить подчиненные мысли',
       onClick: () => void addNeighborsOfAll('children'),
     },
     {
-      label: 'добавить источники связей (родителей)',
+      label: 'Добавить родительские мысли',
       onClick: () => void addNeighborsOfAll('parents'),
     },
-  ];
-  const rect = anchor.getBoundingClientRect();
-  showMenuAt(rect.left, rect.top - 76, items);
-}
-
-/** «Изменить» menu: batch operations. */
-function openEditMenu(anchor: HTMLElement): void {
-  const focusId = store.state.focus?.focused.id;
-
-  const typeItems: MenuItem[] = store.state.thoughtTypes.map((type) => ({
-    label: type.name,
-    onClick: () => void batch({ op: 'set_type', args: { type_id: type.id } }),
-  }));
-  typeItems.push({
-    label: 'очистить тип',
-    onClick: () => void batch({ op: 'clear_type', args: {} }),
-  });
-
-  const items: MenuItem[] = [
-    { label: 'изменить тип', submenu: typeItems },
     {
-      label: 'сделать неактивными',
-      onClick: () => void batch({ op: 'set_inactive', args: { active: false } }),
-    },
-    {
-      label: 'сделать активными',
-      onClick: () => void batch({ op: 'set_active', args: { active: true } }),
-    },
-    {
-      label: 'удалить',
-      danger: true,
-      onClick: () => void batchDelete(),
+      label: 'Добавить мысль…',
+      onClick: () => void addPickedThought(),
     },
     MENU_SEPARATOR,
     {
-      label: 'сделать источниками для фокуса',
-      disabled: focusId === undefined,
-      onClick: () =>
-        void batch({
-          op: 'link_to_focus',
-          args: { focus_thought_id: focusId, direction: 'parent' },
-        }),
-    },
-    {
-      label: 'сделать назначениями для фокуса',
-      disabled: focusId === undefined,
-      onClick: () =>
-        void batch({
-          op: 'link_to_focus',
-          args: { focus_thought_id: focusId, direction: 'child' },
-        }),
-    },
-    MENU_SEPARATOR,
-    {
-      label: 'очистить список',
+      label: 'Очистить список выделенных мыслей',
       onClick: () => clearSelection(),
     },
   ];
-  const rect = anchor.getBoundingClientRect();
-  showMenuAt(rect.left, rect.top - items.length * 32 - 8, items);
 }
 
-/** «Экспортировать» menu: format → async job → poll → download. */
-function openExportMenu(anchor: HTMLElement): void {
-  const formats: ExportFormat[] = ['markdown', 'html', 'pdf'];
-  const items: MenuItem[] = formats.map((format) => ({
-    label: format === 'markdown' ? 'Markdown' : format.toUpperCase(),
-    onClick: () => void runExport(format),
-  }));
-  const rect = anchor.getBoundingClientRect();
-  showMenuAt(rect.left, rect.top - 112, items);
+/** «Действия» menu: focus links, export, delete. */
+function buildActionsMenu(): MenuItem[] {
+  const focusId = store.state.focus?.focused.id;
+  const needFocus = focusId === undefined;
+  return [
+    {
+      label: 'Добавить мысль в фокусе к родительским…',
+      disabled: needFocus,
+      onClick: () => void linkFocus('child'),
+    },
+    {
+      label: 'Сделать мысль в фокусе единственным родителем…',
+      disabled: needFocus,
+      onClick: () => void makeFocusOnlyParent(),
+    },
+    {
+      label: 'Добавить мысль в фокусе к подчиненным…',
+      disabled: needFocus,
+      onClick: () => void linkFocus('parent'),
+    },
+    {
+      label: 'Исключить мысль в фокусе из родителей',
+      disabled: needFocus,
+      onClick: () => void unlinkFocus('child'),
+    },
+    {
+      label: 'Исключить мысль в фокусе из подчиненных',
+      disabled: needFocus,
+      onClick: () => void unlinkFocus('parent'),
+    },
+    MENU_SEPARATOR,
+    {
+      label: 'Экспорт',
+      submenu: [
+        { label: 'Markdown', onClick: () => void runExport('markdown') },
+        { label: 'PDF', onClick: () => void runExport('pdf') },
+        { label: 'HTML', onClick: () => void runExport('html') },
+      ],
+    },
+    MENU_SEPARATOR,
+    {
+      label: 'Удалить',
+      danger: true,
+      onClick: () => void batchDelete(),
+    },
+  ];
+}
+
+/** «Свойства» menu: activity, style, type, property values. */
+function buildPropertiesMenu(): MenuItem[] {
+  return [
+    {
+      label: 'Пометить неактуальными',
+      onClick: () => void batch({ op: 'set_inactive', args: {} }),
+    },
+    {
+      label: 'Пометить актуальными',
+      onClick: () => void batch({ op: 'set_active', args: {} }),
+    },
+    MENU_SEPARATOR,
+    {
+      label: 'Изменить настройки…',
+      onClick: () => void openStyleDialog(),
+    },
+    {
+      label: 'Изменить тип…',
+      onClick: () => void openTypeDialog(),
+    },
+    {
+      label: 'Изменить значение свойства…',
+      onClick: () => showSelectionPropertiesDialog(store.state.selection),
+    },
+  ];
 }
 
 // ---------------------------------------------------------------------------
-// Operations
+// «Выделение» operations
 // ---------------------------------------------------------------------------
-
-/** Runs a batch operation over the current selection. */
-async function batch(input: {
-  op: import('@etn/shared').ThoughtBatchOp;
-  args: import('@etn/shared').ThoughtBatchArgs;
-}): Promise<void> {
-  const networkId = requireNetworkId();
-  const ids = store.state.selection;
-  if (ids.length === 0) return;
-  try {
-    const result = await etn.thoughts.batch(networkId, { ids, op: input.op, args: input.args });
-    if (result.failures.length > 0) {
-      notice(`Не удалось применить к ${result.failures.length} мыслям.`, 'error');
-    } else {
-      notice(`Применено к ${result.affected} мыслям.`);
-    }
-    scheduleRefresh();
-  } catch (err) {
-    errorDialog('Групповая операция', err);
-  }
-}
-
-/** Batch delete with confirmation. */
-async function batchDelete(): Promise<void> {
-  const ids = store.state.selection;
-  if (ids.length === 0) return;
-  if (!(await confirmDialog('Удалить мысли', `Удалить ${ids.length} мыслей?`, true))) return;
-  await batch({ op: 'delete', args: {} });
-  store.update({ selection: [] });
-}
 
 /** Adds children/parents of every selected thought to the selection. */
 async function addNeighborsOfAll(dir: 'children' | 'parents'): Promise<void> {
@@ -297,6 +299,217 @@ async function collectNeighbors(
   } catch (err) {
     notice(`Не удалось получить соседей: ${errText(err)}`, 'error');
   }
+}
+
+/** Opens the thought search dialog and adds the picked thought. */
+async function addPickedThought(): Promise<void> {
+  const networkId = requireNetworkId();
+  const id = await pickThoughtRef(networkId);
+  if (id === null) return;
+  addToSelection([id]);
+}
+
+// ---------------------------------------------------------------------------
+// «Действия» operations
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates focus↔selection links of the chosen type.
+ * `direction: 'child'` makes the focus a parent of every selected thought;
+ * `'parent'` makes it their child.
+ */
+async function linkFocus(direction: 'parent' | 'child'): Promise<void> {
+  const focusId = store.state.focus?.focused.id;
+  if (focusId === undefined) return;
+  const linkTypeId = await pickLinkType('Тип связи с мыслью в фокусе');
+  if (linkTypeId === undefined) return;
+  await batch({
+    op: 'link_to_focus',
+    args: { focus_thought_id: focusId, direction, link_type_id: linkTypeId },
+  });
+}
+
+/**
+ * Drops every focus↔selection link of any type.
+ * `direction: 'child'` removes focus→selection links (focus out of parents);
+ * `'parent'` removes selection→focus links (focus out of children).
+ */
+async function unlinkFocus(direction: 'parent' | 'child'): Promise<void> {
+  const focusId = store.state.focus?.focused.id;
+  if (focusId === undefined) return;
+  await batch({
+    op: 'unlink_from_focus',
+    args: { focus_thought_id: focusId, direction },
+  });
+}
+
+/**
+ * Makes the focused thought the only parent of every selected thought: all
+ * other incoming links are deleted (with a confirmation), the focus link gets
+ * the chosen type.
+ */
+async function makeFocusOnlyParent(): Promise<void> {
+  const focusId = store.state.focus?.focused.id;
+  if (focusId === undefined) return;
+  const ids = store.state.selection;
+  if (ids.length === 0) return;
+  const linkTypeId = await pickLinkType('Тип связи с мыслью в фокусе');
+  if (linkTypeId === undefined) return;
+  const focusTitle = store.state.focus?.focused.title ?? '';
+  const confirmed = await confirmDialog(
+    'Сделать единственным родителем',
+    `У ${ids.length} выделённых мыслей будут удалены все входящие связи, кроме связи с мыслью «${focusTitle}». Продолжить?`,
+    true,
+  );
+  if (!confirmed) return;
+  const networkId = requireNetworkId();
+  let failed = 0;
+  for (const id of ids) {
+    try {
+      const grouped = await etn.links.listByThought(networkId, id);
+      const links = [
+        ...grouped.by_type.flatMap((g) => g.items.map((i) => i.link)),
+        ...grouped.untyped_parents.map((u) => u.link),
+        ...grouped.untyped_children.map((u) => u.link),
+      ];
+      const incoming = links.filter((l) => l.target_id === id);
+      const fromFocus = incoming.filter((l) => l.source_id === focusId);
+      for (const link of incoming) {
+        if (link.source_id === focusId) continue;
+        await etn.links.remove(networkId, link.id, link.version);
+      }
+      if (fromFocus.length > 0) {
+        // Keep exactly one focus link, retyped to the chosen one.
+        const [keep, ...extra] = fromFocus;
+        for (const link of extra) await etn.links.remove(networkId, link.id, link.version);
+        if (keep !== undefined && keep.type_id !== linkTypeId) {
+          await etn.links.update(networkId, keep.id, { type_id: linkTypeId }, keep.version);
+        }
+      } else {
+        await etn.links.create(networkId, {
+          source_id: focusId,
+          target_id: id,
+          type_id: linkTypeId,
+        });
+      }
+    } catch {
+      failed += 1;
+    }
+  }
+  if (failed > 0) notice(`Не удалось обработать ${failed} мыслей.`, 'error');
+  else notice(`Готово: фокус — единственный родитель (${ids.length}).`);
+  scheduleRefresh();
+}
+
+// ---------------------------------------------------------------------------
+// «Свойства» operations
+// ---------------------------------------------------------------------------
+
+/**
+ * Opens the shared style dialog seeded from the first selected thought
+ * (its own colour overrides, else the type's font flags); every change is
+ * applied to the whole selection at once.
+ */
+async function openStyleDialog(): Promise<void> {
+  const networkId = requireNetworkId();
+  const ids = store.state.selection;
+  if (ids.length === 0) return;
+  let first: import('@etn/shared').ThoughtRef | undefined;
+  try {
+    const refs = await etn.thoughts.resolve(networkId, ids.slice(0, 100));
+    first = refs[0];
+  } catch {
+    // Seed from plain defaults when resolve fails.
+  }
+  const type =
+    first?.type_id !== undefined && first.type_id !== null
+      ? store.state.thoughtTypes.find((t) => t.id === first!.type_id)
+      : undefined;
+  showThoughtStyleDialog({
+    resolved: {
+      fg: first?.fg_color ?? null,
+      bg: first?.bg_color ?? null,
+      bold: first?.font_bold ?? type?.font_bold ?? false,
+      italic: first?.font_italic ?? type?.font_italic ?? false,
+      underline: first?.font_underline ?? type?.font_underline ?? false,
+      strike: first?.font_strike ?? type?.font_strike ?? false,
+    },
+    onApply: (patch) => applyStyleToAll(patch),
+  });
+}
+
+/** Applies a style patch to every selected thought (icons are never touched). */
+async function applyStyleToAll(patch: ThoughtStylePatch): Promise<boolean> {
+  const networkId = requireNetworkId();
+  const ids = store.state.selection;
+  if (ids.length === 0) return false;
+  const { icon: _ignored, ...style } = patch;
+  const results = await Promise.allSettled(
+    ids.map(async (id) => {
+      const thought = await etn.thoughts.get(networkId, id);
+      await etn.thoughts.update(networkId, id, style, thought.version);
+    }),
+  );
+  const failed = results.filter((r) => r.status === 'rejected').length;
+  scheduleRefresh();
+  if (failed > 0) {
+    errorDialog('Настройки выделения', `Не удалось применить к ${failed} мыслям.`);
+  }
+  return failed === 0;
+}
+
+/** Opens the searchable type picker and batch-applies the chosen type. */
+async function openTypeDialog(): Promise<void> {
+  const networkId = requireNetworkId();
+  const ids = store.state.selection;
+  if (ids.length === 0) return;
+  // Seed with the type shared by every selected thought (null when mixed).
+  let initial: string | null = null;
+  try {
+    const refs = await etn.thoughts.resolve(networkId, ids.slice(0, 100));
+    const uniq = new Set(refs.map((r) => r.type_id));
+    if (uniq.size === 1) initial = refs[0]?.type_id ?? null;
+  } catch {
+    // null seed is fine
+  }
+  const typeId = await pickThoughtType(initial);
+  if (typeId === undefined) return;
+  if (typeId === null) await batch({ op: 'clear_type', args: {} });
+  else await batch({ op: 'set_type', args: { type_id: typeId } });
+}
+
+// ---------------------------------------------------------------------------
+// Shared operations
+// ---------------------------------------------------------------------------
+
+/** Runs a batch operation over the current selection. */
+async function batch(input: {
+  op: import('@etn/shared').ThoughtBatchOp;
+  args: import('@etn/shared').ThoughtBatchArgs;
+}): Promise<void> {
+  const networkId = requireNetworkId();
+  const ids = store.state.selection;
+  if (ids.length === 0) return;
+  try {
+    const result = await etn.thoughts.batch(networkId, { ids, op: input.op, args: input.args });
+    if (result.failures.length > 0) {
+      notice(`Не удалось применить к ${result.failures.length} мыслям.`, 'error');
+    } else {
+      notice(`Применено к ${result.affected} мыслям.`);
+    }
+    scheduleRefresh();
+  } catch (err) {
+    errorDialog('Групповая операция', err);
+  }
+}
+
+/** Batch delete with confirmation. */
+async function batchDelete(): Promise<void> {
+  const ids = store.state.selection;
+  if (ids.length === 0) return;
+  if (!(await confirmDialog('Удалить мысли', `Удалить ${ids.length} мыслей?`, true))) return;
+  await batch({ op: 'delete', args: {} });
+  store.update({ selection: [] });
 }
 
 /** Starts an export job and polls it to completion. */

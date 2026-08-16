@@ -2304,12 +2304,27 @@ body.dragging * {
   white-space: nowrap;
 }
 
-.selection-actions {
+/* Top menu bar of the selection panel (Выделение / Действия / Свойства). */
+.selection-menu {
   display: flex;
-  gap: 6px;
-  padding: 8px;
-  border-top: 1px solid var(--border);
-  flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.selection-menu-btn {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.selection-menu-btn:hover {
+  background: var(--surface);
 }
 
 /* ---------------------------------------------------------------------------
