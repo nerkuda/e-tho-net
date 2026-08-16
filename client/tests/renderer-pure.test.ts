@@ -181,8 +181,14 @@ describe('canvas zoom', () => {
     const font1 = cloudFontSize(200);
     const height1 = cloudHeight(200);
     assert.equal(cloudFontSize(200, 1.5), Math.round(font1 * 1.5 * 10) / 10);
-    // Borders stay constant (2px total), everything else scales.
-    assert.equal(cloudHeight(200, 2), Math.round((height1 - 2) * 2 + 2));
+    // Borders stay constant (2px total), everything else scales. The font is
+    // rounded to 0.1 px before the line math, so the scaled height may drift
+    // by 1 px at most.
+    const scaled = (height1 - 2) * 2 + 2;
+    assert.ok(
+      Math.abs(cloudHeight(200, 2) - scaled) <= 1,
+      `cloudHeight(200, 2) = ${cloudHeight(200, 2)}, expected ~${scaled}`,
+    );
   });
 
   it('cloudGeom rounds effective px sizes and keeps grid-consistent numbers', () => {

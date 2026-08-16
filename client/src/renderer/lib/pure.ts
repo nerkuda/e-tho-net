@@ -37,19 +37,21 @@ import {
 // Cloud geometry (11-settings-and-state.md §2.4)
 // ---------------------------------------------------------------------------
 
-/** Number of title lines in a simple (non-focus) cloud. */
-export const CLOUD_TITLE_LINES = 2;
+/** Minimum number of title lines in a cloud (short titles stay compact). */
+export const CLOUD_TITLE_LINES_MIN = 1;
+/** Maximum number of title lines in a cloud (long titles clamp with `…`). */
+export const CLOUD_TITLE_LINES = 3;
 
 /** Reference font sizes the cloud font scales between (px). */
 const CLOUD_FONT_MIN = 12;
 const CLOUD_FONT_MAX = 16;
 
 /** Vertical padding of the cloud main column, px (top and bottom). */
-export const CLOUD_PAD = 5;
+export const CLOUD_PAD = 3;
 /** Full height of a single ellipse thickening, px. */
-export const ELLIPSE_HEIGHT = 8;
+export const ELLIPSE_HEIGHT = 4;
 /** Portion of the ellipse inside the card — half of it lies on the frame. */
-export const ELLIPSE_INSIDE = 4;
+export const ELLIPSE_INSIDE = 2;
 /** Cloud border width, px. */
 export const CLOUD_BORDER = 1;
 /** Title line-height factor relative to the font size. */
@@ -74,16 +76,18 @@ export function cloudFontSize(width: number, zoom = 1): number {
 }
 
 /**
- * Fixed height of a simple cloud in px: 2 title lines + indicators line +
+ * Height of a simple cloud in px for `lines` title lines (default: the
+ * maximum) — the minimum (1 line) estimates not-yet-measured grid rows, the
+ * maximum sizes a fully expanded cloud: title lines + indicators line +
  * main-column paddings + the inside halves of the two on-frame ellipses +
  * borders. Not user-editable (11-settings-and-state.md §2.4). The font,
  * paddings and ellipses scale with the canvas zoom; the 1 px borders stay
  * constant (they are constant in CSS too). Stays ~1–3 px above the natural
- * DOM content height — the grid row is never shorter than the rendered cloud.
+ * DOM content height — a grid row is never shorter than the rendered cloud.
  */
-export function cloudHeight(width: number, zoom = 1): number {
+export function cloudHeight(width: number, zoom = 1, lines = CLOUD_TITLE_LINES): number {
   const font = cloudFontSize(width, zoom);
-  const title = font * TITLE_LINE_FACTOR * CLOUD_TITLE_LINES;
+  const title = font * TITLE_LINE_FACTOR * lines;
   const ind = font * IND_LINE_FACTOR;
   const pad = CLOUD_PAD * zoom;
   const ellipseInside = ELLIPSE_INSIDE * zoom;
@@ -124,7 +128,7 @@ export interface CloudGeom {
   gap: number;
   /** Effective title font size, px. */
   font: number;
-  /** Effective fixed cloud height, px. */
+  /** Effective cloud height at the maximum title lines, px. */
   height: number;
 }
 

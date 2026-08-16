@@ -58,10 +58,10 @@ const BADGE_TEXT_DY = 3.5;
 /** Label offset from the line midpoint, px at zoom 1. */
 const LABEL_OFFSET = 8;
 /** Y-offsets from a bounding edge to an ellipse center, px at zoom 1: the
- *  ellipses lie ON the cloud frame, so the center is half their 8px height
+ *  ellipses lie ON the cloud frame, so the center is half their 4px height
  *  inwards from the card edge (L12). */
-const ELLIPSE_TOP_DY = 4;
-const ELLIPSE_BOTTOM_DY = 4;
+const ELLIPSE_TOP_DY = 2;
+const ELLIPSE_BOTTOM_DY = 2;
 /** Bézier bend clamp range, px (L14): keeps short edges visibly curved and
  *  long edges from growing huge loops. */
 const BEND_MIN = 24;
@@ -91,6 +91,21 @@ let activePopoverBundle: Bundle | null = null;
 let opener: LinkEditorOpener | null = null;
 /** Bundle key currently under the cursor (transient). */
 let hoveredKey: string | null = null;
+/** Thought whose ellipse is hovered: its direction's visible links light up. */
+let ellipseHover: { thoughtId: string; direction: 'parent' | 'child' } | null = null;
+
+/**
+ * Highlights every visible link of one ellipse direction (wired by the canvas
+ * hover handlers): `parent` → links arriving at the thought, `child` → links
+ * leaving it. Redraws only the top overlay, so hover changes never rebuild the
+ * hit lines mid-click (08-ui-spec.md §2.4). Pass `null` to clear.
+ */
+export function setEllipseHover(
+  state: { thoughtId: string; direction: 'parent' | 'child' } | null,
+): void {
+  ellipseHover = state;
+  drawActive();
+}
 /** Endpoint ellipses currently highlighted, to clear on the next redraw. */
 let highlightedEllipses: HTMLElement[] = [];
 
@@ -227,6 +242,25 @@ function drawActive(): void {
   while (svgTop.firstChild !== null) svgTop.removeChild(svgTop.firstChild);
   clearEnds();
   const hostRect = hostEl.getBoundingClientRect();
+
+  // Links of a hovered ellipse (§2.4 hover highlight): every visible bundle
+  // arriving at (top ellipse) or leaving (bottom ellipse) the hovered thought.
+  if (ellipseHover !== null) {
+    for (const bundle of currentBundles()) {
+      const matches =
+        ellipseHover.direction === 'parent'
+          ? bundle.targetId === ellipseHover.thoughtId
+          : bundle.sourceId === ellipseHover.thoughtId;
+      if (!matches) continue;
+      const src = findCloudAnywhere(bundle.sourceId);
+      const tgt = findCloudAnywhere(bundle.targetId);
+      if (src === null || tgt === null || !isCloudVisible(src) || !isCloudVisible(tgt)) continue;
+      const from = ellipsePoint(src, 'bottom', hostRect);
+      const to = ellipsePoint(tgt, 'top', hostRect);
+      drawTopLine(bundle, from, to);
+    }
+  }
+
   const active = activeBundle(currentBundles());
   if (active !== null) {
     const src = findCloudAnywhere(active.sourceId);

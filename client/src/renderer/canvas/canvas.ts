@@ -6,9 +6,9 @@
  * - Four areas: parents (top-left), siblings (top-right), focus row (center),
  *   children (bottom, full width). Grid zones are virtualized (visible window +
  *   overscan inside a CSS grid over a full-height spacer, §2.1.1, §2.5).
- * - A cloud is: icon square + clamped title (2 lines, `…`, full text in the
+ * - A cloud is: icon square + clamped title (1–3 lines, `…`, full text in the
  *   tooltip) + indicators row (📝/📅/📎) + top/bottom ellipses (§2.2).
- * - The focus cloud has a variable width and up to 4 title lines (§2.2.2).
+ * - The focus cloud has a variable width and up to 3 title lines (§2.2.2).
  * - Cloud colors/styles come from the thought (own values win) falling back to
  *   the thought type catalogue; inactive thoughts are dimmed (§2.2).
  * - Click on a thought → focus (B1). Dragging from an ellipse: dropped on
@@ -24,9 +24,20 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
-import { cloudGeom, contrastText } from '../lib/pure.js';
+import {
+  CLOUD_TITLE_LINES_MIN,
+  cloudGeom,
+  cloudHeight,
+  contrastText,
+} from '../lib/pure.js';
 import { store } from '../state.js';
-import { initLinksOverlay, drawLinksNow, invalidateLinkCounts, LINK_LABEL_FONT_BASE } from './links.js';
+import {
+  initLinksOverlay,
+  drawLinksNow,
+  invalidateLinkCounts,
+  setEllipseHover,
+  LINK_LABEL_FONT_BASE,
+} from './links.js';
 import {
   captureClouds,
   playFocusTransition,
@@ -363,7 +374,7 @@ export function requestZoneAnimation(): void {
 }
 
 /**
- * Renders the focus cloud (08-ui-spec.md §2.2.2): variable width, up to 4
+ * Renders the focus cloud (08-ui-spec.md §2.2.2): variable width, up to 3
  * title lines, ellipses filled when incoming/outgoing links exist.
  */
 function renderFocusRow(focus: FocusResponse): void {
@@ -484,13 +495,26 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
 /** Renders a zone from the current focus data. */
 function renderZone(dir: 'parents' | 'siblings' | 'children', entries: ZoneEntry[]): void {
   zoneData.set(dir, entries);
+  // The entry set changed — per-row height measurements no longer apply
+  // (rows shift with the order and the column count).
+  rowHeights.delete(dir);
   renderZoneContent(dir);
 }
 
 /** Per-zone entry lists, kept between scroll-triggered re-renders. */
 const zoneData = new Map<'parents' | 'siblings' | 'children', ZoneEntry[]>();
 
-/** Renders the visible window of one zone (virtualized grid). */
+/**
+ * Measured heights of a zone's grid rows (px, gap excluded). Rows that were
+ * never rendered fall back to the one-line estimate; every render re-measures
+ * its visible rows and re-runs the layout once when anything changed, so the
+ * virtualization never diverges from the DOM. A cloud's height depends only
+ * on its title, the fixed cloud width and the zoom — deterministic per row,
+ * so the re-run converges immediately.
+ */
+const rowHeights = new Map<'parents' | 'siblings' | 'children', number[]>();
+
+/** Renders the visible window of one zone (virtualized grid, auto rows). */
 function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   if (zones === null) return;
   const zone = zones[dir];
@@ -504,7 +528,9 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   // same numbers live on the canvas host (applyCanvasScaleVars).
   const geom = cloudGeom(store.state.cloudWidth, store.state.cloudGap, store.state.canvasZoom);
   const cellW = geom.width + geom.gap;
-  const cellH = geom.height + geom.gap;
+  // Estimate for not-yet-measured rows: the minimum cloud height (1 title
+  // line) — most clouds render at it, so scrolling stays stable.
+  const estimate = cloudHeight(store.state.cloudWidth, store.state.canvasZoom, CLOUD_TITLE_LINES_MIN);
 
   if (entries.length === 0) {
     spacer.style.height = '0px';
@@ -518,28 +544,69 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   const avail = Math.max(80, zone.clientWidth - padding);
   const cols = Math.max(1, Math.floor(avail / cellW));
   const rows = Math.ceil(entries.length / cols);
+  const heights = rowHeights.get(dir) ?? [];
+  while (heights.length < rows) heights.push(estimate);
 
   grid.style.gridTemplateColumns = `repeat(${cols}, ${geom.width}px)`;
-  grid.style.gridAutoRows = `${geom.height}px`;
+  grid.style.gridAutoRows = 'auto'; // each row is as tall as its tallest cloud
   grid.style.columnGap = `${geom.gap}px`;
   grid.style.rowGap = `${geom.gap}px`;
 
-  const startRow = Math.max(0, Math.floor(zone.scrollTop / cellH) - OVERSCAN_ROWS);
-  const endRow = Math.min(
-    rows,
-    Math.ceil((zone.scrollTop + zone.clientHeight) / cellH) + OVERSCAN_ROWS,
-  );
+  // Row tops as prefix sums; the gap follows every row (incl. the last — the
+  // spacer keeps the same gap-sized overshoot as the old `rows * cellH`).
+  const prefix = new Array<number>(rows + 1);
+  let top = 0;
+  prefix[0] = 0;
+  for (let i = 0; i < rows; i++) {
+    top += (heights[i] ?? estimate) + geom.gap;
+    prefix[i + 1] = top;
+  }
 
-  spacer.style.height = `${rows * cellH}px`;
-  grid.style.transform = `translateY(${startRow * cellH}px)`;
+  let startRow = 0;
+  while (startRow + 1 < rows && prefix[startRow + 1]! <= zone.scrollTop) startRow++;
+  let endRow = startRow;
+  const windowBottom = zone.scrollTop + zone.clientHeight;
+  while (endRow < rows && prefix[endRow]! < windowBottom) endRow++;
+  startRow = Math.max(0, startRow - OVERSCAN_ROWS);
+  endRow = Math.min(rows, endRow + OVERSCAN_ROWS);
+
+  spacer.style.height = `${prefix[rows]!}px`;
+  grid.style.transform = `translateY(${prefix[startRow]!}px)`;
 
   clear(grid);
   const first = startRow * cols;
   const last = Math.min(entries.length, endRow * cols);
+  const rowClouds = new Map<number, HTMLElement[]>();
   for (let i = first; i < last; i++) {
     const entry = entries[i];
-    if (entry !== undefined) grid.append(buildCloud(entry, dir));
+    if (entry === undefined) continue;
+    const cloud = buildCloud(entry, dir);
+    const r = Math.floor(i / cols);
+    const clouds = rowClouds.get(r);
+    if (clouds === undefined) rowClouds.set(r, [cloud]);
+    else clouds.push(cloud);
+    grid.append(cloud);
   }
+
+  // Measure the rendered rows and re-run the layout once when any height
+  // changed (heights are deterministic — the re-run converges immediately).
+  let measured = false;
+  for (let r = startRow; r < endRow; r++) {
+    const clouds = rowClouds.get(r);
+    if (clouds === undefined) continue;
+    let h = estimate;
+    for (const cloud of clouds) h = Math.max(h, cloud.offsetHeight);
+    if (heights[r] !== h) {
+      heights[r] = h;
+      measured = true;
+    }
+  }
+  rowHeights.set(dir, heights);
+  if (measured) {
+    renderZoneContent(dir);
+    return;
+  }
+
   // Request indicators only AFTER the clouds are in the DOM: a cached value is
   // applied synchronously and would otherwise patch nothing (the focus row
   // loads it after mounting for the same reason).
@@ -848,12 +915,21 @@ export const canvasInternals = {
  * Wires a mouse-drag gesture on an ellipse. On release:
  *  - over another thought cloud → direct link creation;
  *  - anywhere else → the registered add-thought dialog opener.
+ *
+ * Hovering an ellipse highlights it and every visible link of its direction
+ * (the link overlay's {@link setEllipseHover}).
  */
 function wireEllipseDrag(
   ellipse: HTMLElement,
   anchorId: string,
   direction: 'parent' | 'child',
 ): void {
+  ellipse.addEventListener('mouseenter', () => {
+    setEllipseHover({ thoughtId: anchorId, direction });
+  });
+  ellipse.addEventListener('mouseleave', () => {
+    setEllipseHover(null);
+  });
   ellipse.addEventListener('mousedown', (event) => {
     if (event.button !== 0) return;
     // Ctrl+click on an ellipse adds all parents/children to the selection (H16).
