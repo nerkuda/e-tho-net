@@ -30,6 +30,7 @@ import { refreshFocus, requireNetworkId, scheduleRefresh } from '../app.js';
 import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
+import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
 import { canSave, clearDraft, findDraft, offlineNotice, saveDraft } from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -454,19 +455,35 @@ function isVersionConflict(err: unknown): boolean {
  */
 async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
   const networkId = requireNetworkId();
-  const focus = store.state.focus;
-  if (focus === null) return false;
+  const ctx = currentEditorContext();
+  if (ctx === null || ctx.ownerType !== 'thought' || ctx.thought === null) return false;
   try {
     const updated = await etn.thoughts.update(
       networkId,
-      focus.focused.id,
+      ctx.ownerId,
       patch,
-      focus.focused.version,
+      ctx.thought.version,
     );
-    store.update({ focus: { ...focus, focused: updated } });
+    // Reflect the change wherever the entity is shown: the canvas focus (the
+    // cloud repaints at once) and/or the structures view (the editor header
+    // re-renders, the results list reloads) — the actor gets no realtime echo,
+    // so both stores are patched from the save response.
+    const focus = store.state.focus;
+    if (focus !== null && focus.focused.id === ctx.ownerId) {
+      store.update({ focus: { ...focus, focused: updated } });
+    }
+    if (
+      store.state.editorTarget?.kind === 'thought' &&
+      store.state.editorTarget.id === ctx.ownerId
+    ) {
+      store.update({ structuresActiveThought: updated, structuresActiveThoughtId: ctx.ownerId });
+    }
     // A type change re-skins the focus cloud (type icon/colours) — reconcile
     // the whole focus from the server so nothing lags behind the patch.
     if (patch.type_id !== undefined) scheduleRefresh();
+    // The structures results list is server-rendered; reload it so the saved
+    // icon/title/type appear right away.
+    scheduleStructuresRefresh();
     return true;
   } catch (err) {
     if (isVersionConflict(err)) {
