@@ -559,7 +559,8 @@ POST   /api/v1/networks/{nid}/saved-filters        # Client-Request-Id
        { name: "Мои счета", definition: { keywords?, type_ids?, link_type_ids?,
          properties?, show_inactive?, sort, order } }
        → 201 { data: { id, name, definition, created_at, updated_at } }
-       # 409 DUPLICATE при повторном имени; definition валидируется как в §6.10
+       # name — 1..200 символов; 409 DUPLICATE при повторном имени;
+       # definition валидируется как в §6.10
 PATCH  /api/v1/networks/{nid}/saved-filters/{fid}  # Client-Request-Id; только свой
        { name?, definition? }                      # 409 при конфликте имени
 DELETE /api/v1/networks/{nid}/saved-filters/{fid}  # только свой
