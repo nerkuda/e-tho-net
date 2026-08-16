@@ -80,8 +80,12 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
           removeFromFocusHistoryEverywhere: (thoughtId: string) => {
             const nid = currentNetworkId;
             if (!nid) return;
+            // Both per-view histories (focus + structures, 11 §2.3.1).
+            const scopes = ['focus', 'structures'] as const;
             for (const saved of opts.localDb.listProfiles()) {
-              opts.localDb.removeFocusHistory(saved.id, nid, thoughtId);
+              for (const scope of scopes) {
+                opts.localDb.removeFocusHistory(saved.id, nid, thoughtId, scope);
+              }
             }
           },
           getCurrentFocusId: (nid: string) => {

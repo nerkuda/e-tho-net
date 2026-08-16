@@ -402,6 +402,9 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'user-focus-preferences.updated': 'обновлена сортировка зон',
   'user-focus-order.updated': 'обновлён порядок зоны',
   'thought-view.updated': 'обновлён просмотр',
+  'saved-filter.created': 'сохранён отбор',
+  'saved-filter.updated': 'изменён отбор',
+  'saved-filter.deleted': 'удалён отбор',
 };
 
 /**

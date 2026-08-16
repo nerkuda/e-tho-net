@@ -100,6 +100,24 @@ export interface FocusHistoryRow {
   visited_at: string;
 }
 
+/** Which view a visit history belongs to (docs/11-settings-and-state.md §2.3.1). */
+export type HistoryScope = 'focus' | 'structures';
+
+/** Physical table of a history scope (fixed map — never built from input). */
+const HISTORY_TABLES: Record<HistoryScope, string> = {
+  focus: 'focus_history',
+  structures: 'structures_history',
+};
+
+/** Resolve a scope to its table, rejecting unknown values from IPC input. */
+function historyTable(scope: HistoryScope): string {
+  const table = HISTORY_TABLES[scope];
+  if (table === undefined) {
+    throw new Error(`Unknown history scope: ${String(scope)}`);
+  }
+  return table;
+}
+
 /**
  * SQLite-backed local store. Instantiate one per application lifetime (main
  * process). Call {@link close} on quit to release the file handle.
@@ -306,46 +324,58 @@ export class LocalDb {
   }
 
   // -------------------------------------------------------------------------
-  // focus_history (L4, 07-client-electron.md §3.5, 11-settings-and-state.md §2.3)
+  // visit histories (L4, 07-client-electron.md §3.5, 11-settings-and-state.md §2.3)
   // -------------------------------------------------------------------------
 
   /**
-   * (Re)inserts a thought into focus history at the front (highest `seq`).
+   * (Re)inserts a thought into a visit history at the front (highest `seq`).
    * `INSERT OR REPLACE` keeps a single row per
    * `(profile_id, network_id, thought_id)`, bumping it to the most recent slot.
    */
-  public pushFocusHistory(profileId: string, networkId: string, thoughtId: string): void {
+  public pushFocusHistory(
+    profileId: string,
+    networkId: string,
+    thoughtId: string,
+    scope: HistoryScope = 'focus',
+  ): void {
+    const table = historyTable(scope);
     this.db
       .prepare(
-        'INSERT OR REPLACE INTO focus_history (profile_id, network_id, thought_id, seq, visited_at) ' +
+        `INSERT OR REPLACE INTO ${table} (profile_id, network_id, thought_id, seq, visited_at) ` +
           'VALUES (?, ?, ?, ' +
-          '(SELECT COALESCE(MAX(seq), 0) + 1 FROM focus_history WHERE profile_id = ? AND network_id = ?), ' +
+          `(SELECT COALESCE(MAX(seq), 0) + 1 FROM ${table} WHERE profile_id = ? AND network_id = ?), ` +
           "strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
       )
       .run(profileId, networkId, thoughtId, profileId, networkId);
   }
 
-  /** Removes a single thought from focus history (no-op if absent). */
-  public removeFocusHistory(profileId: string, networkId: string, thoughtId: string): void {
+  /** Removes a single thought from a visit history (no-op if absent). */
+  public removeFocusHistory(
+    profileId: string,
+    networkId: string,
+    thoughtId: string,
+    scope: HistoryScope = 'focus',
+  ): void {
     this.db
       .prepare(
-        'DELETE FROM focus_history WHERE profile_id = ? AND network_id = ? AND thought_id = ?',
+        `DELETE FROM ${historyTable(scope)} WHERE profile_id = ? AND network_id = ? AND thought_id = ?`,
       )
       .run(profileId, networkId, thoughtId);
   }
 
   /**
-   * Returns the ordered list of focus-history `thought_id`s, freshest first.
+   * Returns the ordered list of history `thought_id`s, freshest first.
    * Defaults to {@link FOCUS_HISTORY_LIMIT} entries.
    */
   public listFocusHistory(
     profileId: string,
     networkId: string,
     limit = FOCUS_HISTORY_LIMIT,
+    scope: HistoryScope = 'focus',
   ): string[] {
     const rows = this.db
       .prepare(
-        'SELECT thought_id FROM focus_history WHERE profile_id = ? AND network_id = ? ' +
+        `SELECT thought_id FROM ${historyTable(scope)} WHERE profile_id = ? AND network_id = ? ` +
           'ORDER BY seq DESC LIMIT ?',
       )
       .all(profileId, networkId, limit) as { thought_id: string }[];
@@ -366,25 +396,27 @@ export class LocalDb {
     networkId: string,
     oldId: string | null,
     newId: string,
+    scope: HistoryScope = 'focus',
   ): void {
     if (oldId === newId) return;
-    const tx = this.db.transaction((p: string, n: string, old: string | null, newIdTx: string) => {
-      this.db
-        .prepare(
-          'DELETE FROM focus_history WHERE profile_id = ? AND network_id = ? AND thought_id = ?',
-        )
-        .run(p, n, newIdTx);
-      if (old !== null) {
-        this.pushFocusHistory(p, n, old);
-      }
-      this.db
-        .prepare(
-          'DELETE FROM focus_history WHERE profile_id = ? AND network_id = ? ' +
-            'AND seq NOT IN (SELECT seq FROM focus_history WHERE profile_id = ? AND network_id = ? ' +
-            'ORDER BY seq DESC LIMIT ?)',
-        )
-        .run(p, n, p, n, FOCUS_HISTORY_LIMIT);
-    });
+    const table = historyTable(scope);
+    const tx = this.db.transaction(
+      (p: string, n: string, old: string | null, newIdTx: string) => {
+        this.db
+          .prepare(`DELETE FROM ${table} WHERE profile_id = ? AND network_id = ? AND thought_id = ?`)
+          .run(p, n, newIdTx);
+        if (old !== null) {
+          this.pushFocusHistory(p, n, old, scope);
+        }
+        this.db
+          .prepare(
+            `DELETE FROM ${table} WHERE profile_id = ? AND network_id = ? ` +
+              `AND seq NOT IN (SELECT seq FROM ${table} WHERE profile_id = ? AND network_id = ? ` +
+              'ORDER BY seq DESC LIMIT ?)',
+          )
+          .run(p, n, p, n, FOCUS_HISTORY_LIMIT);
+      },
+    );
     tx(profileId, networkId, oldId, newId);
   }
 

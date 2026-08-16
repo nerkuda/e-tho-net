@@ -249,6 +249,60 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
 
+  // --- structures & saved filters (L15) --------------------------------------
+  handlers.set(
+    'structures.query',
+    bind(
+      (networkId: string, request: Parameters<RestClient['queryStructureThoughts']>[1]) =>
+        requireRest(deps).queryStructureThoughts(networkId, request),
+    ),
+  );
+  handlers.set(
+    'structures.hierarchy',
+    bind(
+      (
+        networkId: string,
+        thoughtId: string,
+        query: Parameters<RestClient['getHierarchy']>[2],
+      ) => requireRest(deps).getHierarchy(networkId, thoughtId, query),
+    ),
+  );
+  handlers.set(
+    'savedFilters.list',
+    bind((networkId: string) => requireRest(deps).listSavedFilters(networkId)),
+  );
+  handlers.set(
+    'savedFilters.create',
+    bind((networkId: string, input: Parameters<RestClient['createSavedFilter']>[1]) => {
+      // Idempotency: a fresh Client-Request-Id per user action; the server
+      // caches the response for retries of the same logical call.
+      return requireRest(deps).createSavedFilter(networkId, input, {
+        clientRequestId: randomUUID(),
+      });
+    }),
+  );
+  handlers.set(
+    'savedFilters.update',
+    bind(
+      (
+        networkId: string,
+        filterId: string,
+        input: Parameters<RestClient['updateSavedFilter']>[2],
+      ) =>
+        requireRest(deps).updateSavedFilter(networkId, filterId, input, {
+          clientRequestId: randomUUID(),
+        }),
+    ),
+  );
+  handlers.set(
+    'savedFilters.remove',
+    bind((networkId: string, filterId: string) =>
+      requireRest(deps).deleteSavedFilter(networkId, filterId, {
+        clientRequestId: randomUUID(),
+      }),
+    ),
+  );
+
   // --- links ----------------------------------------------------------------
   handlers.set(
     'links.get',
@@ -711,38 +765,51 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'history.list',
-    bind((profileId: string, networkId: string, limit?: number) =>
-      deps.localDb
-        .listFocusHistory(profileId, networkId, limit)
-        .map((thoughtId) => ({ thoughtId, visitedAt: '' })),
+    bind(
+      (
+        profileId: string,
+        networkId: string,
+        limit?: number,
+        scope?: Parameters<LocalDb['listFocusHistory']>[3],
+      ) =>
+        deps.localDb
+          .listFocusHistory(profileId, networkId, limit, scope)
+          .map((thoughtId) => ({ thoughtId, visitedAt: '' })),
     ),
   );
   handlers.set(
     'history.push',
-    bind((profileId: string, networkId: string, thoughtId: string) => {
-      deps.localDb.pushFocusHistory(profileId, networkId, thoughtId);
-    }),
+    bind(
+      (
+        profileId: string,
+        networkId: string,
+        thoughtId: string,
+        scope?: Parameters<LocalDb['pushFocusHistory']>[3],
+      ) => {
+        deps.localDb.pushFocusHistory(profileId, networkId, thoughtId, scope);
+      },
+    ),
   );
   handlers.set(
     'history.rotate',
-    bind((oldId: string | null, newId: string) => {
+    bind((oldId: string | null, newId: string, scope?: Parameters<LocalDb['rotateFocusHistory']>[4]) => {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
         throw new Error('Not connected: call etn.server.connect and open a network first');
       }
-      deps.localDb.rotateFocusHistory(profile.id, networkId, oldId, newId);
+      deps.localDb.rotateFocusHistory(profile.id, networkId, oldId, newId, scope);
     }),
   );
   handlers.set(
     'history.remove',
-    bind((thoughtId: string) => {
+    bind((thoughtId: string, scope?: Parameters<LocalDb['removeFocusHistory']>[3]) => {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
         throw new Error('Not connected: call etn.server.connect and open a network first');
       }
-      deps.localDb.removeFocusHistory(profile.id, networkId, thoughtId);
+      deps.localDb.removeFocusHistory(profile.id, networkId, thoughtId, scope);
     }),
   );
   handlers.set(

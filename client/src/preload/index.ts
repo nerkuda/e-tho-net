@@ -64,6 +64,18 @@ function buildApi(): EtnApi {
       setFocusOrder: (networkId, focusId, input) =>
         invoke('thoughts.setFocusOrder', networkId, focusId, input),
     },
+    structures: {
+      query: (networkId, request) => invoke('structures.query', networkId, request),
+      hierarchy: (networkId, thoughtId, query) =>
+        invoke('structures.hierarchy', networkId, thoughtId, query),
+    },
+    savedFilters: {
+      list: (networkId) => invoke('savedFilters.list', networkId),
+      create: (networkId, input) => invoke('savedFilters.create', networkId, input),
+      update: (networkId, filterId, input) =>
+        invoke('savedFilters.update', networkId, filterId, input),
+      remove: (networkId, filterId) => invoke('savedFilters.remove', networkId, filterId),
+    },
     links: {
       get: (networkId, id) => invoke('links.get', networkId, id),
       create: (networkId, input) => invoke('links.create', networkId, input),
@@ -176,11 +188,12 @@ function buildApi(): EtnApi {
       set: (key, value) => invoke('meta.set', key, value),
     },
     history: {
-      list: (profileId, networkId, limit) => invoke('history.list', profileId, networkId, limit),
-      push: (profileId, networkId, thoughtId) =>
-        invoke('history.push', profileId, networkId, thoughtId),
-      rotate: (oldId, newId) => invoke('history.rotate', oldId, newId),
-      remove: (thoughtId) => invoke('history.remove', thoughtId),
+      list: (profileId, networkId, limit, scope) =>
+        invoke('history.list', profileId, networkId, limit, scope),
+      push: (profileId, networkId, thoughtId, scope) =>
+        invoke('history.push', profileId, networkId, thoughtId, scope),
+      rotate: (oldId, newId, scope) => invoke('history.rotate', oldId, newId, scope),
+      remove: (thoughtId, scope) => invoke('history.remove', thoughtId, scope),
     },
     system: {
       health: () => invoke('system.health'),

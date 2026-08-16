@@ -1271,6 +1271,99 @@ export class RestClient {
   }
 
   // -------------------------------------------------------------------------
+  // §6.10/§6.11/§18 Structures view (L15)
+  // -------------------------------------------------------------------------
+
+  /**
+   * `POST /networks/{nid}/thoughts/query` — filter thoughts for the structures
+   * view. Returns the page items plus the unrestricted `total` from the list
+   * envelope meta (read via {@link lastMeta}, same call).
+   */
+  public async queryStructureThoughts(
+    networkId: string,
+    request: import('@etn/shared').StructureQueryRequest,
+  ): Promise<{ items: import('@etn/shared').ThoughtRef[]; total: number }> {
+    const items = await this.request<import('@etn/shared').ThoughtRef[]>(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
+      { body: request },
+    );
+    const total = (this.lastMeta as { total?: number } | undefined)?.total;
+    return { items, total: typeof total === 'number' ? total : items.length };
+  }
+
+  /**
+   * `GET /networks/{nid}/thoughts/{id}/hierarchy` — one-level parents/children
+   * for the structures tree. `excludeIds` implements the per-branch dedup
+   * (03-server-api.md §6.11), sent comma-separated.
+   */
+  public async getHierarchy(
+    networkId: string,
+    thoughtId: string,
+    query: { dir: 'parents' | 'children'; showInactive?: boolean; excludeIds?: string[] },
+  ): Promise<import('@etn/shared').HierarchyResponse> {
+    const q: QueryRecord = { dir: query.dir };
+    if (query.showInactive !== undefined) q['show_inactive'] = query.showInactive;
+    if (query.excludeIds !== undefined && query.excludeIds.length > 0) {
+      q['exclude_ids'] = query.excludeIds.join(',');
+    }
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/hierarchy`,
+      { query: q },
+    );
+  }
+
+  /** `GET /networks/{nid}/saved-filters` — the user's own saved filters. */
+  public async listSavedFilters(
+    networkId: string,
+  ): Promise<import('@etn/shared').SavedFilter[]> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/saved-filters`);
+  }
+
+  /** `POST /networks/{nid}/saved-filters` — create (idempotent). */
+  public async createSavedFilter(
+    networkId: string,
+    input: { name: string; definition: import('@etn/shared').SavedFilterDefinition },
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').SavedFilter> {
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
+      body: input,
+      requestOptions: opts,
+    });
+  }
+
+  /** `PATCH /networks/{nid}/saved-filters/{fid}` — rename / redefine (idempotent). */
+  public async updateSavedFilter(
+    networkId: string,
+    filterId: string,
+    input: {
+      name?: string;
+      definition?: import('@etn/shared').SavedFilterDefinition;
+    },
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').SavedFilter> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/saved-filters/${encodeURIComponent(filterId)}`,
+      { body: input, requestOptions: opts },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/saved-filters/{fid}` — delete (idempotent). */
+  public async deleteSavedFilter(
+    networkId: string,
+    filterId: string,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/saved-filters/${encodeURIComponent(filterId)}`,
+      { requestOptions: opts },
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // §14 Export & jobs
   // -------------------------------------------------------------------------
 

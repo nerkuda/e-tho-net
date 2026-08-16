@@ -11,6 +11,8 @@
  * sees the API-key and never touches the network itself.
  */
 
+import type { DraftStatus } from '../db/local-db.js';
+
 import type {
   ApiKey,
   Attachment,
@@ -31,6 +33,7 @@ import type {
   FocusPreferencesInput,
   FocusResponse,
   HealthResponse,
+  HierarchyResponse,
   Link,
   LinkCreateInput,
   LinkType,
@@ -45,8 +48,11 @@ import type {
   PropertyDefinitionInput,
   PropertyDefinitionUpdateInput,
   PropertyValue,
+  SavedFilter,
+  SavedFilterDefinition,
   SearchRequest,
   SearchResponse,
+  StructureQueryRequest,
   Thought,
   ThoughtBatchInput,
   ThoughtBatchResult,
@@ -65,8 +71,6 @@ import type {
   VersionResponse,
 } from '@etn/shared';
 
-import type { DraftStatus } from '../db/local-db.js';
-
 /** Payload of the single `etn:invoke` channel used by the preload bridge. */
 export interface IpcInvokePayload {
   /** Domain-qualified method name, e.g. `thoughts.get`. */
@@ -83,6 +87,9 @@ export interface FocusHistoryEntry {
   thoughtId: string;
   visitedAt: string;
 }
+
+/** Which view's visit history a `history.*` call addresses (L15, 11 §2.3.1). */
+export type HistoryScope = 'focus' | 'structures';
 
 /** How a duplicate candidate matched the proposed title (add-thought dialog). */
 export type DuplicateMatchKind = 'title' | 'synonym' | 'partial';
@@ -199,6 +206,35 @@ export interface EtnApi {
       input: FocusPreferencesInput,
     ): Promise<UserFocusPreferences>;
     setFocusOrder(networkId: string, focusId: string, input: FocusOrderInput): Promise<void>;
+  };
+  structures: {
+    /** `POST /thoughts/query` — filter thoughts of the structures view (L15). */
+    query(
+      networkId: string,
+      request: StructureQueryRequest,
+    ): Promise<{ items: ThoughtRef[]; total: number }>;
+    /**
+     * `GET /thoughts/{id}/hierarchy` — one-level parents/children with
+     * per-branch dedup via `excludeIds`.
+     */
+    hierarchy(
+      networkId: string,
+      thoughtId: string,
+      query: { dir: 'parents' | 'children'; showInactive?: boolean; excludeIds?: string[] },
+    ): Promise<HierarchyResponse>;
+  };
+  savedFilters: {
+    list(networkId: string): Promise<SavedFilter[]>;
+    create(
+      networkId: string,
+      input: { name: string; definition: SavedFilterDefinition },
+    ): Promise<SavedFilter>;
+    update(
+      networkId: string,
+      filterId: string,
+      input: { name?: string; definition?: SavedFilterDefinition },
+    ): Promise<SavedFilter>;
+    remove(networkId: string, filterId: string): Promise<void>;
   };
   links: {
     get(networkId: string, id: string): Promise<Link>;
@@ -392,20 +428,30 @@ export interface EtnApi {
     set(key: string, value: string): Promise<void>;
   };
   history: {
-    list(profileId: string, networkId: string, limit?: number): Promise<FocusHistoryEntry[]>;
-    push(profileId: string, networkId: string, thoughtId: string): Promise<void>;
+    list(
+      profileId: string,
+      networkId: string,
+      limit?: number,
+      scope?: HistoryScope,
+    ): Promise<FocusHistoryEntry[]>;
+    push(
+      profileId: string,
+      networkId: string,
+      thoughtId: string,
+      scope?: HistoryScope,
+    ): Promise<void>;
     /**
      * Rotates focus history on a focus change `oldId → newId` in one local
      * transaction (11-settings-and-state.md §2.3, H7). Uses the active profile
      * and the currently open network.
      */
-    rotate(oldId: string | null, newId: string): Promise<void>;
+    rotate(oldId: string | null, newId: string, scope?: HistoryScope): Promise<void>;
     /**
-     * Drops a thought from the focus history of the active profile/network —
+     * Drops a thought from a visit history of the active profile/network —
      * the actor-side companion of the applier's prune on `thought.deleted`
      * (the server sends no realtime echo to the deleting client, L4).
      */
-    remove(thoughtId: string): Promise<void>;
+    remove(thoughtId: string, scope?: HistoryScope): Promise<void>;
   };
   system: {
     health(): Promise<HealthResponse>;
