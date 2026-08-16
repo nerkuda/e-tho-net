@@ -23,6 +23,7 @@ import type { Comment } from './comment.js';
 import type { Attachment } from './attachment.js';
 import type { Thought, ThoughtUpdateInput } from './thought.js';
 import type { PropertyDefinition, PropertyValueValue, ThoughtType } from './thought-type.js';
+import type { SavedFilter } from './structure.js';
 
 // ---------------------------------------------------------------------------
 // Envelope
@@ -91,6 +92,9 @@ export const REALTIME_EVENT_TYPES = [
   'user-focus-preferences.updated',
   'user-focus-order.updated',
   'thought-view.updated',
+  'saved-filter.created',
+  'saved-filter.updated',
+  'saved-filter.deleted',
 ] as const;
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];
 
@@ -260,6 +264,15 @@ export interface ThoughtViewUpdatedData {
   thought_id: string;
   last_viewed_at: string;
 }
+export interface SavedFilterCreatedData {
+  filter: SavedFilter;
+}
+export interface SavedFilterUpdatedData {
+  filter: SavedFilter;
+}
+export interface SavedFilterDeletedData {
+  id: string;
+}
 
 /**
  * Maps each {@link RealtimeEventType} to its `data` payload type.
@@ -302,6 +315,9 @@ export interface RealtimeEventMap {
   'user-focus-preferences.updated': UserFocusPreferencesUpdatedData;
   'user-focus-order.updated': UserFocusOrderUpdatedData;
   'thought-view.updated': ThoughtViewUpdatedData;
+  'saved-filter.created': SavedFilterCreatedData;
+  'saved-filter.updated': SavedFilterUpdatedData;
+  'saved-filter.deleted': SavedFilterDeletedData;
 }
 
 /** Strongly-typed event envelope for a specific event name. */
@@ -368,6 +384,9 @@ export const REALTIME_EVENT_AUDIENCE = {
   'user-focus-preferences.updated': 'user',
   'user-focus-order.updated': 'user',
   'thought-view.updated': 'user',
+  'saved-filter.created': 'user',
+  'saved-filter.updated': 'user',
+  'saved-filter.deleted': 'user',
 } as const satisfies Record<RealtimeEventType, RealtimeAudience>;
 
 // ---------------------------------------------------------------------------

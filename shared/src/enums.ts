@@ -80,6 +80,18 @@ export type SortKind = (typeof SORT_KINDS)[number];
 export const SORT_ORDERS = ['asc', 'desc'] as const;
 export type SortOrder = (typeof SORT_ORDERS)[number];
 
+/**
+ * Sort kinds available to the structures query (03-server-api.md §6.10).
+ * A subset of {@link SORT_KINDS}: `manual` has no global meaning outside a
+ * focus zone, so it is not accepted.
+ */
+export const STRUCTURE_SORTS = ['alpha', 'created', 'viewed'] as const;
+export type StructureSort = (typeof STRUCTURE_SORTS)[number];
+
+/** Comparison ops of a structures property condition (03-server-api.md §6.10). */
+export const STRUCTURE_PROPERTY_OPS = ['eq', 'contains', 'gt', 'lt', 'in', 'not_in'] as const;
+export type StructurePropertyOp = (typeof STRUCTURE_PROPERTY_OPS)[number];
+
 /** Who receives a real-time event (04-realtime.md §3, 11-settings-and-state.md §4). */
 export const REALTIME_AUDIENCES = ['network', 'user'] as const;
 export type RealtimeAudience = (typeof REALTIME_AUDIENCES)[number];

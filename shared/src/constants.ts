@@ -139,6 +139,8 @@ export const UI_STATE_KEY = {
   CANVAS_LAYOUT: 'canvas_layout',
   CANVAS_ZOOM: 'canvas_zoom',
   LAST_USED_LINK_TYPE_ID: 'last_used_link_type_id',
+  ACTIVE_VIEW: 'active_view',
+  STRUCTURES_STATE: 'structures_state',
 } as const satisfies Record<string, string>;
 export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];
 
@@ -199,3 +201,22 @@ export const TRAVERSAL_DEFAULTS = {
 
 /** Maximum number of ids accepted by `POST /thoughts/resolve` (03-server-api.md §6.9). */
 export const THOUGHT_RESOLVE_MAX_IDS = 100;
+
+// ---------------------------------------------------------------------------
+// «Структуры мыслей» view (L15)
+// ---------------------------------------------------------------------------
+
+/** Page size of the structures result list and the «Показать ещё» step (08-ui-spec.md §15.4). */
+export const STRUCTURES_PAGE_SIZE = 100;
+
+/** Hard maximum of `limit` in `POST /thoughts/query` (03-server-api.md §6.10). */
+export const STRUCTURES_QUERY_MAX_LIMIT = 100;
+
+/** Max neighbors returned per hierarchy expansion node (03-server-api.md §6.11). */
+export const STRUCTURES_NODE_NEIGHBORS_LIMIT = 100;
+
+/** Max ids accepted in hierarchy `exclude_ids` (03-server-api.md §6.11). */
+export const HIERARCHY_EXCLUDE_MAX_IDS = 1000;
+
+/** Maximum length of a saved filter name (03-server-api.md §18). */
+export const SAVED_FILTER_NAME_MAX = 200;

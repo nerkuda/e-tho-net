@@ -12,6 +12,7 @@ export * from './link-type.js';
 export * from './comment.js';
 export * from './attachment.js';
 export * from './search.js';
+export * from './structure.js';
 export * from './realtime.js';
 export * from './api.js';
 export * from './mcp.js';
