@@ -937,13 +937,15 @@ export function focus(
     children: [],
     siblings: [],
   };
-  // Read the orderable zones' sort preferences once; siblings is not orderable.
+  // Read the stored sort preferences per zone; siblings is not manually
+  // orderable but does store a sort/order selection (03-server-api.md §6.8).
   const parentPref = readFocusPref(ndb, userId, thoughtId, 'parents');
   const childPref = readFocusPref(ndb, userId, thoughtId, 'children');
+  const siblingPref = readFocusPref(ndb, userId, thoughtId, 'siblings');
   const prefs: Record<FocusDir, { sort: SortKind; order: SortOrder } | null> = {
     parents: parentPref,
     children: childPref,
-    siblings: null,
+    siblings: siblingPref,
   };
   for (const dir of dirs) {
     grouped[dir] = getNeighbors(ndb, thoughtId, dir, {

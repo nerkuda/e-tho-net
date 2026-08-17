@@ -32,6 +32,7 @@ import {
   resolveThoughts,
   updateThought,
 } from '../src/domain/thought-service.js';
+import { setFocusPreferences } from '../src/domain/focus-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -487,6 +488,42 @@ describe(
             `${focusId}->${c2}`,
             `${p}->${sib}`,
           ].sort());
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('applies the stored sort preference to the siblings zone', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          // Graph: P -> FOCUS, P -> SIB-A, P -> SIB-B (both siblings of FOCUS).
+          const p = seedThought(ndb, { title: 'Parent' });
+          const focusId = seedThought(ndb, { title: 'Focus' });
+          const sibA = seedThought(ndb, { title: 'SibA' });
+          const sibB = seedThought(ndb, { title: 'SibB' });
+          seedLink(ndb, p, focusId);
+          seedLink(ndb, p, sibA);
+          seedLink(ndb, p, sibB);
+          // Deterministic creation order (seedThought shares one millisecond).
+          ndb.prepare('UPDATE thoughts SET created_at = ? WHERE id = ?')
+            .run('2024-01-01T00:00:01Z', sibA);
+          ndb.prepare('UPDATE thoughts SET created_at = ? WHERE id = ?')
+            .run('2024-01-01T00:00:02Z', sibB);
+
+          // Default: created/asc — SIB-A created before SIB-B.
+          assert.deepEqual(focus(ndb, USER, focusId).siblings.map((n) => n.id), [sibA, sibB]);
+
+          // The stored siblings preference must drive the zone order.
+          setFocusPreferences(ndb, USER, focusId, {
+            dir: 'siblings',
+            sort: 'alpha',
+            order: 'desc',
+          });
+          assert.deepEqual(
+            focus(ndb, USER, focusId).siblings.map((n) => n.id),
+            [sibB, sibA],
+            'siblings zone must honour the stored alpha/desc preference',
+          );
         } finally {
           ndb.close();
         }
