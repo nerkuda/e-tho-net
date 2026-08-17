@@ -186,6 +186,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   wireCloudDrag(host, {
     getZoneEl: (dir) => zones?.[dir] ?? null,
     getZoneOrder: (dir) => store.state.zoneOrder[dir],
+    getZoneGrid: (dir) => zoneGridOf(dir),
   });
   // A click not on a link line clears the sticky link selection and returns the
   // editor to the focused thought (editorTarget=null → editor follows the focus).
@@ -506,6 +507,21 @@ function renderZone(dir: 'parents' | 'siblings' | 'children', entries: ZoneEntry
 /** Per-zone entry lists, kept between scroll-triggered re-renders. */
 const zoneData = new Map<'parents' | 'siblings' | 'children', ZoneEntry[]>();
 
+/** Column-major grid geometry of a zone (cols × rows, 08-ui-spec.md §2.1.1). */
+function zoneGridOf(dir: 'parents' | 'siblings' | 'children'): {
+  cols: number;
+  rows: number;
+} | null {
+  const zone = zones?.[dir];
+  if (zone === null || zone === undefined) return null;
+  const entries = zoneData.get(dir) ?? [];
+  const geom = cloudGeom(store.state.cloudWidth, store.state.cloudGap, store.state.canvasZoom);
+  const cellW = geom.width + geom.gap;
+  const avail = Math.max(80, zone.clientWidth - 24);
+  const cols = Math.max(1, Math.floor(avail / cellW));
+  return { cols, rows: Math.ceil(entries.length / cols) };
+}
+
 /**
  * Measured heights of a zone's grid rows (px, gap excluded). Rows that were
  * never rendered fall back to the one-line estimate; every render re-measures
@@ -542,10 +558,9 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   }
   empty.classList.add('hidden');
 
-  const padding = 24; // zone padding (12px each side)
-  const avail = Math.max(80, zone.clientWidth - padding);
-  const cols = Math.max(1, Math.floor(avail / cellW));
-  const rows = Math.ceil(entries.length / cols);
+  const gridInfo = zoneGridOf(dir);
+  if (gridInfo === null) return;
+  const { cols, rows } = gridInfo;
   const heights = rowHeights.get(dir) ?? [];
   while (heights.length < rows) heights.push(estimate);
 
@@ -935,7 +950,11 @@ function wireEllipseDrag(
   anchorId: string,
   direction: 'parent' | 'child',
 ): void {
-  ellipse.addEventListener('mouseenter', () => {
+  ellipse.addEventListener('mouseenter', (event) => {
+    // Ctrl+Shift is the zone reorder drag — hovering an ellipse must not
+    // highlight it or its links: only the clouds matter for the insertion
+    // preview.
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey) return;
     setEllipseHover({ thoughtId: anchorId, direction });
   });
   ellipse.addEventListener('mouseleave', () => {

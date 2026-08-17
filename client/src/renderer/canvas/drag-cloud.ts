@@ -85,6 +85,8 @@ export interface DragAccessors {
   getZoneEl: (dir: ZoneDir) => HTMLElement | null;
   /** Full ordered thought-id list of an orderable zone (deduped, display order). */
   getZoneOrder: (dir: OrderableDir) => string[];
+  /** Column-major grid geometry (cols × rows) of an orderable zone, or null. */
+  getZoneGrid: (dir: OrderableDir) => { cols: number; rows: number } | null;
 }
 
 let gesture: CloudDragGesture | null = null;
@@ -418,18 +420,27 @@ function updateReorderPreview(target: DropTarget, dragged: DraggedCloud, acc: Dr
   const grid = zone.querySelector<HTMLElement>('.zone-grid');
   const source = gesture?.source ?? null;
   if (grid === null || source === null) return;
+  const gridInfo = accessors?.getZoneGrid(dragged.dir) ?? null;
+  if (gridInfo === null) return;
+  const { cols, rows } = gridInfo;
 
-  // Grid position among the rendered (visible-window) clouds: before the first
-  // cloud whose full-order index is >= the insertion index.
+  // The placeholder occupies the grid slot the inserted thought will land on —
+  // column-major order (08-ui-spec.md §2.1.1): entry k sits at slot
+  // (k % rows) * cols + floor(k / rows). The rendered clouds are ordered by
+  // slot, so the placeholder goes right after the last cloud whose slot is
+  // still below the target one (a sparse final column keeps its gap).
+  const slot = (index % rows) * cols + Math.floor(index / rows);
   const order = acc.getZoneOrder(dragged.dir).filter((x) => x !== dragged.id);
   const children = Array.from(grid.children);
-  let pos = children.length;
-  for (let i = 0; i < children.length; i++) {
-    const id = (children[i] as HTMLElement).dataset['id'];
-    if (id !== undefined && order.indexOf(id) >= index) {
-      pos = i;
-      break;
-    }
+  let pos = 0;
+  for (const child of children) {
+    const id = (child as HTMLElement).dataset['id'];
+    if (id === undefined) continue;
+    const entryIndex = order.indexOf(id);
+    if (entryIndex < 0) continue;
+    const entrySlot = (entryIndex % rows) * cols + Math.floor(entryIndex / rows);
+    if (entrySlot >= slot) break;
+    pos++;
   }
 
   // Mini-FLIP: the clouds from the insertion point on shift aside.
