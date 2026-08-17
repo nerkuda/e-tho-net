@@ -313,6 +313,15 @@ function buildThoughtMenuItems(
       disabled: clipboard === null,
       onClick: () => void pasteTo(networkId, target.id),
     },
+    {
+      label: 'Копировать ID',
+      onClick: () => {
+        void navigator.clipboard.writeText(target.id).then(
+          () => notice('ID мысли скопирован.'),
+          () => notice('Не удалось скопировать ID.', 'error'),
+        );
+      },
+    },
     MENU_SEPARATOR,
     {
       label: 'Удалить',

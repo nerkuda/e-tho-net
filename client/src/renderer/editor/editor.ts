@@ -689,7 +689,19 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   });
   activeLabel.append(activeCheck, span('актуально'));
 
-  row.append(typeCombo.root, settingsBtn, activeLabel);
+  // The thought id sits next to the active toggle; a click copies it to the
+  // clipboard so the user can hand it to an agent without retyping a search.
+  const idLabel = el('button', 'thought-id-label', thought.id);
+  idLabel.type = 'button';
+  setTooltip(idLabel, 'Копировать ID мысли');
+  idLabel.addEventListener('click', () => {
+    void navigator.clipboard.writeText(thought.id).then(
+      () => notice('ID мысли скопирован.'),
+      () => notice('Не удалось скопировать ID.', 'error'),
+    );
+  });
+
+  row.append(typeCombo.root, settingsBtn, activeLabel, idLabel);
   box.append(row);
 
   // The title height depends on layout; size it once mounted.
