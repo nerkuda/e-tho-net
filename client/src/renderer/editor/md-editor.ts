@@ -25,6 +25,8 @@ export interface MdEditorCallbacks {
   onInput?: (md: string) => void;
   /** Esc pressed while the autocomplete dropdown is closed. */
   onEscape?: () => void;
+  /** Ctrl/Cmd+Enter: commit the edit and return to the view. */
+  onCommit?: () => void;
   /** Focus left the editor (commit point of the field). */
   onBlur?: () => void;
 }
@@ -88,7 +90,9 @@ const CODE_LANG_ALIASES = new Set([
 const codeLanguages = languages.filter((l) => l.alias?.some((a) => CODE_LANG_ALIASES.has(a)));
 
 const mdTheme = EditorView.theme({
-  '&': { backgroundColor: 'transparent', fontSize: '13px' },
+  // Размер шрифта через переменную — масштабирование Ctrl+колесом (M9)
+  // действует сразу на все поля.
+  '&': { backgroundColor: 'transparent', fontSize: 'var(--md-font-size)' },
   '.cm-content': {
     fontFamily: 'inherit',
     lineHeight: '1.55',
@@ -118,7 +122,8 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
       doc: initial,
       extensions: [
         // Esc cancels the edit (unless the autocomplete dropdown is open —
-        // then the completion keymap closes it first).
+        // then the completion keymap closes it first). Ctrl/Cmd+Enter
+        // commits and returns to the view (M10).
         keymap.of([
           {
             key: 'Escape',
@@ -128,10 +133,18 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
               return true;
             },
           },
+          {
+            key: 'Mod-Enter',
+            run: () => {
+              cb.onCommit?.();
+              return true;
+            },
+          },
           indentWithTab,
         ]),
         history(),
         drawSelection(),
+        EditorView.lineWrapping,
         syntaxHighlighting(mdHighlightStyle, { fallback: true }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) cb.onInput?.(update.state.doc.toString());

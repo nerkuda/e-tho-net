@@ -13,7 +13,12 @@
  */
 
 import { syntaxTree } from '@codemirror/language';
-import { EditorState, RangeSetBuilder, StateField } from '@codemirror/state';
+import {
+  EditorState,
+  RangeSetBuilder,
+  StateField,
+  type SelectionRange,
+} from '@codemirror/state';
 import {
   Decoration,
   type DecorationSet,
@@ -28,13 +33,32 @@ import { renderMermaidBlocks } from './md-mermaid.js';
 /** Корневой класс всех виджетов live preview. */
 export const MD_WIDGET_CLASS = 'md-widget';
 
-/** True when any selection range intersects `[from, to)` (блок «активен»). */
-function isRangeActive(
-  ranges: readonly { from: number; to: number }[],
+/**
+ * Блочное правило (M6-фикс): блок активен, пока каретка/выделение
+ * пересекает его диапазон ВКЛЮЧИТЕЛЬНО — от первого до последнего символа
+ * блока маркеры не скрываются.
+ */
+export function isInRangeInclusive(
+  ranges: readonly SelectionRange[],
   from: number,
   to: number,
 ): boolean {
-  return ranges.some((r) => r.from < to && r.to > from);
+  return ranges.some((r) => r.from <= to && r.to >= from);
+}
+
+/**
+ * Инлайн-правило (M6-фикс): элемент активен, пока каретка внутри него или
+ * непосредственно перед/после (позиции `from-1` … `to`).
+ */
+export function isNearInline(
+  ranges: readonly SelectionRange[],
+  from: number,
+  to: number,
+): boolean {
+  return ranges.some((r) => {
+    if (r.empty) return r.from >= from - 1 && r.from <= to;
+    return r.to >= from - 1 && r.from <= to + 1;
+  });
 }
 
 /** Базовый виджет: HTML-блок из единого рендерера; клик раскрывает исходник. */
@@ -142,56 +166,93 @@ function buildDecorations(state: EditorState): DecorationSet {
     builder.add(from, to, Decoration.replace({ inclusive: true }));
   };
 
+  /** Стек диапазонов Blockquote: маркеры цитат «живут» блоком-родителем. */
+  const quoteStack: Array<{ from: number; to: number }> = [];
+
+  /**
+   * Стек инлайн-родителей (Link / Emphasis-семейство): маркеры детей
+   * скрываются только когда неактивен их инлайн-родитель. Позиции детей из
+   * итератора — документальные, поэтому диапазоны родителей запоминаются
+   * при входе в узел (метод Tree.getChildren не подходит: его координаты
+   * зависят от дерева-объекта, а не от узла).
+   */
+  const inlineStack: Array<{ kind: 'link' | 'emphasis'; from: number; to: number }> = [];
+
   syntaxTree(state).iterate({
     enter(node) {
       const { from, to } = node;
-      const active = isRangeActive(ranges, from, to);
 
       switch (node.name) {
-        // Заголовки: скрыть «# …» до начала текста.
+        // Заголовки: скрыть «# …» до начала текста; блок активен, пока
+        // каретка внутри заголовка (включая последний символ).
         case 'ATXHeading1':
         case 'ATXHeading2':
         case 'ATXHeading3':
         case 'ATXHeading4':
         case 'ATXHeading5':
         case 'ATXHeading6': {
-          if (!active) {
+          if (!isInRangeInclusive(ranges, from, to)) {
             const m = /^#{1,6} +/.exec(state.sliceDoc(from, to));
             if (m !== null) hide(from, from + m[0].length);
           }
           break;
         }
-        // Цитаты: скрыть «>» (и следующий пробел).
+        // Цитаты: запоминаем диапазон блока; маркеры обрабатываются ниже.
+        case 'Blockquote': {
+          quoteStack.push({ from, to });
+          break;
+        }
+        // Маркер цитаты: активен, пока каретка внутри её Blockquote.
         case 'QuoteMark': {
+          const block = quoteStack[quoteStack.length - 1];
+          const active = block !== undefined && isInRangeInclusive(ranges, block.from, block.to);
           if (!active) {
             const extra = state.sliceDoc(to, to + 1) === ' ' ? 1 : 0;
             hide(from, to + extra);
           }
           break;
         }
-        // Инлайн-маркеры: * _ ** ~~ `
+        // Инлайн-родители: запоминаем диапазон; маркеры детей — ниже.
+        case 'Link': {
+          inlineStack.push({ kind: 'link', from, to });
+          break;
+        }
+        case 'Emphasis':
+        case 'StrongEmphasis':
+        case 'Strikethrough':
+        case 'InlineCode': {
+          inlineStack.push({ kind: 'emphasis', from, to });
+          break;
+        }
+        // Маркеры инлайн-выделения: видны, пока каретка внутри элемента или
+        // непосредственно перед/после него.
         case 'EmphasisMark':
         case 'StrikethroughMark':
         case 'CodeMark': {
-          if (!active) hide(from, to);
-          break;
-        }
-        // Ссылки: скрыть «(url "title")», оставив видимый текст.
-        case 'Link': {
-          if (active) break;
-          // Дети в координатах поддерева; переводим в координаты документа.
-          const urls = node.node.getChildren('URL');
-          if (urls.length > 0) {
-            const urlFrom = node.from + urls[0]!.from;
-            if (urlFrom > from) hide(urlFrom - 1, to);
+          const parent = inlineStack[inlineStack.length - 1];
+          if (
+            parent !== undefined &&
+            parent.kind === 'emphasis' &&
+            !isNearInline(ranges, parent.from, parent.to)
+          ) {
+            hide(from, to);
           }
           break;
         }
-        // Целые блоки — виджеты. Дети узла не обрабатываются: диапазоны
-        // внутри виджета добавить нельзя (RangeSetBuilder требует сортировку
-        // по from/startSide, а у replace-виджетов side другой).
+        // URL ссылки: скрыть «(url "title")», оставив видимый текст.
+        case 'URL': {
+          const link = [...inlineStack].reverse().find((p) => p.kind === 'link');
+          if (link !== undefined && !isNearInline(ranges, link.from, link.to)) {
+            hide(from - 1, link.to);
+          }
+          break;
+        }
+        // Целые блоки — виджеты (активны включительно по диапазону).
+        // Дети узла не обрабатываются: диапазоны внутри виджета добавить
+        // нельзя (RangeSetBuilder требует сортировку по from/startSide,
+        // а у replace-виджетов side другой).
         case 'FencedCode': {
-          if (!active) {
+          if (!isInRangeInclusive(ranges, from, to)) {
             builder.add(
               from,
               to,
@@ -206,7 +267,7 @@ function buildDecorations(state: EditorState): DecorationSet {
           break;
         }
         case 'Image': {
-          if (!active) {
+          if (!isInRangeInclusive(ranges, from, to)) {
             builder.add(
               from,
               to,
@@ -219,7 +280,7 @@ function buildDecorations(state: EditorState): DecorationSet {
           break;
         }
         case 'Table': {
-          if (!active) {
+          if (!isInRangeInclusive(ranges, from, to)) {
             builder.add(
               from,
               to,
@@ -234,7 +295,7 @@ function buildDecorations(state: EditorState): DecorationSet {
           break;
         }
         case 'HorizontalRule': {
-          if (!active) {
+          if (!isInRangeInclusive(ranges, from, to)) {
             builder.add(
               from,
               to,
@@ -244,8 +305,10 @@ function buildDecorations(state: EditorState): DecorationSet {
           }
           break;
         }
+        // Wiki-ссылка — инлайн-элемент: скобки видны и внутри, и сразу
+        // после `]]`, чтобы ссылку можно было править.
         case 'WikiLink': {
-          if (!active) {
+          if (!isNearInline(ranges, from, to)) {
             const parsed = wikiLabel(state.sliceDoc(from, to));
             if (parsed !== null) {
               builder.add(
@@ -260,6 +323,22 @@ function buildDecorations(state: EditorState): DecorationSet {
           }
           break;
         }
+        default:
+          break;
+      }
+    },
+    leave(node) {
+      switch (node.name) {
+        case 'Blockquote':
+          quoteStack.pop();
+          break;
+        case 'Link':
+        case 'Emphasis':
+        case 'StrongEmphasis':
+        case 'Strikethrough':
+        case 'InlineCode':
+          inlineStack.pop();
+          break;
         default:
           break;
       }

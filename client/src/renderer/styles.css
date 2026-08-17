@@ -87,6 +87,9 @@
   --hljs-addition: #1a7f37;
   --hljs-deletion: #82071e;
 
+  /* базовый размер шрифта markdown-полей; меняется Ctrl+колесом (M9) */
+  --md-font-size: 13px;
+
   font-family:
     system-ui,
     -apple-system,
@@ -2249,12 +2252,14 @@ body.dragging * {
 }
 
 /* Markdown view/edit field (08-ui-spec.md §6.4): height follows the content
-   (min 5 lines); the editor panel itself provides scrolling. */
+   (min 5 lines); the editor panel itself provides scrolling. Font size rides
+   the global --md-font-size variable (M9 zoom). */
 .md-field-view {
   min-height: calc(1.55em * 5);
   max-height: none;
   overflow: visible;
   cursor: text;
+  font-size: var(--md-font-size);
 }
 
 .md-field-area {

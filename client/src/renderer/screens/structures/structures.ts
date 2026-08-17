@@ -64,6 +64,11 @@ let resultsHost: HTMLElement | null = null;
 let resultIds: string[] = [];
 /** Unrestricted match count of the current filter. */
 let total = 0;
+
+/** True when the thought id is among the currently displayed results (M11). */
+export function isThoughtInResults(id: string): boolean {
+  return resultIds.includes(id);
+}
 /** Known thought metadata: roots + every expanded neighbour. */
 const refs = new Map<string, ThoughtRef>();
 /** Hierarchy data per expanded node direction, `${nodeKey}|${dir}`. */

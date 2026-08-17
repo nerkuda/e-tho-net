@@ -16,11 +16,19 @@ import { tags } from '@lezer/highlight';
 import type { MarkdownExtension } from '@lezer/markdown';
 
 import { WIKI_LINK_CLASS, WIKI_LINK_TARGET_ATTR } from '@etn/markdown';
+import type { Thought } from '@etn/shared';
 
 import { requireNetworkId, setFocus } from '../app.js';
-import { errText } from '../lib/dom.js';
+import { showDialog } from '../lib/dialog.js';
+import { el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
+import {
+  isThoughtInResults,
+  openStructuresThought,
+  setActiveView,
+} from '../screens/structures/structures.js';
+import { store } from '../state.js';
 
 /** Chars allowed inside an in-progress wiki prefix (no closing/alias/newline). */
 const WIKI_PREFIX_RE = /^[^[\]\n|]*$/;
@@ -117,22 +125,74 @@ export function wikiLinkAutocompletion(): Extension {
 }
 
 /**
- * Resolves a wiki target to a thought and focuses it (best-effort: exact title
- * match first, then the closest name/synonym hit; a miss shows a notice).
+ * Диалог «переключиться на карту мыслей?» (M11): мысль не отображается в
+ * текущих результатах структуры.
+ */
+function confirmSwitchToMap(): Promise<boolean> {
+  return new Promise((resolve) => {
+    showDialog({
+      title: 'Мысль не отображается',
+      body: el(
+        'p',
+        'dialog-text',
+        'Эта мысль не отображается в структуре мыслей. Переключиться на карту мыслей?',
+      ),
+      buttons: [
+        { label: 'Нет', onClick: () => resolve(false) },
+        { label: 'Да', primary: true, onClick: () => resolve(true) },
+      ],
+    });
+  });
+}
+
+/**
+ * Разрешает wiki-цель в мысль и открывает её по правилам режима (M11):
+ * на холсте — фокус; в структурах — активация среди отображаемых, иначе
+ * диалог о переключении на карту. Неактуальная мысль при настройке
+ * «скрывать неактуальное» — уведомление.
  */
 export async function openWikiTarget(name: string): Promise<void> {
   const networkId = requireNetworkId();
+  let thoughtId: string | null = null;
   try {
     const res = await etn.thoughts.search(networkId, { q: name, scope: 'names', limit: 10 });
     const hit = res.by_names.find((h) => h.title === name) ?? res.by_names[0];
-    if (hit === undefined) {
-      notice(`Мысль «${name}» не найдена.`, 'error');
-      return;
-    }
-    await setFocus(hit.thought_id);
+    thoughtId = hit?.thought_id ?? null;
   } catch (err) {
     notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
+    return;
   }
+  if (thoughtId === null) {
+    notice(`Мысль «${name}» не найдена.`, 'error');
+    return;
+  }
+
+  let thought: Thought;
+  try {
+    thought = await etn.thoughts.get(networkId, thoughtId);
+  } catch (err) {
+    notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
+    return;
+  }
+
+  if (!thought.active && !store.state.showInactive) {
+    notice('Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.', 'error');
+    return;
+  }
+
+  if (store.state.activeView === 'structures') {
+    if (isThoughtInResults(thought.id)) {
+      await openStructuresThought(thought.id);
+      return;
+    }
+    if (await confirmSwitchToMap()) {
+      setActiveView('map');
+      await setFocus(thought.id);
+    }
+    return;
+  }
+
+  await setFocus(thought.id);
 }
 
 let navigationWired = false;

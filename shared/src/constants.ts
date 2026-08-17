@@ -141,6 +141,7 @@ export const UI_STATE_KEY = {
   LAST_USED_LINK_TYPE_ID: 'last_used_link_type_id',
   ACTIVE_VIEW: 'active_view',
   STRUCTURES_STATE: 'structures_state',
+  MD_ZOOM: 'md_zoom',
 } as const satisfies Record<string, string>;
 export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];
 

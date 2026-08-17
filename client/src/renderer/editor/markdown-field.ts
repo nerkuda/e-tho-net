@@ -17,6 +17,13 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
+import {
+  applyMdZoom,
+  currentMdZoom,
+  loadMdZoom,
+  persistMdZoom,
+  zoomByWheel,
+} from './md-zoom.js';
 
 /** Owner entity for pasted-image attachments ('thought' | 'link'). */
 export interface AttachmentsOwner {
@@ -64,6 +71,18 @@ export function createMarkdownField(opts: {
   /** Guards against a focusout fired while the editor is being rebuilt. */
   let mounting = false;
   let editor: MdEditor | null = null;
+
+  // Масштаб документа (M9): Ctrl+колесо над полем меняет глобальный
+  // `--md-font-size` — действует на все md-поля; значение сохраняется на сеть.
+  const networkId = requireNetworkId();
+  void loadMdZoom(networkId);
+  root.addEventListener('wheel', (event) => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    const next = zoomByWheel(currentMdZoom(), event.deltaY);
+    applyMdZoom(next);
+    persistMdZoom(networkId, next);
+  }, { passive: false });
 
   const renderView = (): void => {
     view.replaceChildren();
@@ -123,6 +142,11 @@ export function createMarkdownField(opts: {
       onInput: (md) => opts.onInput?.(md),
       onEscape: () => {
         cancelled = true;
+        editor?.blur();
+      },
+      // Ctrl+Enter (M10): обычный коммит через blur-обработчик.
+      onCommit: () => {
+        cancelled = false;
         editor?.blur();
       },
       onBlur: () => commitOrRevert(),
