@@ -1,25 +1,29 @@
 /**
- * Canvas cloud drag-n-drop (08-ui-spec.md §2.6/§2.7, scenarios §3).
+ * Canvas cloud drag-n-drop (08-ui-spec.md §2.3/§2.7).
  *
- * Replaces the old reorder-only wiring with a single model driven off one custom
- * MIME type ({@link CLOUD_DRAG_MIME}) so an internal cloud drag is never confused
- * with an external file/URL drop:
+ * A single model driven off one custom MIME type ({@link CLOUD_DRAG_MIME}) so an
+ * internal cloud drag is never confused with an external file/URL drop:
  *
- * - drop on the **top ellipse** of cloud Б → create A→Б (A becomes Б's parent);
- * - drop on the **body** (or bottom ellipse) of cloud Б → create Б→A;
- * - drop on a **different** orderable zone (parents↔children) → flip the dragged
- *   thought's link direction to the focused thought (move);
- * - drop **inside the same** zone, when it is sorted `manual`, → reorder;
- * - drop on the **siblings** zone or outside any target → nothing;
- * - with **Ctrl/Cmd** held → copy the thought ("Копия: …") and apply the same
- *   linking rule to the copy.
+ * - **plain drag** — drop on the top ellipse of cloud Б → create A→Б (A becomes
+ *   Б's parent); drop on the body (or bottom ellipse) of cloud Б → create Б→A;
+ *   drop on a **different** orderable zone (parents↔children) → flip the dragged
+ *   thought's link direction to the focused thought (move); drop **inside the
+ *   same** zone, on the siblings zone or outside any target → nothing (the
+ *   manual order is never changed by a plain drag);
+ * - **Ctrl/Cmd drag** — drop on any part of cloud Б → move the dragged thought
+ *   into subordination of Б: every existing parent link of the dragged thought
+ *   is replaced by a single Б→A link (no copy);
+ * - **Alt drag** — reorder inside the dragged thought's zone, only while the
+ *   zone is sorted `manual`: drop on cloud Б → A takes the position right
+ *   before Б; drop on the empty top part of the zone → first; on the empty
+ *   bottom part → last.
  *
  * Existing links are reused (server 409 → no-op); the reverse link, if any, is
- * removed first and its type carried over to the new link. The previous
- * per-zone ellipse-drag gesture (`wireEllipseDrag`) is left untouched.
+ * removed first and its type carried over to the new link. The per-zone
+ * ellipse-drag gesture (`wireEllipseDrag`) is left untouched.
  */
 
-import { CLOUD_DRAG_MIME, type Attachment, type Link, type ThoughtLinksGrouped } from '@etn/shared';
+import { CLOUD_DRAG_MIME, type Link, type ThoughtLinksGrouped } from '@etn/shared';
 
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -36,11 +40,11 @@ interface DraggedCloud {
   dir: OrderableDir;
 }
 
-type DropKind = 'link-parent' | 'link-child' | 'move' | 'reorder' | 'none';
+type DropKind = 'link-parent' | 'link-child' | 'reparent' | 'move' | 'reorder' | 'none';
 
 interface DropTarget {
   kind: DropKind;
-  /** Thought the dragged cloud lands on (link modes). */
+  /** Thought the dragged cloud lands on (link/reparent modes). */
   targetThoughtId?: string;
   /** Zone the drop happens in (move/reorder). */
   zoneDir?: ZoneDir;
@@ -50,11 +54,6 @@ interface DropTarget {
   highlightEl?: HTMLElement;
   highlightCls?: string;
 }
-
-/** Copy destination: either dock into a zone (link to the focus) or onto a thought. */
-type CopyDest =
-  | { kind: 'zone'; dir: OrderableDir }
-  | { kind: 'link'; targetId: string; mode: LinkMode };
 
 /** Accessors into the canvas module (zone element + current manual order). */
 export interface DragAccessors {
@@ -101,7 +100,7 @@ function onDragStart(event: DragEvent): void {
     const payload = `${dir}:${id}`;
     transfer.setData(CLOUD_DRAG_MIME, payload);
     transfer.setData('text/plain', payload);
-    transfer.effectAllowed = 'copyMove';
+    transfer.effectAllowed = 'move';
   }
 }
 
@@ -113,6 +112,31 @@ function computeTarget(event: DragEvent, dragged: DraggedCloud, acc: DragAccesso
   const cloud = el.closest<HTMLElement>('.cloud');
   if (cloud !== null && cloud.dataset['id'] !== undefined && cloud.dataset['id'] !== dragged.id) {
     const targetThoughtId = cloud.dataset['id'];
+    // Alt: manual reorder — insert right before the hovered cloud. Only inside
+    // the dragged thought's own zone, and only while it is sorted `manual`.
+    if (event.altKey) {
+      if (cloud.closest<HTMLElement>('.zone')?.dataset['dir'] !== dragged.dir) {
+        return { kind: 'none' };
+      }
+      if (store.state.zoneSorts[dragged.dir] !== 'manual') return { kind: 'none' };
+      return {
+        kind: 'reorder',
+        zoneDir: dragged.dir,
+        insertIndex: altCloudIndex(dragged, targetThoughtId, acc),
+        highlightEl: cloud,
+        highlightCls: 'drop-target-move',
+      };
+    }
+    // Ctrl: move the dragged thought into subordination of the target — any
+    // part of the cloud works, the top ellipse included.
+    if (event.ctrlKey || event.metaKey) {
+      return {
+        kind: 'reparent',
+        targetThoughtId,
+        highlightEl: cloud,
+        highlightCls: 'drop-target-link',
+      };
+    }
     const topEllipse = cloud.querySelector<HTMLElement>('.ellipse-top');
     const overEllipse = el.closest<HTMLElement>('.ellipse');
     if (topEllipse !== null && overEllipse === topEllipse) {
@@ -131,37 +155,56 @@ function computeTarget(event: DragEvent, dragged: DraggedCloud, acc: DragAccesso
     const zdir = zone.dataset['dir'];
     if (zdir === 'siblings') return { kind: 'none' };
     if (zdir === 'parents' || zdir === 'children') {
-      if (zdir === dragged.dir) {
+      // Alt: drop on the zone's empty area — top part → first, bottom → last.
+      if (event.altKey) {
+        if (zdir !== dragged.dir || store.state.zoneSorts[dragged.dir] !== 'manual') {
+          return { kind: 'none' };
+        }
         return {
           kind: 'reorder',
           zoneDir: zdir,
-          insertIndex: computeInsertIndex(zdir, el, event, acc),
+          insertIndex: altZoneIndex(zone, event, dragged, acc),
           highlightEl: zone,
           highlightCls: 'drop-target-move',
         };
       }
+      // Plain (and Ctrl) drags never reorder: a drop inside the dragged's own
+      // zone is a no-op; a drop on the other zone flips the link direction.
+      if (zdir === dragged.dir) return { kind: 'none' };
       return { kind: 'move', zoneDir: zdir, highlightEl: zone, highlightCls: 'drop-target-move' };
     }
   }
   return { kind: 'none' };
 }
 
-/** Index in the zone order (without the dragged id) where the drop would insert. */
-function computeInsertIndex(
-  dir: OrderableDir,
-  hovered: HTMLElement,
+/** Alt-drop on a cloud: insert the dragged thought right before it. */
+function altCloudIndex(dragged: DraggedCloud, targetId: string, acc: DragAccessors): number {
+  const order = acc.getZoneOrder(dragged.dir).filter((x) => x !== dragged.id);
+  const idx = order.indexOf(targetId);
+  return idx >= 0 ? idx : order.length;
+}
+
+/**
+ * Alt-drop on the zone's empty area: above the first visible cloud → first,
+ * below the last → last, between rows → before the row below the cursor.
+ */
+function altZoneIndex(
+  zone: HTMLElement,
   event: DragEvent,
+  dragged: DraggedCloud,
   acc: DragAccessors,
 ): number {
-  const order = acc.getZoneOrder(dir).filter((x) => x !== currentDragged?.id);
-  const cloud = hovered.closest<HTMLElement>('.cloud');
-  const id = cloud?.dataset['id'];
-  if (cloud !== null && id !== undefined) {
-    const idx = order.indexOf(id);
-    if (idx >= 0) {
-      const rect = cloud.getBoundingClientRect();
-      return event.clientX < rect.left + rect.width / 2 ? idx : idx + 1;
-    }
+  const order = acc.getZoneOrder(dragged.dir).filter((x) => x !== dragged.id);
+  const y = event.clientY;
+  for (const cloud of zone.querySelectorAll<HTMLElement>('.cloud[data-id]')) {
+    const id = cloud.dataset['id'];
+    if (id === undefined || !order.includes(id)) continue;
+    const rect = cloud.getBoundingClientRect();
+    if (y < rect.top + rect.height / 2) return order.indexOf(id);
+  }
+  if (order.length === 0) {
+    const rect = zone.getBoundingClientRect();
+    return y < rect.top + rect.height / 2 ? 0 : order.length;
   }
   return order.length;
 }
@@ -173,7 +216,7 @@ function onDragOver(event: DragEvent, acc: DragAccessors): void {
   if (target.kind === 'none') return;
   event.preventDefault();
   if (event.dataTransfer !== null) {
-    event.dataTransfer.dropEffect = event.ctrlKey || event.metaKey ? 'copy' : 'move';
+    event.dataTransfer.dropEffect = 'move';
   }
 }
 
@@ -184,28 +227,24 @@ function onDrop(event: DragEvent, acc: DragAccessors): void {
   clearHighlight();
   if (target.kind === 'none') return;
   event.preventDefault();
-  const copy = event.ctrlKey || event.metaKey;
   switch (target.kind) {
     case 'link-parent':
-      void (copy
-        ? copyThought(dragged, { kind: 'link', targetId: target.targetThoughtId!, mode: 'parent' })
-        : linkToThought(dragged.id, target.targetThoughtId!, 'parent'));
+      void linkToThought(dragged.id, target.targetThoughtId!, 'parent');
       break;
     case 'link-child':
-      void (copy
-        ? copyThought(dragged, { kind: 'link', targetId: target.targetThoughtId!, mode: 'child' })
-        : linkToThought(dragged.id, target.targetThoughtId!, 'child'));
+      void linkToThought(dragged.id, target.targetThoughtId!, 'child');
+      break;
+    case 'reparent':
+      void reparentThought(dragged.id, target.targetThoughtId!);
       break;
     case 'move': {
       const dir = target.zoneDir as OrderableDir;
-      void (copy ? copyThought(dragged, { kind: 'zone', dir }) : moveFocusDirection(dragged.id, dir));
+      void moveFocusDirection(dragged.id, dir);
       break;
     }
     case 'reorder': {
       const dir = target.zoneDir as OrderableDir;
-      void (copy
-        ? copyThought(dragged, { kind: 'zone', dir })
-        : reorderZone(dragged.id, dir, target.insertIndex ?? -1));
+      void reorderZone(dragged.id, dir, target.insertIndex ?? -1);
       break;
     }
     default:
@@ -321,6 +360,45 @@ async function moveFocusDirection(draggedId: string, toDir: OrderableDir): Promi
   scheduleRefresh();
 }
 
+/**
+ * Moves the dragged thought into subordination of `targetId` (Ctrl-drag): every
+ * existing parent link of the dragged thought is removed and replaced by a
+ * single target→dragged link. The reverse link (dragged→target), if any, is
+ * removed first and its type carried over, mirroring {@link linkToThought}.
+ */
+async function reparentThought(draggedId: string, targetId: string): Promise<void> {
+  const networkId = requireNetworkId();
+  try {
+    const grouped = await etn.links.listByThought(networkId, draggedId);
+    const links = flattenLinks(grouped);
+    const existing = links.find((l) => l.source_id === targetId && l.target_id === draggedId);
+    const reverse = links.find((l) => l.source_id === draggedId && l.target_id === targetId);
+    const toRemove = links.filter(
+      (l) => l.target_id === draggedId && (existing === undefined || l.id !== existing.id),
+    );
+    if (reverse !== undefined) toRemove.push(reverse);
+    for (const link of toRemove) {
+      try {
+        const fresh = await etn.links.get(networkId, link.id);
+        await etn.links.remove(networkId, link.id, fresh.version);
+      } catch (err) {
+        if (!isDupError(err)) noticeErr('Переместить в подчинение', err);
+      }
+    }
+    if (existing === undefined) {
+      await etn.links.create(networkId, {
+        source_id: targetId,
+        target_id: draggedId,
+        type_id: reverse?.type_id ?? null,
+      });
+    }
+    requestZoneAnimation();
+    scheduleRefresh();
+  } catch (err) {
+    if (!isDupError(err)) noticeErr('Переместить в подчинение', err);
+  }
+}
+
 /** Reorders the dragged thought inside its zone — only when the zone is `manual`. */
 async function reorderZone(draggedId: string, dir: OrderableDir, insertIndex: number): Promise<void> {
   if (store.state.zoneSorts[dir] !== 'manual') return; // bounce back, no change
@@ -336,105 +414,6 @@ async function reorderZone(draggedId: string, dir: OrderableDir, insertIndex: nu
   } catch (err) {
     noticeErr('Изменить порядок', err);
   }
-}
-
-/**
- * Copies the dragged thought ("Копия: …") — visual fields + permanent comment +
- * attachments, no links or chronological comments — then links the copy per the
- * drop destination (08-ui-spec §7).
- */
-async function copyThought(dragged: DraggedCloud, dest: CopyDest): Promise<void> {
-  const networkId = requireNetworkId();
-  const focusId = store.state.focus?.focused.id ?? null;
-  try {
-    const orig = await etn.thoughts.get(networkId, dragged.id);
-
-    // Resolve the create_link for the copy. A drop onto the siblings zone (no
-    // thought) is not allowed for copies — bail out.
-    let createLink: { direction: LinkMode; target_thought_id: string } | undefined;
-    if (dest.kind === 'zone') {
-      if (focusId === null) return;
-      createLink = { direction: dest.dir === 'parents' ? 'parent' : 'child', target_thought_id: focusId };
-    } else {
-      createLink = { direction: dest.mode, target_thought_id: dest.targetId };
-    }
-
-    const copy = await etn.thoughts.create(networkId, {
-      title: `Копия: ${orig.title}`,
-      synonyms: orig.synonyms,
-      type_id: orig.type_id,
-      icon: orig.icon,
-      icon_kind: orig.icon_kind,
-      active: orig.active,
-      fg_color: orig.fg_color,
-      bg_color: orig.bg_color,
-      font_bold: orig.font_bold ?? undefined,
-      font_italic: orig.font_italic ?? undefined,
-      font_underline: orig.font_underline ?? undefined,
-      font_strike: orig.font_strike ?? undefined,
-      create_link: createLink,
-    }).catch(async (err: unknown) => {
-      // The link may already exist (409 DUPLICATE) — fall back to a bare copy.
-      if (isDupError(err)) {
-        return etn.thoughts.create(networkId, {
-          title: `Копия: ${orig.title}`,
-          synonyms: orig.synonyms,
-          type_id: orig.type_id,
-          icon: orig.icon,
-          icon_kind: orig.icon_kind,
-          active: orig.active,
-          fg_color: orig.fg_color,
-          bg_color: orig.bg_color,
-          font_bold: orig.font_bold ?? undefined,
-          font_italic: orig.font_italic ?? undefined,
-          font_underline: orig.font_underline ?? undefined,
-          font_strike: orig.font_strike ?? undefined,
-        });
-      }
-      throw err;
-    });
-
-    // Permanent comment (at most one) — chronological comments are not copied.
-    const comments = await etn.comments.list(networkId, 'thought', dragged.id);
-    const perm = comments.find((c) => c.kind === 'permanent');
-    if (perm !== undefined) {
-      await etn.comments.create(networkId, 'thought', copy.id, {
-        kind: 'permanent',
-        body_md: perm.body_md,
-      });
-    }
-
-    // Attachments (paths/URLs are copied by reference on MVP).
-    const attachments = await etn.attachments.list(networkId, 'thought', dragged.id);
-    for (const att of attachments) {
-      await etn.attachments.add(networkId, 'thought', copy.id, attachmentToInput(att));
-    }
-
-    scheduleRefresh();
-  } catch (err) {
-    noticeErr('Скопировать мысль', err);
-  }
-}
-
-/** Maps a stored attachment back to its create input. */
-function attachmentToInput(att: Attachment): {
-  kind: 'url' | 'file';
-  url?: string | null;
-  file_path?: string | null;
-  file_size?: number | null;
-  mime_type?: string | null;
-  title?: string | null;
-  description?: string | null;
-} {
-  return {
-    kind: att.kind,
-    url: att.url,
-    file_path: att.file_path,
-    file_size: att.file_size,
-    mime_type: att.mime_type,
-    title: att.title,
-    description: att.description,
-  };
 }
 
 /** Surfaces a failure as a transient notice. */
