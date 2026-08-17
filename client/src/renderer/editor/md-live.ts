@@ -15,8 +15,8 @@
 import { syntaxTree } from '@codemirror/language';
 import {
   EditorState,
-  RangeSetBuilder,
   StateField,
+  type Range,
   type SelectionRange,
 } from '@codemirror/state';
 import {
@@ -159,24 +159,27 @@ export function wikiLabel(source: string): { target: string; label: string } | n
 
 /** Строит набор декораций для текущего состояния. */
 function buildDecorations(state: EditorState): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
+  // Диапазоны собираются в массив и сортируются в Decoration.set: hide-замены
+  // имеют startSide −2, mark — 5e8, поэтому на одной позиции (бэктики внутри
+  // InlineCode) порядок вставки не монотонен, и RangeSetBuilder не подходит.
+  const parts: Array<Range<Decoration>> = [];
   const ranges = state.selection.ranges;
 
   const hide = (from: number, to: number): void => {
-    builder.add(from, to, Decoration.replace({ inclusive: true }));
+    parts.push({ from, to, value: Decoration.replace({ inclusive: true }) });
   };
 
   /** Стек диапазонов Blockquote: маркеры цитат «живут» блоком-родителем. */
   const quoteStack: Array<{ from: number; to: number }> = [];
 
   /**
-   * Стек инлайн-родителей (Link / Emphasis-семейство): маркеры детей
-   * скрываются только когда неактивен их инлайн-родитель. Позиции детей из
-   * итератора — документальные, поэтому диапазоны родителей запоминаются
+   * Стек инлайн-родителей (Link / Emphasis-семейство / InlineCode): маркеры
+   * детей скрываются только когда неактивен их инлайн-родитель. Позиции детей
+   * из итератора — документальные, поэтому диапазоны родителей запоминаются
    * при входе в узел (метод Tree.getChildren не подходит: его координаты
    * зависят от дерева-объекта, а не от узла).
    */
-  const inlineStack: Array<{ kind: 'link' | 'emphasis'; from: number; to: number }> = [];
+  const inlineStack: Array<{ kind: 'link' | 'emphasis' | 'code'; from: number; to: number }> = [];
 
   syntaxTree(state).iterate({
     enter(node) {
@@ -184,13 +187,16 @@ function buildDecorations(state: EditorState): DecorationSet {
 
       switch (node.name) {
         // Заголовки: скрыть «# …» до начала текста; блок активен, пока
-        // каретка внутри заголовка (включая последний символ).
+        // каретка внутри заголовка (включая последний символ). Класс строки
+        // задаёт размер/отступы как у h1–h6 в HTML-просмотре (паритет стилей).
         case 'ATXHeading1':
         case 'ATXHeading2':
         case 'ATXHeading3':
         case 'ATXHeading4':
         case 'ATXHeading5':
         case 'ATXHeading6': {
+          const level = node.name.slice('ATXHeading'.length);
+          parts.push({ from, to, value: Decoration.line({ class: `cm-md-h${level}` }) });
           if (!isInRangeInclusive(ranges, from, to)) {
             const m = /^#{1,6} +/.exec(state.sliceDoc(from, to));
             if (m !== null) hide(from, from + m[0].length);
@@ -219,9 +225,16 @@ function buildDecorations(state: EditorState): DecorationSet {
         }
         case 'Emphasis':
         case 'StrongEmphasis':
-        case 'Strikethrough':
-        case 'InlineCode': {
+        case 'Strikethrough': {
           inlineStack.push({ kind: 'emphasis', from, to });
+          break;
+        }
+        case 'InlineCode': {
+          inlineStack.push({ kind: 'code', from, to });
+          // Плашка как у <code> в просмотре — mark на весь узел: скрытые
+          // бэктики ширины не занимают. Контент inline-кода не является
+          // отдельным узлом дерева (CodeText появляется только с codeParser).
+          parts.push({ from, to, value: Decoration.mark({ class: 'cm-md-inline-code' }) });
           break;
         }
         // Маркеры инлайн-выделения: видны, пока каретка внутри элемента или
@@ -232,7 +245,7 @@ function buildDecorations(state: EditorState): DecorationSet {
           const parent = inlineStack[inlineStack.length - 1];
           if (
             parent !== undefined &&
-            parent.kind === 'emphasis' &&
+            parent.kind !== 'link' &&
             !isNearInline(ranges, parent.from, parent.to)
           ) {
             hide(from, to);
@@ -248,59 +261,58 @@ function buildDecorations(state: EditorState): DecorationSet {
           break;
         }
         // Целые блоки — виджеты (активны включительно по диапазону).
-        // Дети узла не обрабатываются: диапазоны внутри виджета добавить
-        // нельзя (RangeSetBuilder требует сортировку по from/startSide,
-        // а у replace-виджетов side другой).
+        // Дети узла не обрабатываются: внутри диапазона, заменённого
+        // виджетом, декорации не отображаются.
         case 'FencedCode': {
           if (!isInRangeInclusive(ranges, from, to)) {
-            builder.add(
+            parts.push({
               from,
               to,
-              Decoration.replace({
+              value: Decoration.replace({
                 // Блок занимает несколько строк — обязателен block: true.
                 block: true,
                 widget: new HtmlWidget(from, to, renderMarkdown(state.sliceDoc(from, to))),
               }),
-            );
+            });
             return false;
           }
           break;
         }
         case 'Image': {
           if (!isInRangeInclusive(ranges, from, to)) {
-            builder.add(
+            parts.push({
               from,
               to,
-              Decoration.replace({
+              value: Decoration.replace({
                 widget: new HtmlWidget(from, to, renderMarkdown(state.sliceDoc(from, to))),
               }),
-            );
+            });
             return false;
           }
           break;
         }
         case 'Table': {
           if (!isInRangeInclusive(ranges, from, to)) {
-            builder.add(
+            parts.push({
               from,
               to,
-              Decoration.replace({
+              value: Decoration.replace({
                 // Таблица занимает несколько строк — обязателен block: true.
                 block: true,
                 widget: new HtmlWidget(from, to, renderMarkdown(state.sliceDoc(from, to))),
               }),
-            );
+            });
             return false;
           }
           break;
         }
         case 'HorizontalRule': {
           if (!isInRangeInclusive(ranges, from, to)) {
-            builder.add(
+            parts.push({
               from,
               to,
-              Decoration.replace({ widget: new HrWidget(from, to) }),
-            );
+              value: Decoration.replace({ widget: new HrWidget(from, to) }),
+            });
             return false;
           }
           break;
@@ -311,13 +323,13 @@ function buildDecorations(state: EditorState): DecorationSet {
           if (!isNearInline(ranges, from, to)) {
             const parsed = wikiLabel(state.sliceDoc(from, to));
             if (parsed !== null) {
-              builder.add(
+              parts.push({
                 from,
                 to,
-                Decoration.replace({
+                value: Decoration.replace({
                   widget: new WikiLinkWidget(from, to, parsed.label),
                 }),
-              );
+              });
               return false;
             }
           }
@@ -345,7 +357,7 @@ function buildDecorations(state: EditorState): DecorationSet {
     },
   });
 
-  return builder.finish();
+  return Decoration.set(parts, true);
 }
 
 /** Live-preview декорации (block-декорации требует StateField, не ViewPlugin). */

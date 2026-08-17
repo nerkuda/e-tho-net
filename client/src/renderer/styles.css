@@ -89,6 +89,8 @@
 
   /* базовый размер шрифта markdown-полей; меняется Ctrl+колесом (M9) */
   --md-font-size: 13px;
+  /* моноширинный шрифт кода — один и для просмотра, и для редактора */
+  --md-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
 
   font-family:
     system-ui,
@@ -2106,7 +2108,9 @@ body.dragging * {
 .comment-view {
   max-height: 420px;
   overflow-y: auto;
-  font-size: 13px;
+  /* Размер через переменную: Ctrl+колесо (M9) масштабирует и виджеты
+     редактора, у которых тот же класс. */
+  font-size: var(--md-font-size);
   line-height: 1.55;
   overflow-wrap: break-word;
 }
@@ -2117,6 +2121,18 @@ body.dragging * {
   height: auto;
 }
 
+/* Ссылки — единый вид с wiki-ссылками и редактором: акцент, без
+   подчёркивания (появляется на hover). */
+.comment-view a,
+.comment-view a:visited {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.comment-view a:hover {
+  text-decoration: underline;
+}
+
 .comment-view table {
   border-collapse: collapse;
 }
@@ -2125,6 +2141,12 @@ body.dragging * {
 .comment-view th {
   border: 1px solid var(--border-strong);
   padding: 3px 8px;
+}
+
+.comment-view code,
+.comment-view pre {
+  /* Тот же моно-стек, что и в редакторе (HighlightStyle tags.monospace). */
+  font-family: var(--md-mono);
 }
 
 .comment-view code {
@@ -2138,6 +2160,12 @@ body.dragging * {
   padding: 8px;
   border-radius: var(--radius-sm);
   overflow-x: auto;
+}
+
+.comment-view hr {
+  border: none;
+  border-top: 1px solid var(--border-strong);
+  margin: 6px 0;
 }
 
 .comment-view blockquote {

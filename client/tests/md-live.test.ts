@@ -1,14 +1,103 @@
 /**
- * Unit tests of the live-preview helpers (task M6). Pure — no DOM.
+ * Unit tests of the live-preview helpers and decorations (task M6). The
+ * decoration tests build a real EditorState (no DOM needed).
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { isInRangeInclusive, isNearInline, wikiLabel } from '../src/renderer/editor/md-live.js';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { EditorState } from '@codemirror/state';
+
+import { isInRangeInclusive, isNearInline, livePreview, wikiLabel } from '../src/renderer/editor/md-live.js';
+import { wikiLinkLanguage } from '../src/renderer/editor/wiki-link.js';
 
 /** Каретка в одной позиции. */
 const caret = (pos: number) => [{ from: pos, to: pos, empty: true }];
+
+// ---------------------------------------------------------------------------
+// Декорации buildDecorations: состояния собираются с тем же набором
+// расширений, что и редактор (язык markdown + wiki-узлы + livePreview).
+// ---------------------------------------------------------------------------
+
+function buildState(doc: string, selection = 0): EditorState {
+  return EditorState.create({
+    doc,
+    selection: { anchor: selection },
+    extensions: [
+      markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+      livePreview,
+    ],
+  });
+}
+
+type DecoSpec = Record<string, unknown>;
+
+function specs(state: EditorState, from = 0, to = state.doc.length): DecoSpec[] {
+  const found: DecoSpec[] = [];
+  state.field(livePreview).between(from, to, (_f, _t, deco) => {
+    found.push((deco as unknown as { spec?: DecoSpec }).spec ?? {});
+  });
+  return found;
+}
+
+function hasClass(state: EditorState, cls: string, from: number, to: number): boolean {
+  return specs(state, from, to).some((s) => s.class === cls);
+}
+
+/** Скрытый маркер — Decoration.replace с inclusive (как в hide()). */
+function hasHiddenMark(state: EditorState, from: number, to: number): boolean {
+  return specs(state, from, to).some((s) => s.inclusive === true);
+}
+
+test('заголовок: класс строки cm-md-h1 всегда; маркер «# » скрыт только вне блока', () => {
+  const doc = '# Заголовок\nтекст';
+  // Каретка вне заголовка (в «текст»): маркер скрыт, класс строки есть.
+  const away = buildState(doc, doc.length);
+  assert.equal(hasClass(away, 'cm-md-h1', 0, 1), true, 'класс строки h1');
+  assert.equal(hasHiddenMark(away, 0, 1), true, '«# » скрыт, каретка вне');
+  // Каретка внутри заголовка: маркер виден, класс строки остаётся.
+  const inside = buildState(doc, 2);
+  assert.equal(hasHiddenMark(inside, 0, 1), false, '«# » виден, каретка внутри');
+  assert.equal(hasClass(inside, 'cm-md-h1', 0, 1), true);
+});
+
+test('заголовок: уровень определяет класс строки (h1–h6)', () => {
+  for (const level of ['1', '2', '3', '4', '5', '6'] as const) {
+    const doc = `${'#'.repeat(Number(level))} Заголовок\n`;
+    const state = buildState(doc, doc.length);
+    assert.equal(hasClass(state, `cm-md-h${level}`, 0, 1), true, `h${level}`);
+  }
+});
+
+test('inline-код: плашка cm-md-inline-code всегда; бэктики скрыты только вне', () => {
+  const doc = '`код` текст';
+  // Каретка вне: бэктики скрыты, плашка есть.
+  const away = buildState(doc, doc.length);
+  assert.equal(hasClass(away, 'cm-md-inline-code', 1, 2), true);
+  assert.equal(hasHiddenMark(away, 0, 1), true, 'открывающий бэктик скрыт');
+  assert.equal(hasHiddenMark(away, 4, 5), true, 'закрывающий бэктик скрыт');
+  // Каретка внутри кода: бэктики видны, плашка остаётся.
+  const inside = buildState(doc, 2);
+  assert.equal(hasHiddenMark(inside, 0, 1), false);
+  assert.equal(hasHiddenMark(inside, 4, 5), false);
+  assert.equal(hasClass(inside, 'cm-md-inline-code', 1, 2), true);
+});
+
+test('wiki-ссылка: вне — виджет; внутри — исходник без виджета', () => {
+  const doc = '[[Мысль]] x';
+  // Каретка после ссылки (за пределами «перед/после»): ссылка — виджет.
+  const away = buildState(doc, doc.length);
+  assert.equal(specs(away, 0, 1).some((s) => s.widget !== undefined), true);
+  // Каретка внутри: виджета нет, исходник виден.
+  const inside = buildState(doc, 4);
+  assert.equal(specs(inside, 0, 1).some((s) => s.widget !== undefined), false);
+});
+
+// ---------------------------------------------------------------------------
+// Правила активности (M6-фикс): блочные — включительно по диапазону,
+// инлайн — плюс одна позиция до/после элемента.
+// ---------------------------------------------------------------------------
 
 test('wikiLabel: имя без алиаса', () => {
   assert.deepEqual(wikiLabel('[[имя мысли]]'), {

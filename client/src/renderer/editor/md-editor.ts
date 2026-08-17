@@ -52,8 +52,9 @@ const mdHighlightStyle = HighlightStyle.define([
   { tag: tags.emphasis, fontStyle: 'italic' },
   { tag: tags.strikethrough, textDecoration: 'line-through' },
   { tag: tags.link, color: 'var(--accent)' },
-  { tag: tags.monospace, fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace' },
-  { tag: tags.quote, color: 'var(--text-dim)' },
+  { tag: tags.monospace, fontFamily: 'var(--md-mono)' },
+  // Цитата: цвет и класс — рамка/отступ задаёт тема (паритет с просмотром).
+  { tag: tags.quote, color: 'var(--text-dim)', class: 'cm-md-quote' },
   { tag: tags.url, color: 'var(--accent)' },
   { tag: tags.meta, color: 'var(--text-dim)' },
 ]);
@@ -93,6 +94,9 @@ const mdTheme = EditorView.theme({
   // Размер шрифта через переменную — масштабирование Ctrl+колесом (M9)
   // действует сразу на все поля.
   '&': { backgroundColor: 'transparent', fontSize: 'var(--md-font-size)' },
+  // Базовый стиль CodeMirror ставит моноширинный шрифт на .cm-scroller;
+  // редактор использует шрифт интерфейса, как и HTML-просмотр.
+  '.cm-scroller': { fontFamily: 'inherit' },
   '.cm-content': {
     fontFamily: 'inherit',
     lineHeight: '1.55',
@@ -100,6 +104,28 @@ const mdTheme = EditorView.theme({
     padding: '2px 0',
   },
   '.cm-line': { padding: '0 4px 0 2px' },
+  // Заголовки: размеры, межстрочный интервал и отступы браузерных стилей
+  // h1–h6 (просмотр их и использует) — паритет между режимами.
+  '.cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-h4, .cm-md-h5, .cm-md-h6': {
+    fontWeight: '700',
+  },
+  '.cm-md-h1': { fontSize: '2em', lineHeight: '1.25', margin: '0.67em 0' },
+  '.cm-md-h2': { fontSize: '1.5em', lineHeight: '1.25', margin: '0.83em 0' },
+  '.cm-md-h3': { fontSize: '1.17em', lineHeight: '1.25', margin: '1em 0' },
+  '.cm-md-h4': { fontSize: '1em', lineHeight: '1.25', margin: '1.33em 0' },
+  '.cm-md-h5': { fontSize: '0.83em', lineHeight: '1.25', margin: '1.67em 0' },
+  '.cm-md-h6': { fontSize: '0.67em', lineHeight: '1.25', margin: '2.33em 0' },
+  // Цитата: как blockquote в просмотре (.comment-view blockquote).
+  '.cm-md-quote': {
+    borderLeft: '3px solid var(--border-strong)',
+    paddingLeft: '10px',
+  },
+  // Inline-код: плашка как у <code> в просмотре (.comment-view code).
+  '.cm-md-inline-code': {
+    background: 'var(--surface-2)',
+    padding: '1px 4px',
+    borderRadius: '4px',
+  },
   '&.cm-focused': { outline: 'none' },
   '.cm-cursor': { borderLeftColor: 'var(--accent)' },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
