@@ -18,7 +18,7 @@ import type { FocusDir, Link } from '@etn/shared';
 
 import { onThoughtDeleted, scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { openAddDialog } from './add-dialog.js';
-import { requestZoneAnimation } from './canvas.js';
+import { invalidateRef, requestZoneAnimation } from './canvas.js';
 import { patchFocusEdge, store } from '../state.js';
 import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
@@ -251,7 +251,7 @@ function buildThoughtMenuItems(
       ],
     },
     {
-      label: 'Изменить активность',
+      label: 'Изменить актуальность',
       onClick: () => void toggleActive(networkId, target.id),
     },
     {
@@ -341,9 +341,12 @@ async function toggleActive(networkId: string, id: string): Promise<void> {
       return;
     }
     await etn.thoughts.update(networkId, id, { active: !thought.active }, thought.version);
+    // No realtime echo to the actor (04-realtime.md §5) — drop the cached ref
+    // so the refreshed zones re-resolve the thought and repaint the dim state.
+    invalidateRef(id);
     scheduleRefresh();
   } catch (err) {
-    errorDialog('Изменить активность', err);
+    errorDialog('Изменить актуальность', err);
   }
 }
 
@@ -352,6 +355,9 @@ async function changeType(networkId: string, id: string, typeId: string | null):
   try {
     const thought = await etn.thoughts.get(networkId, id);
     await etn.thoughts.update(networkId, id, { type_id: typeId }, thought.version);
+    // The type drives the cloud icon/colours — drop the stale cached ref so
+    // the next refresh resolves the new style instead of the old one.
+    invalidateRef(id);
     scheduleRefresh();
   } catch (err) {
     errorDialog('Изменить тип', err);
@@ -371,6 +377,7 @@ async function changeIcon(networkId: string, id: string): Promise<void> {
       { icon: value.trim() === '' ? null : value.trim(), icon_kind: 'emoji' },
       thought.version,
     );
+    invalidateRef(id);
     scheduleRefresh();
   } catch (err) {
     errorDialog('Изменить иконку', err);

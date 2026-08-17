@@ -17,7 +17,7 @@
 
 import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { setAddToSelectionHook, showSelectionThoughtContextMenu } from '../canvas/context-menu.js';
-import { applyThoughtIcon, setSelectionClickHooks } from '../canvas/canvas.js';
+import { applyThoughtIcon, invalidateRef, setSelectionClickHooks } from '../canvas/canvas.js';
 import { pickThoughtRef } from '../editor/thought-picker.js';
 import { showThoughtStyleDialog, type ThoughtStylePatch } from '../editor/style-dialog.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
@@ -464,6 +464,9 @@ async function applyStyleToAll(patch: ThoughtStylePatch): Promise<boolean> {
     }),
   );
   const failed = results.filter((r) => r.status === 'rejected').length;
+  // No realtime echo to the actor (04-realtime.md §5) — drop the cached refs so
+  // the refreshed zones re-resolve the thoughts and repaint their style.
+  for (const id of ids) invalidateRef(id);
   scheduleRefresh();
   if (failed > 0) {
     errorDialog('Настройки выделения', `Не удалось применить к ${failed} мыслям.`);
@@ -510,6 +513,9 @@ async function batch(input: {
     } else {
       notice(`Применено к ${result.affected} мыслям.`);
     }
+    // The batch can change type/activity — refresh the cached refs so the
+    // clouds repaint with the new icon/colours/dim state right away.
+    for (const id of ids) invalidateRef(id);
     scheduleRefresh();
   } catch (err) {
     errorDialog('Групповая операция', err);

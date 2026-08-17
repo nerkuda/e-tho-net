@@ -27,7 +27,7 @@ import {
 } from '@etn/shared';
 
 import { refreshFocus, requireNetworkId, scheduleRefresh } from '../app.js';
-import { applyThoughtIcon, invalidateIndicators, resolveCloudStyle } from '../canvas/canvas.js';
+import { applyThoughtIcon, invalidateIndicators, invalidateRef, resolveCloudStyle } from '../canvas/canvas.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { inNeighbourhood } from '../realtime-ui.js';
@@ -475,7 +475,9 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
         store.update({ focus: { ...focus, focused: updated } });
       } else if (inNeighbourhood(ctx.ownerId)) {
         // The thought is visible on the canvas as a focus neighbour — refetch
-        // the focus so its icon/type/colours repaint right away.
+        // the focus so its icon/type/colours repaint right away. The actor gets
+        // no realtime echo, so the stale cached ref must go first.
+        invalidateRef(ctx.ownerId);
         scheduleRefresh();
       }
     }

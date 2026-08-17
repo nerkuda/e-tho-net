@@ -737,7 +737,11 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   cloud.dataset['id'] = entry.id;
   cloud.dataset['dir'] = dir;
 
-  if (ref !== null && !ref.active) cloud.classList.add('dim');
+  // The live neighbour carries a fresh `active` flag in every focus response —
+  // prefer it over the cached ref, which can lag after a local toggle until the
+  // ref is re-resolved (no realtime echo to the actor, 04-realtime.md §5).
+  const isInactive = (entry.links[0]?.active ?? ref?.active) === false;
+  if (isInactive) cloud.classList.add('dim');
   if (store.state.selection.includes(entry.id)) cloud.classList.add('selected');
 
   const style = resolveCloudStyle(
