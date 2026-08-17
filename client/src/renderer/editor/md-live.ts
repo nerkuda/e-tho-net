@@ -196,7 +196,10 @@ function buildDecorations(state: EditorState): DecorationSet {
         case 'ATXHeading5':
         case 'ATXHeading6': {
           const level = node.name.slice('ATXHeading'.length);
-          parts.push({ from, to, value: Decoration.line({ class: `cm-md-h${level}` }) });
+          // Line-декорация обязана быть нулевой длины (LineDecoration.range
+          // бросает RangeError при to !== from): класс применяется к строке,
+          // содержащей позицию from — заголовок всегда начинается с её начала.
+          parts.push(Decoration.line({ class: `cm-md-h${level}` }).range(from));
           if (!isInRangeInclusive(ranges, from, to)) {
             const m = /^#{1,6} +/.exec(state.sliceDoc(from, to));
             if (m !== null) hide(from, from + m[0].length);

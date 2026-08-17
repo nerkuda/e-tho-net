@@ -41,6 +41,19 @@ function specs(state: EditorState, from = 0, to = state.doc.length): DecoSpec[] 
   return found;
 }
 
+/**
+ * Все декорации через iter(): в отличие от between(), включает точечные
+ * (нулевой длины) диапазоны — например, line-декорации заголовков.
+ */
+function allSpecs(state: EditorState): Array<{ from: number; to: number; spec: DecoSpec }> {
+  const found: Array<{ from: number; to: number; spec: DecoSpec }> = [];
+  for (const it = state.field(livePreview).iter(); it.value !== null; it.next()) {
+    const spec = (it.value as unknown as { spec?: DecoSpec }).spec ?? {};
+    found.push({ from: it.from, to: it.to, spec });
+  }
+  return found;
+}
+
 function hasClass(state: EditorState, cls: string, from: number, to: number): boolean {
   return specs(state, from, to).some((s) => s.class === cls);
 }
@@ -54,19 +67,34 @@ test('заголовок: класс строки cm-md-h1 всегда; мар�
   const doc = '# Заголовок\nтекст';
   // Каретка вне заголовка (в «текст»): маркер скрыт, класс строки есть.
   const away = buildState(doc, doc.length);
-  assert.equal(hasClass(away, 'cm-md-h1', 0, 1), true, 'класс строки h1');
+  assert.equal(allSpecs(away).some((r) => r.spec.class === 'cm-md-h1'), true, 'класс строки h1');
   assert.equal(hasHiddenMark(away, 0, 1), true, '«# » скрыт, каретка вне');
   // Каретка внутри заголовка: маркер виден, класс строки остаётся.
   const inside = buildState(doc, 2);
   assert.equal(hasHiddenMark(inside, 0, 1), false, '«# » виден, каретка внутри');
-  assert.equal(hasClass(inside, 'cm-md-h1', 0, 1), true);
+  assert.equal(allSpecs(inside).some((r) => r.spec.class === 'cm-md-h1'), true);
 });
 
 test('заголовок: уровень определяет класс строки (h1–h6)', () => {
   for (const level of ['1', '2', '3', '4', '5', '6'] as const) {
     const doc = `${'#'.repeat(Number(level))} Заголовок\n`;
     const state = buildState(doc, doc.length);
-    assert.equal(hasClass(state, `cm-md-h${level}`, 0, 1), true, `h${level}`);
+    assert.equal(
+      allSpecs(state).some((r) => r.spec.class === `cm-md-h${level}`),
+      true,
+      `h${level}`,
+    );
+  }
+});
+
+test('line-декорации заголовков — нулевой длины (LineDecoration.range бросает при to ≠ from)', () => {
+  const state = buildState('# Заголовок\n\n## Ещё\nтекст', 0);
+  const headingSpecs = allSpecs(state).filter(
+    (r) => typeof r.spec.class === 'string' && r.spec.class.startsWith('cm-md-h'),
+  );
+  assert.equal(headingSpecs.length, 2, 'обе line-декорации на месте');
+  for (const r of headingSpecs) {
+    assert.equal(r.from, r.to, `${r.spec.class}: from === to`);
   }
 });
 
