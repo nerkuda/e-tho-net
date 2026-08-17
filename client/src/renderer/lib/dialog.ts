@@ -3,8 +3,11 @@
  *
  * Dialogs form a stack: opening one on top of another (a type editor over the
  * type list, a confirmation over an editor) keeps the lower dialog open, and
- * Escape / backdrop click / × close only the topmost one. `promptDialog` and
- * `confirmDialog` are convenience wrappers for the most common inputs.
+ * Escape / backdrop click / × close only the topmost one. Ctrl/Cmd+Enter
+ * confirms the topmost dialog — it clicks its primary button, so «OK»,
+ * «Применить», «Сохранить» etc. are reachable from any field without tabbing
+ * to the footer. `promptDialog` and `confirmDialog` are convenience wrappers
+ * for the most common inputs.
  */
 
 import { button, div, el, errText } from './dom.js';
@@ -15,6 +18,12 @@ export interface DialogButton {
   label: string;
   primary?: boolean;
   danger?: boolean;
+  /**
+   * The confirm button for Ctrl/Cmd+Enter. Defaults to the `primary` button;
+   * set explicitly when the visually primary button is not the confirm one
+   * (a danger confirmation keeps «Отмена» primary-looking).
+   */
+  confirm?: boolean;
   /**
    * Called on click; receives the close function. By default a click also
    * closes the dialog right after this returns (so "Отмена"/"Закрыть"/simple
@@ -57,6 +66,9 @@ export function showDialog(opts: DialogOptions): () => void {
   const box = div('dialog-box');
   if (opts.width !== undefined) box.style.width = `${opts.width}px`;
 
+  /** Confirm button of this dialog — Ctrl+Enter clicks it. */
+  let primaryBtn: HTMLButtonElement | null = null;
+
   const header = div('dialog-header');
   header.append(el('span', 'dialog-title', opts.title));
   const closeBtn = button('', () => close(), 'dialog-close', 'Закрыть (Esc)');
@@ -83,6 +95,9 @@ export function showDialog(opts: DialogOptions): () => void {
           .filter((c) => c !== '')
           .join(' '),
       );
+      if (item.confirm === true || (item.confirm === undefined && item.primary === true)) {
+        if (primaryBtn === null) primaryBtn = btn;
+      }
       item.ref?.(btn);
       footer.append(btn);
     }
@@ -100,12 +115,25 @@ export function showDialog(opts: DialogOptions): () => void {
     if (event.key === 'Escape' && stack[stack.length - 1] === backdrop) close();
   };
   window.addEventListener('keydown', onKey, true);
+  const onConfirm = (event: KeyboardEvent): void => {
+    if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
+    // Bubble phase: field-level handlers (batch add, the thought picker,
+    // thought_ref candidate lists) consume Ctrl+Enter first via
+    // preventDefault; the dialog confirms only a still-unhandled press.
+    if (event.defaultPrevented) return;
+    if (stack[stack.length - 1] !== backdrop) return;
+    if (primaryBtn === null) return;
+    event.preventDefault();
+    primaryBtn.click();
+  };
+  window.addEventListener('keydown', onConfirm);
 
   backdrop.append(box);
   document.body.append(backdrop);
   stack.push(backdrop);
   backdrop.addEventListener('remove', () => {
     window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('keydown', onConfirm);
   });
   opts.onMount?.(close);
   return close;
@@ -167,7 +195,13 @@ export function confirmDialog(title: string, message: string, danger = false): P
       body: el('p', 'dialog-text', message),
       buttons: [
         { label: 'Отмена', onClick: () => finish(false) },
-        { label: 'Подтвердить', primary: !danger, danger, onClick: () => finish(true) },
+        {
+          label: 'Подтвердить',
+          primary: !danger,
+          danger,
+          confirm: true,
+          onClick: () => finish(true),
+        },
       ],
     });
   });
