@@ -12,7 +12,7 @@
  */
 
 import { scheduleRefresh } from '../app.js';
-import { setAddDialogOpener } from '../canvas/canvas.js';
+import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
 import { showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -461,11 +461,25 @@ async function handleExternalDrop(direction: 'parent' | 'child', event: DragEven
         title: url,
         create_link: { direction, target_thought_id: focusId },
       });
-      await etn.attachments.add(networkId, 'thought', thought.id, {
+      // A null title lets the server's URL enrichment (L1) fill the site title;
+      // the response then carries the title and the favicon (data: URL).
+      const attachment = await etn.attachments.add(networkId, 'thought', thought.id, {
         kind: 'url',
         url,
-        title: url,
+        title: null,
       });
+      // Mirror the enriched site title/icon onto the thought so the cloud shows
+      // them right away (the enrichment touches the attachment, not the thought).
+      const patch: import('@etn/shared').ThoughtUpdateInput = {};
+      if (attachment.title !== null && attachment.title !== url) patch.title = attachment.title;
+      if (attachment.icon !== null) {
+        patch.icon = attachment.icon;
+        patch.icon_kind = 'image';
+      }
+      if (Object.keys(patch).length > 0) {
+        await etn.thoughts.update(networkId, thought.id, patch, thought.version);
+        invalidateRef(thought.id);
+      }
       scheduleRefresh();
     } catch (err) {
       notice(`Не удалось создать мысль: ${errText(err)}`, 'error');
