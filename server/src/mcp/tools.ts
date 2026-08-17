@@ -1,9 +1,9 @@
 /**
  * MCP tools (task F4, docs/05-mcp-server.md §4).
  *
- * Nineteen tools in three groups:
- *   * read (§4.1) — networks list, search, get, neighbours, subgraph, path,
- *     links get, mentions, export;
+ * Twenty tools in three groups:
+ *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
+ *     path, links get, mentions, export;
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert, attachments.add,
  *     properties.set, set_active;
  *   * dedupe (§4.3) — find_duplicates.
@@ -48,6 +48,7 @@ import { createComment, listComments, updateComment } from '../domain/comment-se
 import { createAttachment } from '../domain/attachment-service.js';
 import { getPropertyValues, setPropertyValue } from '../domain/property-service.js';
 import { findDuplicates, findMentions, resolveThoughts, search } from '../domain/search-service.js';
+import { queryThoughts } from '../domain/query-service.js';
 import { exportToMarkdown, getExportJobContent, startExportJob } from '../domain/export-service.js';
 import { findPath, subgraph, traverse } from '../domain/graph-traversal.js';
 import { getThoughtType } from '../domain/thought-type-service.js';
@@ -103,7 +104,7 @@ const ThoughtChanges = z
 // ---------------------------------------------------------------------------
 
 /**
- * Register all nineteen `etn.*` tools on a freshly built {@link McpServer}.
+ * Register all twenty `etn.*` tools on a freshly built {@link McpServer}.
  */
 export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
@@ -154,6 +155,49 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           limit: args.limit,
           offset: 0,
         });
+      }),
+  );
+
+  const QueryPropertySchema = z.object({
+    key: z.string().min(1),
+    operator: z.enum(['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 'lte']),
+    value: z.union([z.string(), z.number(), z.boolean()]),
+  });
+  const QuerySchema = z.object({
+    network_id: NetworkId,
+    in_subtree_of: ThoughtId.optional(),
+    max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
+    type_id: z.array(z.string().min(1)).optional(),
+    active: z.enum(['true', 'false', 'any']).optional(),
+    keywords: z.string().min(1).optional(),
+    properties: z.array(QueryPropertySchema).optional(),
+    created_after: z.string().min(1).optional(),
+    created_before: z.string().min(1).optional(),
+    updated_after: z.string().min(1).optional(),
+    updated_before: z.string().min(1).optional(),
+    sort: z.enum(['title', 'created_at', 'updated_at']).optional(),
+    order: z.enum(['asc', 'desc']).optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+    offset: z.number().int().min(0).optional(),
+  });
+  mcp.registerTool(
+    'etn.thoughts.query',
+    {
+      title: 'Структурная выборка мыслей',
+      description:
+        'List thoughts by criteria (docs/05-mcp-server.md §4.1) — no text query required. ' +
+        'Filters combine with AND: `in_subtree_of` (+`max_depth`) restricts to the directed ' +
+        'descendants of a thought (each hit carries its `depth`), `type_id[]` filters by type, ' +
+        '`active` by актуальность (`true`/`false`/`any`), `keywords` by title/synonym LIKE, ' +
+        '`properties` by property values (key + operator eq/ne/contains/gt/gte/lt/lte + value; ' +
+        'the value type selects the column: number/boolean/string), `created_*`/`updated_*` by ' +
+        'ISO-8601 date ranges. Use instead of search when there is no text to query.',
+      inputSchema: QuerySchema,
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        return queryThoughts(ndb, args, { maxNodes: rt.limits.maxNodesPerSubgraph });
       }),
   );
 

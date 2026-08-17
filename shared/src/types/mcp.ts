@@ -26,6 +26,7 @@ export const MCP_TOOL_NAMES = [
   // read (§4.1)
   'etn.networks.list',
   'etn.thoughts.search',
+  'etn.thoughts.query',
   'etn.thoughts.get',
   'etn.thoughts.neighbors',
   'etn.thoughts.subgraph',
