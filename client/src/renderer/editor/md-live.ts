@@ -211,9 +211,14 @@ function buildDecorations(state: EditorState): DecorationSet {
           quoteStack.push({ from, to });
           break;
         }
-        // Маркер цитаты: активен, пока каретка внутри её Blockquote.
+        // Маркер цитаты: активен, пока каретка внутри её Blockquote. Рамка —
+        // line-декорация по одной на строку цитаты, только у внешнего блока
+        // (span-класс подсветки обрамлял бы каждый «>» вложенной цитаты).
         case 'QuoteMark': {
           const block = quoteStack[quoteStack.length - 1];
+          if (quoteStack.length === 1) {
+            parts.push(Decoration.line({ class: 'cm-md-quote-line' }).range(from));
+          }
           const active = block !== undefined && isInRangeInclusive(ranges, block.from, block.to);
           if (!active) {
             const extra = state.sliceDoc(to, to + 1) === ' ' ? 1 : 0;

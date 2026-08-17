@@ -87,15 +87,42 @@ test('заголовок: уровень определяет класс стр�
   }
 });
 
-test('line-декорации заголовков — нулевой длины (LineDecoration.range бросает при to ≠ from)', () => {
-  const state = buildState('# Заголовок\n\n## Ещё\nтекст', 0);
-  const headingSpecs = allSpecs(state).filter(
-    (r) => typeof r.spec.class === 'string' && r.spec.class.startsWith('cm-md-h'),
+test('line-декорации — нулевой длины (LineDecoration.range бросает при to ≠ from)', () => {
+  const state = buildState('# Заголовок\n\n## Ещё\n> цитата\nтекст', 0);
+  const lineSpecs = allSpecs(state).filter(
+    (r) =>
+      typeof r.spec.class === 'string' &&
+      (r.spec.class.startsWith('cm-md-h') || r.spec.class === 'cm-md-quote-line'),
   );
-  assert.equal(headingSpecs.length, 2, 'обе line-декорации на месте');
-  for (const r of headingSpecs) {
+  assert.equal(lineSpecs.length, 3, 'заголовки + цитата');
+  for (const r of lineSpecs) {
     assert.equal(r.from, r.to, `${r.spec.class}: from === to`);
   }
+});
+
+test('цитата: line-класс на строку; маркер «>» виден только внутри блока', () => {
+  // Пустая строка отделяет «текст»: иначе он — ленивое продолжение
+  // Blockquote, и каретка в конце документа всё ещё внутри блока.
+  const doc = '> цитата\n> вторая\n\nтекст';
+  // Две «>»-строки — один Blockquote: каретка внутри блока показывает
+  // маркеры обеих строк (правило M6 — блоком владеет Blockquote).
+  const inside = buildState(doc, 3);
+  const quoteLines = allSpecs(inside).filter((r) => r.spec.class === 'cm-md-quote-line');
+  assert.equal(quoteLines.length, 2, 'по line-классу на каждую строку цитаты');
+  assert.equal(hasHiddenMark(inside, 0, 1), false, '«>» первой строки виден');
+  assert.equal(hasHiddenMark(inside, 9, 10), false, '«>» второй строки виден');
+  // Каретка вне цитаты: оба маркера скрыты, классы строк остаются.
+  const away = buildState(doc, doc.length);
+  assert.equal(hasHiddenMark(away, 0, 1), true);
+  assert.equal(hasHiddenMark(away, 9, 10), true);
+  assert.equal(allSpecs(away).filter((r) => r.spec.class === 'cm-md-quote-line').length, 2);
+});
+
+test('вложенная цитата: line-класс только у внешнего блока — рамка не дублируется', () => {
+  const doc = '> > вложенная\n';
+  const state = buildState(doc, 5);
+  const quoteLines = allSpecs(state).filter((r) => r.spec.class === 'cm-md-quote-line');
+  assert.equal(quoteLines.length, 1);
 });
 
 test('inline-код: плашка cm-md-inline-code всегда; бэктики скрыты только вне', () => {

@@ -53,8 +53,9 @@ const mdHighlightStyle = HighlightStyle.define([
   { tag: tags.strikethrough, textDecoration: 'line-through' },
   { tag: tags.link, color: 'var(--accent)' },
   { tag: tags.monospace, fontFamily: 'var(--md-mono)' },
-  // Цитата: цвет и класс — рамка/отступ задаёт тема (паритет с просмотром).
-  { tag: tags.quote, color: 'var(--text-dim)', class: 'cm-md-quote' },
+  // Цитата: только цвет — рамку/отступ задаёт line-декорация md-live
+  // (span-класс подсветки обрамлял бы каждый «>» вложенных цитат).
+  { tag: tags.quote, color: 'var(--text-dim)' },
   { tag: tags.url, color: 'var(--accent)' },
   { tag: tags.meta, color: 'var(--text-dim)' },
 ]);
@@ -104,22 +105,29 @@ const mdTheme = EditorView.theme({
     padding: '2px 0',
   },
   '.cm-line': { padding: '0 4px 0 2px' },
-  // Заголовки: размеры, межстрочный интервал и отступы браузерных стилей
-  // h1–h6 (просмотр их и использует) — паритет между режимами.
-  '.cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-h4, .cm-md-h5, .cm-md-h6': {
-    fontWeight: '700',
-  },
-  '.cm-md-h1': { fontSize: '2em', lineHeight: '1.25', margin: '0.67em 0' },
-  '.cm-md-h2': { fontSize: '1.5em', lineHeight: '1.25', margin: '0.83em 0' },
-  '.cm-md-h3': { fontSize: '1.17em', lineHeight: '1.25', margin: '1em 0' },
-  '.cm-md-h4': { fontSize: '1em', lineHeight: '1.25', margin: '1.33em 0' },
-  '.cm-md-h5': { fontSize: '0.83em', lineHeight: '1.25', margin: '1.67em 0' },
-  '.cm-md-h6': { fontSize: '0.67em', lineHeight: '1.25', margin: '2.33em 0' },
-  // Цитата: как blockquote в просмотре (.comment-view blockquote).
-  '.cm-md-quote': {
+  // Цитата: рамка и отступ — на строке, как blockquote в просмотре
+  // (.comment-view blockquote). Line-декорацию ставит md-live (одна на
+  // строку, у вложенных цитат — только у внешней).
+  '.cm-md-quote-line': {
     borderLeft: '3px solid var(--border-strong)',
     paddingLeft: '10px',
   },
+  // Заголовки: размеры и межстрочный интервал браузерных стилей h1–h6
+  // (просмотр их и использует) — паритет между режимами. Вертикальные
+  // отступы — padding, не margin: getBoundingClientRect() не включает
+  // margin, и карта высот CodeMirror разошлась бы с раскладкой (стрелки
+  // вверх/вниз прыгали бы через строки).
+  '.cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-h4, .cm-md-h5, .cm-md-h6': {
+    fontWeight: '700',
+    paddingTop: '0.4em',
+    paddingBottom: '0.1em',
+  },
+  '.cm-md-h1': { fontSize: '2em', lineHeight: '1.25' },
+  '.cm-md-h2': { fontSize: '1.5em', lineHeight: '1.25' },
+  '.cm-md-h3': { fontSize: '1.17em', lineHeight: '1.25' },
+  '.cm-md-h4': { fontSize: '1em', lineHeight: '1.25' },
+  '.cm-md-h5': { fontSize: '0.83em', lineHeight: '1.25' },
+  '.cm-md-h6': { fontSize: '0.67em', lineHeight: '1.25' },
   // Inline-код: плашка как у <code> в просмотре (.comment-view code).
   '.cm-md-inline-code': {
     background: 'var(--surface-2)',
