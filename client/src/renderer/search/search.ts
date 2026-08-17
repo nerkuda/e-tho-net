@@ -105,7 +105,7 @@ export function mountSearch(next: SearchChrome): void {
       restored = true;
       void restoreState();
     }
-    applySelection(lastSelectedKey, true);
+    refreshOnActivation();
   });
   input.addEventListener('input', () => {
     if (searchTimer !== null) window.clearTimeout(searchTimer);
@@ -183,6 +183,30 @@ function positionPanel(): void {
 function hidePanel(): void {
   if (chrome !== null) chrome.host.classList.add('hidden');
   cursor = null;
+}
+
+/**
+ * Re-runs the search on every panel activation so the list never serves stale
+ * data — a thought deleted while the panel was hidden must not linger in the
+ * results. The last chosen hit is re-highlighted after the fresh render.
+ */
+function refreshOnActivation(): void {
+  if (chrome === null) return;
+  if (isSearchableQuery(chrome.input.value.trim())) {
+    void run().then(() => applySelection(lastSelectedKey, true));
+  } else {
+    applySelection(lastSelectedKey, true);
+  }
+}
+
+/**
+ * Re-runs the search when the panel is already visible and the query is live —
+ * called after a deletion so the deleted thought leaves the visible list at
+ * once (the actor gets no realtime echo, 04-realtime.md §5).
+ */
+export function refreshSearchIfVisible(): void {
+  if (chrome === null || chrome.host.classList.contains('hidden')) return;
+  if (isSearchableQuery(chrome.input.value.trim())) void run();
 }
 
 /** One keyboard-navigable row: a group header or a hit of an expanded group. */

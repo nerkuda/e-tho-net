@@ -32,6 +32,7 @@ import { applyRealtimeToUi } from './realtime-ui.js';
 import { initTheme } from './lib/theme.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
+import { refreshSearchIfVisible } from './search/search.js';
 import { invalidateStructuresThought } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
 import { store } from './state.js';
@@ -263,6 +264,7 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
   invalidateRef(deletedId);
   invalidateHistoryBar();
   invalidateStructuresThought(deletedId);
+  refreshSearchIfVisible();
 }
 
 /**
