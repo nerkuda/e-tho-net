@@ -1189,12 +1189,15 @@ body.resizing-h {
   cursor: grabbing;
 }
 
-/* Reorder preview (Alt-drag, drag-cloud.ts): the gap where the dragged
-   thought will land — the following clouds shift aside around it. */
+/* Reorder preview (Ctrl+Shift drag, drag-cloud.ts): the gap where the dragged
+   thought will land — the following clouds shift aside around it. The gap must
+   catch the pointer (the zone grid is pointer-transparent), so a drop released
+   over it still resolves the insertion point. */
 .cloud-drop-placeholder {
   border: 2px dashed var(--accent);
   border-radius: var(--radius-cloud);
   background: var(--accent-soft);
+  pointer-events: auto;
 }
 
 .cloud.drop-target {

@@ -145,7 +145,13 @@ function onCloudMouseMove(event: MouseEvent): void {
   moveGhost(event.clientX, event.clientY);
   const dragged: DraggedCloud = { id: gesture.id, dir: gesture.dir };
   const target = computeTarget(event, dragged, accessors);
-  gesture.lastTarget = target;
+  // Hovering the gap the preview just opened (or the pointer-transparent grid
+  // between clouds) resolves to a no-op inside the dragged's own zone; the
+  // preview stays where it is (updateReorderPreview keeps it), and so must the
+  // drop — otherwise releasing over the gap silently cancels the reorder.
+  if (!(target.kind === 'none' && target.zoneDir === dragged.dir)) {
+    gesture.lastTarget = target;
+  }
   highlight(target);
   updateReorderPreview(target, dragged, accessors);
 }
