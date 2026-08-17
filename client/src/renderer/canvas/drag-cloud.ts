@@ -74,6 +74,10 @@ interface CloudDragGesture {
   source: HTMLElement;
   /** Clone of the source following the cursor (`pointer-events: none`). */
   ghost: HTMLElement | null;
+  /** Drop target resolved by the last mousemove — the drop applies it, so the
+   *  preview is always WYSIWYG (a modifier released a tick before the mouse
+   *  button cannot silently change the drop). */
+  lastTarget: DropTarget | null;
 }
 
 /** Accessors into the canvas module (zone element + current manual order). */
@@ -105,9 +109,9 @@ function onCloudMouseDown(event: MouseEvent): void {
   if (event.button !== 0 || gesture !== null) return;
   const target = event.target as HTMLElement | null;
   if (target === null) return;
-  // Ellipse presses run their own gesture (canvas.ts) — it stops propagation,
-  // so this listener never sees them; the guard is a belt-and-braces.
-  if (target.closest<HTMLElement>('.ellipse') !== null) return;
+  // Ellipse presses usually run their own gesture (canvas.ts wireEllipseDrag)
+  // — it stops propagation, so this listener never sees them. Ctrl+Shift is
+  // the zone reorder, and the ellipse handler lets exactly that press through.
   const cloud = target.closest<HTMLElement>('.cloud');
   const id = cloud?.dataset['id'];
   const dir = cloud?.dataset['dir'];
@@ -120,6 +124,7 @@ function onCloudMouseDown(event: MouseEvent): void {
     active: false,
     source: cloud,
     ghost: null,
+    lastTarget: null,
   };
   window.addEventListener('mousemove', onCloudMouseMove);
   window.addEventListener('mouseup', onCloudMouseUp);
@@ -140,6 +145,7 @@ function onCloudMouseMove(event: MouseEvent): void {
   moveGhost(event.clientX, event.clientY);
   const dragged: DraggedCloud = { id: gesture.id, dir: gesture.dir };
   const target = computeTarget(event, dragged, accessors);
+  gesture.lastTarget = target;
   highlight(target);
   updateReorderPreview(target, dragged, accessors);
 }
@@ -156,7 +162,11 @@ function onCloudMouseUp(event: MouseEvent): void {
   g.source.classList.remove('drag-source');
   g.ghost?.remove();
   const dragged: DraggedCloud = { id: g.id, dir: g.dir };
-  const target = computeTarget(event, dragged, accessors!);
+  // The drop applies what the preview showed (the last mousemove target); the
+  // fallback covers a drop without any mousemove. Recomputing from the mouseup
+  // alone would silently change the drop when a modifier is released a tick
+  // before the mouse button.
+  const target = g.lastTarget ?? computeTarget(event, dragged, accessors!);
   clearHighlight();
   switch (target.kind) {
     case 'link-parent':
@@ -186,6 +196,15 @@ function onCloudMouseUp(event: MouseEvent): void {
     }
     default:
       removeReorderPreview();
+      // A Ctrl+Shift drop that ends in a no-op usually means the zone is not
+      // sorted `manual` — say so instead of silently bouncing back.
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.shiftKey &&
+        store.state.zoneSorts[g.dir] !== 'manual'
+      ) {
+        notice('Упорядочивание работает при сортировке зоны «ручной» (правый клик по зоне → порядок).');
+      }
       break;
   }
 }

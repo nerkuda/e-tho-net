@@ -933,8 +933,11 @@ function wireEllipseDrag(
   });
   ellipse.addEventListener('mousedown', (event) => {
     if (event.button !== 0) return;
-    // Ctrl+click on an ellipse adds all parents/children to the selection (H16).
+    // Ctrl+click on an ellipse adds all parents/children to the selection (H16);
+    // Ctrl+Shift is the zone reorder drag (drag-cloud.ts) — that press must
+    // reach the cloud gesture, so let it bubble untouched.
     if (event.ctrlKey || event.metaKey) {
+      if (event.shiftKey) return;
       event.preventDefault();
       selectionHooks?.onEllipseClick(anchorId, direction);
       return;
