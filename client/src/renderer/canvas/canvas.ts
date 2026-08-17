@@ -80,7 +80,7 @@ const OVERSCAN_ROWS = 2;
 /** How many indicator fetches may run concurrently. */
 const INDICATOR_CONCURRENCY = 3;
 /** Minimum mouse travel before a press becomes a drag, px. */
-const DRAG_THRESHOLD_PX = 4;
+export const DRAG_THRESHOLD_PX = 4;
 
 /** Add-thought dialog context produced by an ellipse drag (H14 registers). */
 export interface AddDialogContext {
@@ -100,10 +100,6 @@ interface DragState {
   hovered: HTMLElement | null;
   /** The pressed ellipse — lights up as the drag source (`.drag-source`). */
   sourceEl: HTMLElement;
-  /** Its cloud, made un-draggable for the gesture (restored on release). */
-  sourceCloud: HTMLElement | null;
-  /** Whether `sourceCloud` was draggable before the press. */
-  wasDraggable: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +115,12 @@ let drag: DragState | null = null;
 let suppressNextClick = false;
 let addDialogOpener: ((ctx: AddDialogContext) => void) | null = null;
 let redrawLinks: (() => void) | null = null;
+
+/** Marks the next canvas click as a drag aftermath (consumed by the cloud
+ *  click handler) — set by the cloud drag gesture (drag-cloud.ts). */
+export function suppressNextCanvasClick(): void {
+  suppressNextClick = true;
+}
 
 /** Selection click hooks (H16): Ctrl+click on clouds and ellipses. */
 export interface SelectionClickHooks {
@@ -787,7 +789,6 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   // Click → focus (B1); Ctrl+click toggles selection (H16); Enter on a
   // keyboard-focused cloud focuses it; right-click opens the context menu (H15).
   cloud.tabIndex = 0;
-  cloud.draggable = dir !== 'siblings';
   cloud.addEventListener('click', (event) => {
     if (suppressNextClick) {
       suppressNextClick = false;
@@ -940,12 +941,6 @@ function wireEllipseDrag(
     }
     event.preventDefault();
     event.stopPropagation();
-    // A zone cloud is HTML5-draggable for the whole-cloud DnD (drag-cloud.ts);
-    // an ellipse press must run THIS mouse gesture instead, so keep the native
-    // drag from hijacking it and restore the flag on release.
-    const sourceCloud = ellipse.closest<HTMLElement>('.cloud');
-    const wasDraggable = sourceCloud?.draggable ?? false;
-    if (sourceCloud !== null && wasDraggable) sourceCloud.draggable = false;
     drag = {
       anchorId,
       direction,
@@ -954,8 +949,6 @@ function wireEllipseDrag(
       active: false,
       hovered: null,
       sourceEl: ellipse,
-      sourceCloud,
-      wasDraggable,
     };
     window.addEventListener('mousemove', onDragMove);
     window.addEventListener('mouseup', onDragEnd);
@@ -997,7 +990,6 @@ function onDragEnd(_event: MouseEvent): void {
   const hoveredId = drag.hovered?.dataset['id'] ?? null;
   if (drag.hovered !== null) drag.hovered.classList.remove('drop-target');
   drag.sourceEl.classList.remove('drag-source');
-  if (drag.sourceCloud !== null && drag.wasDraggable) drag.sourceCloud.draggable = true;
   drag = null;
   document.body.classList.remove('dragging');
 

@@ -19,7 +19,7 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { parseAddLines, parseTitleWithSynonyms } from '../lib/pure.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
-import { CLOUD_DRAG_MIME, UI_STATE_KEY } from '@etn/shared';
+import { UI_STATE_KEY } from '@etn/shared';
 import { store } from '../state.js';
 import { requireNetworkId } from '../app.js';
 
@@ -430,19 +430,12 @@ export function openAddDialog(ctx: {
 export function wireZoneExternalDrops(zones: Record<'parents' | 'children', HTMLElement>): void {
   for (const dir of ['parents', 'children'] as const) {
     const zone = zones[dir];
-    // Internal canvas cloud drags carry CLOUD_DRAG_MIME and are handled by the
-    // cloud-drag wiring; ignore them here so an internal drag never spawns a
-    // junk thought via the external file/URL path.
-    const isInternal = (event: DragEvent): boolean =>
-      event.dataTransfer?.types.includes(CLOUD_DRAG_MIME) ?? false;
     zone.addEventListener('dragover', (event) => {
-      if (isInternal(event)) return;
       event.preventDefault();
       zone.classList.add('drag-over');
     });
     zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
     zone.addEventListener('drop', (event) => {
-      if (isInternal(event)) return;
       event.preventDefault();
       zone.classList.remove('drag-over');
       void handleExternalDrop(dir === 'parents' ? 'parent' : 'child', event);
