@@ -13,16 +13,16 @@
  * - **Ctrl/Cmd drag** — drop on any part of cloud Б → move the dragged thought
  *   into subordination of Б: every existing parent link of the dragged thought
  *   is replaced by a single Б→A link (no copy);
- * - **Alt drag** — reorder inside the dragged thought's zone, only while the
- *   zone is sorted `manual`: a drop on cloud Б puts A right **before** Б. The
- *   insertion point is previewed live — a dashed placeholder opens a gap and
- *   the following clouds shift aside — and the refreshed zone FLIP-animates
+ * - **Ctrl+Shift drag** — reorder inside the dragged thought's zone, only while
+ *   the zone is sorted `manual`: a drop on cloud Б puts A right **before** Б.
+ *   The insertion point is previewed live — a dashed placeholder opens a gap
+ *   and the following clouds shift aside — and the refreshed zone FLIP-animates
  *   the clouds to their final positions.
  *
- * A gesture rather than HTML5 drag-n-drop on purpose: Chromium intercepts
- * Alt+drag ("link selection") and never fires `dragstart`, so modifier-key
- * drags would be impossible. The per-zone ellipse-drag gesture (canvas.ts,
- * `wireEllipseDrag`) is left untouched.
+ * A gesture rather than HTML5 drag-n-drop: Chromium intercepts modifier-key
+ * drags in several ways (Alt+drag is link selection, a lone Alt focuses the
+ * menu bar), and a gesture reads the modifiers live mid-drag anyway. The
+ * per-zone ellipse-drag gesture (canvas.ts, `wireEllipseDrag`) is untouched.
  *
  * Existing links are reused (server 409 → no-op); the reverse link, if any, is
  * removed first and its type carried over to the new link.
@@ -85,7 +85,7 @@ export interface DragAccessors {
 
 let gesture: CloudDragGesture | null = null;
 let highlighted: HTMLElement | null = null;
-/** Reorder preview (Alt-drag): zone and insertion index of the placeholder. */
+/** Reorder preview (Ctrl+Shift drag): zone and insertion index of the placeholder. */
 let previewZone: HTMLElement | null = null;
 let previewIndex: number | null = null;
 /** Canvas accessors, captured at wiring; the window gesture handlers need them. */
@@ -241,8 +241,11 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
   const cloud = el.closest<HTMLElement>('.cloud');
   if (cloud !== null && cloud.dataset['id'] !== undefined && cloud.dataset['id'] !== dragged.id) {
     const targetThoughtId = cloud.dataset['id'];
-    if (event.altKey) {
-      return altReorderTarget(
+    // Ctrl+Shift: manual reorder — insert right before the hovered cloud.
+    // Only inside the dragged thought's own zone, and only while it is sorted
+    // `manual`.
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey) {
+      return reorderTarget(
         targetThoughtId,
         cloud.closest<HTMLElement>('.zone')?.dataset['dir'],
         dragged,
@@ -273,13 +276,18 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
     return { kind: 'link-child', targetThoughtId, highlightEl: cloud, highlightCls: 'drop-target-link' };
   }
 
-  // The reorder gap itself (Alt-drag preview): a drop on the placeholder means
-  // inserting before the cloud right after it.
+  // The reorder gap itself (Ctrl+Shift drag preview): a drop on the
+  // placeholder means inserting before the cloud right after it.
   const placeholder = el.closest<HTMLElement>('.cloud-drop-placeholder');
   if (placeholder !== null) {
     const nextId = (placeholder.nextElementSibling as HTMLElement | null)?.dataset['id'];
-    if (nextId !== undefined && nextId !== dragged.id && event.altKey) {
-      return altReorderTarget(
+    if (
+      nextId !== undefined &&
+      nextId !== dragged.id &&
+      (event.ctrlKey || event.metaKey) &&
+      event.shiftKey
+    ) {
+      return reorderTarget(
         nextId,
         placeholder.closest<HTMLElement>('.zone')?.dataset['dir'],
         dragged,
@@ -296,8 +304,8 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
     if (zdir === 'siblings') return { kind: 'none' };
     if (zdir === 'parents' || zdir === 'children') {
       // A plain (or Ctrl) drag never reorders: a drop inside the dragged's own
-      // zone is a no-op (the gap keeps the Alt preview alive); a drop on the
-      // other zone flips the link direction.
+      // zone is a no-op (the gap keeps the reorder preview alive); a drop on
+      // the other zone flips the link direction.
       if (zdir === dragged.dir) return { kind: 'none', zoneDir: zdir };
       return { kind: 'move', zoneDir: zdir, highlightEl: zone, highlightCls: 'drop-target-move' };
     }
@@ -305,9 +313,9 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
   return { kind: 'none' };
 }
 
-/** Alt-drop on a thought: insert the dragged thought right before it (only
- *  inside the dragged's own zone and while it is sorted `manual`). */
-function altReorderTarget(
+/** Ctrl+Shift-drop on a thought: insert the dragged thought right before it
+ *  (only inside the dragged's own zone and while it is sorted `manual`). */
+function reorderTarget(
   targetThoughtId: string,
   zoneDir: string | undefined,
   dragged: DraggedCloud,
@@ -319,14 +327,14 @@ function altReorderTarget(
   return {
     kind: 'reorder',
     zoneDir: dragged.dir,
-    insertIndex: altCloudIndex(dragged, targetThoughtId, acc),
+    insertIndex: reorderBeforeIndex(dragged, targetThoughtId, acc),
     highlightEl,
     highlightCls: 'drop-target-move',
   };
 }
 
-/** Alt-drop on a cloud: insert the dragged thought right before it. */
-function altCloudIndex(dragged: DraggedCloud, targetId: string, acc: DragAccessors): number {
+/** Ctrl+Shift-drop on a cloud: insert the dragged thought right before it. */
+function reorderBeforeIndex(dragged: DraggedCloud, targetId: string, acc: DragAccessors): number {
   const order = acc.getZoneOrder(dragged.dir).filter((x) => x !== dragged.id);
   const idx = order.indexOf(targetId);
   return idx >= 0 ? idx : order.length;
@@ -351,7 +359,7 @@ function clearHighlight(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Reorder preview (Alt-drag): a dashed placeholder opens a gap at the
+// Reorder preview (Ctrl+Shift drag): a dashed placeholder opens a gap at the
 // insertion point and the following clouds shift aside (mini-FLIP). The
 // placeholder stays until the zone re-renders with the new order, so the
 // refresh-time FLIP animates the dragged cloud into the gap.
