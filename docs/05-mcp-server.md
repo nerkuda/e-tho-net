@@ -69,6 +69,7 @@ REST. Все изменения, сделанные агентом, иденти
 |------|----------|-----------|
 | `etn.networks.list` | Доступные сети | — |
 | `etn.thoughts.search` | Полнотекстовый поиск | `network_id`, `query`, `scope?` (`names`/`texts`/`links`/`chronology`/`all`), `in_subtree_of?`, `type_id?`, `limit?` |
+| `etn.thoughts.query` | Структурная выборка (список по критериям) | см. §4.1a |
 | `etn.thoughts.get` | Полная мысль | `network_id`, `thought_id` |
 | `etn.thoughts.neighbors` | Соседи | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход) |
 | `etn.thoughts.subgraph` | Подграф в радиусе N рёбер | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?` |
@@ -80,6 +81,53 @@ REST. Все изменения, сделанные агентом, иденти
 `etn.thoughts.subgraph` — ключевой для RAG-сценариев: агент задаёт радиус
 обхода, лимит узлов, и получает JSON-граф с мыслями, связями и (опционально)
 комментариями — готовый контекст для генерации.
+
+#### 4.1a. `etn.thoughts.query` — структурная выборка
+
+Список мыслей по критериям **без обязательного текстового запроса** (в
+отличие от `etn.thoughts.search`). Нужен, когда искать нечего, а критерий —
+структурный: «все ошибки в поддереве проекта», «мысли со свойством
+статус = активный», «задачи, изменённые за неделю». Все фильтры
+комбинируются (AND).
+
+| Параметр | Тип | Смысл |
+|----------|-----|-------|
+| `network_id` | string | обязателен |
+| `in_subtree_of` | string | ограничить подчинёнными этой мысли: **направленный** обход вниз по активным связям (source → target) на любую глубину |
+| `max_depth` | int | максимальная глубина обхода (по умолчанию 20) |
+| `type_id` | string[] | фильтр по типам мыслей |
+| `active` | `true`/`false`/`any` | актуальность (по умолчанию `true` — только актуальные) |
+| `keywords` | string | LIKE-фильтр по названию и синонимам (без FTS) |
+| `properties` | array | условия по значениям свойств: `{key, operator, value}` |
+| `created_after`/`created_before` | string | ISO-8601, диапазон создания |
+| `updated_after`/`updated_before` | string | ISO-8601, диапазон изменения |
+| `sort` | `title`/`created_at`/`updated_at` | сортировка (по умолчанию `title`) |
+| `order` | `asc`/`desc` | направление (по умолчанию `asc`) |
+| `limit`/`offset` | int | пагинация (лимит по умолчанию 50, максимум 200) |
+
+Операторы условия `properties`: `eq`, `ne`, `contains`, `gt`, `gte`, `lt`,
+`lte`. Тип переданного `value` сам выбирает колонку значения:
+- **число** — `value_number` (все операторы, кроме `contains`);
+- **булево** — `value_bool` (`eq`/`ne`);
+- **строка** — `contains` по `value_text`; `gt/gte/lt/lte` по `value_date`
+  (ISO-8601, лексикографическое сравнение); `eq/ne` по любой текстовой
+  колонке (`value_text`/`value_date`/`value_thought_ref`).
+
+Ответ: `{ total, hits: [{id, title, type_id, active, depth}], truncated,
+reason }`. `depth` — расстояние от `in_subtree_of` (0 — сам корень; `null`,
+если корень не задан). Обход ограничен `max_nodes_per_subgraph` — при
+превышении `truncated: true, reason: "max_nodes"`, и лишние узлы в выборку
+не попадают.
+
+Пример — все ошибки в поддереве проекта за один вызов:
+
+```json
+{
+  "network_id": "<net>",
+  "in_subtree_of": "<id проекта>",
+  "type_id": ["<id типа «ошибка»>"]
+}
+```
 
 ### 4.2. Создание и изменение
 
