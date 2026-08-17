@@ -576,11 +576,17 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   grid.style.transform = `translateY(${prefix[startRow]!}px)`;
 
   clear(grid);
+  // Column-major fill (08-ui-spec.md §2.1.1): a grid slot keeps its visual
+  // position, but the entry placed there follows the top-to-bottom reading
+  // order — slot i (column i % cols, row i / cols) shows the entry whose
+  // column-major index is (i % cols) * rows + floor(i / cols). Sparse last
+  // rows (a partial final column) simply stay empty.
+  const slotOf = (i: number): number => (i % cols) * rows + Math.floor(i / cols);
   const first = startRow * cols;
-  const last = Math.min(entries.length, endRow * cols);
+  const last = endRow * cols;
   const rowClouds = new Map<number, HTMLElement[]>();
   for (let i = first; i < last; i++) {
-    const entry = entries[i];
+    const entry = entries[slotOf(i)];
     if (entry === undefined) continue;
     const cloud = buildCloud(entry, dir);
     const r = Math.floor(i / cols);
@@ -613,7 +619,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   // applied synchronously and would otherwise patch nothing (the focus row
   // loads it after mounting for the same reason).
   for (let i = first; i < last; i++) {
-    const entry = entries[i];
+    const entry = entries[slotOf(i)];
     if (entry !== undefined) queueIndicatorLoad(entry.id);
   }
   redrawLinks?.();
