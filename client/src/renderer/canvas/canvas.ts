@@ -36,6 +36,7 @@ import {
   drawLinksNow,
   invalidateLinkCounts,
   setEllipseHover,
+  setDragLinkLine,
   LINK_LABEL_FONT_BASE,
 } from './links.js';
 import {
@@ -184,9 +185,7 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   // Internal cloud drag-n-drop (move / link / reorder / copy) — one delegation
   // point on the canvas host; siblings are handled there as a non-target.
   wireCloudDrag(host, {
-    getZoneEl: (dir) => zones?.[dir] ?? null,
     getZoneOrder: (dir) => store.state.zoneOrder[dir],
-    getZoneGrid: (dir) => zoneGridOf(dir),
   });
   // A click not on a link line clears the sticky link selection and returns the
   // editor to the focused thought (editorTarget=null → editor follows the focus).
@@ -998,6 +997,12 @@ function onDragMove(event: MouseEvent): void {
     document.body.classList.add('dragging');
     suppressNextClick = true;
   }
+  // The pending-link line follows the cursor from the dragged ellipse's centre.
+  const rect = drag.sourceEl.getBoundingClientRect();
+  setDragLinkLine({
+    from: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+    to: { x: event.clientX, y: event.clientY },
+  });
   const target = document.elementFromPoint(event.clientX, event.clientY);
   const cloud = target instanceof HTMLElement ? target.closest<HTMLElement>('.cloud') : null;
   if (drag.hovered !== null && drag.hovered !== cloud) {
@@ -1022,6 +1027,7 @@ function onDragEnd(_event: MouseEvent): void {
   const hoveredId = drag.hovered?.dataset['id'] ?? null;
   if (drag.hovered !== null) drag.hovered.classList.remove('drop-target');
   drag.sourceEl.classList.remove('drag-source');
+  setDragLinkLine(null);
   drag = null;
   document.body.classList.remove('dragging');
 

@@ -81,6 +81,9 @@ let svg: SVGSVGElement | null = null;
 let svgHit: SVGSVGElement | null = null;
 /** Top overlay — above the hit layer; carries the hovered/selected line. */
 let svgTop: SVGSVGElement | null = null;
+/** Pending-link overlay — above everything; carries the ellipse-drag preview
+ *  line and survives the redraws that rebuild svgTop. */
+let svgDrag: SVGSVGElement | null = null;
 let popover: HTMLElement | null = null;
 /** Bundle whose popover is open (to refresh counts on invalidation). */
 let activePopoverBundle: Bundle | null = null;
@@ -101,6 +104,33 @@ export function setEllipseHover(
 ): void {
   ellipseHover = state;
   drawActive();
+}
+
+/**
+ * Moves the pending-link preview (canvas ellipse drag): a dashed line from the
+ * dragged ellipse to the cursor, drawn above every other layer. Pass `null` to
+ * remove it. Endpoints are viewport coordinates — the line is anchored to the
+ * canvas host's drag overlay.
+ */
+export function setDragLinkLine(
+  state: { from: { x: number; y: number }; to: { x: number; y: number } } | null,
+): void {
+  if (svgDrag === null || hostEl === null) return;
+  if (state === null) {
+    while (svgDrag.firstChild !== null) svgDrag.removeChild(svgDrag.firstChild);
+    return;
+  }
+  const rect = hostEl.getBoundingClientRect();
+  let line = svgDrag.querySelector<SVGLineElement>('.drag-link-line');
+  if (line === null) {
+    line = document.createElementNS(SVG_NS, 'line');
+    line.classList.add('drag-link-line');
+    svgDrag.append(line);
+  }
+  line.setAttribute('x1', String(state.from.x - rect.left));
+  line.setAttribute('y1', String(state.from.y - rect.top));
+  line.setAttribute('x2', String(state.to.x - rect.left));
+  line.setAttribute('y2', String(state.to.y - rect.top));
 }
 /** Endpoint ellipses currently highlighted, to clear on the next redraw. */
 let highlightedEllipses: HTMLElement[] = [];
@@ -126,12 +156,19 @@ export function initLinksOverlay(host: HTMLElement): { redraw(): void } {
   svgTop.classList.add('links-overlay-top');
   svgTop.setAttribute('width', '100%');
   svgTop.setAttribute('height', '100%');
+  // The pending-link preview layer lives ABOVE the top overlay and is never
+  // cleared by the redraws (draw/drawActive rebuild svgTop) — an ellipse drag
+  // keeps its line no matter what repaints in between.
+  svgDrag = document.createElementNS(SVG_NS, 'svg');
+  svgDrag.classList.add('links-overlay-drag');
+  svgDrag.setAttribute('width', '100%');
+  svgDrag.setAttribute('height', '100%');
   // DOM order is the source of truth for layering: visual overlay FIRST (under
   // the clouds), then hit + top overlays LAST. The hit layer shares z=0 with
   // the visual one and relies on DOM order to sit above the curves — both stay
   // BELOW the clouds (z=1), keeping every cloud hover/click-able (§2.4).
   host.prepend(svg);
-  host.append(svgHit, svgTop);
+  host.append(svgHit, svgTop, svgDrag);
 
   new ResizeObserver(() => requestDraw()).observe(host);
   host.addEventListener('scroll', () => requestDraw(), true);

@@ -1009,6 +1009,22 @@ body.resizing-h {
   z-index: 6;
   pointer-events: none;
 }
+/* Pending-link layer: above the top overlay, never cleared by link redraws. */
+.links-overlay-drag {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+}
+
+/* Pending-link preview (canvas ellipse drag): the dashed line of the future
+   link, from the dragged ellipse to the cursor. */
+.drag-link-line {
+  stroke: var(--accent);
+  stroke-width: 2px;
+  stroke-dasharray: 6 4;
+  stroke-linecap: round;
+}
 
 /* Wide invisible hit target for a line. */
 .links-overlay-hit .link-hit {
@@ -1219,6 +1235,12 @@ body.resizing-h {
   background: var(--accent-soft);
   outline: 1px dashed var(--accent);
   outline-offset: -2px;
+}
+/* Ctrl+Shift reorder target: the hovered cloud lights up green — distinct
+   from the blue link/reparent highlight above. */
+.cloud.drop-target-move {
+  outline: 2px solid var(--ok);
+  outline-offset: 2px;
 }
 
 /* Ellipse link-drag gesture (canvas.ts): a link cursor over the whole window —

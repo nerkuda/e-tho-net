@@ -15,9 +15,9 @@
  *   is replaced by a single Б→A link (no copy);
  * - **Ctrl+Shift drag** — reorder inside the dragged thought's zone, only while
  *   the zone is sorted `manual`: a drop on cloud Б puts A right **before** Б.
- *   The insertion point is previewed live — a dashed placeholder opens a gap
- *   and the following clouds shift aside — and the refreshed zone FLIP-animates
- *   the clouds to their final positions.
+ *   The target cloud is highlighted (green) live; nothing else moves until the
+ *   drop — then the refreshed zone shifts the following clouds and FLIP-animates
+ *   them to their final positions.
  *
  * A gesture rather than HTML5 drag-n-drop: Chromium intercepts modifier-key
  * drags in several ways (Alt+drag is link selection, a lone Alt focuses the
@@ -31,11 +31,9 @@
 import { type Link, type ThoughtLinksGrouped } from '@etn/shared';
 
 import { etn } from '../lib/etn.js';
-import { div } from '../lib/dom.js';
 import { notice } from '../lib/notice.js';
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { store } from '../state.js';
-import { prefersReducedMotion } from './transition.js';
 import { DRAG_THRESHOLD_PX, requestZoneAnimation, suppressNextCanvasClick } from './canvas.js';
 
 type OrderableDir = 'parents' | 'children';
@@ -53,8 +51,9 @@ interface DropTarget {
   kind: DropKind;
   /** Thought the dragged cloud lands on (link/reparent modes). */
   targetThoughtId?: string;
-  /** Zone the drop happens in (move/reorder; on a no-op drop inside the
-   *  dragged's own zone it marks the gap so the reorder preview is kept). */
+  /** Zone the drop happens in (move; a no-op drop inside the dragged's own
+   *  zone keeps the last target, so the highlight survives pointer passes
+   *  over the grid gaps between clouds). */
   zoneDir?: ZoneDir;
   /** Insertion index into the zone's order without the dragged id (reorder). */
   insertIndex?: number;
@@ -80,20 +79,14 @@ interface CloudDragGesture {
   lastTarget: DropTarget | null;
 }
 
-/** Accessors into the canvas module (zone element + current manual order). */
+/** Accessors into the canvas module (current manual order). */
 export interface DragAccessors {
-  getZoneEl: (dir: ZoneDir) => HTMLElement | null;
   /** Full ordered thought-id list of an orderable zone (deduped, display order). */
   getZoneOrder: (dir: OrderableDir) => string[];
-  /** Column-major grid geometry (cols × rows) of an orderable zone, or null. */
-  getZoneGrid: (dir: OrderableDir) => { cols: number; rows: number } | null;
 }
 
 let gesture: CloudDragGesture | null = null;
 let highlighted: HTMLElement | null = null;
-/** Reorder preview (Ctrl+Shift drag): zone and insertion index of the placeholder. */
-let previewZone: HTMLElement | null = null;
-let previewIndex: number | null = null;
 /** Canvas accessors, captured at wiring; the window gesture handlers need them. */
 let accessors: DragAccessors | null = null;
 
@@ -147,15 +140,12 @@ function onCloudMouseMove(event: MouseEvent): void {
   moveGhost(event.clientX, event.clientY);
   const dragged: DraggedCloud = { id: gesture.id, dir: gesture.dir };
   const target = computeTarget(event, dragged, accessors);
-  // Hovering the gap the preview just opened (or the pointer-transparent grid
-  // between clouds) resolves to a no-op inside the dragged's own zone; the
-  // preview stays where it is (updateReorderPreview keeps it), and so must the
-  // drop — otherwise releasing over the gap silently cancels the reorder.
+  // A no-op drop inside the dragged's own zone keeps the last target, so the
+  // highlight survives pointer passes over the grid gaps between clouds.
   if (!(target.kind === 'none' && target.zoneDir === dragged.dir)) {
     gesture.lastTarget = target;
   }
   highlight(target);
-  updateReorderPreview(target, dragged, accessors);
 }
 
 function onCloudMouseUp(event: MouseEvent): void {
@@ -178,32 +168,25 @@ function onCloudMouseUp(event: MouseEvent): void {
   clearHighlight();
   switch (target.kind) {
     case 'link-parent':
-      removeReorderPreview();
       void linkToThought(g.id, target.targetThoughtId!, 'parent');
       break;
     case 'link-child':
-      removeReorderPreview();
       void linkToThought(g.id, target.targetThoughtId!, 'child');
       break;
     case 'reparent':
-      removeReorderPreview();
       void reparentThought(g.id, target.targetThoughtId!);
       break;
     case 'move': {
-      removeReorderPreview();
       const dir = target.zoneDir as OrderableDir;
       void moveFocusDirection(g.id, dir);
       break;
     }
     case 'reorder': {
-      // The placeholder stays in the grid until the refreshed zone re-renders
-      // with the new order — the FLIP then animates the clouds into place.
       const dir = target.zoneDir as OrderableDir;
       void reorderZone(g.id, dir, target.insertIndex ?? -1);
       break;
     }
     default:
-      removeReorderPreview();
       // A Ctrl+Shift drop that ends in a no-op usually means the zone is not
       // sorted `manual` — say so instead of silently bouncing back.
       if (
@@ -231,7 +214,6 @@ function cancelCloudDrag(): void {
     g.ghost?.remove();
     clearHighlight();
   }
-  removeReorderPreview();
 }
 
 /** A clone of the source cloud, fixed to the viewport, following the cursor. */
@@ -303,36 +285,13 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
     return { kind: 'link-child', targetThoughtId, highlightEl: cloud, highlightCls: 'drop-target-link' };
   }
 
-  // The reorder gap itself (Ctrl+Shift drag preview): a drop on the
-  // placeholder means inserting before the cloud right after it.
-  const placeholder = el.closest<HTMLElement>('.cloud-drop-placeholder');
-  if (placeholder !== null) {
-    const nextId = (placeholder.nextElementSibling as HTMLElement | null)?.dataset['id'];
-    if (
-      nextId !== undefined &&
-      nextId !== dragged.id &&
-      (event.ctrlKey || event.metaKey) &&
-      event.shiftKey
-    ) {
-      return reorderTarget(
-        nextId,
-        placeholder.closest<HTMLElement>('.zone')?.dataset['dir'],
-        dragged,
-        acc,
-        placeholder,
-      );
-    }
-    return { kind: 'none' };
-  }
-
   const zone = el.closest<HTMLElement>('.zone');
   if (zone !== null) {
     const zdir = zone.dataset['dir'];
     if (zdir === 'siblings') return { kind: 'none' };
     if (zdir === 'parents' || zdir === 'children') {
       // A plain (or Ctrl) drag never reorders: a drop inside the dragged's own
-      // zone is a no-op (the gap keeps the reorder preview alive); a drop on
-      // the other zone flips the link direction.
+      // zone is a no-op; a drop on the other zone flips the link direction.
       if (zdir === dragged.dir) return { kind: 'none', zoneDir: zdir };
       return { kind: 'move', zoneDir: zdir, highlightEl: zone, highlightCls: 'drop-target-move' };
     }
@@ -382,99 +341,6 @@ function clearHighlight(): void {
   if (highlighted !== null) {
     highlighted.classList.remove('drop-target-link', 'drop-target-move');
     highlighted = null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Reorder preview (Ctrl+Shift drag): a dashed placeholder opens a gap at the
-// insertion point and the following clouds shift aside (mini-FLIP). The
-// placeholder stays until the zone re-renders with the new order, so the
-// refresh-time FLIP animates the dragged cloud into the gap.
-// ---------------------------------------------------------------------------
-
-function updateReorderPreview(target: DropTarget, dragged: DraggedCloud, acc: DragAccessors): void {
-  if (target.kind !== 'reorder' || target.zoneDir === undefined || target.insertIndex === undefined) {
-    // Hovering the gaps inside the dragged's own zone keeps the preview at its
-    // last index; anything else dismisses it.
-    if (!(target.kind === 'none' && target.zoneDir === dragged.dir)) {
-      removeReorderPreview();
-    }
-    return;
-  }
-  const zone = acc.getZoneEl(target.zoneDir);
-  if (zone === null) {
-    removeReorderPreview();
-    return;
-  }
-  const index = target.insertIndex;
-  if (
-    previewZone === zone &&
-    previewIndex === index &&
-    zone.querySelector('.cloud-drop-placeholder') !== null
-  ) {
-    return;
-  }
-  removeReorderPreview();
-  previewZone = zone;
-  previewIndex = index;
-  const grid = zone.querySelector<HTMLElement>('.zone-grid');
-  const source = gesture?.source ?? null;
-  if (grid === null || source === null) return;
-  const gridInfo = accessors?.getZoneGrid(dragged.dir) ?? null;
-  if (gridInfo === null) return;
-  const { cols, rows } = gridInfo;
-
-  // The placeholder occupies the grid slot the inserted thought will land on —
-  // column-major order (08-ui-spec.md §2.1.1): entry k sits at slot
-  // (k % rows) * cols + floor(k / rows). The rendered clouds are ordered by
-  // slot, so the placeholder goes right after the last cloud whose slot is
-  // still below the target one (a sparse final column keeps its gap).
-  const slot = (index % rows) * cols + Math.floor(index / rows);
-  const order = acc.getZoneOrder(dragged.dir).filter((x) => x !== dragged.id);
-  const children = Array.from(grid.children);
-  let pos = 0;
-  for (const child of children) {
-    const id = (child as HTMLElement).dataset['id'];
-    if (id === undefined) continue;
-    const entryIndex = order.indexOf(id);
-    if (entryIndex < 0) continue;
-    const entrySlot = (entryIndex % rows) * cols + Math.floor(entryIndex / rows);
-    if (entrySlot >= slot) break;
-    pos++;
-  }
-
-  // Mini-FLIP: the clouds from the insertion point on shift aside.
-  const before =
-    prefersReducedMotion() ? null : new Map<HTMLElement, DOMRect>();
-  if (before !== null) {
-    for (let i = pos; i < children.length; i++) {
-      const el = children[i] as HTMLElement;
-      before.set(el, el.getBoundingClientRect());
-    }
-  }
-  const placeholder = div('cloud-drop-placeholder');
-  placeholder.style.height = `${source.getBoundingClientRect().height}px`;
-  grid.insertBefore(placeholder, children[pos] ?? null);
-  if (before !== null) playShift(before);
-}
-
-function removeReorderPreview(): void {
-  previewZone?.querySelector('.cloud-drop-placeholder')?.remove();
-  previewZone = null;
-  previewIndex = null;
-}
-
-/** Glides shifted clouds from their old rects to the placeholder gap. */
-function playShift(before: Map<HTMLElement, DOMRect>): void {
-  for (const [el, oldRect] of before) {
-    const rect = el.getBoundingClientRect();
-    const dx = oldRect.left - rect.left;
-    const dy = oldRect.top - rect.top;
-    if (Math.abs(dx) + Math.abs(dy) < 1) continue;
-    el.animate(
-      [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
-      { duration: 180, easing: 'ease-out' },
-    );
   }
 }
 
@@ -609,8 +475,8 @@ async function reparentThought(draggedId: string, targetId: string): Promise<voi
 
 /**
  * Reorders the dragged thought inside its zone — only when the zone is
- * `manual`. The next render FLIP-animates the clouds to their new positions;
- * the reorder preview placeholder is kept in the grid until then.
+ * `manual`. The next render shifts the following clouds down one slot and
+ * FLIP-animates them to their new positions.
  */
 async function reorderZone(draggedId: string, dir: OrderableDir, insertIndex: number): Promise<void> {
   if (store.state.zoneSorts[dir] !== 'manual') return; // bounce back, no change
@@ -625,7 +491,6 @@ async function reorderZone(draggedId: string, dir: OrderableDir, insertIndex: nu
     requestZoneAnimation();
     scheduleRefresh();
   } catch (err) {
-    removeReorderPreview();
     noticeErr('Изменить порядок', err);
   }
 }
