@@ -132,7 +132,7 @@ function onCloudMouseMove(event: MouseEvent): void {
     const dist = Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY);
     if (dist < DRAG_THRESHOLD_PX) return;
     gesture.active = true;
-    document.body.classList.add('dragging');
+    document.body.classList.add('cloud-dragging');
     suppressNextCanvasClick();
     gesture.ghost = makeGhost(gesture.source, event.clientX, event.clientY);
     gesture.source.classList.add('drag-source');
@@ -156,7 +156,7 @@ function onCloudMouseUp(event: MouseEvent): void {
   window.removeEventListener('mouseup', onCloudMouseUp);
   window.removeEventListener('blur', cancelCloudDrag);
   if (!g.active) return; // a plain click — the cloud's own click handler runs
-  document.body.classList.remove('dragging');
+  document.body.classList.remove('cloud-dragging');
   g.source.classList.remove('drag-source');
   g.ghost?.remove();
   const dragged: DraggedCloud = { id: g.id, dir: g.dir };
@@ -209,7 +209,7 @@ function cancelCloudDrag(): void {
   window.removeEventListener('mouseup', onCloudMouseUp);
   window.removeEventListener('blur', cancelCloudDrag);
   if (g.active) {
-    document.body.classList.remove('dragging');
+    document.body.classList.remove('cloud-dragging');
     g.source.classList.remove('drag-source');
     g.ghost?.remove();
     clearHighlight();
@@ -222,6 +222,12 @@ function makeGhost(source: HTMLElement, x: number, y: number): HTMLElement {
   ghost.classList.add('drag-ghost');
   const rect = source.getBoundingClientRect();
   ghost.style.position = 'fixed';
+  // A fixed element without top/left sits at its static (in-flow) position —
+  // appended to <body> that is the end of the whole workspace, i.e. below the
+  // viewport — and the translate would count from there. Pin the origin to the
+  // viewport corner instead, so the transform is cursor-anchored.
+  ghost.style.top = '0';
+  ghost.style.left = '0';
   ghost.style.width = `${rect.width}px`;
   ghost.style.pointerEvents = 'none';
   ghost.style.zIndex = '1000';

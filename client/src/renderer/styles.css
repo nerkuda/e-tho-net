@@ -1208,8 +1208,8 @@ body.resizing-h {
 }
 
 .cloud.drag-ghost {
-  opacity: 0.85;
-  box-shadow: var(--shadow);
+  opacity: 0.95;
+  box-shadow: var(--shadow), 0 0 0 2px var(--accent-soft);
   cursor: grabbing;
 }
 
@@ -1257,6 +1257,14 @@ body.resizing-h {
 body.dragging,
 body.dragging * {
   cursor: crosshair !important;
+}
+
+/* Cloud drag (drag-cloud.ts): a grabbing cursor over the whole window while
+   the dragged cloud's ghost follows the pointer — unlike the ellipse gesture
+   (a link is being drawn there), here the cloud itself is being carried. */
+body.cloud-dragging,
+body.cloud-dragging * {
+  cursor: grabbing !important;
 }
 
 /* Icon spine: a full-height band on the left, the glyph centered in it (L12). */
