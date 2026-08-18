@@ -645,6 +645,19 @@ describe('shortenCompoundName (08-ui-spec §2.2.3)', () => {
     );
   });
 
+  it('hides the parts of a compound related thought', () => {
+    // The visible parent is itself compound: `ETN, Ошибки` — both matching
+    // parts of the child name hide, the new part stays.
+    assert.equal(
+      shortenCompoundName('ETN, Ошибки, Отложено на будущее', ['ETN, Ошибки']),
+      'Отложено на будущее',
+    );
+    assert.equal(
+      shortenCompoundName('ETN, Ошибки, Отложено на будущее', ['Ошибки']),
+      'ETN, Отложено на будущее',
+    );
+  });
+
   it('matching ignores case and surrounding spaces', () => {
     assert.equal(
       shortenCompoundName('Проект А, Задачи разработки', ['  проект а ']),

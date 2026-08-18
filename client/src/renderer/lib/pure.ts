@@ -343,17 +343,21 @@ export function splitCompoundName(title: string): string[] {
 
 /**
  * Display name of a compound-named thought outside the focus (08-ui-spec.md
- * §2.2.3): parts equal to the title of a visible related thought are hidden,
- * the kept parts are re-joined with ", ". Comparison is case-insensitive on
- * trimmed strings. When nothing matches or every part is hidden, the full
- * name is returned unchanged.
+ * §2.2.3): parts equal to the title of a visible related thought — or to any
+ * part of that title — are hidden, the kept parts are re-joined with ", ".
+ * Comparison is case-insensitive on trimmed strings. When nothing matches or
+ * every part is hidden, the full name is returned unchanged.
  */
 export function shortenCompoundName(title: string, relatedTitles: readonly string[]): string {
   if (relatedTitles.length === 0) return title;
   const parts = splitCompoundName(title);
   if (parts.length === 1) return title;
-  const related = relatedTitles.map((t) => t.trim().toLowerCase());
-  const kept = parts.filter((p) => !related.includes(p.trim().toLowerCase()));
+  const related = new Set<string>();
+  for (const relatedTitle of relatedTitles) {
+    related.add(relatedTitle.trim().toLowerCase());
+    for (const part of splitCompoundName(relatedTitle)) related.add(part.trim().toLowerCase());
+  }
+  const kept = parts.filter((p) => !related.has(p.trim().toLowerCase()));
   return kept.length === 0 ? title : kept.join(', ');
 }
 
