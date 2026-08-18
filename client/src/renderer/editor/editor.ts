@@ -97,9 +97,7 @@ export function registerTabCount(id: EditorTabId, loader: TabCountLoader): void 
 /** Registers a collapsible section of the «Основное» tab (L7). */
 export function registerMainSection(builder: MainSectionBuilder): void {
   mainSectionBuilders.push(builder);
-}
-
-/** Opens a link in the editor without changing the focus (H6/H11). */
+}/** Opens a link in the editor without changing the focus (H6/H11). */
 export function openLinkInEditor(link: Link): void {
   store.update({ editorTarget: { kind: 'link', id: link.id, link } });
 }
@@ -147,6 +145,17 @@ let positionButton: HTMLButtonElement | null = null;
 let titleEl: HTMLElement | null = null;
 let lastSignature = '';
 
+/**
+ * Guards the one-time module registrations (sections, tabs, the document
+ * listener). `mountEditor` runs again on every network open — `showScreen`
+ * rebuilds the whole workspace — and re-registering would append duplicate
+ * «Основное» sections («Свойства», «Комментарий») for each open.
+ */
+let registrationsDone = false;
+
+/** Unsubscribes the store subscription of the previous editor mount. */
+let storeUnsubscribe: (() => void) | null = null;
+
 /** Badge spans of the current render, per counted tab (for refreshTabCount). */
 const tabCountSpans = new Map<EditorTabId, HTMLElement>();
 /** The context of the current render (for refreshTabCount). */
@@ -187,12 +196,6 @@ export function mountEditor(editorHost: HTMLElement): void {
     persistCollapsed();
   });
 
-  // Editor sections and tabs (H9–H12, L7).
-  registerPropertiesGroup();
-  registerCommentSections();
-  registerAttachmentsTab();
-  registerLinksTab();
-
   // Clicking a link line on the canvas opens the link here (H6 ↔ H8) and marks
   // it as the sticky canvas selection.
   setLinkEditorOpener((link) => {
@@ -203,19 +206,32 @@ export function mountEditor(editorHost: HTMLElement): void {
   // as the editor's ⚙ button.
   setLinkSettingsOpener(openLinkSettings);
 
-  // Pasted-image uploads from any markdown field re-count the «Вложения» tab
-  // badge right away (the tab's own list reloads itself via the same event;
-  // see attachments.ts). Without this the badge showed a stale 0 until the
-  // editor target changed.
-  document.addEventListener('etn:attachments-changed', (event) => {
-    const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
-    const ctx = renderCtx;
-    if (ctx !== null && detail?.ownerType === ctx.ownerType && detail?.ownerId === ctx.ownerId) {
-      refreshTabCount('attachments');
-    }
-  });
+  // Editor sections and tabs (H9–H12, L7). Registered once: mountEditor runs
+  // again per network open, and the section registry is an append-only list.
+  if (!registrationsDone) {
+    registrationsDone = true;
+    registerPropertiesGroup();
+    registerCommentSections();
+    registerAttachmentsTab();
+    registerLinksTab();
 
-  store.subscribe(() => {
+    // Pasted-image uploads from any markdown field re-count the «Вложения» tab
+    // badge right away (the tab's own list reloads itself via the same event;
+    // see attachments.ts). Without this the badge showed a stale 0 until the
+    // editor target changed. One document listener for the app lifetime.
+    document.addEventListener('etn:attachments-changed', (event) => {
+      const detail = (event as CustomEvent<{ ownerType: string; ownerId: string }>).detail;
+      const ctx = renderCtx;
+      if (ctx !== null && detail?.ownerType === ctx.ownerType && detail?.ownerId === ctx.ownerId) {
+        refreshTabCount('attachments');
+      }
+    });
+  }
+
+  // Re-mounting replaces the host — drop the previous mount's subscription
+  // before adding the new one (mountEditor runs again per network open).
+  storeUnsubscribe?.();
+  storeUnsubscribe = store.subscribe(() => {
     if (host?.isConnected === true) void render();
   });
   void render();
@@ -845,3 +861,9 @@ function openLinkSettings(link: Link): void {
     onApply: (patch) => saveLink(link, patch),
   });
 }
+
+/** Test hooks (renderer editor-mount regression test); not part of the app API. */
+export const editorInternals = {
+  /** Registered «Основное» sections — must not grow per `mountEditor` call. */
+  mainSectionCount: (): number => mainSectionBuilders.length,
+};
