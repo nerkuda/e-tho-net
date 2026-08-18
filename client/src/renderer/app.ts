@@ -43,22 +43,24 @@ const REFRESH_DEBOUNCE_MS = 200;
 let refreshTimer: number | null = null;
 
 /**
- * Finds the protected HOME (root) thought of a freshly opened network. The API
- * has no dedicated root endpoint on MVP, so the client searches for candidates
- * titled HOME and picks the one with `is_root = 1`.
+ * Finds the protected HOME (root) thought of a freshly opened network. The root
+ * is identified by the `is_root` flag, not by its title — the home thought may
+ * be renamed (e.g. to the network's own name), so a title search would miss it.
+ * The structural query with an empty filter returns exactly the root thought
+ * (03-server-api.md §6.10).
  */
 async function findRootThought(networkId: string): Promise<Thought> {
-  const result = await etn.thoughts.search(networkId, { q: 'HOME', scope: 'names', limit: 20 });
-  const ids = result.by_names.map((hit) => hit.thought_id);
-  for (const id of ids) {
-    try {
-      const thought = await etn.thoughts.get(networkId, id);
-      if (thought.is_root) return thought;
-    } catch {
-      // Candidate disappeared — keep looking.
-    }
+  const result = await etn.structures.query(networkId, {
+    sort: 'alpha',
+    order: 'asc',
+    limit: 1,
+    offset: 0,
+  });
+  const root = result.items[0];
+  if (root === undefined) {
+    throw new Error('Не удалось найти корневую мысль этой сети.');
   }
-  throw new Error('Не удалось найти корневую мысль HOME в этой сети.');
+  return etn.thoughts.get(networkId, root.id);
 }
 
 /**
