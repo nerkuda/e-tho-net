@@ -34,3 +34,25 @@
   - [x] Тесты `tests/query-service.test.ts` (native-доступны — зелёные, 7/7).
   - [x] Typecheck зелёный; ручная проверка через MCP stdio (20 инструментов,
     выборка ошибок в поддереве ETN одним вызовом, валидация операторов).
+
+## N2. Обогащённое чтение мысли: счётчики и постоянный комментарий
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** N1
+- **Описание:** по запросу пользователя: чтение мысли одним вызовом должно
+  сразу давать «сигналы полноты» — нужно ли тянуть родителей/потомков,
+  вложения и хронику. В `etn.thoughts.get` и ресурс `etn.thought` добавляется
+  блок `meta`: `parents_count`/`children_count` (активные связи),
+  `attachments_count`, `chrono_count` (хронологические комментарии) и
+  `permanent` — постоянный комментарий с обрезкой больших текстов: первая
+  порция `body_md` до `PERMANENT_COMMENT_PREVIEW_CHARS` (2000) + метаданные
+  `chars_returned`/`chars_total`/`truncated`, чтобы агент знал, что текст
+  обрезан и полный можно получить отдельным запросом.
+- **DoD:**
+  - [x] Тип `ThoughtMeta` в `@etn/shared`.
+  - [x] `getThoughtMeta` в `server/src/domain/thought-meta.ts` (4 COUNT по
+    индексам + 1 SELECT по уникальному индексу permanent; обрезка 2000).
+  - [x] `meta` в ответах `etn.thoughts.get` (tools.ts) и `etn://…/thoughts/{id}`
+    (resources.ts); REST-чтение мысли не меняется.
+  - [x] Тесты `tests/thought-meta.test.ts` (счётчики, отсутствие permanent,
+    обрезка длинного текста).
+  - [x] Спека `docs/05-mcp-server.md` §3/§4.1; typecheck зелёный; проверка
+    через MCP stdio.

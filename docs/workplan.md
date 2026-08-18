@@ -95,7 +95,7 @@
 | K — Упаковка и релиз | ✅ `done` | K1–K4: electron-builder, Docker, release workflow, автообновление | [phase-k.md](workplan/phase-k.md) |
 | L — Пост-MVP доработки | ⏳ `in_progress` | L1–L17: вложения, Ctrl-лупа, FLIP-анимации, удаление мысли, меню связей, типы, вкладки редактора, сплиттеры/зум холста, тёмная тема, облачко, эллипсы/авто-контраст, SVG-хром, кривые Безье, структуры мыслей, иконки из картинки, диалог иконки | [phase-l.md](workplan/phase-l.md) |
 | M — Markdown-редактор (live preview) | ⏳ `in_progress` | M1–M11: единый рендерер `@etn/markdown`, CodeMirror 6, wiki-ссылки, подсветка кода, картинки, live preview, mermaid, масштаб, Ctrl+Enter, переходы по ссылкам (M8 — отложен) | [phase-m.md](workplan/phase-m.md) |
-| N — MCP: структурная выборка | ✅ `done` | N1: инструмент `etn.thoughts.query` | [phase-n.md](workplan/phase-n.md) |
+| N — MCP: доработки | ✅ `done` | N1: инструмент `etn.thoughts.query`; N2: обогащённое чтение мысли (счётчики связей/вложений/хроники, превью постоянного комментария) | [phase-n.md](workplan/phase-n.md) |
 
 ## 4. Сводный взгляд на параллелизм
 

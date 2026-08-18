@@ -42,7 +42,7 @@ REST. Все изменения, сделанные агентом, иденти
 |-----|----------|
 | `etn://networks` | Список сетей, доступных пользователю |
 | `etn://networks/{network_id}` | Метаданные сети |
-| `etn://networks/{network_id}/thoughts/{thought_id}` | Полная мысль: свойства, синонимы, тип, стили |
+| `etn://networks/{network_id}/thoughts/{thought_id}` | Полная мысль: свойства, синонимы, тип, стили + блок `meta` (см. ниже) |
 | `etn://networks/{network_id}/thoughts/{thought_id}/neighbors` | Соседи (parents/children/siblings) |
 | `etn://networks/{network_id}/thoughts/{thought_id}/comments` | Комментарии мысли |
 | `etn://networks/{network_id}/thoughts/{thought_id}/attachments` | Вложения мысли |
@@ -53,6 +53,16 @@ REST. Все изменения, сделанные агентом, иденти
 
 Ресурсы отдаются как JSON (mime `application/json`). Комментарии — как Markdown
 (mime `text/markdown`) для прямой передачи агенту.
+
+Блок `meta` в чтении мысли (`etn://…/thoughts/{id}` и `etn.thoughts.get`) —
+«сигналы полноты» (task N2): сколько у мысли входящих/исходящих **активных**
+связей (`parents_count`/`children_count`), вложений (`attachments_count`),
+хронологических записей (`chrono_count`) — агент по ним решает, какие
+отдельные ресурсы/инструменты запрашивать. Поле `permanent` — постоянный
+комментарий (ровно один на мысль) с обрезкой больших текстов: `body_md` —
+первые `PERMANENT_COMMENT_PREVIEW_CHARS` (2000) символов, `chars_returned` /
+`chars_total` / `truncated` сообщают, обрезан ли текст; `null`, когда
+постоянного комментария нет.
 
 Описание типов (`thought_types.description`, `link_types.description`) — это и
 есть тот самый «комментарий для AI-агентов» из словаря: в нём пользователь
@@ -70,7 +80,7 @@ REST. Все изменения, сделанные агентом, иденти
 | `etn.networks.list` | Доступные сети | — |
 | `etn.thoughts.search` | Полнотекстовый поиск | `network_id`, `query`, `scope?` (`names`/`texts`/`links`/`chronology`/`all`), `in_subtree_of?`, `type_id?`, `limit?` |
 | `etn.thoughts.query` | Структурная выборка (список по критериям) | см. §4.1a |
-| `etn.thoughts.get` | Полная мысль | `network_id`, `thought_id` |
+| `etn.thoughts.get` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария) | `network_id`, `thought_id` |
 | `etn.thoughts.neighbors` | Соседи | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход) |
 | `etn.thoughts.subgraph` | Подграф в радиусе N рёбер | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?` |
 | `etn.thoughts.path` | Путь между двумя мыслями | `network_id`, `from_id`, `to_id`, `max_depth` |
