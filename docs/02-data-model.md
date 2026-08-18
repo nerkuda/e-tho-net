@@ -254,7 +254,8 @@ TTL: 10 минут. Очистка по джобе.
 | Столбец | Тип | Описание |
 |---------|-----|----------|
 | `id` | TEXT PK | UUID |
-| `name` | TEXT NOT NULL UNIQUE | |
+| `name` | TEXT NOT NULL | Имя типа |
+| `name_key` | TEXT NOT NULL UNIQUE | Нормализованное имя (`trim` + lowercase) — сравнение имён регистронезависимо: `Тип` = `тип` = `ТИП` |
 | `icon` | TEXT | Иконка типа по умолчанию |
 | `icon_kind` | TEXT NOT NULL DEFAULT `'emoji'` | `'emoji'` \| `'image'` — вид иконки по умолчанию |
 | `fg_color` | TEXT | Цвет текста по умолчанию |
@@ -345,14 +346,18 @@ TTL: 10 минут. Очистка по джобе.
 |---------|-----|----------|
 | `id` | TEXT PK | UUID |
 | `name_forward` | TEXT NOT NULL | Имя от источника к назначению |
+| `name_forward_key` | TEXT NOT NULL | Нормализованное имя (регистронезависимое сравнение) |
 | `name_reverse` | TEXT NOT NULL | Имя от назначения к источнику |
+| `name_reverse_key` | TEXT NOT NULL | Нормализованное имя (регистронезависимое сравнение) |
 | `color` | TEXT | Цвет линии |
 | `style` | TEXT NOT NULL DEFAULT `'solid'` | `'solid'` \| `'dashed'` \| `'dotted'` |
 | `width` | INTEGER NOT NULL DEFAULT 1 | Толщина |
 | `description` | TEXT | Комментарий типа (для AI и пользователя) |
 | `version` / `created_at` / `updated_at` / `created_by` | | |
 
-UNIQUE на `(name_forward, name_reverse)`.
+UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уникальна
+регистронезависимо; перестановка имён (`parent/child` и `child/parent`) — это
+другой тип (направленность значима).
 
 ### 3.8. comments
 
