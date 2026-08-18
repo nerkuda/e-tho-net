@@ -3404,6 +3404,17 @@ body.cloud-dragging * {
 
 /* --- add-thought dialog (H14) -------------------------------------------- */
 
+.add-types-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.add-types-row .field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
 .add-mode-row {
   display: flex;
   gap: 16px;

@@ -142,13 +142,16 @@ export function openAddDialog(ctx: {
   const errorLine = span('', 'error-text');
 
   const body = div('form-stack');
-  const typeRow = div('field');
-  typeRow.append(el('label', 'field-label', 'Тип'), thoughtTypeCombo.root);
-  const linkRow = div('field');
-  linkRow.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
-  // Layout (08-ui-spec.md §4.2): mode switch, then the type pickers, then the
-  // name input with the found-thoughts list directly beneath it.
-  body.append(modeRow, typeRow, linkRow, input, candidates, lineList, errorLine);
+  // Both type pickers share one row (08-ui-spec.md §4.2).
+  const typeRow = div('add-types-row');
+  const thoughtTypeField = div('field add-types-field');
+  thoughtTypeField.append(el('label', 'field-label', 'Тип мысли'), thoughtTypeCombo.root);
+  const linkTypeField = div('field add-types-field');
+  linkTypeField.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
+  typeRow.append(thoughtTypeField, linkTypeField);
+  // Layout (08-ui-spec.md §4.2): mode switch, then the type pickers on one
+  // row, then the name input with the found-thoughts list directly beneath it.
+  body.append(modeRow, typeRow, input, candidates, lineList, errorLine);
 
   const directionText =
     ctx.anchorId === null
@@ -322,6 +325,17 @@ export function openAddDialog(ctx: {
         void useExisting(candidate.id);
       });
       row.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && event.shiftKey) {
+          // Shift+Enter composes a compound name: the candidate's full name
+          // replaces the input text, a comma is appended and the caret lands
+          // right after it (08-ui-spec.md §4.3).
+          event.preventDefault();
+          input.value = `${candidate.title},`;
+          input.focus();
+          input.setSelectionRange(input.value.length, input.value.length);
+          scheduleSearch();
+          return;
+        }
         if (event.key === 'Enter') {
           event.preventDefault();
           void useExisting(candidate.id);
@@ -446,7 +460,7 @@ export function openAddDialog(ctx: {
   const closeDialog = showDialog({
     title: ctx.anchorId === null ? 'Добавить мысли' : `Добавить мысль (${directionText})`,
     body,
-    width: 540,
+    width: 620,
     buttons: [
       { label: 'Отмена' },
       {
