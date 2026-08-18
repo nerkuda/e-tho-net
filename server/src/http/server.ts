@@ -26,6 +26,7 @@ import { createAccessControl } from '../auth/access-control.js';
 import { NetworkMembersService } from '../domain/network-members-service.js';
 import { PubSub } from '../realtime/pubsub.js';
 import { startEventLogCleanup } from '../realtime/event-log-cleanup.js';
+import { EventLogRelay } from '../realtime/event-log-relay.js';
 import { RealtimeGateway, type RealtimeGatewayOptions } from '../realtime/gateway.js';
 import { createIdempotencyMiddleware, registerIdempotencyHooks } from './idempotency.js';
 import { normaliseError } from './errors.js';
@@ -180,6 +181,15 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   gateway.register(app);
   const stopEventLogCleanup = startEventLogCleanup(systemDb, logger);
   app.addHook('onClose', () => stopEventLogCleanup());
+
+  // --- Event-log relay (04-realtime.md §5) ----------------------------------
+  // The broker is in-memory, so events written by a foreign process (the stdio
+  // MCP CLI) never reach the gateway on their own. The relay polls the log and
+  // broadcasts them, bounded by pollIntervalMs; own writes are tracked via the
+  // broker subscription and never re-broadcast.
+  const eventLogRelay = new EventLogRelay({ systemDb, pubsub, logger });
+  eventLogRelay.start();
+  app.addHook('onClose', () => eventLogRelay.stop());
 
   // --- Idempotency (task B11) ----------------------------------------------
   app.decorateRequest('idempotency', null);

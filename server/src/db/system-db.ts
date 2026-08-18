@@ -188,6 +188,7 @@ export class SystemDb {
   private readonly stInsertEvent: Database.Statement;
   private readonly stReadEventsAfter: Database.Statement;
   private readonly stMinEventSeq: Database.Statement;
+  private readonly stMaxEventSeq: Database.Statement;
   private readonly stPruneEvents: Database.Statement;
   private readonly stListEventLogNetworks: Database.Statement;
 
@@ -293,6 +294,7 @@ export class SystemDb {
       'SELECT seq, ts, type, data FROM event_log WHERE network_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?',
     );
     this.stMinEventSeq = db.prepare('SELECT MIN(seq) AS s FROM event_log WHERE network_id = ?');
+    this.stMaxEventSeq = db.prepare('SELECT MAX(seq) AS s FROM event_log WHERE network_id = ?');
     this.stPruneEvents = db.prepare(
       `DELETE FROM event_log
        WHERE network_id = ? AND ts < ?
@@ -820,6 +822,16 @@ export class SystemDb {
    */
   getMinEventSeq(networkId: string): number | null {
     const row = this.stMinEventSeq.get(networkId) as { s: number | null };
+    return row.s;
+  }
+
+  /**
+   * Largest `seq` recorded for a network, or `null` when the log is empty.
+   * Used by the event-log relay to seed its scan position so pre-start history
+   * is never broadcast live (clients replay it via `resume` instead).
+   */
+  getMaxEventSeq(networkId: string): number | null {
+    const row = this.stMaxEventSeq.get(networkId) as { s: number | null };
     return row.s;
   }
 
