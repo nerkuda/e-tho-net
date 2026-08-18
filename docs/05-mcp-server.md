@@ -43,7 +43,7 @@ REST. Все изменения, сделанные агентом, иденти
 | `etn://networks` | Список сетей, доступных пользователю |
 | `etn://networks/{network_id}` | Метаданные сети |
 | `etn://networks/{network_id}/thoughts/{thought_id}` | Полная мысль: свойства, синонимы, тип, стили + блок `meta` (см. ниже) |
-| `etn://networks/{network_id}/thoughts/{thought_id}/neighbors` | Соседи (parents/children/siblings) |
+| `etn://networks/{network_id}/thoughts/{thought_id}/neighbors` | Соседи (parents/children/siblings) + каталоги `link_types`/`thought_types` |
 | `etn://networks/{network_id}/thoughts/{thought_id}/usage` | «Использование» мысли: кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству |
 | `etn://networks/{network_id}/thoughts/{thought_id}/comments` | Комментарии мысли |
 | `etn://networks/{network_id}/thoughts/{thought_id}/attachments` | Вложения мысли |
@@ -90,12 +90,12 @@ null` означает висячую ссылку на удалённую мы�
 | `etn.thoughts.search` | Полнотекстовый поиск | `network_id`, `query`, `scope?` (`names`/`texts`/`links`/`chronology`/`all`), `in_subtree_of?`, `type_id?`, `limit?` |
 | `etn.thoughts.query` | Структурная выборка (список по критериям) | см. §4.1a |
 | `etn.thoughts.get` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария; `thought_ref`-значения свойств резолвнуты в `{id, title}`) | `network_id`, `thought_id` |
-| `etn.thoughts.neighbors` | Соседи | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход) |
-| `etn.thoughts.subgraph` | Подграф в радиусе N рёбер | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?` |
-| `etn.thoughts.path` | Путь между двумя мыслями | `network_id`, `from_id`, `to_id`, `max_depth` |
+| `etn.thoughts.neighbors` | Соседи (+ каталоги `link_types`/`thought_types`) | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход) |
+| `etn.thoughts.subgraph` | Подграф в радиусе N рёбер (+ каталоги `thought_types`/`link_types`) | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?` |
+| `etn.thoughts.path` | Путь между двумя мыслями (+ каталог `thought_types`) | `network_id`, `from_id`, `to_id`, `max_depth` |
 | `etn.links.get` | Связь | `network_id`, `link_id` |
 | `etn.thoughts.mentions` | Где упоминается мысль | `network_id`, `thought_id` |
-| `etn.thoughts.usage` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству | `network_id`, `thought_id` |
+| `etn.thoughts.usage` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`) | `network_id`, `thought_id` |
 | `etn.export.subgraph` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
 
 `etn.thoughts.subgraph` — ключевой для RAG-сценариев: агент задаёт радиус
@@ -110,6 +110,28 @@ null` означает висячую ссылку на удалённую мы�
 `chars_returned`/`chars_total`/`truncated`; уровень списка несёт
 `total`/`returned`/`truncated` — агент видит, что записей больше, и полные
 тексты доступны ресурсом `etn://…/comments`.
+
+#### Каталоги типов в ответах (task N6)
+
+Read-инструменты, возвращающие списки мыслей/связей, несут `type_id` /
+`link_type_id` как **ключи** в сопроводительных справочниках — «reference
+tables» (только реально использованные в ответе типы, а не весь каталог
+сети), чтобы агент не делал дополнительные запросы и не получал повторяющийся
+текст в каждой записи:
+
+- `thought_types`: `{ [type_id]: {id, name, description, icon} }` — в ответах
+  `etn.thoughts.subgraph` (по узлам), `etn.thoughts.neighbors`,
+  `etn.thoughts.query` (по хитам), `etn.thoughts.path` (по пути) и
+  `etn.thoughts.usage` (по использующим мыслям);
+- `link_types`: `{ [link_type_id]: {id, name_forward, name_reverse,
+  description, color, style} }` — в `etn.thoughts.subgraph` (по рёбрам) и
+  `etn.thoughts.neighbors` (по связям соседей).
+
+`description` — тот самый «комментарий для AI» из определения типа (см. §3):
+роль типа и требования по нему; для связи даны оба имени — агент выбирает по
+направлению ребра (source → target = `name_forward`). Неизвестные/удалённые
+типы пропускаются (`type_id` без SQL FK). Формат у инструмента и парного
+ресурса (`etn://…/neighbors`) одинаковый.
 
 #### 4.1a. `etn.thoughts.query` — структурная выборка
 
@@ -143,10 +165,11 @@ null` означает висячую ссылку на удалённую мы�
   колонке (`value_text`/`value_date`/`value_thought_ref`).
 
 Ответ: `{ total, hits: [{id, title, type_id, active, depth}], truncated,
-reason }`. `depth` — расстояние от `in_subtree_of` (0 — сам корень; `null`,
-если корень не задан). Обход ограничен `max_nodes_per_subgraph` — при
-превышении `truncated: true, reason: "max_nodes"`, и лишние узлы в выборку
-не попадают.
+reason, thought_types }`. `depth` — расстояние от `in_subtree_of` (0 — сам
+корень; `null`, если корень не задан). `thought_types` — каталог типов,
+встретившихся в хитах (см. «Каталоги типов в ответах»). Обход ограничен
+`max_nodes_per_subgraph` — при превышении `truncated: true, reason:
+"max_nodes"`, и лишние узлы в выборку не попадают.
 
 Пример — все ошибки в поддереве проекта за один вызов:
 

@@ -117,3 +117,29 @@
   - [x] Тесты: доменные (comment-service.test.ts — лимит записей, обрезка
     тела, пустой владелец) и MCP (mcp-tools.test.ts); typecheck зелёный;
     проверка через MCP stdio.
+
+## N6. Каталоги типов (`thought_types`/`link_types`) в ответах read-инструментов
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** N4
+- **Описание:** по запросу пользователя: `type_id`/`link_type_id` в ответах
+  отдавались голыми UUID — агент не мог понять, как связаны мысли, без
+  дополнительных запросов, а повторять название/описание в каждой записи —
+  раздувание контекста. Решение — «reference tables» (по согласованному
+  дизайну): каждый read-ответ несёт каталоги **только использованных** типов
+  с полями для AI: `thought_types` = `{id, name, description, icon}`,
+  `link_types` = `{id, name_forward, name_reverse, description, color, style}`
+  (оба имени — агент выбирает по направлению ребра). Охват: `subgraph`
+  (типы узлов + типы рёбер), `neighbors` (depth=1 и depth>1), `query`,
+  `path`, `usage`; ресурс `etn://…/neighbors` — тот же формат. `search` не
+  трогается: его хиты не несут `type_id` (REST-контракт).
+- **DoD:**
+  - [x] Типы `ThoughtTypeRef`/`LinkTypeRef` в `@etn/shared` (types/mcp.ts).
+  - [x] `catalogs.ts` (server/src/mcp): `thoughtTypeCatalog`/`linkTypeCatalog`
+    — словари по id, неизвестные/удалённые типы пропускаются (без SQL FK).
+  - [x] Каталоги в tools.ts (subgraph/neighbors/query/path/usage) и в ресурсе
+    `etn.thought.neighbors` (resources.ts).
+  - [x] Спека `docs/05-mcp-server.md` §3/§4.1 («Каталоги типов в ответах») и
+    `docs/mcp-clients.md`.
+  - [x] Тесты mcp-tools.test.ts (каталоги в subgraph/neighbors/query/path/
+    usage, description резолвится; пустой каталог у usage без ссылок);
+    typecheck зелёный; проверка через MCP stdio на живой сети (каталог
+    «софт»/«каталог» с описаниями, 21 инструмент).
