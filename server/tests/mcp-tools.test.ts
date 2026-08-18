@@ -250,6 +250,76 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.thoughts.usage lists referencing thoughts grouped by property (N3)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Seed a thought type with a thought_ref property and two thoughts
+      // linked through it (direct inserts — no MCP tool creates types).
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const typeId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
+           VALUES (?, 'book', 1, '2024', '2024', 'u')`,
+        )
+        .run(typeId);
+      const propId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, required, position)
+           VALUES (?, 'thought_type', ?, 'author', 'thought_ref', 0, 0)`,
+        )
+        .run(propId, typeId);
+      const seed = (title: string): string => {
+        const id = randomUUID();
+        ndb
+          .prepare(
+            `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                   version, created_at, created_by, updated_at, updated_by)
+             VALUES (?, ?, ?, ?, 1, 0, 0, 1, '2024', 'u', '2024', 'u')`,
+          )
+          .run(id, title, title.toLowerCase(), typeId);
+        return id;
+      };
+      const target = seed('Автор');
+      const book = seed('Книга');
+      ndb
+        .prepare(
+          `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_thought_ref, updated_at)
+           VALUES (?, 'thought', ?, ?, ?, '2024')`,
+        )
+        .run(randomUUID(), book, propId, target);
+      // NB: do not close — openNetworkDb caches the connection shared with the MCP server.
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const res = await handle.client.callTool({
+          name: 'etn.thoughts.usage',
+          arguments: { network_id: ctx.networkId, thought_id: target },
+        });
+        assert.equal(res.isError, undefined);
+        const usage = toolJson<{ total: number; groups: Array<{ key: string; thoughts: Array<{ id: string }> }> }>(res);
+        assert.equal(usage.total, 1);
+        assert.equal(usage.groups.length, 1);
+        assert.equal(usage.groups[0]?.key, 'author');
+        assert.equal(usage.groups[0]?.thoughts[0]?.id, book);
+
+        // The referencing thought itself has no usages.
+        const none = await handle.client.callTool({
+          name: 'etn.thoughts.usage',
+          arguments: { network_id: ctx.networkId, thought_id: book },
+        });
+        const noneUsage = toolJson<{ total: number; groups: unknown[] }>(none);
+        assert.equal(noneUsage.total, 0);
+        assert.deepEqual(noneUsage.groups, []);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('auth provider rejects garbage, disabled keys and disabled users (F2)', async () => {
     const ctx = await buildMcpContext();
     try {

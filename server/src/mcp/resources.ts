@@ -18,6 +18,7 @@ import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { getThoughtOrThrow } from '../domain/thought-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
+import { findThoughtUsage } from '../domain/property-service.js';
 import { getNeighbors } from '../domain/thought-service.js';
 import { getLink } from '../domain/link-service.js';
 import { listComments } from '../domain/comment-service.js';
@@ -167,6 +168,29 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
           children: getNeighbors(ndb, thoughtId, 'children', { userId: rt.deps.auth.userId }),
           siblings: getNeighbors(ndb, thoughtId, 'siblings', { userId: rt.deps.auth.userId }),
         });
+      }),
+  );
+
+  // --- usage (reverse thought_ref lookup, 03-server-api.md §9.1) --------------
+  mcp.registerResource(
+    'etn.thought.usage',
+    new ResourceTemplate('etn://networks/{network_id}/thoughts/{thought_id}/usage', {
+      list: undefined,
+    }),
+    {
+      title: 'Использование мысли',
+      description:
+        'Мысли, ссылающиеся на эту как на значение thought_ref-свойства (формальные связи, ' +
+        '«Использование» в редакторе), сгруппированные по свойству.',
+      mimeType: JSON_MIME,
+    },
+    (uri, vars) =>
+      guarded(() => {
+        const networkId = requireVar(vars, 'network_id');
+        const thoughtId = requireVar(vars, 'thought_id');
+        const ndb = openMemberNetwork(rt, networkId);
+        getThoughtOrThrow(ndb, thoughtId);
+        return jsonContents(uri.href, findThoughtUsage(ndb, thoughtId));
       }),
   );
 

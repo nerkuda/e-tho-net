@@ -88,6 +88,7 @@ describe('thought meta (N2)', { skip: !nativeAvailable() }, () => {
       children_count: 0,
       attachments_count: 0,
       chrono_count: 0,
+      usage_count: 0,
       permanent: null,
     });
   });
@@ -157,5 +158,39 @@ describe('thought meta (N2)', { skip: !nativeAvailable() }, () => {
     const meta = getThoughtMeta(ndb, t);
     assert.equal(meta.permanent, null);
     assert.equal(meta.chrono_count, 1);
+  });
+
+  it('counts thought_ref usages by other thoughts', () => {
+    const ndb = createInMemoryNetworkDb();
+    const type = randomUUID();
+    ndb
+      .prepare(
+        `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
+         VALUES (?, 'ref', 1, '2024', '2024', 'u')`,
+      )
+      .run(type);
+    const prop = randomUUID();
+    ndb
+      .prepare(
+        `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, required, position)
+         VALUES (?, 'thought_type', ?, 'project', 'thought_ref', 0, 0)`,
+      )
+      .run(prop, type);
+    const target = seedThought(ndb);
+    const owner1 = seedThought(ndb);
+    const owner2 = seedThought(ndb);
+    for (const owner of [owner1, owner2]) {
+      ndb
+        .prepare(
+          `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_thought_ref, updated_at)
+           VALUES (?, 'thought', ?, ?, ?, '2024')`,
+        )
+        .run(randomUUID(), owner, prop, target);
+    }
+
+    const meta = getThoughtMeta(ndb, target);
+    assert.equal(meta.usage_count, 2);
+    // The referencing thoughts themselves have no usages.
+    assert.equal(getThoughtMeta(ndb, owner1).usage_count, 0);
   });
 });

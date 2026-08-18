@@ -35,7 +35,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('lists the 10 etn:// resources (1 static + 9 templated)', async () => {
+  it('lists the 11 etn:// resources (1 static + 10 templated)', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -47,9 +47,10 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
           ...listed.resources.map((r) => r.uri),
           ...templates.resourceTemplates.map((r) => r.uriTemplate),
         ].sort();
-        assert.equal(uris.length, 10);
+        assert.equal(uris.length, 11);
         assert.ok(uris.includes('etn://networks'));
         assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}'));
+        assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}/usage'));
         assert.ok(uris.includes('etn://networks/{network_id}/thought-types/{type_id}'));
       } finally {
         await handle.close();

@@ -39,6 +39,10 @@ export function getThoughtMeta(ndb: NetworkDb, thoughtId: string): ThoughtMeta {
     "comments WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'chronological'",
     thoughtId,
   );
+  const usage_count = count(
+    "property_values WHERE owner_type = 'thought' AND value_thought_ref = ?",
+    thoughtId,
+  );
 
   const permanentRow = ndb
     .prepare(
@@ -72,6 +76,7 @@ export function getThoughtMeta(ndb: NetworkDb, thoughtId: string): ThoughtMeta {
     children_count,
     attachments_count,
     chrono_count,
+    usage_count,
     permanent,
   };
 }

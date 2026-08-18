@@ -33,6 +33,7 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.path',
   'etn.links.get',
   'etn.thoughts.mentions',
+  'etn.thoughts.usage',
   'etn.export.subgraph',
   // mutate (§4.2)
   'etn.thoughts.create',

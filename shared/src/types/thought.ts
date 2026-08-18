@@ -286,6 +286,12 @@ export interface ThoughtMeta {
   /** Хронологические комментарии мысли. */
   chrono_count: number;
   /**
+   * Сколько раз мысль используется как `thought_ref`-значение свойств
+   * других мыслей (формальные связи, «Использование» в редакторе —
+   * 03-server-api.md §9.1).
+   */
+  usage_count: number;
+  /**
    * Постоянный комментарий (ровно один на мысль) с обрезкой больших
    * текстов: `body_md` — первые {@link PERMANENT_COMMENT_PREVIEW_CHARS}
    * символов; `chars_total` — полная длина, `truncated` — обрезан ли текст.

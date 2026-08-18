@@ -1,9 +1,9 @@
 /**
  * MCP tools (task F4, docs/05-mcp-server.md §4).
  *
- * Twenty tools in three groups:
+ * Twenty-one tools in three groups:
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
- *     path, links get, mentions, export;
+ *     path, links get, mentions, usage, export;
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert, attachments.add,
  *     properties.set, set_active;
  *   * dedupe (§4.3) — find_duplicates.
@@ -46,7 +46,7 @@ import {
 import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
 import { createComment, listComments, updateComment } from '../domain/comment-service.js';
 import { createAttachment } from '../domain/attachment-service.js';
-import { getPropertyValues, setPropertyValue } from '../domain/property-service.js';
+import { getPropertyValues, setPropertyValue, findThoughtUsage } from '../domain/property-service.js';
 import { findDuplicates, findMentions, resolveThoughts, search } from '../domain/search-service.js';
 import { queryThoughts } from '../domain/query-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
@@ -105,7 +105,7 @@ const ThoughtChanges = z
 // ---------------------------------------------------------------------------
 
 /**
- * Register all twenty `etn.*` tools on a freshly built {@link McpServer}.
+ * Register all twenty-one `etn.*` tools on a freshly built {@link McpServer}.
  */
 export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
@@ -377,6 +377,24 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
         return findMentions(ndb, args.thought_id);
+      }),
+  );
+
+  const UsageSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId });
+  mcp.registerTool(
+    'etn.thoughts.usage',
+    {
+      title: 'Где используется мысль',
+      description:
+        'Thoughts referencing this thought as a `thought_ref` property value (formal links, ' +
+        '«Использование» in the editor), grouped by property. Returns ' +
+        '{ total, groups: [{property_id, key, thoughts[]}] }.',
+      inputSchema: UsageSchema,
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        return findThoughtUsage(ndb, args.thought_id);
       }),
   );
 
