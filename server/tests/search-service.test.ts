@@ -386,13 +386,13 @@ describe(
         const target = seedThought(ndb, 'Объект');
         seedSynonym(ndb, target, 'Петров* Игор*');
         seedSynonym(ndb, target, 'Игорян*');
-        const other = seedThought(ndb, 'Заметки');
-        // Adjacent words in order — matches.
-        const good = seedThoughtComment(ndb, other, 'Петрова Игоря видели вчера');
-        // Non-adjacent words — must NOT match.
-        const bad = seedThoughtComment(ndb, other, 'Петрович передал Игорю');
-        // Single-word pattern — matches the input word.
-        const single = seedThoughtComment(ndb, other, 'Игорянский пришёл');
+        // One owning thought per case (mentions collapse per owner).
+        const goodOwner = seedThought(ndb, 'Заметки');
+        const good = seedThoughtComment(ndb, goodOwner, 'Петрова Игоря видели вчера');
+        const badOwner = seedThought(ndb, 'Дневник');
+        const bad = seedThoughtComment(ndb, badOwner, 'Петрович передал Игорю');
+        const singleOwner = seedThought(ndb, 'Письма');
+        const single = seedThoughtComment(ndb, singleOwner, 'Игорянский пришёл');
 
         const mentions = findMentions(ndb, target);
         const ids = mentions.map((m) => m.comment_id);
@@ -433,16 +433,20 @@ describe(
         const target = seedThought(ndb, 'Петров Василий');
         seedSynonym(ndb, target, 'Вас*');
         seedSynonym(ndb, target, 'Петров* Вас*');
-        const other = seedThought(ndb, 'Заметки');
-        // Matching phrases / single-word synonym.
-        const dative = seedThoughtComment(ndb, other, 'Отдал Петрову Васе');
-        const genitive = seedThoughtComment(ndb, other, 'Видел Петрова Василия');
-        const single = seedThoughtComment(ndb, other, 'Васю пригласили');
+        // One owning thought per case (mentions collapse per owner).
+        const dativeOwner = seedThought(ndb, 'Заметки');
+        const dative = seedThoughtComment(ndb, dativeOwner, 'Отдал Петрову Васе');
+        const genitiveOwner = seedThought(ndb, 'Дневник');
+        const genitive = seedThoughtComment(ndb, genitiveOwner, 'Видел Петрова Василия');
+        const singleOwner = seedThought(ndb, 'Письма');
+        const single = seedThoughtComment(ndb, singleOwner, 'Васю пригласили');
         // Only one word of the phrase — must NOT match (regression: the title
         // used to be split into OR-tokens, so «Петрову Игорю» was found via
         // the token «Петров» of the title «Петров Василий»).
-        const otherPerson = seedThoughtComment(ndb, other, 'Петрову Игорю');
-        const otherFamily = seedThoughtComment(ndb, other, 'Петрова Марина');
+        const otherPersonOwner = seedThought(ndb, 'Справка');
+        const otherPerson = seedThoughtComment(ndb, otherPersonOwner, 'Петрову Игорю');
+        const otherFamilyOwner = seedThought(ndb, 'Фото');
+        const otherFamily = seedThoughtComment(ndb, otherFamilyOwner, 'Петрова Марина');
 
         const mentions = findMentions(ndb, target);
         const ids = mentions.map((m) => m.comment_id);
@@ -451,6 +455,23 @@ describe(
         assert.ok(ids.includes(single), 'single-word wildcard synonym matches');
         assert.ok(!ids.includes(otherPerson), 'a single word of the phrase must not match');
         assert.ok(!ids.includes(otherFamily), 'a single word of the phrase must not match');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions returns one hit per owning thought, not per comment', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Петров Василий');
+        seedSynonym(ndb, target, 'Петров* Вас*');
+        const other = seedThought(ndb, 'Заметки');
+        // Two comments of the same thought both mention the target.
+        seedThoughtComment(ndb, other, 'Петрову Васе передали привет');
+        seedThoughtComment(ndb, other, 'Видел Петрова Василия вчера');
+        const mentions = findMentions(ndb, target);
+        assert.equal(mentions.length, 1, 'several matching comments collapse into one hit');
+        assert.equal(mentions[0]!.owner_id, other);
       } finally {
         ndb.close();
       }

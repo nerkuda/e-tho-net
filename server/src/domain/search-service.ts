@@ -961,8 +961,9 @@ export function findDuplicates(
  * patterns: FTS5 prefix queries fetch candidates, then
  * {@link synonymPatternToRegex} enforces the exact semantics (`*` never
  * crosses a word boundary, multi-word patterns require adjacent words in the
- * given order). Returns hits across both thought- and link-owned comments; the
- * target thought's own comments are excluded.
+ * given order). Returns one hit per owning thought/link (a thought with
+ * several matching comments collapses into a single hit); the target thought's
+ * own comments are excluded.
  */
 export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
   const thought = ndb
@@ -988,9 +989,12 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     comment_id: string;
     body: string;
   }
+  // One hit per owning thought/link (03-server-api.md §13 returns «мысли/связи»):
+  // several matching comments of the same owner collapse into its first hit.
   const push = (r: MentionRow, highlightTerms: string[]): void => {
-    if (seen.has(r.comment_id)) return;
-    seen.add(r.comment_id);
+    const key = `${r.owner_type}:${r.owner_id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
     out.push({
       owner_type: r.owner_type,
       owner_id: r.owner_id,
