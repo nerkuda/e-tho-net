@@ -17,6 +17,7 @@ import type { Comment } from '@etn/shared';
 import { invalidateIndicators } from '../canvas/canvas.js';
 import {
   clearDraft,
+  clearDraftsFor,
   findDraft,
   saveDraft,
   type DraftKind,
@@ -145,6 +146,10 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
         }
         await clearDraft(draftId);
         draftId = null;
+        // Sweep by key: a debounce that resolved after the blur would
+        // otherwise leave a row behind (its id never reached `draftId`).
+        await clearDraftsFor(networkId, 'comment', permanent?.id ?? ctx.ownerId);
+        await clearDraftsFor(networkId, 'comment-new', ctx.ownerId);
         invalidateIndicators(ctx.ownerId);
         return html;
       },

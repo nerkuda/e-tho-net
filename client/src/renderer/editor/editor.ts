@@ -32,7 +32,7 @@ import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { inNeighbourhood } from '../realtime-ui.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
-import { canSave, clearDraft, findDraft, offlineNotice, saveDraft } from '../drafts.js';
+import { canSave, clearDraft, clearDraftsFor, findDraft, offlineNotice, saveDraft } from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
@@ -625,7 +625,11 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
       return;
     }
     void saveThought({ title: value }).then((ok) => {
-      if (ok) void clearDraft(titleDraftId);
+      if (!ok) return;
+      void clearDraft(titleDraftId);
+      // Sweep by key: a debounce whose id arrived late (or never) would
+      // otherwise leave a stale row behind.
+      void clearDraftsFor(networkId, 'thought', thought.id);
     });
   };
   titleArea.addEventListener('blur', commitTitle);

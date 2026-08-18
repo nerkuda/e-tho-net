@@ -86,6 +86,30 @@ export async function clearDraft(draftId: string | null): Promise<void> {
 }
 
 /**
+ * Removes every draft of an edit target (all fields). Used after a successful
+ * save: the tracked draft id may be null (a debounce that resolved after the
+ * blur) or point at a row the upsert replaced — deleting by key sweeps whatever
+ * actually exists.
+ */
+export async function clearDraftsFor(
+  networkId: string,
+  entityType: DraftKind,
+  entityId: string,
+): Promise<void> {
+  let drafts: DraftRecord[];
+  try {
+    drafts = (await etn.ui.draftList(networkId)) as DraftRecord[];
+  } catch {
+    return;
+  }
+  for (const draft of drafts) {
+    if (draft.entityType === entityType && draft.entityId === entityId) {
+      await etn.ui.draftDelete(draft.id).catch(() => undefined);
+    }
+  }
+}
+
+/**
  * Finds the draft for a specific edit target, or null. Returns the newest
  * matching row together with the version it was based on, so callers can tell
  * a pending edit (base version still current) from a stale one.
