@@ -5,7 +5,7 @@
 
 ![CI](https://github.com/nerkuda/e-tho-net/actions/workflows/ci.yml/badge.svg) ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 
-![demo-gif](docs\images\ETN-1.gif)
+![demo-gif](docs/images/ETN-1.gif)
 
 ## Статус
 
