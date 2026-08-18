@@ -316,6 +316,48 @@ export function parseAddLines(text: string): AddLine[] {
 }
 
 // ---------------------------------------------------------------------------
+// Compound thought names (08-ui-spec.md §2.2.3)
+// ---------------------------------------------------------------------------
+
+/** Maximum number of parts of a compound thought name (the rest after the 3rd
+ *  comma counts as a single part). */
+const COMPOUND_NAME_MAX_PARTS = 4;
+
+/**
+ * Splits a compound thought name into parts (08-ui-spec.md §2.2.3): the name is
+ * split at the first three commas, everything after the 3rd comma stays one
+ * part, each part is trimmed. A name without commas yields a single part.
+ */
+export function splitCompoundName(title: string): string[] {
+  const parts: string[] = [];
+  let rest = title;
+  for (let i = 0; i < COMPOUND_NAME_MAX_PARTS - 1; i++) {
+    const comma = rest.indexOf(',');
+    if (comma === -1) break;
+    parts.push(rest.slice(0, comma).trim());
+    rest = rest.slice(comma + 1);
+  }
+  parts.push(rest.trim());
+  return parts;
+}
+
+/**
+ * Display name of a compound-named thought outside the focus (08-ui-spec.md
+ * §2.2.3): parts equal to the title of a visible related thought are hidden,
+ * the kept parts are re-joined with ", ". Comparison is case-insensitive on
+ * trimmed strings. When nothing matches or every part is hidden, the full
+ * name is returned unchanged.
+ */
+export function shortenCompoundName(title: string, relatedTitles: readonly string[]): string {
+  if (relatedTitles.length === 0) return title;
+  const parts = splitCompoundName(title);
+  if (parts.length === 1) return title;
+  const related = relatedTitles.map((t) => t.trim().toLowerCase());
+  const kept = parts.filter((p) => !related.includes(p.trim().toLowerCase()));
+  return kept.length === 0 ? title : kept.join(', ');
+}
+
+// ---------------------------------------------------------------------------
 // ui_state parsing (L4)
 // ---------------------------------------------------------------------------
 

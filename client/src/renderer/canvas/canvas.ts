@@ -18,7 +18,7 @@
  *   comment/attachment events invalidate the cache.
  */
 
-import type { FocusNeighbor, FocusResponse, IconKind, ThoughtRef } from '@etn/shared';
+import type { FocusEdge, FocusNeighbor, FocusResponse, IconKind, ThoughtRef } from '@etn/shared';
 
 import { scheduleRefresh, setFocus } from '../app.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
@@ -29,6 +29,7 @@ import {
   cloudGeom,
   cloudHeight,
   contrastText,
+  shortenCompoundName,
 } from '../lib/pure.js';
 import { store } from '../state.js';
 import {
@@ -325,6 +326,7 @@ async function render(): Promise<void> {
 
   // Enrich neighbour metadata (colors/fonts/icon_kind are not in FocusNeighbor).
   await enrichRefs(focus);
+  relatedTitles = visibleRelatedTitles(focus);
   renderFocusRow(focus);
   updateFocusBand();
   renderZone('parents', groupByThought(focus.parents));
@@ -435,6 +437,48 @@ function groupByThought(neighbors: FocusNeighbor[]): ZoneEntry[] {
     entry.links.push(neighbor);
   }
   return [...byId.values()];
+}
+
+/**
+ * Titles of the visible parents/children of every displayed thought — the
+ * endpoint titles of the focus response's `edges` (08-ui-spec.md §2.2.3).
+ * Kept for the current focus; the zone clouds shorten compound names against
+ * them. The focused thought itself always shows its full name (the focus row).
+ */
+let relatedTitles = new Map<string, string[]>();
+
+/**
+ * Maps each displayed thought to the titles of its visible (displayed) related
+ * thoughts — parents and children from the `edges` among the visible set
+ * (focused + parents + siblings + children, 03-server-api.md §6.2).
+ */
+export function visibleRelatedTitles(focus: {
+  focused: { id: string; title: string };
+  parents: FocusNeighbor[];
+  siblings: FocusNeighbor[];
+  children: FocusNeighbor[];
+  edges: FocusEdge[];
+}): Map<string, string[]> {
+  const titleOf = new Map<string, string>();
+  titleOf.set(focus.focused.id, focus.focused.title);
+  for (const neighbor of [...focus.parents, ...focus.siblings, ...focus.children]) {
+    titleOf.set(neighbor.id, neighbor.title);
+  }
+  const related = new Map<string, Set<string>>();
+  const add = (id: string, title: string): void => {
+    const set = related.get(id) ?? new Set<string>();
+    set.add(title);
+    related.set(id, set);
+  };
+  for (const edge of focus.edges) {
+    if (edge.source_id === edge.target_id) continue;
+    const sourceTitle = titleOf.get(edge.source_id);
+    const targetTitle = titleOf.get(edge.target_id);
+    if (sourceTitle === undefined || targetTitle === undefined) continue;
+    add(edge.source_id, targetTitle);
+    add(edge.target_id, sourceTitle);
+  }
+  return new Map([...related].map(([id, titles]) => [id, [...titles]]));
 }
 
 /** Fetches missing refs for all neighbours of a focus response. */
@@ -795,9 +839,12 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   applyThoughtIcon(iconBox, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
   // Prefer the live neighbour title (fresh from the focus response) over the
   // cached ref, which can lag behind after a rename until re-resolved.
-  const cloudTitle = entry.links[0]?.title ?? ref?.title ?? '—';
+  const cloudTitleFull = entry.links[0]?.title ?? ref?.title ?? '—';
+  // Outside the focus, compound names hide the parts matching visible related
+  // thoughts (08-ui-spec.md §2.2.3); the tooltip keeps the full name.
+  const cloudTitle = shortenCompoundName(cloudTitleFull, relatedTitles.get(entry.id) ?? []);
   const title = el('div', 'cloud-title', cloudTitle);
-  setTooltip(title, cloudTitle);
+  setTooltip(title, cloudTitleFull);
 
   const ind = div('cloud-ind');
   const perm = span('📝', 'ind dim');

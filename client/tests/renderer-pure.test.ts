@@ -41,6 +41,8 @@ import {
   parseLinkTypeId,
   parseTitleWithSynonyms,
   parseWindowLayout,
+  shortenCompoundName,
+  splitCompoundName,
   zoomStep,
 } from '../src/renderer/lib/pure.js';
 
@@ -597,5 +599,74 @@ describe('flipTransform (focus transition, 08-ui-spec §2.8)', () => {
       flipTransform({ left: 10, top: 10, width: 44, height: 44 }, { left: 0, top: 0, width: 0, height: 0 }),
       { dx: 10, dy: 10, sx: 44, sy: 44 },
     );
+  });
+});
+
+describe('splitCompoundName (08-ui-spec §2.2.3)', () => {
+  it('a name without commas is a single part', () => {
+    assert.deepEqual(splitCompoundName('Проект А'), ['Проект А']);
+  });
+
+  it('splits at commas and trims the parts', () => {
+    assert.deepEqual(splitCompoundName('Проект А, Задачи разработки'), [
+      'Проект А',
+      'Задачи разработки',
+    ]);
+  });
+
+  it('everything after the 3rd comma is one part', () => {
+    assert.deepEqual(splitCompoundName('a, b, c, d'), ['a', 'b', 'c', 'd']);
+    assert.deepEqual(splitCompoundName('a, b, c, d, e'), ['a', 'b', 'c', 'd, e']);
+  });
+});
+
+describe('shortenCompoundName (08-ui-spec §2.2.3)', () => {
+  it('returns the full name when there are no related titles', () => {
+    assert.equal(
+      shortenCompoundName('Проект А, Задачи разработки', []),
+      'Проект А, Задачи разработки',
+    );
+  });
+
+  it('hides the part matching a visible related thought', () => {
+    assert.equal(
+      shortenCompoundName('Проект А, Задачи разработки', ['Проект А']),
+      'Задачи разработки',
+    );
+  });
+
+  it('hides several parts — visible parent and child', () => {
+    assert.equal(
+      shortenCompoundName('Проект А, Обсудить с Петровым проблемы тестирования, Задачи для офиса', [
+        'Проект А',
+        'Задачи для офиса',
+      ]),
+      'Обсудить с Петровым проблемы тестирования',
+    );
+  });
+
+  it('matching ignores case and surrounding spaces', () => {
+    assert.equal(
+      shortenCompoundName('Проект А, Задачи разработки', ['  проект а ']),
+      'Задачи разработки',
+    );
+  });
+
+  it('unmatched related titles change nothing', () => {
+    assert.equal(
+      shortenCompoundName('Проект А, Задачи разработки', ['Другой проект']),
+      'Проект А, Задачи разработки',
+    );
+  });
+
+  it('falls back to the full name when every part is hidden', () => {
+    assert.equal(
+      shortenCompoundName('Проект А, Задачи разработки', ['Проект А', 'Задачи разработки']),
+      'Проект А, Задачи разработки',
+    );
+  });
+
+  it('a plain (non-compound) name is never shortened', () => {
+    assert.equal(shortenCompoundName('Задачи разработки', ['Задачи разработки']), 'Задачи разработки');
   });
 });

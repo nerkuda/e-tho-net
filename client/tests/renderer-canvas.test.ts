@@ -6,24 +6,30 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { FocusNeighbor, ThoughtRef, ThoughtType } from '@etn/shared';
+import type { FocusEdge, FocusNeighbor, ThoughtRef, ThoughtType } from '@etn/shared';
 
-import { canvasInternals } from '../src/renderer/canvas/canvas.js';
+import { canvasInternals, visibleRelatedTitles } from '../src/renderer/canvas/canvas.js';
 import { store } from '../src/renderer/state.js';
 
 const { groupByThought, resolveCloudStyle } = canvasInternals;
 
-function neighbor(id: string, linkId: string): FocusNeighbor {
+function neighbor(id: string, linkId: string, title = id): FocusNeighbor {
   return {
     id,
-    title: id,
+    title,
     type_id: null,
     icon: null,
     active: true,
     link_id: linkId,
     link_type_id: null,
     link_active: true,
+    has_incoming: false,
+    has_outgoing: false,
   };
+}
+
+function edge(id: string, source_id: string, target_id: string): FocusEdge {
+  return { id, source_id, target_id, type_id: null, color: null, style: null, width: null };
 }
 
 function ref(overrides: Partial<ThoughtRef> = {}): ThoughtRef {
@@ -115,5 +121,45 @@ describe('resolveCloudStyle', () => {
     const style = resolveCloudStyle(ref({ type_id: 'type1', font_bold: false }));
     assert.equal(style.bold, false);
     store.update({ thoughtTypes: [] });
+  });
+});
+
+describe('visibleRelatedTitles (08-ui-spec §2.2.3)', () => {
+  it('maps focus↔neighbour edges to the endpoint titles', () => {
+    const result = visibleRelatedTitles({
+      focused: { id: 'f', title: 'Проект А' },
+      parents: [neighbor('p', 'lp', 'Родитель')],
+      siblings: [],
+      children: [neighbor('c', 'lc', 'Задачи разработки')],
+      edges: [edge('e1', 'f', 'c'), edge('e2', 'p', 'f')],
+    });
+    assert.deepEqual(result.get('f'), ['Задачи разработки', 'Родитель']);
+    assert.deepEqual(result.get('c'), ['Проект А']);
+    assert.deepEqual(result.get('p'), ['Проект А']);
+  });
+
+  it('includes neighbour↔neighbour edges', () => {
+    const result = visibleRelatedTitles({
+      focused: { id: 'f', title: 'Фокус' },
+      parents: [neighbor('p1', 'l1', 'Проект А'), neighbor('p2', 'l2', 'Задачи разработки')],
+      siblings: [],
+      children: [],
+      edges: [edge('e1', 'p1', 'p2')],
+    });
+    assert.deepEqual(result.get('p1'), ['Задачи разработки']);
+    assert.deepEqual(result.get('p2'), ['Проект А']);
+    assert.equal(result.get('f'), undefined);
+  });
+
+  it('ignores edges whose endpoints are not among the displayed thoughts', () => {
+    const result = visibleRelatedTitles({
+      focused: { id: 'f', title: 'Фокус' },
+      parents: [],
+      siblings: [],
+      children: [neighbor('c', 'lc', 'Дитя')],
+      edges: [edge('e1', 'f', 'c'), edge('e2', 'c', 'gone')],
+    });
+    assert.deepEqual(result.get('f'), ['Дитя']);
+    assert.deepEqual(result.get('c'), ['Фокус']);
   });
 });
