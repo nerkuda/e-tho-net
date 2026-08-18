@@ -62,9 +62,16 @@ REST. Все изменения, сделанные агентом, иденти
 `thought_ref`-свойства (`usage_count`, task N3) — агент по ним решает, какие
 отдельные ресурсы/инструменты запрашивать. Поле `permanent` — постоянный
 комментарий (ровно один на мысль) с обрезкой больших текстов: `body_md` —
-первые `PERMANENT_COMMENT_PREVIEW_CHARS` (2000) символов, `chars_returned` /
+первые `COMMENT_PREVIEW_CHARS` (2000) символов, `chars_returned` /
 `chars_total` / `truncated` сообщают, обрезан ли текст; `null`, когда
 постоянного комментария нет.
+
+Значения свойств в чтении мысли отдаются резолвнутыми (task N4):
+`thought_ref`-значение — это `{id, title}`, а не голый UUID, — агенту не нужны
+отдельные вызовы `etn.thoughts.get` на каждую формальную ссылку; `title:
+null` означает висячую ссылку на удалённую мысль. Обратное направление
+(кто ссылается на мысль) — инструмент `etn.thoughts.usage` / ресурс
+`etn.thought.usage` (task N3).
 
 Описание типов (`thought_types.description`, `link_types.description`) — это и
 есть тот самый «комментарий для AI-агентов» из словаря: в нём пользователь
@@ -82,7 +89,7 @@ REST. Все изменения, сделанные агентом, иденти
 | `etn.networks.list` | Доступные сети | — |
 | `etn.thoughts.search` | Полнотекстовый поиск | `network_id`, `query`, `scope?` (`names`/`texts`/`links`/`chronology`/`all`), `in_subtree_of?`, `type_id?`, `limit?` |
 | `etn.thoughts.query` | Структурная выборка (список по критериям) | см. §4.1a |
-| `etn.thoughts.get` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария) | `network_id`, `thought_id` |
+| `etn.thoughts.get` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария; `thought_ref`-значения свойств резолвнуты в `{id, title}`) | `network_id`, `thought_id` |
 | `etn.thoughts.neighbors` | Соседи | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход) |
 | `etn.thoughts.subgraph` | Подграф в радиусе N рёбер | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?` |
 | `etn.thoughts.path` | Путь между двумя мыслями | `network_id`, `from_id`, `to_id`, `max_depth` |
@@ -94,6 +101,15 @@ REST. Все изменения, сделанные агентом, иденти
 `etn.thoughts.subgraph` — ключевой для RAG-сценариев: агент задаёт радиус
 обхода, лимит узлов, и получает JSON-граф с мыслями, связями и (опционально)
 комментариями — готовый контекст для генерации.
+
+С `include_comments: true` комментарии отдаются **превью** (task N5), чтобы
+большой подграф не раздувал контекст: для каждого узла — `permanent`
+(обрезка до `COMMENT_PREVIEW_CHARS`, как в `meta`) и `chronological` —
+последние `CHRONO_PREVIEW_MAX_ENTRIES` (10) записей по `valid_from` DESC,
+каждая с телом не длиннее `COMMENT_PREVIEW_CHARS` и метаданными
+`chars_returned`/`chars_total`/`truncated`; уровень списка несёт
+`total`/`returned`/`truncated` — агент видит, что записей больше, и полные
+тексты доступны ресурсом `etn://…/comments`.
 
 #### 4.1a. `etn.thoughts.query` — структурная выборка
 

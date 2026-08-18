@@ -43,7 +43,7 @@
   блок `meta`: `parents_count`/`children_count` (активные связи),
   `attachments_count`, `chrono_count` (хронологические комментарии) и
   `permanent` — постоянный комментарий с обрезкой больших текстов: первая
-  порция `body_md` до `PERMANENT_COMMENT_PREVIEW_CHARS` (2000) + метаданные
+  порция `body_md` до `COMMENT_PREVIEW_CHARS` (2000) + метаданные
   `chars_returned`/`chars_total`/`truncated`, чтобы агент знал, что текст
   обрезан и полный можно получить отдельным запросом.
 - **DoD:**
@@ -74,3 +74,46 @@
   - [x] Спека `docs/05-mcp-server.md` §3/§4.1 и `docs/mcp-clients.md`.
   - [x] Тесты: `usage_count` в thought-meta.test.ts; вызов инструмента в
     mcp-tools.test.ts; typecheck зелёный; проверка через MCP stdio.
+
+## N4. Резолв `thought_ref`-значений в чтении мысли
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** N3
+- **Описание:** по запросу пользователя (принято полностью): значения
+  свойств в `etn.thoughts.get` и ресурсе `etn.thought` для `value_type =
+  'thought_ref'` отдавались голым UUID — агенту приходилось вызывать
+  `etn.thoughts.get` на каждую формальную ссылку. Теперь `thought_ref`
+  резолвится одним LEFT JOIN в `{id, title}`; `title: null` — висячая ссылка
+  на удалённую мысль (`value_thought_ref` без SQL FK). REST-чтение мысли не
+  меняется: новая доменная функция `getPropertyValuesResolved`
+  (property-service), в REST — прежний `getPropertyValues`.
+- **DoD:**
+  - [x] Типы `ResolvedThoughtRefValue`/`ResolvedPropertyValue` в `@etn/shared`.
+  - [x] `getPropertyValuesResolved` в property-service (один запрос с LEFT JOIN).
+  - [x] Использование в `etn.thoughts.get` (tools.ts) и ресурсе `etn.thought`
+    (resources.ts).
+  - [x] Спека `docs/05-mcp-server.md` §3/§4.1 и `docs/mcp-clients.md`.
+  - [x] Тесты: доменный (property-service.test.ts, в т.ч. висячая ссылка) и
+    MCP (mcp-tools.test.ts); typecheck зелёный; проверка через MCP stdio.
+
+## N5. Превью комментариев в `etn.thoughts.subgraph`
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** N2
+- **Описание:** по запросу пользователя (с заданными ограничениями): с
+  `include_comments: true` `subgraph` отдавал все комментарии всех узлов без
+  ограничений. Теперь — превью: `permanent` — как в `meta` (обрезка до
+  `COMMENT_PREVIEW_CHARS`); `chronological` — последние
+  `CHRONO_PREVIEW_MAX_ENTRIES` (10) записей по `valid_from` DESC, каждая с
+  телом ≤ `COMMENT_PREVIEW_CHARS` и метаданными
+  `chars_returned`/`chars_total`/`truncated`; уровень списка —
+  `total`/`returned`/`truncated` («получено x записей из y всего»). Константа
+  переименована в общую `COMMENT_PREVIEW_CHARS`; превью permanent вынесено из
+  thought-meta в `getPermanentPreview` (comment-service), оба инструмента его
+  переиспользуют.
+- **DoD:**
+  - [x] Константы `COMMENT_PREVIEW_CHARS`/`CHRONO_PREVIEW_MAX_ENTRIES` и типы
+    `ChronoEntryPreview`/`ChronologicalPreview`/`CommentsPreview` в `@etn/shared`.
+  - [x] `getCommentsPreview`/`getPermanentPreview` в comment-service;
+    thought-meta переиспользует `getPermanentPreview`.
+  - [x] Новый формат `comments` в `etn.thoughts.subgraph` (tools.ts).
+  - [x] Спека `docs/05-mcp-server.md` §4.1 и `docs/mcp-clients.md`.
+  - [x] Тесты: доменные (comment-service.test.ts — лимит записей, обрезка
+    тела, пустой владелец) и MCP (mcp-tools.test.ts); typecheck зелёный;
+    проверка через MCP stdio.
