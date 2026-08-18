@@ -84,6 +84,16 @@ export interface DuplicateCandidate {
   synonyms: string[];
   matched_on: 'title' | 'synonym' | 'partial';
   matched_synonym?: string;
+  type_id: string | null;
+  icon: string | null;
+  icon_kind: 'emoji' | 'image';
+  fg_color: string | null;
+  bg_color: string | null;
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
+  parent_title: string | null;
 }
 
 /**

@@ -41,6 +41,13 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import {
+  FONT_BOLD_BIT,
+  FONT_ITALIC_BIT,
+  FONT_STRIKE_BIT,
+  FONT_UNDERLINE_BIT,
+  readFont,
+} from './font-style.js';
 
 // Re-export so route/MCP callers have a single import surface for read helpers
 // (docs/03-server-api.md §6.9 resolve is conceptually part of search/lookup).
@@ -642,6 +649,23 @@ export interface DuplicateHit {
   matched_on: DuplicateMatchKind;
   /** Synonym text that matched, when `matched_on === 'synonym'`. */
   matched_synonym?: string;
+  /** The candidate's own thought type (for icon/style resolution). */
+  type_id: string | null;
+  /** Own icon, when set; the caller falls back to the type's icon. */
+  icon: string | null;
+  icon_kind: IconKind;
+  /** Own style overrides (nullable: inherit the type defaults, 02-data-model.md §3.1.1). */
+  fg_color: string | null;
+  bg_color: string | null;
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
+  /**
+   * Title of one parent (lexicographically first), so the add dialog can
+   * disambiguate equal titles under different parents.
+   */
+  parent_title: string | null;
 }
 
 /** Normalise a title/synonym the way the thought service does (NFC+trim+lower). */
@@ -683,7 +707,24 @@ export function findDuplicates(
 
   const byId = new Map<string, DuplicateHit>();
 
-  const ensure = (row: { id: string; title: string }): DuplicateHit => {
+  /** The row columns shared by every candidate query below. */
+  const DUP_COLUMNS = `id, title, type_id, icon, icon_kind, fg_color, bg_color,
+       font_bold, font_italic, font_underline, font_strike, font_manual`;
+
+  const ensure = (row: {
+    id: string;
+    title: string;
+    type_id: string | null;
+    icon: string | null;
+    icon_kind: string;
+    fg_color: string | null;
+    bg_color: string | null;
+    font_bold: number;
+    font_italic: number;
+    font_underline: number;
+    font_strike: number;
+    font_manual: number;
+  }): DuplicateHit => {
     let hit = byId.get(row.id);
     if (!hit) {
       const synRows = ndb
@@ -694,6 +735,16 @@ export function findDuplicates(
         title: row.title,
         synonyms: synRows.map((s) => s.synonym),
         matched_on: 'partial',
+        type_id: row.type_id,
+        icon: row.icon,
+        icon_kind: row.icon_kind === 'image' ? 'image' : 'emoji',
+        fg_color: row.fg_color,
+        bg_color: row.bg_color,
+        font_bold: readFont(row.font_manual, FONT_BOLD_BIT, row.font_bold),
+        font_italic: readFont(row.font_manual, FONT_ITALIC_BIT, row.font_italic),
+        font_underline: readFont(row.font_manual, FONT_UNDERLINE_BIT, row.font_underline),
+        font_strike: readFont(row.font_manual, FONT_STRIKE_BIT, row.font_strike),
+        parent_title: null,
       };
       byId.set(row.id, hit);
     }
@@ -705,14 +756,29 @@ export function findDuplicates(
   // synonym `Игорян*` matches the input `Игорянский`).
   const wildSynRows = ndb
     .prepare(
-      `SELECT ts.thought_id AS id, t.title AS title, ts.synonym AS synonym,
-              ts.synonym_norm AS synonym_norm
+      `SELECT ts.thought_id AS id, t.title AS title, t.type_id AS type_id,
+              t.icon AS icon, t.icon_kind AS icon_kind,
+              t.fg_color AS fg_color, t.bg_color AS bg_color,
+              t.font_bold AS font_bold, t.font_italic AS font_italic,
+              t.font_underline AS font_underline, t.font_strike AS font_strike,
+              t.font_manual AS font_manual,
+              ts.synonym AS synonym, ts.synonym_norm AS synonym_norm
        FROM thought_synonyms ts JOIN thoughts t ON t.id = ts.thought_id
        WHERE ts.synonym LIKE '%*%'${typeJoin}`,
     )
     .all(...typeArgs) as Array<{
     id: string;
     title: string;
+    type_id: string | null;
+    icon: string | null;
+    icon_kind: string;
+    fg_color: string | null;
+    bg_color: string | null;
+    font_bold: number;
+    font_italic: number;
+    font_underline: number;
+    font_strike: number;
+    font_manual: number;
     synonym: string;
     synonym_norm: string;
   }>;
@@ -721,19 +787,52 @@ export function findDuplicates(
     const n = norm(term);
     // Exact title_norm match (strongest).
     const titleRows = ndb
-      .prepare(`SELECT id, title FROM thoughts WHERE title_norm = ?${typeDirect}`)
-      .all(n, ...typeArgs) as Array<{ id: string; title: string }>;
+      .prepare(`SELECT ${DUP_COLUMNS} FROM thoughts WHERE title_norm = ?${typeDirect}`)
+      .all(n, ...typeArgs) as Array<{
+      id: string;
+      title: string;
+      type_id: string | null;
+      icon: string | null;
+      icon_kind: string;
+      fg_color: string | null;
+      bg_color: string | null;
+      font_bold: number;
+      font_italic: number;
+      font_underline: number;
+      font_strike: number;
+      font_manual: number;
+    }>;
     for (const r of titleRows) {
       ensure(r).matched_on = 'title';
     }
     // Exact synonym_norm match.
     const synRows = ndb
       .prepare(
-        `SELECT ts.thought_id AS id, t.title AS title, ts.synonym AS synonym
+        `SELECT ts.thought_id AS id, t.title AS title, t.type_id AS type_id,
+                t.icon AS icon, t.icon_kind AS icon_kind,
+                t.fg_color AS fg_color, t.bg_color AS bg_color,
+                t.font_bold AS font_bold, t.font_italic AS font_italic,
+                t.font_underline AS font_underline, t.font_strike AS font_strike,
+                t.font_manual AS font_manual,
+                ts.synonym AS synonym
          FROM thought_synonyms ts JOIN thoughts t ON t.id = ts.thought_id
          WHERE ts.synonym_norm = ?${typeJoin}`,
       )
-      .all(n, ...typeArgs) as Array<{ id: string; title: string; synonym: string }>;
+      .all(n, ...typeArgs) as Array<{
+      id: string;
+      title: string;
+      type_id: string | null;
+      icon: string | null;
+      icon_kind: string;
+      fg_color: string | null;
+      bg_color: string | null;
+      font_bold: number;
+      font_italic: number;
+      font_underline: number;
+      font_strike: number;
+      font_manual: number;
+      synonym: string;
+    }>;
     for (const r of synRows) {
       const hit = ensure(r);
       if (hit.matched_on !== 'title') {
@@ -745,8 +844,21 @@ export function findDuplicates(
     // `%`/`_`/`\` in the input are escaped so they stay literal.
     const like = `%${n.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
     const partialRows = ndb
-      .prepare(`SELECT id, title FROM thoughts WHERE title_norm LIKE ? ESCAPE '\\'${typeDirect}`)
-      .all(like, ...typeArgs) as Array<{ id: string; title: string }>;
+      .prepare(`SELECT ${DUP_COLUMNS} FROM thoughts WHERE title_norm LIKE ? ESCAPE '\\'${typeDirect}`)
+      .all(like, ...typeArgs) as Array<{
+      id: string;
+      title: string;
+      type_id: string | null;
+      icon: string | null;
+      icon_kind: string;
+      fg_color: string | null;
+      bg_color: string | null;
+      font_bold: number;
+      font_italic: number;
+      font_underline: number;
+      font_strike: number;
+      font_manual: number;
+    }>;
     for (const r of partialRows) {
       ensure(r);
     }
@@ -754,11 +866,29 @@ export function findDuplicates(
     // (08-ui-spec.md §4.4).
     const partialSynRows = ndb
       .prepare(
-        `SELECT ts.thought_id AS id, t.title AS title
+        `SELECT ts.thought_id AS id, t.title AS title, t.type_id AS type_id,
+                t.icon AS icon, t.icon_kind AS icon_kind,
+                t.fg_color AS fg_color, t.bg_color AS bg_color,
+                t.font_bold AS font_bold, t.font_italic AS font_italic,
+                t.font_underline AS font_underline, t.font_strike AS font_strike,
+                t.font_manual AS font_manual
          FROM thought_synonyms ts JOIN thoughts t ON t.id = ts.thought_id
          WHERE ts.synonym_norm LIKE ? ESCAPE '\\'${typeJoin}`,
       )
-      .all(like, ...typeArgs) as Array<{ id: string; title: string }>;
+      .all(like, ...typeArgs) as Array<{
+      id: string;
+      title: string;
+      type_id: string | null;
+      icon: string | null;
+      icon_kind: string;
+      fg_color: string | null;
+      bg_color: string | null;
+      font_bold: number;
+      font_italic: number;
+      font_underline: number;
+      font_strike: number;
+      font_manual: number;
+    }>;
     for (const r of partialSynRows) {
       ensure(r);
     }
@@ -770,6 +900,27 @@ export function findDuplicates(
         hit.matched_on = 'synonym';
         hit.matched_synonym = r.synonym;
       }
+    }
+  }
+
+  // One parent title per candidate (lexicographically first) — the add dialog
+  // shows it next to equal titles to disambiguate them (08-ui-spec.md §4.2).
+  if (byId.size > 0) {
+    const ids = [...byId.keys()];
+    const parentRows = ndb
+      .prepare(
+        `SELECT l.target_id AS child_id, t.title AS parent_title
+         FROM links l JOIN thoughts t ON t.id = l.source_id
+         WHERE l.target_id IN (${ids.map(() => '?').join(',')}) AND l.active = 1
+         ORDER BY l.target_id, t.title_norm`,
+      )
+      .all(...ids) as Array<{ child_id: string; parent_title: string }>;
+    const firstByChild = new Map<string, string>();
+    for (const r of parentRows) {
+      if (!firstByChild.has(r.child_id)) firstByChild.set(r.child_id, r.parent_title);
+    }
+    for (const [id, hit] of byId) {
+      hit.parent_title = firstByChild.get(id) ?? null;
     }
   }
 

@@ -873,7 +873,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Поиск дубликатов',
       description:
         'Find existing thoughts matching a proposed title/synonyms (exact title, exact synonym, ' +
-        'partial). Always call before `etn.thoughts.create` to avoid duplicates.',
+        'partial). Each candidate carries its icon/style and one `parent_title` for disambiguation. ' +
+        'Always call before `etn.thoughts.create` to avoid duplicates.',
       inputSchema: FindDuplicatesSchema,
     },
     (args) =>

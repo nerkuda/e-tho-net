@@ -117,6 +117,17 @@ export interface DuplicateHit {
   matched_on: DuplicateMatchKind;
   /** Synonym text that matched, when `matched_on === 'synonym'`. */
   matched_synonym?: string;
+  type_id: string | null;
+  icon: string | null;
+  icon_kind: 'emoji' | 'image';
+  fg_color: string | null;
+  bg_color: string | null;
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
+  /** One parent's title (lexicographically first), to disambiguate equal titles. */
+  parent_title: string | null;
 }
 
 /** Input accepted by {@link EtnApi.ui.draftSave} (H19, drafts). */

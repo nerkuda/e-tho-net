@@ -267,6 +267,39 @@ describe(
       }
     });
 
+    it('findDuplicates carries icon/style and one parent_title per candidate', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        ndb
+          .prepare(
+            `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
+             VALUES ('type-a', 'A', 1, '2024', '2024', 'u')`,
+          )
+          .run();
+        const parent = seedThought(ndb, 'Parent');
+        const child = seedThought(ndb, 'Cats', { type_id: 'type-a' });
+        ndb
+          .prepare(
+            `UPDATE thoughts SET icon = '🐱', icon_kind = 'emoji', fg_color = '#123456',
+                    font_bold = 1, font_manual = 1 WHERE id = ?`,
+          )
+          .run(child);
+        seedLink(ndb, parent, child);
+        const [hit] = findDuplicates(ndb, 'cats');
+        assert.equal(hit?.id, child);
+        assert.equal(hit?.type_id, 'type-a');
+        assert.equal(hit?.icon, '🐱');
+        assert.equal(hit?.icon_kind, 'emoji');
+        assert.equal(hit?.fg_color, '#123456');
+        assert.equal(hit?.font_bold, true);
+        // Unset style overrides stay null (inherit the type defaults).
+        assert.equal(hit?.font_italic, null);
+        assert.equal(hit?.parent_title, 'Parent');
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('findDuplicates filters candidates by thought types (thought_ref pickers)', () => {
       const ndb = createInMemoryNetworkDb();
       try {

@@ -12,13 +12,19 @@
  */
 
 import { scheduleRefresh } from '../app.js';
-import { invalidateRef, setAddDialogOpener } from '../canvas/canvas.js';
+import {
+  applyThoughtIcon,
+  invalidateRef,
+  resolveCloudStyle,
+  setAddDialogOpener,
+} from '../canvas/canvas.js';
 import { showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, span } from '../lib/dom.js';
+import { applyFontFlags, button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { parseAddLines, parseTitleWithSynonyms } from '../lib/pure.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
+import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY } from '@etn/shared';
 import { store } from '../state.js';
 import { requireNetworkId } from '../app.js';
@@ -33,20 +39,6 @@ interface AddLine {
   /** Strongest candidate match kind (informational). */
   matchKind: 'title' | 'synonym' | 'partial' | null;
 }
-
-/** Candidate from the duplicate endpoint. */
-interface Candidate {
-  id: string;
-  title: string;
-  synonyms: string[];
-  matched_on: 'title' | 'synonym' | 'partial';
-}
-
-const KIND_LABELS: Record<string, string> = {
-  title: 'точное имя',
-  synonym: 'синоним',
-  partial: 'частично',
-};
 
 let mounted = false;
 
@@ -154,7 +146,9 @@ export function openAddDialog(ctx: {
   typeRow.append(el('label', 'field-label', 'Тип'), thoughtTypeCombo.root);
   const linkRow = div('field');
   linkRow.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
-  body.append(modeRow, lineList, input, typeRow, linkRow, candidates, errorLine);
+  // Layout (08-ui-spec.md §4.2): mode switch, then the type pickers, then the
+  // name input with the found-thoughts list directly beneath it.
+  body.append(modeRow, typeRow, linkRow, input, candidates, lineList, errorLine);
 
   const directionText =
     ctx.anchorId === null
@@ -164,7 +158,7 @@ export function openAddDialog(ctx: {
         : `вниз к «${anchorTitle}»`;
 
   let timer: number | null = null;
-  let lastCandidates: Candidate[] = [];
+  let lastCandidates: DuplicateHit[] = [];
 
   /** Debounced duplicate search for the current input. */
   function scheduleSearch(): void {
@@ -208,6 +202,16 @@ export function openAddDialog(ctx: {
   });
 
   input.addEventListener('keydown', (event) => {
+    // ↓ moves into the found-thoughts list (keyboard path of picking a
+    // candidate); Tab reaches it as the next tab stop.
+    if (event.key === 'ArrowDown') {
+      const first = candidates.querySelector<HTMLElement>('.dup-item');
+      if (first !== null) {
+        event.preventDefault();
+        first.focus();
+      }
+      return;
+    }
     if (event.key !== 'Enter') return;
     event.preventDefault();
     if (multi || event.ctrlKey) {
@@ -275,30 +279,68 @@ export function openAddDialog(ctx: {
   }
 
   /** Renders the duplicate candidates for the current input. */
-  function renderCandidates(list: Candidate[]): void {
+  function renderCandidates(list: DuplicateHit[]): void {
     candidates.replaceChildren();
     if (list.length === 0) return;
     candidates.append(el('p', 'muted', 'Найденные мысли:'));
     for (const candidate of list) {
       const row = div('dup-item');
-      const icon = span(
-        candidate.matched_on === 'title' ? '🟡' : candidate.matched_on === 'synonym' ? '🟠' : '⚪',
-      );
+      row.tabIndex = 0;
+      // The candidate's own icon/style, else its type's defaults — the row
+      // looks like the thought's cloud, so equal titles are easy to tell apart.
+      const iconBox = span('', 'dup-icon');
+      applyThoughtIcon(iconBox, candidate);
       const title = el('span', 'dup-title', candidate.title);
-      title.title =
+      const style = resolveCloudStyle(candidate);
+      applyFontFlags(title, {
+        bold: style.bold,
+        italic: style.italic,
+        underline: style.underline,
+        strike: style.strike,
+      });
+      if (style.fg !== null) title.style.color = style.fg;
+      if (style.bg !== null) row.style.background = style.bg;
+      row.append(iconBox, title);
+      // The parent's title (first 60 chars) instead of the «использовать»
+      // button — the whole row is the pick target (08-ui-spec.md §4.2).
+      if (candidate.parent_title !== null) {
+        const parent = span(candidate.parent_title.slice(0, 60), 'dup-parent');
+        parent.title = candidate.parent_title;
+        row.append(parent);
+      }
+      const matchLabel =
+        candidate.matched_on === 'title'
+          ? 'точное имя'
+          : candidate.matched_on === 'synonym'
+            ? `синоним «${candidate.matched_synonym ?? ''}»`
+            : 'частичное совпадение';
+      row.title =
         candidate.synonyms.length > 0
-          ? `${candidate.title} (${candidate.synonyms.join(', ')})`
-          : candidate.title;
-      row.append(icon, title, span(KIND_LABELS[candidate.matched_on] ?? '', 'dup-kind'));
-      row.append(
-        button(
-          'использовать',
-          () => {
-            void useExisting(candidate.id);
-          },
-          'btn small',
-        ),
-      );
+          ? `${candidate.title} (${candidate.synonyms.join(', ')}) — ${matchLabel}`
+          : `${candidate.title} — ${matchLabel}`;
+      row.addEventListener('click', () => {
+        void useExisting(candidate.id);
+      });
+      row.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          void useExisting(candidate.id);
+        } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          const next =
+            event.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+          if (next instanceof HTMLElement && next.classList.contains('dup-item')) {
+            next.focus();
+            next.scrollIntoView({ block: 'nearest' });
+          } else if (event.key === 'ArrowUp') {
+            // Above the first row the caret returns to the name input.
+            input.focus();
+          }
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          input.focus();
+        }
+      });
       candidates.append(row);
     }
   }

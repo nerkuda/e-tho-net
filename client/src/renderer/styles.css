@@ -221,7 +221,7 @@ textarea {
   resize: vertical;
   min-height: 72px;
   font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .btn {
@@ -3315,6 +3315,9 @@ body.cloud-dragging * {
   max-height: calc(100vh - 60px);
   display: flex;
   flex-direction: column;
+  /* Dialog content is one step larger than the app base (13px) — the base
+     font is too small for modal forms (add-thought dialog report). */
+  font-size: 14px;
 }
 
 .dialog-header {
@@ -3327,7 +3330,7 @@ body.cloud-dragging * {
 
 .dialog-title {
   font-weight: 700;
-  font-size: 14px;
+  font-size: 15px;
   flex: 1;
 }
 
@@ -3345,6 +3348,10 @@ body.cloud-dragging * {
 .dialog-body {
   padding: 14px;
   overflow-y: auto;
+}
+
+.dialog-body .field-label {
+  font-size: 13px;
 }
 
 .dialog-footer {
@@ -3419,7 +3426,7 @@ body.cloud-dragging * {
   padding: 3px 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .add-list-item .al-title {
@@ -3445,12 +3452,39 @@ body.cloud-dragging * {
   padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.dup-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.dup-item:hover {
+  background: var(--surface-2);
 }
 
 /* Keyboard selection (↑/↓, Ctrl+↑/↓, Ctrl+Enter in the thought picker). */
 .dup-item.selected {
   background: var(--accent-soft);
+}
+
+.dup-item .dup-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  flex: none;
+  overflow: hidden;
+}
+
+.dup-item .dup-icon img {
+  max-width: 16px;
+  max-height: 16px;
 }
 
 .dup-item .dup-title {
@@ -3460,10 +3494,16 @@ body.cloud-dragging * {
   white-space: nowrap;
 }
 
-.dup-kind {
-  font-size: 11px;
-  color: var(--text-dim);
+/* The parent's title (first 60 chars) under/next to equal titles —
+   disambiguates duplicates living under different parents. */
+.dup-item .dup-parent {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
 /* --- admin panel (H17) ----------------------------------------------------- */
