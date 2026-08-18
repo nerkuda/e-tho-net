@@ -295,6 +295,103 @@ describe(
       }
     });
 
+    it('findDuplicates matches wildcard synonyms (`*` inside a word)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Петров Игорь');
+        seedSynonym(ndb, a, 'Петров* Игор*');
+        seedSynonym(ndb, a, 'Игорян*');
+        // Single-word pattern: `Игорян*` covers the whole input word.
+        const single = findDuplicates(ndb, 'Игорянский');
+        const singleHit = single.find((h) => h.id === a);
+        assert.ok(singleHit, 'wildcard synonym matches the input word');
+        assert.equal(singleHit!.matched_on, 'synonym');
+        assert.equal(singleHit!.matched_synonym, 'Игорян*');
+        // Multi-word pattern: adjacent words in the given order.
+        const phrase = findDuplicates(ndb, 'Петрова Игоря');
+        const phraseHit = phrase.find((h) => h.id === a);
+        assert.ok(phraseHit, 'multi-word wildcard synonym matches adjacent words');
+        assert.equal(phraseHit!.matched_synonym, 'Петров* Игор*');
+        // `*` must not cross word boundaries.
+        assert.equal(
+          findDuplicates(ndb, 'Петрович передал Игорю').some((h) => h.id === a),
+          false,
+          'words must stay adjacent — `*` does not span the gap',
+        );
+        // The pattern word must cover a whole input word.
+        assert.equal(
+          findDuplicates(ndb, 'СИгорянский').some((h) => h.id === a),
+          false,
+          'a pattern matches words starting with the pattern only',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findDuplicates finds partial matches inside synonyms (08-ui-spec §4.4)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Cats');
+        seedSynonym(ndb, a, 'Felines');
+        const hits = findDuplicates(ndb, 'line');
+        const hit = hits.find((h) => h.id === a);
+        assert.ok(hit, 'input substring of a synonym is a partial candidate');
+        assert.equal(hit!.matched_on, 'partial');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions finds wildcard synonyms with word-boundary semantics', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // The title must stay out of the picture (prefix title matching is a
+        // separate, looser behavior) so the assertions test the synonym paths.
+        const target = seedThought(ndb, 'Объект');
+        seedSynonym(ndb, target, 'Петров* Игор*');
+        seedSynonym(ndb, target, 'Игорян*');
+        const other = seedThought(ndb, 'Заметки');
+        // Adjacent words in order — matches.
+        const good = seedThoughtComment(ndb, other, 'Петрова Игоря видели вчера');
+        // Non-adjacent words — must NOT match.
+        const bad = seedThoughtComment(ndb, other, 'Петрович передал Игорю');
+        // Single-word pattern — matches the input word.
+        const single = seedThoughtComment(ndb, other, 'Игорянский пришёл');
+
+        const mentions = findMentions(ndb, target);
+        const ids = mentions.map((m) => m.comment_id);
+        assert.ok(ids.includes(good), 'multi-word wildcard synonym matches adjacent words');
+        assert.ok(ids.includes(single), 'single-word wildcard synonym matches');
+        assert.ok(
+          !ids.includes(bad),
+          'words must stay adjacent — `*` does not span the gap',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions wildcard synonyms cover mid-word `*` and link comments', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Х');
+        seedSynonym(ndb, target, 'И*ян');
+        const other = seedThought(ndb, 'Заметки');
+        seedThoughtComment(ndb, other, 'в тексте есть Игорян');
+        seedThoughtComment(ndb, other, 'а тут только Иван');
+        const link = seedLink(ndb, target, other);
+        seedLinkComment(ndb, link, 'ссылка на Игорян');
+
+        const mentions = findMentions(ndb, target);
+        assert.equal(mentions.length, 2, 'mid-word `*` matches both owners');
+        assert.ok(mentions.some((m) => m.owner_type === 'thought'));
+        assert.ok(mentions.some((m) => m.owner_type === 'link'));
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('findMentions finds the title in other comments', () => {
       const ndb = createInMemoryNetworkDb();
       try {
