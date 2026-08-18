@@ -17,6 +17,7 @@ import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { getThoughtOrThrow } from '../domain/thought-service.js';
+import { getThoughtMeta } from '../domain/thought-meta.js';
 import { getNeighbors } from '../domain/thought-service.js';
 import { getLink } from '../domain/link-service.js';
 import { listComments } from '../domain/comment-service.js';
@@ -122,7 +123,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Мысль (полная)',
       description:
-        'Мысль целиком: свойства, синонимы, тип (с описанием для AI), стили и значения свойств.',
+        'Мысль целиком: свойства, синонимы, тип (с описанием для AI), стили и значения свойств. ' +
+        'Блок `meta` — счётчики связей/вложений/хроники и превью постоянного комментария.',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -133,7 +135,12 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         const thought = getThoughtOrThrow(ndb, thoughtId);
         const type = thought.type_id === null ? null : getThoughtType(ndb, thought.type_id);
         const properties = getPropertyValues(ndb, 'thought', thoughtId);
-        return jsonContents(uri.href, { ...thought, type, properties });
+        return jsonContents(uri.href, {
+          ...thought,
+          type,
+          properties,
+          meta: getThoughtMeta(ndb, thoughtId),
+        });
       }),
   );
 

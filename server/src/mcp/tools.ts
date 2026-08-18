@@ -49,6 +49,7 @@ import { createAttachment } from '../domain/attachment-service.js';
 import { getPropertyValues, setPropertyValue } from '../domain/property-service.js';
 import { findDuplicates, findMentions, resolveThoughts, search } from '../domain/search-service.js';
 import { queryThoughts } from '../domain/query-service.js';
+import { getThoughtMeta } from '../domain/thought-meta.js';
 import { exportToMarkdown, getExportJobContent, startExportJob } from '../domain/export-service.js';
 import { findPath, subgraph, traverse } from '../domain/graph-traversal.js';
 import { getThoughtType } from '../domain/thought-type-service.js';
@@ -216,7 +217,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const thought = getThoughtOrThrow(ndb, args.thought_id);
         const type = thought.type_id === null ? null : getThoughtType(ndb, thought.type_id);
         const properties = getPropertyValues(ndb, 'thought', args.thought_id);
-        return { ...thought, type, properties };
+        return { ...thought, type, properties, meta: getThoughtMeta(ndb, args.thought_id) };
       }),
   );
 

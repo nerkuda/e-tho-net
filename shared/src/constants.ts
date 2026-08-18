@@ -174,6 +174,10 @@ export const MCP_DEFAULTS = {
   MAX_WRITES_PER_MINUTE: 60,
 } as const satisfies Record<string, number>;
 
+/** Первая порция постоянного комментария в чтении мысли (task N2,
+ * docs/05-mcp-server.md §3) — символы `body_md`, возвращаемые в `meta`. */
+export const PERMANENT_COMMENT_PREVIEW_CHARS = 2000;
+
 /** Defaults for the real-time event-log retention window (04-realtime.md §6). */
 export const REALTIME_DEFAULTS = {
   EVENT_LOG_TTL_HOURS: 24,

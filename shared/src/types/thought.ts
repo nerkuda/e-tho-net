@@ -273,3 +273,39 @@ export interface FocusResponse {
   /** Per-zone sort currently applied for this user (siblings is not orderable). */
   sorts: { parents: SortKind; children: SortKind };
 }
+
+/** «Сигналы полноты» мысли для MCP-чтения (task N2, docs/05-mcp-server.md
+ * §3): счётчики соседних сущностей и превью постоянного комментария. */
+export interface ThoughtMeta {
+  /** Активные связи, входящие в мысль. */
+  parents_count: number;
+  /** Активные связи, исходящие из мысли. */
+  children_count: number;
+  /** Вложения мысли (url + file). */
+  attachments_count: number;
+  /** Хронологические комментарии мысли. */
+  chrono_count: number;
+  /**
+   * Постоянный комментарий (ровно один на мысль) с обрезкой больших
+   * текстов: `body_md` — первые {@link PERMANENT_COMMENT_PREVIEW_CHARS}
+   * символов; `chars_total` — полная длина, `truncated` — обрезан ли текст.
+   * `null`, когда постоянного комментария нет.
+   */
+  permanent: PermanentCommentPreview | null;
+}
+
+/** Превью постоянного комментария (task N2). */
+export interface PermanentCommentPreview {
+  /** Первые 2000 символов markdown-текста. */
+  body_md: string;
+  /** Сколько символов возвращено в `body_md`. */
+  chars_returned: number;
+  /** Полная длина тела комментария. */
+  chars_total: number;
+  /** True, когда текст обрезан (`chars_total > chars_returned`). */
+  truncated: boolean;
+  /** Для permanent совпадает с `created_at` (02-data-model.md §3.8). */
+  valid_from: string;
+  created_at: string;
+  updated_at: string;
+}
