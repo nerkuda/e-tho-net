@@ -3084,12 +3084,12 @@ body.dragging * {
 
 /* In the tree the ellipses expand/fold levels — a pointer, not a drag handle.
  * The 25% canvas width would be oversized on the double-wide tree clouds, so
- * the tree keeps fixed-size knobs at the left edge instead of the centered
- * canvas position. */
+ * the tree keeps fixed-size knobs — centered on the cloud width like the
+ * canvas ellipses (§15.4: the cloud visuals match the canvas). */
 .st-row .cloud .ellipse {
-  left: 8px;
-  right: auto;
-  margin: 0;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
   width: 36px;
   height: calc(8px * var(--cloud-zoom, 1));
   cursor: pointer;
