@@ -39,6 +39,12 @@ export function buildNetworks(): HTMLElement {
   header.append(title, createButton, logoutButton);
   card.append(header);
 
+  const logo = el('img', 'networks-logo');
+  logo.src = './logo.svg';
+  logo.alt = 'ETN';
+  logo.style.marginBottom = '8px';
+  card.prepend(logo);
+
   const userLine = el(
     'p',
     'muted',

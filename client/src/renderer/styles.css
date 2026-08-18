@@ -345,6 +345,14 @@ textarea {
   max-width: 100%;
 }
 
+.networks-logo {
+  display: block;
+  width: 240px;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto 16px;
+}
+
 .onboarding-title,
 .networks-title {
   margin: 0 0 4px;
