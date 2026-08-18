@@ -25,7 +25,7 @@ import { listComments } from '../domain/comment-service.js';
 import { listAttachments } from '../domain/attachment-service.js';
 import { getThoughtType, listThoughtTypes } from '../domain/thought-type-service.js';
 import { getLinkType, listLinkTypes } from '../domain/link-type-service.js';
-import { getPropertyValues, listTypeProperties } from '../domain/property-service.js';
+import { getPropertyValuesResolved, listTypeProperties } from '../domain/property-service.js';
 import { etnErrorText, openMemberNetwork, type McpRuntime } from './context.js';
 
 /** JSON content of one resource read (pretty-printed for the agent). */
@@ -135,7 +135,7 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetwork(rt, networkId);
         const thought = getThoughtOrThrow(ndb, thoughtId);
         const type = thought.type_id === null ? null : getThoughtType(ndb, thought.type_id);
-        const properties = getPropertyValues(ndb, 'thought', thoughtId);
+        const properties = getPropertyValuesResolved(ndb, 'thought', thoughtId);
         return jsonContents(uri.href, {
           ...thought,
           type,

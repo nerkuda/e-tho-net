@@ -17,14 +17,18 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  CHRONO_PREVIEW_MAX_ENTRIES,
   COMMENT_KINDS,
   COMMENT_OWNER_TYPES,
+  COMMENT_PREVIEW_CHARS,
   EtnError,
   type Comment,
   type CommentInput,
   type CommentKind,
   type CommentOwnerType,
   type CommentUpdateInput,
+  type CommentsPreview,
+  type PermanentCommentPreview,
 } from '@etn/shared';
 
 import { renderMarkdown } from '@etn/markdown';
@@ -144,6 +148,111 @@ export function listComments(
     )
     .all(ownerType, ownerId) as CommentRow[];
   return rows.map(rowToComment);
+}
+
+/**
+ * Превью постоянного комментария (tasks N2/N5): `body_md` — первые
+ * {@link COMMENT_PREVIEW_CHARS} символов с метаданными обрезки; `null`, когда
+ * постоянного комментария нет. Один SELECT по частичному уникальному индексу
+ * `idx_comments_permanent_one`.
+ */
+export function getPermanentPreview(
+  ndb: NetworkDb,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+): PermanentCommentPreview | null {
+  validateOwnerType(ownerType);
+  const row = ndb
+    .prepare(
+      `SELECT body_md, valid_from, created_at, updated_at FROM comments
+       WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent'
+       LIMIT 1`,
+    )
+    .get(ownerType, ownerId) as
+    | { body_md: string; valid_from: string; created_at: string; updated_at: string }
+    | undefined;
+  if (row === undefined) {
+    return null;
+  }
+  const chars_total = row.body_md.length;
+  const chars_returned = Math.min(chars_total, COMMENT_PREVIEW_CHARS);
+  return {
+    body_md: row.body_md.slice(0, chars_returned),
+    chars_returned,
+    chars_total,
+    truncated: chars_total > chars_returned,
+    valid_from: row.valid_from,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+/**
+ * Превью комментариев владельца (task N5, MCP `etn.thoughts.subgraph` с
+ * `include_comments`): постоянный — через {@link getPermanentPreview};
+ * хронология — последние {@link CHRONO_PREVIEW_MAX_ENTRIES} записей (по
+ * `valid_from` DESC, затем `created_at` DESC), каждая с телом не длиннее
+ * {@link COMMENT_PREVIEW_CHARS} и метаданными обрезки. Уровень списка несёт
+ * `total`/`returned`/`truncated` — агент видит, что записей больше и полные
+ * доступны отдельным запросом.
+ */
+export function getCommentsPreview(
+  ndb: NetworkDb,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+): CommentsPreview {
+  validateOwnerType(ownerType);
+  const permanent = getPermanentPreview(ndb, ownerType, ownerId);
+  const total = (
+    ndb
+      .prepare(
+        `SELECT COUNT(*) AS c FROM comments
+         WHERE owner_type = ? AND owner_id = ? AND kind = 'chronological'`,
+      )
+      .get(ownerType, ownerId) as { c: number }
+  ).c;
+  const rows = ndb
+    .prepare(
+      `SELECT id, title, body_md, valid_from, valid_to, created_by, created_at
+       FROM comments
+       WHERE owner_type = ? AND owner_id = ? AND kind = 'chronological'
+       ORDER BY valid_from DESC, created_at DESC
+       LIMIT ?`,
+    )
+    .all(ownerType, ownerId, CHRONO_PREVIEW_MAX_ENTRIES) as Array<{
+    id: string;
+    title: string | null;
+    body_md: string;
+    valid_from: string;
+    valid_to: string | null;
+    created_by: string;
+    created_at: string;
+  }>;
+  const entries = rows.map((row) => {
+    const chars_total = row.body_md.length;
+    const chars_returned = Math.min(chars_total, COMMENT_PREVIEW_CHARS);
+    return {
+      id: row.id,
+      title: row.title,
+      valid_from: row.valid_from,
+      valid_to: row.valid_to,
+      created_by: row.created_by,
+      created_at: row.created_at,
+      body_md: row.body_md.slice(0, chars_returned),
+      chars_returned,
+      chars_total,
+      truncated: chars_total > chars_returned,
+    };
+  });
+  return {
+    permanent,
+    chronological: {
+      entries,
+      total,
+      returned: entries.length,
+      truncated: entries.length < total,
+    },
+  };
 }
 
 /**

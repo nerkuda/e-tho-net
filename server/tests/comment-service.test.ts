@@ -16,6 +16,7 @@ import type { NetworkDb } from '../src/db/network-db.js';
 import {
   createComment,
   deleteComment,
+  getCommentsPreview,
   listComments,
   updateComment,
 } from '../src/domain/comment-service.js';
@@ -208,6 +209,69 @@ describe(
         const list = listComments(ndb, 'thought', t);
         assert.equal(list[0]!.kind, 'permanent');
         assert.equal(list[1]!.kind, 'chronological');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('getCommentsPreview trims bodies and caps chronological entries (N5)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        const longBody = 'x'.repeat(2500);
+        // The long entry is the NEWEST (valid_from 2024-01-22 > the 10..21 range),
+        // so it must be the first of the returned previews.
+        createComment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'chronological', body_md: longBody, valid_from: '2024-01-22' },
+          USER,
+        );
+        for (let i = 0; i < 12; i++) {
+          createComment(
+            ndb,
+            'thought',
+            t,
+            { kind: 'chronological', body_md: `entry-${i}`, valid_from: `2024-01-${String(10 + i).padStart(2, '0')}` },
+            USER,
+          );
+        }
+        createComment(ndb, 'thought', t, { kind: 'permanent', body_md: 'perm' }, USER);
+
+        const preview = getCommentsPreview(ndb, 'thought', t);
+        // Permanent preview is present and untruncated.
+        assert.equal(preview.permanent?.body_md, 'perm');
+        assert.equal(preview.permanent?.truncated, false);
+        // Chronology: 13 total, only the 10 newest returned (valid_from DESC).
+        assert.equal(preview.chronological.total, 13);
+        assert.equal(preview.chronological.returned, 10);
+        assert.equal(preview.chronological.truncated, true);
+        // The newest entry is the long one.
+        const newest = preview.chronological.entries[0];
+        assert.equal(newest?.chars_total, 2500);
+        assert.equal(newest?.chars_returned, 2000);
+        assert.equal(newest?.truncated, true);
+        assert.equal(newest?.body_md.length, 2000);
+        // The second-newest (2024-01-21) passes through whole.
+        assert.equal(preview.chronological.entries[1]?.truncated, false);
+        assert.equal(preview.chronological.entries[1]?.body_md, 'entry-11');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('getCommentsPreview is empty for an owner without comments', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const preview = getCommentsPreview(ndb, 'thought', seedThought(ndb));
+        assert.equal(preview.permanent, null);
+        assert.deepEqual(preview.chronological, {
+          entries: [],
+          total: 0,
+          returned: 0,
+          truncated: false,
+        });
       } finally {
         ndb.close();
       }

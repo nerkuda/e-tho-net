@@ -174,9 +174,14 @@ export const MCP_DEFAULTS = {
   MAX_WRITES_PER_MINUTE: 60,
 } as const satisfies Record<string, number>;
 
-/** Первая порция постоянного комментария в чтении мысли (task N2,
- * docs/05-mcp-server.md §3) — символы `body_md`, возвращаемые в `meta`. */
-export const PERMANENT_COMMENT_PREVIEW_CHARS = 2000;
+/** Порция `body_md` комментария в MCP-превью (tasks N2/N5,
+ * docs/05-mcp-server.md §3/§4.1) — символы, возвращаемые вместе с
+ * метаданными `chars_returned`/`chars_total`/`truncated`. */
+export const COMMENT_PREVIEW_CHARS = 2000;
+
+/** Сколько последних хронологических записей возвращает MCP-превью
+ * комментариев (task N5, `etn.thoughts.subgraph` с `include_comments`). */
+export const CHRONO_PREVIEW_MAX_ENTRIES = 10;
 
 /** Defaults for the real-time event-log retention window (04-realtime.md §6). */
 export const REALTIME_DEFAULTS = {

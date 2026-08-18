@@ -22,6 +22,7 @@ import {
   deletePropertyValue,
   findThoughtUsage,
   getPropertyValues,
+  getPropertyValuesResolved,
   setPropertyValue,
   updateTypeProperty,
 } from '../src/domain/property-service.js';
@@ -198,6 +199,46 @@ describe(
         const other = seedTypedThought(ndb, tb.id);
         setPropertyValue(ndb, 'thought', owner, 'ref', other);
         assert.equal(getPropertyValues(ndb, 'thought', owner)[0]!.value, other);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('getPropertyValuesResolved resolves thought_ref to {id, title} (N4)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const author = createThoughtType(ndb, { name: 'AuthorR' }, USER);
+        const book = createThoughtType(ndb, { name: 'BookR' }, USER);
+        createTypeProperty(ndb, 'thought_type', book.id, {
+          key: 'author',
+          value_type: 'thought_ref',
+        });
+        const authorThought = seedTypedThought(ndb, author.id);
+        const bookThought = seedTypedThought(ndb, book.id);
+        // A plain text value must pass through untouched.
+        createTypeProperty(ndb, 'thought_type', book.id, { key: 'note', value_type: 'text' });
+        setPropertyValue(ndb, 'thought', bookThought, 'author', authorThought);
+        setPropertyValue(ndb, 'thought', bookThought, 'note', 'hello');
+
+        const resolved = getPropertyValuesResolved(ndb, 'thought', bookThought);
+        assert.equal(resolved.length, 2);
+        const ref = resolved.find((v) => typeof v.value === 'object' && v.value !== null);
+        const note = resolved.find((v) => v.value === 'hello');
+        assert.deepEqual(ref?.value, { id: authorThought, title: 'T' });
+        assert.equal(note?.value, 'hello');
+
+        // A dangling reference (no SQL FK) resolves to title: null.
+        const orphan = seedTypedThought(ndb, book.id);
+        ndb
+          .prepare(
+            `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_thought_ref, updated_at)
+             VALUES (?, 'thought', ?, ?, ?, '2024')`,
+          )
+          .run(randomUUID(), orphan, ref?.property_id, 'no-such-thought');
+        const dangling = getPropertyValuesResolved(ndb, 'thought', orphan).find(
+          (v) => typeof v.value === 'object' && v.value !== null && v.value.title === null,
+        );
+        assert.deepEqual(dangling?.value, { id: 'no-such-thought', title: null });
       } finally {
         ndb.close();
       }

@@ -312,6 +312,102 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const noneUsage = toolJson<{ total: number; groups: unknown[] }>(none);
         assert.equal(noneUsage.total, 0);
         assert.deepEqual(noneUsage.groups, []);
+
+        // N4: etn.thoughts.get resolves thought_ref values to {id, title}.
+        const got = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: book },
+        });
+        const thought = toolJson<{ properties: Array<{ value: unknown }> }>(got);
+        assert.deepEqual(thought.properties[0]?.value, { id: target, title: 'Автор' });
+
+        // A dangling ref (no SQL FK) resolves to {id, title: null}.
+        const orphan = seed('Мысль без ссылки');
+        ndb
+          .prepare(
+            `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_thought_ref, updated_at)
+             VALUES (?, 'thought', ?, ?, ?, '2024')`,
+          )
+          .run(randomUUID(), orphan, propId, randomUUID());
+        const gotOrphan = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: orphan },
+        });
+        const orphanThought = toolJson<{ properties: Array<{ value: unknown }> }>(gotOrphan);
+        const dangling = orphanThought.properties[0]?.value as { id: string; title: string | null };
+        assert.equal(typeof dangling.id, 'string');
+        assert.equal(dangling.title, null);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('subgraph include_comments returns previews with truncation metadata (N5)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Мысль с хронией' },
+        });
+        const { id } = toolJson<{ id: string }>(created);
+        // 12 хронологических записей; последняя — длинная (проверка обрезки тела).
+        for (let i = 0; i < 12; i++) {
+          const res = await handle.client.callTool({
+            name: 'etn.comments.upsert',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: id,
+              kind: 'chronological',
+              body_md: i === 11 ? 'y'.repeat(2500) : `Запись ${i}`,
+            },
+          });
+          assert.equal(res.isError, undefined, toolText(res));
+        }
+
+        const sub = await handle.client.callTool({
+          name: 'etn.thoughts.subgraph',
+          arguments: {
+            network_id: ctx.networkId,
+            seed_ids: [id],
+            radius: 0,
+            include_comments: true,
+          },
+        });
+        assert.equal(sub.isError, undefined, toolText(sub));
+        const res = toolJson<{
+          comments: Array<{
+            thought_id: string;
+            permanent: unknown;
+            chronological: {
+              entries: Array<{
+                body_md: string;
+                chars_returned: number;
+                chars_total: number;
+                truncated: boolean;
+              }>;
+              total: number;
+              returned: number;
+              truncated: boolean;
+            };
+          }>;
+        }>(sub);
+        const node = res.comments.find((c) => c.thought_id === id);
+        assert.ok(node, 'comments array must contain the created thought');
+        assert.equal(node.permanent, null);
+        assert.equal(node.chronological.total, 12);
+        assert.equal(node.chronological.returned, 10);
+        assert.equal(node.chronological.truncated, true);
+        const longEntry = node.chronological.entries.find((e) => e.truncated);
+        assert.ok(longEntry, 'the long entry must be among the returned previews');
+        assert.equal(longEntry.chars_total, 2500);
+        assert.equal(longEntry.chars_returned, 2000);
+        assert.equal(longEntry.body_md.length, 2000);
       } finally {
         await handle.close();
       }

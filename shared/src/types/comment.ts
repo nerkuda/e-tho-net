@@ -6,6 +6,7 @@
  */
 
 import type { CommentKind, CommentOwnerType } from '../enums.js';
+import type { PermanentCommentPreview } from './thought.js';
 
 /** A permanent or chronological comment on a thought/link (02-data-model.md §3.8). */
 export interface Comment {
@@ -46,4 +47,45 @@ export interface CommentUpdateInput {
   body_md?: string;
   valid_from?: string;
   valid_to?: string | null;
+}
+
+/** Превью одной хронологической записи (task N5): тело не длиннее
+ * {@link COMMENT_PREVIEW_CHARS} символов с метаданными обрезки. */
+export interface ChronoEntryPreview {
+  id: string;
+  /** Заголовок записи (02-data-model.md §3.8). */
+  title: string | null;
+  valid_from: string;
+  valid_to: string | null;
+  created_by: string;
+  created_at: string;
+  /** Первые {@link COMMENT_PREVIEW_CHARS} символов markdown-текста. */
+  body_md: string;
+  /** Сколько символов возвращено в `body_md`. */
+  chars_returned: number;
+  /** Полная длина тела записи. */
+  chars_total: number;
+  /** True, когда текст обрезан (`chars_total > chars_returned`). */
+  truncated: boolean;
+}
+
+/** Превью хронологии (task N5): последние {@link CHRONO_PREVIEW_MAX_ENTRIES}
+ * записей (по `valid_from` DESC) + метаданные полноты списка. */
+export interface ChronologicalPreview {
+  entries: ChronoEntryPreview[];
+  /** Всего хронологических записей у владельца. */
+  total: number;
+  /** Сколько записей возвращено в `entries`. */
+  returned: number;
+  /** True, когда `returned < total` (список обрезан). */
+  truncated: boolean;
+}
+
+/** Превью комментариев владельца (task N5, MCP `etn.thoughts.subgraph`
+ * `include_comments`): постоянный — как в {@link ThoughtMeta.permanent},
+ * хронология — последние записи с обрезкой тел. */
+export interface CommentsPreview {
+  /** Постоянный комментарий с обрезкой; `null`, когда его нет. */
+  permanent: PermanentCommentPreview | null;
+  chronological: ChronologicalPreview;
 }

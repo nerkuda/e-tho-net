@@ -135,6 +135,20 @@ export interface PropertyValue {
   updated_at: string;
 }
 
+/** `thought_ref`-значение в MCP-чтении (task N4): ссылка на мысль,
+ * резолвнутая в `{id, title}` одним JOIN. `title: null` — висячая ссылка
+ * (мысль удалена; `value_thought_ref` без SQL FK). */
+export interface ResolvedThoughtRefValue {
+  id: string;
+  title: string | null;
+}
+
+/** PropertyValue MCP-чтения (task N4): `thought_ref`-значения резолвнуты
+ * в {@link ResolvedThoughtRefValue}; REST-контракт не меняется. */
+export interface ResolvedPropertyValue extends Omit<PropertyValue, 'value'> {
+  value: PropertyValueValue | ResolvedThoughtRefValue;
+}
+
 /** Body of `PUT …/{id}/properties/{key}` (03-server-api.md §9). */
 export interface PropertyValueInput {
   value: PropertyValueValue;

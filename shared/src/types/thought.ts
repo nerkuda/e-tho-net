@@ -293,7 +293,7 @@ export interface ThoughtMeta {
   usage_count: number;
   /**
    * Постоянный комментарий (ровно один на мысль) с обрезкой больших
-   * текстов: `body_md` — первые {@link PERMANENT_COMMENT_PREVIEW_CHARS}
+   * текстов: `body_md` — первые {@link COMMENT_PREVIEW_CHARS}
    * символов; `chars_total` — полная длина, `truncated` — обрезан ли текст.
    * `null`, когда постоянного комментария нет.
    */

@@ -26,6 +26,7 @@ import {
   type PropertyValueType,
   type PropertyValue,
   type PropertyValueValue,
+  type ResolvedPropertyValue,
   type ThoughtUsage,
   type ThoughtUsageGroup,
   type TypeOwnerType,
@@ -479,6 +480,48 @@ export function getPropertyValues(
       owner_id: ownerId,
       property_id: row.property_id,
       value: readValue(row, def.value_type),
+      updated_at: row.updated_at,
+    });
+  }
+  return out;
+}
+
+/**
+ * MCP-чтение значений свойств (task N4, docs/05-mcp-server.md §4.1): то же,
+ * что {@link getPropertyValues}, но `thought_ref`-значения резолвнуты в
+ * `{id, title}` одним LEFT JOIN — агенту не нужны отдельные вызовы
+ * `etn.thoughts.get` на каждую ссылку. REST-ответ не меняется. `title: null`
+ * означает висячую ссылку на удалённую мысль (`value_thought_ref` без SQL FK).
+ */
+export function getPropertyValuesResolved(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+): ResolvedPropertyValue[] {
+  const rows = ndb
+    .prepare(
+      `SELECT pv.*, t.title AS ref_title
+       FROM property_values pv
+       LEFT JOIN thoughts t ON t.id = pv.value_thought_ref
+       WHERE pv.owner_type = ? AND pv.owner_id = ?`,
+    )
+    .all(ownerType, ownerId) as Array<PropertyValueRow & { ref_title: string | null }>;
+  const out: ResolvedPropertyValue[] = [];
+  for (const row of rows) {
+    const def = getTypeProperty(ndb, row.property_id);
+    // Skip orphaned values whose definition was deleted — should not happen
+    // (the FK cascades), but stay defensive.
+    if (!def) continue;
+    const value = readValue(row, def.value_type);
+    out.push({
+      id: row.id,
+      owner_type: ownerType,
+      owner_id: ownerId,
+      property_id: row.property_id,
+      value:
+        def.value_type === 'thought_ref' && typeof value === 'string'
+          ? { id: value, title: row.ref_title }
+          : value,
       updated_at: row.updated_at,
     });
   }

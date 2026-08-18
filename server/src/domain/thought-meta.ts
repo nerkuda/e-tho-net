@@ -9,16 +9,17 @@
  * запрашивая их «вслепую». REST-чтение мысли (GET /thoughts/{id}) не
  * меняется — meta добавляется только в MCP-фасад.
  *
- * Все счётчики — COUNT по существующим индексам; permanent — один SELECT по
- * частичному уникальному индексу `idx_comments_permanent_one`. Тело
- * постоянного комментария возвращается порцией не длиннее
- * {@link PERMANENT_COMMENT_PREVIEW_CHARS} символов с метаданными
- * `chars_returned`/`chars_total`/`truncated` — большие тексты не раздувают
- * ответ, а агент видит, что полный текст доступен отдельным запросом.
+ * Все счётчики — COUNT по существующим индексам; превью постоянного
+ * комментария — {@link getPermanentPreview} (comment-service): тело
+ * возвращается порцией не длиннее {@link COMMENT_PREVIEW_CHARS} символов с
+ * метаданными `chars_returned`/`chars_total`/`truncated` — большие тексты не
+ * раздувают ответ, а агент видит, что полный текст доступен отдельным
+ * запросом.
  */
 
-import { PERMANENT_COMMENT_PREVIEW_CHARS, type ThoughtMeta } from '@etn/shared';
+import type { ThoughtMeta } from '@etn/shared';
 
+import { getPermanentPreview } from './comment-service.js';
 import type { NetworkDb } from '../db/network-db.js';
 
 /**
@@ -44,32 +45,7 @@ export function getThoughtMeta(ndb: NetworkDb, thoughtId: string): ThoughtMeta {
     thoughtId,
   );
 
-  const permanentRow = ndb
-    .prepare(
-      `SELECT body_md, valid_from, created_at, updated_at FROM comments
-       WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'permanent'
-       LIMIT 1`,
-    )
-    .get(thoughtId) as
-    | { body_md: string; valid_from: string; created_at: string; updated_at: string }
-    | undefined;
-
-  const permanent =
-    permanentRow === undefined
-      ? null
-      : (() => {
-          const total = permanentRow.body_md.length;
-          const returned = Math.min(total, PERMANENT_COMMENT_PREVIEW_CHARS);
-          return {
-            body_md: permanentRow.body_md.slice(0, returned),
-            chars_returned: returned,
-            chars_total: total,
-            truncated: total > returned,
-            valid_from: permanentRow.valid_from,
-            created_at: permanentRow.created_at,
-            updated_at: permanentRow.updated_at,
-          };
-        })();
+  const permanent = getPermanentPreview(ndb, 'thought', thoughtId);
 
   return {
     parents_count,

@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 
 import DatabaseConstructor from 'better-sqlite3';
 
-import { PERMANENT_COMMENT_PREVIEW_CHARS } from '@etn/shared';
+import { COMMENT_PREVIEW_CHARS } from '@etn/shared';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
@@ -143,12 +143,12 @@ describe('thought meta (N2)', { skip: !nativeAvailable() }, () => {
 
     const meta = getThoughtMeta(ndb, t);
     assert.ok(meta.permanent !== null);
-    assert.equal(meta.permanent.body_md.length, PERMANENT_COMMENT_PREVIEW_CHARS);
-    assert.equal(meta.permanent.chars_returned, PERMANENT_COMMENT_PREVIEW_CHARS);
+    assert.equal(meta.permanent.body_md.length, COMMENT_PREVIEW_CHARS);
+    assert.equal(meta.permanent.chars_returned, COMMENT_PREVIEW_CHARS);
     assert.equal(meta.permanent.chars_total, longBody.length);
     assert.equal(meta.permanent.truncated, true);
     // The preview is a prefix of the full text.
-    assert.equal(meta.permanent.body_md, longBody.slice(0, PERMANENT_COMMENT_PREVIEW_CHARS));
+    assert.equal(meta.permanent.body_md, longBody.slice(0, COMMENT_PREVIEW_CHARS));
   });
 
   it('reports no permanent when only chronological comments exist', () => {

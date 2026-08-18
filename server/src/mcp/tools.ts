@@ -44,9 +44,13 @@ import {
   updateThought,
 } from '../domain/thought-service.js';
 import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
-import { createComment, listComments, updateComment } from '../domain/comment-service.js';
+import { createComment, getCommentsPreview, listComments, updateComment } from '../domain/comment-service.js';
 import { createAttachment } from '../domain/attachment-service.js';
-import { getPropertyValues, setPropertyValue, findThoughtUsage } from '../domain/property-service.js';
+import {
+  findThoughtUsage,
+  getPropertyValuesResolved,
+  setPropertyValue,
+} from '../domain/property-service.js';
 import { findDuplicates, findMentions, resolveThoughts, search } from '../domain/search-service.js';
 import { queryThoughts } from '../domain/query-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
@@ -216,7 +220,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetwork(rt, args.network_id);
         const thought = getThoughtOrThrow(ndb, args.thought_id);
         const type = thought.type_id === null ? null : getThoughtType(ndb, thought.type_id);
-        const properties = getPropertyValues(ndb, 'thought', args.thought_id);
+        const properties = getPropertyValuesResolved(ndb, 'thought', args.thought_id);
         return { ...thought, type, properties, meta: getThoughtMeta(ndb, args.thought_id) };
       }),
   );
@@ -281,8 +285,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Подграф в радиусе N рёбер',
       description:
         'Extract the radius-bounded subgraph around seed thoughts: nodes (full thoughts), ' +
-        'active edges, and optionally comments per node. The key RAG tool — returns ready-to-use ' +
-        'context. `max_nodes` is capped by the server setting max_nodes_per_subgraph.',
+        'active edges, and optionally comments per node (`include_comments` — previews: ' +
+        'permanent truncated to 2000 chars, last 10 chronological entries with per-entry ' +
+        'truncation). The key RAG tool — returns ready-to-use context. `max_nodes` is capped ' +
+        'by the server setting max_nodes_per_subgraph.',
       inputSchema: SubgraphSchema,
     },
     (args) =>
@@ -298,7 +304,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.include_comments === true
             ? result.nodes.map((id) => ({
                 thought_id: id,
-                comments: listComments(ndb, 'thought', id),
+                ...getCommentsPreview(ndb, 'thought', id),
               }))
             : undefined;
         return {
