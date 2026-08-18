@@ -44,6 +44,7 @@ REST. Все изменения, сделанные агентом, иденти
 | `etn://networks/{network_id}` | Метаданные сети |
 | `etn://networks/{network_id}/thoughts/{thought_id}` | Полная мысль: свойства, синонимы, тип, стили + блок `meta` (см. ниже) |
 | `etn://networks/{network_id}/thoughts/{thought_id}/neighbors` | Соседи (parents/children/siblings) |
+| `etn://networks/{network_id}/thoughts/{thought_id}/usage` | «Использование» мысли: кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству |
 | `etn://networks/{network_id}/thoughts/{thought_id}/comments` | Комментарии мысли |
 | `etn://networks/{network_id}/thoughts/{thought_id}/attachments` | Вложения мысли |
 | `etn://networks/{network_id}/links/{link_id}` | Связь с метаданными |
@@ -57,7 +58,8 @@ REST. Все изменения, сделанные агентом, иденти
 Блок `meta` в чтении мысли (`etn://…/thoughts/{id}` и `etn.thoughts.get`) —
 «сигналы полноты» (task N2): сколько у мысли входящих/исходящих **активных**
 связей (`parents_count`/`children_count`), вложений (`attachments_count`),
-хронологических записей (`chrono_count`) — агент по ним решает, какие
+хронологических записей (`chrono_count`) и **формальных связей** через
+`thought_ref`-свойства (`usage_count`, task N3) — агент по ним решает, какие
 отдельные ресурсы/инструменты запрашивать. Поле `permanent` — постоянный
 комментарий (ровно один на мысль) с обрезкой больших текстов: `body_md` —
 первые `PERMANENT_COMMENT_PREVIEW_CHARS` (2000) символов, `chars_returned` /
@@ -86,6 +88,7 @@ REST. Все изменения, сделанные агентом, иденти
 | `etn.thoughts.path` | Путь между двумя мыслями | `network_id`, `from_id`, `to_id`, `max_depth` |
 | `etn.links.get` | Связь | `network_id`, `link_id` |
 | `etn.thoughts.mentions` | Где упоминается мысль | `network_id`, `thought_id` |
+| `etn.thoughts.usage` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству | `network_id`, `thought_id` |
 | `etn.export.subgraph` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
 
 `etn.thoughts.subgraph` — ключевой для RAG-сценариев: агент задаёт радиус

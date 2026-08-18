@@ -56,3 +56,21 @@
     обрезка длинного текста).
   - [x] Спека `docs/05-mcp-server.md` §3/§4.1; typecheck зелёный; проверка
     через MCP stdio.
+
+## N3. «Использование» мысли: счётчик в meta и список с группировкой по свойствам
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** N2
+- **Описание:** по запросу пользователя: формальные связи через
+  `thought_ref`-свойства (группа «Использование» в редакторе, REST
+  `GET /thoughts/{id}/usage`, `findThoughtUsage`) не видны MCP-агентам.
+  Добавляется: (1) `usage_count` в блок `meta` чтения мысли (как другие
+  счётчики — по `property_values.value_thought_ref`); (2) MCP-инструмент
+  `etn.thoughts.usage` и ресурс `etn://…/thoughts/{id}/usage`, возвращающие
+  `{ total, groups: [{property_id, key, thoughts[]}] }` — те же данные, что
+  в редакторе (группировка по свойству, сортировка по key и названию).
+- **DoD:**
+  - [x] `usage_count` в `ThoughtMeta` и `getThoughtMeta`.
+  - [x] Инструмент `etn.thoughts.usage` (tools.ts) + ресурс `etn.thought.usage`
+    (resources.ts) на базе `findThoughtUsage`; `MCP_TOOL_NAMES` — 21.
+  - [x] Спека `docs/05-mcp-server.md` §3/§4.1 и `docs/mcp-clients.md`.
+  - [x] Тесты: `usage_count` в thought-meta.test.ts; вызов инструмента в
+    mcp-tools.test.ts; typecheck зелёный; проверка через MCP stdio.
