@@ -16,6 +16,7 @@ import type {
   CommentOwnerType,
   ExportFormat,
   FocusDir,
+  LinkStyle,
   PropertyOwnerType,
   SearchScope,
 } from '../enums.js';
@@ -68,6 +69,37 @@ export interface McpMutationResult {
 
 /** Base shape of an `etn://` resource URI (opaque string; templated by server). */
 export type McpResourceUri = string;
+
+// ---------------------------------------------------------------------------
+// Type catalogues inside read responses (task N6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Запись каталога типов мыслей в MCP-ответах (task N6): только типы, реально
+ * встретившиеся в результате, ключ — `type_id` из записей. `description` —
+ * «комментарий для AI» (инструкция и требования по типу).
+ */
+export interface ThoughtTypeRef {
+  id: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+}
+
+/**
+ * Запись каталога типов связей в MCP-ответах (task N6): только типы, реально
+ * встретившиеся в результате, ключ — `link_type_id`/`type_id` рёбер. Оба имени
+ * даны, чтобы агент выбрал по направлению ребра (source → target =
+ * `name_forward`); `description` — роль и требования по типу связи.
+ */
+export interface LinkTypeRef {
+  id: string;
+  name_forward: string;
+  name_reverse: string;
+  description: string | null;
+  color: string | null;
+  style: LinkStyle;
+}
 
 // ---------------------------------------------------------------------------
 // Reused tool parameter shapes (subset — the MCP task adds the rest)

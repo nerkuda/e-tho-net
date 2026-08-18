@@ -54,6 +54,7 @@ import {
 import { findDuplicates, findMentions, resolveThoughts, search } from '../domain/search-service.js';
 import { queryThoughts } from '../domain/query-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
+import { linkTypeCatalog, thoughtTypeCatalog } from './catalogs.js';
 import { exportToMarkdown, getExportJobContent, startExportJob } from '../domain/export-service.js';
 import { findPath, subgraph, traverse } from '../domain/graph-traversal.js';
 import { getThoughtType } from '../domain/thought-type-service.js';
@@ -196,13 +197,19 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         '`active` by актуальность (`true`/`false`/`any`), `keywords` by title/synonym LIKE, ' +
         '`properties` by property values (key + operator eq/ne/contains/gt/gte/lt/lte + value; ' +
         'the value type selects the column: number/boolean/string), `created_*`/`updated_*` by ' +
-        'ISO-8601 date ranges. Use instead of search when there is no text to query.',
+        'ISO-8601 date ranges. The response carries a `thought_types` reference table (name + ' +
+        'AI-facing description) for every type used in `hits`. Use instead of search when ' +
+        'there is no text to query.',
       inputSchema: QuerySchema,
     },
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        return queryThoughts(ndb, args, { maxNodes: rt.limits.maxNodesPerSubgraph });
+        const result = queryThoughts(ndb, args, { maxNodes: rt.limits.maxNodesPerSubgraph });
+        return {
+          ...result,
+          thought_types: thoughtTypeCatalog(ndb, result.hits.map((h) => h.type_id)),
+        };
       }),
   );
 
@@ -237,7 +244,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Соседи мысли',
       description:
         'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`). ' +
-        'With `depth > 1` performs a bounded breadth-first walk returning resolved thoughts.',
+        'With `depth > 1` performs a bounded breadth-first walk returning resolved thoughts. ' +
+        'Responses carry `link_types`/`thought_types` reference tables (name + AI-facing ' +
+        'description) for the types actually used.',
       inputSchema: NeighborsSchema,
     },
     (args) =>
@@ -246,13 +255,16 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const depth = args.depth ?? 1;
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
+          const neighbors = getNeighbors(ndb, args.thought_id, args.dir, {
+            userId: rt.deps.auth.userId,
+          });
           return {
             thought: { id: thought.id, title: thought.title },
             dir: args.dir,
             depth: 1,
-            neighbors: getNeighbors(ndb, args.thought_id, args.dir, {
-              userId: rt.deps.auth.userId,
-            }),
+            neighbors,
+            link_types: linkTypeCatalog(ndb, neighbors.map((n) => n.link_type_id)),
+            thought_types: thoughtTypeCatalog(ndb, neighbors.map((n) => n.type_id)),
           };
         }
         const direction = args.dir === 'siblings' ? 'both' : args.dir;
@@ -260,14 +272,16 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           maxDepth: depth,
           maxNodes: rt.limits.maxNodesPerSubgraph,
         });
+        const thoughts = resolveThoughts(ndb, walk.ids);
         return {
           thought_id: args.thought_id,
           dir: args.dir,
           depth,
           ids: walk.ids,
-          thoughts: resolveThoughts(ndb, walk.ids),
+          thoughts,
           truncated: walk.truncated,
           reason: walk.reason ?? null,
+          thought_types: thoughtTypeCatalog(ndb, thoughts.map((t) => t.type_id)),
         };
       }),
   );
@@ -287,8 +301,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Extract the radius-bounded subgraph around seed thoughts: nodes (full thoughts), ' +
         'active edges, and optionally comments per node (`include_comments` — previews: ' +
         'permanent truncated to 2000 chars, last 10 chronological entries with per-entry ' +
-        'truncation). The key RAG tool — returns ready-to-use context. `max_nodes` is capped ' +
-        'by the server setting max_nodes_per_subgraph.',
+        'truncation). Every response carries `thought_types`/`link_types` reference tables ' +
+        '(id, name, description, icon/color) for the types actually used — the agent reads ' +
+        'the AI-facing type descriptions once instead of re-fetching. The key RAG tool — ' +
+        'returns ready-to-use context. `max_nodes` is capped by the server setting ' +
+        'max_nodes_per_subgraph.',
       inputSchema: SubgraphSchema,
     },
     (args) =>
@@ -312,6 +329,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           edges: result.edges,
           truncated: result.truncated,
           max_nodes: effectiveMax,
+          thought_types: thoughtTypeCatalog(ndb, nodes.map((n) => n.type_id)),
+          link_types: linkTypeCatalog(ndb, result.edges.map((e) => e.type_id)),
           ...(comments === undefined ? {} : { comments }),
         };
       }),
@@ -341,11 +360,17 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.to_id,
           args.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH,
         );
+        const thoughts = path === null ? undefined : resolveThoughts(ndb, path);
         return {
           from_id: args.from_id,
           to_id: args.to_id,
           path,
-          ...(path === null ? {} : { thoughts: resolveThoughts(ndb, path) }),
+          ...(thoughts === undefined
+            ? {}
+            : {
+                thoughts,
+                thought_types: thoughtTypeCatalog(ndb, thoughts.map((t) => t.type_id)),
+              }),
         };
       }),
   );
@@ -394,13 +419,21 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Thoughts referencing this thought as a `thought_ref` property value (formal links, ' +
         '«Использование» in the editor), grouped by property. Returns ' +
-        '{ total, groups: [{property_id, key, thoughts[]}] }.',
+        '{ total, groups: [{property_id, key, thoughts[]}], thought_types } — the latter is ' +
+        'a reference table (name + AI-facing description) for every type used in the result.',
       inputSchema: UsageSchema,
     },
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        return findThoughtUsage(ndb, args.thought_id);
+        const usage = findThoughtUsage(ndb, args.thought_id);
+        return {
+          ...usage,
+          thought_types: thoughtTypeCatalog(
+            ndb,
+            usage.groups.flatMap((g) => g.thoughts.map((t) => t.type_id)),
+          ),
+        };
       }),
   );
 

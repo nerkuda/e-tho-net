@@ -416,6 +416,109 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('read tools attach type catalogues with names and descriptions (N6)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Seed a thought type and a link type with AI-facing descriptions
+      // (direct inserts — no MCP tool creates types).
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtTypeId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thought_types (id, name, description, version, created_at, updated_at, created_by)
+           VALUES (?, 'ошибка', 'Дефект: воспроизведение, ожидание, факт', 1, '2024', '2024', 'u')`,
+        )
+        .run(thoughtTypeId);
+      const linkTypeId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO link_types (id, name_forward, name_reverse, description, version, created_at, updated_at, created_by)
+           VALUES (?, 'блокирует', 'заблокирован', 'Блокировка: A не даёт завершить B', 1, '2024', '2024', 'u')`,
+        )
+        .run(linkTypeId);
+      // NB: do not close — openNetworkDb caches the connection shared with the MCP server.
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: {
+            network_id: ctx.networkId,
+            title: 'Баг: фокус',
+            type_id: thoughtTypeId,
+            link: { direction: 'child', target_thought_id: ctx.homeId, type_id: linkTypeId },
+          },
+        });
+        const { id } = toolJson<{ id: string }>(created);
+
+        // subgraph: both catalogues, keyed by the ids used in nodes/edges.
+        const sub = await handle.client.callTool({
+          name: 'etn.thoughts.subgraph',
+          arguments: { network_id: ctx.networkId, seed_ids: [ctx.homeId], radius: 1 },
+        });
+        const sg = toolJson<{
+          nodes: Array<{ id: string; type_id: string | null }>;
+          edges: Array<{ type_id: string | null }>;
+          thought_types: Record<string, { name: string; description: string | null }>;
+          link_types: Record<
+            string,
+            { name_forward: string; name_reverse: string; description: string | null }
+          >;
+        }>(sub);
+        assert.ok(sg.thought_types[thoughtTypeId], 'thought type of a node must be catalogued');
+        assert.equal(sg.thought_types[thoughtTypeId]?.name, 'ошибка');
+        assert.match(sg.thought_types[thoughtTypeId]?.description ?? '', /Дефект/);
+        assert.ok(sg.link_types[linkTypeId], 'link type of an edge must be catalogued');
+        assert.equal(sg.link_types[linkTypeId]?.name_forward, 'блокирует');
+        assert.equal(sg.link_types[linkTypeId]?.name_reverse, 'заблокирован');
+        assert.match(sg.link_types[linkTypeId]?.description ?? '', /Блокировка/);
+
+        // neighbors: the neighbour's link_type_id resolves through the catalogue.
+        const neigh = await handle.client.callTool({
+          name: 'etn.thoughts.neighbors',
+          arguments: { network_id: ctx.networkId, thought_id: ctx.homeId, dir: 'children' },
+        });
+        const nb = toolJson<{
+          neighbors: Array<{ link_type_id: string | null; type_id: string | null }>;
+          link_types: Record<string, unknown>;
+          thought_types: Record<string, unknown>;
+        }>(neigh);
+        assert.equal(nb.neighbors[0]?.link_type_id, linkTypeId);
+        assert.ok(nb.link_types[linkTypeId]);
+        assert.ok(nb.thought_types[thoughtTypeId]);
+
+        // query and path: thought_types catalogue present and resolved.
+        const q = await handle.client.callTool({
+          name: 'etn.thoughts.query',
+          arguments: { network_id: ctx.networkId, type_id: [thoughtTypeId] },
+        });
+        const qr = toolJson<{ total: number; thought_types: Record<string, { name: string }> }>(q);
+        assert.equal(qr.total, 1);
+        assert.equal(qr.thought_types[thoughtTypeId]?.name, 'ошибка');
+
+        const p = await handle.client.callTool({
+          name: 'etn.thoughts.path',
+          arguments: { network_id: ctx.networkId, from_id: ctx.homeId, to_id: id },
+        });
+        const pr = toolJson<{ path: string[] | null; thought_types: Record<string, unknown> }>(p);
+        assert.ok(pr.thought_types[thoughtTypeId]);
+
+        // usage: catalogue is always present, empty when nothing references.
+        const u = await handle.client.callTool({
+          name: 'etn.thoughts.usage',
+          arguments: { network_id: ctx.networkId, thought_id: id },
+        });
+        const ur = toolJson<{ total: number; thought_types: Record<string, unknown> }>(u);
+        assert.equal(ur.total, 0);
+        assert.deepEqual(ur.thought_types, {});
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('auth provider rejects garbage, disabled keys and disabled users (F2)', async () => {
     const ctx = await buildMcpContext();
     try {

@@ -26,6 +26,7 @@ import { listAttachments } from '../domain/attachment-service.js';
 import { getThoughtType, listThoughtTypes } from '../domain/thought-type-service.js';
 import { getLinkType, listLinkTypes } from '../domain/link-type-service.js';
 import { getPropertyValuesResolved, listTypeProperties } from '../domain/property-service.js';
+import { linkTypeCatalog, thoughtTypeCatalog } from './catalogs.js';
 import { etnErrorText, openMemberNetwork, type McpRuntime } from './context.js';
 
 /** JSON content of one resource read (pretty-printed for the agent). */
@@ -153,7 +154,9 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     }),
     {
       title: 'Соседи мысли',
-      description: 'Родители, дети и «братья/сёстры» мысли (как на канве фокуса).',
+      description:
+        'Родители, дети и «братья/сёстры» мысли (как на канве фокуса), плюс каталоги ' +
+        'использованных типов (`link_types`/`thought_types` с описаниями для AI).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -162,11 +165,17 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         const thoughtId = requireVar(vars, 'thought_id');
         const ndb = openMemberNetwork(rt, networkId);
         const thought = getThoughtOrThrow(ndb, thoughtId);
+        const parents = getNeighbors(ndb, thoughtId, 'parents', { userId: rt.deps.auth.userId });
+        const children = getNeighbors(ndb, thoughtId, 'children', { userId: rt.deps.auth.userId });
+        const siblings = getNeighbors(ndb, thoughtId, 'siblings', { userId: rt.deps.auth.userId });
+        const all = [...parents, ...children, ...siblings];
         return jsonContents(uri.href, {
           thought: { id: thought.id, title: thought.title },
-          parents: getNeighbors(ndb, thoughtId, 'parents', { userId: rt.deps.auth.userId }),
-          children: getNeighbors(ndb, thoughtId, 'children', { userId: rt.deps.auth.userId }),
-          siblings: getNeighbors(ndb, thoughtId, 'siblings', { userId: rt.deps.auth.userId }),
+          parents,
+          children,
+          siblings,
+          link_types: linkTypeCatalog(ndb, all.map((n) => n.link_type_id)),
+          thought_types: thoughtTypeCatalog(ndb, all.map((n) => n.type_id)),
         });
       }),
   );
