@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { EtnError } from '@etn/shared';
+import { EtnError, typeNameKey } from '@etn/shared';
 
 import DatabaseConstructor from 'better-sqlite3';
 
@@ -105,10 +105,10 @@ function seedThoughtType(ndb: NetworkDb, name: string): string {
   const id = randomUUID();
   ndb
     .prepare(
-      `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
-       VALUES (?, ?, 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'u')`,
+      `INSERT INTO thought_types (id, name, name_key, version, created_at, updated_at, created_by)
+       VALUES (?, ?, ?, 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'u')`,
     )
-    .run(id, name);
+    .run(id, name, typeNameKey(name));
   return id;
 }
 
@@ -117,10 +117,11 @@ function seedLinkType(ndb: NetworkDb, forward: string): string {
   const id = randomUUID();
   ndb
     .prepare(
-      `INSERT INTO link_types (id, name_forward, name_reverse, version, created_at, updated_at, created_by)
-       VALUES (?, ?, ?, 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'u')`,
+      `INSERT INTO link_types (id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+                               version, created_at, updated_at, created_by)
+       VALUES (?, ?, ?, ?, ?, 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'u')`,
     )
-    .run(id, forward, `${forward}-rev`);
+    .run(id, forward, typeNameKey(forward), `${forward}-rev`, typeNameKey(`${forward}-rev`));
   return id;
 }
 

@@ -106,6 +106,19 @@ export class NetworkDb {
 }
 
 /**
+ * Register SQL helpers used by network migrations. `type_name_key` computes
+ * the normalized type-name key (trim + lowercase, same as shared `typeNameKey`)
+ * for the backfill in migration 017; it must exist on the connection before
+ * `runMigrations` executes. Exported so tests that apply migrations to their
+ * own connections can register the helpers the same way production code does.
+ */
+export function registerMigrationHelpers(db: Database.Database): void {
+  db.function('type_name_key', (value: unknown) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  );
+}
+
+/**
  * Open (or reuse) the `data.db` for `networkId` under `dataDir`.
  *
  * On first open for a given id the network directory tree
@@ -137,6 +150,7 @@ export function openNetworkDb(dataDir: string, networkId: string, log?: Logger):
   const db = new DatabaseConstructor(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  registerMigrationHelpers(db);
 
   runMigrations(db, networkMigrationsDir(), log);
 
@@ -193,6 +207,7 @@ export function closeAll(): void {
 export function createInMemoryNetworkDb(): NetworkDb {
   const db = new DatabaseConstructor(':memory:');
   db.pragma('foreign_keys = ON');
+  registerMigrationHelpers(db);
   runMigrations(db, networkMigrationsDir());
   return new NetworkDb(db, 'in-memory', ':memory:');
 }

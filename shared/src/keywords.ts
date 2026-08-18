@@ -42,3 +42,17 @@ export function buildLikePattern(word: string): string {
   const escaped = word.replace(/[\\%_]/g, (ch) => `\\${ch}`).replace(/\*/g, '%');
   return `%${escaped}%`;
 }
+
+/**
+ * Normalized comparison key of a type name: trimmed and lower-cased. Thought
+ * and link type names must be unique ignoring case (`Тип` = `тип` = `ТИП`,
+ * docs/02-data-model.md §3.3/§3.7). The server stores the key alongside the
+ * name (`name_key`, `name_forward_key`, `name_reverse_key`) and checks
+ * duplicates against it; the client uses this helper for live duplicate
+ * warnings in the type editors (08-ui-spec.md §8.1). Mirrors the
+ * `type_name_key` SQL function registered by the server for migration
+ * backfills.
+ */
+export function typeNameKey(name: string): string {
+  return name.trim().toLowerCase();
+}

@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import {
   EtnError,
   LINK_STYLES,
+  typeNameKey,
   type LinkStyle,
   type LinkType,
   type LinkTypeInput,
@@ -98,7 +99,7 @@ export function listLinkTypes(ndb: NetworkDb): LinkType[] {
  * Create a link type (docs/03-server-api.md §8).
  *
  * Throws `DUPLICATE` (409) if a type with the same `(name_forward, name_reverse)`
- * pair already exists.
+ * pair (ignoring case) already exists.
  */
 export function createLinkType(
   ndb: NetworkDb,
@@ -107,14 +108,18 @@ export function createLinkType(
 ): LinkType {
   const nameForward = validateLabel(input.name_forward, 'name_forward');
   const nameReverse = validateLabel(input.name_reverse, 'name_reverse');
+  const nameForwardKey = typeNameKey(nameForward);
+  const nameReverseKey = typeNameKey(nameReverse);
   const style = validateStyle(input.style) ?? 'solid';
   const id = randomUUID();
   const now = new Date().toISOString();
 
   return ndb.transaction(() => {
     const existing = ndb
-      .prepare('SELECT 1 FROM link_types WHERE name_forward = ? AND name_reverse = ?')
-      .get(nameForward, nameReverse);
+      .prepare(
+        'SELECT 1 FROM link_types WHERE name_forward_key = ? AND name_reverse_key = ?',
+      )
+      .get(nameForwardKey, nameReverseKey);
     if (existing) {
       throw new EtnError('DUPLICATE', 'a link type with these names already exists', {
         name_forward: nameForward,
@@ -123,14 +128,16 @@ export function createLinkType(
     }
     ndb
       .prepare(
-        `INSERT INTO link_types (id, name_forward, name_reverse, color, style, width,
-                                  description, version, created_at, updated_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+        `INSERT INTO link_types (id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+                                  color, style, width, description, version, created_at, updated_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
       )
       .run(
         id,
         nameForward,
+        nameForwardKey,
         nameReverse,
+        nameReverseKey,
         input.color ?? null,
         style,
         input.width ?? 1,
@@ -174,10 +181,15 @@ export function updateLinkType(
       changes.name_reverse !== undefined
         ? validateLabel(changes.name_reverse, 'name_reverse')
         : current.name_reverse;
-    if (newNameForward !== current.name_forward || newNameReverse !== current.name_reverse) {
+    if (
+      typeNameKey(newNameForward) !== typeNameKey(current.name_forward) ||
+      typeNameKey(newNameReverse) !== typeNameKey(current.name_reverse)
+    ) {
       const clash = ndb
-        .prepare('SELECT 1 FROM link_types WHERE name_forward = ? AND name_reverse = ? AND id <> ?')
-        .get(newNameForward, newNameReverse, id);
+        .prepare(
+          'SELECT 1 FROM link_types WHERE name_forward_key = ? AND name_reverse_key = ? AND id <> ?',
+        )
+        .get(typeNameKey(newNameForward), typeNameKey(newNameReverse), id);
       if (clash) {
         throw new EtnError('DUPLICATE', 'a link type with these names already exists', {
           name_forward: newNameForward,
@@ -190,12 +202,12 @@ export function updateLinkType(
     const sets: string[] = [];
     const args: unknown[] = [];
     if (changes.name_forward !== undefined) {
-      sets.push('name_forward = ?');
-      args.push(newNameForward);
+      sets.push('name_forward = ?', 'name_forward_key = ?');
+      args.push(newNameForward, typeNameKey(newNameForward));
     }
     if (changes.name_reverse !== undefined) {
-      sets.push('name_reverse = ?');
-      args.push(newNameReverse);
+      sets.push('name_reverse = ?', 'name_reverse_key = ?');
+      args.push(newNameReverse, typeNameKey(newNameReverse));
     }
     if (changes.color !== undefined) {
       sets.push('color = ?');

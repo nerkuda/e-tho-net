@@ -13,6 +13,7 @@ import { readdirSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import Database from 'better-sqlite3';
+import { registerMigrationHelpers } from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { networkMigrationsDir } from '../src/paths.js';
 
@@ -34,6 +35,7 @@ const EXPECTED_FILES = [
   '015_attachments_icon.sql',
   '016_saved_filters.sql',
   '016_thought_icon_attachment.sql',
+  '017_type_name_keys.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -83,6 +85,7 @@ describe(
     it('creates every data.db table and is idempotent', () => {
       const db = new Database(':memory:');
       db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
       try {
         const res = runMigrations(db, networkMigrationsDir());
         assert.equal(res.skipped.length, 0);
@@ -162,6 +165,7 @@ describe(
     it('FTS5 fts_thought_names stays in sync with thoughts and synonyms', () => {
       const db = new Database(':memory:');
       db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
       runMigrations(db, networkMigrationsDir());
       try {
         const now = '2024-01-01T00:00:00Z';
@@ -209,6 +213,7 @@ describe(
     it('FTS5 comment tables split by owner_type and update on change', () => {
       const db = new Database(':memory:');
       db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
       runMigrations(db, networkMigrationsDir());
       try {
         const now = '2024-01-01T00:00:00Z';

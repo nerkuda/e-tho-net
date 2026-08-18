@@ -18,6 +18,7 @@ import {
   type QueryBounds,
 } from '../src/domain/query-service.js';
 import type { ThoughtQueryRequest } from '@etn/shared';
+import { typeNameKey } from '@etn/shared';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -87,10 +88,10 @@ function seedThoughtType(ndb: NetworkDb, name: string): string {
   const id = randomUUID();
   ndb
     .prepare(
-      `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
-       VALUES (?, ?, 1, '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z', 'u')`,
+      `INSERT INTO thought_types (id, name, name_key, version, created_at, updated_at, created_by)
+       VALUES (?, ?, ?, 1, '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z', 'u')`,
     )
-    .run(id, name);
+    .run(id, name, typeNameKey(name));
   return id;
 }
 

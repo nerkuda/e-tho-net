@@ -13,7 +13,7 @@ import { EtnError } from '@etn/shared';
 
 import DatabaseConstructor from 'better-sqlite3';
 
-import { createInMemoryNetworkDb, NetworkDb } from '../src/db/network-db.js';
+import { createInMemoryNetworkDb, NetworkDb, registerMigrationHelpers } from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { networkMigrationsDir } from '../src/paths.js';
 import {
@@ -111,6 +111,7 @@ describe(
       const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
       const db = new DatabaseConstructor(':memory:');
       db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
       runMigrations(db, networkMigrationsDir());
       const ndb = new NetworkDb(db, 'att-test', path.join(tmp, 'data.db'));
       try {
@@ -447,6 +448,7 @@ describe(
       const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
       const db = new DatabaseConstructor(':memory:');
       db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
       runMigrations(db, networkMigrationsDir());
       const ndb = new NetworkDb(db, 'att-content', path.join(tmp, 'data.db'));
       try {
@@ -505,6 +507,7 @@ describe(
       const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
       const db = new DatabaseConstructor(':memory:');
       db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
       runMigrations(db, networkMigrationsDir());
       const ndb = new NetworkDb(db, 'att-content2', path.join(tmp, 'data.db'));
       try {

@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   EtnError,
+  typeNameKey,
   type IconKind,
   type ThoughtType,
   type ThoughtTypeInput,
@@ -97,7 +98,8 @@ export function listThoughtTypes(ndb: NetworkDb): ThoughtType[] {
  * Create a thought type (docs/03-server-api.md §8). The `description` field is
  * persisted verbatim so AI agents can read type context (§8).
  *
- * Throws `DUPLICATE` (409) if a type with the same name already exists.
+ * Throws `DUPLICATE` (409) if a type with the same name (ignoring case) already
+ * exists.
  */
 export function createThoughtType(
   ndb: NetworkDb,
@@ -105,24 +107,26 @@ export function createThoughtType(
   actorUserId: string,
 ): ThoughtType {
   const name = validateName(input.name);
+  const nameKey = typeNameKey(name);
   const id = randomUUID();
   const now = new Date().toISOString();
 
   return ndb.transaction(() => {
-    const existing = ndb.prepare('SELECT 1 FROM thought_types WHERE name = ?').get(name);
+    const existing = ndb.prepare('SELECT 1 FROM thought_types WHERE name_key = ?').get(nameKey);
     if (existing) {
       throw new EtnError('DUPLICATE', `thought type "${name}" already exists`, { name });
     }
     ndb
       .prepare(
-        `INSERT INTO thought_types (id, name, icon, icon_kind, fg_color, bg_color,
+        `INSERT INTO thought_types (id, name, name_key, icon, icon_kind, fg_color, bg_color,
                                      font_bold, font_italic, font_underline, font_strike,
                                      description, version, created_at, updated_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
       )
       .run(
         id,
         name,
+        nameKey,
         input.icon ?? null,
         input.icon_kind ?? 'emoji',
         input.fg_color ?? null,
@@ -163,12 +167,13 @@ export function updateThoughtType(
         current: current.version,
       });
     }
+    let newName: string | undefined;
     if (changes.name !== undefined) {
-      const newName = validateName(changes.name);
-      if (newName !== current.name) {
+      newName = validateName(changes.name);
+      if (typeNameKey(newName) !== typeNameKey(current.name)) {
         const clash = ndb
-          .prepare('SELECT 1 FROM thought_types WHERE name = ? AND id <> ?')
-          .get(newName, id);
+          .prepare('SELECT 1 FROM thought_types WHERE name_key = ? AND id <> ?')
+          .get(typeNameKey(newName), id);
         if (clash) {
           throw new EtnError('DUPLICATE', `thought type "${newName}" already exists`, {
             name: newName,
@@ -179,13 +184,16 @@ export function updateThoughtType(
 
     const sets: string[] = [];
     const args: unknown[] = [];
+    if (newName !== undefined) {
+      sets.push('name = ?', 'name_key = ?');
+      args.push(newName, typeNameKey(newName));
+    }
     const optStr = (v: string | null | undefined, col: string) => {
       if (v !== undefined) {
         sets.push(`${col} = ?`);
         args.push(v ?? null);
       }
     };
-    optStr(changes.name, 'name');
     optStr(changes.icon, 'icon');
     optStr(changes.icon_kind, 'icon_kind');
     optStr(changes.fg_color, 'fg_color');

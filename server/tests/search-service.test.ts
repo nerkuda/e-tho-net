@@ -9,6 +9,8 @@ import { describe, it } from 'node:test';
 
 import DatabaseConstructor from 'better-sqlite3';
 
+import { typeNameKey } from '@etn/shared';
+
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { findDuplicates, findMentions, search } from '../src/domain/search-service.js';
@@ -219,10 +221,10 @@ describe(
         ] as const) {
           ndb
             .prepare(
-              `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
-               VALUES (?, ?, 1, '2024', '2024', 'u')`,
+              `INSERT INTO thought_types (id, name, name_key, version, created_at, updated_at, created_by)
+               VALUES (?, ?, ?, 1, '2024', '2024', 'u')`,
             )
-            .run(id, name);
+            .run(id, name, typeNameKey(name));
         }
         seedThought(ndb, 'Red', { type_id: 'type-a' });
         seedThought(ndb, 'Red too', { type_id: 'type-b' });
@@ -272,8 +274,8 @@ describe(
       try {
         ndb
           .prepare(
-            `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
-             VALUES ('type-a', 'A', 1, '2024', '2024', 'u')`,
+            `INSERT INTO thought_types (id, name, name_key, version, created_at, updated_at, created_by)
+             VALUES ('type-a', 'A', 'a', 1, '2024', '2024', 'u')`,
           )
           .run();
         const parent = seedThought(ndb, 'Parent');
@@ -310,10 +312,10 @@ describe(
         ] as const) {
           ndb
             .prepare(
-              `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
-               VALUES (?, ?, 1, '2024', '2024', 'u')`,
+              `INSERT INTO thought_types (id, name, name_key, version, created_at, updated_at, created_by)
+               VALUES (?, ?, ?, 1, '2024', '2024', 'u')`,
             )
-            .run(id, name);
+            .run(id, name, typeNameKey(name));
         }
         const a = seedThought(ndb, 'Cats', { type_id: 'type-a' });
         seedThought(ndb, 'Cats again', { type_id: 'type-b' });

@@ -28,6 +28,7 @@ import type {
   PropertyValueType,
   ThoughtType,
 } from '@etn/shared';
+import { typeNameKey } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { applyThoughtIcon } from '../canvas/canvas.js';
@@ -172,6 +173,12 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   const errorLine = span('', 'error-text');
   const body = div('form-stack');
 
+  // Duplicate-name guard: type names are unique ignoring case (08-ui-spec.md
+  // §8.1). The catalogue is loaded once on open; the server re-checks on save.
+  const DUP_NAME_MSG = 'Тип с таким именем уже существует.';
+  let allTypes: ThoughtType[] = [];
+  let createBtn: HTMLButtonElement | null = null;
+
   // Top row: icon · name · settings (⚙). The icon and ⚙ stay visible but
   // inert until the new type is actually created («Создать и продолжить»).
   const topRow = div('editor-top-row');
@@ -219,9 +226,13 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
 
   if (type === null) {
     const actions = div('form-row');
-    actions.append(
-      button('Создать и продолжить', () => void commitNew(), 'btn', 'Создать тип и продолжить'),
+    createBtn = button(
+      'Создать и продолжить',
+      () => void commitNew(),
+      'btn',
+      'Создать тип и продолжить',
     );
+    actions.append(createBtn);
     body.append(actions);
   }
 
@@ -290,11 +301,43 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
     iconBox.disabled = current === null;
   }
 
+  /** Existing type with the same normalized name as `name` (self excluded). */
+  function nameClash(name: string): ThoughtType | null {
+    const key = typeNameKey(name);
+    return (
+      allTypes.find((t) => t.id !== (current?.id ?? null) && typeNameKey(t.name) === key) ?? null
+    );
+  }
+
+  /** Live duplicate check on the name field: warn + disable the create button. */
+  function revalidateName(): void {
+    if (nameClash(nameInput.value) !== null) {
+      errorLine.textContent = DUP_NAME_MSG;
+      if (createBtn !== null) createBtn.disabled = true;
+    } else {
+      if (errorLine.textContent === DUP_NAME_MSG) errorLine.textContent = '';
+      if (createBtn !== null) createBtn.disabled = false;
+    }
+  }
+
+  // Fresh catalogue for the live duplicate check (the server re-checks anyway).
+  void etn.types
+    .listThoughtTypes(networkId)
+    .then((list) => {
+      allTypes = list;
+      revalidateName();
+    })
+    .catch(() => {});
+
   /** Creates the type and unlocks the icon, settings and properties. */
   async function commitNew(): Promise<void> {
     const name = nameInput.value.trim();
     if (name === '') {
       errorLine.textContent = 'Название типа обязательно.';
+      return;
+    }
+    if (nameClash(name) !== null) {
+      errorLine.textContent = DUP_NAME_MSG;
       return;
     }
     const description = descArea.value.trim();
@@ -322,6 +365,10 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
       errorLine.textContent = 'Название не может быть пустым — возвращено прежнее.';
       return;
     }
+    if (nameClash(name) !== null) {
+      errorLine.textContent = DUP_NAME_MSG;
+      return;
+    }
     const description = descArea.value.trim();
     const nextDesc = description === '' ? null : description;
     if (name === current.name && nextDesc === current.description) return;
@@ -339,6 +386,7 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
       errorLine.textContent = errText(err);
     }
   }
+  nameInput.addEventListener('input', revalidateName);
   nameInput.addEventListener('blur', () => void saveNameDesc());
   descArea.addEventListener('blur', () => void saveNameDesc());
 
@@ -921,6 +969,13 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
   const errorLine = span('', 'error-text');
   const body = div('form-stack');
 
+  // Duplicate-pair guard: a link type is identified by its forward/reverse
+  // name pair, unique ignoring case (08-ui-spec.md §8.1). The catalogue is
+  // loaded once on open; the server re-checks on save.
+  const DUP_PAIR_MSG = 'Тип связи с такими именами уже существует.';
+  let allTypes: LinkType[] = [];
+  let createBtn: HTMLButtonElement | null = null;
+
   // Top row: forward · reverse names · settings (⚙). The ⚙ stays visible but
   // inert until the new type is created («Создать и продолжить»).
   const namesRow = div('form-row type-editor-row');
@@ -950,9 +1005,13 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
 
   if (type === null) {
     const actions = div('form-row');
-    actions.append(
-      button('Создать и продолжить', () => void commitNew(), 'btn', 'Создать тип и продолжить'),
+    createBtn = button(
+      'Создать и продолжить',
+      () => void commitNew(),
+      'btn',
+      'Создать тип и продолжить',
     );
+    actions.append(createBtn);
     body.append(actions);
   }
 
@@ -993,12 +1052,50 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
     });
   }
 
+  /** Existing type with the same normalized name pair (self excluded). */
+  function pairClash(forward: string, reverse: string): LinkType | null {
+    const fwdKey = typeNameKey(forward);
+    const revKey = typeNameKey(reverse);
+    return (
+      allTypes.find(
+        (t) =>
+          t.id !== (current?.id ?? null) &&
+          typeNameKey(t.name_forward) === fwdKey &&
+          typeNameKey(t.name_reverse) === revKey,
+      ) ?? null
+    );
+  }
+
+  /** Live duplicate check on the name fields: warn + disable the create button. */
+  function revalidateNames(): void {
+    if (pairClash(forwardInput.value, reverseInput.value) !== null) {
+      errorLine.textContent = DUP_PAIR_MSG;
+      if (createBtn !== null) createBtn.disabled = true;
+    } else {
+      if (errorLine.textContent === DUP_PAIR_MSG) errorLine.textContent = '';
+      if (createBtn !== null) createBtn.disabled = false;
+    }
+  }
+
+  // Fresh catalogue for the live duplicate check (the server re-checks anyway).
+  void etn.types
+    .listLinkTypes(networkId)
+    .then((list) => {
+      allTypes = list;
+      revalidateNames();
+    })
+    .catch(() => {});
+
   /** Creates the type and unlocks the settings button. */
   async function commitNew(): Promise<void> {
     const nameForward = forwardInput.value.trim();
     const nameReverse = reverseInput.value.trim();
     if (nameForward === '' || nameReverse === '') {
       errorLine.textContent = 'Оба имени обязательны.';
+      return;
+    }
+    if (pairClash(nameForward, nameReverse) !== null) {
+      errorLine.textContent = DUP_PAIR_MSG;
       return;
     }
     const description = descArea.value.trim();
@@ -1029,6 +1126,10 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
       errorLine.textContent = 'Оба имени обязательны — возвращены прежние.';
       return;
     }
+    if (pairClash(nameForward, nameReverse) !== null) {
+      errorLine.textContent = DUP_PAIR_MSG;
+      return;
+    }
     const description = descArea.value.trim();
     const nextDesc = description === '' ? null : description;
     if (
@@ -1052,6 +1153,8 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
       errorLine.textContent = errText(err);
     }
   }
+  forwardInput.addEventListener('input', revalidateNames);
+  reverseInput.addEventListener('input', revalidateNames);
   forwardInput.addEventListener('blur', () => void saveFields());
   reverseInput.addEventListener('blur', () => void saveFields());
   descArea.addEventListener('blur', () => void saveFields());

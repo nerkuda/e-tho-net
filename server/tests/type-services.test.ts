@@ -109,6 +109,33 @@ describe(
         }
       });
 
+      it('rejects a duplicate name ignoring case; renames to a case-variant of itself', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const tt = createThoughtType(ndb, { name: 'Задача' }, USER);
+          // `Тип` = `тип` = `ТИП` — lower/upper variants collide.
+          assert.throws(
+            () => createThoughtType(ndb, { name: 'задача' }, USER),
+            (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+          );
+          assert.throws(
+            () => createThoughtType(ndb, { name: '  ЗАДАЧА ' }, USER),
+            (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+          );
+          // Renaming a type to a case-variant of its own name is allowed…
+          const updated = updateThoughtType(ndb, tt.id, { name: 'задача' }, tt.version);
+          assert.equal(updated.name, 'задача');
+          // …but renaming onto another type's name (ignoring case) is not.
+          createThoughtType(ndb, { name: 'Отчёт' }, USER);
+          assert.throws(
+            () => updateThoughtType(ndb, tt.id, { name: 'ОТЧЁТ' }, updated.version),
+            (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
       it('refuses to delete a type in use without force, detaches with force', () => {
         const ndb = createInMemoryNetworkDb();
         try {
@@ -168,6 +195,24 @@ describe(
             createLinkType(ndb, { name_forward: 'parent', name_reverse: 'other' }, USER),
           );
           assert.equal(listLinkTypes(ndb).length, 2);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('rejects a duplicate name pair ignoring case; swapped pair is a new type', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          createLinkType(ndb, { name_forward: 'Родитель', name_reverse: 'Ребёнок' }, USER);
+          assert.throws(
+            () =>
+              createLinkType(ndb, { name_forward: 'родитель', name_reverse: 'ребёнок' }, USER),
+            (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+          );
+          // The pair is directional: swapping forward/reverse names is a new type.
+          assert.doesNotThrow(() =>
+            createLinkType(ndb, { name_forward: 'ребёнок', name_reverse: 'родитель' }, USER),
+          );
         } finally {
           ndb.close();
         }

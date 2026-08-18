@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { EtnError } from '@etn/shared';
+import { EtnError, typeNameKey } from '@etn/shared';
 
 import DatabaseConstructor from 'better-sqlite3';
 
@@ -53,10 +53,11 @@ function seedLinkType(ndb: NetworkDb, nameForward = 'fwd', nameReverse = 'rev'):
   const id = randomUUID();
   ndb
     .prepare(
-      `INSERT INTO link_types (id, name_forward, name_reverse, style, width, version, created_at, updated_at, created_by)
-       VALUES (?, ?, ?, 'solid', 1, 1, '2024-01-01', '2024-01-01', 'u')`,
+      `INSERT INTO link_types (id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+                               style, width, version, created_at, updated_at, created_by)
+       VALUES (?, ?, ?, ?, ?, 'solid', 1, 1, '2024-01-01', '2024-01-01', 'u')`,
     )
-    .run(id, nameForward, nameReverse);
+    .run(id, nameForward, typeNameKey(nameForward), nameReverse, typeNameKey(nameReverse));
   return id;
 }
 
