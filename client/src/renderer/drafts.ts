@@ -85,21 +85,28 @@ export async function clearDraft(draftId: string | null): Promise<void> {
   }
 }
 
-/** Finds a draft for a specific edit target, or null. */
+/**
+ * Finds the draft for a specific edit target, or null. Returns the newest
+ * matching row together with the version it was based on, so callers can tell
+ * a pending edit (base version still current) from a stale one.
+ */
 export async function findDraft(
   networkId: string,
   entityType: DraftKind,
   entityId: string,
-): Promise<{ id: string; value: string } | null> {
+): Promise<{ id: string; value: string; baseVersion: number | null } | null> {
   let drafts: DraftRecord[];
   try {
     drafts = (await etn.ui.draftList(networkId)) as DraftRecord[];
   } catch {
     return null;
   }
-  const hit = drafts.find((d) => d.entityType === entityType && d.entityId === entityId);
+  const hits = drafts.filter(
+    (d) => d.entityType === entityType && d.entityId === entityId && d.value !== null,
+  );
+  const hit = hits.at(-1);
   if (hit === undefined || hit.value === null) return null;
-  return { id: hit.id, value: hit.value };
+  return { id: hit.id, value: hit.value, baseVersion: hit.baseVersion };
 }
 
 /** True when saves are allowed right now (H19 blocking). */

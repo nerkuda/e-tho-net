@@ -591,12 +591,22 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
       void clearDraft(hit.id);
       return;
     }
-    if (titleArea.value !== hit.value) {
-      titleArea.value = hit.value;
-      titleDraftId = hit.id;
-      resizeTitle();
-      notice('Восстановлен несохранённый черновик заголовка.');
+    if (hit.baseVersion !== null && hit.baseVersion !== thought.version) {
+      // The thought was saved since the draft was taken (by this client or
+      // another) — the draft is stale and must not overwrite the field; the
+      // retry loop still surfaces it on reconnect (09-scenarios.md J1).
+      return;
     }
+    if (titleArea.value !== thought.title) {
+      // The user has already typed a newer value into this field — the draft
+      // is an older snapshot of the same edit; drop it instead of clobbering.
+      void clearDraft(hit.id);
+      return;
+    }
+    titleArea.value = hit.value;
+    titleDraftId = hit.id;
+    resizeTitle();
+    notice('Восстановлен несохранённый черновик заголовка.');
   });
 
   const commitTitle = (): void => {

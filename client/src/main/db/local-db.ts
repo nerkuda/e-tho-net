@@ -266,16 +266,21 @@ export class LocalDb {
   // drafts (07-client-electron.md §3.3)
   // -------------------------------------------------------------------------
 
-  /** Inserts or replaces a draft by `id`. */
+  /**
+   * Upserts a draft by its edit target — one draft per
+   * (profile, network, entity type, entity id, field). The id only matters on
+   * insert; re-saving a field refreshes the existing row instead of piling up
+   * stale drafts (migration 003, 07-client-electron.md §3.3).
+   */
   public upsertDraft(draft: NewDraft): void {
     this.db
       .prepare(
         'INSERT INTO drafts (id, profile_id, network_id, entity_type, entity_id, field, value, base_version, status) ' +
           'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)\n' +
-          'ON CONFLICT(id) DO UPDATE SET profile_id = excluded.profile_id, ' +
-          'network_id = excluded.network_id, entity_type = excluded.entity_type, ' +
-          'entity_id = excluded.entity_id, field = excluded.field, value = excluded.value, ' +
-          'base_version = excluded.base_version, status = excluded.status',
+          'ON CONFLICT(profile_id, network_id, entity_type, entity_id, field) DO UPDATE SET ' +
+          'value = excluded.value, base_version = excluded.base_version, ' +
+          'status = excluded.status, ' +
+          "created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
       )
       .run(
         draft.id,
