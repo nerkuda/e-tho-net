@@ -9,7 +9,9 @@
 
 import { div, el, span } from './dom.js';
 
-/** A menu entry: leaf with `onClick` or a parent with `submenu`. */
+/** A menu entry: leaf with `onClick` or a parent with `submenu`.
+ *  `dragId` marks a row as a drag source for a thought (the history dropdown)
+ *  — it lands in `row.dataset['dragId']` for the caller to wire up. */
 export interface MenuItem {
   label: string;
   icon?: string;
@@ -17,6 +19,7 @@ export interface MenuItem {
   disabled?: boolean;
   danger?: boolean;
   checked?: boolean;
+  dragId?: string;
   onClick?: () => void;
 }
 
@@ -52,6 +55,7 @@ function buildMenu(items: MenuItem[]): HTMLDivElement {
     row.classList.toggle('menu-item-danger', item.danger === true);
     row.classList.toggle('menu-item-disabled', item.disabled === true);
     row.classList.toggle('menu-item-checked', item.checked === true);
+    if (item.dragId !== undefined) row.dataset['dragId'] = item.dragId;
     if (item.icon !== undefined) row.append(span(item.icon, 'menu-item-icon'));
     row.append(span(item.label, 'menu-item-label'));
     if (item.submenu !== undefined) row.append(span('▸', 'menu-item-arrow'));
@@ -86,10 +90,12 @@ function buildMenu(items: MenuItem[]): HTMLDivElement {
 }
 
 /**
- * Shows a menu at viewport coordinates. Coordinates are clamped to the viewport
- * and the menu is closed on outside click, Escape, blur or window resize.
+ * Shows a menu at viewport coordinates and returns its root element (so the
+ * caller can wire extra behaviour onto the rows, e.g. drag sources).
+ * Coordinates are clamped to the viewport and the menu is closed on outside
+ * click, Escape, blur or window resize.
  */
-export function showMenuAt(x: number, y: number, items: MenuItem[]): void {
+export function showMenuAt(x: number, y: number, items: MenuItem[]): HTMLElement {
   closeMenu();
   const root = buildMenu(items);
   document.body.append(root);
@@ -114,4 +120,5 @@ export function showMenuAt(x: number, y: number, items: MenuItem[]): void {
     window.removeEventListener('mousedown', onDown, true);
     window.removeEventListener('resize', onResize);
   });
+  return root;
 }

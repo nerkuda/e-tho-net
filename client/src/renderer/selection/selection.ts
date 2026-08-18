@@ -18,6 +18,7 @@
 import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { setAddToSelectionHook, showSelectionThoughtContextMenu } from '../canvas/context-menu.js';
 import { applyThoughtIcon, invalidateRef, setSelectionClickHooks } from '../canvas/canvas.js';
+import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { pickThoughtRef } from '../editor/thought-picker.js';
 import { showThoughtStyleDialog, type ThoughtStylePatch } from '../editor/style-dialog.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
@@ -55,12 +56,14 @@ export function mountSelection(selectionHost: HTMLElement): void {
   listHost = div('selection-list');
   host.append(header, menuBar, listHost);
 
-  // Ctrl+click wiring (spec §5.1).
+  // Ctrl+click wiring (spec §5.1) and list drag-n-drop (§5.5): rows drag onto
+  // canvas clouds/zones, and canvas drags can be dropped into the list.
   setAddToSelectionHook((id) => toggleSelection([id]));
   setSelectionClickHooks({
     onCloudClick: (id) => toggleSelection([id]),
     onEllipseClick: (id, direction) => void addNeighborsOf(id, direction),
   });
+  registerDropActions({ addToSelection });
 
   store.subscribe(() => {
     if (host?.isConnected === true) refresh();
@@ -99,6 +102,9 @@ async function renderList(ids: string[]): Promise<void> {
   listHost.replaceChildren();
   for (const id of ids) {
     const item = div('selection-item');
+    // A row drags onto the canvas like a zone cloud (§5.5): link onto a
+    // cloud, Ctrl for reparent, drop into parents/children to link to focus.
+    wireExternalDragSource(item, id, 'selection');
     const iconBox = span('', 'mini-icon');
     const ref = refs.get(id);
     if (ref !== undefined) {

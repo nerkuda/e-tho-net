@@ -1251,6 +1251,33 @@ body.resizing-h {
   outline-offset: 2px;
 }
 
+/* Thought list panels as drop targets (drag-cloud.ts §5.5/§11.1): the
+   selection list takes the dragged thought into the selection, the history
+   bar (including the history dropdown rows) opens it. */
+.selection-list.drop-target-add,
+.history-bar.drop-target-add,
+.menu-item.drop-target-add {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+/* A dragged list entry (selection row, history chip, dropdown row) follows the
+   cursor as a ghost. Cloud ghosts are styled above (.cloud.drag-ghost); these
+   rules only dress the non-cloud clones. */
+.selection-item.drag-ghost,
+.history-cloud.drag-ghost,
+.menu-item.drag-ghost {
+  background: var(--surface);
+  box-shadow: var(--shadow), 0 0 0 2px var(--accent-soft);
+  opacity: 0.95;
+  cursor: grabbing;
+}
+/* A menu row cloned outside its `.menu` loses the inherited 13px font. */
+.menu-item.drag-ghost {
+  font-size: 13px;
+}
+
 /* Ellipse link-drag gesture (canvas.ts): a link cursor over the whole window —
    including elements that carry their own cursor — so the drag is always
    visible; the pressed ellipse also lights up (.drag-source above). */

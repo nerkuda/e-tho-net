@@ -15,7 +15,10 @@
  *   thoughts were already pruned locally by the main-process applier, and
  *   inactive thoughts are hidden while `show_inactive` is off;
  * - clicking an entry switches the focus (map view) or opens the thought in
- *   the editor without moving the canvas focus (structures view).
+ *   the editor without moving the canvas focus (structures view);
+ * - entries drag onto the canvas like zone clouds (§11.1): link onto a cloud,
+ *   Ctrl for reparent, drop into parents/children to link to focus; a canvas
+ *   drag dropped onto the bar (or the dropdown) opens the dragged thought.
  */
 
 import { setFocus } from '../app.js';
@@ -25,6 +28,7 @@ import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
+import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { openStructuresThought } from './structures/structures.js';
 
 /** Max title length inside a history mini-cloud. */
@@ -39,6 +43,9 @@ let lastSignature = '';
 /** Mounts the history bar into the status bar host. */
 export function mountHistoryBar(historyHost: HTMLElement): void {
   host = historyHost;
+  // Canvas drags dropped onto the bar (or the history dropdown) open the
+  // dragged thought like a click on a history entry (08-ui-spec.md §11.1).
+  registerDropActions({ openEntry });
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
   });
@@ -137,10 +144,18 @@ async function render(): Promise<void> {
           return {
             label: `${ref?.icon ?? '💭'} ${ref?.title ?? id}`.slice(0, TITLE_LIMIT),
             onClick: () => openEntry(id),
+            dragId: id,
           };
         });
         const rect = more.getBoundingClientRect();
-        showMenuAt(rect.left, rect.top - rest.length * 30 - 8, items);
+        const root = showMenuAt(rect.left, rect.top - rest.length * 30 - 8, items);
+        // Dropdown rows drag onto the canvas like the mini-clouds (§11.1).
+        for (const row of root.querySelectorAll<HTMLElement>('.menu-item')) {
+          const rowId = row.dataset['dragId'];
+          if (rowId !== undefined) {
+            wireExternalDragSource(row, rowId, 'history', { fromMenu: true });
+          }
+        }
       },
       'history-more',
       'Остальная история',
