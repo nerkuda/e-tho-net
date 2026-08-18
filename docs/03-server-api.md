@@ -530,6 +530,7 @@ GET /api/v1/networks/{nid}/search?q=<text>&...
 ```
 GET /api/v1/networks/{nid}/thoughts/{id}/mentions
 # Возвращает мысли/связи, в текстах (комментариях) которых встречается title или синоним.
+# Один элемент на мысль/связь: несколько совпавших комментариев владельца схлопываются в один.
 → 200 { data: [ { owner_type, owner_id, title, comment_id, snippet } ] }
 ```
 
