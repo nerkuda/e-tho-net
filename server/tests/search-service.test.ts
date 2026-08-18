@@ -427,6 +427,35 @@ describe(
       }
     });
 
+    it('findMentions matches a multi-word name as a phrase, not separate words', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Петров Василий');
+        seedSynonym(ndb, target, 'Вас*');
+        seedSynonym(ndb, target, 'Петров* Вас*');
+        const other = seedThought(ndb, 'Заметки');
+        // Matching phrases / single-word synonym.
+        const dative = seedThoughtComment(ndb, other, 'Отдал Петрову Васе');
+        const genitive = seedThoughtComment(ndb, other, 'Видел Петрова Василия');
+        const single = seedThoughtComment(ndb, other, 'Васю пригласили');
+        // Only one word of the phrase — must NOT match (regression: the title
+        // used to be split into OR-tokens, so «Петрову Игорю» was found via
+        // the token «Петров» of the title «Петров Василий»).
+        const otherPerson = seedThoughtComment(ndb, other, 'Петрову Игорю');
+        const otherFamily = seedThoughtComment(ndb, other, 'Петрова Марина');
+
+        const mentions = findMentions(ndb, target);
+        const ids = mentions.map((m) => m.comment_id);
+        assert.ok(ids.includes(dative), 'multi-word wildcard synonym matches the phrase');
+        assert.ok(ids.includes(genitive), 'title phrase matches');
+        assert.ok(ids.includes(single), 'single-word wildcard synonym matches');
+        assert.ok(!ids.includes(otherPerson), 'a single word of the phrase must not match');
+        assert.ok(!ids.includes(otherFamily), 'a single word of the phrase must not match');
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('findMentions finds the title in other comments', () => {
       const ndb = createInMemoryNetworkDb();
       try {

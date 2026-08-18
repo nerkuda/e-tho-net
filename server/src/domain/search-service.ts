@@ -82,6 +82,24 @@ function sanitizeFtsQuery(text: string, operator: 'AND' | 'OR' = 'AND'): string 
   return tokens.map((t) => `"${t}"*`).join(joiner);
 }
 
+/**
+ * Build an FTS5 MATCH expression from whole search terms (a thought title or a
+ * single synonym). Every term is matched as a unit: a one-word term as a prefix
+ * literal, a multi-word term as a phrase of word-prefixes (words adjacent, in
+ * the given order). Terms join with OR — a comment mentions the thought when
+ * any of its names appears as a whole. Matching per-term (not per-token) is
+ * what keeps a name like «Петров Василий» from hitting «Петрову Игорю».
+ */
+function termsToFtsMatch(terms: string[]): string {
+  const phrases: string[] = [];
+  for (const term of terms) {
+    const tokens = tokenize(term);
+    if (tokens.length === 0) continue;
+    phrases.push(tokens.map((t) => `"${t}"*`).join(' '));
+  }
+  return phrases.join(' OR ');
+}
+
 /** HTML-escape the five significant characters of a text node. */
 function escapeHtml(input: string): string {
   return input
@@ -992,9 +1010,10 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     .map((s) => s.synonym_norm);
   if (thought.title.includes('*')) wildcardPatterns.push(thought.title);
 
-  // 1) Literal terms — plain FTS MATCH over the comment-text indexes
-  //    (tokens of the title + `*`-free synonyms, joined with OR).
-  const match = sanitizeFtsQuery(exactTerms.join(' '), 'OR');
+  // 1) Literal terms — plain FTS MATCH over the comment-text indexes. Each
+  //    `*`-free title/synonym is matched as a whole term (a phrase of
+  //    word-prefixes for multi-word names), alternatives joined with OR.
+  const match = termsToFtsMatch(exactTerms);
   if (match !== '') {
     const terms = tokenize(exactTerms.join(' '));
 
