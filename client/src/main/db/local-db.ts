@@ -302,6 +302,23 @@ export class LocalDb {
     return row ?? null;
   }
 
+  /** Id of the single draft row for an edit target (one per field), or null. */
+  public getDraftId(
+    profileId: string,
+    networkId: string,
+    entityType: string,
+    entityId: string,
+    field: string,
+  ): string | null {
+    const row = this.db
+      .prepare(
+        'SELECT id FROM drafts WHERE profile_id = ? AND network_id = ? AND entity_type = ? ' +
+          'AND entity_id = ? AND field = ?',
+      )
+      .get(profileId, networkId, entityType, entityId, field) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
   /** Lists drafts for a (profile, network), optionally filtered by status. */
   public listDrafts(profileId: string, networkId: string, status?: DraftStatus): DraftRow[] {
     if (status !== undefined) {

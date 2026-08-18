@@ -733,7 +733,17 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
           base_version: input.baseVersion ?? null,
           status: 'pending',
         });
-        return id;
+        // Upsert keeps the row's original id on conflict — return the real id
+        // so the caller can delete the draft after a successful save.
+        return (
+          deps.localDb.getDraftId(
+            profile.id,
+            input.networkId,
+            input.entityType,
+            input.entityId,
+            input.field,
+          ) ?? id
+        );
       },
     ),
   );
