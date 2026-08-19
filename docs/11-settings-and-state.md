@@ -421,30 +421,40 @@ for each conn in byNetwork[network_id]:
 
 ### 5.2. Реализация
 
-**SQL (рекурсивное CTE с детекцией цикла):**
+**SQL (рекурсивное CTE с дедупликацией строк):**
 
-SQLite поддерживает `WITH RECURSIVE`. Цикл фиксируется через накопление `path` и
-проверку вхождения:
+SQLite поддерживает `WITH RECURSIVE`. Защита от цикла — `UNION` вместо
+`UNION ALL`: повторяющиеся строки `(id, depth)` отбрасываются, поэтому рабочий
+набор ограничен `|мыслей| × max_depth`, а результат — то же множество
+достижимых узлов (любой маршрут до узла содержит простой подмаршрут не
+большей длины):
 
 ```sql
 -- Все потомки root (по направлениям связей source -> target)
 WITH RECURSIVE
-  descend(id, depth, path) AS (
-    SELECT :root, 0, ',' || :root || ','
-    UNION ALL
-    SELECT t.id, d.depth + 1, d.path || t.id || ','
+  descend(id, depth) AS (
+    SELECT :root, 0
+    UNION
+    SELECT t.id, d.depth + 1
     FROM thoughts t
     JOIN links l ON l.target_id = t.id AND l.active = 1
     JOIN descend d ON l.source_id = d.id
     WHERE d.depth < :max_depth
-      AND instr(d.path, ',' || t.id || ',') = 0   -- не был в пути
   )
 SELECT DISTINCT id FROM descend;
 ```
 
-- `path` — строка `,id1,id2,...,` для быстрой проверки `instr`.
 - `max_depth` — обязательный предел (default 20; для MCP — задаётся агентом).
-- `instr(...)=0` отсекает повторные заходы в тот же узел в рамках одного обхода.
+- `UNION` дедуплицирует `(id, depth)` — узел может встретиться на нескольких
+  глубинах, но каждая пара один раз; `SELECT DISTINCT` сходит к множеству узлов.
+
+> Историческая справка: сначала использовался path-CTE с накоплением строки
+> `path` и проверкой `instr(path, …)`. Такой вариант перечисляет **простые
+> пути**, количество которых на цикличном графе растёт экспоненциально —
+> запрос «поддерево» с корнем в связном узле замораживал синхронный
+> better-sqlite3 на минуты/часы (ошибка тестовой эксплуатации: «Хроника» с
+> флагом «+подчинённые мысли» вешала весь сервер). От path-guard отказались в
+> пользу `UNION`-дедупликации.
 
 **Прикладной уровень (BFS/DFS с visited-set):**
 
@@ -480,7 +490,7 @@ function* traverse(seedIds: string[], opts: TraversalOpts) {
 | `max_depth` (subtree/subgraph) | 20 | параметр запроса, переопределяется агентом |
 | `max_nodes` (subgraph) | `mcp.max_nodes_per_subgraph` (500) | L1-настройка |
 | `query_timeout_ms` | 5000 | хард-лимит на сервере |
-| защита от цикла | visited-set / path-CTE | всегда включена |
+| защита от цикла | visited-set / UNION-CTE | всегда включена |
 
 При превышении `max_nodes` сервер возвращает частичный результат с
 `meta.truncated = true` и причинами.
