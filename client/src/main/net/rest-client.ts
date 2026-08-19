@@ -728,11 +728,17 @@ export class RestClient {
   public async listLinksByThought(
     networkId: string,
     thoughtId: string,
+    showInactive?: boolean,
   ): Promise<import('@etn/shared').ThoughtLinksGrouped> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/links`,
-      { query: { group: 'type' } },
+      {
+        query: {
+          group: 'type',
+          ...(showInactive === undefined ? {} : { show_inactive: showInactive }),
+        },
+      },
     );
   }
 

@@ -427,6 +427,29 @@ describe(
       }
     });
 
+    it('findMentions carries the owner active flag for thoughts and links', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Объект');
+        const activeOwner = seedThought(ndb, 'Живой');
+        seedThoughtComment(ndb, activeOwner, 'тут упомянут Объект');
+        const inactiveOwner = seedThought(ndb, 'Архивный', { active: 0 });
+        seedThoughtComment(ndb, inactiveOwner, 'и тут Объект');
+        const link = seedLink(ndb, target, activeOwner);
+        ndb.prepare('UPDATE links SET active = 0 WHERE id = ?').run(link);
+        seedLinkComment(ndb, link, 'связь с Объект');
+
+        const mentions = findMentions(ndb, target);
+        assert.equal(mentions.length, 3);
+        const byOwner = new Map(mentions.map((m) => [`${m.owner_type}:${m.owner_id}`, m]));
+        assert.equal(byOwner.get(`thought:${activeOwner}`)!.active, true);
+        assert.equal(byOwner.get(`thought:${inactiveOwner}`)!.active, false);
+        assert.equal(byOwner.get(`link:${link}`)!.active, false);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('findMentions matches a multi-word name as a phrase, not separate words', () => {
       const ndb = createInMemoryNetworkDb();
       try {

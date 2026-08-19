@@ -97,7 +97,8 @@ function buildApi(): EtnApi {
         invoke('links.update', networkId, id, input, expectedVersion),
       remove: (networkId, id, expectedVersion) =>
         invoke('links.remove', networkId, id, expectedVersion),
-      listByThought: (networkId, thoughtId) => invoke('links.listByThought', networkId, thoughtId),
+      listByThought: (networkId, thoughtId, showInactive) =>
+        invoke('links.listByThought', networkId, thoughtId, showInactive),
     },
     types: {
       listThoughtTypes: (networkId) => invoke('types.listThoughtTypes', networkId),

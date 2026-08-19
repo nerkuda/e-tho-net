@@ -989,6 +989,7 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     title: string;
     comment_id: string;
     body: string;
+    active: number;
   }
   // One hit per owning thought/link (03-server-api.md §13 returns «мысли/связи»):
   // several matching comments of the same owner collapse into its first hit.
@@ -1002,6 +1003,7 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
       title: r.title,
       comment_id: r.comment_id,
       snippet: makeSnippet(r.body, highlightTerms),
+      active: r.active === 1,
     });
   };
 
@@ -1026,7 +1028,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     // target thought (a thought does not "mention" itself in its own comments).
     const thoughtRows = ndb
       .prepare(
-        `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title, c.body_md AS body
+        `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title,
+                t.active AS active, c.body_md AS body
          FROM fts_thought_texts f
          JOIN comments c ON c.rowid = f.rowid
          JOIN thoughts t ON t.id = c.owner_id
@@ -1036,6 +1039,7 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
       comment_id: string;
       owner_id: string;
       title: string;
+      active: number;
       body: string;
     }>;
     for (const r of thoughtRows) {
@@ -1043,10 +1047,12 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     }
 
     // Link-owned comments: title is the link type's forward name (or empty).
+    // COALESCE keeps stale rows (deleted link) visible with active=1, as before.
     const linkRows = ndb
       .prepare(
         `SELECT c.id AS comment_id, c.owner_id AS owner_id,
-                COALESCE(lt.name_forward, '') AS title, c.body_md AS body
+                COALESCE(lt.name_forward, '') AS title, COALESCE(l.active, 1) AS active,
+                c.body_md AS body
          FROM fts_link_texts f
          JOIN comments c ON c.rowid = f.rowid
          LEFT JOIN links l ON l.id = c.owner_id
@@ -1057,6 +1063,7 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
       comment_id: string;
       owner_id: string;
       title: string;
+      active: number;
       body: string;
     }>;
     for (const r of linkRows) {
@@ -1070,7 +1077,7 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     const re = synonymPatternToRegex(pattern);
     const reAll = new RegExp(re.source, `${re.flags}g`);
     const apply = (
-      rows: Array<{ comment_id: string; owner_id: string; title: string; body: string }>,
+      rows: Array<{ comment_id: string; owner_id: string; title: string; active: number; body: string }>,
       ownerType: 'thought' | 'link',
     ): void => {
       for (const r of rows) {
@@ -1092,7 +1099,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
       apply(
         ndb
           .prepare(
-            `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title, c.body_md AS body
+            `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title,
+                    t.active AS active, c.body_md AS body
              FROM fts_thought_texts f
              JOIN comments c ON c.rowid = f.rowid
              JOIN thoughts t ON t.id = c.owner_id
@@ -1102,6 +1110,7 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
           comment_id: string;
           owner_id: string;
           title: string;
+          active: number;
           body: string;
         }>,
         'thought',
@@ -1110,7 +1119,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
         ndb
           .prepare(
             `SELECT c.id AS comment_id, c.owner_id AS owner_id,
-                    COALESCE(lt.name_forward, '') AS title, c.body_md AS body
+                    COALESCE(lt.name_forward, '') AS title, COALESCE(l.active, 1) AS active,
+                    c.body_md AS body
              FROM fts_link_texts f
              JOIN comments c ON c.rowid = f.rowid
              LEFT JOIN links l ON l.id = c.owner_id
@@ -1121,6 +1131,7 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
           comment_id: string;
           owner_id: string;
           title: string;
+          active: number;
           body: string;
         }>,
         'link',
@@ -1131,7 +1142,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
       apply(
         ndb
           .prepare(
-            `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title, c.body_md AS body
+            `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title,
+                    t.active AS active, c.body_md AS body
              FROM comments c
              JOIN thoughts t ON t.id = c.owner_id
              WHERE c.owner_type = 'thought' AND c.owner_id <> ?`,
@@ -1140,6 +1152,7 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
           comment_id: string;
           owner_id: string;
           title: string;
+          active: number;
           body: string;
         }>,
         'thought',
@@ -1148,7 +1161,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
         ndb
           .prepare(
             `SELECT c.id AS comment_id, c.owner_id AS owner_id,
-                    COALESCE(lt.name_forward, '') AS title, c.body_md AS body
+                    COALESCE(lt.name_forward, '') AS title, COALESCE(l.active, 1) AS active,
+                    c.body_md AS body
              FROM comments c
              LEFT JOIN links l ON l.id = c.owner_id
              LEFT JOIN link_types lt ON lt.id = l.type_id
@@ -1158,6 +1172,7 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
           comment_id: string;
           owner_id: string;
           title: string;
+          active: number;
           body: string;
         }>,
         'link',

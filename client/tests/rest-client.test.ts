@@ -163,6 +163,18 @@ describe('RestClient — URL & query', () => {
     assert.ok(url.includes('q=hello'));
   });
 
+  it('listLinksByThought sends show_inactive only when passed', async () => {
+    const empty = { status: 200, body: { data: { by_type: [], untyped_parents: [], untyped_children: [] } } };
+    const { fetch, calls } = makeFetch([empty, empty]);
+    const client = makeClient(fetch);
+    await client.listLinksByThought('net1', 't1');
+    await client.listLinksByThought('net1', 't1', true);
+    const [without, with_] = calls;
+    assert.ok(without!.url.includes('group=type'));
+    assert.equal(without!.url.includes('show_inactive'), false);
+    assert.ok(with_!.url.includes('show_inactive=true'));
+  });
+
   it('strips a trailing slash from baseUrl', async () => {
     const { fetch, calls } = makeFetch([
       {

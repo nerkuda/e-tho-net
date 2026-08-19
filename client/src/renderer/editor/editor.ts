@@ -251,7 +251,8 @@ async function render(): Promise<void> {
     ctx === null
       ? 'null'
       : `${ctx.ownerType}|${ctx.ownerId}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}` +
-        `|${focusEdgesSignature(store.state.focus)}|${store.state.editorPosition}`;
+        `|${focusEdgesSignature(store.state.focus)}|${store.state.editorPosition}` +
+        `|${String(store.state.showInactive)}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
 

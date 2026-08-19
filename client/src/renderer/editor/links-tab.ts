@@ -15,6 +15,9 @@
  *    property name into collapsible sub-groups. Rows focus the referencing
  *    thought. Realtime `property-value.*` events reload an expanded body.
  *
+ * Inactive thoughts/links appear in every list according to the
+ * `show_inactive` preference and are dimmed like on the map (§2.2).
+ *
  * For a link — a single group with its two endpoint thoughts.
  */
 
@@ -115,7 +118,11 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
 async function countLinks(ctx: EditorContext): Promise<string | undefined> {
   const networkId = requireNetworkId();
   try {
-    const grouped = await etn.links.listByThought(networkId, ctx.ownerId);
+    const grouped = await etn.links.listByThought(
+      networkId,
+      ctx.ownerId,
+      store.state.showInactive,
+    );
     const n =
       grouped.by_type.reduce((sum, g) => sum + g.items.length, 0) +
       grouped.untyped_parents.length +
@@ -151,7 +158,7 @@ function buildDirectLinksBody(ctx: EditorContext): HTMLElement {
     box.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let grouped: ThoughtLinksGrouped;
     try {
-      grouped = await etn.links.listByThought(networkId, ctx.ownerId);
+      grouped = await etn.links.listByThought(networkId, ctx.ownerId, store.state.showInactive);
     } catch (err) {
       box.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
@@ -281,19 +288,22 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
       box.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
+    // Inactive mentioning thoughts/links follow the `show_inactive` setting.
+    const visible = hits.filter((hit) => hit.active || store.state.showInactive);
     // `…` → the resolved count in the group header (08-ui-spec.md §6.7). The
     // fetch cannot resolve before the group machinery mounts this box (the
     // mount runs on a microtask queued before the response arrives), so
     // `closest` finds the header; after a collapse it is a harmless no-op.
-    box.closest('.group')?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${hits.length})` }));
+    box.closest('.group')?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${visible.length})` }));
     box.replaceChildren();
-    if (hits.length === 0) {
+    if (visible.length === 0) {
       box.append(el('p', 'muted', 'Название нигде не упоминается.'));
       return;
     }
     // The group body (this box) is the scroll area — items flow directly.
-    for (const hit of hits) {
+    for (const hit of visible) {
       const item = div('mention-item');
+      if (!hit.active) item.classList.add('dim');
       const kind = span(hit.owner_type === 'thought' ? '💭' : '🔗', 'muted');
       const title = el('span', undefined, hit.title);
       title.style.fontWeight = '600';
@@ -363,13 +373,19 @@ function buildUsageBody(ctx: EditorContext): HTMLElement {
       return;
     }
     if (box.isConnected) everMounted = true;
-    box.closest('.group')?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${usage.total})` }));
+    // Inactive referencing thoughts follow the `show_inactive` setting; the
+    // badge counts what is actually shown, not the server's raw total.
+    const groups = usage.groups
+      .map((g) => ({ ...g, thoughts: g.thoughts.filter((t) => t.active || store.state.showInactive) }))
+      .filter((g) => g.thoughts.length > 0);
+    const total = groups.reduce((sum, g) => sum + g.thoughts.length, 0);
+    box.closest('.group')?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${total})` }));
     box.replaceChildren();
-    if (usage.groups.length === 0) {
+    if (groups.length === 0) {
       box.append(el('p', 'muted', 'Мысль не используется в свойствах.'));
       return;
     }
-    for (const group of usage.groups) {
+    for (const group of groups) {
       const thoughts = group.thoughts;
       box.append(
         groupSection(
@@ -383,10 +399,10 @@ function buildUsageBody(ctx: EditorContext): HTMLElement {
               const body = div('link-group-rows');
               for (const thought of thoughts) {
                 const row = div('link-group-item usage-row');
+                if (!thought.active) row.classList.add('dim');
                 const icon = span('', 'mini-icon');
                 applyThoughtIcon(icon, thought);
                 const title = el('span', 'link-item-title', thought.title);
-                if (!thought.active) title.classList.add('muted');
                 row.append(icon, title);
                 row.addEventListener('click', () => setFocus(thought.id));
                 body.append(row);
@@ -415,7 +431,8 @@ function linkRow(
   const icon = span('', 'mini-icon');
   applyThoughtIcon(icon, other);
   const title = el('span', 'link-item-title', other.title);
-  if (!other.active) title.classList.add('muted');
+  // Same semantics as the canvas clouds: dim on an inactive thought OR link.
+  if (!other.active || !link.active) row.classList.add('dim');
   row.append(arrow, icon, title);
   row.addEventListener('click', () => setFocus(other.id));
   row.addEventListener('contextmenu', (event) => {
@@ -517,7 +534,7 @@ function endpointRow(label: string, other: ThoughtRef, onOpen: () => void): HTML
   const icon = span('', 'mini-icon');
   applyThoughtIcon(icon, other);
   const title = el('span', 'link-item-title', other.title);
-  if (!other.active) title.classList.add('muted');
+  if (!other.active) row.classList.add('dim');
   row.append(icon, title);
   row.addEventListener('click', () => onOpen());
   return row;

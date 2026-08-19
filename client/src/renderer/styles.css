@@ -2702,6 +2702,14 @@ body.cloud-dragging * {
   background: var(--surface-2);
 }
 
+/* Inactive thoughts/links in the editor «Связи» lists — dimmed like the map
+ * clouds (08-ui-spec.md §2.2), shown only while `show_inactive` is on. */
+.link-group-item.dim,
+.mention-item.dim {
+  opacity: 0.5;
+  font-style: italic;
+}
+
 /* ---------------------------------------------------------------------------
  * Search panel (H13)
  * ------------------------------------------------------------------------- */

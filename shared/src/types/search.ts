@@ -94,4 +94,6 @@ export interface MentionHit {
   title: string;
   comment_id: string;
   snippet: string;
+  /** Актуальность мысли-владельца (для связей — самой связи). */
+  active: boolean;
 }

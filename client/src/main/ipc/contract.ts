@@ -299,7 +299,13 @@ export interface EtnApi {
       expectedVersion: number,
     ): Promise<Link>;
     remove(networkId: string, id: string, expectedVersion: number): Promise<void>;
-    listByThought(networkId: string, thoughtId: string): Promise<ThoughtLinksGrouped>;
+    /** `showInactive` — передать `preferences.show_inactive` (сервер иначе
+     *  фильтрует неактуальные связи/мысли, 03-server-api.md §7.2). */
+    listByThought(
+      networkId: string,
+      thoughtId: string,
+      showInactive?: boolean,
+    ): Promise<ThoughtLinksGrouped>;
   };
   types: {
     listThoughtTypes(networkId: string): Promise<ThoughtType[]>;

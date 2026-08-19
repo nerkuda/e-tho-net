@@ -389,8 +389,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'links.listByThought',
-    bind((networkId: string, thoughtId: string) =>
-      requireRest(deps).listLinksByThought(networkId, thoughtId),
+    bind((networkId: string, thoughtId: string, showInactive?: boolean) =>
+      requireRest(deps).listLinksByThought(networkId, thoughtId, showInactive),
     ),
   );
 
