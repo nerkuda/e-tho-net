@@ -127,10 +127,15 @@ Header: Authorization: Bearer <API-key>
 | `saved-filter.created` | `{ filter }` — полный объект отбора | Сохранённый отбор «Структур» (03-server-api.md §18) |
 | `saved-filter.updated` | `{ filter }` — полный объект отбора | Переименование/изменение определения |
 | `saved-filter.deleted` | `{ id }` | Удаление сохранённого отбора |
+| `pinned-thoughts.updated` | `{ ordered_ids }` — полный новый порядок | Изменение списка закреплённых мыслей (03-server-api.md §19) |
 
 Эти события доставляются только подключениям того же `user_id` (на всех его
 клиентах). Другие участники сети их не получают. См.
 [11-settings-and-state.md](11-settings-and-state.md), п. 4.
+
+Примечание: удаление закреплённой мысли не эмитит `pinned-thoughts.updated` —
+запись в таблице удаляется каскадом (FK); клиенты убирают чип по
+`thought.deleted` (§4.1).
 
 ## 5. Маршрутизация на сервере
 

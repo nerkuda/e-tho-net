@@ -130,6 +130,7 @@ byNetwork:   Map<network_id, Set<connectionHandle>>
 | `user_focus_order(user_id, focus_thought_id, dir, thought_id)` | position | Ручной порядок мыслей в зоне фокуса |
 | `thought_views(user_id, thought_id)` | last_viewed_at | Метка «когда пользователь смотрел» для сортировки |
 | `saved_filters(user_id, name)` | definition | Именованные отборы вида «Структуры мыслей» (08-ui-spec.md §15; 03-server-api.md §18) |
+| `user_pinned_thoughts(user_id, thought_id)` | position, pinned_at | Закреплённые мысли панели быстрого перехода (08-ui-spec.md §16; 03-server-api.md §19) |
 
 #### L4. Клиент × пользователь × сеть (`ui_state`)
 | Ключ | Назначение |
@@ -385,6 +386,7 @@ for each conn in byNetwork[network_id]:
 | `user-focus-preferences.updated` | user | `{ focus_thought_id, dir, sort, sort_order }` |
 | `user-focus-order.updated` | user | `{ focus_thought_id, dir, ordered_ids }` |
 | `thought-view.updated` | user | `{ thought_id, last_viewed_at }` |
+| `pinned-thoughts.updated` | user | `{ ordered_ids }` |
 
 Эти типы добавляются в перечень событий [04-realtime.md](04-realtime.md), п. 4.
 

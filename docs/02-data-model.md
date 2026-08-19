@@ -509,6 +509,30 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 | PRIMARY KEY | `(id)` | |
 | UNIQUE | `(user_id, name)` | Повторное имя → 409 `DUPLICATE` |
 
+#### 3.10.6. user_pinned_thoughts
+
+Закреплённые мысли пользователя (08-ui-spec.md §16): упорядоченный список для
+быстрого перехода. Уровень L3 — одинаковы на всех клиентах пользователя,
+синхронизируются событием `pinned-thoughts.updated` (`audience=user`, см.
+[04-realtime.md](04-realtime.md) п. 4.8). Запись семантики — replace: при
+каждом изменении клиент присылает полный порядок, сервер перезаписывает
+таблицу, `position` = индекс в массиве (как `user_focus_order`).
+
+| Столбец | Тип | Описание |
+|---------|-----|----------|
+| `user_id` | TEXT NOT NULL | Владелец (только свой список доступен через API) |
+| `thought_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | Закреплённая мысль |
+| `position` | INTEGER NOT NULL | 0-based порядок в списке |
+| `pinned_at` | TEXT NOT NULL | ISO-8601 UTC момента закрепления |
+| PRIMARY KEY | `(user_id, thought_id)` | Дубли закреплённых не допускаются |
+
+Индекс: `idx_user_pinned_thoughts_pos (user_id, position)`.
+
+Лимит 20 закреплённых — ограничение приложения (`PINNED_THOUGHTS_LIMIT` в
+shared), а не CHECK: сервис отклоняет более длинные списки `VALIDATION_ERROR`.
+При удалении мысли её запись удаляется каскадом (FK); отдельное событие не
+эмитится — клиенты убирают чип по `thought.deleted`.
+
 ### 3.11. Полнотекстовый поиск (FTS5)
 
 Четыре FTS-таблицы покрывают сценарий поиска (см. [08-ui-spec.md](08-ui-spec.md),

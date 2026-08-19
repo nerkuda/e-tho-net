@@ -605,3 +605,39 @@ DELETE /api/v1/networks/{nid}/saved-filters/{fid}  # только свой
 События после мутаций: `saved-filter.created/updated` (полный объект),
 `saved-filter.deleted` (`{ id }`) — [04-realtime.md](04-realtime.md) п. 4.8.
 
+
+## 19. Закреплённые мысли (L3)
+
+Упорядоченный список закреплённых мыслей пользователя (панель быстрого
+перехода, [08-ui-spec.md](08-ui-spec.md) §16). Хранится per-user в network-БД
+(`user_pinned_thoughts`, [02-data-model.md](02-data-model.md) §3.10.6) и
+синхронизируется между клиентами пользователя событием
+`pinned-thoughts.updated` (`audience=user`). Пользователь видит и меняет
+**только свой** список.
+
+```
+GET /api/v1/networks/{nid}/pins
+    → 200 { data: [ { thought_id, position } ] }        # в порядке position
+
+PUT /api/v1/networks/{nid}/pins                          # Client-Request-Id
+    { ordered_ids: [ "<uuid>", ... ] }
+    → 200 { data: [ { thought_id, position } ] }         # position = индекс в массиве
+```
+
+- Запись — replace-семантика: `ordered_ids` задаёт полный новый порядок,
+  сервер перезаписывает таблицу; закрепление, открепление и перемещение —
+  один и тот же `PUT` (как `POST /focus-order`, §6.8).
+- Не более 20 мыслей (`PINNED_THOUGHTS_LIMIT`): превышение → 422
+  `VALIDATION_ERROR` (`details.limit = 20`); клиент заранее показывает
+  сообщение и предлагает открепить лишние.
+- Дубли в `ordered_ids` → 422 `VALIDATION_ERROR` (повторное закрепление
+  уже закреплённой мысли — обычное перемещение, не ошибка).
+- Идентификатор несуществующей мысли → 404 `NOT_FOUND`.
+- При удалении мысли её запись удаляется каскадом (FK ON DELETE CASCADE);
+  событие при этом не эмитится — клиенты убирают чип по `thought.deleted`
+  (§4.1), автор удаления — по ответу `DELETE`.
+- Метаданные мыслей панель получает через `POST /thoughts/resolve` (§6.9),
+  как панель истории.
+
+События после мутаций: `pinned-thoughts.updated`
+(`{ ordered_ids }`) — [04-realtime.md](04-realtime.md) п. 4.8.
