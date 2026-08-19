@@ -5,9 +5,13 @@
  * The ETN graph is an arbitrary directed graph — cycles (A→B→C→A) are legal
  * data, so every traversal must be bounded. Two mechanisms coexist:
  *
- *   * SQL path: recursive CTE that accumulates a `path` string and rejects
- *     revisited ids via `instr(path, ...)` — used by the search service for
- *     `in_subtree_of` (see `search-service.ts`);
+ *   * SQL path: recursive CTE with `UNION` row deduplication — at most one
+ *     row per `(id, depth)`, so the working set is bounded by
+ *     `|thoughts| × max_depth`. Used by the search service for
+ *     `in_subtree_of` and the chronicle service for the subtree filter (a
+ *     `path`-string guard was rejected: it enumerates simple paths, which
+ *     is exponential on cyclic graphs and froze the synchronous SQLite
+ *     loop — see `search-service.ts`);
  *   * application level: BFS with a `Set<string>` visited-set — this module,
  *     used for subgraph extraction and path finding where per-node post-
  *     processing (filters, truncation) is needed in TypeScript.

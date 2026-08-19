@@ -217,10 +217,18 @@ interface SubtreeOptions {
 }
 
 /**
- * Collect every thought id reachable from `seedId` via active links, using a
- * recursive CTE with a `path` cycle guard (docs/11-settings-and-state.md §5.2).
- * The seed itself is always included. Returns `null` when no seed is given
- * (meaning "no subtree restriction").
+ * Collect every thought id reachable from `seedId` via links, using a
+ * recursive CTE (docs/11-settings-and-state.md §5.2). The seed itself is
+ * always included. Returns `null` when no seed is given (meaning "no subtree
+ * restriction").
+ *
+ * Cycle safety comes from `UNION` row deduplication (at most one row per
+ * `(id, depth)`, so the working set is bounded by `|thoughts| × max_depth`)
+ * instead of a `path` string guard: the path-guarded variant enumerates
+ * simple paths, which explodes exponentially on cyclic graphs and freezes
+ * the synchronous SQLite event loop (the «Хроника» subtree filter hang).
+ * Reachability is unaffected: any walk to a node contains a simple sub-walk
+ * of no greater length.
  */
 function collectSubtreeIds(
   ndb: NetworkDb,
@@ -233,19 +241,15 @@ function collectSubtreeIds(
   const rows = ndb
     .prepare(
       `WITH RECURSIVE
-        descend(id, depth, path) AS (
-          SELECT :seed, 0, ',' || :seed || ','
-          UNION ALL
+        descend(id, depth) AS (
+          SELECT :seed, 0
+          UNION
           SELECT CASE WHEN l.target_id = d.id THEN l.source_id ELSE l.target_id END,
-                 d.depth + 1,
-                 d.path ||
-                   CASE WHEN l.target_id = d.id THEN l.source_id ELSE l.target_id END || ','
+                 d.depth + 1
           FROM descend d
           JOIN links l ON (l.source_id = d.id OR l.target_id = d.id)
                        AND (l.active = 1 OR :show_inactive)
           WHERE d.depth < :max_depth
-            AND instr(d.path,
-                      ',' || CASE WHEN l.target_id = d.id THEN l.source_id ELSE l.target_id END || ',') = 0
         )
        SELECT DISTINCT id FROM descend`,
     )

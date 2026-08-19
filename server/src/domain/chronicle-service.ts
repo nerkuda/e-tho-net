@@ -216,8 +216,11 @@ export function parseChronicleQueryBody(
  * Roots come from `thought_ids` (missing ids are dropped); with
  * `include_subtree` their undirected subordinates up to
  * {@link TRAVERSAL_DEFAULTS.MAX_DEPTH} levels are added via a recursive CTE
- * with a `path` cycle guard (dedup built in, docs/11-settings-and-state.md
- * §5.2). Returns `null` when the filter has no roots at all — «all thoughts».
+ * whose cycle safety is `UNION` row deduplication (one row per
+ * `(id, depth)` — bounded by `|thoughts| × max_depth`; the old `path`-string
+ * guard enumerated simple paths and exploded exponentially on cyclic graphs,
+ * freezing the synchronous SQLite loop). Returns `null` when the filter has
+ * no roots at all — «all thoughts».
  */
 function collectRootAndSubtreeIds(
   ndb: NetworkDb,
@@ -235,20 +238,16 @@ function collectRootAndSubtreeIds(
   const rows = ndb
     .prepare(
       `WITH RECURSIVE
-        descend(id, depth, path) AS (
-          SELECT t.id, 0, ',' || t.id || ','
+        descend(id, depth) AS (
+          SELECT t.id, 0
           FROM thoughts t
           WHERE t.id IN (${placeholders(ids.size)})
-          UNION ALL
+          UNION
           SELECT CASE WHEN l.target_id = d.id THEN l.source_id ELSE l.target_id END,
-                 d.depth + 1,
-                 d.path ||
-                   CASE WHEN l.target_id = d.id THEN l.source_id ELSE l.target_id END || ','
+                 d.depth + 1
           FROM descend d
           JOIN links l ON (l.source_id = d.id OR l.target_id = d.id) AND l.active = 1
           WHERE d.depth < ?
-            AND instr(d.path,
-                      ',' || CASE WHEN l.target_id = d.id THEN l.source_id ELSE l.target_id END || ',') = 0
         )
        SELECT DISTINCT id FROM descend`,
     )
@@ -283,6 +282,9 @@ function selectThoughts(
   includeWords: string[],
   excludeWords: string[],
 ): string[] {
+  // An empty root set short-circuits: `IN ()` is invalid SQL and there is
+  // nothing left to filter anyway.
+  if (baseIds !== null && baseIds.length === 0) return [];
   const where: string[] = [];
   const args: unknown[] = [];
   if (baseIds !== null) {
