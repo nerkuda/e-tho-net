@@ -14,6 +14,7 @@ export * from './attachment.js';
 export * from './search.js';
 export * from './query.js';
 export * from './structure.js';
+export * from './pin.js';
 export * from './realtime.js';
 export * from './api.js';
 export * from './mcp.js';

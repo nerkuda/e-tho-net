@@ -230,3 +230,11 @@ export const HIERARCHY_EXCLUDE_MAX_IDS = 1000;
 
 /** Maximum length of a saved filter name (03-server-api.md §18). */
 export const SAVED_FILTER_NAME_MAX = 200;
+
+// ---------------------------------------------------------------------------
+// Pinned thoughts (L18)
+// ---------------------------------------------------------------------------
+
+/** Maximum number of pinned thoughts per user per network (03-server-api.md §19). */
+export const PINNED_THOUGHTS_LIMIT = 20;
+

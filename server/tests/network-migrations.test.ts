@@ -36,6 +36,7 @@ const EXPECTED_FILES = [
   '016_saved_filters.sql',
   '016_thought_icon_attachment.sql',
   '017_type_name_keys.sql',
+  '018_pinned_thoughts.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -55,6 +56,7 @@ const EXPECTED_TABLES = [
   'user_focus_preferences',
   'user_focus_order',
   'saved_filters',
+  'user_pinned_thoughts',
   'embeddings',
 ];
 

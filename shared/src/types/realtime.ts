@@ -95,6 +95,7 @@ export const REALTIME_EVENT_TYPES = [
   'saved-filter.created',
   'saved-filter.updated',
   'saved-filter.deleted',
+  'pinned-thoughts.updated',
 ] as const;
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];
 
@@ -273,6 +274,9 @@ export interface SavedFilterUpdatedData {
 export interface SavedFilterDeletedData {
   id: string;
 }
+export interface PinnedThoughtsUpdatedData {
+  ordered_ids: string[];
+}
 
 /**
  * Maps each {@link RealtimeEventType} to its `data` payload type.
@@ -318,6 +322,7 @@ export interface RealtimeEventMap {
   'saved-filter.created': SavedFilterCreatedData;
   'saved-filter.updated': SavedFilterUpdatedData;
   'saved-filter.deleted': SavedFilterDeletedData;
+  'pinned-thoughts.updated': PinnedThoughtsUpdatedData;
 }
 
 /** Strongly-typed event envelope for a specific event name. */
@@ -387,6 +392,7 @@ export const REALTIME_EVENT_AUDIENCE = {
   'saved-filter.created': 'user',
   'saved-filter.updated': 'user',
   'saved-filter.deleted': 'user',
+  'pinned-thoughts.updated': 'user',
 } as const satisfies Record<RealtimeEventType, RealtimeAudience>;
 
 // ---------------------------------------------------------------------------
