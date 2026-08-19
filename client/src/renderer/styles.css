@@ -4045,6 +4045,7 @@ body.cloud-dragging * {
   min-width: 0;
   min-height: 0;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -4109,15 +4110,9 @@ body.cloud-dragging * {
 }
 
 .chron-splitter {
-  flex: 0 0 4px;
-  cursor: row-resize;
-  background: var(--border);
-  border-radius: 2px;
-  transition: background 0.15s;
-}
-
-.chron-splitter:hover {
-  background: var(--accent);
+  /* The strip is a .row-splitter (grab glyph, pointer drag); this keeps its
+   * look consistent with the other horizontal splitters of the app. */
+  flex: 0 0 auto;
 }
 
 .chron-main {
@@ -4128,8 +4123,11 @@ body.cloud-dragging * {
   overflow: hidden;
 }
 
+/* The table block sizes to its content (default cap below), the bottom editor
+ * takes the remaining space; the splitter between them changes the table's
+ * max-height, so both areas resize together (like the «Хроника» tab, §6.6). */
 .chron-top {
-  flex: 1 1 55%;
+  flex: 0 0 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -4137,7 +4135,7 @@ body.cloud-dragging * {
 }
 
 .chron-table-wrap {
-  flex: 1;
+  max-height: 240px;
   min-height: 0;
   overflow: auto;
 }
@@ -4181,7 +4179,8 @@ table.chron-table {
 }
 
 .chron-targets {
-  max-width: 380px;
+  max-width: 430px;
+  vertical-align: top;
 }
 
 .chron-snippet {
@@ -4199,19 +4198,34 @@ table.chron-table {
 }
 
 /* Target chips (thoughts with icon/style; links «src — type — dst»). */
+/* Target chips: fixed, uniform sizes — thoughts 150px, links 240px — in both
+ * the table column and the bottom editor. Titles truncate with an ellipsis. */
 .chron-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 7px;
+  padding: 0 7px;
   margin: 1px 2px;
+  height: 24px;
+  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
   font-size: 12px;
   cursor: pointer;
   user-select: none;
+  flex: 0 0 auto;
   max-width: 100%;
+}
+
+.chron-chip.thought {
+  width: 150px;
+  max-width: 150px;
+}
+
+.chron-chip.link {
+  width: 240px;
+  max-width: 240px;
 }
 
 .chron-chip:hover {
@@ -4228,17 +4242,32 @@ table.chron-table {
   line-height: 1;
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
 }
 
 .chron-chip .chip-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 160px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chron-chip.thought .chip-title {
+  max-width: 112px;
 }
 
 .chron-chip.link .chip-title {
-  max-width: 120px;
+  max-width: 72px;
+}
+
+.chron-chip .chip-type {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chron-chip.muted {
@@ -4251,17 +4280,34 @@ table.chron-table {
 
 /* Bottom editor: metadata row + target chips + markdown field. */
 .chron-editor {
-  flex: 0 0 auto;
-  min-height: 140px;
+  flex: 1 1 auto;
+  min-height: 0;
   border-top: 1px solid var(--border);
   overflow-y: auto;
   padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
 }
 
 .chron-editor-body {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* The markdown field fills the bottom area (the empty space under a short
+ * comment still belongs to the field — double-click edits anywhere). */
+.chron-editor-body .md-field {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chron-editor-body .md-field-view {
+  flex: 1 1 auto;
 }
 
 .chron-target-chips {

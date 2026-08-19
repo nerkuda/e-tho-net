@@ -424,6 +424,7 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
   );
 
   panel.append(row1, row2, row3, row4);
+  host.append(panel);
   repaintControls();
   void reloadSavedFilters();
   return panel;

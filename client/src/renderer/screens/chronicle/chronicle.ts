@@ -132,7 +132,13 @@ export function mountChronicle(hostEl: HTMLElement): void {
   hostEl.replaceChildren();
 
   const filterArea = div('chron-filter-area');
-  const splitter = div('chron-splitter');
+  // Horizontal grab strip between the filter panel and the table: dragging
+  // changes the panel's max-height (rowSplitter), the rest flows below.
+  const splitter = rowSplitter(() => filterArea, {
+    min: 80,
+    max: () => filterArea.scrollHeight,
+  });
+  splitter.classList.add('chron-splitter');
   const main = div('chron-main');
   hostEl.append(filterArea, splitter, main);
 
@@ -166,6 +172,20 @@ export function mountChronicle(hostEl: HTMLElement): void {
     chronicleFilterAdd: (thoughtId) => addThoughtToFilter(thoughtId),
   });
   showEmptyEditor();
+
+  // Restore the view when the network opens with `active_view = 'chronicle'`
+  // (the switcher path calls ensureChronicleInitialised directly, L20).
+  store.subscribe(() => {
+    if (host === null || !host.isConnected) return;
+    const networkId = store.state.networkId;
+    if (
+      networkId !== null &&
+      networkIdSeen !== networkId &&
+      store.state.activeView === 'chronicle'
+    ) {
+      void ensureChronicleInitialised();
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
