@@ -1020,8 +1020,6 @@ body.resizing-h {
 }
 
 /* Three link layers:
- *   .links-overlay-clip — clipping wrapper of the visual layer (carries the
- *                         inactive-cloud clip path, §2.4);
  *   .links-overlay       — visual curves, UNDER the clouds, never interactive;
  *   .links-overlay-hit   — transparent wide hit curves, also UNDER the clouds:
  *                          only the visible stretches of a line catch the
@@ -1030,12 +1028,6 @@ body.resizing-h {
  *   .links-overlay-top   — the hovered/selected line redrawn (with its label)
  *                          on top of everything.
  */
-.links-overlay-clip {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-}
 .links-overlay {
   position: absolute;
   inset: 0;

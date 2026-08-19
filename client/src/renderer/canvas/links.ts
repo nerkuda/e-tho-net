@@ -72,15 +72,7 @@ interface Bundle {
   edges: FocusEdge[];
 }
 
-/** Id of the clip path that hides line stretches under inactive clouds. */
-const DIM_CLIP_ID = 'etn-link-dim-clip';
-
 let hostEl: HTMLElement | null = null;
-/** Clipping wrapper of the base overlay: carries the inactive-cloud clip
- *  path. Plain HTML because `clip-path` misbehaves on `<svg>` roots in
- *  Chromium (applied in a rotated/odd coordinate space), while on a div it
- *  clips in local border-box coordinates — which match the overlay's. */
-let clipWrap: HTMLDivElement | null = null;
 /** Base overlay — under the clouds; carries every visible link line (no input). */
 let svg: SVGSVGElement | null = null;
 /** Hit overlay — under the clouds with the visual layer; carries wide
@@ -175,10 +167,7 @@ export function initLinksOverlay(host: HTMLElement): { redraw(): void } {
   // the clouds), then hit + top overlays LAST. The hit layer shares z=0 with
   // the visual one and relies on DOM order to sit above the curves — both stay
   // BELOW the clouds (z=1), keeping every cloud hover/click-able (§2.4).
-  clipWrap = document.createElement('div');
-  clipWrap.classList.add('links-overlay-clip');
-  host.prepend(clipWrap);
-  clipWrap.append(svg);
+  host.prepend(svg);
   host.append(svgHit, svgTop, svgDrag);
 
   new ResizeObserver(() => requestDraw()).observe(host);
@@ -235,7 +224,6 @@ function draw(): void {
   defsEl = document.createElementNS(SVG_NS, 'defs');
   gradientSeq = 0;
   svg.append(defsEl);
-  updateDimClip();
   const focus = store.state.focus;
   if (focus === null) {
     hidePopover();
@@ -267,43 +255,6 @@ function draw(): void {
   // Kept in a separate function so a hover change can refresh only this layer
   // without rebuilding the visual/hit lines (which would break in-flight clicks).
   drawActive();
-}
-
-/**
- * Rebuilds the clipping wrapper's clip path from the currently inactive
- * (dimmed) clouds. The dim style keeps clouds translucent (08-ui-spec.md
- * §2.2), so without clipping the link curves under such a cloud would show
- * through it — «связи идут поверх неактуальных мыслей» (§2.4). Active clouds
- * are opaque and hide lines by themselves; the clip is dropped when no
- * inactive cloud is rendered. Rebuilt on every draw because cloud geometry
- * changes on scroll, zoom and focus switches.
- */
-function updateDimClip(): void {
-  if (clipWrap === null || defsEl === null || hostEl === null) return;
-  const hostRect = hostEl.getBoundingClientRect();
-  const clouds = hostEl.querySelectorAll<HTMLElement>('.cloud.dim');
-  if (clouds.length === 0) {
-    clipWrap.style.removeProperty('clip-path');
-    return;
-  }
-  let clip = defsEl.querySelector<SVGClipPathElement>(`#${DIM_CLIP_ID}`);
-  if (clip === null) {
-    clip = document.createElementNS(SVG_NS, 'clipPath');
-    clip.setAttribute('id', DIM_CLIP_ID);
-    clip.setAttribute('clipPathUnits', 'userSpaceOnUse');
-    defsEl.append(clip);
-  }
-  while (clip.firstChild !== null) clip.removeChild(clip.firstChild);
-  for (const cloud of clouds) {
-    const r = cloud.getBoundingClientRect();
-    const rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('x', String(r.left - hostRect.left));
-    rect.setAttribute('y', String(r.top - hostRect.top));
-    rect.setAttribute('width', String(r.width));
-    rect.setAttribute('height', String(r.height));
-    clip.append(rect);
-  }
-  clipWrap.style.clipPath = `url(#${DIM_CLIP_ID})`;
 }
 
 /** Bundles derived from the current focus response. */
