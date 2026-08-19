@@ -482,6 +482,18 @@ export function deleteLink(ndb: NetworkDb, id: string, expectedVersion: number |
         current: current.version,
       });
     }
+    // Polymorphic comment owners without SQL FK: clean up explicitly (mirrors
+    // thought deletion). Comments where the link is the primary owner are
+    // deleted with their m2m targets; secondary attachments are detached (L20).
+    // NOTE: attachments/property_values of the link keep their pre-L20
+    // behaviour (not cleaned here) — out of this task's scope.
+    ndb
+      .prepare(
+        'DELETE FROM comment_targets WHERE comment_id IN (SELECT id FROM comments WHERE owner_type = ? AND owner_id = ?)',
+      )
+      .run('link', id);
+    ndb.prepare('DELETE FROM comments WHERE owner_type = ? AND owner_id = ?').run('link', id);
+    ndb.prepare('DELETE FROM comment_targets WHERE owner_type = ? AND owner_id = ?').run('link', id);
     ndb.prepare('DELETE FROM links WHERE id = ?').run(id);
   });
 }

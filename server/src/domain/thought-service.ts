@@ -638,8 +638,16 @@ export function deleteThought(
         id,
       });
     }
-    // Polymorphic owners without SQL FK: clean up explicitly.
+    // Polymorphic owners without SQL FK: clean up explicitly. Comments where
+    // the thought is the primary owner are deleted with their m2m targets;
+    // targets where it is a secondary attachment are detached (L20).
+    ndb
+      .prepare(
+        'DELETE FROM comment_targets WHERE comment_id IN (SELECT id FROM comments WHERE owner_type = ? AND owner_id = ?)',
+      )
+      .run('thought', id);
     ndb.prepare('DELETE FROM comments WHERE owner_type = ? AND owner_id = ?').run('thought', id);
+    ndb.prepare('DELETE FROM comment_targets WHERE owner_type = ? AND owner_id = ?').run('thought', id);
     ndb.prepare('DELETE FROM attachments WHERE owner_type = ? AND owner_id = ?').run('thought', id);
     ndb
       .prepare('DELETE FROM property_values WHERE owner_type = ? AND owner_id = ?')

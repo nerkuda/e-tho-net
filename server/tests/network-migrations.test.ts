@@ -37,6 +37,8 @@ const EXPECTED_FILES = [
   '016_thought_icon_attachment.sql',
   '017_type_name_keys.sql',
   '018_pinned_thoughts.sql',
+  '019_comment_targets.sql',
+  '020_saved_filters_view.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -50,6 +52,7 @@ const EXPECTED_TABLES = [
   'property_values',
   'links',
   'comments',
+  'comment_targets',
   'attachments',
   'user_preferences',
   'thought_views',
@@ -158,6 +161,72 @@ describe(
         assert.ok(
           thoughtCols.includes('icon_attachment_id'),
           'missing thoughts.icon_attachment_id',
+        );
+
+        // 019 comment_targets: m2m attachments with the primary owner as index.
+        const targetCols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('comment_targets') as {
+            name: string;
+          }[]
+        ).map((r) => r.name);
+        assert.ok(targetCols.includes('comment_id'), 'missing comment_targets.comment_id');
+        assert.ok(targetCols.includes('owner_type'), 'missing comment_targets.owner_type');
+        assert.ok(targetCols.includes('owner_id'), 'missing comment_targets.owner_id');
+
+        // 020 saved_filters: the per-view column exists.
+        const filterCols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('saved_filters') as {
+            name: string;
+          }[]
+        ).map((r) => r.name);
+        assert.ok(filterCols.includes('view'), 'missing saved_filters.view');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('019 backfills comment_targets for pre-existing comments', () => {
+      const db = new Database(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      try {
+        const now = '2024-01-01T00:00:00Z';
+        db.prepare(
+          'INSERT INTO thoughts (id,title,title_norm,active,version,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?)',
+        ).run('t1', 'A', 'a', 1, 1, now, 'u', now, 'u');
+        // Simulate a comment created by the pre-019 code path (no m2m row).
+        db.prepare(
+          'INSERT INTO comments (id,owner_type,owner_id,kind,title,body_md,body_html,valid_from,version,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ).run('c1', 'thought', 't1', 'chronological', 'T', 'x', '<p>x</p>', now, 1, now, now, 'u', 'u');
+        // Re-running the 019 backfill INSERT OR IGNORE must add the target.
+        db.exec(
+          'INSERT OR IGNORE INTO comment_targets (comment_id, owner_type, owner_id) ' +
+            'SELECT id, owner_type, owner_id FROM comments;',
+        );
+        const targets = db
+          .prepare('SELECT comment_id, owner_type, owner_id FROM comment_targets')
+          .all() as Array<{ comment_id: string; owner_type: string; owner_id: string }>;
+        assert.deepEqual(targets, [{ comment_id: 'c1', owner_type: 'thought', owner_id: 't1' }]);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('020 keeps saved-filters names unique per (user, view)', () => {
+      const db = new Database(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      try {
+        const ins =
+          'INSERT INTO saved_filters (id,user_id,view,name,definition,created_at,updated_at) VALUES (?,?,?,?,?,?,?)';
+        db.prepare(ins).run('f1', 'u1', 'structures', 'Отбор', '{}', '2024', '2024');
+        db.prepare(ins).run('f2', 'u1', 'chronicle', 'Отбор', '{}', '2024', '2024');
+        assert.throws(
+          () => db.prepare(ins).run('f3', 'u1', 'structures', 'Отбор', '{}', '2024', '2024'),
+          /UNIQUE/,
+          'same name within one view must collide',
         );
       } finally {
         db.close();

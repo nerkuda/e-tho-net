@@ -1,23 +1,31 @@
 /**
- * Comment routes (task D5, 03-server-api.md §10).
+ * Comment routes (task D5, L20; 03-server-api.md §10).
  *
  *   GET/POST /networks/:networkId/thoughts/:id/comments  — list/create on a thought
  *   GET/POST /networks/:networkId/links/:id/comments     — list/create on a link
- *   PATCH    /networks/:networkId/comments/:id           — update (If-Match)
- *   DELETE   /networks/:networkId/comments/:id           — delete (If-Match)
+ *   POST     /networks/:networkId/comments                — create with 1..N targets (L20)
+ *   GET      /networks/:networkId/comments/:id            — fetch one with all targets (L20)
+ *   PATCH    /networks/:networkId/comments/:id            — update (If-Match)
+ *   DELETE   /networks/:networkId/comments/:id            — delete (If-Match)
+ *   POST     /networks/:networkId/comments/:id/targets                 — attach one more owner (L20)
+ *   DELETE   /networks/:networkId/comments/:id/targets/:ownerType/:ownerId — detach (L20)
  *
- * Comments are polymorphic (`owner_type` + `owner_id`). The service enforces
- * "one permanent comment per owner" (409 DUPLICATE), validates the owner's
- * existence (404) and renders `body_html` from `body_md`.
+ * Comments are polymorphic (`owner_type` + `owner_id`); a chronological
+ * comment may be attached to several owners via `comment_targets` (L20). The
+ * service enforces "one permanent comment per owner" (409 DUPLICATE),
+ * validates the owner's existence (404) and renders `body_html` from
+ * `body_md`.
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 import {
+  COMMENT_OWNER_TYPES,
   EtnError,
   type CommentInput,
   type CommentKind,
   type CommentOwnerType,
+  type CommentTarget,
   type CommentUpdateInput,
 } from '@etn/shared';
 
@@ -31,10 +39,13 @@ import {
   type RouteDeps,
 } from './helpers.js';
 import {
+  addCommentTarget,
   createComment,
+  createCommentWithTargets,
   deleteComment,
   getComment,
   listComments,
+  removeCommentTarget,
   updateComment,
 } from '../domain/comment-service.js';
 
@@ -48,6 +59,14 @@ interface OwnerParams {
 interface CommentIdParams {
   networkId: string;
   id: string;
+}
+
+/** Route params for a network + comment id + one target. */
+interface TargetParams {
+  networkId: string;
+  id: string;
+  ownerType: string;
+  ownerId: string;
 }
 
 /** Parse and validate the body of `POST …/comments`. */
@@ -77,6 +96,48 @@ function parseCommentBody(body: Record<string, unknown>, requestId: string): Com
     valid_from: fieldString(body, 'valid_from', requestId),
     valid_to: fieldNullableString(body, 'valid_to', requestId),
   };
+}
+
+/** Parse the `targets` array of `POST /networks/:nid/comments` (L20). */
+function parseTargets(body: Record<string, unknown>, requestId: string): CommentTarget[] {
+  const raw = body['targets'];
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'targets обязателен: массив { owner_type, owner_id } (1 и более).',
+      { field: 'targets' },
+      requestId,
+    );
+  }
+  const targets: CommentTarget[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'каждый элемент targets — объект { owner_type, owner_id }.',
+        { field: 'targets' },
+        requestId,
+      );
+    }
+    const rec = item as Record<string, unknown>;
+    const ownerType = rec['owner_type'];
+    const ownerId = rec['owner_id'];
+    if (
+      typeof ownerType !== 'string' ||
+      !(COMMENT_OWNER_TYPES as readonly string[]).includes(ownerType) ||
+      typeof ownerId !== 'string' ||
+      ownerId === ''
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'каждый элемент targets — { owner_type: thought|link, owner_id: непустая строка }.',
+        { field: 'targets' },
+        requestId,
+      );
+    }
+    targets.push({ owner_type: ownerType as CommentOwnerType, owner_id: ownerId });
+  }
+  return targets;
 }
 
 /** Parse and validate the body of `PATCH /comments/:id`. */
@@ -139,6 +200,41 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
     registerOwnerRoutes('/networks/:networkId/thoughts/:id', 'thought');
     registerOwnerRoutes('/networks/:networkId/links/:id', 'link');
 
+    // Create a comment attached to several owners at once (L20).
+    app.post(
+      '/networks/:networkId/comments',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as { networkId: string };
+        const body = requestBody(req);
+        const input = parseCommentBody(body, req.id);
+        const targets = parseTargets(body, req.id);
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const comment = createCommentWithTargets(ndb, targets, input, req.auth!.user.id);
+        deps.emit(req, networkId, 'comment.created', { comment });
+        sendCreated(reply, comment, {
+          version: comment.version,
+          updated_at: comment.updated_at,
+          request_id: req.id,
+        });
+      },
+    );
+
+    // Fetch one comment with all its targets (L20).
+    app.get(
+      '/networks/:networkId/comments/:id',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as CommentIdParams;
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const comment = getComment(ndb, id);
+        if (comment === null) {
+          throw new EtnError('NOT_FOUND', `comment ${id} not found`, { entity: 'comment', id }, req.id);
+        }
+        sendSuccess(reply, comment);
+      },
+    );
+
     app.patch(
       '/networks/:networkId/comments/:id',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
@@ -178,6 +274,75 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           });
         }
         reply.code(204).send();
+      },
+    );
+
+    // Attach the comment to one more owner (L20).
+    app.post(
+      '/networks/:networkId/comments/:id/targets',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as CommentIdParams;
+        const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
+        const body = requestBody(req);
+        const ownerType = fieldString(body, 'owner_type', req.id);
+        const ownerId = fieldString(body, 'owner_id', req.id);
+        if (ownerType === undefined || ownerId === undefined) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'owner_type (thought|link) и owner_id обязательны.',
+            { field: 'owner_type/owner_id' },
+            req.id,
+          );
+        }
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const comment = addCommentTarget(
+          ndb,
+          id,
+          ownerType as CommentOwnerType,
+          ownerId,
+          expectedVersion,
+          req.auth!.user.id,
+        );
+        deps.emit(req, networkId, 'comment.updated', {
+          id,
+          changes: { targets: comment.targets },
+          version: comment.version,
+        });
+        sendSuccess(reply, comment, {
+          version: comment.version,
+          updated_at: comment.updated_at,
+          request_id: req.id,
+        });
+      },
+    );
+
+    // Detach the comment from one owner (L20).
+    app.delete(
+      '/networks/:networkId/comments/:id/targets/:ownerType/:ownerId',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id, ownerType, ownerId } = req.params as TargetParams;
+        const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const comment = removeCommentTarget(
+          ndb,
+          id,
+          ownerType as CommentOwnerType,
+          ownerId,
+          expectedVersion,
+          req.auth!.user.id,
+        );
+        deps.emit(req, networkId, 'comment.updated', {
+          id,
+          changes: { targets: comment.targets },
+          version: comment.version,
+        });
+        sendSuccess(reply, comment, {
+          version: comment.version,
+          updated_at: comment.updated_at,
+          request_id: req.id,
+        });
       },
     );
   };

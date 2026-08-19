@@ -181,8 +181,9 @@ const SNIPPET_WINDOW = 160;
 /**
  * Build a short snippet with highlights: a window around the first match of any
  * term, ellipsised when truncated, with every term wrapped in `<mark>`.
+ * Shared with the chronicle view (L20) for its table previews.
  */
-function makeSnippet(rawText: string, terms: string[]): string {
+export function makeSnippet(rawText: string, terms: string[]): string {
   const lower = rawText.toLowerCase();
   let first = -1;
   for (const term of terms) {

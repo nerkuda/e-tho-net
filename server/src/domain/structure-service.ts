@@ -26,9 +26,12 @@ import {
   SORT_ORDERS,
   buildLikePattern,
   parseFilterKeywords,
+  type ChronicleFilterDefinition,
+  type ChronicleSavedFilter,
   type PropertyValueType,
   type SavedFilter,
   type SavedFilterDefinition,
+  type SavedFilterView,
   type SortOrder,
   type StructureFilter,
   type StructurePropertyCondition,
@@ -47,7 +50,7 @@ import { getEdgesAmong, getLinkDirections } from './link-service.js';
 import { getThoughtOrThrow, rowToThoughtRef } from './thought-service.js';
 
 /** Display columns every thought-ref SELECT must carry (see `resolveThoughts`). */
-const REF_COLUMNS =
+export const REF_COLUMNS =
   't.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,' +
   ' t.active, t.fg_color, t.bg_color,' +
   ' t.font_bold, t.font_italic, t.font_underline, t.font_strike, t.font_manual';
@@ -516,58 +519,74 @@ export function getHierarchy(
 interface SavedFilterRow {
   id: string;
   user_id: string;
+  view: string;
   name: string;
   definition: string;
   created_at: string;
   updated_at: string;
 }
 
-/** Convert a raw row into a {@link SavedFilter} (definition JSON is trusted). */
-function rowToSavedFilter(row: SavedFilterRow): SavedFilter {
-  return {
+const SAVED_FILTER_COLUMNS =
+  'id, user_id, view, name, definition, created_at, updated_at FROM saved_filters';
+
+/** Convert a raw row into a saved filter of its view (definition JSON is trusted). */
+function rowToSavedFilterView(row: SavedFilterRow): SavedFilter | ChronicleSavedFilter {
+  const definition = JSON.parse(row.definition) as
+    | SavedFilterDefinition
+    | ChronicleFilterDefinition;
+  const base = {
     id: row.id,
     name: row.name,
-    definition: JSON.parse(row.definition) as SavedFilterDefinition,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+  if (row.view === 'chronicle') {
+    return { ...base, view: 'chronicle', definition: definition as ChronicleFilterDefinition };
+  }
+  return { ...base, view: 'structures', definition: definition as SavedFilterDefinition };
 }
 
-/** List the user's saved filters, alphabetically by name (03-server-api.md §18). */
-export function listSavedFilters(ndb: NetworkDb, userId: string): SavedFilter[] {
+/** List the user's saved filters of one view, alphabetically by name (§18). */
+export function listSavedFilters(
+  ndb: NetworkDb,
+  userId: string,
+  view: SavedFilterView = 'structures',
+): Array<SavedFilter | ChronicleSavedFilter> {
   const rows = ndb
     .prepare(
-      'SELECT id, user_id, name, definition, created_at, updated_at FROM saved_filters' +
-        ' WHERE user_id = ? ORDER BY name COLLATE NOCASE ASC',
+      `SELECT ${SAVED_FILTER_COLUMNS}
+       WHERE user_id = ? AND view = ? ORDER BY name COLLATE NOCASE ASC`,
     )
-    .all(userId) as SavedFilterRow[];
-  return rows.map(rowToSavedFilter);
+    .all(userId, view) as SavedFilterRow[];
+  return rows.map(rowToSavedFilterView);
 }
 
 /** Read one saved filter of the user or throw `NOT_FOUND` (foreign ids included). */
-function getSavedFilterOrThrow(ndb: NetworkDb, userId: string, filterId: string): SavedFilter {
+function getSavedFilterOrThrow(
+  ndb: NetworkDb,
+  userId: string,
+  filterId: string,
+): SavedFilter | ChronicleSavedFilter {
   const row = ndb
-    .prepare(
-      'SELECT id, user_id, name, definition, created_at, updated_at FROM saved_filters' +
-        ' WHERE id = ? AND user_id = ? LIMIT 1',
-    )
+    .prepare(`SELECT ${SAVED_FILTER_COLUMNS} WHERE id = ? AND user_id = ? LIMIT 1`)
     .get(filterId, userId) as SavedFilterRow | undefined;
   if (!row) {
     throw new EtnError('NOT_FOUND', 'Отбор не найден.', { entity: 'saved_filter', id: filterId });
   }
-  return rowToSavedFilter(row);
+  return rowToSavedFilterView(row);
 }
 
-/** Case-insensitive duplicate-name guard (SQLite NOCASE is ASCII-only). */
+/** Case-insensitive duplicate-name guard within one view (SQLite NOCASE is ASCII-only). */
 function assertNameAvailable(
   ndb: NetworkDb,
   userId: string,
+  view: SavedFilterView,
   name: string,
   exceptId?: string,
 ): void {
   const rows = ndb
-    .prepare('SELECT id, name FROM saved_filters WHERE user_id = ?')
-    .all(userId) as Array<{ id: string; name: string }>;
+    .prepare('SELECT id, name FROM saved_filters WHERE user_id = ? AND view = ?')
+    .all(userId, view) as Array<{ id: string; name: string }>;
   const clash = rows.find(
     (row) => row.id !== exceptId && row.name.toLowerCase() === name.toLowerCase(),
   );
@@ -579,21 +598,22 @@ function assertNameAvailable(
   }
 }
 
-/** Create a saved filter; a repeated name → `DUPLICATE` (409). */
+/** Create a saved filter of the given view; a repeated name → `DUPLICATE` (409). */
 export function createSavedFilter(
   ndb: NetworkDb,
   userId: string,
+  view: SavedFilterView,
   name: string,
-  definition: SavedFilterDefinition,
-): SavedFilter {
+  definition: SavedFilterDefinition | ChronicleFilterDefinition,
+): SavedFilter | ChronicleSavedFilter {
   const trimmed = validateFilterName(name);
-  assertNameAvailable(ndb, userId, trimmed);
+  assertNameAvailable(ndb, userId, view, trimmed);
   const id = randomUUID();
   const now = new Date().toISOString();
   ndb.prepare(
-    `INSERT INTO saved_filters (id, user_id, name, definition, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(id, userId, trimmed, JSON.stringify(definition), now, now);
+    `INSERT INTO saved_filters (id, user_id, view, name, definition, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, userId, view, trimmed, JSON.stringify(definition), now, now);
   return getSavedFilterOrThrow(ndb, userId, id);
 }
 
@@ -602,12 +622,12 @@ export function updateSavedFilter(
   ndb: NetworkDb,
   userId: string,
   filterId: string,
-  patch: { name?: string; definition?: SavedFilterDefinition },
-): SavedFilter {
+  patch: { name?: string; definition?: SavedFilterDefinition | ChronicleFilterDefinition },
+): SavedFilter | ChronicleSavedFilter {
   const existing = getSavedFilterOrThrow(ndb, userId, filterId);
   const name = patch.name !== undefined ? validateFilterName(patch.name) : existing.name;
   if (name !== existing.name) {
-    assertNameAvailable(ndb, userId, name, filterId);
+    assertNameAvailable(ndb, userId, existing.view, name, filterId);
   }
   const definition = patch.definition ?? existing.definition;
   ndb.prepare(

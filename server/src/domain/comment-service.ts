@@ -2,12 +2,16 @@
  * Comment domain service (task C7, docs/03-server-api.md §10,
  * docs/02-data-model.md §3.8).
  *
- * Comments are polymorphic: they attach to a thought or a link (`owner_type` +
- * `owner_id`, no SQL FK). Two kinds exist:
+ * Comments are polymorphic: they attach to thoughts or links. A chronological
+ * comment may be attached to **several** owners at once (L20): the m2m table
+ * `comment_targets` holds the full set, while `comments.owner_type/owner_id`
+ * keep the primary (first) attachment. Two kinds exist:
  *   * `permanent` — at most **one** per owner (enforced by the partial unique
- *     index `idx_comments_permanent_one`); `valid_from = created_at`,
- *     `valid_to = NULL`.
- *   * `chronological` — unrestricted count; carries `valid_from`/`valid_to`.
+ *     index `idx_comments_permanent_one`) and always exactly one target;
+ *     `valid_from = created_at`, `valid_to = NULL`.
+ *   * `chronological` — unrestricted count; carries `valid_from`/`valid_to`
+ *     and 1..N targets. Detaching the last target re-attaches the comment to
+ *     the network HOME thought.
  *
  * The server renders and caches `body_html` from `body_md` via the safe
  * {@link renderMarkdown} renderer. Mutating calls accept an optional
@@ -21,11 +25,13 @@ import {
   COMMENT_KINDS,
   COMMENT_OWNER_TYPES,
   COMMENT_PREVIEW_CHARS,
+  COMMENT_TARGETS_MAX,
   EtnError,
   type Comment,
   type CommentInput,
   type CommentKind,
   type CommentOwnerType,
+  type CommentTarget,
   type CommentUpdateInput,
   type CommentsPreview,
   type PermanentCommentPreview,
@@ -53,12 +59,13 @@ interface CommentRow {
   updated_by: string;
 }
 
-/** Convert a raw row into a {@link Comment}. */
-function rowToComment(row: CommentRow): Comment {
+/** Convert a raw row into a {@link Comment} (targets are attached separately). */
+function rowToComment(row: CommentRow, targets: CommentTarget[] = []): Comment {
   return {
     id: row.id,
     owner_type: row.owner_type as CommentOwnerType,
     owner_id: row.owner_id,
+    targets: orderTargets(row, targets),
     kind: row.kind as CommentKind,
     title: row.title,
     body_md: row.body_md,
@@ -71,6 +78,44 @@ function rowToComment(row: CommentRow): Comment {
     created_by: row.created_by,
     updated_by: row.updated_by,
   };
+}
+
+/** Stable targets order: the primary owner first, then the rest as stored. */
+function orderTargets(row: { owner_type: string; owner_id: string }, targets: CommentTarget[]): CommentTarget[] {
+  const primary = targets.filter((t) => t.owner_type === row.owner_type && t.owner_id === row.owner_id);
+  const rest = targets.filter((t) => t.owner_type !== row.owner_type || t.owner_id !== row.owner_id);
+  return [...primary, ...rest];
+}
+
+/**
+ * Load the m2m targets of the given comments in one query, grouped by comment
+ * id. Rows whose target set is somehow missing fall back to the primary owner
+ * (keeps the «at least one target» invariant even on partially-lost data).
+ */
+function loadTargets(
+  ndb: NetworkDb,
+  rows: Array<{ id: string; owner_type: string; owner_id: string }>,
+): Map<string, CommentTarget[]> {
+  const map = new Map<string, CommentTarget[]>();
+  if (rows.length === 0) return map;
+  const placeholders = rows.map(() => '?').join(', ');
+  const targetRows = ndb
+    .prepare(
+      `SELECT comment_id, owner_type, owner_id FROM comment_targets
+       WHERE comment_id IN (${placeholders})`,
+    )
+    .all(...rows.map((r) => r.id)) as Array<{ comment_id: string; owner_type: string; owner_id: string }>;
+  for (const tr of targetRows) {
+    const list = map.get(tr.comment_id) ?? [];
+    list.push({ owner_type: tr.owner_type as CommentOwnerType, owner_id: tr.owner_id });
+    map.set(tr.comment_id, list);
+  }
+  for (const r of rows) {
+    if (!map.has(r.id)) {
+      map.set(r.id, [{ owner_type: r.owner_type as CommentOwnerType, owner_id: r.owner_id }]);
+    }
+  }
+  return map;
 }
 
 /** Validate a comment kind against the enum tuple. */
@@ -117,7 +162,9 @@ function ensureOwnerExists(ndb: NetworkDb, ownerType: CommentOwnerType, ownerId:
 export function getComment(ndb: NetworkDb, id: string): Comment | null {
   const row = ndb.prepare('SELECT * FROM comments WHERE id = ? LIMIT 1').get(id) as
     CommentRow | undefined;
-  return row ? rowToComment(row) : null;
+  if (row === undefined) return null;
+  const targets = loadTargets(ndb, [row]).get(id) ?? [];
+  return rowToComment(row, targets);
 }
 
 /** Return a comment or throw `NOT_FOUND` (404). */
@@ -130,9 +177,10 @@ function getCommentOrThrow(ndb: NetworkDb, id: string): Comment {
 }
 
 /**
- * List comments attached to an owner (docs/03-server-api.md §10). The permanent
- * comment (if any) sorts first, then chronological comments ordered by
- * `valid_from` ascending.
+ * List comments attached to an owner (docs/03-server-api.md §10) — the primary
+ * `owner_type/owner_id` pair plus every m2m attachment in `comment_targets`
+ * (L20). The permanent comment (if any) sorts first, then chronological
+ * comments ordered by `valid_from` ascending.
  */
 export function listComments(
   ndb: NetworkDb,
@@ -142,12 +190,17 @@ export function listComments(
   validateOwnerType(ownerType);
   const rows = ndb
     .prepare(
-      `SELECT * FROM comments
-       WHERE owner_type = ? AND owner_id = ?
-       ORDER BY (kind <> 'permanent'), valid_from ASC, created_at ASC`,
+      `SELECT * FROM comments c
+       WHERE (c.owner_type = ? AND c.owner_id = ?)
+          OR EXISTS (
+            SELECT 1 FROM comment_targets ct
+            WHERE ct.comment_id = c.id AND ct.owner_type = ? AND ct.owner_id = ?
+          )
+       ORDER BY (c.kind <> 'permanent'), c.valid_from ASC, c.created_at ASC`,
     )
-    .all(ownerType, ownerId) as CommentRow[];
-  return rows.map(rowToComment);
+    .all(ownerType, ownerId, ownerType, ownerId) as CommentRow[];
+  const targets = loadTargets(ndb, rows);
+  return rows.map((row) => rowToComment(row, targets.get(row.id) ?? []));
 }
 
 /**
@@ -213,20 +266,30 @@ export function getCommentsPreview(
   const total = (
     ndb
       .prepare(
-        `SELECT COUNT(*) AS c FROM comments
-         WHERE owner_type = ? AND owner_id = ? AND kind = 'chronological'`,
+        `SELECT COUNT(*) AS c FROM comments c
+         WHERE c.kind = 'chronological'
+           AND ((c.owner_type = ? AND c.owner_id = ?)
+                OR EXISTS (
+                  SELECT 1 FROM comment_targets ct
+                  WHERE ct.comment_id = c.id AND ct.owner_type = ? AND ct.owner_id = ?
+                ))`,
       )
-      .get(ownerType, ownerId) as { c: number }
+      .get(ownerType, ownerId, ownerType, ownerId) as { c: number }
   ).c;
   const rows = ndb
     .prepare(
-      `SELECT id, title, body_md, valid_from, valid_to, created_by, created_at
-       FROM comments
-       WHERE owner_type = ? AND owner_id = ? AND kind = 'chronological'
-       ORDER BY valid_from DESC, created_at DESC
+      `SELECT c.id, c.title, c.body_md, c.valid_from, c.valid_to, c.created_by, c.created_at
+       FROM comments c
+       WHERE c.kind = 'chronological'
+         AND ((c.owner_type = ? AND c.owner_id = ?)
+              OR EXISTS (
+                SELECT 1 FROM comment_targets ct
+                WHERE ct.comment_id = c.id AND ct.owner_type = ? AND ct.owner_id = ?
+              ))
+       ORDER BY c.valid_from DESC, c.created_at DESC
        LIMIT ?`,
     )
-    .all(ownerType, ownerId, CHRONO_PREVIEW_MAX_ENTRIES) as Array<{
+    .all(ownerType, ownerId, ownerType, ownerId, CHRONO_PREVIEW_MAX_ENTRIES) as Array<{
     id: string;
     title: string | null;
     body_md: string;
@@ -263,17 +326,8 @@ export function getCommentsPreview(
 }
 
 /**
- * Create a comment (docs/03-server-api.md §10).
- *
- * Throws:
- *   * `VALIDATION_ERROR` (422) for an invalid kind/owner or empty body;
- *   * `NOT_FOUND` (404) if the owner does not exist;
- *   * `DUPLICATE` (409) on a second `permanent` comment for the same owner.
- *
- * For `kind = 'permanent'` the `valid_from`/`valid_to` inputs are ignored
- * (`valid_from` becomes `created_at`, `valid_to` is `NULL`). For chronological
- * comments `valid_from` defaults to now and `valid_to` defaults to `null`
- * (open-ended); an explicit empty string is normalised to `null`.
+ * Create a comment attached to a single owner (docs/03-server-api.md §10).
+ * Backwards-compatible wrapper over {@link createCommentWithTargets} (L20).
  *
  * @param actorUserId - user creating the comment (recorded as created_by/updated_by).
  */
@@ -284,18 +338,82 @@ export function createComment(
   input: CommentInput,
   actorUserId: string,
 ): Comment {
-  const ot = validateOwnerType(ownerType);
+  return createCommentWithTargets(ndb, [{ owner_type: ownerType, owner_id: ownerId }], input, actorUserId);
+}
+
+/**
+ * Create a comment attached to one or more owners at once (L20,
+ * docs/03-server-api.md §10). The first target becomes the primary
+ * `owner_type/owner_id`; all targets (including the primary) are written to
+ * `comment_targets`. Duplicate targets are collapsed. A `permanent` comment
+ * must have exactly one target.
+ *
+ * Throws:
+ *   * `VALIDATION_ERROR` (422) for an invalid kind/targets or empty body;
+ *   * `NOT_FOUND` (404) if any target owner does not exist;
+ *   * `DUPLICATE` (409) on a second `permanent` comment for the same owner.
+ *
+ * For `kind = 'permanent'` the `valid_from`/`valid_to` inputs are ignored
+ * (`valid_from` becomes `created_at`, `valid_to` is `NULL`). For chronological
+ * comments `valid_from` defaults to now and `valid_to` defaults to `null`
+ * (open-ended); an explicit empty string is normalised to `null`.
+ */
+export function createCommentWithTargets(
+  ndb: NetworkDb,
+  rawTargets: CommentTarget[],
+  input: CommentInput,
+  actorUserId: string,
+): Comment {
   const kind = validateKind(input.kind);
   if (typeof input.body_md !== 'string' || input.body_md === '') {
     throw new EtnError('VALIDATION_ERROR', 'body_md must be a non-empty string', {
       field: 'body_md',
     });
   }
+  // Dedup targets preserving order; validate owner types and ids.
+  const seen = new Set<string>();
+  const targets: CommentTarget[] = [];
+  for (const t of rawTargets) {
+    const ot = validateOwnerType(t.owner_type);
+    if (typeof t.owner_id !== 'string' || t.owner_id === '') {
+      throw new EtnError('VALIDATION_ERROR', 'owner_id must be a non-empty string', {
+        field: 'targets',
+      });
+    }
+    const key = `${ot}|${t.owner_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    targets.push({ owner_type: ot, owner_id: t.owner_id });
+  }
+  if (targets.length === 0) {
+    throw new EtnError('VALIDATION_ERROR', 'at least one target is required', {
+      field: 'targets',
+    });
+  }
+  if (targets.length > COMMENT_TARGETS_MAX) {
+    throw new EtnError('VALIDATION_ERROR', `at most ${COMMENT_TARGETS_MAX} targets are allowed`, {
+      field: 'targets',
+      max: COMMENT_TARGETS_MAX,
+    });
+  }
+  if (kind === 'permanent' && targets.length > 1) {
+    throw new EtnError('VALIDATION_ERROR', 'a permanent comment has exactly one owner', {
+      field: 'targets',
+    });
+  }
   const bodyHtml = renderMarkdown(input.body_md);
 
   return ndb.transaction(() => {
-    ensureOwnerExists(ndb, ot, ownerId);
+    for (const t of targets) {
+      ensureOwnerExists(ndb, t.owner_type, t.owner_id);
+    }
 
+    const primary = targets[0];
+    if (primary === undefined) {
+      throw new EtnError('VALIDATION_ERROR', 'at least one target is required', {
+        field: 'targets',
+      });
+    }
     if (kind === 'permanent') {
       // Enforce the "one permanent per owner" invariant ahead of the unique
       // index so we can raise the canonical DUPLICATE error explicitly.
@@ -304,11 +422,11 @@ export function createComment(
           `SELECT 1 FROM comments
            WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent' LIMIT 1`,
         )
-        .get(ot, ownerId);
+        .get(primary.owner_type, primary.owner_id);
       if (existing) {
         throw new EtnError('DUPLICATE', 'a permanent comment already exists for this owner', {
-          owner_type: ot,
-          owner_id: ownerId,
+          owner_type: primary.owner_type,
+          owner_id: primary.owner_id,
         });
       }
     }
@@ -329,8 +447,8 @@ export function createComment(
       )
       .run(
         id,
-        ot,
-        ownerId,
+        primary.owner_type,
+        primary.owner_id,
         kind,
         title,
         input.body_md,
@@ -342,6 +460,12 @@ export function createComment(
         actorUserId,
         actorUserId,
       );
+    const insertTarget = ndb.prepare(
+      'INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES (?, ?, ?)',
+    );
+    for (const t of targets) {
+      insertTarget.run(id, t.owner_type, t.owner_id);
+    }
     return getCommentOrThrow(ndb, id);
   });
 }
@@ -408,7 +532,7 @@ export function updateComment(
 }
 
 /**
- * Delete a comment (docs/03-server-api.md §10).
+ * Delete a comment (docs/03-server-api.md §10) together with its m2m targets.
  *
  * Throws `NOT_FOUND` (404) or `VERSION_CONFLICT` (409).
  */
@@ -427,8 +551,157 @@ export function deleteComment(
         current: current.version,
       });
     }
+    ndb.prepare('DELETE FROM comment_targets WHERE comment_id = ?').run(id);
     ndb.prepare('DELETE FROM comments WHERE id = ?').run(id);
   });
+}
+
+/**
+ * Attach an existing chronological comment to one more owner (L20,
+ * docs/03-server-api.md §10). The primary owner does not change.
+ *
+ * Throws `NOT_FOUND` (404, comment or owner), `VERSION_CONFLICT` (409),
+ * `VALIDATION_ERROR` (422, permanent comment or invalid owner type) or
+ * `DUPLICATE` (409, already attached).
+ */
+export function addCommentTarget(
+  ndb: NetworkDb,
+  commentId: string,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+  expectedVersion: number | undefined,
+  actorUserId: string,
+): Comment {
+  const ot = validateOwnerType(ownerType);
+  return ndb.transaction(() => {
+    const current = getCommentOrThrow(ndb, commentId);
+    if (expectedVersion !== undefined && current.version !== expectedVersion) {
+      throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
+        entity: 'comment',
+        id: commentId,
+        expected: expectedVersion,
+        current: current.version,
+      });
+    }
+    if (current.kind !== 'chronological') {
+      throw new EtnError('VALIDATION_ERROR', 'a permanent comment has exactly one owner', {
+        field: 'targets',
+      });
+    }
+    ensureOwnerExists(ndb, ot, ownerId);
+    const duplicate = ndb
+      .prepare(
+        'SELECT 1 FROM comment_targets WHERE comment_id = ? AND owner_type = ? AND owner_id = ? LIMIT 1',
+      )
+      .get(commentId, ot, ownerId);
+    if (duplicate) {
+      throw new EtnError('DUPLICATE', 'the comment is already attached to this owner', {
+        owner_type: ot,
+        owner_id: ownerId,
+      });
+    }
+    ndb
+      .prepare('INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES (?, ?, ?)')
+      .run(commentId, ot, ownerId);
+    bumpVersion(ndb, commentId, current.version, actorUserId);
+    return getCommentOrThrow(ndb, commentId);
+  });
+}
+
+/**
+ * Detach a chronological comment from one owner (L20, docs/03-server-api.md
+ * §10). When the primary owner is detached, the primary moves to another
+ * remaining target (the FTS triggers rebuild the index row). Detaching the
+ * **last** target re-attaches the comment to the network HOME thought, so a
+ * chronological comment is never left ownerless.
+ *
+ * Throws `NOT_FOUND` (404, comment or target), `VERSION_CONFLICT` (409) or
+ * `VALIDATION_ERROR` (422, permanent comment).
+ */
+export function removeCommentTarget(
+  ndb: NetworkDb,
+  commentId: string,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+  expectedVersion: number | undefined,
+  actorUserId: string,
+): Comment {
+  const ot = validateOwnerType(ownerType);
+  return ndb.transaction(() => {
+    const current = getCommentOrThrow(ndb, commentId);
+    if (expectedVersion !== undefined && current.version !== expectedVersion) {
+      throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
+        entity: 'comment',
+        id: commentId,
+        expected: expectedVersion,
+        current: current.version,
+      });
+    }
+    if (current.kind !== 'chronological') {
+      throw new EtnError('VALIDATION_ERROR', 'a permanent comment has exactly one owner', {
+        field: 'targets',
+      });
+    }
+    const result = ndb
+      .prepare('DELETE FROM comment_targets WHERE comment_id = ? AND owner_type = ? AND owner_id = ?')
+      .run(commentId, ot, ownerId);
+    if (result.changes === 0) {
+      throw new EtnError('NOT_FOUND', 'the comment is not attached to this owner', {
+        owner_type: ot,
+        owner_id: ownerId,
+      });
+    }
+
+    const restRows = ndb
+      .prepare(
+        `SELECT owner_type, owner_id FROM comment_targets WHERE comment_id = ?
+         ORDER BY owner_type ASC, owner_id ASC`,
+      )
+      .all(commentId) as Array<{ owner_type: string; owner_id: string }>;
+    let rest: CommentTarget[] = restRows.map((r) => ({
+      owner_type: r.owner_type as CommentOwnerType,
+      owner_id: r.owner_id,
+    }));
+    if (rest.length === 0) {
+      // Last target detached — fall back to the protected HOME thought.
+      const home = ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1 LIMIT 1').get() as
+        | { id: string }
+        | undefined;
+      if (home === undefined) {
+        throw new EtnError('INTERNAL', 'network has no HOME thought', {});
+      }
+      ndb
+        .prepare('INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES (?, ?, ?)')
+        .run(commentId, 'thought', home.id);
+      rest = [{ owner_type: 'thought', owner_id: home.id }];
+    }
+
+    const wasPrimary = current.owner_type === ot && current.owner_id === ownerId;
+    const nextPrimary = rest[0];
+    if (nextPrimary === undefined) {
+      throw new EtnError('INTERNAL', 'comment has no remaining targets', {});
+    }
+    const now = new Date().toISOString();
+    if (wasPrimary) {
+      ndb
+        .prepare(
+          `UPDATE comments SET owner_type = ?, owner_id = ?, version = ?, updated_at = ?, updated_by = ?
+           WHERE id = ?`,
+        )
+        .run(nextPrimary.owner_type, nextPrimary.owner_id, current.version + 1, now, actorUserId, commentId);
+    } else {
+      bumpVersion(ndb, commentId, current.version, actorUserId);
+    }
+    return getCommentOrThrow(ndb, commentId);
+  });
+}
+
+/** Bump `version`/`updated_at`/`updated_by` of a comment. */
+function bumpVersion(ndb: NetworkDb, commentId: string, currentVersion: number, actorUserId: string): void {
+  const now = new Date().toISOString();
+  ndb
+    .prepare('UPDATE comments SET version = ?, updated_at = ?, updated_by = ? WHERE id = ?')
+    .run(currentVersion + 1, now, actorUserId, commentId);
 }
 
 /**

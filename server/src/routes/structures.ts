@@ -17,10 +17,12 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
+  SAVED_FILTER_VIEWS,
   STRUCTURES_PAGE_SIZE,
   STRUCTURES_QUERY_MAX_LIMIT,
   STRUCTURE_SORTS,
   SORT_ORDERS,
+  type SavedFilterView,
   type StructureQueryRequest,
   type StructureSort,
   type SortOrder,
@@ -44,6 +46,7 @@ import {
   queryThoughts,
   updateSavedFilter,
 } from '../domain/structure-service.js';
+import { parseChronicleFilterDefinition } from '../domain/chronicle-service.js';
 
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
@@ -60,6 +63,18 @@ interface ThoughtIdParams {
 interface SavedFilterIdParams {
   networkId: string;
   fid: string;
+}
+
+/** Validate `view` against the shared enum tuple (default 'structures'). */
+function parseView(value: unknown, requestId?: string): SavedFilterView {
+  if (value === undefined || value === null || value === '') return 'structures';
+  if (typeof value !== 'string' || !(SAVED_FILTER_VIEWS as readonly string[]).includes(value)) {
+    throw new EtnError('VALIDATION_ERROR', 'Недопустимый view.', {
+      field: 'view',
+      allowed: SAVED_FILTER_VIEWS,
+    }, requestId);
+  }
+  return value as SavedFilterView;
 }
 
 /** Validate `sort` against the shared enum tuple. */
@@ -175,8 +190,9 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
+        const view = parseView((req.query as Record<string, unknown>)['view'], req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
-        sendSuccess(reply, listSavedFilters(ndb, req.auth!.user.id));
+        sendSuccess(reply, listSavedFilters(ndb, req.auth!.user.id, view));
       },
     );
 
@@ -186,6 +202,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
         const body = requestBody(req);
+        const view = parseView(body['view'], req.id);
         const name = fieldString(body, 'name', req.id);
         if (name === undefined) {
           throw new EtnError('VALIDATION_ERROR', 'name обязателен.', { field: 'name' }, req.id);
@@ -196,12 +213,12 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             field: 'definition',
           }, req.id);
         }
-        const definition = parseSavedFilterDefinition(
-          definitionRaw as Record<string, unknown>,
-          req.id,
-        );
+        const definition =
+          view === 'chronicle'
+            ? parseChronicleFilterDefinition(definitionRaw as Record<string, unknown>, req.id)
+            : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
-        const filter = createSavedFilter(ndb, req.auth!.user.id, name, definition);
+        const filter = createSavedFilter(ndb, req.auth!.user.id, view, name, definition);
         deps.emit(req, networkId, 'saved-filter.created', { filter }, { audience: 'user' });
         sendCreated(reply, filter, { request_id: req.id });
       },
@@ -213,6 +230,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, fid } = req.params as SavedFilterIdParams;
         const body = requestBody(req);
+        const view = parseView(body['view'], req.id);
         const name = fieldString(body, 'name', req.id);
         let definition;
         const definitionRaw = body['definition'];
@@ -222,7 +240,10 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
               field: 'definition',
             }, req.id);
           }
-          definition = parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
+          definition =
+            view === 'chronicle'
+              ? parseChronicleFilterDefinition(definitionRaw as Record<string, unknown>, req.id)
+              : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
         }
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const filter = updateSavedFilter(ndb, req.auth!.user.id, fid, {

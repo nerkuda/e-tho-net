@@ -507,12 +507,12 @@ describe(
             sort: 'created',
             order: 'desc',
           });
-          const created = createSavedFilter(ndb, USER, 'Мои счёта', definition);
+          const created = createSavedFilter(ndb, USER, 'structures', 'Мои счёта', definition);
           assert.equal(created.name, 'Мои счёта');
           assert.deepEqual(listSavedFilters(ndb, USER).map((f) => f.id), [created.id]);
 
           assert.throws(
-            () => createSavedFilter(ndb, USER, 'мои СЧЁТА', definition),
+            () => createSavedFilter(ndb, USER, 'structures', 'мои СЧЁТА', definition),
             (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
           );
 
@@ -550,7 +550,7 @@ describe(
             (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
           );
           assert.throws(
-            () => createSavedFilter(ndb, USER, '   ', parseSavedFilterDefinition({ sort: 'alpha', order: 'asc' })),
+            () => createSavedFilter(ndb, USER, 'structures', '   ', parseSavedFilterDefinition({ sort: 'alpha', order: 'asc' })),
             (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
           );
         } finally {

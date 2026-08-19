@@ -15,6 +15,9 @@ import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import {
   createComment,
+  createCommentWithTargets,
+  addCommentTarget,
+  removeCommentTarget,
   deleteComment,
   getCommentsPreview,
   listComments,
@@ -43,6 +46,19 @@ function seedThought(ndb: NetworkDb, title = 'Seed'): string {
        VALUES (?, ?, ?, 1, 0, 0, 1, '2024-01-01T00:00:00Z', 'u', '2024-01-01T00:00:00Z', 'u')`,
     )
     .run(id, title, title.toLowerCase());
+  return id;
+}
+
+/** Seed the protected HOME thought (is_root = 1). */
+function seedHome(ndb: NetworkDb): string {
+  const id = randomUUID();
+  ndb
+    .prepare(
+      `INSERT INTO thoughts (id, title, title_norm, active, is_protected, is_root,
+                             version, created_at, created_by, updated_at, updated_by)
+       VALUES (?, ?, ?, 1, 1, 1, 1, '2024-01-01T00:00:00Z', 'u', '2024-01-01T00:00:00Z', 'u')`,
+    )
+    .run(id, 'HOME', 'home');
   return id;
 }
 
@@ -346,6 +362,131 @@ describe(
         const c = createComment(ndb, 'thought', t, { kind: 'permanent', body_md: 'x' }, USER);
         deleteComment(ndb, c.id, c.version);
         assert.equal(listComments(ndb, 'thought', t).length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    // --- L20: multi-target chronological comments ---------------------------
+
+    it('creates a chronological comment with several targets, visible from each (L20)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        const b = seedThought(ndb, 'B');
+        const linkId = seedLink(ndb);
+        const c = createCommentWithTargets(
+          ndb,
+          [
+            { owner_type: 'thought', owner_id: a },
+            { owner_type: 'thought', owner_id: b },
+            { owner_type: 'link', owner_id: linkId },
+          ],
+          { kind: 'chronological', body_md: 'multi', valid_from: '2024-03-01' },
+          USER,
+        );
+        assert.equal(c.owner_type, 'thought');
+        assert.equal(c.owner_id, a, 'first target is the primary owner');
+        assert.deepEqual(
+          c.targets.map((t) => `${t.owner_type}:${t.owner_id}`).sort(),
+          [`thought:${a}`, `thought:${b}`, `link:${linkId}`].sort(),
+        );
+        assert.equal(listComments(ndb, 'thought', a).length, 1);
+        assert.equal(listComments(ndb, 'thought', b).length, 1, 'visible via secondary target');
+        assert.equal(listComments(ndb, 'link', linkId).length, 1, 'visible via link target');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('collapses duplicate targets and rejects a permanent comment with many targets (L20)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        const c = createCommentWithTargets(
+          ndb,
+          [
+            { owner_type: 'thought', owner_id: a },
+            { owner_type: 'thought', owner_id: a },
+          ],
+          { kind: 'chronological', body_md: 'dup' },
+          USER,
+        );
+        assert.equal(c.targets.length, 1);
+        assert.throws(
+          () =>
+            createCommentWithTargets(
+              ndb,
+              [
+                { owner_type: 'thought', owner_id: a },
+                { owner_type: 'thought', owner_id: seedThought(ndb, 'B') },
+              ],
+              { kind: 'permanent', body_md: 'x' },
+              USER,
+            ),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('addCommentTarget attaches one more owner and rejects duplicates (L20)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        const b = seedThought(ndb, 'B');
+        const c = createComment(ndb, 'thought', a, { kind: 'chronological', body_md: 'x' }, USER);
+        const updated = addCommentTarget(ndb, c.id, 'thought', b, c.version, USER);
+        assert.equal(updated.targets.length, 2);
+        assert.equal(updated.version, c.version + 1);
+        assert.throws(
+          () => addCommentTarget(ndb, c.id, 'thought', b, updated.version, USER),
+          (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('removeCommentTarget moves the primary owner when it is detached (L20)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        const b = seedThought(ndb, 'B');
+        const c = createCommentWithTargets(
+          ndb,
+          [
+            { owner_type: 'thought', owner_id: a },
+            { owner_type: 'thought', owner_id: b },
+          ],
+          { kind: 'chronological', body_md: 'x' },
+          USER,
+        );
+        const updated = removeCommentTarget(ndb, c.id, 'thought', a, c.version, USER);
+        assert.equal(updated.owner_type, 'thought');
+        assert.equal(updated.owner_id, b, 'primary moves to the remaining target');
+        assert.equal(updated.targets.length, 1);
+        assert.equal(listComments(ndb, 'thought', a).length, 0);
+        assert.equal(listComments(ndb, 'thought', b).length, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('detaching the last target re-attaches the comment to HOME (L20)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedHome(ndb);
+        const a = seedThought(ndb, 'A');
+        const c = createComment(ndb, 'thought', a, { kind: 'chronological', body_md: 'x' }, USER);
+        const updated = removeCommentTarget(ndb, c.id, 'thought', a, c.version, USER);
+        assert.equal(updated.targets.length, 1);
+        const home = ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1 LIMIT 1').get() as {
+          id: string;
+        };
+        assert.equal(updated.owner_id, home.id, 'comment re-attached to HOME');
+        assert.equal(listComments(ndb, 'thought', home.id).length, 1);
       } finally {
         ndb.close();
       }

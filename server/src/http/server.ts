@@ -37,6 +37,7 @@ import { auditRoutes } from '../routes/audit.js';
 import { createThoughtsRoutes } from '../routes/thoughts.js';
 import { createLinksRoutes } from '../routes/links.js';
 import { createStructuresRoutes } from '../routes/structures.js';
+import { createChronicleRoutes } from '../routes/chronicle.js';
 import { createPinsRoutes } from '../routes/pins.js';
 import { createTypesRoutes } from '../routes/types.js';
 import { createPropertiesRoutes } from '../routes/properties.js';
@@ -246,6 +247,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Structures-view routes (L15): filter query, hierarchy expansion and saved
   // filters (03-server-api.md §6.10, §6.11, §18).
   await app.register(createStructuresRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Chronicle-view routes (L20): two-phase chronological-comment query
+  // (03-server-api.md §20).
+  await app.register(createChronicleRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Pinned-thoughts routes (L18): per-user ordered list (03-server-api.md §19).
   await app.register(createPinsRoutes(routeDeps), { prefix: '/api/v1' });
