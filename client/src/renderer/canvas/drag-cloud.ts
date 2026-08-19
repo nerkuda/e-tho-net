@@ -2,9 +2,11 @@
  * Canvas cloud drag-n-drop (08-ui-spec.md §2.3.1, §5.5, §11.1).
  *
  * A pointer gesture (mousedown → move → mouseup) started from any cloud of the
- * parents/children zones **or from a thought list entry** (selection panel row,
- * history mini-cloud, history dropdown row — `wireExternalDragSource`);
- * modifier keys are read live while dragging:
+ * parents/children zones, from a siblings-zone cloud or the focus cloud (no
+ * zone of origin — they drag like list entries), **or from a thought list
+ * entry** (selection panel row, history mini-cloud, history dropdown row,
+ * pinned chip — `wireExternalDragSource`); modifier keys are read live while
+ * dragging:
  *
  * - **plain drag** — drop on the top ellipse of cloud Б → create A→Б (A becomes
  *   Б's parent); drop on the body (or bottom ellipse) of cloud Б → create Б→A;
@@ -130,6 +132,9 @@ export interface ListDropActions {
   resolvePinTarget?: (el: HTMLElement, x: number) => { dropIndex: number; highlightEl: HTMLElement } | null;
   /** Pins the thought at the drop index (re-pinning an existing pin reorders). */
   pinThought?: (id: string, dropIndex: number) => void;
+  /** Called when the drag gesture ends (drop or cancel) — the pinned panel
+   *  hides its insertion marker here. */
+  onDragEnd?: () => void;
 }
 
 /** Registers list-panel drop actions (called by the panels at mount). */
@@ -188,8 +193,14 @@ function onCloudMouseDown(event: MouseEvent): void {
   // the zone reorder, and the ellipse handler lets exactly that press through.
   const cloud = target.closest<HTMLElement>('.cloud');
   const id = cloud?.dataset['id'];
-  const dir = cloud?.dataset['dir'];
-  if (cloud === null || id === undefined || (dir !== 'parents' && dir !== 'children')) return;
+  if (cloud === null || id === undefined) return;
+  // Zone clouds of the parents/children zones keep their zone semantics
+  // (move/reorder between zones); the focus cloud and the siblings zone have
+  // no zone of origin and drag like list entries — e.g. to pin them onto the
+  // pinned panel or to link them onto another thought (L18).
+  const rawDir = cloud.dataset['dir'];
+  const dir: OrderableDir | undefined =
+    rawDir === 'parents' || rawDir === 'children' ? rawDir : undefined;
   gesture = {
     id,
     dir,
@@ -246,6 +257,7 @@ function onCloudMouseUp(event: MouseEvent): void {
   // before the mouse button.
   const target = g.lastTarget ?? computeTarget(event, dragged, accessors!);
   clearHighlight();
+  dropActions.onDragEnd?.();
   // A gesture started on a dropdown row leaves the menu behind — close it now
   // that the drag is over (the row's own click would have done it, but a drop
   // elsewhere produces no click).
@@ -309,6 +321,7 @@ function cancelCloudDrag(): void {
     g.source.classList.remove('drag-source');
     g.ghost?.remove();
     clearHighlight();
+    dropActions.onDragEnd?.();
   }
 }
 
@@ -481,7 +494,10 @@ function highlight(target: DropTarget): void {
 
 function clearHighlight(): void {
   if (highlighted !== null) {
-    highlighted.classList.remove('drop-target-link', 'drop-target-move');
+    // `drop-target-add` included: panel targets (selection/history/pinned bar)
+    // must release their frame when the drag ends or moves elsewhere — a
+    // stuck frame reads as a permanent highlight (L18 fix).
+    highlighted.classList.remove('drop-target-link', 'drop-target-move', 'drop-target-add');
     highlighted = null;
   }
 }

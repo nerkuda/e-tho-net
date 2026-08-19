@@ -3,7 +3,7 @@
  *
  * ```
  * ┌──────────────────────────────────────────────────────────────────┐
- * │ [Меню сети] [🗺][🌳] [📌 закреплённые…]  [👤 Пользователь] [☰] │ ← toolbar
+ * │ [Меню сети] [🗺][🌳] [📌 закреплённые мысли (вся свободная ширина)] [👤][☰] │
  * ├──────────────────────────────────────────────────────────────────┤
  * │ [Поиск…] [⚙]                                              (карта)│
  * ├─────────┬──────────────────────────────────────────────┬────────┤
@@ -147,8 +147,6 @@ export function buildWorkspace(): HTMLElement {
   const searchRow = div('search-row');
   searchRow.append(searchInput, searchOptionsButton);
 
-  const spacer = div('toolbar-spacer');
-
   const userMenuButton = el('button', 'tb-btn', '');
   userMenuButton.type = 'button';
   const userMenuLabel = span('—', 'tb-label');
@@ -163,12 +161,13 @@ export function buildWorkspace(): HTMLElement {
   viewMenuButton.append(svgIcon('menu'));
   setTooltip(viewMenuButton, 'Вид');
 
+  // The pinned panel (L18) stretches across the whole free toolbar width —
+  // it is one big drop target between the view switcher and the user menu.
   toolbar.append(
     netMenuButton,
     mapViewButton,
     structuresViewButton,
     pinnedHost,
-    spacer,
     userMenuButton,
     viewMenuButton,
   );

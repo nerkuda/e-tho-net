@@ -525,15 +525,18 @@ textarea {
 }
 
 /* Pinned-thoughts panel in the toolbar (L18, 08-ui-spec.md §16): chips in one
-   row; those that don't fit move into the «▾ N» dropdown. */
+   row; those that don't fit move into the «▾ N» dropdown. The panel spans the
+   whole free toolbar width — it is one big drop target; the dashed frame
+   appears only while a drag hovers it. */
 .pinned-bar {
-  flex: 0 1 auto;
+  position: relative;
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  padding: 0 10px;
   overflow: hidden;
-  margin-left: 6px;
 }
 
 .pinned-chip {
@@ -588,9 +591,18 @@ textarea {
   color: var(--text-faint);
   font-size: 12px;
   white-space: nowrap;
-  padding: 1px 8px;
-  border: 1px dashed var(--border-strong);
-  border-radius: 999px;
+}
+
+/* Drop-position marker: a thin accent bar shown between the chips while a
+   drag hovers the panel — makes the insertion point visible (L18). */
+.pin-insert-marker {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
 }
 
 .search-input {
@@ -1370,11 +1382,11 @@ body.resizing-h {
 /* Thought list panels as drop targets (drag-cloud.ts §5.5/§11.1, §16): the
    selection list takes the dragged thought into the selection, the history
    bar (including the history dropdown rows) opens it, the pinned panel pins
-   it at the drop position. */
+   it at the drop position. The frame is applied only while a drag hovers the
+   target and is removed on drop/cancel. */
 .selection-list.drop-target-add,
 .history-bar.drop-target-add,
 .pinned-bar.drop-target-add,
-.pinned-empty.drop-target-add,
 .menu-item.drop-target-add {
   background: var(--accent-soft);
   outline: 1px dashed var(--accent);

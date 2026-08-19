@@ -40,6 +40,8 @@ let host: HTMLElement | null = null;
 let lastSignature = '';
 /** Resolved chip metadata, reused across renders and evicted on updates. */
 const refCache = new Map<string, ThoughtRef>();
+/** Drop-position indicator shown while a drag hovers the panel. */
+let insertMarker: HTMLElement | null = null;
 
 /** Mounts the panel into the toolbar host (called from the workspace builder). */
 export function mountPinnedBar(pinnedHost: HTMLElement): void {
@@ -47,6 +49,7 @@ export function mountPinnedBar(pinnedHost: HTMLElement): void {
   registerDropActions({
     pinThought: (id, dropIndex) => void pinAt(id, dropIndex),
     resolvePinTarget,
+    onDragEnd: hideInsertMarker,
   });
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
@@ -107,6 +110,7 @@ async function render(): Promise<void> {
   });
 
   clear(host);
+  insertMarker = null;
   if (visible.length === 0) {
     const empty = div('pinned-empty');
     empty.append(
@@ -160,7 +164,9 @@ function openOverflowMenu(restIds: string[], refs: Map<string, ThoughtRef>): voi
  * Drop-target resolution for the drag gesture: a drop on the panel (or its
  * dropdown) pins at the drop position — between the chips, at the start or at
  * the end. Returns the insertion index in the FULL ordered list (hidden pins
- * included), or `null` when the point is not over the panel.
+ * included), or `null` when the point is not over the panel. While the cursor
+ * is over the panel the insertion marker follows the resolved position; it is
+ * hidden as soon as the drag leaves (or ends).
  */
 function resolvePinTarget(
   el: HTMLElement,
@@ -170,9 +176,11 @@ function resolvePinTarget(
   if (bar !== null && host !== null) {
     const pins = store.state.pins;
     const chips = Array.from(host.querySelectorAll<HTMLElement>('.pinned-chip[data-id]'));
+    const barLeft = host.getBoundingClientRect().left;
     // Walk left → right: the drop lands before the first chip whose midpoint
     // is right of the cursor, after the last chip, or at the very end.
     let index = pins.length;
+    let markerX = 10;
     for (const chip of chips) {
       const chipId = chip.dataset['id'];
       if (chipId === undefined) continue;
@@ -180,14 +188,18 @@ function resolvePinTarget(
       const rect = chip.getBoundingClientRect();
       if (x < rect.left + rect.width / 2) {
         index = fullIndex;
+        markerX = rect.left - barLeft - 5;
         break;
       }
       index = fullIndex + 1;
+      markerX = rect.right - barLeft + 5;
     }
+    showInsertMarker(markerX);
     return { dropIndex: index, highlightEl: bar };
   }
   const row = el.closest<HTMLElement>('.pinned-menu .menu-item[data-drag-id]');
   if (row !== null && row.parentElement !== null) {
+    hideInsertMarker();
     const rows = Array.from(
       row.parentElement.querySelectorAll<HTMLElement>('.menu-item[data-drag-id]'),
     );
@@ -195,7 +207,24 @@ function resolvePinTarget(
     const chipCount = host?.querySelectorAll('.pinned-chip[data-id]').length ?? 0;
     return { dropIndex: chipCount + rowIndex, highlightEl: row };
   }
+  hideInsertMarker();
   return null;
+}
+
+/** Shows the drop-position marker at the bar-relative x coordinate. */
+function showInsertMarker(x: number): void {
+  if (host === null) return;
+  if (insertMarker === null) {
+    insertMarker = div('pin-insert-marker');
+    host.append(insertMarker);
+  }
+  insertMarker.style.left = `${Math.max(6, x)}px`;
+}
+
+/** Removes the drop-position marker. */
+function hideInsertMarker(): void {
+  insertMarker?.remove();
+  insertMarker = null;
 }
 
 /** Resolves metadata for pin ids (one batched call; cached across renders). */
