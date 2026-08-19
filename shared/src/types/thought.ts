@@ -302,6 +302,8 @@ export interface ThoughtMeta {
 
 /** Превью постоянного комментария (task N2). */
 export interface PermanentCommentPreview {
+  /** Id комментария — адрес для `etn.comments.get` (полный текст). */
+  id: string;
   /** Первые 2000 символов markdown-текста. */
   body_md: string;
   /** Сколько символов возвращено в `body_md`. */

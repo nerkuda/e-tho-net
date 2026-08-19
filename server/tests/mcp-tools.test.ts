@@ -519,6 +519,100 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.comments.get returns the full text by comment id and by thought id (N7)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const longBody = 'z'.repeat(3000);
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Мысль с большим комментарием' },
+        });
+        const { id } = toolJson<{ id: string }>(created);
+        const perm = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: id,
+            kind: 'permanent',
+            body_md: longBody,
+          },
+        });
+        const permId = toolJson<{ id: string }>(perm).id;
+
+        // By comment_id: the complete body_md, no truncation.
+        const byId = await handle.client.callTool({
+          name: 'etn.comments.get',
+          arguments: { network_id: ctx.networkId, comment_id: permId },
+        });
+        assert.equal(byId.isError, undefined, toolText(byId));
+        const full = toolJson<{ id: string; kind: string; body_md: string }>(byId);
+        assert.equal(full.id, permId);
+        assert.equal(full.kind, 'permanent');
+        assert.equal(full.body_md, longBody);
+
+        // By thought_id: the thought's permanent comment.
+        const byThought = await handle.client.callTool({
+          name: 'etn.comments.get',
+          arguments: { network_id: ctx.networkId, thought_id: id },
+        });
+        const tp = toolJson<{
+          thought_id: string;
+          permanent: { id: string; body_md: string } | null;
+        }>(byThought);
+        assert.equal(tp.thought_id, id);
+        assert.equal(tp.permanent?.id, permId);
+        assert.equal(tp.permanent?.body_md, longBody);
+
+        // meta.permanent now carries the comment id, so the agent can follow up.
+        const got = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: id },
+        });
+        const thought = toolJson<{
+          meta: { permanent: { id: string; truncated: boolean } | null };
+        }>(got);
+        assert.equal(thought.meta.permanent?.id, permId);
+        assert.equal(thought.meta.permanent?.truncated, true);
+
+        // Exactly one of comment_id / thought_id is required.
+        const bad = await handle.client.callTool({
+          name: 'etn.comments.get',
+          arguments: { network_id: ctx.networkId },
+        });
+        assert.equal(bad.isError, true);
+        assert.match(toolText(bad), /exactly one/);
+
+        // Unknown comment id → NOT_FOUND.
+        const missing = await handle.client.callTool({
+          name: 'etn.comments.get',
+          arguments: { network_id: ctx.networkId, comment_id: 'no-such-comment' },
+        });
+        assert.equal(missing.isError, true);
+        assert.match(toolText(missing), /NOT_FOUND/);
+
+        // A thought without a permanent comment → { thought_id, permanent: null }.
+        const bare = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Мысль без комментария' },
+        });
+        const bareId = toolJson<{ id: string }>(bare).id;
+        const none = await handle.client.callTool({
+          name: 'etn.comments.get',
+          arguments: { network_id: ctx.networkId, thought_id: bareId },
+        });
+        const noPerm = toolJson<{ permanent: unknown }>(none);
+        assert.equal(noPerm.permanent, null);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('auth provider rejects garbage, disabled keys and disabled users (F2)', async () => {
     const ctx = await buildMcpContext();
     try {

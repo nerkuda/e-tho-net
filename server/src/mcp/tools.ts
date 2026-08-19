@@ -1,9 +1,9 @@
 /**
  * MCP tools (task F4, docs/05-mcp-server.md §4).
  *
- * Twenty-one tools in three groups:
+ * Twenty-two tools in three groups:
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
- *     path, links get, mentions, usage, export;
+ *     path, links get, mentions, usage, comments get, export;
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert, attachments.add,
  *     properties.set, set_active;
  *   * dedupe (§4.3) — find_duplicates.
@@ -44,7 +44,13 @@ import {
   updateThought,
 } from '../domain/thought-service.js';
 import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
-import { createComment, getCommentsPreview, listComments, updateComment } from '../domain/comment-service.js';
+import {
+  createComment,
+  getComment,
+  getCommentsPreview,
+  listComments,
+  updateComment,
+} from '../domain/comment-service.js';
 import { createAttachment } from '../domain/attachment-service.js';
 import {
   findThoughtUsage,
@@ -219,7 +225,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Мысль (полная)',
       description:
-        'Fetch one thought with synonyms, type (with AI-facing description), styles and property values.',
+        'Fetch one thought with synonyms, type (with AI-facing description), styles and ' +
+        'property values (`thought_ref` values resolved to {id, title}). `meta` carries ' +
+        'counters and `meta.permanent` — a preview of the single permanent comment (body ' +
+        'truncated to 2000 chars; `truncated` flag + comment `id`). When `truncated: true` ' +
+        'fetch the full text via `etn.comments.get` (by that `id` or by this thought_id).',
       inputSchema: GetSchema,
     },
     (args) =>
@@ -301,11 +311,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Extract the radius-bounded subgraph around seed thoughts: nodes (full thoughts), ' +
         'active edges, and optionally comments per node (`include_comments` — previews: ' +
         'permanent truncated to 2000 chars, last 10 chronological entries with per-entry ' +
-        'truncation). Every response carries `thought_types`/`link_types` reference tables ' +
-        '(id, name, description, icon/color) for the types actually used — the agent reads ' +
-        'the AI-facing type descriptions once instead of re-fetching. The key RAG tool — ' +
-        'returns ready-to-use context. `max_nodes` is capped by the server setting ' +
-        'max_nodes_per_subgraph.',
+        'truncation; every preview entry carries the comment `id` — fetch the full text via ' +
+        '`etn.comments.get` when `truncated`). Every response carries ' +
+        '`thought_types`/`link_types` reference tables (id, name, description, icon/color) ' +
+        'for the types actually used — the agent reads the AI-facing type descriptions once ' +
+        'instead of re-fetching. The key RAG tool — returns ready-to-use context. ' +
+        '`max_nodes` is capped by the server setting max_nodes_per_subgraph.',
       inputSchema: SubgraphSchema,
     },
     (args) =>
@@ -434,6 +445,49 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             usage.groups.flatMap((g) => g.thoughts.map((t) => t.type_id)),
           ),
         };
+      }),
+  );
+
+  const GetCommentSchema = z
+    .object({
+      network_id: NetworkId,
+      comment_id: z.string().min(1).optional(),
+      thought_id: ThoughtId.optional(),
+    })
+    .refine((a) => (a.comment_id === undefined) !== (a.thought_id === undefined), {
+      message: 'provide exactly one of comment_id or thought_id',
+    });
+  mcp.registerTool(
+    'etn.comments.get',
+    {
+      title: 'Комментарий (полный текст)',
+      description:
+        'Fetch one comment in full: by `comment_id` — any comment (permanent or ' +
+        'chronological) with its complete `body_md`; by `thought_id` — the thought\'s ' +
+        'permanent comment, or `{thought_id, permanent: null}` when absent. Use when a ' +
+        'preview (`meta.permanent`, `subgraph` comments) reports `truncated: true` — every ' +
+        'preview entry carries the comment `id`.',
+      inputSchema: GetCommentSchema,
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        if (args.comment_id !== undefined) {
+          const comment = getComment(ndb, args.comment_id);
+          if (comment === null) {
+            throw new Error(`ETN error [NOT_FOUND]: comment ${args.comment_id} not found`);
+          }
+          return comment;
+        }
+        // The refine guarantees exactly one of the two; TS needs an explicit check.
+        if (args.thought_id === undefined) {
+          throw new Error('ETN error [VALIDATION_ERROR]: thought_id required');
+        }
+        getThoughtOrThrow(ndb, args.thought_id);
+        const permanent =
+          listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ??
+          null;
+        return { thought_id: args.thought_id, permanent };
       }),
   );
 

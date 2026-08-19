@@ -164,12 +164,18 @@ export function getPermanentPreview(
   validateOwnerType(ownerType);
   const row = ndb
     .prepare(
-      `SELECT body_md, valid_from, created_at, updated_at FROM comments
+      `SELECT id, body_md, valid_from, created_at, updated_at FROM comments
        WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent'
        LIMIT 1`,
     )
     .get(ownerType, ownerId) as
-    | { body_md: string; valid_from: string; created_at: string; updated_at: string }
+    | {
+        id: string;
+        body_md: string;
+        valid_from: string;
+        created_at: string;
+        updated_at: string;
+      }
     | undefined;
   if (row === undefined) {
     return null;
@@ -177,6 +183,7 @@ export function getPermanentPreview(
   const chars_total = row.body_md.length;
   const chars_returned = Math.min(chars_total, COMMENT_PREVIEW_CHARS);
   return {
+    id: row.id,
     body_md: row.body_md.slice(0, chars_returned),
     chars_returned,
     chars_total,
