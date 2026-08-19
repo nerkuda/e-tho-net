@@ -304,6 +304,20 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
 
+  // --- pinned thoughts (L18) ------------------------------------------------
+  handlers.set(
+    'pins.list',
+    bind((networkId: string) => requireRest(deps).listPinnedThoughts(networkId)),
+  );
+  handlers.set(
+    'pins.set',
+    bind((networkId: string, orderedIds: string[]) =>
+      requireRest(deps).setPinnedThoughts(networkId, orderedIds, {
+        clientRequestId: randomUUID(),
+      }),
+    ),
+  );
+
   // --- links ----------------------------------------------------------------
   handlers.set(
     'links.get',

@@ -24,6 +24,7 @@ import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import { isPinned, togglePinned } from '../pinned/pins.js';
 
 /** Zone direction (parents/siblings/children). */
 type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -292,6 +293,13 @@ function buildThoughtMenuItems(
         if (opts.openHandler !== undefined) opts.openHandler(target.id);
         else void setFocus(target.id);
       },
+    },
+    {
+      // Pinned-thoughts command (L18, 08-ui-spec.md §16): available in every
+      // thought menu — the canvas, the selection panel, the structures tree,
+      // the history chips and the pinned panel itself.
+      label: isPinned(target.id) ? 'Открепить мысль' : 'Закрепить мысль',
+      onClick: () => void togglePinned(target.id),
     },
     ...selectionItem,
     {

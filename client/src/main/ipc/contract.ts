@@ -50,6 +50,7 @@ import type {
   PropertyValue,
   SavedFilter,
   SavedFilterDefinition,
+  PinnedThoughtEntry,
   SearchRequest,
   SearchResponse,
   StructureQueryRequest,
@@ -257,6 +258,12 @@ export interface EtnApi {
       input: { name?: string; definition?: SavedFilterDefinition },
     ): Promise<SavedFilter>;
     remove(networkId: string, filterId: string): Promise<void>;
+  };
+  pins: {
+    /** `GET /networks/{nid}/pins` — the user's pinned thoughts in position order (L18). */
+    list(networkId: string): Promise<PinnedThoughtEntry[]>;
+    /** `PUT /networks/{nid}/pins` — replace the pinned list (idempotent, ≤20). */
+    set(networkId: string, orderedIds: string[]): Promise<PinnedThoughtEntry[]>;
   };
   links: {
     get(networkId: string, id: string): Promise<Link>;

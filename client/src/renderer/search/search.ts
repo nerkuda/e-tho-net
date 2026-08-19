@@ -143,7 +143,7 @@ export function mountSearch(next: SearchChrome): void {
     }
   });
 
-  // Keep the dropdown anchored to the input while the toolbar/window resizes.
+  // Keep the dropdown anchored to the input while the search row/window resizes.
   window.addEventListener('resize', positionPanel);
   new ResizeObserver(positionPanel).observe(input);
 
@@ -166,21 +166,22 @@ export function mountSearch(next: SearchChrome): void {
   });
 }
 
-/** Anchors the drop panel: left edge under the search input, below the toolbar. */
+/** Anchors the drop panel: left edge under the search input, below its row. */
 function positionPanel(): void {
   if (chrome === null) return;
   const root = chrome.host.parentElement;
   if (root === null) return;
   const rootRect = root.getBoundingClientRect();
   const inputRect = chrome.input.getBoundingClientRect();
-  const toolbar = chrome.input.closest('.toolbar');
-  if (toolbar === null) return;
+  // The input lives in the map-view search row (L18), not in the toolbar.
+  const row = chrome.input.parentElement;
+  if (row === null) return;
   chrome.host.style.left = `${Math.max(0, inputRect.left - rootRect.left)}px`;
-  chrome.host.style.top = `${toolbar.getBoundingClientRect().bottom - rootRect.top + 6}px`;
+  chrome.host.style.top = `${row.getBoundingClientRect().bottom - rootRect.top + 6}px`;
 }
 
 /** Hides the drop panel (query, results and the selected row are kept). */
-function hidePanel(): void {
+export function hidePanel(): void {
   if (chrome !== null) chrome.host.classList.add('hidden');
   cursor = null;
 }

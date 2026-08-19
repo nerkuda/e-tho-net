@@ -74,7 +74,7 @@ export async function openNetwork(networkId: string): Promise<void> {
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
 
-  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw, activeViewRaw] =
+  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw, activeViewRaw, pinsRaw] =
     await Promise.all([
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
@@ -86,6 +86,7 @@ export async function openNetwork(networkId: string): Promise<void> {
       etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_LAYOUT),
       etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_ZOOM),
       etn.ui.getState(networkId, UI_STATE_KEY.ACTIVE_VIEW),
+      etn.pins.list(networkId),
     ]);
 
   const editorPosition = (
@@ -123,6 +124,7 @@ export async function openNetwork(networkId: string): Promise<void> {
     editorTarget: null,
     structuresActiveThoughtId: null,
     structuresActiveThought: null,
+    pins: (pinsRaw ?? []).map((p) => p.thought_id),
   });
 
   showScreen('workspace');
@@ -239,6 +241,11 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
   const wasFocus = store.state.focus?.focused.id === deletedId;
   if (store.state.selection.includes(deletedId)) {
     store.update({ selection: store.state.selection.filter((id) => id !== deletedId) });
+  }
+  // The server cascades the pin row (FK ON DELETE CASCADE) without an event —
+  // drop it from the local panel here (L18).
+  if (store.state.pins.includes(deletedId)) {
+    store.update({ pins: store.state.pins.filter((id) => id !== deletedId) });
   }
   if (wasFocus) {
     const nextId = await pickFocusAfterDeletion(networkId, deletedId);

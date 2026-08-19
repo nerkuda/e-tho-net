@@ -49,8 +49,8 @@ import { DRAG_THRESHOLD_PX, requestZoneAnimation, suppressNextCanvasClick } from
 type OrderableDir = 'parents' | 'children';
 type ZoneDir = 'parents' | 'children' | 'siblings';
 type LinkMode = 'parent' | 'child';
-/** Where the drag started: a zone cloud or a thought list (selection/history). */
-type DragOrigin = 'cloud' | 'selection' | 'history';
+/** Where the drag started: a zone cloud or a thought list (selection/history/pinned). */
+type DragOrigin = 'cloud' | 'selection' | 'history' | 'pinned';
 
 interface DraggedCloud {
   id: string;
@@ -67,6 +67,7 @@ type DropKind =
   | 'reorder'
   | 'add-to-selection'
   | 'open-history'
+  | 'pin'
   | 'none';
 
 interface DropTarget {
@@ -117,10 +118,18 @@ let accessors: DragAccessors | null = null;
 /** Panel actions, registered by the selection/history modules at mount. */
 let dropActions: ListDropActions = {};
 
-/** Drop actions provided by the thought list panels (selection, history). */
+/** Drop actions provided by the thought list panels (selection, history, pins). */
 export interface ListDropActions {
   addToSelection?: (ids: string[]) => void;
   openEntry?: (id: string) => void;
+  /**
+   * The pinned panel resolves drops onto its own DOM: `el` under the cursor,
+   * `x` — the cursor X for the between-chips position. Returns the insertion
+   * index in the FULL pinned list, or `null` when the point is elsewhere.
+   */
+  resolvePinTarget?: (el: HTMLElement, x: number) => { dropIndex: number; highlightEl: HTMLElement } | null;
+  /** Pins the thought at the drop index (re-pinning an existing pin reorders). */
+  pinThought?: (id: string, dropIndex: number) => void;
 }
 
 /** Registers list-panel drop actions (called by the panels at mount). */
@@ -267,6 +276,9 @@ function onCloudMouseUp(event: MouseEvent): void {
     case 'open-history':
       dropActions.openEntry?.(g.id);
       break;
+    case 'pin':
+      dropActions.pinThought?.(g.id, target.insertIndex ?? -1);
+      break;
     default:
       // A Ctrl+Shift drop that ends in a no-op usually means the zone is not
       // sorted `manual` — say so instead of silently bouncing back. List
@@ -336,6 +348,20 @@ function moveGhost(x: number, y: number): void {
 function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccessors): DropTarget {
   const el = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
   if (el === null) return { kind: 'none' };
+
+  // The pinned panel (L18): a drop pins the dragged thought at the position —
+  // between the chips, at the start or at the end. Re-pinning a pinned thought
+  // reorders it. Checked first: the pinned dropdown rows share the
+  // `.menu-item[data-drag-id]` shape with the history dropdown.
+  const pinTarget = dropActions.resolvePinTarget?.(el, event.clientX);
+  if (pinTarget !== undefined && pinTarget !== null) {
+    return {
+      kind: 'pin',
+      insertIndex: pinTarget.dropIndex,
+      highlightEl: pinTarget.highlightEl,
+      highlightCls: 'drop-target-add',
+    };
+  }
 
   // Thought list panels are drop targets of their own: the selection panel
   // takes the dragged thought into the selection, the history bar opens it

@@ -18,6 +18,7 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 import { scheduleRefresh } from './app.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
+import { invalidatePinnedBar, invalidatePinnedRef } from './screens/pinned-bar.js';
 import {
   invalidateStructuresThought,
   scheduleStructuresRefresh,
@@ -45,6 +46,11 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       invalidateRef(evt.data.id);
       invalidateHistoryBar();
       invalidateStructuresThought(evt.data.id);
+      // The pin row cascades on the server (FK ON DELETE CASCADE) without a
+      // `pinned-thoughts.updated` event — drop the chip locally (L18).
+      if (store.state.pins.includes(evt.data.id)) {
+        store.update({ pins: store.state.pins.filter((id) => id !== evt.data.id) });
+      }
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
       break;
 
@@ -55,6 +61,11 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
 
     case 'thought.updated':
       invalidateRef(evt.data.id);
+      // A pinned chip mirrors the thought's title/icon/styles — refresh it.
+      if (store.state.pins.includes(evt.data.id)) {
+        invalidatePinnedRef(evt.data.id);
+        invalidatePinnedBar();
+      }
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
       scheduleStructuresRefresh();
       break;
@@ -115,6 +126,12 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // The user's other client changed a saved filter (audience=user) — the
       // local list re-syncs from the server (§15.3).
       invalidateSavedFilters();
+      break;
+
+    case 'pinned-thoughts.updated':
+      // The user's other client changed the pinned list (audience=user) — the
+      // event carries the full new order (L18, 08-ui-spec.md §16).
+      store.update({ pins: evt.data.ordered_ids });
       break;
 
     case 'network.updated': {

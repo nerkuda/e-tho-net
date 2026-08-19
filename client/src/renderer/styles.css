@@ -508,6 +508,91 @@ textarea {
   flex: 1;
 }
 
+/* Search row of the map view (L18): the search input + gear live under the top
+   bar and belong to the map; the structures view hides the whole row. */
+.search-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.search-row .search-input {
+  flex: 1;
+}
+
+/* Pinned-thoughts panel in the toolbar (L18, 08-ui-spec.md §16): chips in one
+   row; those that don't fit move into the «▾ N» dropdown. */
+.pinned-bar {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  margin-left: 6px;
+}
+
+.pinned-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  max-width: 260px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.pinned-chip:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pinned-chip .pc-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pinned-chip.dim {
+  opacity: 0.5;
+  font-style: italic;
+}
+
+.pinned-more {
+  flex: 0 0 auto;
+  cursor: pointer;
+  color: var(--text-dim);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.pinned-more:hover {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+.pinned-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 12px;
+  white-space: nowrap;
+  padding: 1px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+}
+
 .search-input {
   flex: 0 1 420px;
   min-width: 140px;
@@ -1282,11 +1367,14 @@ body.resizing-h {
   outline-offset: 2px;
 }
 
-/* Thought list panels as drop targets (drag-cloud.ts §5.5/§11.1): the
+/* Thought list panels as drop targets (drag-cloud.ts §5.5/§11.1, §16): the
    selection list takes the dragged thought into the selection, the history
-   bar (including the history dropdown rows) opens it. */
+   bar (including the history dropdown rows) opens it, the pinned panel pins
+   it at the drop position. */
 .selection-list.drop-target-add,
 .history-bar.drop-target-add,
+.pinned-bar.drop-target-add,
+.pinned-empty.drop-target-add,
 .menu-item.drop-target-add {
   background: var(--accent-soft);
   outline: 1px dashed var(--accent);
@@ -1298,6 +1386,7 @@ body.resizing-h {
    rules only dress the non-cloud clones. */
 .selection-item.drag-ghost,
 .history-cloud.drag-ghost,
+.pinned-chip.drag-ghost,
 .menu-item.drag-ghost {
   background: var(--surface);
   box-shadow: var(--shadow), 0 0 0 2px var(--accent-soft);

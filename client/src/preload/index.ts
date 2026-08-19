@@ -76,6 +76,10 @@ function buildApi(): EtnApi {
         invoke('savedFilters.update', networkId, filterId, input),
       remove: (networkId, filterId) => invoke('savedFilters.remove', networkId, filterId),
     },
+    pins: {
+      list: (networkId) => invoke('pins.list', networkId),
+      set: (networkId, orderedIds) => invoke('pins.set', networkId, orderedIds),
+    },
     links: {
       get: (networkId, id) => invoke('links.get', networkId, id),
       create: (networkId, input) => invoke('links.create', networkId, input),

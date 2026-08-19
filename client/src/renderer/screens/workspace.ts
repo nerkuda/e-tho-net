@@ -1,9 +1,11 @@
 /**
- * Workspace layout (H1, 08-ui-spec.md §1):
+ * Workspace layout (H1, 08-ui-spec.md §1, §16):
  *
  * ```
  * ┌──────────────────────────────────────────────────────────────────┐
- * │ [Меню сети] [Поиск…] [⚙]              [👤 Пользователь] [Статус] │ ← toolbar
+ * │ [Меню сети] [🗺][🌳] [📌 закреплённые…]  [👤 Пользователь] [☰] │ ← toolbar
+ * ├──────────────────────────────────────────────────────────────────┤
+ * │ [Поиск…] [⚙]                                              (карта)│
  * ├─────────┬──────────────────────────────────────────────┬────────┤
  * │ выделен.│                 холст (зоны)                 │ редак. │
  * ├─────────┴──────────────────────────────────────────────┴────────┤
@@ -12,8 +14,9 @@
  * ```
  *
  * The module owns the chrome (toolbar/status bar/containers). Content modules
- * (canvas H4, editor H8, search H13, selection H16, history H7) mount into the
- * exposed hosts; the toolbar/status bar re-render from the shared store.
+ * (canvas H4, editor H8, search H13, selection H16, history H7, pinned L18)
+ * mount into the exposed hosts; the toolbar/status bar re-render from the
+ * shared store.
  */
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
@@ -25,9 +28,10 @@ import { mountHistoryBar } from './history-bar.js';
 import { mountEditor } from '../editor/editor.js';
 import { mountEditorResizer } from './editor-resizer.js';
 import { mountSelectionResizer } from './selection-resizer.js';
-import { mountSearch } from '../search/search.js';
+import { hidePanel as hideSearchPanel, mountSearch } from '../search/search.js';
 import { mountSelection } from '../selection/selection.js';
 import { mountStructures, setActiveView } from './structures/structures.js';
+import { mountPinnedBar } from './pinned-bar.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -42,10 +46,14 @@ export interface WorkspaceHandles {
   /** View switcher segment (L15): map / structures. */
   mapViewButton: HTMLButtonElement;
   structuresViewButton: HTMLButtonElement;
-  /** Search input in the toolbar (H13). */
+  /** Pinned-thoughts panel host in the toolbar (L18). */
+  pinnedHost: HTMLElement;
+  /** Search row of the map view (L18): input + gear, under the top bar. */
+  searchRow: HTMLElement;
+  /** Search input (H13, lives in the map-view search row). */
   searchInput: HTMLInputElement;
   searchOptionsButton: HTMLButtonElement;
-  /** Drop panel under the toolbar for search results (H13). */
+  /** Drop panel under the search row for search results (H13). */
   searchHost: HTMLElement;
   /** Left selection panel (H16). */
   selectionHost: HTMLElement;
@@ -106,8 +114,7 @@ export function buildWorkspace(): HTMLElement {
   setTooltip(netMenuButton, 'Меню сети');
 
   // View switcher (L15, 08-ui-spec.md §15.1): immediately after the network
-  // menu. The pressed button marks the active view; the map keeps the search
-  // input, the structures replace canvas + search with their own space.
+  // menu. The pressed button marks the active view.
   const mapViewButton = el('button', 'tb-btn tb-icon view-btn', '');
   mapViewButton.type = 'button';
   mapViewButton.append(svgIcon('mindmap'));
@@ -120,6 +127,13 @@ export function buildWorkspace(): HTMLElement {
   setTooltip(structuresViewButton, 'Структуры мыслей');
   structuresViewButton.addEventListener('click', () => setActiveView('structures'));
 
+  // Pinned-thoughts panel (L18, 08-ui-spec.md §16): right after the view
+  // switcher, visible in both views.
+  const pinnedHost = div('pinned-bar');
+
+  // The search row belongs to the map view (L18): it sits under the top bar
+  // and hides in the structures view, which replaces canvas + search with its
+  // own space.
   const searchInput = el('input', 'search-input');
   searchInput.type = 'text';
   searchInput.placeholder = 'Поиск… (Ctrl+F)';
@@ -129,6 +143,9 @@ export function buildWorkspace(): HTMLElement {
   searchOptionsButton.type = 'button';
   searchOptionsButton.append(svgIcon('settings'));
   setTooltip(searchOptionsButton, 'Опции поиска');
+
+  const searchRow = div('search-row');
+  searchRow.append(searchInput, searchOptionsButton);
 
   const spacer = div('toolbar-spacer');
 
@@ -150,8 +167,7 @@ export function buildWorkspace(): HTMLElement {
     netMenuButton,
     mapViewButton,
     structuresViewButton,
-    searchInput,
-    searchOptionsButton,
+    pinnedHost,
     spacer,
     userMenuButton,
     viewMenuButton,
@@ -209,7 +225,7 @@ export function buildWorkspace(): HTMLElement {
     conflictHost,
   );
 
-  root.append(toolbar, searchHost, body, statusbar);
+  root.append(toolbar, searchRow, searchHost, body, statusbar);
 
   const handles: WorkspaceHandles = {
     root,
@@ -220,6 +236,8 @@ export function buildWorkspace(): HTMLElement {
     viewMenuButton,
     mapViewButton,
     structuresViewButton,
+    pinnedHost,
+    searchRow,
     searchInput,
     searchOptionsButton,
     searchHost,
@@ -243,6 +261,7 @@ export function buildWorkspace(): HTMLElement {
   wireViewMenu(handles);
   mountCanvas(canvasHost);
   mountHistoryBar(historyHost);
+  mountPinnedBar(pinnedHost);
   mountEditor(editorHost);
   mountEditorResizer(editorResizer, body);
   mountSelectionResizer(selectionResizer, body);
@@ -251,6 +270,7 @@ export function buildWorkspace(): HTMLElement {
   mountStructures(structuresHost);
 
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
+  let lastStructuresActive = false;
   function refresh(): void {
     const st = store.state;
     netMenuLabel.textContent = st.network?.display_name ?? '—';
@@ -274,15 +294,19 @@ export function buildWorkspace(): HTMLElement {
     zoomLabel.replaceChildren(svgIcon('search', 12), span(` ${Math.round(st.canvasZoom * 100)}%`));
     eventLabel.textContent = st.lastEvent ?? '';
 
-    // View switcher (L15): the structures view replaces the canvas and the
-    // search row; editor, resizer, status bar and selection panel are shared.
+    // View switcher (L15/L18): the structures view replaces the canvas and the
+    // search row (which belongs to the map); editor, resizer, status bar,
+    // selection panel and the pinned panel are shared.
     const structuresActive = st.activeView === 'structures';
     mapViewButton.classList.toggle('active', !structuresActive);
     structuresViewButton.classList.toggle('active', structuresActive);
     canvasHost.classList.toggle('hidden', structuresActive);
     structuresHost.classList.toggle('hidden', !structuresActive);
-    searchInput.classList.toggle('hidden', structuresActive);
-    searchOptionsButton.classList.toggle('hidden', structuresActive);
+    searchRow.classList.toggle('hidden', structuresActive);
+    // Leaving the map view closes the open search dropdown (it anchors to the
+    // now hidden search row); returning leaves it closed.
+    if (structuresActive && !lastStructuresActive) hideSearchPanel();
+    lastStructuresActive = structuresActive;
   }
 
   store.subscribe(() => {

@@ -473,6 +473,7 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'saved-filter.created': 'сохранён отбор',
   'saved-filter.updated': 'изменён отбор',
   'saved-filter.deleted': 'удалён отбор',
+  'pinned-thoughts.updated': 'обновлены закреплённые',
 };
 
 /**

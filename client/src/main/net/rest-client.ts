@@ -1378,6 +1378,29 @@ export class RestClient {
   }
 
   // -------------------------------------------------------------------------
+  // §19 Pinned thoughts (L18)
+  // -------------------------------------------------------------------------
+
+  /** `GET /networks/{nid}/pins` — the user's pinned thoughts in position order. */
+  public async listPinnedThoughts(
+    networkId: string,
+  ): Promise<import('@etn/shared').PinnedThoughtEntry[]> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/pins`);
+  }
+
+  /** `PUT /networks/{nid}/pins` — replace the pinned list (idempotent, ≤20). */
+  public async setPinnedThoughts(
+    networkId: string,
+    orderedIds: string[],
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').PinnedThoughtEntry[]> {
+    return this.request('PUT', `/networks/${encodeURIComponent(networkId)}/pins`, {
+      body: { ordered_ids: orderedIds },
+      requestOptions: opts,
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // §14 Export & jobs
   // -------------------------------------------------------------------------
 

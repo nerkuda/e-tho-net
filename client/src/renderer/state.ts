@@ -111,6 +111,8 @@ export interface AppState {
   structuresActiveThoughtId: string | null;
   /** Full entity of {@link AppState.structuresActiveThoughtId} (editor header). */
   structuresActiveThought: Thought | null;
+  /** Pinned thoughts of the open network (L18): ordered thought ids (L3). */
+  pins: string[];
 }
 
 /** Initial snapshot. */
@@ -147,6 +149,7 @@ const initial: AppState = {
   activeView: 'map',
   structuresActiveThoughtId: null,
   structuresActiveThought: null,
+  pins: [],
 };
 
 /**
@@ -187,6 +190,7 @@ class Store {
       lastEvent: null,
       structuresActiveThoughtId: null,
       structuresActiveThought: null,
+      pins: [],
     });
   }
 }
