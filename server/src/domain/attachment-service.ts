@@ -435,12 +435,34 @@ export function updateAttachment(
 }
 
 /**
+ * Best-effort removal of a server-stored upload: only `kind='file'` rows whose
+ * `file_path` points **inside the network's `attachments/` directory** are
+ * deleted from disk. Client-local paths (drag-and-drop of OS files keeps them
+ * on the user's machine) are never touched.
+ */
+export function removeStoredFile(
+  ndb: NetworkDb,
+  kind: AttachmentKind,
+  filePath: string | null,
+): void {
+  if (kind !== 'file' || filePath === null) return;
+  const storedDir = path.resolve(path.dirname(ndb.dbPath), 'attachments');
+  const resolved = path.resolve(filePath);
+  if (resolved.startsWith(storedDir + path.sep) && existsSync(resolved)) {
+    try {
+      rmSync(resolved);
+    } catch {
+      // File cleanup is best-effort; callers delete the row regardless.
+    }
+  }
+}
+
+/**
  * Delete an attachment (docs/03-server-api.md §11). Throws `NOT_FOUND` (404).
  *
  * When the attachment is `kind='file'` and its `file_path` points **inside the
  * network's `attachments/` directory** (a server-stored upload), the stored
- * file is removed together with the row. Client-local paths (drag-and-drop of
- * OS files keeps them on the user's machine) are never touched.
+ * file is removed together with the row (see {@link removeStoredFile}).
  */
 export function deleteAttachment(ndb: NetworkDb, id: string): void {
   ndb.transaction(() => {
@@ -451,17 +473,7 @@ export function deleteAttachment(ndb: NetworkDb, id: string): void {
     ndb
       .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
       .run(id);
-    if (current.kind === 'file' && current.file_path !== null) {
-      const storedDir = path.resolve(path.dirname(ndb.dbPath), 'attachments');
-      const resolved = path.resolve(current.file_path);
-      if (resolved.startsWith(storedDir + path.sep) && existsSync(resolved)) {
-        try {
-          rmSync(resolved);
-        } catch {
-          // File cleanup is best-effort; the row is already gone.
-        }
-      }
-    }
+    removeStoredFile(ndb, current.kind, current.file_path);
   });
 }
 
