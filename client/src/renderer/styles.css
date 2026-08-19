@@ -1441,8 +1441,14 @@ body.cloud-dragging * {
 }
 
 .cloud-icon img {
+  /* Definite height (not %) — during intrinsic sizing the box height is
+   * content-driven, so a `max-height: 100%` never clamps and a large PNG
+   * blew the cloud up to its natural size. Keep the image within the emoji
+   * glyph size; wide images clamp to the box width without distortion. */
+  height: calc(var(--cloud-font) * 1.45);
+  width: auto;
   max-width: 100%;
-  max-height: 100%;
+  object-fit: contain;
 }
 
 /* Compact thought icon for lists (history bar, link rows, search hits,
@@ -3606,6 +3612,17 @@ body.cloud-dragging * {
   margin-bottom: 8px;
 }
 
+/* Header of the accumulated list: counter + the «Очистить» button (L20). */
+.add-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
 .add-list-item {
   display: flex;
   align-items: center;
@@ -4273,7 +4290,19 @@ table.chron-table thead th {
   line-height: 1;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  overflow: hidden;
+}
+
+/* Image icons scale into the fixed chip-icon box — never their natural size
+ * (the same rule as .mini-icon: a 64×64 PNG must not stretch the chip). */
+.chron-chip .chip-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .chron-chip .chip-title {

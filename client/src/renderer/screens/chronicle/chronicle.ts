@@ -26,9 +26,9 @@ import {
 } from '@etn/shared';
 
 import { findRootThought, requireNetworkId } from '../../app.js';
+import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
 import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canvas/canvas.js';
 import { wireExternalDragSource, registerDropActions } from '../../canvas/drag-cloud.js';
-import { pickThoughtRef } from '../../editor/thought-picker.js';
 import { openLinkInEditor } from '../../editor/editor.js';
 import { createMarkdownField, editMarkdownField } from '../../editor/markdown-field.js';
 import { rowSplitter } from '../../editor/splitter.js';
@@ -932,27 +932,33 @@ function showEditorTargetMenu(x: number, y: number, target: CommentTarget): void
       label: 'Связать с…',
       onClick: () =>
         void (async () => {
-          const picked = await pickThoughtRef(requireNetworkId());
-          if (picked === null || s.commentId === null) return;
-          try {
-            if (s.targets.some((t) => t.owner_type === 'thought' && t.owner_id === picked)) {
-              notice('Мысль уже привязана к этой записи.', 'info');
-              return;
+          const result = await pickThoughtsDialog({
+            networkId: requireNetworkId(),
+            allowCreate: false,
+            allowLinkType: false,
+          });
+          if (result === null || s.commentId === null) return;
+          let attached = 0;
+          for (const id of pickedThoughtIds(result)) {
+            if (s.targets.some((t) => t.owner_type === 'thought' && t.owner_id === id)) continue;
+            try {
+              const updated = await etn.comments.addTarget(
+                requireNetworkId(),
+                s.commentId,
+                'thought',
+                id,
+                s.version,
+              );
+              s.version = updated.version;
+              s.targets = updated.targets;
+              attached++;
+            } catch (err) {
+              notice(`Не удалось привязать: ${errText(err)}`, 'error');
             }
-            const updated = await etn.comments.addTarget(
-              requireNetworkId(),
-              s.commentId,
-              'thought',
-              picked,
-              s.version,
-            );
-            s.version = updated.version;
-            s.targets = updated.targets;
-            repaintEditorTargets();
-            scheduleChronicleRefresh();
-          } catch (err) {
-            notice(`Не удалось привязать: ${errText(err)}`, 'error');
           }
+          if (attached === 0) notice('Мысли уже привязаны к этой записи.', 'info');
+          repaintEditorTargets();
+          scheduleChronicleRefresh();
         })(),
     },
   );
@@ -980,11 +986,15 @@ async function detachTarget(rowId: string, ownerType: 'thought' | 'link', ownerI
   }
 }
 
-/** Attaches a picked thought to the row's comment (duplicates are rejected). */
+/** Attaches picked thoughts to the row's comment (drop target / picker). */
 async function attachPickedThought(rowId: string): Promise<void> {
-  const picked = await pickThoughtRef(requireNetworkId());
-  if (picked === null) return;
-  await attachThoughtToRow(picked, rowId);
+  const result = await pickThoughtsDialog({
+    networkId: requireNetworkId(),
+    allowCreate: false,
+    allowLinkType: false,
+  });
+  if (result === null) return;
+  for (const id of pickedThoughtIds(result)) await attachThoughtToRow(id, rowId);
 }
 
 /** Attaches a thought to the row's comment (drop target / picker). */

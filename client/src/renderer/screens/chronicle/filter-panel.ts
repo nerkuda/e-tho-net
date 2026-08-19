@@ -20,6 +20,8 @@
 import type { ChronicleSavedFilter, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
+import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
+import { applyThoughtIcon } from '../../canvas/canvas.js';
 import { button, div, el, span, setTooltip } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
@@ -27,7 +29,6 @@ import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
 import { store } from '../../state.js';
-import { pickThoughtsRef } from '../../editor/thought-picker.js';
 import { DEFAULT_FILTER, fromDefinition, toDefinition } from './state.js';
 import type { ChronicleFilterState } from './state.js';
 
@@ -105,11 +106,16 @@ function removeThoughtFromFilter(id: string): void {
   repaintControls();
 }
 
-/** Opens the multi-thought picker; applies the chosen ids to the filter. */
+/** Opens the universal thought picker; applies the chosen ids to the filter. */
 async function pickThoughts(): Promise<void> {
-  const ids = await pickThoughtsRef(requireNetworkId(), filter.thoughtIds);
-  if (ids === null) return;
-  filter = { ...filter, thoughtIds: ids };
+  const result = await pickThoughtsDialog({
+    networkId: requireNetworkId(),
+    allowCreate: false,
+    allowLinkType: false,
+    selectedIds: filter.thoughtIds,
+  });
+  if (result === null) return;
+  filter = { ...filter, thoughtIds: pickedThoughtIds(result) };
   await syncChipsFromIds();
   repaintControls();
 }
@@ -170,7 +176,10 @@ function repaintChips(): void {
     const ref = thoughtRefs.get(id);
     const chip = el('span', 'chron-chip thought');
     chip.dataset['id'] = id;
-    const icon = span(ref?.icon ?? '💭', 'chip-icon');
+    // Image icons render via <img> (applyThoughtIcon) — the raw ref.icon of an
+    // image thought is a base64 data URI that must never land as chip text.
+    const icon = span('', 'chip-icon');
+    applyThoughtIcon(icon, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
     chip.append(icon, span(ref?.title ?? id, 'chip-title'), span('×', 'chip-x'));
     chip.addEventListener('click', (e) => {
       if ((e.target as HTMLElement | null)?.classList.contains('chip-x')) {

@@ -19,7 +19,7 @@ import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { setAddToSelectionHook, showSelectionThoughtContextMenu } from '../canvas/context-menu.js';
 import { applyThoughtIcon, invalidateRef, setSelectionClickHooks } from '../canvas/canvas.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
-import { pickThoughtRef } from '../editor/thought-picker.js';
+import { pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
 import { showThoughtStyleDialog, type ThoughtStylePatch } from '../editor/style-dialog.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
@@ -320,12 +320,13 @@ async function collectNeighbors(
   }
 }
 
-/** Opens the thought search dialog and adds the picked thought. */
+/** Opens the universal thought picker and adds every picked thought. */
 async function addPickedThought(): Promise<void> {
   const networkId = requireNetworkId();
-  const id = await pickThoughtRef(networkId);
-  if (id === null) return;
-  addToSelection([id]);
+  const result = await pickThoughtsDialog({ networkId, allowCreate: false, allowLinkType: false });
+  const ids = pickedThoughtIds(result);
+  if (ids.length === 0) return;
+  addToSelection(ids);
 }
 
 // ---------------------------------------------------------------------------

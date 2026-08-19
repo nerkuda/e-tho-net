@@ -14,8 +14,9 @@
 import type { PropertyDefinition, PropertyValueType, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
+import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { buildValueOptionsCaret } from '../editor/properties.js';
-import { pickThoughtRef, wireThoughtRefSearch } from '../editor/thought-picker.js';
+import { wireThoughtRefSearch } from '../editor/thought-picker.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { createTypeCombobox, type TypeOption } from '../lib/type-combobox.js';
@@ -363,7 +364,13 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
         button(
           'выбрать',
           () => {
-            void pickThoughtRef(networkId, filterIds).then(async (id) => {
+            void pickThoughtsDialog({
+              networkId,
+              allowCreate: false,
+              allowLinkType: false,
+              searchTypeIds: filterIds,
+            }).then(async (result) => {
+              const id = firstPickedThoughtId(result);
               if (id === null) return;
               state.value = id;
               await ensureRefTitle(id);

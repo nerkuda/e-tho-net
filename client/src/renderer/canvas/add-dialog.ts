@@ -1,12 +1,22 @@
 /**
- * Add-thought dialog (H14, 08-ui-spec.md §4; 09-scenarios.md C1, C2).
+ * Universal thought picker/add dialog (H14, 08-ui-spec.md §4; 09-scenarios.md
+ * C1, C2; universalized for every thought-picking site, L20).
  *
- * Live duplicate search over `thoughts.findDuplicates`; single and batch
- * modes; `|` synonym parsing per line; multi-line paste auto-switches to batch
- * mode; Ctrl+Enter inserts everything; Ctrl+Shift+Enter also focuses the first
- * added thought (L19). Creation uses `thoughts.create` with `create_link`
- * (direction from the invoking gesture); picking an existing candidate creates
- * a plain link instead.
+ * Live duplicate search over `thoughts.findDuplicates`; single and multi
+ * modes; `|` synonym parsing per line; multi-line paste auto-switches to
+ * multi mode; Enter adds the best match to the list (an exact title/synonym
+ * hit reuses the existing thought, otherwise a new one is queued), Ctrl+Enter
+ * applies the whole list (Ctrl+Shift+Enter also focuses the first inserted
+ * thought, L19). Clicking a found thought in multi mode adds it to the list
+ * (existing thoughts are picked as-is — never re-created).
+ *
+ * The dialog only ACCUMULATES the list and returns it — the caller decides
+ * what to do (canvas: create thoughts/links; pickers: use the ids). Options
+ * adapt it to a pure picker:
+ *   - `allowCreate: false` forbids new thoughts and hides the type field;
+ *   - `allowLinkType: false` hides the link-type field;
+ *   - `selectedIds` prefills the list (multi mode switches on automatically);
+ *   - `searchTypeIds` narrows the live search (thought_ref type configs).
  *
  * Also handles the drop of files/URLs onto the canvas (08-ui-spec.md §7):
  * the zone drop handlers create thoughts with an attachment.
@@ -29,7 +39,42 @@ import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY } from '@etn/shared';
 import { store } from '../state.js';
 
-/** One batch-mode line with its duplicate-check result. */
+/** One accumulated list entry: an existing thought or a queued new one. */
+export type ThoughtPickItem =
+  | { kind: 'existing'; id: string; raw: string }
+  | { kind: 'new'; title: string; synonyms: string[]; raw: string };
+
+/** Result of {@link pickThoughtsDialog} (null = cancelled). */
+export interface ThoughtPickResult {
+  items: ThoughtPickItem[];
+  /** Type for NEW thoughts (null = none / the field was hidden). */
+  thoughtTypeId: string | null;
+  /** Link type chosen in the dialog (null = none / the field was hidden). */
+  linkTypeId: string | null;
+  /** Applied via Shift+Ctrl+Enter — focus the first inserted item (L19). */
+  focusFirst: boolean;
+}
+
+/** Options of {@link pickThoughtsDialog}. */
+export interface ThoughtPickerOptions {
+  networkId: string;
+  /** Canvas anchor: shows «вверх/вниз к …» and makes the link type meaningful. */
+  anchor?: { id: string; direction: 'parent' | 'child' } | null;
+  /** Allow queueing new thoughts (default true). `false` hides the type field. */
+  allowCreate?: boolean;
+  /** Show the link-type field (default true — the canvas add flows). */
+  allowLinkType?: boolean;
+  /** Restrict the live search to these thought types (thought_ref configs). */
+  searchTypeIds?: string[];
+  /** Prefill the list with these thoughts; multi mode switches on. */
+  selectedIds?: string[];
+  /** Dialog title override (defaults by `allowCreate`/anchor). */
+  title?: string;
+  /** Primary button label override (defaults «Добавить»/«Выбрать»). */
+  applyLabel?: string;
+}
+
+/** One list entry with its duplicate-check result (internal shape). */
 interface AddLine {
   raw: string;
   title: string;
@@ -40,452 +85,633 @@ interface AddLine {
   matchKind: 'title' | 'synonym' | 'partial' | null;
 }
 
+/** The first existing-thought id of a picker result (single-pick helper). */
+export function firstPickedThoughtId(result: ThoughtPickResult | null): string | null {
+  if (result === null) return null;
+  for (const item of result.items) {
+    if (item.kind === 'existing') return item.id;
+  }
+  return null;
+}
+
+/** Every existing-thought id of a picker result (multi-pick helper). */
+export function pickedThoughtIds(result: ThoughtPickResult | null): string[] {
+  if (result === null) return [];
+  return result.items.flatMap((item) => (item.kind === 'existing' ? [item.id] : []));
+}
+
 let mounted = false;
 
 /** Mounts the dialog opener into the canvas drag gestures (called by the workspace). */
 export function mountAddDialog(): void {
   if (mounted) return;
   mounted = true;
-  setAddDialogOpener((ctx) => openAddDialog(ctx));
+  setAddDialogOpener((ctx) => void openAddDialog(ctx));
 }
 
 /**
- * Opens the add-thought dialog. `anchorId = null` disables link creation
- * (batch insert from the selection panel, H16).
+ * Opens the universal picker and inserts the picked list into the canvas:
+ * existing thoughts get linked to the anchor, new ones are created (with the
+ * chosen thought type) and linked; the link type applies to every link.
  */
-export function openAddDialog(ctx: {
+export async function openAddDialog(ctx: {
   anchorId: string | null;
   direction: 'parent' | 'child';
-}): void {
+}): Promise<void> {
   const networkId = requireNetworkId();
-  const anchorTitle = ctx.anchorId !== null ? (store.state.focus?.focused.title ?? '…') : '';
-
-  let multi = false;
-  const lines: AddLine[] = [];
-
-  const modeRow = div('add-mode-row');
-  const singleRadio = el('input');
-  singleRadio.type = 'radio';
-  singleRadio.name = 'add-mode';
-  singleRadio.checked = true;
-  const multiRadio = el('input');
-  multiRadio.type = 'radio';
-  multiRadio.name = 'add-mode';
-  const singleLabel = el('label', 'checkbox-row');
-  singleLabel.append(singleRadio, span('одна'));
-  const multiLabel = el('label', 'checkbox-row');
-  multiLabel.append(multiRadio, span('несколько'));
-  modeRow.append(singleLabel, multiLabel);
-  singleRadio.addEventListener('change', () => {
-    multi = false;
-    applyMode();
+  const result = await pickThoughtsDialog({
+    networkId,
+    anchor: ctx.anchorId !== null ? { id: ctx.anchorId, direction: ctx.direction } : null,
+    allowCreate: true,
+    allowLinkType: true,
+    applyLabel: 'Добавить',
   });
-  multiRadio.addEventListener('change', () => {
-    multi = true;
-    applyMode();
-  });
+  if (result === null) return;
+  await insertIntoCanvas(networkId, ctx, result);
+}
 
-  const lineList = div('add-list hidden');
-
-  const input = el('textarea', 'textarea-input');
-  input.rows = 2;
-  input.placeholder = 'Введите название или вставьте список…';
-
-  // Type of the created thought(s) — searchable picker over the catalogue
-  // (L6): rows carry the type's icon and style.
-  let newThoughtTypeId: string | null = null;
-  const thoughtTypeCombo = createTypeCombobox({
-    options: () =>
-      store.state.thoughtTypes.map((t) => ({
-        id: t.id,
-        label: t.name,
-        icon: { icon: t.icon, kind: t.icon_kind },
-        style: {
-          fg: t.fg_color,
-          bg: t.bg_color,
-          bold: t.font_bold,
-          italic: t.font_italic,
-          underline: t.font_underline,
-          strike: t.font_strike,
-        },
-      })),
-    value: null,
-    placeholder: 'без типа',
-    emptyLabel: 'без типа',
-    onChange: (typeId) => {
-      newThoughtTypeId = typeId;
-    },
-  });
-
-  // Type of the created link(s), remembered as the last used one.
-  let linkTypeId: string | null = store.state.lastUsedLinkTypeId;
-  const linkTypeCombo = createTypeCombobox({
-    options: () =>
-      store.state.linkTypes.map((t) => ({
-        id: t.id,
-        label: `${t.name_forward} / ${t.name_reverse}`,
-        line: { color: t.color, style: t.style, width: t.width },
-      })),
-    value: linkTypeId,
-    placeholder: 'без типа',
-    emptyLabel: 'без типа',
-    onChange: (typeId) => {
-      linkTypeId = typeId;
-      store.update({ lastUsedLinkTypeId: typeId });
-      void etn.ui
-        .setState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID, typeId ?? '')
-        .catch(() => undefined);
-    },
-  });
-
-  const candidates = div('dup-list');
-  const errorLine = span('', 'error-text');
-
-  const body = div('form-stack');
-  // Both type pickers share one row (08-ui-spec.md §4.2).
-  const typeRow = div('add-types-row');
-  const thoughtTypeField = div('field add-types-field');
-  thoughtTypeField.append(el('label', 'field-label', 'Тип мысли'), thoughtTypeCombo.root);
-  const linkTypeField = div('field add-types-field');
-  linkTypeField.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
-  typeRow.append(thoughtTypeField, linkTypeField);
-  // Layout (08-ui-spec.md §4.2): mode switch, then the type pickers on one
-  // row, then the name input with the found-thoughts list directly beneath it.
-  body.append(modeRow, typeRow, input, candidates, lineList, errorLine);
-
-  const directionText =
-    ctx.anchorId === null
-      ? ''
-      : ctx.direction === 'parent'
-        ? `вверх к «${anchorTitle}»`
-        : `вниз к «${anchorTitle}»`;
-
-  let timer: number | null = null;
-  let lastCandidates: DuplicateHit[] = [];
-
-  /** Debounced duplicate search for the current input. */
-  function scheduleSearch(): void {
-    if (timer !== null) window.clearTimeout(timer);
-    timer = window.setTimeout(() => {
-      void (async () => {
-        const raw = input.value.trim();
-        if (raw === '') {
-          renderCandidates([]);
-          return;
-        }
-        const parsed = parseTitleWithSynonyms(raw);
-        try {
-          lastCandidates = await etn.thoughts.findDuplicates(
-            networkId,
-            parsed.title,
-            parsed.synonyms,
-          );
-          renderCandidates(lastCandidates);
-        } catch (err) {
-          errorLine.textContent = errText(err);
-        }
-      })();
-    }, 200);
-  }
-  input.addEventListener('input', scheduleSearch);
-
-  /** Handles multi-line pastes: switches to batch mode and parses lines. */
-  input.addEventListener('paste', () => {
-    window.setTimeout(() => {
-      const text = input.value;
-      if (!text.includes('\n')) return;
-      const parsed = parseAddLines(text);
-      if (parsed.length <= 1) return;
-      multi = true;
-      multiRadio.checked = true;
-      applyMode();
-      for (const line of parsed) addLine(line.raw, line.title, line.synonyms);
-      input.value = '';
-    }, 0);
-  });
-
-  input.addEventListener('keydown', (event) => {
-    // ↓ moves into the found-thoughts list (keyboard path of picking a
-    // candidate); Tab reaches it as the next tab stop.
-    if (event.key === 'ArrowDown') {
-      const first = candidates.querySelector<HTMLElement>('.dup-item');
-      if (first !== null) {
-        event.preventDefault();
-        first.focus();
-      }
-      return;
-    }
-    if (event.key !== 'Enter') return;
-    event.preventDefault();
-    if (multi || event.ctrlKey) {
-      const raw = input.value.trim();
-      if (raw !== '') {
-        const parsed = parseTitleWithSynonyms(raw);
-        addLine(raw, parsed.title, parsed.synonyms);
-        input.value = '';
-        scheduleSearch();
-      }
-      // Ctrl+Shift+Enter inserts everything AND focuses the first added
-      // thought (L19); a plain Ctrl+Enter just inserts.
-      if (event.ctrlKey) void insertAll(event.shiftKey);
-      return;
-    }
-    void insertSingle();
-  });
-
-  /** Shows/hides batch-mode UI. */
-  function applyMode(): void {
-    lineList.classList.toggle('hidden', !multi);
-  }
-
-  /** Adds a batch line with an immediate exact-duplicate check. */
-  function addLine(raw: string, title: string, synonyms: string[]): void {
-    // The server classifies candidates by match strength; exact title/synonym
-    // matches reuse the existing thought, partial matches create a new one.
-    const exact = lastCandidates.find(
-      (c) => c.matched_on === 'title' || c.matched_on === 'synonym',
-    );
-    lines.push({
-      raw,
-      title,
-      synonyms,
-      existingId: exact?.id ?? null,
-      matchKind: exact?.matched_on ?? null,
-    });
-    renderLines();
-  }
-
-  /** Renders the batch line list. */
-  function renderLines(): void {
-    lineList.replaceChildren();
-    lines.forEach((line, index) => {
-      const row = div('add-list-item');
-      const status = line.existingId !== null ? span('🟡', 'al-status') : span('🟢', 'al-status');
-      status.title =
-        line.existingId !== null
-          ? 'Будет использована существующая мысль'
-          : 'Будет создана новая мысль';
-      const title = el('span', 'al-title', line.title === '' ? line.raw : line.title);
-      title.title = line.raw;
-      row.append(status, title);
-      row.append(
-        button(
-          '×',
-          () => {
-            lines.splice(index, 1);
-            renderLines();
-          },
-          'btn small',
-          'Удалить строку',
-        ),
-      );
-      lineList.append(row);
-    });
-  }
-
-  /** Renders the duplicate candidates for the current input. */
-  function renderCandidates(list: DuplicateHit[]): void {
-    candidates.replaceChildren();
-    if (list.length === 0) return;
-    candidates.append(el('p', 'muted', 'Найденные мысли:'));
-    for (const candidate of list) {
-      const row = div('dup-item');
-      row.tabIndex = 0;
-      // The candidate's own icon/style, else its type's defaults — the row
-      // looks like the thought's cloud, so equal titles are easy to tell apart.
-      const iconBox = span('', 'dup-icon');
-      applyThoughtIcon(iconBox, candidate);
-      const title = el('span', 'dup-title', candidate.title);
-      const style = resolveCloudStyle(candidate);
-      applyFontFlags(title, {
-        bold: style.bold,
-        italic: style.italic,
-        underline: style.underline,
-        strike: style.strike,
-      });
-      if (style.fg !== null) title.style.color = style.fg;
-      if (style.bg !== null) row.style.background = style.bg;
-      row.append(iconBox, title);
-      // The parent's title (first 60 chars) instead of the «использовать»
-      // button — the whole row is the pick target (08-ui-spec.md §4.2).
-      if (candidate.parent_title !== null) {
-        const parent = span(candidate.parent_title.slice(0, 60), 'dup-parent');
-        parent.title = candidate.parent_title;
-        row.append(parent);
-      }
-      const matchLabel =
-        candidate.matched_on === 'title'
-          ? 'точное имя'
-          : candidate.matched_on === 'synonym'
-            ? `синоним «${candidate.matched_synonym ?? ''}»`
-            : 'частичное совпадение';
-      row.title =
-        candidate.synonyms.length > 0
-          ? `${candidate.title} (${candidate.synonyms.join(', ')}) — ${matchLabel}`
-          : `${candidate.title} — ${matchLabel}`;
-      row.addEventListener('click', () => {
-        void useExisting(candidate.id);
-      });
-      row.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' && event.shiftKey) {
-          // Shift+Enter composes a compound name: the candidate's full name
-          // replaces the input text, a comma is appended and the caret lands
-          // right after it (08-ui-spec.md §4.3).
-          event.preventDefault();
-          input.value = `${candidate.title},`;
-          input.focus();
-          input.setSelectionRange(input.value.length, input.value.length);
-          scheduleSearch();
-          return;
-        }
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          void useExisting(candidate.id);
-        } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-          event.preventDefault();
-          const next =
-            event.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
-          if (next instanceof HTMLElement && next.classList.contains('dup-item')) {
-            next.focus();
-            next.scrollIntoView({ block: 'nearest' });
-          } else if (event.key === 'ArrowUp') {
-            // Above the first row the caret returns to the name input.
-            input.focus();
-          }
-        } else if (event.key === 'Escape') {
-          event.preventDefault();
-          input.focus();
-        }
-      });
-      candidates.append(row);
-    }
-  }
-
-  /** Links the anchor to an existing thought. */
-  async function useExisting(candidateId: string): Promise<void> {
+/** Creates/links every picked item (the old insertAll flow, L19 focus). */
+async function insertIntoCanvas(
+  networkId: string,
+  ctx: { anchorId: string | null; direction: 'parent' | 'child' },
+  result: ThoughtPickResult,
+): Promise<void> {
+  if (result.items.length === 0) return;
+  let created = 0;
+  let failed = 0;
+  let firstAddedId: string | null = null;
+  for (const item of result.items) {
     try {
-      if (ctx.anchorId === null) return;
-      const source = ctx.direction === 'child' ? ctx.anchorId : candidateId;
-      const target = ctx.direction === 'child' ? candidateId : ctx.anchorId;
-      await etn.links.create(networkId, {
-        source_id: source,
-        target_id: target,
-        type_id: linkTypeId,
-      });
-      notice('Связь создана.');
-      scheduleRefresh();
-      closeDialog();
-    } catch (err) {
-      errorLine.textContent = errText(err);
-    }
-  }
-
-  /** Creates a new thought linked to the anchor (or unlinked); returns its id. */
-  async function createNew(title: string, synonyms: string[]): Promise<string> {
-    const thought = await etn.thoughts.create(networkId, {
-      title,
-      synonyms,
-      type_id: newThoughtTypeId,
-      create_link:
-        ctx.anchorId === null
-          ? undefined
-          : {
-              direction: ctx.direction,
-              target_thought_id: ctx.anchorId,
-              type_id: linkTypeId,
-            },
-    });
-    return thought.id;
-  }
-
-  /** Single mode: exact match → link; otherwise create new. */
-  async function insertSingle(): Promise<void> {
-    const raw = input.value.trim();
-    if (raw === '') return;
-    const parsed = parseTitleWithSynonyms(raw);
-    try {
-      const exact = lastCandidates.find(
-        (c) => c.matched_on === 'title' && c.title.toLowerCase() === parsed.title.toLowerCase(),
-      );
-      if (exact !== undefined && ctx.anchorId !== null) {
-        await useExisting(exact.id);
-        return;
-      }
-      await createNew(parsed.title, parsed.synonyms);
-      notice('Мысль создана.');
-      scheduleRefresh();
-      closeDialog();
-    } catch (err) {
-      errorLine.textContent = errText(err);
-    }
-  }
-
-  /**
-   * Batch mode: creates/links every accumulated line. With `focusFirst` the
-   * first successfully added thought (created or reused) becomes the canvas
-   * focus right after the insert (Ctrl+Shift+Enter, L19).
-   */
-  async function insertAll(focusFirst = false): Promise<void> {
-    if (lines.length === 0 && input.value.trim() !== '') {
-      const parsed = parseTitleWithSynonyms(input.value.trim());
-      lines.push({
-        raw: input.value.trim(),
-        title: parsed.title,
-        synonyms: parsed.synonyms,
-        existingId: null,
-        matchKind: null,
-      });
-      renderLines();
-    }
-    if (lines.length === 0) return;
-    let created = 0;
-    let failed = 0;
-    let firstAddedId: string | null = null;
-    for (const line of lines) {
-      try {
-        if (line.existingId !== null && ctx.anchorId !== null) {
-          const source = ctx.direction === 'child' ? ctx.anchorId : line.existingId;
-          const target = ctx.direction === 'child' ? line.existingId : ctx.anchorId;
+      if (item.kind === 'existing') {
+        if (ctx.anchorId !== null) {
+          const source = ctx.direction === 'child' ? ctx.anchorId : item.id;
+          const target = ctx.direction === 'child' ? item.id : ctx.anchorId;
           await etn.links.create(networkId, {
             source_id: source,
             target_id: target,
-            type_id: linkTypeId,
+            type_id: result.linkTypeId,
           });
-          if (firstAddedId === null) firstAddedId = line.existingId;
-        } else {
-          const newId = await createNew(line.title, line.synonyms);
-          if (firstAddedId === null) firstAddedId = newId;
         }
-        created++;
-      } catch {
-        failed++;
+        if (firstAddedId === null) firstAddedId = item.id;
+      } else {
+        const newThought = await etn.thoughts.create(networkId, {
+          title: item.title,
+          synonyms: item.synonyms,
+          type_id: result.thoughtTypeId,
+          create_link:
+            ctx.anchorId === null
+              ? undefined
+              : {
+                  direction: ctx.direction,
+                  target_thought_id: ctx.anchorId,
+                  type_id: result.linkTypeId,
+                },
+        });
+        if (firstAddedId === null) firstAddedId = newThought.id;
+      }
+      created++;
+    } catch {
+      failed++;
+    }
+  }
+  if (failed > 0) notice(`Создано/связано: ${created}, ошибок: ${failed}`, 'error');
+  else notice(`Готово: ${created}.`);
+  scheduleRefresh();
+  if (result.focusFirst && firstAddedId !== null) void setFocus(firstAddedId);
+}
+
+/**
+ * The universal dialog itself. Accumulates existing/new thoughts in a list
+ * (Enter / candidate click adds; multi-line paste batches new lines) and
+ * resolves with the whole list on «Добавить»/«Выбрать» or Ctrl+Enter.
+ */
+export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtPickResult | null> {
+  const networkId = opts.networkId;
+  const allowCreate = opts.allowCreate !== false;
+  const allowLinkType = opts.allowLinkType !== false;
+  const searchFilter = (opts.searchTypeIds ?? []).filter((id) => id !== '');
+
+  return new Promise((resolve) => {
+    let multi = (opts.selectedIds ?? []).length > 0;
+    const lines: AddLine[] = [];
+
+    const modeRow = div('add-mode-row');
+    const singleRadio = el('input');
+    singleRadio.type = 'radio';
+    singleRadio.name = 'add-mode';
+    singleRadio.checked = !multi;
+    const multiRadio = el('input');
+    multiRadio.type = 'radio';
+    multiRadio.name = 'add-mode';
+    multiRadio.checked = multi;
+    const singleLabel = el('label', 'checkbox-row');
+    singleLabel.append(singleRadio, span('одна'));
+    const multiLabel = el('label', 'checkbox-row');
+    multiLabel.append(multiRadio, span('несколько'));
+    modeRow.append(singleLabel, multiLabel);
+    singleRadio.addEventListener('change', () => {
+      multi = false;
+      applyMode();
+    });
+    multiRadio.addEventListener('change', () => {
+      multi = true;
+      applyMode();
+    });
+
+    // Starts hidden unless the prefill switched multi mode on.
+    const lineList = div(multi ? 'add-list' : 'add-list hidden');
+
+    const input = el('textarea', 'textarea-input');
+    input.rows = 2;
+    input.placeholder =
+      allowCreate ? 'Введите название или вставьте список…' : 'Введите название для поиска…';
+
+    // Type of the created thought(s) — searchable picker over the catalogue
+    // (L6): rows carry the type's icon and style. Hidden when creation is
+    // forbidden (the picker mode never changes existing thoughts).
+    let newThoughtTypeId: string | null = null;
+    const thoughtTypeCombo = createTypeCombobox({
+      options: () =>
+        store.state.thoughtTypes.map((t) => ({
+          id: t.id,
+          label: t.name,
+          icon: { icon: t.icon, kind: t.icon_kind },
+          style: {
+            fg: t.fg_color,
+            bg: t.bg_color,
+            bold: t.font_bold,
+            italic: t.font_italic,
+            underline: t.font_underline,
+            strike: t.font_strike,
+          },
+        })),
+      value: null,
+      placeholder: 'без типа',
+      emptyLabel: 'без типа',
+      onChange: (typeId) => {
+        newThoughtTypeId = typeId;
+      },
+    });
+
+    // Type of the created link(s), remembered as the last used one. Hidden
+    // for pickers that never create links.
+    let linkTypeId: string | null = store.state.lastUsedLinkTypeId;
+    const linkTypeCombo = createTypeCombobox({
+      options: () =>
+        store.state.linkTypes.map((t) => ({
+          id: t.id,
+          label: `${t.name_forward} / ${t.name_reverse}`,
+          line: { color: t.color, style: t.style, width: t.width },
+        })),
+      value: linkTypeId,
+      placeholder: 'без типа',
+      emptyLabel: 'без типа',
+      onChange: (typeId) => {
+        linkTypeId = typeId;
+        store.update({ lastUsedLinkTypeId: typeId });
+        void etn.ui
+          .setState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID, typeId ?? '')
+          .catch(() => undefined);
+      },
+    });
+
+    const candidates = div('dup-list');
+    const errorLine = span('', 'error-text');
+
+    const body = div('form-stack');
+    const typeRow = div('add-types-row');
+    const thoughtTypeField = div('field add-types-field');
+    thoughtTypeField.append(el('label', 'field-label', 'Тип мысли'), thoughtTypeCombo.root);
+    const linkTypeField = div('field add-types-field');
+    linkTypeField.append(el('label', 'field-label', 'Тип связи'), linkTypeCombo.root);
+    if (allowCreate) typeRow.append(thoughtTypeField);
+    if (allowLinkType) typeRow.append(linkTypeField);
+    // Layout (08-ui-spec.md §4.2): mode switch, then the type pickers on one
+    // row, then the name input with the found-thoughts list directly beneath
+    // it and the accumulated list under both.
+    if (typeRow.childElementCount > 0) body.append(typeRow);
+    const hint =
+      allowCreate
+        ? 'Enter — добавить в список, Ctrl+Enter — применить. В режиме «несколько» клик по найденной мысли добавляет её в список.'
+        : 'Выбор только из существующих мыслей: Enter или клик по найденной — в список, Ctrl+Enter — применить.';
+    const hintLine = el('p', 'muted', hint);
+    hintLine.style.margin = '0';
+    body.append(modeRow, input, hintLine, candidates, lineList, errorLine);
+
+    let timer: number | null = null;
+    let lastCandidates: DuplicateHit[] = [];
+
+    /** Debounced duplicate search for the current input. */
+    function scheduleSearch(): void {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        void (async () => {
+          const raw = input.value.trim();
+          if (raw === '') {
+            renderCandidates([]);
+            return;
+          }
+          const parsed = parseTitleWithSynonyms(raw);
+          try {
+            lastCandidates = await etn.thoughts.findDuplicates(
+              networkId,
+              parsed.title,
+              parsed.synonyms,
+              searchFilter,
+            );
+            renderCandidates(lastCandidates);
+          } catch (err) {
+            errorLine.textContent = errText(err);
+          }
+        })();
+      }, 200);
+    }
+    input.addEventListener('input', scheduleSearch);
+
+    /** Handles multi-line pastes: switches to multi mode and parses lines. */
+    if (allowCreate) {
+      input.addEventListener('paste', () => {
+        window.setTimeout(() => {
+          const text = input.value;
+          if (!text.includes('\n')) return;
+          const parsed = parseAddLines(text);
+          if (parsed.length <= 1) return;
+          multi = true;
+          multiRadio.checked = true;
+          applyMode();
+          for (const line of parsed) addLine(line.raw, line.title, line.synonyms);
+          input.value = '';
+        }, 0);
+      });
+    }
+
+    input.addEventListener('keydown', (event) => {
+      // ↓ moves into the found-thoughts list (keyboard path of picking a
+      // candidate); Tab reaches it as the next tab stop.
+      if (event.key === 'ArrowDown') {
+        const first = candidates.querySelector<HTMLElement>('.dup-item');
+        if (first !== null) {
+          event.preventDefault();
+          first.focus();
+        }
+        return;
+      }
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      // Ctrl+Enter applies the whole list (Shift additionally focuses the
+      // first inserted item, L19); the dialog-level Ctrl+Enter does the same
+      // without Shift via the primary button.
+      if (event.ctrlKey) {
+        apply(event.shiftKey);
+        return;
+      }
+      const raw = input.value.trim();
+      if (raw === '') return;
+      if (multi) {
+        addLineFromInput(raw);
+        input.value = '';
+        scheduleSearch();
+        return;
+      }
+      // Single mode: the strongest exact match is picked; otherwise a new
+      // thought is queued (when allowed), else the first candidate.
+      finishSingle(lineFromInput(raw));
+    });
+
+    /** Shows/hides the accumulated-list UI. */
+    function applyMode(): void {
+      lineList.classList.toggle('hidden', !multi);
+    }
+
+    /**
+     * Builds the list entry for a typed query: an exact title/synonym match
+     * reuses the existing thought; otherwise a new one is queued when allowed,
+     * else the first candidate is taken (creation forbidden → pick from found).
+     */
+    function lineFromInput(raw: string): AddLine | null {
+      const parsed = parseTitleWithSynonyms(raw);
+      const exact = lastCandidates.find(
+        (c) => c.matched_on === 'title' || c.matched_on === 'synonym',
+      );
+      if (exact !== undefined) {
+        return {
+          raw,
+          title: parsed.title,
+          synonyms: parsed.synonyms,
+          existingId: exact.id,
+          matchKind: exact.matched_on,
+        };
+      }
+      if (allowCreate) {
+        return { raw, title: parsed.title, synonyms: parsed.synonyms, existingId: null, matchKind: null };
+      }
+      const first = lastCandidates[0];
+      if (first === undefined) {
+        errorLine.textContent = 'Совпадений нет — создание новых мыслей отключено.';
+        return null;
+      }
+      return {
+        raw,
+        title: parsed.title,
+        synonyms: [],
+        existingId: first.id,
+        matchKind: 'partial',
+      };
+    }
+
+    /** Enter in multi mode: appends the typed query to the list. */
+    function addLineFromInput(raw: string): void {
+      const line = lineFromInput(raw);
+      if (line !== null) addLine(line.raw, line.title, line.synonyms, line.existingId, line.matchKind);
+    }
+
+    /** Adds a list entry with an immediate exact-duplicate check. */
+    function addLine(
+      raw: string,
+      title: string,
+      synonyms: string[],
+      existingId: string | null = null,
+      matchKind: AddLine['matchKind'] = null,
+    ): void {
+      // The server classifies candidates by match strength; exact title/synonym
+      // matches reuse the existing thought, partial matches create a new one.
+      const exact = lastCandidates.find(
+        (c) => c.matched_on === 'title' || c.matched_on === 'synonym',
+      );
+      const resolvedId = existingId ?? exact?.id ?? null;
+      if (resolvedId !== null && lines.some((l) => l.existingId === resolvedId)) {
+        errorLine.textContent = 'Эта мысль уже в списке.';
+        return;
+      }
+      lines.push({
+        raw,
+        title,
+        synonyms,
+        existingId: resolvedId,
+        matchKind: matchKind ?? exact?.matched_on ?? null,
+      });
+      errorLine.textContent = '';
+      renderLines();
+    }
+
+    /** Adds an existing thought picked from the candidate list. */
+    function addExisting(candidate: DuplicateHit): void {
+      if (lines.some((l) => l.existingId === candidate.id)) return;
+      lines.push({
+        raw: candidate.title,
+        title: candidate.title,
+        synonyms: [],
+        existingId: candidate.id,
+        matchKind: 'title',
+      });
+      errorLine.textContent = '';
+      renderLines();
+    }
+
+    /** Renders the accumulated list (with the «Очистить» header button). */
+    function renderLines(): void {
+      lineList.replaceChildren();
+      const head = div('add-list-head');
+      head.append(span(`Выбрано: ${lines.length}`, 'muted'));
+      head.append(
+        button(
+          'Очистить',
+          () => {
+            lines.length = 0;
+            renderLines();
+          },
+          'btn small',
+          'Очистить список',
+        ),
+      );
+      lineList.append(head);
+      lines.forEach((line, index) => {
+        const row = div('add-list-item');
+        const status = line.existingId !== null ? span('🟡', 'al-status') : span('🟢', 'al-status');
+        status.title =
+          line.existingId !== null
+            ? 'Существующая мысль — тип мысли не меняется'
+            : 'Будет создана новая мысль';
+        const title = el('span', 'al-title', line.title === '' ? line.raw : line.title);
+        title.title = line.raw;
+        row.append(status, title);
+        row.append(
+          button(
+            '×',
+            () => {
+              lines.splice(index, 1);
+              renderLines();
+            },
+            'btn small',
+            'Удалить строку',
+          ),
+        );
+        lineList.append(row);
+      });
+    }
+
+    /** Renders the duplicate candidates for the current input. */
+    function renderCandidates(list: DuplicateHit[]): void {
+      candidates.replaceChildren();
+      if (list.length === 0) return;
+      candidates.append(el('p', 'muted', 'Найденные мысли:'));
+      for (const candidate of list) {
+        const row = div('dup-item');
+        row.tabIndex = 0;
+        // The candidate's own icon/style, else its type's defaults — the row
+        // looks like the thought's cloud, so equal titles are easy to tell apart.
+        const iconBox = span('', 'dup-icon');
+        applyThoughtIcon(iconBox, candidate);
+        const title = el('span', 'dup-title', candidate.title);
+        const style = resolveCloudStyle(candidate);
+        applyFontFlags(title, {
+          bold: style.bold,
+          italic: style.italic,
+          underline: style.underline,
+          strike: style.strike,
+        });
+        if (style.fg !== null) title.style.color = style.fg;
+        if (style.bg !== null) row.style.background = style.bg;
+        row.append(iconBox, title);
+        // The parent's title (first 60 chars) instead of the «использовать»
+        // button — the whole row is the pick target (08-ui-spec.md §4.2).
+        if (candidate.parent_title !== null) {
+          const parent = span(candidate.parent_title.slice(0, 60), 'dup-parent');
+          parent.title = candidate.parent_title;
+          row.append(parent);
+        }
+        const matchLabel =
+          candidate.matched_on === 'title'
+            ? 'точное имя'
+            : candidate.matched_on === 'synonym'
+              ? `синоним «${candidate.matched_synonym ?? ''}»`
+              : 'частичное совпадение';
+        row.title =
+          candidate.synonyms.length > 0
+            ? `${candidate.title} (${candidate.synonyms.join(', ')}) — ${matchLabel}`
+            : `${candidate.title} — ${matchLabel}`;
+        row.addEventListener('click', () => {
+          pickCandidate(candidate);
+        });
+        row.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' && event.shiftKey) {
+            // Shift+Enter composes a compound name: the candidate's full name
+            // replaces the input text, a comma is appended and the caret lands
+            // right after it (08-ui-spec.md §4.3).
+            event.preventDefault();
+            input.value = `${candidate.title},`;
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
+            scheduleSearch();
+            return;
+          }
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            pickCandidate(candidate);
+          } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            const next =
+              event.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+            if (next instanceof HTMLElement && next.classList.contains('dup-item')) {
+              next.focus();
+              next.scrollIntoView({ block: 'nearest' });
+            } else if (event.key === 'ArrowUp') {
+              // Above the first row the caret returns to the name input.
+              input.focus();
+            }
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            input.focus();
+          }
+        });
+        candidates.append(row);
       }
     }
-    if (failed > 0) notice(`Создано/связано: ${created}, ошибок: ${failed}`, 'error');
-    else notice(`Готово: ${created}.`);
-    scheduleRefresh();
-    closeDialog();
-    if (focusFirst && firstAddedId !== null) void setFocus(firstAddedId);
-  }
 
-  const closeDialog = showDialog({
-    title: ctx.anchorId === null ? 'Добавить мысли' : `Добавить мысль (${directionText})`,
-    body,
-    width: 620,
-    buttons: [
-      { label: 'Отмена' },
-      {
-        // In batch mode this inserts everything; the label keeps it simple.
-        label: 'Добавить',
-        primary: true,
-        keepOpen: true,
-        onClick: () => {
-          if (multi) void insertAll();
-          else void insertSingle();
+    /** A candidate was activated (click/Enter): multi adds it to the list,
+     *  single resolves the dialog with it right away. */
+    function pickCandidate(candidate: DuplicateHit): void {
+      if (multi) {
+        addExisting(candidate);
+        input.value = '';
+        scheduleSearch();
+        return;
+      }
+      // Single mode resolves with exactly this one thought (any accumulated
+      // prefill is replaced).
+      lines.length = 0;
+      lines.push({
+        raw: candidate.title,
+        title: candidate.title,
+        synonyms: [],
+        existingId: candidate.id,
+        matchKind: 'title',
+      });
+      input.value = '';
+      apply(false);
+    }
+
+    /** Single-mode Enter: a built line resolves the dialog immediately. */
+    function finishSingle(line: AddLine | null): void {
+      if (line === null) return;
+      lines.length = 0;
+      lines.push(line);
+      input.value = '';
+      apply(false);
+    }
+
+    /** Applies the whole list: a leftover query joins it first. */
+    function apply(shift: boolean): void {
+      const raw = input.value.trim();
+      if (raw !== '') {
+        const line = lineFromInput(raw);
+        if (line !== null) lines.push(line);
+      }
+      if (lines.length === 0) {
+        notice('Список мыслей пуст.', 'info');
+        return;
+      }
+      finish({
+        items: lines.map((line) =>
+          line.existingId !== null
+            ? { kind: 'existing' as const, id: line.existingId, raw: line.raw }
+            : { kind: 'new' as const, title: line.title, synonyms: line.synonyms, raw: line.raw },
+        ),
+        thoughtTypeId: allowCreate ? newThoughtTypeId : null,
+        linkTypeId: allowLinkType ? linkTypeId : null,
+        focusFirst: shift,
+      });
+    }
+
+    const finish = (result: ThoughtPickResult | null): void => {
+      resolve(result);
+      closeSelf();
+    };
+
+    // Prefill the list from `selectedIds` (titles resolved async; raw ids are
+    // shown while loading / offline) — multi mode is already on.
+    const prefillIds = opts.selectedIds ?? [];
+    if (prefillIds.length > 0) {
+      void etn.thoughts
+        .resolve(networkId, prefillIds)
+        .then((refs) => {
+          const byId = new Map(refs.map((r) => [r.id, r.title]));
+          for (const id of prefillIds) {
+            lines.push({
+              raw: byId.get(id) ?? id,
+              title: byId.get(id) ?? id,
+              synonyms: [],
+              existingId: id,
+              matchKind: 'title',
+            });
+          }
+          renderLines();
+        })
+        .catch(() => {
+          for (const id of prefillIds) {
+            lines.push({ raw: id, title: id, synonyms: [], existingId: id, matchKind: 'title' });
+          }
+          renderLines();
+        });
+    }
+
+    const anchorTitle =
+      opts.anchor !== undefined && opts.anchor !== null
+        ? (store.state.focus?.focused.title ?? '…')
+        : '';
+    const directionText =
+      opts.anchor === undefined || opts.anchor === null
+        ? ''
+        : opts.anchor.direction === 'parent'
+          ? `вверх к «${anchorTitle}»`
+          : `вниз к «${anchorTitle}»`;
+    const title =
+      opts.title ??
+      (allowCreate
+        ? directionText === ''
+          ? 'Добавить мысли'
+          : `Добавить мысль (${directionText})`
+        : 'Выбор мыслей');
+    const applyLabel = opts.applyLabel ?? (allowCreate ? 'Добавить' : 'Выбрать');
+
+    const closeSelf = showDialog({
+      title,
+      body,
+      width: 620,
+      buttons: [
+        { label: 'Отмена', onClick: () => finish(null) },
+        {
+          label: applyLabel,
+          primary: true,
+          keepOpen: true,
+          onClick: () => apply(false),
         },
+      ],
+      onMount: () => {
+        renderLines();
+        input.focus();
       },
-    ],
-    onMount: () => input.focus(),
+    });
   });
 }
 

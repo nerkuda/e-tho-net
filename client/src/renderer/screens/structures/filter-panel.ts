@@ -20,7 +20,8 @@ import {
 } from '@etn/shared';
 
 import { buildValueOptionsCaret } from '../../editor/properties.js';
-import { pickThoughtRef, wireThoughtRefSearch } from '../../editor/thought-picker.js';
+import { firstPickedThoughtId, pickThoughtsDialog } from '../../canvas/add-dialog.js';
+import { wireThoughtRefSearch } from '../../editor/thought-picker.js';
 import { clear, div, el, setTooltip } from '../../lib/dom.js';
 import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
@@ -826,7 +827,13 @@ function buildThoughtRefEditor(
     const pick = el('button', 'st-f-add st-f-ref-pick', 'выбрать') as HTMLButtonElement;
     pick.type = 'button';
     pick.addEventListener('click', () => {
-      void pickThoughtRef(networkId, filterIds).then(async (id) => {
+      void pickThoughtsDialog({
+        networkId,
+        allowCreate: false,
+        allowLinkType: false,
+        searchTypeIds: filterIds,
+      }).then(async (result) => {
+        const id = firstPickedThoughtId(result);
         if (id === null) return;
         try {
           const [ref] = await etn.thoughts.resolve(networkId, [id]);

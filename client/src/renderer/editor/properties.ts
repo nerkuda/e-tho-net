@@ -23,7 +23,8 @@ import { button, div, el, errText, positionBodyDropdown, span } from '../lib/dom
 import { etn } from '../lib/etn.js';
 import { requireNetworkId } from '../app.js';
 import { registerMainSection, type EditorContext } from './editor.js';
-import { pickThoughtRef, wireThoughtRefSearch } from './thought-picker.js';
+import { wireThoughtRefSearch } from './thought-picker.js';
+import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
 
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
@@ -278,7 +279,13 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           button(
             'выбрать',
             () => {
-              void pickThoughtRef(networkId, filterIds).then(async (id) => {
+              void pickThoughtsDialog({
+                networkId,
+                allowCreate: false,
+                allowLinkType: false,
+                searchTypeIds: filterIds,
+              }).then(async (result) => {
+                const id = firstPickedThoughtId(result);
                 if (id !== null && (await save(id))) void reload();
               });
             },

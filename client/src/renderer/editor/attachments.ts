@@ -27,7 +27,7 @@ import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
-import { pickThoughtRef } from './thought-picker.js';
+import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { etnimgUrl, createMarkdownField } from './markdown-field.js';
 import {
   refreshTabCount,
@@ -467,7 +467,8 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
 
   /** «Перенести в мысль» — moves the attachment to another owner (L1). */
   async function moveToThought(attachment: Attachment): Promise<void> {
-    const targetId = await pickThoughtRef(networkId);
+    const result = await pickThoughtsDialog({ networkId, allowCreate: false, allowLinkType: false });
+    const targetId = firstPickedThoughtId(result);
     if (targetId === null || targetId === attachment.owner_id) return;
     try {
       await etn.attachments.update(networkId, attachment.id, {

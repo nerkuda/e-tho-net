@@ -24,8 +24,8 @@
 
 import { setFocus } from '../app.js';
 import { applyThoughtIcon } from '../canvas/canvas.js';
+import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { openLinkInEditor } from '../editor/editor.js';
-import { pickThoughtRef } from '../editor/thought-picker.js';
 import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { UI_STATE_KEY, type SearchResponse, type SearchScope } from '@etn/shared';
@@ -582,7 +582,12 @@ function buildOptionsRow(row: HTMLElement): void {
   const subrootButton = button(
     'подкорень: —',
     () => {
-      void pickThoughtRef(requireNetworkId()).then((id) => {
+      void pickThoughtsDialog({
+        networkId: requireNetworkId(),
+        allowCreate: false,
+        allowLinkType: false,
+      }).then((result) => {
+        const id = firstPickedThoughtId(result);
         if (id !== null) {
           options = { ...options, subrootId: id };
           rebuildOptionsRow();
