@@ -2404,7 +2404,11 @@ body.cloud-dragging * {
   background: var(--surface-2);
   padding: 8px;
   border-radius: var(--radius-sm);
-  overflow-x: auto;
+  /* Длинные строки кода переносятся по ширине поля (08-ui-spec.md §6.4):
+     без переноса строка растягивает pre виджета, .cm-content CodeMirror
+     расширяется — lineWrapping начинает считать ширину по растянутому
+     контенту, и в редакторе перестают переноситься все строки. */
+  white-space: pre-wrap;
 }
 
 .comment-view hr {
@@ -2431,9 +2435,12 @@ body.cloud-dragging * {
   text-decoration: underline;
 }
 
-/* Виджеты live preview (M6): блоки в редакторе отображаются как в просмотре. */
+/* Виджеты live preview (M6): блоки в редакторе отображаются как в просмотре.
+   Вертикальный отступ — padding, не margin: getBoundingClientRect() не
+   включает margin, и карта высот CodeMirror расходилась бы с раскладкой
+   (md-editor.ts, стрелки вверх/вниз прыгали бы через строки). */
 .cm-editor .md-widget {
-  margin: 2px 0;
+  padding: 2px 0;
 }
 
 .cm-editor .md-widget.md-hr {
