@@ -143,3 +143,29 @@
     usage, description резолвится; пустой каталог у usage без ссылок);
     typecheck зелёный; проверка через MCP stdio на живой сети (каталог
     «софт»/«каталог» с описаниями, 21 инструмент).
+
+## N7. Полный текст комментария: инструмент `etn.comments.get`
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** N2, N5
+- **Описание:** по запросу пользователя: у агента не было способа получить
+  полный текст конкретного заинтересовавшего комментария — превью
+  (`meta.permanent`, комментарии `subgraph`) обрезаются на 2000 символов, а
+  ресурс `etn://…/comments` отдаёт все комментарии «одним телом»; на практике
+  агент пытался доставать текст серией `etn.thoughts.search`. Добавлен
+  read-only инструмент `etn.comments.get`: по `comment_id` — любой комментарий
+  (permanent или хронологический) с полным `body_md`; по `thought_id` —
+  постоянный комментарий мысли (`{thought_id, permanent}`; `null`, если его
+  нет). В превью добавлен `id` комментария (`PermanentCommentPreview.id`), а
+  описания `etn.thoughts.get`/`etn.thoughts.subgraph` явно указывают: при
+  `truncated: true` полный текст — через `etn.comments.get`.
+- **DoD:**
+  - [x] `id` в `PermanentCommentPreview` (@etn/shared) и в `getPermanentPreview`
+    (comment-service); превью хроники уже несло `id`.
+  - [x] Инструмент `etn.comments.get` (tools.ts): ровно одно из
+    `comment_id`/`thought_id` (zod refine), NOT_FOUND по чужому id, `null` при
+    отсутствии постоянного; `MCP_TOOL_NAMES` — 22.
+  - [x] Описания `etn.thoughts.get`/`subgraph` указывают путь к полному тексту.
+  - [x] Спека `docs/05-mcp-server.md` §3/§4.1 и `docs/mcp-clients.md`.
+  - [x] Тесты mcp-tools.test.ts (полный текст по id и по мысли, id в превью,
+    валидация «ровно одно из», NOT_FOUND, `permanent: null`); typecheck
+    зелёный; проверка через MCP stdio (22 инструмента, полный текст
+    permanent-комментария мысли ETN).

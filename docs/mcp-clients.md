@@ -48,6 +48,7 @@ IDE-агенты, кастомные скрипты) читают и измен�
 | `etn.thoughts.create/update/delete` | изменение мыслей |
 | `etn.links.create/delete` | связи |
 | `etn.comments.upsert` | комментарии |
+| `etn.comments.get` | полный текст одного комментария (по `comment_id` или по `thought_id` — постоянный); вызывается, когда превью показывает `truncated: true` |
 | `etn.properties.set` | значения свойств |
 | `etn.export.subgraph` | подграф как Markdown-документ |
 
