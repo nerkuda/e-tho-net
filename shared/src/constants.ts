@@ -141,6 +141,7 @@ export const UI_STATE_KEY = {
   LAST_USED_LINK_TYPE_ID: 'last_used_link_type_id',
   ACTIVE_VIEW: 'active_view',
   STRUCTURES_STATE: 'structures_state',
+  CHRONICLE_STATE: 'chronicle_state',
   MD_ZOOM: 'md_zoom',
 } as const satisfies Record<string, string>;
 export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];
@@ -187,8 +188,12 @@ export const MCP_DEFAULTS = {
 export const COMMENT_PREVIEW_CHARS = 2000;
 
 /** Сколько последних хронологических записей возвращает MCP-превью
- * комментариев (task N5, `etn.thoughts.subgraph` с `include_comments`). */
+ *  комментариев (task N5, `etn.thoughts.subgraph` с `include_comments`). */
 export const CHRONO_PREVIEW_MAX_ENTRIES = 10;
+
+/** Maximum number of distinct owners a chronological comment may be attached
+ *  to (L20, 03-server-api.md §10). */
+export const COMMENT_TARGETS_MAX = 100;
 
 /** Defaults for the real-time event-log retention window (04-realtime.md §6). */
 export const REALTIME_DEFAULTS = {
@@ -237,4 +242,20 @@ export const SAVED_FILTER_NAME_MAX = 200;
 
 /** Maximum number of pinned thoughts per user per network (03-server-api.md §19). */
 export const PINNED_THOUGHTS_LIMIT = 20;
+
+// ---------------------------------------------------------------------------
+// «Хроника» view (L20)
+// ---------------------------------------------------------------------------
+
+/** Page size of the chronicle table (08-ui-spec.md §17). */
+export const CHRONICLE_PAGE_SIZE = 50;
+
+/** Hard maximum of `limit` in `POST /chronicle/query` (03-server-api.md §20). */
+export const CHRONICLE_QUERY_MAX_LIMIT = 100;
+
+/** Plain-text snippet length of a chronicle table row (03-server-api.md §20). */
+export const CHRONICLE_SNIPPET_CHARS = 160;
+
+/** Maximum number of thought ids accepted by the chronicle filter's «мысли» field. */
+export const CHRONICLE_THOUGHT_IDS_MAX = 100;
 

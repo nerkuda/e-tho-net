@@ -6,7 +6,7 @@
  * docs/02-data-model.md §3.10.5.
  */
 
-import type { SortOrder, StructurePropertyOp, StructureSort } from '../enums.js';
+import type { SavedFilterView, SortOrder, StructurePropertyOp, StructureSort } from '../enums.js';
 import type { FocusEdge, ThoughtRef } from './thought.js';
 
 /** A single scalar of a property condition (shape depends on the value type). */
@@ -84,6 +84,8 @@ export interface SavedFilterDefinition extends StructureFilter {
 /** A named saved filter of the structures view (L3, per-user). */
 export interface SavedFilter {
   id: string;
+  /** Which view the filter belongs to; legacy rows default to 'structures'. */
+  view: SavedFilterView;
   name: string;
   definition: SavedFilterDefinition;
   /** ISO-8601 UTC. */

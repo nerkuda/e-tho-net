@@ -21,6 +21,7 @@ import type { Link, LinkUpdateInput } from './link.js';
 import type { LinkType } from './link-type.js';
 import type { Comment } from './comment.js';
 import type { Attachment } from './attachment.js';
+import type { ChronicleSavedFilter } from './chronicle.js';
 import type { Thought, ThoughtUpdateInput } from './thought.js';
 import type { PropertyDefinition, PropertyValueValue, ThoughtType } from './thought-type.js';
 import type { SavedFilter } from './structure.js';
@@ -266,10 +267,10 @@ export interface ThoughtViewUpdatedData {
   last_viewed_at: string;
 }
 export interface SavedFilterCreatedData {
-  filter: SavedFilter;
+  filter: SavedFilter | ChronicleSavedFilter;
 }
 export interface SavedFilterUpdatedData {
-  filter: SavedFilter;
+  filter: SavedFilter | ChronicleSavedFilter;
 }
 export interface SavedFilterDeletedData {
   id: string;

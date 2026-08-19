@@ -8,11 +8,25 @@
 import type { CommentKind, CommentOwnerType } from '../enums.js';
 import type { PermanentCommentPreview } from './thought.js';
 
+/**
+ * One attachment of a chronological comment to a thought or a link
+ * (02-data-model.md §3.8, L20). `comments.owner_type/owner_id` keep the
+ * primary (first) attachment; `comment_targets` is the full m2m set —
+ * a chronological comment is visible in the list of every attached owner.
+ * Permanent comments always have exactly one target.
+ */
+export interface CommentTarget {
+  owner_type: CommentOwnerType;
+  owner_id: string;
+}
+
 /** A permanent or chronological comment on a thought/link (02-data-model.md §3.8). */
 export interface Comment {
   id: string;
   owner_type: CommentOwnerType;
   owner_id: string;
+  /** All attachments (m2m, L20); includes the primary `owner_type/owner_id`. */
+  targets: CommentTarget[];
   kind: CommentKind;
   /** Title for chronological comments; `null` for permanent. */
   title: string | null;
@@ -47,6 +61,15 @@ export interface CommentUpdateInput {
   body_md?: string;
   valid_from?: string;
   valid_to?: string | null;
+}
+
+/**
+ * Input accepted by `POST /networks/{nid}/comments` (03-server-api.md §10, L20):
+ * a chronological comment attached to one or more owners at once.
+ * `targets` must contain 1..N entries; duplicates are collapsed.
+ */
+export interface CommentInputWithTargets extends CommentInput {
+  targets: CommentTarget[];
 }
 
 /** Превью одной хронологической записи (task N5): тело не длиннее

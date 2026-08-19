@@ -104,6 +104,18 @@ export type PropertyOwnerType = (typeof PROPERTY_OWNER_TYPES)[number];
 export const COMMENT_OWNER_TYPES = ['thought', 'link'] as const;
 export type CommentOwnerType = (typeof COMMENT_OWNER_TYPES)[number];
 
+/** Which workspace view a named saved filter belongs to (03-server-api.md §18). */
+export const SAVED_FILTER_VIEWS = ['structures', 'chronicle'] as const;
+export type SavedFilterView = (typeof SAVED_FILTER_VIEWS)[number];
+
+/**
+ * How link targets of a chronicle row are matched against the selected
+ * thoughts (03-server-api.md §20): `sources` — the thought is link.source,
+ * `targets` — link.target, `both` — either endpoint.
+ */
+export const CHRONICLE_LINK_SCOPES = ['sources', 'targets', 'both'] as const;
+export type ChronicleLinkScope = (typeof CHRONICLE_LINK_SCOPES)[number];
+
 /** Polymorphic owner of an {@link Attachment} (02-data-model.md §3.9). */
 export const ATTACHMENT_OWNER_TYPES = ['thought', 'link'] as const;
 export type AttachmentOwnerType = (typeof ATTACHMENT_OWNER_TYPES)[number];
