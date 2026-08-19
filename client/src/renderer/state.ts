@@ -107,7 +107,8 @@ export interface AppState {
   lastUsedLinkTypeId: string | null;
   /** Active workspace view (L4 `active_view`, 08-ui-spec.md §15.1). */
   activeView: WorkspaceView;
-  /** The thought opened in the editor from the structures view (its band), L15. */
+  /** The thought opened in the editor from the structures (L15) or chronicle
+   *  (L20) view — the editor shows it instead of the focused thought. */
   structuresActiveThoughtId: string | null;
   /** Full entity of {@link AppState.structuresActiveThoughtId} (editor header). */
   structuresActiveThought: Thought | null;

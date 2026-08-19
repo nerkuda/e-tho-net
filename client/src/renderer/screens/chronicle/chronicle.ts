@@ -1027,11 +1027,18 @@ async function attachThoughtToRow(thoughtId: string, rowId: string): Promise<voi
 // ---------------------------------------------------------------------------
 
 /** Opens a thought in the editor (the canvas focus stays) and pushes it into
- *  the chronicle visit history. */
+ *  the chronicle visit history. The full entity rides along in the store
+ *  (`structuresActiveThought*`) — without the passenger the editor falls
+ *  back to the focused thought (same mechanism as the structures view, L15). */
 export async function openChronicleThought(id: string): Promise<void> {
   const networkId = requireNetworkId();
   const thought = await etn.thoughts.get(networkId, id);
-  store.update({ editorTarget: { kind: 'thought', id: thought.id } });
+  store.update({
+    editorTarget: { kind: 'thought', id: thought.id },
+    structuresActiveThought: thought,
+    structuresActiveThoughtId: thought.id,
+    selectedLinkId: null,
+  });
   await pushChronicleHistory('thought', id);
 }
 
