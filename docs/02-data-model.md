@@ -380,10 +380,36 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 Индексы: `idx_comments_owner` `(owner_type, owner_id)`,
 `idx_comments_chrono` `(owner_type, owner_id, valid_from)`.
 
+#### 3.8.1. comment_targets (L20)
+
+Привязки хронологического комментария к мыслям/связям (m2m): одна запись
+может быть привязана к **нескольким** владельцам сразу (например, к нескольким
+мыслям и связи). `comments.owner_type/owner_id` хранят **первичную** (первую)
+привязку; полный набор — в `comment_targets`.
+
+| Столбец | Тип | Описание |
+|---------|-----|----------|
+| `comment_id` | TEXT NOT NULL | → `comments.id` (без SQL-FK, полиморфность) |
+| `owner_type` | TEXT NOT NULL | `'thought'` \| `'link'` |
+| `owner_id` | TEXT NOT NULL | |
+| PRIMARY KEY | `(comment_id, owner_type, owner_id)` | Контроль дублей привязок |
+
+Индекс: `idx_comment_targets_owner` `(owner_type, owner_id)` — список
+комментариев владельца (включая вторичные привязки). Миграция 019 выполняет
+бэкфилл: каждый существующий комментарий получает одну строку со своим
+первичным владельцем.
+
 Инварианты:
 - для пары `(owner_type, owner_id)` допускается **один** комментарий с
-  `kind = 'permanent'`.
-- хронологических — сколько угодно.
+  `kind = 'permanent'`. Постоянный комментарий всегда имеет ровно одну
+  привязку (дополнительные привязки запрещены).
+- хронологических — сколько угодно; у хронологического — 1..N привязок.
+  Отвязка последней привязки автоматически привязывает запись к HOME
+  (защищённая мысль сети) — запись не может остаться без владельца.
+- FTS-индексы (`fts_thought_texts`/`fts_link_texts`) индексируют текст
+  комментария по **первичной** привязке; при переносе primary триггеры
+  перестраивают строку. Тексты комментариев вторичных владельцев в FTS не
+  попадают (отбор «Хроники» ищет по телам через `comment_targets` напрямую).
 
 ### 3.9. attachments
 
@@ -493,21 +519,23 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 
 #### 3.10.5. saved_filters
 
-Именованные отборы вида «Структуры мыслей» (08-ui-spec.md §15): критерии +
-сортировка, сохранённые пользователем для повторного применения. Уровень L3 —
-одинаковы на всех клиентах пользователя, синхронизируются событиями
-`saved-filter.*` (`audience=user`, см. [04-realtime.md](04-realtime.md) п. 4.8).
+Именованные отборы видов «Структуры мыслей» (08-ui-spec.md §15) и «Хроника»
+(08-ui-spec.md §17): критерии + сортировка, сохранённые пользователем для
+повторного применения. Уровень L3 — одинаковы на всех клиентах пользователя,
+синхронизируются событиями `saved-filter.*` (`audience=user`, см.
+[04-realtime.md](04-realtime.md) п. 4.8).
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
 | `id` | TEXT NOT NULL | UUID |
 | `user_id` | TEXT NOT NULL | Владелец (только свои отборы доступны через API) |
-| `name` | TEXT NOT NULL | Имя отбора (уникально в пределах пользователя) |
-| `definition` | TEXT NOT NULL | JSON: `{ keywords?, type_ids?, link_type_ids?, properties?, show_inactive?, sort, order }` (03-server-api.md §6.10/§18) |
+| `view` | TEXT NOT NULL | `'structures'` \| `'chronicle'` — к какому виду относится отбор |
+| `name` | TEXT NOT NULL | Имя отбора (уникально в пределах пользователя и вида) |
+| `definition` | TEXT NOT NULL | JSON: для structures — `{ keywords?, type_ids?, link_type_ids?, properties?, show_inactive?, sort, order }` (03-server-api.md §6.10/§18); для chronicle — `{ keywords?, thought_ids?, include_subtree?, type_ids?, link_type_ids?, link_scope?, date_from?, date_to?, order }` (03-server-api.md §20) |
 | `created_at` | TEXT NOT NULL | |
 | `updated_at` | TEXT NOT NULL | |
 | PRIMARY KEY | `(id)` | |
-| UNIQUE | `(user_id, name)` | Повторное имя → 409 `DUPLICATE` |
+| UNIQUE | `(user_id, view, name)` | Повторное имя в том же виде → 409 `DUPLICATE` |
 
 #### 3.10.6. user_pinned_thoughts
 

@@ -462,6 +462,37 @@ DELETE /api/v1/networks/{nid}/comments/{id}   If-Match
 # Аналогично для /links/{id}/comments
 ```
 
+### 10.1. Несколько привязок (L20)
+
+Хронологический комментарий может быть привязан к **нескольким** владельцам
+(02-data-model.md §3.8.1). `Comment` в ответах несёт `targets` — полный массив
+`{ owner_type, owner_id }`; `owner_type`/`owner_id` — первичная (первая)
+привязка. Постоянный комментарий всегда имеет ровно одну привязку.
+
+```
+POST   /api/v1/networks/{nid}/comments
+       { kind: "chronological", title?, body_md, valid_from?, valid_to?,
+         targets: [ { owner_type: "thought"|"link", owner_id } ] }   # 1..100, дубли схлопываются
+       → 201 { data: Comment }
+GET    /api/v1/networks/{nid}/comments/{id}
+       → 200 { data: Comment (с targets) }
+POST   /api/v1/networks/{nid}/comments/{id}/targets        If-Match?
+       { owner_type: "thought"|"link", owner_id }
+       # Привязывает комментарий к ещё одному владельцу. 409 DUPLICATE, если
+       # уже привязан; 422 для permanent. → 200 { data: Comment }
+DELETE /api/v1/networks/{nid}/comments/{id}/targets/{owner_type}/{owner_id}   If-Match?
+       # Отвязывает владельца. При отвязке первичной привязки primary
+       # переносится на другую оставшуюся; отвязка последней привязывает
+       # запись к HOME (защищённой мысли сети). → 200 { data: Comment }
+```
+
+`listComments` (`GET …/thoughts/{id}/comments`, `…/links/{id}/comments`) видит
+запись у **каждого** её владельца (по `comment_targets`). Изменение привязок
+эмитит `comment.updated` с `changes.targets` (04-realtime.md §4.4). При
+удалении мысли/связи комментарии, у которых она — первичный владелец,
+удаляются вместе со всеми привязками; вторичные привязки удалённой сущности
+отвязываются.
+
 ## 11. Вложения
 
 ```
@@ -580,25 +611,25 @@ GET /api/v1/version     → версия сервера и совместимы�
 - Все изменения API идут под новым minor/major в `/api/v1` с возможным выкатом
   `/api/v2` параллельно. На MVP — только `v1`.
 
-## 18. Сохранённые отборы («Структуры мыслей», L3)
+## 18. Сохранённые отборы («Структуры мыслей» и «Хроника», L3)
 
-Именованные отборы критериев + сортировки (см. §6.10), хранятся per-user в
-network-БД (`saved_filters`, [02-data-model.md](02-data-model.md) §3.10.5) и
-синхронизируются между клиентами пользователя событиями `saved-filter.*`
-(`audience=user`). Пользователь видит и меняет **только свои** отборы;
-публикация другим пользователям — вне MVP.
+Именованные отборы критериев + сортировки (структуры — см. §6.10, хроника —
+§20), хранятся per-user в network-БД (`saved_filters`,
+[02-data-model.md](02-data-model.md) §3.10.5) и синхронизируются между
+клиентами пользователя событиями `saved-filter.*` (`audience=user`).
+Пользователь видит и меняет **только свои** отборы; публикация другим
+пользователям — вне MVP. Имя уникально в пределах `(пользователь, view)`;
+`view` по умолчанию `structures` (обратная совместимость L15).
 
 ```
-GET    /api/v1/networks/{nid}/saved-filters
-       → 200 { data: [ { id, name, definition, created_at, updated_at } ] }  # по имени (alpha)
+GET    /api/v1/networks/{nid}/saved-filters?view=structures|chronicle
+       → 200 { data: [ { id, view, name, definition, created_at, updated_at } ] }  # по имени (alpha)
 POST   /api/v1/networks/{nid}/saved-filters        # Client-Request-Id
-       { name: "Мои счета", definition: { keywords?, type_ids?, link_type_ids?,
-         properties?, show_inactive?, sort, order } }
-       → 201 { data: { id, name, definition, created_at, updated_at } }
-       # name — 1..200 символов; 409 DUPLICATE при повторном имени;
-       # definition валидируется как в §6.10
+       { view?, name: "Мои счета", definition: ... }   # definition валидируется
+       → 201 { data: { id, view, name, definition, created_at, updated_at } }
+       # name — 1..200 символов; 409 DUPLICATE при повторном имени в том же виде
 PATCH  /api/v1/networks/{nid}/saved-filters/{fid}  # Client-Request-Id; только свой
-       { name?, definition? }                      # 409 при конфликте имени
+       { view?, name?, definition? }               # 409 при конфликте имени; view не меняется
 DELETE /api/v1/networks/{nid}/saved-filters/{fid}  # только свой
 ```
 
@@ -641,3 +672,64 @@ PUT /api/v1/networks/{nid}/pins                          # Client-Request-Id
 
 События после мутаций: `pinned-thoughts.updated`
 (`{ ordered_ids }`) — [04-realtime.md](04-realtime.md) п. 4.8.
+
+## 20. Хроника (третий рабочий стол, L20)
+
+Список хронологических комментариев с привязками к мыслям и связям. Запрос
+двухфазный: **сначала отбираются мысли** (по критериям отбора), **затем по
+отобранным мыслям строится таблица хронологических записей**.
+
+```
+POST /api/v1/networks/{nid}/chronicle/query
+{ keywords?: string,                          # мини-синтаксис §6.10 (* / -слово)
+  thought_ids?: [ "<uuid>", ... ],            # ≤100 корней; пусто = все мысли сети
+  include_subtree?: boolean,                  # + подчинённые до 20 уровней
+                                              # (ненаправленный обход, дедуп по visited-set)
+  type_ids?: [ "<uuid>", ... ],               # типы мыслей (OR)
+  link_type_ids?: [ "<uuid>", ... ],          # типы связей для комментариев связей (OR)
+  link_scope?: "sources"|"targets"|"both",    # какой конец связи должен быть в отборе
+  date_from?: "YYYY-MM-DD"|ISO-8601,          # начало периода (включительно)
+  date_to?: "YYYY-MM-DD"|ISO-8601,            # конец периода (включительно)
+  order: "asc"|"desc", limit: 1..100 (=50), offset: >=0 }
+→ 200 { data: [ ChronicleRow ], meta: { total, offset, limit } }
+```
+
+Фаза 1 — отбор мыслей:
+- `thought_ids` + (опционально) подчинённые до 20 уровней по ненаправленным
+  active-связям с защитой от циклов (дедуп); несуществующие id игнорируются;
+  пустой фильтр = все мысли сети;
+- `type_ids` — фильтр по типу мысли;
+- `keywords` — мини-синтаксис (`*`, `-слово`, AND); слово ищется в названии,
+  синонимах, **текстах комментариев мысли** (по любой привязке) и **текстах
+  комментариев её связей с обеих сторон**. Слово, найденное только в
+  комментарии связи, отбирает **обе стороны** связи (источник и назначение);
+  исключающие слова вычитают мысли, где слово встречается в тех же текстах.
+- Неактуальные мысли включаются (их чипы затемняются на клиенте).
+
+Фаза 2 — хронологические записи (`kind='chronological'`), привязанные:
+- к отобранной мысли (по любой привязке `comment_targets`), ИЛИ
+- к связи, чей источник/назначение/любой конец (по `link_scope`) входит в
+  отбор; при заданных `link_type_ids` — только связи этих типов.
+
+Период: запись попадает, если `[valid_from, valid_to]` пересекается с
+`[date_from, date_to]` (открытый `valid_to = NULL` — бесконечность; обе
+границы необязательны). Сортировка всегда
+`valid_from` → `valid_to` (NULL — последними) → `title` (NOCASE), в
+направлении `order`. Пагинация `limit`/`offset` (клиент — по 50).
+
+`ChronicleRow`:
+```
+{ id, title, valid_from, valid_to, version, created_at, updated_at,
+  created_by, updated_by,
+  snippet: "<mark>…</mark>…",                # ~160 символов body_md, вхождения
+                                             # include-слов ключевых слов обёрнуты в <mark>
+  targets: [                                 # все привязки записи, первичная первой
+    { kind: "thought", thought: ThoughtRef } |
+    { kind: "link", link: {
+        id, type_id, active,
+        type_name_forward, type_name_reverse,
+        source: ThoughtRef, target: ThoughtRef } } ] }
+```
+
+Сохранение отборов Хроники — общий `/saved-filters` с `view = "chronicle"`
+(§18); definition — поля запроса без `limit`/`offset`.

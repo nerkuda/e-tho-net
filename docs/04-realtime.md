@@ -91,6 +91,11 @@ Header: Authorization: Bearer <API-key>
 | `comment.created/updated/deleted` | `{ owner_type, owner_id, ... }` |
 | `attachment.created/updated/deleted` | `{ owner_type, owner_id, ... }` |
 
+L20: `comment.created` несёт полный `Comment` (с `targets` — всеми
+привязками); `comment.updated` при изменении привязок несёт
+`changes.targets` (полный новый список). Оба события адресованы всей сети —
+экран «Хроника» обновляет таблицу по ним.
+
 ### 4.5. Свойства значений
 | type | data |
 |------|------|
