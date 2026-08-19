@@ -3,15 +3,16 @@
  *
  * Live duplicate search over `thoughts.findDuplicates`; single and batch
  * modes; `|` synonym parsing per line; multi-line paste auto-switches to batch
- * mode; Ctrl+Enter inserts everything. Creation uses `thoughts.create` with
- * `create_link` (direction from the invoking gesture); picking an existing
- * candidate creates a plain link instead.
+ * mode; Ctrl+Enter inserts everything; Ctrl+Shift+Enter also focuses the first
+ * added thought (L19). Creation uses `thoughts.create` with `create_link`
+ * (direction from the invoking gesture); picking an existing candidate creates
+ * a plain link instead.
  *
  * Also handles the drop of files/URLs onto the canvas (08-ui-spec.md §7):
  * the zone drop handlers create thoughts with an attachment.
  */
 
-import { scheduleRefresh } from '../app.js';
+import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import {
   applyThoughtIcon,
   invalidateRef,
@@ -27,7 +28,6 @@ import { createTypeCombobox } from '../lib/type-combobox.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY } from '@etn/shared';
 import { store } from '../state.js';
-import { requireNetworkId } from '../app.js';
 
 /** One batch-mode line with its duplicate-check result. */
 interface AddLine {
@@ -225,7 +225,9 @@ export function openAddDialog(ctx: {
         input.value = '';
         scheduleSearch();
       }
-      if (event.ctrlKey) void insertAll();
+      // Ctrl+Shift+Enter inserts everything AND focuses the first added
+      // thought (L19); a plain Ctrl+Enter just inserts.
+      if (event.ctrlKey) void insertAll(event.shiftKey);
       return;
     }
     void insertSingle();
@@ -378,9 +380,9 @@ export function openAddDialog(ctx: {
     }
   }
 
-  /** Creates a new thought linked to the anchor (or unlinked). */
-  async function createNew(title: string, synonyms: string[]): Promise<void> {
-    await etn.thoughts.create(networkId, {
+  /** Creates a new thought linked to the anchor (or unlinked); returns its id. */
+  async function createNew(title: string, synonyms: string[]): Promise<string> {
+    const thought = await etn.thoughts.create(networkId, {
       title,
       synonyms,
       type_id: newThoughtTypeId,
@@ -393,6 +395,7 @@ export function openAddDialog(ctx: {
               type_id: linkTypeId,
             },
     });
+    return thought.id;
   }
 
   /** Single mode: exact match → link; otherwise create new. */
@@ -417,8 +420,12 @@ export function openAddDialog(ctx: {
     }
   }
 
-  /** Batch mode: creates/links every accumulated line. */
-  async function insertAll(): Promise<void> {
+  /**
+   * Batch mode: creates/links every accumulated line. With `focusFirst` the
+   * first successfully added thought (created or reused) becomes the canvas
+   * focus right after the insert (Ctrl+Shift+Enter, L19).
+   */
+  async function insertAll(focusFirst = false): Promise<void> {
     if (lines.length === 0 && input.value.trim() !== '') {
       const parsed = parseTitleWithSynonyms(input.value.trim());
       lines.push({
@@ -433,6 +440,7 @@ export function openAddDialog(ctx: {
     if (lines.length === 0) return;
     let created = 0;
     let failed = 0;
+    let firstAddedId: string | null = null;
     for (const line of lines) {
       try {
         if (line.existingId !== null && ctx.anchorId !== null) {
@@ -443,8 +451,10 @@ export function openAddDialog(ctx: {
             target_id: target,
             type_id: linkTypeId,
           });
+          if (firstAddedId === null) firstAddedId = line.existingId;
         } else {
-          await createNew(line.title, line.synonyms);
+          const newId = await createNew(line.title, line.synonyms);
+          if (firstAddedId === null) firstAddedId = newId;
         }
         created++;
       } catch {
@@ -455,6 +465,7 @@ export function openAddDialog(ctx: {
     else notice(`Готово: ${created}.`);
     scheduleRefresh();
     closeDialog();
+    if (focusFirst && firstAddedId !== null) void setFocus(firstAddedId);
   }
 
   const closeDialog = showDialog({

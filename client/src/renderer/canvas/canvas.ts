@@ -535,6 +535,27 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
     showZoneContextMenu(event, dir);
   });
 
+  // A click on the zone's empty space opens the add-thought dialog (L19):
+  // top-left adds a parent, bottom — a child (anchor: the focused thought).
+  // The siblings zone gets no gesture — the focus may have several parents, so
+  // there is no unambiguous anchor. Cloud clicks keep their own handling, and
+  // a click right after a drag gesture (suppressNextClick) is consumed.
+  zone.addEventListener('click', (event) => {
+    if (suppressNextClick) {
+      suppressNextClick = false;
+      return;
+    }
+    if (dir === 'siblings') return;
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target !== null && target.closest('.cloud') !== null) return;
+    const focusId = store.state.focus?.focused.id;
+    if (focusId === undefined) return;
+    if (addDialogOpener !== null) {
+      addDialogOpener({ anchorId: focusId, direction: dir === 'parents' ? 'parent' : 'child' });
+    }
+  });
+
   return zone;
 }
 

@@ -473,7 +473,7 @@ async function moveInZone(
 // Zone sort menu
 // ---------------------------------------------------------------------------
 
-/** Opens the zone context menu (sorting, 08-ui-spec.md §2.7). */
+/** Opens the zone context menu (add thought — L19; sorting, 08-ui-spec.md §2.7). */
 export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
   const networkId = store.state.networkId;
   const focus = store.state.focus;
@@ -489,7 +489,24 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
     onClick: () => void setZoneSort(networkId, focus.focused.id, dir, sort, order),
   });
 
+  // «Добавить мысль» (L19) lives only in the parents/children zones: the zone
+  // itself tells the direction; the siblings zone has no unambiguous anchor.
+  const addItem: MenuItem[] =
+    dir === 'siblings'
+      ? []
+      : [
+          {
+            label: 'Добавить мысль',
+            onClick: () =>
+              openAddDialog({
+                anchorId: focus.focused.id,
+                direction: dir === 'parents' ? 'parent' : 'child',
+              }),
+          },
+        ];
+
   showMenuAt(event.clientX, event.clientY, [
+    ...addItem,
     {
       label: 'Сортировка',
       submenu: [
