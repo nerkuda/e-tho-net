@@ -535,16 +535,14 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
     showZoneContextMenu(event, dir);
   });
 
-  // A click on the zone's empty space opens the add-thought dialog (L19):
-  // top-left adds a parent, bottom — a child (anchor: the focused thought).
-  // The siblings zone gets no gesture — the focus may have several parents, so
-  // there is no unambiguous anchor. Cloud clicks keep their own handling, and
-  // a click right after a drag gesture (suppressNextClick) is consumed.
-  zone.addEventListener('click', (event) => {
-    if (suppressNextClick) {
-      suppressNextClick = false;
-      return;
-    }
+  // A double click on the zone's empty space opens the add-thought dialog
+  // (L19): top-left adds a parent, bottom — a child (anchor: the focused
+  // thought). A single click stays free of side effects (a plain click on the
+  // canvas only clears the sticky link selection). The siblings zone gets no
+  // gesture — the focus may have several parents, so there is no unambiguous
+  // anchor. Double clicks on clouds keep their own handling; double clicks
+  // with held modifiers are ignored.
+  zone.addEventListener('dblclick', (event) => {
     if (dir === 'siblings') return;
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     const target = event.target as HTMLElement | null;
