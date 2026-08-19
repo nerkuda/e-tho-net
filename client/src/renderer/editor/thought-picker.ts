@@ -168,6 +168,183 @@ export function pickThoughtRef(networkId: string, typeIds?: string[]): Promise<s
 }
 
 /**
+ * Multi-thought picker (the chronicle filter's «мысли» field, L20): a modal
+ * search over existing thoughts where several are accumulated in one pass —
+ * Enter (or a click) adds the best candidate to the in-dialog list, Ctrl+Enter
+ * (or «Применить») applies the whole list. Resolves the chosen ids or `null`
+ * on cancel. Follows the add-dialog batch-mode interaction (08-ui-spec.md §4).
+ */
+export function pickThoughtsRef(
+  networkId: string,
+  initialIds: string[],
+): Promise<string[] | null> {
+  return new Promise((resolve) => {
+    const selectedIds = [...initialIds];
+    /** Resolved titles of the selected ids (raw id as a fallback). */
+    const titles = new Map<string, string>();
+    let hits: Array<{ id: string; title: string; matched_on: string }> = [];
+    let timer: number | null = null;
+
+    const input = el('input', 'text-input');
+    input.type = 'text';
+    input.placeholder = 'Название мысли…';
+    const hint = el('p', 'muted', 'Enter — добавить найденную мысль в список, Ctrl+Enter — применить.');
+    hint.style.margin = '0';
+    const candidates = div('dup-list');
+    const selectedBox = div('add-list');
+    const errorLine = span('', 'error-text');
+    const body = div('form-stack');
+    body.append(input, hint, candidates, selectedBox, errorLine);
+
+    const renderSelected = (): void => {
+      selectedBox.replaceChildren();
+      for (const id of selectedIds) {
+        const row = div('add-list-item');
+        const title = el('span', 'al-title', titles.get(id) ?? id);
+        title.title = title.textContent ?? '';
+        row.append(
+          title,
+          button(
+            '×',
+            () => {
+              selectedIds.splice(selectedIds.indexOf(id), 1);
+              renderSelected();
+            },
+            'btn small',
+            'Убрать мысль из списка',
+          ),
+        );
+        selectedBox.append(row);
+      }
+    };
+
+    /** Adds a candidate to the in-dialog list (duplicates are ignored). */
+    const addHit = (id: string): void => {
+      if (selectedIds.includes(id)) return;
+      selectedIds.push(id);
+      renderSelected();
+    };
+
+    const candidateRows = (): HTMLElement[] =>
+      Array.from(candidates.querySelectorAll<HTMLElement>('.dup-item'));
+
+    const search = (): void => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        void (async () => {
+          const query = input.value.trim();
+          if (query === '') {
+            candidates.replaceChildren();
+            hits = [];
+            return;
+          }
+          try {
+            hits = await etn.thoughts.findDuplicates(networkId, query);
+            renderHits();
+          } catch (err) {
+            errorLine.textContent = err instanceof Error ? err.message : String(err);
+          }
+        })();
+      }, 200);
+    };
+    input.addEventListener('input', search);
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown') {
+        const first = candidateRows()[0];
+        if (first !== undefined) {
+          event.preventDefault();
+          first.focus();
+        }
+        return;
+      }
+      if (event.key !== 'Enter') return;
+      // Ctrl+Enter bubbles to the dialog's primary button («Применить»).
+      if (event.ctrlKey) return;
+      event.preventDefault();
+      const hit = hits[0];
+      if (hit === undefined) return;
+      addHit(hit.id);
+      titles.set(hit.id, hit.title);
+      input.value = '';
+      hits = [];
+      candidates.replaceChildren();
+    });
+
+    function renderHits(): void {
+      candidates.replaceChildren();
+      for (const hit of hits) {
+        const row = div('dup-item');
+        row.tabIndex = 0;
+        const title = el('span', 'dup-title', hit.title);
+        title.title = hit.title;
+        row.append(title, span(KIND_LABELS[hit.matched_on] ?? hit.matched_on, 'dup-kind'));
+        row.addEventListener('click', () => {
+          titles.set(hit.id, hit.title);
+          addHit(hit.id);
+          input.value = '';
+          hits = [];
+          candidates.replaceChildren();
+          input.focus();
+        });
+        row.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            row.click();
+          } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            const next =
+              event.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+            if (next instanceof HTMLElement && next.classList.contains('dup-item')) {
+              next.focus();
+              next.scrollIntoView({ block: 'nearest' });
+            } else if (event.key === 'ArrowUp') {
+              input.focus();
+            }
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            input.focus();
+          }
+        });
+        candidates.append(row);
+      }
+      if (hits.length === 0) candidates.append(el('p', 'muted', 'Совпадений нет.'));
+    }
+
+    /** Ctrl+Enter / «Применить»: a leftover query applies as its best candidate. */
+    const apply = (): void => {
+      const query = input.value.trim();
+      if (selectedIds.length === 0 && query !== '' && hits.length > 0) {
+        addHit(hits[0]!.id);
+      }
+      resolve([...selectedIds]);
+      closeSelf();
+    };
+
+    // Resolve the initial selection titles (raw ids while loading / offline).
+    void etn.thoughts
+      .resolve(networkId, initialIds)
+      .then((refs) => {
+        for (const ref of refs) titles.set(ref.id, ref.title);
+        renderSelected();
+      })
+      .catch(() => renderSelected());
+    renderSelected();
+
+    const closeSelf = showDialog({
+      title: 'Выбор мыслей (несколько)',
+      body,
+      width: 480,
+      buttons: [
+        { label: 'Отмена', onClick: () => resolve(null) },
+        { label: 'Применить', primary: true, onClick: apply },
+      ],
+      onMount: () => input.focus(),
+    });
+  });
+}
+
+/**
  * Wires an inline candidate search to a `thought_ref` value input: typing runs
  * the same live duplicate search as the dialog picker (honouring the type
  * filter) and shows the candidates in a body-mounted dropdown; clicking one

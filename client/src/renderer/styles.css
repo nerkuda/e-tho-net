@@ -3449,13 +3449,23 @@ body.cloud-dragging * {
   text-overflow: ellipsis;
 }
 
+/* Checked items get a visible ✓; the space is reserved on every label so the
+ * text stays aligned in mixed menus (chronicle scope, radio pickers). */
+.menu-item-label::before {
+  display: inline-block;
+  width: 14px;
+  margin-right: 4px;
+  text-align: center;
+}
+
 .menu-item-arrow {
   color: var(--text-faint);
   font-size: 10px;
 }
 
-.menu-item-checked {
-  font-weight: 700;
+.menu-item-checked .menu-item-label::before {
+  content: '✓';
+  color: var(--accent);
 }
 
 /* ---------------------------------------------------------------------------
@@ -4085,18 +4095,24 @@ body.cloud-dragging * {
 }
 
 .chron-saved-select {
-  max-width: 260px;
+  max-width: 240px;
 }
 
+/* «Мысли» chips stretch over the remaining row width (the picker lives in a
+ * dialog now — «Выбрать…»); external drops land here too. */
 .chron-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
+  flex: 1;
+  min-width: 160px;
 }
 
-.chron-thought-picker {
-  width: 150px;
+/* Row 3: type buttons share the whole row width. */
+.chron-type-btn {
+  flex: 1;
+  min-width: 150px;
 }
 
 .chron-date {
@@ -4148,14 +4164,27 @@ body.cloud-dragging * {
   border-top: 1px solid var(--border);
 }
 
-/* Table rows: keyboard-navigable, the selected row is highlighted. */
+/* Table rows: keyboard-navigable, the selected row is highlighted. The header
+ * is pinned while the body scrolls; every row is always one line high (chips
+ * of the «мысли/связи» column never wrap — the rest is reachable by arrows). */
 table.chron-table {
   width: 100%;
   border-collapse: collapse;
 }
 
+table.chron-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+}
+
 .chron-row {
   cursor: pointer;
+}
+
+.chron-row td {
+  overflow: hidden;
 }
 
 .chron-row.selected {
@@ -4181,6 +4210,8 @@ table.chron-table {
 .chron-targets {
   max-width: 430px;
   vertical-align: top;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .chron-snippet {

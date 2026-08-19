@@ -2,10 +2,13 @@
  * Filter panel of the «Хроника» view (L20, 08-ui-spec.md §17).
  *
  * Four rows per the spec:
- *   1. saved filter selector (choice = fill + apply) + the keywords search box
- *      (`*` wildcard, `-` exclusion, searched in titles/synonyms/comments);
- *   2. «мысли» field (chips, live picker) + «+подчинённые» + thought types;
- *   3. period «с»/«по» + link types + link scope (sources/targets/both);
+ *   1. saved filter selector (choice = fill + apply) + period «с»/«по» + the
+ *      keywords search box (`*` wildcard, `-` exclusion, searched in
+ *      titles/synonyms/comments);
+ *   2. «мысли» chips (multi-thought picker dialog, «Выбрать…»/«Очистить») +
+ *      «+подчинённые»;
+ *   3. thought types + link types (checkbox-list dialogs) + link scope
+ *      (sources/targets/both);
  *   4. sort order + «Применить» (Ctrl+Enter) + «Очистить отбор» + filter name
  *      + «Сохранить отбор» (overwrites by name) + «Удалить отбор».
  *
@@ -18,12 +21,13 @@ import type { ChronicleSavedFilter, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { button, div, el, span, setTooltip } from '../../lib/dom.js';
+import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
-import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
+import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
 import { store } from '../../state.js';
-import { wireThoughtRefSearch } from '../../editor/thought-picker.js';
+import { pickThoughtsRef } from '../../editor/thought-picker.js';
 import { DEFAULT_FILTER, fromDefinition, toDefinition } from './state.js';
 import type { ChronicleFilterState } from './state.js';
 
@@ -46,7 +50,6 @@ let chipsBox: HTMLElement | null = null;
 // UI refs (set while the panel is mounted)
 let panel: HTMLElement | null = null;
 let keywordsInput: HTMLInputElement | null = null;
-let thoughtPickerInput: HTMLInputElement | null = null;
 let includeSubtreeCheck: HTMLInputElement | null = null;
 let dateFromInput: HTMLInputElement | null = null;
 let dateToInput: HTMLInputElement | null = null;
@@ -99,6 +102,22 @@ export function addThoughtToFilter(id: string): void {
 function removeThoughtFromFilter(id: string): void {
   filter = { ...filter, thoughtIds: filter.thoughtIds.filter((x) => x !== id) };
   thoughtRefs.delete(id);
+  repaintControls();
+}
+
+/** Opens the multi-thought picker; applies the chosen ids to the filter. */
+async function pickThoughts(): Promise<void> {
+  const ids = await pickThoughtsRef(requireNetworkId(), filter.thoughtIds);
+  if (ids === null) return;
+  filter = { ...filter, thoughtIds: ids };
+  await syncChipsFromIds();
+  repaintControls();
+}
+
+/** Clears the «мысли» field (keeps the rest of the filter). */
+function clearThoughts(): void {
+  filter = { ...filter, thoughtIds: [] };
+  thoughtRefs.clear();
   repaintControls();
 }
 
@@ -190,55 +209,82 @@ function refreshTypeButtons(): void {
   linkScopeButton.textContent = LINK_SCOPE_LABELS[filter.linkScope];
 }
 
-/** Checkbox menu of thought/link types (lib/menu supports `checked`). */
-function showTypesMenu(anchor: HTMLElement, kind: 'thought' | 'link'): void {
-  const rect = anchor.getBoundingClientRect();
-  const items: MenuItem[] =
-    kind === 'thought'
-      ? store.state.thoughtTypes.map((t) => ({
-          label: t.name,
-          checked: filter.typeIds.includes(t.id),
-          onClick: () => {
-            filter = {
-              ...filter,
-              typeIds: filter.typeIds.includes(t.id)
-                ? filter.typeIds.filter((x) => x !== t.id)
-                : [...filter.typeIds, t.id],
-            };
-            repaintControls();
-          },
-        }))
-      : store.state.linkTypes.map((t) => ({
-          label: t.name_forward,
-          checked: filter.linkTypeIds.includes(t.id),
-          onClick: () => {
-            filter = {
-              ...filter,
-              linkTypeIds: filter.linkTypeIds.includes(t.id)
-                ? filter.linkTypeIds.filter((x) => x !== t.id)
-                : [...filter.linkTypeIds, t.id],
-            };
-            repaintControls();
-          },
-        }));
-  const menuItems: MenuItem[] =
-    items.length === 0
-      ? [{ label: 'Типов нет', disabled: true }]
-      : [
-          {
-            label: 'Очистить',
-            onClick: () => {
-              filter = {
-                ...filter,
-                ...(kind === 'thought' ? { typeIds: [] } : { linkTypeIds: [] }),
-              };
-              repaintControls();
-            },
-          },
-          MENU_SEPARATOR,
-          ...items,
-        ];
-  showMenuAt(rect.left, rect.bottom + 4, menuItems);
+/**
+ * Checkbox-list dialog of thought/link types — several types are ticked in
+ * one pass (instead of toggling single choices from a menu). «OK» commits
+ * the ticks to the filter; «Очистить» untick everything.
+ */
+function showTypesDialog(kind: 'thought' | 'link'): void {
+  const list = div('type-filter-box');
+  list.style.maxHeight = '260px';
+  const selected = new Set(kind === 'thought' ? filter.typeIds : filter.linkTypeIds);
+  const thoughtTypes = store.state.thoughtTypes;
+  const linkTypes = store.state.linkTypes;
+
+  const render = (): void => {
+    list.replaceChildren();
+    const renderRow = (id: string, label: string, swatchColor: string | null): void => {
+      const lab = el('label', 'checkbox-row');
+      const check = el('input');
+      check.type = 'checkbox';
+      check.checked = selected.has(id);
+      check.addEventListener('change', () => {
+        if (check.checked) selected.add(id);
+        else selected.delete(id);
+      });
+      if (swatchColor !== null) {
+        const swatch = span('', 'link-type-swatch');
+        swatch.style.borderTopColor = swatchColor;
+        lab.append(check, swatch);
+      } else {
+        lab.append(check);
+      }
+      lab.append(span(label));
+      list.append(lab);
+    };
+    if (kind === 'thought') {
+      if (thoughtTypes.length === 0) {
+        list.append(el('p', 'muted', 'В сети ещё нет типов мыслей.'));
+        return;
+      }
+      for (const t of thoughtTypes) renderRow(t.id, t.name, null);
+    } else {
+      if (linkTypes.length === 0) {
+        list.append(el('p', 'muted', 'В сети ещё нет типов связей.'));
+        return;
+      }
+      for (const t of linkTypes) renderRow(t.id, t.name_forward, t.color);
+    }
+  };
+  render();
+
+  showDialog({
+    title: kind === 'thought' ? 'Типы мыслей' : 'Типы связей',
+    body: list,
+    width: 400,
+    buttons: [
+      {
+        label: 'Очистить',
+        keepOpen: true,
+        onClick: () => {
+          selected.clear();
+          render();
+        },
+      },
+      { label: 'Отмена' },
+      {
+        label: 'OK',
+        primary: true,
+        onClick: () => {
+          filter = {
+            ...filter,
+            ...(kind === 'thought' ? { typeIds: [...selected] } : { linkTypeIds: [...selected] }),
+          };
+          repaintControls();
+        },
+      },
+    ],
+  });
 }
 
 /** Menu of the link-scope selector. */
@@ -319,13 +365,23 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
   host.replaceChildren();
   panel = div('chron-filter');
 
-  // Row 1: saved filters + keywords -------------------------------------------
+  // Row 1: saved filters + period + keywords ---------------------------------
   const row1 = div('chron-filter-row');
   savedSelect = el('select', 'select-input chron-saved-select');
   savedSelect.append(el('option', undefined, 'Сохранённые отборы…'));
   savedSelect.addEventListener('change', () => {
     const value = savedSelect!.value;
     if (value !== '') void applySavedFilter(value);
+  });
+  dateFromInput = el('input', 'text-input chron-date');
+  dateFromInput.type = 'date';
+  dateFromInput.addEventListener('change', () => {
+    filter = { ...filter, dateFrom: dateFromInput!.value };
+  });
+  dateToInput = el('input', 'text-input chron-date');
+  dateToInput.type = 'date';
+  dateToInput.addEventListener('change', () => {
+    filter = { ...filter, dateTo: dateToInput!.value };
   });
   keywordsInput = el('input', 'text-input chron-keywords');
   keywordsInput.type = 'text';
@@ -337,22 +393,30 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
   keywordsInput.addEventListener('input', () => {
     filter = { ...filter, keywords: keywordsInput!.value };
   });
-  row1.append(span('Сохранённые отборы:', 'chron-label'), savedSelect, keywordsInput);
+  row1.append(
+    span('Сохранённые отборы:', 'chron-label'),
+    savedSelect,
+    span('Период с', 'chron-label'),
+    dateFromInput,
+    span('по', 'chron-label'),
+    dateToInput,
+    keywordsInput,
+  );
 
-  // Row 2: thoughts + subtree + types ----------------------------------------
+  // Row 2: thoughts (chips + picker dialog + clear) + subtree ---------------
   const row2 = div('chron-filter-row');
   const thoughtsLabel = span('Мысли:', 'chron-label');
   chipsBox = div('chron-chips');
-  thoughtPickerInput = el('input', 'text-input chron-thought-picker');
-  thoughtPickerInput.type = 'text';
-  thoughtPickerInput.placeholder = 'Добавить мысль…';
-  wireThoughtRefSearch(thoughtPickerInput, {
-    networkId: requireNetworkId(),
-    onPick: (id) => {
-      addThoughtToFilter(id);
-      thoughtPickerInput!.value = '';
-    },
-  });
+  const pickButton = button('Выбрать…', () => void pickThoughts(), 'btn small');
+  pickButton.type = 'button';
+  pickButton.title = 'Диалог выбора нескольких мыслей (Enter — добавить, Ctrl+Enter — применить)';
+  const clearThoughtsButton = button(
+    'Очистить',
+    () => clearThoughts(),
+    'btn small',
+    'Убрать все мысли из отбора',
+  );
+  clearThoughtsButton.type = 'button';
   const subtreeLabel = el('label', 'checkbox-row');
   includeSubtreeCheck = el('input');
   includeSubtreeCheck.type = 'checkbox';
@@ -360,34 +424,17 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
     filter = { ...filter, includeSubtree: includeSubtreeCheck!.checked };
   });
   subtreeLabel.append(includeSubtreeCheck, span('+подчинённые мысли'));
-  typesButton = button('Типы мыслей: все', () => showTypesMenu(typesButton!, 'thought'), 'btn small chron-type-btn');
-  typesButton.type = 'button';
-  row2.append(thoughtsLabel, chipsBox, thoughtPickerInput, subtreeLabel, typesButton);
+  row2.append(thoughtsLabel, chipsBox, pickButton, clearThoughtsButton, subtreeLabel);
 
-  // Row 3: period + link types + link scope ----------------------------------
+  // Row 3: thought types + link types (full width) + link scope --------------
   const row3 = div('chron-filter-row');
-  dateFromInput = el('input', 'text-input chron-date');
-  dateFromInput.type = 'date';
-  dateFromInput.addEventListener('change', () => {
-    filter = { ...filter, dateFrom: dateFromInput!.value };
-  });
-  dateToInput = el('input', 'text-input chron-date');
-  dateToInput.type = 'date';
-  dateToInput.addEventListener('change', () => {
-    filter = { ...filter, dateTo: dateToInput!.value };
-  });
-  linkTypesButton = button('Типы связей: все', () => showTypesMenu(linkTypesButton!, 'link'), 'btn small chron-type-btn');
+  typesButton = button('Типы мыслей: все', () => showTypesDialog('thought'), 'btn small chron-type-btn');
+  typesButton.type = 'button';
+  linkTypesButton = button('Типы связей: все', () => showTypesDialog('link'), 'btn small chron-type-btn');
   linkTypesButton.type = 'button';
-  linkScopeButton = button(LINK_SCOPE_LABELS['both'], () => showScopeMenu(linkScopeButton!), 'btn small chron-type-btn');
+  linkScopeButton = button(LINK_SCOPE_LABELS['both'], () => showScopeMenu(linkScopeButton!), 'btn small');
   linkScopeButton.type = 'button';
-  row3.append(
-    span('Период с', 'chron-label'),
-    dateFromInput,
-    span('по', 'chron-label'),
-    dateToInput,
-    linkTypesButton,
-    linkScopeButton,
-  );
+  row3.append(typesButton, linkTypesButton, linkScopeButton);
 
   // Row 4: order + actions -----------------------------------------------------
   const row4 = div('chron-filter-row');
