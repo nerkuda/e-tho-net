@@ -2697,6 +2697,11 @@ body.cloud-dragging * {
 
 .selection-panel {
   flex: 0 0 var(--selection-w, 210px);
+  /* Without min-width: 0 the flex item's automatic minimum size (content
+   * width of the list rows) would floor the panel, so the resizer strip could
+   * be dragged inside it. Hidden overflow keeps the panel exactly its basis. */
+  min-width: 0;
+  overflow: hidden;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2744,9 +2749,11 @@ body.cloud-dragging * {
   white-space: nowrap;
 }
 
-/* Top menu bar of the selection panel (Выделение / Действия / Свойства). */
+/* Top menu bar of the selection panel (Выделение / Действия / Свойства).
+ * Wraps when the panel is dragged narrower than the buttons. */
 .selection-menu {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 4px 6px;
   border-bottom: 1px solid var(--border);
