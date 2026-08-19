@@ -695,6 +695,37 @@ textarea {
   cursor: row-resize;
 }
 
+/* --- selection resizer: draggable splitter between the selection panel and
+   the canvas (08-ui-spec.md §5). Absolutely positioned on the panel's right
+   seam via the --selection-w variable; when the editor docks left the panel
+   starts after it, hence the extra --editor-w offset. ---------------------- */
+
+.workspace-body > .selection-resizer {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--selection-w) - 3px);
+  width: 6px;
+  background: var(--border);
+  transition: background 0.12s ease;
+  touch-action: none;
+  cursor: col-resize;
+}
+.workspace-body > .selection-resizer:hover,
+.workspace-body > .selection-resizer.dragging {
+  background: var(--accent);
+}
+/* With the editor docked left the panel sits between it and the canvas. */
+.workspace-body[data-editor-pos='left'] > .selection-resizer {
+  left: calc(var(--editor-w) + var(--selection-w) - 3px);
+}
+/* The panel is a horizontal strip in the top/bottom docks — no width resizer. */
+.workspace-body[data-editor-pos='top'] > .selection-resizer,
+.workspace-body[data-editor-pos='bottom'] > .selection-resizer {
+  display: none;
+}
+
 .statusbar {
   flex: 0 0 var(--statusbar-h);
   display: flex;
@@ -2665,7 +2696,7 @@ body.cloud-dragging * {
  * ------------------------------------------------------------------------- */
 
 .selection-panel {
-  flex: 0 0 210px;
+  flex: 0 0 var(--selection-w, 210px);
   min-height: 0;
   display: flex;
   flex-direction: column;

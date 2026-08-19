@@ -29,6 +29,9 @@ import {
   EDITOR_W_MAX,
   EDITOR_W_MIN,
   REALTIME_EVENT_TYPES,
+  SELECTION_W_DEFAULT,
+  SELECTION_W_MAX,
+  SELECTION_W_MIN,
   type AnyRealtimeEvent,
   type RealtimeEventType,
 } from '@etn/shared';
@@ -161,21 +164,28 @@ export function parseCloudGap(raw: string | null): number {
   return clip(Math.round(num), CLOUD_GAP_MIN, CLOUD_GAP_MAX);
 }
 
-/** Result of parsing the L4 `window_layout` value: editor panel sizes. */
+/** Result of parsing the L4 `window_layout` value: panel sizes. */
 export interface ParsedEditorSize {
   /** Editor width when docked left/right, px. */
   w: number;
   /** Editor height when docked top/bottom, px. */
   h: number;
+  /** Selection panel width (left of the canvas), px. */
+  s: number;
 }
 
 /**
- * Parses the L4 `window_layout` value (JSON `{"w":<px>,"h":<px>}`), clipped to
- * the editor size constants. Missing/invalid fields fall back to the defaults,
- * so a partially-stored value or an older single-number format still loads.
+ * Parses the L4 `window_layout` value (JSON `{"w":<px>,"h":<px>,"s":<px>}`),
+ * clipped to the editor/selection size constants. Missing/invalid fields fall
+ * back to the defaults, so a partially-stored value or an older single-number
+ * format still loads.
  */
 export function parseWindowLayout(raw: string | null): ParsedEditorSize {
-  const fallback: ParsedEditorSize = { w: EDITOR_W_DEFAULT, h: EDITOR_H_DEFAULT };
+  const fallback: ParsedEditorSize = {
+    w: EDITOR_W_DEFAULT,
+    h: EDITOR_H_DEFAULT,
+    s: SELECTION_W_DEFAULT,
+  };
   if (raw === null || raw === '') return fallback;
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -183,15 +193,23 @@ export function parseWindowLayout(raw: string | null): ParsedEditorSize {
       const obj = parsed as Record<string, unknown>;
       const wNum = Number(obj['w']);
       const hNum = Number(obj['h']);
+      const sNum = Number(obj['s']);
       return {
         w: Number.isFinite(wNum) ? clip(Math.round(wNum), EDITOR_W_MIN, EDITOR_W_MAX) : fallback.w,
         h: Number.isFinite(hNum) ? clip(Math.round(hNum), EDITOR_H_MIN, EDITOR_H_MAX) : fallback.h,
+        s: Number.isFinite(sNum)
+          ? clip(Math.round(sNum), SELECTION_W_MIN, SELECTION_W_MAX)
+          : fallback.s,
       };
     }
     // Legacy single-number form: treat as width.
     const single = Number(parsed);
     if (Number.isFinite(single)) {
-      return { w: clip(Math.round(single), EDITOR_W_MIN, EDITOR_W_MAX), h: fallback.h };
+      return {
+        w: clip(Math.round(single), EDITOR_W_MIN, EDITOR_W_MAX),
+        h: fallback.h,
+        s: fallback.s,
+      };
     }
   } catch {
     /* fall through to fallback */

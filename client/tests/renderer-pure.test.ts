@@ -21,6 +21,9 @@ import {
   EDITOR_W_DEFAULT,
   EDITOR_W_MAX,
   EDITOR_W_MIN,
+  SELECTION_W_DEFAULT,
+  SELECTION_W_MAX,
+  SELECTION_W_MIN,
 } from '@etn/shared';
 
 import {
@@ -94,26 +97,52 @@ describe('cloud geometry', () => {
 
 describe('parseWindowLayout', () => {
   it('falls back to defaults for missing/invalid input', () => {
-    assert.deepEqual(parseWindowLayout(null), { w: EDITOR_W_DEFAULT, h: EDITOR_H_DEFAULT });
-    assert.deepEqual(parseWindowLayout(''), { w: EDITOR_W_DEFAULT, h: EDITOR_H_DEFAULT });
-    assert.deepEqual(parseWindowLayout('not json'), { w: EDITOR_W_DEFAULT, h: EDITOR_H_DEFAULT });
+    assert.deepEqual(parseWindowLayout(null), {
+      w: EDITOR_W_DEFAULT,
+      h: EDITOR_H_DEFAULT,
+      s: SELECTION_W_DEFAULT,
+    });
+    assert.deepEqual(parseWindowLayout(''), {
+      w: EDITOR_W_DEFAULT,
+      h: EDITOR_H_DEFAULT,
+      s: SELECTION_W_DEFAULT,
+    });
+    assert.deepEqual(parseWindowLayout('not json'), {
+      w: EDITOR_W_DEFAULT,
+      h: EDITOR_H_DEFAULT,
+      s: SELECTION_W_DEFAULT,
+    });
   });
 
-  it('parses a {w,h} JSON object and clamps to editor constants', () => {
-    assert.deepEqual(parseWindowLayout('{"w":500,"h":400}'), { w: 500, h: 400 });
-    assert.deepEqual(parseWindowLayout('{"w":10,"h":10}'), { w: EDITOR_W_MIN, h: EDITOR_H_MIN });
-    assert.deepEqual(parseWindowLayout('{"w":99999,"h":99999}'), {
+  it('parses a {w,h,s} JSON object and clamps to editor/selection constants', () => {
+    assert.deepEqual(parseWindowLayout('{"w":500,"h":400,"s":250}'), { w: 500, h: 400, s: 250 });
+    assert.deepEqual(parseWindowLayout('{"w":10,"h":10,"s":10}'), {
+      w: EDITOR_W_MIN,
+      h: EDITOR_H_MIN,
+      s: SELECTION_W_MIN,
+    });
+    assert.deepEqual(parseWindowLayout('{"w":99999,"h":99999,"s":99999}'), {
       w: EDITOR_W_MAX,
       h: EDITOR_H_MAX,
+      s: SELECTION_W_MAX,
     });
   });
 
   it('keeps a valid dimension when the other is missing/invalid', () => {
-    assert.deepEqual(parseWindowLayout('{"w":450}'), { w: 450, h: EDITOR_H_DEFAULT });
-    assert.deepEqual(parseWindowLayout('{"h":250}'), { w: EDITOR_W_DEFAULT, h: 250 });
-    assert.deepEqual(parseWindowLayout('{"w":"abc","h":300}'), {
+    assert.deepEqual(parseWindowLayout('{"w":450}'), {
+      w: 450,
+      h: EDITOR_H_DEFAULT,
+      s: SELECTION_W_DEFAULT,
+    });
+    assert.deepEqual(parseWindowLayout('{"h":250}'), {
+      w: EDITOR_W_DEFAULT,
+      h: 250,
+      s: SELECTION_W_DEFAULT,
+    });
+    assert.deepEqual(parseWindowLayout('{"w":"abc","h":300,"s":200}'), {
       w: EDITOR_W_DEFAULT,
       h: 300,
+      s: 200,
     });
   });
 });

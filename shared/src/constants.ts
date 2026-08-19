@@ -25,6 +25,13 @@ export const CLOUD_GAP_MAX = 40;
 /** Default gap between clouds for a fresh client installation. */
 export const CLOUD_GAP_DEFAULT = 12;
 
+/** Minimum selection panel width in pixels (08-ui-spec.md §5). */
+export const SELECTION_W_MIN = 140;
+/** Maximum selection panel width in pixels (08-ui-spec.md §5). */
+export const SELECTION_W_MAX = 480;
+/** Default selection panel width for a fresh client installation. */
+export const SELECTION_W_DEFAULT = 210;
+
 /** Minimum editor width (left/right dock) in pixels. */
 export const EDITOR_W_MIN = 240;
 /** Maximum editor width (left/right dock) in pixels. */

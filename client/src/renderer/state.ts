@@ -15,6 +15,7 @@ import {
   CLOUD_WIDTH_DEFAULT,
   EDITOR_H_DEFAULT,
   EDITOR_W_DEFAULT,
+  SELECTION_W_DEFAULT,
   type CurrentUser,
   type FocusEdge,
   type FocusResponse,
@@ -74,6 +75,8 @@ export interface AppState {
   editorW: number;
   /** L4 `window_layout` editor height (top/bottom dock), px. */
   editorH: number;
+  /** L4 `window_layout` selection panel width (left of the canvas), px. */
+  selectionW: number;
   /** L4 `canvas_layout` share of the top strip width for the parents zone. */
   zoneTopSplit: number;
   /** L4 `canvas_layout` share of the canvas height for the children zone. */
@@ -126,6 +129,7 @@ const initial: AppState = {
   lastEditorPosition: 'right',
   editorW: EDITOR_W_DEFAULT,
   editorH: EDITOR_H_DEFAULT,
+  selectionW: SELECTION_W_DEFAULT,
   zoneTopSplit: CANVAS_TOP_SPLIT_DEFAULT,
   zoneChildrenShare: CANVAS_CHILDREN_SHARE_DEFAULT,
   collapsedGroups: {},

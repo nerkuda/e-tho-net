@@ -110,6 +110,7 @@ export async function openNetwork(networkId: string): Promise<void> {
     editorPosition,
     editorW: editorSize.w,
     editorH: editorSize.h,
+    selectionW: editorSize.s,
     zoneTopSplit: canvasLayout.topSplit,
     zoneChildrenShare: canvasLayout.childrenShare,
     collapsedGroups: parseCollapsedGroups(collapsedRaw),

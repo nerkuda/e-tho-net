@@ -24,6 +24,7 @@ import { mountCanvas } from '../canvas/canvas.js';
 import { mountHistoryBar } from './history-bar.js';
 import { mountEditor } from '../editor/editor.js';
 import { mountEditorResizer } from './editor-resizer.js';
+import { mountSelectionResizer } from './selection-resizer.js';
 import { mountSearch } from '../search/search.js';
 import { mountSelection } from '../selection/selection.js';
 import { mountStructures, setActiveView } from './structures/structures.js';
@@ -168,7 +169,17 @@ export function buildWorkspace(): HTMLElement {
   // Draggable splitter between canvas and editor (08-ui-spec.md §6.1). Positioned
   // absolutely on the canvas/editor seam via the --editor-w/--editor-h variables.
   const editorResizer = div('editor-resizer hidden');
-  body.append(selectionHost, canvasHost, structuresHost, editorHost, editorResizer);
+  // Draggable splitter between the selection panel and the canvas (08-ui-spec.md
+  // §5). Positioned on the panel's right seam via the --selection-w variable.
+  const selectionResizer = div('selection-resizer hidden');
+  body.append(
+    selectionHost,
+    canvasHost,
+    structuresHost,
+    editorHost,
+    editorResizer,
+    selectionResizer,
+  );
 
   // --- status bar ------------------------------------------------------------
   const statusbar = div('statusbar');
@@ -234,6 +245,7 @@ export function buildWorkspace(): HTMLElement {
   mountHistoryBar(historyHost);
   mountEditor(editorHost);
   mountEditorResizer(editorResizer, body);
+  mountSelectionResizer(selectionResizer, body);
   mountSearch({ input: searchInput, optionsButton: searchOptionsButton, host: searchHost });
   mountSelection(selectionHost);
   mountStructures(structuresHost);
@@ -253,6 +265,10 @@ export function buildWorkspace(): HTMLElement {
     editorResizer.classList.toggle('hidden', editorHidden);
     body.style.setProperty('--editor-w', `${st.editorW}px`);
     body.style.setProperty('--editor-h', `${st.editorH}px`);
+    body.style.setProperty('--selection-w', `${st.selectionW}px`);
+    // The selection panel (and its resizer) are visible only while the list is
+    // non-empty (mountSelection toggles the panel's own hidden class).
+    selectionResizer.classList.toggle('hidden', st.selection.length === 0);
     focusLabel.textContent = st.focus?.focused.title ?? '—';
     setTooltip(focusLabel, st.focus?.focused.title ?? '');
     zoomLabel.replaceChildren(svgIcon('search', 12), span(` ${Math.round(st.canvasZoom * 100)}%`));

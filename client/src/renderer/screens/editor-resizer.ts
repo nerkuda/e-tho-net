@@ -7,6 +7,8 @@
  *
  * The new size is written to the store at once (so the editor/canvas relayout
  * immediately) and persisted to the L4 `window_layout` ui_state, debounced.
+ * The selection-panel resizer shares this persistence (one timer, full
+ * payload), so the two splitters never overwrite each other's sizes.
  */
 
 import { EDITOR_H_MAX, EDITOR_H_MIN, EDITOR_W_MAX, EDITOR_W_MIN, UI_STATE_KEY } from '@etn/shared';
@@ -41,14 +43,23 @@ function currentPosition(body: HTMLElement): string {
   return body.dataset['editorPos'] ?? 'right';
 }
 
-/** Schedules a debounced persist of the current editor sizes to L4 ui_state. */
-function schedulePersist(): void {
+/**
+ * Schedules a debounced persist of the current panel sizes (editor w/h and the
+ * selection panel width) to the L4 `window_layout` ui_state. Shared by the
+ * editor and selection-panel resizers — the full payload is read from the store
+ * at fire time, so the last writer never loses the other panel's size.
+ */
+export function scheduleLayoutPersist(): void {
   if (persistTimer !== null) window.clearTimeout(persistTimer);
   persistTimer = window.setTimeout(() => {
     persistTimer = null;
     const networkId = store.state.networkId;
     if (networkId === null) return;
-    const payload = JSON.stringify({ w: store.state.editorW, h: store.state.editorH });
+    const payload = JSON.stringify({
+      w: store.state.editorW,
+      h: store.state.editorH,
+      s: store.state.selectionW,
+    });
     void etn.ui.setState(networkId, UI_STATE_KEY.WINDOW_LAYOUT, payload).catch(() => undefined);
   }, PERSIST_DEBOUNCE_MS);
 }
@@ -101,7 +112,7 @@ export function mountEditorResizer(resizer: HTMLElement, body: HTMLElement): voi
       body.style.setProperty(varName, `${size}px`);
       if (horizontal) store.update({ editorW: size });
       else store.update({ editorH: size });
-      schedulePersist();
+      scheduleLayoutPersist();
     };
     const onUp = (ev: PointerEvent): void => {
       resizer.removeEventListener('pointermove', onMove);
