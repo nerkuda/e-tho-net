@@ -383,13 +383,17 @@ DELETE /api/v1/networks/{nid}/links/{id}    If-Match
 
 ### 7.2. Связи мысли (для редактора)
 ```
-GET /api/v1/networks/{nid}/thoughts/{id}/links?group=type
+GET /api/v1/networks/{nid}/thoughts/{id}/links?group=type&show_inactive=true|false
 → 200 { data: {
   by_type: [ { type_id, type_name, items: [ {link, target_thought} ] } ],
   untyped_parents: [ {link, source_thought} ],
   untyped_children: [ {link, target_thought} ]
 } }
 ```
+
+Неактуальные связи и мысли на противоположном конце скрыты, если явно не
+передан `show_inactive=true` (редактор передаёт значение настройки
+`preferences.show_inactive`, 08-ui-spec.md §6.7).
 
 ## 8. Типы мыслей и связей
 
@@ -571,8 +575,12 @@ GET /api/v1/networks/{nid}/search?q=<text>&...
 GET /api/v1/networks/{nid}/thoughts/{id}/mentions
 # Возвращает мысли/связи, в текстах (комментариях) которых встречается title или синоним.
 # Один элемент на мысль/связь: несколько совпавших комментариев владельца схлопываются в один.
-→ 200 { data: [ { owner_type, owner_id, title, comment_id, snippet } ] }
+→ 200 { data: [ { owner_type, owner_id, title, comment_id, snippet, active } ] }
 ```
+
+`active` — актуальность владельца (мысли или связи): клиент показывает
+неактуальных владельцев только при включённой настройке `show_inactive`
+и выделяет их «бледным» начертанием (08-ui-spec.md §6.7).
 
 Реализация: title и синонимы без `*` — подготовленный запрос по FTS, где
 **каждый терм (заголовок или синоним целиком) матчится как единое целое**:
