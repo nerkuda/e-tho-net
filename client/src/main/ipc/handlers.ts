@@ -304,6 +304,47 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
 
+  // --- chronicle view & its saved filters (L20) -----------------------------
+  handlers.set(
+    'chronicle.query',
+    bind((networkId: string, request: Parameters<RestClient['queryChronicle']>[1]) =>
+      requireRest(deps).queryChronicle(networkId, request),
+    ),
+  );
+  handlers.set(
+    'chronicleFilters.list',
+    bind((networkId: string) => requireRest(deps).listChronicleFilters(networkId)),
+  );
+  handlers.set(
+    'chronicleFilters.create',
+    bind((networkId: string, input: Parameters<RestClient['createChronicleFilter']>[1]) =>
+      requireRest(deps).createChronicleFilter(networkId, input, {
+        clientRequestId: randomUUID(),
+      }),
+    ),
+  );
+  handlers.set(
+    'chronicleFilters.update',
+    bind(
+      (
+        networkId: string,
+        filterId: string,
+        input: Parameters<RestClient['updateChronicleFilter']>[2],
+      ) =>
+        requireRest(deps).updateChronicleFilter(networkId, filterId, input, {
+          clientRequestId: randomUUID(),
+        }),
+    ),
+  );
+  handlers.set(
+    'chronicleFilters.remove',
+    bind((networkId: string, filterId: string) =>
+      requireRest(deps).deleteChronicleFilter(networkId, filterId, {
+        clientRequestId: randomUUID(),
+      }),
+    ),
+  );
+
   // --- pinned thoughts (L18) ------------------------------------------------
   handlers.set(
     'pins.list',
@@ -540,6 +581,65 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'comments.remove',
     bind((networkId: string, id: string, expectedVersion: number) =>
       requireRest(deps).deleteComment(networkId, id, expectedVersion),
+    ),
+  );
+  handlers.set(
+    'comments.createMulti',
+    bind(
+      (
+        networkId: string,
+        targets: Parameters<RestClient['createCommentWithTargets']>[1]['targets'],
+        input: Parameters<RestClient['createCommentWithTargets']>[1],
+      ) =>
+        requireRest(deps).createCommentWithTargets(
+          networkId,
+          { ...input, targets },
+          { clientRequestId: randomUUID() },
+        ),
+    ),
+  );
+  handlers.set(
+    'comments.get',
+    bind((networkId: string, id: string) => requireRest(deps).getComment(networkId, id)),
+  );
+  handlers.set(
+    'comments.addTarget',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        ownerType: 'thought' | 'link',
+        ownerId: string,
+        expectedVersion?: number,
+      ) =>
+        requireRest(deps).addCommentTarget(
+          networkId,
+          id,
+          ownerType,
+          ownerId,
+          expectedVersion,
+          { clientRequestId: randomUUID() },
+        ),
+    ),
+  );
+  handlers.set(
+    'comments.removeTarget',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        ownerType: 'thought' | 'link',
+        ownerId: string,
+        expectedVersion?: number,
+      ) =>
+        requireRest(deps).removeCommentTarget(
+          networkId,
+          id,
+          ownerType,
+          ownerId,
+          expectedVersion,
+          { clientRequestId: randomUUID() },
+        ),
     ),
   );
 
@@ -846,6 +946,52 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         throw new Error('Not connected: call etn.server.connect and open a network first');
       }
       deps.localDb.clearFocusHistory(profile.id, networkId, scope);
+    }),
+  );
+  // Chronicle history (L20): entries carry a kind (thought | link).
+  handlers.set(
+    'history.chronicleList',
+    bind(
+      (
+        profileId: string,
+        networkId: string,
+        limit?: Parameters<LocalDb['listChronicleHistory']>[2],
+      ) =>
+        deps.localDb
+          .listChronicleHistory(profileId, networkId, limit)
+          .map((row) => ({ kind: row.entry_kind, id: row.entry_id })),
+    ),
+  );
+  handlers.set(
+    'history.chroniclePush',
+    bind(
+      (
+        profileId: string,
+        networkId: string,
+        kind: Parameters<LocalDb['pushChronicleEntry']>[2],
+        id: string,
+      ) => {
+        deps.localDb.pushChronicleEntry(profileId, networkId, kind, id);
+      },
+    ),
+  );
+  handlers.set(
+    'history.chronicleRemove',
+    bind(
+      (
+        profileId: string,
+        networkId: string,
+        kind: Parameters<LocalDb['removeChronicleEntry']>[2],
+        id: string,
+      ) => {
+        deps.localDb.removeChronicleEntry(profileId, networkId, kind, id);
+      },
+    ),
+  );
+  handlers.set(
+    'history.chronicleClear',
+    bind((profileId: string, networkId: string) => {
+      deps.localDb.clearChronicleHistory(profileId, networkId);
     }),
   );
   handlers.set(

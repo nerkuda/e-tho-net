@@ -22,8 +22,14 @@ import type {
   AttachmentFileInput,
   AttachmentInput,
   AttachmentUpdateInput,
+  ChronicleFilterDefinition,
+  ChronicleQueryRequest,
+  ChronicleQueryResponse,
+  ChronicleSavedFilter,
   Comment,
   CommentInput,
+  CommentInputWithTargets,
+  CommentTarget,
   CurrentUser,
   ExportJob,
   ExportRequest,
@@ -259,6 +265,24 @@ export interface EtnApi {
     ): Promise<SavedFilter>;
     remove(networkId: string, filterId: string): Promise<void>;
   };
+  chronicle: {
+    /** `POST /chronicle/query` — two-phase chronological-comment query (L20). */
+    query(networkId: string, request: ChronicleQueryRequest): Promise<ChronicleQueryResponse>;
+  };
+  chronicleFilters: {
+    /** `GET /saved-filters?view=chronicle` — the user's chronicle filters (L20). */
+    list(networkId: string): Promise<ChronicleSavedFilter[]>;
+    create(
+      networkId: string,
+      input: { name: string; definition: ChronicleFilterDefinition },
+    ): Promise<ChronicleSavedFilter>;
+    update(
+      networkId: string,
+      filterId: string,
+      input: { name?: string; definition?: ChronicleFilterDefinition },
+    ): Promise<ChronicleSavedFilter>;
+    remove(networkId: string, filterId: string): Promise<void>;
+  };
   pins: {
     /** `GET /networks/{nid}/pins` — the user's pinned thoughts in position order (L18). */
     list(networkId: string): Promise<PinnedThoughtEntry[]>;
@@ -367,6 +391,10 @@ export interface EtnApi {
       ownerId: string,
       input: CommentInput,
     ): Promise<Comment>;
+    /** `POST /networks/{nid}/comments` — create attached to 1..N targets (L20). */
+    createMulti(networkId: string, targets: CommentTarget[], input: CommentInput): Promise<Comment>;
+    /** `GET /networks/{nid}/comments/{id}` — one comment with all targets (L20). */
+    get(networkId: string, id: string): Promise<Comment>;
     update(
       networkId: string,
       id: string,
@@ -374,6 +402,22 @@ export interface EtnApi {
       expectedVersion: number,
     ): Promise<Comment>;
     remove(networkId: string, id: string, expectedVersion: number): Promise<void>;
+    /** `POST /networks/{nid}/comments/{id}/targets` — attach one more owner (L20). */
+    addTarget(
+      networkId: string,
+      id: string,
+      ownerType: 'thought' | 'link',
+      ownerId: string,
+      expectedVersion?: number,
+    ): Promise<Comment>;
+    /** `DELETE /networks/{nid}/comments/{id}/targets/{ownerType}/{ownerId}` (L20). */
+    removeTarget(
+      networkId: string,
+      id: string,
+      ownerType: 'thought' | 'link',
+      ownerId: string,
+      expectedVersion?: number,
+    ): Promise<Comment>;
   };
   attachments: {
     list(networkId: string, ownerType: 'thought' | 'link', ownerId: string): Promise<Attachment[]>;
@@ -487,6 +531,28 @@ export interface EtnApi {
      * filter is applied (§15.9).
      */
     clear(scope?: HistoryScope): Promise<void>;
+    /** Chronicles (L20): lists the chronicle view's visit history, freshest first. */
+    chronicleList(
+      profileId: string,
+      networkId: string,
+      limit?: number,
+    ): Promise<Array<{ kind: 'thought' | 'link'; id: string }>>;
+    /** Chronicles (L20): (re)inserts a thought or link at the front of the history. */
+    chroniclePush(
+      profileId: string,
+      networkId: string,
+      kind: 'thought' | 'link',
+      id: string,
+    ): Promise<void>;
+    /** Chronicles (L20): drops a single entry (thought deletion cleanup). */
+    chronicleRemove(
+      profileId: string,
+      networkId: string,
+      kind: 'thought' | 'link',
+      id: string,
+    ): Promise<void>;
+    /** Chronicles (L20): clears the chronicle view's history (on «Применить»). */
+    chronicleClear(profileId: string, networkId: string): Promise<void>;
   };
   system: {
     health(): Promise<HealthResponse>;

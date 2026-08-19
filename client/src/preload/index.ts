@@ -76,6 +76,16 @@ function buildApi(): EtnApi {
         invoke('savedFilters.update', networkId, filterId, input),
       remove: (networkId, filterId) => invoke('savedFilters.remove', networkId, filterId),
     },
+    chronicle: {
+      query: (networkId, request) => invoke('chronicle.query', networkId, request),
+    },
+    chronicleFilters: {
+      list: (networkId) => invoke('chronicleFilters.list', networkId),
+      create: (networkId, input) => invoke('chronicleFilters.create', networkId, input),
+      update: (networkId, filterId, input) =>
+        invoke('chronicleFilters.update', networkId, filterId, input),
+      remove: (networkId, filterId) => invoke('chronicleFilters.remove', networkId, filterId),
+    },
     pins: {
       list: (networkId) => invoke('pins.list', networkId),
       set: (networkId, orderedIds) => invoke('pins.set', networkId, orderedIds),
@@ -126,10 +136,17 @@ function buildApi(): EtnApi {
         invoke('comments.list', networkId, ownerType, ownerId),
       create: (networkId, ownerType, ownerId, input) =>
         invoke('comments.create', networkId, ownerType, ownerId, input),
+      createMulti: (networkId, targets, input) =>
+        invoke('comments.createMulti', networkId, targets, input),
+      get: (networkId, id) => invoke('comments.get', networkId, id),
       update: (networkId, id, input, expectedVersion) =>
         invoke('comments.update', networkId, id, input, expectedVersion),
       remove: (networkId, id, expectedVersion) =>
         invoke('comments.remove', networkId, id, expectedVersion),
+      addTarget: (networkId, id, ownerType, ownerId, expectedVersion) =>
+        invoke('comments.addTarget', networkId, id, ownerType, ownerId, expectedVersion),
+      removeTarget: (networkId, id, ownerType, ownerId, expectedVersion) =>
+        invoke('comments.removeTarget', networkId, id, ownerType, ownerId, expectedVersion),
     },
     attachments: {
       list: (networkId, ownerType, ownerId) =>
@@ -199,6 +216,14 @@ function buildApi(): EtnApi {
       rotate: (oldId, newId, scope) => invoke('history.rotate', oldId, newId, scope),
       remove: (thoughtId, scope) => invoke('history.remove', thoughtId, scope),
       clear: (scope) => invoke('history.clear', scope),
+      chronicleList: (profileId, networkId, limit) =>
+        invoke('history.chronicleList', profileId, networkId, limit),
+      chroniclePush: (profileId, networkId, kind, id) =>
+        invoke('history.chroniclePush', profileId, networkId, kind, id),
+      chronicleRemove: (profileId, networkId, kind, id) =>
+        invoke('history.chronicleRemove', profileId, networkId, kind, id),
+      chronicleClear: (profileId, networkId) =>
+        invoke('history.chronicleClear', profileId, networkId),
     },
     system: {
       health: () => invoke('system.health'),

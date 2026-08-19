@@ -4035,3 +4035,238 @@ body.cloud-dragging * {
     transition: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * «Хроника» view (L20, 08-ui-spec.md §17)
+ * ------------------------------------------------------------------------- */
+
+.chronicle {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Filter panel: four rows of criteria (saved filters/keywords, thoughts/types,
+ * period/link types/scope, order/actions). */
+.chron-filter-area {
+  flex: 0 0 auto;
+  max-height: 46%;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.chron-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chron-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chron-label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.chron-keywords {
+  flex: 1;
+  min-width: 220px;
+}
+
+.chron-saved-select {
+  max-width: 260px;
+}
+
+.chron-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.chron-thought-picker {
+  width: 150px;
+}
+
+.chron-date {
+  width: 130px;
+}
+
+.chron-name-input {
+  flex: 1;
+  min-width: 140px;
+  max-width: 260px;
+}
+
+.chron-splitter {
+  flex: 0 0 4px;
+  cursor: row-resize;
+  background: var(--border);
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+
+.chron-splitter:hover {
+  background: var(--accent);
+}
+
+.chron-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chron-top {
+  flex: 1 1 55%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chron-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chron-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* Table rows: keyboard-navigable, the selected row is highlighted. */
+table.chron-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.chron-row {
+  cursor: pointer;
+}
+
+.chron-row.selected {
+  background: var(--accent-soft);
+}
+
+.chron-row .cell-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.chron-date {
+  white-space: nowrap;
+}
+
+.chron-title {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chron-targets {
+  max-width: 380px;
+}
+
+.chron-snippet {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.chron-snippet mark {
+  background: var(--accent-soft);
+  color: inherit;
+  padding: 0 1px;
+}
+
+/* Target chips (thoughts with icon/style; links «src — type — dst»). */
+.chron-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  margin: 1px 2px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  max-width: 100%;
+}
+
+.chron-chip:hover {
+  border-color: var(--accent);
+}
+
+.chron-chip.chip-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chron-chip .chip-icon {
+  font-size: 12px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+.chron-chip .chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.chron-chip.link .chip-title {
+  max-width: 120px;
+}
+
+.chron-chip.muted {
+  opacity: 0.55;
+}
+
+.chron-chip.muted .chip-title {
+  text-decoration: line-through;
+}
+
+/* Bottom editor: metadata row + target chips + markdown field. */
+.chron-editor {
+  flex: 0 0 auto;
+  min-height: 140px;
+  border-top: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.chron-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chron-target-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}

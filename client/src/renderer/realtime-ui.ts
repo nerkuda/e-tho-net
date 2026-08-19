@@ -24,6 +24,8 @@ import {
   scheduleStructuresRefresh,
 } from './screens/structures/structures.js';
 import { invalidateSavedFilters } from './screens/structures/filter-panel.js';
+import { invalidateChronicleThought, scheduleChronicleRefresh } from './screens/chronicle/chronicle.js';
+import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chronicle/filter-panel.js';
 import { store } from './state.js';
 
 /** True when the thought id participates in the current focus neighbourhood. */
@@ -46,6 +48,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       invalidateRef(evt.data.id);
       invalidateHistoryBar();
       invalidateStructuresThought(evt.data.id);
+      invalidateChronicleThought(evt.data.id);
       // The pin row cascades on the server (FK ON DELETE CASCADE) without a
       // `pinned-thoughts.updated` event — drop the chip locally (L18).
       if (store.state.pins.includes(evt.data.id)) {
@@ -57,6 +60,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'thought.created':
       if (inNeighbourhood(evt.data.thought.id)) scheduleRefresh();
       scheduleStructuresRefresh();
+      scheduleChronicleRefresh();
       break;
 
     case 'thought.updated':
@@ -68,6 +72,7 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       }
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
       scheduleStructuresRefresh();
+      scheduleChronicleRefresh();
       break;
 
     case 'thought.reordered':
@@ -78,22 +83,26 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'property-value.deleted':
       scheduleRefresh();
       scheduleStructuresRefresh();
+      scheduleChronicleRefresh();
       break;
 
     case 'comment.created':
       invalidateIndicators(evt.data.comment.owner_id);
       if (inNeighbourhood(evt.data.comment.owner_id)) scheduleRefresh();
+      scheduleChronicleRefresh();
       break;
 
     case 'comment.deleted':
       invalidateIndicators(evt.data.owner_id);
       if (inNeighbourhood(evt.data.owner_id)) scheduleRefresh();
+      scheduleChronicleRefresh();
       break;
 
     case 'comment.updated':
       // The event carries no owner id — the editor listens itself; the canvas
       // only cares about counts, so refresh lazily.
       scheduleRefresh();
+      scheduleChronicleRefresh();
       break;
 
     case 'attachment.created':
@@ -124,8 +133,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'saved-filter.updated':
     case 'saved-filter.deleted':
       // The user's other client changed a saved filter (audience=user) — the
-      // local list re-syncs from the server (§15.3).
+      // local lists re-sync from the server (§15.3, §17).
       invalidateSavedFilters();
+      void reloadChronicleSavedFilters();
       break;
 
     case 'pinned-thoughts.updated':

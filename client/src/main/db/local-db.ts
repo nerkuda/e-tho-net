@@ -103,7 +103,24 @@ export interface FocusHistoryRow {
 /** Which view a visit history belongs to (docs/11-settings-and-state.md §2.3.1). */
 export type HistoryScope = 'focus' | 'structures';
 
-/** Physical table of a history scope (fixed map — never built from input). */
+/** Kind of a chronicle history entry (thought or link, L20). */
+export type ChronicleEntryKind = 'thought' | 'link';
+
+/** Row of `chronicle_history` (07-client-electron.md §3.5, L20). */
+export interface ChronicleHistoryRow {
+  profile_id: string;
+  network_id: string;
+  entry_kind: ChronicleEntryKind;
+  entry_id: string;
+  seq: number;
+  visited_at: string;
+}
+
+/**
+ * Physical table of a history scope (fixed map — never built from input).
+ * NOTE: `chronicle` is NOT here — `chronicle_history` carries `entry_kind` and
+ * has dedicated methods ({@link pushChronicleEntry} etc.).
+ */
 const HISTORY_TABLES: Record<HistoryScope, string> = {
   focus: 'focus_history',
   structures: 'structures_history',
@@ -451,6 +468,67 @@ export class LocalDb {
       },
     );
     tx(profileId, networkId, oldId, newId);
+  }
+
+  // -------------------------------------------------------------------------
+  // chronicle history (L4, 07-client-electron.md §3.5, L20)
+  // -------------------------------------------------------------------------
+
+  /**
+   * (Re)inserts a chronicle entry (thought or link) at the front (highest
+   * `seq`). `INSERT OR REPLACE` keeps a single row per
+   * `(profile_id, network_id, entry_kind, entry_id)`.
+   */
+  public pushChronicleEntry(
+    profileId: string,
+    networkId: string,
+    entryKind: ChronicleEntryKind,
+    entryId: string,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO chronicle_history (profile_id, network_id, entry_kind, entry_id, seq, visited_at) ` +
+          'VALUES (?, ?, ?, ?, ' +
+          `(SELECT COALESCE(MAX(seq), 0) + 1 FROM chronicle_history WHERE profile_id = ? AND network_id = ?), ` +
+          "strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+      )
+      .run(profileId, networkId, entryKind, entryId, profileId, networkId);
+  }
+
+  /** Removes a single chronicle entry (no-op if absent). */
+  public removeChronicleEntry(
+    profileId: string,
+    networkId: string,
+    entryKind: ChronicleEntryKind,
+    entryId: string,
+  ): void {
+    this.db
+      .prepare(
+        'DELETE FROM chronicle_history WHERE profile_id = ? AND network_id = ? AND entry_kind = ? AND entry_id = ?',
+      )
+      .run(profileId, networkId, entryKind, entryId);
+  }
+
+  /** Drops the whole chronicle history of a profile × network. */
+  public clearChronicleHistory(profileId: string, networkId: string): void {
+    this.db
+      .prepare('DELETE FROM chronicle_history WHERE profile_id = ? AND network_id = ?')
+      .run(profileId, networkId);
+  }
+
+  /** Returns chronicle history rows, freshest first (up to `limit`). */
+  public listChronicleHistory(
+    profileId: string,
+    networkId: string,
+    limit = FOCUS_HISTORY_LIMIT,
+  ): ChronicleHistoryRow[] {
+    return this.db
+      .prepare(
+        'SELECT profile_id, network_id, entry_kind, entry_id, seq, visited_at ' +
+          'FROM chronicle_history WHERE profile_id = ? AND network_id = ? ' +
+          'ORDER BY seq DESC LIMIT ?',
+      )
+      .all(profileId, networkId, limit) as ChronicleHistoryRow[];
   }
 
   // -------------------------------------------------------------------------

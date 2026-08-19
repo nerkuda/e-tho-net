@@ -30,8 +30,8 @@ import {
 /** Top-level screens of the application. */
 export type Screen = 'onboarding' | 'networks' | 'workspace';
 
-/** Workspace views (L15, 08-ui-spec.md §15.1): the map canvas / the structures. */
-export type WorkspaceView = 'map' | 'structures';
+/** Workspace views (L15/L20, 08-ui-spec.md §15.1, §17): map / structures / chronicle. */
+export type WorkspaceView = 'map' | 'structures' | 'chronicle';
 
 /** Editor dock position (L4 `editor_position`, 08-ui-spec.md §6.1). */
 export type EditorPosition = 'left' | 'right' | 'top' | 'bottom' | 'hidden';

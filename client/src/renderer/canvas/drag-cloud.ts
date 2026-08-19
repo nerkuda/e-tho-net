@@ -51,8 +51,8 @@ import { DRAG_THRESHOLD_PX, requestZoneAnimation, suppressNextCanvasClick } from
 type OrderableDir = 'parents' | 'children';
 type ZoneDir = 'parents' | 'children' | 'siblings';
 type LinkMode = 'parent' | 'child';
-/** Where the drag started: a zone cloud or a thought list (selection/history/pinned). */
-type DragOrigin = 'cloud' | 'selection' | 'history' | 'pinned';
+/** Where the drag started: a zone cloud or a thought list (selection/history/pinned/chronicle). */
+type DragOrigin = 'cloud' | 'selection' | 'history' | 'pinned' | 'chronicle';
 
 interface DraggedCloud {
   id: string;
@@ -70,12 +70,17 @@ type DropKind =
   | 'add-to-selection'
   | 'open-history'
   | 'pin'
+  | 'chronicle-attach'
+  | 'chronicle-new'
+  | 'chronicle-filter'
   | 'none';
 
 interface DropTarget {
   kind: DropKind;
   /** Thought the dragged cloud lands on (link/reparent modes). */
   targetThoughtId?: string;
+  /** Chronicle row the dragged thought is attached to (chronicle-attach, L20). */
+  chronicleRowId?: string;
   /** Zone the drop happens in (move; a no-op drop inside the dragged's own
    *  zone keeps the last target, so the highlight survives pointer passes
    *  over the grid gaps between clouds). */
@@ -132,6 +137,14 @@ export interface ListDropActions {
   resolvePinTarget?: (el: HTMLElement, x: number) => { dropIndex: number; highlightEl: HTMLElement } | null;
   /** Pins the thought at the drop index (re-pinning an existing pin reorders). */
   pinThought?: (id: string, dropIndex: number) => void;
+  /** Chronicle (L20): attaches the dropped thought to the row's comment. */
+  chronicleAttach?: (thoughtId: string, rowId: string) => void;
+  /** Chronicle (L20): the drop on the table head/empty space starts a new
+   *  chronological comment attached to the dropped thought. */
+  chronicleNewEntry?: (thoughtId: string) => void;
+  /** Chronicle (L20): the drop on the filter panel adds the thought to the
+   *  «мысли» field of the selection. */
+  chronicleFilterAdd?: (thoughtId: string) => void;
   /** Called when the drag gesture ends (drop or cancel) — the pinned panel
    *  hides its insertion marker here. */
   onDragEnd?: () => void;
@@ -291,6 +304,15 @@ function onCloudMouseUp(event: MouseEvent): void {
     case 'pin':
       dropActions.pinThought?.(g.id, target.insertIndex ?? -1);
       break;
+    case 'chronicle-attach':
+      dropActions.chronicleAttach?.(g.id, target.chronicleRowId!);
+      break;
+    case 'chronicle-new':
+      dropActions.chronicleNewEntry?.(g.id);
+      break;
+    case 'chronicle-filter':
+      dropActions.chronicleFilterAdd?.(g.id);
+      break;
     default:
       // A Ctrl+Shift drop that ends in a no-op usually means the zone is not
       // sorted `manual` — say so instead of silently bouncing back. List
@@ -372,6 +394,38 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
       kind: 'pin',
       insertIndex: pinTarget.dropIndex,
       highlightEl: pinTarget.highlightEl,
+      highlightCls: 'drop-target-add',
+    };
+  }
+
+  // The chronicle view (L20): drops inside its own DOM. A row attaches the
+  // dragged thought to that row's comment; the table head/empty space starts a
+  // new comment; the filter panel adds the thought to the «мысли» field.
+  const chronicleRow = el.closest<HTMLElement>('.chron-row[data-row-id]');
+  if (chronicleRow !== null) {
+    const rowId = chronicleRow.dataset['rowId'];
+    if (rowId !== undefined) {
+      return {
+        kind: 'chronicle-attach',
+        chronicleRowId: rowId,
+        highlightEl: chronicleRow,
+        highlightCls: 'drop-target-add',
+      };
+    }
+  }
+  const chronicleTable = el.closest<HTMLElement>('.chron-table-head, .chron-table-wrap');
+  if (chronicleTable !== null) {
+    return {
+      kind: 'chronicle-new',
+      highlightEl: chronicleTable,
+      highlightCls: 'drop-target-add',
+    };
+  }
+  const chronicleFilter = el.closest<HTMLElement>('.chron-filter');
+  if (chronicleFilter !== null) {
+    return {
+      kind: 'chronicle-filter',
+      highlightEl: chronicleFilter,
       highlightCls: 'drop-target-add',
     };
   }

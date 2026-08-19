@@ -32,7 +32,7 @@ import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
-import { store, type WorkspaceView } from '../../state.js';
+import { store } from '../../state.js';
 import {
   branchThoughtIds,
   flattenStructuresTree,
@@ -89,19 +89,9 @@ let querySeq = 0;
 // View switching (L4 active_view)
 // ---------------------------------------------------------------------------
 
-/** Switches the workspace view and persists the L4 `active_view` key (§15.1). */
-export function setActiveView(view: WorkspaceView): void {
-  if (store.state.activeView === view) return;
-  store.update({ activeView: view });
-  const networkId = store.state.networkId;
-  if (networkId !== null) {
-    void etn.ui.setState(networkId, UI_STATE_KEY.ACTIVE_VIEW, view).catch(() => undefined);
-  }
-  if (view === 'structures') void ensureInitialised();
-}
-
-/** Loads the persisted filter state and runs the first query (idempotent). */
-async function ensureInitialised(): Promise<void> {
+/** Loads the persisted filter state and runs the first query (idempotent).
+ *  Called by the shared view switcher (../active-view.js, L20). */
+export async function ensureStructuresInitialised(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || host === null) return;
   if (networkIdSeen === networkId) return;
@@ -409,7 +399,7 @@ export function mountStructures(hostEl: HTMLElement): void {
       networkIdSeen !== networkId &&
       store.state.activeView === 'structures'
     ) {
-      void ensureInitialised();
+      void ensureStructuresInitialised();
       return;
     }
     if (store.state.activeView !== 'structures') return;
@@ -421,7 +411,7 @@ export function mountStructures(hostEl: HTMLElement): void {
     renderTree();
   });
 
-  if (store.state.activeView === 'structures') void ensureInitialised();
+  if (store.state.activeView === 'structures') void ensureStructuresInitialised();
 }
 
 /**

@@ -49,7 +49,7 @@ let refreshTimer: number | null = null;
  * The structural query with an empty filter returns exactly the root thought
  * (03-server-api.md §6.10).
  */
-async function findRootThought(networkId: string): Promise<Thought> {
+export async function findRootThought(networkId: string): Promise<Thought> {
   const result = await etn.structures.query(networkId, {
     sort: 'alpha',
     order: 'asc',
@@ -118,7 +118,10 @@ export async function openNetwork(networkId: string): Promise<void> {
     linkTypes,
     thoughtTypes,
     lastUsedLinkTypeId: parseLinkTypeId(linkTypeRaw),
-    activeView: activeViewRaw === 'structures' ? 'structures' : 'map',
+    activeView:
+      activeViewRaw === 'structures' || activeViewRaw === 'chronicle'
+        ? activeViewRaw
+        : 'map',
     focus: null,
     selection: [],
     editorTarget: null,
@@ -267,9 +270,14 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
   }
   // setFocus's rotation pushes the deleted id (as the old focus) back into the
   // history — prune it afterwards so it never lingers in «последние». Both
-  // per-view histories (focus + structures, L15 §15.9).
+  // per-view histories (focus + structures, L15 §15.9) and the chronicle
+  // history (L20) are pruned.
   await etn.history.remove(deletedId).catch(() => undefined);
   await etn.history.remove(deletedId, 'structures').catch(() => undefined);
+  const profileId = store.state.profileId;
+  if (profileId !== null) {
+    await etn.history.chronicleRemove(profileId, networkId, 'thought', deletedId).catch(() => undefined);
+  }
   invalidateIndicators(deletedId);
   invalidateRef(deletedId);
   invalidateHistoryBar();

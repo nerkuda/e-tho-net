@@ -344,3 +344,86 @@ describe('RestClient — retry & timeout', () => {
     );
   });
 });
+
+describe('RestClient — chronicle (L20)', () => {
+  it('POSTs the chronicle query and reads total from the list meta', async () => {
+    const { fetch, calls } = makeFetch([
+      {
+        status: 200,
+        body: {
+          data: [{ id: 'c1', title: 'Запись', valid_from: '2024-01-01', valid_to: null, version: 1, created_at: '2024', updated_at: '2024', created_by: 'u', updated_by: 'u', snippet: 'x', targets: [] }],
+          meta: { total: 7, offset: 0, limit: 50 },
+        },
+      },
+    ]);
+    const client = makeClient(fetch);
+    const result = await client.queryChronicle('net1', {
+      keywords: 'счет*',
+      link_scope: 'both',
+      order: 'desc',
+      limit: 50,
+      offset: 0,
+    });
+    assert.equal(result.total, 7);
+    assert.equal(result.rows.length, 1);
+    assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/networks/net1/chronicle/query');
+    const sent = JSON.parse((calls[0]!.init.body ?? '{}') as string) as Record<string, unknown>;
+    assert.equal(sent['keywords'], 'счет*');
+    assert.equal(sent['order'], 'desc');
+  });
+
+  it('lists/create/updates/deletes chronicle saved filters with view=chronicle', async () => {
+    const filter = { id: 'f1', view: 'chronicle', name: 'Отбор', definition: { order: 'asc' }, created_at: '2024', updated_at: '2024' };
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { data: [filter] } },
+      { status: 201, body: { data: filter } },
+      { status: 200, body: { data: { ...filter, name: 'Отбор 2' } } },
+      { status: 204, body: undefined },
+    ]);
+    const client = makeClient(fetch);
+
+    const list = await client.listChronicleFilters('net1');
+    assert.equal(list.length, 1);
+    assert.ok(calls[0]!.url.includes('/saved-filters?'));
+    assert.ok(calls[0]!.url.includes('view=chronicle'));
+
+    await client.createChronicleFilter('net1', { name: 'Отбор', definition: { order: 'asc' } });
+    const createdBody = JSON.parse((calls[1]!.init.body ?? '{}') as string) as Record<string, unknown>;
+    assert.equal(createdBody['view'], 'chronicle');
+
+    await client.updateChronicleFilter('net1', 'f1', { name: 'Отбор 2' });
+    const updatedBody = JSON.parse((calls[2]!.init.body ?? '{}') as string) as Record<string, unknown>;
+    assert.equal(updatedBody['view'], 'chronicle');
+    assert.equal(updatedBody['name'], 'Отбор 2');
+
+    await client.deleteChronicleFilter('net1', 'f1');
+    assert.equal(calls[3]!.url, 'http://localhost:3000/api/v1/networks/net1/saved-filters/f1');
+  });
+
+  it('creates a multi-target comment and manages targets (L20)', async () => {
+    const comment = { id: 'c1', owner_type: 'thought', owner_id: 't1', targets: [{ owner_type: 'thought', owner_id: 't1' }], kind: 'chronological', title: null, body_md: 'x', body_html: '<p>x</p>', valid_from: '2024-01-01', valid_to: null, version: 1, created_at: '2024', updated_at: '2024', created_by: 'u', updated_by: 'u' };
+    const { fetch, calls } = makeFetch([
+      { status: 201, body: { data: comment } },
+      { status: 200, body: { data: comment } },
+      { status: 200, body: { data: comment } },
+      { status: 200, body: { data: comment } },
+    ]);
+    const client = makeClient(fetch);
+
+    await client.createCommentWithTargets('net1', {
+      kind: 'chronological',
+      body_md: 'x',
+      targets: [{ owner_type: 'thought', owner_id: 't1' }, { owner_type: 'thought', owner_id: 't2' }],
+    });
+    assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/networks/net1/comments');
+
+    await client.getComment('net1', 'c1');
+    assert.equal(calls[1]!.url, 'http://localhost:3000/api/v1/networks/net1/comments/c1');
+
+    await client.addCommentTarget('net1', 'c1', 'thought', 't2', 1);
+    assert.equal(calls[2]!.url, 'http://localhost:3000/api/v1/networks/net1/comments/c1/targets');
+
+    await client.removeCommentTarget('net1', 'c1', 'thought', 't2', 2);
+    assert.equal(calls[3]!.url, 'http://localhost:3000/api/v1/networks/net1/comments/c1/targets/thought/t2');
+  });
+});

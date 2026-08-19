@@ -30,6 +30,7 @@ import { store } from '../state.js';
 import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { openStructuresThought } from './structures/structures.js';
+import { openChronicleLinkById, openChronicleThought } from './chronicle/chronicle.js';
 
 /** Max title length inside a history mini-cloud. */
 const TITLE_LIMIT = 40;
@@ -62,10 +63,12 @@ export function invalidateHistoryBar(): void {
   if (host?.isConnected === true) void render();
 }
 
-/** Opens a history entry in the way its view implies (§15.9). */
+/** Opens a history entry in the way its view implies (§15.9, §17). */
 function openEntry(id: string): void {
   if (store.state.activeView === 'structures') {
     void openStructuresThought(id);
+  } else if (store.state.activeView === 'chronicle') {
+    void openChronicleThought(id);
   } else {
     void setFocus(id);
   }
@@ -75,6 +78,9 @@ function openEntry(id: string): void {
 function currentId(): string | null {
   if (store.state.activeView === 'structures') {
     return store.state.structuresActiveThoughtId;
+  }
+  if (store.state.activeView === 'chronicle') {
+    return null; // the chronicle history has no «current» entity (§17)
   }
   return store.state.focus?.focused.id ?? null;
 }
@@ -91,6 +97,11 @@ async function render(): Promise<void> {
 
   if (profileId === null || networkId === null) {
     clear(host);
+    return;
+  }
+
+  if (view === 'chronicle') {
+    await renderChronicle(profileId, networkId);
     return;
   }
 
@@ -163,6 +174,109 @@ async function render(): Promise<void> {
     more.append(svgIcon('chevron-down', 11), span(` ${rest.length}`));
     host.append(more);
   }
+}
+
+/** A chronicle history entry: a thought or a link. */
+type ChronicleHistoryEntry = { kind: 'thought' | 'link'; id: string };
+
+/** Renders the chronicle view's own history (thoughts AND links, §17). */
+async function renderChronicle(profileId: string, networkId: string): Promise<void> {
+  const entries = await etn.history.chronicleList(profileId, networkId, HISTORY_LIMIT);
+  if (host === null || !host.isConnected) return;
+
+  clear(host);
+  if (entries.length === 0) {
+    const empty = div('history-empty');
+    empty.textContent = 'нет открытых мыслей и связей';
+    host.append(empty);
+    return;
+  }
+
+  const back = button('', () => {
+    const first = entries[0];
+    if (first !== undefined) openChronicleEntry(first);
+  }, 'history-back', 'Назад к предыдущей записи');
+  back.append(svgIcon('arrow-left', 13));
+  host.append(back);
+
+  const thoughtIds = entries.filter((e) => e.kind === 'thought').map((e) => e.id);
+  const refs = thoughtIds.length > 0 ? await resolveRefs(networkId, thoughtIds) : new Map();
+  const linkLabels = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.kind === 'link' && !linkLabels.has(entry.id)) {
+      linkLabels.set(entry.id, await resolveLinkLabel(networkId, entry.id));
+    }
+  }
+
+  const shown = entries.slice(0, 3);
+  const rest = entries.slice(3);
+
+  for (const entry of shown) {
+    if (entry.kind === 'thought') {
+      const chip = buildChip(entry.id, refs.get(entry.id));
+      wireExternalDragSource(chip, entry.id, 'history');
+      host.append(chip);
+    } else {
+      host.append(buildLinkChip(entry.id, linkLabels.get(entry.id) ?? '🔗'));
+    }
+  }
+
+  if (rest.length > 0) {
+    const more = button(
+      '',
+      () => {
+        const items: MenuItem[] = rest.map((entry) => ({
+          label:
+            entry.kind === 'thought'
+              ? `${refs.get(entry.id)?.icon ?? '💭'} ${refs.get(entry.id)?.title ?? entry.id}`.slice(0, TITLE_LIMIT)
+              : `🔗 ${linkLabels.get(entry.id) ?? entry.id}`.slice(0, TITLE_LIMIT),
+          onClick: () => openChronicleEntry(entry),
+          dragId: entry.kind === 'thought' ? entry.id : undefined,
+        }));
+        const rect = more.getBoundingClientRect();
+        const root = showMenuAt(rect.left, rect.top - rest.length * 30 - 8, items);
+        for (const row of root.querySelectorAll<HTMLElement>('.menu-item')) {
+          const rowId = row.dataset['dragId'];
+          if (rowId !== undefined) {
+            wireExternalDragSource(row, rowId, 'history', { fromMenu: true });
+          }
+        }
+      },
+      'history-more',
+      'Остальная история',
+    );
+    more.append(svgIcon('chevron-down', 11), span(` ${rest.length}`));
+    host.append(more);
+  }
+}
+
+/** Opens a chronicle history entry (thought or link) in the editor. */
+function openChronicleEntry(entry: ChronicleHistoryEntry): void {
+  if (entry.kind === 'thought') void openChronicleThought(entry.id);
+  else void openChronicleLinkById(entry.id);
+}
+
+/** Resolves the display label of a link history entry («источник — назначение»). */
+async function resolveLinkLabel(networkId: string, linkId: string): Promise<string> {
+  try {
+    const link = await etn.links.get(networkId, linkId);
+    const refs = await etn.thoughts.resolve(networkId, [link.source_id, link.target_id]);
+    const src = refs.find((r) => r.id === link.source_id);
+    const dst = refs.find((r) => r.id === link.target_id);
+    return `${src?.title ?? link.source_id} → ${dst?.title ?? link.target_id}`;
+  } catch {
+    return linkId;
+  }
+}
+
+/** Builds a link mini-chip of the chronicle history. */
+function buildLinkChip(id: string, label: string): HTMLElement {
+  const chip = div('history-cloud');
+  chip.dataset['id'] = id;
+  chip.append(el('span', 'mini-icon', '🔗'), el('span', 'hc-title', label.slice(0, TITLE_LIMIT)));
+  setTooltip(chip, label);
+  chip.addEventListener('click', () => void openChronicleLinkById(id));
+  return chip;
 }
 
 /** Resolves metadata for history ids (single batched call). */

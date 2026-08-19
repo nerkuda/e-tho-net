@@ -30,7 +30,9 @@ import { mountEditorResizer } from './editor-resizer.js';
 import { mountSelectionResizer } from './selection-resizer.js';
 import { hidePanel as hideSearchPanel, mountSearch } from '../search/search.js';
 import { mountSelection } from '../selection/selection.js';
-import { mountStructures, setActiveView } from './structures/structures.js';
+import { mountStructures } from './structures/structures.js';
+import { mountChronicle } from './chronicle/chronicle.js';
+import { setActiveView } from './active-view.js';
 import { mountPinnedBar } from './pinned-bar.js';
 
 /** Hosts exposed to the content modules. */
@@ -43,9 +45,10 @@ export interface WorkspaceHandles {
   userMenuLabel: HTMLSpanElement;
   /** Toolbar dropdown for workspace-layout commands (show/hide editor, …). */
   viewMenuButton: HTMLButtonElement;
-  /** View switcher segment (L15): map / structures. */
+  /** View switcher segment (L15/L20): map / structures / chronicle. */
   mapViewButton: HTMLButtonElement;
   structuresViewButton: HTMLButtonElement;
+  chronicleViewButton: HTMLButtonElement;
   /** Pinned-thoughts panel host in the toolbar (L18). */
   pinnedHost: HTMLElement;
   /** Search row of the map view (L18): input + gear, under the top bar. */
@@ -61,6 +64,8 @@ export interface WorkspaceHandles {
   canvasHost: HTMLElement;
   /** Structures view host (L15, 08-ui-spec.md §15). */
   structuresHost: HTMLElement;
+  /** Chronicle view host (L20, 08-ui-spec.md §17). */
+  chronicleHost: HTMLElement;
   /** Editor container (H8–H12). */
   editorHost: HTMLElement;
   /** Status bar cells. */
@@ -127,6 +132,12 @@ export function buildWorkspace(): HTMLElement {
   setTooltip(structuresViewButton, 'Структуры мыслей');
   structuresViewButton.addEventListener('click', () => setActiveView('structures'));
 
+  const chronicleViewButton = el('button', 'tb-btn tb-icon view-btn', '');
+  chronicleViewButton.type = 'button';
+  chronicleViewButton.append(svgIcon('history'));
+  setTooltip(chronicleViewButton, 'Хроника');
+  chronicleViewButton.addEventListener('click', () => setActiveView('chronicle'));
+
   // Pinned-thoughts panel (L18, 08-ui-spec.md §16): right after the view
   // switcher, visible in both views.
   const pinnedHost = div('pinned-bar');
@@ -167,6 +178,7 @@ export function buildWorkspace(): HTMLElement {
     netMenuButton,
     mapViewButton,
     structuresViewButton,
+    chronicleViewButton,
     pinnedHost,
     userMenuButton,
     viewMenuButton,
@@ -180,6 +192,7 @@ export function buildWorkspace(): HTMLElement {
   const selectionHost = div('selection-panel hidden');
   const canvasHost = div('canvas');
   const structuresHost = div('structures hidden');
+  const chronicleHost = div('chronicle hidden');
   const editorHost = div('editor hidden');
   // Draggable splitter between canvas and editor (08-ui-spec.md §6.1). Positioned
   // absolutely on the canvas/editor seam via the --editor-w/--editor-h variables.
@@ -191,6 +204,7 @@ export function buildWorkspace(): HTMLElement {
     selectionHost,
     canvasHost,
     structuresHost,
+    chronicleHost,
     editorHost,
     editorResizer,
     selectionResizer,
@@ -235,6 +249,7 @@ export function buildWorkspace(): HTMLElement {
     viewMenuButton,
     mapViewButton,
     structuresViewButton,
+    chronicleViewButton,
     pinnedHost,
     searchRow,
     searchInput,
@@ -243,6 +258,7 @@ export function buildWorkspace(): HTMLElement {
     selectionHost,
     canvasHost,
     structuresHost,
+    chronicleHost,
     editorHost,
     historyHost,
     focusLabel,
@@ -267,9 +283,10 @@ export function buildWorkspace(): HTMLElement {
   mountSearch({ input: searchInput, optionsButton: searchOptionsButton, host: searchHost });
   mountSelection(selectionHost);
   mountStructures(structuresHost);
+  mountChronicle(chronicleHost);
 
   /** Re-renders store-driven chrome (labels, indicator, editor position). */
-  let lastStructuresActive = false;
+  let lastMapActive = true;
   function refresh(): void {
     const st = store.state;
     netMenuLabel.textContent = st.network?.display_name ?? '—';
@@ -293,19 +310,22 @@ export function buildWorkspace(): HTMLElement {
     zoomLabel.replaceChildren(svgIcon('search', 12), span(` ${Math.round(st.canvasZoom * 100)}%`));
     eventLabel.textContent = st.lastEvent ?? '';
 
-    // View switcher (L15/L18): the structures view replaces the canvas and the
-    // search row (which belongs to the map); editor, resizer, status bar,
-    // selection panel and the pinned panel are shared.
+    // View switcher (L15/L18/L20): the structures and chronicle views replace
+    // the canvas and the search row (which belongs to the map); editor,
+    // resizer, status bar, selection panel and the pinned panel are shared.
+    const mapActive = st.activeView === 'map';
     const structuresActive = st.activeView === 'structures';
-    mapViewButton.classList.toggle('active', !structuresActive);
+    mapViewButton.classList.toggle('active', mapActive);
     structuresViewButton.classList.toggle('active', structuresActive);
-    canvasHost.classList.toggle('hidden', structuresActive);
+    chronicleViewButton.classList.toggle('active', st.activeView === 'chronicle');
+    canvasHost.classList.toggle('hidden', !mapActive);
     structuresHost.classList.toggle('hidden', !structuresActive);
-    searchRow.classList.toggle('hidden', structuresActive);
+    chronicleHost.classList.toggle('hidden', st.activeView !== 'chronicle');
+    searchRow.classList.toggle('hidden', !mapActive);
     // Leaving the map view closes the open search dropdown (it anchors to the
     // now hidden search row); returning leaves it closed.
-    if (structuresActive && !lastStructuresActive) hideSearchPanel();
-    lastStructuresActive = structuresActive;
+    if (!mapActive && lastMapActive) hideSearchPanel();
+    lastMapActive = mapActive;
   }
 
   store.subscribe(() => {

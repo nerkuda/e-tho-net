@@ -23,11 +23,9 @@ import { showDialog } from '../lib/dialog.js';
 import { el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
-import {
-  isThoughtInResults,
-  openStructuresThought,
-  setActiveView,
-} from '../screens/structures/structures.js';
+import { isThoughtInResults, openStructuresThought } from '../screens/structures/structures.js';
+import { setActiveView } from '../screens/active-view.js';
+import { openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { store } from '../state.js';
 
 /** Chars allowed inside an in-progress wiki prefix (no closing/alias/newline). */
@@ -189,6 +187,13 @@ export async function openWikiTarget(name: string): Promise<void> {
       setActiveView('map');
       await setFocus(thought.id);
     }
+    return;
+  }
+
+  if (store.state.activeView === 'chronicle') {
+    // The chronicle view opens the thought in the editor without moving the
+    // canvas focus (08-ui-spec.md §17).
+    await openChronicleThought(thought.id);
     return;
   }
 

@@ -1081,6 +1081,65 @@ export class RestClient {
     );
   }
 
+  /** `GET /networks/{nid}/comments/{id}` — one comment with all its targets (L20). */
+  public async getComment(
+    networkId: string,
+    id: string,
+  ): Promise<import('@etn/shared').Comment> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/comments/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /** `POST /networks/{nid}/comments` — create attached to 1..N targets (L20). */
+  public async createCommentWithTargets(
+    networkId: string,
+    input: import('@etn/shared').CommentInputWithTargets,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Comment> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/comments`,
+      { body: input, requestOptions: opts },
+    );
+  }
+
+  /** `POST /networks/{nid}/comments/{id}/targets` — attach one more owner (L20). */
+  public async addCommentTarget(
+    networkId: string,
+    id: string,
+    ownerType: 'thought' | 'link',
+    ownerId: string,
+    expectedVersion?: number,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Comment> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/comments/${encodeURIComponent(id)}/targets`,
+      {
+        body: { owner_type: ownerType, owner_id: ownerId },
+        requestOptions: { ...opts, expectedVersion },
+      },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/comments/{id}/targets/{ownerType}/{ownerId}` (L20). */
+  public async removeCommentTarget(
+    networkId: string,
+    id: string,
+    ownerType: 'thought' | 'link',
+    ownerId: string,
+    expectedVersion?: number,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Comment> {
+    return this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/comments/${encodeURIComponent(id)}/targets/${ownerType}/${encodeURIComponent(ownerId)}`,
+      { requestOptions: { ...opts, expectedVersion } },
+    );
+  }
+
   // -------------------------------------------------------------------------
   // §11 Attachments
   // -------------------------------------------------------------------------
@@ -1366,6 +1425,78 @@ export class RestClient {
 
   /** `DELETE /networks/{nid}/saved-filters/{fid}` — delete (idempotent). */
   public async deleteSavedFilter(
+    networkId: string,
+    filterId: string,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/saved-filters/${encodeURIComponent(filterId)}`,
+      { requestOptions: opts },
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // §20 Chronicle view (L20)
+  // -------------------------------------------------------------------------
+
+  /** `POST /networks/{nid}/chronicle/query` — two-phase chronological query. */
+  public async queryChronicle(
+    networkId: string,
+    request: import('@etn/shared').ChronicleQueryRequest,
+  ): Promise<import('@etn/shared').ChronicleQueryResponse> {
+    const rows = await this.request<import('@etn/shared').ChronicleRow[]>(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/chronicle/query`,
+      { body: request },
+    );
+    const meta = this.lastMeta as { total?: number } | undefined;
+    const total = typeof meta?.total === 'number' ? meta.total : rows.length;
+    return { rows, total };
+  }
+
+  /** `GET /networks/{nid}/saved-filters?view=chronicle` — the user's chronicle filters. */
+  public async listChronicleFilters(
+    networkId: string,
+  ): Promise<import('@etn/shared').ChronicleSavedFilter[]> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/saved-filters`,
+      { query: { view: 'chronicle' } },
+    );
+  }
+
+  /** `POST /networks/{nid}/saved-filters` — create a chronicle filter (idempotent). */
+  public async createChronicleFilter(
+    networkId: string,
+    input: { name: string; definition: import('@etn/shared').ChronicleFilterDefinition },
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ChronicleSavedFilter> {
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
+      body: { view: 'chronicle', ...input },
+      requestOptions: opts,
+    });
+  }
+
+  /** `PATCH /networks/{nid}/saved-filters/{fid}` — rename/redefine (idempotent). */
+  public async updateChronicleFilter(
+    networkId: string,
+    filterId: string,
+    input: {
+      name?: string;
+      definition?: import('@etn/shared').ChronicleFilterDefinition;
+    },
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ChronicleSavedFilter> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/saved-filters/${encodeURIComponent(filterId)}`,
+      { body: { view: 'chronicle', ...input }, requestOptions: opts },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/saved-filters/{fid}` — delete (idempotent). */
+  public async deleteChronicleFilter(
     networkId: string,
     filterId: string,
     opts?: RequestOptions,

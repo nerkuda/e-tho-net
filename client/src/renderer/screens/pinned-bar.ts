@@ -31,6 +31,7 @@ import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { pinAt } from '../pinned/pins.js';
 import { store } from '../state.js';
 import { openStructuresThought } from './structures/structures.js';
+import { openChronicleThought } from './chronicle/chronicle.js';
 
 /** Max title length inside a pinned chip (08-ui-spec.md §16). */
 const TITLE_LIMIT = 64;
@@ -81,6 +82,8 @@ export function invalidatePinnedRef(thoughtId: string): void {
 function openPinnedEntry(id: string): void {
   if (store.state.activeView === 'structures') {
     void openStructuresThought(id);
+  } else if (store.state.activeView === 'chronicle') {
+    void openChronicleThought(id);
   } else {
     void setFocus(id);
   }
