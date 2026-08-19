@@ -214,7 +214,8 @@ export function parseChronicleQueryBody(
  * Phase 1 — collect the selected thought ids.
  *
  * Roots come from `thought_ids` (missing ids are dropped); with
- * `include_subtree` their undirected subordinates up to
+ * `include_subtree` their **subordinates** (children, `source → target`
+ * direction, per docs/11-settings-and-state.md §5.2) up to
  * {@link TRAVERSAL_DEFAULTS.MAX_DEPTH} levels are added via a recursive CTE
  * whose cycle safety is `UNION` row deduplication (one row per
  * `(id, depth)` — bounded by `|thoughts| × max_depth`; the old `path`-string
@@ -243,10 +244,9 @@ function collectRootAndSubtreeIds(
           FROM thoughts t
           WHERE t.id IN (${placeholders(ids.size)})
           UNION
-          SELECT CASE WHEN l.target_id = d.id THEN l.source_id ELSE l.target_id END,
-                 d.depth + 1
+          SELECT l.target_id, d.depth + 1
           FROM descend d
-          JOIN links l ON (l.source_id = d.id OR l.target_id = d.id) AND l.active = 1
+          JOIN links l ON l.source_id = d.id AND l.active = 1
           WHERE d.depth < ?
         )
        SELECT DISTINCT id FROM descend`,
