@@ -131,13 +131,20 @@ tables» (только реально использованные в ответ
 сети), чтобы агент не делал дополнительные запросы и не получал повторяющийся
 текст в каждой записи:
 
-- `thought_types`: `{ [type_id]: {id, name, description, icon} }` — в ответах
-  `etn.thoughts.subgraph` (по узлам), `etn.thoughts.neighbors`,
-  `etn.thoughts.query` (по хитам), `etn.thoughts.path` (по пути) и
-  `etn.thoughts.usage` (по использующим мыслям);
-- `link_types`: `{ [link_type_id]: {id, name_forward, name_reverse,
-  description, color, style} }` — в `etn.thoughts.subgraph` (по рёбрам) и
-  `etn.thoughts.neighbors` (по связям соседей).
+- `thought_types`: `{ [type_id]: {id, name, parent_id, is_root, description,
+  icon} }` — в ответах `etn.thoughts.subgraph` (по узлам),
+  `etn.thoughts.neighbors`, `etn.thoughts.query` (по хитам),
+  `etn.thoughts.path` (по пути) и `etn.thoughts.usage` (по использующим
+  мыслям);
+- `link_types`: `{ [link_type_id]: {id, name_forward, name_reverse, parent_id,
+  is_root, description, color, style} }` — в `etn.thoughts.subgraph` (по
+  рёбрам) и `etn.thoughts.neighbors` (по связям соседей).
+
+`parent_id`/`is_root` (L21) описывают иерархию типов: `is_root: true` — корневой
+тип «основной тип» (не назначается мыслям/связям; его настройки применяются к
+элементам без типа), остальные наследуют свойства/стиль от `parent_id`. Отбор
+по `type_id` (например, в `etn.thoughts.query`) соответствует типу **и всем его
+подчинённым** (OR).
 
 `description` — тот самый «комментарий для AI» из определения типа (см. §3):
 роль типа и требования по нему; для связи даны оба имени — агент выбирает по
