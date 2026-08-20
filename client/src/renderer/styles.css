@@ -954,6 +954,12 @@ textarea {
     var(--bg);
 }
 
+/* The host is focusable (§2.9 keyboard navigation, kbd-nav.ts) — the keyboard
+ * cursor frame marks the current cloud, so the host itself draws nothing. */
+.canvas:focus {
+  outline: none;
+}
+
 /* Focus band (L12, 08-ui-spec.md §2.1): a horizontal stripe of
  * --focus-band-color across the focus row, fading out over --focus-band-fade
  * towards the top and bottom edges. The renderer anchors it via
@@ -1265,6 +1271,24 @@ body.resizing-h {
 .cloud.selected {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Halo (§2.2.4): the thought is open in the editor — single click, Enter or a
+ * pick from another view. A soft accent ring plus glow around the cloud. */
+.cloud.halo {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 0 0 5px var(--accent-soft),
+    var(--shadow-focus);
+}
+
+/* Keyboard cursor frame (§2.9): the cloud the arrow navigation points at.
+ * Dashed and offset further than the selection outline so both stay visible
+ * when they combine. */
+.cloud.kbd-cursor {
+  outline: 2px dashed var(--warn-strong);
+  outline-offset: 3px;
 }
 
 .cloud.dim {

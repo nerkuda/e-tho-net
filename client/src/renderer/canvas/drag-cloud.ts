@@ -698,9 +698,11 @@ async function reparentThought(draggedId: string, targetId: string): Promise<voi
 /**
  * Reorders the dragged thought inside its zone — only when the zone is
  * `manual`. The next render shifts the following clouds down one slot and
- * FLIP-animates them to their new positions.
+ * FLIP-animates them to their new positions. Also the backend of the keyboard
+ * reorder Ctrl+Shift+Up/Down (kbd-nav.ts, §2.9): `insertIndex` is the slot in
+ * the zone order without the dragged thought.
  */
-async function reorderZone(draggedId: string, dir: OrderableDir, insertIndex: number): Promise<void> {
+export async function reorderZone(draggedId: string, dir: OrderableDir, insertIndex: number): Promise<void> {
   if (store.state.zoneSorts[dir] !== 'manual') return; // bounce back, no change
   const networkId = requireNetworkId();
   const focus = store.state.focus;

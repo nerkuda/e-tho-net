@@ -11,7 +11,10 @@
  * - The focus cloud has a variable width and up to 3 title lines (§2.2.2).
  * - Cloud colors/styles come from the thought (own values win) falling back to
  *   the thought type catalogue; inactive thoughts are dimmed (§2.2).
- * - Click on a thought → focus (B1). Dragging from an ellipse: dropped on
+ * - Single click on a thought cloud opens it in the editor and lights its halo
+ *   (§2.2.4); double click focuses it (B1). Keyboard navigation over the map —
+ *   arrows/Home/End cursor frame, Enter/Ctrl+Enter, Ctrl+Shift+Up/Down manual
+ *   reorder (§2.9, kbd-nav.ts). Dragging from an ellipse: dropped on
  *   another thought → direct link (C4); otherwise → add-thought dialog (H14
  *   registers the opener via {@link setAddDialogOpener}).
  * - Indicator counts load lazily per visible cloud and are cached; realtime
@@ -48,6 +51,7 @@ import {
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
 import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
+import { initKbdNav, resetCanvasCursor, syncCanvasCursor } from './kbd-nav.js';
 import { mountZoneSplitters } from './zone-splitters.js';
 
 /** Zone directions of the canvas (parents/siblings/children). */
@@ -188,13 +192,21 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   wireCloudDrag(host, {
     getZoneOrder: (dir) => store.state.zoneOrder[dir],
   });
-  // A click not on a link line clears the sticky link selection and returns the
-  // editor to the focused thought (editorTarget=null → editor follows the focus).
+  // Keyboard navigation over the map (§2.9): arrows/Home/End/Enter — active
+  // while the keyboard focus is inside the canvas host.
+  initKbdNav(host);
+  // A click on neither a link line nor a cloud clears the sticky link
+  // selection and returns the editor to the focused thought (editorTarget=null
+  // → editor follows the focus). Clicks on clouds keep their own handling —
+  // a cloud click opens that thought in the editor (§2.2.4), a link-line click
+  // selects the link.
   host.addEventListener('click', (event) => {
     const t = event.target as HTMLElement | null;
     const onLine = t?.closest('.link-hit, .link-line') ?? null;
+    const onCloud = t?.closest('.cloud') ?? null;
     if (
       onLine === null &&
+      onCloud === null &&
       (store.state.selectedLinkId !== null || store.state.editorTarget !== null)
     ) {
       store.update({ selectedLinkId: null, editorTarget: null });
@@ -305,6 +317,7 @@ async function render(): Promise<void> {
   if (focus === null) {
     emptyEl?.classList.remove('hidden');
     resetFocusBand(host);
+    resetCanvasCursor();
     return;
   }
   emptyEl?.classList.add('hidden');
@@ -315,6 +328,9 @@ async function render(): Promise<void> {
   // except when a link-affecting change requested the zone transition so a
   // thought that changed zones visibly flows there (§2.1 exclusivity).
   const focusChanged = focus.focused.id !== lastFocusId;
+  // The keyboard cursor does not survive a focus change: the cursor cloud may
+  // have become the focus cloud, moved between zones or left the map (§2.9).
+  if (focusChanged) resetCanvasCursor();
   const animate = (focusChanged || zoneAnimationPending) && !prefersReducedMotion();
   zoneAnimationPending = false;
   const snapshot = animate ? captureClouds(host) : null;
@@ -339,6 +355,7 @@ async function render(): Promise<void> {
   } else {
     redrawLinks?.();
   }
+  syncCanvasCursor();
 }
 
 /** Focus id of the last render — gates the transition choreography (§2.8). */
@@ -418,6 +435,13 @@ function renderFocusRow(focus: FocusResponse): void {
   cloud.append(topEllipse, iconBox, main, bottomEllipse);
   focusRow.append(cloud);
   focusCloudEl = cloud;
+  // A click on the focus cloud returns the editor to the focused thought
+  // (same as a click on empty canvas space); the double click would refocus
+  // the same thought — a no-op, so it is simply ignored.
+  cloud.addEventListener('click', (event) => {
+    if (event.detail >= 2) return;
+    store.update({ editorTarget: null, selectedLinkId: null });
+  });
   cloud.addEventListener('contextmenu', (event) => {
     event.preventDefault();
     showThoughtContextMenu(event, { id: thought.id, title: thought.title, dir: 'siblings' });
@@ -699,6 +723,8 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     const entry = entries[slotOf(i)];
     if (entry !== undefined) queueIndicatorLoad(entry.id);
   }
+  // The rebuilt clouds lost the keyboard cursor frame — repaint it (§2.9).
+  syncCanvasCursor();
   redrawLinks?.();
 }
 
@@ -826,6 +852,12 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   const isInactive = (entry.links[0]?.active ?? ref?.active) === false;
   if (isInactive) cloud.classList.add('dim');
   if (store.state.selection.includes(entry.id)) cloud.classList.add('selected');
+  // Halo: the thought is open in the editor (§2.2.4) — a single click, Enter
+  // or a pick from the structures/chronicle view.
+  const editorTarget = store.state.editorTarget;
+  if (editorTarget?.kind === 'thought' && editorTarget.id === entry.id) {
+    cloud.classList.add('halo');
+  }
 
   const style = resolveCloudStyle(
     ref ?? {
@@ -876,8 +908,11 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
 
   cloud.append(topEllipse, iconBox, main, bottomEllipse);
 
-  // Click → focus (B1); Ctrl+click toggles selection (H16); Enter on a
-  // keyboard-focused cloud focuses it; right-click opens the context menu (H15).
+  // Single click → open the thought in the editor + halo (§2.2.4); double
+  // click → focus (B1); Ctrl+click toggles selection (H16); right-click opens
+  // the context menu (H15). The cloud stays tab-focusable (clouds re-enable
+  // the pointer inside the pointer-transparent grids) — Enter and the arrows
+  // are handled by the canvas keyboard navigation (kbd-nav.ts).
   cloud.tabIndex = 0;
   cloud.addEventListener('click', (event) => {
     if (suppressNextClick) {
@@ -888,10 +923,13 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
       selectionHooks?.onCloudClick(entry.id);
       return;
     }
-    void setFocus(entry.id);
+    // The second click of a double click is left to the dblclick handler.
+    if (event.detail >= 2) return;
+    store.update({ editorTarget: { kind: 'thought', id: entry.id }, selectedLinkId: null });
   });
-  cloud.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void setFocus(entry.id);
+  cloud.addEventListener('dblclick', (event) => {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    void setFocus(entry.id);
   });
   cloud.addEventListener('contextmenu', (event) => {
     event.preventDefault();
