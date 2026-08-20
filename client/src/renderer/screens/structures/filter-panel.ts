@@ -1,11 +1,15 @@
 /**
  * Filter panel of the «Структуры мыслей» view (L15, 08-ui-spec.md §15.3).
  *
- * Left column: keywords (mini-syntax), thought-type and link-type checkboxes,
- * property conditions with per-type operators and value editors, sort, the
- * «Применить» button and the saved-filters block. The panel owns the filter
- * DOM and the string→wire value conversion; the host module (`structures.ts`)
- * owns the query lifecycle and persists the state (L4 `structures_state`).
+ * Every group is a single compact line in its collapsed shape: keywords with
+ * a history dropdown, a «Родительские мысли» scope field, «Типы мыслей» and
+ * «Типы связей» comma-fields that open a checkbox-picker dialog, a
+ * collapsible «Свойства» condition editor, a collapsible «Дополнительно»
+ * tri-state group and sort. A sticky footer (Применить/Очистить + saved
+ * filters) sits below the scrollable criteria list. The panel owns the
+ * filter DOM and the string→wire value conversion; the host module
+ * (`structures.ts`) owns the query lifecycle and persists the state (L4
+ * `structures_state`).
  */
 
 import {
@@ -14,20 +18,23 @@ import {
   type PropertyValueType,
   type SavedFilter,
   type SortOrder,
+  type StructureFilter,
   type StructurePropertyCondition,
   type StructurePropertyOp,
   type StructureSort,
+  type ThoughtRef,
 } from '@etn/shared';
 
+import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canvas/canvas.js';
+import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { buildValueOptionsCaret } from '../../editor/properties.js';
-import { firstPickedThoughtId, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { wireThoughtRefSearch } from '../../editor/thought-picker.js';
 import { clear, div, el, setTooltip } from '../../lib/dom.js';
-import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
+import { confirmDialog, errorDialog, promptDialog, showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
-import { orderedTypeRows } from '../../lib/type-tree.js';
+import { orderedTypeRows, resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../../lib/type-tree.js';
 import { store } from '../../state.js';
 
 /** One property condition row (values kept as strings; typed on the wire). */
@@ -41,20 +48,26 @@ export interface PropertyConditionState {
 export const FILTER_W_MIN = 230;
 export const FILTER_W_MAX = 420;
 
+/** Tri-state UI value of a «Дополнительно» field: `null` — «не важно». */
+type TriState = boolean | null;
+
 /** Full filter-panel state (persisted as the L4 `structures_state` JSON). */
 export interface FilterState {
   keywords: string;
+  /** Restrict the candidate set to the subtrees of these thoughts (§15.3). */
+  parentIds: string[];
   typeIds: string[];
   linkTypeIds: string[];
   properties: PropertyConditionState[];
+  hasProperties: TriState;
+  hasComment: TriState;
+  hasAttachments: TriState;
+  hasChronology: TriState;
   sort: StructureSort;
   order: SortOrder;
   savedFilterId: string | null;
   /** Panel width set by the splitter drag (px), null until first drag. */
   panelWidth: number | null;
-  /** Checklist heights set by the group grips (px), null until dragged. */
-  typeListHeight: number | null;
-  linkTypeListHeight: number | null;
 }
 
 /** Callbacks the panel fires into the host module. */
@@ -101,15 +114,18 @@ const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; la
 function defaultState(): FilterState {
   return {
     keywords: '',
+    parentIds: [],
     typeIds: [],
     linkTypeIds: [],
     properties: [],
+    hasProperties: null,
+    hasComment: null,
+    hasAttachments: null,
+    hasChronology: null,
     sort: 'created',
     order: 'asc',
     savedFilterId: null,
     panelWidth: null,
-    typeListHeight: null,
-    linkTypeListHeight: null,
   };
 }
 
@@ -125,17 +141,26 @@ let state: FilterState = defaultState();
 const propertyDefs = new Map<string, { def: PropertyDefinition; typeName: string }>();
 /** Thought-ref titles for value chips (resolved lazily). */
 const refTitles = new Map<string, string>();
+/** Resolved metadata of the «Родительские мысли» chips (icon/style, lazy). */
+const parentRefs = new Map<string, ThoughtRef>();
 let savedFilters: SavedFilter[] = [];
 /** Signature of the catalogues the panel depends on (rebuild on change). */
 let catalogueSignature = '';
 
 // DOM anchors rebuilt in renderPanel().
 let keywordsInput: HTMLInputElement | null = null;
+let parentFieldBox: HTMLElement | null = null;
+let typeFieldBox: HTMLElement | null = null;
+let linkTypeFieldBox: HTMLElement | null = null;
 let conditionsBox: HTMLElement | null = null;
 let sortSelect: HTMLSelectElement | null = null;
 let orderSelect: HTMLSelectElement | null = null;
 let saveNameInput: HTMLInputElement | null = null;
 let savedListBox: HTMLElement | null = null;
+
+/** Collapse state of the two collapsible groups (transient, not persisted). */
+let propertiesCollapsed = true;
+let extraCollapsed = true;
 
 // ---------------------------------------------------------------------------
 // Public API (used by structures.ts / realtime)
@@ -149,6 +174,12 @@ export function getFilterState(): FilterState {
 /** Replaces the state (L4 restore / saved filter applied) and rebuilds the DOM. */
 export function setFilterState(next: FilterState): void {
   state = { ...defaultState(), ...next };
+  propertiesCollapsed = state.properties.length === 0;
+  extraCollapsed =
+    state.hasProperties === null &&
+    state.hasComment === null &&
+    state.hasAttachments === null &&
+    state.hasChronology === null;
   renderPanel();
 }
 
@@ -192,6 +223,20 @@ export function buildConditions(): StructurePropertyCondition[] {
     if (values.length === 0) continue; // row not filled in yet
     out.push({ property_id: cond.propertyId, op: cond.op, value: list ? values : values[0]! });
   }
+  return out;
+}
+
+/** The «Родительские мысли»/«Дополнительно» fields of the wire filter (§15.3). */
+export function buildExtraFilter(): Pick<
+  StructureFilter,
+  'parent_ids' | 'has_properties' | 'has_comment' | 'has_attachments' | 'has_chronology'
+> {
+  const out: ReturnType<typeof buildExtraFilter> = {};
+  if (state.parentIds.length > 0) out.parent_ids = state.parentIds;
+  if (state.hasProperties !== null) out.has_properties = state.hasProperties;
+  if (state.hasComment !== null) out.has_comment = state.hasComment;
+  if (state.hasAttachments !== null) out.has_attachments = state.hasAttachments;
+  if (state.hasChronology !== null) out.has_chronology = state.hasChronology;
   return out;
 }
 
@@ -253,6 +298,81 @@ async function loadSavedFilters(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Apply / clear
+// ---------------------------------------------------------------------------
+
+/** Pushes non-empty keywords into the client-local history, then applies. */
+function triggerApply(): void {
+  pushKwHistory(state.keywords);
+  callbacks?.onApply();
+}
+
+/** «Очистить»: drops every criterion but keeps «Сортировка» (§15.3). */
+function clearAllCriteria(): void {
+  state = { ...defaultState(), sort: state.sort, order: state.order, panelWidth: state.panelWidth };
+  propertiesCollapsed = true;
+  extraCollapsed = true;
+  renderPanel();
+  callbacks?.onStatePersist();
+}
+
+// ---------------------------------------------------------------------------
+// Keywords history (client-local, §15.3)
+// ---------------------------------------------------------------------------
+
+const KW_HISTORY_MAX = 10;
+
+function kwHistoryKey(): string {
+  return `structures.kw.history.${store.state.networkId ?? ''}`;
+}
+
+function loadKwHistory(): string[] {
+  try {
+    const raw = localStorage.getItem(kwHistoryKey());
+    if (raw === null) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushKwHistory(value: string): void {
+  const trimmed = value.trim();
+  if (trimmed === '') return;
+  const next = [trimmed, ...loadKwHistory().filter((v) => v !== trimmed)].slice(0, KW_HISTORY_MAX);
+  try {
+    localStorage.setItem(kwHistoryKey(), JSON.stringify(next));
+  } catch {
+    // Storage unavailable/full — the history is a convenience, not critical.
+  }
+}
+
+/** A small absolutely-positioned dropdown anchored right after `anchor`. */
+let openDropdownBox: HTMLElement | null = null;
+function closeFieldDropdown(): void {
+  openDropdownBox?.remove();
+  openDropdownBox = null;
+}
+function openFieldDropdown(anchor: HTMLElement, options: Array<{ label: string; onPick: () => void }>): void {
+  closeFieldDropdown();
+  if (options.length === 0) return;
+  const box = div('st-f-dropdown');
+  for (const opt of options) {
+    const item = el('div', 'st-f-dropdown-item', opt.label);
+    item.addEventListener('mousedown', (event) => {
+      // Keep the field focused so the click registers before any blur-close.
+      event.preventDefault();
+      opt.onPick();
+      closeFieldDropdown();
+    });
+    box.append(item);
+  }
+  openDropdownBox = box;
+  anchor.insertAdjacentElement('afterend', box);
+}
+
+// ---------------------------------------------------------------------------
 // Panel DOM
 // ---------------------------------------------------------------------------
 
@@ -265,14 +385,50 @@ function block(title: string): { box: HTMLElement; body: HTMLElement } {
   return { box, body };
 }
 
+/**
+ * A collapsible section block: clicking the header toggles the body; the
+ * header is bold/accent-colored while collapsed with non-empty content
+ * (§15.3 «Свойства»/«Дополнительно»).
+ */
+function collapsibleBlock(
+  title: string,
+  getCollapsed: () => boolean,
+  setCollapsed: (v: boolean) => void,
+  isNonEmpty: () => boolean,
+): { box: HTMLElement; body: HTMLElement; refresh: () => void } {
+  const box = div('st-f-block');
+  const head = el('div', 'st-f-title st-f-collapsible-title');
+  const caret = el('span', 'st-f-caret', getCollapsed() ? '▸' : '▾');
+  head.append(caret, el('span', '', title));
+  const body = div('st-f-body');
+  box.append(head, body);
+  const refresh = (): void => {
+    const collapsed = getCollapsed();
+    body.classList.toggle('hidden', collapsed);
+    caret.textContent = collapsed ? '▸' : '▾';
+    head.classList.toggle('st-f-title-active', collapsed && isNonEmpty());
+  };
+  head.addEventListener('click', () => {
+    setCollapsed(!getCollapsed());
+    refresh();
+  });
+  refresh();
+  return { box, body, refresh };
+}
+
 /** Rebuilds the whole panel from `state`. */
 function renderPanel(): void {
   if (host === null) return;
   clear(host);
   applyPanelWidth();
+  host.classList.add('st-f-layout');
 
-  // --- keywords -------------------------------------------------------------
+  const scroll = div('st-f-scroll');
+  host.append(scroll);
+
+  // --- keywords ---------------------------------------------------------
   const kw = block('Ключевые слова');
+  const kwWrap = div('st-f-kw-wrap');
   keywordsInput = el('input', 'st-f-input st-f-keywords') as HTMLInputElement;
   keywordsInput.type = 'text';
   keywordsInput.value = state.keywords;
@@ -285,48 +441,118 @@ function renderPanel(): void {
     state.keywords = keywordsInput?.value ?? '';
     callbacks?.onStatePersist();
   });
-  keywordsInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') callbacks?.onApply();
+  keywordsInput.addEventListener('focus', () => {
+    if (keywordsInput === null) return;
+    openFieldDropdown(
+      kwWrap,
+      loadKwHistory().map((word) => ({
+        label: word,
+        onPick: () => {
+          if (keywordsInput !== null) {
+            keywordsInput.value = word;
+            state.keywords = word;
+            callbacks?.onStatePersist();
+          }
+        },
+      })),
+    );
   });
-  kw.body.append(keywordsInput);
-  host.append(kw.box);
+  keywordsInput.addEventListener('blur', () => window.setTimeout(closeFieldDropdown, 150));
+  keywordsInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') triggerApply();
+    if (event.key === 'Escape') closeFieldDropdown();
+  });
+  const kwClear = el('button', 'st-f-clear-inline', '×');
+  kwClear.type = 'button';
+  setTooltip(kwClear, 'Очистить');
+  kwClear.addEventListener('click', () => {
+    state.keywords = '';
+    if (keywordsInput !== null) keywordsInput.value = '';
+    callbacks?.onStatePersist();
+  });
+  kwWrap.append(keywordsInput, kwClear);
+  kw.body.append(kwWrap);
+  scroll.append(kw.box);
 
-  // --- thought types --------------------------------------------------------
+  // --- parent thoughts (scope, §15.3) ------------------------------------
+  const pt = block('Родительские мысли');
+  parentFieldBox = div('st-f-chipfield');
+  parentFieldBox.tabIndex = 0;
+  setTooltip(parentFieldBox, 'Ограничить отбор мыслями, подчинёнными указанным (клик — выбрать)');
+  parentFieldBox.addEventListener('click', () => void openParentPicker());
+  parentFieldBox.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void openParentPicker();
+  });
+  const ptClear = el('button', 'st-f-clear-inline', '×');
+  ptClear.type = 'button';
+  setTooltip(ptClear, 'Очистить');
+  ptClear.addEventListener('click', (event) => {
+    event.stopPropagation();
+    state.parentIds = [];
+    callbacks?.onStatePersist();
+    renderParentField();
+  });
+  const ptRow = div('st-f-fieldrow');
+  ptRow.append(parentFieldBox, ptClear);
+  pt.body.append(ptRow);
+  scroll.append(pt.box);
+  renderParentField();
+
+  // --- thought types ------------------------------------------------------
   const tt = block('Типы мыслей');
-  renderCheckGroup(
-    tt.body,
-    // L21: the type tree (depth drives the indent); a checked parent matches
-    // its whole subtree on the server.
-    orderedTypeRows(store.state.thoughtTypes)
-      .filter((row) => !row.type.is_root)
-      .map((row) => ({ id: row.type.id, label: row.type.name, depth: row.depth - 1 })),
-    () => state.typeIds,
-    (ids) => {
-      state.typeIds = ids;
-      callbacks?.onStatePersist();
-    },
-    'thoughtTypes',
-  );
-  host.append(tt.box);
+  typeFieldBox = div('st-f-chipfield');
+  typeFieldBox.tabIndex = 0;
+  typeFieldBox.addEventListener('click', () => void openThoughtTypesPicker());
+  typeFieldBox.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void openThoughtTypesPicker();
+  });
+  const ttClear = el('button', 'st-f-clear-inline', '×');
+  ttClear.type = 'button';
+  setTooltip(ttClear, 'Очистить');
+  ttClear.addEventListener('click', (event) => {
+    event.stopPropagation();
+    state.typeIds = [];
+    callbacks?.onStatePersist();
+    renderThoughtTypeField();
+  });
+  const ttRow = div('st-f-fieldrow');
+  ttRow.append(typeFieldBox, ttClear);
+  tt.body.append(ttRow);
+  scroll.append(tt.box);
+  renderThoughtTypeField();
 
   // --- link types -----------------------------------------------------------
   const lt = block('Типы связей');
-  renderCheckGroup(
-    lt.body,
-    orderedTypeRows(store.state.linkTypes)
-      .filter((row) => !row.type.is_root)
-      .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 })),
-    () => state.linkTypeIds,
-    (ids) => {
-      state.linkTypeIds = ids;
-      callbacks?.onStatePersist();
-    },
-    'linkTypes',
-  );
-  host.append(lt.box);
+  linkTypeFieldBox = div('st-f-chipfield');
+  linkTypeFieldBox.tabIndex = 0;
+  linkTypeFieldBox.addEventListener('click', () => void openLinkTypesPicker());
+  linkTypeFieldBox.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void openLinkTypesPicker();
+  });
+  const ltClear = el('button', 'st-f-clear-inline', '×');
+  ltClear.type = 'button';
+  setTooltip(ltClear, 'Очистить');
+  ltClear.addEventListener('click', (event) => {
+    event.stopPropagation();
+    state.linkTypeIds = [];
+    callbacks?.onStatePersist();
+    renderLinkTypeField();
+  });
+  const ltRow = div('st-f-fieldrow');
+  ltRow.append(linkTypeFieldBox, ltClear);
+  lt.body.append(ltRow);
+  scroll.append(lt.box);
+  renderLinkTypeField();
 
-  // --- property conditions --------------------------------------------------
-  const props = block('Свойства');
+  // --- property conditions (collapsible, §15.3) ------------------------------
+  const props = collapsibleBlock(
+    'Свойства',
+    () => propertiesCollapsed,
+    (v) => {
+      propertiesCollapsed = v;
+    },
+    () => state.properties.length > 0,
+  );
   conditionsBox = div('st-f-conds');
   renderConditions();
   const addCond = el('button', 'st-f-add', '+ условие');
@@ -341,9 +567,57 @@ function renderPanel(): void {
     ];
     callbacks?.onStatePersist();
     renderConditions();
+    props.refresh();
   });
   props.body.append(conditionsBox, addCond);
-  host.append(props.box);
+  scroll.append(props.box);
+
+  // --- «Дополнительно» (collapsible tri-state group, §15.3) ------------------
+  const extra = collapsibleBlock(
+    'Дополнительно',
+    () => extraCollapsed,
+    (v) => {
+      extraCollapsed = v;
+    },
+    () =>
+      state.hasProperties !== null ||
+      state.hasComment !== null ||
+      state.hasAttachments !== null ||
+      state.hasChronology !== null,
+  );
+  const triRow = (
+    label: string,
+    get: () => TriState,
+    set: (v: TriState) => void,
+  ): HTMLElement => {
+    const row = div('st-f-tri-row');
+    row.append(el('span', 'st-f-tri-label', label));
+    const select = el('select', 'st-f-input') as HTMLSelectElement;
+    for (const opt of [
+      { v: '', label: 'не важно' },
+      { v: 'yes', label: 'есть' },
+      { v: 'no', label: 'нет' },
+    ]) {
+      const o = el('option', '', opt.label) as HTMLOptionElement;
+      o.value = opt.v;
+      select.append(o);
+    }
+    select.value = get() === null ? '' : get() === true ? 'yes' : 'no';
+    select.addEventListener('change', () => {
+      set(select.value === '' ? null : select.value === 'yes');
+      callbacks?.onStatePersist();
+      extra.refresh();
+    });
+    row.append(select);
+    return row;
+  };
+  extra.body.append(
+    triRow('Свойства', () => state.hasProperties, (v) => (state.hasProperties = v)),
+    triRow('Комментарий', () => state.hasComment, (v) => (state.hasComment = v)),
+    triRow('Вложения', () => state.hasAttachments, (v) => (state.hasAttachments = v)),
+    triRow('Хроника', () => state.hasChronology, (v) => (state.hasChronology = v)),
+  );
+  scroll.append(extra.box);
 
   // --- sort -----------------------------------------------------------------
   const sortBlock = block('Сортировка');
@@ -379,64 +653,230 @@ function renderPanel(): void {
   });
   sortRow.append(sortSelect, orderSelect);
   sortBlock.body.append(sortRow);
-  host.append(sortBlock.box);
+  scroll.append(sortBlock.box);
 
-  // --- apply ----------------------------------------------------------------
+  // --- sticky footer: Применить/Очистить + saved filters (§15.3) -------------
+  const footer = div('st-f-footer');
+
+  const btnRow = div('st-f-btnrow');
   const apply = el('button', 'st-f-apply', 'Применить');
   apply.type = 'button';
-  apply.addEventListener('click', () => callbacks?.onApply());
-  host.append(apply);
+  apply.addEventListener('click', () => triggerApply());
+  const clearBtn = el('button', 'st-f-clear', 'Очистить');
+  clearBtn.type = 'button';
+  clearBtn.addEventListener('click', () => clearAllCriteria());
+  btnRow.append(apply, clearBtn);
+  footer.append(btnRow);
 
-  // --- saved filters --------------------------------------------------------
-  const saved = block('Сохранённые отборы');
   const saveRow = div('st-f-saverow');
+  const saveNameWrap = div('st-f-kw-wrap');
   saveNameInput = el('input', 'st-f-input') as HTMLInputElement;
   saveNameInput.type = 'text';
   saveNameInput.placeholder = 'имя отбора';
+  saveNameInput.addEventListener('focus', () => renderSaveDropdown());
+  saveNameInput.addEventListener('input', () => renderSaveDropdown());
+  saveNameInput.addEventListener('blur', () => window.setTimeout(closeFieldDropdown, 150));
+  saveNameInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeFieldDropdown();
+  });
+  saveNameWrap.append(saveNameInput);
   const saveBtn = el('button', 'st-f-save', 'Сохранить');
   saveBtn.type = 'button';
   saveBtn.addEventListener('click', () => void saveCurrentFilter());
-  saveRow.append(saveNameInput, saveBtn);
+  const deleteBtn = el('button', 'st-f-save', 'Удалить');
+  deleteBtn.type = 'button';
+  deleteBtn.addEventListener('click', () => void deleteNamedFilter());
+  saveRow.append(saveNameWrap, saveBtn, deleteBtn);
+  footer.append(saveRow);
+
   savedListBox = div('st-f-savedlist');
-  saved.body.append(saveRow, savedListBox);
-  host.append(saved.box);
+  footer.append(savedListBox);
+  host.append(footer);
   renderSavedList();
 }
 
 // ---------------------------------------------------------------------------
-// Type checklists (§15.3)
+// Chip fields (родительские мысли / типы мыслей / типы связей, §15.3)
 // ---------------------------------------------------------------------------
 
-/** Which checklist a group's search text / height belongs to. */
-type CheckKind = 'thoughtTypes' | 'linkTypes';
+/** Renders a comma-separated row of styled chips (or a placeholder). */
+function renderChips(
+  container: HTMLElement,
+  items: Array<{
+    key: string;
+    label: string;
+    icon: HTMLElement | null;
+    style: { fg: string | null; bg: string | null; bold: boolean; italic: boolean; underline: boolean; strike: boolean };
+  }>,
+): void {
+  clear(container);
+  if (items.length === 0) {
+    container.append(el('span', 'st-f-chip-empty', 'не выбрано'));
+    return;
+  }
+  items.forEach((item, index) => {
+    const chip = el('span', 'st-f-chip');
+    if (item.icon !== null) chip.append(item.icon);
+    const label = el('span', 'st-f-chip-label', item.label);
+    applyCloudStyle(label, item.style);
+    chip.append(label);
+    container.append(chip);
+    if (index < items.length - 1) container.append(el('span', 'st-f-chip-sep', ', '));
+  });
+}
 
-/** Live search text of the two checklists (survives panel re-renders). */
-const checkSearch: Record<CheckKind, string> = { thoughtTypes: '', linkTypes: '' };
-/** Fixed height of one checklist row, px (must match the CSS row height). */
-const CHECK_ROW_H = 22;
-/** Minimum column width of a checklist, px (columns fill the panel width). */
+/** Renders the «Родительские мысли» chips, resolving unknown titles lazily. */
+function renderParentField(): void {
+  if (parentFieldBox === null) return;
+  const networkId = store.state.networkId;
+  const missing = state.parentIds.filter((id) => !parentRefs.has(id));
+  if (networkId !== null && missing.length > 0) {
+    void etn.thoughts
+      .resolve(networkId, missing)
+      .then((refs) => {
+        for (const ref of refs) parentRefs.set(ref.id, ref);
+        renderParentField();
+      })
+      .catch(() => undefined);
+  }
+  renderChips(
+    parentFieldBox,
+    state.parentIds.map((id) => {
+      const ref = parentRefs.get(id);
+      const icon = div('st-f-chip-icon');
+      applyThoughtIcon(icon, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
+      return {
+        key: id,
+        label: ref?.title ?? '…',
+        icon,
+        style: resolveCloudStyle(
+          ref ?? {
+            type_id: null,
+            fg_color: null,
+            bg_color: null,
+            font_bold: false,
+            font_italic: false,
+            font_underline: false,
+            font_strike: false,
+          },
+        ),
+      };
+    }),
+  );
+}
+
+/** Opens the multi-thought picker for the «Родительские мысли» scope. */
+async function openParentPicker(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const result = await pickThoughtsDialog({
+    networkId,
+    allowCreate: false,
+    allowLinkType: false,
+    selectedIds: state.parentIds,
+    title: 'Родительские мысли',
+    applyLabel: 'Применить',
+  });
+  if (result === null) return;
+  state.parentIds = pickedThoughtIds(result);
+  callbacks?.onStatePersist();
+  renderParentField();
+}
+
+/** Renders the «Типы мыслей» chips. */
+function renderThoughtTypeField(): void {
+  if (typeFieldBox === null) return;
+  renderChips(
+    typeFieldBox,
+    state.typeIds.flatMap((id) => {
+      const type = store.state.thoughtTypes.find((t) => t.id === id);
+      if (type === undefined) return [];
+      const visual = resolveThoughtTypeVisual(store.state.thoughtTypes, type.id);
+      const icon = div('st-f-chip-icon');
+      applyThoughtIcon(icon, { icon: visual.icon, icon_kind: visual.icon_kind, type_id: type.id });
+      return [
+        {
+          key: id,
+          label: type.name,
+          icon,
+          style: {
+            fg: visual.fg_color,
+            bg: visual.bg_color,
+            bold: visual.font_bold ?? false,
+            italic: visual.font_italic ?? false,
+            underline: visual.font_underline ?? false,
+            strike: visual.font_strike ?? false,
+          },
+        },
+      ];
+    }),
+  );
+}
+
+/** Renders the «Типы связей» chips (link types have no icon in the data model). */
+function renderLinkTypeField(): void {
+  if (linkTypeFieldBox === null) return;
+  renderChips(
+    linkTypeFieldBox,
+    state.linkTypeIds.flatMap((id) => {
+      const type = store.state.linkTypes.find((t) => t.id === id);
+      if (type === undefined) return [];
+      const visual = resolveLinkTypeVisual(store.state.linkTypes, type.id);
+      return [
+        {
+          key: id,
+          label: type.name_forward,
+          icon: null,
+          style: {
+            fg: visual.color,
+            bg: null,
+            bold: false,
+            italic: false,
+            underline: false,
+            strike: false,
+          },
+        },
+      ];
+    }),
+  );
+}
+
+async function openThoughtTypesPicker(): Promise<void> {
+  const rows = orderedTypeRows(store.state.thoughtTypes)
+    .filter((row) => !row.type.is_root)
+    .map((row) => ({ id: row.type.id, label: row.type.name, depth: row.depth - 1 }));
+  const picked = await openTypePickerDialog('Типы мыслей', rows, state.typeIds);
+  if (picked === null) return;
+  state.typeIds = picked;
+  callbacks?.onStatePersist();
+  renderThoughtTypeField();
+}
+
+async function openLinkTypesPicker(): Promise<void> {
+  const rows = orderedTypeRows(store.state.linkTypes)
+    .filter((row) => !row.type.is_root)
+    .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 }));
+  const picked = await openTypePickerDialog('Типы связей', rows, state.linkTypeIds);
+  if (picked === null) return;
+  state.linkTypeIds = picked;
+  callbacks?.onStatePersist();
+  renderLinkTypeField();
+}
+
+// ---------------------------------------------------------------------------
+// Type picker dialog (search + multi-column checklist + «Применить», §15.3)
+// ---------------------------------------------------------------------------
+
+/** Minimum column width of a checklist, px (columns fill the dialog width). */
 const CHECK_COL_W = 85;
 /** Column gap, px (must match the CSS column-gap). */
 const CHECK_COL_GAP = 14;
-/** Drag range of the checklist height grips, px. */
-const CHECK_H_MIN = 60;
-const CHECK_H_MAX = 420;
-
-/** Persisted height of the given checklist (null — the CSS default). */
-function checkHeight(kind: CheckKind): number | null {
-  return kind === 'thoughtTypes' ? state.typeListHeight : state.linkTypeListHeight;
-}
-
-/** Records the grip-dragged checklist height for the L4 persist. */
-function setCheckHeight(kind: CheckKind, height: number): void {
-  if (kind === 'thoughtTypes') state.typeListHeight = height;
-  else state.linkTypeListHeight = height;
-  callbacks?.onStatePersist();
-}
+/** Fixed height of one checklist row, px (must match the CSS row height). */
+const CHECK_ROW_H = 22;
 
 /**
  * Recomputes the column count of a checklist for its current height and width:
- * as many columns as fit the panel width; when the items need more columns
+ * as many columns as fit the dialog width; when the items need more columns
  * than that, the last column overflows downward and the list scrolls
  * vertically (`column-fill: auto`).
  */
@@ -449,126 +889,93 @@ function applyCheckColumns(list: HTMLElement): void {
   list.style.columnFill = needed > count ? 'auto' : 'balance';
 }
 
-/** Renders only the checklist rows (search, grip and clear button survive). */
-function renderCheckItems(
-  list: HTMLElement,
-  items: Array<{ id: string; label: string; depth?: number }>,
-  getChecked: () => string[],
-  onChange: (ids: string[]) => void,
-  kind: CheckKind,
-): void {
-  clear(list);
-  const checked = new Set(getChecked());
-  const needle = checkSearch[kind].trim().toLowerCase();
-  const matches = items.filter((i) => i.label.toLowerCase().includes(needle));
-  const byAlpha = (a: { label: string }, b: { label: string }): number =>
-    a.label.localeCompare(b.label, 'ru');
-  // Checked items first, the rest alphabetically (§15.3).
-  const sorted = [
-    ...matches.filter((i) => checked.has(i.id)).sort(byAlpha),
-    ...matches.filter((i) => !checked.has(i.id)).sort(byAlpha),
-  ];
-  if (sorted.length === 0) {
-    list.append(el('div', 'st-f-empty', 'Ничего не найдено'));
-  }
-  for (const item of sorted) {
-    const line = el('label', 'st-f-check');
-    line.dataset['id'] = item.id;
-    const input = el('input') as HTMLInputElement;
-    input.type = 'checkbox';
-    input.checked = checked.has(item.id);
-    const label = el('span', '', item.label);
-    // L21: indent the type-tree rows; the root itself is not listed.
-    line.style.paddingLeft = `${Math.max(0, (item.depth ?? 0) - 1) * 14}px`;
-    line.append(input, label);
-    list.append(line);
-  }
-  if (list.isConnected) applyCheckColumns(list);
-  else requestAnimationFrame(() => applyCheckColumns(list));
-}
-
 /**
- * Renders one checklist group: a search box filtering as you type, a
- * multi-column checklist (checked first, then alphabetical), a height grip on
- * the group's bottom border and a «Очистить» button dropping every check.
+ * Modal type picker: a search box filtering as you type, a multi-column
+ * checklist (checked first, then alphabetical) and «Отмена»/«Применить».
+ * Resolves the picked id list, or `null` when cancelled.
  */
-function renderCheckGroup(
-  box: HTMLElement,
-  items: Array<{ id: string; label: string }>,
-  getChecked: () => string[],
-  onChange: (ids: string[]) => void,
-  kind: CheckKind,
-): void {
-  clear(box);
-  box.classList.add('st-f-group');
-
-  const search = el('input', 'st-f-input st-f-search') as HTMLInputElement;
-  search.type = 'text';
-  search.placeholder = 'Найти…';
-  search.value = checkSearch[kind];
-  search.addEventListener('input', () => {
-    checkSearch[kind] = search.value;
-    renderCheckItems(list, items, getChecked, onChange, kind);
-  });
-  box.append(search);
-
-  const list = div('st-f-checks');
-  const height = checkHeight(kind);
-  if (height !== null) list.style.setProperty('--st-checks-h', `${height}px`);
-  box.append(list);
-  renderCheckItems(list, items, getChecked, onChange, kind);
-
-  const grip = div('st-f-grip');
-  setTooltip(grip, 'Изменить высоту списка');
-  grip.addEventListener('pointerdown', (event: PointerEvent) => {
-    if (event.button !== 0) return;
-    const startY = event.clientY;
-    const startH = checkHeight(kind) ?? 132;
-    grip.setPointerCapture(event.pointerId);
-    grip.classList.add('dragging');
-    const onMove = (ev: PointerEvent): void => {
-      const h = Math.min(CHECK_H_MAX, Math.max(CHECK_H_MIN, startH + (ev.clientY - startY)));
-      setCheckHeight(kind, h);
-      list.style.setProperty('--st-checks-h', `${h}px`);
-      applyCheckColumns(list);
+function openTypePickerDialog(
+  title: string,
+  rows: Array<{ id: string; label: string; depth: number }>,
+  initial: string[],
+): Promise<string[] | null> {
+  return new Promise((resolve) => {
+    const checked = new Set(initial);
+    let needle = '';
+    let settled = false;
+    const finish = (value: string[] | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
     };
-    const onUp = (): void => {
-      grip.removeEventListener('pointermove', onMove);
-      grip.removeEventListener('pointerup', onUp);
-      grip.classList.remove('dragging');
+
+    const body = div('st-f-picker');
+    const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Найти…';
+    const list = div('st-f-checks st-f-picker-list');
+    const clearBtn = el('button', 'st-f-clear', 'Очистить');
+    clearBtn.type = 'button';
+
+    const renderList = (): void => {
+      clear(list);
+      const filtered = rows.filter((row) => row.label.toLowerCase().includes(needle));
+      const byAlpha = (a: (typeof rows)[number], b: (typeof rows)[number]): number =>
+        a.label.localeCompare(b.label, 'ru');
+      const sorted = [
+        ...filtered.filter((row) => checked.has(row.id)).sort(byAlpha),
+        ...filtered.filter((row) => !checked.has(row.id)).sort(byAlpha),
+      ];
+      if (sorted.length === 0) list.append(el('div', 'st-f-empty', 'Ничего не найдено'));
+      for (const row of sorted) {
+        const line = el('label', 'st-f-check');
+        line.style.paddingLeft = `${Math.max(0, row.depth) * 14}px`;
+        const input = el('input') as HTMLInputElement;
+        input.type = 'checkbox';
+        input.checked = checked.has(row.id);
+        input.addEventListener('change', () => {
+          if (input.checked) checked.add(row.id);
+          else checked.delete(row.id);
+          clearBtn.disabled = checked.size === 0;
+          renderList();
+        });
+        line.append(input, el('span', '', row.label));
+        list.append(line);
+      }
+      if (list.isConnected) applyCheckColumns(list);
+      else requestAnimationFrame(() => applyCheckColumns(list));
     };
-    grip.addEventListener('pointermove', onMove);
-    grip.addEventListener('pointerup', onUp);
-  });
-  box.append(grip);
+    searchInput.addEventListener('input', () => {
+      needle = searchInput.value.trim().toLowerCase();
+      renderList();
+    });
+    clearBtn.disabled = checked.size === 0;
+    clearBtn.addEventListener('click', () => {
+      checked.clear();
+      renderList();
+      clearBtn.disabled = true;
+    });
+    body.append(searchInput, list, clearBtn);
 
-  const clearBtn = el('button', 'st-f-clear', 'Очистить');
-  clearBtn.type = 'button';
-  clearBtn.disabled = getChecked().length === 0;
-  clearBtn.addEventListener('click', () => {
-    if (getChecked().length === 0) return;
-    onChange([]);
-    renderCheckItems(list, items, getChecked, onChange, kind);
-    clearBtn.disabled = true;
-  });
-  box.append(clearBtn);
-
-  // One delegated handler for every checkbox: re-sorts the list (checked
-  // items jump to the top) and keeps the «Очистить» state in sync.
-  box.addEventListener('change', (event) => {
-    const input = event.target as HTMLInputElement;
-    if (input.type !== 'checkbox') return;
-    const line = input.closest<HTMLElement>('.st-f-check');
-    const id = line?.dataset['id'];
-    if (id === undefined) return;
-    const next = new Set(getChecked());
-    if (input.checked) next.add(id);
-    else next.delete(id);
-    onChange([...next]);
-    renderCheckItems(list, items, getChecked, onChange, kind);
-    clearBtn.disabled = getChecked().length === 0;
+    showDialog({
+      title,
+      body,
+      width: 480,
+      buttons: [
+        { label: 'Отмена', onClick: () => finish(null) },
+        { label: 'Применить', primary: true, onClick: () => finish([...checked]) },
+      ],
+      onMount: () => {
+        renderList();
+        searchInput.focus();
+      },
+    });
   });
 }
+
+// ---------------------------------------------------------------------------
+// Property conditions (§15.3, unchanged editor logic)
+// ---------------------------------------------------------------------------
 
 /** Renders the property condition rows. */
 function renderConditions(): void {
@@ -866,8 +1273,37 @@ function buildThoughtRefEditor(
 }
 
 // ---------------------------------------------------------------------------
-// Saved filters
+// Saved filters (§15.3)
 // ---------------------------------------------------------------------------
+
+/** Filters the saved list by the current name-field text (search-as-type). */
+function renderSaveDropdown(): void {
+  if (saveNameInput === null) return;
+  const needle = saveNameInput.value.trim().toLowerCase();
+  const matches =
+    needle === '' ? savedFilters : savedFilters.filter((f) => f.name.toLowerCase().includes(needle));
+  openFieldDropdown(
+    saveNameInput.parentElement ?? saveNameInput,
+    matches.map((filter) => ({
+      label: filter.name,
+      onPick: () => {
+        if (saveNameInput !== null) saveNameInput.value = filter.name;
+        applySavedFilter(filter);
+      },
+    })),
+  );
+}
+
+/** Deletes the saved filter whose name matches the name field, after confirming. */
+async function deleteNamedFilter(): Promise<void> {
+  const name = (saveNameInput?.value ?? '').trim();
+  const filter = savedFilters.find((f) => f.name.toLowerCase() === name.toLowerCase());
+  if (filter === undefined) {
+    notice('Отбор с таким именем не найден');
+    return;
+  }
+  await removeSavedFilter(filter);
+}
 
 /** Renders the saved-filter list (click — apply; right-click — manage). */
 function renderSavedList(): void {
@@ -911,6 +1347,7 @@ function applySavedFilter(filter: SavedFilter): void {
   const def = filter.definition;
   setFilterState({
     keywords: def.keywords ?? '',
+    parentIds: def.parent_ids ?? [],
     typeIds: def.type_ids ?? [],
     linkTypeIds: def.link_type_ids ?? [],
     properties: (def.properties ?? []).map((c) => ({
@@ -918,12 +1355,14 @@ function applySavedFilter(filter: SavedFilter): void {
       op: c.op,
       values: Array.isArray(c.value) ? c.value.map((v) => String(v)) : [String(c.value)],
     })),
+    hasProperties: def.has_properties ?? null,
+    hasComment: def.has_comment ?? null,
+    hasAttachments: def.has_attachments ?? null,
+    hasChronology: def.has_chronology ?? null,
     sort: def.sort,
     order: def.order,
     savedFilterId: filter.id,
     panelWidth: state.panelWidth,
-    typeListHeight: state.typeListHeight,
-    linkTypeListHeight: state.linkTypeListHeight,
   });
   if (saveNameInput !== null) saveNameInput.value = filter.name;
   callbacks?.onApply();
@@ -940,9 +1379,11 @@ async function saveCurrentFilter(): Promise<void> {
   }
   const definition = {
     ...(state.keywords.trim() !== '' ? { keywords: state.keywords.trim() } : {}),
+    ...(state.parentIds.length > 0 ? { parent_ids: state.parentIds } : {}),
     ...(state.typeIds.length > 0 ? { type_ids: state.typeIds } : {}),
     ...(state.linkTypeIds.length > 0 ? { link_type_ids: state.linkTypeIds } : {}),
     ...(buildConditions().length > 0 ? { properties: buildConditions() } : {}),
+    ...buildExtraFilter(),
     ...(store.state.showInactive ? { show_inactive: true } : {}),
     sort: state.sort,
     order: state.order,

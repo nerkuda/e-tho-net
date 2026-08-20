@@ -44,6 +44,7 @@ import {
 import {
   applyPanelWidth,
   buildConditions,
+  buildExtraFilter,
   FILTER_W_MAX,
   FILTER_W_MIN,
   getFilterState,
@@ -115,12 +116,18 @@ export async function ensureStructuresInitialised(): Promise<void> {
   await applyQuery(true);
 }
 
+/** A tri-state field of the persisted JSON: `true`/`false`, anything else → null. */
+function parseTriState(value: unknown): boolean | null {
+  return value === true || value === false ? value : null;
+}
+
 /** Parses the persisted L4 `structures_state` JSON (unknown input, safe defaults). */
 function parseFilterState(raw: string): FilterState {
   try {
     const parsed = JSON.parse(raw) as Partial<FilterState>;
     return {
       keywords: typeof parsed.keywords === 'string' ? parsed.keywords : '',
+      parentIds: Array.isArray(parsed.parentIds) ? parsed.parentIds.filter((v) => typeof v === 'string') : [],
       typeIds: Array.isArray(parsed.typeIds) ? parsed.typeIds.filter((v) => typeof v === 'string') : [],
       linkTypeIds: Array.isArray(parsed.linkTypeIds)
         ? parsed.linkTypeIds.filter((v) => typeof v === 'string')
@@ -131,6 +138,10 @@ function parseFilterState(raw: string): FilterState {
               typeof c === 'object' && c !== null && typeof c.propertyId === 'string',
           )
         : [],
+      hasProperties: parseTriState(parsed.hasProperties),
+      hasComment: parseTriState(parsed.hasComment),
+      hasAttachments: parseTriState(parsed.hasAttachments),
+      hasChronology: parseTriState(parsed.hasChronology),
       sort: parsed.sort === 'alpha' || parsed.sort === 'created' || parsed.sort === 'viewed' ? parsed.sort : 'created',
       order: parsed.order === 'asc' || parsed.order === 'desc' ? parsed.order : 'asc',
       savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,
@@ -138,14 +149,6 @@ function parseFilterState(raw: string): FilterState {
         typeof parsed.panelWidth === 'number' &&
         Number.isFinite(parsed.panelWidth)
           ? parsed.panelWidth
-          : null,
-      typeListHeight:
-        typeof parsed.typeListHeight === 'number' && Number.isFinite(parsed.typeListHeight)
-          ? parsed.typeListHeight
-          : null,
-      linkTypeListHeight:
-        typeof parsed.linkTypeListHeight === 'number' && Number.isFinite(parsed.linkTypeListHeight)
-          ? parsed.linkTypeListHeight
           : null,
     };
   } catch {
@@ -169,7 +172,7 @@ function persistFilterState(): void {
 /** Builds the wire filter from the panel state (empty arrays dropped). */
 function buildFilter(): StructureFilter {
   const state = getFilterState();
-  const filter: StructureFilter = {};
+  const filter: StructureFilter = { ...buildExtraFilter() };
   if (state.keywords.trim() !== '') filter.keywords = state.keywords.trim();
   if (state.typeIds.length > 0) filter.type_ids = state.typeIds;
   if (state.linkTypeIds.length > 0) filter.link_type_ids = state.linkTypeIds;
