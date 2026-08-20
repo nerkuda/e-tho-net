@@ -25,7 +25,9 @@
  */
 
 import {
+  buildLikePattern,
   EtnError,
+  parseFilterKeywords,
   SEARCH_SCOPES,
   TRAVERSAL_DEFAULTS,
   type IconKind,
@@ -70,16 +72,32 @@ function tokenize(text: string): string[] {
 }
 
 /**
- * Build a safe FTS5 MATCH expression from user input. Each token is wrapped in a
- * phrase literal (double quotes stripped first, so it cannot break out) with the
- * FTS5 prefix suffix `*`; tokens join via implicit AND (or explicit OR). Returns
- * an empty string when no usable tokens remain — callers treat that as "no match".
+ * Build a safe FTS5 MATCH expression from user input using the keywords
+ * mini-syntax (03-server-api.md §6.10): every include word is a required
+ * phrase of word-prefixes, `-word` exclusions join as NOT. FTS5 cannot express
+ * an infix `*`, so a star degenerates into a phrase break (`сло*во` → the
+ * adjacent prefixes «сло» «во»); a trailing star folds into the FTS5 prefix
+ * marker the tokenizer already produced. Double quotes are stripped from
+ * tokens first, so the input cannot break out of the phrase literals. Returns
+ * an empty string when no usable include tokens remain — callers treat that
+ * as "no match" (a query of pure exclusions matches nothing).
  */
 function sanitizeFtsQuery(text: string, operator: 'AND' | 'OR' = 'AND'): string {
-  const tokens = tokenize(text);
-  if (tokens.length === 0) return '';
+  const phrase = (word: string): string => {
+    const tokens = tokenize(word.replace(/\*/g, ' '));
+    if (tokens.length === 0) return '';
+    return tokens.map((t) => `"${t}"*`).join(' ');
+  };
+  const { include, exclude } = parseFilterKeywords(text);
+  const positives = include.map(phrase).filter((p) => p !== '');
+  if (positives.length === 0) return '';
   const joiner = operator === 'OR' ? ' OR ' : ' ';
-  return tokens.map((t) => `"${t}"*`).join(joiner);
+  let match = positives.join(joiner);
+  for (const word of exclude) {
+    const negative = phrase(word);
+    if (negative !== '') match += ` NOT ${negative}`;
+  }
+  return match;
 }
 
 /**
@@ -606,6 +624,11 @@ export function search(
       : 'all';
   const match = sanitizeFtsQuery(request.q);
   const paging = clampPaging(request.limit, request.offset);
+  // Highlight terms: the include words only (`*` folded away, exclusions
+  // dropped) — they are what the matches above actually found in the text.
+  const highlightTerms = parseFilterKeywords(request.q).include.flatMap((w) =>
+    tokenize(w.replace(/\*/g, ' ')),
+  );
 
   const filters: SearchFilters = {
     showInactive: request.show_inactive ?? showInactiveDefault,
@@ -614,7 +637,7 @@ export function search(
     subtreeIds: request.in === 'subtree' ? collectSubtreeIds(ndb, request.from_thought_id) : null,
     limit: paging.limit,
     offset: paging.offset,
-    terms: tokenize(request.q),
+    terms: highlightTerms,
   };
 
   const empty: SearchResponse = {
@@ -698,8 +721,10 @@ function norm(value: string): string {
  * `find_duplicates`).
  *
  * Match priority (strongest wins per candidate): exact `title_norm`, exact
- * `synonym_norm`, then partial (`title_norm LIKE %term%`) for the title and each
- * synonym. Results are ordered by match strength.
+ * `synonym_norm`, then partial — the keywords mini-syntax (03-server-api.md
+ * §6.10): every include word as an infix `LIKE` over `title_norm`/`synonym_norm`
+ * (`*` wildcards), `-word` exclusions, words joined with AND. Results are
+ * ordered by match strength.
  *
  * @param title - proposed thought title.
  * @param synonyms - optional proposed synonyms.
@@ -860,56 +885,47 @@ export function findDuplicates(
       }
     }
     // Partial (LIKE) — lowest priority; ensure() defaults to 'partial'.
-    // `%`/`_`/`\` in the input are escaped so they stay literal.
-    const like = `%${n.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
-    const partialRows = ndb
-      .prepare(`SELECT ${DUP_COLUMNS} FROM thoughts WHERE title_norm LIKE ? ESCAPE '\\'${typeDirect}`)
-      .all(like, ...typeArgs) as Array<{
-      id: string;
-      title: string;
-      type_id: string | null;
-      icon: string | null;
-      icon_kind: string;
-      fg_color: string | null;
-      bg_color: string | null;
-      font_bold: number;
-      font_italic: number;
-      font_underline: number;
-      font_strike: number;
-      font_manual: number;
-    }>;
-    for (const r of partialRows) {
-      ensure(r);
-    }
-    // Partial on synonyms: the input is a substring of a stored synonym
-    // (08-ui-spec.md §4.4).
-    const partialSynRows = ndb
-      .prepare(
-        `SELECT ts.thought_id AS id, t.title AS title, t.type_id AS type_id,
-                t.icon AS icon, t.icon_kind AS icon_kind,
-                t.fg_color AS fg_color, t.bg_color AS bg_color,
-                t.font_bold AS font_bold, t.font_italic AS font_italic,
-                t.font_underline AS font_underline, t.font_strike AS font_strike,
-                t.font_manual AS font_manual
-         FROM thought_synonyms ts JOIN thoughts t ON t.id = ts.thought_id
-         WHERE ts.synonym_norm LIKE ? ESCAPE '\\'${typeJoin}`,
-      )
-      .all(like, ...typeArgs) as Array<{
-      id: string;
-      title: string;
-      type_id: string | null;
-      icon: string | null;
-      icon_kind: string;
-      fg_color: string | null;
-      bg_color: string | null;
-      font_bold: number;
-      font_italic: number;
-      font_underline: number;
-      font_strike: number;
-      font_manual: number;
-    }>;
-    for (const r of partialSynRows) {
-      ensure(r);
+    // The keywords mini-syntax of the map search (03-server-api.md §6.10):
+    // every include word must occur in the title or one of the synonyms
+    // (infix, `*` wildcards), a `-word` must not occur in either. Without
+    // include words there is nothing to anchor the candidates to — a pure
+    // negative query returns no partial hits (unlike the structures filter,
+    // the dialog must not list the whole network).
+    const keywords = parseFilterKeywords(n);
+    if (keywords.include.length > 0) {
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+      const push = (word: string, negate: boolean): void => {
+        const pattern = buildLikePattern(word);
+        const clause =
+          "(title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms ts" +
+          " WHERE ts.thought_id = thoughts.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
+        conditions.push(negate ? `NOT ${clause}` : clause);
+        params.push(pattern, pattern);
+      };
+      for (const word of keywords.include) push(word, false);
+      for (const word of keywords.exclude) push(word, true);
+      const partialRows = ndb
+        .prepare(
+          `SELECT ${DUP_COLUMNS} FROM thoughts WHERE ${conditions.join(' AND ')}${typeDirect}`,
+        )
+        .all(...params, ...typeArgs) as Array<{
+        id: string;
+        title: string;
+        type_id: string | null;
+        icon: string | null;
+        icon_kind: string;
+        fg_color: string | null;
+        bg_color: string | null;
+        font_bold: number;
+        font_italic: number;
+        font_underline: number;
+        font_strike: number;
+        font_manual: number;
+      }>;
+      for (const r of partialRows) {
+        ensure(r);
+      }
     }
     // Wildcard synonyms: stored `*`-patterns the input matches.
     for (const r of wildSynRows) {

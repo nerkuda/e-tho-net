@@ -2,7 +2,10 @@
  * Universal thought picker/add dialog (H14, 08-ui-spec.md §4; 09-scenarios.md
  * C1, C2; universalized for every thought-picking site, L20).
  *
- * Live duplicate search over `thoughts.findDuplicates`; single and multi
+ * Live duplicate search over `thoughts.findDuplicates` (the keywords
+ * mini-syntax of 03-server-api.md §6.10: all words AND, `*`, `-word`); the
+ * anchor thought is excluded from the candidates — a thought cannot link to
+ * itself; single and multi
  * modes; `|` synonym parsing per line; multi-line paste auto-switches to
  * multi mode; Enter adds the best match to the list (an exact title/synonym
  * hit reuses the existing thought, otherwise a new one is queued), Ctrl+Enter
@@ -300,6 +303,9 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
 
     let timer: number | null = null;
     let lastCandidates: DuplicateHit[] = [];
+    // The anchor thought cannot be linked to itself (the server rejects
+    // self-links), so it never shows up among the found candidates.
+    const anchorId = opts.anchor?.id ?? null;
 
     /** Debounced duplicate search for the current input. */
     function scheduleSearch(): void {
@@ -313,12 +319,13 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           }
           const parsed = parseTitleWithSynonyms(raw);
           try {
-            lastCandidates = await etn.thoughts.findDuplicates(
+            const hits = await etn.thoughts.findDuplicates(
               networkId,
               parsed.title,
               parsed.synonyms,
               searchFilter,
             );
+            lastCandidates = hits.filter((hit) => hit.id !== anchorId);
             renderCandidates(lastCandidates);
           } catch (err) {
             errorLine.textContent = errText(err);

@@ -378,6 +378,91 @@ describe(
       }
     });
 
+    it('search supports the keywords mini-syntax (-word exclusions)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Alpha dog');
+        seedThought(ndb, 'Alpha cat');
+        // `-word` excludes the thoughts containing the word.
+        const negated = search(ndb, { q: 'alpha -dog' });
+        assert.deepEqual(
+          negated.by_names.map((h) => h.title),
+          ['Alpha cat'],
+          'excluded word filters out its thoughts',
+        );
+        // Words are AND-matched regardless of order/adjacency.
+        const reordered = search(ndb, { q: 'cat alpha' });
+        assert.equal(reordered.by_names.length, 1);
+        // A query of pure exclusions matches nothing (no unary NOT in FTS5).
+        const pure = search(ndb, { q: '-dog' });
+        assert.equal(pure.by_names.length, 0);
+        assert.equal(pure.by_texts.length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search folds `*` wildcards into prefix phrases', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Счетчик электричества');
+        seedThought(ndb, 'счета за воду');
+        const res = search(ndb, { q: 'счет* -вод*' });
+        assert.deepEqual(
+          res.by_names.map((h) => h.title),
+          ['Счетчик электричества'],
+          '`счет* -вод*` matches the §6.10 example',
+        );
+        // The highlighter uses the folded include word, not the raw `счет*`.
+        assert.ok(res.by_names[0]!.snippet.includes('<mark>'));
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findDuplicates matches every include word, not the whole phrase', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const spread = seedThought(ndb, 'Ivan Petrovich Sidorov');
+        seedSynonym(ndb, spread, 'Ваня');
+        // Words in the input occur in the title but not as the typed phrase.
+        const hits = findDuplicates(ndb, 'ivan sidorov');
+        assert.ok(
+          hits.some((h) => h.id === spread),
+          'all words present (anywhere) → a candidate',
+        );
+        // One of the words may sit in a synonym while others sit in the title.
+        const mixed = findDuplicates(ndb, 'sidorov ваня');
+        assert.ok(mixed.some((h) => h.id === spread), 'words may come from the synonyms');
+        // A word that is nowhere → not a candidate.
+        assert.equal(
+          findDuplicates(ndb, 'ivan sidorov smith').some((h) => h.id === spread),
+          false,
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findDuplicates honours `*` wildcards and -word exclusions (§6.10)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const meter = seedThought(ndb, 'Счетчик электричества');
+        seedThought(ndb, 'счета за воду');
+        const hits = findDuplicates(ndb, 'счет* -вод*');
+        assert.deepEqual(
+          hits.map((h) => h.id),
+          [meter],
+          '`счет* -вод*` matches the §6.10 example',
+        );
+        assert.equal(hits[0]!.matched_on, 'partial');
+        // A pure negative query has nothing to anchor to → no candidates.
+        assert.equal(findDuplicates(ndb, '-вод').length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('findMentions finds wildcard synonyms with word-boundary semantics', () => {
       const ndb = createInMemoryNetworkDb();
       try {
