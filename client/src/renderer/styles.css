@@ -3497,12 +3497,15 @@ body.cloud-dragging * {
   margin-right: 5px;
 }
 
+/* One indent level ≈ 1/3 of the (double-wide) tree cloud (§15.5: the parent
+ * reveal shifts the node + its subtree right by about a third of the cloud's
+ * width, to make room for the ancestor column to its left). */
 .st-row {
   position: relative;
   display: flex;
   align-items: flex-start;
   margin-bottom: 12px;
-  padding-left: calc(var(--st-indent, 0) * 34px);
+  padding-left: calc(var(--st-indent, 0) * var(--cloud-width) * 2 / 3);
 }
 
 .st-row:last-child {
@@ -3612,7 +3615,7 @@ body.cloud-dragging * {
 
 .st-more {
   display: block;
-  margin: 6px 0 4px calc(var(--st-indent, 0) * 34px);
+  margin: 6px 0 4px calc(var(--st-indent, 0) * var(--cloud-width) * 2 / 3);
   padding: 6px 16px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);

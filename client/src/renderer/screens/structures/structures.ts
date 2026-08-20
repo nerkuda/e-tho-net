@@ -17,7 +17,6 @@ import {
   STRUCTURES_PAGE_SIZE,
   UI_STATE_KEY,
   type FocusEdge,
-  type HierarchyResponse,
   type StructureFilter,
   type StructurePropertyCondition,
   type ThoughtRef,
@@ -39,6 +38,7 @@ import {
   subtreeExpansionKeys,
   type ExpansionMap,
   type HierarchyDir,
+  type MoreMarker,
   type TreeRow,
 } from './layout.js';
 import {
@@ -72,8 +72,12 @@ export function isThoughtInResults(id: string): boolean {
 }
 /** Known thought metadata: roots + every expanded neighbour. */
 const refs = new Map<string, ThoughtRef>();
-/** Hierarchy data per expanded node direction, `${nodeKey}|${dir}`. */
-const hierarchy = new Map<string, HierarchyResponse>();
+/**
+ * Accumulated neighbor pages per expanded node direction, `${nodeKey}|${dir}`
+ * (§15.5 per-node pagination): `neighbors` grows with every «Показать ещё»,
+ * `hasMore` reflects the last fetched page's `has_more`.
+ */
+const hierarchy = new Map<string, { neighbors: ThoughtRef[]; hasMore: boolean }>();
 /** Ellipse-fill flags accumulated from hierarchy responses. */
 const directions = new Map<string, { has_incoming: boolean; has_outgoing: boolean }>();
 /** Active links between visible thoughts, deduped by id. */
@@ -224,9 +228,14 @@ async function applyQuery(reset: boolean): Promise<void> {
 // Expansion (§15.5)
 // ---------------------------------------------------------------------------
 
+/** Current flattened rows + per-node «Показать ещё» markers (§15.5). */
+function currentTree(): { rows: TreeRow[]; moreMarkers: MoreMarker[] } {
+  return flattenStructuresTree(resultIds, expansion, neighborsOf);
+}
+
 /** Current flattened rows (render + exclude computation share this). */
 function currentRows(): TreeRow[] {
-  return flattenStructuresTree(resultIds, expansion, neighborsOf);
+  return currentTree().rows;
 }
 
 /** Neighbour ids of an expanded node direction, from the hierarchy cache. */
@@ -266,7 +275,7 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
       showInactive: store.state.showInactive,
       excludeIds,
     });
-    hierarchy.set(`${row.key}|${dir}`, data);
+    hierarchy.set(`${row.key}|${dir}`, { neighbors: data.neighbors, hasMore: data.has_more });
     for (const ref of data.neighbors) refs.set(ref.id, ref);
     for (const [id, flags] of Object.entries(data.directions)) directions.set(id, flags);
     for (const edge of data.edges) edges.set(edge.id, edge);
@@ -274,6 +283,37 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
     renderTree();
   } catch (err) {
     notice(`Не удалось раскрыть: ${errText(err)}`, 'error');
+  }
+}
+
+/**
+ * Fetches the next 100-neighbor page of an already-expanded node direction
+ * and appends it to the accumulated cache (§15.5 per-node «Показать ещё»).
+ */
+async function loadMoreNeighbors(nodeKey: string, thoughtId: string, rootId: string, dir: HierarchyDir): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const cacheKey = `${nodeKey}|${dir}`;
+  const cached = hierarchy.get(cacheKey);
+  const offset = cached?.neighbors.length ?? 0;
+  const excludeIds = branchThoughtIds(currentRows(), rootId);
+  try {
+    const data = await etn.structures.hierarchy(networkId, thoughtId, {
+      dir,
+      showInactive: store.state.showInactive,
+      excludeIds,
+      offset,
+    });
+    hierarchy.set(cacheKey, {
+      neighbors: [...(cached?.neighbors ?? []), ...data.neighbors],
+      hasMore: data.has_more,
+    });
+    for (const ref of data.neighbors) refs.set(ref.id, ref);
+    for (const [id, flags] of Object.entries(data.directions)) directions.set(id, flags);
+    for (const edge of data.edges) edges.set(edge.id, edge);
+    renderTree();
+  } catch (err) {
+    notice(`Не удалось загрузить ещё: ${errText(err)}`, 'error');
   }
 }
 
@@ -484,8 +524,17 @@ function renderSignature(): string {
 function renderTree(): void {
   if (host === null || resultsHost === null) return;
   applyCanvasScaleVars(host);
-  const rows = currentRows();
+  const { rows, moreMarkers } = currentTree();
   clear(resultsHost);
+
+  // Markers with a fresh «has_more» flag, keyed by the row they trail.
+  const markersByAfterKey = new Map<string, MoreMarker>();
+  for (const marker of moreMarkers) {
+    if (hierarchy.get(`${marker.nodeKey}|${marker.dir}`)?.hasMore === true) {
+      markersByAfterKey.set(marker.afterKey, marker);
+    }
+  }
+  const rowByKey = new Map(rows.map((r) => [r.key, r]));
 
   const selection = new Set(store.state.selection);
   // Every filter-result root opens its own framed branch (§15.5): the root row,
@@ -500,6 +549,9 @@ function renderTree(): void {
       resultsHost.append(branch);
     }
     branch.append(buildRow(row, selection));
+    const marker = markersByAfterKey.get(row.key);
+    const node = marker !== undefined ? rowByKey.get(marker.nodeKey) : undefined;
+    if (marker !== undefined && node !== undefined) branch.append(buildMoreButton(marker, node));
   }
 
   if (total === 0) {
@@ -537,6 +589,15 @@ function buildRow(row: TreeRow, selection: Set<string>): HTMLElement {
   if (row.root) rowEl.append(div('st-root-marker'));
   rowEl.append(buildCloud(row, selection));
   return rowEl;
+}
+
+/** Builds one per-node «Показать ещё» button (§15.5 pagination). */
+function buildMoreButton(marker: MoreMarker, node: TreeRow): HTMLElement {
+  const btn = el('button', 'st-more', 'Показать ещё');
+  btn.type = 'button';
+  btn.style.setProperty('--st-indent', String(marker.indent));
+  btn.addEventListener('click', () => void loadMoreNeighbors(marker.nodeKey, node.thoughtId, node.rootId, marker.dir));
+  return btn;
 }
 
 /** Builds one thought cloud: same visual language as the canvas (§15.4). */
@@ -792,7 +853,7 @@ async function reloadAll(): Promise<void> {
           showInactive: store.state.showInactive,
           excludeIds,
         });
-        hierarchy.set(cacheKey, data);
+        hierarchy.set(cacheKey, { neighbors: data.neighbors, hasMore: data.has_more });
         for (const ref of data.neighbors) refs.set(ref.id, ref);
         for (const [id, flags2] of Object.entries(data.directions)) directions.set(id, flags2);
         for (const edge of data.edges) edges.set(edge.id, edge);

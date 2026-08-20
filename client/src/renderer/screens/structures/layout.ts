@@ -40,6 +40,24 @@ export type NeighbourLookup = (
   dir: HierarchyDir,
 ) => string[];
 
+/**
+ * Insertion point for a per-node «Показать ещё» button (§15.5 pagination):
+ * `afterKey` is the row after which the button renders (the last row of that
+ * direction's expansion batch, however deep its own nested expansions go).
+ */
+export interface MoreMarker {
+  afterKey: string;
+  nodeKey: string;
+  dir: HierarchyDir;
+  indent: number;
+}
+
+/** Result of {@link flattenStructuresTree}. */
+export interface TreeFlattenResult {
+  rows: TreeRow[];
+  moreMarkers: MoreMarker[];
+}
+
 /** Safety cap: a branch may not nest deeper than this (cycle guard, L15). */
 export const MAX_TREE_DEPTH = 40;
 
@@ -60,16 +78,29 @@ export function parentKey(nodeKey: string, parentId: string): string {
 /**
  * Flattens the tree: for every root, rows are emitted depth-first. Expanding
  * the children of a node emits its child rows right below it (indent + 1).
- * Expanding the parents emits the parent rows above with the node's own indent
- * — the node itself (and everything below it) shifts one level right
- * (08-ui-spec.md §15.5).
+ *
+ * Expanding the parents of a **descendant-side** row (a filter-result root or
+ * a `child`-via row) starts a new ancestor column: its immediate parents are
+ * emitted above it at the row's own (pre-shift) indent, and the row itself —
+ * plus everything already expanded below it — shifts one level right.
+ * Expanding the parents of a row that is **itself already an ancestor**
+ * (`via.role === 'parent'`) does NOT shift that row again: the further
+ * ancestors join the SAME column (same indent), stacking above it — so a
+ * multi-generation ancestor chain stays in one column instead of walking
+ * further left with every extra generation (08-ui-spec.md §15.5).
  */
 export function flattenStructuresTree(
   roots: string[],
   expansion: ExpansionMap,
   neighborsOf: NeighbourLookup,
-): TreeRow[] {
+): TreeFlattenResult {
   const rows: TreeRow[] = [];
+  const moreMarkers: MoreMarker[] = [];
+  let lastKey: string | null = null;
+  const pushRow = (row: TreeRow): void => {
+    rows.push(row);
+    lastKey = row.key;
+  };
   const emit = (
     key: string,
     thoughtId: string,
@@ -79,10 +110,12 @@ export function flattenStructuresTree(
     depth: number,
   ): void => {
     if (depth > MAX_TREE_DEPTH) return;
+    const isAncestorRow = via !== null && via.role === 'parent';
     const flags = expansion.get(key);
     let selfIndent = indent;
     if (flags?.parents === true) {
-      for (const p of neighborsOf(key, thoughtId, 'parents')) {
+      const parents = neighborsOf(key, thoughtId, 'parents');
+      for (const p of parents) {
         emit(
           parentKey(key, p),
           p,
@@ -92,19 +125,28 @@ export function flattenStructuresTree(
           depth + 1,
         );
       }
-      selfIndent = indent + 1;
+      if (parents.length > 0 && lastKey !== null) {
+        moreMarkers.push({ afterKey: lastKey, nodeKey: key, dir: 'parents', indent });
+      }
+      // An ancestor row stays put — its own further ancestors join its column
+      // instead of pushing it right; only descendant-side rows shift.
+      if (!isAncestorRow) selfIndent = indent + 1;
     }
-    rows.push({ key, thoughtId, rootId, root: via === null, indent: selfIndent, via });
+    pushRow({ key, thoughtId, rootId, root: via === null, indent: selfIndent, via });
     if (flags?.children === true) {
-      for (const c of neighborsOf(key, thoughtId, 'children')) {
+      const children = neighborsOf(key, thoughtId, 'children');
+      for (const c of children) {
         emit(childKey(key, c), c, selfIndent + 1, rootId, { otherId: thoughtId, role: 'child' }, depth + 1);
+      }
+      if (children.length > 0 && lastKey !== null) {
+        moreMarkers.push({ afterKey: lastKey, nodeKey: key, dir: 'children', indent: selfIndent + 1 });
       }
     }
   };
   for (const root of roots) {
     emit(root, root, 0, root, null, 0);
   }
-  return rows;
+  return { rows, moreMarkers };
 }
 
 /** All thought ids currently shown in one root's branch (dedup input, §15.5). */

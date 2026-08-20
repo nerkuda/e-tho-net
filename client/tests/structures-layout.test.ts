@@ -55,7 +55,7 @@ describe('flattenStructuresTree', () => {
   const lookup: NeighbourLookup = (_key, thoughtId, dir) => neighbors[thoughtId]?.[dir] ?? [];
 
   it('lists roots without expansion', () => {
-    const rows = flattenStructuresTree(['a', 'x'], new Map(), lookup);
+    const { rows } = flattenStructuresTree(['a', 'x'], new Map(), lookup);
     assert.deepEqual(
       rows.map((r) => [r.thoughtId, r.indent, r.via]),
       [
@@ -71,7 +71,7 @@ describe('flattenStructuresTree', () => {
 
   it('flags only the filter-result rows as roots', () => {
     const expansion: ExpansionMap = new Map([['a', { children: true }]]);
-    const rows = flattenStructuresTree(['a'], expansion, lookup);
+    const { rows } = flattenStructuresTree(['a'], expansion, lookup);
     assert.deepEqual(
       rows.map((r) => r.root),
       [true, false, false],
@@ -80,7 +80,7 @@ describe('flattenStructuresTree', () => {
 
   it('emits children below the node with indent + 1 and a child via', () => {
     const expansion: ExpansionMap = new Map([['a', { children: true }]]);
-    const rows = flattenStructuresTree(['a'], expansion, lookup);
+    const { rows } = flattenStructuresTree(['a'], expansion, lookup);
     assert.deepEqual(
       rows.map((r) => [r.key, r.thoughtId, r.indent, r.via?.role ?? null]),
       [
@@ -103,7 +103,7 @@ describe('flattenStructuresTree', () => {
       ['a', { children: true }],
       [childKey('a', 'b'), { parents: true, children: true }],
     ]);
-    const rows = flattenStructuresTree(['a'], expansion, lookupKeyed);
+    const { rows } = flattenStructuresTree(['a'], expansion, lookupKeyed);
     assert.deepEqual(
       rows.map((r) => [r.key, r.indent, r.via?.role ?? null]),
       [
@@ -121,9 +121,38 @@ describe('flattenStructuresTree', () => {
     );
   });
 
+  it('keeps a multi-generation ancestor chain in one column (§15.5)', () => {
+    // b's parent p is revealed, then p's own parent q is revealed too: q must
+    // join p's column (same indent), not walk one level further left, and b
+    // shifts right exactly once regardless of how many ancestors are shown.
+    const lookupKeyed: NeighbourLookup = (key, thoughtId, dir) => {
+      if (key === childKey('a', 'b') && dir === 'parents') return ['p'];
+      if (key === parentKey(childKey('a', 'b'), 'p') && dir === 'parents') return ['q'];
+      return lookup(key, thoughtId, dir);
+    };
+    const expansion: ExpansionMap = new Map([
+      ['a', { children: true }],
+      [childKey('a', 'b'), { parents: true }],
+      [parentKey(childKey('a', 'b'), 'p'), { parents: true }],
+    ]);
+    const { rows } = flattenStructuresTree(['a'], expansion, lookupKeyed);
+    assert.deepEqual(
+      rows.map((r) => [r.key, r.indent, r.via?.role ?? null]),
+      [
+        ['a', 0, null],
+        // q (older generation) sits above p, in the SAME column as p.
+        [parentKey(parentKey(childKey('a', 'b'), 'p'), 'q'), 1, 'parent'],
+        [parentKey(childKey('a', 'b'), 'p'), 1, 'parent'],
+        // b shifted right exactly once, not once per revealed ancestor.
+        [childKey('a', 'b'), 2, 'child'],
+        [childKey('a', 'v'), 1, 'child'],
+      ],
+    );
+  });
+
   it('marks each row with its root branch (per-branch dedup scope)', () => {
     const expansion: ExpansionMap = new Map([['a', { children: true }]]);
-    const rows = flattenStructuresTree(['a', 'b'], expansion, lookup);
+    const { rows } = flattenStructuresTree(['a', 'b'], expansion, lookup);
     for (const row of rows) {
       if (row.thoughtId === 'b' && row.rootId === 'a') continue;
       if (row.thoughtId === 'b') assert.equal(row.rootId, 'b');
@@ -135,7 +164,7 @@ describe('flattenStructuresTree', () => {
 
 describe('branchThoughtIds / subtreeExpansionKeys', () => {
   it('collects the ids of one root branch only', () => {
-    const rows = flattenStructuresTree(
+    const { rows } = flattenStructuresTree(
       ['a', 'b'],
       new Map([
         ['a', { children: true }],
