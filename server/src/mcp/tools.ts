@@ -1,11 +1,11 @@
 /**
  * MCP tools (task F4, docs/05-mcp-server.md §4).
  *
- * Twenty-two tools in three groups:
+ * Twenty-four tools in three groups:
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
  *     path, links get, mentions, usage, comments get, export;
- *   * mutate (§4.2) — thought/link CRUD, comments.upsert, attachments.add,
- *     properties.set, set_active;
+ *   * mutate (§4.2) — thought/link CRUD, comments.upsert/update/delete,
+ *     attachments.add, properties.set, set_active;
  *   * dedupe (§4.3) — find_duplicates.
  *
  * Mutating tools are facades over the **same domain services as REST**
@@ -46,6 +46,7 @@ import {
 import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
 import {
   createComment,
+  deleteComment,
   getComment,
   getCommentsPreview,
   listComments,
@@ -116,7 +117,7 @@ const ThoughtChanges = z
 // ---------------------------------------------------------------------------
 
 /**
- * Register all twenty-one `etn.*` tools on a freshly built {@link McpServer}.
+ * Register all twenty-four `etn.*` tools on a freshly built {@link McpServer}.
  */
 export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
@@ -865,6 +866,105 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         return {
           id: comment.id,
           version: comment.version,
+          request_id: String(extra.requestId),
+        } satisfies McpMutationResult;
+      }),
+  );
+
+  const CommentChanges = z
+    .object({
+      title: z.string().nullable().optional(),
+      body_md: z.string().min(1).optional(),
+      valid_from: z.string().min(1).optional(),
+      valid_to: z.string().nullable().optional(),
+    })
+    .refine((c) => Object.keys(c).length > 0, { message: 'changes must not be empty' });
+  const UpdateCommentSchema = z.object({
+    network_id: NetworkId,
+    comment_id: z.string().min(1),
+    changes: CommentChanges,
+    expected_version: ExpectedVersion,
+  });
+  mcp.registerTool(
+    'etn.comments.update',
+    {
+      title: 'Изменить комментарий',
+      description:
+        'Patch an existing comment (chronological or permanent) addressed by `comment_id` — ' +
+        'last-write-wins per field. `valid_from`/`valid_to` apply to chronological entries ' +
+        'only and are ignored for permanent ones. `expected_version` enables optimistic ' +
+        'concurrency — on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }.',
+      inputSchema: UpdateCommentSchema,
+    },
+    (args, extra) =>
+      runTool(async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const comment = updateComment(
+          ndb,
+          args.comment_id,
+          args.changes,
+          args.expected_version,
+          rt.deps.auth.userId,
+        );
+        emitAgentEvent(
+          rt,
+          args.network_id,
+          'comment.updated',
+          { id: comment.id, changes: args.changes, version: comment.version },
+          extra.requestId,
+        );
+        auditAgentCall(rt, 'etn.comments.update', args.network_id, 'comment', comment.id, args);
+        return {
+          id: comment.id,
+          version: comment.version,
+          request_id: String(extra.requestId),
+        } satisfies McpMutationResult;
+      }),
+  );
+
+  const DeleteCommentSchema = z.object({
+    network_id: NetworkId,
+    comment_id: z.string().min(1),
+    expected_version: ExpectedVersion,
+  });
+  mcp.registerTool(
+    'etn.comments.delete',
+    {
+      title: 'Удалить комментарий',
+      description:
+        'Delete a comment (chronological or permanent) by `comment_id` together with all its ' +
+        'attachments to owners. Returns { id, version: 0 }.',
+      inputSchema: DeleteCommentSchema,
+    },
+    (args, extra) =>
+      runTool(async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const existing = getComment(ndb, args.comment_id);
+        if (existing === null) {
+          throw new Error(`ETN error [NOT_FOUND]: comment ${args.comment_id} not found`);
+        }
+        deleteComment(ndb, args.comment_id, args.expected_version);
+        emitAgentEvent(
+          rt,
+          args.network_id,
+          'comment.deleted',
+          {
+            owner_type: existing.owner_type,
+            owner_id: existing.owner_id,
+            id: args.comment_id,
+          },
+          extra.requestId,
+        );
+        auditAgentCall(rt, 'etn.comments.delete', args.network_id, 'comment', args.comment_id, {
+          expected_version: args.expected_version,
+        });
+        return {
+          id: args.comment_id,
+          version: 0,
           request_id: String(extra.requestId),
         } satisfies McpMutationResult;
       }),

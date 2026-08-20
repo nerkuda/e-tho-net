@@ -20,6 +20,7 @@ import type {
   PropertyOwnerType,
   SearchScope,
 } from '../enums.js';
+import type { CommentUpdateInput } from './comment.js';
 import type { PropertyValueValue } from './thought-type.js';
 
 /** All tool names exposed by the ETN MCP server (05-mcp-server.md §4). */
@@ -45,6 +46,8 @@ export const MCP_TOOL_NAMES = [
   'etn.links.create',
   'etn.links.delete',
   'etn.comments.upsert',
+  'etn.comments.update',
+  'etn.comments.delete',
   'etn.attachments.add',
   'etn.properties.set',
   // dedupe (§4.3)
@@ -163,6 +166,21 @@ export interface McpCommentsUpsertParams {
   body_md: string;
   valid_from?: string;
   valid_to?: string | null;
+}
+
+/** Parameters of `etn.comments.update` (05-mcp-server.md §4.2). */
+export interface McpCommentsUpdateParams {
+  network_id: string;
+  comment_id: string;
+  changes: CommentUpdateInput;
+  expected_version?: number;
+}
+
+/** Parameters of `etn.comments.delete` (05-mcp-server.md §4.2). */
+export interface McpCommentsDeleteParams {
+  network_id: string;
+  comment_id: string;
+  expected_version?: number;
 }
 
 /** Parameters of `etn.attachments.add` (05-mcp-server.md §4.2). */

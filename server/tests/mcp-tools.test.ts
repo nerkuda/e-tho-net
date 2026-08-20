@@ -613,6 +613,145 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.comments.update edits and etn.comments.delete removes a comment', async () => {
+    const ctx = await buildMcpContext();
+    let thoughtId = '';
+    let commentId = '';
+    try {
+      const events: AnyRealtimeEvent[] = [];
+      const unsubscribe = ctx.pubsub.subscribe(ctx.networkId, (event) => {
+        events.push(event as unknown as AnyRealtimeEvent);
+      });
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const created = await handle.client.callTool({
+            name: 'etn.thoughts.create',
+            arguments: { network_id: ctx.networkId, title: 'Мысль с правкой хронологии' },
+          });
+          thoughtId = toolJson<{ id: string }>(created).id;
+
+          const upserted = await handle.client.callTool({
+            name: 'etn.comments.upsert',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: thoughtId,
+              kind: 'chronological',
+              title: 'Запись',
+              body_md: 'Первоначальный текст',
+              valid_from: '2026-08-01',
+            },
+          });
+          assert.equal(upserted.isError, undefined, toolText(upserted));
+          commentId = toolJson<{ id: string; version: number }>(upserted).id;
+
+          // Patch body + title with optimistic concurrency.
+          const updated = await handle.client.callTool({
+            name: 'etn.comments.update',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: commentId,
+              changes: { body_md: 'Исправленный текст', title: 'Запись (правка)' },
+              expected_version: 1,
+            },
+          });
+          assert.equal(updated.isError, undefined, toolText(updated));
+          assert.equal(toolJson<{ version: number }>(updated).version, 2);
+
+          const got = await handle.client.callTool({
+            name: 'etn.comments.get',
+            arguments: { network_id: ctx.networkId, comment_id: commentId },
+          });
+          const after = toolJson<{
+            body_md: string;
+            title: string | null;
+            valid_from: string;
+            version: number;
+          }>(got);
+          assert.equal(after.body_md, 'Исправленный текст');
+          assert.equal(after.title, 'Запись (правка)');
+          assert.equal(after.valid_from, '2026-08-01');
+          assert.equal(after.version, 2);
+
+          // Stale expected_version → VERSION_CONFLICT.
+          const conflict = await handle.client.callTool({
+            name: 'etn.comments.update',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: commentId,
+              changes: { body_md: 'Никогда' },
+              expected_version: 1,
+            },
+          });
+          assert.equal(conflict.isError, true);
+          assert.match(toolText(conflict), /VERSION_CONFLICT/);
+
+          // Empty changes are rejected by the schema.
+          const emptyChanges = await handle.client.callTool({
+            name: 'etn.comments.update',
+            arguments: { network_id: ctx.networkId, comment_id: commentId, changes: {} },
+          });
+          assert.equal(emptyChanges.isError, true);
+
+          // Unknown comment id → NOT_FOUND.
+          const missing = await handle.client.callTool({
+            name: 'etn.comments.update',
+            arguments: {
+              network_id: ctx.networkId,
+              comment_id: 'no-such-comment',
+              changes: { body_md: 'Никогда' },
+            },
+          });
+          assert.equal(missing.isError, true);
+          assert.match(toolText(missing), /NOT_FOUND/);
+
+          // Delete, then the comment is gone.
+          const deleted = await handle.client.callTool({
+            name: 'etn.comments.delete',
+            arguments: { network_id: ctx.networkId, comment_id: commentId, expected_version: 2 },
+          });
+          assert.equal(deleted.isError, undefined, toolText(deleted));
+          assert.equal(toolJson<{ version: number }>(deleted).version, 0);
+
+          const gone = await handle.client.callTool({
+            name: 'etn.comments.get',
+            arguments: { network_id: ctx.networkId, comment_id: commentId },
+          });
+          assert.equal(gone.isError, true);
+          assert.match(toolText(gone), /NOT_FOUND/);
+
+          const missingDelete = await handle.client.callTool({
+            name: 'etn.comments.delete',
+            arguments: { network_id: ctx.networkId, comment_id: commentId },
+          });
+          assert.equal(missingDelete.isError, true);
+          assert.match(toolText(missingDelete), /NOT_FOUND/);
+        } finally {
+          await handle.close();
+        }
+
+        // Participants saw the same catalogue events as for human edits.
+        const types = events.map((e) => e.type);
+        assert.ok(types.includes('comment.updated'), `events: ${types.join(',')}`);
+        assert.ok(types.includes('comment.deleted'), `events: ${types.join(',')}`);
+        const deletedEvent = events.find((e) => e.type === 'comment.deleted');
+        assert.ok(deletedEvent !== undefined);
+        assert.equal(deletedEvent.data.id, commentId);
+        assert.equal(deletedEvent.data.owner_id, thoughtId);
+      } finally {
+        unsubscribe();
+      }
+
+      // Both mutating calls landed in audit_log.
+      const actions = ctx.sys.queryAudit({ category: 'data' }).map((a) => a.action);
+      assert.ok(actions.includes('etn.comments.update'));
+      assert.ok(actions.includes('etn.comments.delete'));
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('auth provider rejects garbage, disabled keys and disabled users (F2)', async () => {
     const ctx = await buildMcpContext();
     try {
