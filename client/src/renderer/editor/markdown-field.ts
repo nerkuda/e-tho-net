@@ -254,8 +254,8 @@ async function insertClipboardFiles(
   }
 }
 
-/** Rough MIME guess for clipboard files without a type (by extension). */
-function guessMimeFromName(name: string): string | null {
+/** Rough MIME guess for files without a type (by extension). */
+export function guessMimeFromName(name: string): string | null {
   const ext = name.toLowerCase().split('.').pop() ?? '';
   const map: Record<string, string> = {
     png: 'image/png',

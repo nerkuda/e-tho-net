@@ -28,7 +28,7 @@ import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
-import { etnimgUrl, createMarkdownField } from './markdown-field.js';
+import { etnimgUrl, createMarkdownField, guessMimeFromName } from './markdown-field.js';
 import {
   refreshTabCount,
   registerTabContent,
@@ -94,6 +94,53 @@ function utf8ToBase64(text: string): string {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
+}
+
+/** Attachment upload limit — mirrors the server's `ATTACHMENT_FILE_MAX_BYTES`. */
+const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Uploads a local file's content as a server-stored attachment
+ * (`POST …/attachments/file`, §11). `kind='file'` through the plain
+ * `POST …/attachments` only registers the path — no server copy, no
+ * `mime_type`, hence no preview; uploads land in `networks/<nid>/attachments/`
+ * next to `data.db` like clipboard pastes do.
+ */
+async function uploadLocalFile(
+  networkId: string,
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  filePath: string,
+  title: string | null,
+  description: string | null,
+): Promise<void> {
+  let blob: Blob;
+  try {
+    const res = await fetch(etnimgUrl(filePath));
+    if (!res.ok) throw new Error(res.status === 404 ? 'not found' : `HTTP ${res.status}`);
+    blob = await res.blob();
+  } catch {
+    throw new Error(`Файл не найден или недоступен по пути: ${filePath}`);
+  }
+  if (blob.size > ATTACHMENT_MAX_BYTES) {
+    throw new Error(`Файл больше ${ATTACHMENT_MAX_BYTES / (1024 * 1024)} МБ — лимит вложения.`);
+  }
+  // The etnimg protocol maps only common extensions; fall back to a guess so
+  // the server keeps the right file extension when storing the copy.
+  const mime =
+    blob.type !== '' && blob.type !== 'application/octet-stream'
+      ? blob.type
+      : (guessMimeFromName(filePath) ?? 'application/octet-stream');
+  const dataUrl = await blobToDataUrl(blob);
+  const attachment = await etn.attachments.uploadFile(networkId, ownerType, ownerId, {
+    title,
+    mime_type: mime,
+    data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1),
+  });
+  // The upload endpoint has no description field — patch it separately.
+  if (description !== null) {
+    await etn.attachments.update(networkId, attachment.id, { description });
+  }
 }
 
 /** Minimal HTML escaping for wrapping plain text into a view block. */
@@ -493,7 +540,9 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     const ok = await confirmDialog(
       'Удалить вложение',
       `Удалить вложение «${name}»?` +
-        (attachment.kind === 'file' ? ' Серверная копия файла будет удалена.' : ''),
+        (attachment.kind === 'file'
+          ? ' Серверская копия файла будет удалена, если файл не используется другими вложениями или иконками мыслей.'
+          : ''),
       true,
     );
     if (!ok) return;
@@ -622,13 +671,26 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
                 return;
               }
               try {
-                await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
-                  kind,
-                  url: kind === 'url' ? location : null,
-                  file_path: kind === 'file' ? location : null,
-                  title: titleInput.value.trim() || null,
-                  description: descInput.value.trim() || null,
-                });
+                if (kind === 'file') {
+                  // Upload the content so the server keeps a copy (preview,
+                  // other clients) — a bare file_path would only register it.
+                  const name = location.split(/[\\/]/).pop() ?? location;
+                  await uploadLocalFile(
+                    networkId,
+                    ctx.ownerType,
+                    ctx.ownerId,
+                    location,
+                    titleInput.value.trim() || name,
+                    descInput.value.trim() || null,
+                  );
+                } else {
+                  await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
+                    kind,
+                    url: location,
+                    title: titleInput.value.trim() || null,
+                    description: descInput.value.trim() || null,
+                  });
+                }
                 invalidateIndicators(ctx.ownerId);
                 close();
                 await reload();
