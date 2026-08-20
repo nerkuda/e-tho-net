@@ -3512,32 +3512,16 @@ body.cloud-dragging * {
   margin-bottom: 10px;
 }
 
-/* A tree cloud is twice the canvas width (§15.4). */
+/* The tree cloud matches the canvas cloud 1-to-1 (§15.4): same width, same
+ * ellipses (the canvas defaults apply), only the expand/fold cursor differs
+ * from the canvas drag cursor. */
 .st-row .st-cloud.cloud {
-  width: calc(var(--cloud-width) * 2);
   max-width: 100%;
   flex: 0 0 auto;
 }
 
-/* In the tree the ellipses expand/fold levels — a pointer, not a drag handle.
- * The 25% canvas width would be oversized on the double-wide tree clouds, so
- * the tree keeps fixed-size knobs — centered on the cloud width like the
- * canvas ellipses (§15.4: the cloud visuals match the canvas). */
 .st-row .cloud .ellipse {
-  left: 0;
-  right: 0;
-  margin: 0 auto;
-  width: 36px;
-  height: calc(8px * var(--cloud-zoom, 1));
   cursor: pointer;
-}
-
-.st-row .cloud .ellipse-top {
-  top: calc(-4px * var(--cloud-zoom, 1));
-}
-
-.st-row .cloud .ellipse-bottom {
-  bottom: calc(-4px * var(--cloud-zoom, 1));
 }
 
 .st-row .cloud .ellipse.st-expanded {

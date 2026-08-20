@@ -121,10 +121,10 @@ describe('flattenStructuresTree', () => {
     );
   });
 
-  it('keeps a multi-generation ancestor chain in one column (§15.5)', () => {
-    // b's parent p is revealed, then p's own parent q is revealed too: q must
-    // join p's column (same indent), not walk one level further left, and b
-    // shifts right exactly once regardless of how many ancestors are shown.
+  it('climbs the ancestor ladder — each generation reveal shifts the whole subtree (§15.5)', () => {
+    // b's parent p is revealed, then p's own parent q is revealed too: q
+    // appears at p's vacated position, p and b (its subordinate) shift one
+    // step right each — a right-climbing ladder, not a fixed single column.
     const lookupKeyed: NeighbourLookup = (key, thoughtId, dir) => {
       if (key === childKey('a', 'b') && dir === 'parents') return ['p'];
       if (key === parentKey(childKey('a', 'b'), 'p') && dir === 'parents') return ['q'];
@@ -140,11 +140,12 @@ describe('flattenStructuresTree', () => {
       rows.map((r) => [r.key, r.indent, r.via?.role ?? null]),
       [
         ['a', 0, null],
-        // q (older generation) sits above p, in the SAME column as p.
+        // q (older generation) sits above p at p's vacated column…
         [parentKey(parentKey(childKey('a', 'b'), 'p'), 'q'), 1, 'parent'],
-        [parentKey(childKey('a', 'b'), 'p'), 1, 'parent'],
-        // b shifted right exactly once, not once per revealed ancestor.
-        [childKey('a', 'b'), 2, 'child'],
+        // …p shifted one step right by its own reveal…
+        [parentKey(childKey('a', 'b'), 'p'), 2, 'parent'],
+        // …and b — subordinate to both reveals — at the third step.
+        [childKey('a', 'b'), 3, 'child'],
         [childKey('a', 'v'), 1, 'child'],
       ],
     );

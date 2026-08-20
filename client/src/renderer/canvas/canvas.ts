@@ -1008,8 +1008,12 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
 // Indicators (lazy, cached)
 // ---------------------------------------------------------------------------
 
-/** Enqueues an indicator fetch for a thought (deduplicated, cached). */
-function queueIndicatorLoad(id: string): void {
+/**
+ * Enqueues an indicator fetch for a thought (deduplicated, cached). Exported
+ * so the structures tree can share the same cache/queue for its clouds (L15,
+ * 08-ui-spec.md §15.4: clouds match the canvas 1-to-1, indicators included).
+ */
+export function queueIndicatorLoad(id: string): void {
   // Clouds are rebuilt on scroll/resize (virtualized zones); a cached value
   // must be re-applied to the fresh DOM instead of being skipped.
   const cached = indicatorCache.get(id);
@@ -1056,10 +1060,13 @@ async function loadIndicators(id: string): Promise<void> {
   }
 }
 
-/** Patches indicator cells of every rendered cloud with this id. */
+/**
+ * Patches indicator cells of every rendered cloud with this id, on the canvas
+ * AND the structures tree (both render the same `.cloud`/`.cloud-ind` markup,
+ * 08-ui-spec.md §15.4) — queried document-wide, not scoped to the canvas host.
+ */
 function applyIndicators(id: string, info: IndicatorInfo): void {
-  if (host === null) return;
-  for (const cloud of host.querySelectorAll<HTMLElement>(`.cloud[data-id="${id}"]`)) {
+  for (const cloud of document.querySelectorAll<HTMLElement>(`.cloud[data-id="${id}"]`)) {
     const cells = cloud.querySelectorAll<HTMLElement>('.cloud-ind .ind');
     const perm = cells[0];
     const chrono = cells[1];

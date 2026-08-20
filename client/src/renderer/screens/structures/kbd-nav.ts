@@ -1,23 +1,27 @@
 /**
  * Keyboard navigation over the «Структуры мыслей» results tree (L15,
- * 08-ui-spec.md §15.10) — the same spatial-cursor principle as the canvas
- * (§2.9, `canvas/kbd-nav.ts`), minus the parts that don't apply to a tree
- * without zones/manual order/a single focus cloud:
+ * 08-ui-spec.md §15.10).
  *
- * - arrow keys / Tab / Shift+Tab move a dashed cursor frame to the nearest
- *   rendered cloud in that direction (the results tree is never virtualized,
- *   so every cloud is always in the DOM — no zone-scroll retry needed);
- * - `Home`/`End` jump to the first/last rendered cloud;
+ * The tree behaves like a folder tree in Explorer (every node may have
+ * several parents), so the cursor walks the rows **sequentially** — the flat
+ * visual order of the rendered tree — instead of spatially:
+ *
+ * - `ArrowUp`/`ArrowDown` (and `Tab`/`Shift+Tab`) move to the previous/next
+ *   visible row, following the tree order exactly like Explorer;
+ * - `ArrowRight` expands the children of the cursor row (when it has any and
+ *   they are collapsed); otherwise it steps to the next row;
+ * - `ArrowLeft` collapses the children, else the parents, of the cursor row;
+ *   otherwise it steps to the previous row;
+ * - `Ctrl+ArrowUp`/`Ctrl+ArrowDown` toggle the parents/children expansion of
+ *   the cursor row (same as clicking its top/bottom ellipse);
+ * - `Home`/`End` jump to the first/last visible row;
  * - `Enter` opens the cursor thought in the editor (same as a click);
- * - `Ctrl+Up`/`Ctrl+Down` toggle the parents/children expansion of the
- *   cursor thought (same as clicking its top/bottom ellipse);
  * - `Escape` drops the cursor frame.
  *
  * There is no manual order and no separate "focus" thought in this view, so
  * `Ctrl+Shift+Up/Down` and `Ctrl+Enter` (canvas-only) are not wired here.
  */
 
-import { pickSpatialCandidate, type CloudBox } from '../../canvas/kbd-nav.js';
 import { store } from '../../state.js';
 
 /** Frame class applied to the cloud under the keyboard cursor (shared with the canvas). */
@@ -35,6 +39,15 @@ export interface StructuresKbdNavCallbacks {
 
 let callbacks: StructuresKbdNavCallbacks | null = null;
 
+/** One navigable tree row. */
+interface NavRow {
+  rowEl: HTMLElement;
+  cloud: HTMLElement;
+  id: string;
+  key: string;
+  rootId: string;
+}
+
 /** Wires the keyboard navigation onto the results host. */
 export function initStructuresKbdNav(host: HTMLElement, cb: StructuresKbdNavCallbacks): void {
   hostEl = host;
@@ -51,7 +64,7 @@ export function initStructuresKbdNav(host: HTMLElement, cb: StructuresKbdNavCall
     if (store.state.activeView !== 'structures') return;
     if (event.key === 'Tab') {
       event.preventDefault();
-      step(event.shiftKey ? -1 : 1, 0);
+      step(event.shiftKey ? -1 : 1);
       return;
     }
     if (event.ctrlKey || event.metaKey) {
@@ -70,19 +83,19 @@ export function initStructuresKbdNav(host: HTMLElement, cb: StructuresKbdNavCall
     switch (event.key) {
       case 'ArrowUp':
         event.preventDefault();
-        step(0, -1);
+        step(-1);
         break;
       case 'ArrowDown':
         event.preventDefault();
-        step(0, 1);
-        break;
-      case 'ArrowLeft':
-        event.preventDefault();
-        step(-1, 0);
+        step(1);
         break;
       case 'ArrowRight':
         event.preventDefault();
-        step(1, 0);
+        stepRight();
+        break;
+      case 'ArrowLeft':
+        event.preventDefault();
+        stepLeft();
         break;
       case 'Home':
         event.preventDefault();
@@ -117,23 +130,26 @@ export function syncStructuresCursor(): void {
     el.classList.remove(CURSOR_CLS);
   }
   if (cursorId === null) return;
-  cloudEl(cursorId)?.classList.add(CURSOR_CLS);
+  navRowOf(cursorId)?.cloud.classList.add(CURSOR_CLS);
 }
 
-function cloudEl(id: string): HTMLElement | null {
-  if (hostEl === null) return null;
-  return hostEl.querySelector<HTMLElement>(`.st-cloud.cloud[data-id="${CSS.escape(id)}"]`);
-}
-
-function visibleClouds(): HTMLElement[] {
+/** All rows in the flat visual (DOM) order — the sequential walk order. */
+function navRows(): NavRow[] {
   if (hostEl === null) return [];
-  return [...hostEl.querySelectorAll<HTMLElement>('.st-cloud.cloud')];
+  const out: NavRow[] = [];
+  for (const rowEl of hostEl.querySelectorAll<HTMLElement>('.st-row')) {
+    const cloud = rowEl.querySelector<HTMLElement>('.st-cloud.cloud');
+    const id = cloud?.dataset['id'];
+    const key = rowEl.dataset['key'];
+    const rootId = rowEl.dataset['root'];
+    if (cloud === null || id === undefined || key === undefined || rootId === undefined) continue;
+    out.push({ rowEl, cloud, id, key, rootId });
+  }
+  return out;
 }
 
-function boxOf(el: HTMLElement): CloudBox {
-  const r = el.getBoundingClientRect();
-  const id = el.dataset['id'];
-  return { id: id === undefined ? '' : id, x: r.left, y: r.top, w: r.width, h: r.height };
+function navRowOf(id: string): NavRow | null {
+  return navRows().find((r) => r.id === id) ?? null;
 }
 
 function setCursor(id: string | null): void {
@@ -141,47 +157,94 @@ function setCursor(id: string | null): void {
   syncStructuresCursor();
 }
 
-/** One arrow/Tab step: nearest cloud in the direction; the first press with no
- *  cursor lands on the first rendered cloud (§15.10). */
-function step(dx: -1 | 0 | 1, dy: -1 | 0 | 1): void {
+/** Up/Down (and Tab/Shift+Tab): one row back/forward in the flat tree order.
+ *  The first press with no cursor lands on the first row. */
+function step(delta: -1 | 1): void {
+  const rows = navRows();
+  if (rows.length === 0) return;
   if (cursorId === null) {
-    const first = visibleClouds()[0];
-    const id = first?.dataset['id'];
-    if (id === undefined) return;
-    setCursor(id);
-    first?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const first = rows[0];
+    if (first === undefined) return;
+    setCursor(first.id);
+    first.cloud.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     return;
   }
-  const originEl = cloudEl(cursorId);
-  if (originEl === null) {
+  const index = rows.findIndex((r) => r.id === cursorId);
+  if (index === -1) {
     setCursor(null);
     return;
   }
-  const clouds = visibleClouds();
-  const next = pickSpatialCandidate(clouds.map(boxOf), boxOf(originEl), dx, dy);
-  if (next === null) return;
-  const el = cloudEl(next.id);
-  if (el === null) return;
-  setCursor(next.id);
-  el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  const target = rows[index + delta];
+  if (target === undefined) return;
+  setCursor(target.id);
+  target.cloud.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
-/** Home/End: first/last rendered cloud (no zones to scroll to an edge here). */
+/** Explorer ArrowRight: expand children when possible, else step forward. */
+function stepRight(): void {
+  const rows = navRows();
+  if (rows.length === 0) return;
+  if (cursorId === null) {
+    const first = rows[0];
+    if (first !== undefined) {
+      setCursor(first.id);
+      first.cloud.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    return;
+  }
+  const current = navRowOf(cursorId);
+  if (current !== null && canExpand(current, 'children')) {
+    callbacks?.toggleExpand(current.key, current.id, current.rootId, 'children');
+    return;
+  }
+  step(1);
+}
+
+/** Explorer ArrowLeft: collapse children, then parents; else step backward. */
+function stepLeft(): void {
+  const current = cursorId === null ? null : navRowOf(cursorId);
+  if (current !== null && isExpanded(current, 'children')) {
+    callbacks?.toggleExpand(current.key, current.id, current.rootId, 'children');
+    return;
+  }
+  if (current !== null && isExpanded(current, 'parents')) {
+    callbacks?.toggleExpand(current.key, current.id, current.rootId, 'parents');
+    return;
+  }
+  step(-1);
+}
+
+/** Home/End: first/last row of the flat tree order. */
 function jumpToEdge(toStart: boolean): void {
-  const clouds = visibleClouds();
-  const el = toStart ? clouds[0] : clouds[clouds.length - 1];
-  const id = el?.dataset['id'];
-  if (id === undefined) return;
-  setCursor(id);
-  el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  const rows = navRows();
+  const target = toStart ? rows[0] : rows[rows.length - 1];
+  if (target === undefined) return;
+  setCursor(target.id);
+  target.cloud.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /** Ctrl+Up/Down: toggle the cursor thought's parents/children expansion. */
 function toggleCursorExpansion(dir: 'parents' | 'children'): void {
   if (cursorId === null || callbacks === null) return;
-  const rowEl = cloudEl(cursorId)?.closest<HTMLElement>('.st-row');
-  const key = rowEl?.dataset['key'];
-  const rootId = rowEl?.dataset['root'];
-  if (key === undefined || rootId === undefined) return;
-  callbacks.toggleExpand(key, cursorId, rootId, dir);
+  const current = navRowOf(cursorId);
+  if (current === null) return;
+  callbacks.toggleExpand(current.key, current.id, current.rootId, dir);
+}
+
+/** True when the direction's ellipse is filled (neighbors exist) — `filled`. */
+function canExpand(row: NavRow, dir: 'parents' | 'children'): boolean {
+  const ellipse =
+    dir === 'children'
+      ? row.cloud.querySelector<HTMLElement>('.ellipse-bottom')
+      : row.cloud.querySelector<HTMLElement>('.ellipse-top');
+  return ellipse?.classList.contains('filled') === true && !isExpanded(row, dir);
+}
+
+/** True when the direction is currently expanded (`.st-expanded` on the ellipse). */
+function isExpanded(row: NavRow, dir: 'parents' | 'children'): boolean {
+  const ellipse =
+    dir === 'children'
+      ? row.cloud.querySelector<HTMLElement>('.ellipse-bottom')
+      : row.cloud.querySelector<HTMLElement>('.ellipse-top');
+  return ellipse?.classList.contains('st-expanded') === true;
 }

@@ -22,11 +22,17 @@ import {
   type ThoughtRef,
 } from '@etn/shared';
 
-import { applyCanvasScaleVars, applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canvas/canvas.js';
+import {
+  applyCanvasScaleVars,
+  applyCloudStyle,
+  applyThoughtIcon,
+  queueIndicatorLoad,
+  resolveCloudStyle,
+} from '../../canvas/canvas.js';
 import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
 import { invalidateHistoryBar } from '../history-bar.js';
-import { clear, div, el, setTooltip } from '../../lib/dom.js';
+import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
@@ -584,7 +590,7 @@ function renderTree(): void {
 
 /** Toggles one node's expansion by its DOM-carried identity (§15.10 Ctrl+↑/↓). */
 function toggleExpandFor(key: string, thoughtId: string, rootId: string, dir: HierarchyDir): void {
-  void toggleExpand({ key, thoughtId, rootId, root: false, indent: 0, via: null }, dir);
+  void toggleExpand({ key, thoughtId, rootId, root: false, ownIndent: 0, indent: 0, via: null }, dir);
 }
 
 /** Builds one tree row: the root triangle (for filter results) + a cloud. */
@@ -600,7 +606,11 @@ function buildRow(row: TreeRow, selection: Set<string>): HTMLElement {
     rowEl.dataset['role'] = row.via.role;
   }
   if (row.root) rowEl.append(div('st-root-marker'));
-  rowEl.append(buildCloud(row, selection));
+  const cloud = buildCloud(row, selection);
+  rowEl.append(cloud);
+  // Patch the indicator row from the shared canvas indicator cache/queue
+  // (the cache hit applies synchronously to the fresh DOM, §15.4).
+  queueIndicatorLoad(row.thoughtId);
   return rowEl;
 }
 
@@ -646,8 +656,10 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   const expanded = expansion.get(row.key);
   if (expanded?.parents === true) topEllipse.classList.add('st-expanded');
   if (expanded?.children === true) bottomEllipse.classList.add('st-expanded');
-  setTooltip(topEllipse, 'Родители');
-  setTooltip(bottomEllipse, 'Дети');
+  // Same wording as the canvas ellipse tooltip (§15.4: the cloud matches the
+  // canvas 1-to-1) — connectivity state, not the expand/collapse action.
+  setTooltip(topEllipse, dir?.has_incoming === true ? 'Есть входящие связи' : 'Входящих связей нет');
+  setTooltip(bottomEllipse, dir?.has_outgoing === true ? 'Есть исходящие связи' : 'Исходящих связей нет');
   topEllipse.addEventListener('click', (event) => {
     if (event.ctrlKey || event.metaKey) {
       void addNeighborsOf(row.thoughtId, 'parent');
@@ -665,11 +677,19 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
 
   const iconBox = div('cloud-icon');
   applyThoughtIcon(iconBox, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
-  const title = el('div', 'cloud-title', ref?.title ?? '…');
+  const title = el('div', 'cloud-title', ref?.title ?? '—');
   setTooltip(title, ref?.title ?? '');
 
+  // Indicator row identical to the canvas cloud (§15.4: 📝/📅/📎, patched
+  // asynchronously via the shared indicator queue of canvas.ts).
+  const ind = div('cloud-ind');
+  const perm = span('📝', 'ind dim');
+  const chrono = span('📅', 'ind dim');
+  const att = span('📎', 'ind dim');
+  ind.append(perm, chrono, att);
+
   const main = div('cloud-main');
-  main.append(title);
+  main.append(title, ind);
   cloud.append(topEllipse, iconBox, main, bottomEllipse);
 
   // Click opens the editor without moving the canvas focus; Ctrl toggles the
