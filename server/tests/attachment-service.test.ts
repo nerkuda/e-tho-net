@@ -345,6 +345,72 @@ describe(
       }
     });
 
+    it('deleteAttachment keeps a stored file shared with another attachment', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-shared', path.join(tmp, 'data.db'));
+      try {
+        const t1 = seedThought(ndb, 'One');
+        const t2 = seedThought(ndb, 'Two');
+        const stored = createAttachmentFile(
+          ndb,
+          'thought',
+          t1,
+          { title: 'pic', mime_type: 'image/png', data_base64: Buffer.from('fakepng').toString('base64') },
+          USER,
+        );
+        assert.ok(stored.file_path !== null && existsSync(stored.file_path));
+        // A second row resolving to the same file (possible via PATCH file_path).
+        const twin = createAttachment(
+          ndb,
+          'thought',
+          t2,
+          { kind: 'file', file_path: stored.file_path, mime_type: 'image/png' },
+          USER,
+        );
+        deleteAttachment(ndb, stored.id);
+        assert.ok(existsSync(stored.file_path), 'shared file must survive one row deletion');
+        deleteAttachment(ndb, twin.id);
+        assert.ok(!existsSync(stored.file_path!), 'file must go with the last reference');
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('deleteAttachment keeps the file while a thought icon is backed by it', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-icon', path.join(tmp, 'data.db'));
+      try {
+        const t = seedThought(ndb);
+        const stored = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          { title: 'pic', mime_type: 'image/png', data_base64: Buffer.from('fakepng').toString('base64') },
+          USER,
+        );
+        assert.ok(stored.file_path !== null && existsSync(stored.file_path));
+        ndb.prepare('UPDATE thoughts SET icon_attachment_id = ? WHERE id = ?').run(stored.id, t);
+        deleteAttachment(ndb, stored.id);
+        const row = ndb
+          .prepare('SELECT icon_attachment_id FROM thoughts WHERE id = ?')
+          .get(t) as { icon_attachment_id: string | null };
+        assert.equal(row.icon_attachment_id, null, 'the dangling reference is still cleared');
+        assert.ok(existsSync(stored.file_path), 'icon-backed file must stay on disk');
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
     it('updateAttachment moves the attachment to another owner', () => {
       const ndb = createInMemoryNetworkDb();
       try {

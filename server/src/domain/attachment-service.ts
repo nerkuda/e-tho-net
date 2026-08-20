@@ -458,22 +458,50 @@ export function removeStoredFile(
 }
 
 /**
+ * True when a live attachment row still resolves to the same stored file.
+ * Callers run this AFTER deleting the row(s) they are purging, so every row
+ * left in the table is a real remaining user of the file.
+ */
+export function storedFileInUse(ndb: NetworkDb, resolvedPath: string): boolean {
+  const rows = ndb
+    .prepare("SELECT file_path FROM attachments WHERE kind = 'file' AND file_path IS NOT NULL")
+    .all() as { file_path: string }[];
+  return rows.some((row) => path.resolve(row.file_path) === resolvedPath);
+}
+
+/**
  * Delete an attachment (docs/03-server-api.md §11). Throws `NOT_FOUND` (404).
  *
  * When the attachment is `kind='file'` and its `file_path` points **inside the
  * network's `attachments/` directory** (a server-stored upload), the stored
- * file is removed together with the row (see {@link removeStoredFile}).
+ * file is removed together with the row (see {@link removeStoredFile}) — but
+ * only when nothing else uses it: another attachment resolving to the same
+ * file keeps it (a second reference is possible via `PATCH …/file_path`), and
+ * so does a thought icon backed by this attachment (`icon_attachment_id`,
+ * Ctrl-hover reads the full picture from the file). Otherwise only the row is
+ * deleted and the file stays.
  */
 export function deleteAttachment(ndb: NetworkDb, id: string): void {
   ndb.transaction(() => {
     const current = getAttachmentOrThrow(ndb, id);
+    // Check the icon reference BEFORE it is reset below — the file must
+    // outlive the row for the icon's full picture (L16).
+    const iconBacksFile =
+      current.kind === 'file' &&
+      ndb.prepare('SELECT 1 FROM thoughts WHERE icon_attachment_id = ? LIMIT 1').get(id) !==
+      undefined;
     ndb.prepare('DELETE FROM attachments WHERE id = ?').run(id);
     // Thoughts may reference this attachment as the backing picture of their
     // icon (L16) — drop the dangling reference; the icon preview itself stays.
     ndb
       .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
       .run(id);
-    removeStoredFile(ndb, current.kind, current.file_path);
+    const keepFile =
+      iconBacksFile ||
+      (current.kind === 'file' &&
+        current.file_path !== null &&
+        storedFileInUse(ndb, path.resolve(current.file_path)));
+    if (!keepFile) removeStoredFile(ndb, current.kind, current.file_path);
   });
 }
 

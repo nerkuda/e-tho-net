@@ -20,8 +20,10 @@
 
 import { type AttachmentKind } from '@etn/shared';
 
+import path from 'node:path';
+
 import type { NetworkDb } from '../db/network-db.js';
-import { removeStoredFile } from './attachment-service.js';
+import { removeStoredFile, storedFileInUse } from './attachment-service.js';
 
 /** Polymorphic owner of comments/attachments/property values. */
 type OwnerType = 'thought' | 'link';
@@ -103,6 +105,15 @@ function purgeChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): v
       )
       .run(...attachmentIds);
     for (const row of attachmentRows) {
+      // A live attachment may still resolve to the same stored file (a second
+      // reference is possible via `PATCH …/file_path`) — keep the file then.
+      if (
+        row.kind === 'file' &&
+        row.file_path !== null &&
+        storedFileInUse(ndb, path.resolve(row.file_path))
+      ) {
+        continue;
+      }
       removeStoredFile(ndb, row.kind, row.file_path);
     }
   }
