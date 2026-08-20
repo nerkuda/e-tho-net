@@ -13,11 +13,16 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 import type { EtnApi, IpcInvokePayload } from '../main/ipc/contract.js';
+import { cleanIpcError } from './ipc-error.js';
 
 /** Invoke a main-process handler over the single IPC channel. */
 function invoke<T>(method: string, ...args: unknown[]): Promise<T> {
   const payload: IpcInvokePayload = { method, args };
-  return ipcRenderer.invoke('etn:invoke', payload) as Promise<T>;
+  return ipcRenderer.invoke('etn:invoke', payload).catch((err: unknown) => {
+    // Drop Electron's `Error invoking remote method …: EtnError: …` wrapper —
+    // the UI shows the server's message verbatim.
+    throw cleanIpcError(err);
+  }) as Promise<T>;
 }
 
 /** Build the typed `window.etn` object from the `EtnApi` contract. */

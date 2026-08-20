@@ -143,17 +143,27 @@ export function showThoughtTypesDialog(): void {
 
   // L21: the root type is always expanded; everything else starts collapsed.
   let expanded = new Set<string>();
+  // Last loaded catalogue — tree toggles re-render from this cache, without a
+  // network round-trip and without the «Загрузка…» placeholder, so expanding/
+  // collapsing a branch does not flicker or jump the scroll position.
+  let cachedTypes: ThoughtType[] | null = null;
 
   const onChanged = (): void => void reload();
 
-  async function reload(): Promise<void> {
-    tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+  async function reload(useCache = false): Promise<void> {
+    const scrollTop = tableWrap.scrollTop;
     let types: ThoughtType[];
-    try {
-      types = await etn.types.listThoughtTypes(networkId);
-    } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
-      return;
+    if (useCache && cachedTypes !== null) {
+      types = cachedTypes;
+    } else {
+      tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+      try {
+        types = await etn.types.listThoughtTypes(networkId);
+      } catch (err) {
+        tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+        return;
+      }
+      cachedTypes = types;
     }
     if (expanded.size === 0) {
       expanded = new Set(types.filter((t) => t.is_root).map((t) => t.id));
@@ -210,13 +220,14 @@ export function showThoughtTypesDialog(): void {
     }
     table.append(tbody);
     tableWrap.replaceChildren(table);
+    tableWrap.scrollTop = scrollTop;
   }
 
-  /** Expands/collapses a node and re-renders (no server round-trip). */
+  /** Expands/collapses a node and re-renders from the cache (no round-trip). */
   function toggle(typeId: string): void {
     if (expanded.has(typeId)) expanded.delete(typeId);
     else expanded.add(typeId);
-    void reload();
+    void reload(true);
   }
 
   /** Deletes a thought type (forced: thoughts detached, values dropped). */
@@ -1250,17 +1261,26 @@ export function showLinkTypesDialog(): void {
   );
 
   let expanded = new Set<string>();
+  // Last loaded catalogue — tree toggles re-render from this cache (see the
+  // thought-types dialog for the reasoning: no flicker, no scroll jump).
+  let cachedTypes: LinkType[] | null = null;
 
   const onChanged = (): void => void reload();
 
-  async function reload(): Promise<void> {
-    tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+  async function reload(useCache = false): Promise<void> {
+    const scrollTop = tableWrap.scrollTop;
     let types: LinkType[];
-    try {
-      types = await etn.types.listLinkTypes(networkId);
-    } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
-      return;
+    if (useCache && cachedTypes !== null) {
+      types = cachedTypes;
+    } else {
+      tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+      try {
+        types = await etn.types.listLinkTypes(networkId);
+      } catch (err) {
+        tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+        return;
+      }
+      cachedTypes = types;
     }
     if (expanded.size === 0) {
       expanded = new Set(types.filter((t) => t.is_root).map((t) => t.id));
@@ -1311,13 +1331,14 @@ export function showLinkTypesDialog(): void {
     }
     table.append(tbody);
     tableWrap.replaceChildren(table);
+    tableWrap.scrollTop = scrollTop;
   }
 
-  /** Expands/collapses a node and re-renders (no server round-trip). */
+  /** Expands/collapses a node and re-renders from the cache (no round-trip). */
   function toggle(typeId: string): void {
     if (expanded.has(typeId)) expanded.delete(typeId);
     else expanded.add(typeId);
-    void reload();
+    void reload(true);
   }
 
   /** Deletes a link type (forced: links stay, become untyped). */
