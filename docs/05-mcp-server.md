@@ -210,6 +210,8 @@ reason, thought_types }`. `depth` — расстояние от `in_subtree_of` 
 | `etn.links.create` | Создать связь | `network_id`, `source_id`, `target_id`, `type_id?` |
 | `etn.links.delete` | Удалить связь | `network_id`, `link_id` |
 | `etn.comments.upsert` | Создать/обновить комментарий | `network_id`, `owner_type`, `owner_id`, `kind`, `title?`, `body_md`, `valid_from?`, `valid_to?` |
+| `etn.comments.update` | Изменить комментарий по `comment_id` (chronological или permanent; last-write-wins по полям, `valid_from`/`valid_to` применяются только к chronological) | `network_id`, `comment_id`, `changes` (`title?`, `body_md?`, `valid_from?`, `valid_to?`), `expected_version?` |
+| `etn.comments.delete` | Удалить комментарий (вместе со всеми привязками к владельцам) | `network_id`, `comment_id`, `expected_version?` |
 | `etn.attachments.add` | Добавить вложение | `network_id`, `owner_type`, `owner_id`, `kind`, `url?`/`file_path?`, `title?`, `description?` |
 | `etn.properties.set` | Установить свойство | `network_id`, `owner_type`, `owner_id`, `key`, `value` |
 | `etn.thoughts.set_active` | Изменить актуальность | `network_id`, `thought_id`, `active` |
