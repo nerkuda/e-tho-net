@@ -106,6 +106,15 @@ export type PickImageResult =
   | { status: 'cancel' }
   | { status: 'error'; message: string };
 
+/**
+ * Result of the generic OS file picker: the chosen file's absolute path and
+ * name. No bytes are read — the add-attachment dialog only fills its path
+ * field with it; the server sees the file once «Добавить» is pressed.
+ */
+export type PickFileResult =
+  | { status: 'ok'; path: string; name: string }
+  | { status: 'cancel' };
+
 /** Which view's visit history a `history.*` call addresses (L15, 11 §2.3.1). */
 export type HistoryScope = 'focus' | 'structures';
 
@@ -571,6 +580,12 @@ export interface EtnApi {
      * caller decides how to fit it into the icon limit (workplan L16).
      */
     pickImage(): Promise<PickImageResult>;
+    /**
+     * Opens the OS file picker for a file of ANY type and returns its absolute
+     * path (no content is read). The add-attachment dialog's «Открыть с диска»
+     * button fills its path field with the result.
+     */
+    pickFile(): Promise<PickFileResult>;
     /**
      * Opens a local file with the OS default application (`shell.openPath`).
      * Resolves an error message string when the OS refuses (empty on success).

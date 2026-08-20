@@ -18,7 +18,7 @@ import type { CurrentUser, FocusDir, Network, TypeOwnerType } from '@etn/shared'
 import type { RestClient } from '../net/rest-client.js';
 import type { RealtimeClient } from '../net/ws-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
-import type { PickImageResult } from './contract.js';
+import type { PickFileResult, PickImageResult } from './contract.js';
 
 /** Shared state owned by the main process, injected into handlers. */
 export interface HandlerDeps {
@@ -1013,6 +1013,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((jobId: string) => requireRest(deps).getJob(jobId)),
   );
   handlers.set('system.pickImage', bind(() => pickImageFile()));
+  handlers.set('system.pickFile', bind(() => pickAnyFile()));
   handlers.set('system.openPath', bind((filePath: string) => openPathShell(filePath)));
   handlers.set('system.openExternal', bind((url: string) => openExternalShell(url)));
 
@@ -1082,6 +1083,25 @@ async function pickImageFile(): Promise<PickImageResult> {
   } catch {
     return { status: 'error', message: 'Не удалось прочитать файл.' };
   }
+}
+
+/**
+ * Opens the OS file picker for a file of any type and returns its absolute
+ * path (08-ui-spec.md §6.5). No bytes are read here — the caller only fills
+ * its path field; the file reaches the server when «Добавить» is pressed.
+ */
+async function pickAnyFile(): Promise<PickFileResult> {
+  const { BrowserWindow, dialog } = await import('electron');
+  const win = BrowserWindow.getFocusedWindow();
+  // Inline options in each branch so the showOpenDialog overload resolves.
+  const result =
+    win !== null
+      ? await dialog.showOpenDialog(win, { title: 'Выбрать файл', properties: ['openFile'] })
+      : await dialog.showOpenDialog({ title: 'Выбрать файл', properties: ['openFile'] });
+  if (result.canceled || result.filePaths.length === 0) return { status: 'cancel' };
+  const filePath = result.filePaths[0];
+  if (filePath === undefined) return { status: 'cancel' };
+  return { status: 'ok', path: filePath, name: filePath.split(/[\\/]/).pop() ?? 'file' };
 }
 
 // Re-export for the registration module's convenience.

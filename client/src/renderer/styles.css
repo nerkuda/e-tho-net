@@ -295,6 +295,18 @@ textarea {
   align-items: center;
 }
 
+/* Text input with a side action button (add-attachment dialog, §6.5). */
+.input-with-btn {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.input-with-btn .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
 .checkbox-row {
   display: flex;
   gap: 6px;

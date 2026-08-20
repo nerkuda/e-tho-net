@@ -553,6 +553,11 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     const locationInput = el('input', 'text-input');
     locationInput.type = 'text';
     locationInput.placeholder = 'https://…';
+    // «Открыть с диска…» fills the path via the OS picker; the file reaches
+    // the server only when «Добавить» is pressed (§6.5).
+    const pickBtn = button('Открыть с диска…', () => void pickFileFromDisk(), 'btn small');
+    const locationRow = div('input-with-btn');
+    locationRow.append(locationInput, pickBtn);
 
     const titleInput = el('input', 'text-input');
     titleInput.type = 'text';
@@ -564,9 +569,23 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
 
     const syncKind = (): void => {
       locationInput.placeholder = kindFile.checked ? 'Путь к файлу' : 'https://…';
+      pickBtn.style.display = kindFile.checked ? '' : 'none';
     };
     kindUrl.addEventListener('change', syncKind);
     kindFile.addEventListener('change', syncKind);
+    syncKind();
+
+    /** OS file picker → the path field (and the file name as the title). */
+    async function pickFileFromDisk(): Promise<void> {
+      try {
+        const picked = await etn.system.pickFile();
+        if (picked.status !== 'ok') return;
+        locationInput.value = picked.path;
+        if (titleInput.value.trim() === '') titleInput.value = picked.name;
+      } catch (err) {
+        errorLine.textContent = errText(err);
+      }
+    }
 
     const kindRow = div('form-row');
     const urlLabel = el('label', 'checkbox-row');
@@ -578,7 +597,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     const body = div('form-stack');
     body.append(
       field('Тип', kindRow),
-      field('Адрес / путь', locationInput),
+      field('Адрес / путь', locationRow),
       field('Заголовок (необязательно)', titleInput),
       field('Комментарий (необязательно)', descInput),
       errorLine,
