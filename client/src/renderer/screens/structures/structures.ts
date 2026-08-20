@@ -820,7 +820,12 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   // canvas 1-to-1) — connectivity state, not the expand/collapse action.
   setTooltip(topEllipse, dir?.has_incoming === true ? 'Есть входящие связи' : 'Входящих связей нет');
   setTooltip(bottomEllipse, dir?.has_outgoing === true ? 'Есть исходящие связи' : 'Исходящих связей нет');
+  // The ellipse click must not reach the cloud handler: opening the thought
+  // (store update) fans out an immediate second renderTree() whose finalize
+  // kills the FLIP transition in its first frame — and the click means
+  // "toggle this direction", not "activate the thought" (§15.5).
   topEllipse.addEventListener('click', (event) => {
+    event.stopPropagation();
     if (event.ctrlKey || event.metaKey) {
       void addNeighborsOf(row.thoughtId, 'parent');
       return;
@@ -828,6 +833,7 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
     void toggleExpand(row, 'parents');
   });
   bottomEllipse.addEventListener('click', (event) => {
+    event.stopPropagation();
     if (event.ctrlKey || event.metaKey) {
       void addNeighborsOf(row.thoughtId, 'child');
       return;
