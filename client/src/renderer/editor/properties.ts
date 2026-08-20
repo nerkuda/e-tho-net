@@ -6,6 +6,8 @@
  *  - text/number/date → inputs, saved on blur (empty → remove); a text value
  *    with predefined options also gets a suggestion dropdown that filters as
  *    the user types (an input aid, never a restriction);
+ *  - url → input plus an «Открыть» button that hands the value to the OS
+ *    default handler (http/https, file://, local paths, registered protocols);
  *  - bool → checkbox;
  *  - thought_ref → editable field doubling as a live candidate search (plus
  *    the duplicate-search dialog picker); stores the referenced thought id,
@@ -21,6 +23,7 @@ import type { PropertyDefinition, PropertyValue } from '@etn/shared';
 import { onRealtimeEvent } from '../realtime.js';
 import { button, div, el, errText, positionBodyDropdown, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
 import { registerMainSection, type EditorContext } from './editor.js';
 import { wireThoughtRefSearch } from './thought-picker.js';
@@ -207,6 +210,28 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
               revertValue,
             ),
           );
+          cell.append(row);
+        } else if (definition.value_type === 'url') {
+          // A url property gets an «Открыть» button: it hands the value to the
+          // OS default handler — http/https, `file://`, local paths and other
+          // registered protocols (obsidian://, …); a failure to open surfaces
+          // as a toast (08-ui-spec.md §6.3.1). Clicking blurs the input first,
+          // so the pending edit is committed before it is opened.
+          const openBtn = button('Открыть', () => void openUrlExternally(), 'btn small');
+          const syncOpenBtn = (): void => {
+            openBtn.disabled = input.value.trim() === '';
+          };
+          async function openUrlExternally(): Promise<void> {
+            const value = input.value.trim();
+            if (value === '') return;
+            const err = await etn.system.openExternal(value);
+            if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
+          }
+          input.addEventListener('input', syncOpenBtn);
+          syncOpenBtn();
+          const row = div('form-row');
+          row.style.marginBottom = '0';
+          row.append(input, openBtn);
           cell.append(row);
         } else {
           cell.append(input);

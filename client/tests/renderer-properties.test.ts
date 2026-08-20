@@ -103,9 +103,30 @@ async function buildWithFixtures(): Promise<ShimElement> {
             required: false,
             position: 1,
           },
+          {
+            id: 'p3',
+            owner_type: 'thought_type',
+            owner_id: 'ty1',
+            key: 'Сайт',
+            value_type: 'url',
+            config: null,
+            required: false,
+            position: 2,
+          },
         ],
       },
-      properties: { get: async () => [] },
+      properties: {
+        get: async () => [
+          {
+            id: 'v3',
+            owner_type: 'thought',
+            owner_id: 't1',
+            property_id: 'p3',
+            value: 'https://example.com',
+            updated_at: '2026',
+          },
+        ],
+      },
       thoughts: { resolve: async () => [] },
     },
   };
@@ -156,7 +177,7 @@ describe('editor properties group body (DOM-shimmed)', () => {
     // Headerless table (L7, 08-ui-spec.md §6.3.1): the tbody is the first child.
     const tbody = table.children[0];
     assert.ok(tbody !== undefined, 'tbody present');
-    assert.equal(tbody.children.length, 2, 'one row per property definition');
+    assert.equal(tbody.children.length, 3, 'one row per property definition');
     // The text property with options carries the picker caret button.
     const textCell = tbody.children[0]?.children[1];
     const buttons = textCell?.children[0]?.children.filter((c) => c.tagName === 'button') ?? [];
@@ -170,6 +191,17 @@ describe('editor properties group body (DOM-shimmed)', () => {
     assert.ok(refInput !== undefined, 'thought_ref input rendered');
     assert.notEqual(refInput?.readOnly, true, 'thought_ref input is editable');
     assert.equal(refButtons.length, 1, 'dialog picker button rendered');
+    // The url property renders the input plus an «Открыть» button, enabled
+    // while a value is stored (08-ui-spec.md §6.3.1).
+    const urlCell = tbody.children[2]?.children[1];
+    const urlRow = urlCell?.children[0];
+    const urlInput = urlRow?.children.find((c) => c.tagName === 'input');
+    const openBtn = urlRow?.children.find(
+      (c) => c.tagName === 'button' && c.textContent === 'Открыть',
+    );
+    assert.ok(urlInput !== undefined, 'url input rendered');
+    assert.ok(openBtn !== undefined, 'url «Открыть» button rendered');
+    assert.notEqual((openBtn as ShimElement & { disabled?: boolean }).disabled, true);
   });
 });
 

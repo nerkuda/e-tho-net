@@ -358,11 +358,25 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
         const err = await etn.system.openPath(attachment.file_path);
         if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
       } else if (attachment.kind === 'url' && attachment.url !== null) {
-        await etn.system.openExternal(attachment.url);
+        const err = await etn.system.openExternal(attachment.url);
+        if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
       }
     } catch (err) {
       notice(`Не удалось открыть: ${errText(err)}`, 'error');
     }
+  }
+
+  /**
+   * The «open externally» button shown in the viewer — every URL attachment
+   * gets one (image URLs included, on top of the inline preview), so opening
+   * does not depend on the double-click/context menu being discovered.
+   */
+  function buildOpenDefaultButton(attachment: Attachment): HTMLElement {
+    return button(
+      'Открыть в приложении по умолчанию',
+      () => void openDefault(attachment),
+      'btn small',
+    );
   }
 
   /** Shows a muted hint in the viewer area (nothing selected). */
@@ -388,7 +402,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       img.src = attachment.url ?? '';
       img.alt = attachment.title ?? 'Вложение';
       const frame = div('attachment-view-frame');
-      frame.append(img);
+      frame.append(img, buildOpenDefaultButton(attachment));
       bottom.replaceChildren(frame);
       return;
     }
@@ -399,13 +413,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     // Everything else: open externally instead of a preview (§6.5).
     const frame = div('attachment-view-frame');
     frame.append(el('p', 'muted', 'Для этого типа вложения предпросмотр недоступен.'));
-    frame.append(
-      button(
-        'Открыть в приложении по умолчанию',
-        () => void openDefault(attachment),
-        'btn small',
-      ),
-    );
+    frame.append(buildOpenDefaultButton(attachment));
     bottom.replaceChildren(frame);
   }
 

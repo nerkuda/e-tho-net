@@ -19,6 +19,7 @@ import type { RestClient } from '../net/rest-client.js';
 import type { RealtimeClient } from '../net/ws-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import type { PickFileResult, PickImageResult } from './contract.js';
+import { classifyOpenTarget } from './open-target.js';
 
 /** Shared state owned by the main process, injected into handlers. */
 export interface HandlerDeps {
@@ -1116,16 +1117,28 @@ async function openPathShell(filePath: string): Promise<string> {
   return shell.openPath(filePath);
 }
 
-/** Opens an external URL in the default browser (http/https only). */
-async function openExternalShell(url: string): Promise<void> {
+/**
+ * Opens an external target with the OS default application: local paths and
+ * `file://` URLs via `shell.openPath`, http/https and any other registered
+ * protocol (e.g. `obsidian://`) via `shell.openExternal`. Returns '' on
+ * success or a human-readable error (mirrors {@link openPathShell}), so the
+ * renderer can surface «cannot open» feedback instead of failing silently.
+ */
+async function openExternalShell(target: string): Promise<string> {
   const { shell } = await import('electron');
-  if (typeof url !== 'string') return;
-  let parsed: URL;
+  if (typeof target !== 'string') return 'Некорректный адрес.';
+  const classified = classifyOpenTarget(target);
+  if (classified.kind === 'refused') return classified.reason;
+  if (classified.kind === 'path') return shell.openPath(classified.path);
   try {
-    parsed = new URL(url);
-  } catch {
-    return;
+    await shell.openExternal(classified.url);
+    return '';
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    // For non-web schemes an unregistered protocol handler is the common cause.
+    const hint = /^https?:/i.test(classified.url)
+      ? ''
+      : ' (возможно, протокол не зарегистрирован в системе)';
+    return `Не удалось открыть «${classified.url}»${hint}: ${detail}`;
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
-  await shell.openExternal(parsed.toString());
 }

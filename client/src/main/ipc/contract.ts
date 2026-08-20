@@ -591,7 +591,13 @@ export interface EtnApi {
      * Resolves an error message string when the OS refuses (empty on success).
      */
     openPath(path: string): Promise<string>;
-    /** Opens an external URL in the default browser (`shell.openExternal`). */
-    openExternal(url: string): Promise<void>;
+    /**
+     * Opens an external target with the OS default application: http/https and
+     * other registered protocols (e.g. `obsidian://`) via `shell.openExternal`,
+     * `file://` URLs and bare local paths via `shell.openPath`. Resolves an
+     * error message string when the target cannot be opened (empty on success)
+     * so the renderer can show feedback.
+     */
+    openExternal(url: string): Promise<string>;
   };
 }
