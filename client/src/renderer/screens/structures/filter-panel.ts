@@ -425,7 +425,7 @@ function refreshGroupTitles(): void {
 
 /** Persists the state (L4) and refreshes the uniform group-title marking. */
 function touch(): void {
-  touch();
+  callbacks?.onStatePersist();
   refreshGroupTitles();
 }
 
