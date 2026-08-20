@@ -237,26 +237,32 @@ export function showThoughtTypesDialog(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * The parent-picker combobox of a type editor. Options exclude the type
- * itself, its descendants and any parent that would push the tree past
- * {@link MAX_TYPE_DEPTH} levels. The empty entry is the root type — «очистка
- * родителя равносильна присвоению корневого типа» (08-ui-spec.md §8.1).
+ * The parent-picker combobox of a type editor. Options exclude the root type
+ * (it is represented by the single «без родителя» entry — attaching under
+ * the root is the same thing, 08-ui-spec.md §8.1), the edited type itself,
+ * its descendants and any parent that would push the tree past
+ * {@link MAX_TYPE_DEPTH} levels. The full tree is expanded on open; typing
+ * filters it to matching rows. Rows carry the same icon/style (thoughts) or
+ * line swatch (links) as the other type lists.
  */
 function buildParentPicker(opts: {
   kinds: 'thought' | 'link';
   /** The edited type (null while it is being created). */
   currentId: () => string | null;
+  /** Current parent id; the root id is normalized to `null` («без родителя»). */
   value: string | null;
   onChange: (parentId: string | null) => void;
 }): { root: HTMLElement } {
   const { kinds, currentId, value, onChange } = opts;
   const types = (): typeof store.state.thoughtTypes | typeof store.state.linkTypes =>
     kinds === 'thought' ? store.state.thoughtTypes : store.state.linkTypes;
+  const rootId = types().find((t) => t.is_root)?.id ?? null;
   const combo = createTypeCombobox({
     options: () => {
-      // Candidate parents: every type except the edited one and its
+      // Candidate parents: every type except the root, the edited one and its
       // descendants; the depth cap must hold for the resulting subtree.
       const allowed = (id: string): boolean => {
+        if (id === rootId) return false;
         const selfId = currentId();
         if (selfId !== null) {
           if (id === selfId) return false;
@@ -275,22 +281,37 @@ function buildParentPicker(opts: {
             depth: row.depth,
             has_children: row.hasChildren,
             selectable: true,
+            icon: { icon: row.type.icon, kind: row.type.icon_kind },
+            style: {
+              fg: row.type.fg_color,
+              bg: row.type.bg_color,
+              bold: row.type.font_bold ?? false,
+              italic: row.type.font_italic ?? false,
+              underline: row.type.font_underline ?? false,
+              strike: row.type.font_strike ?? false,
+            },
           }));
       }
       return orderedTypeRows(store.state.linkTypes)
         .filter((row) => allowed(row.type.id))
-        .map((row) => ({
-          id: row.type.id,
-          label: `${row.type.name_forward} / ${row.type.name_reverse}`,
-          parent_id: row.type.parent_id,
-          depth: row.depth,
-          has_children: row.hasChildren,
-          selectable: true,
-        }));
+        .map((row) => {
+          const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
+          return {
+            id: row.type.id,
+            label: `${row.type.name_forward} / ${row.type.name_reverse}`,
+            parent_id: row.type.parent_id,
+            depth: row.depth,
+            has_children: row.hasChildren,
+            selectable: true,
+            line: { color: line.color, style: line.style, width: line.width },
+          };
+        });
     },
-    value,
-    placeholder: 'основной тип',
-    emptyLabel: 'основной тип (без родителя)',
+    // The root id is not an option — normalize it to the «без родителя» entry.
+    value: value !== null && value === rootId ? null : value,
+    placeholder: 'без родителя',
+    emptyLabel: 'без родителя',
+    expandAll: true,
     onChange,
   });
   return { root: combo.root };

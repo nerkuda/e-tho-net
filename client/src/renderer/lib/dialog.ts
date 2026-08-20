@@ -112,10 +112,19 @@ export function showDialog(opts: DialogOptions): () => void {
   const onKey = (event: KeyboardEvent): void => {
     // Lower dialogs ignore Escape even though they see the event too —
     // same-target capture listeners run in registration order.
-    if (event.key === 'Escape' && stack[stack.length - 1] === backdrop) close();
+    if (event.key === 'Escape' && !event.repeat && stack[stack.length - 1] === backdrop) {
+      // preventDefault marks the press as consumed: the global Escape handler
+      // (app.initKeyboard, bubble phase) must not close the dialog *below*
+      // the one just closed here (L21 fix — Escape over a stacked dialog
+      // closed the whole stack). Key auto-repeat is ignored for the same
+      // reason: a held Escape would otherwise walk the stack down.
+      event.preventDefault();
+      close();
+    }
   };
   window.addEventListener('keydown', onKey, true);
   const onConfirm = (event: KeyboardEvent): void => {
+    if (event.repeat) return;
     if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
     // Bubble phase: field-level handlers (batch add, the thought picker,
     // thought_ref candidate lists) consume Ctrl+Enter first via

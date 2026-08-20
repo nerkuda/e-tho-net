@@ -361,6 +361,10 @@ export async function boot(): Promise<void> {
 export function initKeyboard(): void {
   window.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+      // A dialog that consumed the press (the top dialog's capture handler
+      // calls preventDefault) already closed itself — closing again here
+      // would pop the dialog below it (L21 fix). Same for a key auto-repeat.
+      if (event.defaultPrevented || event.repeat) return;
       closeMenu();
       closeDialog();
       return;

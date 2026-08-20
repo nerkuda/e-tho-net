@@ -70,6 +70,11 @@ export function createTypeCombobox(opts: {
   placeholder?: string;
   /** Label of the "no type" row; omit when a type is mandatory. */
   emptyLabel?: string;
+  /**
+   * L21: start with every tree node expanded (the parent picker wants the
+   * full list visible at once). Default: the root only, rest collapsed.
+   */
+  expandAll?: boolean;
   onChange: (typeId: string | null) => void;
 }): TypeCombobox {
   const { options, emptyLabel, onChange } = opts;
@@ -101,13 +106,21 @@ export function createTypeCombobox(opts: {
     return [{ id: null, label: emptyLabel, depth: 1 }, ...optsList];
   }
 
-  /** Auto-expand the root and the ancestor chain of the selected value. */
+  /** Auto-expand the root and the ancestor chain of the selected value;
+   *  with `expandAll` — every node with children (L21 parent picker). */
   function seedExpansion(): void {
     expanded.clear();
     const byId = new Map(options().filter((o) => o.id !== null).map((o) => [o.id as string, o]));
     for (const opt of byId.values()) {
       // The root type is always expanded (docs/08-ui-spec.md §8.1).
       if (opt.selectable === false && opt.parent_id == null) expanded.add(opt.id ?? '');
+      if (opts.expandAll === true) {
+        if (opt.has_children === true) expanded.add(opt.id ?? '');
+        // Parent ids not present in the options (e.g. the root type excluded
+        // from the parent picker) must still count as expanded, otherwise the
+        // top-level rows would never show.
+        if (opt.parent_id != null) expanded.add(opt.parent_id);
+      }
     }
     let walk = current !== null ? byId.get(current) : undefined;
     while (walk !== undefined && walk.parent_id != null) {
@@ -385,10 +398,15 @@ export function createTypeCombobox(opts: {
       detach();
       return;
     }
-    if (open && event.key === 'Escape') {
-      event.stopImmediatePropagation();
-      event.preventDefault();
-      closeList();
+    if (event.key === 'Escape') {
+      // Swallow every Escape while the list is open so the host dialog stays
+      // mounted — and swallow key auto-repeats as well: a held Escape must
+      // not close the list once and the dialog right after (L21 fix).
+      if (open || event.repeat) {
+        event.stopImmediatePropagation();
+        event.preventDefault();
+        if (open) closeList();
+      }
     }
   };
   const onWinScroll = (event: Event): void => {
