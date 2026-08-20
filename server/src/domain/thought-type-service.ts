@@ -245,7 +245,7 @@ export function updateThoughtType(
     }
     if (changes.parent_id !== undefined) {
       if (current.is_root) {
-        throw new EtnError('VALIDATION_ERROR', 'the root type has no parent', {
+        throw new EtnError('VALIDATION_ERROR', 'у корневого типа нет родителя', {
           entity: 'thought_type',
           id,
         });
@@ -260,7 +260,7 @@ export function updateThoughtType(
         if (usage.c > 0) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `thought type is in use by ${usage.c} thought(s); its parent cannot be changed`,
+            `родительский тип изменить нельзя: тип используется в ${usage.c} мыслях`,
             { entity: 'thought_type', id, in_use: usage.c },
           );
         }
@@ -343,7 +343,7 @@ export function deleteThoughtType(
       });
     }
     if (current.is_root) {
-      throw new EtnError('VALIDATION_ERROR', 'the root thought type cannot be deleted', {
+      throw new EtnError('VALIDATION_ERROR', 'корневой тип мысли удалить нельзя', {
         entity: 'thought_type',
         id,
       });
@@ -354,7 +354,7 @@ export function deleteThoughtType(
     if (childCount.c > 0) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `thought type has ${childCount.c} subordinate type(s); delete or move them first`,
+        `у типа есть подчинённые типы (${childCount.c}); сначала удалите или переместите их`,
         { entity: 'thought_type', id, children: childCount.c },
       );
     }
@@ -406,7 +406,7 @@ export function assertThoughtTypeAssignable(ndb: NetworkDb, typeId: string): voi
   if (row.is_root === 1) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'the root thought type is not assignable; leave the thought untyped instead',
+      'корневой тип не назначается мыслям; оставьте мысль без типа',
       { entity: 'thought_type', id: typeId },
     );
   }

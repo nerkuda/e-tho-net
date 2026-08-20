@@ -260,7 +260,7 @@ export function updateLinkType(
     }
     if (changes.parent_id !== undefined) {
       if (current.is_root) {
-        throw new EtnError('VALIDATION_ERROR', 'the root type has no parent', {
+        throw new EtnError('VALIDATION_ERROR', 'у корневого типа нет родителя', {
           entity: 'link_type',
           id,
         });
@@ -273,7 +273,7 @@ export function updateLinkType(
         if (usage.c > 0) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `link type is in use by ${usage.c} link(s); its parent cannot be changed`,
+            `родительский тип изменить нельзя: тип используется в ${usage.c} связях`,
             { entity: 'link_type', id, in_use: usage.c },
           );
         }
@@ -346,7 +346,7 @@ export function deleteLinkType(
       });
     }
     if (current.is_root) {
-      throw new EtnError('VALIDATION_ERROR', 'the root link type cannot be deleted', {
+      throw new EtnError('VALIDATION_ERROR', 'корневой тип связи удалить нельзя', {
         entity: 'link_type',
         id,
       });
@@ -357,7 +357,7 @@ export function deleteLinkType(
     if (childCount.c > 0) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `link type has ${childCount.c} subordinate type(s); delete or move them first`,
+        `у типа есть подчинённые типы (${childCount.c}); сначала удалите или переместите их`,
         { entity: 'link_type', id, children: childCount.c },
       );
     }
@@ -402,7 +402,7 @@ export function assertLinkTypeAssignable(ndb: NetworkDb, typeId: string): void {
   if (row.is_root === 1) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'the root link type is not assignable; leave the link untyped instead',
+      'корневой тип не назначается связям; оставьте связь без типа',
       { entity: 'link_type', id: typeId },
     );
   }

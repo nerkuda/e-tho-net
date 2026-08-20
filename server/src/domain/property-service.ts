@@ -333,7 +333,7 @@ function assertKeyAvailableInTree(
     if (clash && clash.id !== exceptPropertyId) {
       throw new EtnError(
         'DUPLICATE',
-        `property "${key}" already exists on this type or a related type`,
+        `свойство «${key}» уже есть у этого типа или связанного с ним типа`,
         { owner_type: ownerType, owner_id: ownerId, key, clash_owner_id: typeId },
       );
     }

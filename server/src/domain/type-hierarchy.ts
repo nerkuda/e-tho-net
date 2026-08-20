@@ -152,13 +152,13 @@ export function assertParentValid(
   }
   if (typeId !== null) {
     if (parentId === typeId) {
-      throw new EtnError('VALIDATION_ERROR', 'a type cannot be its own parent', {
+      throw new EtnError('VALIDATION_ERROR', 'тип не может быть родителем самого себя', {
         entity: 'type',
         id: typeId,
       });
     }
     if (subtreeIds(ndb, table, typeId).includes(parentId)) {
-      throw new EtnError('VALIDATION_ERROR', 'parent type must not be a descendant of the type', {
+      throw new EtnError('VALIDATION_ERROR', 'родительский тип не может быть подчинённым этого типа', {
         entity: 'type',
         id: typeId,
         parent_id: parentId,
@@ -172,7 +172,7 @@ export function assertParentValid(
   if (parentDepth + subtree > MAX_TYPE_DEPTH) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `type nesting is limited to ${MAX_TYPE_DEPTH} levels including the root type`,
+      `вложенность типов ограничена ${MAX_TYPE_DEPTH} уровнями, включая корневой тип`,
       { entity: 'type', id: typeId, parent_id: parentId },
     );
   }

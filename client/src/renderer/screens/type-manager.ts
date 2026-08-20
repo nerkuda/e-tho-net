@@ -53,6 +53,7 @@ import {
   buildTypeTree,
   orderedTypeRows,
   resolveLinkTypeVisual,
+  resolveThoughtTypeVisual,
   subtreeTypeIds,
   typeDepth,
   subtreeHeight,
@@ -173,10 +174,20 @@ export function showThoughtTypesDialog(): void {
       const nameWrap = span('', 'type-tree-name');
       nameWrap.style.paddingLeft = `${Math.max(0, row.depth - 1) * 18}px`;
       nameWrap.append(treeToggle(row, expanded, () => void toggle(type.id)));
+      // L21: the row shows the EFFECTIVE look — a subordinate type renders
+      // with the icon/colours/font inherited from its ancestors.
+      const visual = resolveThoughtTypeVisual(types, type.id);
       const icon = span('', 'mini-icon');
-      applyThoughtIcon(icon, { icon: type.icon, icon_kind: type.icon_kind, type_id: null });
+      applyThoughtIcon(icon, { icon: visual.icon, icon_kind: visual.icon_kind, type_id: null });
       const name = span(type.name, 'type-list-name');
-      applyTypeStyle(name, type);
+      applyTypeStyle(name, {
+        fg_color: visual.fg_color,
+        bg_color: visual.bg_color,
+        font_bold: visual.font_bold ?? false,
+        font_italic: visual.font_italic ?? false,
+        font_underline: visual.font_underline ?? false,
+        font_strike: visual.font_strike ?? false,
+      });
       nameWrap.append(icon, name);
       nameCell.append(nameWrap);
       const descCell = el('td', 'muted', (type.description ?? '').slice(0, 120));
@@ -190,7 +201,11 @@ export function showThoughtTypesDialog(): void {
         actions.append(button('✕', () => void removeRow(type), 'btn small', 'Удалить тип'));
       }
       tr.append(nameCell, descCell, actions);
-      tr.addEventListener('click', () => showThoughtTypeEditor(type, onChanged));
+      // Clicks on the ▸/▾ toggle or the ✕ button must not open the editor.
+      tr.addEventListener('click', (event) => {
+        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
+        showThoughtTypeEditor(type, onChanged);
+      });
       tbody.append(tr);
     }
     table.append(tbody);
@@ -1287,7 +1302,11 @@ export function showLinkTypesDialog(): void {
         actions.append(button('✕', () => void removeRow(type), 'btn small', 'Удалить тип'));
       }
       tr.append(nameCell, descCell, actions);
-      tr.addEventListener('click', () => showLinkTypeEditor(type, onChanged));
+      // Clicks on the ▸/▾ toggle or the ✕ button must not open the editor.
+      tr.addEventListener('click', (event) => {
+        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
+        showLinkTypeEditor(type, onChanged);
+      });
       tbody.append(tr);
     }
     table.append(tbody);
