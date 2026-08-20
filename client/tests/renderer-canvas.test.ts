@@ -6,12 +6,46 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { FocusEdge, FocusNeighbor, ThoughtRef, ThoughtType } from '@etn/shared';
+import type { FocusEdge, FocusNeighbor, Thought, ThoughtRef, ThoughtType } from '@etn/shared';
 
 import { canvasInternals, visibleRelatedTitles } from '../src/renderer/canvas/canvas.js';
 import { store } from '../src/renderer/state.js';
 
-const { groupByThought, resolveCloudStyle } = canvasInternals;
+const { groupByThought, resolveCloudStyle, canvasRenderKey, selectionKey } = canvasInternals;
+
+function thought(id: string, title = id): Thought {
+  return {
+    id,
+    title,
+    type_id: null,
+    icon: null,
+    icon_kind: 'emoji',
+    active: true,
+    is_protected: false,
+    is_root: false,
+    fg_color: null,
+    bg_color: null,
+    font_bold: null,
+    font_italic: null,
+    font_underline: null,
+    font_strike: null,
+    synonyms: [],
+    version: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+function focusResponse(): FocusResponse {
+  return {
+    focused: thought('f'),
+    parents: [neighbor('p', 'lp')],
+    siblings: [],
+    children: [],
+    edges: [],
+    sorts: { parents: 'created', children: 'created' },
+  };
+}
 
 function neighbor(id: string, linkId: string, title = id): FocusNeighbor {
   return {
@@ -161,5 +195,29 @@ describe('visibleRelatedTitles (08-ui-spec §2.2.3)', () => {
     });
     assert.deepEqual(result.get('f'), ['Дитя']);
     assert.deepEqual(result.get('c'), ['Фокус']);
+  });
+});
+
+describe('canvasRenderKey / selectionKey (2e418bc3)', () => {
+  it('ignores the selection list — selection-only changes repaint in place', () => {
+    store.update({ selection: [], focus: null });
+    const base = canvasRenderKey();
+    // The selection must never be part of the canvas content signature.
+    store.update({ selection: ['a', 'b'] });
+    assert.equal(canvasRenderKey(), base);
+    assert.equal(selectionKey(), 'a\u0000b');
+  });
+
+  it('changes with the focus, cloud geometry and editor target', () => {
+    store.update({ focus: focusResponse(), cloudWidth: 180, editorTarget: null });
+    const base = canvasRenderKey();
+    store.update({ focus: focusResponse() });
+    assert.equal(canvasRenderKey(), base, 'identical focus data — same key');
+    store.update({ focus: { ...focusResponse(), focused: thought('f', 'Переименовано') } });
+    assert.notEqual(canvasRenderKey(), base, 'edited focus title — new key');
+    store.update({ focus: focusResponse(), cloudWidth: 200 });
+    assert.notEqual(canvasRenderKey(), base, 'cloud width — new key');
+    store.update({ focus: focusResponse(), editorTarget: { kind: 'thought', id: 'f' } });
+    assert.notEqual(canvasRenderKey(), base, 'editor target — new key');
   });
 });

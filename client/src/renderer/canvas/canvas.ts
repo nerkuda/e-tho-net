@@ -216,7 +216,24 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   });
 
   store.subscribe(() => {
-    if (host?.isConnected === true) void render();
+    if (host?.isConnected !== true) return;
+    const key = canvasRenderKey();
+    if (key === lastRenderKey) {
+      // The canvas data is unchanged — only the selection may differ
+      // (Ctrl+click on clouds/ellipses, clear, context-menu toggle, 08-ui-spec
+      // §2.8: selection changes are not animated). Repaint the `.selected`
+      // classes in place: a full rebuild reshuffles the virtualized zones and
+      // loses the scroll position of the visible area (2e418bc3).
+      const selKey = selectionKey();
+      if (selKey !== lastSelectionKey) {
+        lastSelectionKey = selKey;
+        paintSelection();
+      }
+      return;
+    }
+    lastRenderKey = key;
+    lastSelectionKey = selectionKey();
+    void render();
   });
   // The focus band follows the focus row, whose position depends on the zone
   // shares and the host size — re-anchor it on resizes too (L12).
@@ -311,6 +328,46 @@ export function applyCanvasScaleVars(h: HTMLElement): void {
   h.style.setProperty('--link-label-font', `${Math.round(LINK_LABEL_FONT_BASE * zoom)}px`);
 }
 
+/**
+ * Content signature of everything the canvas renders from. A store change
+ * whose signature is unchanged — only the selection list differs — repaints
+ * cloud classes instead of rebuilding the zones (see the mountCanvas
+ * subscriber). `zoneAnimationPending` is part of the signature so a requested
+ * FLIP transition is never skipped by the unchanged-data fast path.
+ */
+function canvasRenderKey(): string {
+  const s = store.state;
+  return JSON.stringify({
+    focus: s.focus,
+    cloudWidth: s.cloudWidth,
+    cloudGap: s.cloudGap,
+    canvasZoom: s.canvasZoom,
+    zoneSorts: s.zoneSorts,
+    zoneOrder: s.zoneOrder,
+    linkTypes: s.linkTypes,
+    thoughtTypes: s.thoughtTypes,
+    editorTarget: s.editorTarget,
+    selectedLinkId: s.selectedLinkId,
+    zoneAnimationPending,
+  });
+}
+
+/** Signature of the ordered selection list. */
+function selectionKey(): string {
+  return store.state.selection.join('\u0000');
+}
+
+/** Repaints the `.selected` cloud classes from the store selection in place. */
+function paintSelection(): void {
+  if (host === null) return;
+  const selected = new Set(store.state.selection);
+  for (const cloud of host.querySelectorAll<HTMLElement>('.cloud')) {
+    const id = cloud.dataset['id'];
+    if (id === undefined) continue;
+    cloud.classList.toggle('selected', selected.has(id));
+  }
+}
+
 /** Renders everything from the current store state. */
 async function render(): Promise<void> {
   if (host === null || zones === null || focusRow === null) return;
@@ -362,6 +419,11 @@ async function render(): Promise<void> {
 
 /** Focus id of the last render — gates the transition choreography (§2.8). */
 let lastFocusId: string | null = null;
+
+/** Last canvas content signature handled by the store subscriber — gates the
+ *  selection-only fast path (2e418bc3). */
+let lastRenderKey: string | null = null;
+let lastSelectionKey = '';
 
 /**
  * Positions the focus band gradient (L12, 08-ui-spec.md §2.1): writes the
@@ -1032,6 +1094,8 @@ export const canvasInternals = {
   resolveCloudStyle,
   refCache,
   indicatorCache,
+  canvasRenderKey,
+  selectionKey,
 };
 
 // ---------------------------------------------------------------------------
