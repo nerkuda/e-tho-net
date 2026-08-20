@@ -31,6 +31,7 @@ import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.j
 import { openLinkInEditor } from '../editor/editor.js';
 import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { isNotFoundError, parseThoughtIdQuery } from '../lib/pure.js';
 import {
   UI_STATE_KEY,
   type SearchResponse,
@@ -58,19 +59,6 @@ export const MIN_QUERY_LENGTH = 3;
 /** Whether the query is long enough to hit the server. */
 export function isSearchableQuery(q: string): boolean {
   return q.length >= MIN_QUERY_LENGTH;
-}
-
-/** Canonical UUID shape of ETN entity ids (any version, case-insensitive). */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Returns the thought id when the whole query is a UUID (search by id,
- * 08-ui-spec.md §3.1), otherwise `null`. Ids are stored lowercase, so the match
- * is normalised.
- */
-export function parseThoughtIdQuery(q: string): string | null {
-  const trimmed = q.trim();
-  return UUID_RE.test(trimmed) ? trimmed.toLowerCase() : null;
 }
 
 const DEFAULT_OPTIONS: SearchOptions = {
@@ -429,17 +417,6 @@ async function run(): Promise<void> {
       resultsBox.replaceChildren(span(`Ошибка поиска: ${errText(err)}`, 'error-text'));
     }
   }
-}
-
-/**
- * Whether `err` means "no thought with this id". IPC (`ipcRenderer.invoke`)
- * drops custom error fields of {@link EtnError}, so the server's
- * `thought … not found` message is checked as a fallback for the lost `code`.
- */
-function isNotFoundError(err: unknown): boolean {
-  const shape = err as { code?: unknown; message?: unknown } | null;
-  if (shape?.code === 'NOT_FOUND') return true;
-  return typeof shape?.message === 'string' && shape.message.includes('not found');
 }
 
 /**

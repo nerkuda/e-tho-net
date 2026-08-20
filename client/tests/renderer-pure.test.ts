@@ -32,6 +32,7 @@ import {
   cloudGeom,
   cloudHeight,
   describeEvent,
+  isNotFoundError,
   isRealtimeEvent,
   parseAddLines,
   parseCanvasLayout,
@@ -410,6 +411,18 @@ describe('search scope resolution (H13)', () => {
     assert.equal(parseThoughtIdQuery('099776db-2156-40b4-bcbb'), null);
     assert.equal(parseThoughtIdQuery('099776db-2156-40b4-bcbb-1b9075dbcd8z'), null);
     assert.equal(parseThoughtIdQuery('id 099776db-2156-40b4-bcbb-1b9075dbcd83'), null);
+  });
+
+  it('detects not-found errors via code and via the IPC-surviving message', () => {
+    assert.equal(isNotFoundError({ code: 'NOT_FOUND', message: 'thought x not found' }), true);
+    // ipcRenderer.invoke drops custom fields — only the message survives.
+    assert.equal(
+      isNotFoundError(new Error('Error invoking remote method: Error: thought x not found')),
+      true,
+    );
+    assert.equal(isNotFoundError({ code: 'INTERNAL', message: 'Сетевая ошибка: timeout' }), false);
+    assert.equal(isNotFoundError(null), false);
+    assert.equal(isNotFoundError('not found'), false);
   });
 
   it('navigates rows from either end and clamps at the edges', () => {

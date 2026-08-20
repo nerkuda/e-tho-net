@@ -334,6 +334,34 @@ export function parseAddLines(text: string): AddLine[] {
 }
 
 // ---------------------------------------------------------------------------
+// Search query helpers (08-ui-spec.md §3.1, §4.1)
+// ---------------------------------------------------------------------------
+
+/** Canonical UUID shape of ETN entity ids (any version, case-insensitive). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Returns the thought id when the whole query is a UUID (search by id,
+ * 08-ui-spec.md §3.1), otherwise `null`. Ids are stored lowercase, so the match
+ * is normalised.
+ */
+export function parseThoughtIdQuery(q: string): string | null {
+  const trimmed = q.trim();
+  return UUID_RE.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+/**
+ * Whether `err` means "no entity with this id". IPC (`ipcRenderer.invoke`)
+ * drops custom error fields of `EtnError`, so the server's `… not found`
+ * message is checked as a fallback for the lost `code`.
+ */
+export function isNotFoundError(err: unknown): boolean {
+  const shape = err as { code?: unknown; message?: unknown } | null;
+  if (shape?.code === 'NOT_FOUND') return true;
+  return typeof shape?.message === 'string' && shape.message.includes('not found');
+}
+
+// ---------------------------------------------------------------------------
 // Compound thought names (08-ui-spec.md §2.2.3)
 // ---------------------------------------------------------------------------
 

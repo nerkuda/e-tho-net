@@ -5,7 +5,9 @@
  * Live duplicate search over `thoughts.findDuplicates` (the keywords
  * mini-syntax of 03-server-api.md §6.10: all words AND, `*`, `-word`); the
  * anchor thought is excluded from the candidates — a thought cannot link to
- * itself; single and multi
+ * itself; a whole-query UUID resolves the thought directly via `thoughts.get`
+ * (§4.1) into a single exact-match candidate («Мысль с указанным ID
+ * отсутствует» when unknown); single and multi
  * modes; `|` synonym parsing per line; multi-line paste auto-switches to
  * multi mode; Enter adds the best match to the list (an exact title/synonym
  * hit reuses the existing thought, otherwise a new one is queued), Ctrl+Enter
@@ -36,10 +38,10 @@ import { showDialog } from '../lib/dialog.js';
 import { applyFontFlags, button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
-import { parseAddLines, parseTitleWithSynonyms } from '../lib/pure.js';
+import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
-import { UI_STATE_KEY } from '@etn/shared';
+import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
 
 /** One accumulated list entry: an existing thought or a queued new one. */
@@ -101,6 +103,30 @@ export function firstPickedThoughtId(result: ThoughtPickResult | null): string |
 export function pickedThoughtIds(result: ThoughtPickResult | null): string[] {
   if (result === null) return [];
   return result.items.flatMap((item) => (item.kind === 'existing' ? [item.id] : []));
+}
+
+/**
+ * Maps a thought fetched by id onto the duplicate-hit shape of the candidates
+ * list: `matched_on: 'title'` makes it an exact match, so Enter/клик pick the
+ * existing thought instead of queueing a new one.
+ */
+function thoughtToCandidate(thought: Thought): DuplicateHit {
+  return {
+    id: thought.id,
+    title: thought.title,
+    synonyms: thought.synonyms,
+    matched_on: 'title',
+    type_id: thought.type_id,
+    icon: thought.icon,
+    icon_kind: thought.icon_kind,
+    fg_color: thought.fg_color,
+    bg_color: thought.bg_color,
+    font_bold: thought.font_bold,
+    font_italic: thought.font_italic,
+    font_underline: thought.font_underline,
+    font_strike: thought.font_strike,
+    parent_title: null,
+  };
 }
 
 let mounted = false;
@@ -315,6 +341,36 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           const raw = input.value.trim();
           if (raw === '') {
             renderCandidates([]);
+            return;
+          }
+          // A whole-query UUID is a direct id lookup (08-ui-spec.md §4.1): the
+          // type filter is ignored, inactive thoughts are found too, and the
+          // hit behaves as an exact-title match downstream (Enter picks it).
+          const idQuery = parseThoughtIdQuery(raw);
+          if (idQuery !== null) {
+            try {
+              const thought = await etn.thoughts.get(networkId, idQuery);
+              if (thought.id === anchorId) {
+                // Same protection as the duplicate search: the anchor never
+                // shows up among the candidates (no self-links).
+                lastCandidates = [];
+                candidates.replaceChildren(
+                  el('p', 'muted', 'Нельзя связать мысль с самой собой.'),
+                );
+                return;
+              }
+              lastCandidates = [thoughtToCandidate(thought)];
+              renderCandidates(lastCandidates);
+            } catch (err) {
+              if (isNotFoundError(err)) {
+                lastCandidates = [];
+                candidates.replaceChildren(
+                  el('p', 'muted', 'Мысль с указанным ID отсутствует.'),
+                );
+                return;
+              }
+              errorLine.textContent = errText(err);
+            }
             return;
           }
           const parsed = parseTitleWithSynonyms(raw);
