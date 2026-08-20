@@ -36,9 +36,12 @@ export type WorkspaceView = 'map' | 'structures' | 'chronicle';
 /** Editor dock position (L4 `editor_position`, 08-ui-spec.md §6.1). */
 export type EditorPosition = 'left' | 'right' | 'top' | 'bottom' | 'hidden';
 
-/** What the editor currently shows: a picked thought/link or the focused thought. */
+/** What the editor currently shows: a picked thought/link or the focused thought.
+ *  A picked thought may carry its full entity (`thought`) — the canvas click
+ *  loads it right away (`openThoughtInEditor`); the structures/chronicle views
+ *  deliver it via `structuresActiveThought` instead. */
 export type EditorTarget =
-  { kind: 'thought'; id: string } | { kind: 'link'; id: string; link: Link };
+  { kind: 'thought'; id: string; thought?: Thought } | { kind: 'link'; id: string; link: Link };
 
 /** Realtime connection status as reported by the main process. */
 export type RtStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';

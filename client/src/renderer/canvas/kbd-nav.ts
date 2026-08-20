@@ -22,6 +22,7 @@
  */
 
 import { setFocus } from '../app.js';
+import { openThoughtInEditor } from '../editor/editor.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { reorderZone } from './drag-cloud.js';
@@ -86,14 +87,25 @@ let cursorId: string | null = null;
 export function initKbdNav(host: HTMLElement): void {
   hostEl = host;
   // The keyboard navigation is active while the focus is inside the host.
-  // Clouds are focusable themselves (tabIndex 0); a click on empty canvas
-  // space would leave the focus elsewhere — focus the host on plain presses.
+  // Plain mouse presses keep the focus on the host itself: without
+  // preventDefault the browser would move it onto the pressed cloud (its
+  // tabIndex), and the next zone re-render destroys that element — the focus
+  // fell out of the canvas and the arrows stopped working.
   host.tabIndex = 0;
   host.addEventListener('mousedown', (event) => {
-    if (event.button === 0) host.focus({ preventScroll: true });
+    if (event.button !== 0) return;
+    event.preventDefault();
+    host.focus({ preventScroll: true });
   });
   host.addEventListener('keydown', (event) => {
     if (store.state.activeView !== 'map') return;
+    // Tab walks the same cursor as the arrows (DOM tab order would highlight
+    // a different cloud — the virtualization's slot order, not the visual one).
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      void step(event.shiftKey ? -1 : 1, 0, true);
+      return;
+    }
     if (event.ctrlKey || event.metaKey) {
       if (event.key === 'Enter') {
         event.preventDefault();
@@ -166,6 +178,14 @@ export function syncCanvasCursor(): void {
   hostEl
     .querySelector<HTMLElement>(`.cloud[data-id="${CSS.escape(cursorId)}"]`)
     ?.classList.add(CURSOR_CLS);
+  // A re-render may have destroyed the focused element (e.g. the browser had
+  // focused a cloud that the virtualization rebuilt) — the focus fell onto
+  // <body> and the keys stopped reaching the canvas. While the cursor is
+  // active, pull the focus back to the host. An open menu/dialog/input keeps
+  // its own focus (activeElement is not <body> there), so it is not touched.
+  if (document.activeElement === null || document.activeElement === document.body) {
+    hostEl.focus({ preventScroll: true });
+  }
 }
 
 /** Live cloud of a thought (null when it is outside the virtualization window
@@ -288,17 +308,13 @@ async function scrollZoneToEdge(zone: HTMLElement, toStart: boolean): Promise<bo
   return true;
 }
 
-/** Enter: same as a single click — open the cursor thought in the editor (the
- *  cloud gets the halo); on the focus cloud this returns the editor to the
- *  focused thought. */
+/** Enter: same as a single click — open the cursor thought in the editor with
+ *  its halo (editor.ts loads the entity); on the focus cloud this returns the
+ *  editor to the focused thought. */
 function openCursorInEditor(): void {
   const id = cursorId;
   if (id === null) return;
-  if (id === store.state.focus?.focused.id) {
-    store.update({ editorTarget: null, selectedLinkId: null });
-    return;
-  }
-  store.update({ editorTarget: { kind: 'thought', id }, selectedLinkId: null });
+  openThoughtInEditor(id);
 }
 
 /** Ctrl+Enter: focus the cursor thought (same as a double click). */

@@ -102,6 +102,33 @@ export function openLinkInEditor(link: Link): void {
   store.update({ editorTarget: { kind: 'link', id: link.id, link } });
 }
 
+/**
+ * Opens a thought in the editor without changing the canvas focus (§2.2.4 —
+ * a single cloud click / Enter). The editor target switches at once; the full
+ * entity rides along as soon as it loads — until then the editor falls back to
+ * the focused thought (same mechanism as the structures/chronicle views). The
+ * focused thought itself needs no target (editorTarget=null → follow focus).
+ */
+export function openThoughtInEditor(id: string): void {
+  const focusId = store.state.focus?.focused.id ?? null;
+  if (id === focusId) {
+    store.update({ editorTarget: null, selectedLinkId: null });
+    return;
+  }
+  store.update({ editorTarget: { kind: 'thought', id }, selectedLinkId: null });
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  void etn.thoughts
+    .get(networkId, id)
+    .then((thought) => {
+      const target = store.state.editorTarget;
+      if (target?.kind === 'thought' && target.id === id) {
+        store.update({ editorTarget: { kind: 'thought', id, thought } });
+      }
+    })
+    .catch(() => undefined);
+}
+
 /** Current editor context: a picked thought/link, else the focused thought. */
 export function currentEditorContext(): EditorContext | null {
   const target = store.state.editorTarget;
@@ -109,6 +136,10 @@ export function currentEditorContext(): EditorContext | null {
     return { ownerType: 'link', ownerId: target.id, thought: null, link: target.link };
   }
   if (target !== null && target.kind === 'thought') {
+    // Opened by a canvas click/Enter: the entity rides in the target itself.
+    if (target.thought !== undefined) {
+      return { ownerType: 'thought', ownerId: target.id, thought: target.thought, link: null };
+    }
     // Opened from the structures view (L15): the full entity rides along in
     // the store; until it arrives the editor falls back to the focus.
     const thought = store.state.structuresActiveThought;
@@ -502,7 +533,17 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
       store.state.editorTarget?.kind === 'thought' &&
       store.state.editorTarget.id === ctx.ownerId
     ) {
-      store.update({ structuresActiveThought: updated, structuresActiveThoughtId: ctx.ownerId });
+      // Refresh whichever passenger carries the entity: the canvas click keeps
+      // it inside the target, the structures/chronicle views — in
+      // `structuresActiveThought`.
+      const target = store.state.editorTarget;
+      store.update({
+        ...(target.thought !== undefined
+          ? { editorTarget: { kind: 'thought' as const, id: ctx.ownerId, thought: updated } }
+          : {}),
+        structuresActiveThought: updated,
+        structuresActiveThoughtId: ctx.ownerId,
+      });
     }
     // A type change re-skins the focus cloud (type icon/colours) — reconcile
     // the whole focus from the server so nothing lags behind the patch.

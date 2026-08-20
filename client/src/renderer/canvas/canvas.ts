@@ -24,6 +24,7 @@
 import type { FocusEdge, FocusNeighbor, FocusResponse, IconKind, ThoughtRef } from '@etn/shared';
 
 import { scheduleRefresh, setFocus } from '../app.js';
+import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -440,7 +441,7 @@ function renderFocusRow(focus: FocusResponse): void {
   // the same thought — a no-op, so it is simply ignored.
   cloud.addEventListener('click', (event) => {
     if (event.detail >= 2) return;
-    store.update({ editorTarget: null, selectedLinkId: null });
+    openThoughtInEditor(thought.id);
   });
   cloud.addEventListener('contextmenu', (event) => {
     event.preventDefault();
@@ -925,7 +926,7 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
     }
     // The second click of a double click is left to the dblclick handler.
     if (event.detail >= 2) return;
-    store.update({ editorTarget: { kind: 'thought', id: entry.id }, selectedLinkId: null });
+    openThoughtInEditor(entry.id);
   });
   cloud.addEventListener('dblclick', (event) => {
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
