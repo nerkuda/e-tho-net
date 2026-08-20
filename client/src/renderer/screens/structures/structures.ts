@@ -615,8 +615,12 @@ function renderTree(): void {
 // FLIP animation of expand/collapse (§15.5)
 // ---------------------------------------------------------------------------
 
-/** Animation duration of one expand/collapse transition, ms. */
-const FLIP_MS = 220;
+/** Animation duration of one expand/collapse transition, ms. Kept in sync
+ *  with the stFadeIn/stGhostDissolve keyframe durations in styles.css. */
+const FLIP_MS = 400;
+/** Ease-out curve: the move starts promptly and settles smoothly, so the eye
+ *  follows the rows shifting to their new places (§15.5). */
+const FLIP_EASING = 'cubic-bezier(0.22, 0.61, 0.36, 1)';
 /** While set, drawLinks skips (the layout is still animating to it). */
 let flipUntil = 0;
 let flipTimer: number | null = null;
@@ -675,7 +679,7 @@ function flipElement(el: HTMLElement, from: { left: number; top: number }): bool
   el.style.transition = 'none';
   el.style.transform = `translate(${dx}px, ${dy}px)`;
   void el.offsetWidth; // commit the start frame before enabling the transition
-  el.style.transition = `transform ${FLIP_MS}ms ease`;
+  el.style.transition = `transform ${FLIP_MS}ms ${FLIP_EASING}`;
   el.style.transform = '';
   const cleanup = (): void => {
     el.style.transition = '';

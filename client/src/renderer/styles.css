@@ -3548,12 +3548,13 @@ body.cloud-dragging * {
   pointer-events: none;
 }
 
-/* Dissolving copies of collapsed-away rows (FLIP animation, §15.5). */
+/* Dissolving copies of collapsed-away rows (FLIP animation, §15.5; the
+ * duration follows FLIP_MS in structures/structures.ts). */
 .st-ghost {
   position: absolute;
   z-index: 3;
   pointer-events: none;
-  animation: stGhostDissolve 0.26s ease forwards;
+  animation: stGhostDissolve 0.4s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
 
 .st-ghost .st-row {
@@ -3566,9 +3567,10 @@ body.cloud-dragging * {
   }
 }
 
-/* Freshly revealed rows fade in (FLIP animation, §15.5). */
+/* Freshly revealed rows fade in (FLIP animation, §15.5; the duration follows
+ * FLIP_MS in structures/structures.ts). */
 .st-fade-in {
-  animation: stFadeIn 0.22s ease;
+  animation: stFadeIn 0.4s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 @keyframes stFadeIn {
