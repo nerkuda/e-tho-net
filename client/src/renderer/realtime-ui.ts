@@ -17,6 +17,7 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { scheduleRefresh } from './app.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
+import { etn } from './lib/etn.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from './screens/pinned-bar.js';
 import {
@@ -27,6 +28,21 @@ import { invalidateSavedFilters } from './screens/structures/filter-panel.js';
 import { invalidateChronicleThought, scheduleChronicleRefresh } from './screens/chronicle/chronicle.js';
 import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chronicle/filter-panel.js';
 import { store } from './state.js';
+
+/** Reloads both type catalogues into the store (L21 — the hierarchy changed). */
+export async function reloadTypeCatalogues(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  try {
+    const [thoughtTypes, linkTypes] = await Promise.all([
+      etn.types.listThoughtTypes(networkId),
+      etn.types.listLinkTypes(networkId),
+    ]);
+    store.update({ thoughtTypes, linkTypes });
+  } catch {
+    // The network may have just been closed — ignore.
+  }
+}
 
 /** True when the thought id participates in the current focus neighbourhood. */
 export function inNeighbourhood(id: string): boolean {
@@ -142,6 +158,23 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       // The user's other client changed the pinned list (audience=user) — the
       // event carries the full new order (L18, 08-ui-spec.md §16).
       store.update({ pins: evt.data.ordered_ids });
+      break;
+
+    case 'thought-type.created':
+    case 'thought-type.updated':
+    case 'thought-type.deleted':
+    case 'link-type.created':
+    case 'link-type.updated':
+    case 'link-type.deleted':
+    case 'property-definition.created':
+    case 'property-definition.updated':
+    case 'property-definition.deleted':
+      // Another client changed the type catalogues (L21): reload both lists
+      // and repaint everything that renders type styles/names.
+      void reloadTypeCatalogues();
+      scheduleRefresh();
+      scheduleStructuresRefresh();
+      scheduleChronicleRefresh();
       break;
 
     case 'network.updated': {

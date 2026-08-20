@@ -50,6 +50,7 @@ import {
   FONT_UNDERLINE_BIT,
   readFont,
 } from './font-style.js';
+import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 
 // Re-export so route/MCP callers have a single import surface for read helpers
 // (docs/03-server-api.md §6.9 resolve is conceptually part of search/lookup).
@@ -632,8 +633,11 @@ export function search(
 
   const filters: SearchFilters = {
     showInactive: request.show_inactive ?? showInactiveDefault,
-    typeIds: request.type_id ?? null,
-    linkTypeIds: request.link_type_id ?? null,
+    // L21: a selected parent type matches its whole subtree (OR semantics).
+    typeIds: request.type_id ? expandTypeIdsToSubtree(ndb, 'thought_types', request.type_id) : null,
+    linkTypeIds: request.link_type_id
+      ? expandTypeIdsToSubtree(ndb, 'link_types', request.link_type_id)
+      : null,
     subtreeIds: request.in === 'subtree' ? collectSubtreeIds(ndb, request.from_thought_id) : null,
     limit: paging.limit,
     offset: paging.offset,
@@ -741,9 +745,14 @@ export function findDuplicates(
   if (titleTerms.length === 0) return [];
 
   // Type filter (thought_ref pickers): parameterised IN-list applied to every
-  // query below. The direct thoughts queries use `type_id`, the synonym join
-  // aliases the table as `t`.
-  const types = [...new Set(typeIds.filter((t) => t !== ''))];
+  // query below. L21: the list is expanded to whole subtrees, so picking a
+  // parent type also offers its descendants. The direct thoughts queries use
+  // `type_id`, the synonym join aliases the table as `t`.
+  const types = expandTypeIdsToSubtree(
+    ndb,
+    'thought_types',
+    [...new Set(typeIds.filter((t) => t !== ''))],
+  );
   const typeDirect =
     types.length > 0 ? ` AND type_id IN (${types.map(() => '?').join(',')})` : '';
   const typeJoin = types.length > 0 ? ` AND t.type_id IN (${types.map(() => '?').join(',')})` : '';

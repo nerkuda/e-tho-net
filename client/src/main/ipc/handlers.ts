@@ -503,6 +503,25 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       requireRest(deps).reorderTypeProperties(networkId, ownerType, typeId, orderedIds),
     ),
   );
+  handlers.set(
+    'types.setPropertyDefaultOverride',
+    bind(
+      (
+        networkId: string,
+        ownerType: TypeOwnerType,
+        typeId: string,
+        propertyId: string,
+        value: string | number | boolean | null,
+      ) =>
+        requireRest(deps).setTypePropertyDefaultOverride(
+          networkId,
+          ownerType,
+          typeId,
+          propertyId,
+          value,
+        ),
+    ),
+  );
 
   // --- properties -----------------------------------------------------------
   handlers.set(

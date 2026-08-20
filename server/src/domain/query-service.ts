@@ -38,6 +38,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 
 /** Limits applied by the caller (MCP runtime limits, task F6). */
 export interface QueryBounds {
@@ -281,7 +282,8 @@ export function queryThoughts(
 
   const active: ThoughtQueryActive = request.active ?? 'true';
   const clauses: Array<Clause | null> = [
-    inListClause('t.type_id', request.type_id ?? null),
+    // L21: a selected parent type matches its whole subtree (OR semantics).
+    inListClause('t.type_id', expandTypeIdsToSubtree(ndb, 'thought_types', request.type_id ?? [])),
     active === 'true' ? { sql: 't.active = 1', params: [] }
       : active === 'false'
         ? { sql: 't.active = 0', params: [] }

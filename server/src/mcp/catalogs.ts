@@ -28,7 +28,14 @@ export function thoughtTypeCatalog(
   for (const id of new Set(ids.filter((x): x is string => x !== null))) {
     const type = getThoughtType(ndb, id);
     if (type !== null) {
-      out[id] = { id: type.id, name: type.name, description: type.description, icon: type.icon };
+      out[id] = {
+        id: type.id,
+        name: type.name,
+        parent_id: type.parent_id,
+        is_root: type.is_root,
+        description: type.description,
+        icon: type.icon,
+      };
     }
   }
   return out;
@@ -51,6 +58,8 @@ export function linkTypeCatalog(
         id: type.id,
         name_forward: type.name_forward,
         name_reverse: type.name_reverse,
+        parent_id: type.parent_id,
+        is_root: type.is_root,
         description: type.description,
         color: type.color,
         style: type.style,

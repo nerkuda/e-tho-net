@@ -39,6 +39,7 @@ import { div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
+import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
 import { patchFocusEdge, store } from '../state.js';
 import { openLinkInEditor, registerTabContent, type EditorContext } from './editor.js';
 import { groupSection, type GroupSpec } from './group.js';
@@ -496,11 +497,18 @@ function pickLinkType(current: string | null): Promise<string | null | undefined
     let picked: string | null | undefined = undefined;
     const combo = createTypeCombobox({
       options: () =>
-        store.state.linkTypes.map((t) => ({
-          id: t.id,
-          label: `${t.name_forward} / ${t.name_reverse}`,
-          line: { color: t.color, style: t.style, width: t.width },
-        })),
+        orderedTypeRows(store.state.linkTypes).map((row) => {
+          const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
+          return {
+            id: row.type.id,
+            label: `${row.type.name_forward} / ${row.type.name_reverse}`,
+            parent_id: row.type.parent_id,
+            depth: row.depth,
+            has_children: row.hasChildren,
+            selectable: !row.type.is_root,
+            line: { color: line.color, style: line.style, width: line.width },
+          };
+        }),
       value: current,
       placeholder: 'без типа',
       emptyLabel: 'без типа',

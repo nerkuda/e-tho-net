@@ -24,6 +24,7 @@ import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import { orderedTypeRows } from '../lib/type-tree.js';
 import { isPinned, togglePinned } from '../pinned/pins.js';
 
 /** Zone direction (parents/siblings/children). */
@@ -339,12 +340,15 @@ function buildThoughtMenuItems(
   ];
 }
 
-/** Type-change submenu (types + clear). */
+/** Type-change submenu (type tree with indents + clear; L21). */
 function buildTypeMenu(networkId: string, thoughtId: string): MenuItem[] {
-  const items: MenuItem[] = store.state.thoughtTypes.map((type) => ({
-    label: type.name,
-    onClick: () => void changeType(networkId, thoughtId, type.id),
-  }));
+  // The hierarchy root is not assignable to thoughts (L21) — skip it.
+  const items: MenuItem[] = orderedTypeRows(store.state.thoughtTypes)
+    .filter((row) => !row.type.is_root)
+    .map((row) => ({
+      label: `${'· '.repeat(Math.max(0, row.depth - 2))}${row.type.name}`,
+      onClick: () => void changeType(networkId, thoughtId, row.type.id),
+    }));
   items.push({ label: 'очистить тип', onClick: () => void changeType(networkId, thoughtId, null) });
   return items;
 }

@@ -14,10 +14,21 @@ export interface LinkType {
   name_forward: string;
   /** Name when read target → source. */
   name_reverse: string;
+  /** Parent type id; `null` only on the root type («основной тип»). */
+  parent_id: string | null;
+  /** True for the single undeletable root of the type tree. */
+  is_root: boolean;
   color: string | null;
-  style: LinkStyle;
-  /** Line width in pixels. */
-  width: number;
+  /**
+   * Line style. `null` — inherit from the parent type (the root falls back to
+   * the application default `solid`).
+   */
+  style: LinkStyle | null;
+  /**
+   * Line width in pixels. `null` — inherit from the parent type (the root
+   * falls back to the application default `1`).
+   */
+  width: number | null;
   /** Free-form description used to give AI agents context about the type. */
   description: string | null;
   version: number;
@@ -30,9 +41,12 @@ export interface LinkType {
 export interface LinkTypeInput {
   name_forward: string;
   name_reverse: string;
+  parent_id?: string | null;
   color?: string | null;
-  style?: LinkStyle;
-  width?: number;
+  /** `null` — inherit the parent type's style. */
+  style?: LinkStyle | null;
+  /** `null` — inherit the parent type's width. */
+  width?: number | null;
   description?: string | null;
 }
 
@@ -40,8 +54,12 @@ export interface LinkTypeInput {
 export interface LinkTypeUpdateInput {
   name_forward?: string;
   name_reverse?: string;
+  /** Changing the parent is rejected while the type is in use by links. */
+  parent_id?: string | null;
   color?: string | null;
-  style?: LinkStyle;
-  width?: number;
+  /** `null` — inherit the parent type's style. */
+  style?: LinkStyle | null;
+  /** `null` — inherit the parent type's width. */
+  width?: number | null;
   description?: string | null;
 }

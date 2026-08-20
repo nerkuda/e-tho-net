@@ -39,6 +39,7 @@ import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
+import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
 import { focusEdgesSignature, patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
@@ -726,20 +727,25 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   // Bottom row: type + settings (⚙) + active toggle.
   const row = div('editor-header-row');
 
-  // Searchable type picker (L6): rows carry the type's icon and style.
+  // Searchable type picker (L6/L21): a tree of types, rows carry the type's
+  // icon and style; the root type is shown but not selectable.
   const typeCombo = createTypeCombobox({
     options: () =>
-      store.state.thoughtTypes.map((t) => ({
-        id: t.id,
-        label: t.name,
-        icon: { icon: t.icon, kind: t.icon_kind },
+      orderedTypeRows(store.state.thoughtTypes).map((row) => ({
+        id: row.type.id,
+        label: row.type.name,
+        parent_id: row.type.parent_id,
+        depth: row.depth,
+        has_children: row.hasChildren,
+        selectable: !row.type.is_root,
+        icon: { icon: row.type.icon, kind: row.type.icon_kind },
         style: {
-          fg: t.fg_color,
-          bg: t.bg_color,
-          bold: t.font_bold,
-          italic: t.font_italic,
-          underline: t.font_underline,
-          strike: t.font_strike,
+          fg: row.type.fg_color,
+          bg: row.type.bg_color,
+          bold: row.type.font_bold ?? false,
+          italic: row.type.font_italic ?? false,
+          underline: row.type.font_underline ?? false,
+          strike: row.type.font_strike ?? false,
         },
       })),
     value: thought.type_id,
@@ -859,14 +865,22 @@ function buildLinkHeader(link: Link): HTMLElement {
   // Single row: link type + settings (⚙) + active toggle (08-ui-spec.md §6.2.2).
   const row = div('editor-header-row');
 
-  // Searchable type picker (L6): rows show forward/reverse names + line look.
+  // Searchable type picker (L6/L21): a tree of types; rows show forward/
+  // reverse names and the line look resolved along the type chain.
   const typeCombo = createTypeCombobox({
     options: () =>
-      store.state.linkTypes.map((t) => ({
-        id: t.id,
-        label: `${t.name_forward} / ${t.name_reverse}`,
-        line: { color: t.color, style: t.style, width: t.width },
-      })),
+      orderedTypeRows(store.state.linkTypes).map((row) => {
+        const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
+        return {
+          id: row.type.id,
+          label: `${row.type.name_forward} / ${row.type.name_reverse}`,
+          parent_id: row.type.parent_id,
+          depth: row.depth,
+          has_children: row.hasChildren,
+          selectable: !row.type.is_root,
+          line: { color: line.color, style: line.style, width: line.width },
+        };
+      }),
     value: link.type_id,
     placeholder: 'без типа',
     emptyLabel: 'без типа',
@@ -893,12 +907,14 @@ function buildLinkHeader(link: Link): HTMLElement {
 
 /** Opens the link settings dialog (line colour/style/width + reset). */
 function openLinkSettings(link: Link): void {
-  const type = store.state.linkTypes.find((t) => t.id === link.type_id);
+  // L21: the type line style resolves along the ancestor chain; an untyped
+  // link resolves the root type.
+  const type = resolveLinkTypeVisual(store.state.linkTypes, link.type_id);
   void showLinkStyleDialog({
     resolved: {
-      color: link.color ?? type?.color ?? null,
-      style: link.style ?? type?.style ?? 'solid',
-      width: link.width ?? type?.width ?? 1,
+      color: link.color ?? type.color,
+      style: link.style ?? type.style,
+      width: link.width ?? type.width,
     },
     onApply: (patch) => saveLink(link, patch),
   });

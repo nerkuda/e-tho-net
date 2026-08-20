@@ -40,6 +40,7 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
+import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { UI_STATE_KEY, type Thought } from '@etn/shared';
 import { store } from '../state.js';
@@ -256,22 +257,27 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       allowCreate ? 'Введите название или вставьте список…' : 'Введите название для поиска…';
 
     // Type of the created thought(s) — searchable picker over the catalogue
-    // (L6): rows carry the type's icon and style. Hidden when creation is
-    // forbidden (the picker mode never changes existing thoughts).
+    // tree (L6/L21): rows carry the type's icon and style; the root type is
+    // shown but not selectable. Hidden when creation is forbidden (the picker
+    // mode never changes existing thoughts).
     let newThoughtTypeId: string | null = null;
     const thoughtTypeCombo = createTypeCombobox({
       options: () =>
-        store.state.thoughtTypes.map((t) => ({
-          id: t.id,
-          label: t.name,
-          icon: { icon: t.icon, kind: t.icon_kind },
+        orderedTypeRows(store.state.thoughtTypes).map((row) => ({
+          id: row.type.id,
+          label: row.type.name,
+          parent_id: row.type.parent_id,
+          depth: row.depth,
+          has_children: row.hasChildren,
+          selectable: !row.type.is_root,
+          icon: { icon: row.type.icon, kind: row.type.icon_kind },
           style: {
-            fg: t.fg_color,
-            bg: t.bg_color,
-            bold: t.font_bold,
-            italic: t.font_italic,
-            underline: t.font_underline,
-            strike: t.font_strike,
+            fg: row.type.fg_color,
+            bg: row.type.bg_color,
+            bold: row.type.font_bold ?? false,
+            italic: row.type.font_italic ?? false,
+            underline: row.type.font_underline ?? false,
+            strike: row.type.font_strike ?? false,
           },
         })),
       value: null,
@@ -287,11 +293,18 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     let linkTypeId: string | null = store.state.lastUsedLinkTypeId;
     const linkTypeCombo = createTypeCombobox({
       options: () =>
-        store.state.linkTypes.map((t) => ({
-          id: t.id,
-          label: `${t.name_forward} / ${t.name_reverse}`,
-          line: { color: t.color, style: t.style, width: t.width },
-        })),
+        orderedTypeRows(store.state.linkTypes).map((row) => {
+          const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
+          return {
+            id: row.type.id,
+            label: `${row.type.name_forward} / ${row.type.name_reverse}`,
+            parent_id: row.type.parent_id,
+            depth: row.depth,
+            has_children: row.hasChildren,
+            selectable: !row.type.is_root,
+            line: { color: line.color, style: line.style, width: line.width },
+          };
+        }),
       value: linkTypeId,
       placeholder: 'без типа',
       emptyLabel: 'без типа',

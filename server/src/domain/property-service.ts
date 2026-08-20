@@ -19,6 +19,7 @@ import {
   EtnError,
   PROPERTY_VALUE_TYPES,
   TYPE_OWNER_TYPES,
+  type EffectiveTypeProperty,
   type PropertyDefinition,
   type PropertyDefinitionInput,
   type PropertyDefinitionUpdateInput,
@@ -34,6 +35,13 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { rowToThoughtRef } from './thought-service.js';
+import {
+  expandTypeIdsToSubtree,
+  getRootTypeId,
+  subtreeIds,
+  typeAncestors,
+  type TypeTable,
+} from './type-hierarchy.js';
 
 // ===========================================================================
 // Type-property definitions (C5)
@@ -142,12 +150,203 @@ export function getTypePropertyByKey(
   return row ? rowToPropertyDefinition(row) : null;
 }
 
+// ===========================================================================
+// Hierarchy (L21): chain-resolved definitions + default-value overrides
+// ===========================================================================
+
+/** The type table that stores owners of the given type_properties owner. */
+function ownerTypeTable(ownerType: TypeOwnerType): TypeTable {
+  return ownerType === 'thought_type' ? 'thought_types' : 'link_types';
+}
+
+/** Display name of a type from its owner table (link types: «fwd / rev»). */
+function ownerTypeName(ndb: NetworkDb, ownerType: TypeOwnerType, ownerId: string): string {
+  if (ownerType === 'thought_type') {
+    const row = ndb.prepare('SELECT name FROM thought_types WHERE id = ?').get(ownerId) as
+      | { name: string }
+      | undefined;
+    return row?.name ?? ownerId;
+  }
+  const row = ndb
+    .prepare('SELECT name_forward, name_reverse FROM link_types WHERE id = ?')
+    .get(ownerId) as { name_forward: string; name_reverse: string } | undefined;
+  return row ? `${row.name_forward} / ${row.name_reverse}` : ownerId;
+}
+
+/**
+ * The chain of type ids whose property definitions are visible to a thought/
+ * link of type `typeId`: the type itself, its ancestors up to the root — and,
+ * when `typeId` is `null` (an untyped owner), just the root type, whose
+ * settings apply to every element without a type (docs/08-ui-spec.md §8.1).
+ * Ordered from the type itself up to the root.
+ */
+function visibleTypeChain(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  typeId: string | null,
+): string[] {
+  const table = ownerTypeTable(ownerType);
+  if (typeId === null) {
+    const rootId = getRootTypeId(ndb, table);
+    return rootId === null ? [] : [rootId];
+  }
+  return typeAncestors(ndb, table, typeId);
+}
+
+/** The default-value override a type holds for a property, or `null`. */function getOverride(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  typeId: string,
+  propertyId: string,
+): PropertyValueValue {
+  const row = ndb
+    .prepare(
+      'SELECT default_value FROM type_property_overrides WHERE owner_type = ? AND type_id = ? AND property_id = ?',
+    )
+    .get(ownerType, typeId, propertyId) as { default_value: string } | undefined;
+  return row ? (JSON.parse(row.default_value) as PropertyValueValue) : null;
+}
+
+/**
+ * Effective property definitions of a type (L21, docs/02-data-model.md §3.4.1):
+ * the type's own definitions plus everything inherited from its ancestors,
+ * ordered from the root down to the type. `default_value` on each entry is the
+ * effective default — the override stored on this type (inherited properties
+ * only), else the definition's own `config.default_value`.
+ */
+export function listEffectiveTypeProperties(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  ownerId: string,
+): EffectiveTypeProperty[] {
+  const chainRootFirst = [...visibleTypeChain(ndb, ownerType, ownerId)].reverse();
+  const out: EffectiveTypeProperty[] = [];
+  for (const typeId of chainRootFirst) {
+    for (const def of listTypeProperties(ndb, ownerType, typeId)) {
+      const inherited = typeId !== ownerId;
+      const override = inherited ? getOverride(ndb, ownerType, ownerId, def.id) : null;
+      const ownDefault = def.config?.default_value ?? null;
+      out.push({
+        ...def,
+        inherited,
+        defined_on: typeId,
+        defined_on_name: ownerTypeName(ndb, ownerType, typeId),
+        default_value: inherited ? (override ?? ownDefault) : ownDefault,
+        overridden_here: inherited && override !== null,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Set or clear a type's default-value override of an inherited property
+ * (docs/03-server-api.md §8). `value = null` deletes the override — the
+ * effective default falls back to the definition's own default.
+ *
+ * Throws `NOT_FOUND` (404) when the property or the type does not exist, and
+ * `VALIDATION_ERROR` (422) when the property is defined on the type itself
+ * (own defaults are edited through the definition's `config`) or when the
+ * value does not match the property's value type.
+ */
+export function setTypePropertyDefaultOverride(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  ownerId: string,
+  propertyId: string,
+  value: PropertyValueValue,
+): void {
+  validateTypeOwnerType(ownerType);
+  ndb.transaction(() => {
+    const typeRow = ndb
+      .prepare(`SELECT id FROM ${ownerTypeTable(ownerType)} WHERE id = ?`)
+      .get(ownerId);
+    if (!typeRow) {
+      throw new EtnError('NOT_FOUND', `type ${ownerId} not found`, { entity: 'type', id: ownerId });
+    }
+    const def = getTypeProperty(ndb, propertyId);
+    if (!def || def.owner_type !== ownerType) {
+      throw new EtnError('NOT_FOUND', `property ${propertyId} not found`, {
+        entity: 'type_property',
+        id: propertyId,
+      });
+    }
+    if (def.owner_id === ownerId) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'own defaults are edited on the property definition itself',
+        { entity: 'type_property', id: propertyId, owner_id: ownerId },
+      );
+    }
+    const chain = visibleTypeChain(ndb, ownerType, ownerId);
+    if (!chain.includes(def.owner_id)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'only properties inherited from ancestor types can be overridden',
+        { entity: 'type_property', id: propertyId, owner_id: ownerId },
+      );
+    }
+    if (value !== null) {
+      validateAndCoerce(ndb, def, value);
+    }
+    const now = new Date().toISOString();
+    if (value === null) {
+      ndb
+        .prepare(
+          'DELETE FROM type_property_overrides WHERE owner_type = ? AND type_id = ? AND property_id = ?',
+        )
+        .run(ownerType, ownerId, propertyId);
+      return;
+    }
+    ndb
+      .prepare(
+        `INSERT INTO type_property_overrides (id, owner_type, type_id, property_id, default_value, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (owner_type, type_id, property_id) DO UPDATE SET
+           default_value = excluded.default_value,
+           updated_at = excluded.updated_at`,
+      )
+      .run(randomUUID(), ownerType, ownerId, propertyId, JSON.stringify(value), now, now);
+  });
+}
+
+/**
+ * A key is available for a definition on `ownerId` when no other definition
+ * with the same key exists anywhere in the owner's ancestor chain or subtree —
+ * a duplicate would make the effective property list of some type ambiguous.
+ */
+function assertKeyAvailableInTree(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  ownerId: string,
+  key: string,
+  exceptPropertyId: string | null,
+): void {
+  const table = ownerTypeTable(ownerType);
+  const scope = new Set<string>(typeAncestors(ndb, table, ownerId));
+  for (const id of subtreeIds(ndb, table, ownerId)) scope.add(id);
+  const stmt = ndb.prepare(
+    'SELECT id FROM type_properties WHERE owner_type = ? AND owner_id = ? AND key = ?',
+  );
+  for (const typeId of scope) {
+    const clash = stmt.get(ownerType, typeId, key) as { id: string } | undefined;
+    if (clash && clash.id !== exceptPropertyId) {
+      throw new EtnError(
+        'DUPLICATE',
+        `property "${key}" already exists on this type or a related type`,
+        { owner_type: ownerType, owner_id: ownerId, key, clash_owner_id: typeId },
+      );
+    }
+  }
+}
+
 /**
  * Create a property definition on a type (docs/03-server-api.md §8). `position`
  * defaults to one past the current maximum so new properties land last.
  *
- * Throws `DUPLICATE` (409) if a property with the same key already exists on the
- * owner.
+ * Throws `DUPLICATE` (409) if a property with the same key already exists on
+ * the owner or on any related type in its ancestor chain / subtree — the
+ * effective property list must stay unambiguous (L21).
  */
 export function createTypeProperty(
   ndb: NetworkDb,
@@ -161,16 +360,7 @@ export function createTypeProperty(
   const id = randomUUID();
 
   return ndb.transaction(() => {
-    const existing = ndb
-      .prepare('SELECT 1 FROM type_properties WHERE owner_type = ? AND owner_id = ? AND key = ?')
-      .get(ownerType, ownerId, key);
-    if (existing) {
-      throw new EtnError('DUPLICATE', `property "${key}" already exists on this type`, {
-        owner_type: ownerType,
-        owner_id: ownerId,
-        key,
-      });
-    }
+    assertKeyAvailableInTree(ndb, ownerType, ownerId, key, null);
     const position =
       input.position ??
       (
@@ -303,18 +493,7 @@ export function updateTypeProperty(
 
   return ndb.transaction(() => {
     if (nextKey !== undefined && nextKey !== current.key) {
-      const dupe = ndb
-        .prepare(
-          'SELECT 1 FROM type_properties WHERE owner_type = ? AND owner_id = ? AND key = ? AND id <> ?',
-        )
-        .get(current.owner_type, current.owner_id, nextKey, id);
-      if (dupe) {
-        throw new EtnError('DUPLICATE', `property "${nextKey}" already exists on this type`, {
-          owner_type: current.owner_type,
-          owner_id: current.owner_id,
-          key: nextKey,
-        });
-      }
+      assertKeyAvailableInTree(ndb, current.owner_type, current.owner_id, nextKey, id);
     }
     if (nextType !== undefined && nextType !== current.value_type) {
       migratePropertyValues(ndb, id, current.value_type, nextType);
@@ -437,8 +616,10 @@ function ownerTable(ownerType: PropertyOwnerType): 'thoughts' | 'links' {
 
 /**
  * Find the property definition governing `(ownerType, ownerId, key)` by walking
- * from the owner thought/link to its type and that type's properties. Returns
- * `null` when the owner has no type or the type defines no such property.
+ * from the owner thought/link through its type's ancestor chain (L21): the
+ * nearest definition with the key wins. An untyped owner sees the root type's
+ * properties — the root's settings apply to every element without a type
+ * (docs/08-ui-spec.md §8.1). Returns `null` when nothing matches.
  */
 function resolveDefinition(
   ndb: NetworkDb,
@@ -449,11 +630,15 @@ function resolveDefinition(
   const row = ndb
     .prepare(`SELECT type_id AS tid FROM ${ownerTable(ownerType)} WHERE id = ?`)
     .get(ownerId) as { tid: string | null } | undefined;
-  if (!row || !row.tid) {
+  if (!row) {
     return null;
   }
   const defOwnerType: TypeOwnerType = ownerType === 'thought' ? 'thought_type' : 'link_type';
-  return getTypePropertyByKey(ndb, defOwnerType, row.tid, key);
+  for (const typeId of visibleTypeChain(ndb, defOwnerType, row.tid)) {
+    const def = getTypePropertyByKey(ndb, defOwnerType, typeId, key);
+    if (def) return def;
+  }
+  return null;
 }
 
 /**
@@ -658,11 +843,17 @@ function validateAndCoerce(
       }
       // Type filter: the list form supersedes the legacy single allowed_type_id.
       // Only writes are checked — already stored values are never reprocessed
-      // when the filter changes (02-data-model.md §3.4).
-      const allowedIds = (
-        def.config?.allowed_type_ids ??
-        (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
-      ).filter((id) => id !== '');
+      // when the filter changes (02-data-model.md §3.4). Since L21 the filter
+      // matches whole subtrees: a referenced thought passes when its type is
+      // a descendant of (or equal to) any allowed type (docs/08-ui-spec.md §8.1).
+      const allowedIds = expandTypeIdsToSubtree(
+        ndb,
+        'thought_types',
+        (
+          def.config?.allowed_type_ids ??
+          (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
+        ).filter((id) => id !== ''),
+      );
       if (
         allowedIds.length > 0 &&
         (target.type_id === null || !allowedIds.includes(target.type_id))

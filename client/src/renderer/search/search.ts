@@ -32,6 +32,7 @@ import { openLinkInEditor } from '../editor/editor.js';
 import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { isNotFoundError, parseThoughtIdQuery } from '../lib/pure.js';
+import { orderedTypeRows } from '../lib/type-tree.js';
 import {
   UI_STATE_KEY,
   type SearchResponse,
@@ -716,9 +717,13 @@ function buildOptionsRow(row: HTMLElement): void {
   const typePlaceholder = el('option', undefined, 'Типы мыслей: все');
   typePlaceholder.value = '';
   typeSelect.append(typePlaceholder);
-  for (const type of store.state.thoughtTypes) {
-    const option = el('option', undefined, type.name);
-    option.value = type.id;
+  // L21: the type tree with indent dots; the root type is not selectable (it
+  // would mean «every type»). Selecting a parent matches its whole subtree —
+  // the server expands type filters (docs/03-server-api.md §12).
+  for (const row of orderedTypeRows(store.state.thoughtTypes)) {
+    if (row.type.is_root) continue;
+    const option = el('option', undefined, `${'· '.repeat(Math.max(0, row.depth - 2))}${row.type.name}`);
+    option.value = row.type.id;
     typeSelect.append(option);
   }
   typeSelect.value = options.typeIds[0] ?? '';
@@ -732,9 +737,14 @@ function buildOptionsRow(row: HTMLElement): void {
   const linkPlaceholder = el('option', undefined, 'Типы связей: все');
   linkPlaceholder.value = '';
   linkTypeSelect.append(linkPlaceholder);
-  for (const type of store.state.linkTypes) {
-    const option = el('option', undefined, type.name_forward);
-    option.value = type.id;
+  for (const row of orderedTypeRows(store.state.linkTypes)) {
+    if (row.type.is_root) continue;
+    const option = el(
+      'option',
+      undefined,
+      `${'· '.repeat(Math.max(0, row.depth - 2))}${row.type.name_forward}`,
+    );
+    option.value = row.type.id;
     linkTypeSelect.append(option);
   }
   linkTypeSelect.value = options.linkTypeIds[0] ?? '';

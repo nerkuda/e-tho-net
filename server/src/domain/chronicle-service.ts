@@ -41,6 +41,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { makeSnippet } from './search-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import { REF_COLUMNS } from './structure-service.js';
+import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 
 /** Row shape accepted by {@link rowToThoughtRef}. */
 type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
@@ -292,8 +293,12 @@ function selectThoughts(
     args.push(...baseIds);
   }
   if (typeIds.length > 0) {
-    where.push(`t.type_id IN (${placeholders(typeIds.length)})`);
-    args.push(...typeIds);
+    // L21: a selected parent type matches its whole subtree (OR semantics).
+    const expanded = expandTypeIdsToSubtree(ndb, 'thought_types', typeIds);
+    if (expanded.length > 0) {
+      where.push(`t.type_id IN (${placeholders(expanded.length)})`);
+      args.push(...expanded);
+    }
   }
   for (const word of includeWords) {
     const pattern = buildLikePattern(word);
@@ -330,6 +335,7 @@ function validToLowerCond(dateFrom: string): [string, string[]] {
 
 /** Phase 2 WHERE shared by the count and the page queries. */
 function buildRowsWhere(
+  ndb: NetworkDb,
   selectedIds: string[],
   request: ChronicleQueryRequest,
 ): { cond: string; args: unknown[] } {
@@ -360,8 +366,12 @@ function buildRowsWhere(
     JOIN links l ON l.id = ctl.owner_id AND ctl.owner_type = 'link'
     WHERE ctl.comment_id = c.id AND (${endpointConds.join(' OR ')})`;
   if ((request.link_type_ids ?? []).length > 0) {
-    linkCond += ` AND l.type_id IN (${placeholders(request.link_type_ids!.length)})`;
-    args.push(...request.link_type_ids!);
+    // L21: subtree expansion, same as the thought-type filter above.
+    const expandedLinks = expandTypeIdsToSubtree(ndb, 'link_types', request.link_type_ids!);
+    if (expandedLinks.length > 0) {
+      linkCond += ` AND l.type_id IN (${placeholders(expandedLinks.length)})`;
+      args.push(...expandedLinks);
+    }
   }
   linkCond += ')';
   thoughtConds.push(linkCond);
@@ -475,7 +485,7 @@ export function queryChronicle(
     return { rows: [], total: 0 };
   }
 
-  const { cond, args } = buildRowsWhere(selectedIds, request);
+  const { cond, args } = buildRowsWhere(ndb, selectedIds, request);
   const dir = request.order === 'desc' ? 'DESC' : 'ASC';
   const totalRow = ndb
     .prepare(`SELECT COUNT(*) AS c FROM comments c WHERE ${cond}`)

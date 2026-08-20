@@ -18,13 +18,15 @@
  * the owner (a single module-level listener keeps closures bounded).
  */
 
-import type { PropertyDefinition, PropertyValue } from '@etn/shared';
+import type { EffectiveTypeProperty, PropertyValue } from '@etn/shared';
 
 import { onRealtimeEvent } from '../realtime.js';
 import { button, div, el, errText, positionBodyDropdown, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
+import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
 import { requireNetworkId } from '../app.js';
+import { store } from '../state.js';
 import { registerMainSection, type EditorContext } from './editor.js';
 import { wireThoughtRefSearch } from './thought-picker.js';
 import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
@@ -54,11 +56,12 @@ export function registerPropertiesGroup(): void {
   }
 }
 
-/** Counts the type's property definitions for the group badge (thoughts only). */
+/** Counts the type's effective property definitions for the group badge. */
 async function countProperties(ctx: EditorContext): Promise<string | undefined> {
-  const typeId = ctx.thought?.type_id ?? null;
-  if (typeId === null) return undefined;
   const networkId = requireNetworkId();
+  // L21: an untyped thought shows the root type's properties.
+  const typeId = resolveEditorTypeId(ctx);
+  if (typeId === null) return undefined;
   try {
     const defs = await etn.types.listTypeProperties(networkId, 'thought_type', typeId);
     return `(${defs.length})`;
@@ -67,15 +70,26 @@ async function countProperties(ctx: EditorContext): Promise<string | undefined> 
   }
 }
 
+/**
+ * The type whose properties the editor shows (L21): the thought's own type,
+ * or the root type «основной тип» for an untyped thought (its settings apply
+ * to every element without a type). `null` when the catalogue has no root
+ * (mid-migration edge).
+ */
+function resolveEditorTypeId(ctx: EditorContext): string | null {
+  if (ctx.thought?.type_id != null) return ctx.thought.type_id;
+  return store.state.thoughtTypes.find((t) => t.is_root)?.id ?? null;
+}
+
 /** Builds the properties table for the current thought. */
 function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
   const thoughtId = ctx.ownerId;
-  const typeId = ctx.thought?.type_id ?? null;
+  const typeId = resolveEditorTypeId(ctx);
 
   const box = div('properties-body');
   if (typeId === null) {
-    box.append(el('p', 'muted', 'У мысли нет типа — свойства недоступны.'));
+    box.append(el('p', 'muted', 'Свойства недоступны.'));
     return box;
   }
   // Guarded above; the fallback is unreachable but keeps closure typing honest.
@@ -102,7 +116,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     // by a newer editor render.
     if (everMounted && !box.isConnected) return;
     tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
-    let definitions: PropertyDefinition[];
+    let definitions: EffectiveTypeProperty[];
     let values: PropertyValue[];
     try {
       [definitions, values] = await Promise.all([
@@ -131,11 +145,14 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     for (const definition of definitions) {
       const value = valueByProp.get(definition.id);
       const row = el('tr');
+      const source = definition.inherited
+        ? ` · из «${definition.defined_on_name}»`
+        : '';
       row.append(
         el(
           'td',
           undefined,
-          `${definition.key}${definition.required ? ' *' : ''} (${typeName(definition.value_type)})`,
+          `${definition.key}${definition.required ? ' *' : ''} (${typeName(definition.value_type)})${source}`,
         ),
       );
       row.append(buildEditorCell(definition, value));
@@ -147,7 +164,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
 
   /** Builds the value editor cell for one property. */
   function buildEditorCell(
-    definition: PropertyDefinition,
+    definition: EffectiveTypeProperty,
     current: PropertyValue | undefined,
   ): HTMLElement {
     const cell = el('td');
@@ -278,12 +295,17 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         input.placeholder = 'введите название для поиска…';
         // Type filter from the definition config (list form supersedes the
         // legacy single id); an input aid — stored values are untouched.
-        const filterIds = (
-          definition.config?.allowed_type_ids ??
-          (definition.config?.allowed_type_id !== undefined
-            ? [definition.config.allowed_type_id]
-            : [])
-        ).filter((id) => id !== '');
+        // L21: the filter expands to whole subtrees — a parent type matches
+        // its descendants (mirror of the server-side validation).
+        const filterIds = expandTypeIdsToSubtree(
+          store.state.thoughtTypes,
+          (
+            definition.config?.allowed_type_ids ??
+            (definition.config?.allowed_type_id !== undefined
+              ? [definition.config.allowed_type_id]
+              : [])
+          ).filter((id) => id !== ''),
+        );
         // The field doubles as a live search: typing lists candidates (with
         // the type filter applied); only a picked candidate writes the value.
         // The modal picker stays as an alternative way to choose.

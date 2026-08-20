@@ -20,6 +20,7 @@ import { wireThoughtRefSearch } from '../editor/thought-picker.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { createTypeCombobox, type TypeOption } from '../lib/type-combobox.js';
+import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
 import { showDialog } from '../lib/dialog.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
@@ -49,11 +50,18 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
   return new Promise((resolve) => {
     const combo = createTypeCombobox({
       options: (): TypeOption[] =>
-        store.state.linkTypes.map((t) => ({
-          id: t.id,
-          label: t.name_forward,
-          line: { color: t.color, style: t.style, width: t.width },
-        })),
+        orderedTypeRows(store.state.linkTypes).map((row) => {
+          const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
+          return {
+            id: row.type.id,
+            label: row.type.name_forward,
+            parent_id: row.type.parent_id,
+            depth: row.depth,
+            has_children: row.hasChildren,
+            selectable: !row.type.is_root,
+            line: { color: line.color, style: line.style, width: line.width },
+          };
+        }),
       value: store.state.lastUsedLinkTypeId,
       emptyLabel: 'Без типа',
       placeholder: 'Поиск типа связи…',
@@ -92,17 +100,21 @@ export function pickThoughtType(initial: string | null): Promise<string | null |
   return new Promise((resolve) => {
     const combo = createTypeCombobox({
       options: (): TypeOption[] =>
-        store.state.thoughtTypes.map((t) => ({
-          id: t.id,
-          label: t.name,
-          icon: { icon: t.icon, kind: t.icon_kind },
+        orderedTypeRows(store.state.thoughtTypes).map((row) => ({
+          id: row.type.id,
+          label: row.type.name,
+          parent_id: row.type.parent_id,
+          depth: row.depth,
+          has_children: row.hasChildren,
+          selectable: !row.type.is_root,
+          icon: { icon: row.type.icon, kind: row.type.icon_kind },
           style: {
-            fg: t.fg_color,
-            bg: t.bg_color,
-            bold: t.font_bold,
-            italic: t.font_italic,
-            underline: t.font_underline,
-            strike: t.font_strike,
+            fg: row.type.fg_color,
+            bg: row.type.bg_color,
+            bold: row.type.font_bold ?? false,
+            italic: row.type.font_italic ?? false,
+            underline: row.type.font_underline ?? false,
+            strike: row.type.font_strike ?? false,
           },
         })),
       value: initial,

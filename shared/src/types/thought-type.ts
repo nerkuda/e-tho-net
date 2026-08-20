@@ -11,15 +11,23 @@ import type { IconKind, PropertyValueType, TypeOwnerType } from '../enums.js';
 export interface ThoughtType {
   id: string;
   name: string;
+  /** Parent type id; `null` only on the root type («основной тип»). */
+  parent_id: string | null;
+  /** True for the single undeletable root of the type tree. */
+  is_root: boolean;
   icon: string | null;
   /** Kind of the default icon (thoughts without their own icon inherit it). */
   icon_kind: IconKind;
   fg_color: string | null;
   bg_color: string | null;
-  font_bold: boolean;
-  font_italic: boolean;
-  font_underline: boolean;
-  font_strike: boolean;
+  /**
+   * Default font styles. `null` — not set on this type: the parent type's
+   * value applies (the root falls back to the application defaults, L21).
+   */
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
   /** Free-form description used to give AI agents context about the type. */
   description: string | null;
   version: number;
@@ -31,28 +39,32 @@ export interface ThoughtType {
 /** Input accepted by `POST /thought-types` (03-server-api.md §8). */
 export interface ThoughtTypeInput {
   name: string;
+  /** Parent type; `null`/omitted — attach directly under the root type. */
+  parent_id?: string | null;
   icon?: string | null;
   icon_kind?: IconKind;
   fg_color?: string | null;
   bg_color?: string | null;
-  font_bold?: boolean;
-  font_italic?: boolean;
-  font_underline?: boolean;
-  font_strike?: boolean;
+  font_bold?: boolean | null;
+  font_italic?: boolean | null;
+  font_underline?: boolean | null;
+  font_strike?: boolean | null;
   description?: string | null;
 }
 
 /** Input accepted by `PATCH /thought-types/{id}` (03-server-api.md §8). */
 export interface ThoughtTypeUpdateInput {
   name?: string;
+  /** Changing the parent is rejected while the type is in use by thoughts. */
+  parent_id?: string | null;
   icon?: string | null;
   icon_kind?: IconKind;
   fg_color?: string | null;
   bg_color?: string | null;
-  font_bold?: boolean;
-  font_italic?: boolean;
-  font_underline?: boolean;
-  font_strike?: boolean;
+  font_bold?: boolean | null;
+  font_italic?: boolean | null;
+  font_underline?: boolean | null;
+  font_strike?: boolean | null;
   description?: string | null;
 }
 
@@ -80,6 +92,8 @@ export interface PropertyDefinition {
 
 /** Recognised keys inside a {@link PropertyDefinition.config} JSON blob. */
 export interface PropertyConfig {
+  /** Default value applied to future items of the type (not `thought_ref`). */
+  default_value?: string | number | boolean;
   /** For `value_type = 'thought_ref'`: restrict the referenced thought type
    *  (legacy single form; superseded by `allowed_type_ids`). */
   allowed_type_id?: string;
@@ -114,6 +128,31 @@ export interface PropertyDefinitionUpdateInput {
   config?: PropertyConfig | null;
   required?: boolean;
   position?: number;
+}
+
+/**
+ * A property definition resolved over a type's ancestor chain (L21,
+ * 02-data-model.md §3.4.1): the type's own properties plus everything
+ * inherited from its parents. `default_value` is the effective default — the
+ * deepest ancestor override, else the definition's own `config.default_value`.
+ */
+export interface EffectiveTypeProperty extends PropertyDefinition {
+  /** `false` — defined on this very type; `true` — inherited from an ancestor. */
+  inherited: boolean;
+  /** Id of the type the definition belongs to (`owner_id` mirror, for convenience). */
+  defined_on: string;
+  /** Name of the type the definition belongs to (UI labels). */
+  defined_on_name: string;
+  /** Effective default value (override-aware); `null` — no default. */
+  default_value: PropertyValueValue;
+  /** This type overrides the inherited default (`type_property_overrides`). */
+  overridden_here: boolean;
+}
+
+/** Body of `PUT …/types/{id}/properties/{prop_id}/default` (03-server-api.md §8). */
+export interface PropertyDefaultOverrideInput {
+  /** Default value to override with; `null` clears the override (inherits). */
+  value: PropertyValueValue;
 }
 
 /**

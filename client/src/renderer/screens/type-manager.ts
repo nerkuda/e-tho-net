@@ -1,32 +1,42 @@
 /**
- * Type catalogue management (L6, 08-ui-spec.md §8.1).
+ * Type catalogue management (L6 + L21 hierarchy, 08-ui-spec.md §8.1).
  *
  * Opened from the toolbar «Вид» menu:
- *  - «Типы мыслей» — list of thought types: icon, name rendered with the
- *    type's own colours/font, short description; alphabetical (server order);
- *    «Добавить» opens the editor, each row has a delete button. Deleting a
- *    type is forced: thoughts keep existing with `type_id = null`, and the
- *    type's property definitions (with all stored values) are dropped
- *    server-side.
- *  - «Типы связей» — list of link types (`name_forward / name_reverse` +
- *    description), same flow; links stay and become untyped.
+ *  - «Типы мыслей» / «Типы связей» — a **tree** of types (root «основной тип»
+ *    always expanded, other nodes collapsed; the root has no delete mark and
+ *    is not assignable to thoughts/links): icon, name rendered with the
+ *    type's own colours/font, short description. «Добавить» opens the editor,
+ *    each row has a delete button (the server rejects deleting the root or a
+ *    type that still has subordinate types). Deleting a used type is forced:
+ *    thoughts/links keep existing with `type_id = null`, and the type's
+ *    property definitions (with all stored values) are dropped server-side.
  *
- * Thought-type editor: icon (same picker as the thought editor), required
- * name, ⚙ opens the same style dialog as the thought editor (type mode), a
- * free-form description ("комментарий": type purpose / usage rules) and the
- * property-definition table — key, value type, default value (stored as
- * `config.default_value`), reorder and delete.
+ * Type editors: icon (same picker as the thought editor), required name, ⚙
+ * (the same style dialog, type mode), free-form description and the **parent
+ * picker** (L21 — a type tree; clearing it equals attaching under the root).
+ * Reparenting is validated server-side: rejected while the type is in use,
+ * must not create cycles and the nesting is capped at 4 levels.
  *
- * Link-type editor: forward/reverse names (required), ⚙ opens the same
- * line-style dialog as the link editor (type mode), description.
+ * Property sections (L21):
+ *  - «Свойства типа» — the type's own definitions: key, value type, default
+ *    value, reorder and delete (as before).
+ *  - «Унаследованные свойства» — read-only definitions inherited from the
+ *    ancestors; only the default value may be overridden per type (and the
+ *    override can be reset back to the ancestor's default).
+ *
+ * Link-type editor: forward/reverse names, ⚙ (line-style dialog, type mode —
+ * a reset inherits the parent's style since L21), description and the same
+ * property sections (link types gained a property table in L21).
  */
 
 import type {
+  EffectiveTypeProperty,
   LinkType,
   PropertyDefinition,
   PropertyDefinitionUpdateInput,
   PropertyValueType,
   ThoughtType,
+  TypeOwnerType,
 } from '@etn/shared';
 import { typeNameKey } from '@etn/shared';
 
@@ -37,6 +47,18 @@ import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../l
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
+import {
+  MAX_TYPE_DEPTH,
+  flattenTypeTree,
+  buildTypeTree,
+  orderedTypeRows,
+  resolveLinkTypeVisual,
+  subtreeTypeIds,
+  typeDepth,
+  subtreeHeight,
+  type FlatTypeRow,
+} from '../lib/type-tree.js';
+import { createTypeCombobox } from '../lib/type-combobox.js';
 import { store } from '../state.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dialog.js';
@@ -63,7 +85,7 @@ async function refreshLinkTypes(): Promise<void> {
   store.update({ linkTypes: await etn.types.listLinkTypes(networkId) });
 }
 
-/** Applies a type's colours/font flags to an element (list name cells). */
+/** Applies a type's own colours/font flags to an element (list name cells). */
 function applyTypeStyle(
   target: HTMLElement,
   t: Pick<ThoughtType, 'fg_color' | 'bg_color' | 'font_bold' | 'font_italic' | 'font_underline' | 'font_strike'>,
@@ -71,18 +93,42 @@ function applyTypeStyle(
   if (t.fg_color !== null) target.style.color = t.fg_color;
   if (t.bg_color !== null) target.style.background = t.bg_color;
   applyFontFlags(target, {
-    bold: t.font_bold,
-    italic: t.font_italic,
-    underline: t.font_underline,
-    strike: t.font_strike,
+    bold: t.font_bold ?? false,
+    italic: t.font_italic ?? false,
+    underline: t.font_underline ?? false,
+    strike: t.font_strike ?? false,
   });
 }
 
 // ---------------------------------------------------------------------------
-// Thought types: list + editor
+// Tree rows for the catalogue dialogs (L21): expand/collapse per dialog.
 // ---------------------------------------------------------------------------
 
-/** Opens the thought-types list dialog (L6). */
+/** Rows of a type tree restricted to the expanded nodes. */
+function visibleRows<T extends { id: string; parent_id: string | null; is_root: boolean }>(
+  types: readonly T[],
+  expanded: ReadonlySet<string>,
+): FlatTypeRow<T>[] {
+  return flattenTypeTree(buildTypeTree(types), expanded);
+}
+
+/** The ▸/▾ expander button of a tree row (hidden for leaves). */
+function treeToggle(
+  row: FlatTypeRow<{ id: string; parent_id: string | null; is_root: boolean }>,
+  expanded: ReadonlySet<string>,
+  onToggle: () => void,
+): HTMLElement {
+  const btn = button('', onToggle, 'btn small type-tree-toggle', row.hasChildren ? 'Развернуть/свернуть' : '');
+  btn.textContent = row.hasChildren ? (expanded.has(row.type.id) ? '▾' : '▸') : '';
+  btn.disabled = !row.hasChildren;
+  return btn;
+}
+
+// ---------------------------------------------------------------------------
+// Thought types: tree list + editor
+// ---------------------------------------------------------------------------
+
+/** Opens the thought-types tree dialog (L6/L21). */
 export function showThoughtTypesDialog(): void {
   const networkId = requireNetworkId();
   const errorLine = span('', 'error-text');
@@ -93,6 +139,9 @@ export function showThoughtTypesDialog(): void {
   body.append(
     button('Добавить', () => showThoughtTypeEditor(null, onChanged), 'btn small', 'Создать тип'),
   );
+
+  // L21: the root type is always expanded; everything else starts collapsed.
+  let expanded = new Set<string>();
 
   const onChanged = (): void => void reload();
 
@@ -105,6 +154,9 @@ export function showThoughtTypesDialog(): void {
       tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
+    if (expanded.size === 0) {
+      expanded = new Set(types.filter((t) => t.is_root).map((t) => t.id));
+    }
     const table = el('table', 'table-list');
     const head = el('thead');
     const headRow = el('tr');
@@ -112,14 +164,21 @@ export function showThoughtTypesDialog(): void {
     head.append(headRow);
     table.append(head);
     const tbody = el('tbody');
-    for (const type of types) {
-      const row = el('tr');
+    for (const row of visibleRows(types, expanded)) {
+      const type = row.type;
+      const tr = el('tr');
+      if (type.is_root) tr.classList.add('type-tree-root');
       const nameCell = el('td');
+      nameCell.style.whiteSpace = 'nowrap';
+      const nameWrap = span('', 'type-tree-name');
+      nameWrap.style.paddingLeft = `${Math.max(0, row.depth - 1) * 18}px`;
+      nameWrap.append(treeToggle(row, expanded, () => void toggle(type.id)));
       const icon = span('', 'mini-icon');
       applyThoughtIcon(icon, { icon: type.icon, icon_kind: type.icon_kind, type_id: null });
       const name = span(type.name, 'type-list-name');
       applyTypeStyle(name, type);
-      nameCell.append(icon, name);
+      nameWrap.append(icon, name);
+      nameCell.append(nameWrap);
       const descCell = el('td', 'muted', (type.description ?? '').slice(0, 120));
       descCell.style.maxWidth = '280px';
       descCell.style.overflow = 'hidden';
@@ -127,14 +186,22 @@ export function showThoughtTypesDialog(): void {
       descCell.style.whiteSpace = 'nowrap';
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
-      actions.append(button('✕', () => void removeRow(type), 'btn small', 'Удалить тип'));
-      row.append(nameCell, descCell, actions);
-      row.addEventListener('click', () => showThoughtTypeEditor(type, onChanged));
-      tbody.append(row);
+      if (!type.is_root) {
+        actions.append(button('✕', () => void removeRow(type), 'btn small', 'Удалить тип'));
+      }
+      tr.append(nameCell, descCell, actions);
+      tr.addEventListener('click', () => showThoughtTypeEditor(type, onChanged));
+      tbody.append(tr);
     }
     table.append(tbody);
     tableWrap.replaceChildren(table);
-    if (types.length === 0) tableWrap.replaceChildren(el('p', 'muted', 'Типов нет.'));
+  }
+
+  /** Expands/collapses a node and re-renders (no server round-trip). */
+  function toggle(typeId: string): void {
+    if (expanded.has(typeId)) expanded.delete(typeId);
+    else expanded.add(typeId);
+    void reload();
   }
 
   /** Deletes a thought type (forced: thoughts detached, values dropped). */
@@ -165,7 +232,71 @@ export function showThoughtTypesDialog(): void {
   void reload();
 }
 
-/** Opens the thought-type editor; `type === null` creates a new type (L6). */
+// ---------------------------------------------------------------------------
+// Parent picker (L21) — shared by both type editors
+// ---------------------------------------------------------------------------
+
+/**
+ * The parent-picker combobox of a type editor. Options exclude the type
+ * itself, its descendants and any parent that would push the tree past
+ * {@link MAX_TYPE_DEPTH} levels. The empty entry is the root type — «очистка
+ * родителя равносильна присвоению корневого типа» (08-ui-spec.md §8.1).
+ */
+function buildParentPicker(opts: {
+  kinds: 'thought' | 'link';
+  /** The edited type (null while it is being created). */
+  currentId: () => string | null;
+  value: string | null;
+  onChange: (parentId: string | null) => void;
+}): { root: HTMLElement } {
+  const { kinds, currentId, value, onChange } = opts;
+  const types = (): typeof store.state.thoughtTypes | typeof store.state.linkTypes =>
+    kinds === 'thought' ? store.state.thoughtTypes : store.state.linkTypes;
+  const combo = createTypeCombobox({
+    options: () => {
+      // Candidate parents: every type except the edited one and its
+      // descendants; the depth cap must hold for the resulting subtree.
+      const allowed = (id: string): boolean => {
+        const selfId = currentId();
+        if (selfId !== null) {
+          if (id === selfId) return false;
+          if (subtreeTypeIds(types(), selfId).has(id)) return false;
+        }
+        const subtree = selfId !== null ? subtreeHeight(types(), selfId) : 1;
+        return typeDepth(types(), id) + subtree <= MAX_TYPE_DEPTH;
+      };
+      if (kinds === 'thought') {
+        return orderedTypeRows(store.state.thoughtTypes)
+          .filter((row) => allowed(row.type.id))
+          .map((row) => ({
+            id: row.type.id,
+            label: row.type.name,
+            parent_id: row.type.parent_id,
+            depth: row.depth,
+            has_children: row.hasChildren,
+            selectable: true,
+          }));
+      }
+      return orderedTypeRows(store.state.linkTypes)
+        .filter((row) => allowed(row.type.id))
+        .map((row) => ({
+          id: row.type.id,
+          label: `${row.type.name_forward} / ${row.type.name_reverse}`,
+          parent_id: row.type.parent_id,
+          depth: row.depth,
+          has_children: row.hasChildren,
+          selectable: true,
+        }));
+    },
+    value,
+    placeholder: 'основной тип',
+    emptyLabel: 'основной тип (без родителя)',
+    onChange,
+  });
+  return { root: combo.root };
+}
+
+/** Opens the thought-type editor; `type === null` creates a new type (L6/L21). */
 export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () => void): void {
   const networkId = requireNetworkId();
   // Kept fresh after every immediate patch (icon/style) for If-Match versions.
@@ -210,6 +341,32 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   topRow.append(iconBox, nameInput, settingsBtn);
   body.append(topRow);
 
+  // Parent picker (L21). The root type has no parent; reparenting a type in
+  // use is rejected by the server (the message surfaces in the error line).
+  let pickedParentId: string | null = type === null ? null : (type.parent_id ?? null);
+  const parentField = div('field');
+  const parentLabel = el('p', 'muted', 'Родитель (наследование свойств и стиля)');
+  parentLabel.style.margin = '8px 0 2px';
+  if (type?.is_root === true) {
+    const rootNote = el('p', 'muted', 'Корневой тип — родителя не имеет.');
+    rootNote.style.margin = '0';
+    parentField.append(rootNote);
+  } else {
+    const picker = buildParentPicker({
+      kinds: 'thought',
+      currentId: () => current?.id ?? null,
+      value: type?.parent_id ?? null,
+      onChange: (parentId) => {
+        pickedParentId = parentId;
+        if (current !== null) {
+          void patchType({ parent_id: parentId } as Parameters<typeof patchType>[0]);
+        }
+      },
+    });
+    parentField.append(picker.root);
+  }
+  body.append(parentField);
+
   // Comment (type description / usage rules) — placeholder only, no label.
   const descArea = el('textarea', 'textarea-input');
   descArea.value = type?.description ?? '';
@@ -219,7 +376,7 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
 
   body.append(errorLine);
 
-  // Property table — always visible; a placeholder row until the type exists.
+  // Property sections — always visible; a placeholder row until the type exists.
   const propsHost = div('form-stack');
   body.append(propsHost);
   renderProps();
@@ -236,9 +393,11 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
     body.append(actions);
   }
 
-  /** Applies an immediate patch (icon, style) to the existing type. */
+  /** Applies an immediate patch (icon, style, parent) to the existing type.
+   *  `font_* = null` means «inherit from the parent type» (L21). */
   async function patchType(
     patch: {
+      parent_id?: string | null;
       icon?: string | null;
       icon_kind?: import('@etn/shared').IconKind;
       fg_color?: string | null;
@@ -251,15 +410,7 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   ): Promise<boolean> {
     if (current === null) return false;
     try {
-      // The type's font flags are NOT NULL: a reset arrives as null → false.
-      const input = {
-        ...patch,
-        font_bold: patch.font_bold ?? false,
-        font_italic: patch.font_italic ?? false,
-        font_underline: patch.font_underline ?? false,
-        font_strike: patch.font_strike ?? false,
-      };
-      current = await etn.types.updateThoughtType(networkId, current.id, input, current.version);
+      current = await etn.types.updateThoughtType(networkId, current.id, patch, current.version);
       await refreshThoughtTypes();
       renderIcon();
       onChanged();
@@ -276,24 +427,24 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
       resolved: {
         fg: current.fg_color,
         bg: current.bg_color,
-        bold: current.font_bold,
-        italic: current.font_italic,
-        underline: current.font_underline,
-        strike: current.font_strike,
+        bold: current.font_bold ?? false,
+        italic: current.font_italic ?? false,
+        underline: current.font_underline ?? false,
+        strike: current.font_strike ?? false,
       },
       mode: 'type',
       onApply: (patch) => patchType(patch),
     });
   }
 
-  /** Shows the property table, or a hint while the type is not created yet. */
+  /** Shows the property sections, or a hint while the type is not created yet. */
   function renderProps(): void {
     propsHost.replaceChildren();
-    const label = el('p', 'muted', 'Свойства типа');
+    const label = el('p', 'muted', 'Свойства');
     label.style.margin = '8px 0 2px';
     propsHost.append(label);
     if (current !== null) {
-      propsHost.append(buildPropertiesTable(networkId, current.id, onChanged));
+      propsHost.append(buildPropertiesTable(networkId, 'thought_type', current.id, onChanged));
     } else {
       propsHost.append(el('p', 'muted', 'Свойства станут доступны после создания типа.'));
     }
@@ -344,6 +495,7 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
     try {
       current = await etn.types.createThoughtType(networkId, {
         name,
+        parent_id: pickedParentId,
         description: description === '' ? null : description,
       });
       await refreshThoughtTypes();
@@ -400,15 +552,21 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
 }
 
 // ---------------------------------------------------------------------------
-// Property-definition table + property dialog (thought-type editor)
+// Property-definition tables + property dialog (both type kinds)
 // ---------------------------------------------------------------------------
 
 /**
- * Builds the property-definition table of a thought type (L6): key, value
- * type, default value, reorder and delete. Clicking a row opens the property
- * dialog; «Добавить свойство» opens it for a new property.
+ * Builds the property sections of a type (L6/L21): the type's own
+ * definitions (editable) and the inherited ones (read-only except the
+ * default-value override). Clicking an own row opens the property dialog;
+ * «Добавить свойство» opens it for a new property.
  */
-function buildPropertiesTable(networkId: string, typeId: string, onTouched: () => void): HTMLElement {
+function buildPropertiesTable(
+  networkId: string,
+  ownerType: TypeOwnerType,
+  typeId: string,
+  onTouched: () => void,
+): HTMLElement {
   const box = div('form-stack');
   const tableWrap = div('admin-table-wrap');
   tableWrap.style.maxHeight = '220px';
@@ -421,12 +579,13 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
     button('Добавить свойство', () => showPropertyDialog(null), 'btn small', 'Новое свойство'),
   );
 
-  let defs: PropertyDefinition[] = [];
+  let defs: EffectiveTypeProperty[] = [];
 
   /** Opens the property dialog; reloads the table when it commits a change. */
   function showPropertyDialog(def: PropertyDefinition | null): void {
     openPropertyDialog({
       networkId,
+      ownerType,
       typeId,
       def,
       onDone: () => {
@@ -436,31 +595,45 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
     });
   }
 
-  /** Moves a definition one slot up/down and persists the new order. */
+  /** Opens the default-override dialog of an inherited property (L21). */
+  function showOverrideDialog(def: EffectiveTypeProperty): void {
+    openDefaultOverrideDialog({
+      networkId,
+      ownerType,
+      typeId,
+      def,
+      onDone: () => {
+        onTouched();
+        void reload();
+      },
+    });
+  }
+
+  /** Moves an own definition one slot up/down and persists the new order. */
   async function move(defId: string, delta: -1 | 1): Promise<void> {
-    const ids = defs.map((d) => d.id);
+    const ids = defs.filter((d) => !d.inherited).map((d) => d.id);
     const from = ids.indexOf(defId);
     const to = from + delta;
     if (from < 0 || to < 0 || to >= ids.length) return;
     ids.splice(to, 0, ...ids.splice(from, 1));
     try {
-      await etn.types.reorderTypeProperties(networkId, 'thought_type', typeId, ids);
+      await etn.types.reorderTypeProperties(networkId, ownerType, typeId, ids);
       await reload();
     } catch (err) {
       errorDialog('Изменить порядок', err);
     }
   }
 
-  /** Deletes one definition (its stored values cascade server-side). */
-  async function remove(def: PropertyDefinition): Promise<void> {
+  /** Deletes one own definition (its stored values cascade server-side). */
+  async function remove(def: EffectiveTypeProperty): Promise<void> {
     const ok = await confirmDialog(
       'Удалить свойство',
-      `Удалить свойство «${def.key}»? Значения этого свойства у всех мыслей будут удалены.`,
+      `Удалить свойство «${def.key}»? Значения этого свойства у всех элементов будут удалены.`,
       true,
     );
     if (!ok) return;
     try {
-      await etn.types.removeTypeProperty(networkId, 'thought_type', typeId, def.id);
+      await etn.types.removeTypeProperty(networkId, ownerType, typeId, def.id);
       onTouched();
       await reload();
     } catch (err) {
@@ -468,7 +641,7 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
     }
   }
 
-  /** Renders the definitions table from the server. */
+  /** Renders the own + inherited definition tables from the server. */
   let everMounted = false;
   async function reload(): Promise<void> {
     // The table is built BEFORE its dialog mounts it, so the first reload runs
@@ -476,12 +649,63 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
     // mounted and then discarded (the dialog closed or a newer body took over).
     if (everMounted && !box.isConnected) return;
     try {
-      defs = await etn.types.listTypeProperties(networkId, 'thought_type', typeId);
+      defs = await etn.types.listTypeProperties(networkId, ownerType, typeId);
     } catch (err) {
       tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
     if (box.isConnected) everMounted = true;
+    const own = defs.filter((d) => !d.inherited);
+    const inherited = defs.filter((d) => d.inherited);
+    tableWrap.replaceChildren();
+
+    if (inherited.length > 0) {
+      const inhLabel = el('p', 'muted', 'Унаследованные свойства (тип значения не меняется; переопределяется только значение по умолчанию)');
+      inhLabel.style.margin = '0 0 2px';
+      tableWrap.append(inhLabel);
+      const inhTable = el('table', 'table-list prop-table');
+      const inhHead = el('thead');
+      const inhHeadRow = el('tr');
+      inhHeadRow.append(
+        el('th', undefined, 'Имя'),
+        el('th', undefined, 'Тип'),
+        el('th', undefined, 'Источник'),
+        el('th', undefined, 'По умолчанию'),
+        el('th'),
+      );
+      inhHead.append(inhHeadRow);
+      inhTable.append(inhHead);
+      const inhBody = el('tbody');
+      for (const def of inherited) {
+        const row = el('tr');
+        row.append(el('td', undefined, def.key));
+        row.append(el('td', 'muted', VALUE_TYPE_LABELS[def.value_type]));
+        row.append(el('td', 'muted', def.defined_on_name));
+        row.append(
+          el('td', 'muted', formatDefault(def.default_value) + (def.overridden_here ? ' ●' : '')),
+        );
+        const actions = el('td');
+        actions.style.whiteSpace = 'nowrap';
+        if (def.value_type !== 'thought_ref') {
+          actions.append(
+            button('по умолчанию…', () => showOverrideDialog(def), 'btn small', 'Переопределить значение по умолчанию'),
+          );
+        }
+        if (def.overridden_here) {
+          actions.append(
+            button('сбросить', () => void clearOverride(def), 'btn small', 'Сбросить переопределение'),
+          );
+        }
+        row.append(actions);
+        inhBody.append(row);
+      }
+      inhTable.append(inhBody);
+      tableWrap.append(inhTable);
+      const ownLabel = el('p', 'muted', 'Свойства типа');
+      ownLabel.style.margin = '8px 0 2px';
+      tableWrap.append(ownLabel);
+    }
+
     const table = el('table', 'table-list prop-table');
     const head = el('thead');
     const headRow = el('tr');
@@ -494,11 +718,11 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
     head.append(headRow);
     table.append(head);
     const tbody = el('tbody');
-    for (const def of defs) {
+    for (const def of own) {
       const row = el('tr');
       row.append(el('td', undefined, def.key));
       row.append(el('td', 'muted', VALUE_TYPE_LABELS[def.value_type]));
-      row.append(el('td', 'muted', formatDefault(def)));
+      row.append(el('td', 'muted', formatDefault(def.config?.default_value ?? null)));
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
       actions.append(
@@ -515,24 +739,36 @@ function buildPropertiesTable(networkId: string, typeId: string, onTouched: () =
       tbody.append(row);
     }
     table.append(tbody);
-    tableWrap.replaceChildren(table);
-    if (defs.length === 0) tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
+    tableWrap.append(table);
+    if (own.length === 0 && inherited.length === 0) {
+      tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
+    }
+  }
+
+  /** Drops the type's default-value override (back to the ancestor default). */
+  async function clearOverride(def: EffectiveTypeProperty): Promise<void> {
+    try {
+      await etn.types.setPropertyDefaultOverride(networkId, ownerType, typeId, def.id, null);
+      onTouched();
+      await reload();
+    } catch (err) {
+      errorDialog('Сбросить переопределение', err);
+    }
   }
 
   void reload();
   return box;
 }
 
-/** Human-readable default value of a definition for the table cell. */
-function formatDefault(def: PropertyDefinition): string {
-  const value = def.config?.default_value ?? null;
-  if (value === null) return '—';
+/** Human-readable default value for a table cell. */
+function formatDefault(value: unknown): string {
+  if (value === null || value === undefined) return '—';
   if (typeof value === 'boolean') return value ? 'да' : 'нет';
   return String(value);
 }
 
 /**
- * Builds an input for the "default value" field matching a value type, reading
+ * Builds an input for a "default value" field matching a value type, reading
  * its current value into `read()`. Thought-ref defaults are not supported — a
  * default target makes no sense across thoughts.
  */
@@ -580,6 +816,93 @@ function defaultInputFor(
 }
 
 /**
+ * The default-value override dialog (L21): sets the effective default of an
+ * inherited property for this type, or resets the override.
+ */
+function openDefaultOverrideDialog(opts: {
+  networkId: string;
+  ownerType: TypeOwnerType;
+  typeId: string;
+  def: EffectiveTypeProperty;
+  onDone: () => void;
+}): void {
+  const { networkId, ownerType, typeId, def, onDone } = opts;
+  const errorLine = span('', 'error-text');
+  let value: unknown = def.default_value;
+  const defaultHost = div('form-row');
+  const renderDefault = (): void => {
+    defaultHost.replaceChildren(
+      defaultInputFor(def.value_type, value, (v) => {
+        value = v;
+      }),
+    );
+  };
+  renderDefault();
+
+  const body = div('form-stack');
+  const hint = el(
+    'p',
+    'muted',
+    `Свойство «${def.key}» наследуется от типа «${def.defined_on_name}». ` +
+      'Здесь задаётся значение по умолчанию только для этого типа.',
+  );
+  hint.style.margin = '0';
+  body.append(hint, defaultHost, errorLine);
+
+  /** Applies the override (or clears it when the field is empty). */
+  async function apply(close: () => void): Promise<void> {
+    try {
+      await etn.types.setPropertyDefaultOverride(
+        networkId,
+        ownerType,
+        typeId,
+        def.id,
+        (value ?? null) as string | number | boolean | null,
+      );
+      onDone();
+      close();
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
+  }
+
+  showDialog({
+    title: `Значение по умолчанию — «${def.key}»`,
+    body,
+    width: 460,
+    buttons: [
+      { label: 'Отменить' },
+      ...(def.overridden_here
+        ? [
+            {
+              label: 'Сбросить переопределение',
+              keepOpen: true,
+              onClick: (close: () => void): void => {
+                void (async () => {
+                  try {
+                    await etn.types.setPropertyDefaultOverride(
+                      networkId,
+                      ownerType,
+                      typeId,
+                      def.id,
+                      null,
+                    );
+                    onDone();
+                    close();
+                  } catch (err) {
+                    errorLine.textContent = errText(err);
+                  }
+                })();
+              },
+            } satisfies DialogButton,
+          ]
+        : []),
+      { label: 'Применить', primary: true, keepOpen: true, onClick: (close) => void apply(close) },
+    ],
+  });
+}
+
+/**
  * The property editor dialog (L6): title, value type, default value.
  * New: «Добавить» / «Отменить». Existing: «Применить» / «Удалить» / «Отменить».
  *
@@ -589,11 +912,12 @@ function defaultInputFor(
  */
 function openPropertyDialog(opts: {
   networkId: string;
+  ownerType: TypeOwnerType;
   typeId: string;
   def: PropertyDefinition | null;
   onDone: () => void;
 }): void {
-  const { networkId, typeId, def, onDone } = opts;
+  const { networkId, ownerType, typeId, def, onDone } = opts;
   const isNew = def === null;
   const errorLine = span('', 'error-text');
 
@@ -633,8 +957,9 @@ function openPropertyDialog(opts: {
   let optionsText = choiceOn ? (def?.config?.options ?? []).join('\n') : '';
   const textExtrasHost = div('form-stack');
 
-  // thought_ref type filter: pick from thoughts of the selected types only.
-  // Changing it later never reprocesses stored values.
+  // thought_ref type filter: pick from thoughts of the selected types only
+  // (L21: the type list is the tree; a selected parent matches its whole
+  // subtree on the server). Changing it later never reprocesses stored values.
   const typeFilter = new Set<string>(
     def?.value_type === 'thought_ref'
       ? (def.config?.allowed_type_ids ??
@@ -678,24 +1003,25 @@ function openPropertyDialog(opts: {
   const renderRefFilter = (): void => {
     refFilterHost.replaceChildren();
     if (typeSelect.value !== 'thought_ref') return;
-    const label = el('p', 'muted', 'Отбор по типам — поиск идёт только по ним:');
+    const label = el('p', 'muted', 'Отбор по типам (вместе с подчинёнными) — поиск идёт только по ним:');
     label.style.margin = '0';
     refFilterHost.append(label);
     const boxEl = div('type-filter-box');
-    const types = store.state.thoughtTypes;
-    if (types.length === 0) {
+    const rows = orderedTypeRows(store.state.thoughtTypes).filter((row) => !row.type.is_root);
+    if (rows.length === 0) {
       boxEl.append(el('p', 'muted', 'В сети ещё нет типов мыслей.'));
     }
-    for (const t of types) {
+    for (const row of rows) {
       const lab = el('label', 'checkbox-row');
+      lab.style.marginLeft = `${Math.max(0, row.depth - 2) * 16}px`;
       const check = el('input');
       check.type = 'checkbox';
-      check.checked = typeFilter.has(t.id);
+      check.checked = typeFilter.has(row.type.id);
       check.addEventListener('change', () => {
-        if (check.checked) typeFilter.add(t.id);
-        else typeFilter.delete(t.id);
+        if (check.checked) typeFilter.add(row.type.id);
+        else typeFilter.delete(row.type.id);
       });
-      lab.append(check, span(t.name));
+      lab.append(check, span(row.type.name));
       boxEl.append(lab);
     }
     refFilterHost.append(boxEl);
@@ -774,7 +1100,7 @@ function openPropertyDialog(opts: {
       return;
     }
     try {
-      await etn.types.createTypeProperty(networkId, 'thought_type', typeId, {
+      await etn.types.createTypeProperty(networkId, ownerType, typeId, {
         key,
         value_type: typeSelect.value as PropertyValueType,
         ...configPatch(),
@@ -812,14 +1138,14 @@ function openPropertyDialog(opts: {
       const ok = await confirmDialog(
         'Сменить тип значения',
         `Сменить тип значения свойства «${def.key}»? Значения этого свойства во всех ` +
-          'мыслях будут преобразованы к новому типу; несовместимые — очищены.',
+          'элементах будут преобразованы к новому типу; несовместимые — очищены.',
         true,
       );
       if (!ok) return;
       notice('Ждите: выполняется обработка значений…');
     }
     try {
-      await etn.types.updateTypeProperty(networkId, 'thought_type', typeId, def.id, changes);
+      await etn.types.updateTypeProperty(networkId, ownerType, typeId, def.id, changes);
       if (changes.value_type !== undefined) notice('Обработка выполнена.');
       onDone();
       close();
@@ -833,12 +1159,12 @@ function openPropertyDialog(opts: {
     if (def === null) return;
     const ok = await confirmDialog(
       'Удалить свойство',
-      `Удалить свойство «${def.key}»? Значения этого свойства у всех мыслей будут удалены.`,
+      `Удалить свойство «${def.key}»? Значения этого свойства у всех элементов будут удалены.`,
       true,
     );
     if (!ok) return;
     try {
-      await etn.types.removeTypeProperty(networkId, 'thought_type', typeId, def.id);
+      await etn.types.removeTypeProperty(networkId, ownerType, typeId, def.id);
       onDone();
       close();
     } catch (err) {
@@ -872,10 +1198,10 @@ function openPropertyDialog(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// Link types: list + editor
+// Link types: tree list + editor
 // ---------------------------------------------------------------------------
 
-/** Opens the link-types list dialog (L6). */
+/** Opens the link-types tree dialog (L6/L21). */
 export function showLinkTypesDialog(): void {
   const networkId = requireNetworkId();
   const errorLine = span('', 'error-text');
@@ -886,6 +1212,8 @@ export function showLinkTypesDialog(): void {
   body.append(
     button('Добавить', () => showLinkTypeEditor(null, onChanged), 'btn small', 'Создать тип'),
   );
+
+  let expanded = new Set<string>();
 
   const onChanged = (): void => void reload();
 
@@ -898,6 +1226,9 @@ export function showLinkTypesDialog(): void {
       tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
+    if (expanded.size === 0) {
+      expanded = new Set(types.filter((t) => t.is_root).map((t) => t.id));
+    }
     const table = el('table', 'table-list');
     const head = el('thead');
     const headRow = el('tr');
@@ -909,14 +1240,21 @@ export function showLinkTypesDialog(): void {
     head.append(headRow);
     table.append(head);
     const tbody = el('tbody');
-    for (const type of types) {
-      const row = el('tr');
+    for (const row of visibleRows(types, expanded)) {
+      const type = row.type;
+      const tr = el('tr');
+      if (type.is_root) tr.classList.add('type-tree-root');
       const nameCell = el('td');
-      // Line swatch: colour/dash/width of the type (L6 — visible in the list).
+      nameCell.style.whiteSpace = 'nowrap';
+      const nameWrap = span('', 'type-tree-name');
+      nameWrap.style.paddingLeft = `${Math.max(0, row.depth - 1) * 18}px`;
+      nameWrap.append(treeToggle(row, expanded, () => void toggle(type.id)));
+      // Line swatch: effective colour/dash/width of the type chain (L21).
       const swatch = span('', 'link-type-swatch');
-      const dash = type.style === 'dashed' ? 'dashed' : type.style === 'dotted' ? 'dotted' : 'solid';
-      swatch.style.borderTop = `${Math.max(1, Math.min(6, type.width))}px ${dash} ${type.color ?? '#9aa3b2'}`;
-      nameCell.append(swatch, span(` ${type.name_forward} / ${type.name_reverse}`));
+      const resolved = resolveLinkTypeVisual(types, type.id);
+      swatch.style.borderTop = `${Math.max(1, Math.min(6, resolved.width))}px ${resolved.style} ${resolved.color ?? '#9aa3b2'}`;
+      nameWrap.append(swatch, span(` ${type.name_forward} / ${type.name_reverse}`));
+      nameCell.append(nameWrap);
       const descCell = el('td', 'muted', (type.description ?? '').slice(0, 120));
       descCell.style.maxWidth = '260px';
       descCell.style.overflow = 'hidden';
@@ -924,14 +1262,22 @@ export function showLinkTypesDialog(): void {
       descCell.style.whiteSpace = 'nowrap';
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
-      actions.append(button('✕', () => void removeRow(type), 'btn small', 'Удалить тип'));
-      row.append(nameCell, descCell, actions);
-      row.addEventListener('click', () => showLinkTypeEditor(type, onChanged));
-      tbody.append(row);
+      if (!type.is_root) {
+        actions.append(button('✕', () => void removeRow(type), 'btn small', 'Удалить тип'));
+      }
+      tr.append(nameCell, descCell, actions);
+      tr.addEventListener('click', () => showLinkTypeEditor(type, onChanged));
+      tbody.append(tr);
     }
     table.append(tbody);
     tableWrap.replaceChildren(table);
-    if (types.length === 0) tableWrap.replaceChildren(el('p', 'muted', 'Типов нет.'));
+  }
+
+  /** Expands/collapses a node and re-renders (no server round-trip). */
+  function toggle(typeId: string): void {
+    if (expanded.has(typeId)) expanded.delete(typeId);
+    else expanded.add(typeId);
+    void reload();
   }
 
   /** Deletes a link type (forced: links stay, become untyped). */
@@ -962,7 +1308,7 @@ export function showLinkTypesDialog(): void {
   void reload();
 }
 
-/** Opens the link-type editor; `type === null` creates a new type (L6). */
+/** Opens the link-type editor; `type === null` creates a new type (L6/L21). */
 export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void): void {
   const networkId = requireNetworkId();
   let current = type;
@@ -994,6 +1340,29 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
   namesRow.append(forwardInput, reverseInput, settingsBtn);
   body.append(namesRow);
 
+  // Parent picker (L21), same rules as the thought-type editor.
+  let pickedParentId: string | null = type === null ? null : (type.parent_id ?? null);
+  const parentField = div('field');
+  if (type?.is_root === true) {
+    const rootNote = el('p', 'muted', 'Корневой тип — родителя не имеет.');
+    rootNote.style.margin = '0';
+    parentField.append(rootNote);
+  } else {
+    const picker = buildParentPicker({
+      kinds: 'link',
+      currentId: () => current?.id ?? null,
+      value: type?.parent_id ?? null,
+      onChange: (parentId) => {
+        pickedParentId = parentId;
+        if (current !== null) {
+          void patchStyle({ parent_id: parentId });
+        }
+      },
+    });
+    parentField.append(picker.root);
+  }
+  body.append(parentField);
+
   // Comment (type description / usage rules) — placeholder only, no label.
   const descArea = el('textarea', 'textarea-input');
   descArea.value = type?.description ?? '';
@@ -1002,6 +1371,11 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
   body.append(descArea);
 
   body.append(errorLine);
+
+  // Property sections (L21: link types gained the property table).
+  const propsHost = div('form-stack');
+  body.append(propsHost);
+  renderProps();
 
   if (type === null) {
     const actions = div('form-row');
@@ -1015,23 +1389,26 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
     body.append(actions);
   }
 
-  /** Applies an immediate line-style patch to the existing type. */
+  /** Applies an immediate patch (parent, line style) to the existing type.
+   *  `style`/`width = null` mean «inherit from the parent type» (L21). */
   async function patchStyle(
-    patch: { color?: string | null; style?: import('@etn/shared').LinkStyle | null; width?: number | null },
+    patch: {
+      parent_id?: string | null;
+      color?: string | null;
+      style?: import('@etn/shared').LinkStyle | null;
+      width?: number | null;
+    },
   ): Promise<void> {
     if (current === null) return;
+    // Only the fields present in the patch are sent — an absent field must
+    // keep its stored value, not fall back to «inherit».
+    const input: import('@etn/shared').LinkTypeUpdateInput = {};
+    if (patch.parent_id !== undefined) input.parent_id = patch.parent_id;
+    if (patch.color !== undefined) input.color = patch.color;
+    if (patch.style !== undefined) input.style = patch.style;
+    if (patch.width !== undefined) input.width = patch.width;
     try {
-      // A link type has no null-style semantics — plain defaults instead.
-      current = await etn.types.updateLinkType(
-        networkId,
-        current.id,
-        {
-          color: patch.color ?? null,
-          style: patch.style ?? 'solid',
-          width: patch.width ?? 1,
-        },
-        current.version,
-      );
+      current = await etn.types.updateLinkType(networkId, current.id, input, current.version);
       await refreshLinkTypes();
       onChanged();
     } catch (err) {
@@ -1041,15 +1418,32 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
 
   function openStyle(): void {
     if (current === null) return;
+    // Show the effective line style (resolved along the chain, L21).
+    const resolved = resolveLinkTypeVisual(store.state.linkTypes, current.id);
     showLinkStyleDialog({
       resolved: {
         color: current.color,
-        style: current.style,
-        width: current.width,
+        style: current.style ?? resolved.style,
+        width: current.width ?? resolved.width,
       },
       mode: 'type',
+      // A reset in type mode returns null = inherit from the parent chain.
       onApply: (patch) => patchStyle(patch),
     });
+  }
+
+  /** Shows the property sections, or a hint while the type is not created yet. */
+  function renderProps(): void {
+    propsHost.replaceChildren();
+    const label = el('p', 'muted', 'Свойства');
+    label.style.margin = '8px 0 2px';
+    propsHost.append(label);
+    if (current !== null) {
+      propsHost.append(buildPropertiesTable(networkId, 'link_type', current.id, onChanged));
+    } else {
+      propsHost.append(el('p', 'muted', 'Свойства станут доступны после создания типа.'));
+    }
+    settingsBtn.disabled = current === null;
   }
 
   /** Existing type with the same normalized name pair (self excluded). */
@@ -1103,12 +1497,14 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
       current = await etn.types.createLinkType(networkId, {
         name_forward: nameForward,
         name_reverse: nameReverse,
+        parent_id: pickedParentId,
         description: description === '' ? null : description,
       });
       await refreshLinkTypes();
       onChanged();
       errorLine.textContent = '';
       settingsBtn.disabled = false;
+      renderProps();
       forwardInput.focus();
     } catch (err) {
       errorLine.textContent = errText(err);

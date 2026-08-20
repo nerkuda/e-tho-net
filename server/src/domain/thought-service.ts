@@ -38,6 +38,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { purgeThoughtDeletionDependants } from './owner-cleanup.js';
+import { assertThoughtTypeAssignable } from './thought-type-service.js';
 
 import { getAttachment } from './attachment-service.js';
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
@@ -412,6 +413,11 @@ export function createThought(
   const iconKind: IconKind = input.icon_kind ?? 'emoji';
 
   return ndb.transaction(() => {
+    // The root type is never assignable — its settings apply to untyped
+    // thoughts implicitly (L21, docs/08-ui-spec.md §8.1).
+    if (input.type_id !== undefined && input.type_id !== null) {
+      assertThoughtTypeAssignable(ndb, input.type_id);
+    }
     // Bitmap of manually-provided font_* fields (those absent stay inherited).
     const fontManual =
       (input.font_bold !== undefined ? FONT_BOLD_BIT : 0) |
@@ -502,6 +508,11 @@ export function updateThought(
       args.push(title, normalizeTitle(title));
     }
     if (changes.type_id !== undefined) {
+      // The root type is never assignable — its settings apply to untyped
+      // thoughts implicitly (L21, docs/08-ui-spec.md §8.1).
+      if (changes.type_id !== null) {
+        assertThoughtTypeAssignable(ndb, changes.type_id);
+      }
       sets.push('type_id = ?');
       args.push(changes.type_id);
     }

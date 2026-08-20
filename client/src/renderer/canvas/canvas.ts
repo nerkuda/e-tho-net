@@ -28,6 +28,7 @@ import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
+import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import {
   CLOUD_TITLE_LINES_MIN,
   cloudGeom,
@@ -734,8 +735,9 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolves the visual style of a thought: own values win, then the thought
- * type defaults (08-ui-spec.md §2.2).
+ * Resolves the visual style of a thought: own values win, then the type chain
+ * defaults (L21: the type inherits unset fields from its ancestors; a thought
+ * without a type resolves the root type «основной тип»), 08-ui-spec.md §2.2.
  */
 export function resolveCloudStyle(
   thought: Pick<
@@ -749,19 +751,16 @@ export function resolveCloudStyle(
     | 'type_id'
   >,
 ): CloudStyle {
-  const type =
-    thought.type_id !== null
-      ? store.state.thoughtTypes.find((t) => t.id === thought.type_id)
-      : undefined;
+  const type = resolveThoughtTypeVisual(store.state.thoughtTypes, thought.type_id);
   return {
-    fg: thought.fg_color ?? type?.fg_color ?? null,
-    bg: thought.bg_color ?? type?.bg_color ?? null,
+    fg: thought.fg_color ?? type.fg_color,
+    bg: thought.bg_color ?? type.bg_color,
     // font_* use null-coalesce (NOT OR): a manual `false` must override a `true`
     // type default, which `||` would wrongly collapse (02-data-model.md §3.1.1).
-    bold: thought.font_bold ?? (type?.font_bold ?? false),
-    italic: thought.font_italic ?? (type?.font_italic ?? false),
-    underline: thought.font_underline ?? (type?.font_underline ?? false),
-    strike: thought.font_strike ?? (type?.font_strike ?? false),
+    bold: thought.font_bold ?? (type.font_bold ?? false),
+    italic: thought.font_italic ?? (type.font_italic ?? false),
+    underline: thought.font_underline ?? (type.font_underline ?? false),
+    strike: thought.font_strike ?? (type.font_strike ?? false),
   };
 }
 
@@ -784,8 +783,9 @@ export function applyCloudStyle(cloud: HTMLElement, style: CloudStyle): void {
 }
 
 /**
- * Resolves a thought's icon: its own icon wins, else the thought-type's default
- * icon, else none (the caller falls back to 💬). Returns the icon value together
+ * Resolves a thought's icon: its own icon wins, else the default icon resolved
+ * along the type chain (L21; a thought without a type resolves the root type),
+ * else none (the caller falls back to 💬). Returns the icon value together
  * with its kind (02-data-model.md §3.1.1).
  */
 export function resolveThoughtIcon(thought: {
@@ -796,11 +796,8 @@ export function resolveThoughtIcon(thought: {
   if (thought.icon !== null) {
     return { icon: thought.icon, kind: thought.icon_kind };
   }
-  const type =
-    thought.type_id !== null
-      ? store.state.thoughtTypes.find((t) => t.id === thought.type_id)
-      : undefined;
-  if (type?.icon !== null && type?.icon !== undefined) {
+  const type = resolveThoughtTypeVisual(store.state.thoughtTypes, thought.type_id);
+  if (type.icon !== null) {
     return { icon: type.icon, kind: type.icon_kind };
   }
   return { icon: null, kind: 'emoji' };

@@ -844,12 +844,13 @@ export class RestClient {
     return `/networks/${encodeURIComponent(networkId)}/${kind}`;
   }
 
-  /** `GET /networks/{nid}/{kind}-types/{id}/properties` — list definitions. */
+  /** `GET /networks/{nid}/{kind}-types/{id}/properties` — effective (L21)
+   *  definitions: the type's own plus inherited from ancestors. */
   public async listTypeProperties(
     networkId: string,
     ownerType: TypeOwnerType,
     typeId: string,
-  ): Promise<import('@etn/shared').PropertyDefinition[]> {
+  ): Promise<import('@etn/shared').EffectiveTypeProperty[]> {
     return this.request(
       'GET',
       `${RestClient.typeCollectionPath(networkId, ownerType)}/${encodeURIComponent(typeId)}/properties`,
@@ -914,6 +915,23 @@ export class RestClient {
       'PUT',
       `${RestClient.typeCollectionPath(networkId, ownerType)}/${encodeURIComponent(typeId)}/properties/reorder`,
       { body: { ordered_ids: orderedIds }, requestOptions: opts },
+    );
+  }
+
+  /** `PUT …/types/{id}/properties/{propId}/default` — L21: set (`value`) or
+   *  clear (`null`) a type's default-value override of an inherited property. */
+  public async setTypePropertyDefaultOverride(
+    networkId: string,
+    ownerType: TypeOwnerType,
+    typeId: string,
+    propertyId: string,
+    value: string | number | boolean | null,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'PUT',
+      `${RestClient.typeCollectionPath(networkId, ownerType)}/${encodeURIComponent(typeId)}/properties/${encodeURIComponent(propertyId)}/default`,
+      { body: { value }, requestOptions: opts },
     );
   }
 

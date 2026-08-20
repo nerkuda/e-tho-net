@@ -27,6 +27,7 @@ import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
+import { orderedTypeRows } from '../../lib/type-tree.js';
 import { store } from '../../state.js';
 
 /** One property condition row (values kept as strings; typed on the wire). */
@@ -294,7 +295,11 @@ function renderPanel(): void {
   const tt = block('Типы мыслей');
   renderCheckGroup(
     tt.body,
-    store.state.thoughtTypes.map((t) => ({ id: t.id, label: t.name })),
+    // L21: the type tree (depth drives the indent); a checked parent matches
+    // its whole subtree on the server.
+    orderedTypeRows(store.state.thoughtTypes)
+      .filter((row) => !row.type.is_root)
+      .map((row) => ({ id: row.type.id, label: row.type.name, depth: row.depth - 1 })),
     () => state.typeIds,
     (ids) => {
       state.typeIds = ids;
@@ -308,7 +313,9 @@ function renderPanel(): void {
   const lt = block('Типы связей');
   renderCheckGroup(
     lt.body,
-    store.state.linkTypes.map((t) => ({ id: t.id, label: t.name_forward })),
+    orderedTypeRows(store.state.linkTypes)
+      .filter((row) => !row.type.is_root)
+      .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 })),
     () => state.linkTypeIds,
     (ids) => {
       state.linkTypeIds = ids;
@@ -445,7 +452,7 @@ function applyCheckColumns(list: HTMLElement): void {
 /** Renders only the checklist rows (search, grip and clear button survive). */
 function renderCheckItems(
   list: HTMLElement,
-  items: Array<{ id: string; label: string }>,
+  items: Array<{ id: string; label: string; depth?: number }>,
   getChecked: () => string[],
   onChange: (ids: string[]) => void,
   kind: CheckKind,
@@ -471,6 +478,8 @@ function renderCheckItems(
     input.type = 'checkbox';
     input.checked = checked.has(item.id);
     const label = el('span', '', item.label);
+    // L21: indent the type-tree rows; the root itself is not listed.
+    line.style.paddingLeft = `${Math.max(0, (item.depth ?? 0) - 1) * 14}px`;
     line.append(input, label);
     list.append(line);
   }

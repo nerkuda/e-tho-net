@@ -2,13 +2,19 @@
  * Searchable type picker (L6, 08-ui-spec.md §8.1): a text input with a
  * dropdown over the type catalogue.
  *
- * The input doubles as the search field — typing filters the list; the rows
- * (and the selected value in the input) carry the type's icon, colours and
- * font style so a needed type is easy to spot among many. Link types show a
- * line swatch (colour/dash/width) instead. Keyboard: ↓/↑ move the active row,
- * Enter picks it, Escape closes the list (the caret stays in the input). The
- * list scrolls on its own (wheel, scrollbar, active-row scrollIntoView) and
- * closes on blur, an outside click, a scroll elsewhere, or Escape.
+ * Since L21 the dropdown is a **tree**: rows carry their hierarchy depth
+ * (indent), nodes with children get a ▸/▾ toggle (the root type «основной
+ * тип» is always expanded, everything else starts collapsed), and the root
+ * itself has no selection mark — it is never assignable to a thought/link.
+ * Typing filters the list keeping the matched rows plus their ancestor chain.
+ *
+ * The input doubles as the search field; the rows (and the selected value in
+ * the input) carry the type's icon, colours and font style so a needed type
+ * is easy to spot among many. Link types show a line swatch (colour/dash/
+ * width) instead. Keyboard: ↓/↑ move the active row, Enter picks it, Escape
+ * closes the list (the caret stays in the input). The list scrolls on its own
+ * (wheel, scrollbar, active-row scrollIntoView) and closes on blur, an
+ * outside click, a scroll elsewhere, or Escape.
  *
  * The dropdown is mounted in `document.body` with fixed positioning — it must
  * not be clipped by the host dialog's bounds (08-ui-spec.md §4.2).
@@ -24,6 +30,17 @@ export interface TypeOption {
   /** Type id; `null` is the "no type" entry (added when `emptyLabel` is set). */
   id: string | null;
   label: string;
+  /** Parent type id — drives the tree layout (L21); `null`/absent = top row. */
+  parent_id?: string | null;
+  /** Tree depth (root type = 1) — drives the row indent. */
+  depth?: number;
+  /** The row has child types and can be expanded. */
+  has_children?: boolean;
+  /**
+   * `false` — the row is displayed but cannot be picked (the hierarchy root
+   * «основной тип» has no selection mark, docs/08-ui-spec.md §8.1).
+   */
+  selectable?: boolean;
   /** Optional icon (e.g. a thought type's own/default icon). */
   icon?: { icon: string | null; kind: IconKind } | null;
   /** Optional font/colour style applied to the row and the selected input. */
@@ -36,7 +53,7 @@ export interface TypeOption {
     strike: boolean;
   } | null;
   /** Optional line swatch (a link type's line look) shown before the label. */
-  line?: { color: string | null; style: LinkStyle; width: number } | null;
+  line?: { color: string | null; style: LinkStyle | null; width: number | null } | null;
 }
 
 /** The created combobox widget. */
@@ -73,6 +90,31 @@ export function createTypeCombobox(opts: {
   let activeIndex = -1;
   let rows: TypeOption[] = [];
   let current = opts.value;
+  // Tree expansion state (L21): the root type is always expanded, everything
+  // else starts collapsed (docs/08-ui-spec.md §8.1).
+  const expanded = new Set<string>();
+
+  /** All catalogue options plus the optional "no type" entry on top. */
+  function allOptions(): TypeOption[] {
+    const optsList = options();
+    if (emptyLabel === undefined) return optsList;
+    return [{ id: null, label: emptyLabel, depth: 1 }, ...optsList];
+  }
+
+  /** Auto-expand the root and the ancestor chain of the selected value. */
+  function seedExpansion(): void {
+    expanded.clear();
+    const byId = new Map(options().filter((o) => o.id !== null).map((o) => [o.id as string, o]));
+    for (const opt of byId.values()) {
+      // The root type is always expanded (docs/08-ui-spec.md §8.1).
+      if (opt.selectable === false && opt.parent_id == null) expanded.add(opt.id ?? '');
+    }
+    let walk = current !== null ? byId.get(current) : undefined;
+    while (walk !== undefined && walk.parent_id != null) {
+      expanded.add(walk.parent_id);
+      walk = byId.get(walk.parent_id);
+    }
+  }
 
   /** Renders an option's icon into a box (emoji glyph or <img>). */
   function renderIcon(box: HTMLElement, opt: TypeOption | null): void {
@@ -108,8 +150,9 @@ export function createTypeCombobox(opts: {
   function lineSwatch(line: TypeOption['line']): HTMLElement | null {
     if (line == null) return null;
     const swatch = span('', 'type-combo-swatch');
-    const style = line.style === 'dashed' ? 'dashed' : line.style === 'dotted' ? 'dotted' : 'solid';
-    swatch.style.borderTop = `${Math.max(1, Math.min(6, line.width))}px ${style} ${line.color ?? '#9aa3b2'}`;
+    const dash = line.style === 'dashed' ? 'dashed' : line.style === 'dotted' ? 'dotted' : 'solid';
+    const width = Math.max(1, Math.min(6, line.width ?? 1));
+    swatch.style.borderTop = `${width}px ${dash} ${line.color ?? '#9aa3b2'}`;
     return swatch;
   }
 
@@ -127,24 +170,70 @@ export function createTypeCombobox(opts: {
     applyStyle(input, opt);
   }
 
-  /** Rebuilds the filtered dropdown rows. */
+  /** Rebuilds the dropdown rows: the tree of types, filtered by the query.
+   *
+   * L21: rows carry their tree depth; nodes with children get a ▸/▾ toggle.
+   * A non-empty query keeps every matching row plus its ancestor chain (so
+   * the tree structure stays readable), regardless of the expansion state.
+   */
   function renderList(query: string): void {
     const q = query.trim().toLowerCase();
-    rows = options().filter((o) => o.label.toLowerCase().includes(q));
-    if (emptyLabel !== undefined && emptyLabel.toLowerCase().includes(q)) {
-      rows.unshift({ id: null, label: emptyLabel });
+    const all = allOptions();
+    const byId = new Map(all.filter((o) => o.id !== null).map((o) => [o.id as string, o]));
+    const matches = (o: TypeOption): boolean => o.label.toLowerCase().includes(q);
+    let visible: TypeOption[];
+    if (q === '') {
+      visible = all.filter((o) => o.parent_id == null || expanded.has(o.parent_id));
+      // The "no type" entry (id: null) has no parent — always visible.
+    } else {
+      const keep = new Set<TypeOption>();
+      for (const opt of all) {
+        if (opt.id !== null && matches(opt)) {
+          let walk: TypeOption | undefined = opt;
+          while (walk !== undefined) {
+            keep.add(walk);
+            walk = walk.parent_id != null ? byId.get(walk.parent_id) : undefined;
+          }
+        }
+      }
+      if (emptyLabel !== undefined && matches({ id: null, label: emptyLabel })) {
+        keep.add(all[0]!);
+      }
+      visible = all.filter((o) => keep.has(o));
     }
+    rows = visible;
     list.replaceChildren();
     if (rows.length === 0) {
       activeIndex = -1;
       list.append(el('p', 'muted type-combo-empty', 'Ничего не найдено.'));
       return;
     }
-    const selectedAt = rows.findIndex((o) => o.id === current);
-    activeIndex = selectedAt >= 0 ? selectedAt : 0;
+    const selectableRows = rows.filter((o) => o.selectable !== false);
+    const selectedAt = selectableRows.findIndex((o) => o.id === current);
+    const preferred =
+      selectedAt >= 0 ? rows.indexOf(selectableRows[selectedAt]!) : rows.findIndex((o) => o.selectable !== false);
+    activeIndex = preferred >= 0 ? preferred : 0;
     for (const [index, opt] of rows.entries()) {
       const row = div('type-combo-item');
-      if (index === activeIndex) row.classList.add('active');
+      if (index === activeIndex && opt.selectable !== false) row.classList.add('active');
+      if (opt.selectable === false) row.classList.add('disabled');
+      row.style.paddingLeft = `${8 + Math.max(0, (opt.depth ?? 1) - 1) * 16}px`;
+      if (opt.has_children === true) {
+        const toggle = span('', 'type-combo-toggle');
+        toggle.textContent = expanded.has(opt.id ?? '') ? '▾' : '▸';
+        toggle.addEventListener('mousedown', (event) => event.preventDefault());
+        toggle.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const id = opt.id ?? '';
+          if (expanded.has(id)) expanded.delete(id);
+          else expanded.add(id);
+          renderList(input.value);
+          positionList();
+        });
+        row.append(toggle);
+      } else {
+        row.append(span('', 'type-combo-toggle type-combo-toggle-leaf'));
+      }
       const swatch = lineSwatch(opt.line);
       if (swatch !== null) row.append(swatch);
       const icon = span('', 'type-combo-icon');
@@ -154,7 +243,9 @@ export function createTypeCombobox(opts: {
       applyStyle(label, opt);
       row.append(label);
       row.addEventListener('mousedown', (event) => event.preventDefault()); // keep input focus
-      row.addEventListener('click', () => select(opt));
+      if (opt.selectable !== false) {
+        row.addEventListener('click', () => select(opt));
+      }
       list.append(row);
     }
   }
@@ -176,10 +267,20 @@ export function createTypeCombobox(opts: {
     list.style.width = `${Math.round(width)}px`;
   }
 
-  /** Marks the active row after an arrow-key move. */
+  /** Marks the active row after an arrow-key move (skips non-selectable rows). */
   function setActive(next: number): void {
     if (rows.length === 0) return;
-    activeIndex = Math.max(0, Math.min(rows.length - 1, next));
+    const clamp = Math.max(0, Math.min(rows.length - 1, next));
+    let index = clamp;
+    if (rows[index]?.selectable === false) {
+      // Step to the nearest selectable row in the move direction.
+      const dir = next > activeIndex ? 1 : -1;
+      while (index >= 0 && index < rows.length && rows[index]?.selectable === false) {
+        index += dir;
+      }
+      if (index < 0 || index >= rows.length || rows[index]?.selectable === false) return;
+    }
+    activeIndex = index;
     const items = list.querySelectorAll<HTMLElement>('.type-combo-item');
     items.forEach((item, i) => item.classList.toggle('active', i === activeIndex));
     items[activeIndex]?.scrollIntoView({ block: 'nearest' });
@@ -188,6 +289,7 @@ export function createTypeCombobox(opts: {
   function openList(): void {
     if (open) return;
     open = true;
+    seedExpansion();
     renderList('');
     positionList();
     input.select();

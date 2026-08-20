@@ -48,6 +48,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { getTypeProperty } from './property-service.js';
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
 import { getThoughtOrThrow, rowToThoughtRef } from './thought-service.js';
+import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 
 /** Display columns every thought-ref SELECT must carry (see `resolveThoughts`). */
 export const REF_COLUMNS =
@@ -346,8 +347,12 @@ export function queryThoughts(
   }
 
   if (req.type_ids !== undefined && req.type_ids.length > 0) {
-    where.push(`t.type_id IN (${req.type_ids.map(() => '?').join(',')})`);
-    params.push(...req.type_ids);
+    // L21: a selected parent type matches its whole subtree (OR semantics).
+    const expanded = expandTypeIdsToSubtree(ndb, 'thought_types', req.type_ids);
+    if (expanded.length > 0) {
+      where.push(`t.type_id IN (${expanded.map(() => '?').join(',')})`);
+      params.push(...expanded);
+    }
   }
 
   for (const cond of req.properties ?? []) {
@@ -401,12 +406,16 @@ export function queryThoughts(
   }
 
   if (req.link_type_ids !== undefined && req.link_type_ids.length > 0) {
-    where.push(
-      `EXISTS (SELECT 1 FROM links l WHERE l.active = 1
-         AND l.type_id IN (${req.link_type_ids.map(() => '?').join(',')})
-         AND (l.source_id = t.id OR l.target_id = t.id))`,
-    );
-    params.push(...req.link_type_ids);
+    // L21: subtree expansion, same as the thought-type filter above.
+    const expandedLinks = expandTypeIdsToSubtree(ndb, 'link_types', req.link_type_ids);
+    if (expandedLinks.length > 0) {
+      where.push(
+        `EXISTS (SELECT 1 FROM links l WHERE l.active = 1
+           AND l.type_id IN (${expandedLinks.map(() => '?').join(',')})
+           AND (l.source_id = t.id OR l.target_id = t.id))`,
+      );
+      params.push(...expandedLinks);
+    }
   }
 
   // Sort: enum members validated by the route layer, interpolated as fixed

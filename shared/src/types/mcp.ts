@@ -83,6 +83,9 @@ export type McpResourceUri = string;
 export interface ThoughtTypeRef {
   id: string;
   name: string;
+  /** L21: parent type id; `is_root` marks the hierarchy root «основной тип». */
+  parent_id: string | null;
+  is_root: boolean;
   description: string | null;
   icon: string | null;
 }
@@ -97,9 +100,12 @@ export interface LinkTypeRef {
   id: string;
   name_forward: string;
   name_reverse: string;
+  /** L21: parent type id; `is_root` marks the hierarchy root «основной тип». */
+  parent_id: string | null;
+  is_root: boolean;
   description: string | null;
   color: string | null;
-  style: LinkStyle;
+  style: LinkStyle | null;
 }
 
 // ---------------------------------------------------------------------------

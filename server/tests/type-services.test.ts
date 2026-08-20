@@ -77,7 +77,11 @@ describe(
         try {
           const tt = createThoughtType(ndb, { name: 'Person', description: 'A human being' }, USER);
           assert.equal(tt.description, 'A human being');
-          assert.equal(listThoughtTypes(ndb).length, 1);
+          // The migration seeds the hierarchy root «основной тип» (L21), so
+          // the catalogue holds root + Person.
+          assert.equal(listThoughtTypes(ndb).length, 2);
+          assert.equal(tt.parent_id, listThoughtTypes(ndb).find((t) => t.is_root)?.id ?? null);
+          assert.equal(tt.is_root, false);
 
           const updated = updateThoughtType(
             ndb,
@@ -194,7 +198,8 @@ describe(
           assert.doesNotThrow(() =>
             createLinkType(ndb, { name_forward: 'parent', name_reverse: 'other' }, USER),
           );
-          assert.equal(listLinkTypes(ndb).length, 2);
+          // Root link type (migration seed, L21) + the two created types.
+          assert.equal(listLinkTypes(ndb).length, 3);
         } finally {
           ndb.close();
         }

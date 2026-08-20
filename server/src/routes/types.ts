@@ -58,8 +58,10 @@ import {
 import {
   createTypeProperty,
   deleteTypeProperty,
-  listTypeProperties,
+  getTypeProperty,
+  listEffectiveTypeProperties,
   reorderTypeProperties,
+  setTypePropertyDefaultOverride,
   updateTypeProperty,
 } from '../domain/property-service.js';
 
@@ -74,6 +76,19 @@ interface TypePropertyParams {
   networkId: string;
   id: string;
   propertyId: string;
+}
+
+/**
+ * Parse a `parent_id` body field: a string id, `null`/'' — «under the root».
+ * Returns `undefined` when the field is absent (no change).
+ */
+function fieldParentId(
+  body: Record<string, unknown>,
+  requestId: string,
+): string | null | undefined {
+  if (body.parent_id === undefined) return undefined;
+  const value = fieldNullableString(body, 'parent_id', requestId);
+  return value === undefined || value === '' ? null : value;
 }
 
 /** Parse the body of `POST /thought-types`. */
@@ -94,6 +109,7 @@ function parseThoughtTypeBody(body: Record<string, unknown>, requestId: string):
   }
   return {
     name,
+    parent_id: fieldParentId(body, requestId) ?? null,
     icon,
     icon_kind: iconKind,
     fg_color: fieldNullableString(body, 'fg_color', requestId),
@@ -114,6 +130,10 @@ function parseThoughtTypeUpdateBody(
   const changes: ThoughtTypeUpdateInput = {};
   if (body.name !== undefined) {
     changes.name = fieldString(body, 'name', requestId);
+  }
+  const parentId = fieldParentId(body, requestId);
+  if (parentId !== undefined) {
+    changes.parent_id = parentId;
   }
   if (body.icon !== undefined) {
     changes.icon = fieldNullableString(body, 'icon', requestId);
@@ -168,9 +188,13 @@ function parseLinkTypeBody(body: Record<string, unknown>, requestId: string): Li
   return {
     name_forward: nameForward,
     name_reverse: nameReverse,
+    parent_id: fieldParentId(body, requestId) ?? null,
     color: fieldNullableString(body, 'color', requestId),
-    style: fieldString(body, 'style', requestId) as LinkTypeInput['style'],
-    width: typeof body.width === 'number' ? body.width : undefined,
+    style:
+      body.style === null
+        ? null
+        : (fieldString(body, 'style', requestId) as LinkTypeInput['style']),
+    width: body.width === null ? null : typeof body.width === 'number' ? body.width : undefined,
     description: fieldNullableString(body, 'description', requestId),
   };
 }
@@ -187,22 +211,29 @@ function parseLinkTypeUpdateBody(
   if (body.name_reverse !== undefined) {
     changes.name_reverse = fieldString(body, 'name_reverse', requestId);
   }
+  const parentId = fieldParentId(body, requestId);
+  if (parentId !== undefined) {
+    changes.parent_id = parentId;
+  }
   if (body.color !== undefined) {
     changes.color = fieldNullableString(body, 'color', requestId);
   }
   if (body.style !== undefined) {
-    changes.style = fieldString(body, 'style', requestId) as LinkTypeUpdateInput['style'];
+    changes.style =
+      body.style === null
+        ? null
+        : (fieldString(body, 'style', requestId) as LinkTypeUpdateInput['style']);
   }
   if (body.width !== undefined) {
-    if (typeof body.width !== 'number' || !Number.isFinite(body.width)) {
+    if (body.width !== null && (typeof body.width !== 'number' || !Number.isFinite(body.width))) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'width должен быть числом.',
+        'width должен быть числом или null.',
         { field: 'width' },
         requestId,
       );
     }
-    changes.width = body.width;
+    changes.width = body.width as number | null;
   }
   if (body.description !== undefined) {
     changes.description = fieldNullableString(body, 'description', requestId);
@@ -432,7 +463,9 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as TypeIdParams;
           const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
-          const props = listTypeProperties(ndb, ownerType, id);
+          // L21: the list is the effective (inheritance-aware) one — the
+          // type's own definitions plus everything inherited from ancestors.
+          const props = listEffectiveTypeProperties(ndb, ownerType, id);
           sendList(reply, props, props.length, 0, props.length);
         },
       );
@@ -496,6 +529,52 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
           const props = reorderTypeProperties(ndb, ownerType, id, orderedIds);
           sendList(reply, props, props.length, 0, props.length);
+        },
+      );
+
+      // L21: set/clear a type's default-value override of an inherited
+      // property definition (`value: null` clears the override).
+      app.put(
+        `${pathBase}/:id/properties/:propertyId/default`,
+        { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+        async (req: FastifyRequest, reply) => {
+          const { networkId, id, propertyId } = req.params as TypePropertyParams;
+          const body = requestBody(req);
+          if (!('value' in body)) {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'value обязателен (значение или null).',
+              { field: 'value' },
+              req.id,
+            );
+          }
+          const value = body.value;
+          if (
+            value !== null &&
+            typeof value !== 'string' &&
+            typeof value !== 'number' &&
+            typeof value !== 'boolean'
+          ) {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'value должен быть строкой, числом, булевым или null.',
+              { field: 'value' },
+              req.id,
+            );
+          }
+          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          setTypePropertyDefaultOverride(ndb, ownerType, id, propertyId, value);
+          const def = getTypeProperty(ndb, propertyId);
+          deps.emit(req, networkId, 'property-definition.updated', {
+            id: propertyId,
+            // The payload just signals that this definition's effective
+            // default changed; consumers re-fetch the effective list.
+            changes:
+              value === null ? {} : { config: { ...def?.config, default_value: value } },
+          });
+          sendSuccess(reply, { property_id: propertyId, default_value: value }, {
+            request_id: req.id,
+          });
         },
       );
     };

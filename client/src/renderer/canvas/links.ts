@@ -29,6 +29,7 @@ import { closeMenu, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { div, el } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { ELLIPSE_INSIDE } from '../lib/pure.js';
+import { resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import { store } from '../state.js';
 import { findCloudAnywhere, getRef } from './canvas.js';
 import { showLinkContextMenu } from './context-menu.js';
@@ -489,9 +490,9 @@ function endpointColor(thoughtId: string): string | null {
   const ref = getRef(thoughtId);
   if (ref !== null) {
     if (ref.bg_color !== null) return ref.bg_color;
-    if (ref.type_id !== null) {
-      return store.state.thoughtTypes.find((t) => t.id === ref.type_id)?.bg_color ?? null;
-    }
+    // L21: the type bg colour resolves along the ancestor chain; an untyped
+    // thought resolves the root type.
+    return resolveThoughtTypeVisual(store.state.thoughtTypes, ref.type_id).bg_color;
   }
   return null;
 }
@@ -714,21 +715,22 @@ function drawTopLine(
   }
 }
 
-/** Stroke styling for a bundle: per-link override wins, else the type default. */
+/** Stroke styling for a bundle: per-link override wins, else the type chain. */
 function linkStyle(bundle: Bundle): { color: string; width: number; dash: string } {
   const edges = bundle.edges;
   if (edges.length === 0) {
     return { color: DEFAULT_COLOR, width: BASE_WIDTH, dash: 'none' };
   }
   // Resolve one edge: its own override (color/style/width) wins over the type
-  // default (08-ui-spec.md §6.9). All edges of a bundle must agree, else the
-  // bundle is heterogeneous and falls back to the default stroke.
+  // chain default (08-ui-spec.md §6.9; L21 — unset type fields inherit from
+  // the ancestors, an untyped link resolves the root type). All edges of a
+  // bundle must agree, else the bundle is heterogeneous and falls back to the
+  // default stroke.
   const resolve = (edge: FocusEdge) => {
-    const type =
-      edge.type_id !== null ? store.state.linkTypes.find((t) => t.id === edge.type_id) : undefined;
-    const color = edge.color ?? type?.color ?? null;
-    const style = edge.style ?? type?.style ?? 'solid';
-    const width = edge.width ?? type?.width ?? null;
+    const type = resolveLinkTypeVisual(store.state.linkTypes, edge.type_id);
+    const color = edge.color ?? type.color;
+    const style = edge.style ?? type.style;
+    const width = edge.width ?? type.width;
     return { color, style, width };
   };
   const first = resolve(edges[0]!);

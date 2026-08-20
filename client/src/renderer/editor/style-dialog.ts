@@ -120,21 +120,9 @@ export function showThoughtStyleDialog(opts: {
         danger: true,
         keepOpen: true,
         onClick: (close) => {
-          if (mode === 'type') {
-            // A type's font flags are NOT NULL — reset to plain defaults.
-            void onApply({
-              fg_color: null,
-              bg_color: null,
-              font_bold: false,
-              font_italic: false,
-              font_underline: false,
-              font_strike: false,
-            }).then((ok) => {
-              if (ok) close();
-            });
-            return;
-          }
-          // Null every manual style → inherit from the type.
+          // Both modes reset to «inherit» since L21: a thought inherits its
+          // type chain, a type inherits its parent (the root falls back to
+          // the application defaults).
           void onApply({
             icon: null,
             fg_color: null,
@@ -205,12 +193,9 @@ export function showLinkStyleDialog(opts: {
         danger: true,
         keepOpen: true,
         onClick: (close) => {
-          if (mode === 'type') {
-            // A link type has no per-link override semantics — plain defaults.
-            void onApply({ color: null, style: 'solid', width: 1 }).then(() => close());
-            return;
-          }
-          // Null every override → inherit from the link type.
+          // Since L21 both modes reset to «inherit»: a link inherits its type
+          // chain, a type inherits its parent (the root falls back to the
+          // application defaults solid/1).
           void onApply({ color: null, style: null, width: null }).then(() => close());
         },
       },

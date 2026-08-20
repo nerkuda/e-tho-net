@@ -3991,6 +3991,47 @@ body.cloud-dragging * {
   background: var(--accent-soft);
 }
 
+/* L21: type trees in the type-manager dialogs and filter lists. */
+.type-tree-toggle {
+  min-width: 20px;
+  padding: 0 4px;
+  color: var(--muted, #8a93a5);
+}
+
+.type-tree-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.type-tree-root > td {
+  border-top: 2px solid var(--border, #d5dae3);
+  font-weight: 600;
+}
+
+.type-combo-toggle {
+  flex: none;
+  width: 12px;
+  font-size: 10px;
+  color: var(--muted, #8a93a5);
+  text-align: center;
+  cursor: pointer;
+}
+
+.type-combo-toggle-leaf {
+  cursor: default;
+}
+
+.type-combo-item.disabled {
+  cursor: default;
+  color: var(--muted, #8a93a5);
+}
+
+.type-combo-item.disabled:hover,
+.type-combo-item.disabled.active {
+  background: transparent;
+}
+
 .type-combo-swatch {
   width: 22px;
   border-top: 2px solid var(--link-default);

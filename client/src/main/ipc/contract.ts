@@ -50,6 +50,7 @@ import type {
   Network,
   NetworkListItem,
   NetworkMember,
+  EffectiveTypeProperty,
   PropertyDefinition,
   PropertyDefinitionInput,
   PropertyDefinitionUpdateInput,
@@ -346,12 +347,16 @@ export interface EtnApi {
       expectedVersion: number,
       force?: boolean,
     ): Promise<void>;
-    /** Property definitions of a type (L6); `ownerType` picks the type kind. */
+    /**
+     * Property definitions of a type (L6/L21); `ownerType` picks the type
+     * kind. Since L21 the list is effective: the type's own definitions plus
+     * everything inherited from ancestors (`inherited` flag on each).
+     */
     listTypeProperties(
       networkId: string,
       ownerType: TypeOwnerType,
       typeId: string,
-    ): Promise<PropertyDefinition[]>;
+    ): Promise<EffectiveTypeProperty[]>;
     createTypeProperty(
       networkId: string,
       ownerType: TypeOwnerType,
@@ -377,6 +382,15 @@ export interface EtnApi {
       typeId: string,
       orderedIds: string[],
     ): Promise<PropertyDefinition[]>;
+    /** L21: set (`value`) or clear (`null`) a type's default-value override
+     *  of a property inherited from an ancestor type. */
+    setPropertyDefaultOverride(
+      networkId: string,
+      ownerType: TypeOwnerType,
+      typeId: string,
+      propertyId: string,
+      value: string | number | boolean | null,
+    ): Promise<void>;
   };
   properties: {
     get(

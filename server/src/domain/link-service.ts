@@ -29,6 +29,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { purgeOwnerDependants } from './owner-cleanup.js';
+import { assertLinkTypeAssignable } from './link-type-service.js';
 
 import {
   FONT_BOLD_BIT,
@@ -279,13 +280,8 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
       });
     }
     if (typeId !== null) {
-      const lt = ndb.prepare('SELECT 1 FROM link_types WHERE id = ?').get(typeId);
-      if (!lt) {
-        throw new EtnError('NOT_FOUND', `link type ${typeId} not found`, {
-          entity: 'link_type',
-          id: typeId,
-        });
-      }
+      // The root type is never assignable to links (L21, docs/08-ui-spec.md §8.1).
+      assertLinkTypeAssignable(ndb, typeId);
     }
     // Duplicate guard, NULL-safe on both sides.
     const dup = ndb
@@ -425,15 +421,10 @@ export function updateLink(
       args.push(changes.active ? 1 : 0);
     }
 
-    // If type_id is changing, verify the new type exists.
+    // If type_id is changing, verify the new type exists and is not the root
+    // (the root is never assignable, L21).
     if (changes.type_id !== undefined && newTypeId !== null) {
-      const lt = ndb.prepare('SELECT 1 FROM link_types WHERE id = ?').get(newTypeId);
-      if (!lt) {
-        throw new EtnError('NOT_FOUND', `link type ${newTypeId} not found`, {
-          entity: 'link_type',
-          id: newTypeId,
-        });
-      }
+      assertLinkTypeAssignable(ndb, newTypeId);
     }
     // Duplicate guard for the resulting pair: direction or type may have changed.
     if (changes.type_id !== undefined || endpointsChanging) {

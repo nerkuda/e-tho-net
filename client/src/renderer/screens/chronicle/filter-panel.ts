@@ -28,6 +28,7 @@ import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
+import { orderedTypeRows } from '../../lib/type-tree.js';
 import { store } from '../../state.js';
 import { DEFAULT_FILTER, fromDefinition, toDefinition } from './state.js';
 import type { ChronicleFilterState } from './state.js';
@@ -232,8 +233,9 @@ function showTypesDialog(kind: 'thought' | 'link'): void {
 
   const render = (): void => {
     list.replaceChildren();
-    const renderRow = (id: string, label: string, swatchColor: string | null): void => {
+    const renderRow = (id: string, label: string, swatchColor: string | null, depth: number): void => {
       const lab = el('label', 'checkbox-row');
+      lab.style.marginLeft = `${Math.max(0, depth - 1) * 14}px`;
       const check = el('input');
       check.type = 'checkbox';
       check.checked = selected.has(id);
@@ -256,13 +258,20 @@ function showTypesDialog(kind: 'thought' | 'link'): void {
         list.append(el('p', 'muted', 'В сети ещё нет типов мыслей.'));
         return;
       }
-      for (const t of thoughtTypes) renderRow(t.id, t.name, null);
+      // L21: the type tree with indents; the root is not selectable.
+      for (const row of orderedTypeRows(thoughtTypes)) {
+        if (row.type.is_root) continue;
+        renderRow(row.type.id, row.type.name, null, row.depth - 1);
+      }
     } else {
       if (linkTypes.length === 0) {
         list.append(el('p', 'muted', 'В сети ещё нет типов связей.'));
         return;
       }
-      for (const t of linkTypes) renderRow(t.id, t.name_forward, t.color);
+      for (const row of orderedTypeRows(linkTypes)) {
+        if (row.type.is_root) continue;
+        renderRow(row.type.id, row.type.name_forward, row.type.color, row.depth - 1);
+      }
     }
   };
   render();

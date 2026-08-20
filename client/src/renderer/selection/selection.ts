@@ -26,6 +26,7 @@ import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import { store } from '../state.js';
 import { pickLinkType, pickThoughtType, showSelectionPropertiesDialog } from './dialogs.js';
 import type { ExportFormat } from '@etn/shared';
@@ -441,18 +442,20 @@ async function openStyleDialog(): Promise<void> {
   } catch {
     // Seed from plain defaults when resolve fails.
   }
-  const type =
-    first?.type_id !== undefined && first.type_id !== null
-      ? store.state.thoughtTypes.find((t) => t.id === first!.type_id)
-      : undefined;
+  // L21: the type defaults resolve along the ancestor chain; a thought without
+  // a type resolves the root type.
+  const type = resolveThoughtTypeVisual(
+    store.state.thoughtTypes,
+    first?.type_id !== undefined && first.type_id !== null ? first.type_id : null,
+  );
   showThoughtStyleDialog({
     resolved: {
       fg: first?.fg_color ?? null,
       bg: first?.bg_color ?? null,
-      bold: first?.font_bold ?? type?.font_bold ?? false,
-      italic: first?.font_italic ?? type?.font_italic ?? false,
-      underline: first?.font_underline ?? type?.font_underline ?? false,
-      strike: first?.font_strike ?? type?.font_strike ?? false,
+      bold: first?.font_bold ?? type.font_bold ?? false,
+      italic: first?.font_italic ?? type.font_italic ?? false,
+      underline: first?.font_underline ?? type.font_underline ?? false,
+      strike: first?.font_strike ?? type.font_strike ?? false,
     },
     onApply: (patch) => applyStyleToAll(patch),
   });
