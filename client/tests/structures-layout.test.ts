@@ -108,9 +108,10 @@ describe('flattenStructuresTree', () => {
       rows.map((r) => [r.key, r.indent, r.via?.role ?? null]),
       [
         ['a', 0, null],
-        // The fresh parent p sits above b at b's original indent…
-        [parentKey(childKey('a', 'b'), 'p'), 1, 'parent'],
-        // …then b shifted to 2…
+        // The fresh parent p sits one structural level above b (b's own
+        // column minus one, clamped at 0)…
+        [parentKey(childKey('a', 'b'), 'p'), 0, 'parent'],
+        // …then b shifted to 2 by its own reveal…
         [childKey('a', 'b'), 2, 'child'],
         // …and its children at 3.
         [childKey(childKey('a', 'b'), 'v'), 3, 'child'],
@@ -123,8 +124,8 @@ describe('flattenStructuresTree', () => {
 
   it('climbs the ancestor ladder — each generation reveal shifts the whole subtree (§15.5)', () => {
     // b's parent p is revealed, then p's own parent q is revealed too: q
-    // appears at p's vacated position, p and b (its subordinate) shift one
-    // step right each — a right-climbing ladder, not a fixed single column.
+    // sits at the bottom of the ladder (structural level of p minus one),
+    // p and b (its subordinate) shift one step right each.
     const lookupKeyed: NeighbourLookup = (key, thoughtId, dir) => {
       if (key === childKey('a', 'b') && dir === 'parents') return ['p'];
       if (key === parentKey(childKey('a', 'b'), 'p') && dir === 'parents') return ['q'];
@@ -140,13 +141,47 @@ describe('flattenStructuresTree', () => {
       rows.map((r) => [r.key, r.indent, r.via?.role ?? null]),
       [
         ['a', 0, null],
-        // q (older generation) sits above p at p's vacated column…
-        [parentKey(parentKey(childKey('a', 'b'), 'p'), 'q'), 1, 'parent'],
+        // q (older generation) at the ladder bottom (own level clamped at 0)…
+        [parentKey(parentKey(childKey('a', 'b'), 'p'), 'q'), 0, 'parent'],
         // …p shifted one step right by its own reveal…
-        [parentKey(childKey('a', 'b'), 'p'), 2, 'parent'],
+        [parentKey(childKey('a', 'b'), 'p'), 1, 'parent'],
         // …and b — subordinate to both reveals — at the third step.
         [childKey('a', 'b'), 3, 'child'],
         [childKey('a', 'v'), 1, 'child'],
+      ],
+    );
+  });
+
+  it('reveals children of a revealed parent and parents of that child (§15.5)', () => {
+    // A's parent B is revealed; B's children {V, G} appear below B at A's
+    // column; G's parents {D, E} appear above G at B's column — every shown
+    // row is a full node expandable in both directions.
+    const lookupKeyed: NeighbourLookup = (key, thoughtId, dir) => {
+      if (key === 'a' && dir === 'parents') return ['b'];
+      if (key === parentKey('a', 'b') && dir === 'children') return ['v', 'g'];
+      if (key === childKey(parentKey('a', 'b'), 'g') && dir === 'parents') return ['d', 'e'];
+      return lookup(key, thoughtId, dir);
+    };
+    const expansion: ExpansionMap = new Map([
+      ['a', { parents: true }],
+      [parentKey('a', 'b'), { children: true }],
+      [childKey(parentKey('a', 'b'), 'g'), { parents: true }],
+    ]);
+    const { rows } = flattenStructuresTree(['a'], expansion, lookupKeyed);
+    assert.deepEqual(
+      rows.map((r) => [r.key, r.indent, r.via?.role ?? null]),
+      [
+        // B at the ladder bottom…
+        [parentKey('a', 'b'), 0, 'parent'],
+        // …B's children in order: V first (at A's column)…
+        [childKey(parentKey('a', 'b'), 'v'), 1, 'child'],
+        // …then G's parents D and E above G at B's column (G shifts right)…
+        [parentKey(childKey(parentKey('a', 'b'), 'g'), 'd'), 0, 'parent'],
+        [parentKey(childKey(parentKey('a', 'b'), 'g'), 'e'), 0, 'parent'],
+        // …G itself shifted by its own parents reveal…
+        [childKey(parentKey('a', 'b'), 'g'), 2, 'child'],
+        // …and A shifted by B's reveal (G's reveal does not reach upward).
+        ['a', 1, null],
       ],
     );
   });
@@ -186,5 +221,21 @@ describe('branchThoughtIds / subtreeExpansionKeys', () => {
     ]);
     const keys = subtreeExpansionKeys('a', expansion);
     assert.deepEqual(keys.sort(), ['a', 'a/b', 'a/b/g'].sort());
+  });
+
+  it('directional subtree keys cover only that direction (§15.5)', () => {
+    // Folding the children zone must not touch the parents zone and vice
+    // versa — each ellipse owns its own direction.
+    const expansion: ExpansionMap = new Map([
+      ['a', { parents: true, children: true }],
+      [childKey('a', 'b'), { children: true }],
+      [parentKey('a', 'p'), { children: true }],
+      [parentKey(parentKey('a', 'p'), 'q'), { parents: true }],
+    ]);
+    assert.deepEqual(subtreeExpansionKeys('a', expansion, 'children').sort(), ['a', 'a/b'].sort());
+    assert.deepEqual(
+      subtreeExpansionKeys('a', expansion, 'parents').sort(),
+      ['a', 'a^p', 'a^p^q'].sort(),
+    );
   });
 });

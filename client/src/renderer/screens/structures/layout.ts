@@ -111,7 +111,11 @@ interface RevealSpec {
  *
  * Pass 1 walks the expansion map depth-first, emitting every row in final
  * visual order (parents above, the node, then its children) and recording the
- * reveals in creation order plus the downward edges.
+ * reveals in creation order plus the downward edges. Every row — root, child
+ * or revealed parent — is a full node: its parents expansion reveals parents
+ * one structural level up (≥ 0), its children expansion emits children one
+ * level down; so a revealed parent can further reveal its own parents AND its
+ * children (08-ui-spec.md §15.5).
  *
  * Pass 2 computes a `covers` counter per row: each reveal increments its
  * revealer and the whole downward closure (children chains plus the
@@ -127,7 +131,7 @@ export function flattenStructuresTree(
 ): TreeFlattenResult {
   const specs: RowSpec[] = [];
   const reveals: RevealSpec[] = [];
-  /** Downward child keys of a main row, in emission order. */
+  /** Downward child keys of a row, in emission order. */
   const childEdges = new Map<string, string[]>();
   /** Revealer key of every parent row (its downward link). */
   const parentRevealerOf = new Map<string, string>();
@@ -139,7 +143,7 @@ export function flattenStructuresTree(
     if (lastKey !== null) markerSpecs.push({ afterKey: lastKey, nodeKey, dir });
   };
 
-  const emitMain = (
+  const emitNode = (
     key: string,
     thoughtId: string,
     ownIndent: number,
@@ -151,8 +155,13 @@ export function flattenStructuresTree(
     if (expansion.get(key)?.parents === true) {
       reveals.push({ revealerKey: key });
       const parents = neighborsOf(key, thoughtId, 'parents');
+      // The revealed parents sit one structural level up (clamped at 0) —
+      // the ladder climbs up-left; the rows below shift right via covers.
+      const parentIndent = Math.max(0, ownIndent - 1);
       for (const p of parents) {
-        emitParent(parentKey(key, p), p, ownIndent, rootId, key, thoughtId, depth + 1);
+        const pKey = parentKey(key, p);
+        parentRevealerOf.set(pKey, key);
+        emitNode(pKey, p, parentIndent, rootId, { otherId: thoughtId, role: 'parent' }, depth + 1);
       }
       if (parents.length > 0) pushMoreMarker(key, 'parents');
     }
@@ -161,41 +170,18 @@ export function flattenStructuresTree(
     if (expansion.get(key)?.children === true) {
       const children = neighborsOf(key, thoughtId, 'children');
       for (const c of children) {
-        const childKeyValue = childKey(key, c);
+        const ck = childKey(key, c);
         const list = childEdges.get(key);
-        if (list === undefined) childEdges.set(key, [childKeyValue]);
-        else list.push(childKeyValue);
-        emitMain(childKeyValue, c, ownIndent + 1, rootId, { otherId: thoughtId, role: 'child' }, depth + 1);
+        if (list === undefined) childEdges.set(key, [ck]);
+        else list.push(ck);
+        emitNode(ck, c, ownIndent + 1, rootId, { otherId: thoughtId, role: 'child' }, depth + 1);
       }
       if (children.length > 0) pushMoreMarker(key, 'children');
     }
   };
 
-  const emitParent = (
-    key: string,
-    thoughtId: string,
-    ownIndent: number,
-    rootId: string,
-    revealerKey: string,
-    childId: string,
-    depth: number,
-  ): void => {
-    if (depth > MAX_TREE_DEPTH) return;
-    parentRevealerOf.set(key, revealerKey);
-    if (expansion.get(key)?.parents === true) {
-      reveals.push({ revealerKey: key });
-      const parents = neighborsOf(key, thoughtId, 'parents');
-      for (const p of parents) {
-        emitParent(parentKey(key, p), p, ownIndent, rootId, key, thoughtId, depth + 1);
-      }
-      if (parents.length > 0) pushMoreMarker(key, 'parents');
-    }
-    specs.push({ key, thoughtId, rootId, root: false, ownIndent, via: { otherId: childId, role: 'parent' } });
-    lastKey = key;
-  };
-
   for (const root of roots) {
-    emitMain(root, root, 0, root, null, 0);
+    emitNode(root, root, 0, root, null, 0);
   }
 
   // --- pass 2: covers (ancestor reveals in effect) per row -------------------
@@ -255,11 +241,23 @@ export function branchThoughtIds(rows: TreeRow[], rootId: string): string[] {
 }
 
 /**
- * Node keys whose expansion state is nested under `key` (the subtree that
- * collapses when the node folds). Includes the node's own two directions.
+ * Node keys whose expansion state is nested under `key` — the subtree that
+ * collapses when the node folds. Includes the node's own key. With `dir`, only
+ * the subtree of THAT direction is listed (`key/…` for children, `key^…` for
+ * parents): folding one direction must not touch the other direction's
+ * subtree (§15.5 — each ellipse owns its own zone).
  */
-export function subtreeExpansionKeys(key: string, expansion: ExpansionMap): string[] {
-  const prefixes = [`${key}${CHILD_SEP}`, `${key}${PARENT_SEP}`];
+export function subtreeExpansionKeys(
+  key: string,
+  expansion: ExpansionMap,
+  dir?: HierarchyDir,
+): string[] {
+  const prefixes =
+    dir === 'children'
+      ? [`${key}${CHILD_SEP}`]
+      : dir === 'parents'
+        ? [`${key}${PARENT_SEP}`]
+        : [`${key}${CHILD_SEP}`, `${key}${PARENT_SEP}`];
   const out: string[] = [];
   for (const candidate of expansion.keys()) {
     if (candidate === key || prefixes.some((p) => candidate.startsWith(p))) {

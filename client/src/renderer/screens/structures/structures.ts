@@ -265,21 +265,26 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
   if (networkId === null) return;
   const flags = expansion.get(row.key) ?? {};
   if (flags[dir] === true) {
-    // Fold: drop the direction and the whole nested expansion state.
-    const dropped = subtreeExpansionKeys(row.key, expansion);
+    // Fold: drop the CLICKED direction of this node plus everything nested
+    // under that direction only (§15.5) — the other direction (its zone and
+    // its subtree) stays untouched.
+    const dropped = subtreeExpansionKeys(row.key, expansion, dir);
     for (const key of dropped) {
-      const f = expansion.get(key);
-      if (f !== undefined) {
-        delete f[dir];
-        if (Object.keys(f).length === 0) expansion.delete(key);
-        else expansion.set(key, f);
+      if (key === row.key) {
+        const f = expansion.get(key);
+        if (f !== undefined) {
+          delete f[dir];
+          if (Object.keys(f).length === 0) expansion.delete(key);
+          else expansion.set(key, f);
+        }
+        hierarchy.delete(`${key}|${dir}`);
+        continue;
       }
-      hierarchy.delete(`${key}|${dir}`);
-      hierarchy.delete(`${key}|${dir === 'parents' ? 'children' : 'parents'}`);
+      // Nested under the folded direction: the whole branch disappears.
+      expansion.delete(key);
+      hierarchy.delete(`${key}|parents`);
+      hierarchy.delete(`${key}|children`);
     }
-    delete flags[dir];
-    if (Object.keys(flags).length === 0) expansion.delete(row.key);
-    else expansion.set(row.key, flags);
     renderTree();
     return;
   }
@@ -291,6 +296,9 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
       showInactive: store.state.showInactive,
       excludeIds,
     });
+    // Every neighbor is already shown in this branch (per-branch dedup) —
+    // nothing to reveal, so nothing changes (no shift, no expansion flag).
+    if (data.neighbors.length === 0) return;
     hierarchy.set(`${row.key}|${dir}`, { neighbors: data.neighbors, hasMore: data.has_more });
     for (const ref of data.neighbors) refs.set(ref.id, ref);
     for (const [id, flags] of Object.entries(data.directions)) directions.set(id, flags);

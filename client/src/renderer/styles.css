@@ -3139,11 +3139,6 @@ body.cloud-dragging * {
   display: inline-block;
 }
 
-.st-f-title-active {
-  color: var(--accent);
-  font-weight: 700;
-}
-
 /* «Дополнительно» tri-state rows. */
 .st-f-tri-row {
   display: flex;
@@ -3206,6 +3201,13 @@ body.cloud-dragging * {
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* «Group carries values» marking (§15.3): compound selector — wins over the
+ * base `.st-f-title` regardless of rule order. */
+.st-f-title.st-f-title-active {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .st-f-body {
