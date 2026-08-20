@@ -3461,22 +3461,8 @@ body.cloud-dragging * {
     var(--bg);
 }
 
-/* Active-thought band (§15.7): same gradient-stripe technique as the canvas
- * focus band, anchored via --st-band-top/--st-band-bottom. */
-.st-results::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: linear-gradient(
-    to bottom,
-    transparent calc(var(--st-band-top, 9999px) - 90px),
-    var(--focus-band-color) var(--st-band-top, 9999px),
-    var(--focus-band-color) var(--st-band-bottom, 0px),
-    transparent calc(var(--st-band-bottom, 0px) + 90px)
-  );
-}
+/* The active thought of the view is framed by its cloud halo (.cloud.halo,
+ * §15.7) — the same accent ring as the canvas, no full-width band. */
 
 /* Root branch frame (§15.5): a thin outline around one filter result and
  * everything expanded under/above it — deep trees stay attributable to the

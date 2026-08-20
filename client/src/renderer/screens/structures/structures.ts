@@ -7,8 +7,8 @@
  *  - each expansion fetches one hierarchy level with `exclude_ids` = every
  *    thought already shown in the same root branch (per-branch dedup, §15.5);
  *  - a cloud click opens the thought in the editor WITHOUT switching the canvas
- *    focus and lights the activity band; a connector click opens the link and
- *    dims the band (§15.6–15.7);
+ *    focus and lights its halo; a connector click opens the link and drops
+ *    the halo (§15.6–15.7);
  *  - Ctrl+click on clouds/ellipses feeds the shared selection (§15.8);
  *  - clicking a thought pushes it into the per-view structures history (L4).
  */
@@ -595,7 +595,6 @@ function renderTree(): void {
   counter.textContent = `Показано ${resultIds.length} из ${total}`;
   resultsHost.append(counter);
 
-  updateBand();
   syncStructuresCursor();
   const animated = applyTreeFlip(before);
   if (animated) {
@@ -781,6 +780,12 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   cloud.dataset['id'] = row.thoughtId;
   if (ref !== null && !ref.active) cloud.classList.add('dim');
   if (selection.has(row.thoughtId)) cloud.classList.add('selected');
+  // Halo of the active thought (§15.7): the same accent ring around the cloud
+  // as the canvas (§2.2.4) instead of the old full-width band; it fades out
+  // while a link is open in the editor (the link takes the spotlight).
+  if (store.state.structuresActiveThoughtId === row.thoughtId && store.state.editorTarget?.kind !== 'link') {
+    cloud.classList.add('halo');
+  }
 
   applyCloudStyle(
     cloud,
@@ -1176,30 +1181,6 @@ function connectorLabel(links: FocusEdge[]): string {
   const first = links[0]!;
   const base = linkLabel(first);
   return links.length > 1 ? `${base} ×${links.length}` : base;
-}
-
-/** Positions the active-thought band over its row (§15.7), or hides it. */
-function updateBand(): void {
-  if (resultsHost === null) return;
-  const target = store.state.editorTarget;
-  const activeId =
-    target !== null && target.kind === 'link' ? null : store.state.structuresActiveThoughtId;
-  const row =
-    activeId !== null
-      ? resultsHost.querySelector<HTMLElement>(`.st-row[data-id="${activeId}"]`)
-      : null;
-  if (row === null) {
-    resultsHost.style.setProperty('--st-band-top', '9999px');
-    resultsHost.style.setProperty('--st-band-bottom', '0px');
-    return;
-  }
-  // The rows sit inside .st-branch frames (their own offset parent), so the
-  // band is anchored via viewport rects relative to the scrolling host.
-  const rowRect = row.getBoundingClientRect();
-  const hostRect = resultsHost.getBoundingClientRect();
-  const top = rowRect.top - hostRect.top + resultsHost.scrollTop;
-  resultsHost.style.setProperty('--st-band-top', `${top}px`);
-  resultsHost.style.setProperty('--st-band-bottom', `${top + rowRect.height}px`);
 }
 
 // ---------------------------------------------------------------------------
