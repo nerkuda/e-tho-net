@@ -52,6 +52,13 @@ export interface StructureFilter {
   has_attachments?: StructureTriState;
   /** Has at least one chronological comment entry. */
   has_chronology?: StructureTriState;
+  /**
+   * «Актуальность»: `true` — only active thoughts, `false` — only inactive;
+   * absent — "not important" (the `show_inactive` flag governs). The panel
+   * offers the field only while the client setting «Показывать неактуальное»
+   * is on (§15.3 «Дополнительно»).
+   */
+  active?: StructureTriState;
   show_inactive?: boolean;
 }
 

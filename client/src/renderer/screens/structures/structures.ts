@@ -160,6 +160,7 @@ function parseFilterState(raw: string): FilterState {
       hasComment: parseTriState(parsed.hasComment),
       hasAttachments: parseTriState(parsed.hasAttachments),
       hasChronology: parseTriState(parsed.hasChronology),
+      active: parseTriState(parsed.active),
       sort: parsed.sort === 'alpha' || parsed.sort === 'created' || parsed.sort === 'viewed' ? parsed.sort : 'created',
       order: parsed.order === 'asc' || parsed.order === 'desc' ? parsed.order : 'asc',
       savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,
@@ -529,10 +530,15 @@ function renderSignature(): string {
   ]);
 }
 
-/** Rebuilds the results tree from the current state (full rebuild, small lists). */
+/** Rebuilds the results tree from the current state (full rebuild, small lists).
+ *  An expanding/collapsing layout change plays a FLIP animation (§15.5): the
+ *  rows keep moving smoothly from their old places, freshly revealed rows
+ *  fade in, and removed rows dissolve in place. */
 function renderTree(): void {
   if (host === null || resultsHost === null) return;
   applyCanvasScaleVars(host);
+  finalizeTreeAnimation();
+  const before = captureTreeLayout();
   const { rows, moreMarkers } = currentTree();
   clear(resultsHost);
 
@@ -548,12 +554,13 @@ function renderTree(): void {
   const selection = new Set(store.state.selection);
   // Every filter-result root opens its own framed branch (§15.5): the root row,
   // its parents and its descendants stay visually together, so deep expansions
-  // remain attributable to their root.
+  // remain attributable to its root.
   let branch: HTMLElement | null = null;
   let branchRootId: string | null = null;
   for (const row of rows) {
     if (branch === null || row.rootId !== branchRootId) {
       branch = div('st-branch');
+      branch.dataset['root'] = row.rootId;
       branchRootId = row.rootId;
       resultsHost.append(branch);
     }
@@ -581,9 +588,147 @@ function renderTree(): void {
   resultsHost.append(counter);
 
   updateBand();
-  drawLinks();
-  void refreshEdges();
   syncStructuresCursor();
+  const animated = applyTreeFlip(before);
+  if (animated) {
+    // Lines are drawn at final geometry — wait out the FLIP, then draw.
+    flipUntil = performance.now() + FLIP_MS + 40;
+    flipTimer = window.setTimeout(() => {
+      flipTimer = null;
+      flipUntil = 0;
+      drawLinks();
+    }, FLIP_MS + 50);
+  } else {
+    drawLinks();
+  }
+  void refreshEdges();
+}
+
+// ---------------------------------------------------------------------------
+// FLIP animation of expand/collapse (§15.5)
+// ---------------------------------------------------------------------------
+
+/** Animation duration of one expand/collapse transition, ms. */
+const FLIP_MS = 220;
+/** While set, drawLinks skips (the layout is still animating to it). */
+let flipUntil = 0;
+let flipTimer: number | null = null;
+/** Live FLIP transform cleanups of the current render. */
+let flipCleanups: Array<() => void> = [];
+
+/** Layout snapshot before a rebuild: rows keyed by their path key + branches. */
+interface TreeLayoutSnapshot {
+  rows: Map<string, { left: number; top: number; width: number; html: string }>;
+  branches: Map<string, { left: number; top: number }>;
+}
+
+/** Captures the current row/branch positions relative to the scrolling host. */
+function captureTreeLayout(): TreeLayoutSnapshot {
+  const snapshot: TreeLayoutSnapshot = { rows: new Map(), branches: new Map() };
+  const host = resultsHost;
+  if (host === null) return snapshot;
+  const hostRect = host.getBoundingClientRect();
+  const x = (r: DOMRect): number => r.left - hostRect.left + host.scrollLeft;
+  const y = (r: DOMRect): number => r.top - hostRect.top + host.scrollTop;
+  for (const rowEl of host.querySelectorAll<HTMLElement>('.st-row')) {
+    const key = rowEl.dataset['key'];
+    if (key === undefined) continue;
+    const r = rowEl.getBoundingClientRect();
+    snapshot.rows.set(key, { left: x(r), top: y(r), width: r.width, html: rowEl.outerHTML });
+  }
+  for (const branchEl of host.querySelectorAll<HTMLElement>('.st-branch')) {
+    const root = branchEl.dataset['root'];
+    if (root === undefined) continue;
+    const r = branchEl.getBoundingClientRect();
+    snapshot.branches.set(root, { left: x(r), top: y(r) });
+  }
+  return snapshot;
+}
+
+/** Snaps any running animation to its end and drops the ghosts (new render). */
+function finalizeTreeAnimation(): void {
+  if (flipTimer !== null) {
+    window.clearTimeout(flipTimer);
+    flipTimer = null;
+  }
+  flipUntil = 0;
+  for (const cleanup of flipCleanups) cleanup();
+  flipCleanups = [];
+  resultsHost?.querySelectorAll('.st-ghost').forEach((g) => g.remove());
+}
+
+/** Animates one element from its snapshot position to the current one. */
+function flipElement(el: HTMLElement, from: { left: number; top: number }): boolean {
+  if (resultsHost === null) return false;
+  const hostRect = resultsHost.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  const dx = from.left - (r.left - hostRect.left + resultsHost.scrollLeft);
+  const dy = from.top - (r.top - hostRect.top + resultsHost.scrollTop);
+  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return false;
+  el.style.transition = 'none';
+  el.style.transform = `translate(${dx}px, ${dy}px)`;
+  void el.offsetWidth; // commit the start frame before enabling the transition
+  el.style.transition = `transform ${FLIP_MS}ms ease`;
+  el.style.transform = '';
+  const cleanup = (): void => {
+    el.style.transition = '';
+    el.style.transform = '';
+  };
+  el.addEventListener('transitionend', cleanup, { once: true });
+  flipCleanups.push(cleanup);
+  return true;
+}
+
+/**
+ * Plays the layout change: moved rows/branches FLIP from their old positions,
+ * newly appeared rows fade in, removed rows dissolve as positioned ghosts.
+ * Returns true when anything actually animated.
+ */
+function applyTreeFlip(before: TreeLayoutSnapshot): boolean {
+  if (resultsHost === null) return false;
+  let animated = false;
+  const hostRect = resultsHost.getBoundingClientRect();
+  const afterKeys = new Set<string>();
+
+  for (const rowEl of resultsHost.querySelectorAll<HTMLElement>('.st-row')) {
+    const key = rowEl.dataset['key'];
+    if (key === undefined) continue;
+    afterKeys.add(key);
+    const snap = before.rows.get(key);
+    if (snap === undefined) {
+      rowEl.classList.add('st-fade-in');
+      flipCleanups.push(() => rowEl.classList.remove('st-fade-in'));
+      animated = true;
+      continue;
+    }
+    if (flipElement(rowEl, snap)) animated = true;
+  }
+  for (const branchEl of resultsHost.querySelectorAll<HTMLElement>('.st-branch')) {
+    const root = branchEl.dataset['root'];
+    const snap = root === undefined ? undefined : before.branches.get(root);
+    if (snap !== undefined && flipElement(branchEl, snap)) animated = true;
+  }
+
+  // Removed rows dissolve in place (ghosts over the tree, non-interactive).
+  for (const [key, snap] of before.rows) {
+    if (afterKeys.has(key)) continue;
+    const ghost = div('st-ghost');
+    ghost.innerHTML = snap.html;
+    ghost.style.left = `${snap.left}px`;
+    ghost.style.top = `${snap.top}px`;
+    ghost.style.width = `${snap.width}px`;
+    resultsHost.append(ghost);
+    flipCleanups.push(() => ghost.remove());
+    animated = true;
+  }
+  if (animated) {
+    // Ghosts self-remove after their dissolve animation regardless of the
+    // next render's finalize.
+    window.setTimeout(() => {
+      resultsHost?.querySelectorAll('.st-ghost').forEach((g) => g.remove());
+    }, FLIP_MS + 120);
+  }
+  return animated;
 }
 
 /** Toggles one node's expansion by its DOM-carried identity (§15.10 Ctrl+↑/↓). */
@@ -672,6 +817,12 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
     }
     void toggleExpand(row, 'children');
   });
+  // Hovering an ellipse elevates every link of this thought above the clouds
+  // (§15.6, same as the canvas endpoint highlight).
+  for (const ellipse of [topEllipse, bottomEllipse]) {
+    ellipse.addEventListener('mouseenter', () => setLinksHoverThought(row.thoughtId));
+    ellipse.addEventListener('mouseleave', () => setLinksHoverThought(null));
+  }
 
   const iconBox = div('cloud-icon');
   applyThoughtIcon(iconBox, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
@@ -801,21 +952,93 @@ async function refreshEdges(): Promise<void> {
   }
 }
 
+/** One drawn curve: the bundle, its geometry and stroke (for the top layer). */
+interface DrawnBundle {
+  /** Unique drawn-curve key (`source>target#branch`). */
+  key: string;
+  bundle: EdgeBundle;
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  width: number;
+  dash: string;
+  color: string;
+  label: string;
+}
+
+/** Curves of the last drawLinks() — input of the hover/selection top layer. */
+let drawnBundles: DrawnBundle[] = [];
+/** Curve currently under the pointer (top-layer elevation). */
+let hoveredBundleKey: string | null = null;
+/** Thought whose ellipse is hovered — all its links elevate (§15.6). */
+let linksHoverThoughtId: string | null = null;
+
+/** Records/removes the ellipse-hover elevation of a thought's links. */
+function setLinksHoverThought(id: string | null): void {
+  if (linksHoverThoughtId === id) return;
+  linksHoverThoughtId = id;
+  drawTopOverlay();
+}
+
+/** Redraws the lines after a hover/selection change (cheap, small lists). */
+function drawTopOverlay(): void {
+  if (resultsHost === null) return;
+  resultsHost.querySelectorAll('.st-links-top').forEach((el) => el.remove());
+  const selected = store.state.selectedLinkId;
+  const elevated = drawnBundles.filter(
+    (d) =>
+      d.key === hoveredBundleKey ||
+      (selected !== null && d.bundle.edges.some((e) => e.id === selected)) ||
+      (linksHoverThoughtId !== null &&
+        (d.bundle.sourceId === linksHoverThoughtId || d.bundle.targetId === linksHoverThoughtId)),
+  );
+  if (elevated.length === 0) return;
+
+  const overlay = div('st-links-top');
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('width', String(resultsHost.scrollWidth));
+  svg.setAttribute('height', String(resultsHost.scrollHeight));
+  overlay.append(svg);
+  const zoom = store.state.canvasZoom;
+  for (const d of elevated) {
+    const geo = edgeGeometry(d.from, d.to);
+    const line = document.createElementNS(SVG_NS, 'path');
+    line.setAttribute('d', geo.d);
+    line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', 'var(--warn, #c98a06)');
+    line.setAttribute('stroke-width', String(d.width + 2 * zoom));
+    if (d.dash !== 'none') line.setAttribute('stroke-dasharray', d.dash);
+    svg.append(line);
+    const label = document.createElementNS(SVG_NS, 'text');
+    label.classList.add('st-link-label');
+    label.setAttribute('x', String(geo.mid.x));
+    label.setAttribute('y', String(geo.mid.y - 8 * zoom));
+    label.setAttribute('text-anchor', 'middle');
+    label.textContent = d.label;
+    svg.append(label);
+  }
+  resultsHost.append(overlay);
+}
+
 /**
  * Draws the link curves over the tree (§15.6): one Bézier per directed pair
- * among the visible thoughts, from the source cloud's bottom ellipse to the
- * target cloud's top ellipse — the same geometry and line style as the canvas.
- * A wide transparent hit stroke under each curve captures hover/click; the
- * label (type name, or «Тип ×N» for several links) appears on hover and stays
- * for the selected link. The overlay sits UNDER the rows, so clouds keep
- * their own clicks and only the visible stretches of the curves are
- * interactive.
+ * INSIDE ONE BRANCH FRAME (links between different result frames are not
+ * drawn — the frames are the visual context), from the source cloud's bottom
+ * ellipse to the target cloud's top ellipse — the same geometry and line
+ * style as the canvas. A wide transparent hit stroke under the rows captures
+ * hover/click; the label (type name, or «Тип ×N» for several links) appears
+ * on hover and stays for the selected link. Hovering a line or an endpoint
+ * ellipse elevates the curve above the clouds (drawTopOverlay).
  */
 function drawLinks(): void {
   if (resultsHost === null) return;
+  if (performance.now() < flipUntil) return; // layout still animating
   resultsHost.querySelectorAll('.st-links').forEach((el) => el.remove());
+  drawnBundles = [];
   const bundles = groupEdgeBundles([...edges.values()]);
-  if (bundles.length === 0) return;
+  if (bundles.length === 0) {
+    drawTopOverlay();
+    return;
+  }
 
   const overlay = div('st-links');
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -828,91 +1051,108 @@ function drawLinks(): void {
   const scrollTop = resultsHost.scrollTop;
   const zoom = store.state.canvasZoom;
 
-  // First cloud occurrence per id, in document order.
-  const cloudById = new Map<string, HTMLElement>();
-  for (const cloud of resultsHost.querySelectorAll<HTMLElement>('.st-row .st-cloud')) {
-    const id = cloud.dataset['id'];
-    if (id !== undefined && !cloudById.has(id)) cloudById.set(id, cloud);
-  }
-
-  for (const bundle of bundles) {
-    const fromCloud = cloudById.get(bundle.sourceId);
-    const toCloud = cloudById.get(bundle.targetId);
-    if (fromCloud === undefined || toCloud === undefined) continue;
-    const fr = fromCloud.getBoundingClientRect();
-    const tr = toCloud.getBoundingClientRect();
-    const from = {
-      x: fr.left - hostRect.left + scrollLeft + fr.width / 2,
-      y: fr.bottom - hostRect.top + scrollTop - ELLIPSE_INSIDE * zoom,
-    };
-    const to = {
-      x: tr.left - hostRect.left + scrollLeft + tr.width / 2,
-      y: tr.top - hostRect.top + scrollTop + ELLIPSE_INSIDE * zoom,
-    };
-    if (to.y < from.y) continue; // the target must sit below the source
-    const geo = edgeGeometry(from, to);
-    const style = bundleStroke(bundle);
-    const count = bundle.edges.length;
-    const width = (count > 1 ? ST_LINK_BASE + (count - 1) * ST_LINK_EXTRA : style.width) * zoom;
-
-    const group = document.createElementNS(SVG_NS, 'g');
-    group.classList.add('st-bundle');
-    if (
-      store.state.selectedLinkId !== null &&
-      bundle.edges.some((e) => e.id === store.state.selectedLinkId)
-    ) {
-      group.classList.add('selected');
+  for (const branch of resultsHost.querySelectorAll<HTMLElement>('.st-branch')) {
+    // First cloud occurrence per id inside THIS branch (a thought may render
+    // in several branches; each frame draws its own copy of the link).
+    const cloudById = new Map<string, HTMLElement>();
+    for (const cloud of branch.querySelectorAll<HTMLElement>('.st-row .st-cloud')) {
+      const id = cloud.dataset['id'];
+      if (id !== undefined && !cloudById.has(id)) cloudById.set(id, cloud);
     }
 
-    const visual = document.createElementNS(SVG_NS, 'path');
-    visual.classList.add('st-link-visual');
-    visual.setAttribute('d', geo.d);
-    visual.setAttribute('fill', 'none');
-    visual.setAttribute('stroke', style.color);
-    visual.setAttribute('stroke-width', String(width));
-    if (style.dash !== 'none') visual.setAttribute('stroke-dasharray', style.dash);
+    for (const bundle of bundles) {
+      const fromCloud = cloudById.get(bundle.sourceId);
+      const toCloud = cloudById.get(bundle.targetId);
+      if (fromCloud === undefined || toCloud === undefined) continue;
+      const fr = fromCloud.getBoundingClientRect();
+      const tr = toCloud.getBoundingClientRect();
+      const from = {
+        x: fr.left - hostRect.left + scrollLeft + fr.width / 2,
+        y: fr.bottom - hostRect.top + scrollTop - ELLIPSE_INSIDE * zoom,
+      };
+      const to = {
+        x: tr.left - hostRect.left + scrollLeft + tr.width / 2,
+        y: tr.top - hostRect.top + scrollTop + ELLIPSE_INSIDE * zoom,
+      };
+      if (to.y < from.y) continue; // the target must sit below the source
+      const geo = edgeGeometry(from, to);
+      const style = bundleStroke(bundle);
+      const count = bundle.edges.length;
+      const width = (count > 1 ? ST_LINK_BASE + (count - 1) * ST_LINK_EXTRA : style.width) * zoom;
 
-    // Wide transparent hit stroke following the same curve.
-    const hit = document.createElementNS(SVG_NS, 'path');
-    hit.classList.add('st-link-hit');
-    hit.setAttribute('d', geo.d);
-    hit.setAttribute('fill', 'none');
-    hit.setAttribute('stroke', 'transparent');
-    hit.setAttribute('stroke-width', String(Math.max(width + 10, 16)));
-    hit.setAttribute('pointer-events', 'stroke');
-    hit.setAttribute('cursor', 'pointer');
-    hit.addEventListener('mouseenter', () => group.classList.add('hovered'));
-    hit.addEventListener('mouseleave', () => group.classList.remove('hovered'));
-    hit.addEventListener('click', (event) => {
-      event.stopPropagation();
-      onConnectorClick(event, bundle.edges);
-    });
-    hit.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (bundle.edges.length === 1) {
-        showLinkContextMenu(event, bundle.edges[0]!.id);
-      } else {
-        const items: MenuItem[] = bundle.edges.map((edge) => ({
-          label: `Связь: ${linkLabel(edge)}`,
-          onClick: () => showLinkContextMenuAt(event, edge.id),
-        }));
-        showMenuAt(event.clientX, event.clientY, items);
-      }
-    });
+      const group = document.createElementNS(SVG_NS, 'g');
+      group.classList.add('st-bundle');
 
-    // Label at the curve midpoint, revealed on hover/selection.
-    const label = document.createElementNS(SVG_NS, 'text');
-    label.classList.add('st-link-label');
-    label.setAttribute('x', String(geo.mid.x));
-    label.setAttribute('y', String(geo.mid.y - 8 * zoom));
-    label.setAttribute('text-anchor', 'middle');
-    label.textContent = connectorLabel(bundle.edges);
+      const visual = document.createElementNS(SVG_NS, 'path');
+      visual.classList.add('st-link-visual');
+      visual.setAttribute('d', geo.d);
+      visual.setAttribute('fill', 'none');
+      visual.setAttribute('stroke', style.color);
+      visual.setAttribute('stroke-width', String(width));
+      if (style.dash !== 'none') visual.setAttribute('stroke-dasharray', style.dash);
 
-    group.append(visual, hit, label);
-    svg.append(group);
+      // Wide transparent hit stroke following the same curve.
+      const hit = document.createElementNS(SVG_NS, 'path');
+      hit.classList.add('st-link-hit');
+      hit.setAttribute('d', geo.d);
+      hit.setAttribute('fill', 'none');
+      hit.setAttribute('stroke', 'transparent');
+      hit.setAttribute('stroke-width', String(Math.max(width + 10, 16)));
+      hit.setAttribute('pointer-events', 'stroke');
+      hit.setAttribute('cursor', 'pointer');
+
+      const drawnKey = `${bundle.sourceId}>${bundle.targetId}#${branch.dataset['root'] ?? ''}`;
+      hit.addEventListener('mouseenter', () => {
+        hoveredBundleKey = drawnKey;
+        drawTopOverlay();
+      });
+      hit.addEventListener('mouseleave', () => {
+        if (hoveredBundleKey === drawnKey) {
+          hoveredBundleKey = null;
+          drawTopOverlay();
+        }
+      });
+      hit.addEventListener('click', (event) => {
+        event.stopPropagation();
+        onConnectorClick(event, bundle.edges);
+      });
+      hit.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (bundle.edges.length === 1) {
+          showLinkContextMenu(event, bundle.edges[0]!.id);
+        } else {
+          const items: MenuItem[] = bundle.edges.map((edge) => ({
+            label: `Связь: ${linkLabel(edge)}`,
+            onClick: () => showLinkContextMenuAt(event, edge.id),
+          }));
+          showMenuAt(event.clientX, event.clientY, items);
+        }
+      });
+
+      const label = document.createElementNS(SVG_NS, 'text');
+      label.classList.add('st-link-label');
+      label.setAttribute('x', String(geo.mid.x));
+      label.setAttribute('y', String(geo.mid.y - 8 * zoom));
+      label.setAttribute('text-anchor', 'middle');
+      label.textContent = connectorLabel(bundle.edges);
+
+      group.append(visual, hit, label);
+      svg.append(group);
+      drawnBundles.push({
+        key: drawnKey,
+        bundle,
+        from,
+        to,
+        width,
+        dash: style.dash,
+        color: style.color,
+        label: connectorLabel(bundle.edges),
+      });
+    }
   }
   resultsHost.append(overlay);
+  drawTopOverlay();
 }
 
 /** Re-shows the link context menu at remembered coordinates (multi-link pick). */

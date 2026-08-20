@@ -3163,6 +3163,11 @@ body.cloud-dragging * {
   min-width: 110px;
 }
 
+.st-f-tri-row .st-f-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Type/link-type picker dialog body (§15.3). */
 .st-f-picker {
   display: flex;
@@ -3545,30 +3550,67 @@ body.cloud-dragging * {
   z-index: 1;
 }
 
+/* Elevated copies of hovered/selected curves — ABOVE the clouds, purely
+ * decorative (pointer events stay on the hit strokes below the rows). */
+.st-links-top {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* Dissolving copies of collapsed-away rows (FLIP animation, §15.5). */
+.st-ghost {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  animation: stGhostDissolve 0.26s ease forwards;
+}
+
+.st-ghost .st-row {
+  position: static;
+}
+
+@keyframes stGhostDissolve {
+  to {
+    opacity: 0;
+  }
+}
+
+/* Freshly revealed rows fade in (FLIP animation, §15.5). */
+.st-fade-in {
+  animation: stFadeIn 0.22s ease;
+}
+
+@keyframes stFadeIn {
+  from {
+    opacity: 0;
+  }
+}
+
 .st-links .st-link-visual {
   transition: stroke 0.12s ease;
 }
 
-.st-links .st-bundle.hovered .st-link-visual,
-.st-links .st-bundle.selected .st-link-visual {
-  stroke: var(--warn);
-}
-
-.st-links .st-link-label {
+.st-links .st-link-label,
+.st-links-top .st-link-label {
   fill: var(--text-dim);
   font-size: var(--link-label-font, 11px);
-  opacity: 0;
   paint-order: stroke;
   stroke: var(--surface, #fff);
   stroke-width: 3px;
   pointer-events: none;
   user-select: none;
-  transition: opacity 0.12s ease;
 }
 
-.st-links .st-bundle.hovered .st-link-label,
-.st-links .st-bundle.selected .st-link-label {
-  opacity: 1;
+/* The base copy of a label stays hidden — the elevated top-layer copy is the
+ * one the user sees (§15.6). */
+.st-links .st-link-label {
+  opacity: 0;
+}
+
+.st-links-top .st-link-label {
   fill: var(--warn-strong);
   font-weight: 600;
 }

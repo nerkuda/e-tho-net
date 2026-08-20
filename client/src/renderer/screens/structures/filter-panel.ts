@@ -63,6 +63,8 @@ export interface FilterState {
   hasComment: TriState;
   hasAttachments: TriState;
   hasChronology: TriState;
+  /** «Актуальность»: true/false; null — «не важно» (§15.3 «Дополнительно»). */
+  active: TriState;
   sort: StructureSort;
   order: SortOrder;
   savedFilterId: string | null;
@@ -122,6 +124,7 @@ function defaultState(): FilterState {
     hasComment: null,
     hasAttachments: null,
     hasChronology: null,
+    active: null,
     sort: 'created',
     order: 'asc',
     savedFilterId: null,
@@ -179,7 +182,8 @@ export function setFilterState(next: FilterState): void {
     state.hasProperties === null &&
     state.hasComment === null &&
     state.hasAttachments === null &&
-    state.hasChronology === null;
+    state.hasChronology === null &&
+    state.active === null;
   renderPanel();
 }
 
@@ -229,7 +233,7 @@ export function buildConditions(): StructurePropertyCondition[] {
 /** The «Родительские мысли»/«Дополнительно» fields of the wire filter (§15.3). */
 export function buildExtraFilter(): Pick<
   StructureFilter,
-  'parent_ids' | 'has_properties' | 'has_comment' | 'has_attachments' | 'has_chronology'
+  'parent_ids' | 'has_properties' | 'has_comment' | 'has_attachments' | 'has_chronology' | 'active'
 > {
   const out: ReturnType<typeof buildExtraFilter> = {};
   if (state.parentIds.length > 0) out.parent_ids = state.parentIds;
@@ -237,6 +241,9 @@ export function buildExtraFilter(): Pick<
   if (state.hasComment !== null) out.has_comment = state.hasComment;
   if (state.hasAttachments !== null) out.has_attachments = state.hasAttachments;
   if (state.hasChronology !== null) out.has_chronology = state.hasChronology;
+  // «Актуальность» only participates while «Показывать неактуальное» is on —
+  // otherwise inactive thoughts are not in the candidate set at all (§15.3).
+  if (state.active !== null && store.state.showInactive) out.active = state.active;
   return out;
 }
 
@@ -258,7 +265,7 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
 
   store.subscribe(() => {
     if (host === null || !host.isConnected) return;
-    const signature = `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}`;
+    const signature = `${store.state.networkId ?? ''}|${store.state.thoughtTypes.map((t) => t.id).join(',')}|${store.state.linkTypes.map((t) => t.id).join(',')}|${store.state.showInactive ? 1 : 0}`;
     if (signature !== catalogueSignature) {
       catalogueSignature = signature;
       void loadPropertyDefs().then(() => renderPanel());
@@ -313,7 +320,7 @@ function clearAllCriteria(): void {
   propertiesCollapsed = true;
   extraCollapsed = true;
   renderPanel();
-  callbacks?.onStatePersist();
+  touch();
 }
 
 // ---------------------------------------------------------------------------
@@ -376,26 +383,63 @@ function openFieldDropdown(anchor: HTMLElement, options: Array<{ label: string; 
 // Panel DOM
 // ---------------------------------------------------------------------------
 
-/** Section block with a title. */
-function block(title: string): { box: HTMLElement; body: HTMLElement } {
+/** Section block with a title; the title element is exposed for the uniform
+ *  «group has values» marking (§15.3). */
+function block(title: string): { box: HTMLElement; body: HTMLElement; head: HTMLElement } {
   const box = div('st-f-block');
   const head = el('div', 'st-f-title', title);
   const body = div('st-f-body');
   box.append(head, body);
-  return { box, body };
+  return { box, body, head };
+}
+
+// Group-title elements of the current panel (refreshGroupTitles toggles them).
+let kwTitle: HTMLElement | null = null;
+let parentTitle: HTMLElement | null = null;
+let ttTitle: HTMLElement | null = null;
+let ltTitle: HTMLElement | null = null;
+let propsTitle: HTMLElement | null = null;
+let extraTitle: HTMLElement | null = null;
+
+/**
+ * Uniform «group carries values» marking (§15.3): EVERY group whose criteria
+ * are set — collapsible or not — gets a bold, accent-colored title, so a
+ * collapsed group visibly holds settings. «Сортировка» always has a value and
+ * is never marked.
+ */
+function refreshGroupTitles(): void {
+  kwTitle?.classList.toggle('st-f-title-active', state.keywords.trim() !== '');
+  parentTitle?.classList.toggle('st-f-title-active', state.parentIds.length > 0);
+  ttTitle?.classList.toggle('st-f-title-active', state.typeIds.length > 0);
+  ltTitle?.classList.toggle('st-f-title-active', state.linkTypeIds.length > 0);
+  propsTitle?.classList.toggle('st-f-title-active', state.properties.length > 0);
+  extraTitle?.classList.toggle(
+    'st-f-title-active',
+    state.hasProperties !== null ||
+      state.hasComment !== null ||
+      state.hasAttachments !== null ||
+      state.hasChronology !== null ||
+      (state.active !== null && store.state.showInactive),
+  );
+}
+
+/** Persists the state (L4) and refreshes the uniform group-title marking. */
+function touch(): void {
+  touch();
+  refreshGroupTitles();
 }
 
 /**
- * A collapsible section block: clicking the header toggles the body; the
- * header is bold/accent-colored while collapsed with non-empty content
- * (§15.3 «Свойства»/«Дополнительно»).
+ * A collapsible section block: clicking the header toggles the body. The
+ * header carries the uniform «group has values» marking (bold + accent,
+ * §15.3) — same rule as the always-open groups, collapsed or not.
  */
 function collapsibleBlock(
   title: string,
   getCollapsed: () => boolean,
   setCollapsed: (v: boolean) => void,
   isNonEmpty: () => boolean,
-): { box: HTMLElement; body: HTMLElement; refresh: () => void } {
+): { box: HTMLElement; body: HTMLElement; head: HTMLElement; refresh: () => void } {
   const box = div('st-f-block');
   const head = el('div', 'st-f-title st-f-collapsible-title');
   const caret = el('span', 'st-f-caret', getCollapsed() ? '▸' : '▾');
@@ -406,14 +450,14 @@ function collapsibleBlock(
     const collapsed = getCollapsed();
     body.classList.toggle('hidden', collapsed);
     caret.textContent = collapsed ? '▸' : '▾';
-    head.classList.toggle('st-f-title-active', collapsed && isNonEmpty());
+    head.classList.toggle('st-f-title-active', isNonEmpty());
   };
   head.addEventListener('click', () => {
     setCollapsed(!getCollapsed());
     refresh();
   });
   refresh();
-  return { box, body, refresh };
+  return { box, body, head, refresh };
 }
 
 /** Rebuilds the whole panel from `state`. */
@@ -428,6 +472,7 @@ function renderPanel(): void {
 
   // --- keywords ---------------------------------------------------------
   const kw = block('Ключевые слова');
+  kwTitle = kw.head;
   const kwWrap = div('st-f-kw-wrap');
   keywordsInput = el('input', 'st-f-input st-f-keywords') as HTMLInputElement;
   keywordsInput.type = 'text';
@@ -439,7 +484,7 @@ function renderPanel(): void {
   );
   keywordsInput.addEventListener('input', () => {
     state.keywords = keywordsInput?.value ?? '';
-    callbacks?.onStatePersist();
+    touch();
   });
   keywordsInput.addEventListener('focus', () => {
     if (keywordsInput === null) return;
@@ -451,7 +496,7 @@ function renderPanel(): void {
           if (keywordsInput !== null) {
             keywordsInput.value = word;
             state.keywords = word;
-            callbacks?.onStatePersist();
+            touch();
           }
         },
       })),
@@ -468,7 +513,7 @@ function renderPanel(): void {
   kwClear.addEventListener('click', () => {
     state.keywords = '';
     if (keywordsInput !== null) keywordsInput.value = '';
-    callbacks?.onStatePersist();
+    touch();
   });
   kwWrap.append(keywordsInput, kwClear);
   kw.body.append(kwWrap);
@@ -476,6 +521,7 @@ function renderPanel(): void {
 
   // --- parent thoughts (scope, §15.3) ------------------------------------
   const pt = block('Родительские мысли');
+  parentTitle = pt.head;
   parentFieldBox = div('st-f-chipfield');
   parentFieldBox.tabIndex = 0;
   setTooltip(parentFieldBox, 'Ограничить отбор мыслями, подчинёнными указанным (клик — выбрать)');
@@ -489,7 +535,7 @@ function renderPanel(): void {
   ptClear.addEventListener('click', (event) => {
     event.stopPropagation();
     state.parentIds = [];
-    callbacks?.onStatePersist();
+    touch();
     renderParentField();
   });
   const ptRow = div('st-f-fieldrow');
@@ -500,6 +546,7 @@ function renderPanel(): void {
 
   // --- thought types ------------------------------------------------------
   const tt = block('Типы мыслей');
+  ttTitle = tt.head;
   typeFieldBox = div('st-f-chipfield');
   typeFieldBox.tabIndex = 0;
   typeFieldBox.addEventListener('click', () => void openThoughtTypesPicker());
@@ -512,7 +559,7 @@ function renderPanel(): void {
   ttClear.addEventListener('click', (event) => {
     event.stopPropagation();
     state.typeIds = [];
-    callbacks?.onStatePersist();
+    touch();
     renderThoughtTypeField();
   });
   const ttRow = div('st-f-fieldrow');
@@ -523,6 +570,7 @@ function renderPanel(): void {
 
   // --- link types -----------------------------------------------------------
   const lt = block('Типы связей');
+  ltTitle = lt.head;
   linkTypeFieldBox = div('st-f-chipfield');
   linkTypeFieldBox.tabIndex = 0;
   linkTypeFieldBox.addEventListener('click', () => void openLinkTypesPicker());
@@ -535,7 +583,7 @@ function renderPanel(): void {
   ltClear.addEventListener('click', (event) => {
     event.stopPropagation();
     state.linkTypeIds = [];
-    callbacks?.onStatePersist();
+    touch();
     renderLinkTypeField();
   });
   const ltRow = div('st-f-fieldrow');
@@ -553,6 +601,7 @@ function renderPanel(): void {
     },
     () => state.properties.length > 0,
   );
+  propsTitle = props.head;
   conditionsBox = div('st-f-conds');
   renderConditions();
   const addCond = el('button', 'st-f-add', '+ условие');
@@ -565,7 +614,7 @@ function renderPanel(): void {
         ? { propertyId: first.def.id, op: OPS_BY_TYPE[first.def.value_type][0]!.op, values: [''] }
         : { propertyId: '', op: 'eq', values: [''] },
     ];
-    callbacks?.onStatePersist();
+    touch();
     renderConditions();
     props.refresh();
   });
@@ -583,29 +632,37 @@ function renderPanel(): void {
       state.hasProperties !== null ||
       state.hasComment !== null ||
       state.hasAttachments !== null ||
-      state.hasChronology !== null,
+      state.hasChronology !== null ||
+      (state.active !== null && store.state.showInactive),
   );
+  extraTitle = extra.head;
   const triRow = (
     label: string,
     get: () => TriState,
     set: (v: TriState) => void,
+    options?: { yes: string; no: string; disabled?: boolean; tooltip?: string },
   ): HTMLElement => {
     const row = div('st-f-tri-row');
     row.append(el('span', 'st-f-tri-label', label));
     const select = el('select', 'st-f-input') as HTMLSelectElement;
-    for (const opt of [
+    const opts = [
       { v: '', label: 'не важно' },
-      { v: 'yes', label: 'есть' },
-      { v: 'no', label: 'нет' },
-    ]) {
+      { v: 'yes', label: options?.yes ?? 'есть' },
+      { v: 'no', label: options?.no ?? 'нет' },
+    ];
+    for (const opt of opts) {
       const o = el('option', '', opt.label) as HTMLOptionElement;
       o.value = opt.v;
       select.append(o);
     }
     select.value = get() === null ? '' : get() === true ? 'yes' : 'no';
+    if (options?.disabled === true) {
+      select.disabled = true;
+      if (options.tooltip !== undefined) setTooltip(select, options.tooltip);
+    }
     select.addEventListener('change', () => {
       set(select.value === '' ? null : select.value === 'yes');
-      callbacks?.onStatePersist();
+      touch();
       extra.refresh();
     });
     row.append(select);
@@ -616,6 +673,14 @@ function renderPanel(): void {
     triRow('Комментарий', () => state.hasComment, (v) => (state.hasComment = v)),
     triRow('Вложения', () => state.hasAttachments, (v) => (state.hasAttachments = v)),
     triRow('Хроника', () => state.hasChronology, (v) => (state.hasChronology = v)),
+    triRow('Актуальность', () => state.active, (v) => (state.active = v), {
+      yes: 'актуальные',
+      no: 'не актуальные',
+      // Only meaningful while inactive thoughts are in the candidate set at
+      // all — i.e. the client setting «Показывать неактуальное» is on (§15.3).
+      disabled: !store.state.showInactive,
+      tooltip: 'Доступно при включённой настройке «Показывать неактуальное» (Вид → Неактуальные)',
+    }),
   );
   scroll.append(extra.box);
 
@@ -635,7 +700,7 @@ function renderPanel(): void {
   sortSelect.value = state.sort;
   sortSelect.addEventListener('change', () => {
     state.sort = sortSelect?.value as StructureSort;
-    callbacks?.onStatePersist();
+    touch();
   });
   orderSelect = el('select', 'st-f-input') as HTMLSelectElement;
   for (const opt of [
@@ -649,7 +714,7 @@ function renderPanel(): void {
   orderSelect.value = state.order;
   orderSelect.addEventListener('change', () => {
     state.order = orderSelect?.value as SortOrder;
-    callbacks?.onStatePersist();
+    touch();
   });
   sortRow.append(sortSelect, orderSelect);
   sortBlock.body.append(sortRow);
@@ -693,6 +758,7 @@ function renderPanel(): void {
   footer.append(savedListBox);
   host.append(footer);
   renderSavedList();
+  refreshGroupTitles();
 }
 
 // ---------------------------------------------------------------------------
@@ -779,7 +845,7 @@ async function openParentPicker(): Promise<void> {
   });
   if (result === null) return;
   state.parentIds = pickedThoughtIds(result);
-  callbacks?.onStatePersist();
+  touch();
   renderParentField();
 }
 
@@ -848,7 +914,7 @@ async function openThoughtTypesPicker(): Promise<void> {
   const picked = await openTypePickerDialog('Типы мыслей', rows, state.typeIds);
   if (picked === null) return;
   state.typeIds = picked;
-  callbacks?.onStatePersist();
+  touch();
   renderThoughtTypeField();
 }
 
@@ -859,7 +925,7 @@ async function openLinkTypesPicker(): Promise<void> {
   const picked = await openTypePickerDialog('Типы связей', rows, state.linkTypeIds);
   if (picked === null) return;
   state.linkTypeIds = picked;
-  callbacks?.onStatePersist();
+  touch();
   renderLinkTypeField();
 }
 
@@ -1019,7 +1085,7 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
       op: ops.some((o) => o.op === cond.op) ? cond.op : ops[0]!.op,
       values: [''],
     };
-    callbacks?.onStatePersist();
+    touch();
     renderConditions();
   });
 
@@ -1040,7 +1106,7 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
     // live state as the base (a different op starts with one empty value).
     const live = state.properties[index] ?? cond;
     state.properties[index] = { ...live, op: opSelect.value as StructurePropertyOp, values: [''] };
-    callbacks?.onStatePersist();
+    touch();
     renderConditions();
   });
 
@@ -1051,7 +1117,7 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
   remove.type = 'button';
   remove.addEventListener('click', () => {
     state.properties = state.properties.filter((_, i) => i !== index);
-    callbacks?.onStatePersist();
+    touch();
     renderConditions();
   });
 
@@ -1083,7 +1149,7 @@ function buildValueEditor(
     while (values.length <= i) values.push('');
     values[i] = v;
     state.properties[index] = { ...current, values };
-    callbacks?.onStatePersist();
+    touch();
   };
 
   const addScalar = (i: number): HTMLElement => {
@@ -1159,7 +1225,7 @@ function buildValueEditor(
         const current = live();
         const next = current.values.filter((_, j) => j !== i);
         state.properties[index] = { ...current, values: next.length > 0 ? next : [''] };
-        callbacks?.onStatePersist();
+        touch();
         renderList();
       });
       line.append(rm);
@@ -1170,7 +1236,7 @@ function buildValueEditor(
     add.addEventListener('click', () => {
       const current = live();
       state.properties[index] = { ...current, values: [...current.values, ''] };
-      callbacks?.onStatePersist();
+      touch();
       renderList();
     });
     box.append(add);
@@ -1199,7 +1265,7 @@ function buildThoughtRefEditor(
     while (values.length <= valueIndex) values.push('');
     values[valueIndex] = v;
     state.properties[index] = { ...current, values };
-    callbacks?.onStatePersist();
+    touch();
   };
 
   const input = el('input', 'st-f-input') as HTMLInputElement;
@@ -1359,6 +1425,7 @@ function applySavedFilter(filter: SavedFilter): void {
     hasComment: def.has_comment ?? null,
     hasAttachments: def.has_attachments ?? null,
     hasChronology: def.has_chronology ?? null,
+    active: def.active ?? null,
     sort: def.sort,
     order: def.order,
     savedFilterId: filter.id,
@@ -1412,7 +1479,7 @@ async function saveCurrentFilter(): Promise<void> {
       return;
     }
   }
-  callbacks?.onStatePersist();
+  touch();
   await loadSavedFilters();
   renderSavedList();
   notice(`Отбор «${name}» сохранён`);
@@ -1451,7 +1518,7 @@ async function removeSavedFilter(filter: SavedFilter): Promise<void> {
   }
   if (state.savedFilterId === filter.id) {
     state.savedFilterId = null;
-    callbacks?.onStatePersist();
+    touch();
   }
   await loadSavedFilters();
 }

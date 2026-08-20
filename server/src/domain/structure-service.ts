@@ -157,7 +157,7 @@ export function parseStructureFilter(
     filter.show_inactive = showInactive;
   }
 
-  for (const field of ['has_properties', 'has_comment', 'has_attachments', 'has_chronology'] as const) {
+  for (const field of ['has_properties', 'has_comment', 'has_attachments', 'has_chronology', 'active'] as const) {
     const raw = body[field];
     if (raw !== undefined) {
       if (typeof raw !== 'boolean') {
@@ -256,7 +256,8 @@ export function isFilterEmpty(filter: StructureFilter): boolean {
     filter.has_properties === undefined &&
     filter.has_comment === undefined &&
     filter.has_attachments === undefined &&
-    filter.has_chronology === undefined
+    filter.has_chronology === undefined &&
+    filter.active === undefined
   );
 }
 
@@ -385,7 +386,13 @@ export function queryThoughts(
   const where: string[] = [];
   const params: unknown[] = [];
 
-  if (showInactive !== 1) where.push('t.active = 1');
+  // «Актуальность» (§15.3 «Дополнительно»): an explicit value overrides the
+  // show_inactive default — `false` selects only inactive thoughts.
+  if (req.active !== undefined) {
+    where.push(req.active ? 't.active = 1' : 't.active = 0');
+  } else if (showInactive !== 1) {
+    where.push('t.active = 1');
+  }
 
   if (req.parent_ids !== undefined && req.parent_ids.length > 0) {
     const scoped = expandParentIdsToSubtree(ndb, req.parent_ids, showInactive === 1);

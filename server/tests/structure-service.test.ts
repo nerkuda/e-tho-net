@@ -513,6 +513,33 @@ describe(
           ndb.close();
         }
       });
+
+      it('filters by «Актуальность» overriding the show_inactive default', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const on = seedThought(ndb, { title: 'Живая' });
+          const off = seedThought(ndb, { title: 'Спящая', active: 0 });
+
+          // show_inactive: true includes everything — the default «не важно».
+          const any = queryThoughts(ndb, USER, query({ show_inactive: true, keywords: '*' }));
+          assert.deepEqual(any.items.map((t) => t.title).sort(), ['Home', 'Живая', 'Спящая'].sort());
+
+          // active: true narrows an inclusive query to active-only…
+          const onlyActive = queryThoughts(
+            ndb,
+            USER,
+            query({ show_inactive: true, active: true, keywords: '*' }),
+          );
+          assert.deepEqual(onlyActive.items.map((t) => t.title).sort(), ['Home', 'Живая'].sort());
+
+          // …and active: false selects the inactive ones alone.
+          const onlyInactive = queryThoughts(ndb, USER, query({ active: false, keywords: '*' }));
+          assert.deepEqual(onlyInactive.items.map((t) => t.id), [off]);
+        } finally {
+          ndb.close();
+        }
+      });
     });
 
     describe('queryThoughts: sort & paging', () => {
