@@ -30,6 +30,9 @@ import {
   resolveCloudStyle,
 } from '../../canvas/canvas.js';
 import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
+import { edgeGeometry } from '../../canvas/links.js';
+import { ELLIPSE_INSIDE } from '../../lib/pure.js';
+import { resolveLinkTypeVisual } from '../../lib/type-tree.js';
 import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
 import { invalidateHistoryBar } from '../history-bar.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
@@ -87,8 +90,10 @@ const refs = new Map<string, ThoughtRef>();
 const hierarchy = new Map<string, { neighbors: ThoughtRef[]; hasMore: boolean }>();
 /** Ellipse-fill flags accumulated from hierarchy responses. */
 const directions = new Map<string, { has_incoming: boolean; has_outgoing: boolean }>();
-/** Active links between visible thoughts, deduped by id. */
+/** Every active link among the visible thoughts, deduped by id (§15.6/§6.12). */
 const edges = new Map<string, FocusEdge>();
+/** Signature of the visible-id set the edges cache was fetched for. */
+let edgesSignature = '';
 /** Which nodes have parents/children expanded. */
 let expansion: ExpansionMap = new Map();
 
@@ -116,6 +121,7 @@ export async function ensureStructuresInitialised(): Promise<void> {
   hierarchy.clear();
   directions.clear();
   edges.clear();
+  edgesSignature = '';
   expansion = new Map();
   resetStructuresCursor();
 
@@ -217,6 +223,7 @@ async function applyQuery(reset: boolean): Promise<void> {
       // Stale expansion data must not leak into the fresh tree.
       directions.clear();
       edges.clear();
+      edgesSignature = '';
     } else {
       const known = new Set(resultIds);
       resultIds = [...resultIds, ...result.items.map((r) => r.id).filter((id) => !known.has(id))];
@@ -286,7 +293,6 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
     hierarchy.set(`${row.key}|${dir}`, { neighbors: data.neighbors, hasMore: data.has_more });
     for (const ref of data.neighbors) refs.set(ref.id, ref);
     for (const [id, flags] of Object.entries(data.directions)) directions.set(id, flags);
-    for (const edge of data.edges) edges.set(edge.id, edge);
     expansion.set(row.key, { ...flags, [dir]: true });
     renderTree();
   } catch (err) {
@@ -318,7 +324,6 @@ async function loadMoreNeighbors(nodeKey: string, thoughtId: string, rootId: str
     });
     for (const ref of data.neighbors) refs.set(ref.id, ref);
     for (const [id, flags] of Object.entries(data.directions)) directions.set(id, flags);
-    for (const edge of data.edges) edges.set(edge.id, edge);
     renderTree();
   } catch (err) {
     notice(`Не удалось загрузить ещё: ${errText(err)}`, 'error');
@@ -369,14 +374,6 @@ async function openStructureLink(linkId: string): Promise<void> {
   } catch (err) {
     notice(`Не удалось открыть связь: ${errText(err)}`, 'error');
   }
-}
-
-/** Links between two thoughts (either direction), from the accumulated edges. */
-function pairLinks(a: string, b: string): FocusEdge[] {
-  return [...edges.values()].filter(
-    (e) =>
-      (e.source_id === a && e.target_id === b) || (e.source_id === b && e.target_id === a),
-  );
 }
 
 /** Link label read source → target (§15.6): the forward type name. */
@@ -585,6 +582,7 @@ function renderTree(): void {
 
   updateBand();
   drawLinks();
+  void refreshEdges();
   syncStructuresCursor();
 }
 
@@ -718,91 +716,203 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   return cloud;
 }
 
+// ---------------------------------------------------------------------------
+// Link drawing (§15.6: like the canvas — Bézier curves from the source's
+// bottom ellipse to the target's top ellipse, every active link among the
+// visible thoughts, §6.12)
+// ---------------------------------------------------------------------------
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+/** Base stroke width of a single link, px (mirrors the canvas line style). */
+const ST_LINK_BASE = 1.5;
+/** Extra width per additional link of a pair, px. */
+const ST_LINK_EXTRA = 1.2;
+/** Default stroke colour (the CSS link colour variable). */
+const ST_LINK_DEFAULT = 'var(--link-default, #9aa3b2)';
+
+/** One directed source→target pair of visible thoughts with its links. */
+interface EdgeBundle {
+  sourceId: string;
+  targetId: string;
+  edges: FocusEdge[];
+}
+
+/** Groups edges into directed bundles by `source>target` (like the canvas). */
+function groupEdgeBundles(edges: FocusEdge[]): EdgeBundle[] {
+  const byKey = new Map<string, EdgeBundle>();
+  for (const edge of edges) {
+    const key = `${edge.source_id}>${edge.target_id}`;
+    const bundle = byKey.get(key);
+    if (bundle === undefined) {
+      byKey.set(key, { sourceId: edge.source_id, targetId: edge.target_id, edges: [edge] });
+    } else {
+      bundle.edges.push(edge);
+    }
+  }
+  return [...byKey.values()];
+}
+
 /**
- * Draws one link line per parent→child pair over the tree (§15.6), absolute
- * in the results host: the vertical starts at the parent cloud's bottom-left
- * corner and reaches the child's left edge. Lines are appended in row order,
- * so the links of lower rows paint over the links of the rows above — exactly
- * how several parents of one thought overlap. A line is a single element, so
- * hovering it highlights the whole link at once (--warn) and reveals the
- * source → target label, which otherwise stays hidden (no label collisions).
+ * Stroke styling of a bundle, mirroring the canvas line style: a per-link
+ * override wins, else the link-type chain default; bundles whose links
+ * disagree fall back to the default stroke.
+ */
+function bundleStroke(bundle: EdgeBundle): { color: string; width: number; dash: string } {
+  const resolve = (edge: FocusEdge): { color: string | null; style: string | null; width: number | null } => {
+    const type = resolveLinkTypeVisual(store.state.linkTypes, edge.type_id);
+    return {
+      color: edge.color ?? type.color,
+      style: edge.style ?? type.style,
+      width: edge.width ?? type.width,
+    };
+  };
+  const first = resolve(bundle.edges[0]!);
+  const allAgree = bundle.edges.every((edge) => {
+    const s = resolve(edge);
+    return s.color === first.color && s.style === first.style && s.width === first.width;
+  });
+  if (!allAgree) {
+    return { color: ST_LINK_DEFAULT, width: ST_LINK_BASE, dash: 'none' };
+  }
+  const dash = first.style === 'dashed' ? '6 4' : first.style === 'dotted' ? '2 4' : 'none';
+  return {
+    color: first.color ?? ST_LINK_DEFAULT,
+    width: first.width ?? ST_LINK_BASE,
+    dash,
+  };
+}
+
+/** Refetches every active link among the visible thoughts when the visible set
+ *  changed (§6.12), then redraws the ellipse-to-ellipse lines. */
+async function refreshEdges(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null || resultsHost === null) return;
+  const ids = [...new Set(currentRows().map((r) => r.thoughtId))];
+  const signature = `${store.state.showInactive ? 1 : 0}|${ids.slice().sort().join(',')}`;
+  if (signature === edgesSignature) return;
+  edgesSignature = signature;
+  try {
+    const list = await etn.structures.edges(networkId, ids, store.state.showInactive);
+    edges.clear();
+    for (const edge of list) edges.set(edge.id, edge);
+    drawLinks();
+  } catch {
+    // The tree stays usable without the lines.
+  }
+}
+
+/**
+ * Draws the link curves over the tree (§15.6): one Bézier per directed pair
+ * among the visible thoughts, from the source cloud's bottom ellipse to the
+ * target cloud's top ellipse — the same geometry and line style as the canvas.
+ * A wide transparent hit stroke under each curve captures hover/click; the
+ * label (type name, or «Тип ×N» for several links) appears on hover and stays
+ * for the selected link. The overlay sits UNDER the rows, so clouds keep
+ * their own clicks and only the visible stretches of the curves are
+ * interactive.
  */
 function drawLinks(): void {
   if (resultsHost === null) return;
-  resultsHost.querySelectorAll('.st-link-line').forEach((l) => l.remove());
+  resultsHost.querySelectorAll('.st-links').forEach((el) => el.remove());
+  const bundles = groupEdgeBundles([...edges.values()]);
+  if (bundles.length === 0) return;
+
+  const overlay = div('st-links');
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('width', String(resultsHost.scrollWidth));
+  svg.setAttribute('height', String(resultsHost.scrollHeight));
+  overlay.append(svg);
+
   const hostRect = resultsHost.getBoundingClientRect();
   const scrollLeft = resultsHost.scrollLeft;
   const scrollTop = resultsHost.scrollTop;
+  const zoom = store.state.canvasZoom;
 
-  for (const branch of resultsHost.querySelectorAll<HTMLElement>('.st-branch')) {
-    const rows = [...branch.querySelectorAll<HTMLElement>('.st-row')];
-    const rowsById = new Map<string, HTMLElement>();
-    for (const rowEl of rows) {
-      const id = rowEl.dataset['id'];
-      if (id !== undefined) rowsById.set(id, rowEl);
-    }
-    const drawn = new Set<string>();
-    for (const rowEl of rows) {
-      const selfId = rowEl.dataset['id'];
-      const viaId = rowEl.dataset['via'];
-      const role = rowEl.dataset['role'];
-      if (selfId === undefined || viaId === undefined) continue;
-      if (role !== 'child' && role !== 'parent') continue;
-      const parentId = role === 'child' ? viaId : selfId;
-      const childId = role === 'child' ? selfId : viaId;
-      const pairKey = `${parentId}|${childId}`;
-      if (drawn.has(pairKey)) continue;
-      drawn.add(pairKey);
-
-      const parentCloud =
-        rowsById.get(parentId)?.querySelector<HTMLElement>('.st-cloud') ?? null;
-      const childCloud =
-        rowsById.get(childId)?.querySelector<HTMLElement>('.st-cloud') ?? null;
-      if (parentCloud === null || childCloud === null) continue;
-
-      const pr = parentCloud.getBoundingClientRect();
-      const cr = childCloud.getBoundingClientRect();
-      const x = pr.left - hostRect.left + scrollLeft + 5;
-      const yTop = pr.bottom - hostRect.top + scrollTop;
-      const yMid = cr.top - hostRect.top + scrollTop + cr.height / 2;
-      const xEnd = cr.left - hostRect.left + scrollLeft;
-      if (yMid <= yTop) continue; // the child cannot sit above its parent
-
-      const line = div('st-link-line');
-      line.style.left = `${x}px`;
-      line.style.top = `${yTop}px`;
-      line.style.width = `${Math.max(2, xEnd - x)}px`;
-      line.style.height = `${yMid - yTop}px`;
-
-      const links = pairLinks(parentId, childId);
-      if (links.length > 0) {
-        const selected = store.state.selectedLinkId;
-        if (selected !== null && links.some((l) => l.id === selected)) {
-          line.classList.add('st-selected');
-        }
-        const label = el('span', 'st-link-label', connectorLabel(links));
-        line.append(label);
-        line.addEventListener('click', (event) => {
-          event.stopPropagation();
-          onConnectorClick(event, links);
-        });
-        line.addEventListener('contextmenu', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (links.length === 1) {
-            showLinkContextMenu(event, links[0]!.id);
-          } else {
-            const items: MenuItem[] = links.map((edge) => ({
-              label: `Связь: ${linkLabel(edge)}`,
-              onClick: () => showLinkContextMenuAt(event, edge.id),
-            }));
-            showMenuAt(event.clientX, event.clientY, items);
-          }
-        });
-      }
-      resultsHost.append(line);
-    }
+  // First cloud occurrence per id, in document order.
+  const cloudById = new Map<string, HTMLElement>();
+  for (const cloud of resultsHost.querySelectorAll<HTMLElement>('.st-row .st-cloud')) {
+    const id = cloud.dataset['id'];
+    if (id !== undefined && !cloudById.has(id)) cloudById.set(id, cloud);
   }
+
+  for (const bundle of bundles) {
+    const fromCloud = cloudById.get(bundle.sourceId);
+    const toCloud = cloudById.get(bundle.targetId);
+    if (fromCloud === undefined || toCloud === undefined) continue;
+    const fr = fromCloud.getBoundingClientRect();
+    const tr = toCloud.getBoundingClientRect();
+    const from = {
+      x: fr.left - hostRect.left + scrollLeft + fr.width / 2,
+      y: fr.bottom - hostRect.top + scrollTop - ELLIPSE_INSIDE * zoom,
+    };
+    const to = {
+      x: tr.left - hostRect.left + scrollLeft + tr.width / 2,
+      y: tr.top - hostRect.top + scrollTop + ELLIPSE_INSIDE * zoom,
+    };
+    if (to.y < from.y) continue; // the target must sit below the source
+    const geo = edgeGeometry(from, to);
+    const style = bundleStroke(bundle);
+    const count = bundle.edges.length;
+    const width = (count > 1 ? ST_LINK_BASE + (count - 1) * ST_LINK_EXTRA : style.width) * zoom;
+
+    const group = document.createElementNS(SVG_NS, 'g');
+    group.classList.add('st-bundle');
+    if (
+      store.state.selectedLinkId !== null &&
+      bundle.edges.some((e) => e.id === store.state.selectedLinkId)
+    ) {
+      group.classList.add('selected');
+    }
+
+    const visual = document.createElementNS(SVG_NS, 'path');
+    visual.classList.add('st-link-visual');
+    visual.setAttribute('d', geo.d);
+    visual.setAttribute('fill', 'none');
+    visual.setAttribute('stroke', style.color);
+    visual.setAttribute('stroke-width', String(width));
+    if (style.dash !== 'none') visual.setAttribute('stroke-dasharray', style.dash);
+
+    // Wide transparent hit stroke following the same curve.
+    const hit = document.createElementNS(SVG_NS, 'path');
+    hit.classList.add('st-link-hit');
+    hit.setAttribute('d', geo.d);
+    hit.setAttribute('fill', 'none');
+    hit.setAttribute('stroke', 'transparent');
+    hit.setAttribute('stroke-width', String(Math.max(width + 10, 16)));
+    hit.setAttribute('pointer-events', 'stroke');
+    hit.setAttribute('cursor', 'pointer');
+    hit.addEventListener('mouseenter', () => group.classList.add('hovered'));
+    hit.addEventListener('mouseleave', () => group.classList.remove('hovered'));
+    hit.addEventListener('click', (event) => {
+      event.stopPropagation();
+      onConnectorClick(event, bundle.edges);
+    });
+    hit.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (bundle.edges.length === 1) {
+        showLinkContextMenu(event, bundle.edges[0]!.id);
+      } else {
+        const items: MenuItem[] = bundle.edges.map((edge) => ({
+          label: `Связь: ${linkLabel(edge)}`,
+          onClick: () => showLinkContextMenuAt(event, edge.id),
+        }));
+        showMenuAt(event.clientX, event.clientY, items);
+      }
+    });
+
+    // Label at the curve midpoint, revealed on hover/selection.
+    const label = document.createElementNS(SVG_NS, 'text');
+    label.classList.add('st-link-label');
+    label.setAttribute('x', String(geo.mid.x));
+    label.setAttribute('y', String(geo.mid.y - 8 * zoom));
+    label.setAttribute('text-anchor', 'middle');
+    label.textContent = connectorLabel(bundle.edges);
+
+    group.append(visual, hit, label);
+    svg.append(group);
+  }
+  resultsHost.append(overlay);
 }
 
 /** Re-shows the link context menu at remembered coordinates (multi-link pick). */
@@ -868,6 +978,9 @@ async function reloadAll(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null || networkIdSeen !== networkId) return;
   await applyQuery(true);
+  // The visible set may be unchanged while the links themselves changed
+  // (realtime) — force the edges refresh even for the same id signature.
+  edgesSignature = '';
   // Refetch every expanded direction, top-down, with fresh per-branch excludes.
   const rows = currentRows();
   const seen = new Set<string>();

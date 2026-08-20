@@ -34,6 +34,7 @@ import type {
   ExportJob,
   ExportRequest,
   FocusDir,
+  FocusEdge,
   FocusNeighbor,
   FocusOrderInput,
   FocusPreferencesInput,
@@ -266,6 +267,11 @@ export interface EtnApi {
         offset?: number;
       },
     ): Promise<HierarchyResponse>;
+    /**
+     * `POST /thoughts/edges` — every active link between the given visible
+     * thoughts (03-server-api.md §6.12), for drawing the tree links.
+     */
+    edges(networkId: string, ids: string[], showInactive: boolean): Promise<FocusEdge[]>;
   };
   savedFilters: {
     list(networkId: string): Promise<SavedFilter[]>;

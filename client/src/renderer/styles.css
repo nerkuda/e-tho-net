@@ -3497,15 +3497,14 @@ body.cloud-dragging * {
   margin-right: 5px;
 }
 
-/* One indent level ≈ 1/3 of the (double-wide) tree cloud (§15.5: the parent
- * reveal shifts the node + its subtree right by about a third of the cloud's
- * width, to make room for the ancestor column to its left). */
+/* One indent level = 1/4 of the tree cloud width (§15.5: a parent reveal
+ * shifts the node + its revealed subtree right by a quarter of the cloud). */
 .st-row {
   position: relative;
   display: flex;
   align-items: flex-start;
   margin-bottom: 12px;
-  padding-left: calc(var(--st-indent, 0) * var(--cloud-width) * 2 / 3);
+  padding-left: calc(var(--st-indent, 0) * var(--cloud-width) / 4);
 }
 
 .st-row:last-child {
@@ -3529,77 +3528,54 @@ body.cloud-dragging * {
   border-color: var(--accent);
 }
 
-/* Link lines (§15.6): one absolute line per parent→child pair, drawn over the
- * tree. The vertical starts at the parent cloud's bottom-left corner and
- * reaches the child's left edge (classic directory tree). The label stays
- * hidden until hover, when the whole line highlights (--warn) and the
- * source → target type name appears — no overlapping labels. Several parents
- * of one thought: lines are appended in row order, so lower rows paint over
- * the upper ones. */
-.st-link-line {
+/* Link curves (§15.6): one SVG overlay UNDER the rows, drawing a Bézier per
+ * directed pair of visible thoughts — from the source's bottom ellipse to the
+ * target's top ellipse, exactly like the canvas. The wide transparent hit
+ * stroke captures hover/click; the label (type name / «Тип ×N») is revealed
+ * on hover and stays for the selected link. */
+.st-links {
   position: absolute;
-  z-index: 2;
-  cursor: pointer;
-}
-
-.st-link-v,
-.st-link-h {
-  position: absolute;
-  background: var(--link-default);
-  border-radius: 2px;
-}
-
-.st-link-v {
   left: 0;
   top: 0;
-  width: 2px;
-  height: 100%;
+  z-index: 0;
+  pointer-events: none;
 }
 
-.st-link-h {
-  left: 0;
-  top: calc(100% - 1px);
-  width: 100%;
-  height: 2px;
+.st-row {
+  z-index: 1;
 }
 
-.st-link-label {
-  position: absolute;
-  left: 8px;
-  bottom: 12px;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.st-links .st-link-visual {
+  transition: stroke 0.12s ease;
+}
+
+.st-links .st-bundle.hovered .st-link-visual,
+.st-links .st-bundle.selected .st-link-visual {
+  stroke: var(--warn);
+}
+
+.st-links .st-link-label {
+  fill: var(--text-dim);
   font-size: var(--link-label-font, 11px);
-  line-height: 1.2;
-  color: var(--text-dim);
-  background: var(--surface);
-  border-radius: 4px;
-  padding: 1px 6px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
   opacity: 0;
+  paint-order: stroke;
+  stroke: var(--surface, #fff);
+  stroke-width: 3px;
   pointer-events: none;
   user-select: none;
+  transition: opacity 0.12s ease;
 }
 
-.st-link-line:hover .st-link-v,
-.st-link-line:hover .st-link-h,
-.st-link-line.st-selected .st-link-v,
-.st-link-line.st-selected .st-link-h {
-  background: var(--warn);
-}
-
-.st-link-line:hover .st-link-label,
-.st-link-line.st-selected .st-link-label {
+.st-links .st-bundle.hovered .st-link-label,
+.st-links .st-bundle.selected .st-link-label {
   opacity: 1;
-  color: var(--warn-strong);
+  fill: var(--warn-strong);
   font-weight: 600;
 }
 
 .st-more {
   display: block;
-  margin: 6px 0 4px calc(var(--st-indent, 0) * var(--cloud-width) * 2 / 3);
+  margin: 6px 0 4px calc(var(--st-indent, 0) * var(--cloud-width) / 4);
   padding: 6px 16px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);

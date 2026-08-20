@@ -1417,6 +1417,24 @@ export class RestClient {
     );
   }
 
+  /**
+   * `POST /networks/{nid}/thoughts/edges` — every active link between the
+   * given visible thoughts (03-server-api.md §6.12), for drawing the
+   * structures tree links from ellipse to ellipse.
+   */
+  public async postStructureEdges(
+    networkId: string,
+    ids: string[],
+    showInactive: boolean,
+  ): Promise<import('@etn/shared').FocusEdge[]> {
+    const data = await this.request<{ edges: import('@etn/shared').FocusEdge[] }>(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/edges`,
+      { body: { ids, show_inactive: showInactive } },
+    );
+    return data.edges;
+  }
+
   /** `GET /networks/{nid}/saved-filters` — the user's own saved filters. */
   public async listSavedFilters(
     networkId: string,

@@ -236,6 +236,9 @@ export const HIERARCHY_EXCLUDE_MAX_IDS = 1000;
 /** Max depth of the `parent_ids` subtree scoping walk (03-server-api.md §6.10). */
 export const STRUCTURES_PARENT_SCOPE_MAX_DEPTH = 20;
 
+/** Max ids accepted by `POST /thoughts/edges` (03-server-api.md §6.12). */
+export const STRUCTURES_EDGES_MAX_IDS = 2000;
+
 /** Maximum length of a saved filter name (03-server-api.md §18). */
 export const SAVED_FILTER_NAME_MAX = 200;
 

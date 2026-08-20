@@ -270,6 +270,13 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'structures.edges',
+    bind(
+      (networkId: string, ids: string[], showInactive: boolean) =>
+        requireRest(deps).postStructureEdges(networkId, ids, showInactive),
+    ),
+  );
+  handlers.set(
     'savedFilters.list',
     bind((networkId: string) => requireRest(deps).listSavedFilters(networkId)),
   );

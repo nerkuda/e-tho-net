@@ -18,6 +18,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import {
   EtnError,
   SAVED_FILTER_VIEWS,
+  STRUCTURES_EDGES_MAX_IDS,
   STRUCTURES_PAGE_SIZE,
   STRUCTURES_QUERY_MAX_LIMIT,
   STRUCTURE_SORTS,
@@ -47,6 +48,7 @@ import {
   updateSavedFilter,
 } from '../domain/structure-service.js';
 import { parseChronicleFilterDefinition } from '../domain/chronicle-service.js';
+import { getEdgesAmong } from '../domain/link-service.js';
 
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
@@ -186,6 +188,37 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
           offset,
         });
         sendSuccess(reply, data);
+      },
+    );
+
+    // --- Links among visible thoughts (03-server-api.md §6.12) ---------------
+
+    app.post(
+      '/networks/:networkId/thoughts/edges',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as NetworkIdParams;
+        const body = requestBody(req);
+        const idsRaw = body['ids'];
+        if (!Array.isArray(idsRaw) || idsRaw.some((v) => typeof v !== 'string')) {
+          throw new EtnError('VALIDATION_ERROR', 'ids должен быть массивом строк.', {
+            field: 'ids',
+          }, req.id);
+        }
+        const showInactive = body['show_inactive'] === true;
+        const ids = (idsRaw as string[]).slice(0, STRUCTURES_EDGES_MAX_IDS);
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const edges = getEdgesAmong(ndb, ids, showInactive).map((l) => ({
+          id: l.id,
+          source_id: l.source_id,
+          target_id: l.target_id,
+          type_id: l.type_id,
+          // Per-link line-style override (null = inherit from the type), §6.12.
+          color: l.color,
+          style: l.style,
+          width: l.width,
+        }));
+        sendSuccess(reply, { edges });
       },
     );
 
