@@ -174,10 +174,16 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         const showInactive =
           queryBoolean(query['show_inactive'], 'show_inactive', req.id) ?? false;
+        const offsetRaw = query['offset'];
+        const offset =
+          typeof offsetRaw === 'string' && offsetRaw !== '' && Number.isInteger(Number(offsetRaw))
+            ? Math.max(0, Number(offsetRaw))
+            : 0;
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const data = getHierarchy(ndb, id, dir, {
           showInactive,
           excludeIds: parseExcludeIds(query['exclude_ids']),
+          offset,
         });
         sendSuccess(reply, data);
       },

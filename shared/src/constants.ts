@@ -233,6 +233,9 @@ export const STRUCTURES_NODE_NEIGHBORS_LIMIT = 100;
 /** Max ids accepted in hierarchy `exclude_ids` (03-server-api.md §6.11). */
 export const HIERARCHY_EXCLUDE_MAX_IDS = 1000;
 
+/** Max depth of the `parent_ids` subtree scoping walk (03-server-api.md §6.10). */
+export const STRUCTURES_PARENT_SCOPE_MAX_DEPTH = 20;
+
 /** Maximum length of a saved filter name (03-server-api.md §18). */
 export const SAVED_FILTER_NAME_MAX = 200;
 

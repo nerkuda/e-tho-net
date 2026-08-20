@@ -20,6 +20,7 @@ import {
   HIERARCHY_EXCLUDE_MAX_IDS,
   SAVED_FILTER_NAME_MAX,
   STRUCTURES_NODE_NEIGHBORS_LIMIT,
+  STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
   STRUCTURES_QUERY_MAX_LIMIT,
   STRUCTURE_PROPERTY_OPS,
   STRUCTURE_SORTS,
@@ -110,6 +111,16 @@ export function parseStructureFilter(
     if (keywords.trim() !== '') filter.keywords = keywords;
   }
 
+  const parentIds = body['parent_ids'];
+  if (parentIds !== undefined) {
+    if (!Array.isArray(parentIds) || parentIds.some((v) => typeof v !== 'string')) {
+      throw new EtnError('VALIDATION_ERROR', 'parent_ids должен быть массивом строк.', {
+        field: 'parent_ids',
+      }, requestId);
+    }
+    if (parentIds.length > 0) filter.parent_ids = parentIds as string[];
+  }
+
   const typeIds = body['type_ids'];
   if (typeIds !== undefined) {
     if (!Array.isArray(typeIds) || typeIds.some((v) => typeof v !== 'string')) {
@@ -144,6 +155,16 @@ export function parseStructureFilter(
       }, requestId);
     }
     filter.show_inactive = showInactive;
+  }
+
+  for (const field of ['has_properties', 'has_comment', 'has_attachments', 'has_chronology'] as const) {
+    const raw = body[field];
+    if (raw !== undefined) {
+      if (typeof raw !== 'boolean') {
+        throw new EtnError('VALIDATION_ERROR', `${field} должен быть boolean.`, { field }, requestId);
+      }
+      filter[field] = raw;
+    }
   }
 
   const properties = body['properties'];
@@ -228,9 +249,14 @@ export function parseSavedFilterDefinition(
 export function isFilterEmpty(filter: StructureFilter): boolean {
   return (
     (filter.keywords ?? '').trim() === '' &&
+    (filter.parent_ids ?? []).length === 0 &&
     (filter.type_ids ?? []).length === 0 &&
     (filter.link_type_ids ?? []).length === 0 &&
-    (filter.properties ?? []).length === 0
+    (filter.properties ?? []).length === 0 &&
+    filter.has_properties === undefined &&
+    filter.has_comment === undefined &&
+    filter.has_attachments === undefined &&
+    filter.has_chronology === undefined
   );
 }
 
@@ -296,6 +322,34 @@ function sqlScalar(
   }
 }
 
+/**
+ * Depth-bounded subtree walk from `rootIds` via active `source_id → target_id`
+ * links (parent_ids scoping, 03-server-api.md §6.10). The graph may contain
+ * cycles (docs/AGENTS.md §7) — the depth cap terminates the walk without a
+ * separate visited-set; the final `DISTINCT id` dedups the output.
+ */
+function expandParentIdsToSubtree(ndb: NetworkDb, rootIds: string[], showInactive: boolean): string[] {
+  if (rootIds.length === 0) return [];
+  const placeholders = rootIds.map(() => '?').join(',');
+  const activeFlag = showInactive ? 1 : 0;
+  const rows = ndb
+    .prepare(
+      `WITH RECURSIVE subtree(id, depth) AS (
+         SELECT l.target_id, 1
+         FROM links l
+         WHERE l.source_id IN (${placeholders}) AND (l.active = 1 OR ?)
+         UNION
+         SELECT l.target_id, s.depth + 1
+         FROM links l
+         JOIN subtree s ON l.source_id = s.id
+         WHERE (l.active = 1 OR ?) AND s.depth < ?
+       )
+       SELECT DISTINCT id FROM subtree`,
+    )
+    .all(...rootIds, activeFlag, activeFlag, STRUCTURES_PARENT_SCOPE_MAX_DEPTH) as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
 /** Reads the link-direction flags of the given thoughts as a plain record. */
 function directionsOf(ndb: NetworkDb, ids: string[]): StructureDirectionFlags {
   const out: StructureDirectionFlags = {};
@@ -332,6 +386,32 @@ export function queryThoughts(
   const params: unknown[] = [];
 
   if (showInactive !== 1) where.push('t.active = 1');
+
+  if (req.parent_ids !== undefined && req.parent_ids.length > 0) {
+    const scoped = expandParentIdsToSubtree(ndb, req.parent_ids, showInactive === 1);
+    if (scoped.length === 0) return { items: [], total: 0, directions: {} };
+    where.push(`t.id IN (${scoped.map(() => '?').join(',')})`);
+    params.push(...scoped);
+  }
+
+  if (req.has_properties !== undefined) {
+    const sql = "EXISTS (SELECT 1 FROM property_values pv WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id)";
+    where.push(req.has_properties ? sql : `NOT ${sql}`);
+  }
+  if (req.has_comment !== undefined) {
+    const sql =
+      "EXISTS (SELECT 1 FROM comments c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'permanent')";
+    where.push(req.has_comment ? sql : `NOT ${sql}`);
+  }
+  if (req.has_attachments !== undefined) {
+    const sql = "EXISTS (SELECT 1 FROM attachments a WHERE a.owner_type = 'thought' AND a.owner_id = t.id)";
+    where.push(req.has_attachments ? sql : `NOT ${sql}`);
+  }
+  if (req.has_chronology !== undefined) {
+    const sql =
+      "EXISTS (SELECT 1 FROM comments c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'chronological')";
+    where.push(req.has_chronology ? sql : `NOT ${sql}`);
+  }
 
   const keywords = parseFilterKeywords(req.keywords ?? '');
   for (const word of keywords.include) {
@@ -464,8 +544,10 @@ export function queryThoughts(
 /** Options of {@link getHierarchy}. */
 export interface HierarchyOptions {
   showInactive?: boolean;
-  /** Thoughts already shown in the same root branch — excluded before the limit. */
+  /** Thoughts already shown in the same root branch — excluded before paging. */
   excludeIds?: string[];
+  /** Page offset into the post-exclude neighbor list (§15.5 per-node pagination). */
+  offset?: number;
 }
 
 /**
@@ -501,8 +583,10 @@ export function getHierarchy(
     )
     .all(thoughtId, showInactive, showInactive) as Array<ThoughtRefRow>;
   const fresh = rows.filter((row) => !exclude.has(row.id));
-  const truncated = fresh.length > STRUCTURES_NODE_NEIGHBORS_LIMIT;
-  const neighbors = fresh.slice(0, STRUCTURES_NODE_NEIGHBORS_LIMIT).map(rowToThoughtRef);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const page = fresh.slice(offset, offset + STRUCTURES_NODE_NEIGHBORS_LIMIT);
+  const hasMore = offset + page.length < fresh.length;
+  const neighbors = page.map(rowToThoughtRef);
 
   const visibleIds = [thoughtId, ...neighbors.map((n) => n.id)];
   const edges = getEdgesAmong(ndb, visibleIds, opts.showInactive === true).map((l) => ({
@@ -517,7 +601,13 @@ export function getHierarchy(
   // Whether each visible thought has active incoming/outgoing links at all —
   // in the tree these mean "has parents/children to expand", so the ellipses
   // can be filled exactly like on the canvas.
-  return { neighbors, edges, truncated, directions: directionsOf(ndb, visibleIds) };
+  return {
+    neighbors,
+    edges,
+    truncated: hasMore,
+    has_more: hasMore,
+    directions: directionsOf(ndb, visibleIds),
+  };
 }
 
 // ---------------------------------------------------------------------------

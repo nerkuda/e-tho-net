@@ -25,16 +25,33 @@ export interface StructurePropertyCondition {
   value: StructurePropertyValue | StructurePropertyValue[];
 }
 
+/** Tri-state has/hasn't criterion: `true`/`false` filters, absent — "not important". */
+export type StructureTriState = boolean | undefined;
+
 /** Filter criteria of the structures query (03-server-api.md §6.10). */
 export interface StructureFilter {
   /** Keywords mini-syntax: whitespace-separated words, `*` wildcard, `-` exclusion. */
   keywords?: string;
+  /**
+   * Restrict the candidate set to the union of the subtrees of these thoughts
+   * (OR between roots, depth ≤ `STRUCTURES_PARENT_SCOPE_MAX_DEPTH`, deduped;
+   * the roots themselves are excluded — only their descendants match).
+   */
+  parent_ids?: string[];
   /** Thought types (OR inside the list). */
   type_ids?: string[];
   /** The thought has an active link of any of these types in either direction. */
   link_type_ids?: string[];
   /** Property conditions (AND between conditions). */
   properties?: StructurePropertyCondition[];
+  /** Has at least one property value (§15.3 «Дополнительно»). */
+  has_properties?: StructureTriState;
+  /** Has a permanent comment. */
+  has_comment?: StructureTriState;
+  /** Has at least one attachment. */
+  has_attachments?: StructureTriState;
+  /** Has at least one chronological comment entry. */
+  has_chronology?: StructureTriState;
   show_inactive?: boolean;
 }
 
@@ -67,8 +84,10 @@ export interface HierarchyResponse {
   neighbors: ThoughtRef[];
   /** Active links between the expanded thought and the returned neighbors. */
   edges: FocusEdge[];
-  /** true — more neighbors were dropped by the per-node limit. */
+  /** @deprecated alias of `has_more`, kept for backward compatibility. */
   truncated: boolean;
+  /** true — more neighbors exist past `offset + limit` (§15.5 «Показать ещё»). */
+  has_more: boolean;
   /** Whether each visible thought (node + neighbors) has active incoming/outgoing
    *  links — in the tree these mean "has parents/children to expand"; drives the
    *  ellipse fill exactly like on the canvas. */

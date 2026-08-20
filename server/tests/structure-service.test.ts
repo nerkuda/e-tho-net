@@ -137,6 +137,28 @@ function seedProperty(ndb: NetworkDb, ownerId: string, key: string, valueType: s
   return id;
 }
 
+/** Insert a comment row for a thought owner (`permanent` or `chronological`). */
+function seedComment(ndb: NetworkDb, thoughtId: string, kind: 'permanent' | 'chronological'): void {
+  ndb
+    .prepare(
+      `INSERT INTO comments (id, owner_type, owner_id, kind, body_md, body_html, valid_from,
+                             version, created_at, updated_at, created_by, updated_by)
+       VALUES (?, 'thought', ?, ?, 'x', '<p>x</p>', '2024-01-01T00:00:00Z', 1,
+               '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'u', 'u')`,
+    )
+    .run(randomUUID(), thoughtId, kind);
+}
+
+/** Insert a URL attachment row for a thought owner. */
+function seedAttachment(ndb: NetworkDb, thoughtId: string): void {
+  ndb
+    .prepare(
+      `INSERT INTO attachments (id, owner_type, owner_id, kind, url, position, created_at, created_by)
+       VALUES (?, 'thought', ?, 'url', 'https://example.com', 0, '2024-01-01T00:00:00Z', 'u')`,
+    )
+    .run(randomUUID(), thoughtId);
+}
+
 /** Insert a property value row for a thought owner. */
 function seedPropertyValue(
   ndb: NetworkDb,
@@ -396,6 +418,103 @@ describe(
       });
     });
 
+    describe('queryThoughts: parent_ids scoping', () => {
+      it('restricts the candidate set to the union of the given subtrees, roots excluded', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const rootA = seedThought(ndb, { title: 'Корень А' });
+          const rootB = seedThought(ndb, { title: 'Корень Б' });
+          const childA = seedThought(ndb, { title: 'Ребёнок А' });
+          const grandA = seedThought(ndb, { title: 'Внук А' });
+          const childB = seedThought(ndb, { title: 'Ребёнок Б' });
+          const outside = seedThought(ndb, { title: 'Снаружи' });
+          seedLink(ndb, rootA, childA);
+          seedLink(ndb, childA, grandA);
+          seedLink(ndb, rootB, childB);
+
+          const scoped = queryThoughts(ndb, USER, query({ parent_ids: [rootA] }));
+          assert.deepEqual(
+            scoped.items.map((t) => t.id).sort(),
+            [childA, grandA].sort(),
+          );
+          // The root itself and unrelated thoughts are not «подчинённые».
+          assert.ok(!scoped.items.some((t) => t.id === rootA || t.id === outside));
+
+          const union = queryThoughts(ndb, USER, query({ parent_ids: [rootA, rootB] }));
+          assert.deepEqual(
+            union.items.map((t) => t.id).sort(),
+            [childA, grandA, childB].sort(),
+          );
+
+          const unknown = queryThoughts(ndb, USER, query({ parent_ids: [randomUUID()] }));
+          assert.deepEqual(unknown.items, []);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('terminates on a cyclic subtree via the depth cap', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const a = seedThought(ndb, { title: 'А' });
+          const b = seedThought(ndb, { title: 'Б' });
+          seedLink(ndb, a, b);
+          seedLink(ndb, b, a); // cycle
+          const result = queryThoughts(ndb, USER, query({ parent_ids: [a] }));
+          assert.deepEqual(result.items.map((t) => t.id).sort(), [a, b].sort());
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
+    describe('queryThoughts: has_* tri-state filters', () => {
+      it('filters by presence/absence of properties, comment, attachments and chronology', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const type = seedThoughtType(ndb, 'Лицо');
+          const prop = seedProperty(ndb, type, 'город', 'text');
+          const withProp = seedThought(ndb, { title: 'СПроп', type_id: type });
+          seedPropertyValue(ndb, withProp, prop, 'value_text', 'Москва');
+          const withComment = seedThought(ndb, { title: 'СКоммент' });
+          seedComment(ndb, withComment, 'permanent');
+          const withChrono = seedThought(ndb, { title: 'СХроникой' });
+          seedComment(ndb, withChrono, 'chronological');
+          const withAttachment = seedThought(ndb, { title: 'СВложением' });
+          seedAttachment(ndb, withAttachment);
+          const bare = seedThought(ndb, { title: 'Пустая' });
+
+          assert.deepEqual(
+            queryThoughts(ndb, USER, query({ has_properties: true })).items.map((t) => t.id),
+            [withProp],
+          );
+          assert.deepEqual(
+            queryThoughts(ndb, USER, query({ has_comment: true })).items.map((t) => t.id),
+            [withComment],
+          );
+          assert.deepEqual(
+            queryThoughts(ndb, USER, query({ has_chronology: true })).items.map((t) => t.id),
+            [withChrono],
+          );
+          assert.deepEqual(
+            queryThoughts(ndb, USER, query({ has_attachments: true })).items.map((t) => t.id),
+            [withAttachment],
+          );
+          const noneOf = queryThoughts(
+            ndb,
+            USER,
+            query({ has_comment: false, keywords: 'Пустая' }),
+          );
+          assert.deepEqual(noneOf.items.map((t) => t.id), [bare]);
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
     describe('queryThoughts: sort & paging', () => {
       it('sorts by title asc/desc and pages with total', () => {
         const ndb = createInMemoryNetworkDb();
@@ -480,6 +599,15 @@ describe(
           const data = getHierarchy(ndb, root, 'children', {});
           assert.equal(data.neighbors.length, 100);
           assert.equal(data.truncated, true);
+          assert.equal(data.has_more, true);
+
+          const nextPage = getHierarchy(ndb, root, 'children', { offset: 100 });
+          assert.equal(nextPage.neighbors.length, 5);
+          assert.equal(nextPage.has_more, false);
+          assert.equal(nextPage.truncated, false);
+          // The two pages together cover every fresh neighbor exactly once.
+          const ids = new Set([...data.neighbors, ...nextPage.neighbors].map((n) => n.id));
+          assert.equal(ids.size, 105);
         } finally {
           ndb.close();
         }
