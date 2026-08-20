@@ -296,6 +296,14 @@ POST /api/v1/networks/{nid}/thoughts/resolve
 POST /api/v1/networks/{nid}/thoughts/query
 {
   keywords?: "счет* -вод*",       # мини-синтаксис, см. ниже; AND по словам
+  parent_ids?: ["..."],           # ограничить отбор поддеревом указанных
+                                  # мыслей (OR между несколькими: подходит
+                                  # поддерево любой из них), глубина ≤ 20
+                                  # уровней, сами перечисленные мысли в
+                                  # результат НЕ входят («подчинённые
+                                  # указанным»); остальные критерии этого
+                                  # фильтра применяются только внутри
+                                  # объединённого поддерева
   type_ids?: ["..."],             # типы мыслей (OR внутри списка; L21: каждый
                                   # id раскрывается до ПОДДЕРЕВА — подчинённые
                                   # типы тоже соответствуют, OR)
@@ -306,6 +314,12 @@ POST /api/v1/networks/{nid}/thoughts/query
     { property_id: "...", op: "contains"|"eq"|"gt"|"lt"|"in"|"not_in",
       value: "..." | 42 | true | ["Москва", "Воронеж"] }
   ],
+  has_properties?: true|false,    # «Дополнительно»: есть/нет хотя бы одно
+                                  # значение свойства у мысли; поле отсутствует
+                                  # — критерий «не важно» (не участвует)
+  has_comment?: true|false,       # есть/нет постоянный комментарий мысли
+  has_attachments?: true|false,   # есть/нет хотя бы одно вложение мысли
+  has_chronology?: true|false,    # есть/нет хотя бы одна хроникальная запись
   show_inactive?: false,          # как в focus/поиске
   sort: "alpha"|"created"|"viewed",
   order: "asc"|"desc",
@@ -314,8 +328,10 @@ POST /api/v1/networks/{nid}/thoughts/query
 → 200 { data: [ ThoughtRef... ], meta: { total, limit, offset, directions } }
 ```
 
-- **Пустой фильтр** (нет `keywords`, `type_ids`, `link_type_ids` и `properties`)
-  возвращает ровно одну мысль — HOME (`is_root=1`), `meta.total=1`.
+- **Пустой фильтр** (нет ни одного из `keywords`, `parent_ids`, `type_ids`,
+  `link_type_ids`, `properties`, `has_properties`, `has_comment`,
+  `has_attachments`, `has_chronology`) возвращает ровно одну мысль — HOME
+  (`is_root=1`), `meta.total=1`.
 - `meta.directions` — `{ "<thought_id>": { has_incoming, has_outgoing }, ... }`
   для всех мыслей страницы: наличие active входящих/исходящих связей. Клиент
   закрашивает эллипсы корней дерева сразу после отбора (та же семантика, что
@@ -327,11 +343,21 @@ POST /api/v1/networks/{nid}/thoughts/query
   Пример: `счет* -вод*` соответствует «Счетчик электричества», но не
   «счета за воду». Реализация — параметризованный `LIKE … ESCAPE '\'` по
   нормализованным `title_norm`/`synonym_norm` (`%`, `_`, `\` экранируются).
+- **`parent_ids`**: применяется до остальных критериев — множество кандидатов
+  сужается до объединения поддеревьев указанных мыслей (обход по активным
+  связям «источник → цель», глубина ≤ 20, дедуп по id; граф может содержать
+  циклы — обход с ограничением глубины их не зацикливает). Несуществующий
+  id молча пропускается; если ни один из перечисленных id не существует —
+  результат пуст (не HOME, фильтр не пуст).
 - **Операции свойств** применяются к колонке типа значения определения
   (`value_text/value_number/value_date/value_bool/value_thought_ref`); допустимые
   `op` зависят от `value_type`: text/url — `contains|eq|in|not_in`;
   number/date — `eq|gt|lt`; bool — `eq`; thought_ref — `eq|in|not_in`.
   `in`/`not_in` принимают массив значений (OR внутри списка).
+- **`has_properties`/`has_comment`/`has_attachments`/`has_chronology`** — три
+  состояния: `true` — только мысли с хотя бы одним значением/записью,
+  `false` — только без них, поле не передано — критерий не участвует
+  («не важно»). Условия объединяются по AND с остальными.
 - Сортировка: `alpha` — по заголовку (NOCASE), `created` — по `created_at`,
   `viewed` — по `thought_views.last_viewed_at` текущего пользователя
   (NULL — последними при `asc`).
@@ -341,22 +367,31 @@ POST /api/v1/networks/{nid}/thoughts/query
 ### 6.11. Иерархия одного уровня (для дерева «Структур»)
 ```
 GET /api/v1/networks/{nid}/thoughts/{id}/hierarchy
-    ?dir=parents|children&show_inactive=&exclude_ids=id1,id2,...
+    ?dir=parents|children&show_inactive=&exclude_ids=id1,id2,...&offset=0
 → 200 { data: {
-     neighbors: [ ThoughtRef... ],   # родители (источники связей) или дети (цели)
+     neighbors: [ ThoughtRef... ],   # родители (источники связей) или дети (цели),
+                                      # порция limit=100 начиная с offset
      edges:     [ { id, source_id, target_id, type_id, color, style, width } ],
-                                      # active-связи между {id} и соседями
-     truncated: false,                # true — соседей больше лимита (100)
+                                      # active-связи между {id} и порцией neighbors
+     truncated: false,                # DEPRECATED-alias для has_more (совместимость)
+     has_more: false,                 # true — за пределами offset+100 есть ещё
+                                      # соседи; клиент запрашивает следующую
+                                      # порцию с offset+100 (08-ui-spec.md §15.5)
      directions: { "<thought_id>": { has_incoming, has_outgoing }, ... }
                                       # наличие active входящих/исходящих связей
                                       # у узла и соседей — закраска эллипсов дерева
    } }
 ```
 
-- Соседи исключаются по `exclude_ids` **до** применения лимита — так клиент
-  убирает повторы в пределах ветки раскрытия (дедуп per-ветка, 08-ui-spec.md
-  §15.5): например, дети A = {Б, В}; при раскрытии Б с `exclude_ids=[A,Б,В]`
-  из детей {В, Г} вернётся только Г.
+- Соседи исключаются по `exclude_ids` **до** применения `offset`/лимита — так
+  клиент убирает повторы в пределах ветки раскрытия (дедуп per-ветка,
+  08-ui-spec.md §15.5): например, дети A = {Б, В}; при раскрытии Б с
+  `exclude_ids=[A,Б,В]` из детей {В, Г} вернётся только Г.
+- `offset` — сдвиг по отфильтрованному (после `exclude_ids`) списку соседей,
+  отсортированному `alpha asc`; страница — 100 соседей. Повторный запрос той
+  же ноды с бо́льшим `offset` использует те же `exclude_ids` (клиент не
+  повторяет уже показанных соседей в исключениях — они получены другой
+  страницей того же направления, не другой веткой).
 - До 1000 id в `exclude_ids`; сортировка соседей — `alpha asc` (дерево
   показывает единый стабильный порядок).
 
