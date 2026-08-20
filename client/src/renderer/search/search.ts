@@ -9,6 +9,9 @@
  *   panel again;
  * - the server search runs for queries of 3+ characters: debounced 250 ms while
  *   typing or on Enter; shorter queries only show a hint;
+ * - a whole-query UUID is a thought id lookup (§3.1): it bypasses the options
+ *   and resolves the thought via `thoughts.get` into a single
+ *   «Мысль по ID» section (absent thought → explicit notice);
  * - empty result groups render collapsed; ↑/↓ walk group headers and hits,
  *   Ctrl+↑/↓ jump to the first/last row, Enter (or Ctrl+Enter) toggles a group
  *   header or activates a hit (hiding the panel); the next activation
@@ -28,7 +31,12 @@ import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.j
 import { openLinkInEditor } from '../editor/editor.js';
 import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import { UI_STATE_KEY, type SearchResponse, type SearchScope } from '@etn/shared';
+import {
+  UI_STATE_KEY,
+  type SearchResponse,
+  type SearchScope,
+  type Thought,
+} from '@etn/shared';
 import { store } from '../state.js';
 import { requireNetworkId } from '../app.js';
 
@@ -50,6 +58,19 @@ export const MIN_QUERY_LENGTH = 3;
 /** Whether the query is long enough to hit the server. */
 export function isSearchableQuery(q: string): boolean {
   return q.length >= MIN_QUERY_LENGTH;
+}
+
+/** Canonical UUID shape of ETN entity ids (any version, case-insensitive). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Returns the thought id when the whole query is a UUID (search by id,
+ * 08-ui-spec.md §3.1), otherwise `null`. Ids are stored lowercase, so the match
+ * is normalised.
+ */
+export function parseThoughtIdQuery(q: string): string | null {
+  const trimmed = q.trim();
+  return UUID_RE.test(trimmed) ? trimmed.toLowerCase() : null;
 }
 
 const DEFAULT_OPTIONS: SearchOptions = {
@@ -379,6 +400,11 @@ async function run(): Promise<void> {
   if (resultsBox !== null) {
     resultsBox.replaceChildren(el('span', 'muted', 'Поиск…'));
   }
+  const idQuery = parseThoughtIdQuery(q);
+  if (idQuery !== null) {
+    await runById(networkId, idQuery);
+    return;
+  }
   const scopes = scopesFor(options);
   try {
     const responses = await Promise.all(
@@ -403,6 +429,98 @@ async function run(): Promise<void> {
       resultsBox.replaceChildren(span(`Ошибка поиска: ${errText(err)}`, 'error-text'));
     }
   }
+}
+
+/**
+ * Whether `err` means "no thought with this id". IPC (`ipcRenderer.invoke`)
+ * drops custom error fields of {@link EtnError}, so the server's
+ * `thought … not found` message is checked as a fallback for the lost `code`.
+ */
+function isNotFoundError(err: unknown): boolean {
+  const shape = err as { code?: unknown; message?: unknown } | null;
+  if (shape?.code === 'NOT_FOUND') return true;
+  return typeof shape?.message === 'string' && shape.message.includes('not found');
+}
+
+/**
+ * Direct lookup when the whole query is a thought id (08-ui-spec.md §3.1): the
+ * thought is fetched via `thoughts.get` and shown as the only result section,
+ * ignoring all search options (subtree, types, «показывать неактуальные») —
+ * inactive thoughts are found as well.
+ */
+async function runById(networkId: string, id: string): Promise<void> {
+  try {
+    const thought = await etn.thoughts.get(networkId, id);
+    renderIdResult(thought);
+  } catch (err) {
+    if (isNotFoundError(err)) {
+      renderIdResult(null);
+      return;
+    }
+    if (chrome !== null) {
+      const resultsBox = chrome.host.querySelector('.search-results');
+      if (resultsBox !== null) {
+        resultsBox.replaceChildren(span(`Ошибка поиска: ${errText(err)}`, 'error-text'));
+      }
+    }
+  }
+}
+
+/**
+ * Renders the single «Мысль по ID» section: the found thought (click → focus,
+ * snippet shows the id itself) or the explicit "absent" notice, which must stay
+ * visible, so the empty section is rendered expanded.
+ */
+function renderIdResult(thought: Thought | null): void {
+  if (chrome === null) return;
+  const resultsBox = chrome.host.querySelector('.search-results');
+  if (resultsBox === null) return;
+  resultsBox.replaceChildren();
+  const section = div('search-group');
+  const header = div('search-group-header');
+  const caret = span('▾', 'group-caret');
+  const label = span(`Мысль по ID (${thought === null ? 0 : 1})`, 'group-title');
+  header.append(caret, label);
+  const body = div('search-group-body');
+  header.addEventListener('click', () => {
+    const collapsed = body.classList.toggle('hidden');
+    caret.textContent = collapsed ? '▸' : '▾';
+    syncCursorAfterToggle(header);
+  });
+  if (thought !== null) {
+    const row = div('search-hit');
+    const key = `thought:${thought.id}`;
+    row.dataset['key'] = key;
+    const info = div('search-hit-info');
+    info.style.flex = '1';
+    info.style.minWidth = '0';
+    info.append(el('div', 'hit-title', thought.title));
+    info.append(el('div', 'hit-snippet', thought.id));
+    row.append(
+      thoughtIconEl({
+        thought_id: thought.id,
+        icon: thought.icon,
+        icon_kind: thought.icon_kind,
+        icon_attachment_id: thought.icon_attachment_id,
+      }),
+      info,
+    );
+    row.addEventListener('click', () => {
+      lastSelectedKey = key;
+      applySelection(key, true);
+      hidePanel();
+      // A synthetic Enter click keeps focus in the input; leave it so the
+      // canvas/editor receives the following keystrokes.
+      if (chrome !== null) chrome.input.blur();
+      void setFocus(thought.id);
+    });
+    body.append(row);
+  } else {
+    body.append(el('p', 'muted', 'Мысль с указанным ID отсутствует.'));
+  }
+  section.append(header, body);
+  resultsBox.append(section);
+  applySelection(lastSelectedKey, false);
 }
 
 /** Builds a hit icon element from the thought's own icon (💭 fallback). */
@@ -686,6 +804,7 @@ export const searchInternals = {
   mergeResponses,
   DEFAULT_OPTIONS,
   isSearchableQuery,
+  parseThoughtIdQuery,
   MIN_QUERY_LENGTH,
   nextNavIndex,
 };

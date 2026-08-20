@@ -56,8 +56,14 @@ import { flipTransform } from '../src/renderer/canvas/transition.js';
 import { zoomable } from '../src/renderer/lib/image-zoom.js';
 import { focusEdgesSignature, patchFocusEdge, store } from '../src/renderer/state.js';
 
-const { scopesFor, mergeResponses, DEFAULT_OPTIONS, isSearchableQuery, nextNavIndex } =
-  searchInternals;
+const {
+  scopesFor,
+  mergeResponses,
+  DEFAULT_OPTIONS,
+  isSearchableQuery,
+  parseThoughtIdQuery,
+  nextNavIndex,
+} = searchInternals;
 
 describe('clip', () => {
   it('clamps into the range', () => {
@@ -384,6 +390,26 @@ describe('search scope resolution (H13)', () => {
     assert.equal(isSearchableQuery('   '.trim()), false);
     assert.equal(isSearchableQuery('три'), true);
     assert.equal(isSearchableQuery('query'), true);
+  });
+
+  it('recognises a whole-query uuid as a thought id lookup', () => {
+    assert.equal(
+      parseThoughtIdQuery('099776db-2156-40b4-bcbb-1b9075dbcd83'),
+      '099776db-2156-40b4-bcbb-1b9075dbcd83',
+    );
+    // Uppercase input is normalised (ids are stored lowercase), padding trimmed.
+    assert.equal(
+      parseThoughtIdQuery('  099776DB-2156-40B4-BCBB-1B9075DBCD83 '),
+      '099776db-2156-40b4-bcbb-1b9075dbcd83',
+    );
+  });
+
+  it('rejects plain text and malformed uuids as id lookups', () => {
+    assert.equal(parseThoughtIdQuery(''), null);
+    assert.equal(parseThoughtIdQuery('мысль о море'), null);
+    assert.equal(parseThoughtIdQuery('099776db-2156-40b4-bcbb'), null);
+    assert.equal(parseThoughtIdQuery('099776db-2156-40b4-bcbb-1b9075dbcd8z'), null);
+    assert.equal(parseThoughtIdQuery('id 099776db-2156-40b4-bcbb-1b9075dbcd83'), null);
   });
 
   it('navigates rows from either end and clamps at the edges', () => {
