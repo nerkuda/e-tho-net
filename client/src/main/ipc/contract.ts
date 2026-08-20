@@ -259,7 +259,12 @@ export interface EtnApi {
     hierarchy(
       networkId: string,
       thoughtId: string,
-      query: { dir: 'parents' | 'children'; showInactive?: boolean; excludeIds?: string[] },
+      query: {
+        dir: 'parents' | 'children';
+        showInactive?: boolean;
+        excludeIds?: string[];
+        offset?: number;
+      },
     ): Promise<HierarchyResponse>;
   };
   savedFilters: {

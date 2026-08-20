@@ -1397,13 +1397,19 @@ export class RestClient {
   public async getHierarchy(
     networkId: string,
     thoughtId: string,
-    query: { dir: 'parents' | 'children'; showInactive?: boolean; excludeIds?: string[] },
+    query: {
+      dir: 'parents' | 'children';
+      showInactive?: boolean;
+      excludeIds?: string[];
+      offset?: number;
+    },
   ): Promise<import('@etn/shared').HierarchyResponse> {
     const q: QueryRecord = { dir: query.dir };
     if (query.showInactive !== undefined) q['show_inactive'] = query.showInactive;
     if (query.excludeIds !== undefined && query.excludeIds.length > 0) {
       q['exclude_ids'] = query.excludeIds.join(',');
     }
+    if (query.offset !== undefined && query.offset > 0) q['offset'] = query.offset;
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/hierarchy`,
