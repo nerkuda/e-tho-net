@@ -41,6 +41,7 @@ import {
   type MoreMarker,
   type TreeRow,
 } from './layout.js';
+import { initStructuresKbdNav, resetStructuresCursor, syncStructuresCursor } from './kbd-nav.js';
 import {
   applyPanelWidth,
   buildConditions,
@@ -110,6 +111,7 @@ export async function ensureStructuresInitialised(): Promise<void> {
   directions.clear();
   edges.clear();
   expansion = new Map();
+  resetStructuresCursor();
 
   try {
     const raw = await etn.ui.getState(networkId, UI_STATE_KEY.STRUCTURES_STATE);
@@ -408,6 +410,10 @@ export function mountStructures(hostEl: HTMLElement): void {
   resultsHost = results;
   applyPanelWidth();
   wirePanelSplitter(splitter, panel);
+  initStructuresKbdNav(results, {
+    openThought: (id) => void openStructuresThought(id),
+    toggleExpand: toggleExpandFor,
+  });
 
   results.addEventListener('click', (event) => {
     // A click on the empty area drops the sticky link selection and returns
@@ -573,6 +579,12 @@ function renderTree(): void {
 
   updateBand();
   drawLinks();
+  syncStructuresCursor();
+}
+
+/** Toggles one node's expansion by its DOM-carried identity (§15.10 Ctrl+↑/↓). */
+function toggleExpandFor(key: string, thoughtId: string, rootId: string, dir: HierarchyDir): void {
+  void toggleExpand({ key, thoughtId, rootId, root: false, indent: 0, via: null }, dir);
 }
 
 /** Builds one tree row: the root triangle (for filter results) + a cloud. */
@@ -580,6 +592,7 @@ function buildRow(row: TreeRow, selection: Set<string>): HTMLElement {
   const rowEl = div('st-row');
   rowEl.dataset['key'] = row.key;
   rowEl.dataset['id'] = row.thoughtId;
+  rowEl.dataset['root'] = row.rootId;
   rowEl.style.setProperty('--st-indent', String(row.indent));
   if (row.via !== null) {
     // The link lines are drawn over the tree from these attributes (drawLinks).
