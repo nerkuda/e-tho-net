@@ -59,6 +59,23 @@ GET /api/v1/me
 → 200 { data: { id, username, display_name, is_admin } }
 ```
 
+### 3.1.1. Редактирование своего профиля
+```
+PATCH /api/v1/me                  { display_name?: string | null }
+→ 200 { data: { id, username, display_name, is_admin } }
+```
+
+- Self-service: редактирует только `display_name` текущего пользователя.
+  Другие поля (`is_admin`, `disabled`, `username`) через `PATCH /me` не
+  меняются — для этого admin использует `PATCH /admin/users/{id}`
+  (см. §4.1).
+- `display_name`: строка, обрезается по краям; пустая строка после trim
+  сохраняется как `null`. Лимит 200 символов (`VALIDATION_ERROR` иначе).
+- `null` или отсутствие поля — текущее значение сохраняется (no-op).
+- При изменении в `audit_log` пишется запись
+  `category=user, action=user.update, details.display_name` с
+  `self: true` и `previous_display_name`.
+
 ### 3.2. Управление своими API-key
 ```
 GET    /api/v1/me/keys                 # список (только prefix, без полного ключа)
