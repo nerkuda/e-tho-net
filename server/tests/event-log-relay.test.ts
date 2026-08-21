@@ -22,8 +22,6 @@ import { systemMigrationsDir } from '../src/paths.js';
 import { EventLogRelay, type EventLogReader } from '../src/realtime/event-log-relay.js';
 import { PubSub } from '../src/realtime/pubsub.js';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 /** Build a minimal network-audience event envelope for a log entry. */
 function makeEvent(networkId: string, seq: number): AnyRealtimeEvent {
   return {

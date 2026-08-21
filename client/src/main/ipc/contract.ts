@@ -28,7 +28,6 @@ import type {
   ChronicleSavedFilter,
   Comment,
   CommentInput,
-  CommentInputWithTargets,
   CommentTarget,
   CurrentUser,
   ExportJob,

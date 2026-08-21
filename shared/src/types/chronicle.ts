@@ -10,7 +10,6 @@
  */
 
 import type { ChronicleLinkScope, SavedFilterView, SortOrder } from '../enums.js';
-import type { CommentTarget } from './comment.js';
 import type { ThoughtRef } from './thought.js';
 
 /** Filter criteria of the chronicle query (03-server-api.md §20). */

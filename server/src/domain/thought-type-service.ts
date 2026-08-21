@@ -30,7 +30,6 @@ import type { NetworkDb } from '../db/network-db.js';
 import {
   assertParentValid,
   getRootTypeId,
-  MAX_TYPE_DEPTH,
   typeAncestors,
 } from './type-hierarchy.js';
 

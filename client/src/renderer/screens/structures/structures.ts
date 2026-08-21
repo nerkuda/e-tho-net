@@ -725,7 +725,6 @@ function flipElement(el: HTMLElement, from: { left: number; top: number }): bool
 function applyTreeFlip(before: TreeLayoutSnapshot): boolean {
   if (resultsHost === null) return false;
   let animated = false;
-  const hostRect = resultsHost.getBoundingClientRect();
   const afterKeys = new Set<string>();
 
   for (const rowEl of resultsHost.querySelectorAll<HTMLElement>('.st-row')) {

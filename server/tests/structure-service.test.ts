@@ -612,7 +612,7 @@ describe(
         const ndb = createInMemoryNetworkDb();
         try {
           seedThought(ndb, { title: 'Home', is_root: 1 });
-          const on = seedThought(ndb, { title: 'Живая' });
+          const _on = seedThought(ndb, { title: 'Живая' });
           const off = seedThought(ndb, { title: 'Спящая', active: 0 });
 
           // show_inactive: true includes everything — the default «не важно».

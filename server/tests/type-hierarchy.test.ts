@@ -28,7 +28,6 @@ import {
   assertThoughtTypeAssignable,
   createThoughtType,
   deleteThoughtType,
-  getThoughtType,
   listThoughtTypes,
   updateThoughtType,
 } from '../src/domain/thought-type-service.js';
@@ -40,7 +39,6 @@ import {
 } from '../src/domain/property-service.js';
 import {
   expandTypeIdsToSubtree,
-  MAX_TYPE_DEPTH,
   subtreeIds,
 } from '../src/domain/type-hierarchy.js';
 

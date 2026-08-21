@@ -59,7 +59,6 @@ function collectEligibleTextNodes(root: HTMLElement): Text[] {
   });
   const out: Text[] = [];
   let n: Node | null;
-  // eslint-disable-next-line no-cond-assign
   while ((n = walker.nextNode())) out.push(n as Text);
   return out;
 }

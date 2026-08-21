@@ -702,7 +702,6 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   // Effective (zoom-multiplied) sizes; the --cloud-* CSS variables with the
   // same numbers live on the canvas host (applyCanvasScaleVars).
   const geom = cloudGeom(store.state.cloudWidth, store.state.cloudGap, store.state.canvasZoom);
-  const cellW = geom.width + geom.gap;
   // Estimate for not-yet-measured rows: the minimum cloud height (1 title
   // line) — most clouds render at it, so scrolling stays stable.
   const estimate = cloudHeight(store.state.cloudWidth, store.state.canvasZoom, CLOUD_TITLE_LINES_MIN);

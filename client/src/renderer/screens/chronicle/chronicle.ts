@@ -62,9 +62,8 @@ let networkIdSeen: string | null = null;
 let rows: ChronicleRow[] = [];
 let total = 0;
 let offset = 0;
-/** Id of the selected row (its full comment lives in `selectedComment`). */
+/** Id of the selected row. */
 let selectedRowId: string | null = null;
-let selectedComment: Comment | null = null;
 /** Fresh-comment mode: `null` — show the selected comment; preset targets otherwise. */
 let newTargets: CommentTarget[] | null = null;
 let tableWrap: HTMLElement | null = null;
@@ -91,7 +90,6 @@ export async function ensureChronicleInitialised(): Promise<void> {
   total = 0;
   offset = 0;
   selectedRowId = null;
-  selectedComment = null;
   newTargets = null;
   cursor = { row: -1, col: 0, chip: 0 };
 
@@ -220,7 +218,6 @@ async function applyQuery(reset: boolean): Promise<void> {
     total = result.total;
     if (selectedRowId !== null && !rows.some((r) => r.id === selectedRowId)) {
       selectedRowId = null;
-      selectedComment = null;
       newTargets = null;
       showEmptyEditor();
     }
@@ -493,7 +490,6 @@ function selectRow(row: ChronicleRow): void {
     try {
       const comment = await etn.comments.get(networkId, row.id);
       if (selectedRowId !== row.id) return;
-      selectedComment = comment;
       buildEditor(comment);
     } catch (err) {
       notice(`Не удалось загрузить комментарий: ${errText(err)}`, 'error');
@@ -505,7 +501,6 @@ function selectRow(row: ChronicleRow): void {
 function showEmptyEditor(): void {
   if (editorArea === null) return;
   selectedRowId = null;
-  selectedComment = null;
   newTargets = null;
   const hint = el('p', 'muted', 'Выберите запись из таблицы или добавьте новую.');
   hint.style.margin = '0';
@@ -634,7 +629,6 @@ function buildEditor(existing: Comment | null, startEdit = false): void {
         s.version = created.version;
         s.targets = created.targets;
         selectedRowId = created.id;
-        selectedComment = created;
         repaintEditorTargets();
         html = created.body_html;
       } else {
@@ -675,21 +669,6 @@ function repaintEditorTargets(): void {
   }
   if (s.targets.length === 0) {
     editorTargetsBox.append(span('Привязок нет — при создании будет привязана мысль из отбора или начальная мысль.', 'muted'));
-  }
-}
-
-/** Refreshes the editor's targets from the server (attach/detach feedback). */
-async function refreshEditorTargetsFromServer(): Promise<void> {
-  const s = editorState;
-  if (s === null || s.commentId === null) return;
-  try {
-    const fresh = await etn.comments.get(requireNetworkId(), s.commentId);
-    if (editorState !== s) return;
-    s.version = fresh.version;
-    s.targets = fresh.targets;
-    repaintEditorTargets();
-  } catch (err) {
-    notice(`Не удалось обновить привязки: ${errText(err)}`, 'error');
   }
 }
 
@@ -749,7 +728,6 @@ async function removeComment(existing: Comment): Promise<void> {
     await etn.comments.remove(networkId, fresh.id, fresh.version);
     if (selectedRowId === existing.id) {
       selectedRowId = null;
-      selectedComment = null;
       editorState = null;
       showEmptyEditor();
     }
@@ -803,7 +781,6 @@ async function startNewFromFilter(): Promise<void> {
 /** Starts a fresh comment with the given preset attachments. */
 function startNew(targets: CommentTarget[]): void {
   selectedRowId = null;
-  selectedComment = null;
   newTargets = targets;
   cursor = { row: -1, col: 0, chip: 0 };
   repaintTableSelection();
@@ -823,7 +800,6 @@ async function copyComment(id: string): Promise<void> {
       valid_to: todayIso(),
     });
     selectedRowId = created.id;
-    selectedComment = created;
     newTargets = null;
     await applyQuery(false);
     buildEditor(created);
@@ -979,7 +955,6 @@ async function detachTarget(rowId: string, ownerType: 'thought' | 'link', ownerI
     await etn.comments.removeTarget(networkId, rowId, ownerType, ownerId, fresh.version);
     if (selectedRowId === rowId) {
       const updated = await etn.comments.get(networkId, rowId);
-      selectedComment = updated;
       if (editorState !== null && editorState.commentId === rowId) {
         editorState.version = updated.version;
         editorState.targets = updated.targets;
@@ -1015,7 +990,6 @@ async function attachThoughtToRow(thoughtId: string, rowId: string): Promise<voi
     await etn.comments.addTarget(networkId, rowId, 'thought', thoughtId, fresh.version);
     if (selectedRowId === rowId) {
       const updated = await etn.comments.get(networkId, rowId);
-      selectedComment = updated;
       if (editorState !== null && editorState.commentId === rowId) {
         editorState.version = updated.version;
         editorState.targets = updated.targets;

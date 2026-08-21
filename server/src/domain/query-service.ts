@@ -31,7 +31,6 @@ import {
   type PropertyQueryOperator,
   type ThoughtQueryActive,
   type ThoughtQueryHit,
-  type ThoughtQueryOrder,
   type ThoughtQueryRequest,
   type ThoughtQueryResponse,
   type ThoughtQuerySort,

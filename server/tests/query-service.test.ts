@@ -160,7 +160,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     const root = seedThought(ndb, 'Root');
     const child = seedThought(ndb, 'Child');
     const grandchild = seedThought(ndb, 'Grandchild');
-    const detached = seedThought(ndb, 'Detached');
+    seedThought(ndb, 'Detached');
     // Grandchild also has an edge back to root (cycle) — must not loop.
     seedLink(ndb, root, child);
     seedLink(ndb, child, grandchild);
@@ -181,7 +181,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     const typeA = seedThoughtType(ndb, 'задача');
     const typeB = seedThoughtType(ndb, 'смета');
     const t1 = seedThought(ndb, 'План работ', { type_id: typeA });
-    const t2 = seedThought(ndb, 'План отдыха', { type_id: typeA, active: 0 });
+    const _t2 = seedThought(ndb, 'План отдыха', { type_id: typeA, active: 0 });
     seedThought(ndb, 'Смета', { type_id: typeB });
     seedSynonym(ndb, t1, 'roadmap');
 
