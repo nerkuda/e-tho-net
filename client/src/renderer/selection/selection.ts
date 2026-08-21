@@ -287,7 +287,7 @@ function buildPropertiesMenu(): MenuItem[] {
       onClick: () => void openStyleDialog(),
     },
     {
-      label: 'Изменить тип…',
+      label: 'Изменить тип мыслей…',
       onClick: () => void openTypeDialog(),
     },
     {

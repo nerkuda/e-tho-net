@@ -417,6 +417,48 @@ describe(
           payload: { ids: [x], op: 'link_parents', args: {} },
         });
         assert.equal(badArgs.statusCode, 422);
+
+        // args.link_type_id sets the type of the links the op CREATES; the
+        // pairs linked above (untyped) are untouched, the new one is typed.
+        const lt = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/link-types`,
+          headers: authHeaders(ctx),
+          payload: { name_forward: 'Содержит', name_reverse: 'Входит в' },
+        });
+        assert.equal(lt.statusCode, 201);
+        const linkTypeId = (lt.json().data as { id: string }).id;
+        const typed = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+          headers: authHeaders(ctx),
+          payload: {
+            ids: [y],
+            op: 'link_parents',
+            args: { parent_ids: [x, parent2], link_type_id: linkTypeId },
+          },
+        });
+        assert.equal(typed.statusCode, 200);
+        assert.equal((typed.json().data as { affected: number }).affected, 1);
+        // y keeps the untyped parent1 link and gains typed x/parent2 links.
+        const yLinks = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${y}/links?group=type`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(yLinks.statusCode, 200);
+        const grouped = yLinks.json().data as {
+          by_type: Array<{ type_id: string | null; items: Array<{ link: { source_id: string } }> }>;
+          untyped_parents: Array<{ link: { source_id: string } }>;
+        };
+        const typedGroup = grouped.by_type.find((g) => g.type_id === linkTypeId);
+        assert.ok(typedGroup !== undefined);
+        assert.deepEqual(
+          typedGroup.items.map((i) => i.link.source_id).sort(),
+          [x, parent2].sort(),
+        );
+        // The pre-existing untyped parent1 → y link is untouched.
+        assert.ok(grouped.untyped_parents.some((u) => u.link.source_id === parent1));
       } finally {
         await closeRestContext(ctx);
       }

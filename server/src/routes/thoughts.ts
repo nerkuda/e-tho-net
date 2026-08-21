@@ -506,6 +506,9 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         let direction: 'parent' | 'child' = 'child';
         let anchorParentIds: string[] | undefined;
         let anchorChildIds: string[] | undefined;
+        // Type of the links the bulk link ops create (absent/null = untyped);
+        // links that already exist keep their type untouched.
+        let bulkLinkType: string | null = null;
         if (op === 'set_type') {
           const raw = args.type_id;
           if (raw === undefined) {
@@ -564,6 +567,18 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         if (op === 'link_children' || op === 'unlink_children') {
           anchorChildIds = parseAnchorIds(args.child_ids, 'child_ids', req.id);
+        }
+        if (op === 'link_parents' || op === 'link_children' || op === 'set_only_parents') {
+          const rawLinkType = args.link_type_id;
+          if (rawLinkType !== undefined && rawLinkType !== null && typeof rawLinkType !== 'string') {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'args.link_type_id должен быть строкой или null.',
+              { field: 'args.link_type_id' },
+              req.id,
+            );
+          }
+          bulkLinkType = rawLinkType ?? null;
         }
 
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
@@ -639,15 +654,16 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
               }
               // Bulk link operations of the structures filter commands
               // (03-server-api.md §6.6, L22): anchors come from the picker,
-              // new links are untyped and pairs already linked in any type are
-              // left untouched — the op is idempotent per pair.
+              // newly created links get `args.link_type_id` (untyped when
+              // absent) and pairs already linked in any type are left
+              // untouched — the op is idempotent per pair.
               case 'link_parents': {
                 for (const parentId of anchorParentIds!) {
                   if (parentId === id) continue; // self-loop is skipped silently
                   if (findLinksBetween(ndb, parentId, id).length > 0) continue;
                   const link = createLink(
                     ndb,
-                    { source_id: parentId, target_id: id, type_id: null },
+                    { source_id: parentId, target_id: id, type_id: bulkLinkType },
                     userId,
                   );
                   deps.emit(req, networkId, 'link.created', { link });
@@ -660,7 +676,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   if (findLinksBetween(ndb, id, childId).length > 0) continue;
                   const link = createLink(
                     ndb,
-                    { source_id: id, target_id: childId, type_id: null },
+                    { source_id: id, target_id: childId, type_id: bulkLinkType },
                     userId,
                   );
                   deps.emit(req, networkId, 'link.created', { link });
@@ -679,7 +695,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   if (findLinksBetween(ndb, parentId, id).length > 0) continue;
                   const link = createLink(
                     ndb,
-                    { source_id: parentId, target_id: id, type_id: null },
+                    { source_id: parentId, target_id: id, type_id: bulkLinkType },
                     userId,
                   );
                   deps.emit(req, networkId, 'link.created', { link });

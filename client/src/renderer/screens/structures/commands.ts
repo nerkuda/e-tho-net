@@ -9,9 +9,12 @@
  * command touches.
  *
  * Selection commands are client-side (the shared selection panel, §5); the
- * rest run as one `thoughts.batch` call (03-server-api.md §6.6). New links are
- * created untyped, already linked pairs keep their type; destructive commands
- * (only parents / unlink / delete) ask for a confirmation.
+ * rest run as one `thoughts.batch` call (03-server-api.md §6.6). Link
+ * commands open the picker with thought creation allowed: the chosen thought
+ * type applies to the new thoughts only, the chosen link type — to the links
+ * the command creates; already linked pairs keep their type. Destructive
+ * commands (only parents / unlink / delete) ask for a confirmation; the
+ * unlink pickers never create thoughts.
  */
 
 import {
@@ -23,7 +26,7 @@ import {
   type ThoughtBatchOp,
 } from '@etn/shared';
 
-import { pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
+import { pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { errText } from '../../lib/dom.js';
 import { confirmDialog, errorDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
@@ -56,7 +59,7 @@ function buildMenu(ctx: FilterCommandsContext): MenuItem[] {
     MENU_SEPARATOR,
     { label: 'Сделать актуальными', onClick: () => void cmdBatch(ctx, 'set_active', {}) },
     { label: 'Сделать неактуальными', onClick: () => void cmdBatch(ctx, 'set_inactive', {}) },
-    { label: 'Изменить тип…', onClick: () => void cmdChangeType(ctx) },
+    { label: 'Изменить тип мыслей…', onClick: () => void cmdChangeType(ctx) },
     MENU_SEPARATOR,
     { label: 'Добавить родительские мысли…', onClick: () => void cmdLinkAnchors(ctx, 'parents') },
     { label: 'Сделать единственными родителями…', onClick: () => void cmdOnlyParents(ctx) },
@@ -134,30 +137,100 @@ async function cmdChangeType(ctx: FilterCommandsContext): Promise<void> {
   else await cmdBatch(ctx, 'set_type', { type_id: typeId });
 }
 
-/** «Добавить родительские/подчинённые мысли…»: pick anchors, link untyped. */
+/** Anchors of a link command after the picker (new thoughts already created). */
+interface AnchorsPick {
+  ids: string[];
+  /** Link type for the links the command creates (`null` = untyped). */
+  linkTypeId: string | null;
+}
+
+/**
+ * Opens the anchor picker («Родительские»/«Подчинённые мысли»). With
+ * `allowCreate` the dialog also offers creating new thoughts (the chosen
+ * thought type applies to them only) and picking the link type for the links
+ * the command will create; the picked new thoughts are created right here,
+ * so the returned ids are all existing. `null` — cancelled or nothing picked.
+ */
+async function pickAnchors(
+  dir: 'parents' | 'children',
+  applyLabel: string,
+  allowCreate: boolean,
+): Promise<AnchorsPick | null> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return null;
+  const result = await pickThoughtsDialog({
+    networkId,
+    allowCreate,
+    allowLinkType: allowCreate,
+    title: dir === 'parents' ? 'Родительские мысли' : 'Подчинённые мысли',
+    applyLabel,
+  });
+  if (result === null) return null;
+  const ids: string[] = [];
+  let created = 0;
+  let failed = 0;
+  for (const item of result.items) {
+    if (item.kind === 'existing') {
+      ids.push(item.id);
+      continue;
+    }
+    try {
+      // A new anchor is linked to the filter result by the batch command
+      // itself — created here without an inline link.
+      const thought = await etn.thoughts.create(networkId, {
+        title: item.title,
+        synonyms: item.synonyms,
+        type_id: result.thoughtTypeId,
+      });
+      ids.push(thought.id);
+      created++;
+    } catch {
+      failed++;
+    }
+  }
+  if (failed > 0) {
+    notice(`Не удалось создать ${failed} новых мыслей — они пропущены.`, 'error');
+  }
+  if (created > 0) notice(`Создано новых мыслей: ${created}.`);
+  if (ids.length === 0) return null;
+  return { ids, linkTypeId: allowCreate ? result.linkTypeId : null };
+}
+
+/** «Добавить родительские/подчинённые мысли…»: pick anchors, link them. */
 async function cmdLinkAnchors(
   ctx: FilterCommandsContext,
   dir: 'parents' | 'children',
 ): Promise<void> {
-  const anchors = await pickAnchors(dir, 'Добавить');
+  const anchors = await pickAnchors(dir, 'Добавить', true);
   if (anchors === null) return;
   if (dir === 'parents') {
-    await cmdBatch(ctx, 'link_parents', { parent_ids: anchors });
+    await cmdBatch(ctx, 'link_parents', {
+      parent_ids: anchors.ids,
+      link_type_id: anchors.linkTypeId,
+    });
   } else {
-    await cmdBatch(ctx, 'link_children', { child_ids: anchors });
+    await cmdBatch(ctx, 'link_children', {
+      child_ids: anchors.ids,
+      link_type_id: anchors.linkTypeId,
+    });
   }
 }
 
 /** «Сделать единственными родителями…»: destructive, confirmed. */
 async function cmdOnlyParents(ctx: FilterCommandsContext): Promise<void> {
-  const anchors = await pickAnchors('parents', 'Выбрать');
+  const anchors = await pickAnchors('parents', 'Выбрать', true);
   if (anchors === null) return;
-  await cmdBatch(ctx, 'set_only_parents', { parent_ids: anchors }, {
-    confirmTitle: 'Сделать единственными родителями',
-    confirmText: (n) =>
-      `У ${n} отобранных мыслей будут удалены все входящие связи, кроме связей ` +
-      `с выбранными мыслями (${anchors.length}). Продолжить?`,
-  });
+  await cmdBatch(
+    ctx,
+    'set_only_parents',
+    { parent_ids: anchors.ids, link_type_id: anchors.linkTypeId },
+    {
+      confirmTitle: 'Сделать единственными родителями',
+      confirmText: (n) =>
+        `У ${n} отобранных мыслей будут удалены все входящие связи, кроме связей ` +
+        `с выбранными мыслями (${anchors.ids.length}). Продолжить?`,
+    },
+  );
 }
 
 /** «Разорвать связи…»: pick anchors, drop their links, confirmed. */
@@ -165,19 +238,20 @@ async function cmdUnlinkAnchors(
   ctx: FilterCommandsContext,
   dir: 'parents' | 'children',
 ): Promise<void> {
-  const anchors = await pickAnchors(dir, 'Разорвать');
+  // Destructive command: no new thoughts, no type picking (§15.3.1).
+  const anchors = await pickAnchors(dir, 'Разорвать', false);
   if (anchors === null) return;
   const title =
     dir === 'parents' ? 'Разорвать связи с родителями' : 'Разорвать связи с подчинёнными';
   await cmdBatch(
     ctx,
     dir === 'parents' ? 'unlink_parents' : 'unlink_children',
-    dir === 'parents' ? { parent_ids: anchors } : { child_ids: anchors },
+    dir === 'parents' ? { parent_ids: anchors.ids } : { child_ids: anchors.ids },
     {
       confirmTitle: title,
       confirmText: (n) =>
         `У ${n} отобранных мыслей будут удалены связи с выбранными мыслями ` +
-        `(${anchors.length}). Продолжить?`,
+        `(${anchors.ids.length}). Продолжить?`,
     },
   );
 }
@@ -243,25 +317,4 @@ async function cmdBatch(
     return;
   }
   ctx.refresh();
-}
-
-/**
- * Opens the anchor picker («Родительские»/«Подчинённые мысли»): existing
- * thoughts only, multi-select. `null` — cancelled or nothing picked.
- */
-async function pickAnchors(
-  dir: 'parents' | 'children',
-  applyLabel: string,
-): Promise<string[] | null> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return null;
-  const result = await pickThoughtsDialog({
-    networkId,
-    allowCreate: false,
-    allowLinkType: false,
-    title: dir === 'parents' ? 'Родительские мысли' : 'Подчинённые мысли',
-    applyLabel,
-  });
-  const ids = pickedThoughtIds(result);
-  return ids.length > 0 ? ids : null;
 }
