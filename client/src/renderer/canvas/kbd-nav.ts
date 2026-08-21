@@ -112,9 +112,9 @@ export function initKbdNav(host: HTMLElement): void {
         focusCursor();
         return;
       }
-      if (event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      if (event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
         event.preventDefault();
-        void reorderCursor(event.key === 'ArrowUp' ? -1 : 1);
+        void reorderCursor(event.key === 'ArrowLeft' ? -1 : 1);
         return;
       }
       return; // other Ctrl-combos (zoom, search) keep their global handlers
@@ -215,7 +215,7 @@ function boxOf(el: HTMLElement): CloudBox {
 }
 
 /** Stores the cursor id and repaints the frame. */
-function setCursor(id: string | null): void {
+export function setCursor(id: string | null): void {
   cursorId = id;
   syncCanvasCursor();
 }

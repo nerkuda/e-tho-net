@@ -25,6 +25,7 @@ import type { FocusEdge, FocusNeighbor, FocusResponse, IconKind, ThoughtRef } fr
 
 import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
+import { setCursor } from './kbd-nav.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -1014,6 +1015,11 @@ function buildCloud(
     }
     // The second click of a double click is left to the dblclick handler.
     if (event.detail >= 2) return;
+    // Click selects the cloud as the keyboard cursor so subsequent arrows
+    // (and Ctrl+Shift+←/→ in manual mode) move from the just-clicked cloud,
+    // not from whichever cloud the cursor happened to be on. The editor
+    // halo and the cursor frame are independent — both follow this click.
+    setCursor(entry.id);
     openThoughtInEditor(entry.id);
   });
   cloud.addEventListener('dblclick', (event) => {
