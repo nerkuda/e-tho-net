@@ -599,6 +599,12 @@ function buildEditor(existing: Comment | null, startEdit = false): void {
   const widget = createMarkdownField({
     md: existing?.body_md ?? '',
     html: existing?.body_html ?? '',
+    // L24: a record's own thought target is never offered as an auto-mention
+    // (its name/synonyms are not underlined in the record text). A getter —
+    // targets change after the first save / attach / detach, and the field
+    // re-renders the view without being rebuilt.
+    getMentionsExcludeThoughtId: () =>
+      editorState?.targets.find((t) => t.owner_type === 'thought')?.owner_id,
     onSave: async (md) => {
       const s = editorState;
       if (s === null) return '';

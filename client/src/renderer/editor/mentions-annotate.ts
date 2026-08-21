@@ -29,7 +29,7 @@ import { openThoughtByRef } from './wiki-link.js';
 const BLOCK_SELECTOR = 'p, li, td, th, blockquote, h1, h2, h3, h4, h5, h6, dd, dt';
 
 /** Ancestors whose text must never be scanned/wrapped. */
-const EXCLUDED_SELECTOR = 'a, code, pre, .thought-mention';
+const EXCLUDED_SELECTOR = 'a, code, pre, .wiki-link, .thought-mention';
 
 /** A scanning unit: one leaf block element plus its eligible flat text. */
 interface TextUnit {

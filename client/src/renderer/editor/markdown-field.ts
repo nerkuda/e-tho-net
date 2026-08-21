@@ -60,6 +60,14 @@ export function createMarkdownField(opts: {
    * this entity and inserts the markdown image reference at the caret.
    */
   attachmentsOwner?: AttachmentsOwner;
+  /**
+   * Thought never offered as an auto-mention match (L24): its own name and
+   * synonyms must not be underlined in its own comment text. Evaluated on
+   * every view render — the chronicle desktop passes a getter because a
+   * record's thought targets can change after the field is built. Falls back
+   * to the `attachmentsOwner` thought when omitted.
+   */
+  getMentionsExcludeThoughtId?: () => string | undefined;
   minRows?: number;
 }): HTMLElement {
   const root = div('md-field');
@@ -87,8 +95,9 @@ export function createMarkdownField(opts: {
     persistMdZoom(networkId, next);
   }, { passive: false });
 
-  const excludeThoughtId =
-    opts.attachmentsOwner?.ownerType === 'thought' ? opts.attachmentsOwner.ownerId : undefined;
+  const excludeThoughtId = (): string | undefined =>
+    opts.getMentionsExcludeThoughtId?.() ??
+    (opts.attachmentsOwner?.ownerType === 'thought' ? opts.attachmentsOwner.ownerId : undefined);
 
   /**
    * «Вставить ссылку» (L24): replaces the first occurrence of the matched
@@ -128,7 +137,10 @@ export function createMarkdownField(opts: {
     if (currentHtml.trim() !== '') {
       renderHtml(view, currentHtml);
       renderMermaidBlocks(view);
-      annotateMentions(view, { excludeThoughtId, onInsertLink: insertMentionLink });
+      annotateMentions(view, {
+        excludeThoughtId: excludeThoughtId(),
+        onInsertLink: insertMentionLink,
+      });
     }
   };
 
