@@ -1567,6 +1567,38 @@ body.cloud-dragging * {
   text-decoration: underline;
 }
 
+/* Manual-order position indicator (08-ui-spec.md §2.2). Small black badge
+   in the right-bottom corner of a zone cloud. The 16×16 circle's centre
+   coincides with the cloud's right-bottom corner (right: -8px, bottom: -8px
+   for a 16×16 box), so the badge slightly overlaps the corner. Shown only
+   when the zone is sorted `manual` and the thought has an actual entry in
+   `user_focus_order` (manual_position !== null). pointer-events: none keeps
+   the cloud's click/dblclick/contextmenu handlers intact. */
+.cloud-pos {
+  position: absolute;
+  right: -8px;
+  bottom: -8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #000;
+  color: #d0d0d0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--cloud-font) * 0.75);
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+  z-index: 2;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.cloud-pos[hidden] {
+  display: none;
+}
+
 .cloud.font-bold .cloud-title {
   font-weight: 700;
 }

@@ -722,6 +722,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
 
   grid.style.gridTemplateColumns = `repeat(${cols}, ${geom.width}px)`;
   grid.style.gridAutoRows = 'auto'; // each row is as tall as its tallest cloud
+  grid.style.gridAutoFlow = 'row';  // row-major: DOM order = entries order; default, fixed for safety
   grid.style.columnGap = `${geom.gap}px`;
   grid.style.rowGap = `${geom.gap}px`;
 
@@ -747,19 +748,23 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   grid.style.transform = `translateY(${prefix[startRow]!}px)`;
 
   clear(grid);
-  // Column-major fill (08-ui-spec.md §2.1.1): a grid slot keeps its visual
-  // position, but the entry placed there follows the top-to-bottom reading
-  // order — slot i (column i % cols, row i / cols) shows the entry whose
-  // column-major index is (i % cols) * rows + floor(i / cols). Sparse last
-  // rows (a partial final column) simply stay empty.
-  const slotOf = (i: number): number => (i % cols) * rows + Math.floor(i / cols);
+  // Row-major fill (08-ui-spec.md §2.1.1): DOM order = entries order
+  // (`entries[i]`); CSS Grid `grid-auto-flow: row` (fixed above) lays them
+  // out left-to-right within a row, then advances to the next row. Visual
+  // slot `(col = i % cols, row = floor(i / cols))` therefore contains the
+  // entry with row-major index i — i.e. the same position it occupies in
+  // the server-returned neighbours array (zoneOrder). This matches the
+  // keyboard cursor model (↑/↓/←/→ step by row-major index) and
+  // `Ctrl+Shift+↑/↓` (which moves by one position in zoneOrder).
+  const showPosition = dir !== 'siblings' && store.state.zoneSorts[dir] === 'manual';
   const first = startRow * cols;
   const last = endRow * cols;
   const rowClouds = new Map<number, HTMLElement[]>();
   for (let i = first; i < last; i++) {
-    const entry = entries[slotOf(i)];
+    const entry = entries[i];
     if (entry === undefined) continue;
-    const cloud = buildCloud(entry, dir);
+    const position = showPosition ? (entry.links[0]?.manual_position ?? null) : null;
+    const cloud = buildCloud(entry, dir, position);
     const r = Math.floor(i / cols);
     const clouds = rowClouds.get(r);
     if (clouds === undefined) rowClouds.set(r, [cloud]);
@@ -790,7 +795,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   // applied synchronously and would otherwise patch nothing (the focus row
   // loads it after mounting for the same reason).
   for (let i = first; i < last; i++) {
-    const entry = entries[slotOf(i)];
+    const entry = entries[i];
     if (entry !== undefined) queueIndicatorLoad(entry.id);
   }
   // The rebuilt clouds lost the keyboard cursor frame — repaint it (§2.9).
@@ -906,7 +911,11 @@ export function applyThoughtIcon(
 }
 
 /** Builds one zone cloud element. */
-function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'): HTMLElement {
+function buildCloud(
+  entry: ZoneEntry,
+  dir: 'parents' | 'siblings' | 'children',
+  position: number | null,
+): HTMLElement {
   const ref = entry.ref;
   const cloud = div('cloud');
   cloud.dataset['id'] = entry.id;
@@ -972,7 +981,21 @@ function buildCloud(entry: ZoneEntry, dir: 'parents' | 'siblings' | 'children'):
   const main = div('cloud-main');
   main.append(title, ind);
 
-  cloud.append(topEllipse, iconBox, main, bottomEllipse);
+  // Manual-order position indicator (08-ui-spec.md §2.2): small black badge
+  // in the right-bottom corner, number = position+1 (1-based). Shown only when
+  // the zone is sorted `manual` AND the thought has an actual entry in
+  // `user_focus_order`. For newly added thoughts in a `manual`-sorted zone
+  // there is no entry yet — the indicator stays hidden until the user gives
+  // it a position via Ctrl+Shift+↑/↓ or a drag.
+  const posBadge = div('cloud-pos');
+  if (position === null) {
+    posBadge.hidden = true;
+  } else {
+    posBadge.textContent = String(position + 1);
+    posBadge.title = `Позиция в зоне: ${position + 1}`;
+  }
+
+  cloud.append(topEllipse, iconBox, main, bottomEllipse, posBadge);
 
   // Single click → open the thought in the editor + halo (§2.2.4); double
   // click → focus (B1); Ctrl+click toggles selection (H16); right-click opens

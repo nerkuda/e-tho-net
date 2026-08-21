@@ -74,6 +74,11 @@ export function getFocusPreferences(
  * Upsert the per-(user, focus, dir) sort selection. `siblings` may use any
  * sort except `manual`; the read side ignores manual for siblings anyway, but
  * the write side rejects it to keep stored state honest (03-server-api.md §6.8).
+ *
+ * `manual` ordering is always ascending (08-ui-spec.md §2.7): there is no
+ * semantic meaning to a reversed manual list — "above/below" is defined
+ * relative to the zoneOrder itself. The write side therefore rejects
+ * `sort='manual' && order='desc'` as `VALIDATION_ERROR`.
  */
 export function setFocusPreferences(
   ndb: NetworkDb,
@@ -84,6 +89,13 @@ export function setFocusPreferences(
   validatePrefInput(input);
   if (input.dir === 'siblings' && input.sort === 'manual') {
     throw new EtnError('VALIDATION_ERROR', 'manual order is not available for siblings');
+  }
+  if (input.sort === 'manual' && input.order === 'desc') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'order=desc is not allowed with sort=manual (manual is always ascending)',
+      { field: 'order' },
+    );
   }
   const now = new Date().toISOString();
   ndb

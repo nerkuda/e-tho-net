@@ -249,6 +249,16 @@ export interface FocusNeighbor {
   has_incoming: boolean;
   /** Whether the neighbour has ANY outgoing link (drives the bottom ellipse fill). */
   has_outgoing: boolean;
+  /**
+   * Linear row-major position of this neighbour in the zone when the user's
+   * sort is `manual` (docs/02-data-model.md §3.10.4): `0` for the first
+   * thought, `1` for the second, etc. `null` when the active sort is not
+   * `manual` or when the thought has no entry in `user_focus_order`
+   * (e.g. it was just added to a `manual`-sorted zone and has not yet
+   * been positioned by an explicit reorder — it then falls to the tail
+   * of the row-major list, §11-settings-and-state.md §3.2).
+   */
+  manual_position: number | null;
 }
 
 /**

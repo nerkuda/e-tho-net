@@ -707,7 +707,18 @@ export async function reorderZone(draggedId: string, dir: OrderableDir, insertIn
   const networkId = requireNetworkId();
   const focus = store.state.focus;
   if (focus === null) return;
-  const order = store.state.zoneOrder[dir].filter((x) => x !== draggedId);
+  // Build a "clean" order from the actual zone members: drop ids that no
+  // longer appear in the neighbours list (e.g. after a `link.deleted` that
+  // hasn't been reordered yet), then insert the dragged thought at the
+  // requested slot. The server's `setFocusOrder` is a full replace
+  // (03-server-api.md §6.8) — any orphan rows left over from previous
+  // reorders get wiped, and the surviving positions become a contiguous
+  // 0..N-1 (02-data-model.md §3.10.4).
+  const neighbourIds = new Set(
+    (dir === 'parents' ? focus.parents : focus.children).map((n) => n.id),
+  );
+  const baseOrder = store.state.zoneOrder[dir].filter((id) => neighbourIds.has(id));
+  const order = baseOrder.filter((x) => x !== draggedId);
   const at = Math.max(0, Math.min(order.length, insertIndex));
   order.splice(at, 0, draggedId);
   try {

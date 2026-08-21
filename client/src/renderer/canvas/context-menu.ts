@@ -564,11 +564,16 @@ async function setZoneSort(
   sort: 'manual' | 'alpha' | 'created' | 'viewed',
   order: 'asc' | 'desc',
 ): Promise<void> {
+  // Manual ordering is always ascending — there is no semantic meaning to a
+  // reversed manual list (08-ui-spec.md §2.7). Normalise here so accidental
+  // callers (or future UI) cannot leak `desc` through to the server, which
+  // would reject it with VALIDATION_ERROR.
+  const effectiveOrder: 'asc' | 'desc' = sort === 'manual' ? 'asc' : order;
   try {
     await etn.thoughts.setFocusPreferences(networkId, focusId, {
       dir: dir as FocusDir,
       sort,
-      order,
+      order: effectiveOrder,
     });
     scheduleRefresh();
   } catch (err) {

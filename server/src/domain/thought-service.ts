@@ -91,6 +91,12 @@ interface NeighborRow {
   link_id: string;
   link_type_id: string | null;
   link_active: number;
+  /**
+   * Populated only when the query opted into the manual-position join
+   * (`useManualJoin`, see `buildNeighborsQuery`). `number` for an entry
+   * found in `user_focus_order`, otherwise `null`.
+   */
+  manual_position?: number | null;
 }
 
 /** Convert a raw row + synonyms into a {@link Thought}. */
@@ -175,6 +181,9 @@ function rowToNeighbor(row: NeighborRow): FocusNeighbor {
     // Placeholder; `focus()` overwrites these from `getLinkDirections`.
     has_incoming: false,
     has_outgoing: false,
+    // Only set when the query joined `user_focus_order`; otherwise undefined
+    // and surfaced as `null` (no position known, indicator hidden).
+    manual_position: row.manual_position ?? null,
   };
 }
 
