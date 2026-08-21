@@ -19,8 +19,8 @@ import { buildValueOptionsCaret } from '../editor/properties.js';
 import { wireThoughtRefSearch } from '../editor/thought-picker.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import { createTypeCombobox, type TypeOption } from '../lib/type-combobox.js';
-import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
+import { createTypeCombobox } from '../lib/type-combobox.js';
+import { linkTypeOptions, thoughtTypeOptions } from '../lib/type-tree.js';
 import { showDialog } from '../lib/dialog.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
@@ -49,19 +49,7 @@ function focusCombo(combo: HTMLElement): void {
 export function pickLinkType(title: string): Promise<string | null | undefined> {
   return new Promise((resolve) => {
     const combo = createTypeCombobox({
-      options: (): TypeOption[] =>
-        orderedTypeRows(store.state.linkTypes).map((row) => {
-          const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
-          return {
-            id: row.type.id,
-            label: row.type.name_forward,
-            parent_id: row.type.parent_id,
-            depth: row.depth,
-            has_children: row.hasChildren,
-            selectable: !row.type.is_root,
-            line: { color: line.color, style: line.style, width: line.width },
-          };
-        }),
+      options: () => linkTypeOptions(store.state.linkTypes),
       value: store.state.lastUsedLinkTypeId,
       emptyLabel: 'Без типа',
       placeholder: 'Поиск типа связи…',
@@ -89,7 +77,7 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
 }
 
 // ---------------------------------------------------------------------------
-// Thought type picker («Изменить тип»)
+// Thought type picker («Изменить тип мыслей»)
 // ---------------------------------------------------------------------------
 
 /**
@@ -99,31 +87,14 @@ export function pickLinkType(title: string): Promise<string | null | undefined> 
 export function pickThoughtType(initial: string | null): Promise<string | null | undefined> {
   return new Promise((resolve) => {
     const combo = createTypeCombobox({
-      options: (): TypeOption[] =>
-        orderedTypeRows(store.state.thoughtTypes).map((row) => ({
-          id: row.type.id,
-          label: row.type.name,
-          parent_id: row.type.parent_id,
-          depth: row.depth,
-          has_children: row.hasChildren,
-          selectable: !row.type.is_root,
-          icon: { icon: row.type.icon, kind: row.type.icon_kind },
-          style: {
-            fg: row.type.fg_color,
-            bg: row.type.bg_color,
-            bold: row.type.font_bold ?? false,
-            italic: row.type.font_italic ?? false,
-            underline: row.type.font_underline ?? false,
-            strike: row.type.font_strike ?? false,
-          },
-        })),
+      options: () => thoughtTypeOptions(store.state.thoughtTypes),
       value: initial,
-      emptyLabel: 'Без типа (очистить тип)',
+      emptyLabel: 'Без типа',
       placeholder: 'Поиск типа…',
       onChange: () => undefined,
     });
     showDialog({
-      title: 'Изменить тип',
+      title: 'Изменить тип мыслей',
       body: combo.root,
       width: 420,
       buttons: [

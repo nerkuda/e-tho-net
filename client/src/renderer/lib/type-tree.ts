@@ -11,6 +11,8 @@
 
 import type { LinkStyle, LinkType, ThoughtType } from '@etn/shared';
 
+import type { TypeOption } from './type-combobox.js';
+
 /** Minimal catalogue entry shape shared by both type kinds. */
 export interface TypeNode {
   id: string;
@@ -252,4 +254,55 @@ export function resolveLinkTypeVisual(
   const width = chain.find((t) => t.width !== null)?.width ?? LINK_STYLE_DEFAULTS.width;
   const color = chain.find((t) => t.color !== null)?.color ?? LINK_STYLE_DEFAULTS.color;
   return { color, style, width };
+}
+
+// ---------------------------------------------------------------------------
+// Combobox options (pick lists without the hierarchy root, L22 review)
+// ---------------------------------------------------------------------------
+
+/**
+ * Rows for a thought-type pick list: the whole tree WITHOUT the hierarchy
+ * root («основной тип» lives only in the type manager, 08-ui-spec.md §8.1)
+ * and with depths shifted up so the former root children sit at the left
+ * edge. Every row is selectable and carries the type's own icon/font style.
+ */
+export function thoughtTypeOptions(types: readonly ThoughtType[]): TypeOption[] {
+  return orderedTypeRows(types)
+    .filter((row) => !row.type.is_root)
+    .map((row) => ({
+      id: row.type.id,
+      label: row.type.name,
+      parent_id: row.type.parent_id,
+      depth: row.depth - 1,
+      has_children: row.hasChildren,
+      icon: { icon: row.type.icon, kind: row.type.icon_kind },
+      style: {
+        fg: row.type.fg_color,
+        bg: row.type.bg_color,
+        bold: row.type.font_bold ?? false,
+        italic: row.type.font_italic ?? false,
+        underline: row.type.font_underline ?? false,
+        strike: row.type.font_strike ?? false,
+      },
+    }));
+}
+
+/**
+ * Rows for a link-type pick list: like {@link thoughtTypeOptions}, without the
+ * root, labels carry both direction names, rows show the resolved line swatch.
+ */
+export function linkTypeOptions(types: readonly LinkType[]): TypeOption[] {
+  return orderedTypeRows(types)
+    .filter((row) => !row.type.is_root)
+    .map((row) => {
+      const line = resolveLinkTypeVisual(types, row.type.id);
+      return {
+        id: row.type.id,
+        label: `${row.type.name_forward} / ${row.type.name_reverse}`,
+        parent_id: row.type.parent_id,
+        depth: row.depth - 1,
+        has_children: row.hasChildren,
+        line: { color: line.color, style: line.style, width: line.width },
+      };
+    });
 }

@@ -39,7 +39,7 @@ import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
-import { orderedTypeRows, resolveLinkTypeVisual } from '../lib/type-tree.js';
+import { linkTypeOptions, resolveLinkTypeVisual, thoughtTypeOptions } from '../lib/type-tree.js';
 import { focusEdgesSignature, patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
@@ -727,27 +727,11 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   // Bottom row: type + settings (⚙) + active toggle.
   const row = div('editor-header-row');
 
-  // Searchable type picker (L6/L21): a tree of types, rows carry the type's
-  // icon and style; the root type is shown but not selectable.
+  // Searchable type picker (L6/L21): the type tree without the hierarchy
+  // root (the root is only managed in «Типы мыслей»); rows carry the type's
+  // icon and style.
   const typeCombo = createTypeCombobox({
-    options: () =>
-      orderedTypeRows(store.state.thoughtTypes).map((row) => ({
-        id: row.type.id,
-        label: row.type.name,
-        parent_id: row.type.parent_id,
-        depth: row.depth,
-        has_children: row.hasChildren,
-        selectable: !row.type.is_root,
-        icon: { icon: row.type.icon, kind: row.type.icon_kind },
-        style: {
-          fg: row.type.fg_color,
-          bg: row.type.bg_color,
-          bold: row.type.font_bold ?? false,
-          italic: row.type.font_italic ?? false,
-          underline: row.type.font_underline ?? false,
-          strike: row.type.font_strike ?? false,
-        },
-      })),
+    options: () => thoughtTypeOptions(store.state.thoughtTypes),
     value: thought.type_id,
     placeholder: 'без типа',
     emptyLabel: 'без типа',
@@ -865,22 +849,10 @@ function buildLinkHeader(link: Link): HTMLElement {
   // Single row: link type + settings (⚙) + active toggle (08-ui-spec.md §6.2.2).
   const row = div('editor-header-row');
 
-  // Searchable type picker (L6/L21): a tree of types; rows show forward/
-  // reverse names and the line look resolved along the type chain.
+  // Searchable type picker (L6/L21): the link-type tree without the root;
+  // rows show forward/reverse names and the resolved line look.
   const typeCombo = createTypeCombobox({
-    options: () =>
-      orderedTypeRows(store.state.linkTypes).map((row) => {
-        const line = resolveLinkTypeVisual(store.state.linkTypes, row.type.id);
-        return {
-          id: row.type.id,
-          label: `${row.type.name_forward} / ${row.type.name_reverse}`,
-          parent_id: row.type.parent_id,
-          depth: row.depth,
-          has_children: row.hasChildren,
-          selectable: !row.type.is_root,
-          line: { color: line.color, style: line.style, width: line.width },
-        };
-      }),
+    options: () => linkTypeOptions(store.state.linkTypes),
     value: link.type_id,
     placeholder: 'без типа',
     emptyLabel: 'без типа',

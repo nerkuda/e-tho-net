@@ -14,10 +14,12 @@ import {
   expandTypeIdsToSubtree,
   findRootType,
   flattenTypeTree,
+  linkTypeOptions,
   orderedTypeRows,
   resolveLinkTypeVisual,
   resolveThoughtTypeVisual,
   subtreeTypeIds,
+  thoughtTypeOptions,
   typeDepth,
   typeChainOf,
 } from '../src/renderer/lib/type-tree.js';
@@ -152,5 +154,44 @@ describe('type-tree helpers (L21)', () => {
     // The child inherits everything from `a`.
     const b = resolveLinkTypeVisual(types, 'b');
     assert.deepEqual(b, { color: '#123456', style: 'dashed', width: 3 });
+  });
+});
+
+describe('pick-list options without the hierarchy root (L22 review)', () => {
+  it('thoughtTypeOptions drops the root and shifts depths up', () => {
+    const types = [
+      tt('root', 'основной тип', null),
+      tt('a', 'Проект', 'root'),
+      tt('b', 'Задача', 'a'),
+      tt('c', 'Архив', 'root'),
+    ];
+    const options = thoughtTypeOptions(types);
+    // Root gone; former root children at depth 1 (alphabetical per level),
+    // their kids indented once.
+    assert.deepEqual(
+      options.map((o) => [o.id, o.depth, o.parent_id]),
+      [
+        ['c', 1, 'root'],
+        ['a', 1, 'root'],
+        ['b', 2, 'a'],
+      ],
+    );
+    // Every row is selectable and carries the type's icon/style.
+    assert.ok(options.every((o) => o.selectable !== false));
+    assert.ok(options.every((o) => o.icon !== null && o.style !== null));
+  });
+
+  it('linkTypeOptions drops the root, labels both names, rows carry line swatches', () => {
+    const types = [
+      lt('root', null),
+      lt('a', 'root'),
+      lt('b', 'a', { color: '#123456', style: 'dashed', width: 3 }),
+    ];
+    const options = linkTypeOptions(types);
+    assert.deepEqual(options.map((o) => o.id), ['a', 'b']);
+    assert.deepEqual(options.map((o) => o.depth), [1, 2]);
+    assert.equal(options[0]!.label, 'fa / ra');
+    // The child's swatch resolves through the chain (own overrides).
+    assert.deepEqual(options[1]!.line, { color: '#123456', style: 'dashed', width: 3 });
   });
 });

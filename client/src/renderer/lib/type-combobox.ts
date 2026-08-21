@@ -95,6 +95,11 @@ export function createTypeCombobox(opts: {
   let activeIndex = -1;
   let rows: TypeOption[] = [];
   let current = opts.value;
+  // The live search query, tracked separately from the input value: while the
+  // list is open the input still shows the LABEL of the selected value until
+  // the user types, and that label must never leak into the filtering (a row
+  // toggle click used to filter the tree down to the "no type" entry).
+  let search = '';
   // Tree expansion state (L21): the root type is always expanded, everything
   // else starts collapsed (docs/08-ui-spec.md §8.1).
   const expanded = new Set<string>();
@@ -114,13 +119,11 @@ export function createTypeCombobox(opts: {
     for (const opt of byId.values()) {
       // The root type is always expanded (docs/08-ui-spec.md §8.1).
       if (opt.selectable === false && opt.parent_id == null) expanded.add(opt.id ?? '');
-      if (opts.expandAll === true) {
-        if (opt.has_children === true) expanded.add(opt.id ?? '');
-        // Parent ids not present in the options (e.g. the root type excluded
-        // from the parent picker) must still count as expanded, otherwise the
-        // top-level rows would never show.
-        if (opt.parent_id != null) expanded.add(opt.parent_id);
-      }
+      if (opts.expandAll === true && opt.has_children === true) expanded.add(opt.id ?? '');
+      // A parent id absent from the options (e.g. the hierarchy root excluded
+      // from a pick list) must always count as expanded — otherwise its
+      // children, the intended top rows, would never show.
+      if (opt.parent_id != null && !byId.has(opt.parent_id)) expanded.add(opt.parent_id);
     }
     let walk = current !== null ? byId.get(current) : undefined;
     while (walk !== undefined && walk.parent_id != null) {
@@ -240,7 +243,7 @@ export function createTypeCombobox(opts: {
           const id = opt.id ?? '';
           if (expanded.has(id)) expanded.delete(id);
           else expanded.add(id);
-          renderList(input.value);
+          renderList(search);
           positionList();
         });
         row.append(toggle);
@@ -302,6 +305,7 @@ export function createTypeCombobox(opts: {
   function openList(): void {
     if (open) return;
     open = true;
+    search = '';
     seedExpansion();
     renderList('');
     positionList();
@@ -333,12 +337,14 @@ export function createTypeCombobox(opts: {
     if (open) closeList();
   });
   input.addEventListener('input', () => {
+    // Typing replaces the selected-value label with a real search query.
+    search = input.value;
     if (!open) {
       open = true;
-      renderList(input.value);
+      renderList(search);
       positionList();
     } else {
-      renderList(input.value);
+      renderList(search);
     }
   });
   input.addEventListener('keydown', (event) => {
