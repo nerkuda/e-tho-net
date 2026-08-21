@@ -590,6 +590,13 @@ async function enrichRefs(focus: FocusResponse): Promise<void> {
 // Zones
 // ---------------------------------------------------------------------------
 
+/** Empty-zone hints; the double-click hint only where the gesture works (L19). */
+const ZONE_EMPTY_LABELS: Record<'parents' | 'siblings' | 'children', string> = {
+  parents: 'Влияющих мыслей нет. Двойной клик для добавления',
+  siblings: 'Родственных мыслей нет',
+  children: 'Подчинённых мыслей нет. Двойной клик для добавления',
+};
+
 /** Builds a grid zone with scroll → virtualization wiring. */
 function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
   const zone = div(`zone zone-${dir}`);
@@ -598,7 +605,7 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
   const spacer = div('zone-spacer');
   const grid = div('zone-grid');
   const empty = div('zone-empty');
-  empty.textContent = 'нет мыслей';
+  empty.textContent = ZONE_EMPTY_LABELS[dir];
   spacer.append(grid);
   zone.append(spacer, empty);
 
