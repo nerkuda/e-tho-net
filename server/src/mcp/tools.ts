@@ -54,6 +54,10 @@ import {
 } from '../domain/comment-service.js';
 import { createAttachment } from '../domain/attachment-service.js';
 import {
+  copyAttachment,
+  searchAttachments,
+} from '../domain/attachment-service.js';
+import {
   findThoughtUsage,
   getPropertyValuesResolved,
   setPropertyValue,
@@ -1021,6 +1025,97 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           version: 0,
           request_id: String(extra.requestId),
         } satisfies McpMutationResult;
+      }),
+  );
+
+  const CopyAttachmentSchema = z.object({
+    network_id: NetworkId,
+    attachment_id: z.string().min(1),
+    target_owner_type: z.enum(['thought', 'link']),
+    target_owner_ids: z.array(z.string().min(1)).min(1),
+  });
+  mcp.registerTool(
+    'etn.attachments.copy',
+    {
+      title: 'Скопировать вложение',
+      description:
+        'Copy an existing attachment to one or more target thoughts (workplan L25). ' +
+        'Each target receives a new row carrying the same visible fields as the source; ' +
+        'the underlying file is not duplicated. Targets that already own the same ' +
+        'attachment (same kind + same url/file_path) are skipped silently. ' +
+        'Returns one `{id, version: 0, request_id}` per created row.',
+      inputSchema: CopyAttachmentSchema,
+    },
+    (args, extra) =>
+      runTool(async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const result = copyAttachment(
+          ndb,
+          args.attachment_id,
+          { target_owner_type: args.target_owner_type, target_owner_ids: args.target_owner_ids },
+          rt.deps.auth.userId,
+        );
+        for (const attachment of result.created) {
+          emitAgentEvent(
+            rt,
+            args.network_id,
+            'attachment.created',
+            { attachment },
+            extra.requestId,
+          );
+        }
+        auditAgentCall(
+          rt,
+          'etn.attachments.copy',
+          args.network_id,
+          'attachment',
+          args.attachment_id,
+          args,
+        );
+        return result.created.map((a) => ({
+          id: a.id,
+          version: 0,
+          request_id: String(extra.requestId),
+        })) satisfies McpMutationResult[];
+      }),
+  );
+
+  const SearchAttachmentsSchema = z.object({
+    network_id: NetworkId,
+    q: z.string().min(1),
+    kind: z.enum(ATTACHMENT_KINDS).optional(),
+    exclude_owner_type: z.enum(['thought', 'link']).optional(),
+    exclude_owner_id: z.string().min(1).optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+    offset: z.number().int().min(0).optional(),
+  });
+  mcp.registerTool(
+    'etn.attachments.search',
+    {
+      title: 'Поиск вложений',
+      description:
+        'Search attachments across the network by keywords (workplan L25). ' +
+        '`q` uses the same mini-syntax as `etn.thoughts.search`: AND of include-words, ' +
+        '`-word` exclusion, `*` infix wildcard. Searches title, description, url and ' +
+        'file_path (case-insensitive LIKE). Pass `exclude_owner_type`/`exclude_owner_id` ' +
+        'to hide rows that already belong to a specific owner (used by the editor\'s ' +
+        '"Найти существующее" dialog tab). No FTS index — LIKE under the hood.',
+      inputSchema: SearchAttachmentsSchema,
+    },
+    (args, _extra) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const { items } = searchAttachments(ndb, {
+          q: args.q,
+          kind: args.kind,
+          exclude_owner_type: args.exclude_owner_type,
+          exclude_owner_id: args.exclude_owner_id,
+          limit: args.limit,
+          offset: args.offset,
+        });
+        return items;
       }),
   );
 

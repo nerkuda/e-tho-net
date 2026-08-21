@@ -102,3 +102,44 @@ export interface AttachmentContentUpdateInput {
 export interface AttachmentContentUpdateResult {
   html: string | null;
 }
+
+/**
+ * Input of `POST /attachments/{id}/copy` (03-server-api.md §11, workplan L25).
+ * Creates one new attachment row per `target_owner_ids`, all pointing at the
+ * same `url`/`file_path` as the source — the underlying file is not duplicated.
+ */
+export interface AttachmentCopyInput {
+  /** Target owner kind. Currently only `'thought'` is supported. */
+  target_owner_type: AttachmentOwnerType;
+  /** Ids of the target owners. All must exist; duplicates are skipped silently. */
+  target_owner_ids: string[];
+}
+
+/** Result of `POST /attachments/{id}/copy`. */
+export interface AttachmentCopyResult {
+  /** Created rows in the order of `target_owner_ids`, skipping duplicates. */
+  created: Attachment[];
+  /** Ids of `target_owner_ids` that already had the same attachment. */
+  skipped: string[];
+}
+
+/**
+ * Query of `GET /attachments` (03-server-api.md §11, workplan L25).
+ * `q` is required; without it the server returns an empty result
+ * (no unscoped listing).
+ */
+export interface AttachmentSearchQuery {
+  /** Keywords; same mini-syntax as the thought search (§6.10): AND of
+   *  include-words, `-word` exclusion, `*` infix wildcard. */
+  q: string;
+  /** Filter to one attachment kind. */
+  kind?: AttachmentKind;
+  /** Exclude attachments of this owner (used by the editor's add dialog to
+   *  hide rows already attached to the current thought/link). */
+  exclude_owner_type?: AttachmentOwnerType;
+  exclude_owner_id?: string;
+  /** Result limit, default 50. */
+  limit?: number;
+  /** Offset for pagination. */
+  offset?: number;
+}

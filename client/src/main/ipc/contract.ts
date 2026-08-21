@@ -19,8 +19,11 @@ import type {
   AttachmentContent,
   AttachmentContentUpdateInput,
   AttachmentContentUpdateResult,
+  AttachmentCopyInput,
+  AttachmentCopyResult,
   AttachmentFileInput,
   AttachmentInput,
+  AttachmentSearchQuery,
   AttachmentUpdateInput,
   ChronicleFilterDefinition,
   ChronicleQueryRequest,
@@ -500,6 +503,20 @@ export interface EtnApi {
       id: string,
       input: AttachmentContentUpdateInput,
     ): Promise<AttachmentContentUpdateResult>;
+    /**
+     * `POST /attachments/{id}/copy` — copy the attachment to one or more target
+     * thoughts (workplan L25). Duplicates are skipped silently.
+     */
+    copy(
+      networkId: string,
+      attachmentId: string,
+      input: AttachmentCopyInput,
+    ): Promise<AttachmentCopyResult>;
+    /**
+     * `GET /attachments?q=…` — network-wide attachment search (workplan L25).
+     * Used by the editor's "Найти существующее" dialog tab.
+     */
+    search(networkId: string, query: AttachmentSearchQuery): Promise<Attachment[]>;
   };
   admin: {
     listUsers(): Promise<User[]>;
