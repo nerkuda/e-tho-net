@@ -245,7 +245,7 @@ export function parseSavedFilterDefinition(
   return { ...filter, sort: sortRaw as StructureSort, order: orderRaw as SortOrder };
 }
 
-/** True when the filter carries no criteria at all (empty filter → HOME only). */
+/** True when the filter carries no criteria at all (empty filter → HOME + orphans). */
 export function isFilterEmpty(filter: StructureFilter): boolean {
   return (
     (filter.keywords ?? '').trim() === '' &&
@@ -361,11 +361,39 @@ function directionsOf(ndb: NetworkDb, ids: string[]): StructureDirectionFlags {
 }
 
 /**
+ * Sort columns of the requested sort plus the per-user `thought_views` join it
+ * needs (enum members are validated by the route layer and interpolated as
+ * fixed fragments only). Returned without the `ORDER BY` keyword so callers
+ * can prepend their own leading keys.
+ */
+function sortClause(
+  userId: string,
+  req: StructureQueryRequest,
+): { sortSql: string; joinSql: string; joinParams: unknown[] } {
+  const dirKeyword = req.order === 'desc' ? 'DESC' : 'ASC';
+  const nullsLast = req.order === 'desc' ? 'DESC' : 'ASC';
+  switch (req.sort) {
+    case 'alpha':
+      return { sortSql: `t.title COLLATE NOCASE ${dirKeyword}`, joinSql: '', joinParams: [] };
+    case 'created':
+      return { sortSql: `t.created_at ${dirKeyword}`, joinSql: '', joinParams: [] };
+    case 'viewed':
+      return {
+        sortSql: `(tv.last_viewed_at IS NULL) ${nullsLast}, tv.last_viewed_at ${dirKeyword}`,
+        joinSql: 'LEFT JOIN thought_views tv ON tv.user_id = ? AND tv.thought_id = t.id',
+        joinParams: [userId],
+      };
+  }
+}
+
+/**
  * Filter thoughts by the structure criteria (docs/03-server-api.md §6.10).
  *
- * An empty filter returns only the HOME thought (`is_root=1`). Conditions with
- * an unknown `property_id` are ignored — the property definition may have been
- * deleted after the filter was saved; the remaining conditions still apply.
+ * An empty filter returns HOME (`is_root=1`, always first) plus the orphans —
+ * thoughts with no active parent link — so every disconnected island of the
+ * network stays reachable from the empty tree. Conditions with an unknown
+ * `property_id` are ignored — the property definition may have been deleted
+ * after the filter was saved; the remaining conditions still apply.
  */
 export function queryThoughts(
   ndb: NetworkDb,
@@ -374,12 +402,30 @@ export function queryThoughts(
   requestId?: string,
 ): StructureQueryResult {
   if (isFilterEmpty(req)) {
-    const row = ndb
-      .prepare(`SELECT ${REF_COLUMNS} FROM thoughts t WHERE t.is_root = 1 LIMIT 1`)
-      .get() as ThoughtRefRow | undefined;
-    if (!row) return { items: [], total: 0, directions: {} };
-    const home = rowToThoughtRef(row);
-    return { items: [home], total: 1, directions: directionsOf(ndb, [home.id]) };
+    const showInactive = req.show_inactive === true ? 1 : 0;
+    const { sortSql, joinSql, joinParams } = sortClause(userId, req);
+    const baseSql = `FROM thoughts t ${joinSql}
+       WHERE t.is_root = 1 OR (
+         t.is_root = 0 AND (t.active = 1 OR ?) AND NOT EXISTS (
+           SELECT 1 FROM links l WHERE l.target_id = t.id AND l.active = 1))`;
+    const total = (
+      ndb.prepare(`SELECT COUNT(*) AS c ${baseSql}`).get(...joinParams, showInactive) as {
+        c: number;
+      }
+    ).c;
+    const limit = Math.min(Math.max(req.limit, 1), STRUCTURES_QUERY_MAX_LIMIT);
+    const offset = Math.max(req.offset, 0);
+    const rows = ndb
+      .prepare(
+        `SELECT ${REF_COLUMNS} ${baseSql}
+         ORDER BY (t.is_root = 1) DESC, ${sortSql}
+         LIMIT ? OFFSET ?`,
+      )
+      .all(...joinParams, showInactive, limit, offset) as Array<ThoughtRefRow>;
+    const items = rows.map(rowToThoughtRef);
+    // The page carries its own direction flags — the root ellipses are filled
+    // right after the query, without waiting for the first expansion.
+    return { items, total, directions: directionsOf(ndb, items.map((i) => i.id)) };
   }
 
   const showInactive = req.show_inactive === true ? 1 : 0;
@@ -507,25 +553,7 @@ export function queryThoughts(
 
   // Sort: enum members validated by the route layer, interpolated as fixed
   // fragments only. `viewed` needs the per-user view-mark join.
-  const dirKeyword = req.order === 'desc' ? 'DESC' : 'ASC';
-  const nullsLast = req.order === 'desc' ? 'DESC' : 'ASC';
-  let orderBy: string;
-  switch (req.sort) {
-    case 'alpha':
-      orderBy = `ORDER BY t.title COLLATE NOCASE ${dirKeyword}`;
-      break;
-    case 'created':
-      orderBy = `ORDER BY t.created_at ${dirKeyword}`;
-      break;
-    case 'viewed':
-      orderBy = `ORDER BY (tv.last_viewed_at IS NULL) ${nullsLast}, tv.last_viewed_at ${dirKeyword}`;
-      break;
-  }
-  const useViewedJoin = req.sort === 'viewed';
-  const joinSql = useViewedJoin
-    ? 'LEFT JOIN thought_views tv ON tv.user_id = ? AND tv.thought_id = t.id'
-    : '';
-  const joinParams: unknown[] = useViewedJoin ? [userId] : [];
+  const { sortSql, joinSql, joinParams } = sortClause(userId, req);
 
   const baseSql = `FROM thoughts t ${joinSql} WHERE ${where.join(' AND ')}`;
   const total = (
@@ -536,7 +564,7 @@ export function queryThoughts(
   const limit = Math.min(Math.max(req.limit, 1), STRUCTURES_QUERY_MAX_LIMIT);
   const offset = Math.max(req.offset, 0);
   const rows = ndb
-    .prepare(`SELECT ${REF_COLUMNS} ${baseSql} ${orderBy} LIMIT ? OFFSET ?`)
+    .prepare(`SELECT ${REF_COLUMNS} ${baseSql} ORDER BY ${sortSql} LIMIT ? OFFSET ?`)
     .all(...joinParams, ...params, limit, offset) as Array<ThoughtRefRow>;
   const items = rows.map(rowToThoughtRef);
   // The tree fills the root ellipses from these flags right after the query —

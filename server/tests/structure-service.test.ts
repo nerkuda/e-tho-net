@@ -193,11 +193,12 @@ describe(
     const USER = 'user-1';
 
     describe('queryThoughts: empty filter', () => {
-      it('returns only the HOME thought', () => {
+      it('returns HOME alone when the network has no orphans', () => {
         const ndb = createInMemoryNetworkDb();
         try {
           const home = seedThought(ndb, { title: 'Home', is_root: 1 });
-          seedThought(ndb, { title: 'Other' });
+          const other = seedThought(ndb, { title: 'Other' });
+          seedLink(ndb, home, other); // Other has a parent → not an orphan
           const result = queryThoughts(ndb, USER, query());
           assert.equal(result.total, 1);
           assert.deepEqual(
@@ -208,8 +209,58 @@ describe(
           // ellipses right after the query, before any expansion.
           assert.deepEqual(result.directions[home], {
             has_incoming: false,
-            has_outgoing: false,
+            has_outgoing: true,
           });
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('returns HOME first plus orphans (no active parent link), paged and sorted', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const home = seedThought(ndb, { title: 'Home', is_root: 1 });
+          const parent = seedThought(ndb, { title: 'А-Родитель' }); // source, no parents → orphan
+          const orphan = seedThought(ndb, { title: 'М-Сирота' });
+          const inactiveLinked = seedThought(ndb, { title: 'Я-Формальная' });
+          seedLink(ndb, parent, inactiveLinked, { active: 0 }); // inactive link ≠ parent
+          const child = seedThought(ndb, { title: 'П-Ребёнок' });
+          seedLink(ndb, parent, child); // has an active parent → not an orphan
+          const sleepingOrphan = seedThought(ndb, { title: 'Б-Спящая', active: 0 });
+
+          // HOME is pinned first, then the active orphans in the requested sort
+          // (NOCASE/binary: Latin before Cyrillic).
+          const result = queryThoughts(ndb, USER, query());
+          assert.deepEqual(
+            result.items.map((t) => t.id),
+            [home, parent, orphan, inactiveLinked],
+          );
+          assert.equal(result.total, 4);
+
+          // desc flips the orphans but keeps HOME first.
+          const desc = queryThoughts(ndb, USER, query({ order: 'desc' }));
+          assert.deepEqual(
+            desc.items.map((t) => t.id),
+            [home, inactiveLinked, orphan, parent],
+          );
+
+          // Pagination walks the combined list.
+          const page = queryThoughts(ndb, USER, query({ limit: 2, offset: 1 }));
+          assert.deepEqual(page.items.map((t) => t.id), [parent, orphan]);
+          assert.equal(page.total, 4);
+
+          // show_inactive adds the inactive orphan (HOME stays first).
+          const withInactive = queryThoughts(ndb, USER, query({ show_inactive: true }));
+          assert.deepEqual(
+            withInactive.items.map((t) => t.id),
+            [home, parent, sleepingOrphan, orphan, inactiveLinked],
+          );
+          assert.equal(withInactive.total, 5);
+
+          // Orphans without parents show empty incoming flags; the link source
+          // shows the outgoing one — the tree root ellipses depend on these.
+          assert.deepEqual(result.directions[orphan], { has_incoming: false, has_outgoing: false });
+          assert.equal(result.directions[parent]?.has_outgoing, true);
         } finally {
           ndb.close();
         }
