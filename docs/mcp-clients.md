@@ -50,7 +50,7 @@ IDE-агенты, кастомные скрипты) читают и измен�
 | `etn.comments.upsert` | комментарии (permanent — create-or-update, chronological — новая запись) |
 | `etn.comments.update` / `delete` | правка и удаление комментария по `comment_id` |
 | `etn.comments.get` | полный текст одного комментария (по `comment_id` или по `thought_id` — постоянный); вызывается, когда превью показывает `truncated: true` |
-| `etn.properties.set` | значения свойств |
+| `etn.properties.set` | значения свойств: одно (`key`+`value`) или набор (`values: {key: value\|null}` — одной транзакцией) |
 | `etn.thoughts.upsert_bundle` | составная запись «единицы знания» (мысль + постоянный комментарий + свойства + связи + вложения) **одной транзакцией и одним вызовом** вместо 5–8 отдельных |
 | `etn.export.subgraph` | подграф как Markdown-документ |
 

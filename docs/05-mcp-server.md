@@ -213,7 +213,7 @@ reason, thought_types }`. `depth` — расстояние от `in_subtree_of` 
 | `etn.comments.update` | Изменить комментарий по `comment_id` (chronological или permanent; last-write-wins по полям, `valid_from`/`valid_to` применяются только к chronological) | `network_id`, `comment_id`, `changes` (`title?`, `body_md?`, `valid_from?`, `valid_to?`), `expected_version?` |
 | `etn.comments.delete` | Удалить комментарий (вместе со всеми привязками к владельцам) | `network_id`, `comment_id`, `expected_version?` |
 | `etn.attachments.add` | Добавить вложение | `network_id`, `owner_type`, `owner_id`, `kind`, `url?`/`file_path?`, `title?`, `description?` |
-| `etn.properties.set` | Установить свойство | `network_id`, `owner_type`, `owner_id`, `key`, `value` |
+| `etn.properties.set` | Установить свойство: одно (`key`+`value`) или набор (`values: {key: value\|null}` одной транзакцией) | `network_id`, `owner_type`, `owner_id` + ровно одно из `key`+`value` / `values` |
 | `etn.thoughts.set_active` | Изменить актуальность | `network_id`, `thought_id`, `active` |
 | `etn.thoughts.upsert_bundle` | Составная запись «единицы знания» одной транзакцией | см. §4.2a |
 
@@ -222,6 +222,14 @@ reason, thought_types }`. `depth` — расстояние от `in_subtree_of` 
   (если не передан — last-write-wins без проверки);
 - возвращают `{ id, version, request_id }`;
 - порождают стандартные real-time события (см. [04-realtime.md](04-realtime.md)).
+
+`etn.properties.set` (task O2) принимает либо одиночную форму `key` + `value`
+(обратная совместимость; `value: null` — очистка значения), либо карту
+`values: {key: value|null}` — набор свойств пишется **одной транзакцией**:
+ошибка валидации любого ключа откатывает весь набор. Ответ одиночной формы —
+`{ id, version: 0, request_id }`; формы `values` — `{ values: {key: {id}},
+version: 0, request_id }`. Набор стоит одной записи для rate-limit (§6.2),
+событие `property-value.set` эмитится по одному на каждое значение.
 
 > **Live-рассылка зависит от транспорта.** В HTTP-режиме (`ETN_MCP_ENABLED=1`,
 > `/mcp`) события публикуются в тот же внутрипроцессный брокер, что и REST —
