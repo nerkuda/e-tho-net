@@ -17,6 +17,7 @@ import { createInMemoryNetworkDb, NetworkDb, registerMigrationHelpers } from '..
 import { runMigrations } from '../src/db/migrator.js';
 import { networkMigrationsDir } from '../src/paths.js';
 import {
+  copyAttachment,
   createAttachment,
   createAttachmentFile,
   deleteAttachment,
@@ -26,6 +27,7 @@ import {
   getAttachment,
   getAttachmentContent,
   listAttachments,
+  searchAttachments,
   updateAttachment,
   updateAttachmentContent,
 } from '../src/domain/attachment-service.js';
@@ -630,6 +632,235 @@ describe(
       } finally {
         ndb.close();
         rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    // --- L25: copy + search -------------------------------------------------
+
+    it('copyAttachment creates one row per target, file not duplicated', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const source = seedThought(ndb, 'Source');
+        const t1 = seedThought(ndb, 'Target 1');
+        const t2 = seedThought(ndb, 'Target 2');
+        const a = createAttachment(
+          ndb,
+          'thought',
+          source,
+          {
+            kind: 'url',
+            url: 'https://e.com/page',
+            title: 'Page',
+            description: 'desc',
+            mime_type: 'text/html',
+          },
+          USER,
+        );
+        // Icon is normally filled by URL enrichment (enrichUrlAttachment);
+        // PATCH it in to mimic that state — copyAttachment must preserve it.
+        updateAttachment(ndb, a.id, { icon: 'data:image/png;base64,AAA' });
+        const result = copyAttachment(
+          ndb,
+          a.id,
+          { target_owner_type: 'thought', target_owner_ids: [t1, t2] },
+          USER,
+        );
+        assert.equal(result.skipped.length, 0);
+        assert.equal(result.created.length, 2);
+        // New ids, same visible fields.
+        const ids = new Set(result.created.map((c) => c.id));
+        assert.equal(ids.size, 2);
+        for (const created of result.created) {
+          assert.notEqual(created.id, a.id);
+          assert.equal(created.kind, 'url');
+          assert.equal(created.url, 'https://e.com/page');
+          assert.equal(created.title, 'Page');
+          assert.equal(created.description, 'desc');
+          assert.equal(created.mime_type, 'text/html');
+          assert.equal(created.icon, 'data:image/png;base64,AAA');
+          assert.equal(created.owner_type, 'thought');
+          assert.ok([t1, t2].includes(created.owner_id));
+        }
+        // Each target now sees the attachment in its list.
+        assert.equal(listAttachments(ndb, 'thought', t1).length, 1);
+        assert.equal(listAttachments(ndb, 'thought', t2).length, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('copyAttachment skips duplicate (same owner + same kind + same url) silently', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const source = seedThought(ndb);
+        const target = seedThought(ndb);
+        const a = createAttachment(
+          ndb,
+          'thought',
+          source,
+          { kind: 'url', url: 'https://e.com/dup' },
+          USER,
+        );
+        // Pre-existing copy on the target.
+        createAttachment(ndb, 'thought', target, { kind: 'url', url: 'https://e.com/dup' }, USER);
+        const otherTarget = seedThought(ndb, 'Other');
+        const result = copyAttachment(
+          ndb,
+          a.id,
+          { target_owner_type: 'thought', target_owner_ids: [target, otherTarget] },
+          USER,
+        );
+        assert.deepEqual(result.skipped, [target]);
+        assert.equal(result.created.length, 1);
+        assert.equal(result.created[0]!.owner_id, otherTarget);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('copyAttachment 404s on unknown source and 422s on unknown target', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const source = seedThought(ndb);
+        const a = createAttachment(ndb, 'thought', source, { kind: 'url', url: 'https://e' }, USER);
+        assert.throws(
+          () =>
+            copyAttachment(
+              ndb,
+              'does-not-exist',
+              { target_owner_type: 'thought', target_owner_ids: [source] },
+              USER,
+            ),
+          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+        );
+        assert.throws(
+          () =>
+            copyAttachment(
+              ndb,
+              a.id,
+              { target_owner_type: 'thought', target_owner_ids: ['no-such-thought'] },
+              USER,
+            ),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('copyAttachment preserves file_path on kind=file (no file copy)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const source = seedThought(ndb);
+        const t = seedThought(ndb);
+        const a = createAttachment(
+          ndb,
+          'thought',
+          source,
+          { kind: 'file', file_path: 'C:\\shared\\plan.md', mime_type: 'text/markdown' },
+          USER,
+        );
+        const result = copyAttachment(
+          ndb,
+          a.id,
+          { target_owner_type: 'thought', target_owner_ids: [t] },
+          USER,
+        );
+        assert.equal(result.created.length, 1);
+        assert.equal(result.created[0]!.file_path, 'C:\\shared\\plan.md');
+        assert.equal(result.created[0]!.kind, 'file');
+        assert.equal(result.created[0]!.mime_type, 'text/markdown');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('searchAttachments filters by keywords across title/description/url/file_path', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb);
+        createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'url', url: 'https://e.com/roadmap', title: 'Roadmap Q4' },
+          USER,
+        );
+        createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'url', url: 'https://e.com/budget', title: 'Budget 2025', description: 'Annual plan' },
+          USER,
+        );
+        createAttachment(
+          ndb,
+          'thought',
+          t,
+          { kind: 'file', file_path: 'C:\\docs\\notes.txt', title: 'Notes' },
+          USER,
+        );
+
+        const byTitle = searchAttachments(ndb, { q: 'roadmap' });
+        assert.equal(byTitle.total, 1);
+        assert.equal(byTitle.items[0]!.title, 'Roadmap Q4');
+
+        const byDescription = searchAttachments(ndb, { q: 'annual' });
+        assert.equal(byDescription.total, 1);
+        assert.equal(byDescription.items[0]!.title, 'Budget 2025');
+
+        const byUrl = searchAttachments(ndb, { q: 'budget' });
+        assert.equal(byUrl.total, 1);
+
+        const byFilePath = searchAttachments(ndb, { q: 'notes' });
+        assert.equal(byFilePath.total, 1);
+
+        // Exclude: `-word` must not appear anywhere.
+        const withExclude = searchAttachments(ndb, { q: 'plan -budget' });
+        assert.equal(withExclude.total, 0);
+
+        // Empty `q` returns nothing.
+        const empty = searchAttachments(ndb, { q: '' });
+        assert.equal(empty.total, 0);
+        assert.equal(empty.items.length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('searchAttachments filters by kind and excludes attachments of one owner', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const owner = seedThought(ndb, 'Owner');
+        const other = seedThought(ndb, 'Other');
+        createAttachment(
+          ndb,
+          'thought',
+          owner,
+          { kind: 'url', url: 'https://e.com/x', title: 'Shared doc' },
+          USER,
+        );
+        createAttachment(
+          ndb,
+          'thought',
+          other,
+          { kind: 'file', file_path: 'C:\\x.pdf', title: 'Shared doc' },
+          USER,
+        );
+
+        const onlyUrl = searchAttachments(ndb, { q: 'shared', kind: 'url' });
+        assert.equal(onlyUrl.total, 1);
+        assert.equal(onlyUrl.items[0]!.kind, 'url');
+
+        const excludeOwner = searchAttachments(ndb, {
+          q: 'shared',
+          exclude_owner_type: 'thought',
+          exclude_owner_id: owner,
+        });
+        assert.equal(excludeOwner.total, 1);
+        assert.equal(excludeOwner.items[0]!.owner_id, other);
+      } finally {
+        ndb.close();
       }
     });
   },

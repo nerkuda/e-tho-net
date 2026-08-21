@@ -208,5 +208,183 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('attachments: POST /attachments/:id/copy — multi-target, skip duplicates, 404/422', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const source = await createThought(ctx, 'Источник');
+        const t1 = await createThought(ctx, 'Получатель 1');
+        const t2 = await createThought(ctx, 'Получатель 2');
+
+        // Create source attachment.
+        const sourceAtt = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${source}/attachments`,
+          headers: authHeaders(ctx),
+          payload: {
+            kind: 'url',
+            url: 'https://example.com/page',
+            title: 'Page',
+            description: 'desc',
+            mime_type: 'text/html',
+          },
+        });
+        assert.equal(sourceAtt.statusCode, 201);
+        const sourceId = (sourceAtt.json().data as { id: string }).id;
+
+        // Copy to two targets — both new.
+        const copyRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/${sourceId}/copy`,
+          headers: authHeaders(ctx),
+          payload: { target_owner_type: 'thought', target_owner_ids: [t1, t2] },
+        });
+        assert.equal(copyRes.statusCode, 200);
+        const copyBody = copyRes.json().data as {
+          created: Array<{ id: string; owner_id: string; title: string }>;
+          skipped: string[];
+        };
+        assert.equal(copyBody.created.length, 2);
+        assert.deepEqual(copyBody.skipped, []);
+        const newIds = new Set(copyBody.created.map((c) => c.id));
+        assert.equal(newIds.size, 2);
+        for (const c of copyBody.created) {
+          assert.equal(c.title, 'Page');
+          assert.ok([t1, t2].includes(c.owner_id));
+        }
+
+        // Re-copy: same source, target t1 already has the same kind+url — skipped.
+        const reCopy = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/${sourceId}/copy`,
+          headers: authHeaders(ctx),
+          payload: { target_owner_type: 'thought', target_owner_ids: [t1, t2] },
+        });
+        assert.equal(reCopy.statusCode, 200);
+        const reBody = reCopy.json().data as {
+          created: unknown[];
+          skipped: string[];
+        };
+        assert.equal(reBody.created.length, 0);
+        assert.deepEqual(reBody.skipped.sort(), [t1, t2].sort());
+
+        // Each target now has exactly one copy in its list.
+        for (const tid of [t1, t2]) {
+          const list = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${ctx.networkId}/thoughts/${tid}/attachments`,
+            headers: authHeaders(ctx),
+          });
+          assert.equal((list.json().data as unknown[]).length, 1);
+        }
+
+        // Unknown source → 404.
+        const missing = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/00000000-0000-0000-0000-000000000000/copy`,
+          headers: authHeaders(ctx),
+          payload: { target_owner_type: 'thought', target_owner_ids: [t1] },
+        });
+        assert.equal(missing.statusCode, 404);
+
+        // Unknown target → 422.
+        const badTarget = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/${sourceId}/copy`,
+          headers: authHeaders(ctx),
+          payload: {
+            target_owner_type: 'thought',
+            target_owner_ids: ['00000000-0000-0000-0000-000000000000'],
+          },
+        });
+        assert.equal(badTarget.statusCode, 422);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('attachments: GET /attachments — network-wide search with q/kind/exclude_owner', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const a = await createThought(ctx, 'Владелец A');
+        const b = await createThought(ctx, 'Владелец B');
+        // Three attachments across two owners.
+        for (const [owner, payload] of [
+          [a, { kind: 'url', url: 'https://e.com/roadmap', title: 'Roadmap Q4' }],
+          [a, { kind: 'url', url: 'https://e.com/budget', title: 'Budget 2025' }],
+          [b, { kind: 'file', file_path: 'C:\\notes.txt', title: 'Notes' }],
+        ] as const) {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thoughts/${owner}/attachments`,
+            headers: authHeaders(ctx),
+            payload,
+          });
+          assert.equal(res.statusCode, 201);
+        }
+
+        // Search by title keyword.
+        const byTitle = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=roadmap`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(byTitle.statusCode, 200);
+        assert.equal((byTitle.json().data as unknown[]).length, 1);
+
+        // Empty q → empty result (no unscoped listing).
+        const empty = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(empty.statusCode, 200);
+        assert.equal((empty.json().data as unknown[]).length, 0);
+
+        // Exclude owner — keyword "notes" hits only B's row (A has no match).
+        const excludeA = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=notes&exclude_owner_type=thought&exclude_owner_id=${a}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(excludeA.statusCode, 200);
+        const items = excludeA.json().data as Array<{ owner_id: string }>;
+        assert.equal(items.length, 1);
+        assert.equal(items[0]!.owner_id, b);
+
+        // Without `exclude_owner` the same `q` would also match nothing for A
+        // (A has no "notes" row), so flip the keyword to a common one and
+        // check that exclude_owner actually filters out A's matches.
+        const withoutExclude = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=e`,
+          headers: authHeaders(ctx),
+        });
+        const withExclude = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=e&exclude_owner_type=thought&exclude_owner_id=${a}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(withoutExclude.statusCode, 200);
+        assert.equal(withExclude.statusCode, 200);
+        const allRows = withoutExclude.json().data as Array<{ owner_id: string }>;
+        const filteredRows = withExclude.json().data as Array<{ owner_id: string }>;
+        // `e` is a one-letter substring of "Roadmap", "Budget" and "notes" —
+        // every attachment matches. Excluding owner `a` leaves only B's row.
+        assert.equal(allRows.length, 3);
+        assert.equal(filteredRows.length, 1);
+        assert.equal(filteredRows[0]!.owner_id, b);
+
+        // Filter by kind — only the url row remains.
+        const onlyUrl = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments?q=roadmap&kind=url`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal((onlyUrl.json().data as unknown[]).length, 1);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );
