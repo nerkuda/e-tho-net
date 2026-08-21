@@ -1,7 +1,8 @@
 /**
- * Search, export and job routes (task D6, 03-server-api.md §12, §14).
+ * Search, export and job routes (task D6, 03-server-api.md §12, §14, §21).
  *
  *   GET  /networks/:networkId/search            — full-text search (§12)
+ *   POST /networks/:networkId/mentions/scan     — thought mentions in text (§21, L24)
  *   POST /networks/:networkId/export            — start an export job (202 + job_id)
  *   GET  /jobs/:jobId                           — job status
  *   GET  /jobs/:jobId/download                  — finished job content (binary stream)
@@ -20,12 +21,14 @@ import {
   EXPORT_FORMATS,
   PREF_KEY,
   type ExportFormat,
+  type MentionsScanMatch,
   type SearchResponse,
   type SearchScope,
 } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
 import {
+  fieldBoolean,
   fieldString,
   fieldStringArray,
   openRouteNetworkDb,
@@ -36,7 +39,11 @@ import {
   type RouteDeps,
 } from './helpers.js';
 import { getExportJob, getExportJobContent, startExportJob } from '../domain/export-service.js';
-import { search } from '../domain/search-service.js';
+import { findMentionsInTexts, search } from '../domain/search-service.js';
+
+/** `POST /mentions/scan` payload limits (03-server-api.md §21). */
+const MENTIONS_SCAN_MAX_TEXTS = 50;
+const MENTIONS_SCAN_MAX_TOTAL_CHARS = 20_000;
 
 /** Route params for a network id. */
 interface NetworkIdParams {
@@ -173,6 +180,54 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           );
         }
         sendSuccess(reply, response);
+      },
+    );
+
+    // --- Mentions scan (03-server-api.md §21, L24) --------------------------
+
+    app.post(
+      '/networks/:networkId/mentions/scan',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as NetworkIdParams;
+        const body = requestBody(req);
+
+        const texts = fieldStringArray(body, 'texts', req.id);
+        if (texts === undefined) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'texts обязателен (массив строк).',
+            { field: 'texts' },
+            req.id,
+          );
+        }
+        if (texts.length > MENTIONS_SCAN_MAX_TEXTS) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `texts не может содержать больше ${MENTIONS_SCAN_MAX_TEXTS} элементов.`,
+            { field: 'texts', max: MENTIONS_SCAN_MAX_TEXTS },
+            req.id,
+          );
+        }
+        const totalChars = texts.reduce((sum, t) => sum + t.length, 0);
+        if (totalChars > MENTIONS_SCAN_MAX_TOTAL_CHARS) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `Суммарная длина texts не может превышать ${MENTIONS_SCAN_MAX_TOTAL_CHARS} символов.`,
+            { field: 'texts', max_total_chars: MENTIONS_SCAN_MAX_TOTAL_CHARS },
+            req.id,
+          );
+        }
+
+        const showInactive = fieldBoolean(body, 'show_inactive', req.id) ?? false;
+        const excludeThoughtId = fieldString(body, 'exclude_thought_id', req.id);
+
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const results: MentionsScanMatch[][] = findMentionsInTexts(ndb, texts, {
+          showInactive,
+          excludeThoughtId,
+        });
+        sendSuccess(reply, { results });
       },
     );
 

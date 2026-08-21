@@ -13,7 +13,7 @@ import { typeNameKey } from '@etn/shared';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
-import { findDuplicates, findMentions, search } from '../src/domain/search-service.js';
+import { findDuplicates, findMentions, findMentionsInTexts, search } from '../src/domain/search-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -609,6 +609,152 @@ describe(
         seedThoughtComment(ndb, target, 'Self reference here');
         const mentions = findMentions(ndb, target);
         assert.equal(mentions.length, 0, 'a thought does not "mention" itself in its own comments');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    // -------------------------------------------------------------------
+    // findMentionsInTexts (§21, L24) — reverse direction: many thoughts
+    // scanned against one caller-supplied text.
+    // -------------------------------------------------------------------
+
+    it('findMentionsInTexts matches a plain thought title', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'ProjectX');
+        const [matches] = findMentionsInTexts(ndb, ['see ProjectX for details'], {
+          showInactive: false,
+        });
+        assert.equal(matches!.length, 1);
+        assert.equal(matches![0]!.thoughts[0]!.id, t);
+        assert.equal(matches![0]!.start, 4);
+        assert.equal(matches![0]!.end, 12);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentionsInTexts matches each part of a compound title separately (§2.2.3)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'ETN, План разработки');
+        const [matches] = findMentionsInTexts(
+          ndb,
+          ['Обсудили ETN и План разработки сегодня'],
+          { showInactive: false },
+        );
+        assert.equal(matches!.length, 2, 'both compound-title parts match independently');
+        assert.ok(matches!.every((m) => m.thoughts.some((th) => th.id === t)));
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentionsInTexts matches wildcard synonyms (docs/02-data-model.md §3.2)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Петров Игорь');
+        seedSynonym(ndb, t, 'Петров* Игор*');
+        seedSynonym(ndb, t, 'Игорян*');
+        const [phrase] = findMentionsInTexts(
+          ndb,
+          ['Сегодня обсудили с Петровым Игорем стратегию развития продукта.'],
+          { showInactive: false },
+        );
+        assert.equal(phrase!.length, 1);
+        assert.equal(phrase![0]!.thoughts[0]!.id, t);
+        const [single] = findMentionsInTexts(ndb, ['Занял Игоряну 100 рублей до пятницы'], {
+          showInactive: false,
+        });
+        assert.equal(single!.length, 1);
+        assert.equal(single![0]!.thoughts[0]!.id, t);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentionsInTexts respects excludeThoughtId', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Alpha');
+        const [matches] = findMentionsInTexts(ndb, ['about Alpha'], {
+          showInactive: false,
+          excludeThoughtId: t,
+        });
+        assert.equal(matches!.length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentionsInTexts hides inactive thoughts unless showInactive', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Ghost', { active: 0 });
+        const hidden = findMentionsInTexts(ndb, ['a Ghost story'], { showInactive: false });
+        assert.equal(hidden[0]!.length, 0);
+        const shown = findMentionsInTexts(ndb, ['a Ghost story'], { showInactive: true });
+        assert.equal(shown[0]!.length, 1);
+        assert.equal(shown[0]![0]!.thoughts[0]!.active, false);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentionsInTexts prefers the longest match on overlap', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Игорь');
+        const long = seedThought(ndb, 'Игорь Петров');
+        const [matches] = findMentionsInTexts(ndb, ['встретил Игорь Петров вчера'], {
+          showInactive: false,
+        });
+        assert.equal(matches!.length, 1, 'the shorter overlapping match is dropped');
+        assert.deepEqual(
+          matches![0]!.thoughts.map((t) => t.id),
+          [long],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentionsInTexts groups same-span matches and caps at 5 thoughts', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        for (const title of ['T1', 'T2', 'T3', 'T4', 'T5', 'T6']) {
+          const id = seedThought(ndb, title);
+          seedSynonym(ndb, id, 'Общее');
+        }
+        const [matches] = findMentionsInTexts(ndb, ['тут есть Общее слово'], {
+          showInactive: false,
+        });
+        assert.equal(matches!.length, 1, 'all candidates share the same matched span');
+        assert.equal(matches![0]!.thoughts.length, 5, 'capped at 5 candidates');
+        assert.deepEqual(
+          matches![0]!.thoughts.map((t) => t.title),
+          ['T1', 'T2', 'T3', 'T4', 'T5'],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentionsInTexts scans multiple texts independently, in the same order', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Alpha');
+        const results = findMentionsInTexts(
+          ndb,
+          ['no match here', 'about Alpha', 'Alpha again'],
+          { showInactive: false },
+        );
+        assert.equal(results.length, 3);
+        assert.equal(results[0]!.length, 0);
+        assert.equal(results[1]!.length, 1);
+        assert.equal(results[1]![0]!.thoughts[0]!.id, t);
+        assert.equal(results[2]!.length, 1);
       } finally {
         ndb.close();
       }

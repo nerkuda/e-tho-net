@@ -1333,6 +1333,16 @@ export class RestClient {
     );
   }
 
+  /** `POST /networks/{nid}/mentions/scan` — thought mentions in text (§21, L24). */
+  public async mentionsScan(
+    networkId: string,
+    request: import('@etn/shared').MentionsScanRequest,
+  ): Promise<import('@etn/shared').MentionsScanResponse> {
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/mentions/scan`, {
+      body: request,
+    });
+  }
+
   /** `GET /networks/{nid}/thoughts/{id}/usage` — reverse thought_ref lookup (L7). */
   public async getThoughtUsage(
     networkId: string,

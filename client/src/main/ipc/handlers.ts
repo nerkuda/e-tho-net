@@ -230,6 +230,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string, id: string) => requireRest(deps).listMentions(networkId, id)),
   );
   handlers.set(
+    'thoughts.mentionsScan',
+    bind((networkId: string, request: Parameters<RestClient['mentionsScan']>[1]) =>
+      requireRest(deps).mentionsScan(networkId, request),
+    ),
+  );
+  handlers.set(
     'thoughts.usage',
     bind((networkId: string, id: string) => requireRest(deps).getThoughtUsage(networkId, id)),
   );

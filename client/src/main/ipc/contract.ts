@@ -48,6 +48,8 @@ import type {
   LinkTypeUpdateInput,
   LinkUpdateInput,
   MentionHit,
+  MentionsScanRequest,
+  MentionsScanResponse,
   Network,
   NetworkListItem,
   NetworkMember,
@@ -231,6 +233,8 @@ export interface EtnApi {
     resolve(networkId: string, ids: string[]): Promise<ThoughtRef[]>;
     search(networkId: string, request: SearchRequest): Promise<SearchResponse>;
     mentions(networkId: string, id: string): Promise<MentionHit[]>;
+    /** `POST /mentions/scan` — thought mentions in caller-supplied text (§21, L24). */
+    mentionsScan(networkId: string, request: MentionsScanRequest): Promise<MentionsScanResponse>;
     /** `GET /thoughts/{id}/usage` — thoughts referencing this one via thought_ref (L7). */
     usage(networkId: string, id: string): Promise<ThoughtUsage>;
     /** `GET /thoughts/duplicates` — live duplicate candidates for the add dialog (H14). */

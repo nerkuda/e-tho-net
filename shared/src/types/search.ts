@@ -97,3 +97,34 @@ export interface MentionHit {
   /** Актуальность мысли-владельца (для связей — самой связи). */
   active: boolean;
 }
+
+/** Body of `POST /mentions/scan` (03-server-api.md §21). */
+export interface MentionsScanRequest {
+  /** Texts to scan (e.g. one entry per block-level element of a comment). */
+  texts: string[];
+  /** Include inactive thoughts as match candidates; default `false`. */
+  show_inactive?: boolean;
+  /** A thought to never match against (typically the comment's own owner). */
+  exclude_thought_id?: string;
+}
+
+/** A thought matched at a given span, within {@link MentionsScanMatch.thoughts}. */
+export interface MentionsScanThought {
+  id: string;
+  title: string;
+  active: boolean;
+}
+
+/** One matched span within a scanned text — a group of ≤5 candidate thoughts. */
+export interface MentionsScanMatch {
+  /** UTF-16 code-unit offset into the corresponding input text (inclusive). */
+  start: number;
+  /** UTF-16 code-unit offset into the corresponding input text (exclusive). */
+  end: number;
+  thoughts: MentionsScanThought[];
+}
+
+/** Response of `POST /mentions/scan` — one match array per input text, same order. */
+export interface MentionsScanResponse {
+  results: MentionsScanMatch[][];
+}

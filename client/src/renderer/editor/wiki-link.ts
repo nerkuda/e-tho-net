@@ -144,35 +144,15 @@ function confirmSwitchToMap(): Promise<boolean> {
 }
 
 /**
- * Разрешает wiki-цель в мысль и открывает её по правилам режима (M11):
- * на холсте — фокус; в структурах — активация среди отображаемых, иначе
- * диалог о переключении на карту. Неактуальная мысль при настройке
- * «скрывать неактуальное» — уведомление.
+ * Opens an already-resolved thought by the current view's rules (M11): on the
+ * canvas — focus; in structures — activation among displayed thoughts, else a
+ * "switch to the map?" dialog; in the chronicle — open in the editor without
+ * moving canvas focus (08-ui-spec.md §17). An inactive thought with «скрывать
+ * неактуальное» on is refused with a notice. Shared by wiki-links (name
+ * resolved here) and the mentions auto-annotation (L24, id already known —
+ * see `mentions-annotate.ts`).
  */
-export async function openWikiTarget(name: string): Promise<void> {
-  const networkId = requireNetworkId();
-  let thoughtId: string | null = null;
-  try {
-    const res = await etn.thoughts.search(networkId, { q: name, scope: 'names', limit: 10 });
-    const hit = res.by_names.find((h) => h.title === name) ?? res.by_names[0];
-    thoughtId = hit?.thought_id ?? null;
-  } catch (err) {
-    notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
-    return;
-  }
-  if (thoughtId === null) {
-    notice(`Мысль «${name}» не найдена.`, 'error');
-    return;
-  }
-
-  let thought: Thought;
-  try {
-    thought = await etn.thoughts.get(networkId, thoughtId);
-  } catch (err) {
-    notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
-    return;
-  }
-
+export async function openThoughtByRef(thought: Thought): Promise<void> {
   if (!thought.active && !store.state.showInactive) {
     notice('Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.', 'error');
     return;
@@ -198,6 +178,37 @@ export async function openWikiTarget(name: string): Promise<void> {
   }
 
   await setFocus(thought.id);
+}
+
+/**
+ * Разрешает wiki-цель в мысль и открывает её по правилам режима (M11) через
+ * {@link openThoughtByRef}.
+ */
+export async function openWikiTarget(name: string): Promise<void> {
+  const networkId = requireNetworkId();
+  let thoughtId: string | null = null;
+  try {
+    const res = await etn.thoughts.search(networkId, { q: name, scope: 'names', limit: 10 });
+    const hit = res.by_names.find((h) => h.title === name) ?? res.by_names[0];
+    thoughtId = hit?.thought_id ?? null;
+  } catch (err) {
+    notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
+    return;
+  }
+  if (thoughtId === null) {
+    notice(`Мысль «${name}» не найдена.`, 'error');
+    return;
+  }
+
+  let thought: Thought;
+  try {
+    thought = await etn.thoughts.get(networkId, thoughtId);
+  } catch (err) {
+    notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
+    return;
+  }
+
+  await openThoughtByRef(thought);
 }
 
 let navigationWired = false;

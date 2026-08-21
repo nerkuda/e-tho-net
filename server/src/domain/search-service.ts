@@ -21,17 +21,24 @@
  * `limit`/`offset` (default 50 / 0).
  *
  * {@link findDuplicates} powers the add-thought dialog and the MCP
- * `find_duplicates` tool; {@link findMentions} powers the editor mentions panel.
+ * `find_duplicates` tool; {@link findMentions} powers the editor mentions
+ * panel; {@link findMentionsInTexts} powers the comment view-mode
+ * auto-annotation of thought mentions (§21, L24) — the reverse direction:
+ * many thoughts scanned against one caller-supplied text.
  */
 
 import {
   buildLikePattern,
   EtnError,
   parseFilterKeywords,
+  regexEscape,
   SEARCH_SCOPES,
+  splitCompoundTitle,
+  synonymPatternToRegex,
   TRAVERSAL_DEFAULTS,
   type IconKind,
   type MentionHit,
+  type MentionsScanMatch,
   type SearchChronoHit,
   type SearchLinkHit,
   type SearchNameHit,
@@ -127,31 +134,6 @@ function escapeHtml(input: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-/** Escape regex meta-characters so a term can be used inside a RegExp literal. */
-function regexEscape(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Compile a synonym (a single word or a whitespace-separated phrase) into a
- * case-insensitive matcher RegExp. `*` inside a pattern word matches any run
- * of non-whitespace characters (zero or more), so it never crosses a word
- * boundary. Pattern words must appear in the text as whole adjacent words in
- * the given order; the text may differ from the pattern only at `*` positions.
- * The match is not anchored to the text — a synonym matches anywhere inside.
- */
-export function synonymPatternToRegex(synonym: string): RegExp {
-  const words = synonym.trim().split(/\s+/).filter((w) => w !== '');
-  if (words.length === 0) return /(?!)/u;
-  const wordBody = (word: string): string =>
-    word
-      .split('*')
-      .map((part) => (part === '' ? '' : regexEscape(part)))
-      .join('\\S*');
-  const core = words.map(wordBody).join('\\s+');
-  return new RegExp(`(?:^|\\s)${core}(?=\\s|$)`, 'iu');
 }
 
 /**
@@ -1206,4 +1188,171 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
   }
 
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Public: findMentionsInTexts (auto-annotation of comment view text, §21)
+// ---------------------------------------------------------------------------
+
+/** A candidate thought with its compiled matcher patterns. */
+interface MentionCandidate {
+  id: string;
+  title: string;
+  active: boolean;
+  /** `priority`: 0 — a compound-title part (§2.2.3), 1 — literal synonym, 2 — wildcard synonym. */
+  patterns: Array<{ re: RegExp; priority: number }>;
+}
+
+/** Builds matcher candidates for every eligible thought of the network. */
+function buildMentionCandidates(
+  ndb: NetworkDb,
+  opts: { showInactive: boolean; excludeThoughtId?: string },
+): MentionCandidate[] {
+  const thoughtRows = ndb
+    .prepare('SELECT id, title, active FROM thoughts WHERE :show_inactive OR active = 1')
+    .all({ show_inactive: opts.showInactive ? 1 : 0 }) as Array<{
+    id: string;
+    title: string;
+    active: number;
+  }>;
+  const thoughts = thoughtRows.filter((t) => t.id !== opts.excludeThoughtId);
+  if (thoughts.length === 0) return [];
+
+  const synRows = ndb.prepare('SELECT thought_id, synonym FROM thought_synonyms').all() as Array<{
+    thought_id: string;
+    synonym: string;
+  }>;
+  const synonymsByThought = new Map<string, string[]>();
+  for (const r of synRows) {
+    const list = synonymsByThought.get(r.thought_id);
+    if (list) list.push(r.synonym);
+    else synonymsByThought.set(r.thought_id, [r.synonym]);
+  }
+
+  const candidates: MentionCandidate[] = [];
+  for (const t of thoughts) {
+    const patterns: Array<{ re: RegExp; priority: number }> = [];
+    for (const part of splitCompoundTitle(t.title)) {
+      patterns.push({ re: synonymPatternToRegex(part), priority: 0 });
+    }
+    for (const syn of synonymsByThought.get(t.id) ?? []) {
+      patterns.push({ re: synonymPatternToRegex(syn), priority: syn.includes('*') ? 2 : 1 });
+    }
+    if (patterns.length === 0) continue;
+    candidates.push({ id: t.id, title: t.title, active: t.active === 1, patterns });
+  }
+  return candidates;
+}
+
+/** A single raw (possibly overlapping) match before span-resolution. */
+interface RawSpan {
+  start: number;
+  end: number;
+  candidate: MentionCandidate;
+  priority: number;
+}
+
+/**
+ * Resolves overlapping raw matches into disjoint groups: the longest span
+ * wins over any shorter span it overlaps; matches sharing the exact same
+ * `(start, end)` (from different thoughts, or different patterns of the same
+ * thought) collapse into one group, capped at 5 thoughts, sorted by match
+ * priority then title.
+ */
+function resolveMentionSpans(raw: RawSpan[]): MentionsScanMatch[] {
+  const sorted = [...raw].sort(
+    (a, b) => b.end - b.start - (a.end - a.start) || a.start - b.start,
+  );
+  interface Group {
+    start: number;
+    end: number;
+    thoughts: Map<string, { id: string; title: string; active: boolean; priority: number }>;
+  }
+  const groups: Group[] = [];
+  for (const span of sorted) {
+    const exact = groups.find((g) => g.start === span.start && g.end === span.end);
+    if (exact) {
+      const existing = exact.thoughts.get(span.candidate.id);
+      if (existing === undefined || span.priority < existing.priority) {
+        exact.thoughts.set(span.candidate.id, {
+          id: span.candidate.id,
+          title: span.candidate.title,
+          active: span.candidate.active,
+          priority: span.priority,
+        });
+      }
+      continue;
+    }
+    const overlapsExisting = groups.some((g) => span.start < g.end && g.start < span.end);
+    if (overlapsExisting) continue;
+    groups.push({
+      start: span.start,
+      end: span.end,
+      thoughts: new Map([
+        [
+          span.candidate.id,
+          {
+            id: span.candidate.id,
+            title: span.candidate.title,
+            active: span.candidate.active,
+            priority: span.priority,
+          },
+        ],
+      ]),
+    });
+  }
+  groups.sort((a, b) => a.start - b.start);
+  return groups.map((g) => ({
+    start: g.start,
+    end: g.end,
+    thoughts: [...g.thoughts.values()]
+      .sort((a, b) => a.priority - b.priority || a.title.localeCompare(b.title))
+      .slice(0, 5)
+      .map((t) => ({ id: t.id, title: t.title, active: t.active })),
+  }));
+}
+
+/**
+ * Finds thought mentions inside each of `texts` (docs/03-server-api.md §21) —
+ * the reverse direction of {@link findMentions}: instead of one thought
+ * scanned against the whole comment corpus, every eligible thought of the
+ * network is scanned against one caller-supplied text (typically a single
+ * block-level element of a comment being viewed). Matchable terms per thought
+ * are its compound-title parts (docs/08-ui-spec.md §2.2.3 — a title without
+ * commas is a single part) and its synonyms (wildcard `*` per
+ * docs/02-data-model.md §3.2); both go through the same
+ * {@link synonymPatternToRegex}, since it already implements the exact
+ * word-boundary/adjacency semantics for literal terms too.
+ */
+export function findMentionsInTexts(
+  ndb: NetworkDb,
+  texts: string[],
+  opts: { showInactive: boolean; excludeThoughtId?: string },
+): MentionsScanMatch[][] {
+  const candidates = buildMentionCandidates(ndb, opts);
+  if (candidates.length === 0) return texts.map(() => []);
+  return texts.map((text) => {
+    const raw: RawSpan[] = [];
+    for (const candidate of candidates) {
+      for (const pattern of candidate.patterns) {
+        const re = new RegExp(pattern.re.source, `${pattern.re.flags}g`);
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(text)) !== null) {
+          if (m[0].length === 0) {
+            re.lastIndex += 1;
+            continue;
+          }
+          // `(?:^|\s)` may have consumed one leading whitespace char (only
+          // possible when the match doesn't start at position 0, since `^`
+          // without the `m` flag only matches the absolute string start);
+          // the trailing `(?=\s|$)` lookahead is zero-width and never
+          // consumed, so `m[0].length` already excludes it.
+          const start = m.index + (m.index > 0 ? 1 : 0);
+          const end = m.index + m[0].length;
+          if (end > start) raw.push({ start, end, candidate, priority: pattern.priority });
+        }
+      }
+    }
+    return resolveMentionSpans(raw);
+  });
 }

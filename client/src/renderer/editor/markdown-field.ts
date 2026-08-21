@@ -10,12 +10,15 @@
  * with the rest of the dialog): blur then just switches back to the view.
  */
 
+import type { MentionsScanThought } from '@etn/shared';
+
 import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
-import { div, renderHtml } from '../lib/dom.js';
+import { div, errText, renderHtml } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
+import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 import {
   applyMdZoom,
@@ -84,11 +87,48 @@ export function createMarkdownField(opts: {
     persistMdZoom(networkId, next);
   }, { passive: false });
 
+  const excludeThoughtId =
+    opts.attachmentsOwner?.ownerType === 'thought' ? opts.attachmentsOwner.ownerId : undefined;
+
+  /**
+   * «Вставить ссылку» (L24): replaces the first occurrence of the matched
+   * plain text in the markdown source with a wiki-link and saves — or, when
+   * the field has no `onSave` (e.g. a "new" form), stages the change by
+   * switching into edit mode so the caller's own save flow picks it up.
+   */
+  const insertMentionLink = (thought: MentionsScanThought, matchedText: string): void => {
+    const idx = currentMd.indexOf(matchedText);
+    if (idx === -1) {
+      notice(
+        `Не удалось вставить ссылку: текст «${matchedText}» не найден в исходнике (изменён форматированием).`,
+        'error',
+      );
+      return;
+    }
+    const newMd =
+      currentMd.slice(0, idx) + `[[${thought.title}|${matchedText}]]` + currentMd.slice(idx + matchedText.length);
+    if (opts.onSave === undefined) {
+      showEdit(newMd);
+      return;
+    }
+    void opts
+      .onSave(newMd)
+      .then((html) => {
+        currentMd = newMd;
+        currentHtml = html;
+        showView();
+      })
+      .catch((err) => {
+        notice(`Не удалось сохранить ссылку: ${errText(err)}`, 'error');
+      });
+  };
+
   const renderView = (): void => {
     view.replaceChildren();
     if (currentHtml.trim() !== '') {
       renderHtml(view, currentHtml);
       renderMermaidBlocks(view);
+      annotateMentions(view, { excludeThoughtId, onInsertLink: insertMentionLink });
     }
   };
 

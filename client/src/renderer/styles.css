@@ -2478,6 +2478,25 @@ body.cloud-dragging * {
   text-decoration: underline;
 }
 
+/* Авто-упоминания мыслей в тексте комментариев (L24, 08-ui-spec.md §6.4):
+   пунктирное подчёркивание отличает их от явных wiki-ссылок. */
+.thought-mention {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-decoration-color: currentColor;
+}
+
+.thought-mention:hover {
+  text-decoration-style: solid;
+}
+
+/* Хотя бы одна из мыслей группы неактивна — бледное начертание (как у
+   неактивных владельцев в «Упоминаниях», §6.7). */
+.thought-mention-inactive {
+  opacity: 0.6;
+}
+
 /* Виджеты live preview (M6): блоки в редакторе отображаются как в просмотре.
    Вертикальный отступ — padding, не margin: getBoundingClientRect() не
    включает margin, и карта высот CodeMirror расходилась бы с раскладкой
