@@ -206,8 +206,21 @@ export interface McpPropertiesSetParams {
   network_id: string;
   owner_type: PropertyOwnerType;
   owner_id: string;
-  key: string;
-  value: PropertyValueValue;
+  /** Single-property form (backward compatible): write/clear one key. */
+  key?: string;
+  value?: PropertyValueValue;
+  /** Bulk form (task O2): write a set of keys in one transaction. */
+  values?: Record<string, PropertyValueValue>;
+}
+
+/** Result of `etn.properties.set` (05-mcp-server.md §4.2). */
+export interface McpPropertiesSetResult {
+  /** Id of the single stored value (`key`/`value` form); absent for `values`. */
+  id?: string;
+  version: number;
+  /** Per-key stored value ids, returned for the `values` form. */
+  values?: Record<string, { id: string }>;
+  request_id?: string;
 }
 
 /** Parameters of `etn.thoughts.upsert_bundle` (05-mcp-server.md §4.2a). */

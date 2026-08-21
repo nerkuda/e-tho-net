@@ -34,6 +34,7 @@ import {
   TRAVERSAL_DEFAULTS,
   type ExportFormat,
   type McpMutationResult,
+  type McpPropertiesSetResult,
   type McpUpsertBundleResult,
 } from '@etn/shared';
 
@@ -58,6 +59,7 @@ import {
   findThoughtUsage,
   getPropertyValuesResolved,
   setPropertyValue,
+  setPropertyValues,
 } from '../domain/property-service.js';
 import { findDuplicates, findMentions, resolveThoughts, search } from '../domain/search-service.js';
 import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
@@ -1026,20 +1028,31 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const SetPropertySchema = z.object({
-    network_id: NetworkId,
-    owner_type: z.enum(PROPERTY_OWNER_TYPES),
-    owner_id: z.string().min(1),
-    key: z.string().min(1),
-    value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
-  });
+  const SetPropertySchema = z
+    .object({
+      network_id: NetworkId,
+      owner_type: z.enum(PROPERTY_OWNER_TYPES),
+      owner_id: z.string().min(1),
+      key: z.string().min(1).optional(),
+      value: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
+      values: z
+        .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
+        .optional(),
+    })
+    .refine(
+      (v) => (v.key !== undefined && v.value !== undefined) !== (v.values !== undefined),
+      { message: 'provide exactly one of { key + value } or { values }' },
+    );
   mcp.registerTool(
     'etn.properties.set',
     {
       title: 'Установить свойство',
       description:
         'Set (or clear with `value: null`) a property value on a thought/link, addressed by key; ' +
-        "the value must match the property definition's value_type. Returns { id, version: 0 }.",
+        "the value must match the property definition's value_type. Either provide one " +
+        '`key`+`value`, or a map `values: {key: value|null}` to write several properties in a ' +
+        'single transaction (any invalid key rolls back the whole set). Single form returns ' +
+        '{ id, version: 0 }; bulk form returns { values: {key: {id}}, version: 0 }.',
       inputSchema: SetPropertySchema,
     },
     (args, extra) =>
@@ -1047,7 +1060,41 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const stored = setPropertyValue(ndb, args.owner_type, args.owner_id, args.key, args.value);
+
+        if (args.values !== undefined) {
+          const stored = setPropertyValues(ndb, args.owner_type, args.owner_id, args.values);
+          for (const value of Object.values(stored)) {
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'property-value.set',
+              {
+                owner_type: args.owner_type,
+                owner_id: args.owner_id,
+                property_id: value.property_id,
+                value: value.value,
+              },
+              extra.requestId,
+            );
+          }
+          auditAgentCall(rt, 'etn.properties.set', args.network_id, args.owner_type, args.owner_id, {
+            values: args.values,
+          });
+          return {
+            values: Object.fromEntries(Object.entries(stored).map(([k, v]) => [k, { id: v.id }])),
+            version: 0,
+            request_id: String(extra.requestId),
+          } satisfies McpPropertiesSetResult;
+        }
+
+        // Single-property form (backward compatible). The refine guarantees both
+        // are present whenever `values` is absent.
+        const key = args.key;
+        const value = args.value;
+        if (key === undefined || value === undefined) {
+          throw new Error('ETN error [VALIDATION_ERROR]: key and value are required');
+        }
+        const stored = setPropertyValue(ndb, args.owner_type, args.owner_id, key, value);
         emitAgentEvent(
           rt,
           args.network_id,
@@ -1061,8 +1108,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.properties.set', args.network_id, args.owner_type, args.owner_id, {
-          key: args.key,
-          value: args.value,
+          key,
+          value,
         });
         return {
           id: stored.id,

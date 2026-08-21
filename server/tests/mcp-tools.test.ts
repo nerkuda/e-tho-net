@@ -970,4 +970,94 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       await closeMcpContext(ctx);
     }
   });
+
+  it('etn.properties.set accepts a values map, writes mixed types in one call (O2)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Seed a type with text/number/bool properties (direct inserts).
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const typeId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
+           VALUES (?, 'book', 1, '2024', '2024', 'u')`,
+        )
+        .run(typeId);
+      const props = [
+        { key: 'title', value_type: 'text' },
+        { key: 'year', value_type: 'number' },
+        { key: 'published', value_type: 'bool' },
+      ];
+      for (const p of props) {
+        ndb
+          .prepare(
+            `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, required, position)
+             VALUES (?, 'thought_type', ?, ?, ?, 0, 0)`,
+          )
+          .run(randomUUID(), typeId, p.key, p.value_type);
+      }
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Дюна', type_id: typeId },
+        });
+        const { id: thoughtId } = toolJson<{ id: string; version: number }>(created);
+
+        const res = await handle.client.callTool({
+          name: 'etn.properties.set',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: thoughtId,
+            values: { title: 'Dune', year: 1965, published: true },
+          },
+        });
+        assert.equal(res.isError, undefined, res.isError === true ? toolText(res) : undefined);
+        const result = toolJson<{ values?: Record<string, { id: string }>; version: number }>(res);
+        assert.equal(result.version, 0);
+        assert.ok(result.values?.title?.id);
+        assert.ok(result.values?.year?.id);
+        assert.ok(result.values?.published?.id);
+
+        const count = ndb
+          .prepare('SELECT COUNT(*) AS c FROM property_values WHERE owner_id = ?')
+          .get(thoughtId) as { c: number };
+        assert.equal(count.c, 3);
+
+        // Single-property form is still backward compatible.
+        const single = await handle.client.callTool({
+          name: 'etn.properties.set',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: thoughtId,
+            key: 'year',
+            value: 2020,
+          },
+        });
+        assert.equal(single.isError, undefined);
+        const singleResult = toolJson<{ id: string; version: number }>(single);
+        assert.equal(singleResult.version, 0);
+        assert.equal(typeof singleResult.id, 'string');
+
+        // Providing neither/neither is rejected by the schema (zod refine).
+        const invalid = await handle.client.callTool({
+          name: 'etn.properties.set',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: thoughtId,
+            key: 'year',
+          },
+        });
+        assert.equal(invalid.isError, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
 });
