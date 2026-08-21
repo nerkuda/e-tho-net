@@ -32,12 +32,14 @@ import type {
 
 import { requireNetworkId, setFocus } from '../app.js';
 import { applyThoughtIcon } from '../canvas/canvas.js';
+import { pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { deleteLink, deleteThought } from '../canvas/context-menu.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { errorDialog, field, showDialog } from '../lib/dialog.js';
-import { div, el, errText, renderHtml, span } from '../lib/dom.js';
+import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
+import { notice } from '../lib/notice.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import { linkTypeOptions } from '../lib/type-tree.js';
 import { patchFocusEdge, store } from '../state.js';
@@ -70,12 +72,31 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
   }
 
   const root = div('links-tab');
+
+  // Mutable ref so the action button can trigger a body reload after a link
+  // is created. The body sets this when it first builds.
+  let reloadLinks: (() => void) | null = null;
+  const actionsBtn = button('Действия ▾', () => {
+    const rect = actionsBtn.getBoundingClientRect();
+    showMenuAt(rect.left, rect.bottom + 2, [
+      {
+        label: 'Добавить родительские мысли…',
+        onClick: () => void addDirectLinks(ctx, 'parents', () => reloadLinks?.()),
+      },
+      {
+        label: 'Добавить подчинённые мысли…',
+        onClick: () => void addDirectLinks(ctx, 'children', () => reloadLinks?.()),
+      },
+    ]);
+  }, 'btn small');
+
   const direct = groupSection(
     {
       id: 'links',
       title: 'Прямые связи',
       loadCount: () => countLinks(ctx),
-      buildBody: () => buildDirectLinksBody(ctx),
+      buildBody: () => buildDirectLinksBody(ctx, (reload) => { reloadLinks = reload; }),
+      actions: [actionsBtn],
     },
     ctx.ownerId,
   );
@@ -149,7 +170,10 @@ function groupName(ownerId: string, group: ThoughtLinksByTypeGroup): string {
 }
 
 /** Builds the direct-links group body: collapsible per-type sections (L7). */
-function buildDirectLinksBody(ctx: EditorContext): HTMLElement {
+function buildDirectLinksBody(
+  ctx: EditorContext,
+  onReady?: (reload: () => void) => void,
+): HTMLElement {
   const networkId = requireNetworkId();
   const box = div('links-body');
   void reload();
@@ -239,6 +263,9 @@ function buildDirectLinksBody(ctx: EditorContext): HTMLElement {
     box.closest('.group')?.dispatchEvent(new CustomEvent('etn:refresh-count'));
   }
 
+  // Expose the reload function so the group-header actions button can trigger
+  // a refresh after adding links without collapsing/rebuilding the body.
+  onReady?.(() => void reload());
   return box;
 }
 
@@ -441,6 +468,71 @@ function linkRow(
     showMenuAt(event.clientX, event.clientY, buildRowMenuItems(link, other, onChanged));
   });
   return row;
+}
+
+// ---------------------------------------------------------------------------
+// Direct-link add commands (bd8fb4d8 — «Действия» in the group header)
+// ---------------------------------------------------------------------------
+
+/**
+ * Opens the thought picker and adds parent/child links to the edited thought.
+ * Works the same as the analogous commands in the Structures panel (§15.3):
+ *   — the link-type and thought-type fields are shown;
+ *   — new thoughts are created inline before the link is established.
+ */
+async function addDirectLinks(
+  ctx: EditorContext,
+  dir: 'parents' | 'children',
+  refresh: () => void,
+): Promise<void> {
+  const networkId = requireNetworkId();
+  const result = await pickThoughtsDialog({
+    networkId,
+    allowCreate: true,
+    allowLinkType: true,
+    title: dir === 'parents' ? 'Родительские мысли' : 'Подчинённые мысли',
+    applyLabel: 'Добавить',
+  });
+  if (result === null) return;
+
+  let added = 0;
+  let failed = 0;
+  for (const item of result.items) {
+    try {
+      if (item.kind === 'new') {
+        // Create the new thought and attach it in one server round-trip.
+        await etn.thoughts.create(networkId, {
+          title: item.title,
+          synonyms: item.synonyms,
+          type_id: result.thoughtTypeId,
+          create_link: {
+            // 'parent': the new thought becomes a parent of ownerId
+            // 'child':  the new thought becomes a child of ownerId
+            direction: dir === 'parents' ? 'parent' : 'child',
+            target_thought_id: ctx.ownerId,
+            type_id: result.linkTypeId,
+          },
+        });
+      } else {
+        // Existing thought: create the link directly.
+        // Parent links: item → ownerId (source is the parent).
+        // Child  links: ownerId → item (ownerId is the parent).
+        const sourceId = dir === 'parents' ? item.id : ctx.ownerId;
+        const targetId = dir === 'parents' ? ctx.ownerId : item.id;
+        await etn.links.create(networkId, {
+          source_id: sourceId,
+          target_id: targetId,
+          type_id: result.linkTypeId,
+        });
+      }
+      added++;
+    } catch {
+      failed++;
+    }
+  }
+  if (failed > 0) notice(`Добавлено: ${added}, ошибок: ${failed}.`, 'error');
+  else if (added > 0) notice(`Добавлено: ${added}.`);
+  refresh();
 }
 
 // ---------------------------------------------------------------------------
