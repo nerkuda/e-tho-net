@@ -77,6 +77,13 @@ export const THOUGHT_TITLE_MAX = 400;
 /** Number of characters used for a truncated title preview. */
 export const THOUGHT_TITLE_PREVIEW = 120;
 
+/**
+ * Maximum length of `users.display_name` in characters (03-server-api.md
+ * §3.1.1). Mirrors the trim-and-cap on `PATCH /me` and is also used as the
+ * `maxlength` on the Settings dialog input.
+ */
+export const DISPLAY_NAME_MAX_LENGTH = 200;
+
 /** Maximum number of entries kept in client `focus_history` per network (11-settings-and-state.md §2.3). */
 export const FOCUS_HISTORY_LIMIT = 50;
 

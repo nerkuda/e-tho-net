@@ -314,6 +314,14 @@ export class RestClient {
     return this.request('GET', '/me');
   }
 
+  /** `PATCH /me` — edit own profile (display_name only on the MVP). */
+  public async updateMe(
+    displayName: string | null,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').CurrentUser> {
+    return this.request('PATCH', '/me', { body: { display_name: displayName }, requestOptions: opts });
+  }
+
   /** `GET /me/keys` — list own API-keys (prefix only). */
   public async listMyKeys(): Promise<import('@etn/shared').ApiKey[]> {
     return this.request('GET', '/me/keys');

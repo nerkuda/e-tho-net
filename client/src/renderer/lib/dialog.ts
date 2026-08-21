@@ -43,6 +43,23 @@ export interface DialogOptions {
   title: string;
   body: HTMLElement;
   buttons?: DialogButton[];
+  /**
+   * Sticky custom footer element. When provided, {@link buttons} is ignored:
+   * the caller owns the footer (its layout, sticky behaviour and buttons),
+   * and is responsible for wiring `close` into a Cancel button if needed.
+   * Esc and the primary/confirm button still close the dialog as usual;
+   * pair with {@link extraShortcuts} for additional keys such as Shift+Enter.
+   */
+  customFooter?: HTMLElement;
+  /**
+   * Extra keyboard shortcuts handled while this dialog is on top. Esc closes
+   * the dialog (built-in); Ctrl/Cmd+Enter clicks the primary button
+   * (built-in via {@link DialogButton.confirm}).
+   */
+  extraShortcuts?: {
+    /** Fired when the user presses Shift+Enter on the topmost dialog. */
+    shiftEnter?: () => void;
+  };
   width?: number;
   /** Called after the dialog is mounted (focus management, etc.). */
   onMount?: (close: () => void) => void;
@@ -65,6 +82,10 @@ export function showDialog(opts: DialogOptions): () => void {
   const backdrop = div('dialog-backdrop');
   const box = div('dialog-box');
   if (opts.width !== undefined) box.style.width = `${opts.width}px`;
+  // Custom footers (e.g. the unified settings dialog) want a scrollable body
+  // and a sticky bottom bar; opt in via the `dialog-box-tall` class so the
+  // default one-button footer stays as small as before.
+  if (opts.customFooter !== undefined) box.classList.add('dialog-box-tall');
 
   /** Confirm button of this dialog — Ctrl+Enter clicks it. */
   let primaryBtn: HTMLButtonElement | null = null;
@@ -80,7 +101,9 @@ export function showDialog(opts: DialogOptions): () => void {
   body.append(opts.body);
   box.append(body);
 
-  if (opts.buttons !== undefined && opts.buttons.length > 0) {
+  if (opts.customFooter !== undefined) {
+    box.append(opts.customFooter);
+  } else if (opts.buttons !== undefined && opts.buttons.length > 0) {
     const footer = div('dialog-footer');
     for (const item of opts.buttons) {
       const btn = button(
@@ -137,12 +160,28 @@ export function showDialog(opts: DialogOptions): () => void {
   };
   window.addEventListener('keydown', onConfirm);
 
+  const onShiftEnter = (event: KeyboardEvent): void => {
+    if (event.repeat) return;
+    if (event.key !== 'Enter' || !event.shiftKey) return;
+    // Shift+Enter is the «Apply without closing» shortcut used by the unified
+    // settings dialog. Esc closes via onKey (capture); Ctrl+Enter above wins
+    // when both modifiers are held.
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.defaultPrevented) return;
+    if (stack[stack.length - 1] !== backdrop) return;
+    if (opts.extraShortcuts?.shiftEnter === undefined) return;
+    event.preventDefault();
+    opts.extraShortcuts.shiftEnter();
+  };
+  window.addEventListener('keydown', onShiftEnter);
+
   backdrop.append(box);
   document.body.append(backdrop);
   stack.push(backdrop);
   backdrop.addEventListener('remove', () => {
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keydown', onConfirm);
+    window.removeEventListener('keydown', onShiftEnter);
   });
   opts.onMount?.(close);
   return close;

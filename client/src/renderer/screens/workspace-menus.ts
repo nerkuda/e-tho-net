@@ -1,26 +1,31 @@
 /**
  * Toolbar menus of the workspace (08-ui-spec.md §8, H3/H18).
  *
- * - Network menu: open network list, create network, network settings
- *   (owner), members (owner), leave network (non-owner).
- * - User menu (H18): visibility settings, cloud sizing, administration,
- *   disconnect.
+ * - Network menu: open network list, create network, members (owner), leave
+ *   network (non-owner). Network settings (display_name / description) and
+ *   the L3 visibility toggle moved to the unified Settings dialog
+ *   (`screens/settings.ts`), opened from the View menu.
+ * - User menu (H18): administration (when admin), disconnect. All personal
+ *   preferences (display_name, visibility, cloud sizing, theme) live in
+ *   Settings.
+ * - View menu (☰): show/hide editor, type catalogues, the unified Settings
+ *   entry (with a gear icon).
  *
  * Menus are built lazily on click from the current store state.
  */
 
 import { backToNetworks, disconnect, requireNetworkId } from '../app.js';
 import { openAdminPanel } from '../admin/admin.js';
-import { confirmDialog, errorDialog, field, showDialog } from '../lib/dialog.js';
+import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
+import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import { toggleEditorVisibility } from '../editor/editor.js';
-import { toggleTheme } from '../lib/theme.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { showCreateNetworkDialog } from './networks.js';
-import { showCloudSizeSettings, showVisibilitySettings } from './settings.js';
+import { showSettingsDialog } from './settings.js';
 import { showLinkTypesDialog, showThoughtTypesDialog } from './type-manager.js';
 import type { NetworkMember, User } from '@etn/shared';
 
@@ -40,11 +45,6 @@ export function buildNetMenuItems(): MenuItem[] {
   return [
     { label: 'Открыть сеть (список)', onClick: () => backToNetworks() },
     { label: 'Создать сеть', onClick: () => void showCreateNetworkDialog() },
-    {
-      label: 'Настройки сети',
-      disabled: !isOwner,
-      onClick: () => void networkSettingsDialog(),
-    },
     { label: 'Участники сети', disabled: !isOwner, onClick: () => void membersDialog() },
     MENU_SEPARATOR,
     {
@@ -54,55 +54,6 @@ export function buildNetMenuItems(): MenuItem[] {
       onClick: () => void leaveNetwork(),
     },
   ];
-}
-
-/** Network settings dialog: display_name / description (owner only). */
-async function networkSettingsDialog(): Promise<void> {
-  const net = store.state.network;
-  const networkId = store.state.networkId;
-  if (net === null || networkId === null) return;
-
-  const nameInput = el('input', 'text-input');
-  nameInput.type = 'text';
-  nameInput.value = net.display_name;
-  nameInput.maxLength = 200;
-  const descInput = el('input', 'text-input');
-  descInput.type = 'text';
-  descInput.value = net.description ?? '';
-  descInput.maxLength = 2000;
-  const errorLine = span('', 'error-text');
-  const body = div('form-stack');
-  body.append(field('Название сети', nameInput), field('Описание', descInput), errorLine);
-
-  showDialog({
-    title: 'Настройки сети',
-    body,
-    width: 460,
-    buttons: [
-      { label: 'Отмена' },
-      {
-        label: 'Сохранить',
-        primary: true,
-        keepOpen: true,
-        onClick: (close) => {
-          void (async () => {
-            try {
-              const fields: { display_name: string; description?: string } = {
-                display_name: nameInput.value.trim(),
-              };
-              const description = descInput.value.trim();
-              if (description !== '') fields['description'] = description;
-              const updated = await etn.networks.update(networkId, fields);
-              store.update({ network: updated });
-              close();
-            } catch (err) {
-              errorLine.textContent = errText(err);
-            }
-          })();
-        },
-      },
-    ],
-  });
 }
 
 /** Members dialog: list, add, remove, transfer ownership (owner only). */
@@ -273,19 +224,22 @@ export function wireUserMenu(handles: WorkspaceHandles): void {
   });
 }
 
-/** Builds the user menu items (H18). */
+/**
+ * Builds the user menu items (H18). Personal preferences (display_name,
+ * visibility, cloud sizing, theme) live in the unified Settings dialog
+ * (`showSettingsDialog`, opened from the View menu). This menu keeps the
+ * admin entry and the disconnect action.
+ */
 export function buildUserMenuItems(): MenuItem[] {
-  const items: MenuItem[] = [
-    { label: 'Настройки видимости', onClick: () => showVisibilitySettings() },
-    { label: 'Размер облачка', onClick: () => showCloudSizeSettings() },
-  ];
+  const items: MenuItem[] = [];
   if (store.state.me?.is_admin === true) {
     items.push({
       label: 'Администрирование',
       onClick: () => openAdminPanel(),
     });
+    items.push(MENU_SEPARATOR);
   }
-  items.push(MENU_SEPARATOR, {
+  items.push({
     label: 'Отключиться',
     danger: true,
     onClick: () => void disconnect(),
@@ -302,25 +256,34 @@ export function wireViewMenu(handles: WorkspaceHandles): void {
 }
 
 /**
- * Builds the "View" menu items from the current state. Intended as a home for
- * workspace-layout commands; the first one toggles the editor panel — the only
- * way back once the editor (and its own header dropdown) is hidden. The type
- * catalogues (L6) open from here too.
+ * Builds the "View" menu items from the current state. Houses workspace-layout
+ * commands (the first one toggles the editor panel — the only way back once
+ * the editor and its own header dropdown are hidden), the type catalogues
+ * (L6) and the unified Settings entry, opened with a gear icon.
+ *
+ * The UI theme moved to the Settings dialog (it's an L5 client setting, not
+ * a layout toggle). The `Settings` row is a leaf that opens
+ * `showSettingsDialog` from `screens/settings.ts`.
  */
 export function buildViewMenuItems(): MenuItem[] {
   const hidden = store.state.editorPosition === 'hidden';
-  return [
+  const items: MenuItem[] = [
     {
       label: hidden ? 'Показать редактор' : 'Скрыть редактор',
       onClick: () => void toggleEditorVisibility(),
     },
-    {
-      label: 'Тёмная тема',
-      checked: store.state.theme === 'dark',
-      onClick: () => toggleTheme(),
-    },
-    MENU_SEPARATOR,
     { label: 'Типы мыслей', onClick: () => showThoughtTypesDialog() },
     { label: 'Типы связей', onClick: () => showLinkTypesDialog() },
   ];
+  // The settings entry carries a lucide-style gear SVG. `MenuItem.icon`
+  // accepts either a text glyph or a DOM node; passing the SVG node directly
+  // (instead of innerHTML) keeps `lib/menu.ts` safe — textContent-escaping
+  // would otherwise turn the markup into literal text.
+  const gear = svgIcon('settings', 14);
+  items.push(MENU_SEPARATOR, {
+    label: 'Настройки',
+    icon: gear,
+    onClick: () => showSettingsDialog(),
+  });
+  return items;
 }

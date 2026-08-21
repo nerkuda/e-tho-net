@@ -14,7 +14,10 @@ import { div, el, span } from './dom.js';
  *  — it lands in `row.dataset['dragId']` for the caller to wire up. */
 export interface MenuItem {
   label: string;
-  icon?: string;
+  /** A glyph string (rendered as text) or a DOM node (e.g. an inline-SVG
+   *  icon). DOM nodes get the same `menu-item-icon` class wrapper so the
+   *  layout stays consistent across both shapes. */
+  icon?: string | Node;
   submenu?: MenuItem[];
   disabled?: boolean;
   danger?: boolean;
@@ -56,7 +59,15 @@ function buildMenu(items: MenuItem[]): HTMLDivElement {
     row.classList.toggle('menu-item-disabled', item.disabled === true);
     row.classList.toggle('menu-item-checked', item.checked === true);
     if (item.dragId !== undefined) row.dataset['dragId'] = item.dragId;
-    if (item.icon !== undefined) row.append(span(item.icon, 'menu-item-icon'));
+    if (item.icon !== undefined) {
+      if (typeof item.icon === 'string') {
+        row.append(span(item.icon, 'menu-item-icon'));
+      } else {
+        const wrap = span('', 'menu-item-icon');
+        wrap.append(item.icon);
+        row.append(wrap);
+      }
+    }
     row.append(span(item.label, 'menu-item-label'));
     if (item.submenu !== undefined) row.append(span('▸', 'menu-item-arrow'));
     row.addEventListener('click', (event) => {
