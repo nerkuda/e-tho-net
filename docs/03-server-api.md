@@ -240,14 +240,37 @@ POST /api/v1/networks/{nid}/thoughts/batch
 {
   ids: ["...", "..."],
   op: "set_type"|"clear_type"|"set_active"|"set_inactive"|"delete"|
-       "link_to_focus"|"unlink_from_focus",
-  args: { type_id?, active?, focus_thought_id?, link_type_id?, direction? }
+       "link_to_focus"|"unlink_from_focus"|
+       "link_parents"|"link_children"|"set_only_parents"|
+       "unlink_parents"|"unlink_children",
+  args: { type_id?, active?, focus_thought_id?, link_type_id?, direction?,
+          parent_ids?, child_ids? }
 }
 → 200 { data: { affected: N, failures: [ {id, code, message} ] } }
 ```
 
 `link_to_focus` — создать связи между всеми `ids` и мыслью в фокусе клиента
 (`focus_thought_id` передаётся явно). `direction` — `parent`/`child`.
+
+Массовые операции со связями (L22, для команд отбора «Структур»,
+08-ui-spec.md §15.3). Якоря — `args.parent_ids`/`args.child_ids` — непустые
+массивы id (дедуплицируются). Общие правила: новые связи создаются **без
+типа**; пара, уже связанная связью любого типа, не меняется — операция
+идемпотентна по парам; совпадение якоря с самой обрабатываемой мыслью
+(self-loop) молча пропускается, а не падает ошибкой:
+
+- `link_parents` — для каждой мысли из `ids` создать связи
+  `каждый parent_ids → эта мысль`;
+- `link_children` — создать связи `эта мысль → каждый child_ids`;
+- `set_only_parents` — удалить у каждой мысли из `ids` **все** входящие связи
+  (любого типа, включая неактивные), кроме связей с мыслями из `parent_ids`;
+  недостающие связи с `parent_ids` создать (без типа);
+- `unlink_parents` — удалить все связи `parent_ids → эта мысль` (любого типа);
+  отсутствие связей с каким-то якорем — не ошибка, а пустое действие;
+- `unlink_children` — удалить все связи `эта мысль → child_ids`.
+
+Ошибки отдельных мыслей (несуществующий id, защищённая HOME при `delete`)
+собираются в `failures`, остальные обрабатываются.
 
 ### 6.7. Соседи без смены фокуса (для drag-операций, выбора)
 ```
@@ -327,10 +350,19 @@ POST /api/v1/networks/{nid}/thoughts/query
   show_inactive?: false,          # как в focus/поиске
   sort: "alpha"|"created"|"viewed",
   order: "asc"|"desc",
-  limit: 100, offset: 0           # limit клампится в 1..100
+  limit: 100, offset: 0,          # limit клампится в 1..100
+                                  # (при ids_only: true — в 1..2000)
+  ids_only?: false                # true — вместо ThoughtRef вернуть только id
+                                  # (для массовых команд отбора, 08-ui-spec §15.3)
 }
 → 200 { data: [ ThoughtRef... ], meta: { total, limit, offset, directions } }
 ```
+
+- **`ids_only: true`** — тот же набор кандидатов и тот же порядок, но страница
+  несёт только id: `→ 200 { data: { ids: ["…"], total } }` (без `meta.directions`).
+  Потолок `limit` поднят до 2000 — команды отбора собирают весь результат
+  (без учёта пагинации дерева) за меньшее число запросов, клиент догружает
+  страницы по `offset`, пока не наберёт `total`.
 
 - **Пустой фильтр** (нет ни одного из `keywords`, `parent_ids`, `type_ids`,
   `link_type_ids`, `properties`, `has_properties`, `has_comment`,
