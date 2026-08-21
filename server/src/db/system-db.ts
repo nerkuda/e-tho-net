@@ -57,6 +57,7 @@ interface ApiKeyRow {
   key_hash: string;
   key_prefix: string;
   read_only: number;
+  max_writes_per_minute: number | null;
   disabled: number;
   created_at: string;
   last_used_at: string | null;
@@ -84,6 +85,7 @@ function rowToApiKey(r: ApiKeyRow): ApiKey {
     label: r.label,
     prefix: r.key_prefix,
     read_only: r.read_only === 1,
+    max_writes_per_minute: r.max_writes_per_minute,
     disabled: r.disabled === 1,
     created_at: r.created_at,
     last_used_at: r.last_used_at,
@@ -112,6 +114,8 @@ export interface CreateApiKeyParams {
   keyPrefix: string;
   /** Defaults to false. */
   readOnly?: boolean;
+  /** Per-key MCP write rate limit override; `null`/omitted — server default. */
+  maxWritesPerMinute?: number | null;
 }
 
 /** Input for {@link SystemDb.insertAuditLog}. */
@@ -166,6 +170,7 @@ export class SystemDb {
   private readonly stListKeysByUser: Database.Statement;
   private readonly stGetKeyById: Database.Statement;
   private readonly stDisableKey: Database.Statement;
+  private readonly stUpdateApiKeyMaxWrites: Database.Statement;
   private readonly stCountOwnedNetworks: Database.Statement;
   private readonly stUpdateUser: Database.Statement;
   private readonly stDeleteUser: Database.Statement;
@@ -204,7 +209,7 @@ export class SystemDb {
     this.stGetUserById = db.prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
     this.stGetUserByUsername = db.prepare('SELECT * FROM users WHERE username = ? LIMIT 1');
     this.stInsertApiKey = db.prepare(
-      'INSERT INTO api_keys (id, user_id, label, key_hash, key_prefix, read_only, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO api_keys (id, user_id, label, key_hash, key_prefix, read_only, max_writes_per_minute, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     );
     this.stFindKeyByHash = db.prepare('SELECT * FROM api_keys WHERE key_hash = ? LIMIT 1');
     this.stTouchKeyUsed = db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
@@ -228,6 +233,9 @@ export class SystemDb {
     );
     this.stGetKeyById = db.prepare('SELECT * FROM api_keys WHERE id = ? LIMIT 1');
     this.stDisableKey = db.prepare('UPDATE api_keys SET disabled = 1 WHERE id = ?');
+    this.stUpdateApiKeyMaxWrites = db.prepare(
+      'UPDATE api_keys SET max_writes_per_minute = ? WHERE id = ?',
+    );
     this.stCountOwnedNetworks = db.prepare('SELECT COUNT(*) AS c FROM networks WHERE owner_id = ?');
     this.stUpdateUser = db.prepare(
       'UPDATE users SET display_name = ?, is_admin = ?, disabled = ?, updated_at = ? WHERE id = ?',
@@ -367,6 +375,7 @@ export class SystemDb {
   createApiKey(params: CreateApiKeyParams): ApiKey {
     const now = new Date().toISOString();
     const readOnly = params.readOnly === true ? 1 : 0;
+    const maxWritesPerMinute = params.maxWritesPerMinute ?? null;
     this.stInsertApiKey.run(
       params.id,
       params.userId,
@@ -374,6 +383,7 @@ export class SystemDb {
       params.keyHash,
       params.keyPrefix,
       readOnly,
+      maxWritesPerMinute,
       now,
     );
     return {
@@ -382,6 +392,7 @@ export class SystemDb {
       label: params.label,
       prefix: params.keyPrefix,
       read_only: params.readOnly === true,
+      max_writes_per_minute: maxWritesPerMinute,
       disabled: false,
       created_at: now,
       last_used_at: null,
@@ -499,6 +510,14 @@ export class SystemDb {
   /** Disable (revoke) an API-key by id. Idempotent for already-disabled keys. */
   disableApiKey(keyId: string): void {
     this.stDisableKey.run(keyId);
+  }
+
+  /**
+   * Set the per-key MCP write rate limit override (task O8, 05-mcp-server.md
+   * §6.2). `null` clears the override, falling back to the server-wide default.
+   */
+  updateApiKeyMaxWrites(keyId: string, maxWritesPerMinute: number | null): void {
+    this.stUpdateApiKeyMaxWrites.run(maxWritesPerMinute, keyId);
   }
 
   /** Count networks currently owned by `userId` (DELETE-user guard, 06-auth.md §4.3). */

@@ -934,4 +934,40 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       await closeMcpContext(ctx);
     }
   });
+
+  it('a per-key max_writes_per_minute override beats the global limit (O8)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Global limit stays at its default (60); the key itself caps writes at 1.
+      const gen = generateApiKey();
+      ctx.sys.createApiKey({
+        id: randomUUID(),
+        userId: ctx.adminId,
+        label: 'o8',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+        maxWritesPerMinute: 1,
+      });
+
+      const handle = await connectMcpClient(ctx, gen.key);
+      try {
+        const first = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Раз' },
+        });
+        assert.equal(first.isError, undefined, first.isError === true ? toolText(first) : undefined);
+
+        const second = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Два' },
+        });
+        assert.equal(second.isError, true);
+        assert.match(toolText(second), /write limit|RATE_LIMITED/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
 });

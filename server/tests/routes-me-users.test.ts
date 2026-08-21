@@ -160,6 +160,65 @@ describe(
       }
     });
 
+    it('creates a key with a per-key write limit and edits it via PATCH (O8)', async () => {
+      const { app, sys, admin } = await buildApp();
+      try {
+        const create = await app.inject({
+          method: 'POST',
+          url: '/api/v1/me/keys',
+          headers: { authorization: `Bearer ${admin.key}` },
+          payload: { label: 'bulk', max_writes_per_minute: 500 },
+        });
+        assert.equal(create.statusCode, 201);
+        const created = create.json().data;
+        assert.equal(created.max_writes_per_minute, 500);
+
+        // PATCH the own key to clear the override.
+        const patch = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/me/keys/${created.id}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+          payload: { max_writes_per_minute: null },
+        });
+        assert.equal(patch.statusCode, 200);
+        assert.equal(patch.json().data.max_writes_per_minute, null);
+
+        // Invalid value → 422.
+        const bad = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/me/keys/${created.id}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+          payload: { max_writes_per_minute: 0 },
+        });
+        assert.equal(bad.statusCode, 422);
+        assert.equal(bad.json().error.code, 'VALIDATION_ERROR');
+      } finally {
+        await app.close();
+        sys.close();
+      }
+    });
+
+    it('admin edits another user key limit via PATCH (O8)', async () => {
+      const { app, sys, admin } = await buildApp();
+      const pleb = seedUser(sys, 'pleb-o8', false);
+      try {
+        const key = sys.listApiKeysByUser(pleb.userId)[0];
+        assert.ok(key);
+        const patch = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/admin/users/${pleb.userId}/keys/${key!.id}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+          payload: { max_writes_per_minute: 42 },
+        });
+        assert.equal(patch.statusCode, 200);
+        assert.equal(patch.json().data.max_writes_per_minute, 42);
+        assert.equal(sys.getApiKeyById(key!.id)?.max_writes_per_minute, 42);
+      } finally {
+        await app.close();
+        sys.close();
+      }
+    });
+
     it('forbids a non-admin from admin endpoints (403)', async () => {
       const { app, sys } = await buildApp();
       const pleb = seedUser(sys, 'pleb', false);

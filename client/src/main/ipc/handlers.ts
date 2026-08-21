@@ -795,8 +795,11 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'admin.createUserKey',
-    bind(async (id: string, label?: string) => {
-      const key = await requireRest(deps).adminCreateUserKey(id, { label: label ?? null });
+    bind(async (id: string, label?: string, maxWritesPerMinute?: number | null) => {
+      const key = await requireRest(deps).adminCreateUserKey(id, {
+        label: label ?? null,
+        max_writes_per_minute: maxWritesPerMinute ?? null,
+      });
       return { id: key.id, apiKey: key.key };
     }),
   );
@@ -828,8 +831,11 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'me.createKey',
-    bind(async (label?: string) => {
-      const key = await requireRest(deps).createMyKey({ label: label ?? null });
+    bind(async (label?: string, maxWritesPerMinute?: number | null) => {
+      const key = await requireRest(deps).createMyKey({
+        label: label ?? null,
+        max_writes_per_minute: maxWritesPerMinute ?? null,
+      });
       return { id: key.id, apiKey: key.key };
     }),
   );

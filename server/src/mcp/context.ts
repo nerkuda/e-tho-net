@@ -32,7 +32,7 @@ export interface McpRuntime {
 
 /** Build the runtime for a deps bundle (limits resolved once per server). */
 export function createRuntime(deps: McpDeps): McpRuntime {
-  const limits = resolveMcpLimits(deps.systemDb);
+  const limits = resolveMcpLimits(deps.systemDb, deps.auth.maxWritesPerMinute);
   return { deps, limits, writes: new WriteRateLimiter(limits.maxWritesPerMinute) };
 }
 

@@ -66,6 +66,11 @@ export interface ApiKey {
   prefix: string;
   /** Read-only keys cannot call mutating endpoints (06-auth.md §6.3). */
   read_only: boolean;
+  /**
+   * Per-key override of the MCP write rate limit (05-mcp-server.md §6.2,
+   * task O8). `null` — inherit the server-wide `mcp.max_writes_per_minute`.
+   */
+  max_writes_per_minute: number | null;
   disabled: boolean;
   created_at: string;
   last_used_at: string | null;
@@ -81,6 +86,18 @@ export interface ApiKeyWithSecret extends ApiKey {
 export interface CreateApiKeyInput {
   label?: string | null;
   read_only?: boolean;
+  /** Per-key MCP write rate limit override; `null`/omitted — server default. */
+  max_writes_per_minute?: number | null;
+}
+
+/**
+ * Input for key edit endpoints (03-server-api.md §3.2, §4.1, task O8). Only the
+ * MCP write rate limit override is editable after creation; other key fields
+ * (label, read_only) are immutable without re-issuing the key.
+ */
+export interface UpdateApiKeyInput {
+  /** `null` clears the override, falling back to the server-wide default. */
+  max_writes_per_minute?: number | null;
 }
 
 /**

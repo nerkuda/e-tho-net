@@ -515,7 +515,11 @@ export interface EtnApi {
       expectedVersion: number,
     ): Promise<User>;
     removeUser(id: string, expectedVersion: number): Promise<void>;
-    createUserKey(id: string, label?: string): Promise<{ id: string; apiKey: string }>;
+    createUserKey(
+      id: string,
+      label?: string,
+      maxWritesPerMinute?: number | null,
+    ): Promise<{ id: string; apiKey: string }>;
     removeUserKey(id: string, keyId: string): Promise<void>;
     listNetworks(): Promise<Network[]>;
     removeNetwork(id: string): Promise<void>;
@@ -524,7 +528,10 @@ export interface EtnApi {
   me: {
     get(): Promise<CurrentUser>;
     listKeys(): Promise<ApiKey[]>;
-    createKey(label?: string): Promise<{ id: string; apiKey: string }>;
+    createKey(
+      label?: string,
+      maxWritesPerMinute?: number | null,
+    ): Promise<{ id: string; apiKey: string }>;
     removeKey(id: string): Promise<void>;
   };
   realtime: {

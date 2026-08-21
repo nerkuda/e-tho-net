@@ -110,6 +110,38 @@ describe(
       }
     });
 
+    it('stores and updates a per-key write rate limit override (O8)', () => {
+      const db = openDb();
+      const sys = new SystemDb(db);
+      try {
+        const uid = randomUUID();
+        sys.createUser({ id: uid, username: 'o8', displayName: null });
+        const kid = randomUUID();
+        const key = sys.createApiKey({
+          id: kid,
+          userId: uid,
+          label: 'bulk-import',
+          keyHash: '0a'.repeat(32),
+          keyPrefix: '0a0a0a0a',
+          maxWritesPerMinute: 1000,
+        });
+        assert.equal(key.max_writes_per_minute, 1000);
+
+        const found = sys.getApiKeyById(kid);
+        assert.equal(found?.max_writes_per_minute, 1000);
+        assert.equal(sys.findApiKeyByHash('0a'.repeat(32))?.apiKey.max_writes_per_minute, 1000);
+
+        // Clear the override → back to null (server default).
+        sys.updateApiKeyMaxWrites(kid, null);
+        assert.equal(sys.getApiKeyById(kid)?.max_writes_per_minute, null);
+
+        sys.updateApiKeyMaxWrites(kid, 5);
+        assert.equal(sys.getApiKeyById(kid)?.max_writes_per_minute, 5);
+      } finally {
+        sys.close();
+      }
+    });
+
     it('does not return a disabled key', () => {
       const db = openDb();
       const sys = new SystemDb(db);

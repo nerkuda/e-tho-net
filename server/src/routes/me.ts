@@ -4,6 +4,7 @@
  *   GET    /api/v1/me              — current user (no secrets)
  *   GET    /api/v1/me/keys         — list own keys (prefix only)
  *   POST   /api/v1/me/keys         — create a key, full key returned once (201)
+ *   PATCH  /api/v1/me/keys/:id     — edit a key's write rate limit (O8)
  *   DELETE /api/v1/me/keys/:id     — revoke an own key (204)
  *
  * Registered under the `/api/v1` prefix by the server factory. The auth
@@ -15,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import type { ApiKeyWithSecret, CreateApiKeyInput } from '@etn/shared';
+import type { ApiKeyWithSecret, CreateApiKeyInput, UpdateApiKeyInput } from '@etn/shared';
 
 import { EtnError } from '@etn/shared';
 
@@ -25,9 +26,35 @@ import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 /** Body of `POST /me/keys`. */
 type CreateKeyBody = CreateApiKeyInput;
 
+/** Body of `PATCH /me/keys/:id`. */
+type UpdateKeyBody = UpdateApiKeyInput;
+
 /** Path params for `DELETE /me/keys/:id`. */
 interface KeyIdParams {
   id: string;
+}
+
+/**
+ * Validate a `max_writes_per_minute` value from a request body. Accepts `null`
+ * (clear/inherit the server default) or a positive integer; anything else
+ * raises `VALIDATION_ERROR`.
+ */
+export function parseMaxWritesPerMinute(
+  value: unknown,
+  requestId?: string,
+): number | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'max_writes_per_minute должен быть положительным целым числом или null.',
+      { field: 'max_writes_per_minute' },
+      requestId,
+    );
+  }
+  return value;
 }
 
 /** Build the public DTO of an existing key (no secret). */
@@ -37,6 +64,7 @@ function keyPublicDto(k: {
   label: string | null;
   prefix: string;
   read_only: boolean;
+  max_writes_per_minute: number | null;
   disabled: boolean;
   created_at: string;
   last_used_at: string | null;
@@ -47,6 +75,7 @@ function keyPublicDto(k: {
     label: k.label,
     prefix: k.prefix,
     read_only: k.read_only,
+    max_writes_per_minute: k.max_writes_per_minute,
     disabled: k.disabled,
     created_at: k.created_at,
     last_used_at: k.last_used_at,
@@ -78,6 +107,10 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const body = (req.body ?? {}) as CreateKeyBody;
       const label = typeof body.label === 'string' ? body.label.trim() || null : null;
       const readOnly = body.read_only === true;
+      const maxWritesPerMinute =
+        body.max_writes_per_minute === undefined
+          ? null
+          : parseMaxWritesPerMinute(body.max_writes_per_minute, req.id);
 
       const gen = generateApiKey();
       const apiKey = app.systemDb.createApiKey({
@@ -87,6 +120,7 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         keyHash: hashApiKey(gen.key),
         keyPrefix: gen.keyPrefix,
         readOnly,
+        maxWritesPerMinute,
       });
       app.systemDb.insertAuditLog({
         actorUserId: req.auth!.user.id,
@@ -94,10 +128,44 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         action: 'api_key.create',
         targetType: 'api_key',
         targetId: apiKey.id,
-        details: { label, read_only: readOnly, self: true },
+        details: { label, read_only: readOnly, max_writes_per_minute: maxWritesPerMinute, self: true },
       });
       const dto: ApiKeyWithSecret = { ...keyPublicDto(apiKey), key: gen.key };
       sendCreated(reply, dto);
+    },
+  );
+
+  app.patch(
+    '/me/keys/:id',
+    { preHandler: [app.authPreHandler, app.idempotency.preHandler] },
+    async (req: FastifyRequest, reply) => {
+      const { id: keyId } = req.params as KeyIdParams;
+      const key = app.systemDb.getApiKeyById(keyId);
+      if (key === null || key.user_id !== req.auth!.user.id) {
+        // Do not leak ownership: treat a foreign key as not-found.
+        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+      }
+      const body = (req.body ?? {}) as UpdateKeyBody;
+      if (!('max_writes_per_minute' in body)) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Требуется поле max_writes_per_minute (число или null).',
+          { field: 'max_writes_per_minute' },
+          req.id,
+        );
+      }
+      const maxWritesPerMinute = parseMaxWritesPerMinute(body.max_writes_per_minute, req.id);
+      app.systemDb.updateApiKeyMaxWrites(keyId, maxWritesPerMinute);
+      app.systemDb.insertAuditLog({
+        actorUserId: req.auth!.user.id,
+        category: 'user',
+        action: 'api_key.update',
+        targetType: 'api_key',
+        targetId: keyId,
+        details: { max_writes_per_minute: maxWritesPerMinute, self: true },
+      });
+      const updated = app.systemDb.getApiKeyById(keyId)!;
+      sendSuccess(reply, keyPublicDto(updated));
     },
   );
 

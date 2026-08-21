@@ -45,17 +45,29 @@ function parseSettingInt(raw: string | null, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-/** Read both limits from `_system.db.settings`, falling back to shared defaults. */
-export function resolveMcpLimits(systemDb: SystemDb): ResolvedMcpLimits {
+/**
+ * Read both limits from `_system.db.settings`, falling back to shared defaults.
+ *
+ * `perKeyMaxWritesPerMinute` (task O8) is the authenticated key's override from
+ * `api_keys.max_writes_per_minute` (`null` — no override). When non-null it
+ * replaces the server-wide `mcp.max_writes_per_minute`, so a bulk-import key can
+ * hold a different budget than the global runaway-agent protection.
+ */
+export function resolveMcpLimits(
+  systemDb: SystemDb,
+  perKeyMaxWritesPerMinute: number | null = null,
+): ResolvedMcpLimits {
   return {
     maxNodesPerSubgraph: parseSettingInt(
       systemDb.getSetting(SETTING_KEY.MCP_MAX_NODES_PER_SUBGRAPH),
       MCP_DEFAULTS.MAX_NODES_PER_SUBGRAPH,
     ),
-    maxWritesPerMinute: parseSettingInt(
-      systemDb.getSetting(SETTING_KEY.MCP_MAX_WRITES_PER_MINUTE),
-      MCP_DEFAULTS.MAX_WRITES_PER_MINUTE,
-    ),
+    maxWritesPerMinute:
+      perKeyMaxWritesPerMinute ??
+      parseSettingInt(
+        systemDb.getSetting(SETTING_KEY.MCP_MAX_WRITES_PER_MINUTE),
+        MCP_DEFAULTS.MAX_WRITES_PER_MINUTE,
+      ),
   };
 }
 
