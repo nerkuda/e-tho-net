@@ -15,12 +15,10 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  type AttachmentCopyInput,
   type AttachmentFileInput,
   type AttachmentInput,
   type AttachmentKind,
   type AttachmentOwnerType,
-  type AttachmentSearchQuery,
   type AttachmentUpdateInput,
 } from '@etn/shared';
 
@@ -33,7 +31,6 @@ import {
   type RouteDeps,
 } from './helpers.js';
 import {
-  copyAttachment,
   createAttachment,
   createAttachmentFile,
   deleteAttachment,
@@ -41,7 +38,6 @@ import {
   getAttachment,
   getAttachmentContent,
   listAttachments,
-  searchAttachments,
   updateAttachment,
   updateAttachmentContent,
 } from '../domain/attachment-service.js';
@@ -177,100 +173,6 @@ function parseAttachmentUpdateBody(
   return changes;
 }
 
-/** Parse and validate the body of `POST /attachments/:id/copy` (workplan L25). */
-function parseAttachmentCopyBody(
-  body: Record<string, unknown>,
-  requestId: string,
-): AttachmentCopyInput {
-  const t = fieldString(body, 'target_owner_type', requestId);
-  if (t !== 'thought' && t !== 'link') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'target_owner_type должен быть thought|link.',
-      { field: 'target_owner_type' },
-      requestId,
-    );
-  }
-  const rawIds = body['target_owner_ids'];
-  if (!Array.isArray(rawIds)) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'target_owner_ids должен быть массивом строк.',
-      { field: 'target_owner_ids' },
-      requestId,
-    );
-  }
-  const ids = rawIds.map((v) => {
-    if (typeof v !== 'string' || v === '') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'target_owner_ids содержит не строку или пустую строку.',
-        { field: 'target_owner_ids' },
-        requestId,
-      );
-    }
-    return v;
-  });
-  return { target_owner_type: t, target_owner_ids: ids };
-}
-
-/**
- * Parse the query string of `GET /attachments` (workplan L25). All fields are
- * optional except `q`; a missing `q` makes the route return an empty result.
- */
-function parseAttachmentSearchQuery(
-  query: Record<string, unknown>,
-  requestId: string,
-): AttachmentSearchQuery {
-  const q = typeof query['q'] === 'string' ? (query['q'] as string) : '';
-  const result: AttachmentSearchQuery = { q };
-  const ownerType = query['exclude_owner_type'];
-  if (ownerType !== undefined) {
-    if (ownerType !== 'thought' && ownerType !== 'link') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'exclude_owner_type должен быть thought|link.',
-        { field: 'exclude_owner_type' },
-        requestId,
-      );
-    }
-    result.exclude_owner_type = ownerType;
-  }
-  const ownerId = query['exclude_owner_id'];
-  if (ownerId !== undefined) {
-    if (typeof ownerId !== 'string') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'exclude_owner_id должен быть строкой.',
-        { field: 'exclude_owner_id' },
-        requestId,
-      );
-    }
-    result.exclude_owner_id = ownerId;
-  }
-  const kind = query['kind'];
-  if (kind !== undefined) {
-    if (kind !== 'url' && kind !== 'file') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'kind должен быть url|file.',
-        { field: 'kind' },
-        requestId,
-      );
-    }
-    result.kind = kind;
-  }
-  const limit = query['limit'];
-  if (limit !== undefined) {
-    result.limit = optionalIntField(query, 'limit', requestId);
-  }
-  const offset = query['offset'];
-  if (offset !== undefined) {
-    result.offset = optionalIntField(query, 'offset', requestId);
-  }
-  return result;
-}
-
 /** `/api/v1/networks*` attachment routes plugin factory. */
 export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
   return async (app: FastifyInstance) => {
@@ -329,48 +231,6 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
 
     registerOwnerRoutes('/networks/:networkId/thoughts/:id', 'thought');
     registerOwnerRoutes('/networks/:networkId/links/:id', 'link');
-
-    // Network-wide attachment search (03-server-api.md §11, workplan L25).
-    // Must be registered before the `:id` routes to keep the URL space clear;
-    // Fastify resolves by exact match first, but the explicit ordering keeps
-    // route tables readable.
-    app.get(
-      '/networks/:networkId/attachments',
-      { preHandler: [app.authPreHandler, requireNetworkMember()] },
-      async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as { networkId: string };
-        const query = parseAttachmentSearchQuery(
-          req.query as Record<string, unknown>,
-          req.id,
-        );
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
-        const { items, total } = searchAttachments(ndb, query);
-        const limit = query.limit ?? 50;
-        const offset = query.offset ?? 0;
-        sendList(reply, items, total, offset, limit);
-      },
-    );
-
-    // Copy an attachment to one or more target owners (workplan L25). Each
-    // target receives a new row with the same visible fields; the file is not
-    // duplicated. 422 on unknown targets or invalid body, 404 on the source.
-    app.post(
-      '/networks/:networkId/attachments/:id/copy',
-      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
-      async (req: FastifyRequest, reply) => {
-        const { networkId, id } = req.params as AttachmentIdParams;
-        const input = parseAttachmentCopyBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
-        const result = copyAttachment(ndb, id, input, req.auth!.user.id);
-        // One event per created row so realtime subscribers can react
-        // individually (re-render the target's attachments tab, refresh the
-        // `attachments_count` indicator, etc.).
-        for (const attachment of result.created) {
-          deps.emit(req, networkId, 'attachment.created', { attachment });
-        }
-        sendSuccess(reply, result);
-      },
-    );
 
     app.patch(
       '/networks/:networkId/attachments/:id',

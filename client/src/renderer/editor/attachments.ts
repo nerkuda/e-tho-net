@@ -19,7 +19,7 @@
 import type { Attachment } from '@etn/shared';
 
 import { invalidateIndicators, invalidateRef } from '../canvas/canvas.js';
-import { closeDialog, confirmDialog, field, showDialog } from '../lib/dialog.js';
+import { confirmDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, isHttpUrl, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { ICON_MAX_BYTES, dataUrlBytes, makeIconPreview } from '../lib/image-preview.js';
@@ -27,7 +27,7 @@ import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
-import { firstPickedThoughtId, pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
+import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { etnimgUrl, createMarkdownField, guessMimeFromName } from './markdown-field.js';
 import {
   refreshTabCount,
@@ -57,19 +57,6 @@ export function registerAttachmentsTab(): void {
 /** True for image files (server-stored or client-local). */
 function isImageFile(a: Attachment): boolean {
   return a.kind === 'file' && (a.mime_type ?? '').startsWith('image/');
-}
-
-/**
- * Picks one of three Russian noun forms by `n` (mod 10 / mod 100):
- * `['мысль', 'мысли', 'мыслей']` → 1 мысль, 3 мысли, 5 мыслей. Local helper
- * for the «Скопировано в N мыслей…» notice; not exposed.
- */
-function pluralRu(n: number, forms: [string, string, string]): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return forms[0];
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return forms[1];
-  return forms[2];
 }
 
 /** True for URL attachments pointing at common image formats. */
@@ -555,39 +542,6 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     }
   }
 
-  /**
-   * «Скопировать в мысли…» — multi-pick destination thoughts (workplan L25).
-   * The server creates one new attachment row per target, all sharing the
-   * source's `url`/`file_path` (no file duplication). Duplicates in targets
-   * that already own the same `kind+url/file_path` are skipped silently.
-   */
-  async function copyToThoughts(attachment: Attachment): Promise<void> {
-    const result = await pickThoughtsDialog({
-      networkId,
-      allowCreate: false,
-      allowLinkType: false,
-    });
-    const targetIds = pickedThoughtIds(result).filter((id) => id !== attachment.owner_id);
-    if (targetIds.length === 0) return;
-    try {
-      const copyResult = await etn.attachments.copy(networkId, attachment.id, {
-        target_owner_type: 'thought',
-        target_owner_ids: targetIds,
-      });
-      for (const created of copyResult.created) {
-        invalidateIndicators(created.owner_id);
-      }
-      const created = copyResult.created.length;
-      const skipped = copyResult.skipped.length;
-      const parts: string[] = [];
-      if (created > 0) parts.push(`Скопировано в ${created} ${pluralRu(created, ['мысль', 'мысли', 'мыслей'])}`);
-      if (skipped > 0) parts.push(`уже было в ${skipped}`);
-      notice(parts.join(', ') + '.');
-    } catch (err) {
-      notice(`Не удалось скопировать: ${errText(err)}`, 'error');
-    }
-  }
-
   /** «Удалить» — removes the row (and the server-stored file). */
   async function removeAttachment(attachment: Attachment): Promise<void> {
     const name = attachment.title ?? attachment.url ?? attachment.file_path ?? '—';
@@ -636,10 +590,6 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       onClick: () => void moveToThought(attachment),
     });
     items.push({
-      label: 'Скопировать в мысли…',
-      onClick: () => void copyToThoughts(attachment),
-    });
-    items.push({
       label: 'Удалить…',
       danger: true,
       onClick: () => void removeAttachment(attachment),
@@ -649,19 +599,6 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
 
   /** Opens the add-attachment dialog. */
   function openAddDialog(): void {
-    // --- tab switcher --------------------------------------------------------
-    // «Создать новое» — the classic form (URL/path + title + description).
-    // «Найти существующее» — network-wide search by title/description/url/file_path,
-    // reuses an existing attachment instead of uploading a fresh copy (L25).
-    const tabCreate = el('input');
-    tabCreate.type = 'radio';
-    tabCreate.name = 'att-tab';
-    tabCreate.checked = true;
-    const tabSearch = el('input');
-    tabSearch.type = 'radio';
-    tabSearch.name = 'att-tab';
-
-    // --- create panel (the classic form) ------------------------------------
     const kindUrl = el('input');
     kindUrl.type = 'radio';
     kindUrl.name = 'att-kind';
@@ -714,8 +651,8 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     fileLabel.append(kindFile, span('Файл (путь)'));
     kindRow.append(urlLabel, fileLabel);
 
-    const createPanel = div('att-tab-panel');
-    createPanel.append(
+    const body = div('form-stack');
+    body.append(
       field('Тип', kindRow),
       field('Адрес / путь', locationRow),
       field('Заголовок (необязательно)', titleInput),
@@ -723,121 +660,10 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
       errorLine,
     );
 
-    // --- search panel --------------------------------------------------------
-    const searchInput = el('input', 'text-input');
-    searchInput.type = 'text';
-    searchInput.placeholder = 'Название, файл, URL, комментарий…';
-    const searchResults = div('att-search-results');
-    const searchHint = el('p', 'muted att-search-hint', 'Введите запрос для поиска по сети.');
-    searchResults.append(searchHint);
-    const searchError = span('', 'error-text');
-
-    const searchPanel = div('att-tab-panel hidden');
-    searchPanel.append(
-      field('Поиск', searchInput),
-      searchResults,
-      searchError,
-    );
-
-    // Debounced search: 250 ms after the last keystroke. We remember the latest
-    // request id so out-of-order replies don't overwrite newer results.
-    let searchSeq = 0;
-    let searchDebounce: ReturnType<typeof setTimeout> | null = null;
-    function scheduleSearch(): void {
-      if (searchDebounce !== null) clearTimeout(searchDebounce);
-      const seq = ++searchSeq;
-      const q = searchInput.value.trim();
-      searchResults.replaceChildren(el('p', 'muted', 'Поиск…'));
-      if (q === '') {
-        searchResults.replaceChildren(el('p', 'muted', 'Введите запрос.'));
-        return;
-      }
-      searchDebounce = setTimeout(() => {
-        void runSearch(seq, q);
-      }, 250);
-    }
-    async function runSearch(seq: number, q: string): Promise<void> {
-      try {
-        const hits = await etn.attachments.search(networkId, {
-          q,
-          exclude_owner_type: ctx.ownerType,
-          exclude_owner_id: ctx.ownerId,
-        });
-        if (seq !== searchSeq) return;
-        renderSearchResults(hits);
-      } catch (err) {
-        if (seq !== searchSeq) return;
-        searchError.textContent = errText(err);
-        searchResults.replaceChildren();
-      }
-    }
-    function renderSearchResults(hits: Attachment[]): void {
-      searchError.textContent = '';
-      searchResults.replaceChildren();
-      if (hits.length === 0) {
-        searchResults.append(el('p', 'muted', 'Ничего не найдено.'));
-        return;
-      }
-      for (const attachment of hits) {
-        const item = buildAttachmentItem(attachment);
-        item.classList.add('att-search-result');
-        item.addEventListener('click', () => void reuseAttachment(attachment));
-        searchResults.append(item);
-      }
-    }
-    /**
-     * Reuses the chosen attachment: creates a new row for the current owner
-     * with the same visible fields. The server does not duplicate the file —
-     * a second row simply references the same `url`/`file_path`.
-     */
-    async function reuseAttachment(attachment: Attachment): Promise<void> {
-      try {
-        await etn.attachments.add(networkId, ctx.ownerType, ctx.ownerId, {
-          kind: attachment.kind,
-          url: attachment.kind === 'url' ? attachment.url : null,
-          file_path: attachment.kind === 'file' ? attachment.file_path : null,
-          file_size: attachment.file_size,
-          mime_type: attachment.mime_type,
-          title: attachment.title,
-          description: attachment.description,
-        });
-        invalidateIndicators(ctx.ownerId);
-        closeDialog();
-        await reload();
-      } catch (err) {
-        searchError.textContent = errText(err);
-      }
-    }
-    searchInput.addEventListener('input', scheduleSearch);
-
-    // --- tabs ---------------------------------------------------------------
-    const tabRow = div('form-row');
-    const createLabel = el('label', 'checkbox-row');
-    createLabel.append(tabCreate, span('Создать новое'));
-    const searchLabel = el('label', 'checkbox-row');
-    searchLabel.append(tabSearch, span('Найти существующее'));
-    tabRow.append(createLabel, searchLabel);
-
-    const applyTabs = (): void => {
-      if (tabCreate.checked) {
-        createPanel.classList.remove('hidden');
-        searchPanel.classList.add('hidden');
-      } else {
-        createPanel.classList.add('hidden');
-        searchPanel.classList.remove('hidden');
-        searchInput.focus();
-      }
-    };
-    tabCreate.addEventListener('change', applyTabs);
-    tabSearch.addEventListener('change', applyTabs);
-
-    const body = div('form-stack');
-    body.append(field('Режим', tabRow), createPanel, searchPanel);
-
     showDialog({
       title: 'Добавить вложение',
       body,
-      width: 520,
+      width: 480,
       buttons: [
         { label: 'Отмена' },
         {
@@ -845,9 +671,6 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
           primary: true,
           keepOpen: true,
           onClick: (close) => {
-            // The «Добавить» button only applies to the «Создать новое» tab —
-            // the search tab commits immediately on row click.
-            if (!tabCreate.checked) return;
             void (async () => {
               const kind = kindFile.checked ? 'file' : 'url';
               const location = locationInput.value.trim();

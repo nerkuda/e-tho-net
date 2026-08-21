@@ -1301,49 +1301,6 @@ export class RestClient {
     );
   }
 
-  /**
-   * `POST /networks/{nid}/attachments/{id}/copy` — copy the attachment to one
-   * or more target owners (workplan L25). Each target receives a new row with
-   * the same visible fields; targets that already own the same attachment
-   * (`same kind + same url/file_path`) are skipped silently and reported via
-   * `skipped`.
-   */
-  public async copyAttachment(
-    networkId: string,
-    attachmentId: string,
-    input: import('@etn/shared').AttachmentCopyInput,
-    opts?: RequestOptions,
-  ): Promise<import('@etn/shared').AttachmentCopyResult> {
-    return this.request(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/attachments/${encodeURIComponent(attachmentId)}/copy`,
-      { body: input, requestOptions: opts },
-    );
-  }
-
-  /**
-   * `GET /networks/{nid}/attachments?q=…&exclude_owner_*=…&kind=…&limit=&offset=`
-   * — network-wide attachment search (workplan L25). Used by the editor's
-   * "Найти существующее" tab to suggest rows the user can reuse instead of
-   * uploading a fresh copy.
-   */
-  public async searchAttachments(
-    networkId: string,
-    query: import('@etn/shared').AttachmentSearchQuery,
-  ): Promise<import('@etn/shared').Attachment[]> {
-    const q: QueryRecord = { q: query.q };
-    if (query.kind !== undefined) q['kind'] = query.kind;
-    if (query.exclude_owner_type !== undefined) q['exclude_owner_type'] = query.exclude_owner_type;
-    if (query.exclude_owner_id !== undefined) q['exclude_owner_id'] = query.exclude_owner_id;
-    if (query.limit !== undefined) q['limit'] = query.limit;
-    if (query.offset !== undefined) q['offset'] = query.offset;
-    return this.request(
-      'GET',
-      `/networks/${encodeURIComponent(networkId)}/attachments`,
-      { query: q },
-    );
-  }
-
   // -------------------------------------------------------------------------
   // §12–13 Search & mentions
   // -------------------------------------------------------------------------

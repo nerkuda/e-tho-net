@@ -20,20 +20,15 @@ import path from 'node:path';
 import {
   ATTACHMENT_KINDS,
   ATTACHMENT_OWNER_TYPES,
-  buildLikePattern,
   EtnError,
-  parseFilterKeywords,
   type Attachment,
   type AttachmentContent,
   type AttachmentContentUpdateInput,
   type AttachmentContentUpdateResult,
-  type AttachmentCopyInput,
-  type AttachmentCopyResult,
   type AttachmentFileInput,
   type AttachmentInput,
   type AttachmentKind,
   type AttachmentOwnerType,
-  type AttachmentSearchQuery,
   type AttachmentUpdateInput,
 } from '@etn/shared';
 
@@ -326,185 +321,6 @@ export function createAttachmentFile(
     },
     actorUserId,
   );
-}
-
-/**
- * Copy an attachment to one or more target owners (03-server-api.md §11,
- * workplan L25). Each target gets a brand-new row carrying the same visible
- * fields as the source (`kind`/`url`/`file_path`/`mime_type`/`title`/
- * `description`/`icon`/`file_size`); the underlying file is **not** duplicated —
- * a `kind='file'` row simply references the same `file_path`, so the server's
- * existing rule "file is removed only when nobody uses it" (deleteAttachment,
- * L16 icon cleanup) applies without change.
- *
- * Targets that already own an attachment with the same `kind` and the same
- * `url`/`file_path` are skipped silently and reported via `skipped`.
- *
- * Throws:
- *   * `NOT_FOUND` (404) if the source attachment does not exist;
- *   * `VALIDATION_ERROR` (422) if any target owner id does not exist.
- *
- * The whole batch runs in a single transaction — either every new row is
- * inserted or none are.
- *
- * @param actorUserId - user creating the copies (recorded as `created_by`).
- */
-export function copyAttachment(
-  ndb: NetworkDb,
-  sourceId: string,
-  input: AttachmentCopyInput,
-  actorUserId: string,
-): AttachmentCopyResult {
-  const targetOwnerType = validateOwnerType(input.target_owner_type);
-  // Link owners are intentionally not supported yet: the workplan task scope is
-  // "copy attachment to other thoughts". When support is added, the route
-  // handler will switch to validateOwnerType unconditionally.
-  if (targetOwnerType !== 'thought') {
-    throw new EtnError('VALIDATION_ERROR', 'target_owner_type must be "thought"', {
-      field: 'target_owner_type',
-    });
-  }
-  const targetIds = Array.from(new Set(input.target_owner_ids));
-  if (targetIds.length === 0) {
-    return { created: [], skipped: [] };
-  }
-  return ndb.transaction(() => {
-    const source = getAttachmentOrThrow(ndb, sourceId);
-    // All targets must exist before any row is written — 422 names the first
-    // missing id so the client can show a precise error.
-    const placeholders = targetIds.map(() => '?').join(', ');
-    const existingThoughtIds = new Set(
-      (
-        ndb
-          .prepare(`SELECT id FROM thoughts WHERE id IN (${placeholders})`)
-          .all(...targetIds) as { id: string }[]
-      ).map((r) => r.id),
-    );
-    for (const id of targetIds) {
-      if (!existingThoughtIds.has(id)) {
-        throw new EtnError('VALIDATION_ERROR', `thought ${id} not found`, {
-          field: 'target_owner_ids',
-          missing: id,
-        });
-      }
-    }
-    // Detect duplicates in one pass: same owner + same kind + same url/file_path.
-    // The url/file_path leg is split by kind to keep NULL-handling clean in SQL.
-    const dupRows = ndb
-      .prepare(
-        `SELECT owner_id FROM attachments
-         WHERE owner_type = ? AND kind = ? AND owner_id IN (${placeholders})
-           AND ((? IS NOT NULL AND url = ?) OR (? IS NULL AND file_path = ?))`,
-      )
-      .all(
-        targetOwnerType,
-        source.kind,
-        ...targetIds,
-        source.url,
-        source.url,
-        source.file_path,
-        source.file_path,
-      ) as { owner_id: string }[];
-    const duplicateIds = new Set(dupRows.map((r) => r.owner_id));
-
-    const now = new Date().toISOString();
-    const created: Attachment[] = [];
-    const skipped: string[] = [];
-    const insertStmt = ndb.prepare(
-      `INSERT INTO attachments (id, owner_type, owner_id, kind, url, file_path,
-                               file_size, mime_type, title, description, icon,
-                               position, created_at, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    const selectById = ndb.prepare('SELECT * FROM attachments WHERE id = ? LIMIT 1');
-    for (const targetId of targetIds) {
-      if (duplicateIds.has(targetId)) {
-        skipped.push(targetId);
-        continue;
-      }
-      const newId = randomUUID();
-      insertStmt.run(
-        newId,
-        targetOwnerType,
-        targetId,
-        source.kind,
-        source.kind === 'url' ? source.url : null,
-        source.kind === 'file' ? source.file_path : null,
-        source.file_size,
-        source.mime_type,
-        source.title,
-        source.description,
-        source.icon,
-        0,
-        now,
-        actorUserId,
-      );
-      const row = selectById.get(newId) as AttachmentRow | undefined;
-      if (row !== undefined) created.push(rowToAttachment(row));
-    }
-    return { created, skipped };
-  });
-}
-
-/**
- * Search attachments across the whole network by keywords (03-server-api.md §11,
- * workplan L25). `q` is required and uses the same mini-syntax as the thought
- * search (§6.10): AND of include-words, `-word` exclusion, `*` infix wildcard;
- * every include word must match somewhere in the union of `title`,
- * `description`, `url`, `file_path` (case-insensitive LIKE).
- *
- * Used by the editor's «Найти существующее» dialog tab to suggest attachments
- * the user can reuse instead of uploading a fresh copy. The `exclude_owner_*`
- * pair hides rows that already belong to the active owner.
- *
- * No FTS index exists on `attachments`; the search runs as parameterised LIKE.
- * Result order is `created_at DESC` (most recent first).
- */
-export function searchAttachments(
-  ndb: NetworkDb,
-  query: AttachmentSearchQuery,
-): { items: Attachment[]; total: number } {
-  const keywords = parseFilterKeywords(query.q ?? '');
-  if (keywords.include.length === 0) {
-    return { items: [], total: 0 };
-  }
-  const limit = typeof query.limit === 'number' ? Math.max(0, Math.min(200, Math.trunc(query.limit))) : 50;
-  const offset = typeof query.offset === 'number' ? Math.max(0, Math.trunc(query.offset)) : 0;
-
-  const where: string[] = [];
-  const params: unknown[] = [];
-  const fieldConcat =
-    "LOWER(COALESCE(title, '') || '\n' || COALESCE(description, '') || '\n' || COALESCE(url, '') || '\n' || COALESCE(file_path, ''))";
-  for (const word of keywords.include) {
-    const pattern = buildLikePattern(word).toLowerCase();
-    where.push(`${fieldConcat} LIKE ? ESCAPE '\\'`);
-    params.push(pattern);
-  }
-  for (const word of keywords.exclude) {
-    const pattern = buildLikePattern(word).toLowerCase();
-    where.push(`${fieldConcat} NOT LIKE ? ESCAPE '\\'`);
-    params.push(pattern);
-  }
-  if (query.kind !== undefined) {
-    where.push('kind = ?');
-    params.push(query.kind);
-  }
-  if (query.exclude_owner_type !== undefined && query.exclude_owner_id !== undefined) {
-    where.push('NOT (owner_type = ? AND owner_id = ?)');
-    params.push(query.exclude_owner_type, query.exclude_owner_id);
-  }
-
-  const whereSql = where.join(' AND ');
-  const totalRow = ndb
-    .prepare(`SELECT COUNT(*) AS n FROM attachments WHERE ${whereSql}`)
-    .get(...params) as { n: number };
-  const rows = ndb
-    .prepare(
-      `SELECT * FROM attachments WHERE ${whereSql}
-       ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-    )
-    .all(...params, limit, offset) as AttachmentRow[];
-  return { items: rows.map(rowToAttachment), total: totalRow.n };
 }
 
 /**

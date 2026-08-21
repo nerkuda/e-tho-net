@@ -756,22 +756,6 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       ) => requireRest(deps).updateAttachmentContent(networkId, id, input),
     ),
   );
-  handlers.set(
-    'attachments.copy',
-    bind(
-      (
-        networkId: string,
-        attachmentId: string,
-        input: Parameters<RestClient['copyAttachment']>[2],
-      ) => requireRest(deps).copyAttachment(networkId, attachmentId, input),
-    ),
-  );
-  handlers.set(
-    'attachments.search',
-    bind((networkId: string, query: Parameters<RestClient['searchAttachments']>[1]) =>
-      requireRest(deps).searchAttachments(networkId, query),
-    ),
-  );
 
   // --- admin -----------------------------------------------------------------
   handlers.set(

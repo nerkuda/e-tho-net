@@ -2657,32 +2657,6 @@ body.cloud-dragging * {
   font-size: 11px;
 }
 
-/* «Добавить вложение» — вкладки (workplan L25). */
-.att-tab-panel.hidden {
-  display: none;
-}
-
-.att-search-results {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  max-height: 240px;
-  overflow-y: auto;
-}
-
-.att-search-results .att-search-hint {
-  padding: 8px 10px;
-}
-
-.att-search-result {
-  cursor: pointer;
-}
-
-.att-search-result:hover {
-  background: var(--surface-2);
-}
-
 /* Attachment rows open the context menu on right-click (08-ui-spec §6.5). */
 .attachment-item {
   cursor: context-menu;

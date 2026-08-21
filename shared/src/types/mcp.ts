@@ -49,8 +49,6 @@ export const MCP_TOOL_NAMES = [
   'etn.comments.update',
   'etn.comments.delete',
   'etn.attachments.add',
-  'etn.attachments.copy',
-  'etn.attachments.search',
   'etn.properties.set',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
@@ -195,30 +193,6 @@ export interface McpAttachmentsAddParams {
   file_path?: string | null;
   title?: string | null;
   description?: string | null;
-}
-
-/**
- * Parameters of `etn.attachments.copy` (05-mcp-server.md §4.2, workplan L25).
- * Each `target_owner_ids[i]` receives a new attachment row with the same
- * visible fields as the source; duplicates in a target thought are skipped
- * silently. Returns one `McpMutationResult` per created row.
- */
-export interface McpAttachmentsCopyParams {
-  network_id: string;
-  attachment_id: string;
-  target_owner_type: AttachmentOwnerType;
-  target_owner_ids: string[];
-}
-
-/** Parameters of `etn.attachments.search` (05-mcp-server.md §4.2, workplan L25). */
-export interface McpAttachmentsSearchParams {
-  network_id: string;
-  q: string;
-  kind?: AttachmentKind;
-  exclude_owner_type?: AttachmentOwnerType;
-  exclude_owner_id?: string;
-  limit?: number;
-  offset?: number;
 }
 
 /** Parameters of `etn.properties.set` (05-mcp-server.md §4.2). */

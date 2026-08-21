@@ -172,9 +172,6 @@ function buildApi(): EtnApi {
       getContent: (networkId, id) => invoke('attachments.getContent', networkId, id),
       updateContent: (networkId, id, input) =>
         invoke('attachments.updateContent', networkId, id, input),
-      copy: (networkId, attachmentId, input) =>
-        invoke('attachments.copy', networkId, attachmentId, input),
-      search: (networkId, query) => invoke('attachments.search', networkId, query),
     },
     admin: {
       listUsers: () => invoke('admin.listUsers'),
