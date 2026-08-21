@@ -334,8 +334,13 @@ POST /api/v1/networks/{nid}/thoughts/query
 
 - **Пустой фильтр** (нет ни одного из `keywords`, `parent_ids`, `type_ids`,
   `link_type_ids`, `properties`, `has_properties`, `has_comment`,
-  `has_attachments`, `has_chronology`, `active`) возвращает ровно одну мысль —
-  HOME (`is_root=1`), `meta.total=1`.
+  `has_attachments`, `has_chronology`, `active`) возвращает начальную мысль
+  сети HOME (`is_root=1`, всегда первой) и всех «сирот» — мысли без
+  родительских связей (нет ни одной active-связи, где мысль является целью).
+  Сироты идут за HOME в выбранной сортировке; `show_inactive` действует как
+  обычно (неактуальные сироты попадают в результат только при
+  `show_inactive: true`); `meta.total` = HOME + все сироты, `limit`/`offset`
+  пагинируют объединённый список.
 - `meta.directions` — `{ "<thought_id>": { has_incoming, has_outgoing }, ... }`
   для всех мыслей страницы: наличие active входящих/исходящих связей. Клиент
   закрашивает эллипсы корней дерева сразу после отбора (та же семантика, что
