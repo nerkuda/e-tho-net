@@ -22,6 +22,11 @@ import type {
 } from '../enums.js';
 import type { CommentUpdateInput } from './comment.js';
 import type { PropertyValueValue } from './thought-type.js';
+import type {
+  ThoughtBundleMatchKind,
+  ThoughtBundleOnDuplicate,
+  ThoughtBundleThoughtAction,
+} from './thought-bundle.js';
 
 /** All tool names exposed by the ETN MCP server (05-mcp-server.md §4). */
 export const MCP_TOOL_NAMES = [
@@ -50,6 +55,7 @@ export const MCP_TOOL_NAMES = [
   'etn.comments.delete',
   'etn.attachments.add',
   'etn.properties.set',
+  'etn.thoughts.upsert_bundle',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -202,6 +208,52 @@ export interface McpPropertiesSetParams {
   owner_id: string;
   key: string;
   value: PropertyValueValue;
+}
+
+/** Parameters of `etn.thoughts.upsert_bundle` (05-mcp-server.md §4.2a). */
+export interface McpUpsertBundleParams {
+  network_id: string;
+  /** Existing thought to augment in-place; mutually exclusive with `thought`
+   *  being the sole way to address a target (exactly one of the two required). */
+  thought_id?: string;
+  thought?: {
+    title: string;
+    synonyms?: string[];
+    type_id?: string | null;
+    active?: boolean;
+  };
+  /** Only consulted when `thought_id` is absent and `find_duplicates` matches. */
+  on_duplicate?: ThoughtBundleOnDuplicate;
+  /** Always the owner's permanent comment (create-or-update). */
+  comment?: {
+    title?: string | null;
+    body_md: string;
+    valid_from?: string;
+    valid_to?: string | null;
+  };
+  properties?: Record<string, PropertyValueValue>;
+  links?: Array<{
+    direction: 'parent' | 'child';
+    target_thought_id: string;
+    type_id?: string | null;
+  }>;
+  attachments?: Array<{
+    kind: AttachmentKind;
+    url?: string | null;
+    file_path?: string | null;
+    title?: string | null;
+    description?: string | null;
+  }>;
+}
+
+/** Result of `etn.thoughts.upsert_bundle` (05-mcp-server.md §4.2a). */
+export interface McpUpsertBundleResult extends McpMutationResult {
+  thought_action: ThoughtBundleThoughtAction;
+  matched_on: ThoughtBundleMatchKind | null;
+  comment?: { id: string; version: number };
+  properties?: Record<string, { id: string }>;
+  links?: Array<{ id: string; version: number }>;
+  attachments?: Array<{ id: string }>;
 }
 
 /** `dir` parameter shared by read tools that accept a direction. */

@@ -1,11 +1,11 @@
 /**
  * MCP tools (task F4, docs/05-mcp-server.md §4).
  *
- * Twenty-four tools in three groups:
+ * Twenty-five tools in three groups:
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
  *     path, links get, mentions, usage, comments get, export;
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert/update/delete,
- *     attachments.add, properties.set, set_active;
+ *     attachments.add, properties.set, set_active, thoughts.upsert_bundle;
  *   * dedupe (§4.3) — find_duplicates.
  *
  * Mutating tools are facades over the **same domain services as REST**
@@ -34,6 +34,7 @@ import {
   TRAVERSAL_DEFAULTS,
   type ExportFormat,
   type McpMutationResult,
+  type McpUpsertBundleResult,
 } from '@etn/shared';
 
 import {
@@ -59,6 +60,7 @@ import {
   setPropertyValue,
 } from '../domain/property-service.js';
 import { findDuplicates, findMentions, resolveThoughts, search } from '../domain/search-service.js';
+import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
 import { queryThoughts } from '../domain/query-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
 import { linkTypeCatalog, thoughtTypeCatalog } from './catalogs.js';
@@ -117,7 +119,7 @@ const ThoughtChanges = z
 // ---------------------------------------------------------------------------
 
 /**
- * Register all twenty-four `etn.*` tools on a freshly built {@link McpServer}.
+ * Register all twenty-five `etn.*` tools on a freshly built {@link McpServer}.
  */
 export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
@@ -1067,6 +1069,174 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           version: 0,
           request_id: String(extra.requestId),
         } satisfies McpMutationResult;
+      }),
+  );
+
+  const BundleThoughtSchema = z.object({
+    title: z.string().min(1),
+    synonyms: z.array(z.string().min(1)).optional(),
+    type_id: z.string().min(1).nullable().optional(),
+    active: z.boolean().optional(),
+  });
+  const BundleCommentSchema = z.object({
+    title: z.string().nullable().optional(),
+    body_md: z.string().min(1),
+    valid_from: z.string().min(1).optional(),
+    valid_to: z.string().nullable().optional(),
+  });
+  const BundleLinkSchema = z.object({
+    direction: z.enum(['parent', 'child']),
+    target_thought_id: ThoughtId,
+    type_id: z.string().min(1).nullable().optional(),
+  });
+  const BundleAttachmentSchema = z.object({
+    kind: z.enum(ATTACHMENT_KINDS),
+    url: z.string().min(1).nullable().optional(),
+    file_path: z.string().min(1).nullable().optional(),
+    title: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+  });
+  const UpsertBundleSchema = z
+    .object({
+      network_id: NetworkId,
+      thought_id: ThoughtId.optional(),
+      thought: BundleThoughtSchema.optional(),
+      on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
+      comment: BundleCommentSchema.optional(),
+      properties: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+      links: z.array(BundleLinkSchema).optional(),
+      attachments: z.array(BundleAttachmentSchema).optional(),
+    })
+    .refine((v) => v.thought_id !== undefined || v.thought !== undefined, {
+      message: 'either thought_id or thought must be provided',
+    });
+  mcp.registerTool(
+    'etn.thoughts.upsert_bundle',
+    {
+      title: 'Составная запись «единицы знания»',
+      description:
+        'Create (or, via `thought_id`/`on_duplicate`, augment) a thought together with its ' +
+        'permanent comment, a map of property values, links and attachments — one atomic ' +
+        'transaction, one write-budget slot. `thought_id` addresses an existing thought to ' +
+        'augment in place; otherwise `thought.title`/`synonyms` are matched with the same ' +
+        'logic as `etn.thoughts.find_duplicates`, and `on_duplicate` decides what happens on a ' +
+        "match: `fail` (default) errors with `candidates`, `reuse` attaches the bundle's other " +
+        "parts to the existing thought unchanged, `update` also patches the thought's fields. " +
+        'Returns { id, version, thought_action, matched_on, comment?, properties?, links?, attachments? }.',
+      inputSchema: UpsertBundleSchema,
+    },
+    (args, extra) =>
+      runTool(async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const result = upsertThoughtBundle(
+          ndb,
+          {
+            ...(args.thought_id === undefined ? {} : { thought_id: args.thought_id }),
+            ...(args.thought === undefined ? {} : { thought: args.thought }),
+            ...(args.on_duplicate === undefined ? {} : { on_duplicate: args.on_duplicate }),
+            ...(args.comment === undefined ? {} : { comment: args.comment }),
+            ...(args.properties === undefined ? {} : { properties: args.properties }),
+            ...(args.links === undefined ? {} : { links: args.links }),
+            ...(args.attachments === undefined
+              ? {}
+              : {
+                  attachments: args.attachments.map((a) => ({
+                    kind: a.kind,
+                    url: a.url ?? null,
+                    file_path: a.file_path ?? null,
+                    title: a.title ?? null,
+                    description: a.description ?? null,
+                  })),
+                }),
+          },
+          rt.deps.auth.userId,
+        );
+
+        if (result.thought_action === 'created') {
+          emitAgentEvent(rt, args.network_id, 'thought.created', { thought: result.thought }, extra.requestId);
+        } else if (result.thought_action === 'updated') {
+          emitAgentEvent(
+            rt,
+            args.network_id,
+            'thought.updated',
+            { id: result.thought.id, changes: args.thought ?? {}, version: result.thought.version },
+            extra.requestId,
+          );
+        }
+        if (result.comment !== undefined) {
+          if (result.comment_action === 'created') {
+            emitAgentEvent(rt, args.network_id, 'comment.created', { comment: result.comment }, extra.requestId);
+          } else {
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'comment.updated',
+              {
+                id: result.comment.id,
+                changes: {
+                  ...(args.comment?.title === undefined ? {} : { title: args.comment.title }),
+                  body_md: args.comment?.body_md,
+                },
+                version: result.comment.version,
+              },
+              extra.requestId,
+            );
+          }
+        }
+        if (result.properties !== undefined) {
+          for (const stored of Object.values(result.properties)) {
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'property-value.set',
+              {
+                owner_type: 'thought',
+                owner_id: result.thought.id,
+                property_id: stored.property_id,
+                value: stored.value,
+              },
+              extra.requestId,
+            );
+          }
+        }
+        if (result.links !== undefined) {
+          for (const link of result.links) {
+            emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId);
+          }
+        }
+        if (result.attachments !== undefined) {
+          for (const attachment of result.attachments) {
+            emitAgentEvent(rt, args.network_id, 'attachment.created', { attachment }, extra.requestId);
+          }
+        }
+
+        auditAgentCall(rt, 'etn.thoughts.upsert_bundle', args.network_id, 'thought', result.thought.id, args);
+
+        return {
+          id: result.thought.id,
+          version: result.thought.version,
+          thought_action: result.thought_action,
+          matched_on: result.matched_on,
+          ...(result.comment === undefined
+            ? {}
+            : { comment: { id: result.comment.id, version: result.comment.version } }),
+          ...(result.properties === undefined
+            ? {}
+            : {
+                properties: Object.fromEntries(
+                  Object.entries(result.properties).map(([key, v]) => [key, { id: v.id }]),
+                ),
+              }),
+          ...(result.links === undefined
+            ? {}
+            : { links: result.links.map((l) => ({ id: l.id, version: l.version })) }),
+          ...(result.attachments === undefined
+            ? {}
+            : { attachments: result.attachments.map((a) => ({ id: a.id })) }),
+          request_id: String(extra.requestId),
+        } satisfies McpUpsertBundleResult;
       }),
   );
 

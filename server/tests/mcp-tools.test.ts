@@ -787,4 +787,151 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       await closeMcpContext(ctx);
     }
   });
+
+  it('etn.thoughts.upsert_bundle writes thought+comment+property+link+attachment ' +
+    'atomically, emits one realtime event per entity and one audit row (O1)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const events: AnyRealtimeEvent[] = [];
+      const unsubscribe = ctx.pubsub.subscribe(ctx.networkId, (event) => {
+        events.push(event as unknown as AnyRealtimeEvent);
+      });
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const res = await handle.client.callTool({
+            name: 'etn.thoughts.upsert_bundle',
+            arguments: {
+              network_id: ctx.networkId,
+              thought: { title: 'Дюна' },
+              comment: { body_md: 'Роман Фрэнка Герберта.' },
+              links: [{ direction: 'child', target_thought_id: ctx.homeId }],
+              attachments: [{ kind: 'url', url: 'https://example.com/dune' }],
+            },
+          });
+          assert.equal(res.isError, undefined, res.isError === true ? toolText(res) : undefined);
+          const result = toolJson<{
+            id: string;
+            version: number;
+            thought_action: string;
+            matched_on: string | null;
+            comment?: { id: string; version: number };
+            links?: Array<{ id: string; version: number }>;
+            attachments?: Array<{ id: string }>;
+          }>(res);
+          assert.equal(result.thought_action, 'created');
+          assert.equal(result.matched_on, null);
+          assert.ok(result.comment !== undefined);
+          assert.equal(result.links?.length, 1);
+          assert.equal(result.attachments?.length, 1);
+
+          const count = openNetworkDb(ctx.dataDir, ctx.networkId)
+            .prepare('SELECT COUNT(*) AS c FROM thoughts')
+            .get() as { c: number };
+          assert.equal(count.c, 2); // HOME + Дюна
+        } finally {
+          await handle.close();
+        }
+
+        const types = events.map((e) => e.type).sort();
+        assert.deepEqual(types, [
+          'attachment.created',
+          'comment.created',
+          'link.created',
+          'thought.created',
+        ]);
+      } finally {
+        unsubscribe();
+      }
+
+      // A five-entity bundle writes exactly one audit row (O1/O8: bundle = 1 record).
+      const audit = ctx.sys.queryAudit({ category: 'data' });
+      assert.equal(audit.length, 1);
+      assert.equal(audit[0]?.action, 'etn.thoughts.upsert_bundle');
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thoughts.upsert_bundle: on_duplicate="fail" rejects with candidates, ' +
+    'nothing is written mid-bundle (atomicity, O1)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const first = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: { network_id: ctx.networkId, thought: { title: 'Конкуренты 1С' } },
+        });
+        assert.equal(first.isError, undefined);
+
+        const second = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: {
+            network_id: ctx.networkId,
+            thought: { title: 'Конкуренты 1С' },
+            comment: { body_md: 'Не должно записаться.' },
+          },
+        });
+        assert.equal(second.isError, true);
+        assert.match(toolText(second), /DUPLICATE/);
+
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const thoughts = ndb
+          .prepare("SELECT COUNT(*) AS c FROM thoughts WHERE title = 'Конкуренты 1С'")
+          .get() as { c: number };
+        assert.equal(thoughts.c, 1, 'no second thought was created');
+        const comments = ndb.prepare('SELECT COUNT(*) AS c FROM comments').get() as { c: number };
+        assert.equal(comments.c, 0, 'the comment must not have been written');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thoughts.upsert_bundle: a bundle costs exactly one write-budget slot ' +
+    'regardless of how many entities it touches (O1/O8)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      ctx.rawDb
+        .prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)')
+        .run('mcp.max_writes_per_minute', '2', new Date().toISOString());
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const bundleArgs = (title: string): Record<string, unknown> => ({
+          network_id: ctx.networkId,
+          thought: { title },
+          comment: { body_md: 'x' },
+          links: [{ direction: 'child', target_thought_id: ctx.homeId }],
+          attachments: [{ kind: 'url', url: 'https://example.com/x' }],
+        });
+
+        const first = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: bundleArgs('Раз'),
+        });
+        assert.equal(first.isError, undefined, first.isError === true ? toolText(first) : undefined);
+
+        const second = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: bundleArgs('Два'),
+        });
+        assert.equal(second.isError, undefined, second.isError === true ? toolText(second) : undefined);
+
+        const third = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: bundleArgs('Три'),
+        });
+        assert.equal(third.isError, true);
+        assert.match(toolText(third), /write limit|RATE_LIMITED/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
 });
