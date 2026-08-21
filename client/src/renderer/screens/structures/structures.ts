@@ -29,12 +29,14 @@ import {
   queueIndicatorLoad,
   resolveCloudStyle,
 } from '../../canvas/canvas.js';
+import { setFocus } from '../../app.js';
 import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { edgeGeometry } from '../../canvas/links.js';
 import { ELLIPSE_INSIDE } from '../../lib/pure.js';
 import { resolveLinkTypeVisual } from '../../lib/type-tree.js';
 import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
 import { invalidateHistoryBar } from '../history-bar.js';
+import { setActiveView } from '../active-view.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
@@ -909,7 +911,15 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
     showThoughtContextMenu(
       event,
       { id: row.thoughtId, title: ref?.title ?? row.thoughtId, dir: 'siblings' },
-      { openHandler: (id) => void openStructuresThought(id) },
+      {
+        openHandler: (id) => void openStructuresThought(id),
+        findOnMapHandler: (id) => {
+          // «Найти на карте мыслей» (L23, §15.8): switch the view first so the
+          // map is visible while the focus response arrives.
+          setActiveView('map');
+          void setFocus(id);
+        },
+      },
     );
   });
   return cloud;

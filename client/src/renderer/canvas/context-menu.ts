@@ -3,8 +3,9 @@
  *
  * - thought context menu (right-click on a cloud): add parent/child/sibling,
  *   toggle activity, reorder (manual zones), change type, change icon, add
- *   attachment (focus + editor), open editor, add to selection (H16),
- *   copy/cut/paste (link creation), delete;
+ *   attachment (focus + editor), open editor, find on the map (structures
+ *   view, L23), add to selection (H16), copy/cut/paste (link creation),
+ *   delete;
  * - zone context menu: sort by alpha/created/viewed × asc/desc and manual
  *   (parents/children only) → `thoughts.setFocusPreferences`;
  * - drag-reorder: dragging a cloud to another position switches the zone to
@@ -181,14 +182,20 @@ export async function deleteLink(networkId: string, linkId: string): Promise<boo
 export function showThoughtContextMenu(
   event: MouseEvent,
   target: CloudMenuTarget,
-  opts: { openHandler?: (id: string) => void } = {},
+  opts: {
+    openHandler?: (id: string) => void;
+    findOnMapHandler?: (id: string) => void;
+  } = {},
 ): void {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   showMenuAt(
     event.clientX,
     event.clientY,
-    buildThoughtMenuItems(networkId, target, { openHandler: opts.openHandler }),
+    buildThoughtMenuItems(networkId, target, {
+      openHandler: opts.openHandler,
+      findOnMapHandler: opts.findOnMapHandler,
+    }),
   );
 }
 
@@ -211,7 +218,11 @@ export function showSelectionThoughtContextMenu(event: MouseEvent, target: Cloud
 function buildThoughtMenuItems(
   networkId: string,
   target: CloudMenuTarget,
-  opts: { hideSelectionCommand?: boolean; openHandler?: (id: string) => void } = {},
+  opts: {
+    hideSelectionCommand?: boolean;
+    openHandler?: (id: string) => void;
+    findOnMapHandler?: (id: string) => void;
+  } = {},
 ): MenuItem[] {
   const focus = store.state.focus;
   const isFocus = focus?.focused.id === target.id;
@@ -295,6 +306,16 @@ function buildThoughtMenuItems(
         else void setFocus(target.id);
       },
     },
+    ...(opts.findOnMapHandler !== undefined
+      ? [
+          {
+            // Structures-only command (L23, 08-ui-spec.md §15.8): jump to the
+            // map view with this thought focused.
+            label: 'Найти на карте мыслей',
+            onClick: () => opts.findOnMapHandler?.(target.id),
+          },
+        ]
+      : []),
     {
       // Pinned-thoughts command (L18, 08-ui-spec.md §16): available in every
       // thought menu — the canvas, the selection panel, the structures tree,
@@ -339,6 +360,9 @@ function buildThoughtMenuItems(
     },
   ];
 }
+
+/** Internals exported for unit tests. */
+export const menuInternals = { buildThoughtMenuItems };
 
 /** Type-change submenu (type tree with indents + clear; L21). */
 function buildTypeMenu(networkId: string, thoughtId: string): MenuItem[] {
