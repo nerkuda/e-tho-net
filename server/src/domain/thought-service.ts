@@ -825,7 +825,8 @@ function buildNeighborsQuery(
   const select =
     'SELECT t.id, t.title, t.type_id, t.icon, t.active, t.created_at' +
     (useViewedJoin ? ', tv.last_viewed_at' : '') +
-    (useManualJoin ? ', ufo.position' : '') +
+    // Alias is required: rowToNeighbor reads `manual_position` by name.
+    (useManualJoin ? ', ufo.position AS manual_position' : '') +
     (dir === 'siblings'
       ? ', MIN(l.id) AS link_id, MIN(l.type_id) AS link_type_id, MIN(l.active) AS link_active'
       : ', l.id AS link_id, l.type_id AS link_type_id, l.active AS link_active');
