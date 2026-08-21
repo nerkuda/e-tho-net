@@ -25,6 +25,9 @@
   /* Hover tone for accent-filled controls (primary buttons, focus ellipse). */
   --accent-strong: #245cc9;
   --accent-soft: #e4ecfd;
+  /* Selection outline of clouds picked into the selection panel — teal, so it
+   * never reads as the editor halo (§5, L22 review). */
+  --selection: #0f8f86;
   --danger: #d64545;
   --danger-soft: #fdeaea;
   --ok: #2f9e44;
@@ -118,6 +121,8 @@
   --accent: #5b8cff;
   --accent-strong: #7ba1ff;
   --accent-soft: #22304d;
+  /* Selection outline of clouds picked into the selection panel — teal. */
+  --selection: #2fbfae;
   --danger: #e06a6a;
   --danger-soft: #3a2226;
   --ok: #4cb763;
@@ -1268,8 +1273,10 @@ body.resizing-h {
   box-shadow: var(--shadow-hover);
 }
 
+/* Clouds picked into the selection panel (§5): a teal outline, clearly
+ * distinct from the editor halo of the opened thought (.cloud.halo below). */
 .cloud.selected {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--selection);
   outline-offset: 1px;
 }
 
