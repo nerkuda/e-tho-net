@@ -319,6 +319,14 @@ Real-time и `audit_log`: событие своего типа на каждую
 - `max_writes_per_minute` на пользователя — защита от runaway-агента.
 Лимиты настраиваются в `_system.db` (`settings`), на MVP — фиксированные дефолты.
 
+**Per-key переопределение (task O8).** API-ключ может нести собственный
+`max_writes_per_minute` (`api_keys.max_writes_per_minute`; `NULL` — серверный
+дефолт `mcp.max_writes_per_minute`). Задаётся при создании ключа (`POST
+/me/keys`, `POST /admin/users/{id}/keys`) и меняется админом/владельцем через
+`PATCH …/keys/{id}` (06-auth.md §6.2a–6.2b). MCP-слой резолвит эффективный
+лимит на ключ при открытии сессии; bundle-вызов `etn.thoughts.upsert_bundle`
+(O1) считается одной записью для этого лимита.
+
 ### 6.3. Режим read-only для ключа
 При создании API-key через `/me/keys` можно указать `read_only: true` — такой
 ключ пропускает только resources и read-tools. Удобно для «посмотреть — не

@@ -54,6 +54,8 @@ API-key для авторизации клиентов и MCP-агентов. У
 | `label` | TEXT | Метка («desktop», «mcp-agent») |
 | `key_hash` | TEXT NOT NULL UNIQUE | SHA-256 от ключа; сам ключ не хранится |
 | `key_prefix` | TEXT NOT NULL | Первые 8 символов ключа (для отображения `etn_abc12345…`) |
+| `read_only` | INTEGER NOT NULL DEFAULT 0 | 1 = ключу запрещены изменяющие операции (MCP read-only, 06-auth.md §6.3) |
+| `max_writes_per_minute` | INTEGER NULL | Переопределение лимита записи MCP для этого ключа (task O8); `NULL` — серверный дефолт `mcp.max_writes_per_minute` |
 | `created_at` | TEXT NOT NULL | |
 | `last_used_at` | TEXT | |
 | `disabled` | INTEGER NOT NULL DEFAULT 0 | |
