@@ -690,6 +690,36 @@ PUT    /api/v1/networks/{nid}/attachments/{id}/content
        # 422 VALIDATION_ERROR. Версионности нет (last-write-wins, как у PATCH).
        # Эмитит attachment.updated.
 → 200 { data: { html: string|null } }   # markdown-рендер нового содержимого
+
+# Копирование вложения к нескольким владельцам (workplan L25). Новая строка
+# в attachments указывает на тот же url/file_path — серверный файл не
+# дублируется, общее правило удаления файла (§11: «копия удаляется только
+# когда файл больше никем не используется») применяется as-is. Все видимые
+# поля исходного вложения (kind/url/file_path/mime_type/title/description/
+# icon/file_size) копируются в новые строки.
+POST   /api/v1/networks/{nid}/attachments/{id}/copy
+       { target_owner_type: "thought", target_owner_ids: string[] }
+       # 404 если исходное вложение не найдено; 422 если target_owner_type
+       # невалиден или хотя бы одна target_owner_id не существует.
+       # Дубликат в целевой мысли (тот же owner + тот же kind + тот же
+       # url/file_path) пропускается тихо — попадает в skipped.
+→ 200 { data: {
+       created: Attachment[],   # созданные строки (порядок = target_owner_ids)
+       skipped: string[]        # target_owner_ids, где уже было такое вложение
+     } }
+       # Эмитит attachment.created на каждую созданную строку.
+
+# Поиск вложений по сети (workplan L25). Без q возвращает пустой результат —
+# защита от случайного полного скана; полный листинг не предусмотрен.
+GET    /api/v1/networks/{nid}/attachments
+       ?q=<keywords>&exclude_owner_type=<thought|link>&exclude_owner_id=<id>
+       &kind=<url|file>&limit=50&offset=0
+       # Поиск по title, description, url, file_path (LOWER LIKE с экранированием;
+       # синтаксис q как в §12 — include-AND, `-word` — исключение). exclude_owner
+       # исключает строки указанного владельца (используется диалогом добавления
+       # в редакторе, чтобы не предлагать уже имеющиеся у мысли вложения).
+→ 200 { data: Attachment[], meta: { total: number } }
+
 # Аналогично для /links/{id}/attachments
 ```
 

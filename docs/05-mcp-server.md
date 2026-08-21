@@ -213,6 +213,17 @@ reason, thought_types }`. `depth` — расстояние от `in_subtree_of` 
 | `etn.comments.update` | Изменить комментарий по `comment_id` (chronological или permanent; last-write-wins по полям, `valid_from`/`valid_to` применяются только к chronological) | `network_id`, `comment_id`, `changes` (`title?`, `body_md?`, `valid_from?`, `valid_to?`), `expected_version?` |
 | `etn.comments.delete` | Удалить комментарий (вместе со всеми привязками к владельцам) | `network_id`, `comment_id`, `expected_version?` |
 | `etn.attachments.add` | Добавить вложение | `network_id`, `owner_type`, `owner_id`, `kind`, `url?`/`file_path?`, `title?`, `description?` |
+| `etn.attachments.copy` | Скопировать вложение в одну или несколько мыслей (workplan L25) | `network_id`, `attachment_id`, `target_owner_type: "thought"`, `target_owner_ids[]` |
+| `etn.attachments.search` | Поиск вложений сети (workplan L25) | `network_id`, `q`, `exclude_owner_type?`, `exclude_owner_id?`, `kind?`, `limit?`, `offset?` |
+
+`etn.attachments.copy` возвращает массив `McpMutationResult` — по одному на
+каждую созданную строку; цели с уже имеющимся вложением того же kind и того же
+url/file_path пропускаются без ошибки и без записи в массив (как и в
+`POST /attachments/{id}/copy`, 03-server-api.md §11).
+
+`etn.attachments.search` — read-инструмент: `q` обязателен (без него пустой
+массив), синтаксис как в §12 поиска мыслей (include-AND, `-word` исключение);
+возвращает массив `Attachment[]`.
 | `etn.properties.set` | Установить свойство | `network_id`, `owner_type`, `owner_id`, `key`, `value` |
 | `etn.thoughts.set_active` | Изменить актуальность | `network_id`, `thought_id`, `active` |
 
