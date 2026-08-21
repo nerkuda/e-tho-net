@@ -332,26 +332,48 @@ CREATE INDEX idx_user_focus_order_pos
 
 1. `SELECT sort, sort_order FROM user_focus_preferences WHERE user_id=U AND
    focus_thought_id=F AND dir=D`. Если записи нет → дефолт `created`/`asc`.
+   При `sort='manual'` серверная валидация гарантирует `sort_order='asc'`
+   (см. §3.3, [03-server-api.md](03-server-api.md) §6.8).
 2. Получить соседей (связи с соответствующей стороны).
 3. В зависимости от `sort`:
    - `alpha` → `ORDER BY title COLLATE NOCASE`
    - `created` → `ORDER BY created_at`
    - `viewed` → `LEFT JOIN thought_views ... ORDER BY last_viewed_at`
    - `manual` → `LEFT JOIN user_focus_order ... ORDER BY position NULLS LAST,
-     title` (мысли без позиции — в конце по алфавиту).
-4. Применить `sort_order` (asc/desc).
+     title` (мысли без позиции — в конце по алфавиту). `position` —
+     линейный индекс в row-major-упорядоченном списке зоны
+     ([08-ui-spec.md](08-ui-spec.md) §2.1.1): первая мысль —
+     `0`, вторая — `1`, и т. д.
+4. Применить `sort_order` (asc/desc; при `sort='manual'` — всегда asc).
+
+Соседи возвращаются клиенту в серверном порядке; клиент не пересортировывает
+их и кладёт в DOM в том же порядке (`entries[i]`), а CSS Grid с
+`grid-auto-flow: row` раскладывает их row-major — слева направо в строке,
+затем следующая строка.
 
 ### 3.3. Изменение порядка
 
 - Пользователь меняет выбор сортировки (контекстное меню зоны) →
   `PUT /networks/{nid}/focus/{tid}/preferences { dir, sort, sort_order }` →
-  upsert в `user_focus_preferences`.
+  upsert в `user_focus_preferences`. При `sort='manual'` `sort_order='desc'`
+  отвергается (`VALIDATION_ERROR`); если параметр `order` не передан при
+  `sort='manual'`, он нормализуется в `'asc'`.
 - Пользователь перетаскивает мысль (ручной порядок) →
   `POST /networks/{nid}/focus/{tid}/order { dir, ordered_ids: [...] }` →
   сервер записывает `position = индекс в массиве` для каждого `thought_id` в
-  `user_focus_order`, остальные записи по этому (user, focus, dir) удаляются.
+  `user_focus_order`, остальные записи по этому (user, focus, dir) удаляются
+  (replace-семантика; осиротевшие от удалённых связей записи подчищаются
+  автоматически, [02-data-model.md](02-data-model.md) §3.10.4).
+  Клиент обязан слать **полный** список id текущей зоны в нужном порядке (без
+  дыр, без id отсутствующих мыслей) — тогда `position` в БД всегда
+  последовательны `0..N-1`.
 - При удалении фокус-мысли или её соседа — записи каскадно чистятся (см.
-  триггеры в [02-data-model.md](02-data-model.md)).
+  триггеры в [02-data-model.md](02-data-model.md)). После этого
+  `user_focus_order` может оказаться с «дырами» (например, был `0,1,2,3`,
+  удалили `1` → осталось `0,2,3`); визуально это не проявляется
+  (`LEFT JOIN` не подцепляет отсутствующих), но до ближайшего reorder-а
+  позиции в БД «отстают» от фактического состава зоны — это допустимо и
+  чинится автоматически при следующем явном `setFocusOrder`.
 
 ### 3.4. Синхронизация между клиентами
 

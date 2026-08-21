@@ -293,6 +293,8 @@ PUT  /api/v1/networks/{nid}/thoughts/{fid}/focus-preferences
      { dir: "children"|"parents"|"siblings",
        sort: "manual"|"alpha"|"created"|"viewed",
        order: "asc"|"desc" }
+# При sort='manual' параметр order должен быть 'asc' (или опущен — нормализуется в 'asc');
+# 'desc' отвергается VALIDATION_ERROR (08-ui-spec.md §2.7).
 → 200 { data: { focus_thought_id, dir, sort, order } }
 
 # Ручной порядок мыслей (только для dir=children|parents; siblings ручного порядка не имеет)
@@ -300,7 +302,11 @@ POST /api/v1/networks/{nid}/thoughts/{fid}/focus-order
      { dir: "children"|"parents",
        ordered_ids: ["id1","id2","id3"] }
 # Сервер записывает position = индекс в массиве для каждого thought_id в
-# user_focus_order; прочие записи по (user, focus, dir) удаляются.
+# user_focus_order; прочие записи по (user, focus, dir) удаляются
+# (replace-семантика — осиротевшие от удалённых связей записи подчищаются
+# автоматически, 02-data-model.md §3.10.4). Клиент обязан слать только
+# id, реально присутствующие в текущей зоне, и в нужном порядке; сервер
+# длину/полноту не валидирует, лишь записывает то, что прислано.
 → 200 { data: { focus_thought_id, dir, ordered_ids } }
 ```
 

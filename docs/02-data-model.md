@@ -575,11 +575,27 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 | `focus_thought_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | |
 | `dir` | TEXT NOT NULL | `'children'` \| `'parents'` |
 | `thought_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | Ребёнок или родитель |
-| `position` | INTEGER NOT NULL | |
+| `position` | INTEGER NOT NULL | Линейный индекс в row-major-порядке зоны (08-ui-spec.md §2.1.1) |
 | `updated_at` | TEXT NOT NULL | |
 | PRIMARY KEY | `(user_id, focus_thought_id, dir, thought_id)` | |
 
 Индекс: `idx_user_focus_order_pos (user_id, focus_thought_id, dir, position)`.
+
+`position` хранится как **линейный индекс** в row-major-упорядоченном списке
+зоны: первая мысль — `0`, вторая — `1`, и т. д.; между ними не должно быть
+пропусков. Соответствие «визуальная ячейка = `position`» однозначно при
+row-major-раскладке (08-ui-spec.md §2.1.1).
+
+Допускаются **осиротевшие** записи: если связь удалена (`link.deleted`), а
+пользователь после этого не делал reorder для соответствующего `(focus, dir)`,
+запись `(user, focus, dir, thought_id)` остаётся в таблице — `focus()` такие
+записи не возвращает (`LEFT JOIN` на `neighbors` не подцепляет отсутствующих),
+но они не мешают. Чистятся автоматически при следующем успешном
+`POST focus-order` для этого `(focus, dir)` (replace-семантика,
+`DELETE … WHERE focus_thought_id = ? AND dir = ?`).
+
+Удаление фокус-мысли или самой мысли-члена зоны каскадно чистит все записи
+по обоим FK (`ON DELETE CASCADE`).
 
 Алгоритм применения сортировки и поведения при изменении порядка —
 см. [11-settings-and-state.md](11-settings-and-state.md), п. 3.
