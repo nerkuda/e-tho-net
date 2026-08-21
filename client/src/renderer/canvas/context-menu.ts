@@ -570,6 +570,23 @@ async function setZoneSort(
   // would reject it with VALIDATION_ERROR.
   const effectiveOrder: 'asc' | 'desc' = sort === 'manual' ? 'asc' : order;
   try {
+    // First-time switch to manual: initialise user_focus_order with the
+    // currently visible order. Without this, every neighbour has
+    // manual_position === null (no row in user_focus_order yet), the visual
+    // indicator (.cloud-pos, 08-ui-spec.md §2.2) is hidden for all of them,
+    // and the user sees no numbering at all — looking as if the feature is
+    // broken. By committing the current zoneOrder up-front we get positions
+    // 0..N-1 (via setFocusOrder's replace semantics, 02-data-model.md §3.10.4)
+    // and the indicators appear immediately after refresh.
+    if (sort === 'manual' && (dir === 'parents' || dir === 'children')) {
+      const currentOrder = store.state.zoneOrder[dir];
+      if (currentOrder.length > 0) {
+        await etn.thoughts.setFocusOrder(networkId, focusId, {
+          dir,
+          ordered_ids: currentOrder,
+        });
+      }
+    }
     await etn.thoughts.setFocusPreferences(networkId, focusId, {
       dir: dir as FocusDir,
       sort,
