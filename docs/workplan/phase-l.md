@@ -611,3 +611,37 @@
     typecheck чистый.
   - [x] Спека 08 (§15.8) дополнена.
   - [ ] Ручная проверка пользователем.
+
+## L24. Авто-упоминания мыслей в тексте комментариев
+
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** нет.
+- **Источник:** задача «Выделение мыслей в текстах комментариев» (мыслесеть
+  «Тест 1», `ETN → План разработки`,
+  `8f6b1c70-a859-4efe-8307-1125789a4547`).
+- **Описание:** в HTML-просмотре markdown-комментария (не в редактировании)
+  слова, совпадающие с названием мысли сети (в т.ч. с отдельной частью
+  составного имени, §2.2.3) или с любым синонимом (в т.ч. wildcard `*`),
+  подчёркиваются пунктиром. Клик открывает меню «Перейти к «…»» / «Вставить
+  ссылку на «…»» (заменяет подчёркнутый текст на `[[имя|текст]]` в
+  источнике); несколько подходящих мыслей (до 5) — по пункту-мысли с обеими
+  командами. Неактивные мысли участвуют только при включённой настройке
+  «Показывать неактуальные». Сопоставление — новый серверный эндпоинт
+  `POST /mentions/scan` (03-server-api.md §21, обратное направление к §13);
+  разметка HTML — клиентский пост-процесс поверх уже вставленного
+  `body_html` (как рендер mermaid-диаграмм), не часть кешируемого рендера
+  `@etn/markdown`.
+- **DoD:**
+  - [x] `shared/src/mentions.ts` — общие `synonymPatternToRegex`,
+    `splitCompoundTitle` (сервер + типы).
+  - [x] Сервер: `findMentionsInTexts` (`search-service.ts`) + роут
+    `POST /networks/:id/mentions/scan` (`routes/search.ts`).
+  - [x] IPC: `thoughts.mentionsScan` (contract/handlers/preload/rest-client).
+  - [x] Клиент: `mentions-annotate.ts` (`annotateMentions`), интеграция в
+    `markdown-field.ts` (`renderView` + «вставить ссылку»),
+    `openThoughtByRef` вынесен из `wiki-link.ts` для переиспользования.
+  - [x] CSS `.thought-mention` (пунктир) в `styles.css`.
+  - [x] Тесты: `server/tests/search-service.test.ts` (`findMentionsInTexts`),
+    `client/tests/mentions-annotate.test.ts` (`findRangeAtOffset`) — зелёные;
+    `npm run typecheck` чистый.
+  - [x] Спеки: 03 §21, 08 §6.4.
+  - [ ] Ручная проверка пользователем.
