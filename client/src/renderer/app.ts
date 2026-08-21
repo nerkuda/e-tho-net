@@ -161,6 +161,46 @@ function zoneStateFromFocus(response: FocusResponse): {
 }
 
 /**
+ * Initialise `user_focus_order` for any `manual`-sorted zone whose neighbours
+ * all came back with `manual_position === null`. This catches two cases:
+ *
+ *  1. The user just switched a zone to manual — `setZoneSort` already commits
+ *     the current order up-front, but if that call was on an older client
+ *     (or the request failed silently), `user_focus_order` may be empty.
+ *  2. The zone was already manual before this client started, and no one has
+ *     reordered since — the server has no positions to surface.
+ *
+ * Without this backstop the .cloud-pos indicator (08-ui-spec.md §2.2) stays
+ * hidden for every neighbour in the zone, which looks exactly like the
+ * feature being broken.
+ *
+ * Safe to call repeatedly: once positions exist, the second pass is a no-op
+ * (no neighbour has `manual_position === null` any more).
+ */
+async function ensureManualPositionsInitialized(
+  networkId: string,
+  focusId: string,
+  response: FocusResponse,
+  zoneOrder: { parents: string[]; children: string[] },
+): Promise<void> {
+  for (const dir of ['parents', 'children'] as const) {
+    if (response.sorts[dir] !== 'manual') continue;
+    const neighbourArr = dir === 'parents' ? response.parents : response.children;
+    if (neighbourArr.length === 0) continue;
+    const allUnpositioned = neighbourArr.every((n) => n.manual_position === null);
+    if (!allUnpositioned) continue;
+    const ordered_ids = zoneOrder[dir];
+    if (ordered_ids.length === 0) continue;
+    try {
+      await etn.thoughts.setFocusOrder(networkId, focusId, { dir, ordered_ids });
+    } catch {
+      // Best-effort — if this fails the user can still reorder manually and
+      // the next refresh will see the now-existing positions.
+    }
+  }
+}
+
+/**
  * Focuses a thought (H5): fetches the focus response, rotates local history
  * (H7) and persists the L4 current-focus key.
  */
@@ -175,8 +215,10 @@ export async function setFocus(id: string): Promise<void> {
   if (oldId !== null && oldId !== id) {
     await etn.history.rotate(oldId, id).catch(() => undefined);
   }
-  store.update({ focus: response, editorTarget: null, selectedLinkId: null, ...zoneStateFromFocus(response) });
+  const zoneState = zoneStateFromFocus(response);
+  store.update({ focus: response, editorTarget: null, selectedLinkId: null, ...zoneState });
   void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
+  void ensureManualPositionsInitialized(networkId, id, response, zoneState.zoneOrder).catch(() => undefined);
 }
 
 /**
@@ -188,7 +230,9 @@ export async function refreshFocus(): Promise<void> {
   const focusId = store.state.focus?.focused.id;
   if (networkId === null || focusId === undefined) return;
   const response: FocusResponse = await etn.thoughts.focus(networkId, focusId);
-  store.update({ focus: response, ...zoneStateFromFocus(response) });
+  const zoneState = zoneStateFromFocus(response);
+  store.update({ focus: response, ...zoneState });
+  void ensureManualPositionsInitialized(networkId, focusId, response, zoneState.zoneOrder).catch(() => undefined);
 }
 
 /** Coalesces consecutive refresh requests into one call. */
