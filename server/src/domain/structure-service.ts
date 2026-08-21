@@ -21,6 +21,7 @@ import {
   SAVED_FILTER_NAME_MAX,
   STRUCTURES_NODE_NEIGHBORS_LIMIT,
   STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
+  STRUCTURES_QUERY_IDS_MAX_LIMIT,
   STRUCTURES_QUERY_MAX_LIMIT,
   STRUCTURE_PROPERTY_OPS,
   STRUCTURE_SORTS,
@@ -387,45 +388,43 @@ function sortClause(
 }
 
 /**
- * Filter thoughts by the structure criteria (docs/03-server-api.md §6.10).
- *
- * An empty filter returns HOME (`is_root=1`, always first) plus the orphans —
- * thoughts with no active parent link — so every disconnected island of the
- * network stays reachable from the empty tree. Conditions with an unknown
- * `property_id` are ignored — the property definition may have been deleted
- * after the filter was saved; the remaining conditions still apply.
+ * Shared WHERE/ORDER BY of the structures filter (03-server-api.md §6.10):
+ * the paged ref query and the id-only query of the bulk commands (L22) must
+ * run over exactly the same candidate set. `null` — the filter degenerated to
+ * an empty result (unknown `parent_ids` scope roots).
  */
-export function queryThoughts(
+interface FilterQuerySql {
+  /** `FROM thoughts t … WHERE …` with `?` placeholders (join params first). */
+  baseSql: string;
+  /** JOIN parameters, bound before the WHERE parameters. */
+  joinParams: unknown[];
+  /** WHERE parameters. */
+  params: unknown[];
+  /** ORDER BY columns without the keyword. */
+  sortSql: string;
+  /** Empty filter pins HOME first with an extra leading sort key. */
+  homeFirst: boolean;
+}
+
+function buildFilterQuerySql(
   ndb: NetworkDb,
   userId: string,
   req: StructureQueryRequest,
   requestId?: string,
-): StructureQueryResult {
+): FilterQuerySql | null {
   if (isFilterEmpty(req)) {
     const showInactive = req.show_inactive === true ? 1 : 0;
     const { sortSql, joinSql, joinParams } = sortClause(userId, req);
-    const baseSql = `FROM thoughts t ${joinSql}
+    return {
+      baseSql: `FROM thoughts t ${joinSql}
        WHERE t.is_root = 1 OR (
          t.is_root = 0 AND (t.active = 1 OR ?) AND NOT EXISTS (
-           SELECT 1 FROM links l WHERE l.target_id = t.id AND l.active = 1))`;
-    const total = (
-      ndb.prepare(`SELECT COUNT(*) AS c ${baseSql}`).get(...joinParams, showInactive) as {
-        c: number;
-      }
-    ).c;
-    const limit = Math.min(Math.max(req.limit, 1), STRUCTURES_QUERY_MAX_LIMIT);
-    const offset = Math.max(req.offset, 0);
-    const rows = ndb
-      .prepare(
-        `SELECT ${REF_COLUMNS} ${baseSql}
-         ORDER BY (t.is_root = 1) DESC, ${sortSql}
-         LIMIT ? OFFSET ?`,
-      )
-      .all(...joinParams, showInactive, limit, offset) as Array<ThoughtRefRow>;
-    const items = rows.map(rowToThoughtRef);
-    // The page carries its own direction flags — the root ellipses are filled
-    // right after the query, without waiting for the first expansion.
-    return { items, total, directions: directionsOf(ndb, items.map((i) => i.id)) };
+           SELECT 1 FROM links l WHERE l.target_id = t.id AND l.active = 1))`,
+      joinParams,
+      params: [showInactive],
+      sortSql,
+      homeFirst: true,
+    };
   }
 
   const showInactive = req.show_inactive === true ? 1 : 0;
@@ -442,7 +441,7 @@ export function queryThoughts(
 
   if (req.parent_ids !== undefined && req.parent_ids.length > 0) {
     const scoped = expandParentIdsToSubtree(ndb, req.parent_ids, showInactive === 1);
-    if (scoped.length === 0) return { items: [], total: 0, directions: {} };
+    if (scoped.length === 0) return null;
     where.push(`t.id IN (${scoped.map(() => '?').join(',')})`);
     params.push(...scoped);
   }
@@ -554,22 +553,90 @@ export function queryThoughts(
   // Sort: enum members validated by the route layer, interpolated as fixed
   // fragments only. `viewed` needs the per-user view-mark join.
   const { sortSql, joinSql, joinParams } = sortClause(userId, req);
+  return {
+    baseSql: `FROM thoughts t ${joinSql} WHERE ${where.join(' AND ')}`,
+    joinParams,
+    params,
+    sortSql,
+    homeFirst: false,
+  };
+}
 
-  const baseSql = `FROM thoughts t ${joinSql} WHERE ${where.join(' AND ')}`;
-  const total = (
-    ndb.prepare(`SELECT COUNT(*) AS c ${baseSql}`).get(...joinParams, ...params) as {
+/** Count the unrestricted matches of a built filter query. */
+function countFilterMatches(ndb: NetworkDb, sql: FilterQuerySql): number {
+  return (
+    ndb.prepare(`SELECT COUNT(*) AS c ${sql.baseSql}`).get(...sql.joinParams, ...sql.params) as {
       c: number;
     }
   ).c;
+}
+
+/** ORDER BY clause of a built filter query (empty filter pins HOME first). */
+function orderClause(sql: FilterQuerySql): string {
+  return sql.homeFirst ? `(t.is_root = 1) DESC, ${sql.sortSql}` : sql.sortSql;
+}
+
+/**
+ * Filter thoughts by the structure criteria (docs/03-server-api.md §6.10).
+ *
+ * An empty filter returns HOME (`is_root=1`, always first) plus the orphans —
+ * thoughts with no active parent link — so every disconnected island of the
+ * network stays reachable from the empty tree. Conditions with an unknown
+ * `property_id` are ignored — the property definition may have been deleted
+ * after the filter was saved; the remaining conditions still apply.
+ */
+export function queryThoughts(
+  ndb: NetworkDb,
+  userId: string,
+  req: StructureQueryRequest,
+  requestId?: string,
+): StructureQueryResult {
+  const sql = buildFilterQuerySql(ndb, userId, req, requestId);
+  if (sql === null) return { items: [], total: 0, directions: {} };
+  const total = countFilterMatches(ndb, sql);
   const limit = Math.min(Math.max(req.limit, 1), STRUCTURES_QUERY_MAX_LIMIT);
   const offset = Math.max(req.offset, 0);
   const rows = ndb
-    .prepare(`SELECT ${REF_COLUMNS} ${baseSql} ORDER BY ${sortSql} LIMIT ? OFFSET ?`)
-    .all(...joinParams, ...params, limit, offset) as Array<ThoughtRefRow>;
+    .prepare(
+      `SELECT ${REF_COLUMNS} ${sql.baseSql}
+       ORDER BY ${orderClause(sql)}
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...sql.joinParams, ...sql.params, limit, offset) as Array<ThoughtRefRow>;
   const items = rows.map(rowToThoughtRef);
-  // The tree fills the root ellipses from these flags right after the query —
-  // without them the fill would only appear after the first expansion.
+  // The page carries its own direction flags — the root ellipses are filled
+  // right after the query, without waiting for the first expansion.
   return { items, total, directions: directionsOf(ndb, items.map((i) => i.id)) };
+}
+
+/** Result of {@link queryThoughtIds} (L22 ids-only filter query, §6.10). */
+export interface StructureIdsResult {
+  ids: string[];
+  total: number;
+}
+
+/**
+ * Id-only variant of the structures filter query (03-server-api.md §6.10,
+ * `ids_only: true`): the same candidate set and ordering as
+ * {@link queryThoughts}, but the page carries bare ids — the bulk filter
+ * commands (08-ui-spec.md §15.3) collect the whole result this way. The route
+ * layer raises the limit ceiling for this mode.
+ */
+export function queryThoughtIds(
+  ndb: NetworkDb,
+  userId: string,
+  req: StructureQueryRequest,
+  requestId?: string,
+): StructureIdsResult {
+  const sql = buildFilterQuerySql(ndb, userId, req, requestId);
+  if (sql === null) return { ids: [], total: 0 };
+  const total = countFilterMatches(ndb, sql);
+  const limit = Math.min(Math.max(req.limit, 1), STRUCTURES_QUERY_IDS_MAX_LIMIT);
+  const offset = Math.max(req.offset, 0);
+  const rows = ndb
+    .prepare(`SELECT t.id ${sql.baseSql} ORDER BY ${orderClause(sql)} LIMIT ? OFFSET ?`)
+    .all(...sql.joinParams, ...sql.params, limit, offset) as Array<{ id: string }>;
+  return { ids: rows.map((r) => r.id), total };
 }
 
 // ---------------------------------------------------------------------------

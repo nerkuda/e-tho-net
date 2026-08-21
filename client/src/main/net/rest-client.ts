@@ -1390,6 +1390,22 @@ export class RestClient {
   }
 
   /**
+   * `POST /networks/{nid}/thoughts/query` with `ids_only: true` — bare ids of
+   * the whole filter result for the bulk structures commands (L22,
+   * 03-server-api.md §6.10). The limit ceiling is higher than the paged tree.
+   */
+  public async queryStructureThoughtIds(
+    networkId: string,
+    request: import('@etn/shared').StructureQueryRequest,
+  ): Promise<import('@etn/shared').StructureIdsQueryResponse> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/query`,
+      { body: { ...request, ids_only: true } },
+    );
+  }
+
+  /**
    * `GET /networks/{nid}/thoughts/{id}/hierarchy` — one-level parents/children
    * for the structures tree. `excludeIds` implements the per-branch dedup
    * (03-server-api.md §6.11), sent comma-separated.

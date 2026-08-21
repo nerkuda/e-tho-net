@@ -29,7 +29,7 @@ import { notice } from '../lib/notice.js';
 import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import { store } from '../state.js';
 import { pickLinkType, pickThoughtType, showSelectionPropertiesDialog } from './dialogs.js';
-import type { ExportFormat } from '@etn/shared';
+import { THOUGHT_RESOLVE_MAX_IDS, type ExportFormat } from '@etn/shared';
 
 /** Panel chrome the selection module renders into. */
 let host: HTMLElement | null = null;
@@ -95,7 +95,13 @@ async function renderList(ids: string[]): Promise<void> {
   listHost.replaceChildren(el('span', 'muted', 'Загрузка…'));
   let refs = new Map<string, import('@etn/shared').ThoughtRef>();
   try {
-    const resolved = await etn.thoughts.resolve(networkId, ids.slice(0, 100));
+    // resolve caps at 100 ids per call — chunk long lists (bulk filter
+    // commands can push the whole filter result into the selection, L22).
+    const resolved: import('@etn/shared').ThoughtRef[] = [];
+    for (let i = 0; i < ids.length; i += THOUGHT_RESOLVE_MAX_IDS) {
+      const chunk = await etn.thoughts.resolve(networkId, ids.slice(i, i + THOUGHT_RESOLVE_MAX_IDS));
+      resolved.push(...chunk);
+    }
     refs = new Map(resolved.map((r) => [r.id, r]));
   } catch {
     // ids shown as-is
@@ -165,6 +171,17 @@ export function addToSelection(ids: string[]): void {
   const fresh = [...new Set(ids)].filter((id) => !current.has(id));
   if (fresh.length === 0) return;
   store.update({ selection: [...store.state.selection, ...fresh] });
+}
+
+/**
+ * Removes the given ids from the selection (bulk filter command «удалить из
+ * выделенных», 08-ui-spec.md §15.3): absent ids are ignored, no toggle.
+ */
+export function removeFromSelection(ids: string[]): void {
+  if (ids.length === 0) return;
+  const drop = new Set(ids);
+  const kept = store.state.selection.filter((id) => !drop.has(id));
+  if (kept.length !== store.state.selection.length) store.update({ selection: kept });
 }
 
 /** Clears the selection list (the panel hides itself on empty). */

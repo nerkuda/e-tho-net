@@ -63,6 +63,7 @@ import type {
   SearchResponse,
   StructureQueryRequest,
   StructureQueryResponse,
+  StructureIdsQueryResponse,
   Thought,
   ThoughtBatchInput,
   ThoughtBatchResult,
@@ -253,6 +254,14 @@ export interface EtnApi {
       networkId: string,
       request: StructureQueryRequest,
     ): Promise<StructureQueryResponse>;
+    /**
+     * `POST /thoughts/query` with `ids_only: true` — bare ids of the whole
+     * filter result, for the bulk filter commands (L22).
+     */
+    queryIds(
+      networkId: string,
+      request: StructureQueryRequest,
+    ): Promise<StructureIdsQueryResponse>;
     /**
      * `GET /thoughts/{id}/hierarchy` — one-level parents/children with
      * per-branch dedup via `excludeIds`.

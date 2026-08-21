@@ -68,6 +68,12 @@ export interface StructureQueryRequest extends StructureFilter {
   order: SortOrder;
   limit: number;
   offset: number;
+  /**
+   * `true` — return bare thought ids instead of `ThoughtRef` pages (used by
+   * the bulk filter commands to collect the whole result, L22): the `limit`
+   * ceiling is `STRUCTURES_QUERY_IDS_MAX_LIMIT` instead of 100.
+   */
+  ids_only?: boolean;
 }
 
 /**
@@ -83,6 +89,12 @@ export interface StructureQueryResponse {
   total: number;
   /** Direction flags of every returned item (rides in the list envelope `meta`). */
   directions: StructureDirectionFlags;
+}
+
+/** Result of `POST /thoughts/query` with `ids_only: true` (§6.10, L22). */
+export interface StructureIdsQueryResponse {
+  ids: string[];
+  total: number;
 }
 
 /** Response of `GET /thoughts/{id}/hierarchy` (03-server-api.md §6.11). */

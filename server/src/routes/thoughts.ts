@@ -57,7 +57,7 @@ import {
   type RouteDeps,
 } from './helpers.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
-import { createLink, deleteLink, findLinksBetween } from '../domain/link-service.js';
+import { createLink, deleteLink, findLinksBetween, incomingLinksOf } from '../domain/link-service.js';
 import { findThoughtUsage } from '../domain/property-service.js';
 import { findDuplicates, findMentions } from '../domain/search-service.js';
 import {
@@ -96,10 +96,35 @@ const BATCH_OPS: readonly ThoughtBatchOp[] = [
   'delete',
   'link_to_focus',
   'unlink_from_focus',
+  'link_parents',
+  'link_children',
+  'set_only_parents',
+  'unlink_parents',
+  'unlink_children',
 ];
 
 function isBatchOp(value: unknown): value is ThoughtBatchOp {
   return typeof value === 'string' && (BATCH_OPS as readonly string[]).includes(value);
+}
+
+/**
+ * Anchor id list of the bulk link operations (`parent_ids`/`child_ids`,
+ * 03-server-api.md §6.6): a non-empty array of non-empty strings, deduped.
+ */
+function parseAnchorIds(
+  raw: unknown,
+  field: 'parent_ids' | 'child_ids',
+  requestId: string,
+): string[] {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.some((v) => typeof v !== 'string' || v === '')) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `${field} должен быть непустым массивом непустых строк.`,
+      { field: `args.${field}` },
+      requestId,
+    );
+  }
+  return [...new Set(raw as string[])];
 }
 
 /** Convert a comma-separated synonym string into an array (service dedupes). */
@@ -479,6 +504,8 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         let linkTypeForCreate: string | null | undefined;
         let linkTypeForFind: string | null | undefined;
         let direction: 'parent' | 'child' = 'child';
+        let anchorParentIds: string[] | undefined;
+        let anchorChildIds: string[] | undefined;
         if (op === 'set_type') {
           const raw = args.type_id;
           if (raw === undefined) {
@@ -531,6 +558,12 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           }
           linkTypeForCreate = rawType ?? null;
           linkTypeForFind = rawType; // undefined = any type when unlinking
+        }
+        if (op === 'link_parents' || op === 'set_only_parents' || op === 'unlink_parents') {
+          anchorParentIds = parseAnchorIds(args.parent_ids, 'parent_ids', req.id);
+        }
+        if (op === 'link_children' || op === 'unlink_children') {
+          anchorChildIds = parseAnchorIds(args.child_ids, 'child_ids', req.id);
         }
 
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
@@ -601,6 +634,73 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                 for (const link of found) {
                   deleteLink(ndb, link.id, undefined);
                   deps.emit(req, networkId, 'link.deleted', { id: link.id });
+                }
+                break;
+              }
+              // Bulk link operations of the structures filter commands
+              // (03-server-api.md §6.6, L22): anchors come from the picker,
+              // new links are untyped and pairs already linked in any type are
+              // left untouched — the op is idempotent per pair.
+              case 'link_parents': {
+                for (const parentId of anchorParentIds!) {
+                  if (parentId === id) continue; // self-loop is skipped silently
+                  if (findLinksBetween(ndb, parentId, id).length > 0) continue;
+                  const link = createLink(
+                    ndb,
+                    { source_id: parentId, target_id: id, type_id: null },
+                    userId,
+                  );
+                  deps.emit(req, networkId, 'link.created', { link });
+                }
+                break;
+              }
+              case 'link_children': {
+                for (const childId of anchorChildIds!) {
+                  if (childId === id) continue;
+                  if (findLinksBetween(ndb, id, childId).length > 0) continue;
+                  const link = createLink(
+                    ndb,
+                    { source_id: id, target_id: childId, type_id: null },
+                    userId,
+                  );
+                  deps.emit(req, networkId, 'link.created', { link });
+                }
+                break;
+              }
+              case 'set_only_parents': {
+                const keepers = new Set(anchorParentIds!);
+                for (const link of incomingLinksOf(ndb, id)) {
+                  if (keepers.has(link.source_id)) continue;
+                  deleteLink(ndb, link.id, undefined);
+                  deps.emit(req, networkId, 'link.deleted', { id: link.id });
+                }
+                for (const parentId of anchorParentIds!) {
+                  if (parentId === id) continue;
+                  if (findLinksBetween(ndb, parentId, id).length > 0) continue;
+                  const link = createLink(
+                    ndb,
+                    { source_id: parentId, target_id: id, type_id: null },
+                    userId,
+                  );
+                  deps.emit(req, networkId, 'link.created', { link });
+                }
+                break;
+              }
+              case 'unlink_parents': {
+                for (const parentId of anchorParentIds!) {
+                  for (const link of findLinksBetween(ndb, parentId, id)) {
+                    deleteLink(ndb, link.id, undefined);
+                    deps.emit(req, networkId, 'link.deleted', { id: link.id });
+                  }
+                }
+                break;
+              }
+              case 'unlink_children': {
+                for (const childId of anchorChildIds!) {
+                  for (const link of findLinksBetween(ndb, id, childId)) {
+                    deleteLink(ndb, link.id, undefined);
+                    deps.emit(req, networkId, 'link.deleted', { id: link.id });
+                  }
                 }
                 break;
               }

@@ -24,6 +24,7 @@ import {
   getHierarchy,
   listSavedFilters,
   parseSavedFilterDefinition,
+  queryThoughtIds,
   queryThoughts,
   updateSavedFilter,
 } from '../src/domain/structure-service.js';
@@ -191,6 +192,48 @@ describe(
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
     const USER = 'user-1';
+
+    describe('queryThoughtIds: ids-only variant (L22)', () => {
+      it('returns the same candidate set and ordering as queryThoughts, HOME first', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const home = seedThought(ndb, { title: 'Home', is_root: 1 });
+          const orphanA = seedThought(ndb, { title: 'А-Сирота' });
+          const orphanB = seedThought(ndb, { title: 'Б-Сирота' });
+          const child = seedThought(ndb, { title: 'В-Ребёнок' });
+          seedLink(ndb, home, child); // not an orphan
+
+          const refs = queryThoughts(ndb, USER, query());
+          const ids = queryThoughtIds(ndb, USER, query());
+          assert.equal(ids.total, refs.total);
+          assert.deepEqual(ids.ids, refs.items.map((t) => t.id));
+          assert.deepEqual(ids.ids, [home, orphanA, orphanB]);
+
+          // Paging walks the same list with the raised ceiling.
+          const page = queryThoughtIds(ndb, USER, query({ limit: 2000, offset: 1 }));
+          assert.deepEqual(page.ids, [orphanA, orphanB]);
+          assert.equal(page.total, 3);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('applies the keyword criteria exactly like the ref query', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const home = seedThought(ndb, { title: 'Home', is_root: 1 });
+          seedThought(ndb, { title: 'Счетчик электричества' });
+          seedThought(ndb, { title: 'Счета за воду' });
+          const refs = queryThoughts(ndb, USER, query({ keywords: 'счет* -вод*' }));
+          const ids = queryThoughtIds(ndb, USER, query({ keywords: 'счет* -вод*' }));
+          assert.deepEqual(ids.ids, refs.items.map((t) => t.id));
+          assert.ok(!ids.ids.includes(home));
+          assert.equal(ids.total, 1);
+        } finally {
+          ndb.close();
+        }
+      });
+    });
 
     describe('queryThoughts: empty filter', () => {
       it('returns HOME alone when the network has no orphans', () => {

@@ -198,6 +198,18 @@ export function findLinksBetween(
 }
 
 /**
+ * Every incoming link of a thought (links where it is the target), any type,
+ * active or not. Backs the `set_only_parents` batch operation
+ * (03-server-api.md §6.6, L22).
+ */
+export function incomingLinksOf(ndb: NetworkDb, thoughtId: string): Link[] {
+  const rows = ndb
+    .prepare('SELECT * FROM links WHERE target_id = ?')
+    .all(thoughtId) as LinkRow[];
+  return rows.map(rowToLink);
+}
+
+/**
  * Returns every link whose both ends are in `ids` (the visible thoughts of a
  * focus response), optionally including inactive ones. Used to draw all links
  * among the visible clouds — not just those incident to the focus.

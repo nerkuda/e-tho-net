@@ -239,6 +239,13 @@ export const STRUCTURES_PARENT_SCOPE_MAX_DEPTH = 20;
 /** Max ids accepted by `POST /thoughts/edges` (03-server-api.md §6.12). */
 export const STRUCTURES_EDGES_MAX_IDS = 2000;
 
+/**
+ * Hard maximum of `limit` when `POST /thoughts/query` is called with
+ * `ids_only: true` (03-server-api.md §6.10) — bulk commands over the whole
+ * filter result collect ids in fewer, larger pages than the paged tree.
+ */
+export const STRUCTURES_QUERY_IDS_MAX_LIMIT = 2000;
+
 /** Maximum length of a saved filter name (03-server-api.md §18). */
 export const SAVED_FILTER_NAME_MAX = 200;
 

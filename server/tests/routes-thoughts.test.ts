@@ -301,6 +301,127 @@ describe(
       }
     });
 
+    it('batch: bulk link ops (L22) — untyped new links, idempotent, only-parents', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const parent1 = await createThought(ctx, { title: 'Родитель один' });
+        const parent2 = await createThought(ctx, { title: 'Родитель два' });
+        const x = await createThought(ctx, { title: 'Отобранная X' });
+        const y = await createThought(ctx, { title: 'Отобранная Y' });
+
+        // A foreign incoming link parent2 → x (typed with no type).
+        const seed = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/links`,
+          headers: authHeaders(ctx),
+          payload: { source_id: parent2, target_id: x },
+        });
+        assert.equal(seed.statusCode, 201);
+
+        const parentsOf = async (id: string): Promise<string[]> => {
+          const res = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${ctx.networkId}/thoughts/${id}/hierarchy?dir=parents`,
+            headers: authHeaders(ctx),
+          });
+          assert.equal(res.statusCode, 200);
+          return (res.json().data as { neighbors: Array<{ id: string }> }).neighbors.map(
+            (n) => n.id,
+          );
+        };
+
+        // link_parents: untyped parent1 → x/y; the existing parent2 → x stays.
+        const link = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+          headers: authHeaders(ctx),
+          payload: { ids: [x, y], op: 'link_parents', args: { parent_ids: [parent1] } },
+        });
+        assert.equal(link.statusCode, 200);
+        const ld = link.json().data as { affected: number; failures: unknown[] };
+        assert.equal(ld.affected, 2);
+        assert.equal(ld.failures.length, 0);
+        assert.deepEqual((await parentsOf(x)).sort(), [parent1, parent2].sort());
+        assert.deepEqual(await parentsOf(y), [parent1]);
+
+        // Re-running the same op is idempotent — already linked pairs are kept.
+        const linkAgain = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+          headers: authHeaders(ctx),
+          payload: { ids: [x, y], op: 'link_parents', args: { parent_ids: [parent1] } },
+        });
+        assert.equal(linkAgain.statusCode, 200);
+        const lad = linkAgain.json().data as { affected: number; failures: unknown[] };
+        assert.equal(lad.affected, 2);
+        assert.equal(lad.failures.length, 0);
+
+        // A self-loop anchor (the thought is in its own parents) is skipped
+        // silently — not a per-id failure.
+        const selfLoop = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+          headers: authHeaders(ctx),
+          payload: { ids: [x], op: 'link_parents', args: { parent_ids: [x, parent1] } },
+        });
+        assert.equal(selfLoop.statusCode, 200);
+        assert.equal((selfLoop.json().data as { affected: number }).affected, 1);
+
+        // set_only_parents: parent2 → x is dropped, parent1 → x survives.
+        const only = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+          headers: authHeaders(ctx),
+          payload: { ids: [x], op: 'set_only_parents', args: { parent_ids: [parent1] } },
+        });
+        assert.equal(only.statusCode, 200);
+        assert.equal((only.json().data as { affected: number }).affected, 1);
+        assert.deepEqual(await parentsOf(x), [parent1]);
+
+        // unlink_parents: drop the links with the picked parents only.
+        const unlink = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+          headers: authHeaders(ctx),
+          payload: { ids: [x], op: 'unlink_parents', args: { parent_ids: [parent1, parent2] } },
+        });
+        assert.equal(unlink.statusCode, 200);
+        assert.equal((unlink.json().data as { affected: number }).affected, 1);
+        assert.deepEqual(await parentsOf(x), []);
+
+        // link_children creates x → y; unlink_children drops it back. (The
+        // parent1 → y link from the link_parents step above stays — unlink is
+        // scoped to the picked anchors.)
+        const linkChild = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+          headers: authHeaders(ctx),
+          payload: { ids: [x], op: 'link_children', args: { child_ids: [y] } },
+        });
+        assert.equal(linkChild.statusCode, 200);
+        assert.deepEqual((await parentsOf(y)).sort(), [parent1, x].sort());
+        const unlinkChild = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+          headers: authHeaders(ctx),
+          payload: { ids: [x], op: 'unlink_children', args: { child_ids: [y] } },
+        });
+        assert.equal(unlinkChild.statusCode, 200);
+        assert.deepEqual(await parentsOf(y), [parent1]);
+
+        // args validation: missing anchor list → 422 for the whole request.
+        const badArgs = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+          headers: authHeaders(ctx),
+          payload: { ids: [x], op: 'link_parents', args: {} },
+        });
+        assert.equal(badArgs.statusCode, 422);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('resolve returns light metadata and drops unknown ids', async () => {
       const ctx = await buildRestContext();
       try {

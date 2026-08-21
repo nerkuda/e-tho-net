@@ -51,6 +51,7 @@ import {
   type TreeRow,
 } from './layout.js';
 import { initStructuresKbdNav, resetStructuresCursor, syncStructuresCursor } from './kbd-nav.js';
+import { openFilterCommandsMenu } from './commands.js';
 import {
   applyPanelWidth,
   buildConditions,
@@ -101,6 +102,16 @@ let expansion: ExpansionMap = new Map();
 let networkIdSeen: string | null = null;
 /** Loading guard so the tree does not flicker with stale data. */
 let querySeq = 0;
+/**
+ * The last APPLIED filter (criteria + sort/order) — what the results tree
+ * shows. The bulk «Команды» menu (L22, §15.3) runs against this, not against
+ * the panel draft: a command must touch exactly what the user applied.
+ */
+let appliedQuery: {
+  filter: StructureFilter;
+  sort: FilterState['sort'];
+  order: FilterState['order'];
+} | null = null;
 
 // ---------------------------------------------------------------------------
 // View switching (L4 active_view)
@@ -123,6 +134,7 @@ export async function ensureStructuresInitialised(): Promise<void> {
   edges.clear();
   edgesSignature = '';
   expansion = new Map();
+  appliedQuery = null;
   resetStructuresCursor();
 
   try {
@@ -208,6 +220,10 @@ async function applyQuery(reset: boolean): Promise<void> {
   const state = getFilterState();
   const seq = ++querySeq;
   const offset = reset ? 0 : resultIds.length;
+  // A fresh application re-anchors the bulk commands to the new result (L22).
+  if (reset) {
+    appliedQuery = { filter: buildFilter(), sort: state.sort, order: state.order };
+  }
   try {
     const result = await etn.structures.query(networkId, {
       ...buildFilter(),
@@ -450,6 +466,15 @@ export function mountStructures(hostEl: HTMLElement): void {
       void applyQuery(true);
     },
     onStatePersist: () => persistFilterState(),
+    onCommands: (anchor) => {
+      if (appliedQuery === null) return;
+      openFilterCommandsMenu(anchor, {
+        filter: appliedQuery.filter,
+        sort: appliedQuery.sort,
+        order: appliedQuery.order,
+        refresh: () => scheduleStructuresRefresh(),
+      });
+    },
   });
 
   store.subscribe(() => {

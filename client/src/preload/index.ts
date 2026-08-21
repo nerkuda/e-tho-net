@@ -71,6 +71,7 @@ function buildApi(): EtnApi {
     },
     structures: {
       query: (networkId, request) => invoke('structures.query', networkId, request),
+      queryIds: (networkId, request) => invoke('structures.queryIds', networkId, request),
       hierarchy: (networkId, thoughtId, query) =>
         invoke('structures.hierarchy', networkId, thoughtId, query),
       edges: (networkId, ids, showInactive) =>

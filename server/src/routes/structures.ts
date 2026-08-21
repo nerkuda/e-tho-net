@@ -20,6 +20,7 @@ import {
   SAVED_FILTER_VIEWS,
   STRUCTURES_EDGES_MAX_IDS,
   STRUCTURES_PAGE_SIZE,
+  STRUCTURES_QUERY_IDS_MAX_LIMIT,
   STRUCTURES_QUERY_MAX_LIMIT,
   STRUCTURE_SORTS,
   SORT_ORDERS,
@@ -44,6 +45,7 @@ import {
   listSavedFilters,
   parseSavedFilterDefinition,
   parseStructureFilter,
+  queryThoughtIds,
   queryThoughts,
   updateSavedFilter,
 } from '../domain/structure-service.js';
@@ -106,6 +108,7 @@ function parseQueryBody(body: Record<string, unknown>, requestId: string): Struc
   const filter = parseStructureFilter(body, requestId);
   const sort = parseSort(body['sort'] ?? 'created', requestId);
   const order = parseOrder(body['order'] ?? 'asc', requestId);
+  const idsOnly = body['ids_only'] === true;
   const limitRaw = body['limit'];
   const limit =
     typeof limitRaw === 'number' && Number.isInteger(limitRaw)
@@ -114,10 +117,11 @@ function parseQueryBody(body: Record<string, unknown>, requestId: string): Struc
   const offsetRaw = body['offset'];
   const offset =
     typeof offsetRaw === 'number' && Number.isInteger(offsetRaw) ? offsetRaw : 0;
-  if (limit < 1 || limit > STRUCTURES_QUERY_MAX_LIMIT) {
+  const maxLimit = idsOnly ? STRUCTURES_QUERY_IDS_MAX_LIMIT : STRUCTURES_QUERY_MAX_LIMIT;
+  if (limit < 1 || limit > maxLimit) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `limit должен быть целым числом 1..${STRUCTURES_QUERY_MAX_LIMIT}.`,
+      `limit должен быть целым числом 1..${maxLimit}.`,
       { field: 'limit' },
       requestId,
     );
@@ -127,7 +131,7 @@ function parseQueryBody(body: Record<string, unknown>, requestId: string): Struc
       field: 'offset',
     }, requestId);
   }
-  return { ...filter, sort, order, limit, offset };
+  return { ...filter, sort, order, limit, offset, ...(idsOnly ? { ids_only: true } : {}) };
 }
 
 /** Parse the `exclude_ids` query parameter: a comma-separated id list. */
@@ -153,6 +157,13 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId } = req.params as NetworkIdParams;
         const query = parseQueryBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        // ids_only (L22): bare ids for the bulk filter commands — the same
+        // candidate set and ordering, a higher limit ceiling, no meta flags.
+        if (query.ids_only === true) {
+          const result = queryThoughtIds(ndb, req.auth!.user.id, query, req.id);
+          sendSuccess(reply, { ids: result.ids, total: result.total });
+          return;
+        }
         const result = queryThoughts(ndb, req.auth!.user.id, query, req.id);
         sendList(reply, result.items, result.total, query.offset, query.limit, {
           directions: result.directions,

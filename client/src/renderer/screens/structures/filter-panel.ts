@@ -78,6 +78,11 @@ export interface FilterPanelCallbacks {
   onApply(): void;
   /** Any field changed — persist the state (L4). */
   onStatePersist(): void;
+  /**
+   * «Команды ▾» clicked — open the bulk-command menu of the applied filter
+   * (L22, §15.3) below the button.
+   */
+  onCommands(anchor: HTMLElement): void;
 }
 
 /** Operators per property value type (03-server-api.md §6.10). */
@@ -730,7 +735,11 @@ function renderPanel(): void {
   const clearBtn = el('button', 'st-f-clear', 'Очистить');
   clearBtn.type = 'button';
   clearBtn.addEventListener('click', () => clearAllCriteria());
-  btnRow.append(apply, clearBtn);
+  const commandsBtn = el('button', 'st-f-commands', 'Команды ▾');
+  commandsBtn.type = 'button';
+  setTooltip(commandsBtn, 'Команды над всеми мыслями отбора (без учёта пагинации)');
+  commandsBtn.addEventListener('click', () => callbacks?.onCommands(commandsBtn));
+  btnRow.append(apply, clearBtn, commandsBtn);
   footer.append(btnRow);
 
   const saveRow = div('st-f-saverow');

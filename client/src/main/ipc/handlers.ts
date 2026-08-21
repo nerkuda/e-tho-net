@@ -206,9 +206,14 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'thoughts.batch',
-    bind((networkId: string, input: Parameters<RestClient['batchThoughts']>[1]) =>
-      requireRest(deps).batchThoughts(networkId, input),
-    ),
+    bind((networkId: string, input: Parameters<RestClient['batchThoughts']>[1]) => {
+      // Idempotency: a fresh Client-Request-Id per user action; the server
+      // caches the response for retries of the same logical call — the bulk
+      // filter commands (L22) can be large, an HTTP retry must not re-run them.
+      return requireRest(deps).batchThoughts(networkId, input, {
+        clientRequestId: randomUUID(),
+      });
+    }),
   );
   handlers.set(
     'thoughts.resolve',
@@ -257,6 +262,13 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind(
       (networkId: string, request: Parameters<RestClient['queryStructureThoughts']>[1]) =>
         requireRest(deps).queryStructureThoughts(networkId, request),
+    ),
+  );
+  handlers.set(
+    'structures.queryIds',
+    bind(
+      (networkId: string, request: Parameters<RestClient['queryStructureThoughtIds']>[1]) =>
+        requireRest(deps).queryStructureThoughtIds(networkId, request),
     ),
   );
   handlers.set(

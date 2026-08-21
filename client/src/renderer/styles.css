@@ -2988,12 +2988,31 @@ body.cloud-dragging * {
 
 .st-f-btnrow {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
 }
 
 .st-f-btnrow .st-f-clear {
   align-self: auto;
+}
+
+/* «Команды ▾» — bulk commands over the whole applied filter (L22, §15.3).
+ * Same quiet look as «Очистить»; wraps onto its own row on a narrow panel. */
+.st-f-commands {
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.st-f-commands:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 /* Compact row: an input/chip-field with an inline «×» clear button. */

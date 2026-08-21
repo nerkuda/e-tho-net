@@ -109,7 +109,15 @@ export type ThoughtBatchOp =
   | 'set_inactive'
   | 'delete'
   | 'link_to_focus'
-  | 'unlink_from_focus';
+  | 'unlink_from_focus'
+  // Bulk link operations of the structures filter commands (L22, §6.6):
+  // anchors come in `parent_ids`/`child_ids`, new links are untyped and
+  // existing pairs are left untouched.
+  | 'link_parents'
+  | 'link_children'
+  | 'set_only_parents'
+  | 'unlink_parents'
+  | 'unlink_children';
 
 /** Arguments for {@link ThoughtBatchInput}. */
 export interface ThoughtBatchArgs {
@@ -118,6 +126,10 @@ export interface ThoughtBatchArgs {
   focus_thought_id?: string;
   link_type_id?: string | null;
   direction?: 'parent' | 'child';
+  /** Anchor thought ids for `link_parents`/`set_only_parents`/`unlink_parents`. */
+  parent_ids?: string[];
+  /** Anchor thought ids for `link_children`/`unlink_children`. */
+  child_ids?: string[];
 }
 
 /** Input accepted by `POST /thoughts/batch` (03-server-api.md §6.6). */
