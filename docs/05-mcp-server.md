@@ -215,6 +215,7 @@ reason, thought_types }`. `depth` — расстояние от `in_subtree_of` 
 | `etn.attachments.add` | Добавить вложение | `network_id`, `owner_type`, `owner_id`, `kind`, `url?`/`file_path?`, `title?`, `description?` |
 | `etn.properties.set` | Установить свойство | `network_id`, `owner_type`, `owner_id`, `key`, `value` |
 | `etn.thoughts.set_active` | Изменить актуальность | `network_id`, `thought_id`, `active` |
+| `etn.thoughts.upsert_bundle` | Составная запись «единицы знания» одной транзакцией | см. §4.2a |
 
 Все изменяющие инструменты:
 - принимают опциональный `expected_version` для optimistic concurrency
@@ -229,6 +230,56 @@ reason, thought_types }`. `depth` — расстояние от `in_subtree_of` 
 > его event-log relay'ем с задержкой до 300 мс (см. [04-realtime.md](04-realtime.md)
 > §5.1), при недоступном сервере клиенты догонят запись через `resume` при
 > переподключении.
+
+#### 4.2a. `etn.thoughts.upsert_bundle` — составная запись «единицы знания» (task O1)
+
+Создание одной осмысленной мысли обычным путём требует 5–8 последовательных
+вызовов (`thoughts.create` → `comments.upsert` → `properties.set` × N →
+`links.create` × M → `attachments.add`), и каждый промежуточный шаг неатомарен
+— упавший агент оставляет мысль без свойств и связей. `upsert_bundle` пишет
+мысль + постоянный (`permanent`) комментарий + карту свойств + связи +
+вложения **одной SQL-транзакцией**: любая ошибка на любом шаге (несуществующий
+`target_thought_id`, дублирующая связь, невалидное значение свойства, …)
+откатывает весь вызов целиком — в базе не остаётся ни новой мысли, ни частично
+применённых свойств.
+
+| Параметр | Тип | Смысл |
+|----------|-----|-------|
+| `network_id` | string | обязателен |
+| `thought_id` | string | адресует **существующую** мысль для дополнения на месте (без пересоздания). Обязателен ровно один из `thought_id`/`thought` |
+| `thought` | object | `{title, synonyms?, type_id?, active?}` — спецификация новой/сопоставляемой мысли |
+| `on_duplicate` | `fail`\|`reuse`\|`update` | политика при совпадении `thought.title`/`synonyms` с существующей мыслью (см. ниже); по умолчанию `fail`. Игнорируется, если задан `thought_id` |
+| `comment` | object | `{title?, body_md, valid_from?, valid_to?}` — постоянный комментарий владельца (create-or-update, как `etn.comments.upsert` с `kind: 'permanent'`) |
+| `properties` | object | карта `{key: value}` — по одному вызову `properties.set` на ключ, в общей транзакции |
+| `links` | array | `[{direction, target_thought_id, type_id?}]` — связи мысли-владельца с другими мыслями (направление — как у `link` в `etn.thoughts.create`) |
+| `attachments` | array | `[{kind, url?/file_path?, title?, description?}]` |
+
+Если `thought_id` не задан, мысль ищется/создаётся так же, как в паре
+`find_duplicates` → `create`, но без гонки между вызовами: сервер сам вызывает
+`find_duplicates(thought.title, thought.synonyms)` внутри транзакции.
+- Совпадений нет — мысль создаётся (`thought_action: "created"`).
+- Есть совпадение — по `on_duplicate`:
+  - `fail` (по умолчанию) — ошибка `DUPLICATE` с `details.candidates` (тот же
+    формат, что у `etn.thoughts.find_duplicates`); ничего не записывается;
+  - `reuse` — берётся лучший (`find_duplicates`-приоритет: точный
+    title > synonym > partial) кандидат как есть, `comment`/`properties`/
+    `links`/`attachments` дополняют его (`thought_action: "reused"`);
+  - `update` — лучший кандидат ещё и патчится полями `thought`
+    (`thought_action: "updated"`).
+
+Ответ: `{ id, version, thought_action: "created"|"updated"|"reused", matched_on:
+"title"|"synonym"|"partial"|null, comment?: {id, version}, properties?: {[key]:
+{id}}, links?: [{id, version}], attachments?: [{id}], request_id }`.
+`matched_on` — чем совпал кандидат, приведший к `reused`/`updated`; `null` для
+свежесозданной или явно адресованной (`thought_id`) мысли.
+
+Real-time и `audit_log`: событие своего типа на каждую фактически
+изменённую/созданную сущность (`thought.created`/`thought.updated` — не
+эмитится при `reused`, `comment.created`/`comment.updated`,
+`property-value.set` × N, `link.created` × M, `attachment.created` × K), но
+**один** вызов `requireWriteBudget`/одна запись `audit_log` на весь bundle —
+для лимита `max_writes_per_minute` (§6.2) bundle всегда стоит как одна запись,
+сколько бы сущностей он ни затронул.
 
 ### 4.3. Дедупликация (важна для агентов)
 
