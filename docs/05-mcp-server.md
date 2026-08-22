@@ -149,7 +149,7 @@ DoD — клиент по умолчанию показывает обычный
 |------|-----------|----------|-----------|
 | `etn.networks.list` | `read-only` | Доступные сети + `description`/`when_to_use`/`has_structure` (см. §3) | — |
 | `etn.networks.structure` | `read-only` | Структура сети: активные мысли узлового типа (превью постоянного комментария, свойства, счётчики, каталог типов). Когда `node_section_type_id` не задан — пустой `sections` | `network_id` |
-| `etn.thoughts.search` | `read-only` | Полнотекстовый поиск | `network_id`, `query`, `scope?` (`names`/`texts`/`links`/`chronology`/`all`), `in_subtree_of?`, `type_id?`, `limit?` |
+| `etn.thoughts.search` | `read-only` | Полнотекстовый поиск | `network_id`, `query`, `scope?` (`names`/`texts`/`links`/`chronology`/`all`), `in_subtree_of?`, `type_id?`, `limit?` (1–200, default 50), `offset?` (≥ 0, default 0; task O11) |
 | `etn.thoughts.query` | `read-only` | Структурная выборка (список по критериям) | см. §5.1a |
 | `etn.thoughts.get` | `read-only` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария; `thought_ref`-значения свойств резолвнуты в `{id, title}`) | `network_id`, `thought_id` |
 | `etn.thoughts.neighbors` | `read-only` | Соседи (+ каталоги `link_types`/`thought_types`) | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход) |
@@ -163,6 +163,16 @@ DoD — клиент по умолчанию показывает обычный
 | `etn.types.list` | `read-only` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §5.1b | `network_id` |
 | `etn.changes.list` | `read-only` | Дельта событий из `event_log` для долгоживущего агента с кэшем (`seq > since_seq`, с признаком усечения буфера и фильтром `audience`) — см. §5.1c | `network_id`, `since_seq`, `limit?` |
 | `etn.metrics.reads` | `read-only` | Метрики чтений мыслей агентами: «топ читаемых» / «мёртвые зоны с даты», см. §5.1d. Счётчик инкрементится автоматически `etn.thoughts.get`/`subgraph`/`query`/`search`/`networks.structure` (см. `02-data-model.md` §3.13) | `network_id`, `kind?` (`top`/`cold`), `since?`, `limit?` (1..200), `include_inactive?` |
+
+`etn.thoughts.search` пагинируется парой `limit`/`offset` (задача O11): оба
+применяются к каждой из четырёх групп (`by_names`/`by_texts`/`by_links`/
+`by_chrono`) независимо; `meta.total_in_group` — **неусечённые** итоги по
+каждой группе, агент по разнице `total_in_group - offset` определяет, есть
+ли ещё страницы, и останавливается, когда выдача пуста либо `offset`
+сравнялся с `total_in_group`. Дефолты (без параметров): `limit = 50`,
+`offset = 0` — то же поведение, что и для одного корневого запроса до O11.
+Без `scope: 'all'` лишние группы не возвращаются и лимит/офсет к ним не
+применяется — пагинируется только то, что заказано.
 
 `etn.networks.structure` — входная точка агента в базу знаний сети (O5).
 Возвращает активные мысли `node_section_type_id` с обогащением:
