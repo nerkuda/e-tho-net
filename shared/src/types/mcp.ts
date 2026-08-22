@@ -49,6 +49,7 @@ export const MCP_TOOL_NAMES = [
   'etn.export.subgraph',
   'etn.types.list',
   'etn.changes.list',
+  'etn.metrics.reads',
   // mutate (§4.2)
   'etn.thoughts.create',
   'etn.thoughts.update',
@@ -118,6 +119,7 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.export.subgraph': { readOnlyHint: true },
   'etn.types.list': { readOnlyHint: true },
   'etn.changes.list': { readOnlyHint: true },
+  'etn.metrics.reads': { readOnlyHint: true },
   'etn.attachments.search': { readOnlyHint: true },
   'etn.thoughts.find_duplicates': { readOnlyHint: true },
 
@@ -476,4 +478,78 @@ export interface McpChangesListResult {
   truncated: boolean;
   /** Effective cap actually applied (echoes `limit` or the default). */
   limit: number;
+}
+
+// ---------------------------------------------------------------------------
+// `etn.metrics.reads` (task O10, 05-mcp-server.md §5.1) — usage analytics
+// for the knowledge base. Returns either the top-read thoughts or the cold
+// ones (never read, or not read since `since`), so the network owner can
+// surface dead zones and over-heated nodes driven by AI-agent traffic.
+// ---------------------------------------------------------------------------
+
+/** Selection for `etn.metrics.reads`. */
+export type McpMetricsReadsKind = 'top' | 'cold';
+
+/** Parameters of `etn.metrics.reads` (05-mcp-server.md §5.1). */
+export interface McpMetricsReadsParams {
+  network_id: string;
+  /**
+   * Selection:
+   *  - `'top'` (default) — thoughts with the highest `reads_count`, ordered
+   *    by `(reads_count DESC, last_read_at DESC)`. Useful for «hot spots».
+   *  - `'cold'` — thoughts that have not been read by MCP tools in the
+   *    selected window. Without `since`: never read at all (zero
+   *    `reads_count`). With `since`: `last_read_at < since` (or never
+   *    read). Ordered by `updated_at DESC` so the freshest nodes surface
+   *    first — the typical «dead zone» the owner cares about.
+   */
+  kind?: McpMetricsReadsKind;
+  /**
+   * ISO-8601 timestamp. Only consulted for `kind: 'cold'`: keeps thoughts
+   * whose `last_read_at` is `null` or older than this value. Ignored for
+   * `kind: 'top'`.
+   */
+  since?: string;
+  /**
+   * Maximum number of items returned. Default 20, hard cap 200.
+   */
+  limit?: number;
+  /**
+   * When `false` (default), only active thoughts (`active = 1`) are
+   * considered. Pass `true` to include inactive nodes in the result.
+   */
+  include_inactive?: boolean;
+}
+
+/** One row of `etn.metrics.reads`. `title`/`type_id` come from `thoughts`
+ *  joined to the aggregate row. `reads_count` is `0` for never-read rows
+ *  produced by `kind: 'cold'` — there is no `thought_read_metrics` row in
+ *  that case, the server synthesises the entry on the fly. */
+export interface McpMetricsReadsItem {
+  thought_id: string;
+  title: string;
+  type_id: string | null;
+  /** Always present. `0` when the thought has never been read. */
+  reads_count: number;
+  /** `null` until the first read. */
+  first_read_at: string | null;
+  /** `null` until the first read. */
+  last_read_at: string | null;
+}
+
+/** Result of `etn.metrics.reads`. */
+export interface McpMetricsReadsResult {
+  network_id: string;
+  /** Echo of the effective `kind`. */
+  kind: McpMetricsReadsKind;
+  /** Echo of the effective `since` (or `null` for `kind: 'top'`). */
+  since: string | null;
+  /** Echo of the effective `limit`. */
+  limit: number;
+  /** Up to `limit` thoughts ordered per `kind`. */
+  items: McpMetricsReadsItem[];
+  /** Reference table of thought types referenced by `items[].type_id`
+   *  (task N6). Same `Record<type_id, ThoughtTypeRef>` shape as the other
+   *  read tools (`etn.thoughts.query`, `subgraph`, `neighbors`). */
+  thought_types: Record<string, ThoughtTypeRef>;
 }

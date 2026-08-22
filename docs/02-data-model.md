@@ -713,6 +713,48 @@ CREATE VIRTUAL TABLE fts_link_texts USING fts5(
 Сам векторный поиск на MVP не реализуется; таблица заведена, чтобы будущий
 семантический поиск через MCP-агента не требовал миграций.
 
+### 3.13. thought_read_metrics (task O10)
+
+Агрегированный счётчик чтений мыслей через MCP-инструменты. Отделён от
+`thought_views` (§3.10.2) намеренно: `thought_views` фиксирует фокус
+конкретного пользователя и управляет сортировкой «по дате просмотра», а
+здесь — **сетевой** агрегат, одинаковый для всех участников, и единственное
+его назначение — аналитика для владельца БЗ («мёртвые зоны» и перегретые
+узлы, см. [05-mcp-server.md](05-mcp-server.md) §5.1).
+
+| Столбец | Тип | Описание |
+|---------|-----|----------|
+| `thought_id` | TEXT PK | UUID, FK → `thoughts.id` ON DELETE CASCADE |
+| `reads_count` | INTEGER NOT NULL DEFAULT 0 | Сколько раз мысль была возвращена MCP read-tools |
+| `first_read_at` | TEXT NOT NULL | ISO-8601 UTC момента первого чтения |
+| `last_read_at` | TEXT NOT NULL | ISO-8601 UTC момента последнего чтения |
+
+Индекс: `idx_thought_read_metrics_count (reads_count DESC, last_read_at DESC)` —
+поддерживает «топ читаемых» без временной сортировки.
+
+**Что инкрементит:** `etn.thoughts.get` (1 узел), `etn.thoughts.subgraph`
+(все узлы подграфа одной батчевой UPSERT), `etn.thoughts.query` (все хиты),
+`etn.thoughts.search` (`by_names` + `by_texts` + `by_chrono` с
+`owner: 'thought'`; `by_links` пропускается, т.к. несёт только `link_id`),
+`etn.networks.structure` (узлы секций).
+
+**Что НЕ инкрементит:** `etn.thoughts.mentions` (поиск упоминаний — не
+«прочитано»), `etn.thoughts.neighbors`/`path`/`usage`/`export.subgraph` (не
+описано в DoD O10; `usage`/`neighbors`/`path` остаются без счётчика, чтобы
+не размывать scope), `etn.types.list`/`etn.changes.list`/`etn.metrics.reads`
+сами по себе.
+
+**Реализация:** один батчевый
+`INSERT … SELECT … FROM json_each(?) ON CONFLICT DO UPDATE` на инкремент —
+N идентификаторов за один SQL-запрос (см. `read-metrics-service.ts`).
+Дедупликация на стороне сервера до SQL; несуществующие `thought_id`
+отбрасываются `INNER JOIN thoughts`, FK-каскад чистит счётчик при удалении
+мысли.
+
+**Доступ:** чтение через `etn.metrics.reads` доступно любому члену сети
+(`member`/`owner`); запись происходит прозрачно как побочный эффект других
+read-tools (отдельный вызов не нужен). Записи в `audit_log` не происходит.
+
 ## 4. Инициализация новой мыслесети
 
 При `POST /networks` сервер:

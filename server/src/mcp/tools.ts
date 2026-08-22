@@ -1,10 +1,10 @@
 /**
  * MCP tools (task F4, docs/05-mcp-server.md §4).
  *
- * Thirty tools in three groups:
+ * Thirty-one tools in three groups:
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
  *     path, links get, mentions, usage, comments get, export, types list,
- *     changes list (O9);
+ *     changes list (O9), metrics.reads (O10);
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert/update/delete,
  *     attachments.add, properties.set, set_active, thoughts.upsert_bundle,
  *     attachments.search;
@@ -56,6 +56,7 @@ import {
   type McpChangeEntry,
   type McpChangesListParams,
   type McpChangesListResult,
+  type McpMetricsReadsResult,
   type McpMutationResult,
   type McpPropertiesSetResult,
   type McpTypesListResult,
@@ -103,6 +104,12 @@ import {
 import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
 import { queryThoughts } from '../domain/query-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
+import {
+  clampReadMetricsParams,
+  getColdReads,
+  getTopReads,
+  recordReads,
+} from '../domain/read-metrics-service.js';
 import { linkTypeCatalog, thoughtTypeCatalog } from './catalogs.js';
 import { exportToMarkdown, getExportJobContent, startExportJob } from '../domain/export-service.js';
 import { findPath, subgraph, traverse } from '../domain/graph-traversal.js';
@@ -315,6 +322,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           };
         });
 
+        // O10: count every section the agent looked at while reading the
+        // network's structure. `nodes_section_type_id` rows are typically a
+        // handful, so this is a tiny batch — kept here for completeness so
+        // the owner can see "the agent loaded these sections N times".
+        recordReads(ndb, sections.map((s) => s.id), { now: new Date().toISOString() });
+
         // Reference table: the network's section type plus every other type
         // referenced by the section nodes (caller can dive further without an
         // extra `etn.types.list` round trip).
@@ -364,7 +377,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        return search(ndb, {
+        const result = search(ndb, {
           q: args.query,
           scope: args.scope,
           in: args.in_subtree_of === undefined ? undefined : 'subtree',
@@ -373,6 +386,17 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           limit: args.limit,
           offset: 0,
         });
+        // O10: count the thoughts referenced by name/text/chrono hits. Link hits
+        // (`by_links`) carry only `link_id`, so they don't move a thought counter.
+        const thoughtIds = [
+          ...result.by_names.map((h) => h.thought_id),
+          ...result.by_texts.map((h) => h.thought_id),
+          ...result.by_chrono
+            .filter((h) => h.owner === 'thought')
+            .map((h) => h.owner_id),
+        ];
+        recordReads(ndb, thoughtIds, { now: new Date().toISOString() });
+        return result;
       }),
   );
 
@@ -419,6 +443,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
         const result = queryThoughts(ndb, args, { maxNodes: rt.limits.maxNodesPerSubgraph });
+        // O10: count every hit in the structured query.
+        recordReads(ndb, result.hits.map((h) => h.id), { now: new Date().toISOString() });
         return {
           ...result,
           thought_types: thoughtTypeCatalog(ndb, result.hits.map((h) => h.type_id)),
@@ -446,6 +472,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const thought = getThoughtOrThrow(ndb, args.thought_id);
         const type = thought.type_id === null ? null : getThoughtType(ndb, thought.type_id);
         const properties = getPropertyValuesResolved(ndb, 'thought', args.thought_id);
+        // O10: count this single read for `etn.metrics.reads` analytics.
+        recordReads(ndb, [thought.id], { now: new Date().toISOString() });
         return { ...thought, type, properties, meta: getThoughtMeta(ndb, args.thought_id) };
       }),
   );
@@ -545,6 +573,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
                 ...getCommentsPreview(ndb, 'thought', id),
               }))
             : undefined;
+        // O10: one batched UPSERT covers every node returned by the subgraph.
+        recordReads(ndb, result.nodes, { now: new Date().toISOString() });
         return {
           nodes,
           edges: result.edges,
@@ -934,6 +964,73 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           truncated,
           limit,
         } satisfies McpChangesListResult;
+      }),
+  );
+
+  // etn.metrics.reads — O10 read tool. Read-side analytics for the knowledge
+  // base: aggregates per-thought counts from `thought_read_metrics` (network-
+  // wide, written by every read tool via `recordReads`). The owner uses
+  // `kind: 'top'` to surface hot spots and `kind: 'cold'` (optionally with
+  // `since`) to find dead zones. Membership is checked through the system
+  // DB the same way as `etn.networks.structure`; the actual reads go through
+  // `openMemberNetwork` because the aggregate table lives in `data.db`.
+  const MetricsReadsSchema = z.object({
+    network_id: NetworkId,
+    kind: z.enum(['top', 'cold']).optional(),
+    since: z.string().min(1).optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+    include_inactive: z.boolean().optional(),
+  });
+  mcp.registerTool(
+    'etn.metrics.reads',
+    {
+      title: 'Метрики чтений мыслей',
+      description:
+        'Per-thought read counters collected by the MCP read tools (task O10, ' +
+        'docs/05-mcp-server.md §5.1). `kind: "top"` (default) returns the most-read ' +
+        'thoughts ordered by `reads_count DESC, last_read_at DESC`. `kind: "cold"` ' +
+        'returns thoughts that have never been read, or — when `since` is given — ' +
+        'whose `last_read_at` is older than the cutoff, ordered by `updated_at DESC` ' +
+        'so the freshest un-touched nodes come first. Use this to spot hot spots ' +
+        'and dead zones; the counter is incremented by `etn.thoughts.get`, ' +
+        '`etn.thoughts.subgraph`, `etn.thoughts.query`, `etn.thoughts.search` and ' +
+        '`etn.networks.structure` after each successful read.',
+      inputSchema: MetricsReadsSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.metrics.reads'],
+    },
+    (args) =>
+      runTool(async () => {
+        const network = rt.deps.systemDb.getNetworkById(args.network_id);
+        if (network === null) {
+          throw new EtnError('NOT_FOUND', `Network ${args.network_id} not found.`);
+        }
+        const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, args.network_id);
+        if (role === null) {
+          throw new EtnError(
+            'FORBIDDEN',
+            `You are not a member of network ${args.network_id}; this API key cannot access it.`,
+            { network_id: args.network_id },
+          );
+        }
+        const { kind, limit } = clampReadMetricsParams({
+          kind: args.kind,
+          limit: args.limit,
+        });
+        const includeInactive = args.include_inactive === true;
+        const since = kind === 'cold' ? args.since : undefined;
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const items =
+          kind === 'cold'
+            ? getColdReads(ndb, { limit, since, includeInactive })
+            : getTopReads(ndb, { limit, includeInactive });
+        return {
+          network_id: args.network_id,
+          kind,
+          since: since ?? null,
+          limit,
+          items,
+          thought_types: thoughtTypeCatalog(ndb, items.map((i) => i.type_id)),
+        } satisfies McpMetricsReadsResult;
       }),
   );
 

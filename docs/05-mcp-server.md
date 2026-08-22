@@ -162,6 +162,7 @@ DoD — клиент по умолчанию показывает обычный
 | `etn.export.subgraph` | `read-only` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
 | `etn.types.list` | `read-only` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §5.1b | `network_id` |
 | `etn.changes.list` | `read-only` | Дельта событий из `event_log` для долгоживущего агента с кэшем (`seq > since_seq`, с признаком усечения буфера и фильтром `audience`) — см. §5.1c | `network_id`, `since_seq`, `limit?` |
+| `etn.metrics.reads` | `read-only` | Метрики чтений мыслей агентами: «топ читаемых» / «мёртвые зоны с даты», см. §5.1d. Счётчик инкрементится автоматически `etn.thoughts.get`/`subgraph`/`query`/`search`/`networks.structure` (см. `02-data-model.md` §3.13) | `network_id`, `kind?` (`top`/`cold`), `since?`, `limit?` (1..200), `include_inactive?` |
 
 `etn.networks.structure` — входная точка агента в базу знаний сети (O5).
 Возвращает активные мысли `node_section_type_id` с обогащением:
@@ -427,6 +428,74 @@ Cookbook (`docs/mcp-clients.md` §8.2):
 
 Тип ответа — `McpChangesListResult` в `@etn/shared` (параметры —
 `McpChangesListParams`).
+
+#### 5.1d. `etn.metrics.reads` — метрики использования БЗ (task O10)
+
+Владелец базы знаний не видит «мёртвые зоны» (узлы, которые агенты
+никогда не находят) и перегретые узлы: `thought_views` (§3.10.2) фиксирует
+только фокус конкретного пользователя и не отражает агентский трафик,
+а `audit_log` на каждое чтение слишком дорог. `etn.metrics.reads`
+возвращает агрегат из таблицы `thought_read_metrics` (02-data-model.md
+§3.13) — счётчик `reads_count` инкрементится прозрачно для агента как
+побочный эффект `etn.thoughts.get`/`subgraph`/`query`/`search`/
+`networks.structure` (батчево, один SQL-запрос на инкремент). Записи в
+`audit_log` нет, real-time события нет — инструмент чисто read-only.
+
+Параметры:
+
+- `network_id` — обязательный. Доступ — любой член сети (`member` или
+  `owner`).
+- `kind` *(опц.)* — `'top'` (по умолчанию) или `'cold'`:
+  - `'top'` — топ читаемых; `ORDER BY reads_count DESC, last_read_at
+    DESC`. Полезно для понимания, что агенты «цепляют» в первую очередь.
+  - `'cold'` — не читанные с даты (или вообще); `ORDER BY updated_at
+    DESC`, чтобы свежие нетронутые узлы оказывались наверху — обычно это
+    и есть «мёртвая зона», которая волнует владельца.
+- `since` *(опц., только для `kind: 'cold'`)* — ISO-8601; мысль попадает в
+  выборку, если `last_read_at IS NULL` или строго `< since`. Без `since`
+  — «никогда не читалась».
+- `limit` *(опц.)* — `1..200`, по умолчанию `20`.
+- `include_inactive` *(опц.)* — если `false` (по умолчанию), неактивные
+  (`active = 0`) мысли в выборку не попадают.
+
+Ответ:
+
+```jsonc
+{
+  "network_id": "<net>",
+  "kind": "top" | "cold",
+  "since": "ISO-8601" | null,
+  "limit": 20,
+  "items": [
+    {
+      "thought_id": "<uuid>",
+      "title": "...",
+      "type_id": "<uuid>" | null,
+      "reads_count": 42,
+      "first_read_at": "ISO-8601",
+      "last_read_at":  "ISO-8601"
+    }
+    // для cold с `reads_count = 0` поля `first_read_at`/`last_read_at` равны null
+  ],
+  "thought_types": { "<type_id>": { "id": ..., "name": ..., ... } }
+}
+```
+
+`thought_types` — обычная reference-таблица (N6) для типов из `items[]`.
+Тип ответа — `McpMetricsReadsResult` в `@etn/shared` (параметры —
+`McpMetricsReadsParams`).
+
+Типичные сценарии (`docs/mcp-clients.md` §8.2):
+
+- «Горячие» узлы: `kind: 'top'` без `since` — что агенты читают чаще всего.
+- «Мёртвые зоны за неделю»: `kind: 'cold', since: '<неделю назад>'` —
+  что никто не открывал последние 7 дней.
+- «Никогда не читанные»: `kind: 'cold'` без `since` — узлы, до которых
+  агенты вообще не добираются (кандидаты на удаление/перенос в другую сеть
+  или наоборот — на доработку, чтобы их было легче найти).
+
+`etn.metrics.reads` сам **не** инкрементирует счётчик (см. §3.13) — это
+только чтение, чтобы можно было запрашивать метрики сколько угодно раз.
 
 ### 5.2. Создание и изменение
 
