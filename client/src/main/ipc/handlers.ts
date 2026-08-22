@@ -1093,8 +1093,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'system.downloadExport',
     bind(async (jobId: string, suggestedFilename: string) => {
-      const { downloadJob } = requireRest(deps);
-      const { contentType, body } = await downloadJob(jobId);
+      const rest = requireRest(deps);
+      const { contentType, body } = await rest.downloadJob(jobId);
       const ext = extensionForContentType(contentType);
       const filename = suggestedFilename.endsWith(`.${ext}`)
         ? suggestedFilename
