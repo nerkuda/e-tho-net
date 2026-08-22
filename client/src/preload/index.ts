@@ -200,14 +200,22 @@ function buildApi(): EtnApi {
         return () => ipcRenderer.removeListener('realtime:event', listener);
       },
       onStatusChange(cb) {
-        const listener = (_event: unknown, status: string): void => cb(status);
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(payload as { networkId: string; status: string });
         ipcRenderer.on('realtime:status', listener);
         return () => ipcRenderer.removeListener('realtime:status', listener);
       },
       onStale(cb) {
-        const listener = (_event: unknown, lastSeq: number): void => cb(lastSeq);
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(payload as { networkId: string; lastSeq: number });
         ipcRenderer.on('realtime:stale', listener);
         return () => ipcRenderer.removeListener('realtime:stale', listener);
+      },
+      onNetworkLost(cb) {
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(payload as { networkId: string; reason: 'unauthorized' | 'not-found' });
+        ipcRenderer.on('realtime:networkLost', listener);
+        return () => ipcRenderer.removeListener('realtime:networkLost', listener);
       },
     },
     ui: {
@@ -237,6 +245,14 @@ function buildApi(): EtnApi {
         invoke('history.chronicleRemove', profileId, networkId, kind, id),
       chronicleClear: (profileId, networkId) =>
         invoke('history.chronicleClear', profileId, networkId),
+    },
+    tabs: {
+      list: () => invoke('tabs.list'),
+      open: (networkId) => invoke('tabs.open', networkId),
+      activate: (tabId) => invoke('tabs.activate', tabId),
+      close: (tabId) => invoke('tabs.close', tabId),
+      reorder: (orderedIds) => invoke('tabs.reorder', orderedIds),
+      updateState: (tabId, partial) => invoke('tabs.updateState', tabId, partial),
     },
     system: {
       health: () => invoke('system.health'),

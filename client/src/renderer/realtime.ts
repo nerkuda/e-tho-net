@@ -68,13 +68,31 @@ export function initRealtime(): void {
   if (initialized) return;
   initialized = true;
 
-  etn.realtime.onStatusChange((status) => {
+  etn.realtime.onStatusChange((payload) => {
+    // Q2: payload is `{networkId, status}` from TabRealtimePool.
     const valid: RtStatus[] = ['idle', 'connecting', 'connected', 'reconnecting', 'offline'];
-    const next: RtStatus = valid.includes(status as RtStatus) ? (status as RtStatus) : 'offline';
-    store.update({ rtStatus: next });
+    const obj = payload as { networkId?: unknown; status?: unknown };
+    const networkId = typeof obj.networkId === 'string' ? obj.networkId : null;
+    const statusStr = typeof obj.status === 'string' ? obj.status : null;
+    if (networkId === null || statusStr === null) return;
+    const next: RtStatus = valid.includes(statusStr as RtStatus)
+      ? (statusStr as RtStatus)
+      : 'offline';
+    const map = { ...store.state.rtStatusByNetwork, [networkId]: next };
+    const active = store.state.networkId;
+    const activeStatus =
+      active !== null && map[active] !== undefined ? map[active]! : next;
+    store.update({ rtStatusByNetwork: map, rtStatus: activeStatus });
   });
 
-  etn.realtime.onStale(() => {
+  etn.realtime.onStale((payload) => {
+    // Q2: payload is `{networkId, lastSeq}` from TabRealtimePool.
+    const obj = payload as { networkId?: unknown; lastSeq?: unknown };
+    const networkId = typeof obj.networkId === 'string' ? obj.networkId : null;
+    if (networkId === null) return;
+    // UI-wide "stale" applies to the active network — non-active tabs lose
+    // access silently (Q3/Q5 will surface them with the dirty marker).
+    if (networkId !== store.state.networkId) return;
     effects.onStale();
   });
 

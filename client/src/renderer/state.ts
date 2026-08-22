@@ -94,8 +94,13 @@ export interface AppState {
   linkTypes: LinkType[];
   /** Thought type catalogue of the open network (editor header). */
   thoughtTypes: ThoughtType[];
-  /** Realtime status (🟢/🟡/🔴 indicator, H19 offline blocking). */
+  /** Realtime status (🟢/🟡/🔴 indicator, H19 offline blocking).
+   *  С фазой Q — derived (см. {@link getRtStatus}); для UI используется хелпер. */
   rtStatus: RtStatus;
+  /** Realtime status per network id (07-client-electron.md §2, Q2). Ключ —
+   *  `networkId` открытой сети. Активный статус берётся по
+   *  {@link AppState.networkId}; fallback — {@link AppState.rtStatus}. */
+  rtStatusByNetwork: Record<string, RtStatus>;
   /** UI theme applied to the document root (L5 `client_meta.theme`, L10). */
   theme: Theme;
   /** Last realtime event description for the status bar (auto-hides). */
@@ -144,6 +149,7 @@ const initial: AppState = {
   linkTypes: [],
   thoughtTypes: [],
   rtStatus: 'idle',
+  rtStatusByNetwork: {},
   theme: 'light',
   lastEvent: null,
   editorTarget: null,

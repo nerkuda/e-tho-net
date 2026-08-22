@@ -122,6 +122,36 @@ export type PickFileResult =
 /** Which view's visit history a `history.*` call addresses (L15, 11 §2.3.1). */
 export type HistoryScope = 'focus' | 'structures';
 
+/** Workspace view modes (08-ui-spec.md §15.1). */
+export type TabViewMode = 'map' | 'structures' | 'chronicle';
+
+/**
+ * Public DTO of an open tab (07-client-electron.md §3.6, workplan Q2).
+ * `focus_id`/`view_mode`/etc. may be `null` while the tab is freshly created.
+ */
+export interface TabDto {
+  tab_id: string;
+  slot_idx: number;
+  network_id: string;
+  focus_id: string | null;
+  view_mode: TabViewMode | null;
+  structures_state: string | null;
+  chronicle_state: string | null;
+  last_active_at: string;
+}
+
+/**
+ * Patch for {@link TabDto} updates (focus/view/filter_state/slot). A `null`
+ * value clears the corresponding field (e.g. `focus_id: null` сбрасывает фокус).
+ */
+export interface TabStatePatch {
+  slot_idx?: number;
+  focus_id?: string | null;
+  view_mode?: TabViewMode | null;
+  structures_state?: string | null;
+  chronicle_state?: string | null;
+}
+
 /** How a duplicate candidate matched the proposed title (add-thought dialog). */
 export type DuplicateMatchKind = 'title' | 'synonym' | 'partial';
 
@@ -536,9 +566,18 @@ export interface EtnApi {
   };
   realtime: {
     onEvent(cb: (event: unknown) => void): () => void;
-    onStatusChange(cb: (status: string) => void): () => void;
-    /** `resume.stale` — event-log window exceeded; the UI must fully re-focus. */
-    onStale(cb: (lastSeq: number) => void): () => void;
+    /**
+     * Per-network status change (Q2). Payload: `{networkId, status}` where
+     * `status` is one of `'idle'|'connecting'|'connected'|'reconnecting'|'offline'`.
+     */
+    onStatusChange(cb: (payload: { networkId: string; status: string }) => void): () => void;
+    /**
+     * `resume.stale` per network (Q2). Payload: `{networkId, lastSeq}` — the
+     * UI must fully re-focus the network whose event-log window was exceeded.
+     */
+    onStale(cb: (payload: { networkId: string; lastSeq: number }) => void): () => void;
+    /** Per-network terminal close (Q5) — `network.deleted` or membership lost. */
+    onNetworkLost(cb: (payload: { networkId: string; reason: 'unauthorized' | 'not-found' }) => void): () => void;
   };
   ui: {
     getState(networkId: string, key: string, tabId?: string | null): Promise<string | null>;
@@ -612,6 +651,23 @@ export interface EtnApi {
     ): Promise<void>;
     /** Chronicles (L20): clears the chronicle view's history (on «Применить»). */
     chronicleClear(profileId: string, networkId: string): Promise<void>;
+  };
+  tabs: {
+    /** List all open tabs of the active profile, ordered by `slot_idx` (Q1/Q2). */
+    list(): Promise<TabDto[]>;
+    /** Open a new tab for `networkId`; acquires the realtime socket. Returns
+     *  the created tab. If a tab for the same network already exists, the
+     *  existing tab is returned (no duplicate open). */
+    open(networkId: string): Promise<TabDto>;
+    /** Activate a tab (returns snapshot for renderer store hydration). Returns
+     *  `null` if the network is no longer accessible (Q5). */
+    activate(tabId: string): Promise<TabDto | null>;
+    /** Close a tab; releases the realtime socket when no tabs reference it. */
+    close(tabId: string): Promise<void>;
+    /** Reorder tabs to the given id order (single transaction). */
+    reorder(orderedIds: string[]): Promise<void>;
+    /** Update a tab's state (focus_id, view_mode, filter_state, slot_idx). */
+    updateState(tabId: string, partial: TabStatePatch): Promise<void>;
   };
   system: {
     health(): Promise<HealthResponse>;

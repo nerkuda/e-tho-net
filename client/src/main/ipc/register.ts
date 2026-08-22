@@ -1,9 +1,13 @@
 /**
  * IPC registration (task G7): the `etn:invoke` channel and realtime bridges.
  *
- * Owns the main-process connection state (active `RestClient`, `RealtimeClient`,
- * profile and current network) and binds it into the handler map from
- * `handlers.ts`. All state lives here — `handlers.ts` stays pure.
+ * Owns the main-process connection state (active `RestClient`,
+ * `TabRealtimePool`, profile and current user) and binds it into the handler
+ * map from `handlers.ts`. All state lives here — `handlers.ts` stays pure.
+ *
+ * С фазой Q один `RealtimeClient` заменён пулом (`TabRealtimePool`) — по сокету
+ * на каждую открытую сеть; refcount растёт при `etn.tabs.open`/снижается при
+ * `etn.tabs.close`.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -13,8 +17,8 @@ import { UI_STATE_KEY, type CurrentUser, type Network } from '@etn/shared';
 import type { LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { decryptApiKey, encryptApiKey } from '../safe-storage.js';
 import { RestClient } from '../net/rest-client.js';
-import { RealtimeClient, normaliseWsUrl } from '../net/ws-client.js';
-import { RealtimeState, applyRealtimeEvent } from '../realtime/applier.js';
+import { RealtimeState } from '../realtime/applier.js';
+import { TabRealtimePool } from '../realtime/tab-rt-pool.js';
 import { createHandlers } from './handlers.js';
 import type { IpcInvokePayload } from './contract.js';
 
@@ -33,7 +37,7 @@ export interface RegisterIpcOptions {
  */
 export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
   let rest: RestClient | null = null;
-  let rt: RealtimeClient | null = null;
+  let pool: TabRealtimePool | null = null;
   let profile: ServerProfileRow | null = null;
   let currentNetworkId: string | null = null;
   let currentUser: CurrentUser | null = null;
@@ -62,48 +66,53 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
     });
     const me = await restClient.getMe(); // key check before anything else
 
-    const rtClient = new RealtimeClient({
-      baseUrl: normaliseWsUrl(p.base_url),
-      getApiKey: keyResolver(p),
+    const rtPool = new TabRealtimePool({
+      profile: p,
       getClientId: () => opts.clientId,
-      getNetworkId: () => currentNetworkId,
+      getApiKey: keyResolver(p),
       localDb: opts.localDb,
-    });
-    rtClient.onTyped('event', (event) => {
-      // G8: apply the event to the local cache, drop own-client echoes, maintain
-      // focus history; only accepted events reach the renderer.
-      const result = applyRealtimeEvent(
-        rtState,
-        {
-          getClientId: () => opts.clientId,
-          getCurrentUserId: () => currentUser?.id ?? p.user_id ?? null,
-          removeFromFocusHistoryEverywhere: (thoughtId: string) => {
-            const nid = currentNetworkId;
-            if (!nid) return;
-            // Both per-view histories (focus + structures, 11 §2.3.1).
-            const scopes = ['focus', 'structures'] as const;
-            for (const saved of opts.localDb.listProfiles()) {
-              for (const scope of scopes) {
-                opts.localDb.removeFocusHistory(saved.id, nid, thoughtId, scope);
-              }
+      rtState,
+      getCurrentUserId: () => currentUser?.id ?? p.user_id ?? null,
+      removeFromFocusHistoryEverywhere: (thoughtId: string) => {
+        // Both per-view histories (focus + structures, 11 §2.3.1). Pool only
+        // carries one active network at a time per applier invocation; we
+        // sweep every known network via the saved tabs (Q2/Q3).
+        for (const saved of opts.localDb.listProfiles()) {
+          for (const scope of ['focus', 'structures'] as const) {
+            for (const tab of opts.localDb.listTabs(saved.id)) {
+              opts.localDb.removeFocusHistory(saved.id, tab.network_id, tab.tab_id, thoughtId, scope);
             }
-          },
-          getCurrentFocusId: (nid: string) => {
-            if (!profile) return null;
-            return opts.localDb.getUiState(profile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID);
-          },
-        },
-        event,
-      );
-      if (result.applied) broadcast('realtime:event', event);
+          }
+        }
+      },
+      getCurrentFocusId: (nid: string) => {
+        if (!profile) return null;
+        // Walk active tabs to find the focus for the requested network — this
+        // is a per-network query, used by the applier when echoing back.
+        for (const tab of opts.localDb.listTabs(profile.id)) {
+          if (tab.network_id !== nid) continue;
+          const focusId = opts.localDb.getUiState(profile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, tab.tab_id);
+          if (focusId !== null) return focusId;
+        }
+        // Legacy fallback: tab-less rows (migration 001–004).
+        return opts.localDb.getUiState(profile.id, nid, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, null);
+      },
+      broadcast,
     });
-    rtClient.onTyped('status', (status) => broadcast('realtime:status', status));
-    rtClient.onTyped('stale', (lastSeq) => broadcast('realtime:stale', lastSeq));
 
     rest = restClient;
-    rt = rtClient;
+    pool = rtPool;
     profile = p;
     currentUser = me;
+
+    // Q2: re-acquire realtime sockets for every previously open tab so non-
+    // active tabs still receive events (dirty-marker «*» requirement).
+    const restoredNetworks = new Set<string>();
+    for (const tab of opts.localDb.listTabs(p.id)) {
+      if (restoredNetworks.has(tab.network_id)) continue;
+      restoredNetworks.add(tab.network_id);
+      rtPool.acquire(tab.network_id);
+    }
     return me;
   };
 
@@ -135,11 +144,11 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
 
   const disconnect = (): void => {
     try {
-      rt?.disconnect();
+      pool?.shutdown();
     } catch {
       // best-effort: dropping the reference below is the real teardown
     }
-    rt = null;
+    pool = null;
     rest = null;
     profile = null;
     currentNetworkId = null;
@@ -153,14 +162,15 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
     if (profile) {
       opts.localDb.setUiState(profile.id, networkId, UI_STATE_KEY.CURRENT_NETWORK_ID, networkId);
     }
-    rt?.connect();
+    // Q2: explicit acquire via pool (legacy single-network path still works).
+    pool?.acquire(networkId);
     return network;
   };
 
   const handlers = createHandlers({
     localDb: opts.localDb,
     getRest: () => rest,
-    getRealtime: () => rt,
+    getRealtimePool: () => pool,
     getProfile: () => profile,
     connectProfile,
     addProfile,
