@@ -362,6 +362,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     in_subtree_of: ThoughtId.optional(),
     type_id: ThoughtId.nullable().optional(),
     limit: z.number().int().min(1).max(200).optional(),
+    offset: z.number().int().min(0).optional(),
   });
   mcp.registerTool(
     'etn.thoughts.search',
@@ -369,8 +370,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Полнотекстовый поиск',
       description:
         'Full-text search across thought names, comment texts, link texts and chronology ' +
-        '(docs/05-mcp-server.md §4.1). `scope` selects result groups (`names`/`texts`/`links`/`chronology`/`all`). ' +
-        '`in_subtree_of` restricts to the subtree of a thought; `type_id` filters by thought type.',
+        '(docs/05-mcp-server.md §4.1, task O11). `scope` selects result groups ' +
+        '(`names`/`texts`/`links`/`chronology`/`all`). `in_subtree_of` restricts to the subtree ' +
+        'of a thought; `type_id` filters by thought type. Pagination: `limit` (1–200, default 50) ' +
+        'and `offset` (≥ 0, default 0) — together they walk the result tail; `meta.total_in_group` ' +
+        'reports the unfiltered totals per group so the agent can detect the end of the list.',
       inputSchema: SearchSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.search'],
     },
@@ -384,7 +388,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           from_thought_id: args.in_subtree_of,
           type_id: args.type_id === undefined || args.type_id === null ? undefined : [args.type_id],
           limit: args.limit,
-          offset: 0,
+          offset: args.offset,
         });
         // O10: count the thoughts referenced by name/text/chrono hits. Link hits
         // (`by_links`) carry only `link_id`, so they don't move a thought counter.

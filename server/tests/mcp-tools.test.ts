@@ -2321,4 +2321,143 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       await closeMcpContext(ctx);
     }
   });
+
+  it('etn.thoughts.search honours limit + offset and walks the full result tail (O11)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Five thoughts sharing a unique token: every match lands in
+        // by_names, so `limit`/`offset` there are easy to reason about.
+        const TOKEN = `paginate_o11_${randomUUID().replace(/-/g, '')}`;
+        const createdIds = new Set<string>();
+        for (let i = 0; i < 5; i++) {
+          const created = await handle.client.callTool({
+            name: 'etn.thoughts.create',
+            arguments: {
+              network_id: ctx.networkId,
+              title: `${TOKEN} entry ${i}`,
+            },
+          });
+          assert.equal(created.isError, undefined, toolText(created));
+          const { id } = toolJson<{ id: string }>(created);
+          createdIds.add(id);
+        }
+
+        // Page 1 (offset 0, limit 2): 2 hits, totals unchanged.
+        const p1 = await handle.client.callTool({
+          name: 'etn.thoughts.search',
+          arguments: {
+            network_id: ctx.networkId,
+            query: TOKEN,
+            scope: 'names',
+            limit: 2,
+            offset: 0,
+          },
+        });
+        assert.equal(p1.isError, undefined, toolText(p1));
+        const r1 = toolJson<{
+          by_names: Array<{ thought_id: string }>;
+          meta: { total_in_group: { names: number; texts: number; links: number; chronology: number } };
+        }>(p1);
+        assert.equal(r1.by_names.length, 2);
+        assert.equal(r1.meta.total_in_group.names, 5);
+
+        // Page 2 (offset 2, limit 2): next 2 hits, totals still 5.
+        const p2 = await handle.client.callTool({
+          name: 'etn.thoughts.search',
+          arguments: {
+            network_id: ctx.networkId,
+            query: TOKEN,
+            scope: 'names',
+            limit: 2,
+            offset: 2,
+          },
+        });
+        const r2 = toolJson<{
+          by_names: Array<{ thought_id: string }>;
+          meta: { total_in_group: { names: number } };
+        }>(p2);
+        assert.equal(r2.by_names.length, 2);
+        assert.equal(r2.meta.total_in_group.names, 5);
+
+        // Pages must not overlap and together cover all five thoughts.
+        const seen = new Set<string>();
+        for (const h of [...r1.by_names, ...r2.by_names]) seen.add(h.thought_id);
+        assert.equal(seen.size, 4, 'pages must be disjoint');
+        for (const id of seen) assert.ok(createdIds.has(id), 'hits belong to the created set');
+
+        // Page 3 (offset 4): the tail — exactly 1 hit.
+        const p3 = await handle.client.callTool({
+          name: 'etn.thoughts.search',
+          arguments: {
+            network_id: ctx.networkId,
+            query: TOKEN,
+            scope: 'names',
+            limit: 2,
+            offset: 4,
+          },
+        });
+        const r3 = toolJson<{
+          by_names: Array<{ thought_id: string }>;
+          meta: { total_in_group: { names: number } };
+        }>(p3);
+        assert.equal(r3.by_names.length, 1);
+        assert.equal(r3.meta.total_in_group.names, 5);
+
+        // Page 4 (offset 5): past the end — empty page, totals still report 5.
+        const p4 = await handle.client.callTool({
+          name: 'etn.thoughts.search',
+          arguments: {
+            network_id: ctx.networkId,
+            query: TOKEN,
+            scope: 'names',
+            limit: 2,
+            offset: 5,
+          },
+        });
+        const r4 = toolJson<{
+          by_names: Array<{ thought_id: string }>;
+          meta: { total_in_group: { names: number } };
+        }>(p4);
+        assert.equal(r4.by_names.length, 0);
+        assert.equal(r4.meta.total_in_group.names, 5);
+
+        // Sanity: omitting offset behaves like offset: 0.
+        const defaultPage = await handle.client.callTool({
+          name: 'etn.thoughts.search',
+          arguments: {
+            network_id: ctx.networkId,
+            query: TOKEN,
+            scope: 'names',
+            limit: 2,
+          },
+        });
+        const rd = toolJson<{
+          by_names: Array<{ thought_id: string }>;
+        }>(defaultPage);
+        assert.deepEqual(
+          rd.by_names.map((h) => h.thought_id),
+          r1.by_names.map((h) => h.thought_id),
+        );
+
+        // Negative offset is rejected by the input schema.
+        const bad = await handle.client.callTool({
+          name: 'etn.thoughts.search',
+          arguments: {
+            network_id: ctx.networkId,
+            query: TOKEN,
+            scope: 'names',
+            offset: -1,
+          },
+        });
+        assert.equal(bad.isError, true);
+        assert.match(toolText(bad), /offset|VALIDATION/i);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
 });
