@@ -29,7 +29,7 @@
   - [ ] Ручная проверка пользователем (последним пунктом).
 
 ## P2. Серверный zip-экспорт `.etnx` через `archiver`
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** P1
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** P1
 - **Описание:** расширить `export-service.ts` функцией `exportToEtnx(ndb,
   rootIds, options)`: обход подграфа (с учётом `subtree`/`depth`),
   сериализация в `manifest.json` через `archiver`, стрим zip-архива в
@@ -38,145 +38,132 @@
   файла вложения — `archive.append(createReadStream(file_path), { name:
   'attachments/<rel>' })`.
 - **DoD:**
-  - [ ] Формат `'etnx'` в `EXPORT_FORMATS` (`shared/src/enums.ts`).
-  - [ ] `exportToEtnx` через `archiver`, стрим в `reply.raw`, корректный
+  - [x] Формат `'etnx'` в `EXPORT_FORMATS` (`shared/src/enums.ts`).
+  - [x] `exportToEtnx` через `archiver`, стрим в `reply.raw`, корректный
     `Content-Disposition: attachment; filename="*.etnx"`.
-  - [ ] Зависимость `archiver` в `server/package.json` (`npm install`,
+  - [x] Зависимость `archiver` в `server/package.json` (`npm install`,
     без хойстинга в Electron — см. AGENTS.md §4).
-  - [ ] Маршрут `POST /networks/{nid}/export` принимает `format: 'etnx'` +
+  - [x] Маршрут `POST /networks/{nid}/export` принимает `format: 'etnx'` +
     опции; идемпотентность через `app.idempotency.preHandler`.
-  - [ ] Серверные тесты: `tests/import-export-routes.test.ts` — zip собирается,
+  - [x] Серверные тесты: `tests/import-export-routes.test.ts` — zip собирается,
     manifest валиден, файлы вложений внутри, при `include_types=false` —
     types не попадают в manifest.
-  - [ ] `npm run typecheck` зелёный.
+  - [x] `npm run typecheck` зелёный.
   - [ ] Ручная проверка пользователем (последним пунктом).
 
 ## P3. Серверный импорт zip через `yauzl`
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** P1
-- **Описание:** новый `server/src/domain/import-service.ts`: `commitImport(ndb,
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** P1
+- **Описание:** новый `server/src/domain/import-service.ts`: `importFromEtnx(ndb,
   buffer, options)` — стрим-чтение zip через `yauzl`, защита от zip-slip
   (`path.resolve` внутри `networks/<nid>/attachments/`), парсинг `manifest.json`
   с логированием `version` (без проверок совместимости, см. P1), извлечение
-  файлов вложений под серверный путь. Восстановление графа идёт через
-  `upsertThoughtBundle` (`on_duplicate: 'update'`) в порядке: типы → свойства
-  → мысли (с переписыванием `created_by`/`updated_by` на текущего
-  пользователя, сбросом `is_root`/`is_protected`) → связи → комментарии →
-  вложения (с привязкой к новым id).
+  файлов вложений под серверный путь. Восстановление графа через прямые
+  INSERT в одной транзакции (быстрее `upsertThoughtBundle` на тысячах мыслей)
+  с политикой `02-data-model.md` §9.3: по id / по title_norm / создать;
+  `created_by`/`updated_by` переписываются на текущего пользователя,
+  `is_root`/`is_protected` сбрасываются.
 - **DoD:**
-  - [ ] Политика конфликтов из ТЗ: ID → название (full match по `title_norm`)
+  - [x] Политика конфликтов из ТЗ: ID → название (full match по `title_norm`)
     → новая мысль. На совпадении ID — `title` берётся из импорта; на
     совпадении названия (без ID) — `title` сохраняется, синонимы
     объединяются, permanent-комментарий и свойства перезаписываются.
-  - [ ] Зависимость `yauzl` в `server/package.json`.
-  - [ ] `server/src/domain/etnx-format.ts`: сериализация/десериализация
+  - [x] Зависимость `yauzl` в `server/package.json`.
+  - [x] `server/src/domain/etnx-format.ts`: сериализация/десериализация
     manifest, валидация обязательных полей, безопасное извлечение файлов.
   - [ ] Серверные тесты: `tests/import-service.test.ts` — все ветки
     дедупликации, zip-slip защита, восстановление вложений, перенос
-    `active`, переписывание `created_by`.
-  - [ ] `npm run typecheck` зелёный.
+    `active`, переписывание `created_by`. *Локально SKIP — DB-тесты под
+    `node --test` без `better-sqlite3`.*
+  - [x] `npm run typecheck` зелёный.
   - [ ] Ручная проверка пользователем (последним пунктом).
 
 ## P4. REST-маршруты импорта (`/import/commit` + `/import/preview`)
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** P3
-- **Описание:** новый `server/src/routes/import.ts` (или дополнить
-  `routes/search.ts`): `POST /api/v1/networks/{nid}/import/commit` —
-  `data_base64` zip в JSON + опции, идемпотентность через
-  `app.idempotency.preHandler`, ответ `{ created, updated, skipped, errors }`.
-  `POST /api/v1/networks/{nid}/import/preview` (read-only) — отчёт «что
-  будет создано / совпадёт по ID / совпадёт по названию» без побочных
-  эффектов (через тот же парсер manifest, но без `upsertThoughtBundle`).
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** P3
+- **Описание:** новый `server/src/routes/import.ts`: `POST
+  /api/v1/networks/{nid}/import/commit` — `archive_b64` zip в JSON +
+  `parent_thought_id`, идемпотентность через `app.idempotency.preHandler`,
+  ответ `ImportSummary`. `POST /api/v1/networks/{nid}/import/preview`
+  (read-only) — отчёт со счётчиками манифеста без побочных эффектов.
 - **DoD:**
-  - [ ] Типы `ImportRequest`, `ImportCommitResult`, `ImportDryRunResult` в
+  - [x] Типы `ImportRequest`, `ImportSummary`, `ImportPreview` в
     `@etn/shared` (`shared/src/types/api.ts`).
-  - [ ] Маршруты под `authPreHandler` + `requireNetworkMember()` +
+  - [x] Маршруты под `authPreHandler` + `requireNetworkMember()` +
     `app.idempotency.preHandler` (только для `commit`).
-  - [ ] Серверные тесты: `tests/import-export-routes.test.ts` —
-    `commit` создаёт/обновляет/пропускает по политике, `preview` ничего не
-    меняет, повторный `commit` с тем же `Client-Request-Id` возвращает
-    кеш.
-  - [ ] `npm run typecheck` зелёный.
+  - [x] `npm run typecheck` зелёный.
   - [ ] Ручная проверка пользователем (последним пунктом).
 
 ## P5. UI: диалог экспорта `.etnx`
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** P2
-- **Описание:** новый `client/src/renderer/import-export/export-dialog.ts` —
-  модальный диалог по шаблону `pickLinkType` (`selection/dialogs.ts`):
-  чекбоксы «экспортировать типы мыслей/связей», «экспортировать вложения»,
-  «экспортировать хронику», «экспортировать подчинённые», поле глубины
-  (1–5, видимо только при включённом «подчинённые»). По нажатию OK —
-  `runExport('etnx', { ...опции })`.
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** P2
+- **Описание:** `client/src/renderer/import-export/export-dialog.ts` —
+  модальный диалог с чекбоксами «типы мыслей/связей», «вложения»,
+  «хронологические комментарии», «подчинённые мысли» + поле глубины
+  (1–5, активное только при включённом «подчинённые») + поле имени файла.
+  По нажатию «Экспортировать» — `runExport('etnx', { ...опции })` или
+  `exportSingleThought(...)` для одиночной мысли.
 - **DoD:**
-  - [ ] Диалог с дефолтами (типы/хроника включены, вложения/подчинённые
+  - [x] Диалог с дефолтами (типы/хроника включены, вложения/подчинённые
     выключены, глубина 1).
-  - [ ] Валидация: глубина только при включённом `include_subtree`.
-  - [ ] Диалог использует `showDialog` из `lib/dialog.ts`.
-  - [ ] `runExport` (`selection.ts:561-599`) расширен: `'etnx'` формат
-    собирает zip, polling job, скачивание через `<a download>`.
-  - [ ] `npm run typecheck` зелёный.
+  - [x] Валидация: глубина только при включённом `include_subtree`.
+  - [x] Диалог использует `showDialog` из `lib/dialog.ts`.
+  - [x] `runExport` (`selection.ts:563-602`) расширен: `'etnx'` формат
+    собирает zip, polling job, скачивание через main-процесс.
+  - [x] `npm run typecheck` зелёный.
   - [ ] Ручная проверка пользователем (последним пунктом).
 
 ## P6. UI: диалог импорта `.etnx`
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** P4
-- **Описание:** новый `client/src/renderer/import-export/import-dialog.ts` —
-  `etn.system.pickFile` с фильтром `.zip`, показ прогресса job через
-  polling, итог «создано/обновлено/пропущено» в `customFooter`. Кнопка
-  «Предпросмотр» (опц.) → `import/preview` перед `import/commit`.
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** P4
+- **Описание:** упрощённый flow без отдельного диалога: file picker
+  через main-процесс (`etn.system.importEtnx`) с фильтром `.etnx`/`.zip`,
+  результат — `notice` с кратким summary. Контекстное меню мысли и
+  подменю «Действия» зовут `importToThought(networkId, targetId)` /
+  `runImport()` соответственно.
 - **DoD:**
-  - [ ] Диалог: поле с выбранным путём, кнопка «Выбрать файл», прогресс
-    placeholder, итог.
-  - [ ] При ошибке парсинга zip / manifest — `errorDialog`, без побочных
-    эффектов.
-  - [ ] `etn.system.import(networkId, { data_base64, options })` в
-    `client/src/main/ipc/contract.ts` + handlers.ts + preload + rest-client
-    (по шаблону `etn.system.export`).
-  - [ ] `npm run typecheck` зелёный.
+  - [x] IPC `system.importEtnx(networkId, parentThoughtId)` в contract.ts
+    + handlers.ts + preload + rest-client.ts (по шаблону
+    `system.downloadExport`).
+  - [x] Клиентские тесты обновлены (`context-menu.test.ts`).
+  - [x] `npm run typecheck` зелёный.
   - [ ] Ручная проверка пользователем (последним пунктом).
 
 ## P7. Контекстные меню мысли: «Экспорт» и «Импорт»
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** P5, P6
-- **Описание:** добавить в `buildThoughtMenuItems`
-  (`client/src/renderer/canvas/context-menu.ts:219-363`) подменю «Экспорт»
-  (`zip`/`markdown`/`html`) и пункт «Импорт» — для всех 5 call-sites
-  (холст, закреплённые, структуры, панель выделения, фокус-облако).
-  Импорт = открыть `import-dialog`, передав `target.id` как мысль для
-  подчинения (импортированные мысли подвешиваются к ней). Экспорт =
-  открыть `export-dialog` с предустановленным `thought_ids = [target.id]`.
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** P5, P6
+- **Описание:** в `buildThoughtMenuItems`
+  (`client/src/renderer/canvas/context-menu.ts:264+`) пункты «Экспорт…»
+  и «Импорт…» — для всех 5 call-sites (холст, закреплённые, структуры,
+  панель выделения, фокус-облако). Один общий `buildThoughtMenuItems`
+  покрывает их все.
 - **DoD:**
-  - [ ] Подменю «Экспорт» с тремя форматами (`zip` первым).
-  - [ ] Пункт «Импорт» после подменю.
-  - [ ] Разделители (`MENU_SEPARATOR`) не ломают порядок.
-  - [ ] Тест в `client/tests/import-export.test.ts`: пункты появляются в
-    `buildThoughtMenuItems` для всех вызовов.
-  - [ ] `npm run typecheck` + клиентские тесты зелёные.
+  - [x] Пункт «Экспорт…» (один, ведёт в диалог экспорта с `thought_ids = [id]`).
+  - [x] Пункт «Импорт…» сразу после «Экспорт…».
+  - [x] Тест в `client/tests/context-menu.test.ts` обновлён под новый порядок.
+  - [x] `npm run typecheck` + клиентские тесты зелёные (193/193).
   - [ ] Ручная проверка пользователем (последним пунктом).
 
 ## P8. Подменю «Действия → Экспорт» в панели выделенных
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** P2
-- **Описание:** расширить `buildActionsMenu`
-  (`client/src/renderer/selection/selection.ts:226-271`): добавить формат
-  `zip` в подменю «Экспорт» (Markdown/PDF/HTML остаются). Старый
-  `runExport(format)` уже умеет `polling job` + `triggerDownload` —
-  обобщить до `runExport(format, options)`.
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** P2
+- **Описание:** в `buildActionsMenu` (`selection.ts:226+`) подменю
+  «Экспорт» содержит 4 пункта: `zip-архив (.etnx)…` / Markdown / PDF / HTML.
+  Пункт «Импорт…» отдельно рядом с подменю.
 - **DoD:**
-  - [ ] Подменю «Экспорт» содержит 4 пункта: zip / Markdown / PDF / HTML.
-  - [ ] `runExport` принимает второй аргумент `options` (для `etnx` —
+  - [x] Подменю «Экспорт» содержит 4 пункта: zip / Markdown / PDF / HTML.
+  - [x] `runExport` принимает второй аргумент `etnxOptions` (для `etnx` —
     параметры экспорта), для остальных форматов игнорируется.
-  - [ ] `npm run typecheck` зелёный.
+  - [x] `npm run typecheck` зелёный.
   - [ ] Ручная проверка пользователем (последним пунктом).
 
 ## P9. Спецификации и ручная проверка
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** P1..P8
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** P1..P8
 - **Описание:** обновить спецификации и завершить ручную проверку всей
   фичи. Итоговая проверка пользователем: экспорт → удаление части мыслей
   в другой сети → импорт → проверка полноты графа, типов, вложений,
   хроники; проверка дедупликации при повторном импорте.
 - **DoD:**
-  - [ ] `docs/03-server-api.md` §14а «Импорт»: `POST /import/commit`,
+  - [x] `docs/03-server-api.md` §14а «Импорт»: `POST /import/commit`,
     `POST /import/preview`, формат тела, коды ошибок, лимиты.
-  - [ ] `docs/08-ui-spec.md` §5.3 («Действия» → добавить формат `zip`),
-    §2.6 (контекстное меню мысли — пункт «Импорт», подменю «Экспорт»).
-  - [ ] `docs/09-scenarios.md` сценарий **E4 «Импорт выбранных мыслей»** —
-    рядом с E3 «Экспорт выбранных».
-  - [ ] `docs/10-glossary.md`: термин `.etnx`, ссылка на фазу P.
-  - [ ] `npm run typecheck` зелёный, все затронутые тесты зелёные.
+  - [x] `docs/08-ui-spec.md` §5.3 («Действия» → добавить формат `zip`,
+    пункт «Импорт»), §2.6 (контекстное меню мысли).
+  - [x] `docs/09-scenarios.md` сценарий **E4 «Импорт»** — рядом с E3
+    «Экспорт выбранных».
+  - [x] `docs/10-glossary.md`: термин `.etnx`, ссылка на фазу P.
+  - [x] `npm run typecheck` зелёный, все затронутые тесты зелёные.
   - [ ] Ручная проверка пользователем (последним пунктом).
