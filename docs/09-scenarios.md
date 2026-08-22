@@ -210,6 +210,19 @@
 2. `POST /networks/{nid}/export { thought_ids, format }` → `202 { job_id }`.
 3. Polling `GET /jobs/{job_id}` → по готовности — скачивание.
 
+### E4. Импорт `.etnx`
+1. Контекстное меню мысли → «Импорт…» (или «Действия» → «Импорт…» при
+   сфокусированной мысли).
+2. Системный диалог выбора файла с фильтром `.etnx` / `.zip`.
+3. Main-процесс читает файл и POST'ит `archive_b64` + `parent_thought_id`
+   на `/networks/{nid}/import/commit`.
+4. Сервер применяет политику `02-data-model.md` §9.3 (по id / по title /
+   создать), импортирует типы, мысли, связи, вложения в одной транзакции.
+5. Корневые мысли архива прикрепляются к `parent_thought_id`.
+6. Клиент показывает notice со счётчиками
+   `thoughts_created` / `thoughts_updated` / `links_created` /
+   `attachments_imported`.
+
 ## F. Совместная работа
 
 ### F1. Real-time-редактирование

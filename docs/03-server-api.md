@@ -840,6 +840,30 @@ GET <download_url>   # бинарный поток файла, временны�
 Экспорт — асинхронная задача (PDF/HTML генерируются ресурсоёмко). Markdown —
 синхронно (можно вернуть сразу, без job_id).
 
+## 14а. Импорт (`.etnx`)
+
+```
+POST /api/v1/networks/{nid}/import/preview
+{ archive_b64: string }
+→ 200 { data: { manifest_version, source_network_name, counts: {...} } }
+
+POST /api/v1/networks/{nid}/import/commit
+{ archive_b64: string, parent_thought_id: UUID }
+→ 200 { data: ImportSummary }
+```
+
+Фаза P, задачи P3+P4. Файл `.etnx` — zip-архив с `manifest.json` (+ опционально
+`attachments/`), см. `02-data-model.md` §9. Архив передаётся как base64 в
+JSON-конверте; максимальный размер — `ETNX_MAX_BYTES` (50 МБ). Эндпоинты
+требуют членства в сети; `commit` дополнительно идемпотентен по
+`Client-Request-Id`.
+
+Политика дедупликации — `02-data-model.md` §9.3: по id / по title_norm / создать.
+Корневые мысли архива (без входящих связей внутри архива) прикрепляются к
+`parent_thought_id` как дети. Ответ содержит счётчики
+`thoughts_created`/`thoughts_updated`/`links_created`/`attachments_imported`
+и т. п.
+
 ## 15. Журнал аудита (только admin)
 
 ```
