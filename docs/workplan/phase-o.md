@@ -260,6 +260,30 @@
 > **Блок Retrieval (O11–O15) — опциональный.** Выполняется после O1–O10 и
 > только по отдельному решению пользователя.
 
+## O17. MCP: импорт `.etnx` + расширение экспорта
+- **Статус:** `blocked` · **Зависимости:** P (фаза P, P9 done)
+- **Описание:** закрыть симметрию MCP для переноса мыслей между сетями/компьютерами.
+  После того как UI-импорт (фаза P) стабилизируется, добавить MCP-инструменты
+  для тех же операций: **(a)** новые write/read-инструменты `etn.import.subgraph`
+  (`destructiveHint: true` — принимает base64-zip + опции, создаёт/обновляет
+  мысли по политике P3) и `etn.import.dry_run` (`readOnlyHint: true` —
+  отчёт «N новых / M совпадений по ID / K по названию» без побочных эффектов);
+  **(b)** расширение существующего `etn.export.subgraph` — добавить
+  `format: 'etnx'` (zip с вложениями через base64 в JSON-ответе, см. фазу P,
+  P2) и параметры `include_types/attachments/chronology/subtree/depth` —
+  те же, что в REST-эндпоинте. Это даст AI-агентам самодостаточный round-trip
+  «получить подграф → записать в другую сеть».
+- **DoD:**
+  - [ ] Инструмент `etn.import.subgraph` (write, `destructiveHint: true`),
+    идемпотентность и `requireWriteBudget` как у других write-инструментов.
+  - [ ] Инструмент `etn.import.dry_run` (read-only, `readOnlyHint: true`).
+  - [ ] `etn.export.subgraph`: новый `format: 'etnx'` + опции
+    `include_types/attachments/chronology/subtree/depth`.
+  - [ ] Спека `docs/05-mcp-server.md` §4.2 + `docs/mcp-clients.md`; MCP-тесты
+    (round-trip в две сети, dry-run отчёт, версия формата в логе);
+    typecheck зелёный.
+  - [ ] Ручная проверка пользователем (последним пунктом).
+
 ## O11. (опц.) Пагинация `etn.thoughts.search`: рабочий `offset`
 - **Статус:** `done` · **Зависимости:** F
 - **Описание:** в `mcp/tools.ts` у `etn.thoughts.search` `offset` захардкожен
