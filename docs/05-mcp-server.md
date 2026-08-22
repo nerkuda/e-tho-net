@@ -119,24 +119,48 @@ null` означает висячую ссылку на удалённую мы�
 
 Все инструменты именуются по схеме `etn.<сущность>.<действие>`.
 
+### Аннотации инструментов (task O7)
+
+В каждой регистрации (`mcp/tools.ts`) инструмент несёт блок `annotations`
+спецификации MCP — три хинта, помогающие клиенту принять решение о
+разрешениях без ручной настройки:
+
+| Хинт | Смысл | Кому ставим |
+|------|-------|-------------|
+| `readOnlyHint: true` | Инструмент не меняет состояние сети (нет DB-записей, real-time событий, `audit_log`-строк). Клиент может выдавать доступ без ручного подтверждения | всем read-инструментам §5.1 + `etn.thoughts.find_duplicates` (4.3) + `etn.attachments.search` |
+| `destructiveHint: true` | Инструмент удаляет сущности (откатить нельзя) — клиент обязан запросить подтверждение пользователя | `etn.thoughts.delete`, `etn.links.delete`, `etn.comments.delete` |
+| `idempotentHint: true` | Повторный вызов с теми же аргументами не даёт дополнительного эффекта (финальное состояние то же) — клиент может безопасно ретраить | `etn.thoughts.set_active`, `etn.properties.set`, `etn.thoughts.upsert_bundle` (upsert-семантика O1) |
+
+Остальные мутирующие инструменты (`create`/`update`/`links.create`,
+`comments.upsert`/`update`, `attachments.add`/`copy`) аннотаций не несут:
+`readOnlyHint` для них ложен, `destructiveHint`/`idempotentHint` не описаны в
+DoD — клиент по умолчанию показывает обычный промпт подтверждения для любого
+записывающего вызова. Хинты — **подсказки** (по спеке MCP), а не гарантии;
+сервер всегда проверяет права и rate-limit перед самой записью.
+
+Канонический реестр — `MCP_TOOL_ANNOTATIONS` в `@etn/shared` (тип
+`McpToolAnnotations`); фронтенд регистрации использует его при создании
+объекта `tool` MCP SDK. Агентский клиент (`MCP client.listTools`) получает
+блок `annotations` для каждой записи и показывает его в диалоге разрешений.
+
 ### 5.1. Поиск и чтение
 
-| Tool | Описание | Параметры |
-|------|----------|-----------|
-| `etn.networks.list` | Доступные сети + `description`/`when_to_use`/`has_structure` (см. §3) | — |
-| `etn.networks.structure` | Структура сети: активные мысли узлового типа (превью постоянного комментария, свойства, счётчики, каталог типов). Когда `node_section_type_id` не задан — пустой `sections` | `network_id` |
-| `etn.thoughts.search` | Полнотекстовый поиск | `network_id`, `query`, `scope?` (`names`/`texts`/`links`/`chronology`/`all`), `in_subtree_of?`, `type_id?`, `limit?` |
-| `etn.thoughts.query` | Структурная выборка (список по критериям) | см. §5.1a |
-| `etn.thoughts.get` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария; `thought_ref`-значения свойств резолвнуты в `{id, title}`) | `network_id`, `thought_id` |
-| `etn.thoughts.neighbors` | Соседи (+ каталоги `link_types`/`thought_types`) | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход) |
-| `etn.thoughts.subgraph` | Подграф в радиусе N рёбер (+ каталоги `thought_types`/`link_types`) | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?` |
-| `etn.thoughts.path` | Путь между двумя мыслями (+ каталог `thought_types`) | `network_id`, `from_id`, `to_id`, `max_depth` |
-| `etn.links.get` | Связь | `network_id`, `link_id` |
-| `etn.thoughts.mentions` | Где упоминается мысль | `network_id`, `thought_id` |
-| `etn.thoughts.usage` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`) | `network_id`, `thought_id` |
-| `etn.comments.get` | Полный текст одного комментария: по `comment_id` (любой) или по `thought_id` (постоянный). Нужен, когда превью (`meta.permanent`, комментарии `subgraph`) показывает `truncated: true` — id есть в самом превью | `network_id` + ровно одно из `comment_id`/`thought_id` |
-| `etn.export.subgraph` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
-| `etn.types.list` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §5.1b | `network_id` |
+| Tool | Аннотации | Описание | Параметры |
+|------|-----------|----------|-----------|
+| `etn.networks.list` | `read-only` | Доступные сети + `description`/`when_to_use`/`has_structure` (см. §3) | — |
+| `etn.networks.structure` | `read-only` | Структура сети: активные мысли узлового типа (превью постоянного комментария, свойства, счётчики, каталог типов). Когда `node_section_type_id` не задан — пустой `sections` | `network_id` |
+| `etn.thoughts.search` | `read-only` | Полнотекстовый поиск | `network_id`, `query`, `scope?` (`names`/`texts`/`links`/`chronology`/`all`), `in_subtree_of?`, `type_id?`, `limit?` |
+| `etn.thoughts.query` | `read-only` | Структурная выборка (список по критериям) | см. §5.1a |
+| `etn.thoughts.get` | `read-only` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария; `thought_ref`-значения свойств резолвнуты в `{id, title}`) | `network_id`, `thought_id` |
+| `etn.thoughts.neighbors` | `read-only` | Соседи (+ каталоги `link_types`/`thought_types`) | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход) |
+| `etn.thoughts.subgraph` | `read-only` | Подграф в радиусе N рёбер (+ каталоги `thought_types`/`link_types`) | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?` |
+| `etn.thoughts.path` | `read-only` | Путь между двумя мыслями (+ каталог `thought_types`) | `network_id`, `from_id`, `to_id`, `max_depth` |
+| `etn.links.get` | `read-only` | Связь | `network_id`, `link_id` |
+| `etn.thoughts.mentions` | `read-only` | Где упоминается мысль | `network_id`, `thought_id` |
+| `etn.thoughts.usage` | `read-only` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`) | `network_id`, `thought_id` |
+| `etn.comments.get` | `read-only` | Полный текст одного комментария: по `comment_id` (любой) или по `thought_id` (постоянный). Нужен, когда превью (`meta.permanent`, комментарии `subgraph`) показывает `truncated: true` — id есть в самом превью | `network_id` + ровно одно из `comment_id`/`thought_id` |
+| `etn.export.subgraph` | `read-only` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
+| `etn.types.list` | `read-only` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §5.1b | `network_id` |
 
 `etn.networks.structure` — входная точка агента в базу знаний сети (O5).
 Возвращает активные мысли `node_section_type_id` с обогащением:
@@ -317,19 +341,19 @@ N6-каталога (`id`, `name`/`name_forward`+`name_reverse`, `parent_id`,
 
 ### 5.2. Создание и изменение
 
-| Tool | Описание | Параметры |
-|------|----------|-----------|
-| `etn.thoughts.create` | Создать мысль; тип — `type_id` или `type` (по имени, task O4, см. §5.1b) | `network_id`, `title`, `synonyms?`, `type_id?`\|`type?`, `active?`, `link?` `{direction, target_thought_id, type_id?\|type?}` |
-| `etn.thoughts.update` | Изменить мысль | `network_id`, `thought_id`, `changes`, `expected_version?` |
-| `etn.thoughts.delete` | Удалить | `network_id`, `thought_id`, `expected_version?` |
-| `etn.links.create` | Создать связь; тип — `type_id` или `type` (по `name_forward`/`name_reverse`, task O4, см. §5.1b) | `network_id`, `source_id`, `target_id`, `type_id?`\|`type?` |
-| `etn.links.delete` | Удалить связь | `network_id`, `link_id` |
-| `etn.comments.upsert` | Создать/обновить комментарий; для `chronological` — ровно одно из `owner_type`+`owner_id` (одна привязка) или `targets[]` (несколько, 1..100, первый — первичный владелец; для `permanent` только одиночная форма) | `network_id`, `owner_type`+`owner_id` \| `targets[]` (`{owner_type, owner_id}`), `kind`, `title?`, `body_md`, `valid_from?`, `valid_to?` |
-| `etn.comments.update` | Изменить комментарий по `comment_id` (chronological или permanent; last-write-wins по полям, `valid_from`/`valid_to` применяются только к chronological) | `network_id`, `comment_id`, `changes` (`title?`, `body_md?`, `valid_from?`, `valid_to?`), `expected_version?` |
-| `etn.comments.delete` | Удалить комментарий (вместе со всеми привязками к владельцам) | `network_id`, `comment_id`, `expected_version?` |
-| `etn.attachments.add` | Добавить вложение | `network_id`, `owner_type`, `owner_id`, `kind`, `url?`/`file_path?`, `title?`, `description?` |
-| `etn.attachments.copy` | Скопировать вложение в одну или несколько мыслей (workplan L25) | `network_id`, `attachment_id`, `target_owner_type: "thought"`, `target_owner_ids[]` |
-| `etn.attachments.search` | Поиск вложений сети (workplan L25) | `network_id`, `q`, `exclude_owner_type?`, `exclude_owner_id?`, `kind?`, `limit?`, `offset?` |
+| Tool | Аннотации | Описание | Параметры |
+|------|-----------|----------|-----------|
+| `etn.thoughts.create` | — | Создать мысль; тип — `type_id` или `type` (по имени, task O4, см. §5.1b) | `network_id`, `title`, `synonyms?`, `type_id?`\|`type?`, `active?`, `link?` `{direction, target_thought_id, type_id?\|type?}` |
+| `etn.thoughts.update` | — | Изменить мысль | `network_id`, `thought_id`, `changes`, `expected_version?` |
+| `etn.thoughts.delete` | `destructive` | Удалить | `network_id`, `thought_id`, `expected_version?` |
+| `etn.links.create` | — | Создать связь; тип — `type_id` или `type` (по `name_forward`/`name_reverse`, task O4, см. §5.1b) | `network_id`, `source_id`, `target_id`, `type_id?`\|`type?` |
+| `etn.links.delete` | `destructive` | Удалить связь | `network_id`, `link_id` |
+| `etn.comments.upsert` | — | Создать/обновить комментарий; для `chronological` — ровно одно из `owner_type`+`owner_id` (одна привязка) или `targets[]` (несколько, 1..100, первый — первичный владелец; для `permanent` только одиночная форма) | `network_id`, `owner_type`+`owner_id` \| `targets[]` (`{owner_type, owner_id}`), `kind`, `title?`, `body_md`, `valid_from?`, `valid_to?` |
+| `etn.comments.update` | — | Изменить комментарий по `comment_id` (chronological или permanent; last-write-wins по полям, `valid_from`/`valid_to` применяются только к chronological) | `network_id`, `comment_id`, `changes` (`title?`, `body_md?`, `valid_from?`, `valid_to?`), `expected_version?` |
+| `etn.comments.delete` | `destructive` | Удалить комментарий (вместе со всеми привязками к владельцам) | `network_id`, `comment_id`, `expected_version?` |
+| `etn.attachments.add` | — | Добавить вложение | `network_id`, `owner_type`, `owner_id`, `kind`, `url?`/`file_path?`, `title?`, `description?` |
+| `etn.attachments.copy` | — | Скопировать вложение в одну или несколько мыслей (workplan L25) | `network_id`, `attachment_id`, `target_owner_type: "thought"`, `target_owner_ids[]` |
+| `etn.attachments.search` | `read-only` | Поиск вложений сети (workplan L25) | `network_id`, `q`, `exclude_owner_type?`, `exclude_owner_id?`, `kind?`, `limit?`, `offset?` |
 
 `etn.attachments.copy` возвращает массив `McpMutationResult` — по одному на
 каждую созданную строку; цели с уже имеющимся вложением того же kind и того же
@@ -339,9 +363,9 @@ url/file_path пропускаются без ошибки и без запис�
 `etn.attachments.search` — read-инструмент: `q` обязателен (без него пустой
 массив), синтаксис как в §12 поиска мыслей (include-AND, `-word` исключение);
 возвращает массив `Attachment[]`.
-| `etn.properties.set` | Установить свойство: одно (`key`+`value`) или набор (`values: {key: value\|null}` одной транзакцией) | `network_id`, `owner_type`, `owner_id` + ровно одно из `key`+`value` / `values` |
-| `etn.thoughts.set_active` | Изменить актуальность | `network_id`, `thought_id`, `active` |
-| `etn.thoughts.upsert_bundle` | Составная запись «единицы знания» одной транзакцией | см. §5.2a |
+| `etn.properties.set` | `idempotent` | Установить свойство: одно (`key`+`value`) или набор (`values: {key: value\|null}` одной транзакцией) | `network_id`, `owner_type`, `owner_id` + ровно одно из `key`+`value` / `values` |
+| `etn.thoughts.set_active` | `idempotent` | Изменить актуальность | `network_id`, `thought_id`, `active` |
+| `etn.thoughts.upsert_bundle` | `idempotent` | Составная запись «единицы знания» одной транзакцией | см. §5.2a |
 
 Все изменяющие инструменты:
 - принимают опциональный `expected_version` для optimistic concurrency
@@ -459,9 +483,9 @@ Real-time и `audit_log`: событие своего типа на каждую
 
 ### 5.3. Дедупликация (важна для агентов)
 
-| Tool | Описание | Параметры |
-|------|----------|-----------|
-| `etn.thoughts.find_duplicates` | Поиск существующих по имени/синонимам | `network_id`, `title`, `synonyms?` |
+| Tool | Аннотации | Описание | Параметры |
+|------|-----------|----------|-----------|
+| `etn.thoughts.find_duplicates` | `read-only` | Поиск существующих по имени/синонимам | `network_id`, `title`, `synonyms?` |
 
 Возвращает матчи с оценкой совпадения (точное/по синониму/частичное). Агент
 должен вызывать это **перед** `etn.thoughts.create`, чтобы не плодить дубликаты
