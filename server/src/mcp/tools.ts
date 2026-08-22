@@ -1,9 +1,10 @@
 /**
  * MCP tools (task F4, docs/05-mcp-server.md §4).
  *
- * Twenty-nine tools in three groups:
+ * Thirty tools in three groups:
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
- *     path, links get, mentions, usage, comments get, export, types list;
+ *     path, links get, mentions, usage, comments get, export, types list,
+ *     changes list (O9);
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert/update/delete,
  *     attachments.add, properties.set, set_active, thoughts.upsert_bundle,
  *     attachments.search;
@@ -47,10 +48,14 @@ import {
   ICON_KINDS,
   MCP_TOOL_ANNOTATIONS,
   PROPERTY_OWNER_TYPES,
+  REALTIME_DEFAULTS,
   SEARCH_SCOPES,
   TRAVERSAL_DEFAULTS,
   type CommentTarget,
   type ExportFormat,
+  type McpChangeEntry,
+  type McpChangesListParams,
+  type McpChangesListResult,
   type McpMutationResult,
   type McpPropertiesSetResult,
   type McpTypesListResult,
@@ -195,7 +200,7 @@ function effectiveLinkTypeId(
 // ---------------------------------------------------------------------------
 
 /**
- * Register all twenty-six `etn.*` tools on a freshly built {@link McpServer}.
+ * Register all thirty `etn.*` tools on a freshly built {@link McpServer}.
  */
 export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
@@ -847,6 +852,88 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             link_types_total: number;
           };
         };
+      }),
+  );
+
+  // etn.changes.list — O9 read tool. Delta feed over the real-time event_log
+  // (04-realtime.md §3, §6) for long-lived agents that maintain their own
+  // cache. Same retention window as the WebSocket gateway (24h / 10 000 rows,
+  // `REALTIME_DEFAULTS.EVENT_LOG_*`) — when the agent's `since_seq` falls
+  // outside the retained buffer, the response carries `truncated: true` so
+  // the caller knows to do a full resync instead of resuming. No `data.db`
+  // access: the event log lives in `_system.db` (see migration
+  // `009_event_log.sql`), so we reuse the membership-only check pattern from
+  // `etn.networks.structure`.
+  const ChangesListSchema = z.object({
+    network_id: NetworkId,
+    since_seq: z.number().int().min(0),
+    limit: z.number().int().min(1).max(REALTIME_DEFAULTS.EVENT_LOG_MAX_ROWS).optional(),
+  });
+  const DEFAULT_CHANGES_LIMIT = 1000;
+  mcp.registerTool(
+    'etn.changes.list',
+    {
+      title: 'Дельта событий',
+      description:
+        'Delta feed over the real-time `event_log` for long-lived agents with their own cache ' +
+        '(task O9, docs/05-mcp-server.md §4.1). Returns events with `seq > since_seq` in ' +
+        'ascending order, capped at `limit` (default 1000). The `cursor` echoes the current ' +
+        'retained window (`min_seq`/`max_seq`, `null` when the log is empty). When `since_seq` ' +
+        'falls outside that window the response carries `truncated: true` — the agent must do a ' +
+        'full resync (`etn.thoughts.search` + `etn.thoughts.get`) before resuming. Events with ' +
+        '`audience: "user"` are filtered: only events authored by the calling user are returned ' +
+        '(mirrors WebSocket audience routing, 04-realtime.md §5).',
+      inputSchema: ChangesListSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.changes.list'],
+    },
+    (args) =>
+      runTool(async () => {
+        const network = rt.deps.systemDb.getNetworkById(args.network_id);
+        if (network === null) {
+          throw new EtnError('NOT_FOUND', `Network ${args.network_id} not found.`);
+        }
+        const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, args.network_id);
+        if (role === null) {
+          throw new EtnError(
+            'FORBIDDEN',
+            `You are not a member of network ${args.network_id}; this API key cannot access it.`,
+            { network_id: args.network_id },
+          );
+        }
+
+        const limit = args.limit ?? DEFAULT_CHANGES_LIMIT;
+        const minSeq = rt.deps.systemDb.getMinEventSeq(args.network_id);
+        const maxSeq = rt.deps.systemDb.getMaxEventSeq(args.network_id);
+        const events = rt.deps.systemDb.readEventsAfter(
+          args.network_id,
+          args.since_seq,
+          limit,
+        );
+        const authUserId = rt.deps.auth.userId;
+        const filtered: McpChangeEntry[] = events
+          .filter((e) => e.audience === 'network' || e.actor.user_id === authUserId)
+          .map((e) => ({
+            type: e.type,
+            seq: e.seq,
+            ts: e.ts,
+            data: e.data,
+            audience: e.audience,
+          }));
+        // `truncated` fires only when an explicit (non-zero) `since_seq` is
+        // older than the first retained row: a zero `since_seq` means
+        // "from the start of the buffer" and is never truncated. An empty
+        // buffer (`min_seq === null`) is also not truncated — there was
+        // nothing to lose.
+        const truncated =
+          args.since_seq !== 0 && minSeq !== null && args.since_seq < minSeq - 1;
+
+        return {
+          network_id: args.network_id,
+          cursor: { min_seq: minSeq, max_seq: maxSeq },
+          events: filtered,
+          truncated,
+          limit,
+        } satisfies McpChangesListResult;
       }),
   );
 

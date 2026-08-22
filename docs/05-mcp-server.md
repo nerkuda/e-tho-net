@@ -161,6 +161,7 @@ DoD — клиент по умолчанию показывает обычный
 | `etn.comments.get` | `read-only` | Полный текст одного комментария: по `comment_id` (любой) или по `thought_id` (постоянный). Нужен, когда превью (`meta.permanent`, комментарии `subgraph`) показывает `truncated: true` — id есть в самом превью | `network_id` + ровно одно из `comment_id`/`thought_id` |
 | `etn.export.subgraph` | `read-only` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
 | `etn.types.list` | `read-only` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §5.1b | `network_id` |
+| `etn.changes.list` | `read-only` | Дельта событий из `event_log` для долгоживущего агента с кэшем (`seq > since_seq`, с признаком усечения буфера и фильтром `audience`) — см. §5.1c | `network_id`, `since_seq`, `limit?` |
 
 `etn.networks.structure` — входная точка агента в базу знаний сети (O5).
 Возвращает активные мысли `node_section_type_id` с обогащением:
@@ -338,6 +339,94 @@ N6-каталога (`id`, `name`/`name_forward`+`name_reverse`, `parent_id`,
 глобально уникален; для связей возможно по-настоящему: `name_forward` одного
 типа может совпасть с `name_reverse` другого, поскольку уникальна только
 **пара** имён).
+
+#### 5.1c. `etn.changes.list` — дельта-фид для долгоживущих агентов (task O9)
+
+Долгоживущий агент с собственным индексом/кэшем базы знаний не может
+постоянно тащить «всё через `etn.thoughts.search`»: это лишние запросы и
+лишний контекст. В ETN уже есть `event_log` ([04-realtime.md](04-realtime.md)
+§3, §6) — буфер real-time событий с монотонным per-network `seq`, инкремент
+которого атомарен записи в журнал, и окном удержания
+(`REALTIME_DEFAULTS.EVENT_LOG_TTL_HOURS = 24`,
+`EVENT_LOG_MAX_ROWS = 10 000`). Этот же буфер читает WebSocket-шлюз
+при `resume` ([04-realtime.md](04-realtime.md) §6) — `etn.changes.list`
+выставляет его MCP-агенту в виде delta-фида.
+
+Параметры:
+
+- `network_id` — обязательный. Членство проверяется (как и в любом
+  read-инструменте сети).
+- `since_seq` — обязательный. Эксклюзивная нижняя граница: отдаются события
+  с `seq > since_seq` в возрастающем порядке. `0` — «от начала удерживаемого
+  буфера» (для первого запроса или после полной ресинхронизации).
+- `limit` *(опц.)* — жёсткий потолок количества событий в ответе (1..10 000;
+  верхняя граница совпадает с `EVENT_LOG_MAX_ROWS`, чтобы запрос не мог
+  попросить больше, чем буфер физически хранит). По умолчанию `1000`. Для
+  длинных offline-периодов агент делает несколько вызовов с увеличивающимся
+  `since_seq` либо, увидев `truncated: true`, уходит в полную
+  ресинхронизацию — подробнее ниже.
+
+Ответ:
+
+```jsonc
+{
+  "network_id": "<net>",
+  "cursor": { "min_seq": 1, "max_seq": 42 },   // null при пустом буфере
+  "events": [
+    {
+      "type": "thought.created",   // имя из REALTIME_EVENT_TYPES
+      "seq": 7,
+      "ts": "2026-08-22T12:34:56.000Z",
+      "audience": "network",       // "network" | "user"
+      "data": { /* payload из RealtimeEventMap[type] */ }
+    }
+    // …
+  ],
+  "truncated": false,              // true → нужна полная ресинхронизация
+  "limit": 1000                    // эффективный потолок
+}
+```
+
+Правила:
+
+- **Фильтр `audience`.** События с `audience: "user"` (например,
+  `thought.reordered`, `user-preference.updated`,
+  `user-focus-preferences.updated`, см. `REALTIME_EVENT_AUDIENCE` в
+  `@etn/shared`) возвращаются **только когда `actor.user_id` совпадает с
+  пользователем API-ключа**. Чужие приватные события агенту не утекают —
+  правило ровно то же, что у WebSocket-шлюза ([04-realtime.md](04-realtime.md)
+  §5).
+- **Усечение буфера.** Буфер чистится периодическим джобом
+  (`server/src/realtime/event-log-cleanup.ts`): удаляются записи старше 24ч,
+  но всегда сохраняются 10 000 самых свежих. Если `since_seq < min_seq - 1`
+  (запрошенная позиция «уехала» из окна) — ответ несёт `truncated: true`.
+  Агент обязан сделать полную ресинхронизацию (например,
+  `etn.thoughts.search` по всей сети или `etn.export.subgraph` с большим
+  `radius` от HOME), и только потом снова опрашивать `etn.changes.list`.
+  Случай `since_seq = 0` (первый запрос) никогда не усечён, даже если
+  `min_seq > 1`; случай пустого буфера (`min_seq === null`) — тоже
+  не усечён, терять нечего.
+- **Без `data.db`.** События живут в `_system.db`, поэтому инструменту не
+  нужен `openMemberNetwork`/`openNetworkDb` — достаточно проверить
+  членство через `systemDb.getMemberRole` (как `etn.networks.structure`).
+- **Без записи в `audit_log`.** Чистое чтение, для read-only ключей
+  работает без ограничений (аннотация `read-only`).
+
+Cookbook (`docs/mcp-clients.md` §8.2):
+
+1. При подключении агент один раз проходит `etn.networks.list` →
+   `etn.thoughts.search` (или `etn.export.subgraph`) для каждой сети и
+   сохраняет в свой индекс снапшот вместе с `cursor.max_seq` из
+   `etn.changes.list(since_seq: 0)`.
+2. В цикле опроса — `etn.changes.list(since_seq: <last_seen>)`, обновление
+   своего индекса по `events[].data`, движение `since_seq` к
+   `events[events.length - 1].seq`. Если `truncated: true` — снапшот
+   пересохраняется с нуля (шаг 1).
+3. Для приватных настроек пользователя ключ тот же — агент видит только
+   события, чей `actor.user_id` равен пользователю ключа.
+
+Тип ответа — `McpChangesListResult` в `@etn/shared` (параметры —
+`McpChangesListParams`).
 
 ### 5.2. Создание и изменение
 

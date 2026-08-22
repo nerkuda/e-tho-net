@@ -18,10 +18,12 @@ import type {
   FocusDir,
   LinkStyle,
   PropertyOwnerType,
+  RealtimeAudience,
   SearchScope,
 } from '../enums.js';
 import type { CommentUpdateInput } from './comment.js';
 import type { EffectiveTypeProperty, PropertyValueValue } from './thought-type.js';
+import type { RealtimeEventType } from './realtime.js';
 import type {
   ThoughtBundleMatchKind,
   ThoughtBundleOnDuplicate,
@@ -46,6 +48,7 @@ export const MCP_TOOL_NAMES = [
   'etn.comments.get',
   'etn.export.subgraph',
   'etn.types.list',
+  'etn.changes.list',
   // mutate (§4.2)
   'etn.thoughts.create',
   'etn.thoughts.update',
@@ -114,6 +117,7 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.comments.get': { readOnlyHint: true },
   'etn.export.subgraph': { readOnlyHint: true },
   'etn.types.list': { readOnlyHint: true },
+  'etn.changes.list': { readOnlyHint: true },
   'etn.attachments.search': { readOnlyHint: true },
   'etn.thoughts.find_duplicates': { readOnlyHint: true },
 
@@ -401,3 +405,75 @@ export interface McpUpsertBundleResult extends McpMutationResult {
 
 /** `dir` parameter shared by read tools that accept a direction. */
 export type McpNeighborDir = FocusDir;
+
+// ---------------------------------------------------------------------------
+// `etn.changes.list` (task O9, 05-mcp-server.md §4.1) — delta feed over the
+// real-time event_log for long-lived agents with their own cache. The agent
+// passes the highest `seq` it has already consumed; the server replays events
+// with `seq > since_seq` (ascending) and signals `truncated` when the requested
+// position falls outside the retained buffer window.
+// ---------------------------------------------------------------------------
+
+/** Parameters of `etn.changes.list` (05-mcp-server.md §4.1). */
+export interface McpChangesListParams {
+  network_id: string;
+  /**
+   * Exclusive lower bound: return only events with `seq > since_seq`. `0`
+   * means «from the start of the buffer».
+   */
+  since_seq: number;
+  /**
+   * Hard cap on returned events (ascending). Defaults to a safe value when
+   * omitted; agents tailing the feed should keep `limit` reasonable to avoid
+   * one huge response on the first call after a long offline period.
+   */
+  limit?: number;
+}
+
+/**
+ * One row of the `etn.changes.list` response — the same event envelope the
+ * WebSocket gateway delivers, but with `network_id` lifted to the response
+ * level (every row belongs to the requested network) and `actor`/`meta`
+ * stripped (they are not useful for the delta-feed use case and would inflate
+ * the response).
+ */
+export interface McpChangeEntry {
+  type: RealtimeEventType;
+  seq: number;
+  /** ISO-8601 UTC. */
+  ts: string;
+  /**
+   * The event's payload (`RealtimeEvent.data`). The catalogue-driven type
+   * union is preserved so agents can `switch` on `type` with full payload
+   * shape, but the wrapping is loose at this layer because the runtime row
+   * is rebuilt from JSON.
+   */
+  data: unknown;
+  audience: RealtimeAudience;
+}
+
+/** Result of `etn.changes.list`. */
+export interface McpChangesListResult {
+  network_id: string;
+  /**
+   * Cursor describing the current retained window. `min_seq`/`max_seq` are
+   * `null` when the log is empty for this network.
+   */
+  cursor: {
+    min_seq: number | null;
+    max_seq: number | null;
+  };
+  /** Replayed events with `seq > since_seq`, ascending. */
+  events: McpChangeEntry[];
+  /**
+   * `true` when `since_seq` falls outside the retained buffer window (either
+   * the requested position is older than `min_seq - 1`, or the buffer was
+   * truncated by the cleanup job while the agent was offline). The agent
+   * must do a full resync (e.g. `etn.thoughts.search` + `etn.thoughts.get`)
+   * before it can resume delta tracking. Always `false` for an empty buffer
+   * (nothing was lost — the agent just starts at the beginning).
+   */
+  truncated: boolean;
+  /** Effective cap actually applied (echoes `limit` or the default). */
+  limit: number;
+}

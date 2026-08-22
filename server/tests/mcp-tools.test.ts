@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import type { AnyRealtimeEvent } from '@etn/shared';
+import type { AnyRealtimeEvent, McpChangesListResult } from '@etn/shared';
 
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { createApiKeyAuthProvider } from '../src/mcp/auth.js';
@@ -1994,6 +1994,326 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const propertyIds = new Set(againResult.warnings.map((w) => w.property_id));
         assert.ok(propertyIds.has(status.id));
         assert.ok(propertyIds.has(owner.id));
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // `etn.changes.list` — task O9, delta feed over the real-time event_log.
+  // -------------------------------------------------------------------------
+
+  it('changes.list on an empty network: empty events, null cursor, not truncated (O9)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.changes.list',
+          arguments: { network_id: ctx.networkId, since_seq: 0 },
+        });
+        assert.equal(result.isError, undefined);
+        const body = toolJson<McpChangesListResult>(result);
+        assert.deepEqual(body.events, []);
+        assert.equal(body.cursor.min_seq, null);
+        assert.equal(body.cursor.max_seq, null);
+        assert.equal(body.truncated, false);
+        assert.equal(body.limit, 1000);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('changes.list surfaces events emitted by a mutating tool (O9)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: {
+            network_id: ctx.networkId,
+            title: 'Конкуренты 1С',
+            link: { direction: 'child', target_thought_id: ctx.homeId },
+          },
+        });
+        assert.equal(created.isError, undefined);
+
+        const result = await handle.client.callTool({
+          name: 'etn.changes.list',
+          arguments: { network_id: ctx.networkId, since_seq: 0 },
+        });
+        assert.equal(result.isError, undefined);
+        const body = toolJson<McpChangesListResult>(result);
+        assert.equal(body.cursor.min_seq, 1);
+        assert.ok((body.cursor.max_seq ?? 0) >= 2);
+        const types = body.events.map((e) => e.type).sort();
+        assert.ok(types.includes('thought.created'), `types: ${types.join(',')}`);
+        assert.ok(types.includes('link.created'), `types: ${types.join(',')}`);
+        // Ascending seq, compact projection: only type/seq/ts/data/audience.
+        for (const e of body.events) {
+          assert.equal(typeof e.seq, 'number');
+          assert.equal(typeof e.ts, 'string');
+          assert.ok(e.audience === 'network' || e.audience === 'user');
+          assert.ok(typeof e.type === 'string');
+        }
+        for (let i = 1; i < body.events.length; i++) {
+          assert.ok(
+            (body.events[i]?.seq ?? 0) > (body.events[i - 1]?.seq ?? 0),
+            'events must be ascending by seq',
+          );
+        }
+        // `thought.created` payload exposes the new thought id (sanity).
+        const created_ = body.events.find((e) => e.type === 'thought.created');
+        assert.ok(created_ !== undefined);
+        const payload = created_!.data as { thought?: { id?: string; title?: string } };
+        assert.equal(payload.thought?.title, 'Конкуренты 1С');
+        assert.equal(typeof payload.thought?.id, 'string');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('changes.list honours since_seq and limit (O9)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        for (const title of ['Раз', 'Два', 'Три']) {
+          const r = await handle.client.callTool({
+            name: 'etn.thoughts.create',
+            arguments: { network_id: ctx.networkId, title },
+          });
+          assert.equal(r.isError, undefined);
+        }
+        const cursor = toolJson<McpChangesListResult>(
+          await handle.client.callTool({
+            name: 'etn.changes.list',
+            arguments: { network_id: ctx.networkId, since_seq: 0 },
+          }),
+        );
+        const maxSeq = cursor.cursor.max_seq;
+        assert.ok(maxSeq !== null && maxSeq > 1);
+
+        // since_seq = maxSeq → no further events.
+        const tail = toolJson<McpChangesListResult>(
+          await handle.client.callTool({
+            name: 'etn.changes.list',
+            arguments: { network_id: ctx.networkId, since_seq: maxSeq },
+          }),
+        );
+        assert.equal(tail.events.length, 0);
+        assert.equal(tail.cursor.max_seq, maxSeq);
+
+        // since_seq = maxSeq - 1 → exactly one event (the last).
+        const one = toolJson<McpChangesListResult>(
+          await handle.client.callTool({
+            name: 'etn.changes.list',
+            arguments: { network_id: ctx.networkId, since_seq: maxSeq - 1 },
+          }),
+        );
+        assert.equal(one.events.length, 1);
+        assert.equal(one.events[0]?.seq, maxSeq);
+
+        // limit caps the response.
+        const limited = toolJson<McpChangesListResult>(
+          await handle.client.callTool({
+            name: 'etn.changes.list',
+            arguments: { network_id: ctx.networkId, since_seq: 0, limit: 2 },
+          }),
+        );
+        assert.equal(limited.events.length, 2);
+        assert.equal(limited.limit, 2);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('changes.list reports truncated when since_seq is older than the retained buffer (O9)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Seed five `thought.created` events (no links → one event each).
+        for (const title of ['Один', 'Два', 'Три', 'Четыре', 'Пять']) {
+          const r = await handle.client.callTool({
+            name: 'etn.thoughts.create',
+            arguments: { network_id: ctx.networkId, title },
+          });
+          assert.equal(r.isError, undefined);
+        }
+
+        const before = toolJson<McpChangesListResult>(
+          await handle.client.callTool({
+            name: 'etn.changes.list',
+            arguments: { network_id: ctx.networkId, since_seq: 0 },
+          }),
+        );
+        const minSeq = before.cursor.min_seq;
+        const maxSeq = before.cursor.max_seq;
+        assert.ok(minSeq !== null && minSeq >= 1);
+        assert.ok(maxSeq !== null && maxSeq - minSeq >= 4);
+
+        // Simulate retention-window prune: drop the first three rows so the
+        // retained window starts at `minSeq + 3` while at least two events
+        // are still around.
+        const newMin = minSeq + 3;
+        ctx.rawDb
+          .prepare('DELETE FROM event_log WHERE network_id = ? AND seq < ?')
+          .run(ctx.networkId, newMin);
+        // A `since_seq` strictly older than `newMin - 1` (i.e. < newMin - 1)
+        // signals a lost event and must trip `truncated: true`. Pick the
+        // earliest such value that still passes zod's `min(0)`.
+        const stale = Math.max(0, newMin - 2);
+
+        const result = await handle.client.callTool({
+          name: 'etn.changes.list',
+          arguments: { network_id: ctx.networkId, since_seq: stale },
+        });
+        assert.equal(result.isError, undefined);
+        const body = toolJson<McpChangesListResult>(result);
+        assert.equal(body.truncated, true, 'stale since_seq must trigger truncated');
+
+        // First call (since_seq = 0) is never truncated, even if min_seq > 1.
+        const fresh = toolJson<McpChangesListResult>(
+          await handle.client.callTool({
+            name: 'etn.changes.list',
+            arguments: { network_id: ctx.networkId, since_seq: 0 },
+          }),
+        );
+        assert.equal(fresh.truncated, false);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('changes.list filters audience:user events by actor user_id (O9)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Seed two synthetic events directly: one network-audience and one
+      // user-audience authored by *another* user. The caller (adminId) must
+      // see the network event and not the user event.
+      const otherUserId = randomUUID();
+      const dataSelf = JSON.stringify({
+        actor: { user_id: ctx.adminId, client_id: 'self' },
+        audience: 'user',
+        data: { value: 'self' },
+      });
+      const dataNetwork = JSON.stringify({
+        actor: { user_id: ctx.adminId, client_id: 'self' },
+        audience: 'network',
+        data: { hello: 'world' },
+      });
+      const dataOther = JSON.stringify({
+        actor: { user_id: otherUserId, client_id: 'other' },
+        audience: 'user',
+        data: { private: 'no' },
+      });
+      const ts = new Date().toISOString();
+      ctx.sys.appendEvent(ctx.networkId, 1, 'user-preference.updated', dataSelf, ts);
+      ctx.sys.appendEvent(ctx.networkId, 2, 'thought.created', dataNetwork, ts);
+      ctx.sys.appendEvent(ctx.networkId, 3, 'user-preference.updated', dataOther, ts);
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.changes.list',
+          arguments: { network_id: ctx.networkId, since_seq: 0 },
+        });
+        assert.equal(result.isError, undefined);
+        const body = toolJson<McpChangesListResult>(result);
+        const typesAndAudiences = body.events.map(
+          (e) => `${e.type}#${e.audience}`,
+        );
+        assert.ok(typesAndAudiences.includes('thought.created#network'));
+        assert.ok(typesAndAudiences.includes('user-preference.updated#user'));
+        assert.ok(
+          !typesAndAudiences.some((s) => s === 'user-preference.updated#user' && s.includes('no')),
+          'no foreign-audience:user events must leak',
+        );
+        // All returned audience:user entries must belong to the caller.
+        for (const e of body.events) {
+          if (e.audience === 'user') {
+            const payload = e.data as { value?: string; private?: string };
+            assert.ok(
+              payload.private === undefined,
+              `leaked foreign user-audience event: ${JSON.stringify(payload)}`,
+            );
+          }
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('changes.list rejects users without membership in the target network (O9)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Build a second user + key that has no membership in ctx.networkId.
+      const strangerId = randomUUID();
+      ctx.sys.createUser({
+        id: strangerId,
+        username: 'stranger',
+        displayName: 'Stranger',
+        isAdmin: false,
+        isFirstUser: false,
+      });
+      const gen = generateApiKey();
+      ctx.sys.createApiKey({
+        id: randomUUID(),
+        userId: strangerId,
+        label: 'stranger',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+      });
+
+      const handle = await connectMcpClient(ctx, gen.key);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.changes.list',
+          arguments: { network_id: ctx.networkId, since_seq: 0 },
+        });
+        assert.equal(result.isError, true);
+        assert.match(toolText(result), /not a member|FORBIDDEN/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('changes.list is reachable by a read-only key (O9)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.readOnlyKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.changes.list',
+          arguments: { network_id: ctx.networkId, since_seq: 0 },
+        });
+        assert.equal(result.isError, undefined);
+        const body = toolJson<McpChangesListResult>(result);
+        assert.equal(body.cursor.min_seq, null);
+        assert.equal(body.events.length, 0);
       } finally {
         await handle.close();
       }
