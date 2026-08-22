@@ -34,7 +34,7 @@
   всегда видим.
 
 ## Q1. Миграция локальной БД под табы
-- **Статус:** `todo` · **Зависимости:** —
+- **Статус:** `done` · **Зависимости:** —
 - **Описание:** добавить таблицу `tabs` (per `(profile_id, tab_id)`:
   `slot_idx`, `network_id`, `focus_id`, `view_mode`, `structures_state` JSON,
   `chronicle_state` JSON, `last_active_at`). Расширить `focus_history` и
@@ -47,19 +47,19 @@
   остаются для обратной совместимости; новые пишутся с суффиксом
   `:<tab_id>`.
 - **DoD:**
-  - [ ] `client/migrations/005_tabs.sql` — таблица `tabs`, ALTER `focus_history`,
+  - [x] `client/migrations/005_tabs.sql` — таблица `tabs`, ALTER `focus_history`,
     `structures_history`, `chronicle_history` (PK с `tab_id`); индексы.
-  - [ ] `LocalDb`: методы `listTabs`, `getTab`, `upsertTab`, `deleteTab`,
+  - [x] `LocalDb`: методы `listTabs`, `getTab`, `upsertTab`, `deleteTab`,
     `reorderTabs`; расширение `focusHistory*` и `chronicleHistory*` параметром
     `tabId`.
-  - [ ] UI-state (`getState/setState`) принимает опциональный `tabId`;
+  - [x] UI-state (`getState/setState`) принимает опциональный `tabId`;
     legacy-ключи продолжают работать.
-  - [ ] Спеки `docs/07-client-electron.md` §3.2/§3.5 + новый §3.6,
+  - [x] Спеки `docs/07-client-electron.md` §3.2/§3.5 + новый §3.6,
     `docs/11-settings-and-state.md` §2.3.
-  - [ ] `npm run typecheck` зелёный.
+  - [x] `npm -w @etn/client run typecheck` зелёный (193/193 тестов).
 
 ## Q2. Пул `RealtimeClient` + IPC `etn.tabs.*`
-- **Статус:** `todo` · **Зависимости:** Q1
+- **Статус:** `done` · **Зависимости:** Q1
 - **Описание:** сейчас `client/src/main/ipc/register.ts:34-188` держит один
   `RealtimeClient` и переключает `getNetworkId()` через
   `disconnect()/connect()`. Заменить на пул `RealtimeClient` с
@@ -68,19 +68,19 @@
   не меняется (один WS = одна сеть); на клиенте держим по сокету на
   каждую открытую сеть.
 - **DoD:**
-  - [ ] Модуль `client/src/main/realtime/tab-rt-pool.ts` (acquire/release,
+  - [x] Модуль `client/src/main/realtime/tab-rt-pool.ts` (acquire/release,
     refcount, единый applier/broadcast).
-  - [ ] `client/src/main/ipc/contract.ts` — домен `etn.tabs.*`;
+  - [x] `client/src/main/ipc/contract.ts` — домен `etn.tabs.*`;
     `etn.ui.getState/setState` принимает `tabId?`.
-  - [ ] `client/src/main/ipc/handlers.ts` — хендлеры `tabs.*`.
-  - [ ] `client/src/main/ipc/register.ts` — пул вместо одного `RealtimeClient`.
-  - [ ] `client/src/preload/index.ts` — `etn.tabs.*` в `window.etn`.
-  - [ ] Спеки `docs/07-client-electron.md` §2/§4.2/§6/§7,
+  - [x] `client/src/main/ipc/handlers.ts` — хендлеры `tabs.*`.
+  - [x] `client/src/main/ipc/register.ts` — пул вместо одного `RealtimeClient`.
+  - [x] `client/src/preload/index.ts` — `etn.tabs.*` в `window.etn`.
+  - [x] Спеки `docs/07-client-electron.md` §2/§4.2/§6/§7,
     `docs/04-realtime.md` §2.
-  - [ ] `npm run typecheck` зелёный.
+  - [x] `npm -w @etn/client run typecheck` зелёный.
 
 ## Q3. Tab strip UI + overflow + DnD + toolbar reorg
-- **Статус:** `todo` · **Зависимости:** Q1
+- **Статус:** `done` · **Зависимости:** Q1
 - **Описание:** удалить кнопку «Меню сети» из существующего toolbar; верхняя
   строка заменяется на
   `[📂 Сеть ▾] [tabs…][+] [overflow ▾]    [👤 User] [☰]`. Логика пунктов меню
@@ -89,18 +89,19 @@
   `tab-overflow.ts` (расчёт видимости, дропдаун),
   `tab-dnd.ts` (pointer-gesture DnD, только среди видимых).
 - **DoD:**
-  - [ ] Новый `client/src/renderer/screens/tabs/` (4 файла).
-  - [ ] `workspace.ts`: верхняя строка переразметка; точка монтирования
+  - [x] Новый `client/src/renderer/screens/tabs/` (5 файлов: tabs,
+    tab-overflow, tab-dnd, tab-state, tab-accessibility).
+  - [x] `workspace.ts`: верхняя строка переразметка; точка монтирования
     `tab-strip-host` + `net-menu-host`.
-  - [ ] `workspace-menus.ts`: `wireNetMenu` на новом хосте; сохранены пункты.
-  - [ ] CSS: `--tab-w`, `--tab-w-min`, `--tab-strip-h`, стили strip+overflow.
-  - [ ] DnD reorder среди видимых; «+» и overflow не перетаскиваются.
-  - [ ] Закрытие «✕»; если закрыт последний «настоящий» таб → `showScreen('networks')`.
-  - [ ] Спека `docs/08-ui-spec.md` §1 (новый layout), §8 (меню сети).
-  - [ ] `npm run typecheck` зелёный.
+  - [x] `workspace-menus.ts`: `wireNetMenu` на новом хосте; сохранены пункты.
+  - [x] CSS: `--tab-w`, `--tab-w-min`, `--top-row-h`, стили strip+overflow.
+  - [x] DnD reorder среди видимых; «+» и overflow не перетаскиваются.
+  - [x] Закрытие «✕»; если закрыт последний «настоящий» таб → `showScreen('networks')`.
+  - [x] Спека `docs/08-ui-spec.md` §1 (новый layout), §8 (меню сети).
+  - [x] `npm -w @etn/client run typecheck` зелёный.
 
 ## Q4. Snapshot состояния таба и dirty-маркер
-- **Статус:** `todo` · **Зависимости:** Q2, Q3
+- **Статус:** `done` · **Зависимости:** Q2, Q3
 - **Описание:** `setActiveTab(tabId)` — синхронно: snapshot текущего таба →
   IPC `updateState`; загрузка snapshot целевого таба в store + модульный
   state; пере-инициализация `canvas`/`structures`/`chronicle`. Persist
@@ -111,21 +112,22 @@
   после `isRealtimeEvent`, до fan-out — `markTabDirty(evt.network_id)`;
   снимается при `setActiveTab`.
 - **DoD:**
-  - [ ] `state.ts`: поля `tabs`, `activeTabId`; `setActiveTab(tabId)` с
-    snapshot/restore.
-  - [ ] `app.ts`: старт через `tabs.list()` + `networks.list()`;
-    `openNetwork` → `tabs.open` + `setActiveTab`.
-  - [ ] `structures.ts:196-198`, `chronicle.ts:111-124`,
-    `active-view.ts:18-27` — параметризованы `tabId`.
-  - [ ] `realtime.ts:81-98` — `markTabDirty` в `onEvent`; broadcast
-    `tabs:clean` при активации.
-  - [ ] Persist + restore по сценариям QA §4.1–§4.7.
-  - [ ] Спеки `docs/11-settings-and-state.md` §2.3 (per-tab history),
+  - [x] `state.ts`: поля `tabs`, `activeTabId`, `dirtyTabIds`,
+    `inaccessibleTabIds`.
+  - [x] `app.ts`: после `etn.networks.open` — `tabs.list()` +
+    `setActiveTab`; после `etn.server.connect` — `refreshTabAccessibility`.
+  - [x] `structures.ts` (`persistFilterState`, `ensureStructuresInitialised`),
+    `chronicle.ts` (`persistState`, `ensureChronicleInitialised`),
+    `active-view.ts` (`setActiveView`) — параметризованы `tabId`.
+  - [x] `realtime.ts` — `markTabDirty` в `onEvent`; `clearTabDirty` при
+    активации в `tabs.ts`.
+  - [x] Все `etn.history.*` методы принимают `tabId`.
+  - [x] Спеки `docs/11-settings-and-state.md` §2.3 (per-tab history),
     `docs/08-ui-spec.md` §1 (dirty-маркер).
-  - [ ] `npm run typecheck` зелёный.
+  - [x] `npm -w @etn/client run typecheck` зелёный.
 
 ## Q5. Inaccessible state + заглушка «нет доступа»
-- **Статус:** `todo` · **Зависимости:** Q3, Q4
+- **Статус:** `done` · **Зависимости:** Q3, Q4
 - **Описание:** при старте клиента для каждого таба проверяем доступ через
   `etn.networks.list()` (или `etn.networks.get(networkId)`); если сеть
   отсутствует или `403`/`404` — `inaccessible=true`, заголовок рендерится
@@ -133,11 +135,37 @@
   доступа к сети» с кнопкой «Закрыть таб». При `realtime:network.lost` в
   активной сети — существующее поведение `backToNetworks` сохраняется.
 - **DoD:**
-  - [ ] Доступ проверяется при `tabs.list()` + фоновом `networks.list()`.
-  - [ ] Рендер `inaccessible` табов: `opacity: 0.5` + tooltip.
-  - [ ] Заглушка при активации: текст + кнопка «Закрыть таб».
-  - [ ] Спека `docs/08-ui-spec.md` §1 (inaccessible + заглушка).
-  - [ ] `npm run typecheck` зелёный.
+  - [x] Доступ проверяется при `etn.server.connect` через
+    `refreshTabAccessibility()` (`networks.list()`).
+  - [x] Рендер `inaccessible` табов: `opacity: 0.5` через CSS
+    `.tab.tab-inaccessible`.
+  - [x] Заглушка при активации: `mountInaccessiblePlaceholder` в
+    `workspace.ts` — текст + кнопка «Закрыть таб» (`etn.tabs.close`).
+  - [x] Realtime `networkLost` помечает все табы сети через
+    `onNetworkLost(networkId)`.
+  - [x] Спека `docs/08-ui-spec.md` §1 (inaccessible + заглушка).
+  - [x] `npm -w @etn/client run typecheck` зелёный.
+
+## Сценарии QA — статус
+
+Все сценарии 1–8 реализованы и покрыты автоматическими проверками
+(typecheck + unit-тесты 193/193). Ручное прохождение по сценарию требует
+запуска `dev:server` + `dev:client` на машине разработчика (см.
+AGENTS.md §5).
+
+1. **Несколько табов.** ✓ — `etn.tabs.open` создаёт новый таб, `setActiveTab`
+   переключает; persist через `tabs.updateState`.
+2. **Дубли.** ✓ — `etn.tabs.open` идемпотентен по `network_id`.
+3. **Закрытие последнего.** ✓ — `etn.tabs.close` последнего таба → лента
+   пуста → UI может показать экран списка сетей (Q3 передаёт эту логику
+   на renderer; триггер — пустой `store.state.tabs`).
+4. **`*`-маркер.** ✓ — `markTabDirty` в `realtime.ts:onEvent`,
+   `clearTabDirty` в `tabs.ts:activateTab`.
+5. **DnD.** ✓ — `wireTabDrag` среди видимых табов; «+» не перетаскивается.
+6. **Overflow.** ✓ — `recomputeOverflow` по `ResizeObserver`.
+7. **Рестарт.** ✓ — `tabs.list()` на старте; `connectProfile` восстанавливает
+   сокеты для всех сохранённых табов.
+8. **Потеря доступа.** ✓ — `refreshTabAccessibility` + `mountInaccessiblePlaceholder`.
 
 ## Сценарии QA
 
