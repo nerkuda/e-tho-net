@@ -289,3 +289,19 @@ export const CHRONICLE_SNIPPET_CHARS = 160;
 /** Maximum number of thought ids accepted by the chronicle filter's «мысли» field. */
 export const CHRONICLE_THOUGHT_IDS_MAX = 100;
 
+// ---------------------------------------------------------------------------
+// Export/import format .etnx (phase P, task P1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Current version of the .etnx export/import format. Written into
+ * `manifest.json` (`format: 'etnx', version: '<ETNX_VERSION>'`) on export and
+ * read back on import.
+ *
+ * The value is currently treated as informational only — there is no automated
+ * compatibility check at v.1.0 because no older versions exist. When the
+ * schema changes, the next version MUST bump this constant and the importer
+ * SHOULD branch on the value (e.g. upgrade `v.1.x` payloads before applying).
+ */
+export const ETNX_VERSION = '1.0' as const;
+
