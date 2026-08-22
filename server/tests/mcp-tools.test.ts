@@ -419,6 +419,205 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('subgraph max_chars shrinks comment previews when only comment bodies overflow (O13)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Build a small graph: 2 children of HOME with long permanent
+        // comments. The topology is tiny, so a moderate `max_chars` forces
+        // the preview-shortening step without dropping any node.
+        const ids: string[] = [];
+        for (let i = 0; i < 2; i++) {
+          const created = await handle.client.callTool({
+            name: 'etn.thoughts.create',
+            arguments: {
+              network_id: ctx.networkId,
+              title: `Узел ${i}`,
+              link: { direction: 'child', target_thought_id: ctx.homeId },
+            },
+          });
+          ids.push(toolJson<{ id: string }>(created).id);
+          // Permanent preview body of ~3000 chars on every node.
+          await handle.client.callTool({
+            name: 'etn.comments.upsert',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: ids[i]!,
+              kind: 'permanent',
+              body_md: 'z'.repeat(3000),
+            },
+          });
+        }
+
+        const sub = await handle.client.callTool({
+          name: 'etn.thoughts.subgraph',
+          arguments: {
+            network_id: ctx.networkId,
+            seed_ids: [ctx.homeId],
+            radius: 1,
+            include_comments: true,
+            max_chars: 5000,
+          },
+        });
+        assert.equal(sub.isError, undefined, toolText(sub));
+        const res = toolJson<{
+          nodes: Array<{ id: string }>;
+          edges: Array<unknown>;
+          truncated: boolean;
+          reason: string | null;
+          budget?: {
+            max_chars: number;
+            original_chars: number;
+            final_chars: number;
+            steps: string | null;
+          };
+          comments: Array<{
+            thought_id: string;
+            permanent: { body_md: string } | null;
+          }>;
+        }>(sub);
+
+        // All topology preserved — preview shrinking was enough on its own.
+        assert.equal(res.nodes.length, 3);
+        assert.equal(res.truncated, true);
+        assert.equal(res.reason, 'max_chars_preview');
+        assert.ok(res.budget !== undefined, 'budget diagnostics must be reported');
+        assert.equal(res.budget.max_chars, 5000);
+        assert.ok(res.budget.original_chars > res.budget.final_chars);
+        assert.ok(res.budget.final_chars <= 5000);
+        for (const c of res.comments) {
+          if (c.permanent !== null) {
+            assert.ok(
+              c.permanent.body_md.length <= 500,
+              `permanent body for ${c.thought_id} must be trimmed to the budget floor (got ${c.permanent.body_md.length})`,
+            );
+          }
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('subgraph max_chars drops farthest nodes when preview shrinking is not enough (O13)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Build a chain home → a → b → c → d (depth 1 only — every link is
+        // parent→child). With `radius: 2` we collect the whole chain.
+        let lastId = ctx.homeId;
+        const chain: string[] = [];
+        for (let i = 0; i < 4; i++) {
+          const created = await handle.client.callTool({
+            name: 'etn.thoughts.create',
+            arguments: {
+              network_id: ctx.networkId,
+              title: `Цепь ${i}`,
+              link: { direction: 'child', target_thought_id: lastId },
+            },
+          });
+          const id = toolJson<{ id: string }>(created).id;
+          chain.push(id);
+          // Big comment body to inflate the JSON.
+          await handle.client.callTool({
+            name: 'etn.comments.upsert',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: id,
+              kind: 'permanent',
+              body_md: 'q'.repeat(1500),
+            },
+          });
+          lastId = id;
+        }
+
+        // Pick a budget well below what the shrunk-previews payload weighs,
+        // forcing the node-drop step.
+        const sub = await handle.client.callTool({
+          name: 'etn.thoughts.subgraph',
+          arguments: {
+            network_id: ctx.networkId,
+            seed_ids: [ctx.homeId],
+            radius: 4,
+            include_comments: true,
+            max_chars: 1500,
+          },
+        });
+        assert.equal(sub.isError, undefined, toolText(sub));
+        const res = toolJson<{
+          nodes: Array<{ id: string }>;
+          edges: Array<{ source_id: string; target_id: string }>;
+          truncated: boolean;
+          reason: string | null;
+          budget?: { max_chars: number; final_chars: number; steps: string | null };
+          comments: Array<{ thought_id: string }>;
+        }>(sub);
+
+        assert.equal(res.truncated, true);
+        assert.equal(res.reason, 'max_chars_nodes');
+        assert.ok(res.budget !== undefined);
+        assert.ok(res.budget.final_chars <= 1500);
+
+        // Seed must survive; the farthest node must be the first dropped.
+        assert.ok(res.nodes.some((n) => n.id === ctx.homeId));
+        assert.equal(
+          res.nodes.some((n) => n.id === chain[3]),
+          false,
+          'the farthest chain node must be dropped first',
+        );
+
+        // Surviving edges must reference surviving nodes only.
+        const surviving = new Set(res.nodes.map((n) => n.id));
+        for (const edge of res.edges) {
+          assert.ok(
+            surviving.has(edge.source_id) && surviving.has(edge.target_id),
+            `edge ${edge.source_id} → ${edge.target_id} must reference surviving nodes`,
+          );
+        }
+        // Surviving comment slots must reference surviving nodes only.
+        for (const c of res.comments) {
+          assert.ok(surviving.has(c.thought_id), `comment slot for dropped node ${c.thought_id}`);
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('subgraph without max_chars reports reason=null (O13 default)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const sub = await handle.client.callTool({
+          name: 'etn.thoughts.subgraph',
+          arguments: { network_id: ctx.networkId, seed_ids: [ctx.homeId], radius: 0 },
+        });
+        assert.equal(sub.isError, undefined, toolText(sub));
+        const res = toolJson<{
+          truncated: boolean;
+          reason: string | null;
+          budget?: unknown;
+        }>(sub);
+        assert.equal(res.truncated, false);
+        assert.equal(res.reason, null);
+        assert.equal(res.budget, undefined, 'budget diagnostics must be absent without max_chars');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('read tools attach type catalogues with names and descriptions (N6)', async () => {
     const ctx = await buildMcpContext();
     try {

@@ -103,6 +103,7 @@ import {
   resolveThoughts,
   search,
 } from '../domain/search-service.js';
+import { shrinkSubgraphToBudget } from './subgraph-budget.js';
 import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
 import { queryThoughts } from '../domain/query-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
@@ -587,6 +588,16 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     seed_ids: z.array(ThoughtId).min(1).max(50),
     radius: z.number().int().min(0).max(TRAVERSAL_DEFAULTS.MAX_DEPTH),
     max_nodes: z.number().int().min(1).optional(),
+    /**
+     * Task O13 — soft cap on the JSON-encoded response size (characters).
+     * The server first shortens every comment preview body down to
+     * {@link SUBGRAPH_BUDGET_PREVIEW_CHARS} and then drops the farthest
+     * nodes (BFS level) until the response fits. Surfaces diagnostics via
+     * `truncated` and `reason` (`"max_chars_preview"` /
+     * `"max_chars_nodes"`). The hard `max_nodes` cap still wins — when it
+     * fires, budget trimming is skipped and `reason` is `"max_nodes"`.
+     */
+    max_chars: z.number().int().min(1).optional(),
     include_comments: z.boolean().optional(),
     view: View,
   });
@@ -604,6 +615,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'for the types actually used — the agent reads the AI-facing type descriptions once ' +
         'instead of re-fetching. The key RAG tool — returns ready-to-use context. ' +
         '`max_nodes` is capped by the server setting max_nodes_per_subgraph. ' +
+        '`max_chars` (task O13) caps the JSON-encoded response size: the server first ' +
+        'shrinks every comment preview body and then drops the farthest nodes (BFS level ' +
+        'from the seeds) until the payload fits, reporting the truncation via `truncated: ' +
+        'true` and `reason` in `{"max_chars_preview", "max_chars_nodes"}`. ' +
         '`view: "compact"` (default, task O12) drops colours and font-style flags from every ' +
         'node and the line-style fields from the link-type catalogue — the dominant token ' +
         'saving on large subgraphs. `view: "full"` keeps the legacy shape.',
@@ -638,14 +653,61 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           view === 'full'
             ? linkTypeCatalog(ndb, result.edges.map((e) => e.type_id))
             : linkTypeCatalogCompact(ndb, result.edges.map((e) => e.type_id));
-        return {
+        // When the hard `max_nodes` bound fires during traversal, the response is
+        // already structurally incomplete — running the budget shrinker on top
+        // would only hide that fact behind a softer reason. Surface the
+        // `max_nodes` reason verbatim in that case and skip budget trimming.
+        const thoughtTypes = thoughtTypeCatalog(ndb, nodes.map((n) => n.type_id));
+        const payload: {
+          nodes: typeof projectedNodes;
+          edges: typeof result.edges;
+          thought_types: typeof thoughtTypes;
+          link_types: typeof linkTypes;
+          comments?: typeof comments;
+        } = {
           nodes: projectedNodes,
           edges: result.edges,
-          truncated: result.truncated,
-          max_nodes: effectiveMax,
-          thought_types: thoughtTypeCatalog(ndb, nodes.map((n) => n.type_id)),
+          thought_types: thoughtTypes,
           link_types: linkTypes,
           ...(comments === undefined ? {} : { comments }),
+        };
+        const traversalTruncated = result.truncated;
+        const budget =
+          args.max_chars !== undefined && !traversalTruncated
+            ? shrinkSubgraphToBudget(payload, {
+                seed_ids: args.seed_ids,
+                max_chars: args.max_chars,
+              })
+            : null;
+        return {
+          nodes: payload.nodes,
+          edges: payload.edges,
+          truncated: traversalTruncated || (budget?.truncated ?? false),
+          max_nodes: effectiveMax,
+          // Reason: explicit `max_nodes` (from `traverse`) takes priority over
+          // budget diagnostics — a traversal-level cap is the more informative
+          // answer for the agent, because it means *not every reachable node
+          // was even considered*. `null` when nothing was trimmed.
+          reason: traversalTruncated
+            ? 'max_nodes'
+            : (budget?.reason ?? null),
+          thought_types: payload.thought_types,
+          link_types: payload.link_types,
+          ...(payload.comments === undefined ? {} : { comments: payload.comments }),
+          // Echo of the budget diagnostic so the agent can distinguish "we
+          // shrank to 40k chars from 90k" from "we dropped 50 nodes". Absent
+          // when the caller did not set `max_chars` or when traversal already
+          // truncated.
+          ...(budget === null
+            ? {}
+            : {
+                budget: {
+                  max_chars: args.max_chars as number,
+                  original_chars: budget.original_chars,
+                  final_chars: budget.final_chars,
+                  steps: budget.reason,
+                },
+              }),
         };
       }),
   );

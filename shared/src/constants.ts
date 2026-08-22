@@ -198,6 +198,16 @@ export const COMMENT_PREVIEW_CHARS = 2000;
  *  комментариев (task N5, `etn.thoughts.subgraph` с `include_comments`). */
 export const CHRONO_PREVIEW_MAX_ENTRIES = 10;
 
+/**
+ * Floor length (in characters) for comment bodies inside `etn.thoughts.subgraph`
+ * responses when the server is squeezing the JSON under a `max_chars` budget
+ * (task O13). The first shrink step trims every permanent / chronological
+ * preview body down to this length before any node drops are considered, so
+ * the agent still sees enough context to decide whether to drill in with
+ * `etn.comments.get`.
+ */
+export const SUBGRAPH_BUDGET_PREVIEW_CHARS = 500;
+
 /** Maximum number of distinct owners a chronological comment may be attached
  *  to (L20, 03-server-api.md §10). */
 export const COMMENT_TARGETS_MAX = 100;

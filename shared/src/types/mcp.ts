@@ -260,8 +260,30 @@ export interface McpSubgraphParams {
   seed_ids: string[];
   radius: number;
   max_nodes?: number;
+  /**
+   * Task O13 — soft cap on the JSON-encoded response size (in characters).
+   * When the subgraph would exceed the budget, the server first shortens
+   * comment previews (`SUBGRAPH_BUDGET_PREVIEW_CHARS`) and then drops the
+   * farthest nodes (BFS level) until it fits, reporting the truncation via
+   * `truncated: true` and a `reason` in
+   * `{ "max_nodes" | "max_chars_preview" | "max_chars_nodes" }`.
+   */
+  max_chars?: number;
   include_comments?: boolean;
 }
+
+/**
+ * Reason the server had to truncate an `etn.thoughts.subgraph` response
+ * (task O13). `max_nodes` — the hard `max_nodes_per_subgraph` cap fired first.
+ * `max_chars_preview` — the byte budget was met after shrinking every comment
+ * preview body to `SUBGRAPH_BUDGET_PREVIEW_CHARS`. `max_chars_nodes` — even
+ * with shrunk previews the budget was too tight, so the server additionally
+ * dropped the farthest nodes (and their incident edges).
+ */
+export type McpSubgraphTruncationReason =
+  | 'max_nodes'
+  | 'max_chars_preview'
+  | 'max_chars_nodes';
 
 /** Parameters of `etn.export.subgraph` (05-mcp-server.md §4.1). */
 export interface McpExportSubgraphParams {
