@@ -12,6 +12,7 @@ import type { Comment } from './comment.js';
 import type { Link } from './link.js';
 import type { Thought } from './thought.js';
 import type { PropertyValue, PropertyValueValue } from './thought-type.js';
+import type { ThoughtCardWarning } from './thought-card-warning.js';
 
 /** How an existing duplicate candidate was matched (mirrors `find_duplicates`). */
 export type ThoughtBundleMatchKind = 'title' | 'synonym' | 'partial';
@@ -75,4 +76,12 @@ export interface ThoughtBundleResult {
   properties?: Record<string, PropertyValue>;
   links?: Link[];
   attachments?: Attachment[];
+  /**
+   * "Card completeness" warnings about the resulting card (task O6). Always
+   * populated: empty array when the type has no `required` properties or all
+   * of them are filled. The MCP layer surfaces this to the agent verbatim;
+   * REST ignores it (the contract change is additive, docs/05-mcp-server.md
+   * §4.2).
+   */
+  warnings?: ThoughtCardWarning[];
 }

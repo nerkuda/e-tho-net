@@ -28,6 +28,7 @@ import {
   type PropertyValue,
   type PropertyValueValue,
   type ResolvedPropertyValue,
+  type ThoughtCardWarning,
   type ThoughtUsage,
   type ThoughtUsageGroup,
   type TypeOwnerType,
@@ -971,6 +972,74 @@ export function setPropertyValues(
     }
     return stored;
   });
+}
+
+/**
+ * Compute "card completeness" warnings for a thought (task O6,
+ * docs/05-mcp-server.md §4.2). Returns one entry per `required` property in
+ * the thought's effective type chain (L21, own + inherited) for which there
+ * is no stored value on this card.
+ *
+ * The check runs against the live `property_values` table — defaults set via
+ * `type_property_overrides` / `config.default_value` are not stored rows and
+ * therefore do NOT mask the warning (they apply to *future* values; the
+ * existing card still lacks a stored one). Thoughts without a type never
+ * report warnings — the root type intentionally carries no required
+ * properties (its settings apply implicitly to untyped thoughts,
+ * docs/08-ui-spec.md §8.1).
+ */
+export function computeThoughtCardWarnings(
+  ndb: NetworkDb,
+  thoughtId: string,
+): ThoughtCardWarning[] {
+  const row = ndb.prepare('SELECT type_id FROM thoughts WHERE id = ?').get(thoughtId) as
+    | { type_id: string | null }
+    | undefined;
+  if (row === undefined || row.type_id === null) {
+    return [];
+  }
+  const effective = listEffectiveTypeProperties(ndb, 'thought_type', row.type_id);
+  if (effective.length === 0) {
+    return [];
+  }
+  // Map (key → value) of everything currently stored on the thought.
+  const stored = new Map<string, PropertyValueValue>();
+  for (const v of getPropertyValues(ndb, 'thought', thoughtId)) {
+    stored.set(keyOf(ndb, v.property_id), v.value);
+  }
+  const warnings: ThoughtCardWarning[] = [];
+  for (const def of effective) {
+    if (!def.required) continue;
+    if (hasValue(stored.get(def.key))) continue;
+    warnings.push({
+      code: 'REQUIRED_PROPERTY_MISSING',
+      key: def.key,
+      property_id: def.id,
+      defined_on: def.defined_on,
+      value_type: def.value_type,
+      inherited: def.inherited,
+    });
+  }
+  return warnings;
+}
+
+/** Resolve a property definition's `key` from its id (small N, in-memory). */
+function keyOf(ndb: NetworkDb, propertyId: string): string {
+  const row = ndb.prepare('SELECT key FROM type_properties WHERE id = ?').get(propertyId) as
+    | { key: string }
+    | undefined;
+  return row?.key ?? propertyId;
+}
+
+/**
+ * A stored value counts as "filled" for the purpose of required-property
+ * warnings when it is not the absence marker (`null`). Empty strings are
+ * treated as filled for `text`/`url`/`date` — they are legitimate values
+ * (e.g. an empty note is still a note), and conflating them with "unset"
+ * would surprise callers who set `""` deliberately.
+ */
+function hasValue(value: PropertyValueValue | undefined): boolean {
+  return value !== undefined && value !== null;
 }
 
 /**

@@ -349,6 +349,45 @@ url/file_path пропускаются без ошибки и без запис�
 - возвращают `{ id, version, request_id }`;
 - порождают стандартные real-time события (см. [04-realtime.md](04-realtime.md)).
 
+#### 5.2b. `warnings` — «карточка неполная» (задача O6)
+
+Тип мысли может объявлять `required`-свойства в `type_properties` (02-data-model.md
+§3.4). Когда `etn.thoughts.create`, `etn.thoughts.update` (с `changes.type_id`) или
+`etn.thoughts.upsert_bundle` создают/дополняют мысль и карточка получается неполной
+(некоторые `required`-свойства остались без значений), в ответе появляется
+неломающий блок `warnings: ThoughtCardWarning[]`:
+
+```jsonc
+{
+  "code": "REQUIRED_PROPERTY_MISSING",
+  "key": "status",                  // property key — адресуем в properties.set
+  "property_id": "<uuid>",          // type_properties.id
+  "defined_on": "<type-uuid>",      // тип, на котором объявлено свойство
+  "value_type": "text",             // ожидаемый тип значения
+  "inherited": false                // true для свойств, пришедших от предка по L21
+}
+```
+
+Правила:
+
+- Проверка идёт по эффективному списку свойств типа (L21, свои + унаследованные)
+  против живой таблицы `property_values`. Дефолты (`config.default_value` /
+  `type_property_overrides.default_value`) **не** маскируют warning — они применяются
+  к будущим значениям, а в `property_values` на момент проверки записи нет.
+- `warnings` появляется только когда есть расхождения. Для `etn.thoughts.upsert_bundle`
+  поле присутствует **всегда** (включая пустой массив `[]`) — форма стабильна,
+  агенту удобно парсить.
+- `updateThought` возвращает `warnings` **только** при смене `type_id` — это единственное
+  поле в `changes`, после которого может вырасти новый список обязательств
+  (переименование/рестайлинг/`active` контракт свойств не меняют).
+- Мысль без типа → `warnings` отсутствует; корневой тип специально не объявляет
+  `required`-свойств (его настройки применяются к безтиповым мыслям, 08-ui-spec.md §8.1).
+
+REST-контракт не меняется (тип `warnings` опционален на уровне MCP-фасада); UI/клиент
+получает то же, что и раньше. Агент узнаёт о неполной карточке из ответа `create` /
+`update` / `upsert_bundle` и дозаполняет её одним `etn.properties.set` (или новым
+`upsert_bundle`, который сразу принесёт свойства).
+
 `etn.properties.set` (task O2) принимает либо одиночную форму `key` + `value`
 (обратная совместимость; `value: null` — очистка значения), либо карту
 `values: {key: value|null}` — набор свойств пишется **одной транзакцией**:
@@ -403,9 +442,12 @@ version: 0, request_id }`. Набор стоит одной записи для 
 
 Ответ: `{ id, version, thought_action: "created"|"updated"|"reused", matched_on:
 "title"|"synonym"|"partial"|null, comment?: {id, version}, properties?: {[key]:
-{id}}, links?: [{id, version}], attachments?: [{id}], request_id }`.
+{id}}, links?: [{id, version}], attachments?: [{id}], warnings: ThoughtCardWarning[],
+request_id }`.
 `matched_on` — чем совпал кандидат, приведший к `reused`/`updated`; `null` для
-свежесозданной или явно адресованной (`thought_id`) мысли.
+свежесозданной или явно адресованной (`thought_id`) мысли. `warnings` — массив
+`REQUIRED_PROPERTY_MISSING` по эффективному списку свойств типа (см. §5.2b), всегда
+присутствует (пустой, когда карточка полная).
 
 Real-time и `audit_log`: событие своего типа на каждую фактически
 изменённую/созданную сущность (`thought.created`/`thought.updated` — не

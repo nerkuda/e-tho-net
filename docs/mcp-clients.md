@@ -155,3 +155,50 @@ etn.networks.structure { network_id }
 `update`) делает повторный импорт безопасным. Обязательный шаг —
 `etn.thoughts.find_duplicates` перед `upsert_bundle`, чтобы не плодить
 дубликаты, и сверка с `conventions` для типа.
+
+## 9. Warnings о незаполненных `required`-свойствах (задача O6)
+
+Тип мысли может объявлять `required`-свойства в `type_properties`. `etn.thoughts.create`,
+`etn.thoughts.update` (когда `changes.type_id` присутствует) и `etn.thoughts.upsert_bundle`
+**не падают**, если карточка получилась неполной — вместо этого возвращают неломающий
+блок `warnings: [{code: "REQUIRED_PROPERTY_MISSING", key, property_id, defined_on,
+value_type, inherited}]` по эффективному списку свойств типа (свои + унаследованные от
+предков, L21). Это сигнал агенту «карточка записана, но карточка неполная — дозаполни».
+
+Правила:
+
+- Поле `warnings` появляется **только** когда есть расхождения. Для
+  `etn.thoughts.upsert_bundle` это поле **всегда присутствует** (включая пустой массив)
+  — удобнее для парсинга.
+- Дефолты (`config.default_value` / `type_property_overrides.default_value`) **не
+  маскируют** предупреждение: они применяются к будущим значениям, но в `property_values`
+  на момент проверки записи нет — карточка по-прежнему считается неполной. Чтобы
+  заглушить warning, запишите значение явно через `etn.properties.set` или добавьте
+  его в `properties` следующего `upsert_bundle`.
+- `warnings` появляется и при смене типа: если вы переводите мысль на тип, у которого
+  есть `required`-свойства, не заполненные сейчас, вы получите их в ответе `update`.
+- Тип **без** `required`-свойств → `warnings` отсутствует (для `create`/`update`) или
+  пустой (для `upsert_bundle`).
+- Мысль **без типа** → `warnings` отсутствует; корневой тип специально не объявляет
+  `required`-свойств (его настройки применяются к безтиповым мыслям, §8.1).
+
+Типичный сценарий «дозаполнения»:
+
+```jsonc
+// 1) upsert_bundle вернул warnings: [{ key: "status", ... }]
+// 2) закрываем gap одним вызовом:
+{
+  "name": "etn.properties.set",
+  "arguments": {
+    "network_id": "...",
+    "owner_type": "thought",
+    "owner_id": "<id из шага 1>",
+    "values": { "status": "active" }
+  }
+}
+```
+
+Совет: чтобы избежать двухэтапной записи, передавайте `required`-свойства прямо
+в `properties` вашего `upsert_bundle` — `etn.types.list` (или
+`etn.types.list(in_subtree_of=…)`) подскажет, какие ключи обязательны для типа.
+

@@ -52,10 +52,12 @@ import {
 
 import {
   createThought,
+  createThoughtWithWarnings,
   deleteThought,
   getNeighbors,
   getThoughtOrThrow,
   updateThought,
+  updateThoughtWithWarnings,
 } from '../domain/thought-service.js';
 import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
 import {
@@ -850,7 +852,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Create a thought, optionally attaching a parent/child link in the same transaction. ' +
         'Call `etn.thoughts.find_duplicates` first to avoid duplicates. `type`/`link.type` ' +
         '(task O4) resolve a type by name instead of `type_id` (see `etn.types.list`). ' +
-        'Returns { id, version }.',
+        'Returns { id, version }; when the assigned type declares `required` properties and ' +
+        'the card leaves some of them unset, also returns `warnings: [{code: ' +
+        '"REQUIRED_PROPERTY_MISSING", key, …}]` so the agent can follow up with ' +
+        '`etn.properties.set` / another bundle (task O6).',
       inputSchema: CreateThoughtSchema,
     },
     (args, extra) =>
@@ -861,7 +866,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const typeId = effectiveThoughtTypeId(ndb, args.type_id, args.type);
         const linkTypeId =
           args.link === undefined ? undefined : effectiveLinkTypeId(ndb, args.link.type_id, args.link.type);
-        const thought = createThought(
+        const { thought, warnings } = createThoughtWithWarnings(
           ndb,
           {
             title: args.title,
@@ -902,6 +907,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           id: thought.id,
           version: thought.version,
           request_id: String(extra.requestId),
+          ...(warnings.length === 0 ? {} : { warnings }),
         } satisfies McpMutationResult;
       }),
   );
@@ -918,7 +924,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Изменить мысль',
       description:
         'Patch a thought (last-write-wins per field). `expected_version` enables optimistic ' +
-        'concurrency — on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }.',
+        'concurrency — on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }; ' +
+        'when `changes.type_id` is present and the new type declares `required` properties that ' +
+        'the card leaves unset, also returns `warnings: [{code: ' +
+        '"REQUIRED_PROPERTY_MISSING", key, …}]` (task O6).',
       inputSchema: UpdateThoughtSchema,
     },
     (args, extra) =>
@@ -926,7 +935,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        const thought = updateThought(
+        const { thought, warnings } = updateThoughtWithWarnings(
           ndb,
           args.thought_id,
           args.changes,
@@ -945,6 +954,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           id: thought.id,
           version: thought.version,
           request_id: String(extra.requestId),
+          ...(warnings.length === 0 ? {} : { warnings }),
         } satisfies McpMutationResult;
       }),
   );
@@ -1592,7 +1602,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         "parts to the existing thought unchanged, `update` also patches the thought's fields. " +
         '`thought.type`/`links[].type` (task O4) resolve a type by name instead of `type_id` ' +
         '(see `etn.types.list`). ' +
-        'Returns { id, version, thought_action, matched_on, comment?, properties?, links?, attachments? }.',
+        'Returns { id, version, thought_action, matched_on, comment?, properties?, links?, attachments?, ' +
+        'warnings? }. `warnings` (task O6) lists the type\'s `required` properties that remain ' +
+        'unset on the resulting card so the agent can follow up with `etn.properties.set` ' +
+        '(empty array when the card is complete).',
       inputSchema: UpsertBundleSchema,
     },
     (args, extra) =>
@@ -1729,6 +1742,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           ...(result.attachments === undefined
             ? {}
             : { attachments: result.attachments.map((a) => ({ id: a.id })) }),
+          // Task O6: surface unfilled required properties (computed by the
+          // bundle service against the freshly written card) so the agent
+          // can follow up. `warnings` is always an array here — it is part of
+          // the result even when empty — so callers can rely on the shape.
+          warnings: result.warnings ?? [],
           request_id: String(extra.requestId),
         } satisfies McpUpsertBundleResult;
       }),

@@ -31,6 +31,7 @@ import {
   type SortKind,
   type SortOrder,
   type Thought,
+  type ThoughtCardWarning,
   type ThoughtCreateInput,
   type ThoughtRef,
   type ThoughtUpdateInput,
@@ -38,6 +39,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { purgeThoughtDeletionDependants } from './owner-cleanup.js';
+import { computeThoughtCardWarnings } from './property-service.js';
 import { assertThoughtTypeAssignable } from './thought-type-service.js';
 
 import { getAttachment } from './attachment-service.js';
@@ -1029,4 +1031,56 @@ export function focus(
       children: childPref?.sort ?? 'created',
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// "Card completeness" warnings (task O6, docs/05-mcp-server.md §4.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of a mutation that may surface {@link ThoughtCardWarning}s about the
+ * resulting card. REST endpoints ignore `warnings`; the MCP layer surfaces
+ * them to the agent so it can follow up with `etn.properties.set` /
+ * `etn.thoughts.upsert_bundle`.
+ */
+export interface ThoughtMutationWithWarnings {
+  thought: Thought;
+  warnings: ThoughtCardWarning[];
+}
+
+/**
+ * Thin wrapper over {@link createThought} that returns the resulting thought
+ * together with the list of "missing required property" warnings (task O6).
+ * The warnings are computed against the freshly-written row in the same
+ * transaction — empty when the type has no `required` properties or when all
+ * of them are filled.
+ */
+export function createThoughtWithWarnings(
+  ndb: NetworkDb,
+  input: ThoughtCreateInput,
+  actorUserId: string,
+): ThoughtMutationWithWarnings {
+  const thought = createThought(ndb, input, actorUserId);
+  const warnings = computeThoughtCardWarnings(ndb, thought.id);
+  return { thought, warnings };
+}
+
+/**
+ * Thin wrapper over {@link updateThought}. Warnings are recomputed **only**
+ * when the change set may have shifted the required-property surface — i.e.
+ * `type_id` is present in `changes` (a type assignment is the only mutation
+ * that can introduce a new obligation; renaming, restyling and toggling
+ * `active` leave the property contract alone, so we skip the lookup).
+ */
+export function updateThoughtWithWarnings(
+  ndb: NetworkDb,
+  id: string,
+  changes: ThoughtUpdateInput,
+  expectedVersion: number | undefined,
+  actorUserId: string,
+): ThoughtMutationWithWarnings {
+  const thought = updateThought(ndb, id, changes, expectedVersion, actorUserId);
+  const warnings =
+    changes.type_id === undefined ? [] : computeThoughtCardWarnings(ndb, thought.id);
+  return { thought, warnings };
 }

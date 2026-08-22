@@ -1777,4 +1777,228 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       await closeMcpContext(ctx);
     }
   });
+
+  it('etn.thoughts.create surfaces warnings when the assigned type has ' +
+    'unfilled required properties (O6)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const type = createThoughtType(ndb, { name: 'Issue' }, ctx.adminId);
+      const required = createTypeProperty(ndb, 'thought_type', type.id, {
+        key: 'status',
+        value_type: 'text',
+        required: true,
+      });
+      // Optional property — must not appear in warnings.
+      createTypeProperty(ndb, 'thought_type', type.id, { key: 'description', value_type: 'text' });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const res = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Карточка', type_id: type.id },
+        });
+        assert.equal(res.isError, undefined, toolText(res));
+        const result = toolJson<{
+          id: string;
+          version: number;
+          warnings?: Array<{
+            code: string;
+            key: string;
+            property_id: string;
+            defined_on: string;
+            value_type: string;
+            inherited: boolean;
+          }>;
+        }>(res);
+        assert.equal(result.version, 1);
+        assert.ok(Array.isArray(result.warnings));
+        assert.equal(result.warnings!.length, 1);
+        const w = result.warnings![0]!;
+        assert.equal(w.code, 'REQUIRED_PROPERTY_MISSING');
+        assert.equal(w.key, 'status');
+        assert.equal(w.property_id, required.id);
+        assert.equal(w.defined_on, type.id);
+        assert.equal(w.value_type, 'text');
+        assert.equal(w.inherited, false);
+
+        // A thought created without a type does not report warnings — the root
+        // type intentionally has no required properties (docs/08-ui-spec.md §8.1).
+        const plain = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Безтиповая' },
+        });
+        assert.equal(plain.isError, undefined, toolText(plain));
+        const plainResult = toolJson<{ warnings?: unknown[] }>(plain);
+        assert.equal(plainResult.warnings, undefined);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thoughts.update returns warnings only when type_id changes (O6)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const plain = createThoughtType(ndb, { name: 'Plain' }, ctx.adminId);
+      const issue = createThoughtType(ndb, { name: 'Issue' }, ctx.adminId);
+      createTypeProperty(ndb, 'thought_type', issue.id, {
+        key: 'priority',
+        value_type: 'text',
+        required: true,
+      });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // 1) Create a typed thought with no required gaps.
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Тип сменится', type_id: plain.id },
+        });
+        assert.equal(created.isError, undefined);
+        const { id } = toolJson<{ id: string }>(created);
+
+        // 2) Renaming without touching type_id must NOT emit warnings — the
+        //    contract didn't change.
+        const renamed = await handle.client.callTool({
+          name: 'etn.thoughts.update',
+          arguments: { network_id: ctx.networkId, thought_id: id, changes: { title: 'Новое имя' } },
+        });
+        assert.equal(renamed.isError, undefined, toolText(renamed));
+        const renamedResult = toolJson<{ warnings?: unknown[] }>(renamed);
+        assert.equal(renamedResult.warnings, undefined);
+
+        // 3) Switching to a type with an unfilled required property MUST emit
+        //    warnings, including the `inherited` flag for ancestors.
+        const switched = await handle.client.callTool({
+          name: 'etn.thoughts.update',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_id: id,
+            changes: { type_id: issue.id },
+          },
+        });
+        assert.equal(switched.isError, undefined, toolText(switched));
+        const switchedResult = toolJson<{
+          warnings?: Array<{ code: string; key: string; inherited: boolean }>;
+        }>(switched);
+        assert.ok(Array.isArray(switchedResult.warnings));
+        assert.equal(switchedResult.warnings!.length, 1);
+        assert.equal(switchedResult.warnings![0]!.code, 'REQUIRED_PROPERTY_MISSING');
+        assert.equal(switchedResult.warnings![0]!.key, 'priority');
+        assert.equal(switchedResult.warnings![0]!.inherited, false);
+
+        // 4) Filling the gap and re-patching (without type_id) clears warnings.
+        await handle.client.callTool({
+          name: 'etn.properties.set',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: id,
+            key: 'priority',
+            value: 'high',
+          },
+        });
+        const patched = await handle.client.callTool({
+          name: 'etn.thoughts.update',
+          arguments: { network_id: ctx.networkId, thought_id: id, changes: { active: false } },
+        });
+        assert.equal(patched.isError, undefined, toolText(patched));
+        assert.equal(toolJson<{ warnings?: unknown[] }>(patched).warnings, undefined);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thoughts.upsert_bundle returns warnings[] (always present) and clears them ' +
+    'when the bundle supplies the missing required properties (O6)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const issue = createThoughtType(ndb, { name: 'Bug' }, ctx.adminId);
+      const status = createTypeProperty(ndb, 'thought_type', issue.id, {
+        key: 'status',
+        value_type: 'text',
+        required: true,
+      });
+      const owner = createTypeProperty(ndb, 'thought_type', issue.id, {
+        key: 'owner',
+        value_type: 'text',
+        required: true,
+      });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Incomplete bundle — `status` and `owner` are missing.
+        const incomplete = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: {
+            network_id: ctx.networkId,
+            thought: { title: 'Баг в логине', type_id: issue.id },
+            comment: { body_md: 'Не воспроизводится на stage.' },
+          },
+        });
+        assert.equal(incomplete.isError, undefined, toolText(incomplete));
+        const incompleteResult = toolJson<{
+          id: string;
+          version: number;
+          warnings: Array<{ code: string; key: string }>;
+        }>(incomplete);
+        const missing = incompleteResult.warnings.map((w) => w.key).sort();
+        assert.deepEqual(missing, ['owner', 'status']);
+        for (const w of incompleteResult.warnings) {
+          assert.equal(w.code, 'REQUIRED_PROPERTY_MISSING');
+        }
+        assert.ok(incompleteResult.warnings.length > 0);
+
+        // Complete bundle — `properties` fills both gaps; warnings is empty.
+        const complete = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: {
+            network_id: ctx.networkId,
+            thought_id: incompleteResult.id,
+            properties: { status: 'open', owner: 'alice' },
+          },
+        });
+        assert.equal(complete.isError, undefined, toolText(complete));
+        const completeResult = toolJson<{ warnings: Array<unknown> }>(complete);
+        assert.ok(Array.isArray(completeResult.warnings));
+        assert.equal(completeResult.warnings.length, 0);
+
+        // Bundle for an untyped thought reports an empty `warnings`, not an
+        // absent field — callers can rely on the shape.
+        const untTyped = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: { network_id: ctx.networkId, thought: { title: 'Просто мысль' } },
+        });
+        assert.equal(untTyped.isError, undefined, toolText(untTyped));
+        const untTypedResult = toolJson<{ warnings?: unknown[] }>(untTyped);
+        assert.ok(Array.isArray(untTypedResult.warnings));
+        assert.equal(untTypedResult.warnings!.length, 0);
+
+        // Property-id echo check (use a fresh incomplete bundle).
+        const again = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: {
+            network_id: ctx.networkId,
+            thought: { title: 'Ещё баг', type_id: issue.id },
+          },
+        });
+        const againResult = toolJson<{ warnings: Array<{ property_id: string }> }>(again);
+        const propertyIds = new Set(againResult.warnings.map((w) => w.property_id));
+        assert.ok(propertyIds.has(status.id));
+        assert.ok(propertyIds.has(owner.id));
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
 });

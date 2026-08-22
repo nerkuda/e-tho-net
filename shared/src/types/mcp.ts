@@ -27,6 +27,7 @@ import type {
   ThoughtBundleOnDuplicate,
   ThoughtBundleThoughtAction,
 } from './thought-bundle.js';
+import type { ThoughtCardWarning } from './thought-card-warning.js';
 
 /** All tool names exposed by the ETN MCP server (05-mcp-server.md §4). */
 export const MCP_TOOL_NAMES = [
@@ -79,6 +80,14 @@ export interface McpMutationResult {
   id: string;
   version: number;
   request_id?: string;
+  /**
+   * Non-fatal warnings about the resulting card (task O6). Currently emitted
+   * by `etn.thoughts.create`, `etn.thoughts.update` (when `type_id` changes)
+   * and `etn.thoughts.upsert_bundle` — the call succeeded, but the card is
+   * not fully compliant with its type's required-property contract. Absent
+   * when no warnings apply.
+   */
+  warnings?: ThoughtCardWarning[];
 }
 
 /** Base shape of an `etn://` resource URI (opaque string; templated by server). */
@@ -320,6 +329,12 @@ export interface McpUpsertBundleResult extends McpMutationResult {
   properties?: Record<string, { id: string }>;
   links?: Array<{ id: string; version: number }>;
   attachments?: Array<{ id: string }>;
+  /**
+   * "Card completeness" warnings (task O6) — always an array, possibly empty.
+   * Overrides the optional {@link McpMutationResult.warnings} for this tool so
+   * callers can rely on the field being present.
+   */
+  warnings: ThoughtCardWarning[];
 }
 
 /** `dir` parameter shared by read tools that accept a direction. */

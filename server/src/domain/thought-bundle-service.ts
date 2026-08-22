@@ -21,6 +21,7 @@ import type {
   ThoughtBundleInput,
   ThoughtBundleResult,
   ThoughtBundleThoughtAction,
+  ThoughtCardWarning,
 } from '@etn/shared';
 import { EtnError } from '@etn/shared';
 
@@ -28,7 +29,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { createAttachment } from './attachment-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import { createLink } from './link-service.js';
-import { setPropertyValue } from './property-service.js';
+import { computeThoughtCardWarnings, setPropertyValue } from './property-service.js';
 import { findDuplicates } from './search-service.js';
 import { createThought, getThoughtOrThrow, updateThought } from './thought-service.js';
 
@@ -196,6 +197,11 @@ export function upsertThoughtBundle(
       attachments = input.attachments.map((a) => createAttachment(ndb, 'thought', thought.id, a, actorUserId));
     }
 
+    // Task O6: "card completeness" warnings — computed against the freshly
+    // written card so the agent learns about unfilled `required` properties
+    // (own or inherited via L21) before assuming the bundle is "done".
+    const warnings = computeThoughtCardWarnings(ndb, thought.id);
+
     return {
       thought,
       thought_action: action,
@@ -205,6 +211,7 @@ export function upsertThoughtBundle(
       properties,
       links,
       attachments,
+      warnings,
     } satisfies ThoughtBundleResult;
   });
 }

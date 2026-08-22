@@ -18,6 +18,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import {
+  computeThoughtCardWarnings,
   createTypeProperty,
   deletePropertyValue,
   findThoughtUsage,
@@ -420,6 +421,182 @@ describe(
         assert.equal(otherUsage.total, 1);
         assert.equal(otherUsage.groups[0]!.key, 'editor');
         assert.equal(otherUsage.groups[0]!.thoughts[0]!.id, b2);
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
+
+describe(
+  'computeThoughtCardWarnings (O6)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    const USER = 'user-1';
+
+    it('returns no warnings for an untyped thought', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const thought = seedTypedThought(ndb, null as unknown as string);
+        // Re-seed with NULL type_id — seedTypedThought hard-codes a type.
+        ndb.prepare('DELETE FROM thoughts WHERE id = ?').run(thought);
+        const id = randomUUID();
+        ndb
+          .prepare(
+            `INSERT INTO thoughts (id, title, title_norm, active, version, created_at, created_by, updated_at, updated_by)
+             VALUES (?, ?, ?, 1, 1, '2024-01-01', 'u', '2024-01-01', 'u')`,
+          )
+          .run(id, 'T', 't');
+        assert.deepEqual(computeThoughtCardWarnings(ndb, id), []);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('returns no warnings when the type has no required properties', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Note' }, USER);
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'body', value_type: 'text' });
+        const thought = seedTypedThought(ndb, tt.id);
+        assert.deepEqual(computeThoughtCardWarnings(ndb, thought), []);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('lists required properties that have no stored value', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Issue' }, USER);
+        const status = createTypeProperty(ndb, 'thought_type', tt.id, {
+          key: 'status',
+          value_type: 'text',
+          required: true,
+        });
+        const priority = createTypeProperty(ndb, 'thought_type', tt.id, {
+          key: 'priority',
+          value_type: 'text',
+          required: true,
+        });
+        const optional = createTypeProperty(ndb, 'thought_type', tt.id, {
+          key: 'description',
+          value_type: 'text',
+        });
+        const thought = seedTypedThought(ndb, tt.id);
+        // Fill only `status`; `priority` must remain in the warning list.
+        setPropertyValue(ndb, 'thought', thought, 'status', 'open');
+
+        const warnings = computeThoughtCardWarnings(ndb, thought);
+        assert.equal(warnings.length, 1);
+        const w = warnings[0]!;
+        assert.equal(w.code, 'REQUIRED_PROPERTY_MISSING');
+        assert.equal(w.key, 'priority');
+        assert.equal(w.property_id, priority.id);
+        assert.equal(w.value_type, 'text');
+        assert.equal(w.inherited, false);
+        assert.equal(w.defined_on, tt.id);
+        // Reference for sanity: status was filled, optional is not required.
+        assert.notEqual(status.id, priority.id);
+        assert.notEqual(optional.id, priority.id);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('treats defaults (config.default_value / type_property_overrides) as not filled', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Task' }, USER);
+        // A `required` property whose `config.default_value` is set — the
+        // default applies to future values, not to the existing card; the
+        // warning must still fire until the value is stored explicitly.
+        createTypeProperty(ndb, 'thought_type', tt.id, {
+          key: 'state',
+          value_type: 'text',
+          required: true,
+          config: { default_value: 'new' },
+        });
+        const thought = seedTypedThought(ndb, tt.id);
+        const warnings = computeThoughtCardWarnings(ndb, thought);
+        assert.equal(warnings.length, 1);
+        assert.equal(warnings[0]!.key, 'state');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('walks the L21 chain and reports inherited required properties (parent → child)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const parent = createThoughtType(ndb, { name: 'IssueParent' }, USER);
+        createTypeProperty(ndb, 'thought_type', parent.id, {
+          key: 'owner',
+          value_type: 'text',
+          required: true,
+        });
+        const child = createThoughtType(ndb, { name: 'IssueChild', parent_id: parent.id }, USER);
+        createTypeProperty(ndb, 'thought_type', child.id, {
+          key: 'severity',
+          value_type: 'number',
+          required: true,
+        });
+
+        const thought = seedTypedThought(ndb, child.id);
+        const warnings = computeThoughtCardWarnings(ndb, thought);
+        const byKey = new Map(warnings.map((w) => [w.key, w]));
+        assert.equal(warnings.length, 2);
+        const owner = byKey.get('owner');
+        assert.ok(owner !== undefined);
+        assert.equal(owner!.defined_on, parent.id);
+        assert.equal(owner!.inherited, true);
+        const severity = byKey.get('severity');
+        assert.ok(severity !== undefined);
+        assert.equal(severity!.defined_on, child.id);
+        assert.equal(severity!.inherited, false);
+
+        // Filling the inherited gap clears it.
+        setPropertyValue(ndb, 'thought', thought, 'owner', 'alice');
+        const after = computeThoughtCardWarnings(ndb, thought);
+        assert.deepEqual(
+          after.map((w) => w.key),
+          ['severity'],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('returns no warnings after every required property is filled', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Filled' }, USER);
+        createTypeProperty(ndb, 'thought_type', tt.id, {
+          key: 'flag',
+          value_type: 'bool',
+          required: true,
+        });
+        const thought = seedTypedThought(ndb, tt.id);
+        assert.equal(computeThoughtCardWarnings(ndb, thought).length, 1);
+        setPropertyValue(ndb, 'thought', thought, 'flag', true);
+        assert.deepEqual(computeThoughtCardWarnings(ndb, thought), []);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('an empty string counts as filled (a deliberate value, not an unset one)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'EmptyString' }, USER);
+        createTypeProperty(ndb, 'thought_type', tt.id, {
+          key: 'note',
+          value_type: 'text',
+          required: true,
+        });
+        const thought = seedTypedThought(ndb, tt.id);
+        setPropertyValue(ndb, 'thought', thought, 'note', '');
+        assert.deepEqual(computeThoughtCardWarnings(ndb, thought), []);
       } finally {
         ndb.close();
       }
