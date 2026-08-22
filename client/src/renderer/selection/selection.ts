@@ -21,6 +21,7 @@ import { applyThoughtIcon, invalidateRef, setSelectionClickHooks } from '../canv
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
 import { showThoughtStyleDialog, type ThoughtStylePatch } from '../editor/style-dialog.js';
+import { showExportEtnxDialog } from '../import-export/export-dialog.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -29,7 +30,7 @@ import { notice } from '../lib/notice.js';
 import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import { store } from '../state.js';
 import { pickLinkType, pickThoughtType, showSelectionPropertiesDialog } from './dialogs.js';
-import { THOUGHT_RESOLVE_MAX_IDS, type ExportFormat } from '@etn/shared';
+import { THOUGHT_RESOLVE_MAX_IDS, type ExportEtnxOptions, type ExportFormat, type ExportRequest } from '@etn/shared';
 
 /** Panel chrome the selection module renders into. */
 let host: HTMLElement | null = null;
@@ -256,6 +257,7 @@ function buildActionsMenu(): MenuItem[] {
     {
       label: 'Экспорт',
       submenu: [
+        { label: 'zip-архив (.etnx)…', onClick: () => void runExport('etnx') },
         { label: 'Markdown', onClick: () => void runExport('markdown') },
         { label: 'PDF', onClick: () => void runExport('pdf') },
         { label: 'HTML', onClick: () => void runExport('html') },
@@ -559,12 +561,23 @@ async function batchDelete(): Promise<void> {
 }
 
 /** Starts an export job and polls it to completion. */
-async function runExport(format: ExportFormat): Promise<void> {
+async function runExport(format: ExportFormat, etnxOptions?: ExportEtnxOptions): Promise<void> {
   const networkId = requireNetworkId();
   const ids = store.state.selection;
   if (ids.length === 0) return;
+  let options = etnxOptions;
+  if (format === 'etnx' && options === undefined) {
+    const dialog = await showExportEtnxDialog(ids.length);
+    if (dialog.options === undefined) return; // cancelled
+    options = dialog.options;
+  }
   try {
-    const { job_id } = await etn.system.export(networkId, { thought_ids: ids, format });
+    const payload: ExportRequest = {
+      thought_ids: ids,
+      format,
+      ...(options === undefined ? {} : { etnx: options }),
+    };
+    const { job_id } = await etn.system.export(networkId, payload);
     notice(`Экспорт запущен (${job_id})…`);
     const job = await pollJob(job_id);
     if (job.download_url === undefined) {

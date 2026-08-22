@@ -28,6 +28,51 @@ import { notice } from '../lib/notice.js';
 import { orderedTypeRows } from '../lib/type-tree.js';
 import { isPinned, togglePinned } from '../pinned/pins.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
+import { errText } from '../lib/dom.js';
+import { showExportEtnxDialog } from '../import-export/export-dialog.js';
+
+/** Run an `.etnx` export for a single thought (phase P, task P7). The polling
+ *  loop and `<a download>` trigger mirror `selection.ts:runExport`; we keep a
+ *  local copy to avoid coupling the context-menu to the selection panel. */
+async function exportSingleThought(networkId: string, thoughtId: string): Promise<void> {
+  const dialog = await showExportEtnxDialog(1);
+  if (dialog.options === undefined) return;
+  try {
+    const { job_id } = await etn.system.export(networkId, {
+      thought_ids: [thoughtId],
+      format: 'etnx',
+      etnx: dialog.options,
+    });
+    notice(`Экспорт запущен (${job_id})…`);
+    const job = await pollJob(job_id);
+    if (job.download_url === undefined) {
+      notice('Экспорт завершился без ссылки на скачивание.', 'error');
+      return;
+    }
+    triggerDownload(job.download_url);
+    notice('Экспорт готов — файл скачивается.');
+  } catch (err) {
+    notice(`Экспорт не удался: ${errText(err)}`, 'error');
+  }
+}
+
+async function pollJob(jobId: string): Promise<{ status: string; download_url?: string }> {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const job = await etn.system.getJob(jobId);
+    if (job.status === 'done' || job.status === 'failed') return job;
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
+  }
+  return { status: 'failed' };
+}
+
+function triggerDownload(url: string): void {
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = '';
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+}
 
 /** Zone direction (parents/siblings/children). */
 type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -306,6 +351,10 @@ function buildThoughtMenuItems(
         if (opts.openHandler !== undefined) opts.openHandler(target.id);
         else void setFocus(target.id);
       },
+    },
+    {
+      label: 'Экспорт…',
+      onClick: () => void exportSingleThought(networkId, target.id),
     },
     ...(opts.findOnMapHandler !== undefined
       ? [
