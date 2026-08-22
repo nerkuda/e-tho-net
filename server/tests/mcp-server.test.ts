@@ -7,7 +7,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { MCP_PROMPT_NAMES, MCP_TOOL_NAMES } from '@etn/shared';
+import {
+  MCP_PROMPT_NAMES,
+  MCP_TOOL_ANNOTATIONS,
+  MCP_TOOL_NAMES,
+} from '@etn/shared';
 
 import {
   closeMcpContext,
@@ -172,6 +176,74 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(result.isError, true);
         assert.match(toolText(result), /ETN error|Unexpected error|Invalid/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('tools/list surfaces MCP annotations from the canonical registry (O7)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const { tools } = await handle.client.listTools();
+        const byName = new Map(tools.map((t) => [t.name, t]));
+
+        // Every tool from the catalogue must be present AND carry exactly the
+        // annotations declared in `MCP_TOOL_ANNOTATIONS` — a regression
+        // guard against (a) a new tool silently shipped without hints or
+        // (b) a hint accidentally dropped from an existing registration.
+        for (const name of MCP_TOOL_NAMES) {
+          const tool = byName.get(name);
+          assert.ok(tool, `tools/list must contain ${name}`);
+          assert.deepEqual(
+            tool.annotations ?? {},
+            MCP_TOOL_ANNOTATIONS[name] ?? {},
+            `annotations for ${name} must match the canonical registry`,
+          );
+        }
+
+        // Spot-check the three hint classes against real tool entries so a
+        // blanket deepEqual cannot hide a flipped boolean.
+        const get = byName.get('etn.thoughts.get')!;
+        assert.equal(get.annotations?.readOnlyHint, true);
+        assert.equal(get.annotations?.destructiveHint, undefined);
+        assert.equal(get.annotations?.idempotentHint, undefined);
+
+        const del = byName.get('etn.thoughts.delete')!;
+        assert.equal(del.annotations?.readOnlyHint, undefined);
+        assert.equal(del.annotations?.destructiveHint, true);
+
+        const upsert = byName.get('etn.thoughts.upsert_bundle')!;
+        assert.equal(upsert.annotations?.idempotentHint, true);
+
+        const setActive = byName.get('etn.thoughts.set_active')!;
+        assert.equal(setActive.annotations?.idempotentHint, true);
+
+        const setProp = byName.get('etn.properties.set')!;
+        assert.equal(setProp.annotations?.idempotentHint, true);
+
+        // Sanity check: count coverage matches the registry so a future
+        // addition does not silently leak a tool without a hint.
+        const annotated = MCP_TOOL_NAMES.filter(
+          (n) => MCP_TOOL_ANNOTATIONS[n] !== undefined,
+        ).length;
+        const hintReadOnly = MCP_TOOL_NAMES.filter(
+          (n) => MCP_TOOL_ANNOTATIONS[n]?.readOnlyHint === true,
+        ).length;
+        const hintDestructive = MCP_TOOL_NAMES.filter(
+          (n) => MCP_TOOL_ANNOTATIONS[n]?.destructiveHint === true,
+        ).length;
+        const hintIdempotent = MCP_TOOL_NAMES.filter(
+          (n) => MCP_TOOL_ANNOTATIONS[n]?.idempotentHint === true,
+        ).length;
+        assert.equal(annotated, 22);
+        assert.equal(hintReadOnly, 16);
+        assert.equal(hintDestructive, 3);
+        assert.equal(hintIdempotent, 3);
       } finally {
         await handle.close();
       }

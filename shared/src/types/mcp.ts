@@ -66,6 +66,68 @@ export const MCP_TOOL_NAMES = [
 ] as const;
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
 
+/**
+ * Per-tool MCP annotations (workplan task O7, docs/05-mcp-server.md §4).
+ *
+ * Subset of the MCP `ToolAnnotations` schema:
+ *
+ * - `readOnlyHint` — `true` for every read-only tool (no DB writes, no
+ *   events, no audit row). Lets clients grant automatic read access without
+ *   manual permission prompts.
+ * - `destructiveHint` — `true` for the three delete tools (`thoughts.delete`,
+ *   `links.delete`, `comments.delete`). Combined with `readOnlyHint: false`
+ *   it tells the agent host that the call needs explicit user approval.
+ * - `idempotentHint` — `true` for tools whose repeated call with the same
+ *   arguments produces the same final state: `thoughts.set_active`,
+ *   `properties.set`, and `thoughts.upsert_bundle` (upsert semantics, O1).
+ *
+ * All fields are optional on the wire; tools that carry no hints (the
+ * remaining mutating tools — `create`/`update`/`links.create`/comments
+ * `upsert`+`update`/`attachments.add`+`copy`) are not listed here at all.
+ */
+export interface McpToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+}
+
+/**
+ * Canonical per-tool annotation table (task O7). Indexed by every entry of
+ * {@link MCP_TOOL_NAMES}; the {@link ReadonlyPartial} cast keeps the index
+ * signature honest without forcing every tool to opt in (the spec only
+ * defines three hint classes — read/destructive/idempotent — and an
+ * absent hint is the documented default).
+ */
+export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnotations } = {
+  // ---- read tools (§4.1) — readOnlyHint ---------------------------
+  'etn.networks.list': { readOnlyHint: true },
+  'etn.networks.structure': { readOnlyHint: true },
+  'etn.thoughts.search': { readOnlyHint: true },
+  'etn.thoughts.query': { readOnlyHint: true },
+  'etn.thoughts.get': { readOnlyHint: true },
+  'etn.thoughts.neighbors': { readOnlyHint: true },
+  'etn.thoughts.subgraph': { readOnlyHint: true },
+  'etn.thoughts.path': { readOnlyHint: true },
+  'etn.links.get': { readOnlyHint: true },
+  'etn.thoughts.mentions': { readOnlyHint: true },
+  'etn.thoughts.usage': { readOnlyHint: true },
+  'etn.comments.get': { readOnlyHint: true },
+  'etn.export.subgraph': { readOnlyHint: true },
+  'etn.types.list': { readOnlyHint: true },
+  'etn.attachments.search': { readOnlyHint: true },
+  'etn.thoughts.find_duplicates': { readOnlyHint: true },
+
+  // ---- mutating tools — destructiveHint ---------------------------
+  'etn.thoughts.delete': { destructiveHint: true },
+  'etn.links.delete': { destructiveHint: true },
+  'etn.comments.delete': { destructiveHint: true },
+
+  // ---- mutating tools — idempotentHint ----------------------------
+  'etn.thoughts.set_active': { idempotentHint: true },
+  'etn.properties.set': { idempotentHint: true },
+  'etn.thoughts.upsert_bundle': { idempotentHint: true },
+};
+
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5). */
 export const MCP_PROMPT_NAMES = [
   'etn.summarize_thought',

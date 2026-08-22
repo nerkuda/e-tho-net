@@ -1,11 +1,12 @@
 /**
  * MCP tools (task F4, docs/05-mcp-server.md §4).
  *
- * Twenty-six tools in three groups:
+ * Twenty-nine tools in three groups:
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
  *     path, links get, mentions, usage, comments get, export, types list;
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert/update/delete,
- *     attachments.add, properties.set, set_active, thoughts.upsert_bundle;
+ *     attachments.add, properties.set, set_active, thoughts.upsert_bundle,
+ *     attachments.search;
  *   * dedupe (§4.3) — find_duplicates.
  *
  * `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`
@@ -19,6 +20,11 @@
  * catalogue real-time event via {@link emitAgentEvent} and appends an
  * `audit_log` row (category `data`) via {@link auditAgentCall} — so agent-made
  * changes fan out to network participants exactly like human ones.
+ *
+ * MCP annotations (task O7) — every registration references the canonical
+ * registry {@link MCP_TOOL_ANNOTATIONS} for `readOnlyHint`/`destructiveHint`/
+ * `idempotentHint` so client UIs can show meaningful permission prompts
+ * without per-tool hand-tuning.
  *
  * Tool names and result shapes reuse `@etn/shared` MCP contracts
  * ({@link MCP_TOOL_NAMES}, {@link McpMutationResult}).
@@ -39,6 +45,7 @@ import {
   EXPORT_FORMATS,
   FOCUS_DIRS,
   ICON_KINDS,
+  MCP_TOOL_ANNOTATIONS,
   PROPERTY_OWNER_TYPES,
   SEARCH_SCOPES,
   TRAVERSAL_DEFAULTS,
@@ -205,6 +212,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Each item carries `has_structure: true|false` — when true, the network declares a node ' +
         'section type and exposes its machine-readable structure via `etn.networks.structure`. ' +
         'The agent may only operate on networks returned here.',
+      annotations: MCP_TOOL_ANNOTATIONS['etn.networks.list'],
     },
     () =>
       runTool(async () => {
@@ -232,6 +240,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'reference table of thought types actually used. When `has_structure: false`, the ' +
         '`sections` list is empty and the agent should fall back to search/query.',
       inputSchema: NetworksStructureSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.networks.structure'],
     },
     (args) =>
       runTool(async () => {
@@ -345,6 +354,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         '(docs/05-mcp-server.md §4.1). `scope` selects result groups (`names`/`texts`/`links`/`chronology`/`all`). ' +
         '`in_subtree_of` restricts to the subtree of a thought; `type_id` filters by thought type.',
       inputSchema: SearchSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.search'],
     },
     (args) =>
       runTool(async () => {
@@ -398,6 +408,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'AI-facing description) for every type used in `hits`. Use instead of search when ' +
         'there is no text to query.',
       inputSchema: QuerySchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
     },
     (args) =>
       runTool(async () => {
@@ -422,6 +433,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'truncated to 2000 chars; `truncated` flag + comment `id`). When `truncated: true` ' +
         'fetch the full text via `etn.comments.get` (by that `id` or by this thought_id).',
       inputSchema: GetSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
     (args) =>
       runTool(async () => {
@@ -449,6 +461,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Responses carry `link_types`/`thought_types` reference tables (name + AI-facing ' +
         'description) for the types actually used.',
       inputSchema: NeighborsSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.neighbors'],
     },
     (args) =>
       runTool(async () => {
@@ -509,6 +522,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'instead of re-fetching. The key RAG tool — returns ready-to-use context. ' +
         '`max_nodes` is capped by the server setting max_nodes_per_subgraph.',
       inputSchema: SubgraphSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.subgraph'],
     },
     (args) =>
       runTool(async () => {
@@ -552,6 +566,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Shortest path between two thoughts through undirected parent/child edges, bounded by ' +
         '`max_depth`. Returns the id sequence or `path: null` when unreachable.',
       inputSchema: PathSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.path'],
     },
     (args) =>
       runTool(async () => {
@@ -584,6 +599,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Связь (с метаданными)',
       description: 'Fetch one link with its link type (including the AI-facing description).',
       inputSchema: LinkGetSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.links.get'],
     },
     (args) =>
       runTool(async () => {
@@ -605,6 +621,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Comments (on thoughts and links) whose text mentions the thought by title or synonym.',
       inputSchema: MentionsSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.mentions'],
     },
     (args) =>
       runTool(async () => {
@@ -624,6 +641,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         '{ total, groups: [{property_id, key, thoughts[]}], thought_types } — the latter is ' +
         'a reference table (name + AI-facing description) for every type used in the result.',
       inputSchema: UsageSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.usage'],
     },
     (args) =>
       runTool(async () => {
@@ -659,6 +677,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'preview (`meta.permanent`, `subgraph` comments) reports `truncated: true` — every ' +
         'preview entry carries the comment `id`.',
       inputSchema: GetCommentSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.comments.get'],
     },
     (args) =>
       runTool(async () => {
@@ -696,6 +715,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Render the radius-bounded subgraph around seeds as a Markdown (`markdown`, default) or ' +
         'HTML document. PDF is not supported on the MVP.',
       inputSchema: ExportSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.export.subgraph'],
     },
     (args) =>
       runTool(async () => {
@@ -750,6 +770,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'each with a `usage_count` for ranking. Useful as the second step after ' +
         '`etn.networks.structure` — pick a section, then pick a type relevant to that section.',
       inputSchema: TypesListSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.types.list'],
     },
     (args) =>
       runTool(async () => {
@@ -972,6 +993,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Delete a thought (cascades to links, comments, attachments, property values). ' +
         'Protected thoughts (HOME) are rejected. Returns { id, version: 0 }.',
       inputSchema: DeleteThoughtSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.delete'],
     },
     (args, extra) =>
       runTool(async () => {
@@ -1008,6 +1030,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Изменить актуальность мысли',
       description: 'Activate or deactivate a thought. The HOME thought cannot be deactivated.',
       inputSchema: SetActiveSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.set_active'],
     },
     (args, extra) =>
       runTool(async () => {
@@ -1094,6 +1117,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Удалить связь',
       description: 'Delete a link. Returns { id, version: 0 }.',
       inputSchema: DeleteLinkSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.links.delete'],
     },
     (args, extra) =>
       runTool(async () => {
@@ -1275,6 +1299,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Delete a comment (chronological or permanent) by `comment_id` together with all its ' +
         'attachments to owners. Returns { id, version: 0 }.',
       inputSchema: DeleteCommentSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.comments.delete'],
     },
     (args, extra) =>
       runTool(async () => {
@@ -1437,6 +1462,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'to hide rows that already belong to a specific owner (used by the editor\'s ' +
         '"Найти существующее" dialog tab). No FTS index — LIKE under the hood.',
       inputSchema: SearchAttachmentsSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.search'],
     },
     (args, _extra) =>
       runTool(async () => {
@@ -1479,6 +1505,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'single transaction (any invalid key rolls back the whole set). Single form returns ' +
         '{ id, version: 0 }; bulk form returns { values: {key: {id}}, version: 0 }.',
       inputSchema: SetPropertySchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.properties.set'],
     },
     (args, extra) =>
       runTool(async () => {
@@ -1607,6 +1634,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'unset on the resulting card so the agent can follow up with `etn.properties.set` ' +
         '(empty array when the card is complete).',
       inputSchema: UpsertBundleSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.upsert_bundle'],
     },
     (args, extra) =>
       runTool(async () => {
@@ -1770,6 +1798,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'partial). Each candidate carries its icon/style and one `parent_title` for disambiguation. ' +
         'Always call before `etn.thoughts.create` to avoid duplicates.',
       inputSchema: FindDuplicatesSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.find_duplicates'],
     },
     (args) =>
       runTool(async () => {
