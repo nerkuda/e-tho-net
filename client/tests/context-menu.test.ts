@@ -27,17 +27,17 @@ describe('buildThoughtMenuItems — «Найти на карте мыслей» 
     );
   });
 
-  it('places the command right after «Экспорт…» and calls the handler with the id', () => {
+  it('places the command right after «Импорт…» and calls the handler with the id', () => {
     let called: string | null = null;
     const items = buildThoughtMenuItems('net', target, {
       findOnMapHandler: (id) => (called = id),
     });
     const idx = labels(items).indexOf('Найти на карте мыслей');
     assert.ok(idx > 0, 'the command must be present');
-    // Order on the canvas: Открыть редактор → Экспорт… → Найти на карте мыслей.
-    // The new «Экспорт…» item (phase P, task P7) sits between the editor
-    // opener and the structures-only map-jump command.
-    assert.equal(labels(items)[idx - 1], 'Экспорт…');
+    // Order on the canvas: Открыть редактор → Экспорт… → Импорт… → Найти на карте мыслей.
+    // The export + import items (phase P, P7) sit between the editor opener
+    // and the structures-only map-jump command.
+    assert.equal(labels(items)[idx - 1], 'Импорт…');
     items[idx]!.onClick?.();
     assert.equal(called, 't1');
   });

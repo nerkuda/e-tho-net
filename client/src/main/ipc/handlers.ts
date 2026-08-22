@@ -1118,8 +1118,74 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       return { saved_path: save.filePath, cancelled: false };
     }),
   );
+  handlers.set(
+    'system.importEtnx',
+    bind(async (networkId: string, parentThoughtId: string) => {
+      const rest = requireRest(deps);
+      const picked = await pickEtnxArchive();
+      if (picked.kind === 'cancelled') return { cancelled: true };
+      if (picked.kind === 'error') return { cancelled: false, error: picked.error };
+      try {
+        const summary = await rest.importEtnx(
+          networkId,
+          parentThoughtId,
+          picked.archive_b64,
+        );
+        return { cancelled: false, summary, filename: picked.filename };
+      } catch (err) {
+        return { cancelled: false, error: errText(err) };
+      }
+    }),
+  );
 
   return handlers;
+}
+
+/** Maximum picked `.etnx` archive size — mirrors `ETNX_MAX_BYTES` on the server. */
+const PICK_ETNX_MAX_BYTES = 50 * 1024 * 1024;
+
+type PickedArchive =
+  | { kind: 'cancelled' }
+  | { kind: 'error'; error: string }
+  | { kind: 'ok'; archive_b64: string; filename: string };
+
+/**
+ * Open the OS file picker for a `.etnx` archive and read it back as base64
+ * (the REST contract requires base64 inside the JSON envelope). Filters the
+ * dialog by `.etnx` / `.zip` extension so the user is nudged towards the
+ * right format.
+ */
+async function pickEtnxArchive(): Promise<PickedArchive> {
+  const { BrowserWindow, dialog } = await import('electron');
+  const win = BrowserWindow.getFocusedWindow();
+  const opts = {
+    title: 'Выбрать .etnx архив',
+    properties: ['openFile'] as Array<'openFile'>,
+    filters: [{ name: 'Экспорт ETN (.etnx, .zip)', extensions: ['etnx', 'zip'] }],
+  };
+  const result =
+    win !== null
+      ? await dialog.showOpenDialog(win, opts)
+      : await dialog.showOpenDialog(opts);
+  if (result.canceled || result.filePaths.length === 0) {
+    return { kind: 'cancelled' };
+  }
+  const filePath = result.filePaths[0];
+  if (filePath === undefined) return { kind: 'cancelled' };
+  let buf: Buffer;
+  try {
+    buf = readFileSync(filePath);
+  } catch (err) {
+    return { kind: 'error', error: errText(err) };
+  }
+  if (buf.length > PICK_ETNX_MAX_BYTES) {
+    return {
+      kind: 'error',
+      error: `Файл больше ${PICK_ETNX_MAX_BYTES} байт.`,
+    };
+  }
+  const filename = filePath.split(/[\\/]/).pop() ?? 'archive.etnx';
+  return { kind: 'ok', archive_b64: buf.toString('base64'), filename };
 }
 
 /** Maximum picked image size — mirrors the server's attachment upload limit. */

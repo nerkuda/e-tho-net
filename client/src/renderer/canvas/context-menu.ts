@@ -65,6 +65,32 @@ async function exportSingleThought(networkId: string, thoughtId: string): Promis
   }
 }
 
+/**
+ * Import a `.etnx` archive and attach its root thoughts as children of
+ * `parentThoughtId` (phase P, task P7). The main process handles the file
+ * picker + base64 + REST roundtrip; we just show the result as a notice.
+ */
+async function importToThought(networkId: string, parentThoughtId: string): Promise<void> {
+  try {
+    const result = await etn.system.importEtnx(networkId, parentThoughtId);
+    if (result.cancelled) {
+      // user closed the file picker — no message needed
+      return;
+    }
+    if (result.error !== undefined) {
+      notice(`Импорт не удался: ${result.error}`, 'error');
+      return;
+    }
+    const s = result.summary;
+    notice(
+      `Импорт ${result.filename}: создано ${s.thoughts_created}, обновлено ${s.thoughts_updated}, ` +
+        `новых связей ${s.links_created}, вложений ${s.attachments_imported}.`,
+    );
+  } catch (err) {
+    notice(`Импорт не удался: ${errText(err)}`, 'error');
+  }
+}
+
 async function pollJob(jobId: string): Promise<{ status: string }> {
   for (let attempt = 0; attempt < 60; attempt++) {
     const job = await etn.system.getJob(jobId);
@@ -355,6 +381,10 @@ function buildThoughtMenuItems(
     {
       label: 'Экспорт…',
       onClick: () => void exportSingleThought(networkId, target.id),
+    },
+    {
+      label: 'Импорт…',
+      onClick: () => void importToThought(networkId, target.id),
     },
     ...(opts.findOnMapHandler !== undefined
       ? [

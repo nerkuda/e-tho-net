@@ -249,6 +249,8 @@ function buildApi(): EtnApi {
       getJob: (jobId) => invoke('system.getJob', jobId),
       downloadExport: (jobId: string, suggestedFilename: string) =>
         invoke('system.downloadExport', jobId, suggestedFilename),
+      importEtnx: (networkId: string, parentThoughtId: string) =>
+        invoke('system.importEtnx', networkId, parentThoughtId),
       pickImage: () => invoke('system.pickImage'),
       pickFile: () => invoke('system.pickFile'),
       openPath: (filePath: string) => invoke('system.openPath', filePath),

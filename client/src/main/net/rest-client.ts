@@ -1672,6 +1672,23 @@ export class RestClient {
     });
   }
 
+  /** `POST /networks/{nid}/import/commit` — apply a `.etnx` archive (phase P). */
+  public async importEtnx(
+    networkId: string,
+    parentThoughtId: string,
+    archiveB64: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ImportSummary> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/import/commit`,
+      {
+        body: { archive_b64: archiveB64, parent_thought_id: parentThoughtId },
+        requestOptions: opts,
+      },
+    );
+  }
+
   /** `GET /jobs/{jobId}` — poll an export job. */
   public async getJob(jobId: string): Promise<import('@etn/shared').ExportJob> {
     return this.request('GET', `/jobs/${encodeURIComponent(jobId)}`);

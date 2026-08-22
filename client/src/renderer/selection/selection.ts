@@ -263,6 +263,10 @@ function buildActionsMenu(): MenuItem[] {
         { label: 'HTML', onClick: () => void runExport('html') },
       ],
     },
+    {
+      label: 'Импорт…',
+      onClick: () => void runImport(),
+    },
     MENU_SEPARATOR,
     {
       label: 'Удалить',
@@ -610,4 +614,36 @@ async function pollJob(jobId: string): Promise<{ status: string }> {
     await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
   }
   return { status: 'failed' };
+}
+
+/**
+ * Apply a `.etnx` archive under the currently focused thought. The user
+ * picks a file via the OS dialog (handled in main process); the result is
+ * shown as a notice.
+ */
+async function runImport(): Promise<void> {
+  const networkId = requireNetworkId();
+  // Attach to the focused thought — this matches the spec (P7) and gives the
+  // user a natural "import into here" intent.
+  const focus = store.state.focus;
+  const parentId = focus?.focused.id;
+  if (parentId === undefined) {
+    notice('Сначала сфокусируйте мысль — она станет родителем импортированного графа.', 'error');
+    return;
+  }
+  try {
+    const result = await etn.system.importEtnx(networkId, parentId);
+    if (result.cancelled) return;
+    if (result.error !== undefined) {
+      notice(`Импорт не удался: ${result.error}`, 'error');
+      return;
+    }
+    const s = result.summary;
+    notice(
+      `Импорт ${result.filename}: создано ${s.thoughts_created}, обновлено ${s.thoughts_updated}, ` +
+        `новых связей ${s.links_created}, вложений ${s.attachments_imported}.`,
+    );
+  } catch (err) {
+    notice(`Импорт не удался: ${errText(err)}`, 'error');
+  }
 }

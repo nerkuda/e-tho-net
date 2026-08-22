@@ -656,6 +656,25 @@ export interface EtnApi {
       suggestedFilename: string,
     ): Promise<{ saved_path: string | null; cancelled: boolean; error?: string }>;
     /**
+     * Open the OS file picker for a `.etnx` archive and apply it to the
+     * network under `parentThoughtId`. The main process handles the file
+     * read + base64 encoding + REST roundtrip; the renderer only sees the
+     * final summary (phase P, P6).
+     */
+    importEtnx(
+      networkId: string,
+      parentThoughtId: string,
+    ): Promise<
+      | { cancelled: true }
+      | { cancelled: false; error: string; summary?: undefined; filename?: undefined }
+      | {
+          cancelled: false;
+          error?: undefined;
+          filename: string;
+          summary: import('@etn/shared').ImportSummary;
+        }
+    >;
+    /**
      * Opens the OS file picker for an image and returns the original file as a
      * `data:` URL with its name/mime/size (≤ the attachment upload limit). The
      * caller decides how to fit it into the icon limit (workplan L16).
