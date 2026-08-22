@@ -7,9 +7,10 @@
  * callers can dispatch directly to `etn.system.export` (see
  * `selection.ts:runExport` and `canvas/context-menu.ts:exportSingleThought`).
  *
- * Layout reuses the existing `.checkbox-row`, `.field-label`, `.text-input`
- * classes from `styles.css` — there are no new CSS classes here, the dialog
- * blends with every other modal in the app.
+ * DOM follows the project's checkbox-row convention (`<label class="checkbox-row">`
+ * wraps both the `<input>` and the visible label so clicking the text toggles
+ * the checkbox). Layout reuses `.field`, `.text-input`, `.field-label` from
+ * `styles.css` — no new CSS classes here.
  */
 
 import {
@@ -34,7 +35,31 @@ export function showExportEtnxDialog(
   defaultFilename: string = defaultExportName(),
 ): Promise<DialogResult> {
   return new Promise<DialogResult>((resolve) => {
-    const includeTypes = makeCheckbox('Включить типы мыслей и связей', initial.include_types ?? true);
+    const filenameInput = el('input', 'text-input') as HTMLInputElement;
+    filenameInput.type = 'text';
+    filenameInput.id = 'etnx-export-filename';
+    filenameInput.value = defaultFilename;
+    filenameInput.placeholder = defaultFilename;
+    filenameInput.spellcheck = false;
+
+    const filenameField = div('field');
+    const filenameLabel = el('label', 'field-label');
+    filenameLabel.htmlFor = 'etnx-export-filename';
+    filenameLabel.textContent = 'Имя файла (без расширения)';
+    filenameField.append(filenameLabel, filenameInput);
+
+    const depthInput = el('input', 'text-input') as HTMLInputElement;
+    depthInput.type = 'number';
+    depthInput.id = 'etnx-export-depth';
+    depthInput.min = '1';
+    depthInput.max = String(ETNX_SUBTREE_DEPTH_MAX);
+    depthInput.step = '1';
+    depthInput.value = String(initial.subtree_depth ?? 1);
+
+    const includeTypes = makeCheckbox(
+      'Включить типы мыслей и связей',
+      initial.include_types ?? true,
+    );
     const includeAttachments = makeCheckbox(
       'Включить вложения (файлы внутри архива)',
       initial.include_attachments ?? true,
@@ -47,40 +72,43 @@ export function showExportEtnxDialog(
       'Включить подчинённые мысли',
       initial.include_subtree ?? false,
     );
-    const depthInput = el('input', 'text-input') as HTMLInputElement;
-    depthInput.type = 'number';
-    depthInput.min = '1';
-    depthInput.max = String(ETNX_SUBTREE_DEPTH_MAX);
-    depthInput.step = '1';
-    depthInput.value = String(initial.subtree_depth ?? 1);
     depthInput.disabled = !includeSubtree.checked;
     includeSubtree.addEventListener('change', () => {
       depthInput.disabled = !includeSubtree.checked;
+      if (depthInput.disabled) depthInput.classList.add('text-input-disabled');
+      else depthInput.classList.remove('text-input-disabled');
     });
 
-    const filenameInput = el('input', 'text-input') as HTMLInputElement;
-    filenameInput.type = 'text';
-    filenameInput.value = defaultFilename;
-    filenameInput.placeholder = defaultFilename;
+    const depthField = div('field');
+    const depthLabel = el('label', 'field-label');
+    depthLabel.htmlFor = 'etnx-export-depth';
+    depthLabel.textContent = `Глубина подчинённости (1..${ETNX_SUBTREE_DEPTH_MAX})`;
+    depthField.append(depthLabel, depthInput);
 
-    const body = div('export-dialog');
-    body.append(
-      makeHint(`Будет экспортировано мыслей: ${thoughtCount}.`),
-      makeField('Имя файла (без расширения)', filenameInput),
-      div('form-stack'),
+    const optionsStack = div('form-stack');
+    optionsStack.append(
       includeTypes,
       includeAttachments,
       includeChronology,
       includeSubtree,
-      makeField(`Глубина подчинённости (1..${ETNX_SUBTREE_DEPTH_MAX})`, depthInput),
+      depthField,
     );
+
+    const hint = el('p', 'dialog-text');
+    hint.textContent = `Будет экспортировано мыслей: ${thoughtCount}.`;
+
+    const body = div('form-stack');
+    body.append(hint, filenameField, optionsStack);
 
     showDialog({
       title: 'Экспорт в .etnx',
       body,
-      width: 480,
+      width: 520,
       buttons: [
-        { label: 'Отмена', onClick: () => resolve({ options: undefined, filename: undefined }) },
+        {
+          label: 'Отмена',
+          onClick: () => resolve({ options: undefined, filename: undefined }),
+        },
         {
           label: 'Экспортировать',
           primary: true,
@@ -104,32 +132,21 @@ export function showExportEtnxDialog(
   });
 }
 
-/** Build a checkbox row that uses the project's `.checkbox-row` style. */
+/**
+ * Build a checkbox row in the project's standard form:
+ *   <label class="checkbox-row"><input type="checkbox"/><span>text</span></label>
+ * Clicking the label text toggles the checkbox (native label behaviour).
+ * Returns the underlying `<input>` so callers can read `checked` and bind events.
+ */
 function makeCheckbox(labelText: string, initial: boolean): HTMLInputElement {
+  const row = el('label', 'checkbox-row');
   const cb = el('input') as HTMLInputElement;
   cb.type = 'checkbox';
   cb.checked = initial;
-  const row = div('checkbox-row');
-  const lab = el('label', 'field-label');
-  lab.textContent = labelText;
-  row.append(cb, lab);
+  const text = el('span');
+  text.textContent = labelText;
+  row.append(cb, text);
   return cb;
-}
-
-/** `field(label, control)` — label above control, sharing the row. */
-function makeField(labelText: string, control: HTMLElement): HTMLElement {
-  const wrap = div('form-stack');
-  const lab = el('label', 'field-label');
-  lab.textContent = labelText;
-  wrap.append(lab, control);
-  return wrap;
-}
-
-/** Inline hint paragraph at the top of the dialog. */
-function makeHint(text: string): HTMLElement {
-  const p = el('p', 'dialog-text');
-  p.textContent = text;
-  return p;
 }
 
 function clampDepth(v: number): number {
