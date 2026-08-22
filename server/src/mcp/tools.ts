@@ -26,12 +26,14 @@ import {
   ATTACHMENT_KINDS,
   COMMENT_KINDS,
   COMMENT_OWNER_TYPES,
+  COMMENT_TARGETS_MAX,
   EXPORT_FORMATS,
   FOCUS_DIRS,
   ICON_KINDS,
   PROPERTY_OWNER_TYPES,
   SEARCH_SCOPES,
   TRAVERSAL_DEFAULTS,
+  type CommentTarget,
   type ExportFormat,
   type McpMutationResult,
   type McpPropertiesSetResult,
@@ -47,7 +49,7 @@ import {
 } from '../domain/thought-service.js';
 import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
 import {
-  createComment,
+  createCommentWithTargets,
   deleteComment,
   getComment,
   getCommentsPreview,
@@ -796,16 +798,29 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const UpsertCommentSchema = z.object({
-    network_id: NetworkId,
+  const CommentTargetSchema = z.object({
     owner_type: z.enum(COMMENT_OWNER_TYPES),
     owner_id: z.string().min(1),
-    kind: z.enum(COMMENT_KINDS),
-    title: z.string().nullable().optional(),
-    body_md: z.string().min(1),
-    valid_from: z.string().min(1).optional(),
-    valid_to: z.string().nullable().optional(),
   });
+  const UpsertCommentSchema = z
+    .object({
+      network_id: NetworkId,
+      owner_type: z.enum(COMMENT_OWNER_TYPES).optional(),
+      owner_id: z.string().min(1).optional(),
+      targets: z.array(CommentTargetSchema).min(1).max(COMMENT_TARGETS_MAX).optional(),
+      kind: z.enum(COMMENT_KINDS),
+      title: z.string().nullable().optional(),
+      body_md: z.string().min(1),
+      valid_from: z.string().min(1).optional(),
+      valid_to: z.string().nullable().optional(),
+    })
+    .refine(
+      (v) => (v.owner_type !== undefined && v.owner_id !== undefined) !== (v.targets !== undefined),
+      { message: 'provide exactly one of { owner_type + owner_id } or { targets }' },
+    )
+    .refine((v) => v.targets === undefined || v.kind === 'chronological', {
+      message: 'targets is only allowed for kind: "chronological" (a permanent comment has exactly one owner)',
+    });
   mcp.registerTool(
     'etn.comments.upsert',
     {
@@ -813,7 +828,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'For `permanent`: creates the single permanent comment of the owner, or updates it when ' +
         'it already exists. For `chronological`: always appends a new dated entry ' +
-        '(`valid_from`/`valid_to`). Returns { id, version }.',
+        '(`valid_from`/`valid_to`); pass `targets: [{owner_type, owner_id}]` (1..100, first is the ' +
+        'primary owner) instead of `owner_type`+`owner_id` to attach the same entry to several ' +
+        'thoughts/links at once. Returns { id, version }.',
       inputSchema: UpsertCommentSchema,
     },
     (args, extra) =>
@@ -821,8 +838,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        const targets: CommentTarget[] =
+          args.targets ?? [{ owner_type: args.owner_type!, owner_id: args.owner_id! }];
+        const primary = targets[0]!;
         if (args.kind === 'permanent') {
-          const existing = listComments(ndb, args.owner_type, args.owner_id).find(
+          const existing = listComments(ndb, primary.owner_type, primary.owner_id).find(
             (c) => c.kind === 'permanent',
           );
           if (existing !== undefined) {
@@ -852,10 +872,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             } satisfies McpMutationResult;
           }
         }
-        const comment = createComment(
+        const comment = createCommentWithTargets(
           ndb,
-          args.owner_type,
-          args.owner_id,
+          targets,
           {
             kind: args.kind,
             title: args.title ?? null,

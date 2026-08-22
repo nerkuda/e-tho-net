@@ -752,6 +752,116 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.comments.upsert accepts multi-target chronological entries (O3)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const first = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Мысль A (multi-target)' },
+        });
+        const firstId = toolJson<{ id: string }>(first).id;
+        const second = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Мысль B (multi-target)' },
+        });
+        const secondId = toolJson<{ id: string }>(second).id;
+
+        // Attaches one chronological entry to two owners in one call; first target is primary.
+        const upserted = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: {
+            network_id: ctx.networkId,
+            targets: [
+              { owner_type: 'thought', owner_id: firstId },
+              { owner_type: 'thought', owner_id: secondId },
+            ],
+            kind: 'chronological',
+            body_md: 'Общая запись для двух мыслей',
+          },
+        });
+        assert.equal(upserted.isError, undefined, toolText(upserted));
+        const commentId = toolJson<{ id: string }>(upserted).id;
+
+        const got = await handle.client.callTool({
+          name: 'etn.comments.get',
+          arguments: { network_id: ctx.networkId, comment_id: commentId },
+        });
+        const comment = toolJson<{
+          owner_type: string;
+          owner_id: string;
+          targets: Array<{ owner_type: string; owner_id: string }>;
+        }>(got);
+        assert.equal(comment.owner_type, 'thought');
+        assert.equal(comment.owner_id, firstId, 'first target must become the primary owner');
+        assert.deepEqual(comment.targets, [
+          { owner_type: 'thought', owner_id: firstId },
+          { owner_type: 'thought', owner_id: secondId },
+        ]);
+
+        // Duplicate targets collapse (domain layer, same as REST — L20).
+        const withDupes = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: {
+            network_id: ctx.networkId,
+            targets: [
+              { owner_type: 'thought', owner_id: firstId },
+              { owner_type: 'thought', owner_id: firstId },
+            ],
+            kind: 'chronological',
+            body_md: 'Дубли схлопываются',
+          },
+        });
+        assert.equal(withDupes.isError, undefined, toolText(withDupes));
+        const dupComment = await handle.client.callTool({
+          name: 'etn.comments.get',
+          arguments: { network_id: ctx.networkId, comment_id: toolJson<{ id: string }>(withDupes).id },
+        });
+        assert.deepEqual(toolJson<{ targets: unknown[] }>(dupComment).targets, [
+          { owner_type: 'thought', owner_id: firstId },
+        ]);
+
+        // targets[] is rejected for a permanent comment (exactly one owner allowed).
+        const permanentWithTargets = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: {
+            network_id: ctx.networkId,
+            targets: [{ owner_type: 'thought', owner_id: firstId }],
+            kind: 'permanent',
+            body_md: 'Не должно пройти',
+          },
+        });
+        assert.equal(permanentWithTargets.isError, true);
+
+        // Neither owner_type/owner_id nor targets → schema rejects.
+        const missingOwner = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: { network_id: ctx.networkId, kind: 'chronological', body_md: 'Без владельца' },
+        });
+        assert.equal(missingOwner.isError, true);
+
+        // Both forms at once → schema rejects (exactly one of the two).
+        const bothForms = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: firstId,
+            targets: [{ owner_type: 'thought', owner_id: secondId }],
+            kind: 'chronological',
+            body_md: 'Обе формы сразу',
+          },
+        });
+        assert.equal(bothForms.isError, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('auth provider rejects garbage, disabled keys and disabled users (F2)', async () => {
     const ctx = await buildMcpContext();
     try {
