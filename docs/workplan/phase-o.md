@@ -82,7 +82,7 @@
     тесты (иерархия, unknown/ambiguous name); typecheck зелёный.
 
 ## O5. Самоописание сети: четыре markdown-поля + узловой тип раздела
-- **Статус:** `todo` · **Зависимости:** B (L2 — единый диалог настроек), F, O4
+- **Статус:** `done` · **Зависимости:** B (L2 — единый диалог настроек), F, O4
 - **Описание:** агенту при первом подключении к сети нужно понять три вещи:
   «что в сети», «когда в неё обращаться», «по каким правилам в ней
   писать». Часть уже есть: короткое поле `description`
@@ -118,20 +118,20 @@
   мысли равноправны, агент работает с их списком.
 
 - **DoD:**
-  - [ ] Миграция `_system.db`: три новых `TEXT NULL` колонки в `networks`
+  - [x] Миграция `_system.db`: три новых `TEXT NULL` колонки в `networks`
     — `when_to_use`, `conventions`, `examples` (`description` уже есть,
     миграция `003_networks.sql`) + `node_section_type_id` TEXT NULL
     (ссылка на тип мысли сети).
-  - [ ] REST: `PATCH /networks/:id` принимает новые поля +
+  - [x] REST: `PATCH /networks/:id` принимает новые поля +
     `node_section_type_id` (owner-only, как `display_name`/`description`);
     `GET /networks/:id` отдаёт все поля; `GET /networks` (список) отдаёт
     `description`, `when_to_use` полностью и признак `has_structure`
     (`node_section_type_id IS NOT NULL`); `conventions`/`examples` в
     списке — `null` (не раздувать ответ при большом числе сетей).
-  - [ ] Защита типа: удаление типа, указанного как `node_section_type_id`
+  - [x] Защита типа: удаление типа, указанного как `node_section_type_id`
     любой сети, отклоняется с понятной ошибкой (проверка использования
     при `DELETE` типа).
-  - [ ] MCP: `etn.networks.list` отдаёт `description`, `when_to_use`,
+  - [x] MCP: `etn.networks.list` отдаёт `description`, `when_to_use`,
     `has_structure`; новый read-only инструмент
     `etn.networks.structure { network_id }` возвращает активные мысли
     узлового типа (тип из настроек сети) с обогащением: превью
@@ -139,7 +139,7 @@
     `truncated` и `comment_id`), свойства, счётчики (`parents_count`,
     `children_count`, `attachments_count`, `usage_count`),
     reference-таблицу типов.
-  - [ ] UI: на странице «Мыслесеть» единого диалога настроек — **табы**
+  - [x] UI: на странице «Мыслесеть» единого диалога настроек — **табы**
     по одному на markdown-поле («Описание», «Когда использовать»,
     «Правила», «Примеры»), в каждом — markdown-редактор с live preview
     (`@etn/markdown`); селектор «Узловой тип раздела» (dropdown типов
@@ -147,7 +147,7 @@
     действуют на все табы и селектор сразу (одна PATCH-транзакция). Для
     пустых полей — подсказки-заглушки, что писать (аналогично
     `comment_template_md` типов).
-  - [ ] Спеки: `docs/02-data-model.md` §2.3 (поля `networks`),
+  - [x] Спеки: `docs/02-data-model.md` §2.3 (поля `networks`),
     `docs/03-server-api.md` (REST PATCH / GET), `docs/05-mcp-server.md`
     §3 / §4.1 (MCP `networks.list` + `networks.structure`),
     `docs/mcp-clients.md` (cookbook: маршрутизация между сетями; поиск
@@ -231,7 +231,7 @@
     typecheck зелёный.
 
 ## O16. Контекстная типизация: `etn.types.list` с `in_subtree_of`
-- **Статус:** `todo` · **Зависимости:** F, O4
+- **Статус:** `done` · **Зависимости:** F, O4
 - **Описание:** `etn.types.list` возвращает весь каталог типов сети сразу;
   при десятках типов ответ раздувается, а агенту для работы в конкретном
   разделе нужны только типы, которые там реально используются. Добавить
@@ -246,11 +246,11 @@
   через `types.list(in_subtree_of=<узел>)` для уточнения поиска и выбора
   типа при записи.
 - **DoD:**
-  - [ ] Параметр `in_subtree_of` в схеме `etn.types.list` (для каталогов
+  - [x] Параметр `in_subtree_of` в схеме `etn.types.list` (для каталогов
     и мыслей, и связей); distinct-выборка использованных типов по
     поддереву с обходом visited-set (граф может быть циклическим) и
     лимитом; счётчики использования.
-  - [ ] Спека `docs/05-mcp-server.md` §4.1 + `docs/mcp-clients.md`
+  - [x] Спека `docs/05-mcp-server.md` §4.1 + `docs/mcp-clients.md`
     (cookbook: «типы раздела — через `types.list(in_subtree_of=...)`»);
     тесты (поддерево с одним/несколькими типами, пустое поддерево, цикл
     в графе); typecheck зелёный.

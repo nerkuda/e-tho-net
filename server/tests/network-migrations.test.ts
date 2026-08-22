@@ -40,6 +40,7 @@ const EXPECTED_FILES = [
   '019_comment_targets.sql',
   '020_saved_filters_view.sql',
   '021_type_hierarchy.sql',
+  '022_thought_types_comment_template.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
