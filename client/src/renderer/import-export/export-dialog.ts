@@ -2,15 +2,21 @@
  * Export dialog (phase P, task P5).
  *
  * Reusable modal that captures the user's intent for a `.etnx` export:
- * the output filename, which slices of the graph to include, and how deep
+ * the output file path, which slices of the graph to include, and how deep
  * the subtree walk should go. Returns the chosen options via a Promise so
  * callers can dispatch directly to `etn.system.export` (see
  * `selection.ts:runExport` and `canvas/context-menu.ts:exportSingleThought`).
  *
+ * The file destination is picked via the OS save dialog up-front (the
+ * «Обзор…» button next to the filename input) — when the user presses
+ * «Экспортировать», the bytes are streamed straight into that file. The
+ * server's temp archive is deleted the moment the response is read
+ * (`export-service.ts:getExportJobContent`), so no cleanup is left over.
+ *
  * DOM follows the project's checkbox-row convention (`<label class="checkbox-row">`
  * wraps both the `<input>` and the visible label so clicking the text toggles
- * the checkbox). Layout reuses `.field`, `.text-input`, `.field-label` from
- * `styles.css` — no new CSS classes here.
+ * the checkbox). Layout reuses `.field`, `.text-input`, `.field-label`,
+ * `.input-with-btn`, `.dialog-text`, `.dialog-subhead` from `styles.css`.
  */
 
 import {
@@ -18,14 +24,15 @@ import {
   type ExportEtnxOptions,
 } from '@etn/shared';
 
-import { div, el } from '../lib/dom.js';
+import { div, el, button } from '../lib/dom.js';
 import { showDialog } from '../lib/dialog.js';
+import { etn } from '../lib/etn.js';
 
 interface DialogResult {
   /** `undefined` — the user cancelled. */
   options: ExportEtnxOptions | undefined;
-  /** Output filename hint (without extension). Defaults to a network+date slug. */
-  filename: string | undefined;
+  /** Absolute file path the archive will be written to. `undefined` on cancel. */
+  targetPath: string | undefined;
 }
 
 /** Open the dialog and resolve with the chosen options or `undefined`. */
@@ -45,8 +52,14 @@ export function showExportEtnxDialog(
     const filenameField = div('field');
     const filenameLabel = el('label', 'field-label');
     filenameLabel.htmlFor = 'etnx-export-filename';
-    filenameLabel.textContent = 'Имя файла (без расширения)';
-    filenameField.append(filenameLabel, filenameInput);
+    filenameLabel.textContent = 'Имя файла';
+    const filenameRow = div('input-with-btn');
+    filenameRow.append(filenameInput);
+    const browseBtn = button('Обзор…', () => void browse());
+    browseBtn.type = 'button';
+    browseBtn.classList.add('dialog-btn');
+    filenameRow.append(browseBtn);
+    filenameField.append(filenameLabel, filenameRow);
 
     const depthInput = el('input', 'text-input') as HTMLInputElement;
     depthInput.type = 'number';
@@ -85,6 +98,9 @@ export function showExportEtnxDialog(
     depthLabel.textContent = `Глубина подчинённости (1..${ETNX_SUBTREE_DEPTH_MAX})`;
     depthField.append(depthLabel, depthInput);
 
+    const optionsHead = el('h4', 'dialog-subhead');
+    optionsHead.textContent = 'Что включить в архив';
+
     const optionsStack = div('form-stack');
     optionsStack.append(
       includeTypes,
@@ -98,7 +114,14 @@ export function showExportEtnxDialog(
     hint.textContent = `Будет экспортировано мыслей: ${thoughtCount}.`;
 
     const body = div('form-stack');
-    body.append(hint, filenameField, optionsStack);
+    body.append(hint, filenameField, optionsHead, optionsStack);
+
+    async function browse(): Promise<void> {
+      const suggested = filenameInput.value.trim() || defaultFilename;
+      const picked = await etn.system.pickSavePath(suggested, 'etnx');
+      if (picked.cancelled || picked.filePath === null) return;
+      filenameInput.value = picked.filePath;
+    }
 
     showDialog({
       title: 'Экспорт в .etnx',
@@ -107,14 +130,15 @@ export function showExportEtnxDialog(
       buttons: [
         {
           label: 'Отмена',
-          onClick: () => resolve({ options: undefined, filename: undefined }),
+          onClick: () => resolve({ options: undefined, targetPath: undefined }),
         },
         {
           label: 'Экспортировать',
           primary: true,
           onClick: () => {
+            const targetPath = filenameInput.value.trim();
+            if (targetPath === '') return; // validation: a path is required
             const depth = clampDepth(depthInput.valueAsNumber);
-            const filename = filenameInput.value.trim() || defaultFilename;
             resolve({
               options: {
                 include_types: includeTypes.checked,
@@ -123,7 +147,7 @@ export function showExportEtnxDialog(
                 include_subtree: includeSubtree.checked,
                 subtree_depth: depth,
               },
-              filename,
+              targetPath,
             });
           },
         },
@@ -154,9 +178,7 @@ function clampDepth(v: number): number {
   return Math.max(1, Math.min(ETNX_SUBTREE_DEPTH_MAX, Math.floor(v)));
 }
 
-/** Default filename: `etnx-YYYY-MM-DD`. The `.etnx` extension is appended
- *  by the download route (or by the browser, which keeps the original
- *  content-disposition name). */
+/** Default filename: `etnx-YYYY-MM-DD`. The user picks a folder via «Обзор…». */
 export function defaultExportName(): string {
   const now = new Date();
   const y = now.getFullYear();

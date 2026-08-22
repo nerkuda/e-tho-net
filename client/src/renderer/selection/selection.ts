@@ -570,12 +570,13 @@ async function runExport(format: ExportFormat, etnxOptions?: ExportEtnxOptions):
   const ids = store.state.selection;
   if (ids.length === 0) return;
   let options = etnxOptions;
-  let filename: string | undefined;
+  let targetPath: string | undefined;
   if (format === 'etnx' && options === undefined) {
     const dialog = await showExportEtnxDialog(ids.length);
     if (dialog.options === undefined) return; // cancelled
+    if (dialog.targetPath === undefined) return; // no path picked
     options = dialog.options;
-    filename = dialog.filename;
+    targetPath = dialog.targetPath;
   }
   try {
     const payload: ExportRequest = {
@@ -590,12 +591,13 @@ async function runExport(format: ExportFormat, etnxOptions?: ExportEtnxOptions):
       notice('Экспорт завершился с ошибкой.', 'error');
       return;
     }
-    const suggested = format === 'etnx' ? filename ?? `etnx-${job_id}` : `etnx-${job_id}.${format}`;
-    const result = await etn.system.downloadExport(job_id, suggested);
-    if (result.cancelled) {
-      notice('Сохранение отменено.');
-      return;
-    }
+    const suggested =
+      format === 'etnx' ? `etnx-${job_id}` : `etnx-${job_id}.${format}`;
+    const result = await etn.system.downloadExport(
+      job_id,
+      suggested,
+      targetPath,
+    );
     if (result.error !== undefined) {
       notice(`Не удалось сохранить файл: ${result.error}`, 'error');
       return;

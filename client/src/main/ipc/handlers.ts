@@ -1092,31 +1092,75 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set('system.openExternal', bind((url: string) => openExternalShell(url)));
   handlers.set(
     'system.downloadExport',
-    bind(async (jobId: string, suggestedFilename: string) => {
-      const rest = requireRest(deps);
-      const { contentType, body } = await rest.downloadJob(jobId);
-      const ext = extensionForContentType(contentType);
-      const filename = suggestedFilename.endsWith(`.${ext}`)
-        ? suggestedFilename
-        : `${suggestedFilename}.${ext}`;
-      const { dialog, BrowserWindow } = await import('electron');
-      const win = BrowserWindow.getFocusedWindow();
-      const save = win
-        ? await dialog.showSaveDialog(win, {
-            title: 'Сохранить экспорт',
-            defaultPath: filename,
-          })
-        : await dialog.showSaveDialog({ title: 'Сохранить экспорт', defaultPath: filename });
-      if (save.canceled || save.filePath === undefined || save.filePath === '') {
-        return { saved_path: null, cancelled: true };
-      }
-      try {
-        writeFileSync(save.filePath, body);
-      } catch (err) {
-        return { saved_path: null, cancelled: false, error: errText(err) };
-      }
-      return { saved_path: save.filePath, cancelled: false };
-    }),
+    bind(
+      async (
+        jobId: string,
+        suggestedFilename: string,
+        targetPath?: string,
+      ) => {
+        const rest = requireRest(deps);
+        const { contentType, body } = await rest.downloadJob(jobId);
+        const ext = extensionForContentType(contentType);
+        // When the caller already has a path (the export dialog picked one),
+        // skip the picker entirely and write directly.
+        if (targetPath !== undefined && targetPath !== '') {
+          try {
+            writeFileSync(targetPath, body);
+          } catch (err) {
+            return { saved_path: null, cancelled: false, error: errText(err) };
+          }
+          return { saved_path: targetPath, cancelled: false };
+        }
+        const filename = suggestedFilename.endsWith(`.${ext}`)
+          ? suggestedFilename
+          : `${suggestedFilename}.${ext}`;
+        const { dialog, BrowserWindow } = await import('electron');
+        const win = BrowserWindow.getFocusedWindow();
+        const save = win
+          ? await dialog.showSaveDialog(win, {
+              title: 'Сохранить экспорт',
+              defaultPath: filename,
+            })
+          : await dialog.showSaveDialog({ title: 'Сохранить экспорт', defaultPath: filename });
+        if (save.canceled || save.filePath === undefined || save.filePath === '') {
+          return { saved_path: null, cancelled: true };
+        }
+        try {
+          writeFileSync(save.filePath, body);
+        } catch (err) {
+          return { saved_path: null, cancelled: false, error: errText(err) };
+        }
+        return { saved_path: save.filePath, cancelled: false };
+      },
+    ),
+  );
+  handlers.set(
+    'system.pickSavePath',
+    bind(
+      async (
+        suggestedFilename: string,
+        defaultExt: string,
+      ): Promise<{ filePath: string | null; cancelled: boolean }> => {
+        const { BrowserWindow, dialog } = await import('electron');
+        const win = BrowserWindow.getFocusedWindow();
+        const filename =
+          suggestedFilename.endsWith(`.${defaultExt}`)
+            ? suggestedFilename
+            : `${suggestedFilename}.${defaultExt}`;
+        const opts = {
+          title: 'Сохранить экспорт',
+          defaultPath: filename,
+        };
+        const result =
+          win !== null
+            ? await dialog.showSaveDialog(win, opts)
+            : await dialog.showSaveDialog(opts);
+        if (result.canceled || result.filePath === undefined || result.filePath === '') {
+          return { filePath: null, cancelled: true };
+        }
+        return { filePath: result.filePath, cancelled: false };
+      },
+    ),
   );
   handlers.set(
     'system.importEtnx',

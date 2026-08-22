@@ -247,8 +247,10 @@ function buildApi(): EtnApi {
       version: () => invoke('system.version'),
       export: (networkId, request) => invoke('system.export', networkId, request),
       getJob: (jobId) => invoke('system.getJob', jobId),
-      downloadExport: (jobId: string, suggestedFilename: string) =>
-        invoke('system.downloadExport', jobId, suggestedFilename),
+      downloadExport: (jobId: string, suggestedFilename: string, targetPath?: string) =>
+        invoke('system.downloadExport', jobId, suggestedFilename, targetPath),
+      pickSavePath: (suggestedFilename: string, defaultExt: string) =>
+        invoke('system.pickSavePath', suggestedFilename, defaultExt),
       importEtnx: (networkId: string, parentThoughtId: string) =>
         invoke('system.importEtnx', networkId, parentThoughtId),
       pickImage: () => invoke('system.pickImage'),

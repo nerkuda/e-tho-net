@@ -654,7 +654,18 @@ export interface EtnApi {
     downloadExport(
       jobId: string,
       suggestedFilename: string,
+      targetPath?: string,
     ): Promise<{ saved_path: string | null; cancelled: boolean; error?: string }>;
+    /**
+     * Open the OS save dialog and return the chosen file path. Used by the
+     * export dialog so the user can pick a destination up-front — when
+     * «Экспортировать» is pressed, the file is written directly to that path
+     * without a second save step.
+     */
+    pickSavePath(
+      suggestedFilename: string,
+      defaultExt: string,
+    ): Promise<{ filePath: string | null; cancelled: boolean }>;
     /**
      * Open the OS file picker for a `.etnx` archive and apply it to the
      * network under `parentThoughtId`. The main process handles the file

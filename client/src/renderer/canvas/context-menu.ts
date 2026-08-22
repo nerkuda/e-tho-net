@@ -37,6 +37,7 @@ import { showExportEtnxDialog } from '../import-export/export-dialog.js';
 async function exportSingleThought(networkId: string, thoughtId: string): Promise<void> {
   const dialog = await showExportEtnxDialog(1);
   if (dialog.options === undefined) return;
+  if (dialog.targetPath === undefined) return;
   try {
     const { job_id } = await etn.system.export(networkId, {
       thought_ids: [thoughtId],
@@ -49,12 +50,7 @@ async function exportSingleThought(networkId: string, thoughtId: string): Promis
       notice('Экспорт завершился с ошибкой.', 'error');
       return;
     }
-    const suggested = dialog.filename ?? `etnx-${job_id}`;
-    const result = await etn.system.downloadExport(job_id, suggested);
-    if (result.cancelled) {
-      notice('Сохранение отменено.');
-      return;
-    }
+    const result = await etn.system.downloadExport(job_id, '', dialog.targetPath);
     if (result.error !== undefined) {
       notice(`Не удалось сохранить файл: ${result.error}`, 'error');
       return;
