@@ -20,6 +20,7 @@ import { etn } from './lib/etn.js';
 import { describeEvent, isRealtimeEvent } from './lib/pure.js';
 import { store, type RtStatus } from './state.js';
 import { markTabDirty } from './screens/tabs/tab-state.js';
+import { onNetworkLost } from './screens/tabs/tab-accessibility.js';
 
 /** Application-level effect callbacks (registered by the app controller). */
 export interface RealtimeEffects {
@@ -95,6 +96,19 @@ export function initRealtime(): void {
     // access silently (Q3/Q5 will surface them with the dirty marker).
     if (networkId !== store.state.networkId) return;
     effects.onStale();
+  });
+
+  // Q5: realtime WS closed with 4401 (unauthorized) or 4404 (not-found) for a
+  // specific network. Mark every tab of that network as inaccessible and drop
+  // back to the networks list when the active network is affected.
+  etn.realtime.onNetworkLost((payload) => {
+    const obj = payload as { networkId?: unknown; reason?: unknown };
+    const networkId = typeof obj.networkId === 'string' ? obj.networkId : null;
+    if (networkId === null) return;
+    onNetworkLost(networkId);
+    if (networkId === store.state.networkId) {
+      effects.onNetworkLost();
+    }
   });
 
   etn.realtime.onEvent((raw: unknown) => {

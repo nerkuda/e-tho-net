@@ -32,6 +32,7 @@ import { applyRealtimeToUi } from './realtime-ui.js';
 import { initTheme } from './lib/theme.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
+import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
 import { refreshSearchIfVisible } from './search/search.js';
 import { invalidateStructuresThought } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
@@ -371,6 +372,8 @@ export async function boot(): Promise<void> {
     try {
       const me = await etn.server.connect(active.id);
       store.update({ profileId: active.id, me });
+      // Q5: mark tabs whose networks the user can no longer see.
+      void refreshTabAccessibility();
       showScreen('networks');
       return;
     } catch {

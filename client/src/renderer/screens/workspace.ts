@@ -23,6 +23,7 @@
  */
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
+import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { store, type RtStatus } from '../state.js';
 import { wireNetMenu, wireUserMenu, wireViewMenu } from './workspace-menus.js';
@@ -220,6 +221,13 @@ export function buildWorkspace(): HTMLElement {
     selectionResizer,
   );
 
+  // Q5: full-body placeholder shown when the active tab is inaccessible
+  // (08-ui-spec.md §1.1). It subscribes to the store and toggles visibility on
+  // every change of `activeTabId`/`inaccessibleTabIds`.
+  const placeholderHost = div('workspace-placeholder hidden');
+  body.append(placeholderHost);
+  mountInaccessiblePlaceholder(placeholderHost);
+
   // --- status bar ------------------------------------------------------------
   const statusbar = div('statusbar');
 
@@ -343,4 +351,48 @@ export function buildWorkspace(): HTMLElement {
   });
   refresh();
   return root;
+}
+
+/**
+ * Renders the «Нет доступа к сети» placeholder inside `host`. Toggles visibility
+ * whenever the active tab becomes inaccessible (Q5, 08-ui-spec.md §1.1).
+ */
+function mountInaccessiblePlaceholder(host: HTMLElement): void {
+  const closeBtn = el('button', 'btn primary', 'Закрыть таб') as HTMLButtonElement;
+  closeBtn.type = 'button';
+  closeBtn.addEventListener('click', () => {
+    const id = store.state.activeTabId;
+    if (id === null) return;
+    void etn.tabs.close(id).catch(() => undefined);
+    // tabs.ts subscribes to the store and removes the tab locally.
+  });
+  const text = document.createElement('div');
+  text.className = 'placeholder-text';
+  text.textContent = 'Нет доступа к сети';
+  const hint = document.createElement('div');
+  hint.className = 'placeholder-hint';
+  hint.textContent =
+    'Сеть, открытая в этом табе, больше не доступна (вы исключены из участников или сеть удалена).';
+  host.append(text, hint, closeBtn);
+
+  const update = (): void => {
+    const id = store.state.activeTabId;
+    const inaccessible =
+      id !== null && store.state.inaccessibleTabIds.has(id);
+    host.classList.toggle('hidden', !inaccessible);
+    if (inaccessible) {
+      const tab = store.state.tabs.find((t) => t.tab_id === id);
+      text.textContent =
+        tab !== undefined
+          ? `Нет доступа к сети ${shortNetworkId(tab.network_id)}`
+          : 'Нет доступа к сети';
+    }
+  };
+
+  store.subscribe(update);
+  update();
+}
+
+function shortNetworkId(networkId: string): string {
+  return networkId.length <= 8 ? networkId : `${networkId.slice(0, 8)}…`;
 }
