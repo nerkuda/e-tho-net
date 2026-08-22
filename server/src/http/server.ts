@@ -31,6 +31,7 @@ import { RealtimeGateway, type RealtimeGatewayOptions } from '../realtime/gatewa
 import { createIdempotencyMiddleware, registerIdempotencyHooks } from './idempotency.js';
 import { normaliseError } from './errors.js';
 import { meRoutes } from '../routes/me.js';
+import { createImportRoutes } from '../routes/import.js';
 import { usersRoutes } from '../routes/users.js';
 import { createNetworksRoutes } from '../routes/networks.js';
 import { auditRoutes } from '../routes/audit.js';
@@ -267,6 +268,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // Search, export and job routes (task D6, 03-server-api.md §12, §14).
   await app.register(createSearchRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Import routes (phase P, P4): preview + commit a `.etnx` archive.
+  await app.register(createImportRoutes(routeDeps), { prefix: '/api/v1' });
 
   // --- System routes (03-server-api.md §16) --------------------------------
   app.get('/api/v1/health', async () => {

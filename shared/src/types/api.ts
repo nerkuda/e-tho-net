@@ -123,3 +123,64 @@ export interface ExportJob {
   /** Present once the job reaches `done`; short-lived URL with TTL. */
   download_url?: string;
 }
+
+/**
+ * Body of `POST /networks/{nid}/import/commit` (03-server-api.md §14а, phase P,
+ * task P4). The `.etnx` archive is sent as a base64-encoded string because the
+ * REST envelope is JSON.
+ */
+export interface ImportRequest {
+  /** Base64-encoded contents of the `.etnx` zip file. */
+  archive_b64: string;
+  /**
+   * UUID of the thought the imported subgraph is attached to as children.
+   * The import creates a parent→child link for every root thought in the
+   * archive (those without an incoming link inside the archive).
+   */
+  parent_thought_id: string;
+}
+
+/**
+ * Per-entity counters returned by the import endpoint (phase P, P3).
+ * Surfaces the effect of the dedup policy without forcing the caller to
+ * diff the resulting graph.
+ */
+export interface ImportSummary {
+  thought_types_created: number;
+  thought_types_reused: number;
+  link_types_created: number;
+  link_types_reused: number;
+  property_definitions_created: number;
+  thoughts_created: number;
+  thoughts_updated: number;
+  thoughts_reused: number;
+  links_created: number;
+  permanent_comments_updated: number;
+  chronological_comments_added: number;
+  property_values_set: number;
+  attachments_imported: number;
+  /** Manifest version echoed back for the caller to log. */
+  manifest_version: string;
+}
+
+/**
+ * Body of `POST /networks/{nid}/import/preview` (03-server-api.md §14а, P4).
+ * Reports what *would* be imported without committing anything.
+ */
+export interface ImportPreview {
+  /** Detected format version of the manifest. */
+  manifest_version: string;
+  /** Source network the archive was exported from. */
+  source_network_name: string | null;
+  /** Totals as reported by the manifest. */
+  counts: {
+    thought_types: number;
+    link_types: number;
+    type_properties: number;
+    thoughts: number;
+    thought_synonyms: number;
+    links: number;
+    comments: number;
+    attachments: number;
+  };
+}
