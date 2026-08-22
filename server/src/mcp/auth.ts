@@ -39,6 +39,7 @@ export function createApiKeyAuthProvider(systemDb: SystemDb): McpAuthProvider {
       keyId: found.apiKey.id,
       keyPrefix: found.apiKey.prefix,
       readOnly: found.apiKey.read_only,
+      maxWritesPerMinute: found.apiKey.max_writes_per_minute,
       isAdmin: found.user.is_admin,
     };
   };

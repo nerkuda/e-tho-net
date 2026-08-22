@@ -24,6 +24,7 @@ const EXPECTED_FILES = [
   '007_client_request_cache.sql',
   '008_settings.sql',
   '009_event_log.sql',
+  '010_api_keys_max_writes_per_minute.sql',
 ];
 
 /** All `_system.db` tables that must exist after migration. */
@@ -87,6 +88,10 @@ describe(
           (r) => r.name,
         );
         assert.ok(apiCols.includes('read_only'), 'api_keys.read_only missing');
+        assert.ok(
+          apiCols.includes('max_writes_per_minute'),
+          'api_keys.max_writes_per_minute missing (O8)',
+        );
 
         // Settings seeded with all 7 defaults (5 SETTING_KEY + 2 traversal.*).
         const n = (db.prepare('SELECT COUNT(*) AS c FROM settings').get() as { c: number }).c;

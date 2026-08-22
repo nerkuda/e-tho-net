@@ -129,6 +129,32 @@ export function listThoughtTypes(ndb: NetworkDb): ThoughtType[] {
 }
 
 /**
+ * Resolve a thought type id by its display name, case-insensitively (task O4,
+ * `name_key`, same normalization as the {@link createThoughtType} duplicate
+ * check). Throws `NOT_FOUND` when no type matches, `VALIDATION_ERROR` with
+ * `details.candidates` when more than one does (defensive — `name_key` is
+ * globally unique per the `idx_thought_types_name_key` index, so this should
+ * be unreachable in practice).
+ */
+export function resolveThoughtTypeIdByName(ndb: NetworkDb, name: string): string {
+  const key = typeNameKey(name);
+  const rows = ndb
+    .prepare('SELECT id, name, parent_id FROM thought_types WHERE name_key = ?')
+    .all(key) as Array<{ id: string; name: string; parent_id: string | null }>;
+  if (rows.length === 0) {
+    throw new EtnError('NOT_FOUND', `thought type "${name}" not found`, { field: 'type', name });
+  }
+  if (rows.length > 1) {
+    throw new EtnError('VALIDATION_ERROR', `thought type name "${name}" is ambiguous`, {
+      field: 'type',
+      name,
+      candidates: rows.map((r) => ({ id: r.id, name: r.name, parent_id: r.parent_id })),
+    });
+  }
+  return rows[0]!.id;
+}
+
+/**
  * Create a thought type (docs/03-server-api.md §8). The `description` field is
  * persisted verbatim so AI agents can read type context (§8). `parent_id`
  * defaults to the root type; the nesting depth is validated against

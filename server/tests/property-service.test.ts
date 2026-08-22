@@ -24,6 +24,7 @@ import {
   getPropertyValues,
   getPropertyValuesResolved,
   setPropertyValue,
+  setPropertyValues,
   updateTypeProperty,
 } from '../src/domain/property-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
@@ -91,6 +92,56 @@ describe(
         // values carry property_id, not key; the column test above already
         // proved the single-column rule for 'year'.
         assert.equal(values.length, 3);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('setPropertyValues writes a mixed set in one transaction (O2)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'BookSet' }, USER);
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'title', value_type: 'text' });
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'year', value_type: 'number' });
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'published', value_type: 'bool' });
+        const thought = seedTypedThought(ndb, tt.id);
+
+        const stored = setPropertyValues(ndb, 'thought', thought, {
+          title: 'Dune',
+          year: 1965,
+          published: true,
+        });
+        assert.equal(stored.title?.value, 'Dune');
+        assert.equal(stored.year?.value, 1965);
+        assert.equal(stored.published?.value, true);
+
+        const values = getPropertyValues(ndb, 'thought', thought);
+        assert.equal(values.length, 3);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('setPropertyValues rolls back the whole set when one key is invalid (O2)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'AtomicSet' }, USER);
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'title', value_type: 'text' });
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'year', value_type: 'number' });
+        const thought = seedTypedThought(ndb, tt.id);
+
+        // 'year' gets a non-number → VALIDATION_ERROR; 'title' must also be absent.
+        assert.throws(
+          () =>
+            setPropertyValues(ndb, 'thought', thought, {
+              title: 'Dune',
+              year: 'not-a-number' as unknown as number,
+            }),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+
+        const values = getPropertyValues(ndb, 'thought', thought);
+        assert.equal(values.length, 0, 'no value may survive the rollback');
       } finally {
         ndb.close();
       }

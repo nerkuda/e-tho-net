@@ -950,6 +950,30 @@ export function setPropertyValue(
 }
 
 /**
+ * Write a map of property values in one transaction (task O2,
+ * docs/05-mcp-server.md §4.2). Each entry is validated and upserted exactly as
+ * {@link setPropertyValue} does; the surrounding transaction makes the whole
+ * set atomic — a failure on any key (undefined property, value-type mismatch)
+ * rolls back every other value already written.
+ *
+ * Returns the stored values keyed by the property key.
+ */
+export function setPropertyValues(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  values: Record<string, PropertyValueValue>,
+): Record<string, PropertyValue> {
+  return ndb.transaction(() => {
+    const stored: Record<string, PropertyValue> = {};
+    for (const [key, value] of Object.entries(values)) {
+      stored[key] = setPropertyValue(ndb, ownerType, ownerId, key, value);
+    }
+    return stored;
+  });
+}
+
+/**
  * Delete a stored property value addressed by key. Throws `NOT_FOUND` (404) if
  * the property is undefined or no value is stored for that key.
  */

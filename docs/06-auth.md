@@ -90,7 +90,7 @@ requireNetworkMember(role?: "owner") // член сети (или владеле
 
 ### 6.1. Администратором для пользователя
 ```
-POST /api/v1/admin/users/{id}/keys { label: "desktop", read_only?: false }
+POST /api/v1/admin/users/{id}/keys { label: "desktop", read_only?: false, max_writes_per_minute?: null|int }
 → 201 { data: { id, key: "etn_...", prefix, label, created_at } }
 ```
 Полный ключ возвращается **один раз**. Админ копирует его из UI кнопкой
@@ -98,9 +98,29 @@ POST /api/v1/admin/users/{id}/keys { label: "desktop", read_only?: false }
 
 ### 6.2. Самим пользователем
 ```
-POST /api/v1/me/keys { label, read_only? }
+POST /api/v1/me/keys { label, read_only?, max_writes_per_minute? }
 → 201 { data: { id, key, prefix } }
 ```
+
+### 6.2a. Лимит записи на ключ (task O8)
+
+`max_writes_per_minute` — необязательное переопределение лимита записи MCP
+для конкретного ключа (`NULL`/отсутствует — серверный дефолт
+`mcp.max_writes_per_minute`, см. 05-mcp-server.md §6.2). Позволяет выдать
+ключу легитимного bulk-импорта базы знаний отдельный бюджет, не поднимая
+глобальную защиту от runaway-агента. Принимает положительное целое или
+`null`; MCP-слой резолвит эффективный лимит на ключ, bundle-вызов (O1)
+считается одной записью.
+
+### 6.2b. Редактирование лимита ключа
+```
+PATCH /api/v1/me/keys/{id}                    { max_writes_per_minute: null|int }
+PATCH /api/v1/admin/users/{uid}/keys/{id}     { max_writes_per_minute: null|int }
+→ 200 { data: { id, prefix, max_writes_per_minute, ... } }
+```
+Меняет только `max_writes_per_minute` существующего ключа (`null` — сброс к
+серверному дефолту). Остальные поля ключа (`label`, `read_only`) не
+редактируются — для их изменения ключ перевыпускается.
 
 ### 6.3. Отзыв
 ```

@@ -79,8 +79,10 @@ PATCH /api/v1/me                  { display_name?: string | null }
 ### 3.2. Управление своими API-key
 ```
 GET    /api/v1/me/keys                 # список (только prefix, без полного ключа)
-POST   /api/v1/me/keys                 { label } → 201 { data: { id, key, prefix } }
+POST   /api/v1/me/keys                 { label, read_only?, max_writes_per_minute? }
+                                       # → 201 { data: { id, key, prefix } }
                                        # полный ключ возвращается ТОЛЬКО при создании
+PATCH  /api/v1/me/keys/{id}            { max_writes_per_minute: null|int }   # task O8
 DELETE /api/v1/me/keys/{id}            # отозвать
 ```
 
@@ -96,8 +98,10 @@ GET    /api/v1/admin/users/{id}
 PATCH  /api/v1/admin/users/{id}        { display_name?, is_admin?, disabled? }
 DELETE /api/v1/admin/users/{id}        # запрещено для is_first_user=1 → 422
 
-POST   /api/v1/admin/users/{id}/keys   { label }
+POST   /api/v1/admin/users/{id}/keys   { label, read_only?, max_writes_per_minute? }
                                        → 201 { key, prefix } # для передачи пользователю
+PATCH  /api/v1/admin/users/{id}/keys/{key_id}
+                                       { max_writes_per_minute: null|int }   # task O8
 DELETE /api/v1/admin/users/{id}/keys/{key_id}
 ```
 

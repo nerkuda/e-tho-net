@@ -183,7 +183,8 @@ function buildApi(): EtnApi {
       updateUser: (id, fields, expectedVersion) =>
         invoke('admin.updateUser', id, fields, expectedVersion),
       removeUser: (id, expectedVersion) => invoke('admin.removeUser', id, expectedVersion),
-      createUserKey: (id, label) => invoke('admin.createUserKey', id, label),
+      createUserKey: (id, label, maxWritesPerMinute) =>
+        invoke('admin.createUserKey', id, label, maxWritesPerMinute),
       removeUserKey: (id, keyId) => invoke('admin.removeUserKey', id, keyId),
       listNetworks: () => invoke('admin.listNetworks'),
       removeNetwork: (id) => invoke('admin.removeNetwork', id),
@@ -193,7 +194,7 @@ function buildApi(): EtnApi {
       get: () => invoke('me.get'),
       update: (displayName) => invoke('me.update', displayName),
       listKeys: () => invoke('me.listKeys'),
-      createKey: (label) => invoke('me.createKey', label),
+      createKey: (label, maxWritesPerMinute) => invoke('me.createKey', label, maxWritesPerMinute),
       removeKey: (id) => invoke('me.removeKey', id),
     },
     realtime: {

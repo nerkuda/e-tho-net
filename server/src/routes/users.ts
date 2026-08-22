@@ -7,6 +7,7 @@
  *   PATCH  /api/v1/admin/users/:id              — update display_name/is_admin/disabled
  *   DELETE /api/v1/admin/users/:id              — delete (422 for first user / network owner)
  *   POST   /api/v1/admin/users/:id/keys         — issue a key for a user (201, full key once)
+ *   PATCH  /api/v1/admin/users/:id/keys/:keyId   — edit a key's write rate limit (O8)
  *   DELETE /api/v1/admin/users/:id/keys/:keyId  — revoke a user's key (204)
  *
  * All routes require `requireAdmin`. Mutating routes also use the idempotency
@@ -24,6 +25,7 @@ import { EtnError } from '@etn/shared';
 
 import { generateApiKey } from '../auth/api-key.js';
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
+import { parseMaxWritesPerMinute } from './me.js';
 
 /** Path params for `:id` routes. */
 interface UserIdParams {
@@ -40,6 +42,12 @@ interface UserKeyIdParams {
 interface CreateKeyForUserBody {
   label?: string | null;
   read_only?: boolean;
+  max_writes_per_minute?: number | null;
+}
+
+/** Body of `PATCH /admin/users/:id/keys/:keyId`. */
+interface UpdateKeyForUserBody {
+  max_writes_per_minute?: number | null;
 }
 
 /** Reusable DTO without secrets for user listings. */
@@ -72,6 +80,7 @@ function keyPublicDto(k: {
   label: string | null;
   prefix: string;
   read_only: boolean;
+  max_writes_per_minute: number | null;
   disabled: boolean;
   created_at: string;
   last_used_at: string | null;
@@ -82,6 +91,7 @@ function keyPublicDto(k: {
     label: k.label,
     prefix: k.prefix,
     read_only: k.read_only,
+    max_writes_per_minute: k.max_writes_per_minute,
     disabled: k.disabled,
     created_at: k.created_at,
     last_used_at: k.last_used_at,
@@ -278,6 +288,10 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const body = (req.body ?? {}) as CreateKeyForUserBody;
       const label = typeof body.label === 'string' ? body.label.trim() || null : null;
       const readOnly = body.read_only === true;
+      const maxWritesPerMinute =
+        body.max_writes_per_minute === undefined
+          ? null
+          : parseMaxWritesPerMinute(body.max_writes_per_minute, req.id);
 
       const gen = generateApiKey();
       const apiKey = app.systemDb.createApiKey({
@@ -287,6 +301,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         keyHash: gen.keyHash,
         keyPrefix: gen.keyPrefix,
         readOnly,
+        maxWritesPerMinute,
       });
       app.systemDb.insertAuditLog({
         actorUserId: req.auth!.user.id,
@@ -294,10 +309,43 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         action: 'api_key.create',
         targetType: 'api_key',
         targetId: apiKey.id,
-        details: { label, read_only: readOnly, for_user: user.id },
+        details: { label, read_only: readOnly, max_writes_per_minute: maxWritesPerMinute, for_user: user.id },
       });
       const dto: ApiKeyWithSecret = { ...keyPublicDto(apiKey), key: gen.key };
       sendCreated(reply, dto);
+    },
+  );
+
+  app.patch(
+    '/admin/users/:id/keys/:keyId',
+    { preHandler: [app.authPreHandler, requireAdmin, app.idempotency.preHandler] },
+    async (req: FastifyRequest, reply) => {
+      const { id, keyId } = req.params as UserKeyIdParams;
+      const key = app.systemDb.getApiKeyById(keyId);
+      if (key === null || key.user_id !== id) {
+        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+      }
+      const body = (req.body ?? {}) as UpdateKeyForUserBody;
+      if (!('max_writes_per_minute' in body)) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Требуется поле max_writes_per_minute (число или null).',
+          { field: 'max_writes_per_minute' },
+          req.id,
+        );
+      }
+      const maxWritesPerMinute = parseMaxWritesPerMinute(body.max_writes_per_minute, req.id);
+      app.systemDb.updateApiKeyMaxWrites(keyId, maxWritesPerMinute);
+      app.systemDb.insertAuditLog({
+        actorUserId: req.auth!.user.id,
+        category: 'user',
+        action: 'api_key.update',
+        targetType: 'api_key',
+        targetId: keyId,
+        details: { max_writes_per_minute: maxWritesPerMinute, for_user: id },
+      });
+      const updated = app.systemDb.getApiKeyById(keyId)!;
+      sendSuccess(reply, keyPublicDto(updated));
     },
   );
 

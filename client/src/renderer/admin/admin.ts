@@ -11,7 +11,7 @@
 
 import type { AuditLogEntry, Network, User } from '@etn/shared';
 
-import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
+import { confirmDialog, errorDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, fmtDateTime, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -174,12 +174,51 @@ function contentOf(node: HTMLElement): HTMLElement {
 
 /** Generates a transferable API-key and shows it exactly once (A6). */
 async function generateKey(user: User): Promise<void> {
-  try {
-    const result = await etn.admin.createUserKey(user.id, 'handoff');
-    showApiKey(result.apiKey);
-  } catch (err) {
-    errorDialog('Генерация ключа', err);
-  }
+  // O8: the key can carry a per-key MCP write rate limit override (empty — the
+  // server-wide `mcp.max_writes_per_minute`).
+  const limitInput = el('input', 'text-input');
+  limitInput.type = 'number';
+  limitInput.min = '1';
+  limitInput.step = '1';
+  limitInput.placeholder = 'серверный лимит';
+  limitInput.style.width = '120px';
+  const body = div('form-stack');
+  const limitRow = div('hint-field');
+  limitRow.append(limitInput, span('пусто — серверный лимит', 'muted'));
+  body.append(field('Лимит записи MCP (в мин.)', limitRow));
+  showDialog({
+    title: 'Сгенерировать API-key',
+    body,
+    buttons: [
+      { label: 'Отмена' },
+      {
+        label: 'Создать',
+        primary: true,
+        keepOpen: true,
+        onClick: (close) => {
+          const raw = limitInput.value.trim();
+          let maxWritesPerMinute: number | null = null;
+          if (raw !== '') {
+            const n = Number(raw);
+            if (!Number.isInteger(n) || n <= 0) {
+              errorDialog('Генерация ключа', new Error('Лимит должен быть положительным целым числом.'));
+              return;
+            }
+            maxWritesPerMinute = n;
+          }
+          void (async () => {
+            try {
+              const result = await etn.admin.createUserKey(user.id, 'handoff', maxWritesPerMinute);
+              close();
+              showApiKey(result.apiKey);
+            } catch (err) {
+              errorDialog('Генерация ключа', err);
+            }
+          })();
+        },
+      },
+    ],
+  });
 }
 
 /** Shows the one-time API-key modal with a copy button. */

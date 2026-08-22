@@ -21,7 +21,12 @@ import type {
   SearchScope,
 } from '../enums.js';
 import type { CommentUpdateInput } from './comment.js';
-import type { PropertyValueValue } from './thought-type.js';
+import type { EffectiveTypeProperty, PropertyValueValue } from './thought-type.js';
+import type {
+  ThoughtBundleMatchKind,
+  ThoughtBundleOnDuplicate,
+  ThoughtBundleThoughtAction,
+} from './thought-bundle.js';
 
 /** All tool names exposed by the ETN MCP server (05-mcp-server.md §4). */
 export const MCP_TOOL_NAMES = [
@@ -38,6 +43,7 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.usage',
   'etn.comments.get',
   'etn.export.subgraph',
+  'etn.types.list',
   // mutate (§4.2)
   'etn.thoughts.create',
   'etn.thoughts.update',
@@ -52,6 +58,7 @@ export const MCP_TOOL_NAMES = [
   'etn.attachments.copy',
   'etn.attachments.search',
   'etn.properties.set',
+  'etn.thoughts.upsert_bundle',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -111,6 +118,31 @@ export interface LinkTypeRef {
   description: string | null;
   color: string | null;
   style: LinkStyle | null;
+}
+
+// ---------------------------------------------------------------------------
+// `etn.types.list` (task O4, 05-mcp-server.md §4.1) — full type catalogues
+// with effective (L21 chain-resolved) property definitions.
+// ---------------------------------------------------------------------------
+
+/** A thought type entry of `etn.types.list`: {@link ThoughtTypeRef} + its
+ *  effective property list (own + inherited along the L21 chain). */
+export interface McpThoughtTypeEntry extends ThoughtTypeRef {
+  properties: EffectiveTypeProperty[];
+}
+
+/** A link type entry of `etn.types.list`: {@link LinkTypeRef} + its effective
+ *  property list (own + inherited along the L21 chain). */
+export interface McpLinkTypeEntry extends LinkTypeRef {
+  properties: EffectiveTypeProperty[];
+}
+
+/** Result of `etn.types.list` — both catalogues in full (not just the types
+ *  used in some other response, unlike {@link ThoughtTypeRef}/{@link LinkTypeRef}
+ *  reference tables). */
+export interface McpTypesListResult {
+  thought_types: McpThoughtTypeEntry[];
+  link_types: McpLinkTypeEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -226,8 +258,67 @@ export interface McpPropertiesSetParams {
   network_id: string;
   owner_type: PropertyOwnerType;
   owner_id: string;
-  key: string;
-  value: PropertyValueValue;
+  /** Single-property form (backward compatible): write/clear one key. */
+  key?: string;
+  value?: PropertyValueValue;
+  /** Bulk form (task O2): write a set of keys in one transaction. */
+  values?: Record<string, PropertyValueValue>;
+}
+
+/** Result of `etn.properties.set` (05-mcp-server.md §4.2). */
+export interface McpPropertiesSetResult {
+  /** Id of the single stored value (`key`/`value` form); absent for `values`. */
+  id?: string;
+  version: number;
+  /** Per-key stored value ids, returned for the `values` form. */
+  values?: Record<string, { id: string }>;
+  request_id?: string;
+}
+
+/** Parameters of `etn.thoughts.upsert_bundle` (05-mcp-server.md §4.2a). */
+export interface McpUpsertBundleParams {
+  network_id: string;
+  /** Existing thought to augment in-place; mutually exclusive with `thought`
+   *  being the sole way to address a target (exactly one of the two required). */
+  thought_id?: string;
+  thought?: {
+    title: string;
+    synonyms?: string[];
+    type_id?: string | null;
+    active?: boolean;
+  };
+  /** Only consulted when `thought_id` is absent and `find_duplicates` matches. */
+  on_duplicate?: ThoughtBundleOnDuplicate;
+  /** Always the owner's permanent comment (create-or-update). */
+  comment?: {
+    title?: string | null;
+    body_md: string;
+    valid_from?: string;
+    valid_to?: string | null;
+  };
+  properties?: Record<string, PropertyValueValue>;
+  links?: Array<{
+    direction: 'parent' | 'child';
+    target_thought_id: string;
+    type_id?: string | null;
+  }>;
+  attachments?: Array<{
+    kind: AttachmentKind;
+    url?: string | null;
+    file_path?: string | null;
+    title?: string | null;
+    description?: string | null;
+  }>;
+}
+
+/** Result of `etn.thoughts.upsert_bundle` (05-mcp-server.md §4.2a). */
+export interface McpUpsertBundleResult extends McpMutationResult {
+  thought_action: ThoughtBundleThoughtAction;
+  matched_on: ThoughtBundleMatchKind | null;
+  comment?: { id: string; version: number };
+  properties?: Record<string, { id: string }>;
+  links?: Array<{ id: string; version: number }>;
+  attachments?: Array<{ id: string }>;
 }
 
 /** `dir` parameter shared by read tools that accept a direction. */

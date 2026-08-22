@@ -45,19 +45,24 @@ IDE-агенты, кастомные скрипты) читают и измен�
 | `etn.thoughts.subgraph` | подграф радиуса N (контекст для генерации) с каталогами типов и превью комментариев (`include_comments` — последние 10 хронологических записей, тела ≤ 2000 символов) |
 | `etn.thoughts.path` | путь между мыслями |
 | `etn.thoughts.find_duplicates` | **обязателен перед созданием** — поиск дубликатов |
-| `etn.thoughts.create/update/delete` | изменение мыслей |
-| `etn.links.create/delete` | связи |
-| `etn.comments.upsert` | комментарии (permanent — create-or-update, chronological — новая запись) |
+| `etn.types.list` | оба каталога типов целиком (иерархия + эффективные свойства L21) — что заполнять, до записи |
+| `etn.thoughts.create/update/delete` | изменение мыслей; `create` принимает тип по `type_id` **или** `type` (по имени) |
+| `etn.links.create/delete` | связи; `create` принимает тип по `type_id` **или** `type` (по `name_forward`/`name_reverse`) |
+| `etn.comments.upsert` | комментарии (permanent — create-or-update, chronological — новая запись; `owner_type`+`owner_id` или `targets[]` для привязки одной хронологической записи к нескольким мыслям/связям сразу) |
 | `etn.comments.update` / `delete` | правка и удаление комментария по `comment_id` |
 | `etn.comments.get` | полный текст одного комментария (по `comment_id` или по `thought_id` — постоянный); вызывается, когда превью показывает `truncated: true` |
-| `etn.properties.set` | значения свойств |
+| `etn.properties.set` | значения свойств: одно (`key`+`value`) или набор (`values: {key: value\|null}` — одной транзакцией) |
+| `etn.thoughts.upsert_bundle` | составная запись «единицы знания» (мысль + постоянный комментарий + свойства + связи + вложения) **одной транзакцией и одним вызовом** вместо 5–8 отдельных; `thought.type`/`links[].type` тоже принимают тип по имени |
 | `etn.export.subgraph` | подграф как Markdown-документ |
 
 ## 5. Важное правило: не плодить дубликаты
 
 Перед `etn.thoughts.create` агент **обязан** вызывать
 `etn.thoughts.find_duplicates` и переиспользовать существующую мысль при
-совпадении имени/синонима.
+совпадении имени/синонима. `etn.thoughts.upsert_bundle` делает эту проверку
+сам (параметр `on_duplicate: fail|reuse|update`, по умолчанию `fail`) — для
+записи «мысль + всё остальное» одним вызовом предпочтительнее его, а не
+связку `find_duplicates` → `create` → … .
 
 ## 6. Поведение
 

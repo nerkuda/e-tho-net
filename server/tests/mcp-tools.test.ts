@@ -16,6 +16,9 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { createApiKeyAuthProvider } from '../src/mcp/auth.js';
 import { openNetworkDb } from '../src/db/network-db.js';
+import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
+import { createTypeProperty } from '../src/domain/property-service.js';
 import {
   buildMcpContext,
   closeMcpContext,
@@ -752,6 +755,368 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.comments.upsert accepts multi-target chronological entries (O3)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const first = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Мысль A (multi-target)' },
+        });
+        const firstId = toolJson<{ id: string }>(first).id;
+        const second = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Мысль B (multi-target)' },
+        });
+        const secondId = toolJson<{ id: string }>(second).id;
+
+        // Attaches one chronological entry to two owners in one call; first target is primary.
+        const upserted = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: {
+            network_id: ctx.networkId,
+            targets: [
+              { owner_type: 'thought', owner_id: firstId },
+              { owner_type: 'thought', owner_id: secondId },
+            ],
+            kind: 'chronological',
+            body_md: 'Общая запись для двух мыслей',
+          },
+        });
+        assert.equal(upserted.isError, undefined, toolText(upserted));
+        const commentId = toolJson<{ id: string }>(upserted).id;
+
+        const got = await handle.client.callTool({
+          name: 'etn.comments.get',
+          arguments: { network_id: ctx.networkId, comment_id: commentId },
+        });
+        const comment = toolJson<{
+          owner_type: string;
+          owner_id: string;
+          targets: Array<{ owner_type: string; owner_id: string }>;
+        }>(got);
+        assert.equal(comment.owner_type, 'thought');
+        assert.equal(comment.owner_id, firstId, 'first target must become the primary owner');
+        assert.deepEqual(comment.targets, [
+          { owner_type: 'thought', owner_id: firstId },
+          { owner_type: 'thought', owner_id: secondId },
+        ]);
+
+        // Duplicate targets collapse (domain layer, same as REST — L20).
+        const withDupes = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: {
+            network_id: ctx.networkId,
+            targets: [
+              { owner_type: 'thought', owner_id: firstId },
+              { owner_type: 'thought', owner_id: firstId },
+            ],
+            kind: 'chronological',
+            body_md: 'Дубли схлопываются',
+          },
+        });
+        assert.equal(withDupes.isError, undefined, toolText(withDupes));
+        const dupComment = await handle.client.callTool({
+          name: 'etn.comments.get',
+          arguments: { network_id: ctx.networkId, comment_id: toolJson<{ id: string }>(withDupes).id },
+        });
+        assert.deepEqual(toolJson<{ targets: unknown[] }>(dupComment).targets, [
+          { owner_type: 'thought', owner_id: firstId },
+        ]);
+
+        // targets[] is rejected for a permanent comment (exactly one owner allowed).
+        const permanentWithTargets = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: {
+            network_id: ctx.networkId,
+            targets: [{ owner_type: 'thought', owner_id: firstId }],
+            kind: 'permanent',
+            body_md: 'Не должно пройти',
+          },
+        });
+        assert.equal(permanentWithTargets.isError, true);
+
+        // Neither owner_type/owner_id nor targets → schema rejects.
+        const missingOwner = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: { network_id: ctx.networkId, kind: 'chronological', body_md: 'Без владельца' },
+        });
+        assert.equal(missingOwner.isError, true);
+
+        // Both forms at once → schema rejects (exactly one of the two).
+        const bothForms = await handle.client.callTool({
+          name: 'etn.comments.upsert',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: firstId,
+            targets: [{ owner_type: 'thought', owner_id: secondId }],
+            kind: 'chronological',
+            body_md: 'Обе формы сразу',
+          },
+        });
+        assert.equal(bothForms.isError, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.types.list returns both catalogues with hierarchy and effective properties (O4)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const parentType = createThoughtType(ndb, { name: 'Проект' }, ctx.adminId);
+      createTypeProperty(ndb, 'thought_type', parentType.id, {
+        key: 'дедлайн',
+        value_type: 'date',
+        required: true,
+      });
+      const childType = createThoughtType(
+        ndb,
+        { name: 'Подпроект', parent_id: parentType.id },
+        ctx.adminId,
+      );
+
+      const parentLinkType = createLinkType(
+        ndb,
+        { name_forward: 'содержит', name_reverse: 'входит в' },
+        ctx.adminId,
+      );
+      // NB: do not close — openNetworkDb caches the connection shared with the MCP server.
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const listed = await handle.client.callTool({
+          name: 'etn.types.list',
+          arguments: { network_id: ctx.networkId },
+        });
+        assert.equal(listed.isError, undefined, toolText(listed));
+        const result = toolJson<{
+          thought_types: Array<{
+            id: string;
+            name: string;
+            parent_id: string | null;
+            is_root: boolean;
+            properties: Array<{ key: string; inherited: boolean; defined_on: string }>;
+          }>;
+          link_types: Array<{ id: string; name_forward: string; name_reverse: string }>;
+        }>(listed);
+
+        const parentEntry = result.thought_types.find((t) => t.id === parentType.id);
+        const childEntry = result.thought_types.find((t) => t.id === childType.id);
+        assert.ok(parentEntry, 'parent type must be listed');
+        assert.ok(childEntry, 'child type must be listed');
+        assert.equal(childEntry.parent_id, parentType.id);
+        // The child inherits the parent's property (L21) as an effective one.
+        const inherited = childEntry.properties.find((p) => p.key === 'дедлайн');
+        assert.ok(inherited, 'child must see the inherited property');
+        assert.equal(inherited.inherited, true);
+        assert.equal(inherited.defined_on, parentType.id);
+        // The parent's own definition is not marked inherited.
+        const ownDef = parentEntry.properties.find((p) => p.key === 'дедлайн');
+        assert.ok(ownDef);
+        assert.equal(ownDef.inherited, false);
+
+        const linkEntry = result.link_types.find((t) => t.id === parentLinkType.id);
+        assert.ok(linkEntry, 'link type must be listed');
+        assert.equal(linkEntry.name_forward, 'содержит');
+        assert.equal(linkEntry.name_reverse, 'входит в');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thoughts.create resolves a thought type by name; rejects unknown/both forms (O4)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const type = createThoughtType(ndb, { name: 'Задача' }, ctx.adminId);
+      // NB: do not close — shared connection with the MCP server.
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Case-insensitive match by name.
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Сделать релиз', type: 'задача' },
+        });
+        assert.equal(created.isError, undefined, toolText(created));
+        const { id } = toolJson<{ id: string }>(created);
+        const got = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: id },
+        });
+        assert.equal(toolJson<{ type_id: string | null }>(got).type_id, type.id);
+
+        // Unknown name → NOT_FOUND.
+        const unknown = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Мимо кассы', type: 'нет такого типа' },
+        });
+        assert.equal(unknown.isError, true);
+        assert.match(toolText(unknown), /NOT_FOUND/);
+
+        // Both type_id and type at once → schema rejects.
+        const both = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: {
+            network_id: ctx.networkId,
+            title: 'Обе формы',
+            type_id: type.id,
+            type: 'Задача',
+          },
+        });
+        assert.equal(both.isError, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.links.create resolves a link type by forward/reverse name; ambiguous name errors (O4)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const blocks = createLinkType(
+        ndb,
+        { name_forward: 'блокирует', name_reverse: 'заблокирован' },
+        ctx.adminId,
+      );
+      // A second type whose reverse label collides with the first type's forward label
+      // ("блокирует"); its own forward label ("связан с") does not collide with anything.
+      createLinkType(ndb, { name_forward: 'связан с', name_reverse: 'блокирует' }, ctx.adminId);
+      // NB: do not close — shared connection with the MCP server.
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const a = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Мысль А (links.create)' },
+        });
+        const aId = toolJson<{ id: string }>(a).id;
+        const b = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Мысль Б (links.create)' },
+        });
+        const bId = toolJson<{ id: string }>(b).id;
+
+        // "блокирует" is `blocks.name_forward` AND the second type's
+        // `name_reverse` — genuinely ambiguous.
+        const ambiguous = await handle.client.callTool({
+          name: 'etn.links.create',
+          arguments: {
+            network_id: ctx.networkId,
+            source_id: aId,
+            target_id: bId,
+            type: 'блокирует',
+          },
+        });
+        assert.equal(ambiguous.isError, true);
+        assert.match(toolText(ambiguous), /VALIDATION_ERROR/);
+        assert.match(toolText(ambiguous), /candidates/);
+
+        // "заблокирован" only matches `blocks.name_reverse` — unambiguous.
+        const created = await handle.client.callTool({
+          name: 'etn.links.create',
+          arguments: {
+            network_id: ctx.networkId,
+            source_id: aId,
+            target_id: bId,
+            type: 'заблокирован',
+          },
+        });
+        assert.equal(created.isError, undefined, toolText(created));
+        const link = await handle.client.callTool({
+          name: 'etn.links.get',
+          arguments: { network_id: ctx.networkId, link_id: toolJson<{ id: string }>(created).id },
+        });
+        assert.equal(toolJson<{ type_id: string | null }>(link).type_id, blocks.id);
+
+        // Unknown name and both forms at once are rejected too.
+        const unknown = await handle.client.callTool({
+          name: 'etn.links.create',
+          arguments: { network_id: ctx.networkId, source_id: aId, target_id: bId, type: 'нет такой связи' },
+        });
+        assert.equal(unknown.isError, true);
+        assert.match(toolText(unknown), /NOT_FOUND/);
+
+        const both = await handle.client.callTool({
+          name: 'etn.links.create',
+          arguments: {
+            network_id: ctx.networkId,
+            source_id: aId,
+            target_id: bId,
+            type_id: blocks.id,
+            type: 'блокирует',
+          },
+        });
+        assert.equal(both.isError, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thoughts.upsert_bundle resolves thought.type and links[].type by name (O4)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const thoughtType = createThoughtType(ndb, { name: 'Грабли' }, ctx.adminId);
+      const linkType = createLinkType(
+        ndb,
+        { name_forward: 'иллюстрирует', name_reverse: 'иллюстрируется' },
+        ctx.adminId,
+      );
+      // NB: do not close — shared connection with the MCP server.
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const bundled = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: {
+            network_id: ctx.networkId,
+            thought: { title: 'Забыли про часовой пояс', type: 'грабли' },
+            links: [{ direction: 'child', target_thought_id: ctx.homeId, type: 'иллюстрирует' }],
+          },
+        });
+        assert.equal(bundled.isError, undefined, toolText(bundled));
+        const { id } = toolJson<{ id: string }>(bundled);
+
+        const got = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: id },
+        });
+        assert.equal(toolJson<{ type_id: string | null }>(got).type_id, thoughtType.id);
+
+        const neighbors = await handle.client.callTool({
+          name: 'etn.thoughts.neighbors',
+          arguments: { network_id: ctx.networkId, thought_id: id, dir: 'parents' },
+        });
+        const { neighbors: list } = toolJson<{
+          neighbors: Array<{ id: string; link_type_id: string | null }>;
+        }>(neighbors);
+        const home = list.find((n) => n.id === ctx.homeId);
+        assert.ok(home, 'HOME must be a parent neighbour');
+        assert.equal(home.link_type_id, linkType.id);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('auth provider rejects garbage, disabled keys and disabled users (F2)', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -783,6 +1148,279 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       assert.notEqual(provider(doomed.key), null);
       ctx.sys.updateUser(ctx.adminId, { displayName: 'Admin', isAdmin: true, disabled: true });
       assert.equal(provider(doomed.key), null);
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thoughts.upsert_bundle writes thought+comment+property+link+attachment ' +
+    'atomically, emits one realtime event per entity and one audit row (O1)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const events: AnyRealtimeEvent[] = [];
+      const unsubscribe = ctx.pubsub.subscribe(ctx.networkId, (event) => {
+        events.push(event as unknown as AnyRealtimeEvent);
+      });
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const res = await handle.client.callTool({
+            name: 'etn.thoughts.upsert_bundle',
+            arguments: {
+              network_id: ctx.networkId,
+              thought: { title: 'Дюна' },
+              comment: { body_md: 'Роман Фрэнка Герберта.' },
+              links: [{ direction: 'child', target_thought_id: ctx.homeId }],
+              attachments: [{ kind: 'url', url: 'https://example.com/dune' }],
+            },
+          });
+          assert.equal(res.isError, undefined, res.isError === true ? toolText(res) : undefined);
+          const result = toolJson<{
+            id: string;
+            version: number;
+            thought_action: string;
+            matched_on: string | null;
+            comment?: { id: string; version: number };
+            links?: Array<{ id: string; version: number }>;
+            attachments?: Array<{ id: string }>;
+          }>(res);
+          assert.equal(result.thought_action, 'created');
+          assert.equal(result.matched_on, null);
+          assert.ok(result.comment !== undefined);
+          assert.equal(result.links?.length, 1);
+          assert.equal(result.attachments?.length, 1);
+
+          const count = openNetworkDb(ctx.dataDir, ctx.networkId)
+            .prepare('SELECT COUNT(*) AS c FROM thoughts')
+            .get() as { c: number };
+          assert.equal(count.c, 2); // HOME + Дюна
+        } finally {
+          await handle.close();
+        }
+
+        const types = events.map((e) => e.type).sort();
+        assert.deepEqual(types, [
+          'attachment.created',
+          'comment.created',
+          'link.created',
+          'thought.created',
+        ]);
+      } finally {
+        unsubscribe();
+      }
+
+      // A five-entity bundle writes exactly one audit row (O1/O8: bundle = 1 record).
+      const audit = ctx.sys.queryAudit({ category: 'data' });
+      assert.equal(audit.length, 1);
+      assert.equal(audit[0]?.action, 'etn.thoughts.upsert_bundle');
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thoughts.upsert_bundle: on_duplicate="fail" rejects with candidates, ' +
+    'nothing is written mid-bundle (atomicity, O1)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const first = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: { network_id: ctx.networkId, thought: { title: 'Конкуренты 1С' } },
+        });
+        assert.equal(first.isError, undefined);
+
+        const second = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: {
+            network_id: ctx.networkId,
+            thought: { title: 'Конкуренты 1С' },
+            comment: { body_md: 'Не должно записаться.' },
+          },
+        });
+        assert.equal(second.isError, true);
+        assert.match(toolText(second), /DUPLICATE/);
+
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const thoughts = ndb
+          .prepare("SELECT COUNT(*) AS c FROM thoughts WHERE title = 'Конкуренты 1С'")
+          .get() as { c: number };
+        assert.equal(thoughts.c, 1, 'no second thought was created');
+        const comments = ndb.prepare('SELECT COUNT(*) AS c FROM comments').get() as { c: number };
+        assert.equal(comments.c, 0, 'the comment must not have been written');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thoughts.upsert_bundle: a bundle costs exactly one write-budget slot ' +
+    'regardless of how many entities it touches (O1/O8)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      ctx.rawDb
+        .prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)')
+        .run('mcp.max_writes_per_minute', '2', new Date().toISOString());
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const bundleArgs = (title: string): Record<string, unknown> => ({
+          network_id: ctx.networkId,
+          thought: { title },
+          comment: { body_md: 'x' },
+          links: [{ direction: 'child', target_thought_id: ctx.homeId }],
+          attachments: [{ kind: 'url', url: 'https://example.com/x' }],
+        });
+
+        const first = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: bundleArgs('Раз'),
+        });
+        assert.equal(first.isError, undefined, first.isError === true ? toolText(first) : undefined);
+
+        const second = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: bundleArgs('Два'),
+        });
+        assert.equal(second.isError, undefined, second.isError === true ? toolText(second) : undefined);
+
+        const third = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: bundleArgs('Три'),
+        });
+        assert.equal(third.isError, true);
+        assert.match(toolText(third), /write limit|RATE_LIMITED/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('a per-key max_writes_per_minute override beats the global limit (O8)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Global limit stays at its default (60); the key itself caps writes at 1.
+      const gen = generateApiKey();
+      ctx.sys.createApiKey({
+        id: randomUUID(),
+        userId: ctx.adminId,
+        label: 'o8',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+        maxWritesPerMinute: 1,
+      });
+
+      const handle = await connectMcpClient(ctx, gen.key);
+      try {
+        const first = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Раз' },
+        });
+        assert.equal(first.isError, undefined, first.isError === true ? toolText(first) : undefined);
+
+        const second = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Два' },
+        });
+        assert.equal(second.isError, true);
+        assert.match(toolText(second), /write limit|RATE_LIMITED/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.properties.set accepts a values map, writes mixed types in one call (O2)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Seed a type with text/number/bool properties (direct inserts).
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const typeId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
+           VALUES (?, 'book', 1, '2024', '2024', 'u')`,
+        )
+        .run(typeId);
+      const props = [
+        { key: 'title', value_type: 'text' },
+        { key: 'year', value_type: 'number' },
+        { key: 'published', value_type: 'bool' },
+      ];
+      for (const p of props) {
+        ndb
+          .prepare(
+            `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, required, position)
+             VALUES (?, 'thought_type', ?, ?, ?, 0, 0)`,
+          )
+          .run(randomUUID(), typeId, p.key, p.value_type);
+      }
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Дюна', type_id: typeId },
+        });
+        const { id: thoughtId } = toolJson<{ id: string; version: number }>(created);
+
+        const res = await handle.client.callTool({
+          name: 'etn.properties.set',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: thoughtId,
+            values: { title: 'Dune', year: 1965, published: true },
+          },
+        });
+        assert.equal(res.isError, undefined, res.isError === true ? toolText(res) : undefined);
+        const result = toolJson<{ values?: Record<string, { id: string }>; version: number }>(res);
+        assert.equal(result.version, 0);
+        assert.ok(result.values?.title?.id);
+        assert.ok(result.values?.year?.id);
+        assert.ok(result.values?.published?.id);
+
+        const count = ndb
+          .prepare('SELECT COUNT(*) AS c FROM property_values WHERE owner_id = ?')
+          .get(thoughtId) as { c: number };
+        assert.equal(count.c, 3);
+
+        // Single-property form is still backward compatible.
+        const single = await handle.client.callTool({
+          name: 'etn.properties.set',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: thoughtId,
+            key: 'year',
+            value: 2020,
+          },
+        });
+        assert.equal(single.isError, undefined);
+        const singleResult = toolJson<{ id: string; version: number }>(single);
+        assert.equal(singleResult.version, 0);
+        assert.equal(typeof singleResult.id, 'string');
+
+        // Providing neither/neither is rejected by the schema (zod refine).
+        const invalid = await handle.client.callTool({
+          name: 'etn.properties.set',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: thoughtId,
+            key: 'year',
+          },
+        });
+        assert.equal(invalid.isError, true);
+      } finally {
+        await handle.close();
+      }
     } finally {
       await closeMcpContext(ctx);
     }

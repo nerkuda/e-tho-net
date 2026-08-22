@@ -27,6 +27,11 @@ export interface McpAuthContext {
   keyPrefix: string;
   /** True when the key was created with `read_only` — mutating tools reject. */
   readOnly: boolean;
+  /**
+   * Per-key override of the write rate limit (05-mcp-server.md §6.2, task O8);
+   * `null` — inherit the server-wide `mcp.max_writes_per_minute`.
+   */
+  maxWritesPerMinute: number | null;
   /** Whether the owning user is a server administrator (not used on MVP). */
   isAdmin: boolean;
 }
