@@ -151,13 +151,13 @@ DoD — клиент по умолчанию показывает обычный
 | `etn.networks.structure` | `read-only` | Структура сети: активные мысли узлового типа (превью постоянного комментария, свойства, счётчики, каталог типов). Когда `node_section_type_id` не задан — пустой `sections` | `network_id` |
 | `etn.thoughts.search` | `read-only` | Полнотекстовый поиск | `network_id`, `query`, `scope?` (`names`/`texts`/`links`/`chronology`/`all`), `in_subtree_of?`, `type_id?`, `limit?` (1–200, default 50), `offset?` (≥ 0, default 0; task O11) |
 | `etn.thoughts.query` | `read-only` | Структурная выборка (список по критериям) | см. §5.1a |
-| `etn.thoughts.get` | `read-only` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария; `thought_ref`-значения свойств резолвнуты в `{id, title}`) | `network_id`, `thought_id` |
-| `etn.thoughts.neighbors` | `read-only` | Соседи (+ каталоги `link_types`/`thought_types`) | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход) |
-| `etn.thoughts.subgraph` | `read-only` | Подграф в радиусе N рёбер (+ каталоги `thought_types`/`link_types`) | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?` |
+| `etn.thoughts.get` | `read-only` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария; `thought_ref`-значения свойств резолвнуты в `{id, title}`) | `network_id`, `thought_id`, `view?` (`compact` — дефолт для MCP, `full` — task O12, см. §5.1e) |
+| `etn.thoughts.neighbors` | `read-only` | Соседи (+ каталоги `link_types`/`thought_types`) | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход), `view?` (O12, см. §5.1e) |
+| `etn.thoughts.subgraph` | `read-only` | Подграф в радиусе N рёбер (+ каталоги `thought_types`/`link_types`) | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?`, `view?` (O12, см. §5.1e) |
 | `etn.thoughts.path` | `read-only` | Путь между двумя мыслями (+ каталог `thought_types`) | `network_id`, `from_id`, `to_id`, `max_depth` |
 | `etn.links.get` | `read-only` | Связь | `network_id`, `link_id` |
 | `etn.thoughts.mentions` | `read-only` | Где упоминается мысль | `network_id`, `thought_id` |
-| `etn.thoughts.usage` | `read-only` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`) | `network_id`, `thought_id` |
+| `etn.thoughts.usage` | `read-only` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`) | `network_id`, `thought_id`, `view?` (O12, см. §5.1e) |
 | `etn.comments.get` | `read-only` | Полный текст одного комментария: по `comment_id` (любой) или по `thought_id` (постоянный). Нужен, когда превью (`meta.permanent`, комментарии `subgraph`) показывает `truncated: true` — id есть в самом превью | `network_id` + ровно одно из `comment_id`/`thought_id` |
 | `etn.export.subgraph` | `read-only` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
 | `etn.types.list` | `read-only` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §5.1b | `network_id` |
@@ -506,6 +506,64 @@ Cookbook (`docs/mcp-clients.md` §8.2):
 
 `etn.metrics.reads` сам **не** инкрементирует счётчик (см. §3.13) — это
 только чтение, чтобы можно было запрашивать метрики сколько угодно раз.
+
+#### 5.1e. Компактная проекция ответов `view: "compact" | "full"` (task O12)
+
+Read-ответы `etn.thoughts.get`, `etn.thoughts.neighbors`,
+`etn.thoughts.subgraph` и `etn.thoughts.usage` исторически несут
+**визуальные и служебные поля**, которые агент не использует при работе
+с базой знаний: цвета текста/фона (`fg_color`, `bg_color`), флаги шрифта
+(`font_bold`/`font_italic`/`font_underline`/`font_strike`), признак
+emoji/image у иконки (`icon_kind`), ссылка на файл иконки
+(`icon_attachment_id`), `is_protected`/`is_root` (служебные), а для
+связей и типов связей — `color`/`style`/`width`. На `etn.thoughts.subgraph`
+с сотнями узлов это заметная доля токенов без пользы для рассуждения.
+
+Параметр `view` управляет проекцией ответа на уровне **полей** (конверт
+не меняется — те же ключи верхнего уровня, те же `meta`/`properties`/
+`comments` блоки):
+
+| `view` | Кто использует | Что делает |
+|--------|----------------|-----------|
+| `compact` *(дефолт для MCP)* | агент по умолчанию | убирает визуальные/служебные поля из каждой мысли, каждой связи и каждой записи каталога `link_types`; `icon` (emoji/путь) остаётся — он семантический |
+| `full` | легаси-вызовы, инструменты визуализации, период сосуществования (см. §10) | возвращает ответ ровно в той же форме, что и до O12 |
+
+Применяется к четырём read-инструментам:
+
+| Tool | Эффект `view: "compact"` |
+|------|---------------------------|
+| `etn.thoughts.get` | проекция мысли (`fg_color`/`bg_color`/`font_*`/`icon_kind`/`icon_attachment_id`/`is_protected`/`is_root` убраны); `type`, `properties`, `meta` — без изменений |
+| `etn.thoughts.neighbors` | depth=1: `FocusNeighbor` уже без этих полей — меняется только каталог `link_types` (без `color`/`style`); depth>1: каждая запись `thoughts[]` — `ThoughtRef` без `fg_color`/`bg_color`/`font_*`/`icon_kind`/`icon_attachment_id` |
+| `etn.thoughts.subgraph` | каждая запись `nodes[]` — компактная мысль; каталог `link_types` — без `color`/`style`; рёбра (edges) сервер уже возвращает в минимальной форме (`id`/`source_id`/`target_id`/`type_id`), отдельная проекция им не нужна |
+| `etn.thoughts.usage` | каждая запись `groups[].thoughts[]` — компактный `ThoughtRef` (без визуальных полей) |
+
+Параметр принимают **только эти четыре инструмента**. Прочие read-инструменты
+(`search`, `query`, `path`, `links.get`, `mentions`, `comments.get`,
+`networks.list/structure`, `changes.list`, `metrics.reads`, `export.subgraph`,
+`types.list`) `view` не имеют: либо их ответы уже компактны, либо это
+специализированные ответы (delta-фид, метрики), где визуальные поля не
+появляются.
+
+Семантика:
+
+- **Дефолт — `compact`.** При первом подключении агент по умолчанию видит
+  компактные ответы. Для переопределения достаточно передать `view: "full"`
+  в аргументах вызова.
+- **Конверт не меняется.** Например, `etn.thoughts.get` и при `compact`, и
+  при `full` отдаёт один и тот же набор ключей верхнего уровня (`id`,
+  `title`, `type`, `properties`, `meta`, …) — различается только набор
+  полей на самой мысли. Парсер агента, который смотрит только на `id` /
+  `title` / `meta.permanent`, работает идентично в обеих проекциях.
+- **`full` остаётся доступным неопределённо долго.** Когда мы созреем до
+  полного отказа от `full`, это будет отдельный период сосуществования
+  по §10 — `view` приходит сразу с двумя режимами, переход на «только
+  `compact`» — позже и через отдельное объявление.
+
+Тип ответа в `@etn/shared` — `McpViewMode = 'compact' | 'full'`;
+производные проекции типов — `CompactThought` / `CompactThoughtRef` /
+`CompactLink` / `CompactLinkTypeRef`. Помощники проекции —
+`toCompactThought` / `toCompactThoughtRef` / `toCompactLink` /
+`linkTypeCatalogCompact` в `server/src/mcp/catalogs.ts`.
 
 ### 5.2. Создание и изменение
 
