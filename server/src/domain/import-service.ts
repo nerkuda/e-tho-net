@@ -63,16 +63,28 @@ export interface ImportOptions {
   actorUserId: string;
   /** Thought the imported graph is attached to as a parent. */
   parentThoughtId: string;
+  /** Slices of the manifest to import. Unspecified → all slices (defaults). */
+  slices?: {
+    include_types?: boolean;
+    include_attachments?: boolean;
+    include_chronology?: boolean;
+  };
 }
 
 /**
  * Result of {@link importFromEtnx}. Mirrors {@link ImportSummary} but also
- * exposes the thought-id remap so the caller can correlate `manifest.id` →
- * `target.id`.
+ * exposes the thought-id remap and the lists of freshly created entities so
+ * the route layer can fire realtime events for them.
  */
 export interface ImportResult extends ImportSummary {
   /** Map `manifest.thoughts[].id` → final thought id in the target network. */
   thoughtIdRemap: Map<string, string>;
+  /** Thought ids that were *newly* created by this import (not updated/reused). */
+  createdThoughtIds: string[];
+  /** Link ids that were *newly* created by this import (not duplicates). */
+  createdLinkIds: string[];
+  /** Permanent comment ids whose body was overwritten by this import. */
+  updatedCommentIds: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +507,7 @@ function insertSynonym(
     .run(row.thought_id, row.synonym, row.synonym_norm);
 }
 
-function insertLink(ndb: NetworkDb, row: Link, actorUserId: string, now: string): boolean {
+function insertLink(ndb: NetworkDb, row: Link, actorUserId: string, now: string): string | null {
   const result = ndb
     .prepare(
       `INSERT OR IGNORE INTO links (
@@ -515,7 +527,7 @@ function insertLink(ndb: NetworkDb, row: Link, actorUserId: string, now: string)
       actorUserId,
       now,
     );
-  return result.changes > 0;
+  return result.changes > 0 ? row.id : null;
 }
 
 function insertComment(
@@ -752,6 +764,9 @@ export function applyManifest(
   logger: Logger,
 ): ImportResult {
   const now = new Date().toISOString();
+  const includeTypes = opts.slices?.include_types ?? true;
+  const includeAttachments = opts.slices?.include_attachments ?? true;
+  const includeChronology = opts.slices?.include_chronology ?? true;
   return ndb.transaction((): ImportResult => {
     const summary: ImportSummary = {
       thought_types_created: 0,
@@ -773,57 +788,70 @@ export function applyManifest(
     const typeIdRemap = new Map<string, string>();
     const linkTypeIdRemap = new Map<string, string>();
     const propertyIdRemap = new Map<string, string>();
+    const createdThoughtIds: string[] = [];
+    const createdLinkIds: string[] = [];
+    const updatedCommentIds: string[] = [];
 
     // 1. Thought types ------------------------------------------------------
-    const existingTT = readExistingThoughtTypeIds(
-      ndb,
-      manifest.thought_types.map((t) => t.id),
-    );
-    for (const t of manifest.thought_types) {
-      const wasExisting = existingTT.has(t.id);
-      insertThoughtType(ndb, t);
-      if (wasExisting) summary.thought_types_reused += 1;
-      else summary.thought_types_created += 1;
-      typeIdRemap.set(t.id, t.id);
-    }
-
-    // 2. Link types ---------------------------------------------------------
-    const existingLT = readExistingLinkTypeIds(
-      ndb,
-      manifest.link_types.map((t) => t.id),
-    );
-    for (const t of manifest.link_types) {
-      const wasExisting = existingLT.has(t.id);
-      insertLinkType(ndb, t);
-      if (wasExisting) summary.link_types_reused += 1;
-      else summary.link_types_created += 1;
-      linkTypeIdRemap.set(t.id, t.id);
-    }
-
-    // 3. Property definitions ----------------------------------------------
-    const existingPD = readExistingPropertyIds(
-      ndb,
-      manifest.type_properties.map((p) => p.id),
-    );
-    for (const p of manifest.type_properties) {
-      const resolvedOwnerId =
-        p.owner_type === 'thought_type'
-          ? typeIdRemap.get(p.owner_id) ?? null
-          : p.owner_type === 'link_type'
-            ? linkTypeIdRemap.get(p.owner_id) ?? null
-            : null;
-      if (resolvedOwnerId === null) {
-        logger.warn(
-          { propertyId: p.id, ownerType: p.owner_type, ownerId: p.owner_id },
-          'property definition without resolvable owner — skipping',
-        );
-        continue;
+    if (includeTypes) {
+      const existingTT = readExistingThoughtTypeIds(
+        ndb,
+        manifest.thought_types.map((t) => t.id),
+      );
+      for (const t of manifest.thought_types) {
+        const wasExisting = existingTT.has(t.id);
+        insertThoughtType(ndb, t);
+        if (wasExisting) summary.thought_types_reused += 1;
+        else summary.thought_types_created += 1;
+        typeIdRemap.set(t.id, t.id);
       }
-      const rewritten: PropertyDefinition = { ...p, owner_id: resolvedOwnerId };
-      const wasExisting = existingPD.has(p.id);
-      insertPropertyDefinition(ndb, rewritten);
-      if (!wasExisting) summary.property_definitions_created += 1;
-      propertyIdRemap.set(p.id, rewritten.id);
+
+      // 2. Link types ---------------------------------------------------------
+      const existingLT = readExistingLinkTypeIds(
+        ndb,
+        manifest.link_types.map((t) => t.id),
+      );
+      for (const t of manifest.link_types) {
+        const wasExisting = existingLT.has(t.id);
+        insertLinkType(ndb, t);
+        if (wasExisting) summary.link_types_reused += 1;
+        else summary.link_types_created += 1;
+        linkTypeIdRemap.set(t.id, t.id);
+      }
+
+      // 3. Property definitions ----------------------------------------------
+      const existingPD = readExistingPropertyIds(
+        ndb,
+        manifest.type_properties.map((p) => p.id),
+      );
+      for (const p of manifest.type_properties) {
+        const resolvedOwnerId =
+          p.owner_type === 'thought_type'
+            ? typeIdRemap.get(p.owner_id) ?? null
+            : p.owner_type === 'link_type'
+              ? linkTypeIdRemap.get(p.owner_id) ?? null
+              : null;
+        if (resolvedOwnerId === null) {
+          logger.warn(
+            { propertyId: p.id, ownerType: p.owner_type, ownerId: p.owner_id },
+            'property definition without resolvable owner — skipping',
+          );
+          continue;
+        }
+        const rewritten: PropertyDefinition = { ...p, owner_id: resolvedOwnerId };
+        const wasExisting = existingPD.has(p.id);
+        insertPropertyDefinition(ndb, rewritten);
+        if (!wasExisting) summary.property_definitions_created += 1;
+        propertyIdRemap.set(p.id, rewritten.id);
+      }
+    } else {
+      // Skip types/properties entirely; imported thoughts will get null type_id
+      // and property_value rows that reference unknown property_ids will be
+      // skipped in step 8 (resolvedPropertyId is undefined → continue).
+      logger.info(
+        { thoughtTypes: manifest.thought_types.length, linkTypes: manifest.link_types.length },
+        'import: skipping types/properties slice (user opted out)',
+      );
     }
 
     // 4. Thoughts (with id/title dedup) -----------------------------------
@@ -843,6 +871,7 @@ export function applyManifest(
         else summary.thoughts_reused += 1;
         continue;
       }
+      // (Title-match path below creates new thoughts too — both go into createdThoughtIds)
       const normTitle = normalizeTitle(t.title);
       if (existingByTitle.has(normTitle) && !titleMatchIds.has(normTitle)) {
         const existingId = existingByTitle.get(normTitle);
@@ -878,6 +907,7 @@ export function applyManifest(
       }
       const r = createThoughtForTitleMatch(ndb, t, resolvedTypeId, opts.actorUserId, now);
       thoughtIdRemap.set(t.id, r.id);
+      createdThoughtIds.push(r.id);
       summary.thoughts_created += 1;
     }
 
@@ -899,13 +929,25 @@ export function applyManifest(
       const typeId =
         l.type_id === null ? null : linkTypeIdRemap.get(l.type_id) ?? l.type_id;
       if (sourceId === undefined || targetId === undefined) continue;
-      if (insertLink(ndb, { ...l, source_id: sourceId, target_id: targetId, type_id: typeId }, opts.actorUserId, now)) {
+      const insertedId = insertLink(
+        ndb,
+        { ...l, source_id: sourceId, target_id: targetId, type_id: typeId },
+        opts.actorUserId,
+        now,
+      );
+      if (insertedId !== null) {
+        createdLinkIds.push(insertedId);
         summary.links_created += 1;
       }
     }
 
     // 7. Comments -----------------------------------------------------------
+    let skippedChrono = 0;
     for (const c of manifest.comments) {
+      if (c.kind === 'chronological' && !includeChronology) {
+        skippedChrono += 1;
+        continue;
+      }
       const resolvedOwner = thoughtIdRemap.get(c.owner_id);
       if (resolvedOwner === undefined) continue;
       const action = insertComment(ndb, c, resolvedOwner, opts.actorUserId, now);
@@ -913,10 +955,16 @@ export function applyManifest(
       // queries work for the imported comments.
       insertCommentTarget(ndb, c.id, 'thought', resolvedOwner);
       if (c.kind === 'permanent') {
-        if (action === 'updated') summary.permanent_comments_updated += 1;
+        if (action === 'updated') {
+          summary.permanent_comments_updated += 1;
+          updatedCommentIds.push(c.id);
+        }
       } else {
         summary.chronological_comments_added += 1;
       }
+    }
+    if (skippedChrono > 0) {
+      logger.info({ skippedChrono }, 'import: skipped chronological comments (user opted out)');
     }
     if (manifest.comment_targets.length > 0) {
       logger.info(
@@ -945,36 +993,42 @@ export function applyManifest(
     // 9. Attachments --------------------------------------------------------
     const attachDir = path.join(path.dirname(ndb.dbPath), 'attachments');
     mkdirSync(attachDir, { recursive: true });
-    for (const a of manifest.attachments) {
-      const resolvedOwnerId = thoughtIdRemap.get(a.owner_id);
-      if (resolvedOwnerId === undefined) continue;
-      if (a.kind === 'file' && a.file_path !== null) {
-        const buf = attachments.get(a.file_path);
-        if (buf === undefined) {
-          logger.warn({ att: a.id }, 'attachment binary missing in archive — skipping');
-          continue;
+    if (!includeAttachments) {
+      logger.info(
+        { attachments: manifest.attachments.length },
+        'import: skipping attachments slice (user opted out)',
+      );
+    } else
+      for (const a of manifest.attachments) {
+        const resolvedOwnerId = thoughtIdRemap.get(a.owner_id);
+        if (resolvedOwnerId === undefined) continue;
+        if (a.kind === 'file' && a.file_path !== null) {
+          const buf = attachments.get(a.file_path);
+          if (buf === undefined) {
+            logger.warn({ att: a.id }, 'attachment binary missing in archive — skipping');
+            continue;
+          }
+          const safeRel = a.file_path.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const localPath = path.join(attachDir, `${randomUUID().slice(0, 8)}-${safeRel}`);
+          writeFileSync(localPath, buf);
+          insertAttachment(
+            ndb,
+            { ...a, owner_id: resolvedOwnerId, file_path: localPath },
+            resolvedOwnerId,
+            opts.actorUserId,
+            now,
+          );
+        } else {
+          insertAttachment(
+            ndb,
+            { ...a, owner_id: resolvedOwnerId },
+            resolvedOwnerId,
+            opts.actorUserId,
+            now,
+          );
         }
-        const safeRel = a.file_path.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const localPath = path.join(attachDir, `${randomUUID().slice(0, 8)}-${safeRel}`);
-        writeFileSync(localPath, buf);
-        insertAttachment(
-          ndb,
-          { ...a, owner_id: resolvedOwnerId, file_path: localPath },
-          resolvedOwnerId,
-          opts.actorUserId,
-          now,
-        );
-      } else {
-        insertAttachment(
-          ndb,
-          { ...a, owner_id: resolvedOwnerId },
-          resolvedOwnerId,
-          opts.actorUserId,
-          now,
-        );
+        summary.attachments_imported += 1;
       }
-      summary.attachments_imported += 1;
-    }
 
     // 10. Attach roots to parent_thought_id -------------------------------
     const incomingTargets = new Set(manifest.links.map((l) => l.target_id));
@@ -987,7 +1041,7 @@ export function applyManifest(
       // matches are already part of the target graph and shouldn't be moved.
       if (resolvedId !== t.id) continue;
       const linkId = randomUUID();
-      ndb
+      const inserted = ndb
         .prepare(
           `INSERT OR IGNORE INTO links (
              id, source_id, target_id, type_id, active, version,
@@ -1003,11 +1057,14 @@ export function applyManifest(
           opts.actorUserId,
           opts.actorUserId,
         );
-      summary.links_created += 1;
+      if (inserted.changes > 0) {
+        createdLinkIds.push(linkId);
+        summary.links_created += 1;
+      }
     }
 
     logger.info({ ...summary }, 'etnx import finished');
-    return { ...summary, thoughtIdRemap };
+    return { ...summary, thoughtIdRemap, createdThoughtIds, createdLinkIds, updatedCommentIds };
   });
 }
 

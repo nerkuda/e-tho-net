@@ -125,6 +125,20 @@ export interface ExportJob {
 }
 
 /**
+ * Options for the `.etnx` import dialog (phase P, task P6). All toggles default
+ * to `true`; users can disable a slice of the archive (e.g. drop attachments)
+ * before committing.
+ */
+export interface ImportEtnxOptions {
+  /** Import `thought_types` / `link_types` (default true). */
+  include_types?: boolean;
+  /** Import `attachments` (default true). */
+  include_attachments?: boolean;
+  /** Import `chronological` comments (default true). */
+  include_chronology?: boolean;
+}
+
+/**
  * Body of `POST /networks/{nid}/import/commit` (03-server-api.md §14а, phase P,
  * task P4). The `.etnx` archive is sent as a base64-encoded string because the
  * REST envelope is JSON.
@@ -138,6 +152,8 @@ export interface ImportRequest {
    * archive (those without an incoming link inside the archive).
    */
   parent_thought_id: string;
+  /** Slices of the manifest to import. Unspecified → all slices (defaults). */
+  etnx?: ImportEtnxOptions;
 }
 
 /**
