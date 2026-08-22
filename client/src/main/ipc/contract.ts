@@ -541,8 +541,8 @@ export interface EtnApi {
     onStale(cb: (lastSeq: number) => void): () => void;
   };
   ui: {
-    getState(networkId: string, key: string): Promise<string | null>;
-    setState(networkId: string, key: string, value: string): Promise<void>;
+    getState(networkId: string, key: string, tabId?: string | null): Promise<string | null>;
+    setState(networkId: string, key: string, value: string, tabId?: string | null): Promise<void>;
     /** Saves an edit draft in the local DB; returns the draft id (H19). */
     draftSave(input: DraftSaveInput): Promise<string>;
     /** Lists drafts of the active profile for a network (H19 retry). */
