@@ -247,6 +247,8 @@ function buildApi(): EtnApi {
       version: () => invoke('system.version'),
       export: (networkId, request) => invoke('system.export', networkId, request),
       getJob: (jobId) => invoke('system.getJob', jobId),
+      downloadExport: (jobId: string, suggestedFilename: string) =>
+        invoke('system.downloadExport', jobId, suggestedFilename),
       pickImage: () => invoke('system.pickImage'),
       pickFile: () => invoke('system.pickFile'),
       openPath: (filePath: string) => invoke('system.openPath', filePath),

@@ -560,7 +560,7 @@ async function batchDelete(): Promise<void> {
   store.update({ selection: [] });
 }
 
-/** Starts an export job and polls it to completion. */
+/** Starts an export job and saves the result through main process. */
 async function runExport(format: ExportFormat, etnxOptions?: ExportEtnxOptions): Promise<void> {
   const networkId = requireNetworkId();
   const ids = store.state.selection;
@@ -582,41 +582,32 @@ async function runExport(format: ExportFormat, etnxOptions?: ExportEtnxOptions):
     const { job_id } = await etn.system.export(networkId, payload);
     notice(`Экспорт запущен (${job_id})…`);
     const job = await pollJob(job_id);
-    if (job.download_url === undefined) {
-      notice('Экспорт завершился без ссылки на скачивание.', 'error');
+    if (job.status !== 'done') {
+      notice('Экспорт завершился с ошибкой.', 'error');
       return;
     }
-    triggerDownload(job.download_url, format === 'etnx' ? filename : undefined);
-    notice('Экспорт готов — файл скачивается.');
+    const suggested = format === 'etnx' ? filename ?? `etnx-${job_id}` : `etnx-${job_id}.${format}`;
+    const result = await etn.system.downloadExport(job_id, suggested);
+    if (result.cancelled) {
+      notice('Сохранение отменено.');
+      return;
+    }
+    if (result.error !== undefined) {
+      notice(`Не удалось сохранить файл: ${result.error}`, 'error');
+      return;
+    }
+    notice(`Экспорт сохранён: ${result.saved_path}`);
   } catch (err) {
     notice(`Экспорт не удался: ${errText(err)}`, 'error');
   }
 }
 
 /** Polls the job status until done/failed (max ~60 s). */
-async function pollJob(jobId: string): Promise<{ status: string; download_url?: string }> {
+async function pollJob(jobId: string): Promise<{ status: string }> {
   for (let attempt = 0; attempt < 60; attempt++) {
     const job = await etn.system.getJob(jobId);
-    if (job.status === 'done' || job.status === 'failed') return job;
+    if (job.status === 'done' || job.status === 'failed') return { status: job.status };
     await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
   }
   return { status: 'failed' };
-}
-
-/** Triggers a browser download for a URL. When `suggestedFilename` is set,
- *  the browser uses it as the download name (falls back to the server's
- *  `Content-Disposition` when omitted). */
-function triggerDownload(url: string, suggestedFilename?: string): void {
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  if (suggestedFilename !== undefined && suggestedFilename.length > 0) {
-    anchor.download = suggestedFilename.endsWith('.etnx')
-      ? suggestedFilename
-      : `${suggestedFilename}.etnx`;
-  } else {
-    anchor.download = '';
-  }
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
 }

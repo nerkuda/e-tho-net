@@ -11,7 +11,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { Buffer } from 'node:buffer';
+import path from 'node:path';
 
 import type { CurrentUser, FocusDir, Network, TypeOwnerType } from '@etn/shared';
 
@@ -20,6 +22,7 @@ import type { RealtimeClient } from '../net/ws-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import type { PickFileResult, PickImageResult } from './contract.js';
 import { classifyOpenTarget } from './open-target.js';
+import { errText } from '../../renderer/lib/dom.js';
 
 /** Shared state owned by the main process, injected into handlers. */
 export interface HandlerDeps {
@@ -1087,12 +1090,49 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set('system.pickFile', bind(() => pickAnyFile()));
   handlers.set('system.openPath', bind((filePath: string) => openPathShell(filePath)));
   handlers.set('system.openExternal', bind((url: string) => openExternalShell(url)));
+  handlers.set(
+    'system.downloadExport',
+    bind(async (jobId: string, suggestedFilename: string) => {
+      const { downloadJob } = requireRest(deps);
+      const { contentType, body } = await downloadJob(jobId);
+      const ext = extensionForContentType(contentType);
+      const filename = suggestedFilename.endsWith(`.${ext}`)
+        ? suggestedFilename
+        : `${suggestedFilename}.${ext}`;
+      const { dialog, BrowserWindow } = await import('electron');
+      const win = BrowserWindow.getFocusedWindow();
+      const save = win
+        ? await dialog.showSaveDialog(win, {
+            title: 'Сохранить экспорт',
+            defaultPath: filename,
+          })
+        : await dialog.showSaveDialog({ title: 'Сохранить экспорт', defaultPath: filename });
+      if (save.canceled || save.filePath === undefined || save.filePath === '') {
+        return { saved_path: null, cancelled: true };
+      }
+      try {
+        writeFileSync(save.filePath, body);
+      } catch (err) {
+        return { saved_path: null, cancelled: false, error: errText(err) };
+      }
+      return { saved_path: save.filePath, cancelled: false };
+    }),
+  );
 
   return handlers;
 }
 
 /** Maximum picked image size — mirrors the server's attachment upload limit. */
 const PICK_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Pick a save-dialog extension from the server's Content-Type. */
+function extensionForContentType(contentType: string): string {
+  if (contentType.includes('zip')) return 'etnx';
+  if (contentType.includes('html')) return 'html';
+  if (contentType.includes('markdown')) return 'md';
+  if (contentType.includes('pdf')) return 'pdf';
+  return 'bin';
+}
 
 /** Maps a file extension to its MIME type (for `data:` URLs). */
 const IMAGE_MIME: Record<string, string> = {

@@ -32,8 +32,8 @@ import { errText } from '../lib/dom.js';
 import { showExportEtnxDialog } from '../import-export/export-dialog.js';
 
 /** Run an `.etnx` export for a single thought (phase P, task P7). The polling
- *  loop and `<a download>` trigger mirror `selection.ts:runExport`; we keep a
- *  local copy to avoid coupling the context-menu to the selection panel. */
+ *  loop and save flow mirror `selection.ts:runExport`; we keep a local copy
+ *  to avoid coupling the context-menu to the selection panel. */
 async function exportSingleThought(networkId: string, thoughtId: string): Promise<void> {
   const dialog = await showExportEtnxDialog(1);
   if (dialog.options === undefined) return;
@@ -45,39 +45,33 @@ async function exportSingleThought(networkId: string, thoughtId: string): Promis
     });
     notice(`Экспорт запущен (${job_id})…`);
     const job = await pollJob(job_id);
-    if (job.download_url === undefined) {
-      notice('Экспорт завершился без ссылки на скачивание.', 'error');
+    if (job.status !== 'done') {
+      notice('Экспорт завершился с ошибкой.', 'error');
       return;
     }
-    triggerDownload(job.download_url, dialog.filename);
-    notice('Экспорт готов — файл скачивается.');
+    const suggested = dialog.filename ?? `etnx-${job_id}`;
+    const result = await etn.system.downloadExport(job_id, suggested);
+    if (result.cancelled) {
+      notice('Сохранение отменено.');
+      return;
+    }
+    if (result.error !== undefined) {
+      notice(`Не удалось сохранить файл: ${result.error}`, 'error');
+      return;
+    }
+    notice(`Экспорт сохранён: ${result.saved_path}`);
   } catch (err) {
     notice(`Экспорт не удался: ${errText(err)}`, 'error');
   }
 }
 
-async function pollJob(jobId: string): Promise<{ status: string; download_url?: string }> {
+async function pollJob(jobId: string): Promise<{ status: string }> {
   for (let attempt = 0; attempt < 60; attempt++) {
     const job = await etn.system.getJob(jobId);
-    if (job.status === 'done' || job.status === 'failed') return job;
+    if (job.status === 'done' || job.status === 'failed') return { status: job.status };
     await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
   }
   return { status: 'failed' };
-}
-
-function triggerDownload(url: string, suggestedFilename?: string): void {
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  if (suggestedFilename !== undefined && suggestedFilename.length > 0) {
-    anchor.download = suggestedFilename.endsWith('.etnx')
-      ? suggestedFilename
-      : `${suggestedFilename}.etnx`;
-  } else {
-    anchor.download = '';
-  }
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
 }
 
 /** Zone direction (parents/siblings/children). */

@@ -17,12 +17,19 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
 
 import archiver from 'archiver';
-import { Writable } from 'node:stream';
 
 import {
   EtnError,
@@ -42,8 +49,12 @@ import { getThoughtOrThrow } from './thought-service.js';
 import { listComments } from './comment-service.js';
 
 interface ExportJobEntry extends ExportJob {
-  /** Rendered body — string for markdown/html, Buffer for .etnx (zip binary). */
+  /** Rendered body — string for markdown/html. Unused when `filePath` is set. */
   content?: string | Buffer;
+  /** Path to a temp file holding the rendered body — used for `.etnx` zip
+   *  exports (storing the whole zip in memory risks truncation; archiver
+   *  emits non-fatal `warning`s that earlier rejected the in-memory pipeline). */
+  filePath?: string;
   /** Requested output format (stored so the download route can pick a MIME type). */
   format?: ExportFormat;
   /** Wall-clock ms when the job reached a terminal state (for TTL sweep). */
@@ -56,11 +67,19 @@ const jobs = new Map<string, ExportJobEntry>();
 /** How long a finished job's result stays retrievable (03-server-api.md §14 TTL). */
 const JOB_RESULT_TTL_MS = 10 * 60 * 1000;
 
-/** Drop finished jobs older than {@link JOB_RESULT_TTL_MS}. */
+/** Drop finished jobs older than {@link JOB_RESULT_TTL_MS}; for jobs with a
+ *  `filePath` (the `.etnx` exports) also remove the temp file. */
 function sweepJobs(): void {
   const now = Date.now();
   for (const [id, entry] of jobs) {
     if (entry.finishedAt !== undefined && now - entry.finishedAt > JOB_RESULT_TTL_MS) {
+      if (entry.filePath !== undefined) {
+        try {
+          unlinkSync(entry.filePath);
+        } catch {
+          // already gone — fine.
+        }
+      }
       jobs.delete(id);
     }
   }
@@ -139,27 +158,29 @@ export async function startExportJob(
   format: ExportFormat,
   opts: { etnx?: ExportEtnxOptions; source: EtnxManifestSource },
 ): Promise<ExportJob> {
-  let content: string | Buffer;
+  const jobId = randomUUID();
+  const entry: ExportJobEntry = {
+    job_id: jobId,
+    status: 'done',
+    download_url: `/api/v1/jobs/${jobId}/download`,
+    format,
+    finishedAt: Date.now(),
+  };
   if (format === 'pdf') {
     throw new EtnError(
       'VALIDATION_ERROR',
       'PDF export is not implemented on the MVP; use HTML and print to PDF',
     );
   } else if (format === 'etnx') {
-    content = await exportToEtnx(ndb, thoughtIds, opts.etnx, opts.source);
+    // Stream the zip into a temp file (avoids the in-memory `archiver.on('warning')`
+    // pitfall that produced truncated archives in the first attempt).
+    const filePath = path.join(os.tmpdir(), `etn-export-${jobId}.zip`);
+    await exportToEtnx(ndb, thoughtIds, opts.etnx, opts.source, filePath);
+    entry.filePath = filePath;
   } else {
     const markdown = exportToMarkdown(ndb, thoughtIds);
-    content = format === 'html' ? markdownToHtml(markdown) : markdown;
+    entry.content = format === 'html' ? markdownToHtml(markdown) : markdown;
   }
-  const jobId = randomUUID();
-  const entry: ExportJobEntry = {
-    job_id: jobId,
-    status: 'done',
-    download_url: `/api/v1/jobs/${jobId}/download`,
-    content,
-    format,
-    finishedAt: Date.now(),
-  };
   jobs.set(jobId, entry);
   return toPublicJob(entry);
 }
@@ -174,6 +195,11 @@ export function getExportJob(jobId: string): ExportJob | null {
 /**
  * Rendered content of a finished export job, or `null` (not ready/unknown).
  *
+ * For textual exports (markdown/html) the body is a `string`. For `.etnx`
+ * the body is a `Buffer` loaded from the job's temp file — read fully into
+ * memory so `reply.send` does not need to wait on a stream lifecycle, and
+ * the route handler is the only place that touches the file.
+ *
  * @param format - preferred output format; falls back to the format stored
  *   with the job when omitted (the REST download route does not know it).
  */
@@ -183,9 +209,23 @@ export function getExportJobContent(
 ): { body: string | Buffer; contentType: string } | null {
   sweepJobs();
   const entry = jobs.get(jobId);
-  if (!entry || entry.status !== 'done' || entry.content === undefined) return null;
+  if (!entry || entry.status !== 'done') return null;
   const effectiveFormat = format ?? entry.format ?? 'markdown';
   const contentType = contentTypeFor(effectiveFormat);
+  if (effectiveFormat === 'etnx') {
+    if (entry.filePath === undefined) return null;
+    if (!existsSync(entry.filePath)) return null;
+    const buf = readFileSync(entry.filePath);
+    // Best-effort cleanup: the file is no longer needed once the bytes are
+    // in memory. The TTL sweep would do this eventually anyway.
+    try {
+      unlinkSync(entry.filePath);
+    } catch {
+      // already gone — fine.
+    }
+    return { body: buf, contentType };
+  }
+  if (entry.content === undefined) return null;
   return { body: entry.content, contentType };
 }
 
@@ -209,65 +249,94 @@ function contentTypeFor(format: ExportFormat): string {
  *   * `attachments/<relpath>` — binary attachment files referenced by
  *     `manifest.attachments[].file_path` (only when `include_attachments`).
  *
- * The zip is collected into memory and bounded by {@link ETNX_MAX_BYTES} —
- * large exports fail fast with `VALIDATION_ERROR` rather than blocking the
- * HTTP loop. Streaming into `reply.raw` is a future optimisation.
+ * The archive is streamed into `outputPath` (a caller-owned file inside
+ * `os.tmpdir()`) so large exports don't sit in memory; the route streams the
+ * file back to the client with a `createReadStream`. The file is the
+ * caller's responsibility to delete (the job's TTL sweep does this for jobs
+ * served through `startExportJob`).
  */
 export async function exportToEtnx(
   ndb: NetworkDb,
   rootIds: string[],
   opts: ExportEtnxOptions | undefined,
   source: EtnxManifestSource,
-): Promise<Buffer> {
+  outputPath: string,
+): Promise<{ size: number }> {
   const manifest = buildManifest(ndb, rootIds, opts, source, logger);
-  const zip = await collectZip(manifest, ndb);
-  if (zip.length > ETNX_MAX_BYTES) {
+  const size = await collectZip(manifest, ndb, outputPath);
+  if (size > ETNX_MAX_BYTES) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Размер .etnx превысил лимит ${ETNX_MAX_BYTES} байт (получено ${zip.length}). ` +
+      `Размер .etnx превысил лимит ${ETNX_MAX_BYTES} байт (получено ${size}). ` +
         'Отключите вложения или уменьшите subtree_depth.',
-      { limit: ETNX_MAX_BYTES, actual: zip.length },
+      { limit: ETNX_MAX_BYTES, actual: size },
     );
   }
-  return zip;
+  return { size };
 }
 
-/** Stream the manifest + referenced attachments into a single in-memory zip. */
-function collectZip(manifest: EtnxManifest, ndb: NetworkDb): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  const sink = new Writable({
-    write(chunk: Buffer, _enc, cb): void {
-      chunks.push(Buffer.from(chunk));
-      cb();
-    },
-  });
-  const archive = archiver('zip', { zlib: { level: 9 } });
-  const finished = new Promise<void>((resolve, reject) => {
-    sink.on('finish', (): void => resolve());
-    archive.on('warning', (err: Error): void => reject(err));
-    archive.on('error', (err: Error): void => reject(err));
-  });
-  archive.pipe(sink);
+/**
+ * Stream the manifest + referenced attachments into `outputPath` via
+ * `archiver.pipe(fs.createWriteStream(path))`. Two failure modes from the
+ * first attempt are explicitly handled:
+ *
+ *   1. `archiver.on('warning')` is logged but **does not** reject — the
+ *      earlier `reject(err)` made the export fail with a partial zip the
+ *      moment `archiver` emitted any non-fatal diagnostic, which happened
+ *      for every empty attachment entry.
+ *   2. The Promise only resolves after the file stream's `close` event —
+ *      `archive.finalize()` schedules the closing chunks asynchronously
+ *      and resolving earlier produced a truncated zip.
+ */
+function collectZip(manifest: EtnxManifest, ndb: NetworkDb, outputPath: string): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const fileStream = createWriteStream(outputPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    let settled = false;
 
-  archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
+    fileStream.on('close', () => {
+      if (settled) return;
+      settled = true;
+      try {
+        const stat = statSync(outputPath);
+        resolve(stat.size);
+      } catch {
+        resolve(0);
+      }
+    });
+    fileStream.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+    archive.on('error', (err: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+    archive.on('warning', (err: Error) => {
+      logger.warn({ err: err.message }, 'archiver warning — non-fatal, ignoring');
+    });
 
-  const attachDir = path.join(path.dirname(ndb.dbPath), 'attachments');
-  for (const att of manifest.attachments) {
-    if (att.kind !== 'file' || att.file_path === null) continue;
-    const rel = att.file_path.replace(/^\/+/, '');
-    const abs = joinWithinDir(attachDir, rel);
-    if (abs === null) continue;
-    try {
+    archive.pipe(fileStream);
+
+    archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
+
+    const attachDir = path.join(path.dirname(ndb.dbPath), 'attachments');
+    for (const att of manifest.attachments) {
+      if (att.kind !== 'file' || att.file_path === null) continue;
+      const rel = att.file_path.replace(/^\/+/, '');
+      const abs = joinWithinDir(attachDir, rel);
+      if (abs === null) continue;
+      if (!existsSync(abs)) {
+        logger.warn({ rel }, 'attachment missing on export — skipping');
+        continue;
+      }
       archive.append(createReadStream(abs), { name: `attachments/${rel}` });
-    } catch {
-      // Missing/unreadable file — skip silently (a missing attachment does
-      // not invalidate the export; the importer will see `file_path` and may
-      // log a warning at apply time).
     }
-  }
 
-  void archive.finalize();
-  return finished.then(() => Buffer.concat(chunks));
+    void archive.finalize();
+  });
 }
 
 /**

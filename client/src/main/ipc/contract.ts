@@ -643,6 +643,19 @@ export interface EtnApi {
     export(networkId: string, request: ExportRequest): Promise<{ job_id: string }>;
     getJob(jobId: string): Promise<ExportJob>;
     /**
+     * Download a finished export job through the main process: it shows the
+     * OS save dialog, fetches the binary with the current API key, writes
+     * the bytes to the chosen path, and resolves with `{ saved_path }` (or
+     * `{ cancelled: true }`). Going through main process is more reliable
+     * than `<a download>` in Electron for binary content (`application/zip`,
+     * `text/html`) — the bytes round-trip without the renderer's URL
+     * navigation quirks.
+     */
+    downloadExport(
+      jobId: string,
+      suggestedFilename: string,
+    ): Promise<{ saved_path: string | null; cancelled: boolean; error?: string }>;
+    /**
      * Opens the OS file picker for an image and returns the original file as a
      * `data:` URL with its name/mime/size (≤ the attachment upload limit). The
      * caller decides how to fit it into the icon limit (workplan L16).

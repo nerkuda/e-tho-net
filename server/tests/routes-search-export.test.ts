@@ -7,6 +7,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import { describe, it } from 'node:test';
 import yauzl from 'yauzl';
@@ -279,12 +283,28 @@ describe(
         assert.match(download.headers['content-type'] ?? '', /application\/zip/);
         assert.match(download.headers['content-disposition'] ?? '', /\.etnx/);
 
-        const buf = Buffer.from(download.rawPayload as Buffer);
+        const raw = download.rawPayload;
+        const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as string, 'binary');
         // Zip magic: PK\x03\x04
         assert.equal(buf[0], 0x50);
         assert.equal(buf[1], 0x4b);
         assert.equal(buf[2], 0x03);
         assert.equal(buf[3], 0x04);
+
+        // Persist to disk and ask the system `unzip` (if available) whether
+        // the archive is well-formed — this is the strongest cross-check
+        // against any silent corruption along the archiver → Buffer → HTTP
+        // → `app.inject` chain that the user's archive manager would also see.
+        const onDisk = path.join(tmpdir(), `etnx-test-${jobId}.zip`);
+        writeFileSync(onDisk, buf);
+        try {
+          execFileSync('unzip', ['-t', onDisk], { stdio: 'pipe' });
+        } catch (e) {
+          // Surface the `unzip` stderr so a CI failure is debuggable.
+          const err = e as { stderr?: Buffer };
+          const detail = err.stderr !== undefined ? err.stderr.toString('utf8') : '';
+          assert.fail(`unzip -t rejected the .etnx archive: ${detail}`);
+        }
 
         const entries = await listZipEntries(buf);
         const names = entries.map((e) => e.fileName);

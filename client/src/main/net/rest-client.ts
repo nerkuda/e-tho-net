@@ -1677,6 +1677,33 @@ export class RestClient {
     return this.request('GET', `/jobs/${encodeURIComponent(jobId)}`);
   }
 
+  /**
+   * `GET /jobs/{jobId}/download` — fetch the rendered export bytes. Bypasses
+   * the JSON envelope path used by {@link request}: the server returns binary
+   * (`application/zip` or `text/markdown`/`text/html`) and we hand the raw
+   * Buffer to the caller. Going through main process is more reliable than
+   * `<a download>` in Electron for binary content — the bytes round-trip
+   * without the renderer's URL navigation quirks.
+   */
+  public async downloadJob(jobId: string): Promise<{
+    contentType: string;
+    body: Buffer;
+  }> {
+    const url = `${this.baseUrl}/api/v1/jobs/${encodeURIComponent(jobId)}/download`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${await this.getApiKey()}`,
+      Accept: '*/*',
+    };
+    const res = await this.fetchImpl(url, { method: 'GET', headers });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`download failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
+    return { contentType, body: Buffer.from(arrayBuffer) };
+  }
+
   // -------------------------------------------------------------------------
   // §16 System endpoints
   // -------------------------------------------------------------------------
