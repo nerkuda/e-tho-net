@@ -101,6 +101,7 @@ null` означает висячую ссылку на удалённую мы�
 | `etn.thoughts.usage` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`) | `network_id`, `thought_id` |
 | `etn.comments.get` | Полный текст одного комментария: по `comment_id` (любой) или по `thought_id` (постоянный). Нужен, когда превью (`meta.permanent`, комментарии `subgraph`) показывает `truncated: true` — id есть в самом превью | `network_id` + ровно одно из `comment_id`/`thought_id` |
 | `etn.export.subgraph` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
+| `etn.types.list` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §4.1b | `network_id` |
 
 `etn.thoughts.subgraph` — ключевой для RAG-сценариев: агент задаёт радиус
 обхода, лимит узлов, и получает JSON-граф с мыслями, связями и (опционально)
@@ -208,14 +209,47 @@ reason, thought_types }`. `depth` — расстояние от `in_subtree_of` 
 }
 ```
 
+#### 4.1b. `etn.types.list` — каталог типов с эффективными свойствами (task O4)
+
+В отличие от reference-таблиц N6 (только типы, реально встретившиеся в
+ответе), `etn.types.list` отдаёт **оба каталога целиком**: все типы мыслей и
+все типы связей сети, включая корневой тип. У каждой записи, помимо полей
+N6-каталога (`id`, `name`/`name_forward`+`name_reverse`, `parent_id`,
+`is_root`, `description`, ...), — `properties[]`: **эффективный** список
+определений свойств типа (L21, docs/03-server-api.md §8.2) — собственные плюс
+унаследованные от предков по цепочке, от корня вниз; у каждого элемента —
+`key`, `value_type`, `required`, `config` (в т.ч. `options`/
+`allowed_type_ids`/`default_value`), `inherited`, `defined_on`,
+`defined_on_name`, эффективный `default_value` (переопределение типа или
+собственный дефолт свойства), `overridden_here`. Параметров, кроме
+`network_id`, нет — фильтрации по одному типу нет (для этого — конкретный
+`type_id`/`type` в create-инструментах или ресурс `etn://…/thought-types/{id}`).
+
+Вызывается агентом **перед созданием типизированной мысли/связи**, чтобы
+увидеть, какие свойства заполнить и что вообще доступно из типов; также
+источник для резолва типа по имени ниже.
+
+##### Тип по имени вместо `type_id` (task O4)
+
+`etn.thoughts.create`, `etn.links.create` и `etn.thoughts.upsert_bundle`
+(§4.2, §4.2a) принимают параметр `type` (строка) как альтернативу `type_id` —
+ровно одно из двух, иначе `VALIDATION_ERROR`. Резолв — по `name_key`
+(case-insensitive, та же нормализация, что и при проверке дублей имени типа);
+для связей — по `name_forward` **или** `name_reverse`. Ошибки: имя не найдено
+— `NOT_FOUND`; имя соответствует нескольким типам — `VALIDATION_ERROR` с
+`details.candidates` (для мыслей на практике недостижимо — `name_key`
+глобально уникален; для связей возможно по-настоящему: `name_forward` одного
+типа может совпасть с `name_reverse` другого, поскольку уникальна только
+**пара** имён).
+
 ### 4.2. Создание и изменение
 
 | Tool | Описание | Параметры |
 |------|----------|-----------|
-| `etn.thoughts.create` | Создать мысль | `network_id`, `title`, `synonyms?`, `type_id?`, `active?`, `link?` `{direction, target_thought_id, type_id?}` |
+| `etn.thoughts.create` | Создать мысль; тип — `type_id` или `type` (по имени, task O4, см. §4.1b) | `network_id`, `title`, `synonyms?`, `type_id?`\|`type?`, `active?`, `link?` `{direction, target_thought_id, type_id?\|type?}` |
 | `etn.thoughts.update` | Изменить мысль | `network_id`, `thought_id`, `changes`, `expected_version?` |
 | `etn.thoughts.delete` | Удалить | `network_id`, `thought_id`, `expected_version?` |
-| `etn.links.create` | Создать связь | `network_id`, `source_id`, `target_id`, `type_id?` |
+| `etn.links.create` | Создать связь; тип — `type_id` или `type` (по `name_forward`/`name_reverse`, task O4, см. §4.1b) | `network_id`, `source_id`, `target_id`, `type_id?`\|`type?` |
 | `etn.links.delete` | Удалить связь | `network_id`, `link_id` |
 | `etn.comments.upsert` | Создать/обновить комментарий; для `chronological` — ровно одно из `owner_type`+`owner_id` (одна привязка) или `targets[]` (несколько, 1..100, первый — первичный владелец; для `permanent` только одиночная форма) | `network_id`, `owner_type`+`owner_id` \| `targets[]` (`{owner_type, owner_id}`), `kind`, `title?`, `body_md`, `valid_from?`, `valid_to?` |
 | `etn.comments.update` | Изменить комментарий по `comment_id` (chronological или permanent; last-write-wins по полям, `valid_from`/`valid_to` применяются только к chronological) | `network_id`, `comment_id`, `changes` (`title?`, `body_md?`, `valid_from?`, `valid_to?`), `expected_version?` |
@@ -263,11 +297,11 @@ version: 0, request_id }`. Набор стоит одной записи для 
 |----------|-----|-------|
 | `network_id` | string | обязателен |
 | `thought_id` | string | адресует **существующую** мысль для дополнения на месте (без пересоздания). Обязателен ровно один из `thought_id`/`thought` |
-| `thought` | object | `{title, synonyms?, type_id?, active?}` — спецификация новой/сопоставляемой мысли |
+| `thought` | object | `{title, synonyms?, type_id?\|type?, active?}` — спецификация новой/сопоставляемой мысли; `type` резолвит тип по имени (task O4, см. §4.1b), ровно одно из `type_id`/`type` |
 | `on_duplicate` | `fail`\|`reuse`\|`update` | политика при совпадении `thought.title`/`synonyms` с существующей мыслью (см. ниже); по умолчанию `fail`. Игнорируется, если задан `thought_id` |
 | `comment` | object | `{title?, body_md, valid_from?, valid_to?}` — постоянный комментарий владельца (create-or-update, как `etn.comments.upsert` с `kind: 'permanent'`) |
 | `properties` | object | карта `{key: value}` — по одному вызову `properties.set` на ключ, в общей транзакции |
-| `links` | array | `[{direction, target_thought_id, type_id?}]` — связи мысли-владельца с другими мыслями (направление — как у `link` в `etn.thoughts.create`) |
+| `links` | array | `[{direction, target_thought_id, type_id?\|type?}]` — связи мысли-владельца с другими мыслями (направление — как у `link` в `etn.thoughts.create`); `type` резолвит тип связи по имени (task O4), ровно одно из `type_id`/`type` на каждую связь |
 | `attachments` | array | `[{kind, url?/file_path?, title?, description?}]` |
 
 Если `thought_id` не задан, мысль ищется/создаётся так же, как в паре
