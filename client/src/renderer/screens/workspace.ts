@@ -1,9 +1,11 @@
 /**
- * Workspace layout (H1, 08-ui-spec.md §1, §16):
+ * Workspace layout (H1, 08-ui-spec.md §1, §16, workplan Q3):
  *
  * ```
  * ┌──────────────────────────────────────────────────────────────────┐
- * │ [Меню сети] [🗺][🌳] [📌 закреплённые мысли (вся свободная ширина)] [👤][☰] │
+ * │ [📂 Сеть ▾] [Tab1 *][Tab2][Tab3][+] [▾N]            [👤][☰]      │ ← top row (Q3)
+ * ├──────────────────────────────────────────────────────────────────┤
+ * │ [🗺][🌳] [📌 закреплённые мысли…]                                  │ ← toolbar (виды)
  * ├──────────────────────────────────────────────────────────────────┤
  * │ [Поиск…] [⚙]                                              (карта)│
  * ├─────────┬──────────────────────────────────────────────┬────────┤
@@ -16,7 +18,8 @@
  * The module owns the chrome (toolbar/status bar/containers). Content modules
  * (canvas H4, editor H8, search H13, selection H16, history H7, pinned L18)
  * mount into the exposed hosts; the toolbar/status bar re-render from the
- * shared store.
+ * shared store. С фазой Q верхняя строка (`top-row`) вынесена из тулбара и
+ * содержит меню сети, tab-strip и user/view меню.
  */
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
@@ -34,6 +37,7 @@ import { mountStructures } from './structures/structures.js';
 import { mountChronicle } from './chronicle/chronicle.js';
 import { setActiveView } from './active-view.js';
 import { mountPinnedBar } from './pinned-bar.js';
+import { mountTabStrip } from './tabs/tabs.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -175,14 +179,20 @@ export function buildWorkspace(): HTMLElement {
   // The pinned panel (L18) stretches across the whole free toolbar width —
   // it is one big drop target between the view switcher and the user menu.
   toolbar.append(
-    netMenuButton,
     mapViewButton,
     structuresViewButton,
     chronicleViewButton,
     pinnedHost,
-    userMenuButton,
-    viewMenuButton,
   );
+
+  // --- top row (Q3) — net menu + tab strip + user/view ------------------------
+  // Mounts the tab strip; net/user/view menus live here.
+  const tabStripHost = div('tab-strip-host');
+  const topRow = div('top-row');
+  const topRight = div('top-right');
+  topRight.append(userMenuButton, viewMenuButton);
+  topRow.append(netMenuButton, tabStripHost, topRight);
+  mountTabStrip(tabStripHost);
 
   // --- search drop panel -----------------------------------------------------
   const searchHost = div('search-panel hidden');
@@ -238,7 +248,7 @@ export function buildWorkspace(): HTMLElement {
     conflictHost,
   );
 
-  root.append(toolbar, searchRow, searchHost, body, statusbar);
+  root.append(topRow, toolbar, searchRow, searchHost, body, statusbar);
 
   const handles: WorkspaceHandles = {
     root,

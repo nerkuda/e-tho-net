@@ -130,6 +130,20 @@ export async function openNetwork(networkId: string): Promise<void> {
     pins: (pinsRaw ?? []).map((p) => p.thought_id),
   });
 
+  // Q3: refresh tab list and activate the tab for the opened network so the
+  // strip highlights the right entry. The list mutation is awaited before
+  // showing the workspace, otherwise the active state would briefly flicker.
+  try {
+    const tabs = await etn.tabs.list();
+    const target = tabs.find((t) => t.network_id === networkId) ?? null;
+    store.update({
+      tabs,
+      activeTabId: target?.tab_id ?? null,
+    });
+  } catch {
+    // ignore — workspace still usable without tab strip state
+  }
+
   showScreen('workspace');
 
   // Initial focus: stored L4 focus or the HOME thought.

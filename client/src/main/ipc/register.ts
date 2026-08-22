@@ -162,8 +162,26 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
     if (profile) {
       opts.localDb.setUiState(profile.id, networkId, UI_STATE_KEY.CURRENT_NETWORK_ID, networkId);
     }
-    // Q2: explicit acquire via pool (legacy single-network path still works).
+    // Q2/Q3: explicit acquire via pool (legacy single-network path still works).
     pool?.acquire(networkId);
+    // Q3: ensure a tab row exists for this network so the tab strip populates
+    // when the workspace mounts. Idempotent — duplicate network opens reuse
+    // the existing tab (Q2 DoD).
+    if (profile !== null) {
+      const existing = opts.localDb
+        .listTabs(profile.id)
+        .find((t) => t.network_id === networkId);
+      if (existing === undefined) {
+        const tabs = opts.localDb.listTabs(profile.id);
+        opts.localDb.upsertTab(profile.id, {
+          tab_id: randomUUID(),
+          slot_idx: tabs.length,
+          network_id: networkId,
+        });
+      } else {
+        opts.localDb.touchTab(profile.id, existing.tab_id);
+      }
+    }
     return network;
   };
 

@@ -26,7 +26,8 @@ export type IconName =
   | 'x'
   | 'mindmap'
   | 'tree'
-  | 'history';
+  | 'history'
+  | 'plus';
 
 /**
  * Trusted static inner-SVG markup per icon (lucide geometry, MIT). Assigned
@@ -53,6 +54,7 @@ const PATHS: Record<IconName, string> = {
   alert:
     '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   // View switcher (L15, 08-ui-spec.md §15.1): the canvas map (central hub with
   // satellite clouds) and the structures tree (explorer-style hierarchy).
   mindmap:

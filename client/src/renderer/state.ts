@@ -26,6 +26,7 @@ import {
   type Thought,
   type ThoughtType,
 } from '@etn/shared';
+import type { TabDto } from '../main/ipc/contract.js';
 
 /** Top-level screens of the application. */
 export type Screen = 'onboarding' | 'networks' | 'workspace';
@@ -122,6 +123,14 @@ export interface AppState {
   structuresActiveThought: Thought | null;
   /** Pinned thoughts of the open network (L18): ordered thought ids (L3). */
   pins: string[];
+  /** Open tabs (Q3, 08-ui-spec.md §1.1). */
+  tabs: TabDto[];
+  /** Currently active tab id (Q3/Q4). `null` when no tab is active. */
+  activeTabId: string | null;
+  /** Tab ids with unacknowledged realtime events (Q4). */
+  dirtyTabIds: Set<string>;
+  /** Tab ids whose network the user no longer has access to (Q5). */
+  inaccessibleTabIds: Set<string>;
 }
 
 /** Initial snapshot. */
@@ -160,6 +169,10 @@ const initial: AppState = {
   structuresActiveThoughtId: null,
   structuresActiveThought: null,
   pins: [],
+  tabs: [],
+  activeTabId: null,
+  dirtyTabIds: new Set<string>(),
+  inaccessibleTabIds: new Set<string>(),
 };
 
 /**
@@ -201,6 +214,10 @@ class Store {
       structuresActiveThoughtId: null,
       structuresActiveThought: null,
       pins: [],
+      tabs: [],
+      activeTabId: null,
+      dirtyTabIds: new Set<string>(),
+      inaccessibleTabIds: new Set<string>(),
     });
   }
 }
