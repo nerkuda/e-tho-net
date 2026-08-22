@@ -14,13 +14,13 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │ Main process (Node.js, Electron)                                │
 │                                                                 │
-│  ┌──────────────┐ ┌────────────┐ ┌──────────┐ ┌─────────────┐   │
-│  │ Network      │ │ Realtime   │ │ Local    │ │ IPC         │   │
-│  │ client       │ │ client     │ │ store    │ │ handlers    │   │
-│  │ (REST + WS)  │ │ (events)   │ │ (SQLite) │ │             │   │
-│  └──────────────┘ └────────────┘ └──────────┘ └─────────────┘   │
-│         │                │             │              │         │
-│         └────────────────┴─────────────┴──────────────┘         │
+│  ┌──────────────┐ ┌────────────────┐ ┌──────────┐ ┌─────────┐   │
+│  │ Network      │ │ Realtime       │ │ Local    │ │ IPC     │   │
+│  │ client       │ │ pool           │ │ store    │ │ handlers│   │
+│  │ (REST)       │ │ (WS per net)   │ │ (SQLite) │ │         │   │
+│  └──────────────┘ └────────────────┘ └──────────┘ └─────────┘   │
+│         │                │                │           │         │
+│         └────────────────┴────────────────┴───────────┘         │
 │                              │                                   │
 │                    safeStorage (API-key)                         │
 └──────────────────────────────┬──────────────────────────────────┘
@@ -28,16 +28,26 @@
 ┌──────────────────────────────┴──────────────────────────────────┐
 │ Renderer process (Chromium)                                     │
 │                                                                 │
-│  UI: холст │ редактор │ поиск │ выделения │ диалоги │ настройки │
-│  UI-state: in-memory store + подписки на realtime-события        │
+│  UI: tab-strip │ холст │ редактор │ поиск │ выделения │ диалоги │
+│  UI-state: in-memory store (per-active-tab snapshot)            │
+│            + подписки на realtime-события (per-active-tab +     │
+│            маркер «*» на табах неактивных сетей)                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+> **Табы (фаза Q).** В одном окне Electron можно держать несколько
+> открытых мыслесетей и несколько табов с одной и той же сетью — см.
+> [08-ui-spec.md](08-ui-spec.md) §1. Realtime-клиент в main стал **пулом**
+> по сокетам (один WS на сеть), UI-state — снапшот активного таба. Подробности
+> в §3.5–§3.6, §4.2, §6.
+
 ### 2.1. Разделение ответственности
-- **Main:** сетевые операции, локальная БД, хранение ключей, IPC-обработчики.
-  Ключ API в renderer **не попадает**.
+- **Main:** сетевые операции, локальная БД, хранение ключей, IPC-обработчики,
+  пул `RealtimeClient` (см. §4.2). Ключ API в renderer **не попадает**.
 - **Renderer:** только UI и UI-state. Все обращения к данным — через IPC
-  (например, `window.etn.thoughts.get(id)` → IPC → main → REST).
+  (например, `window.etn.thoughts.get(id)` → IPC → main → REST). С табами
+  renderer держит **список табов** и **id активного**; «текущая сеть» —
+  это сеть активного таба; «текущий фокус» — focus активного таба.
 
 ## 3. Локальное хранилище
 
@@ -75,6 +85,14 @@ API-key шифруется `safeStorage.encryptString(key)` перед запи�
 настройки пользователя (`show_inactive`, выбор сортировки фокуса, ручной
 порядок) **здесь не хранятся** — они синхронизируются через real-time
 (audience=user).
+
+> **Табы (фаза Q).** Состояние, специфичное для конкретного таба (focus,
+> view, filter_state), пишется в `ui_state` с суффиксом `:<tab_id>` в
+> `key`: `current_focus_thought_id:<tab_id>`,
+> `active_view:<tab_id>`, `structures_state:<tab_id>`,
+> `chronicle_state:<tab_id>`. Ключи без суффикса остаются для
+> обратной совместимости и трактуются как legacy (один таб на сеть).
+> См. §3.6 и [08-ui-spec.md](08-ui-spec.md) §1.
 
 Зарезервированные ключи:
 - `current_focus_thought_id` — текущий фокус на этом клиенте.
@@ -149,38 +167,47 @@ API-key шифруется `safeStorage.encryptString(key)` перед запи�
 ### 3.5. focus_history (история фокуса, L4)
 
 История мыслей, побывавших в фокусе на этом клиенте. Локальное состояние per
-`(profile_id, network_id)`. См. [11-settings-and-state.md](11-settings-and-state.md),
-п. 2.3.
+`(profile_id, network_id, tab_id)`. См.
+[11-settings-and-state.md](11-settings-and-state.md), п. 2.3.
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
 | `profile_id` | TEXT NOT NULL | Сервер-профиль |
 | `network_id` | TEXT NOT NULL | |
+| `tab_id` | TEXT NULL | Идентификатор таба (см. §3.6); `NULL` — legacy-данные до введения табов |
 | `thought_id` | TEXT NOT NULL | |
-| `seq` | INTEGER NOT NULL | Монотонный счётчик на (profile, network); больший = более свежий |
+| `seq` | INTEGER NOT NULL | Монотонный счётчик на (profile, network, tab_id); больший = более свежий |
 | `visited_at` | TEXT NOT NULL | |
-| PRIMARY KEY | `(profile_id, network_id, thought_id)` | |
+| PRIMARY KEY | `(profile_id, network_id, tab_id, thought_id)` | |
 
-Индекс: `idx_focus_history_seq (profile_id, network_id, seq DESC)`.
+Индекс: `idx_focus_history_seq (profile_id, network_id, tab_id, seq DESC)`.
 
-**Алгоритм при смене фокуса `oldId → newId`** (в одной транзакции локально):
+> **Табы (фаза Q).** PK расширен колонкой `tab_id`; в существующих строках
+> `tab_id` остаётся `NULL` — при первом запуске клиента с табами
+> автоматически создаётся стартовый таб с `tab_id = 'LEGACY'`, и история
+> привязывается к нему (см. §3.6). Для двух табов с одной сетью истории
+> независимы — это позволяет вести параллельные контексты в одной сети.
+
+**Алгоритм при смене фокуса `oldId → newId`** (в одной транзакции локально;
+`?` — `profile_id, network_id, tab_id`):
 
 ```sql
 -- 1. newId больше не в истории — он становится фокусом
 DELETE FROM focus_history
-  WHERE profile_id = ? AND network_id = ? AND thought_id = ?;   -- newId
+  WHERE profile_id = ? AND network_id = ? AND tab_id IS ? AND thought_id = ?;  -- newId
 
--- 2. oldId — в начало истории
-INSERT OR REPLACE INTO focus_history (profile_id, network_id, thought_id, seq, visited_at)
-  VALUES (?, ?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM focus_history
-                    WHERE profile_id = ? AND network_id = ?), ?);
+-- 2. oldId — в начало истории (seq — per-tab)
+INSERT OR REPLACE INTO focus_history (profile_id, network_id, tab_id, thought_id, seq, visited_at)
+  VALUES (?, ?, ?, ?,
+          (SELECT COALESCE(MAX(seq), 0) + 1 FROM focus_history
+            WHERE profile_id = ? AND network_id = ? AND tab_id IS ?), ?);
 
 -- 3. Trim до 50: удалить всё, что не входит в топ-50 свежих
 DELETE FROM focus_history
-  WHERE profile_id = ? AND network_id = ?
+  WHERE profile_id = ? AND network_id = ? AND tab_id IS ?
     AND seq NOT IN (
       SELECT seq FROM focus_history
-        WHERE profile_id = ? AND network_id = ?
+        WHERE profile_id = ? AND network_id = ? AND tab_id IS ?
         ORDER BY seq DESC LIMIT 50
     );
 ```
@@ -192,7 +219,7 @@ DELETE FROM focus_history
 
 ```sql
 SELECT thought_id FROM focus_history
-  WHERE profile_id = ? AND network_id = ?
+  WHERE profile_id = ? AND network_id = ? AND tab_id IS ?
   ORDER BY seq DESC LIMIT 50;
 ```
 
@@ -202,9 +229,58 @@ SELECT thought_id FROM focus_history
 
 **Очистка:** при получении real-time события `thought.deleted` для мысли в
 истории — обязательная локальная чистка
-(`DELETE FROM focus_history WHERE profile_id=? AND network_id=? AND thought_id=?`).
+(`DELETE FROM focus_history WHERE profile_id=? AND network_id=? AND tab_id IS ? AND thought_id=?`).
 Неактуальные (`active=0`) мысли из истории **не** вычищаются — они скрываются на
 уровне рендера при выключенном `show_inactive`.
+
+> Замечание: аналогично `structures_history` (§3.5.1 в
+> [11-settings-and-state.md](11-settings-and-state.md)) и
+> `chronicle_history` (миграция `004_chronicle_history.sql`) тоже получают
+> колонку `tab_id` с тем же поведением. Их PK расширяется соответственно.
+
+### 3.6. tabs (открытые табы, L4)
+
+Состояние tab-strip клиента (08-ui-spec.md §1). Каждой записи соответствует
+один видимый таб; «+» и overflow-элементы — не строки.
+
+| Столбец | Тип | Описание |
+|---------|-----|----------|
+| `profile_id` | TEXT NOT NULL | Сервер-профиль |
+| `tab_id` | TEXT NOT NULL | UUID, стабильный между перезапусками |
+| `slot_idx` | INTEGER NOT NULL | Позиция в strip по возрастанию |
+| `network_id` | TEXT NOT NULL | Какую сеть открывает таб |
+| `focus_id` | TEXT NULL | Текущий focus (или NULL, если ещё не выбран) |
+| `view_mode` | TEXT NULL | `'map'` \| `'structures'` \| `'chronicle'` (08-ui-spec.md §15.1) |
+| `structures_state` | TEXT NULL | JSON `FilterState` (08-ui-spec.md §15.3) |
+| `chronicle_state` | TEXT NULL | JSON `ChronicleFilterState` (08-ui-spec.md §17.7) |
+| `last_active_at` | TEXT NOT NULL | ISO-8601 последней активации (для сортировки при необходимости) |
+| PRIMARY KEY | `(profile_id, tab_id)` | |
+
+Индекс: `idx_tabs_order (profile_id, slot_idx)`.
+
+**Поведение:**
+
+- Строка создаётся при `etn.tabs.open(networkId)` (см. §6).
+- Удаляется при `etn.tabs.close(tabId)` либо при отсутствии ссылки на
+  `tab_id` из других таблиц (каскад не нужен — `focus_history`/`ui_state`
+  хранят строки с `tab_id`, но потеря orphan-строк допустима: при
+  следующем запуске такие табы не появятся, и строки тихо игнорируются).
+- При reorder — обновляются только `slot_idx` в одной транзакции
+  (метод `reorderTabs(profileId, orderedIds[])`).
+- `focus_id`, `view_mode`, `structures_state`, `chronicle_state` — **не**
+  дублируются в `ui_state` для табов, открытых после введения этой
+  схемы; пишутся только сюда. Для legacy-таба (`tab_id = 'LEGACY'`)
+  значения могут читаться из legacy-ключей `ui_state` (см. §3.2).
+
+**Миграция с legacy:** при первом запуске клиента с табами (если в
+`ui_state` есть `current_focus_thought_id`/`active_view`/`structures_state`/
+`chronicle_state`, а `tabs` пуста):
+
+1. Создаётся один таб `tab_id = 'LEGACY'`, `slot_idx = 0`,
+   `network_id` из `current_network_id` (если есть).
+2. Legacy-значения переносятся в строку таба; legacy-ключи `ui_state`
+   остаются для чтения в эту же сессию (на случай гонки), но в новых
+   записях используются per-tab ключи `:<tab_id>`.
 
 ## 4. Сетевой клиент
 
@@ -221,6 +297,17 @@ SELECT thought_id FROM focus_history
 - События парсятся и пересылаются в renderer через IPC-событие
   `realtime:event`. Renderer применяет к UI-state.
 - Автоматический реконнект с jitter.
+
+> **Табы (фаза Q).** Один `RealtimeClient` стал **пулом**:
+> `Map<networkId, {client, refCount}>` в `client/src/main/realtime/tab-rt-pool.ts`.
+> Сокет поднимается при первом `acquire(networkId)` (например, при открытии
+> таба с этой сетью или активации ранее открытого), опускается при
+> `refCount → 0` (например, при закрытии последнего таба с этой сетью).
+> Серверный контракт «один сокет = одна сеть» сохраняется; см.
+> [04-realtime.md](04-realtime.md) §2.0 и [11-settings-and-state.md](11-settings-and-state.md)
+> §1.2 — `byClient` уже поддерживает множественные сокеты на одного
+> `Client-Id`. `last_seq` остаётся per-network (без изменений в
+> `client_meta`).
 
 ## 5. Онлайн-only поведение
 
@@ -283,8 +370,17 @@ window.etn = {
     onEvent(cb),         // подписка на события в renderer
     onStatusChange(cb)
   },
+  tabs: {
+    list(): Promise<TabDto[]>,
+    open(networkId): Promise<TabDto>,
+    activate(tabId): Promise<TabDto | null>,
+    close(tabId): Promise<void>,
+    reorder(orderedIds: string[]): Promise<void>,
+    updateState(tabId, partial: TabStatePatch): Promise<void>,
+  },
   ui: {
-    getState(networkId, key), setState(networkId, key, value)
+    getState(networkId, key, tabId?): Promise<string | null>,
+    setState(networkId, key, value, tabId?): Promise<void>,
   }
 }
 ```
@@ -292,15 +388,37 @@ window.etn = {
 Все методы асинхронны (`Promise`). Ошибки — стандартизованный `EtnError`
 с кодом и деталями.
 
+> **Табы (фаза Q, фаза Q4).** Домен `etn.tabs.*` управляет жизненным
+> циклом табов и их состоянием. `tabId` в `etn.ui.*` — опциональный;
+> если передан, ключ `ui_state` интерпретируется как
+> `key:<tab_id>` (см. §3.2/§3.6). Дополнительные широковещания
+> `tabs:dirty {tabId}` (realtime-событие для неактивного таба) и
+> `tabs:clean {tabId}` (активация) — для маркера «*».
+
 ## 7. Жизненный цикл приложения
 
 1. Запуск → выбор активного профиля (или первоначальная настройка — ввод URL
    сервера + ключ).
 2. Проверка `GET /me` → кеширование информации о пользователе.
-3. Подключение WebSocket (если был активный profile/network — к ней).
-4. Загрузка списка сетей → пользователь выбирает сеть.
-5. Загрузка фокуса и рендер UI.
-6. Подписка на realtime-события выбранной сети.
+3. **Подключение WebSocket ко всем открытым сетям (фаза Q).** При наличии
+   табов в `tabs` (см. §3.6) — пул `RealtimeClient` поднимает сокет на
+   каждую `network_id` (счётчик ссылок ≥1). `last_seq` берётся per-network
+   из `client_meta`.
+4. Загрузка списка сетей (`etn.networks.list`) и табов
+   (`etn.tabs.list`) параллельно. Если для какого-то таба сеть
+   отсутствует/недоступна — таб помечается `inaccessible`, заголовок
+   рендерится «блеклым» (08-ui-spec.md §1).
+5. Активация таба: `etn.tabs.activate(tabId)` возвращает snapshot
+   (`focus_id`, `view_mode`, `structures_state`, `chronicle_state`) либо
+   `null` для inaccessible. Renderer применяет snapshot к store + модульным
+   state-ам, инициализирует `canvas`/`structures`/`chronicle`.
+6. Подписка на realtime-события уже работает на уровне пула — renderer
+   дополнительно проставляет маркер «*» для табов, чей `network_id`
+   совпадает с `evt.network_id`, но `tabId !== activeTabId` (см.
+   [08-ui-spec.md](08-ui-spec.md) §1).
+7. Пользователь нажимает «+» → переход на экран списка сетей; выбор сети
+   → `etn.tabs.open(networkId)` + `etn.tabs.activate`. Закрытие последнего
+   «настоящего» таба → возврат на экран списка сетей.
 
 ## 8. Обновление приложения
 
