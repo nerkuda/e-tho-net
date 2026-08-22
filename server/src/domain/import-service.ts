@@ -498,7 +498,7 @@ function insertSynonym(
 function insertLink(ndb: NetworkDb, row: Link, actorUserId: string, now: string): boolean {
   const result = ndb
     .prepare(
-      `INSERT INTO links (
+      `INSERT OR IGNORE INTO links (
          id, source_id, target_id, type_id, active, version,
          created_at, updated_at, created_by, updated_by
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -542,7 +542,7 @@ function insertComment(
     }
     ndb
       .prepare(
-        `INSERT INTO comments (
+        `INSERT OR IGNORE INTO comments (
            id, owner_type, owner_id, kind, title, body_md, body_html,
            valid_from, valid_to, version, created_at, created_by,
            updated_at, updated_by
@@ -564,10 +564,12 @@ function insertComment(
       );
     return 'created';
   }
-  // Chronological — always a fresh row.
-  ndb
+  // Chronological — INSERT OR IGNORE so re-importing the same archive is a
+  // no-op for chronology rows (the spec says we add without duplicate checks
+  // for fresh imports; a re-import replaying the same id must not crash).
+  const result = ndb
     .prepare(
-      `INSERT INTO comments (
+      `INSERT OR IGNORE INTO comments (
          id, owner_type, owner_id, kind, title, body_md, body_html,
          valid_from, valid_to, version, created_at, created_by,
          updated_at, updated_by
@@ -587,7 +589,7 @@ function insertComment(
       c.updated_at,
       actorUserId,
     );
-  return 'created';
+  return result.changes > 0 ? 'created' : 'updated';
 }
 
 /**
@@ -987,7 +989,7 @@ export function applyManifest(
       const linkId = randomUUID();
       ndb
         .prepare(
-          `INSERT INTO links (
+          `INSERT OR IGNORE INTO links (
              id, source_id, target_id, type_id, active, version,
              created_at, updated_at, created_by, updated_by
            ) VALUES (?, ?, ?, NULL, 1, 1, ?, ?, ?, ?)`,
