@@ -153,7 +153,7 @@ DoD — клиент по умолчанию показывает обычный
 | `etn.thoughts.query` | `read-only` | Структурная выборка (список по критериям) | см. §5.1a |
 | `etn.thoughts.get` | `read-only` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария; `thought_ref`-значения свойств резолвнуты в `{id, title}`) | `network_id`, `thought_id`, `view?` (`compact` — дефолт для MCP, `full` — task O12, см. §5.1e) |
 | `etn.thoughts.neighbors` | `read-only` | Соседи (+ каталоги `link_types`/`thought_types`) | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход), `view?` (O12, см. §5.1e) |
-| `etn.thoughts.subgraph` | `read-only` | Подграф в радиусе N рёбер (+ каталоги `thought_types`/`link_types`) | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?`, `view?` (O12, см. §5.1e) |
+| `etn.thoughts.subgraph` | `read-only` | Подграф в радиусе N рёбер (+ каталоги `thought_types`/`link_types`) | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `max_chars?` (O13, см. §5.1f), `include_comments?`, `view?` (O12, см. §5.1e) |
 | `etn.thoughts.path` | `read-only` | Путь между двумя мыслями (+ каталог `thought_types`) | `network_id`, `from_id`, `to_id`, `max_depth` |
 | `etn.links.get` | `read-only` | Связь | `network_id`, `link_id` |
 | `etn.thoughts.mentions` | `read-only` | Где упоминается мысль | `network_id`, `thought_id` |
@@ -564,6 +564,113 @@ emoji/image у иконки (`icon_kind`), ссылка на файл иконк
 `CompactLink` / `CompactLinkTypeRef`. Помощники проекции —
 `toCompactThought` / `toCompactThoughtRef` / `toCompactLink` /
 `linkTypeCatalogCompact` в `server/src/mcp/catalogs.ts`.
+
+#### 5.1f. Бюджет ответа `subgraph`: `max_chars` (task O13)
+
+У `etn.thoughts.subgraph` есть жёсткий лимит `max_nodes` (настройка
+`mcp.max_nodes_per_subgraph`, дефолт `MCP_DEFAULTS.MAX_NODES_PER_SUBGRAPH`),
+но нет лимита **символов**: 200 узлов с `include_comments` и большими
+`permanent`-превью дают JSON на сотни килобайт, который заведомо не
+влезает в контекстное окно агента. Параметр `max_chars` (опц.) задаёт
+**мягкий** потолок на размер JSON-сериализации ответа: сервер сам
+ужимает полезную нагрузку под бюджет и **честно** сообщает, что именно
+пришлось отрезать.
+
+Параметры:
+
+- `max_chars` *(опц.)* — целое число ≥ 1. При отсутствии — поведение
+  pre-O13: только жёсткий `max_nodes` cap. При наличии — после обхода
+  графа сервер прогоняет ужатие (см. ниже). Если обход уже усечён по
+  `max_nodes`, бюджетирование **не запускается**: `reason: 'max_nodes'`
+  важнее, потому что означает «не все достижимые узлы даже
+  рассматривались».
+
+Алгоритм ужатия (в `server/src/mcp/subgraph-budget.ts`):
+
+1. Измерить `JSON.stringify(payload).length` (все блоки: `nodes`,
+   `edges`, опциональные `comments`, `thought_types`, `link_types`).
+   Влезает — вернуть как есть, `truncated: false`, `reason: null`.
+2. **Шаг 1 — сжатие превью.** Каждое тело комментария (постоянный
+   `permanent.body_md` и каждая запись `chronological.entries[i].body_md`)
+   обрезается до `SUBGRAPH_BUDGET_PREVIEW_CHARS` (500 символов).
+   Агент по-прежнему видит начало мысли и `comment_id` — полный текст
+   через `etn.comments.get`.
+3. Если после шага 1 влезает — `truncated: true`, `reason:
+   'max_chars_preview'`.
+4. **Шаг 2 — отбрасывание узлов.** Считается BFS-расстояние от seed'ов
+   по оставшимся рёбрам (несвязанные узлы получают `+∞`); узлы
+   сортируются по убыванию расстояния и далее по обратному обходу
+   (последний добавленный в BFS удаляется первым). Удаление узла
+   уносит инцидентные рёбра и его comment-слот (если был
+   `include_comments`). Seed'ы **никогда** не удаляются — даже если
+   один seed с одним превью уже превышает бюджет.
+5. Как только влезает — `truncated: true`, `reason: 'max_chars_nodes'`.
+   Если не влезает вообще — возвращается максимально ужатый вариант
+   (только seed'ы), `truncated: true`, `reason: 'max_chars_nodes'`,
+   без ошибки: агент повторяет с меньшим `radius`/`include_comments` /
+   `max_chars`.
+
+Признаки усечения в ответе:
+
+```jsonc
+{
+  "nodes": [...],
+  "edges": [...],
+  "truncated": true,
+  "reason": "max_chars_preview" | "max_chars_nodes" | "max_nodes" | null,
+  "max_nodes": 500,
+  // Диагностика бюджета — присутствует только когда `max_chars` задан
+  // и traversal не усекался раньше (`max_nodes`):
+  "budget": {
+    "max_chars": 12000,
+    "original_chars": 184320,
+    "final_chars": 11510,
+    "steps": "max_chars_preview"   // == reason в этом случае
+  }
+}
+```
+
+Правила:
+
+- **`reason: 'max_nodes'`** — сработал жёсткий лимит обхода
+  (`mcp.max_nodes_per_subgraph` или `max_nodes` аргумента). Бюджет
+  пропускается: дальнейшее сжатие всё равно не сделает граф полнее.
+- **`reason: 'max_chars_preview'`** — влезли после укорачивания
+  превью. Топология сохранена целиком; полный текст комментариев — за
+  `etn.comments.get` (по `comment_id` из превью).
+- **`reason: 'max_chars_nodes'`** — даже с укороченными превью не
+  влезли, дальние узлы (и их рёбра/комментарии) отброшены. Семантика
+  «фактический обход меньше радиуса»: агент либо сужает `radius`, либо
+  переходит на повторные вызовы от разных seed'ов, либо терпит
+  неполноту.
+- **`reason: null`** — `max_chars` либо не задан, либо ответ и так
+  влезал. `truncated: false`, `budget` отсутствует.
+- `budget.final_chars` отражает размер JSON после ужатия и совпадает
+  с `JSON.stringify(respons).length`. Используется для отладки и
+  адаптивного выбора `max_chars` агентом.
+- Дефолт `SUBGRAPH_BUDGET_PREVIEW_CHARS = 500` задан в `@etn/shared` —
+  это явный trade-off «короткий сниппет + `comment_id` для полного
+  чтения», не 0 (потеря смысла) и не 2000 (как обычный preview).
+
+Тип ответа — `McpSubgraphResult` в `@etn/shared` (параметры —
+`McpSubgraphParams`, причина усечения — `McpSubgraphTruncationReason`).
+Реализация — чистая функция `shrinkSubgraphToBudget` в
+`server/src/mcp/subgraph-budget.ts` без БД-зависимостей — её удобно
+покрывать unit-тестами (`server/tests/subgraph-budget.test.ts`).
+
+Cookbook (`docs/mcp-clients.md` §8.2):
+- **«Хочу всё, что влезет»** — не передавать `max_chars`: полагаемся
+  на `max_nodes`, O12 compact и короткие превью по умолчанию.
+- **«Жёсткий бюджет 8 KB на контекст»** — `max_chars: 8000` +
+  `include_comments: true`: сервер сначала сожмёт превью (чаще всего
+  этого достаточно), при необходимости отбросит дальние узлы.
+- **«Хочу максимум топологии, минимум шума»** — `view: 'compact'`
+  (O12) **вместе с** `max_chars: <бюджет>`: экономия от компактной
+  проекции складывается с бюджетированием.
+- **«Не знаю бюджет — адаптируюсь»** — вызвать без `max_chars`,
+  посмотреть `JSON.stringify(response).length` на своей стороне;
+  при превышении перезапросить с `max_chars` равным этому размеру с
+  запасом ×0.8 (на случай следующих обновлений между вызовами).
 
 ### 5.2. Создание и изменение
 
