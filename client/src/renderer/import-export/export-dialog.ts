@@ -1,93 +1,101 @@
 /**
  * Export dialog (phase P, task P5).
  *
- * Reusable modal that captures the user's intent for a `.etnx` export —
- * which slices of the graph to include and how deep the subtree walk
- * should go. Returns the chosen options via a Promise so callers can
- * dispatch directly to `etn.system.export` (see `selection.ts:runExport`).
+ * Reusable modal that captures the user's intent for a `.etnx` export:
+ * the output filename, which slices of the graph to include, and how deep
+ * the subtree walk should go. Returns the chosen options via a Promise so
+ * callers can dispatch directly to `etn.system.export` (see
+ * `selection.ts:runExport` and `canvas/context-menu.ts:exportSingleThought`).
  *
- * For non-`.etnx` formats the dialog is unnecessary — `runExport` skips
- * the prompt and uses defaults. This keeps the legacy Markdown/PDF/HTML
- * flow one click long.
+ * Layout reuses the existing `.checkbox-row`, `.field-label`, `.text-input`
+ * classes from `styles.css` — there are no new CSS classes here, the dialog
+ * blends with every other modal in the app.
  */
 
-import { ETNX_SUBTREE_DEPTH_MAX, type ExportEtnxOptions } from '@etn/shared';
+import {
+  ETNX_SUBTREE_DEPTH_MAX,
+  type ExportEtnxOptions,
+} from '@etn/shared';
 
 import { div, el } from '../lib/dom.js';
 import { showDialog } from '../lib/dialog.js';
 
-/** Inline label helper — wraps a control with a `<label>` whose text is on
- *  the left. Kept here to avoid pulling a util module just for this dialog. */
-function wrapLabel(text: string, control: HTMLElement): HTMLElement {
-  const wrap = div('export-dialog-row');
-  const lab = el('label', 'export-dialog-label');
-  lab.textContent = text;
-  lab.append(control);
-  wrap.append(lab);
-  return wrap;
-}
-
 interface DialogResult {
   /** `undefined` — the user cancelled. */
   options: ExportEtnxOptions | undefined;
+  /** Output filename hint (without extension). Defaults to a network+date slug. */
+  filename: string | undefined;
 }
 
 /** Open the dialog and resolve with the chosen options or `undefined`. */
 export function showExportEtnxDialog(
   thoughtCount: number,
   initial: Partial<ExportEtnxOptions> = {},
+  defaultFilename: string = defaultExportName(),
 ): Promise<DialogResult> {
   return new Promise<DialogResult>((resolve) => {
-    const state: Required<ExportEtnxOptions> = {
-      include_types: initial.include_types ?? true,
-      include_attachments: initial.include_attachments ?? true,
-      include_chronology: initial.include_chronology ?? true,
-      include_subtree: initial.include_subtree ?? false,
-      subtree_depth: initial.subtree_depth ?? 1,
-    };
-
-    const cbTypes = checkbox('Типы мыслей и связей', state.include_types);
-    const cbAtt = checkbox('Вложения (файлы внутри zip)', state.include_attachments);
-    const cbChrono = checkbox('Хронологические комментарии', state.include_chronology);
-    const cbSubtree = checkbox('Включить подчинённые мысли', state.include_subtree);
-    const depthInput = numberInput(
-      `Глубина подчинённости (1..${ETNX_SUBTREE_DEPTH_MAX})`,
-      state.subtree_depth,
+    const includeTypes = makeCheckbox('Включить типы мыслей и связей', initial.include_types ?? true);
+    const includeAttachments = makeCheckbox(
+      'Включить вложения (файлы внутри архива)',
+      initial.include_attachments ?? true,
     );
-    depthInput.disabled = !state.include_subtree;
-    cbSubtree.addEventListener('change', () => {
-      depthInput.disabled = !cbSubtree.checked;
+    const includeChronology = makeCheckbox(
+      'Включить хронологические комментарии',
+      initial.include_chronology ?? true,
+    );
+    const includeSubtree = makeCheckbox(
+      'Включить подчинённые мысли',
+      initial.include_subtree ?? false,
+    );
+    const depthInput = el('input', 'text-input') as HTMLInputElement;
+    depthInput.type = 'number';
+    depthInput.min = '1';
+    depthInput.max = String(ETNX_SUBTREE_DEPTH_MAX);
+    depthInput.step = '1';
+    depthInput.value = String(initial.subtree_depth ?? 1);
+    depthInput.disabled = !includeSubtree.checked;
+    includeSubtree.addEventListener('change', () => {
+      depthInput.disabled = !includeSubtree.checked;
     });
+
+    const filenameInput = el('input', 'text-input') as HTMLInputElement;
+    filenameInput.type = 'text';
+    filenameInput.value = defaultFilename;
+    filenameInput.placeholder = defaultFilename;
 
     const body = div('export-dialog');
     body.append(
-      el('p', 'export-dialog-hint', `Будет экспортировано мыслей: ${thoughtCount}.`),
-      cbTypes,
-      cbAtt,
-      cbChrono,
-      cbSubtree,
-      depthInput,
+      makeHint(`Будет экспортировано мыслей: ${thoughtCount}.`),
+      makeField('Имя файла (без расширения)', filenameInput),
+      div('form-stack'),
+      includeTypes,
+      includeAttachments,
+      includeChronology,
+      includeSubtree,
+      makeField(`Глубина подчинённости (1..${ETNX_SUBTREE_DEPTH_MAX})`, depthInput),
     );
 
     showDialog({
       title: 'Экспорт в .etnx',
       body,
-      width: 460,
+      width: 480,
       buttons: [
-        { label: 'Отмена', onClick: () => resolve({ options: undefined }) },
+        { label: 'Отмена', onClick: () => resolve({ options: undefined, filename: undefined }) },
         {
           label: 'Экспортировать',
           primary: true,
           onClick: () => {
             const depth = clampDepth(depthInput.valueAsNumber);
+            const filename = filenameInput.value.trim() || defaultFilename;
             resolve({
               options: {
-                include_types: cbTypes.checked,
-                include_attachments: cbAtt.checked,
-                include_chronology: cbChrono.checked,
-                include_subtree: cbSubtree.checked,
+                include_types: includeTypes.checked,
+                include_attachments: includeAttachments.checked,
+                include_chronology: includeChronology.checked,
+                include_subtree: includeSubtree.checked,
                 subtree_depth: depth,
               },
+              filename,
             });
           },
         },
@@ -96,30 +104,46 @@ export function showExportEtnxDialog(
   });
 }
 
-function checkbox(labelText: string, initial: boolean): HTMLInputElement {
-  const cb = el('input', 'export-dialog-checkbox') as HTMLInputElement;
+/** Build a checkbox row that uses the project's `.checkbox-row` style. */
+function makeCheckbox(labelText: string, initial: boolean): HTMLInputElement {
+  const cb = el('input') as HTMLInputElement;
   cb.type = 'checkbox';
   cb.checked = initial;
-  // Build the label-row container in-place. The caller stores `cb` directly
-  // to read `.checked`; the wrapper exists in the DOM only as a layout hint.
-  const wrap = wrapLabel(labelText, cb);
-  void wrap;
+  const row = div('checkbox-row');
+  const lab = el('label', 'field-label');
+  lab.textContent = labelText;
+  row.append(cb, lab);
   return cb;
 }
 
-function numberInput(labelText: string, initial: number, max: number = ETNX_SUBTREE_DEPTH_MAX): HTMLInputElement {
-  const input = el('input', 'export-dialog-number') as HTMLInputElement;
-  input.type = 'number';
-  input.min = '1';
-  input.max = String(max);
-  input.step = '1';
-  input.value = String(initial);
-  const wrap = wrapLabel(labelText, input);
-  void wrap;
-  return input;
+/** `field(label, control)` — label above control, sharing the row. */
+function makeField(labelText: string, control: HTMLElement): HTMLElement {
+  const wrap = div('form-stack');
+  const lab = el('label', 'field-label');
+  lab.textContent = labelText;
+  wrap.append(lab, control);
+  return wrap;
+}
+
+/** Inline hint paragraph at the top of the dialog. */
+function makeHint(text: string): HTMLElement {
+  const p = el('p', 'dialog-text');
+  p.textContent = text;
+  return p;
 }
 
 function clampDepth(v: number): number {
   if (!Number.isFinite(v)) return 1;
   return Math.max(1, Math.min(ETNX_SUBTREE_DEPTH_MAX, Math.floor(v)));
+}
+
+/** Default filename: `etnx-YYYY-MM-DD`. The `.etnx` extension is appended
+ *  by the download route (or by the browser, which keeps the original
+ *  content-disposition name). */
+export function defaultExportName(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `etnx-${y}-${m}-${d}`;
 }

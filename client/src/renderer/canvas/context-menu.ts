@@ -49,7 +49,7 @@ async function exportSingleThought(networkId: string, thoughtId: string): Promis
       notice('Экспорт завершился без ссылки на скачивание.', 'error');
       return;
     }
-    triggerDownload(job.download_url);
+    triggerDownload(job.download_url, dialog.filename);
     notice('Экспорт готов — файл скачивается.');
   } catch (err) {
     notice(`Экспорт не удался: ${errText(err)}`, 'error');
@@ -65,10 +65,16 @@ async function pollJob(jobId: string): Promise<{ status: string; download_url?: 
   return { status: 'failed' };
 }
 
-function triggerDownload(url: string): void {
+function triggerDownload(url: string, suggestedFilename?: string): void {
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = '';
+  if (suggestedFilename !== undefined && suggestedFilename.length > 0) {
+    anchor.download = suggestedFilename.endsWith('.etnx')
+      ? suggestedFilename
+      : `${suggestedFilename}.etnx`;
+  } else {
+    anchor.download = '';
+  }
   document.body.append(anchor);
   anchor.click();
   anchor.remove();

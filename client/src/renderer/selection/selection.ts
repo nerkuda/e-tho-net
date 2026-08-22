@@ -566,10 +566,12 @@ async function runExport(format: ExportFormat, etnxOptions?: ExportEtnxOptions):
   const ids = store.state.selection;
   if (ids.length === 0) return;
   let options = etnxOptions;
+  let filename: string | undefined;
   if (format === 'etnx' && options === undefined) {
     const dialog = await showExportEtnxDialog(ids.length);
     if (dialog.options === undefined) return; // cancelled
     options = dialog.options;
+    filename = dialog.filename;
   }
   try {
     const payload: ExportRequest = {
@@ -584,7 +586,7 @@ async function runExport(format: ExportFormat, etnxOptions?: ExportEtnxOptions):
       notice('Экспорт завершился без ссылки на скачивание.', 'error');
       return;
     }
-    triggerDownload(job.download_url);
+    triggerDownload(job.download_url, format === 'etnx' ? filename : undefined);
     notice('Экспорт готов — файл скачивается.');
   } catch (err) {
     notice(`Экспорт не удался: ${errText(err)}`, 'error');
@@ -601,11 +603,19 @@ async function pollJob(jobId: string): Promise<{ status: string; download_url?: 
   return { status: 'failed' };
 }
 
-/** Triggers a browser download for a URL. */
-function triggerDownload(url: string): void {
+/** Triggers a browser download for a URL. When `suggestedFilename` is set,
+ *  the browser uses it as the download name (falls back to the server's
+ *  `Content-Disposition` when omitted). */
+function triggerDownload(url: string, suggestedFilename?: string): void {
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = '';
+  if (suggestedFilename !== undefined && suggestedFilename.length > 0) {
+    anchor.download = suggestedFilename.endsWith('.etnx')
+      ? suggestedFilename
+      : `${suggestedFilename}.etnx`;
+  } else {
+    anchor.download = '';
+  }
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
