@@ -2460,4 +2460,528 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       await closeMcpContext(ctx);
     }
   });
+
+  describe('compact response projection (task O12)', () => {
+    /**
+     * Seed a thought whose row has every visual/style field populated plus a
+     * child link whose edge row also carries `color`/`style`/`width`
+     * overrides. Returns the ids so the test can address child / grandchild.
+     * Direct SQL inserts mirror the patterns the N6 catalogue test uses
+     * (no MCP tool creates link types).
+     */
+    function seedRichGraph(ctx: McpTestContextLocal): {
+      childId: string;
+      grandId: string;
+      linkTypeId: string;
+    } {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const linkTypeId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO link_types (id, name_forward, name_reverse, description, color, style, width,
+                                   version, created_at, updated_at, created_by)
+           VALUES (?, 'связан', 'связан_обратно', 'Описание типа', '#ff0000', 'dashed', 3,
+                   1, '2024', '2024', 'u')`,
+        )
+        .run(linkTypeId);
+      const childId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                 icon, icon_kind, icon_attachment_id,
+                                 fg_color, bg_color,
+                                 font_bold, font_italic, font_underline, font_strike,
+                                 font_manual,
+                                 version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'Цветная мысль', 'цветная мысль', NULL, 1, 0, 0,
+                   '🎨', 'emoji', NULL,
+                   '#112233', '#445566',
+                   1, 0, 1, 0,
+                   5,  -- bit 0 (bold) + bit 2 (underline) set
+                   1, '2024', 'u', '2024', 'u')`,
+        )
+        .run(childId);
+      const grandId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                 icon, icon_kind, icon_attachment_id,
+                                 fg_color, bg_color,
+                                 font_bold, font_italic, font_underline, font_strike,
+                                 font_manual,
+                                 version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'Внук', 'внук', NULL, 1, 0, 0,
+                   '🔗', 'emoji', NULL,
+                   NULL, NULL,
+                   0, 0, 0, 0,
+                   0,
+                   1, '2024', 'u', '2024', 'u')`,
+        )
+        .run(grandId);
+      // Typed edge child → grand with style overrides.
+      ndb
+        .prepare(
+          `INSERT INTO links (id, source_id, target_id, type_id, active, color, style, width,
+                              version, created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, ?, 1, '#00ff00', 'dotted', 5,
+                   1, '2024', '2024', 'u', 'u')`,
+        )
+        .run(randomUUID(), childId, grandId, linkTypeId);
+      return { childId, grandId, linkTypeId };
+    }
+
+    it('etn.thoughts.get — compact drops visual fields, full keeps them', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const { childId } = seedRichGraph(ctx);
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          // Default (no `view`) — must be compact.
+          const compact = await handle.client.callTool({
+            name: 'etn.thoughts.get',
+            arguments: { network_id: ctx.networkId, thought_id: childId },
+          });
+          const c = toolJson<Record<string, unknown>>(compact);
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+            'icon_attachment_id',
+            'is_protected',
+            'is_root',
+          ]) {
+            assert.equal(
+              dropped in c,
+              false,
+              `compact get must not carry ${dropped}; got ${JSON.stringify(Object.keys(c))}`,
+            );
+          }
+          // Kept fields.
+          assert.equal(c.id, childId);
+          assert.equal(c.title, 'Цветная мысль');
+          assert.equal(c.icon, '🎨');
+          assert.deepEqual(c.synonyms, []);
+          assert.equal(c.active, true);
+          // Envelope keys preserved across views.
+          assert.ok('type' in c);
+          assert.ok('properties' in c);
+          assert.ok('meta' in c);
+
+          // Explicit `view: 'compact'` matches the default.
+          const compactExplicit = toolJson<Record<string, unknown>>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.get',
+              arguments: { network_id: ctx.networkId, thought_id: childId, view: 'compact' },
+            }),
+          );
+          assert.deepEqual(Object.keys(compactExplicit).sort(), Object.keys(c).sort());
+
+          // `view: 'full'` restores every visual/service field.
+          const full = toolJson<Record<string, unknown>>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.get',
+              arguments: { network_id: ctx.networkId, thought_id: childId, view: 'full' },
+            }),
+          );
+          assert.equal(full.fg_color, '#112233');
+          assert.equal(full.bg_color, '#445566');
+          // font_bold + font_underline had their `font_manual` bits set in the
+          // seed, so they come back as explicit booleans. italic / strike
+          // inherit from the type and therefore come back as `null`.
+          assert.equal(full.font_bold, true);
+          assert.equal(full.font_underline, true);
+          assert.equal(full.font_italic, null);
+          assert.equal(full.font_strike, null);
+          assert.equal(full.icon_kind, 'emoji');
+          assert.equal(full.is_protected, false);
+          assert.equal(full.is_root, false);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.thoughts.subgraph — compact nodes drop style fields and link-types drop color/style', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const { childId, grandId, linkTypeId } = seedRichGraph(ctx);
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          // Default (compact).
+          const sub = toolJson<{
+            nodes: Array<Record<string, unknown>>;
+            link_types: Record<string, Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.subgraph',
+              arguments: {
+                network_id: ctx.networkId,
+                seed_ids: [childId],
+                radius: 1,
+              },
+            }),
+          );
+          const child = sub.nodes.find((n) => n.id === childId);
+          assert.ok(child, 'subgraph must include the seeded child');
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+            'icon_attachment_id',
+            'is_protected',
+            'is_root',
+          ]) {
+            assert.equal(
+              dropped in child!,
+              false,
+              `compact node must not carry ${dropped}`,
+            );
+          }
+          assert.equal(child!.title, 'Цветная мысль');
+          assert.equal(child!.icon, '🎨');
+
+          // Compact link-type catalogue drops color + style.
+          const compactLinkType = sub.link_types[linkTypeId];
+          assert.ok(compactLinkType, 'link-type catalogue must include the seeded type');
+          assert.equal(
+            'color' in compactLinkType!,
+            false,
+            'compact link-type entry must not carry color',
+          );
+          assert.equal(
+            'style' in compactLinkType!,
+            false,
+            'compact link-type entry must not carry style',
+          );
+          assert.equal(compactLinkType!.name_forward, 'связан');
+
+          // view: 'full' restores visual fields on nodes and the catalogue.
+          const fullSub = toolJson<{
+            nodes: Array<Record<string, unknown>>;
+            link_types: Record<string, Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.subgraph',
+              arguments: {
+                network_id: ctx.networkId,
+                seed_ids: [childId],
+                radius: 1,
+                view: 'full',
+              },
+            }),
+          );
+          const fullChild = fullSub.nodes.find((n) => n.id === childId);
+          assert.equal(fullChild?.fg_color, '#112233');
+          assert.equal(fullChild?.font_bold, true);
+          const fullLinkType = fullSub.link_types[linkTypeId];
+          assert.equal(fullLinkType?.color, '#ff0000');
+          assert.equal(fullLinkType?.style, 'dashed');
+
+          // Sanity: the grand-child is also returned with the compact projection.
+          const grand = sub.nodes.find((n) => n.id === grandId);
+          assert.ok(grand);
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+            'icon_attachment_id',
+            'is_protected',
+            'is_root',
+          ]) {
+            assert.equal(dropped in grand!, false, `compact node must not carry ${dropped}`);
+          }
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.thoughts.neighbors — compact depth>1 drops visual fields from each thought, depth=1 drops link-type style', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const { childId, grandId, linkTypeId } = seedRichGraph(ctx);
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          // depth=1, default view: compact.
+          const n1 = toolJson<{
+            neighbors: Array<Record<string, unknown>>;
+            link_types: Record<string, Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.neighbors',
+              arguments: {
+                network_id: ctx.networkId,
+                thought_id: childId,
+                dir: 'children',
+              },
+            }),
+          );
+          assert.equal(n1.neighbors.length, 1);
+          // FocusNeighbor never carried the dropped fields; the only O12 effect
+          // at depth=1 is the link-type catalogue.
+          assert.equal('color' in n1.link_types[linkTypeId]!, false);
+          assert.equal('style' in n1.link_types[linkTypeId]!, false);
+
+          // view: 'full' at depth=1 restores the link-type catalogue fields.
+          const n1Full = toolJson<{
+            link_types: Record<string, Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.neighbors',
+              arguments: {
+                network_id: ctx.networkId,
+                thought_id: childId,
+                dir: 'children',
+                view: 'full',
+              },
+            }),
+          );
+          assert.equal(n1Full.link_types[linkTypeId]?.color, '#ff0000');
+          assert.equal(n1Full.link_types[linkTypeId]?.style, 'dashed');
+
+          // depth>1 (ThoughtRef[]), compact drops ThoughtRef visual fields.
+          const n2 = toolJson<{
+            thoughts: Array<Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.neighbors',
+              arguments: {
+                network_id: ctx.networkId,
+                thought_id: childId,
+                dir: 'children',
+                depth: 2,
+              },
+            }),
+          );
+          const grand = n2.thoughts.find((t) => t.id === grandId);
+          assert.ok(grand, 'depth>1 must walk to the grand-child');
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+            'icon_attachment_id',
+          ]) {
+            assert.equal(dropped in grand!, false, `compact ThoughtRef must not carry ${dropped}`);
+          }
+          assert.equal(grand!.title, 'Внук');
+          assert.equal(grand!.icon, '🔗');
+
+          // view: 'full' restores the ThoughtRef visual fields.
+          const n2Full = toolJson<{
+            thoughts: Array<Record<string, unknown>>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.neighbors',
+              arguments: {
+                network_id: ctx.networkId,
+                thought_id: childId,
+                dir: 'children',
+                depth: 2,
+                view: 'full',
+              },
+            }),
+          );
+          const grandFull = n2Full.thoughts.find((t) => t.id === grandId);
+          assert.equal(grandFull?.icon_kind, 'emoji');
+          // 'fg_color' was `NULL` for the grand-child in seedRichGraph.
+          assert.equal('fg_color' in grandFull!, true);
+          assert.equal(grandFull!.fg_color, null);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.thoughts.usage — compact drops ThoughtRef visual fields on referencing thoughts', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        // Seed: a thought_ref property whose target is referenced by another
+        // thought that carries every visual field.
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const typeId = randomUUID();
+        ndb
+          .prepare(
+            `INSERT INTO thought_types (id, name, version, created_at, updated_at, created_by)
+             VALUES (?, 'book', 1, '2024', '2024', 'u')`,
+          )
+          .run(typeId);
+        const propId = randomUUID();
+        ndb
+          .prepare(
+            `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, required, position)
+             VALUES (?, 'thought_type', ?, 'author', 'thought_ref', 0, 0)`,
+          )
+          .run(propId, typeId);
+        const targetId = randomUUID();
+        ndb
+          .prepare(
+            `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                   icon, icon_kind, icon_attachment_id,
+                                   fg_color, bg_color,
+                                   font_bold, font_italic, font_underline, font_strike,
+                                   font_manual,
+                                   version, created_at, created_by, updated_at, updated_by)
+             VALUES (?, 'Автор', 'автор', NULL, 1, 0, 0,
+                     '👤', 'emoji', NULL,
+                     '#aabbcc', '#ddeeff',
+                     1, 1, 0, 0,
+                     3,  -- bit 0 (bold) + bit 1 (italic) set
+                     1, '2024', 'u', '2024', 'u')`,
+          )
+          .run(targetId);
+        const bookId = randomUUID();
+        ndb
+          .prepare(
+            `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                   icon, icon_kind, icon_attachment_id,
+                                   fg_color, bg_color,
+                                   font_bold, font_italic, font_underline, font_strike,
+                                   font_manual,
+                                   version, created_at, created_by, updated_at, updated_by)
+             VALUES (?, 'Книга', 'книга', ?, 1, 0, 0,
+                     '📕', 'emoji', NULL,
+                     '#112233', '#445566',
+                     1, 0, 1, 0,
+                     5,  -- bit 0 (bold) + bit 2 (underline) set
+                     1, '2024', 'u', '2024', 'u')`,
+          )
+          .run(bookId, typeId);
+        ndb
+          .prepare(
+            `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_thought_ref, updated_at)
+             VALUES (?, 'thought', ?, ?, ?, '2024')`,
+          )
+          .run(randomUUID(), bookId, propId, targetId);
+
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          // Default (compact) — the referencing thought (Книга) must not
+          // carry the dropped fields.
+          const compact = toolJson<{
+            total: number;
+            groups: Array<{
+              key: string;
+              thoughts: Array<Record<string, unknown>>;
+            }>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.usage',
+              arguments: { network_id: ctx.networkId, thought_id: targetId },
+            }),
+          );
+          assert.equal(compact.total, 1);
+          assert.equal(compact.groups[0]?.thoughts.length, 1);
+          const ref = compact.groups[0]?.thoughts[0];
+          assert.ok(ref);
+          for (const dropped of [
+            'fg_color',
+            'bg_color',
+            'font_bold',
+            'font_italic',
+            'font_underline',
+            'font_strike',
+            'icon_kind',
+            'icon_attachment_id',
+          ]) {
+            assert.equal(dropped in ref!, false, `compact usage ref must not carry ${dropped}`);
+          }
+          assert.equal(ref!.id, bookId);
+          assert.equal(ref!.title, 'Книга');
+          assert.equal(ref!.icon, '📕');
+
+          // view: 'full' restores them.
+          const full = toolJson<{
+            groups: Array<{ thoughts: Array<Record<string, unknown>> }>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.usage',
+              arguments: {
+                network_id: ctx.networkId,
+                thought_id: targetId,
+                view: 'full',
+              },
+            }),
+          );
+          const refFull = full.groups[0]?.thoughts[0];
+          assert.equal(refFull?.fg_color, '#112233');
+          assert.equal(refFull?.font_bold, true);
+          assert.equal(refFull?.icon_kind, 'emoji');
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('unknown view values are rejected by the input schema', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const cases: Array<{ name: string; args: Record<string, unknown> }> = [
+            {
+              name: 'etn.thoughts.get',
+              args: { network_id: ctx.networkId, thought_id: ctx.homeId, view: 'plaid' },
+            },
+            {
+              name: 'etn.thoughts.neighbors',
+              args: {
+                network_id: ctx.networkId,
+                thought_id: ctx.homeId,
+                dir: 'children',
+                view: 'plaid',
+              },
+            },
+            {
+              name: 'etn.thoughts.subgraph',
+              args: {
+                network_id: ctx.networkId,
+                seed_ids: [ctx.homeId],
+                radius: 0,
+                view: 'plaid',
+              },
+            },
+            {
+              name: 'etn.thoughts.usage',
+              args: { network_id: ctx.networkId, thought_id: ctx.homeId, view: 'plaid' },
+            },
+          ];
+          for (const { name, args } of cases) {
+            const bad = await handle.client.callTool({ name, arguments: args });
+            assert.equal(bad.isError, true, `${name} must reject unknown view`);
+          }
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+  });
 });
+
+/** Alias used in the O12 seed helper above to keep the call sites readable. */
+type McpTestContextLocal = Awaited<ReturnType<typeof buildMcpContext>>;

@@ -139,3 +139,15 @@ export type JobStatus = (typeof JOB_STATUSES)[number];
 /** Output formats accepted by the export endpoint (03-server-api.md §14). */
 export const EXPORT_FORMATS = ['markdown', 'pdf', 'html'] as const;
 export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+
+/**
+ * Response projection for MCP read tools (task O12, docs/05-mcp-server.md
+ * §4.1). `compact` drops purely visual and service fields the agent never
+ * consumes (text/background colours, font-style flags, icon attachment
+ * id, link-style overrides) — the token saving is most visible on
+ * `etn.thoughts.subgraph` responses with hundreds of nodes. `full` is the
+ * legacy response shape; it is the safe fallback for callers that do not
+ * yet know about the projection.
+ */
+export const MCP_VIEW_MODES = ['compact', 'full'] as const;
+export type McpViewMode = (typeof MCP_VIEW_MODES)[number];

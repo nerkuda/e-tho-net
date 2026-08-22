@@ -17,6 +17,7 @@ import type {
   ExportFormat,
   FocusDir,
   LinkStyle,
+  McpViewMode,
   PropertyOwnerType,
   RealtimeAudience,
   SearchScope,
@@ -30,6 +31,8 @@ import type {
   ThoughtBundleThoughtAction,
 } from './thought-bundle.js';
 import type { ThoughtCardWarning } from './thought-card-warning.js';
+import type { Link } from './link.js';
+import type { Thought, ThoughtRef, ThoughtUsage } from './thought.js';
 
 /** All tool names exposed by the ETN MCP server (05-mcp-server.md §4). */
 export const MCP_TOOL_NAMES = [
@@ -553,3 +556,106 @@ export interface McpMetricsReadsResult {
    *  read tools (`etn.thoughts.query`, `subgraph`, `neighbors`). */
   thought_types: Record<string, ThoughtTypeRef>;
 }
+
+// ---------------------------------------------------------------------------
+// Compact response projection (task O12, docs/05-mcp-server.md §4.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Drop-in replacement of {@link Thought} for MCP read tools called with
+ * `view: 'compact'`. Drops purely visual and service fields the agent never
+ * consumes (text/background colours, font-style flags, icon attachment id,
+ * `is_protected`/`is_root`); `icon` (the emoji / image reference itself) is
+ * kept because it carries semantic information the agent uses to recognise a
+ * node. Everything else — id, title, type, synonyms, lifecycle timestamps —
+ * is identical to the full projection.
+ */
+export type CompactThought = Omit<
+  Thought,
+  | 'fg_color'
+  | 'bg_color'
+  | 'font_bold'
+  | 'font_italic'
+  | 'font_underline'
+  | 'font_strike'
+  | 'icon_kind'
+  | 'icon_attachment_id'
+  | 'is_protected'
+  | 'is_root'
+>;
+
+/**
+ * Drop-in replacement of {@link ThoughtRef} for the neighbours catalogue and
+ * `etn.thoughts.usage`. The reference already only carries style fields
+ * (`fg_color`, `bg_color`, `font_*`, `icon_attachment_id`), so the compact
+ * projection strips those and keeps the identity / lifecycle subset.
+ */
+export type CompactThoughtRef = Omit<
+  ThoughtRef,
+  | 'fg_color'
+  | 'bg_color'
+  | 'font_bold'
+  | 'font_italic'
+  | 'font_underline'
+  | 'font_strike'
+  | 'icon_kind'
+  | 'icon_attachment_id'
+>;
+
+/**
+ * Drop-in replacement of {@link Link} for edges returned by MCP read tools
+ * (`etn.thoughts.subgraph`, …) under `view: 'compact'`. Drops the
+ * per-link style overrides (`color`, `style`, `width`) — agents do not
+ * re-render the canvas, only reason over the topology.
+ */
+export type CompactLink = Omit<Link, 'color' | 'style' | 'width'>;
+
+/**
+ * Drop-in replacement of {@link LinkTypeRef} inside the read-tool reference
+ * tables (`etn.thoughts.subgraph`, `neighbors`, `usage`) under
+ * `view: 'compact'`. Drops the visual line-style fields — agents consume
+ * `name_forward`/`name_reverse`/`description` to reason about the type, not
+ * to render it.
+ */
+export type CompactLinkTypeRef = Omit<LinkTypeRef, 'color' | 'style'>;
+
+/**
+ * `etn.thoughts.usage` result with a {@link CompactThoughtRef} catalogue —
+ * the wrapper preserves `total`/`groups`; the only change is the
+ * `groups[].thoughts[]` element shape under `view: 'compact'`.
+ */
+export interface CompactThoughtUsage
+  extends Omit<ThoughtUsage, 'groups'> {
+  groups: Array<{
+    property_id: string;
+    key: string;
+    thoughts: CompactThoughtRef[];
+  }>;
+}
+
+// ---------------------------------------------------------------------------
+// `etn.thoughts.get` / `neighbors` / `subgraph` / `usage` — view=compact
+// ---------------------------------------------------------------------------
+
+/**
+ * Parameters shared by all MCP read tools that honour `view` (task O12):
+ * `etn.thoughts.get`, `etn.thoughts.neighbors`, `etn.thoughts.subgraph`,
+ * `etn.thoughts.usage`. `compact` is the default for MCP responses; `full`
+ * preserves the pre-O12 shape for callers that still need the visual fields.
+ *
+ * The view only changes the *fields* returned on individual entities
+ * (thoughts / links / link-type catalogue); the envelope shape (top-level
+ * keys, types of `meta` / `properties` / `comments`) is preserved across the
+ * two projections — callers can safely ignore `view` and only inspect the
+ * fields they need.
+ */
+export interface McpReadViewParam {
+  /**
+   * Response projection. `compact` (default for MCP) drops visual/service
+   * fields that the agent never consumes — saves a meaningful share of tokens
+   * on large `etn.thoughts.subgraph` responses. `full` returns the legacy
+   * shape unchanged.
+   */
+  view?: McpViewMode;
+}
+

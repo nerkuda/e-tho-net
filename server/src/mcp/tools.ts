@@ -47,6 +47,7 @@ import {
   FOCUS_DIRS,
   ICON_KINDS,
   MCP_TOOL_ANNOTATIONS,
+  MCP_VIEW_MODES,
   PROPERTY_OWNER_TYPES,
   REALTIME_DEFAULTS,
   SEARCH_SCOPES,
@@ -61,6 +62,7 @@ import {
   type McpPropertiesSetResult,
   type McpTypesListResult,
   type McpUpsertBundleResult,
+  type McpViewMode,
 } from '@etn/shared';
 
 import {
@@ -110,7 +112,14 @@ import {
   getTopReads,
   recordReads,
 } from '../domain/read-metrics-service.js';
-import { linkTypeCatalog, thoughtTypeCatalog } from './catalogs.js';
+import {
+  linkTypeCatalog,
+  linkTypeCatalogCompact,
+  thoughtTypeCatalog,
+  toCompactLink,
+  toCompactThought,
+  toCompactThoughtRef,
+} from './catalogs.js';
 import { exportToMarkdown, getExportJobContent, startExportJob } from '../domain/export-service.js';
 import { findPath, subgraph, traverse } from '../domain/graph-traversal.js';
 import {
@@ -141,6 +150,19 @@ const NetworkId = z.string().min(1);
 const ThoughtId = z.string().min(1);
 const LinkId = z.string().min(1);
 const ExpectedVersion = z.number().int().min(1).optional();
+
+/**
+ * Response projection accepted by the read tools that support it (task O12,
+ * docs/05-mcp-server.md §4.1): `etn.thoughts.get`, `…neighbors`,
+ * `…subgraph`, `…usage`. `compact` (default) drops purely visual and
+ * service fields the agent never consumes; `full` keeps the legacy shape.
+ */
+const View = z
+  .enum(MCP_VIEW_MODES)
+  .optional()
+  .describe(
+    "Response projection: 'compact' (default, drops visual/service fields) or 'full' (legacy shape).",
+  );
 
 /** Error text shared by every `type_id`/`type` pair (task O4). */
 const TYPE_ID_TYPE_CONFLICT = 'provide at most one of type_id or type';
@@ -456,7 +478,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const GetSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId });
+  const GetSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId, view: View });
   mcp.registerTool(
     'etn.thoughts.get',
     {
@@ -466,7 +488,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'property values (`thought_ref` values resolved to {id, title}). `meta` carries ' +
         'counters and `meta.permanent` — a preview of the single permanent comment (body ' +
         'truncated to 2000 chars; `truncated` flag + comment `id`). When `truncated: true` ' +
-        'fetch the full text via `etn.comments.get` (by that `id` or by this thought_id).',
+        'fetch the full text via `etn.comments.get` (by that `id` or by this thought_id). ' +
+        'Pass `view: "full"` to keep the legacy shape with every visual field (colours, font-style ' +
+        'flags, icon attachment id); the default `view: "compact"` drops them (task O12).',
       inputSchema: GetSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -478,7 +502,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const properties = getPropertyValuesResolved(ndb, 'thought', args.thought_id);
         // O10: count this single read for `etn.metrics.reads` analytics.
         recordReads(ndb, [thought.id], { now: new Date().toISOString() });
-        return { ...thought, type, properties, meta: getThoughtMeta(ndb, args.thought_id) };
+        const meta = getThoughtMeta(ndb, args.thought_id);
+        const view: McpViewMode = args.view ?? 'compact';
+        // Keep the response envelope identical between views — only the
+        // thought-level fields differ. `type`, `properties` and `meta` were
+        // never affected by the O12 projection change.
+        const projected = view === 'full' ? thought : toCompactThought(thought);
+        return { ...projected, type, properties, meta };
       }),
   );
 
@@ -487,6 +517,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     thought_id: ThoughtId,
     dir: z.enum(FOCUS_DIRS),
     depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
+    view: View,
   });
   mcp.registerTool(
     'etn.thoughts.neighbors',
@@ -496,7 +527,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`). ' +
         'With `depth > 1` performs a bounded breadth-first walk returning resolved thoughts. ' +
         'Responses carry `link_types`/`thought_types` reference tables (name + AI-facing ' +
-        'description) for the types actually used.',
+        'description) for the types actually used. `view: "compact"` (default, task O12) drops ' +
+        'colours and line-style fields from the link-type catalogue and, for `depth > 1`, the ' +
+        'visual fields from each resolved thought.',
       inputSchema: NeighborsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.neighbors'],
     },
@@ -504,17 +537,25 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
         const depth = args.depth ?? 1;
+        const view: McpViewMode = args.view ?? 'compact';
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
           const neighbors = getNeighbors(ndb, args.thought_id, args.dir, {
             userId: rt.deps.auth.userId,
           });
+          // `FocusNeighbor` carries no visual fields of its own (only `icon`,
+          // which is semantic), so the only O12 effect at depth=1 is on the
+          // link-type catalogue.
+          const linkTypes =
+            view === 'full'
+              ? linkTypeCatalog(ndb, neighbors.map((n) => n.link_type_id))
+              : linkTypeCatalogCompact(ndb, neighbors.map((n) => n.link_type_id));
           return {
             thought: { id: thought.id, title: thought.title },
             dir: args.dir,
             depth: 1,
             neighbors,
-            link_types: linkTypeCatalog(ndb, neighbors.map((n) => n.link_type_id)),
+            link_types: linkTypes,
             thought_types: thoughtTypeCatalog(ndb, neighbors.map((n) => n.type_id)),
           };
         }
@@ -524,12 +565,16 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           maxNodes: rt.limits.maxNodesPerSubgraph,
         });
         const thoughts = resolveThoughts(ndb, walk.ids);
+        // Depth>1 returns ThoughtRef rows (the lightweight identity slice);
+        // project each entry to its compact shape under `view: 'compact'`.
+        const projected =
+          view === 'full' ? thoughts : thoughts.map((t) => toCompactThoughtRef(t));
         return {
           thought_id: args.thought_id,
           dir: args.dir,
           depth,
           ids: walk.ids,
-          thoughts,
+          thoughts: projected,
           truncated: walk.truncated,
           reason: walk.reason ?? null,
           thought_types: thoughtTypeCatalog(ndb, thoughts.map((t) => t.type_id)),
@@ -543,6 +588,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     radius: z.number().int().min(0).max(TRAVERSAL_DEFAULTS.MAX_DEPTH),
     max_nodes: z.number().int().min(1).optional(),
     include_comments: z.boolean().optional(),
+    view: View,
   });
   mcp.registerTool(
     'etn.thoughts.subgraph',
@@ -557,7 +603,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         '`thought_types`/`link_types` reference tables (id, name, description, icon/color) ' +
         'for the types actually used — the agent reads the AI-facing type descriptions once ' +
         'instead of re-fetching. The key RAG tool — returns ready-to-use context. ' +
-        '`max_nodes` is capped by the server setting max_nodes_per_subgraph.',
+        '`max_nodes` is capped by the server setting max_nodes_per_subgraph. ' +
+        '`view: "compact"` (default, task O12) drops colours and font-style flags from every ' +
+        'node and the line-style fields from the link-type catalogue — the dominant token ' +
+        'saving on large subgraphs. `view: "full"` keeps the legacy shape.',
       inputSchema: SubgraphSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.subgraph'],
     },
@@ -579,13 +628,23 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             : undefined;
         // O10: one batched UPSERT covers every node returned by the subgraph.
         recordReads(ndb, result.nodes, { now: new Date().toISOString() });
+        const view: McpViewMode = args.view ?? 'compact';
+        // The traversal already returns edges with the minimal shape (no
+        // colour/style/width — see graph-traversal/subgraph), so the only O12
+        // effects here are the node projection and the link-type catalogue.
+        const projectedNodes =
+          view === 'full' ? nodes : nodes.map((t) => toCompactThought(t));
+        const linkTypes =
+          view === 'full'
+            ? linkTypeCatalog(ndb, result.edges.map((e) => e.type_id))
+            : linkTypeCatalogCompact(ndb, result.edges.map((e) => e.type_id));
         return {
-          nodes,
+          nodes: projectedNodes,
           edges: result.edges,
           truncated: result.truncated,
           max_nodes: effectiveMax,
           thought_types: thoughtTypeCatalog(ndb, nodes.map((n) => n.type_id)),
-          link_types: linkTypeCatalog(ndb, result.edges.map((e) => e.type_id)),
+          link_types: linkTypes,
           ...(comments === undefined ? {} : { comments }),
         };
       }),
@@ -669,7 +728,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const UsageSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId });
+  const UsageSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId, view: View });
   mcp.registerTool(
     'etn.thoughts.usage',
     {
@@ -678,7 +737,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Thoughts referencing this thought as a `thought_ref` property value (formal links, ' +
         '«Использование» in the editor), grouped by property. Returns ' +
         '{ total, groups: [{property_id, key, thoughts[]}], thought_types } — the latter is ' +
-        'a reference table (name + AI-facing description) for every type used in the result.',
+        'a reference table (name + AI-facing description) for every type used in the result. ' +
+        '`view: "compact"` (default, task O12) drops colours, font-style flags and the icon ' +
+        'attachment id from each referencing thought; `view: "full"` keeps them.',
       inputSchema: UsageSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.usage'],
     },
@@ -686,8 +747,20 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
         const usage = findThoughtUsage(ndb, args.thought_id);
+        const view: McpViewMode = args.view ?? 'compact';
+        // `groups[].thoughts[]` is a ThoughtRef[] — project each entry under
+        // the compact view. The `total` and `groups` skeleton are preserved.
+        const groups =
+          view === 'full'
+            ? usage.groups
+            : usage.groups.map((g) => ({
+                property_id: g.property_id,
+                key: g.key,
+                thoughts: g.thoughts.map((t) => toCompactThoughtRef(t)),
+              }));
         return {
-          ...usage,
+          total: usage.total,
+          groups,
           thought_types: thoughtTypeCatalog(
             ndb,
             usage.groups.flatMap((g) => g.thoughts.map((t) => t.type_id)),
