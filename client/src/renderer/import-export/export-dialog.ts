@@ -85,9 +85,9 @@ export function showExportEtnxDialog(
       'Включить подчинённые мысли',
       initial.include_subtree ?? false,
     );
-    depthInput.disabled = !includeSubtree.checked;
-    includeSubtree.addEventListener('change', () => {
-      depthInput.disabled = !includeSubtree.checked;
+    depthInput.disabled = !includeSubtree.input.checked;
+    includeSubtree.input.addEventListener('change', () => {
+      depthInput.disabled = !includeSubtree.input.checked;
       if (depthInput.disabled) depthInput.classList.add('text-input-disabled');
       else depthInput.classList.remove('text-input-disabled');
     });
@@ -103,10 +103,10 @@ export function showExportEtnxDialog(
 
     const optionsStack = div('form-stack');
     optionsStack.append(
-      includeTypes,
-      includeAttachments,
-      includeChronology,
-      includeSubtree,
+      includeTypes.row,
+      includeAttachments.row,
+      includeChronology.row,
+      includeSubtree.row,
       depthField,
     );
 
@@ -141,10 +141,10 @@ export function showExportEtnxDialog(
             const depth = clampDepth(depthInput.valueAsNumber);
             resolve({
               options: {
-                include_types: includeTypes.checked,
-                include_attachments: includeAttachments.checked,
-                include_chronology: includeChronology.checked,
-                include_subtree: includeSubtree.checked,
+                include_types: includeTypes.input.checked,
+                include_attachments: includeAttachments.input.checked,
+                include_chronology: includeChronology.input.checked,
+                include_subtree: includeSubtree.input.checked,
                 subtree_depth: depth,
               },
               targetPath,
@@ -157,20 +157,28 @@ export function showExportEtnxDialog(
 }
 
 /**
- * Build a checkbox row in the project's standard form:
+ * A labelled checkbox row: returns the wrapping `<label>` (so the visible
+ * caption stays attached to the checkbox in the DOM) AND the underlying
+ * `<input>` so callers can read `checked` / bind `change` events.
+ *
  *   <label class="checkbox-row"><input type="checkbox"/><span>text</span></label>
- * Clicking the label text toggles the checkbox (native label behaviour).
- * Returns the underlying `<input>` so callers can read `checked` and bind events.
+ *
+ * Earlier revisions returned the bare `<input>` and the wrapping label was
+ * silently dropped — the checkbox row appeared with no caption (visible only
+ * as a bare tick box). Always use the wrapping label.
  */
-function makeCheckbox(labelText: string, initial: boolean): HTMLInputElement {
+function makeCheckbox(
+  labelText: string,
+  initial: boolean,
+): { row: HTMLLabelElement; input: HTMLInputElement } {
   const row = el('label', 'checkbox-row');
-  const cb = el('input') as HTMLInputElement;
-  cb.type = 'checkbox';
-  cb.checked = initial;
+  const input = el('input') as HTMLInputElement;
+  input.type = 'checkbox';
+  input.checked = initial;
   const text = el('span');
   text.textContent = labelText;
-  row.append(cb, text);
-  return cb;
+  row.append(input, text);
+  return { row, input };
 }
 
 function clampDepth(v: number): number {

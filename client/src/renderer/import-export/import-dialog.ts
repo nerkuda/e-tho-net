@@ -71,7 +71,11 @@ export function showImportEtnxDialog(
     optionsHead.textContent = 'Что импортировать';
 
     const optionsStack = div('form-stack');
-    optionsStack.append(includeTypes, includeAttachments, includeChronology);
+    optionsStack.append(
+      includeTypes.row,
+      includeAttachments.row,
+      includeChronology.row,
+    );
 
     const hint = el('p', 'dialog-text');
     hint.textContent =
@@ -98,9 +102,9 @@ export function showImportEtnxDialog(
             resolve({
               filePath: path,
               options: {
-                include_types: includeTypes.checked,
-                include_attachments: includeAttachments.checked,
-                include_chronology: includeChronology.checked,
+                include_types: includeTypes.input.checked,
+                include_attachments: includeAttachments.input.checked,
+                include_chronology: includeChronology.input.checked,
               },
             });
           },
@@ -110,15 +114,22 @@ export function showImportEtnxDialog(
   });
 }
 
-/** Same shape as `export-dialog.ts:makeCheckbox` — kept local so the two
- *  dialogs stay decoupled. */
-function makeCheckbox(labelText: string, initial: boolean): HTMLInputElement {
+/**
+ * Same shape as `export-dialog.ts:makeCheckbox` — returns the wrapping
+ * `<label>` AND the underlying `<input>`. Earlier revisions dropped the
+ * label by returning only the input; that left a bare checkbox with no
+ * caption. Always use both.
+ */
+function makeCheckbox(
+  labelText: string,
+  initial: boolean,
+): { row: HTMLLabelElement; input: HTMLInputElement } {
   const row = el('label', 'checkbox-row');
-  const cb = el('input') as HTMLInputElement;
-  cb.type = 'checkbox';
-  cb.checked = initial;
+  const input = el('input') as HTMLInputElement;
+  input.type = 'checkbox';
+  input.checked = initial;
   const text = el('span');
   text.textContent = labelText;
-  row.append(cb, text);
-  return cb;
+  row.append(input, text);
+  return { row, input };
 }
