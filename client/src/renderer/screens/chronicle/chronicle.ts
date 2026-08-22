@@ -82,6 +82,7 @@ let querySeq = 0;
 /** Switches to the chronicle view — lazily loads persisted state (L4). */
 export async function ensureChronicleInitialised(): Promise<void> {
   const networkId = store.state.networkId;
+  const tabId = store.state.activeTabId;
   if (networkId === null || host === null) return;
   if (networkIdSeen === networkId) return;
   networkIdSeen = networkId;
@@ -93,8 +94,16 @@ export async function ensureChronicleInitialised(): Promise<void> {
   newTargets = null;
   cursor = { row: -1, col: 0, chip: 0 };
 
+  // Q4: prefer per-tab persisted state, fall back to legacy ui_state.
   try {
-    const raw = await etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_STATE);
+    let raw: string | null = null;
+    if (tabId !== null) {
+      const tab = store.state.tabs.find((t) => t.tab_id === tabId);
+      raw = tab?.chronicle_state ?? null;
+    }
+    if (raw === null) {
+      raw = await etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_STATE);
+    }
     if (raw !== null && raw !== '') {
       const parsed = parseChronicleState(raw);
       setFilterState(fromDefinition(parsed.filter));
@@ -107,20 +116,18 @@ export async function ensureChronicleInitialised(): Promise<void> {
   await applyQuery(false);
 }
 
-/** Persists the current filter + page to L4. */
+/** Persists the current filter + page to L4 (per-tab, Q4). */
 function persistState(): void {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  void etn.ui
-    .setState(
-      networkId,
-      UI_STATE_KEY.CHRONICLE_STATE,
-      JSON.stringify({
+  const tabId = store.state.activeTabId;
+  if (tabId === null) return;
+  void etn.tabs
+    .updateState(tabId, {
+      chronicle_state: JSON.stringify({
         filter: toDefinition(getFilterState()),
         offset,
         savedFilterId: getSavedFilterId(),
       }),
-    )
+    })
     .catch(() => undefined);
 }
 

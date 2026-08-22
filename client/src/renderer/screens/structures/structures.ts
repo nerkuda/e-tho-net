@@ -123,6 +123,7 @@ let appliedQuery: {
  *  Called by the shared view switcher (../active-view.js, L20). */
 export async function ensureStructuresInitialised(): Promise<void> {
   const networkId = store.state.networkId;
+  const tabId = store.state.activeTabId;
   if (networkId === null || host === null) return;
   if (networkIdSeen === networkId) return;
   networkIdSeen = networkId;
@@ -139,8 +140,17 @@ export async function ensureStructuresInitialised(): Promise<void> {
   appliedQuery = null;
   resetStructuresCursor();
 
+  // Q4: prefer per-tab persisted filter, fall back to legacy ui_state when
+  // the active tab has no entry (migration / fresh tab).
   try {
-    const raw = await etn.ui.getState(networkId, UI_STATE_KEY.STRUCTURES_STATE);
+    let raw: string | null = null;
+    if (tabId !== null) {
+      const tab = store.state.tabs.find((t) => t.tab_id === tabId);
+      raw = tab?.structures_state ?? null;
+    }
+    if (raw === null) {
+      raw = await etn.ui.getState(networkId, UI_STATE_KEY.STRUCTURES_STATE);
+    }
     if (raw !== null && raw !== '') setFilterState(parseFilterState(raw));
   } catch {
     // Fall back to the empty filter (HOME).
@@ -191,10 +201,10 @@ function parseFilterState(raw: string): FilterState {
 
 /** Persists the current filter state to the L4 `structures_state` key. */
 function persistFilterState(): void {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  void etn.ui
-    .setState(networkId, UI_STATE_KEY.STRUCTURES_STATE, JSON.stringify(getFilterState()))
+  const tabId = store.state.activeTabId;
+  if (tabId === null) return;
+  void etn.tabs
+    .updateState(tabId, { structures_state: JSON.stringify(getFilterState()) })
     .catch(() => undefined);
 }
 
