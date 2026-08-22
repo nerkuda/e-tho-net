@@ -136,8 +136,8 @@ export type PresenceState = (typeof PRESENCE_STATES)[number];
 export const JOB_STATUSES = ['pending', 'running', 'done', 'failed'] as const;
 export type JobStatus = (typeof JOB_STATUSES)[number];
 
-/** Output formats accepted by the export endpoint (03-server-api.md §14). */
-export const EXPORT_FORMATS = ['markdown', 'pdf', 'html'] as const;
+/** Output formats accepted by the export endpoint (03-server-api.md §14, phase P). */
+export const EXPORT_FORMATS = ['markdown', 'pdf', 'html', 'etnx'] as const;
 export type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
 /**

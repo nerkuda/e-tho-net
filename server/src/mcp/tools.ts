@@ -887,7 +887,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Экспорт подграфа',
       description:
         'Render the radius-bounded subgraph around seeds as a Markdown (`markdown`, default) or ' +
-        'HTML document. PDF is not supported on the MVP.',
+        'HTML document. PDF is not supported on the MVP. `.etnx` export (full graph slice, phase P) ' +
+        'is wired up in O17 — this tool accepts `format: "etnx"` but will surface it as unsupported ' +
+        'until O17 lands.',
       inputSchema: ExportSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.export.subgraph'],
     },
@@ -895,6 +897,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
         const format: ExportFormat = args.format ?? 'markdown';
+        if (format === 'etnx') {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            '`.etnx` export через MCP будет доступен в O17 (после P9).',
+            { tool: 'etn.export.subgraph', field: 'format' },
+          );
+        }
         const result = subgraph(ndb, args.seed_ids, args.radius, {
           maxNodes: rt.limits.maxNodesPerSubgraph,
         });
@@ -902,10 +911,21 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         if (format === 'markdown') {
           content = exportToMarkdown(ndb, result.nodes);
         } else {
-          const job = startExportJob(ndb, result.nodes, format);
+          const job = await startExportJob(ndb, result.nodes, format, {
+            source: {
+              network_id: args.network_id,
+              network_name: args.network_id,
+              user_id: rt.deps.auth.userId,
+            },
+          });
           const downloaded = getExportJobContent(job.job_id, format);
           if (downloaded === null) {
             throw new Error('ETN error [INTERNAL]: export content unavailable');
+          }
+          if (typeof downloaded.body !== 'string') {
+            throw new Error(
+              'ETN error [INTERNAL]: expected textual export content, got binary',
+            );
           }
           content = downloaded.body;
         }

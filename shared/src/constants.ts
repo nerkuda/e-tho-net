@@ -305,3 +305,15 @@ export const CHRONICLE_THOUGHT_IDS_MAX = 100;
  */
 export const ETNX_VERSION = '1.0' as const;
 
+/**
+ * Hard upper bound (in bytes) on the in-memory .etnx zip produced by the
+ * synchronous export path (phase P, task P2). Exceeding the limit surfaces
+ * as `LIMIT_EXCEEDED` and a 422 — the export must be split (smaller root set
+ * or no attachments) before it can succeed. 50 MiB matches the per-job memory
+ * budget and the existing 16 MiB `bodyLimit` margin for the import side.
+ */
+export const ETNX_MAX_BYTES = 50 * 1024 * 1024;
+
+/** Maximum descendant depth accepted by `ExportEtnxOptions.subtree_depth`. */
+export const ETNX_SUBTREE_DEPTH_MAX = 5;
+

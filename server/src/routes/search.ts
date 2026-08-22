@@ -18,8 +18,10 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
+  ETNX_SUBTREE_DEPTH_MAX,
   EXPORT_FORMATS,
   PREF_KEY,
+  type ExportEtnxOptions,
   type ExportFormat,
   type MentionsScanMatch,
   type SearchResponse,
@@ -44,6 +46,98 @@ import { findMentionsInTexts, search } from '../domain/search-service.js';
 /** `POST /mentions/scan` payload limits (03-server-api.md §21). */
 const MENTIONS_SCAN_MAX_TEXTS = 50;
 const MENTIONS_SCAN_MAX_TOTAL_CHARS = 20_000;
+
+/** Map a stored export MIME type to the recommended download filename extension. */
+function extensionFor(contentType: string): string {
+  if (contentType.includes('html')) return 'html';
+  if (contentType.includes('markdown')) return 'md';
+  if (contentType.includes('zip')) return 'etnx';
+  return 'bin';
+}
+
+/** Parse the optional `etnx` block of an export request (phase P, P2). */
+function parseEtnxOptions(
+  body: Record<string, unknown>,
+  requestId: string,
+): ExportEtnxOptions | undefined {
+  const raw = body['etnx'];
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Поле etnx должно быть объектом.',
+      { field: 'etnx' },
+      requestId,
+    );
+  }
+  const obj = raw as Record<string, unknown>;
+  const opts: ExportEtnxOptions = {};
+  if (obj['include_types'] !== undefined) {
+    if (typeof obj['include_types'] !== 'boolean') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'etnx.include_types должен быть boolean.',
+        { field: 'etnx.include_types' },
+        requestId,
+      );
+    }
+    opts.include_types = obj['include_types'];
+  }
+  if (obj['include_attachments'] !== undefined) {
+    if (typeof obj['include_attachments'] !== 'boolean') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'etnx.include_attachments должен быть boolean.',
+        { field: 'etnx.include_attachments' },
+        requestId,
+      );
+    }
+    opts.include_attachments = obj['include_attachments'];
+  }
+  if (obj['include_chronology'] !== undefined) {
+    if (typeof obj['include_chronology'] !== 'boolean') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'etnx.include_chronology должен быть boolean.',
+        { field: 'etnx.include_chronology' },
+        requestId,
+      );
+    }
+    opts.include_chronology = obj['include_chronology'];
+  }
+  if (obj['include_subtree'] !== undefined) {
+    if (typeof obj['include_subtree'] !== 'boolean') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'etnx.include_subtree должен быть boolean.',
+        { field: 'etnx.include_subtree' },
+        requestId,
+      );
+    }
+    opts.include_subtree = obj['include_subtree'];
+  }
+  if (obj['subtree_depth'] !== undefined) {
+    if (typeof obj['subtree_depth'] !== 'number' || !Number.isInteger(obj['subtree_depth'])) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'etnx.subtree_depth должен быть целым числом.',
+        { field: 'etnx.subtree_depth' },
+        requestId,
+      );
+    }
+    const depth = obj['subtree_depth'] as number;
+    if (depth < 1 || depth > ETNX_SUBTREE_DEPTH_MAX) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `etnx.subtree_depth должен быть в диапазоне 1..${ETNX_SUBTREE_DEPTH_MAX}.`,
+        { field: 'etnx.subtree_depth', min: 1, max: ETNX_SUBTREE_DEPTH_MAX },
+        requestId,
+      );
+    }
+    opts.subtree_depth = depth;
+  }
+  return opts;
+}
 
 /** Route params for a network id. */
 interface NetworkIdParams {
@@ -263,9 +357,21 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           );
         }
 
+        // .etnx-specific options (phase P, task P2). For other formats these
+        // are ignored — passing `etnx: {...}` alongside `format: 'markdown'`
+        // is allowed for forward compatibility.
+        const etnxOpts = parseEtnxOptions(body, req.id);
+
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         // PDF is rejected by the service on MVP (VALIDATION_ERROR → 422).
-        const job = startExportJob(ndb, thoughtIds, format as ExportFormat);
+        const job = await startExportJob(ndb, thoughtIds, format as ExportFormat, {
+          etnx: etnxOpts,
+          source: {
+            network_id: networkId,
+            network_name: networkId,
+            user_id: req.auth!.user.id,
+          },
+        });
         sendSuccess(reply, { job_id: job.job_id }, undefined, 202);
       },
     );
@@ -299,7 +405,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
             req.id,
           );
         }
-        const extension = content.contentType.includes('html') ? 'html' : 'md';
+        const extension = extensionFor(content.contentType);
         reply
           .header('content-type', content.contentType)
           .header('content-disposition', `attachment; filename="etn-export.${extension}"`)

@@ -1,10 +1,15 @@
 /**
- * Export service (task C13, docs/03-server-api.md §14).
+ * Export service (task C13, docs/03-server-api.md §14; phase P tasks P2/P3 for
+ * the `.etnx` zip format).
  *
- * Produces a Markdown/HTML/PDF document for a set of thoughts: title, permanent
- * comment, chronological comments and outgoing links per thought. Markdown is
- * synchronous (fast, returned directly); HTML/PDF run as asynchronous jobs
- * behind a small in-process queue so large exports do not block the HTTP loop.
+ * Produces a Markdown/HTML/PDF document or a `.etnx` zip archive for a set of
+ * thoughts. Markdown/HTML/PDF are textual exports (legacy); `.etnx` is the
+ * full graph slice including types, comments, attachments and properties, used
+ * for import/export between networks.
+ *
+ * All formats complete synchronously (the job goes straight to `done`); the
+ * async job machinery exists for symmetry with the future PDF renderer and for
+ * the per-job TTL/cleanup semantics.
  *
  * MVP note: PDF generation requires a renderer (`puppeteer`); until that lands,
  * `startExportJob` fails PDF requests with a clear validation error while
@@ -12,17 +17,33 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import path from 'node:path';
+import { Buffer } from 'node:buffer';
 
-import { EtnError, type ExportFormat, type ExportJob } from '@etn/shared';
+import archiver from 'archiver';
+import { Writable } from 'node:stream';
+
+import {
+  EtnError,
+  ETNX_MAX_BYTES,
+  type EtnxManifest,
+  type EtnxManifestSource,
+  type ExportEtnxOptions,
+  type ExportFormat,
+  type ExportJob,
+} from '@etn/shared';
 import { renderMarkdown } from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { logger } from '../logger.js';
+import { buildManifest } from './etnx-format.js';
 import { getThoughtOrThrow } from './thought-service.js';
 import { listComments } from './comment-service.js';
 
 interface ExportJobEntry extends ExportJob {
-  /** Rendered document body (markdown or html) once `done`. */
-  content?: string;
+  /** Rendered body — string for markdown/html, Buffer for .etnx (zip binary). */
+  content?: string | Buffer;
   /** Requested output format (stored so the download route can pick a MIME type). */
   format?: ExportFormat;
   /** Wall-clock ms when the job reached a terminal state (for TTL sweep). */
@@ -103,25 +124,33 @@ function markdownToHtml(markdown: string): string {
 }
 
 /**
- * Start an export job for the given thoughts and format. Markdown and HTML
- * complete immediately (job goes straight to `done`); PDF is not implemented
- * on the MVP and throws `VALIDATION_ERROR` with a helpful message.
+ * Start an export job for the given thoughts and format. Markdown/HTML/PDF
+ * complete synchronously (job goes straight to `done`); the `.etnx` zip
+ * archive needs an async stream writer so the job reaches `done` after a
+ * `Promise` resolves. The async signature is uniform for every format — the
+ * REST route already awaits the result, so callers don't need branching.
+ *
+ * @param opts.etnx - options for `.etnx` exports (ignored for other formats).
+ * @param source - provenance block written into the manifest.
  */
-export function startExportJob(
+export async function startExportJob(
   ndb: NetworkDb,
   thoughtIds: string[],
   format: ExportFormat,
-): ExportJob {
+  opts: { etnx?: ExportEtnxOptions; source: EtnxManifestSource },
+): Promise<ExportJob> {
+  let content: string | Buffer;
   if (format === 'pdf') {
     throw new EtnError(
       'VALIDATION_ERROR',
       'PDF export is not implemented on the MVP; use HTML and print to PDF',
     );
+  } else if (format === 'etnx') {
+    content = await exportToEtnx(ndb, thoughtIds, opts.etnx, opts.source);
+  } else {
+    const markdown = exportToMarkdown(ndb, thoughtIds);
+    content = format === 'html' ? markdownToHtml(markdown) : markdown;
   }
-  const content =
-    format === 'html'
-      ? markdownToHtml(exportToMarkdown(ndb, thoughtIds))
-      : exportToMarkdown(ndb, thoughtIds);
   const jobId = randomUUID();
   const entry: ExportJobEntry = {
     job_id: jobId,
@@ -151,12 +180,103 @@ export function getExportJob(jobId: string): ExportJob | null {
 export function getExportJobContent(
   jobId: string,
   format?: ExportFormat,
-): { body: string; contentType: string } | null {
+): { body: string | Buffer; contentType: string } | null {
   sweepJobs();
   const entry = jobs.get(jobId);
   if (!entry || entry.status !== 'done' || entry.content === undefined) return null;
   const effectiveFormat = format ?? entry.format ?? 'markdown';
-  const contentType =
-    effectiveFormat === 'html' ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8';
+  const contentType = contentTypeFor(effectiveFormat);
   return { body: entry.content, contentType };
+}
+
+/** MIME type for an export job's stored content. */
+function contentTypeFor(format: ExportFormat): string {
+  if (format === 'html') return 'text/html; charset=utf-8';
+  if (format === 'markdown') return 'text/markdown; charset=utf-8';
+  if (format === 'etnx') return 'application/zip';
+  return 'application/octet-stream';
+}
+
+// ---------------------------------------------------------------------------
+// .etnx (phase P, task P2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a `.etnx` zip archive for the given root thoughts (phase P, P2). The
+ * archive contains exactly two kinds of entries:
+ *
+ *   * `manifest.json` — full graph slice produced by `buildManifest`;
+ *   * `attachments/<relpath>` — binary attachment files referenced by
+ *     `manifest.attachments[].file_path` (only when `include_attachments`).
+ *
+ * The zip is collected into memory and bounded by {@link ETNX_MAX_BYTES} —
+ * large exports fail fast with `VALIDATION_ERROR` rather than blocking the
+ * HTTP loop. Streaming into `reply.raw` is a future optimisation.
+ */
+export async function exportToEtnx(
+  ndb: NetworkDb,
+  rootIds: string[],
+  opts: ExportEtnxOptions | undefined,
+  source: EtnxManifestSource,
+): Promise<Buffer> {
+  const manifest = buildManifest(ndb, rootIds, opts, source, logger);
+  const zip = await collectZip(manifest, ndb);
+  if (zip.length > ETNX_MAX_BYTES) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Размер .etnx превысил лимит ${ETNX_MAX_BYTES} байт (получено ${zip.length}). ` +
+        'Отключите вложения или уменьшите subtree_depth.',
+      { limit: ETNX_MAX_BYTES, actual: zip.length },
+    );
+  }
+  return zip;
+}
+
+/** Stream the manifest + referenced attachments into a single in-memory zip. */
+function collectZip(manifest: EtnxManifest, ndb: NetworkDb): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  const sink = new Writable({
+    write(chunk: Buffer, _enc, cb): void {
+      chunks.push(Buffer.from(chunk));
+      cb();
+    },
+  });
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  const finished = new Promise<void>((resolve, reject) => {
+    sink.on('finish', (): void => resolve());
+    archive.on('warning', (err: Error): void => reject(err));
+    archive.on('error', (err: Error): void => reject(err));
+  });
+  archive.pipe(sink);
+
+  archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
+
+  const attachDir = path.join(path.dirname(ndb.dbPath), 'attachments');
+  for (const att of manifest.attachments) {
+    if (att.kind !== 'file' || att.file_path === null) continue;
+    const rel = att.file_path.replace(/^\/+/, '');
+    const abs = joinWithinDir(attachDir, rel);
+    if (abs === null) continue;
+    try {
+      archive.append(createReadStream(abs), { name: `attachments/${rel}` });
+    } catch {
+      // Missing/unreadable file — skip silently (a missing attachment does
+      // not invalidate the export; the importer will see `file_path` and may
+      // log a warning at apply time).
+    }
+  }
+
+  void archive.finalize();
+  return finished.then(() => Buffer.concat(chunks));
+}
+
+/**
+ * Resolve `attachments/<rel>` against the network's `attachments/` directory.
+ * Returns `null` for path-traversal attempts (zip-slip protection). The
+ * `rel` argument is the literal attachment file basename as stored in the DB,
+ * never user input — this guard is a defence-in-depth check.
+ */
+function joinWithinDir(dir: string, rel: string): string | null {
+  if (rel.includes('..') || rel.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(rel)) return null;
+  return `${dir.replace(/[\\/]+$/, '')}/${rel}`;
 }

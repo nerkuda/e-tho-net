@@ -89,10 +89,31 @@ export interface AuditQuery {
   offset?: number;
 }
 
+/**
+ * Options applied only to `format: 'etnx'` exports (phase P, docs/02-data-model.md §9).
+ * Markdown/HTML/PDF exports ignore these fields.
+ */
+export interface ExportEtnxOptions {
+  /** Include `thought_types` and `link_types` in `manifest.json`. Default: true. */
+  include_types?: boolean;
+  /** Include binary attachments inside `attachments/` (and their rows in
+   *  `manifest.attachments`). Default: true. */
+  include_attachments?: boolean;
+  /** Include chronological comments and their `comment_targets`. Default: true. */
+  include_chronology?: boolean;
+  /** Include the descendants of every root thought in `thought_ids` (BFS by
+   *  outgoing parent→child links). Default: false. */
+  include_subtree?: boolean;
+  /** Maximum descendant depth when `include_subtree` is true. 1..5. Default: 1. */
+  subtree_depth?: number;
+}
+
 /** Body of `POST /export` (03-server-api.md §14). */
 export interface ExportRequest {
   thought_ids: string[];
   format: ExportFormat;
+  /** Required when `format === 'etnx'`; ignored otherwise. */
+  etnx?: ExportEtnxOptions;
 }
 
 /** Status snapshot of an export job (03-server-api.md §14). */

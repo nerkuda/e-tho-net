@@ -2,10 +2,14 @@
  * Integration tests for the /search, /export and /jobs routes (task D6, D8)
  * via app.inject: search across groups with the legacy `scope=thoughts`
  * mapping, export job lifecycle (202 → done → download) and PDF rejection.
+ * Phase P (task P2) adds .etnx export coverage: zip signature, archive
+ * entries, manifest shape.
  */
 
 import assert from 'node:assert/strict';
+import { promisify } from 'node:util';
 import { describe, it } from 'node:test';
+import yauzl from 'yauzl';
 
 import {
   authHeaders,
@@ -14,6 +18,62 @@ import {
   nativeAvailable,
   type RestTestContext,
 } from './rest-helpers.js';
+
+const yauzlFromBuffer = promisify<
+  Buffer,
+  yauzl.Options,
+  yauzl.ZipFile
+>(yauzl.fromBuffer);
+
+interface ZipEntrySummary {
+  fileName: string;
+  uncompressedSize: number;
+}
+
+/** List file entries of a zip buffer (directories skipped). */
+async function listZipEntries(buffer: Buffer): Promise<ZipEntrySummary[]> {
+  const zip = await yauzlFromBuffer(buffer, { lazyEntries: true });
+  const out: ZipEntrySummary[] = [];
+  await new Promise<void>((resolve, reject) => {
+    zip.on('entry', (entry: yauzl.Entry) => {
+      if (!/\/$/.test(entry.fileName)) {
+        out.push({ fileName: entry.fileName, uncompressedSize: entry.uncompressedSize });
+      }
+      zip.readEntry();
+    });
+    zip.on('end', () => resolve());
+    zip.on('error', reject);
+    zip.readEntry();
+  });
+  zip.close();
+  return out;
+}
+
+/** Read one entry's contents from a zip buffer as a Buffer. */
+async function readZipEntry(buffer: Buffer, fileName: string): Promise<Buffer> {
+  const zip = await yauzlFromBuffer(buffer, { lazyEntries: true });
+  return new Promise<Buffer>((resolve, reject) => {
+    zip.on('entry', (entry: yauzl.Entry) => {
+      if (entry.fileName === fileName) {
+        zip.openReadStream(entry, (err, stream) => {
+          if (err !== null) {
+            reject(err);
+            return;
+          }
+          const chunks: Buffer[] = [];
+          stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+          stream.on('end', () => resolve(Buffer.concat(chunks)));
+          stream.on('error', reject);
+        });
+      } else {
+        zip.readEntry();
+      }
+    });
+    zip.on('end', () => reject(new Error(`entry not found: ${fileName}`)));
+    zip.on('error', reject);
+    zip.readEntry();
+  });
+}
 
 /** Create a thought via the API and return its id. */
 async function createThought(ctx: RestTestContext, title: string): Promise<string> {
@@ -171,6 +231,108 @@ describe(
           url: `/api/v1/jobs/${jobId}`,
         });
         assert.equal(noKey.statusCode, 401);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('export: .etnx job produces a valid zip with manifest.json (phase P, P2)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const rootId = await createThought(ctx, 'Корень экспорта');
+        const childId = await createThought(ctx, 'Потомок');
+
+        // Link parent → child so include_subtree has something to walk.
+        const link = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/links`,
+          headers: authHeaders(ctx),
+          payload: { source_id: rootId, target_id: childId },
+        });
+        assert.equal(link.statusCode, 201);
+
+        const start = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/export`,
+          headers: authHeaders(ctx),
+          payload: {
+            thought_ids: [rootId],
+            format: 'etnx',
+            etnx: {
+              include_types: true,
+              include_attachments: true,
+              include_chronology: true,
+              include_subtree: true,
+              subtree_depth: 1,
+            },
+          },
+        });
+        assert.equal(start.statusCode, 202);
+        const jobId = (start.json().data as { job_id: string }).job_id;
+
+        const download = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/jobs/${jobId}/download`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(download.statusCode, 200);
+        assert.match(download.headers['content-type'] ?? '', /application\/zip/);
+        assert.match(download.headers['content-disposition'] ?? '', /\.etnx/);
+
+        const buf = Buffer.from(download.rawPayload as Buffer);
+        // Zip magic: PK\x03\x04
+        assert.equal(buf[0], 0x50);
+        assert.equal(buf[1], 0x4b);
+        assert.equal(buf[2], 0x03);
+        assert.equal(buf[3], 0x04);
+
+        const entries = await listZipEntries(buf);
+        const names = entries.map((e) => e.fileName);
+        assert.ok(names.includes('manifest.json'));
+
+        const manifestRaw = await readZipEntry(buf, 'manifest.json');
+        const manifest = JSON.parse(manifestRaw.toString('utf8')) as Record<string, unknown>;
+        assert.equal(manifest['format'], 'etnx');
+        assert.equal(manifest['version'], '1.0');
+        assert.equal(typeof manifest['exported_at'], 'string');
+        const thoughts = manifest['thoughts'] as Array<{ id: string; title: string }>;
+        assert.ok(thoughts.some((t) => t.id === rootId && t.title === 'Корень экспорта'));
+        assert.ok(thoughts.some((t) => t.id === childId && t.title === 'Потомок'));
+        const links = manifest['links'] as Array<{ source_id: string; target_id: string }>;
+        assert.ok(
+          links.some((l) => l.source_id === rootId && l.target_id === childId),
+        );
+
+        // Missing format → 422.
+        const bad = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/export`,
+          headers: authHeaders(ctx),
+          payload: { thought_ids: [rootId] },
+        });
+        assert.equal(bad.statusCode, 422);
+
+        // subtree_depth out of range → 422.
+        const tooDeep = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/export`,
+          headers: authHeaders(ctx),
+          payload: {
+            thought_ids: [rootId],
+            format: 'etnx',
+            etnx: { include_subtree: true, subtree_depth: 99 },
+          },
+        });
+        assert.equal(tooDeep.statusCode, 422);
+
+        // Unknown root id → 404.
+        const missing = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/export`,
+          headers: authHeaders(ctx),
+          payload: { thought_ids: ['00000000-0000-0000-0000-000000000000'], format: 'etnx' },
+        });
+        assert.equal(missing.statusCode, 404);
       } finally {
         await closeRestContext(ctx);
       }
