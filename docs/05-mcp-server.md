@@ -119,9 +119,17 @@ null` означает висячую ссылку на удалённую мы�
 
 L20: `etn.comments.get` дополнительно возвращает `targets` — все привязки
 комментария (`{ owner_type, owner_id }`), включая вторичные (см.
-03-server-api.md §10.1). Формат и параметры MCP-инструментов не меняются;
-`etn.comments.upsert` создаёт запись с одной привязкой (как раньше) —
-несколько привязок задаются через REST/клиент.
+03-server-api.md §10.1).
+
+O3: `etn.comments.upsert` принимает опциональный параметр `targets[]`
+(`{owner_type, owner_id}`, 1..100, дубли схлопываются) — альтернатива
+одиночным `owner_type`+`owner_id` для `kind: 'chronological'`: первый элемент
+становится первичным владельцем, остальные — вторичными привязками
+(`comment_targets`, та же доменная функция, что и REST-путь §10.1). Ровно
+одна из двух форм обязательна; `permanent`-комментарий по-прежнему допускает
+только одиночную форму (у него ровно один владелец). Точечное
+привязывание/отвязывание одного дополнительного владельца к уже созданной
+записи (`POST/DELETE …/comments/{id}/targets`) остаётся только в REST/клиенте.
 
 #### Каталоги типов в ответах (task N6)
 
@@ -209,7 +217,7 @@ reason, thought_types }`. `depth` — расстояние от `in_subtree_of` 
 | `etn.thoughts.delete` | Удалить | `network_id`, `thought_id`, `expected_version?` |
 | `etn.links.create` | Создать связь | `network_id`, `source_id`, `target_id`, `type_id?` |
 | `etn.links.delete` | Удалить связь | `network_id`, `link_id` |
-| `etn.comments.upsert` | Создать/обновить комментарий | `network_id`, `owner_type`, `owner_id`, `kind`, `title?`, `body_md`, `valid_from?`, `valid_to?` |
+| `etn.comments.upsert` | Создать/обновить комментарий; для `chronological` — ровно одно из `owner_type`+`owner_id` (одна привязка) или `targets[]` (несколько, 1..100, первый — первичный владелец; для `permanent` только одиночная форма) | `network_id`, `owner_type`+`owner_id` \| `targets[]` (`{owner_type, owner_id}`), `kind`, `title?`, `body_md`, `valid_from?`, `valid_to?` |
 | `etn.comments.update` | Изменить комментарий по `comment_id` (chronological или permanent; last-write-wins по полям, `valid_from`/`valid_to` применяются только к chronological) | `network_id`, `comment_id`, `changes` (`title?`, `body_md?`, `valid_from?`, `valid_to?`), `expected_version?` |
 | `etn.comments.delete` | Удалить комментарий (вместе со всеми привязками к владельцам) | `network_id`, `comment_id`, `expected_version?` |
 | `etn.attachments.add` | Добавить вложение | `network_id`, `owner_type`, `owner_id`, `kind`, `url?`/`file_path?`, `title?`, `description?` |

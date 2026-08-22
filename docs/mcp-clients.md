@@ -47,7 +47,7 @@ IDE-агенты, кастомные скрипты) читают и измен�
 | `etn.thoughts.find_duplicates` | **обязателен перед созданием** — поиск дубликатов |
 | `etn.thoughts.create/update/delete` | изменение мыслей |
 | `etn.links.create/delete` | связи |
-| `etn.comments.upsert` | комментарии (permanent — create-or-update, chronological — новая запись) |
+| `etn.comments.upsert` | комментарии (permanent — create-or-update, chronological — новая запись; `owner_type`+`owner_id` или `targets[]` для привязки одной хронологической записи к нескольким мыслям/связям сразу) |
 | `etn.comments.update` / `delete` | правка и удаление комментария по `comment_id` |
 | `etn.comments.get` | полный текст одного комментария (по `comment_id` или по `thought_id` — постоянный); вызывается, когда превью показывает `truncated: true` |
 | `etn.properties.set` | значения свойств: одно (`key`+`value`) или набор (`values: {key: value\|null}` — одной транзакцией) |
