@@ -30,6 +30,7 @@ import { isPinned, togglePinned } from '../pinned/pins.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { errText } from '../lib/dom.js';
 import { showExportEtnxDialog } from '../import-export/export-dialog.js';
+import { showImportEtnxDialog } from '../import-export/import-dialog.js';
 
 /** Run an `.etnx` export for a single thought (phase P, task P7). The polling
  *  loop and save flow mirror `selection.ts:runExport`; we keep a local copy
@@ -63,16 +64,35 @@ async function exportSingleThought(networkId: string, thoughtId: string): Promis
 
 /**
  * Import a `.etnx` archive and attach its root thoughts as children of
- * `parentThoughtId` (phase P, task P7). The main process handles the file
- * picker + base64 + REST roundtrip; we just show the result as a notice.
+ * `parentThoughtId` (phase P, task P7). Flow:
+ *   1. OS file picker → filePath
+ *   2. Slice-toggles dialog (types / attachments / chronology)
+ *   3. Main process reads the file, base64-encodes, POSTs /import/commit;
+ *      the route fires realtime events so the canvas/panels refresh.
  */
 async function importToThought(networkId: string, parentThoughtId: string): Promise<void> {
+  let picked: Awaited<ReturnType<typeof etn.system.pickArchiveFile>>;
   try {
-    const result = await etn.system.importEtnx(networkId, parentThoughtId);
-    if (result.cancelled) {
-      // user closed the file picker — no message needed
-      return;
-    }
+    picked = await etn.system.pickArchiveFile();
+  } catch (err) {
+    notice(`Импорт не удался: ${errText(err)}`, 'error');
+    return;
+  }
+  if (picked.cancelled) return;
+  if (picked.error !== undefined || picked.filePath === null) {
+    notice(`Импорт не удался: ${picked.error ?? 'файл не выбран'}`, 'error');
+    return;
+  }
+  const dialog = await showImportEtnxDialog(picked.filePath);
+  if (dialog.filePath === undefined || dialog.options === undefined) return;
+  try {
+    const result = await etn.system.importEtnx(
+      networkId,
+      parentThoughtId,
+      dialog.filePath,
+      dialog.options,
+    );
+    if (result.cancelled) return;
     if (result.error !== undefined) {
       notice(`Импорт не удался: ${result.error}`, 'error');
       return;

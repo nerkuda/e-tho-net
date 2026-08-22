@@ -1163,23 +1163,54 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
-    'system.importEtnx',
-    bind(async (networkId: string, parentThoughtId: string) => {
-      const rest = requireRest(deps);
+    'system.pickArchiveFile',
+    bind(async (): Promise<{ filePath: string | null; cancelled: boolean; error?: string }> => {
       const picked = await pickEtnxArchive();
-      if (picked.kind === 'cancelled') return { cancelled: true };
-      if (picked.kind === 'error') return { cancelled: false, error: picked.error };
-      try {
-        const summary = await rest.importEtnx(
-          networkId,
-          parentThoughtId,
-          picked.archive_b64,
-        );
-        return { cancelled: false, summary, filename: picked.filename };
-      } catch (err) {
-        return { cancelled: false, error: errText(err) };
-      }
+      if (picked.kind === 'cancelled') return { filePath: null, cancelled: true };
+      if (picked.kind === 'error') return { filePath: null, cancelled: false, error: picked.error };
+      return { filePath: picked.filePath, cancelled: false };
     }),
+  );
+  handlers.set(
+    'system.importEtnx',
+    bind(
+      async (
+        networkId: string,
+        parentThoughtId: string,
+        filePath: string,
+        slices?: {
+          include_types?: boolean;
+          include_attachments?: boolean;
+          include_chronology?: boolean;
+        },
+      ) => {
+        const rest = requireRest(deps);
+        let buf: Buffer;
+        try {
+          buf = readFileSync(filePath);
+        } catch (err) {
+          return { cancelled: false, error: errText(err) };
+        }
+        if (buf.length > PICK_ETNX_MAX_BYTES) {
+          return {
+            cancelled: false,
+            error: `Файл больше ${PICK_ETNX_MAX_BYTES} байт.`,
+          };
+        }
+        const filename = filePath.split(/[\\/]/).pop() ?? 'archive.etnx';
+        try {
+          const summary = await rest.importEtnx(
+            networkId,
+            parentThoughtId,
+            buf.toString('base64'),
+            slices,
+          );
+          return { cancelled: false, summary, filename };
+        } catch (err) {
+          return { cancelled: false, error: errText(err) };
+        }
+      },
+    ),
   );
 
   return handlers;
@@ -1191,7 +1222,7 @@ const PICK_ETNX_MAX_BYTES = 50 * 1024 * 1024;
 type PickedArchive =
   | { kind: 'cancelled' }
   | { kind: 'error'; error: string }
-  | { kind: 'ok'; archive_b64: string; filename: string };
+  | { kind: 'ok'; archive_b64: string; filePath: string; filename: string };
 
 /**
  * Open the OS file picker for a `.etnx` archive and read it back as base64
@@ -1229,7 +1260,7 @@ async function pickEtnxArchive(): Promise<PickedArchive> {
     };
   }
   const filename = filePath.split(/[\\/]/).pop() ?? 'archive.etnx';
-  return { kind: 'ok', archive_b64: buf.toString('base64'), filename };
+  return { kind: 'ok', archive_b64: buf.toString('base64'), filePath, filename };
 }
 
 /** Maximum picked image size — mirrors the server's attachment upload limit. */

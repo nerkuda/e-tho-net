@@ -667,14 +667,31 @@ export interface EtnApi {
       defaultExt: string,
     ): Promise<{ filePath: string | null; cancelled: boolean }>;
     /**
-     * Open the OS file picker for a `.etnx` archive and apply it to the
-     * network under `parentThoughtId`. The main process handles the file
-     * read + base64 encoding + REST roundtrip; the renderer only sees the
-     * final summary (phase P, P6).
+     * Open the OS file picker for a `.etnx` archive and return the chosen
+     * path. Used by the import dialog (P6) to fill the «Файл архива» field —
+     * the user picks a file once, then the dialog shows the slice toggles.
+     */
+    pickArchiveFile(): Promise<{
+      filePath: string | null;
+      cancelled: boolean;
+      error?: string;
+    }>;
+    /**
+     * Apply a `.etnx` archive to the network under `parentThoughtId`. The
+     * main process reads the file (size-capped at `ETNX_MAX_BYTES`), base64-
+     * encodes it and POSTs `/import/commit` with the optional slice toggles.
+     * The route fires realtime events for every created thought/link so the
+     * canvas/panels refresh without a manual reload.
      */
     importEtnx(
       networkId: string,
       parentThoughtId: string,
+      filePath: string,
+      slices?: {
+        include_types?: boolean;
+        include_attachments?: boolean;
+        include_chronology?: boolean;
+      },
     ): Promise<
       | { cancelled: true }
       | { cancelled: false; error: string; summary?: undefined; filename?: undefined }

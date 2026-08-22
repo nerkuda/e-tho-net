@@ -1677,13 +1677,23 @@ export class RestClient {
     networkId: string,
     parentThoughtId: string,
     archiveB64: string,
+    slices?: {
+      include_types?: boolean;
+      include_attachments?: boolean;
+      include_chronology?: boolean;
+    },
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').ImportSummary> {
+    const body: Record<string, unknown> = {
+      archive_b64: archiveB64,
+      parent_thought_id: parentThoughtId,
+    };
+    if (slices !== undefined) body['etnx'] = slices;
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/import/commit`,
       {
-        body: { archive_b64: archiveB64, parent_thought_id: parentThoughtId },
+        body,
         requestOptions: opts,
       },
     );

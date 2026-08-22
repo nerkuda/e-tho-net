@@ -22,6 +22,7 @@ import { registerDropActions, wireExternalDragSource } from '../canvas/drag-clou
 import { pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
 import { showThoughtStyleDialog, type ThoughtStylePatch } from '../editor/style-dialog.js';
 import { showExportEtnxDialog } from '../import-export/export-dialog.js';
+import { showImportEtnxDialog } from '../import-export/import-dialog.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -619,9 +620,11 @@ async function pollJob(jobId: string): Promise<{ status: string }> {
 }
 
 /**
- * Apply a `.etnx` archive under the currently focused thought. The user
- * picks a file via the OS dialog (handled in main process); the result is
- * shown as a notice.
+ * Apply a `.etnx` archive under the currently focused thought. Flow:
+ *   1. OS file picker → filePath
+ *   2. Slice-toggles dialog (types / attachments / chronology)
+ *   3. Main process reads + base64 + POST /import/commit; the route fires
+ *      realtime events so the canvas/panels refresh.
  */
 async function runImport(): Promise<void> {
   const networkId = requireNetworkId();
@@ -633,8 +636,27 @@ async function runImport(): Promise<void> {
     notice('Сначала сфокусируйте мысль — она станет родителем импортированного графа.', 'error');
     return;
   }
+  let picked: Awaited<ReturnType<typeof etn.system.pickArchiveFile>>;
   try {
-    const result = await etn.system.importEtnx(networkId, parentId);
+    picked = await etn.system.pickArchiveFile();
+  } catch (err) {
+    notice(`Импорт не удался: ${errText(err)}`, 'error');
+    return;
+  }
+  if (picked.cancelled) return;
+  if (picked.error !== undefined || picked.filePath === null) {
+    notice(`Импорт не удался: ${picked.error ?? 'файл не выбран'}`, 'error');
+    return;
+  }
+  const dialog = await showImportEtnxDialog(picked.filePath);
+  if (dialog.filePath === undefined || dialog.options === undefined) return;
+  try {
+    const result = await etn.system.importEtnx(
+      networkId,
+      parentId,
+      dialog.filePath,
+      dialog.options,
+    );
     if (result.cancelled) return;
     if (result.error !== undefined) {
       notice(`Импорт не удался: ${result.error}`, 'error');
