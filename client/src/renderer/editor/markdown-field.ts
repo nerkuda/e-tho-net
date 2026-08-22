@@ -16,6 +16,7 @@ import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { div, errText, renderHtml } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
@@ -60,6 +61,14 @@ export function createMarkdownField(opts: {
    * this entity and inserts the markdown image reference at the caret.
    */
   attachmentsOwner?: AttachmentsOwner;
+  /**
+   * Резолвер шаблона комментария типа (08-ui-spec.md §8.1, §6.4). Когда
+   * задан, контекстное меню редактора (правый клик) предлагает пункт
+   * «Вставить текст шаблона из типа мысли», если колбэк возвращает
+   * непустую строку. Клик вставляет её в позицию курсора через
+   * `MdEditor.insertAtCaret`.
+   */
+  onInsertTemplate?: () => string | null;
   /**
    * Thought never offered as an auto-mention match (L24): its own name and
    * synonyms must not be underlined in its own comment text. Evaluated on
@@ -213,6 +222,32 @@ export function createMarkdownField(opts: {
       if (files === undefined || files.length === 0) return;
       event.preventDefault();
       void insertClipboardFiles(editor, owner, Array.from(files));
+    });
+    // Контекстное меню: «Вставить текст шаблона из типа мысли»
+    // (08-ui-spec.md §6.4). Пункт появляется только когда тип назначен и
+    // шаблон непустой — тогда нативное контекстное меню редактора не
+    // показывается; иначе пропускаем событие, и пользователь видит
+    // стандартное меню CM6.
+    editor.dom.addEventListener('contextmenu', (event) => {
+      if (opts.onInsertTemplate === undefined || editor === null) return;
+      const template = opts.onInsertTemplate();
+      if (template === null || template.trim() === '') return;
+      event.preventDefault();
+      const items: MenuItem[] = [
+        {
+          label: 'Вставить текст шаблона из типа мысли',
+          onClick: () => {
+            if (editor === null) return;
+            if (area.classList.contains('hidden')) {
+              // Поле в view-режиме: переключаем в edit и подставляем текст.
+              showEdit(template);
+            } else {
+              editor.insertAtCaret(template);
+            }
+          },
+        },
+      ];
+      showMenuAt(event.clientX, event.clientY, items);
     });
     area.replaceChildren(editor.dom);
     mounting = false;

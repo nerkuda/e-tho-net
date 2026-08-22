@@ -25,6 +25,7 @@ import {
 import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { requireNetworkId } from '../app.js';
+import { store } from '../state.js';
 import { registerMainSection, type EditorContext } from './editor.js';
 import { createMarkdownField } from './markdown-field.js';
 import { registerChronoTab } from './chrono-tab.js';
@@ -116,6 +117,18 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       md: permanent?.body_md ?? '',
       html: permanent?.body_html ?? '',
       attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
+      // Шаблон комментария типа мысли (08-ui-spec.md §6.4): когда у
+      // редактируемой мысли есть тип с непустым `comment_template_md`,
+      // контекстное меню редактора предлагает «Вставить текст шаблона из
+      // типа мысли». Для связи команда не показывается (комментарий
+      // связи не наследует тип).
+      onInsertTemplate: (): string | null => {
+        if (ctx.ownerType !== 'thought' || ctx.thought === null) return null;
+        const typeId = ctx.thought.type_id;
+        if (typeId === null) return null;
+        const t = store.state.thoughtTypes.find((x) => x.id === typeId);
+        return t?.comment_template_md ?? null;
+      },
       onInput: (md) => scheduleDraft(md),
       onSave: async (md) => {
         // The blur save settles the edit — the pending debounce must not

@@ -37,6 +37,7 @@ import {
 import { showDialog } from '../lib/dialog.js';
 import { applyFontFlags, button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { notice } from '../lib/notice.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
@@ -197,6 +198,11 @@ async function insertIntoCanvas(
                   type_id: result.linkTypeId,
                 },
         });
+        // Шаблон комментария типа (08-ui-spec.md §8.1): применяется к
+        // пустому постоянному комментарию сразу после создания мысли.
+        if (result.thoughtTypeId !== null) {
+          await applyCommentTemplateIfEmpty(networkId, newThought.id, result.thoughtTypeId);
+        }
         if (firstAddedId === null) firstAddedId = newThought.id;
       }
       created++;

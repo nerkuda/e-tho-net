@@ -62,6 +62,7 @@ import {
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import { store } from '../state.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
+import { createMdEditor, type MdEditor } from '../editor/md-editor.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dialog.js';
 
 /** Human-readable property value-type labels. */
@@ -421,6 +422,31 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   descArea.placeholder = 'Комментарий: описание типа, правила применения…';
   body.append(descArea);
 
+  // Шаблон постоянного комментария мысли (08-ui-spec.md §8.1, 02-data-model.md
+  // §3.3). CodeMirror сразу в режиме редактирования (без view/edit
+  // переключения, без live preview — клиентского рендера markdown для шаблона
+  // нет). Автосохранение на blur через PATCH /thought-types/{id}.
+  const templateLabel = el(
+    'p',
+    'muted',
+    'Шаблон комментария (применяется к пустому комментарию мысли при создании/назначении типа)',
+  );
+  templateLabel.style.margin = '8px 0 2px';
+  body.append(templateLabel);
+  let templateEditor: MdEditor | null = null;
+  let templateInert: HTMLElement | null = null;
+  if (type !== null) {
+    templateEditor = createMdEditor(type.comment_template_md ?? '', {
+      onBlur: () => void saveTemplate(),
+    });
+    body.append(templateEditor.dom);
+  } else {
+    templateInert = div('muted');
+    templateInert.textContent = 'Шаблон станет доступен после создания типа.';
+    templateInert.style.padding = '4px 0';
+    body.append(templateInert);
+  }
+
   body.append(errorLine);
 
   // Property sections — always visible; a placeholder row until the type exists.
@@ -549,6 +575,15 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
       onChanged();
       errorLine.textContent = '';
       renderProps();
+      // Шаблон комментария: меняем inert-плейсхолдер на полноценный
+      // CM-редактор (08-ui-spec.md §8.1).
+      if (templateInert !== null) {
+        templateEditor = createMdEditor(current.comment_template_md ?? '', {
+          onBlur: () => void saveTemplate(),
+        });
+        templateInert.replaceWith(templateEditor.dom);
+        templateInert = null;
+      }
       nameInput.focus();
     } catch (err) {
       errorLine.textContent = errText(err);
@@ -588,6 +623,27 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   nameInput.addEventListener('input', revalidateName);
   nameInput.addEventListener('blur', () => void saveNameDesc());
   descArea.addEventListener('blur', () => void saveNameDesc());
+
+  /** Autosaves the comment-template field of an existing type on blur. */
+  async function saveTemplate(): Promise<void> {
+    if (current === null || templateEditor === null) return;
+    const md = templateEditor.getValue();
+    const next = md === '' ? null : md;
+    if (next === (current.comment_template_md ?? null)) return;
+    try {
+      current = await etn.types.updateThoughtType(
+        networkId,
+        current.id,
+        { comment_template_md: next },
+        current.version,
+      );
+      await refreshThoughtTypes();
+      onChanged();
+      errorLine.textContent = '';
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
+  }
 
   showDialog({
     title: type === null ? 'Новый тип мысли' : 'Тип мысли',

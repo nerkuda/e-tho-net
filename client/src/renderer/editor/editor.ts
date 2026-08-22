@@ -49,6 +49,7 @@ import { registerPropertiesGroup } from './properties.js';
 import { registerLinksTab } from './links-tab.js';
 import { showIconDialog, type IconPickResult } from './icon-dialog.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
+import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 
 /** What the editor currently edits. */
 export interface EditorContext {
@@ -548,7 +549,12 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
     }
     // A type change re-skins the focus cloud (type icon/colours) — reconcile
     // the whole focus from the server so nothing lags behind the patch.
-    if (patch.type_id !== undefined) scheduleRefresh();
+    if (patch.type_id !== undefined) {
+      scheduleRefresh();
+      // Шаблон комментария типа (08-ui-spec.md §8.1): применяется к
+      // пустому постоянному комментарию сразу после назначения/смены типа.
+      await applyCommentTemplateIfEmpty(networkId, ctx.ownerId, patch.type_id);
+    }
     // The structures results list is server-rendered; reload it so the saved
     // icon/title/type appear right away.
     scheduleStructuresRefresh();

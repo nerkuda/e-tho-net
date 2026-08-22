@@ -27,6 +27,7 @@ import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { orderedTypeRows } from '../lib/type-tree.js';
 import { isPinned, togglePinned } from '../pinned/pins.js';
+import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 
 /** Zone direction (parents/siblings/children). */
 type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -404,6 +405,9 @@ async function changeType(networkId: string, id: string, typeId: string | null):
     // the next refresh resolves the new style instead of the old one.
     invalidateRef(id);
     scheduleRefresh();
+    // Шаблон комментария типа (08-ui-spec.md §8.1): применяется к пустому
+    // постоянному комментарию сразу после назначения/смены типа.
+    await applyCommentTemplateIfEmpty(networkId, id, typeId);
   } catch (err) {
     errorDialog('Изменить тип', err);
   }
