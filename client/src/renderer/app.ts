@@ -180,6 +180,7 @@ function zoneStateFromFocus(response: FocusResponse): {
  */
 export async function setFocus(id: string): Promise<void> {
   const networkId = requireNetworkId();
+  const tabId = store.state.activeTabId;
   const oldId = store.state.focus?.focused.id ?? null;
   const response = await etn.thoughts.focus(networkId, id);
   // Rotate the local history BEFORE the store update: the history bar re-renders
@@ -187,10 +188,22 @@ export async function setFocus(id: string): Promise<void> {
   // bar showed a pre-rotation snapshot (the new focus still listed, the
   // previous one missing). Awaiting the local SQLite write costs nothing.
   if (oldId !== null && oldId !== id) {
-    await etn.history.rotate(oldId, id).catch(() => undefined);
+    if (tabId !== null) {
+      // Q4: per-tab focus history — main uses `tabId IS ?` semantics.
+      await etn.history.rotate(oldId, id, tabId).catch(() => undefined);
+    } else {
+      await etn.history.rotate(oldId, id).catch(() => undefined);
+    }
   }
   store.update({ focus: response, editorTarget: null, selectedLinkId: null, ...zoneStateFromFocus(response) });
-  void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
+  // Q4: persist focus_id on the tab row so it survives restarts and tab
+  // switches. Falls back to the legacy ui_state key when no tab is active
+  // (shouldn't happen post-Q3, but defensible).
+  if (tabId !== null) {
+    void etn.tabs.updateState(tabId, { focus_id: id }).catch(() => undefined);
+  } else {
+    void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
+  }
 }
 
 /**
@@ -286,11 +299,11 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
   // history — prune it afterwards so it never lingers in «последние». Both
   // per-view histories (focus + structures, L15 §15.9) and the chronicle
   // history (L20) are pruned.
-  await etn.history.remove(deletedId).catch(() => undefined);
-  await etn.history.remove(deletedId, 'structures').catch(() => undefined);
+  await etn.history.remove(deletedId, store.state.activeTabId).catch(() => undefined);
+  await etn.history.remove(deletedId, store.state.activeTabId, 'structures').catch(() => undefined);
   const profileId = store.state.profileId;
   if (profileId !== null) {
-    await etn.history.chronicleRemove(profileId, networkId, 'thought', deletedId).catch(() => undefined);
+    await etn.history.chronicleRemove(profileId, networkId, store.state.activeTabId, 'thought', deletedId).catch(() => undefined);
   }
   invalidateIndicators(deletedId);
   invalidateRef(deletedId);
@@ -310,7 +323,7 @@ async function pickFocusAfterDeletion(
   const profileId = store.state.profileId;
   if (profileId !== null) {
     try {
-      const entries = await etn.history.list(profileId, networkId, 10);
+      const entries = await etn.history.list(profileId, networkId, store.state.activeTabId, 10);
       for (const entry of entries) {
         if (entry.thoughtId === deletedId) continue;
         try {

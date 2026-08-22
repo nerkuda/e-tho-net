@@ -19,6 +19,7 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 import { etn } from './lib/etn.js';
 import { describeEvent, isRealtimeEvent } from './lib/pure.js';
 import { store, type RtStatus } from './state.js';
+import { markTabDirty } from './screens/tabs/tab-state.js';
 
 /** Application-level effect callbacks (registered by the app controller). */
 export interface RealtimeEffects {
@@ -101,6 +102,13 @@ export function initRealtime(): void {
     const evt = raw;
     store.update({ lastEvent: describeEvent(evt) });
     scheduleEventHide();
+
+    // Q4: mark every tab whose network received this event with a dirty
+    // marker «*». The active tab also gets the marker (cleared on activation).
+    const networkId = evt.network_id;
+    for (const tab of store.state.tabs) {
+      if (tab.network_id === networkId) markTabDirty(tab.tab_id);
+    }
 
     // Derived effects (04-realtime.md §7, G8 applier contracts).
     if (evt.type === 'thought.deleted' && store.state.focus?.focused.id === evt.data.id) {

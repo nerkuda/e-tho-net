@@ -14,12 +14,17 @@ import { store, type WorkspaceView } from '../state.js';
 import { ensureStructuresInitialised } from './structures/structures.js';
 import { ensureChronicleInitialised } from './chronicle/chronicle.js';
 
-/** Switches the workspace view and persists the L4 `active_view` key. */
+/** Switches the workspace view and persists the L4 `active_view` key per tab. */
 export function setActiveView(view: WorkspaceView): void {
   if (store.state.activeView === view) return;
   store.update({ activeView: view });
   const networkId = store.state.networkId;
-  if (networkId !== null) {
+  const tabId = store.state.activeTabId;
+  // Q4: prefer per-tab persistence (`etn.tabs.updateState`); fall back to the
+  // legacy `ui_state` key only if there's no active tab (legacy migration).
+  if (tabId !== null) {
+    void etn.tabs.updateState(tabId, { view_mode: view }).catch(() => undefined);
+  } else if (networkId !== null) {
     void etn.ui.setState(networkId, UI_STATE_KEY.ACTIVE_VIEW, view).catch(() => undefined);
   }
   if (view === 'structures') void ensureStructuresInitialised();

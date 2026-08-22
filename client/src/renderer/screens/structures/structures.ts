@@ -381,8 +381,9 @@ export async function openStructuresThought(id: string): Promise<void> {
     return;
   }
   const profileId = store.state.profileId;
-  if (profileId !== null) {
-    await etn.history.push(profileId, networkId, id, 'structures').catch(() => undefined);
+  const tabId = store.state.activeTabId;
+  if (profileId !== null && tabId !== null) {
+    await etn.history.push(profileId, networkId, tabId, id, 'structures').catch(() => undefined);
   }
 }
 
@@ -463,7 +464,7 @@ export function mountStructures(hostEl: HTMLElement): void {
       persistFilterState();
       // A new filter may make the old structures-history entries unopenable —
       // drop the whole view history and refresh the bar (§15.9).
-      void etn.history.clear('structures');
+      void etn.history.clear(store.state.activeTabId, 'structures');
       invalidateHistoryBar();
       void applyQuery(true);
     },

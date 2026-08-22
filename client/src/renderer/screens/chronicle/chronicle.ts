@@ -199,7 +199,7 @@ async function applyQuery(reset: boolean): Promise<void> {
     // The visit history of the view is cleared on every «Применить» (§17).
     const profileId = store.state.profileId;
     if (profileId !== null) {
-      await etn.history.chronicleClear(profileId, networkId).catch(() => undefined);
+      await etn.history.chronicleClear(profileId, networkId, store.state.activeTabId).catch(() => undefined);
       invalidateHistoryBar();
     }
   }
@@ -1039,6 +1039,6 @@ async function pushChronicleHistory(kind: 'thought' | 'link', id: string): Promi
   const profileId = store.state.profileId;
   const networkId = store.state.networkId;
   if (profileId === null || networkId === null) return;
-  await etn.history.chroniclePush(profileId, networkId, kind, id);
+  await etn.history.chroniclePush(profileId, networkId, store.state.activeTabId, kind, id);
   invalidateHistoryBar();
 }

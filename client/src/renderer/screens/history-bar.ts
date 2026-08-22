@@ -108,6 +108,7 @@ async function render(): Promise<void> {
   const entries = await etn.history.list(
     profileId,
     networkId,
+    store.state.activeTabId,
     HISTORY_LIMIT,
     view === 'structures' ? 'structures' : 'focus',
   );
@@ -181,7 +182,12 @@ type ChronicleHistoryEntry = { kind: 'thought' | 'link'; id: string };
 
 /** Renders the chronicle view's own history (thoughts AND links, §17). */
 async function renderChronicle(profileId: string, networkId: string): Promise<void> {
-  const entries = await etn.history.chronicleList(profileId, networkId, HISTORY_LIMIT);
+  const entries = await etn.history.chronicleList(
+    profileId,
+    networkId,
+    store.state.activeTabId,
+    HISTORY_LIMIT,
+  );
   if (host === null || !host.isConnected) return;
 
   clear(host);

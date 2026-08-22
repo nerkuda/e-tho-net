@@ -1071,11 +1071,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       (
         profileId: string,
         networkId: string,
+        tabId?: string | null,
         limit?: number,
         scope?: Parameters<LocalDb['listFocusHistory']>[4],
       ) =>
         deps.localDb
-          .listFocusHistory(profileId, networkId, null, limit, scope)
+          .listFocusHistory(profileId, networkId, tabId ?? null, limit, scope)
           .map((thoughtId) => ({ thoughtId, visitedAt: '' })),
     ),
   );
@@ -1085,45 +1086,62 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       (
         profileId: string,
         networkId: string,
+        tabId: string | null,
         thoughtId: string,
         scope?: Parameters<LocalDb['pushFocusHistory']>[4],
       ) => {
-        // tabId: null — legacy (один таб на сеть); Q4 добавит реальный tabId.
-        deps.localDb.pushFocusHistory(profileId, networkId, null, thoughtId, scope);
+        deps.localDb.pushFocusHistory(profileId, networkId, tabId, thoughtId, scope);
       },
     ),
   );
   handlers.set(
     'history.rotate',
-    bind((oldId: string | null, newId: string, scope?: Parameters<LocalDb['rotateFocusHistory']>[5]) => {
+    bind((
+      oldId: string | null,
+      newId: string,
+      tabId?: string | null,
+      scope?: Parameters<LocalDb['rotateFocusHistory']>[5],
+    ) => {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
         throw new Error('Not connected: call etn.server.connect and open a network first');
       }
-      deps.localDb.rotateFocusHistory(profile.id, networkId, null, oldId, newId, scope);
+      deps.localDb.rotateFocusHistory(profile.id, networkId, tabId ?? null, oldId, newId, scope);
     }),
   );
   handlers.set(
     'history.remove',
-    bind((thoughtId: string, scope?: Parameters<LocalDb['removeFocusHistory']>[4]) => {
+    bind((thoughtId: string, tabId?: string | null, scope?: Parameters<LocalDb['removeFocusHistory']>[4]) => {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
         throw new Error('Not connected: call etn.server.connect and open a network first');
       }
-      deps.localDb.removeFocusHistory(profile.id, networkId, null, thoughtId, scope);
+      if (tabId === null || tabId === undefined) {
+        // Q4: `null` means «across every tab of the network» — a deleted thought
+        // shouldn't linger in any tab's history. Iterate tabs to honour per-tab
+        // history isolation.
+        for (const tab of deps.localDb.listTabs(profile.id)) {
+          if (tab.network_id !== networkId) continue;
+          deps.localDb.removeFocusHistory(profile.id, networkId, tab.tab_id, thoughtId, scope);
+        }
+        // Plus legacy rows (tab_id IS NULL).
+        deps.localDb.removeFocusHistory(profile.id, networkId, null, thoughtId, scope);
+      } else {
+        deps.localDb.removeFocusHistory(profile.id, networkId, tabId, thoughtId, scope);
+      }
     }),
   );
   handlers.set(
     'history.clear',
-    bind((scope?: Parameters<LocalDb['clearFocusHistory']>[3]) => {
+    bind((tabId?: string | null, scope?: Parameters<LocalDb['clearFocusHistory']>[3]) => {
       const profile = deps.getProfile();
       const networkId = deps.getCurrentNetworkId();
       if (!profile || !networkId) {
         throw new Error('Not connected: call etn.server.connect and open a network first');
       }
-      deps.localDb.clearFocusHistory(profile.id, networkId, null, scope);
+      deps.localDb.clearFocusHistory(profile.id, networkId, tabId ?? null, scope);
     }),
   );
   // Chronicle history (L20): entries carry a kind (thought | link).
@@ -1133,10 +1151,11 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       (
         profileId: string,
         networkId: string,
+        tabId?: string | null,
         limit?: Parameters<LocalDb['listChronicleHistory']>[3],
       ) =>
         deps.localDb
-          .listChronicleHistory(profileId, networkId, null, limit)
+          .listChronicleHistory(profileId, networkId, tabId ?? null, limit)
           .map((row) => ({ kind: row.entry_kind, id: row.entry_id })),
     ),
   );
@@ -1146,10 +1165,11 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       (
         profileId: string,
         networkId: string,
+        tabId: string | null,
         kind: Parameters<LocalDb['pushChronicleEntry']>[3],
         id: string,
       ) => {
-        deps.localDb.pushChronicleEntry(profileId, networkId, null, kind, id);
+        deps.localDb.pushChronicleEntry(profileId, networkId, tabId, kind, id);
       },
     ),
   );
@@ -1159,17 +1179,18 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       (
         profileId: string,
         networkId: string,
+        tabId: string | null,
         kind: Parameters<LocalDb['removeChronicleEntry']>[3],
         id: string,
       ) => {
-        deps.localDb.removeChronicleEntry(profileId, networkId, null, kind, id);
+        deps.localDb.removeChronicleEntry(profileId, networkId, tabId, kind, id);
       },
     ),
   );
   handlers.set(
     'history.chronicleClear',
-    bind((profileId: string, networkId: string) => {
-      deps.localDb.clearChronicleHistory(profileId, networkId, null);
+    bind((profileId: string, networkId: string, tabId?: string | null) => {
+      deps.localDb.clearChronicleHistory(profileId, networkId, tabId ?? null);
     }),
   );
   handlers.set(

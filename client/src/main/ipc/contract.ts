@@ -602,43 +602,55 @@ export interface EtnApi {
     list(
       profileId: string,
       networkId: string,
+      tabId?: string | null,
       limit?: number,
       scope?: HistoryScope,
     ): Promise<FocusHistoryEntry[]>;
     push(
       profileId: string,
       networkId: string,
+      tabId: string | null,
       thoughtId: string,
       scope?: HistoryScope,
     ): Promise<void>;
     /**
      * Rotates focus history on a focus change `oldId → newId` in one local
-     * transaction (11-settings-and-state.md §2.3, H7). Uses the active profile
-     * and the currently open network.
+     * transaction (11-settings-and-state.md §2.3, H7, Q4). Uses the active
+     * profile and the currently open network. `tabId` keys the per-tab history
+     * (07-client-electron.md §3.5).
      */
-    rotate(oldId: string | null, newId: string, scope?: HistoryScope): Promise<void>;
+    rotate(
+      oldId: string | null,
+      newId: string,
+      tabId?: string | null,
+      scope?: HistoryScope,
+    ): Promise<void>;
     /**
      * Drops a thought from a visit history of the active profile/network —
      * the actor-side companion of the applier's prune on `thought.deleted`
-     * (the server sends no realtime echo to the deleting client, L4).
+     * (the server sends no realtime echo to the deleting client, L4). `tabId`
+     * scopes the removal to one tab; `null` clears across all tabs of the
+     * network (server-side deletion cleanup).
      */
-    remove(thoughtId: string, scope?: HistoryScope): Promise<void>;
+    remove(thoughtId: string, tabId?: string | null, scope?: HistoryScope): Promise<void>;
     /**
      * Clears the whole visit history of one view of the active
      * profile/network — the structures view clears its history when a new
-     * filter is applied (§15.9).
+     * filter is applied (§15.9). `tabId` scopes; `null` clears all tabs.
      */
-    clear(scope?: HistoryScope): Promise<void>;
+    clear(tabId?: string | null, scope?: HistoryScope): Promise<void>;
     /** Chronicles (L20): lists the chronicle view's visit history, freshest first. */
     chronicleList(
       profileId: string,
       networkId: string,
+      tabId?: string | null,
       limit?: number,
     ): Promise<Array<{ kind: 'thought' | 'link'; id: string }>>;
     /** Chronicles (L20): (re)inserts a thought or link at the front of the history. */
     chroniclePush(
       profileId: string,
       networkId: string,
+      tabId: string | null,
       kind: 'thought' | 'link',
       id: string,
     ): Promise<void>;
@@ -646,11 +658,16 @@ export interface EtnApi {
     chronicleRemove(
       profileId: string,
       networkId: string,
+      tabId: string | null,
       kind: 'thought' | 'link',
       id: string,
     ): Promise<void>;
     /** Chronicles (L20): clears the chronicle view's history (on «Применить»). */
-    chronicleClear(profileId: string, networkId: string): Promise<void>;
+    chronicleClear(
+      profileId: string,
+      networkId: string,
+      tabId?: string | null,
+    ): Promise<void>;
   };
   tabs: {
     /** List all open tabs of the active profile, ordered by `slot_idx` (Q1/Q2). */

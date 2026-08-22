@@ -15,7 +15,7 @@ import { svgIcon } from '../../lib/icons.js';
 import { etn } from '../../lib/etn.js';
 import { store } from '../../state.js';
 import type { TabDto } from '../../../main/ipc/contract.js';
-import { removeTab, upsertTab } from './tab-state.js';
+import { clearTabDirty, removeTab, upsertTab } from './tab-state.js';
 import { showScreen } from '../screens.js';
 import {
   buildOverflowButton,
@@ -164,6 +164,8 @@ async function activateTab(tabId: string): Promise<void> {
     if (tab === null) return;
     upsertTab(tab);
     store.update({ activeTabId: tab.tab_id });
+    // Q4: activation clears the dirty marker (08-ui-spec.md §1.1).
+    clearTabDirty(tabId);
   } catch {
     // ignore — status bar / log
   }
