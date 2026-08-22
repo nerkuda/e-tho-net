@@ -21,7 +21,7 @@ import type {
   SearchScope,
 } from '../enums.js';
 import type { CommentUpdateInput } from './comment.js';
-import type { PropertyValueValue } from './thought-type.js';
+import type { EffectiveTypeProperty, PropertyValueValue } from './thought-type.js';
 import type {
   ThoughtBundleMatchKind,
   ThoughtBundleOnDuplicate,
@@ -43,6 +43,7 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.usage',
   'etn.comments.get',
   'etn.export.subgraph',
+  'etn.types.list',
   // mutate (§4.2)
   'etn.thoughts.create',
   'etn.thoughts.update',
@@ -115,6 +116,31 @@ export interface LinkTypeRef {
   description: string | null;
   color: string | null;
   style: LinkStyle | null;
+}
+
+// ---------------------------------------------------------------------------
+// `etn.types.list` (task O4, 05-mcp-server.md §4.1) — full type catalogues
+// with effective (L21 chain-resolved) property definitions.
+// ---------------------------------------------------------------------------
+
+/** A thought type entry of `etn.types.list`: {@link ThoughtTypeRef} + its
+ *  effective property list (own + inherited along the L21 chain). */
+export interface McpThoughtTypeEntry extends ThoughtTypeRef {
+  properties: EffectiveTypeProperty[];
+}
+
+/** A link type entry of `etn.types.list`: {@link LinkTypeRef} + its effective
+ *  property list (own + inherited along the L21 chain). */
+export interface McpLinkTypeEntry extends LinkTypeRef {
+  properties: EffectiveTypeProperty[];
+}
+
+/** Result of `etn.types.list` — both catalogues in full (not just the types
+ *  used in some other response, unlike {@link ThoughtTypeRef}/{@link LinkTypeRef}
+ *  reference tables). */
+export interface McpTypesListResult {
+  thought_types: McpThoughtTypeEntry[];
+  link_types: McpLinkTypeEntry[];
 }
 
 // ---------------------------------------------------------------------------

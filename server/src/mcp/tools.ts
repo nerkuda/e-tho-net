@@ -1,12 +1,17 @@
 /**
  * MCP tools (task F4, docs/05-mcp-server.md §4).
  *
- * Twenty-five tools in three groups:
+ * Twenty-six tools in three groups:
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
- *     path, links get, mentions, usage, comments get, export;
+ *     path, links get, mentions, usage, comments get, export, types list;
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert/update/delete,
  *     attachments.add, properties.set, set_active, thoughts.upsert_bundle;
  *   * dedupe (§4.3) — find_duplicates.
+ *
+ * `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`
+ * additionally accept a type **by name** (`type`, task O4) as an alternative
+ * to `type_id` — resolved case-insensitively against `etn.types.list`'s
+ * catalogues before the domain call.
  *
  * Mutating tools are facades over the **same domain services as REST**
  * (05 §7): membership is re-checked per call, the read-only flag and the
@@ -22,11 +27,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
+import type { NetworkDb } from '../db/network-db.js';
+
 import {
   ATTACHMENT_KINDS,
   COMMENT_KINDS,
   COMMENT_OWNER_TYPES,
   COMMENT_TARGETS_MAX,
+  EtnError,
   EXPORT_FORMATS,
   FOCUS_DIRS,
   ICON_KINDS,
@@ -37,6 +45,7 @@ import {
   type ExportFormat,
   type McpMutationResult,
   type McpPropertiesSetResult,
+  type McpTypesListResult,
   type McpUpsertBundleResult,
 } from '@etn/shared';
 
@@ -60,6 +69,7 @@ import { createAttachment } from '../domain/attachment-service.js';
 import {
   findThoughtUsage,
   getPropertyValuesResolved,
+  listEffectiveTypeProperties,
   setPropertyValue,
   setPropertyValues,
 } from '../domain/property-service.js';
@@ -70,8 +80,16 @@ import { getThoughtMeta } from '../domain/thought-meta.js';
 import { linkTypeCatalog, thoughtTypeCatalog } from './catalogs.js';
 import { exportToMarkdown, getExportJobContent, startExportJob } from '../domain/export-service.js';
 import { findPath, subgraph, traverse } from '../domain/graph-traversal.js';
-import { getThoughtType } from '../domain/thought-type-service.js';
-import { getLinkType } from '../domain/link-type-service.js';
+import {
+  getThoughtType,
+  listThoughtTypes,
+  resolveThoughtTypeIdByName,
+} from '../domain/thought-type-service.js';
+import {
+  getLinkType,
+  listLinkTypes,
+  resolveLinkTypeIdByName,
+} from '../domain/link-type-service.js';
 import {
   auditAgentCall,
   emitAgentEvent,
@@ -91,13 +109,20 @@ const ThoughtId = z.string().min(1);
 const LinkId = z.string().min(1);
 const ExpectedVersion = z.number().int().min(1).optional();
 
-/** Optional link attached to a freshly created thought (§4.2). */
+/** Error text shared by every `type_id`/`type` pair (task O4). */
+const TYPE_ID_TYPE_CONFLICT = 'provide at most one of type_id or type';
+
+/** Optional link attached to a freshly created thought (§4.2). `type` (task
+ *  O4) resolves a link type by `name_forward`/`name_reverse`, mutually
+ *  exclusive with `type_id`. */
 const CreateLink = z
   .object({
     direction: z.enum(['parent', 'child']),
     target_thought_id: ThoughtId,
     type_id: z.string().min(1).nullable().optional(),
+    type: z.string().min(1).optional(),
   })
+  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
   .optional();
 
 /** Field subset accepted by `etn.thoughts.update` (mirrors `ThoughtUpdateInput`). */
@@ -118,12 +143,38 @@ const ThoughtChanges = z
   })
   .refine((c) => Object.keys(c).length > 0, { message: 'changes must not be empty' });
 
+/**
+ * Resolve a thought's effective `type_id`: `type_id` as given, or the id
+ * resolved from `type` (by name, task O4). Schema `.refine()`s guarantee the
+ * two are never both present.
+ */
+function effectiveThoughtTypeId(
+  ndb: NetworkDb,
+  typeId: string | null | undefined,
+  typeName: string | undefined,
+): string | null | undefined {
+  return typeName === undefined ? typeId : resolveThoughtTypeIdByName(ndb, typeName);
+}
+
+/**
+ * Resolve a link's effective `type_id`: `type_id` as given, or the id
+ * resolved from `type` (by `name_forward`/`name_reverse`, task O4). Schema
+ * `.refine()`s guarantee the two are never both present.
+ */
+function effectiveLinkTypeId(
+  ndb: NetworkDb,
+  typeId: string | null | undefined,
+  typeName: string | undefined,
+): string | null | undefined {
+  return typeName === undefined ? typeId : resolveLinkTypeIdByName(ndb, typeName);
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
 /**
- * Register all twenty-five `etn.*` tools on a freshly built {@link McpServer}.
+ * Register all twenty-six `etn.*` tools on a freshly built {@link McpServer}.
  */
 export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // =========================================================================
@@ -535,25 +586,73 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
+  const TypesListSchema = z.object({ network_id: NetworkId });
+  mcp.registerTool(
+    'etn.types.list',
+    {
+      title: 'Каталог типов',
+      description:
+        'Both type catalogues in full (not just the types used elsewhere in a response, unlike ' +
+        'the `thought_types`/`link_types` reference tables of other read tools): thought types ' +
+        'and link types with their hierarchy (`parent_id`/`is_root`), `description` (AI-facing ' +
+        'context) and effective property definitions — own plus everything inherited along the ' +
+        'L21 type chain (`key`, `value_type`, `required`, `config` incl. `options`/' +
+        '`allowed_type_ids`, effective `default_value`, `inherited`, `defined_on`). Call before ' +
+        'creating a typed thought/link to see what to fill; also lets `type_id` be replaced by a ' +
+        'type name in `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`.',
+      inputSchema: TypesListSchema,
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const thoughtTypes = listThoughtTypes(ndb).map((t) => ({
+          id: t.id,
+          name: t.name,
+          parent_id: t.parent_id,
+          is_root: t.is_root,
+          description: t.description,
+          icon: t.icon,
+          properties: listEffectiveTypeProperties(ndb, 'thought_type', t.id),
+        }));
+        const linkTypes = listLinkTypes(ndb).map((t) => ({
+          id: t.id,
+          name_forward: t.name_forward,
+          name_reverse: t.name_reverse,
+          parent_id: t.parent_id,
+          is_root: t.is_root,
+          description: t.description,
+          color: t.color,
+          style: t.style,
+          properties: listEffectiveTypeProperties(ndb, 'link_type', t.id),
+        }));
+        return { thought_types: thoughtTypes, link_types: linkTypes } satisfies McpTypesListResult;
+      }),
+  );
+
   // =========================================================================
   // Mutating tools (§4.2) — domain services + real-time events + audit log
   // =========================================================================
 
-  const CreateThoughtSchema = z.object({
-    network_id: NetworkId,
-    title: z.string().min(1),
-    synonyms: z.array(z.string().min(1)).optional(),
-    type_id: ThoughtId.nullable().optional(),
-    active: z.boolean().optional(),
-    link: CreateLink,
-  });
+  const CreateThoughtSchema = z
+    .object({
+      network_id: NetworkId,
+      title: z.string().min(1),
+      synonyms: z.array(z.string().min(1)).optional(),
+      type_id: ThoughtId.nullable().optional(),
+      type: z.string().min(1).optional(),
+      active: z.boolean().optional(),
+      link: CreateLink,
+    })
+    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
   mcp.registerTool(
     'etn.thoughts.create',
     {
       title: 'Создать мысль',
       description:
         'Create a thought, optionally attaching a parent/child link in the same transaction. ' +
-        'Call `etn.thoughts.find_duplicates` first to avoid duplicates. Returns { id, version }.',
+        'Call `etn.thoughts.find_duplicates` first to avoid duplicates. `type`/`link.type` ' +
+        '(task O4) resolve a type by name instead of `type_id` (see `etn.types.list`). ' +
+        'Returns { id, version }.',
       inputSchema: CreateThoughtSchema,
     },
     (args, extra) =>
@@ -561,12 +660,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        const typeId = effectiveThoughtTypeId(ndb, args.type_id, args.type);
+        const linkTypeId =
+          args.link === undefined ? undefined : effectiveLinkTypeId(ndb, args.link.type_id, args.link.type);
         const thought = createThought(
           ndb,
           {
             title: args.title,
             ...(args.synonyms === undefined ? {} : { synonyms: args.synonyms }),
-            ...(args.type_id === undefined ? {} : { type_id: args.type_id }),
+            ...(typeId === undefined ? {} : { type_id: typeId }),
             ...(args.active === undefined ? {} : { active: args.active }),
             ...(args.link === undefined
               ? {}
@@ -574,7 +676,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
                   create_link: {
                     direction: args.link.direction,
                     target_thought_id: args.link.target_thought_id,
-                    type_id: args.link.type_id ?? null,
+                    type_id: linkTypeId ?? null,
                   },
                 }),
           },
@@ -586,7 +688,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             args.link.direction === 'parent'
               ? [thought.id, args.link.target_thought_id]
               : [args.link.target_thought_id, thought.id];
-          const link = findLinksBetween(ndb, sourceId, targetId, args.link.type_id ?? null)[0];
+          const link = findLinksBetween(ndb, sourceId, targetId, linkTypeId ?? null)[0];
           if (link !== undefined) {
             emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId);
           }
@@ -594,7 +696,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         auditAgentCall(rt, 'etn.thoughts.create', args.network_id, 'thought', thought.id, {
           title: args.title,
           synonyms: args.synonyms,
-          type_id: args.type_id,
+          type_id: typeId,
           active: args.active,
           link: args.link,
         });
@@ -729,19 +831,23 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const CreateLinkSchema = z.object({
-    network_id: NetworkId,
-    source_id: ThoughtId,
-    target_id: ThoughtId,
-    type_id: z.string().min(1).nullable().optional(),
-  });
+  const CreateLinkSchema = z
+    .object({
+      network_id: NetworkId,
+      source_id: ThoughtId,
+      target_id: ThoughtId,
+      type_id: z.string().min(1).nullable().optional(),
+      type: z.string().min(1).optional(),
+    })
+    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
   mcp.registerTool(
     'etn.links.create',
     {
       title: 'Создать связь',
       description:
         'Create a directed link source → target, optionally typed. Duplicate pairs and ' +
-        'self-loops are rejected. Returns { id, version }.',
+        'self-loops are rejected. `type` (task O4) resolves a link type by `name_forward`/' +
+        '`name_reverse` instead of `type_id` (see `etn.types.list`). Returns { id, version }.',
       inputSchema: CreateLinkSchema,
     },
     (args, extra) =>
@@ -749,16 +855,17 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        const typeId = effectiveLinkTypeId(ndb, args.type_id, args.type);
         const link = createLink(
           ndb,
-          { source_id: args.source_id, target_id: args.target_id, type_id: args.type_id ?? null },
+          { source_id: args.source_id, target_id: args.target_id, type_id: typeId ?? null },
           rt.deps.auth.userId,
         );
         emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId);
         auditAgentCall(rt, 'etn.links.create', args.network_id, 'link', link.id, {
           source_id: args.source_id,
           target_id: args.target_id,
-          type_id: args.type_id,
+          type_id: typeId,
         });
         return {
           id: link.id,
@@ -1138,23 +1245,29 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const BundleThoughtSchema = z.object({
-    title: z.string().min(1),
-    synonyms: z.array(z.string().min(1)).optional(),
-    type_id: z.string().min(1).nullable().optional(),
-    active: z.boolean().optional(),
-  });
+  const BundleThoughtSchema = z
+    .object({
+      title: z.string().min(1),
+      synonyms: z.array(z.string().min(1)).optional(),
+      type_id: z.string().min(1).nullable().optional(),
+      type: z.string().min(1).optional(),
+      active: z.boolean().optional(),
+    })
+    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
   const BundleCommentSchema = z.object({
     title: z.string().nullable().optional(),
     body_md: z.string().min(1),
     valid_from: z.string().min(1).optional(),
     valid_to: z.string().nullable().optional(),
   });
-  const BundleLinkSchema = z.object({
-    direction: z.enum(['parent', 'child']),
-    target_thought_id: ThoughtId,
-    type_id: z.string().min(1).nullable().optional(),
-  });
+  const BundleLinkSchema = z
+    .object({
+      direction: z.enum(['parent', 'child']),
+      target_thought_id: ThoughtId,
+      type_id: z.string().min(1).nullable().optional(),
+      type: z.string().min(1).optional(),
+    })
+    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
   const BundleAttachmentSchema = z.object({
     kind: z.enum(ATTACHMENT_KINDS),
     url: z.string().min(1).nullable().optional(),
@@ -1188,6 +1301,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'logic as `etn.thoughts.find_duplicates`, and `on_duplicate` decides what happens on a ' +
         "match: `fail` (default) errors with `candidates`, `reuse` attaches the bundle's other " +
         "parts to the existing thought unchanged, `update` also patches the thought's fields. " +
+        '`thought.type`/`links[].type` (task O4) resolve a type by name instead of `type_id` ' +
+        '(see `etn.types.list`). ' +
         'Returns { id, version, thought_action, matched_on, comment?, properties?, links?, attachments? }.',
       inputSchema: UpsertBundleSchema,
     },
@@ -1196,15 +1311,39 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        const thoughtTypeId =
+          args.thought === undefined
+            ? undefined
+            : effectiveThoughtTypeId(ndb, args.thought.type_id, args.thought.type);
+        const resolvedThought =
+          args.thought === undefined
+            ? undefined
+            : {
+                title: args.thought.title,
+                ...(args.thought.synonyms === undefined ? {} : { synonyms: args.thought.synonyms }),
+                ...(thoughtTypeId === undefined ? {} : { type_id: thoughtTypeId }),
+                ...(args.thought.active === undefined ? {} : { active: args.thought.active }),
+              };
+        const resolvedLinks =
+          args.links === undefined
+            ? undefined
+            : args.links.map((l) => {
+                const linkTypeId = effectiveLinkTypeId(ndb, l.type_id, l.type);
+                return {
+                  direction: l.direction,
+                  target_thought_id: l.target_thought_id,
+                  ...(linkTypeId === undefined ? {} : { type_id: linkTypeId }),
+                };
+              });
         const result = upsertThoughtBundle(
           ndb,
           {
             ...(args.thought_id === undefined ? {} : { thought_id: args.thought_id }),
-            ...(args.thought === undefined ? {} : { thought: args.thought }),
+            ...(resolvedThought === undefined ? {} : { thought: resolvedThought }),
             ...(args.on_duplicate === undefined ? {} : { on_duplicate: args.on_duplicate }),
             ...(args.comment === undefined ? {} : { comment: args.comment }),
             ...(args.properties === undefined ? {} : { properties: args.properties }),
-            ...(args.links === undefined ? {} : { links: args.links }),
+            ...(resolvedLinks === undefined ? {} : { links: resolvedLinks }),
             ...(args.attachments === undefined
               ? {}
               : {
@@ -1227,7 +1366,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             rt,
             args.network_id,
             'thought.updated',
-            { id: result.thought.id, changes: args.thought ?? {}, version: result.thought.version },
+            { id: result.thought.id, changes: resolvedThought ?? {}, version: result.thought.version },
             extra.requestId,
           );
         }
