@@ -209,12 +209,14 @@ export function makeSnippet(rawText: string, terms: string[]): string {
 // Subtree filter (recursive CTE, cycle-safe — docs/11-settings-and-state.md §5)
 // ---------------------------------------------------------------------------
 
-/** Options for {@link collectSubtreeIds}. */
-interface SubtreeOptions {
+/** Options for {@link collectSubtreeIds} / {@link collectSubtreeTypes}. */
+export interface SubtreeOptions {
   /** Max edge-hops from the seed (default {@link TRAVERSAL_DEFAULTS.MAX_DEPTH}). */
   maxDepth?: number;
   /** Include inactive links in the traversal. */
   showInactive?: boolean;
+  /** Include inactive thoughts in the result. Default: false (matches search). */
+  includeInactiveThoughts?: boolean;
 }
 
 /**
@@ -229,7 +231,7 @@ interface SubtreeOptions {
  * simple paths, which explodes exponentially on cyclic graphs and freezes
  * the synchronous SQLite event loop (the «Хроника» subtree filter hang).
  */
-function collectSubtreeIds(
+export function collectSubtreeIds(
   ndb: NetworkDb,
   seedId: string | undefined,
   opts: SubtreeOptions = {},
@@ -254,6 +256,78 @@ function collectSubtreeIds(
     id: string;
   }>;
   return new Set(rows.map((r) => r.id));
+}
+
+/**
+ * Aggregate `type_id` usage inside a thought's subtree (task O16,
+ * docs/05-mcp-server.md §5.1b — `etn.types.list` with `in_subtree_of`).
+ *
+ * Returns:
+ *   * `thought_type_counts` — `Map<type_id, count>` of distinct thought types
+ *     used in the subtree (`thoughts.type_id` is nullable, so thoughts without
+ *     a type are counted under `null` and dropped from the returned map).
+ *   * `link_type_counts` — `Map<type_id, count>` of distinct link types
+ *     used by links whose both endpoints lie inside the subtree. Inactive
+ *     links are excluded.
+ *
+ * Returns `null` for both maps when no `seedId` is supplied (meaning "no
+ * subtree restriction" — the caller should fall back to the full catalogue).
+ */
+export interface SubtreeTypes {
+  thought_type_counts: Map<string, number>;
+  link_type_counts: Map<string, number>;
+}
+
+export function collectSubtreeTypes(
+  ndb: NetworkDb,
+  seedId: string | undefined,
+  opts: SubtreeOptions = {},
+): SubtreeTypes {
+  const empty: SubtreeTypes = {
+    thought_type_counts: new Map(),
+    link_type_counts: new Map(),
+  };
+  const ids = collectSubtreeIds(ndb, seedId, opts);
+  if (ids === null || ids.size === 0) {
+    return empty;
+  }
+  const includeInactiveThoughts = opts.includeInactiveThoughts === true;
+  const idList = Array.from(ids);
+
+  // Single pass: thought type usage grouped by type_id.
+  const thoughtRows = ndb
+    .prepare(
+      `SELECT type_id, COUNT(*) AS c
+         FROM thoughts
+        WHERE id IN (${idList.map(() => '?').join(',')})
+          ${includeInactiveThoughts ? '' : 'AND active = 1'}
+          AND type_id IS NOT NULL
+        GROUP BY type_id`,
+    )
+    .all(...idList) as Array<{ type_id: string; c: number }>;
+  for (const row of thoughtRows) {
+    empty.thought_type_counts.set(row.type_id, row.c);
+  }
+
+  // Link types restricted to the subtree (both endpoints inside the set) so a
+  // single cross-boundary link is never counted under the section's type. The
+  // set of ids is small after the recursive CTE; the IN-list is bounded by the
+  // subtree size.
+  const linkRows = ndb
+    .prepare(
+      `SELECT type_id, COUNT(*) AS c
+         FROM links
+        WHERE source_id IN (${idList.map(() => '?').join(',')})
+          AND target_id IN (${idList.map(() => '?').join(',')})
+          AND active = 1
+          AND type_id IS NOT NULL
+        GROUP BY type_id`,
+    )
+    .all(...idList, ...idList) as Array<{ type_id: string; c: number }>;
+  for (const row of linkRows) {
+    empty.link_type_counts.set(row.type_id, row.c);
+  }
+  return empty;
 }
 
 // ---------------------------------------------------------------------------

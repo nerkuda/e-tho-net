@@ -32,6 +32,7 @@ import type {
 export const MCP_TOOL_NAMES = [
   // read (§4.1)
   'etn.networks.list',
+  'etn.networks.structure',
   'etn.thoughts.search',
   'etn.thoughts.query',
   'etn.thoughts.get',

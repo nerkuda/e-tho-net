@@ -55,6 +55,7 @@ import type {
   Network,
   NetworkListItem,
   NetworkMember,
+  UpdateNetworkInput,
   EffectiveTypeProperty,
   PropertyDefinition,
   PropertyDefinitionInput,
@@ -205,7 +206,7 @@ export interface EtnApi {
     list(): Promise<NetworkListItem[]>;
     open(networkId: string): Promise<Network>;
     create(displayName: string, description?: string): Promise<Network>;
-    update(id: string, fields: { display_name?: string; description?: string }): Promise<Network>;
+    update(id: string, fields: UpdateNetworkInput): Promise<Network>;
     listMembers(id: string): Promise<NetworkMember[]>;
     addMember(id: string, userId: string): Promise<NetworkMember>;
     removeMember(id: string, userId: string): Promise<void>;

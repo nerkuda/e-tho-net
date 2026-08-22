@@ -25,6 +25,7 @@ const EXPECTED_FILES = [
   '008_settings.sql',
   '009_event_log.sql',
   '010_api_keys_max_writes_per_minute.sql',
+  '011_networks_self_description.sql',
 ];
 
 /** All `_system.db` tables that must exist after migration. */

@@ -20,6 +20,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { ServerConfig } from '../src/config.js';
 import { SystemDb } from '../src/db/system-db.js';
+import { closeNetworkDb } from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { systemMigrationsDir } from '../src/paths.js';
 import { createServer } from '../src/http/server.js';
@@ -311,6 +312,420 @@ describe(
       } finally {
         await app.close();
         sys.close();
+      }
+    });
+
+    it('GET /networks/{id} returns all four markdown self-description fields (O5)', async () => {
+      // Real network on disk so `validateNodeSectionType` can see data.db.
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-self-desc-'));
+      const db: Database.Database = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, systemMigrationsDir());
+      const sys = new SystemDb(db);
+      const adminId = randomUUID();
+      sys.createUser({
+        id: adminId,
+        username: 'admin',
+        displayName: 'Admin',
+        isAdmin: true,
+        isFirstUser: true,
+      });
+      const gen = generateApiKey();
+      sys.createApiKey({
+        id: randomUUID(),
+        userId: adminId,
+        label: 'p',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+      });
+      const app = await createServer({
+        config: { ...TEST_CONFIG, dataDir },
+        systemDb: sys,
+        logger: createLogger('silent'),
+      });
+      let createdId: string | null = null;
+      try {
+        // Create the network through the real POST endpoint.
+        const created = await app.inject({
+          method: 'POST',
+          url: '/api/v1/networks',
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { display_name: 'Self-desc' },
+        });
+        assert.equal(created.statusCode, 201);
+        const createdDto = created.json().data as {
+          id: string;
+          description: string | null;
+          when_to_use: string | null;
+          conventions: string | null;
+          examples: string | null;
+          node_section_type_id: string | null;
+          has_structure: boolean;
+        };
+        createdId = createdDto.id;
+        assert.equal(createdDto.description, null);
+        assert.equal(createdDto.when_to_use, null);
+        assert.equal(createdDto.conventions, null);
+        assert.equal(createdDto.examples, null);
+        assert.equal(createdDto.node_section_type_id, null);
+        assert.equal(createdDto.has_structure, false);
+
+        const get = await app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${createdDto.id}`,
+          headers: { authorization: `Bearer ${gen.key}` },
+        });
+        assert.equal(get.statusCode, 200);
+        const dto = get.json().data as typeof createdDto;
+        assert.equal(dto.description, null);
+        assert.equal(dto.when_to_use, null);
+        assert.equal(dto.conventions, null);
+        assert.equal(dto.examples, null);
+        assert.equal(dto.node_section_type_id, null);
+        assert.equal(dto.has_structure, false);
+      } finally {
+        await app.close();
+        sys.close();
+        if (createdId !== null) closeNetworkDb(createdId);
+        fs.rmSync(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    it('PATCH /networks/{id} updates the four markdown fields (O5)', async () => {
+      const { app, sys, db, admin } = await buildApp();
+      const networkId = seedNetwork(db, admin.userId);
+      try {
+        const patch = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${networkId}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+          payload: {
+            display_name: 'Renamed',
+            description: 'What the network is about.',
+            when_to_use: 'Coding tasks → conventions.',
+            conventions: 'Always chronicle changes.',
+            examples: 'Good: ... ; Bad: ...',
+          },
+        });
+        assert.equal(patch.statusCode, 200);
+        const dto = patch.json().data as {
+          display_name: string;
+          description: string | null;
+          when_to_use: string | null;
+          conventions: string | null;
+          examples: string | null;
+          node_section_type_id: string | null;
+          has_structure: boolean;
+        };
+        assert.equal(dto.display_name, 'Renamed');
+        assert.equal(dto.description, 'What the network is about.');
+        assert.equal(dto.when_to_use, 'Coding tasks → conventions.');
+        assert.equal(dto.conventions, 'Always chronicle changes.');
+        assert.equal(dto.examples, 'Good: ... ; Bad: ...');
+        assert.equal(dto.has_structure, false);
+
+        // GET round-trip.
+        const get = await app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${networkId}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+        });
+        const got = get.json().data as typeof dto;
+        assert.equal(got.description, 'What the network is about.');
+        assert.equal(got.conventions, 'Always chronicle changes.');
+      } finally {
+        await app.close();
+        sys.close();
+      }
+    });
+
+    it('PATCH /networks/{id} rejects an unknown node_section_type_id (O5)', async () => {
+      // Real data directory so the network has a data.db to query.
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-bad-section-'));
+      const db: Database.Database = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, systemMigrationsDir());
+      const sys = new SystemDb(db);
+      const adminId = randomUUID();
+      sys.createUser({
+        id: adminId,
+        username: 'admin',
+        displayName: 'Admin',
+        isAdmin: true,
+        isFirstUser: true,
+      });
+      const gen = generateApiKey();
+      sys.createApiKey({
+        id: randomUUID(),
+        userId: adminId,
+        label: 'p',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+      });
+      const app = await createServer({
+        config: { ...TEST_CONFIG, dataDir },
+        systemDb: sys,
+        logger: createLogger('silent'),
+      });
+      let nid: string | null = null;
+      try {
+        const created = await app.inject({
+          method: 'POST',
+          url: '/api/v1/networks',
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { display_name: 'Bad section' },
+        });
+        nid = (created.json().data as { id: string }).id;
+        const patch = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}`,
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { node_section_type_id: randomUUID() },
+        });
+        assert.equal(patch.statusCode, 422);
+        const err = patch.json().error as { code: string };
+        assert.equal(err.code, 'VALIDATION_ERROR');
+      } finally {
+        await app.close();
+        sys.close();
+        if (nid !== null) closeNetworkDb(nid);
+        fs.rmSync(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    it('PATCH /networks/{id} accepts a real node_section_type_id and sets has_structure (O5)', async () => {
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-ok-section-'));
+      const db: Database.Database = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, systemMigrationsDir());
+      const sys = new SystemDb(db);
+      const adminId = randomUUID();
+      sys.createUser({
+        id: adminId,
+        username: 'admin',
+        displayName: 'Admin',
+        isAdmin: true,
+        isFirstUser: true,
+      });
+      const gen = generateApiKey();
+      sys.createApiKey({
+        id: randomUUID(),
+        userId: adminId,
+        label: 'p',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+      });
+      const app = await createServer({
+        config: { ...TEST_CONFIG, dataDir },
+        systemDb: sys,
+        logger: createLogger('silent'),
+      });
+      let nid: string | null = null;
+      try {
+        const created = await app.inject({
+          method: 'POST',
+          url: '/api/v1/networks',
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { display_name: 'Has structure' },
+        });
+        nid = (created.json().data as { id: string }).id;
+
+        // Create a thought type inside the network.
+        const tt = await app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types`,
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { name: 'Раздел' },
+        });
+        assert.equal(tt.statusCode, 201);
+        const sectionTypeId = (tt.json().data as { id: string }).id;
+
+        const patch = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}`,
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { node_section_type_id: sectionTypeId },
+        });
+        assert.equal(patch.statusCode, 200);
+        const dto = patch.json().data as {
+          node_section_type_id: string | null;
+          has_structure: boolean;
+        };
+        assert.equal(dto.node_section_type_id, sectionTypeId);
+        assert.equal(dto.has_structure, true);
+
+        // Clearing it back to null flips has_structure back off.
+        const clear = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}`,
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { node_section_type_id: null },
+        });
+        assert.equal(clear.statusCode, 200);
+        const cleared = clear.json().data as typeof dto;
+        assert.equal(cleared.node_section_type_id, null);
+        assert.equal(cleared.has_structure, false);
+      } finally {
+        await app.close();
+        sys.close();
+        if (nid !== null) closeNetworkDb(nid);
+        fs.rmSync(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    it('DELETE /networks/{id}/thought-types/{tid} refuses the network node-section type (O5)', async () => {
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-section-guard-'));
+      const db: Database.Database = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, systemMigrationsDir());
+      const sys = new SystemDb(db);
+      const adminId = randomUUID();
+      sys.createUser({
+        id: adminId,
+        username: 'admin',
+        displayName: 'Admin',
+        isAdmin: true,
+        isFirstUser: true,
+      });
+      const gen = generateApiKey();
+      sys.createApiKey({
+        id: randomUUID(),
+        userId: adminId,
+        label: 'p',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+      });
+      const app = await createServer({
+        config: { ...TEST_CONFIG, dataDir },
+        systemDb: sys,
+        logger: createLogger('silent'),
+      });
+      let nid: string | null = null;
+      try {
+        const created = await app.inject({
+          method: 'POST',
+          url: '/api/v1/networks',
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { display_name: 'Section guard' },
+        });
+        nid = (created.json().data as { id: string }).id;
+        const tt = await app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types`,
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { name: 'Раздел' },
+        });
+        const sectionTypeId = (tt.json().data as { id: string }).id;
+        // Pin the type as the network's node_section_type_id.
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}`,
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { node_section_type_id: sectionTypeId },
+        });
+
+        // Try to delete with `force=true` — should still be refused.
+        const del = await app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${nid}/thought-types/${sectionTypeId}?force=true`,
+          headers: { authorization: `Bearer ${gen.key}` },
+        });
+        assert.equal(del.statusCode, 422);
+        const err = del.json().error as { code: string };
+        assert.equal(err.code, 'VALIDATION_ERROR');
+
+        // After clearing node_section_type_id, deletion must succeed.
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}`,
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { node_section_type_id: null },
+        });
+        const delOk = await app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${nid}/thought-types/${sectionTypeId}`,
+          headers: { authorization: `Bearer ${gen.key}` },
+        });
+        assert.equal(delOk.statusCode, 204);
+      } finally {
+        await app.close();
+        sys.close();
+        if (nid !== null) closeNetworkDb(nid);
+        fs.rmSync(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    it('GET /networks includes description/when_to_use/has_structure in the list (O5)', async () => {
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-list-self-'));
+      const db: Database.Database = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, systemMigrationsDir());
+      const sys = new SystemDb(db);
+      const adminId = randomUUID();
+      sys.createUser({
+        id: adminId,
+        username: 'admin',
+        displayName: 'Admin',
+        isAdmin: true,
+        isFirstUser: true,
+      });
+      const gen = generateApiKey();
+      sys.createApiKey({
+        id: randomUUID(),
+        userId: adminId,
+        label: 'p',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+      });
+      const app = await createServer({
+        config: { ...TEST_CONFIG, dataDir },
+        systemDb: sys,
+        logger: createLogger('silent'),
+      });
+      let nid: string | null = null;
+      try {
+        const created = await app.inject({
+          method: 'POST',
+          url: '/api/v1/networks',
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { display_name: 'Listed', description: 'Short desc' },
+        });
+        nid = (created.json().data as { id: string }).id;
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}`,
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { when_to_use: 'Coding → conventions' },
+        });
+
+        const list = await app.inject({
+          method: 'GET',
+          url: '/api/v1/networks',
+          headers: { authorization: `Bearer ${gen.key}` },
+        });
+        assert.equal(list.statusCode, 200);
+        const data = list.json().data as Array<{
+          id: string;
+          description: string | null;
+          when_to_use: string | null;
+          has_structure: boolean;
+          // These two must NOT be present (compact list, O5).
+          conventions?: unknown;
+          examples?: unknown;
+        }>;
+        assert.equal(data.length, 1);
+        const item = data[0]!;
+        assert.equal(item.id, nid);
+        assert.equal(item.description, 'Short desc');
+        assert.equal(item.when_to_use, 'Coding → conventions');
+        assert.equal(item.has_structure, false);
+        assert.equal(item.conventions, undefined);
+        assert.equal(item.examples, undefined);
+      } finally {
+        await app.close();
+        sys.close();
+        if (nid !== null) closeNetworkDb(nid);
+        fs.rmSync(dataDir, { recursive: true, force: true });
       }
     });
   },

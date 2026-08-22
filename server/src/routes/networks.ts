@@ -76,9 +76,35 @@ function networkDto(n: Network) {
     display_name: n.display_name,
     owner_id: n.owner_id,
     description: n.description,
+    when_to_use: n.when_to_use,
+    conventions: n.conventions,
+    examples: n.examples,
+    node_section_type_id: n.node_section_type_id,
+    has_structure: n.node_section_type_id !== null,
     created_at: n.created_at,
     updated_at: n.updated_at,
   };
+}
+
+/**
+ * Resolve a PATCH body field that is `undefined` (keep existing), `null` or
+ * empty string (clear), or a non-empty string (set) into the value to persist
+ * (task O5, markdown self-description fields).
+ */
+function normalizeOptionalText(
+  incoming: string | null | undefined,
+  current: string | null,
+): string | null {
+  if (incoming === undefined) {
+    return current;
+  }
+  if (incoming === null) {
+    return null;
+  }
+  if (typeof incoming !== 'string') {
+    return current;
+  }
+  return incoming.length === 0 ? null : incoming;
 }
 
 /**
@@ -187,13 +213,30 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
           typeof body.display_name === 'string'
             ? body.display_name.trim() || network.display_name
             : network.display_name;
-        const description =
-          body.description === undefined
-            ? network.description
-            : typeof body.description === 'string'
-              ? body.description || null
-              : null;
-        app.systemDb.updateNetwork(network.id, { displayName, description });
+        // Markdown self-description fields (task O5). Treat empty strings and
+        // explicit null as "clear", omit as "keep existing value".
+        const description = normalizeOptionalText(body.description, network.description);
+        const whenToUse = normalizeOptionalText(body.when_to_use, network.when_to_use);
+        const conventions = normalizeOptionalText(body.conventions, network.conventions);
+        const examples = normalizeOptionalText(body.examples, network.examples);
+        // node_section_type_id is special: when present it must point at a
+        // real thought type in this network's data.db (no cross-DB FK), or be
+        // null. A stale id would silently break `etn.networks.structure`, so we
+        // refuse to persist unknown ids up front.
+        const nodeSectionTypeId = networkService.validateNodeSectionType(
+          network.id,
+          body.node_section_type_id === undefined
+            ? network.node_section_type_id
+            : body.node_section_type_id,
+        );
+        app.systemDb.updateNetwork(network.id, {
+          displayName,
+          description,
+          when_to_use: whenToUse,
+          conventions,
+          examples,
+          node_section_type_id: nodeSectionTypeId,
+        });
         app.systemDb.insertAuditLog({
           actorUserId: req.auth!.user.id,
           networkId: network.id,
@@ -201,20 +244,36 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
           action: 'network.update',
           targetType: 'network',
           targetId: network.id,
-          details: { display_name: displayName, description },
-        });
-        // Real-time (E3, 04-realtime.md §4.6): broadcast only changed fields.
-        emitDomainEvent(
-          { systemDb: app.systemDb, pubsub: app.pubsub },
-          network.id,
-          'network.updated',
-          {
-            ...(displayName !== network.display_name ? { display_name: displayName } : {}),
-            ...(description !== network.description ? { description } : {}),
+          details: {
+            display_name: displayName,
+            description,
+            when_to_use: whenToUse,
+            conventions,
+            examples,
+            node_section_type_id: nodeSectionTypeId,
           },
-          { user_id: req.auth!.user.id, client_id: req.auth!.clientId },
-          { meta: { request_id: req.id } },
-        );
+        });
+        // Real-time (E3, 04-realtime.md §4.6, task O5): broadcast only changed
+        // fields so clients can merge in place.
+        const changes: Record<string, unknown> = {};
+        if (displayName !== network.display_name) changes['display_name'] = displayName;
+        if (description !== network.description) changes['description'] = description;
+        if (whenToUse !== network.when_to_use) changes['when_to_use'] = whenToUse;
+        if (conventions !== network.conventions) changes['conventions'] = conventions;
+        if (examples !== network.examples) changes['examples'] = examples;
+        if (nodeSectionTypeId !== network.node_section_type_id) {
+          changes['node_section_type_id'] = nodeSectionTypeId;
+        }
+        if (Object.keys(changes).length > 0) {
+          emitDomainEvent(
+            { systemDb: app.systemDb, pubsub: app.pubsub },
+            network.id,
+            'network.updated',
+            changes,
+            { user_id: req.auth!.user.id, client_id: req.auth!.clientId },
+            { meta: { request_id: req.id } },
+          );
+        }
         const updated = app.systemDb.getNetworkById(network.id);
         sendSuccess(reply, networkDto(updated!));
       },

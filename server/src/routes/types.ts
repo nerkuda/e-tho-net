@@ -379,6 +379,19 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const query = req.query as Record<string, unknown>;
         const force = queryBoolean(query.force, 'force', req.id) === true;
+        // Task O5: the type is the network's `node_section_type_id`?
+        // Refuse even with `force` — the network would lose its machine-readable
+        // structure marker. The owner must clear the setting first.
+        const referencing = app.systemDb.listNetworksReferencingNodeSectionType(id);
+        const selfRef = referencing.find((n) => n.id === networkId);
+        if (selfRef !== undefined) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'Тип используется как узловой раздел сети; сначала очистите настройку сети.',
+            { entity: 'thought_type', id, network_id: networkId },
+            req.id,
+          );
+        }
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         deleteThoughtType(ndb, id, expectedVersion, { force, actorUserId: req.auth!.user.id });
         deps.emit(req, networkId, 'thought-type.deleted', { id });

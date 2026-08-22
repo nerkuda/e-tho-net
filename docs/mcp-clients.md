@@ -79,3 +79,79 @@ IDE-агенты, кастомные скрипты) читают и измен�
 3. Сгенерировать дайджест в своей LLM.
 4. Опционально: `etn.comments.upsert` — сохранить дайджест как хронологический
    комментарий у корневой мысли.
+
+## 8. Самоописание сети: маршрутизация и формат записи (задача O5)
+
+### 8.1. Выбрать подходящую сеть
+
+Когда у пользователя несколько сетей, агент должен сам решить, в какую писать.
+`etn.networks.list` отдаёт `description` и `when_to_use` для каждой сети
+плюс `has_structure: true|false`. Алгоритм:
+
+1. Получить список: `etn.networks.list` (без параметров).
+2. Прочитать `description` — общее назначение сети.
+3. Прочитать `when_to_use` — список use cases, для каждого — какие ещё поля
+   сети релевантны (например, «Кодирование → structure, conventions»).
+4. Выбрать сеть, чей `when_to_use` соответствует текущей задаче.
+5. Если `has_structure: true`, начать с `etn.networks.structure` (§8.2).
+6. Если `has_structure: false` (или структура нерелевантна) — сразу
+   `etn.thoughts.search` / `etn.thoughts.query`.
+
+Не читайте все поля подряд (`conventions`, `examples`) у всех сетей —
+это лишний расход контекста. Запрашивайте только нужные выбранной сети
+(`GET /networks/{id}` или ресурс `etn://networks/{network_id}`).
+
+### 8.2. Работа со структурой сети
+
+Когда сеть объявляет `node_section_type_id`, агент читает «оглавление» через:
+
+```
+etn.networks.structure { network_id }
+```
+
+Ответ:
+
+- `node_section_type_id` — тип мысли-раздела.
+- `sections[]` — активные мысли этого типа с обогащением:
+  - `permanent` — превью постоянного комментария (обрезка до 2000 символов
+    + `comment_id` для полного чтения через `etn.comments.get`);
+  - `properties` — резолвнутые значения (`thought_ref` → `{id,title}`);
+  - `counters` — `parents_count`, `children_count`, `attachments_count`,
+    `usage_count`.
+- `thought_types` — каталог типов, использованных в разделах.
+- `has_structure: false` — пустой `sections`, агент переходит к search/query.
+
+Дальше — обычный drill-down по выбранному разделу:
+
+1. Прочитать `permanent` целиком, если `truncated: true` —
+   `etn.comments.get { comment_id }`.
+2. Запросить **типы раздела** (task O16) — только типы, реально
+   используемые в поддереве этого раздела:
+   ```
+   etn.types.list { network_id, in_subtree_of: <section.id> }
+   ```
+   Ответ содержит только релевантные `thought_types` и `link_types`, каждый
+   с `usage_count` — счётчиком использования внутри раздела. Это второй
+   шаг после `structure`; для записи в раздел у агента сразу есть
+   «контекстный» каталог типов, без полного снимка всей сети.
+3. Найти подходящие под-мысли:
+   `etn.thoughts.query { network_id, in_subtree_of: <section.id>, ... }`
+   или `etn.thoughts.search`.
+4. Прочитать детали нужных мыслей: `etn.thoughts.get` или `subgraph`.
+
+Если нужно изменить `max_depth` обхода поддерева — параметр `max_depth` (1..`TRAVERSAL_DEFAULTS.MAX_DEPTH`). При пустом поддереве (нет детей) —
+пустые `thought_types` / `link_types`; это валидный ответ, не ошибка.
+
+### 8.3. Запись в сеть: формы и правила
+
+Перед `create` / `update` агент обязан прочитать `conventions` (правила
+записи) и при сомнениях по форме — `examples` (хорошие/плохие записи).
+Эти поля не возвращаются в `etn.networks.list`; запросите их явно через
+`GET /networks/{id}` или ресурс.
+
+Запись одной «единицы знания» — идемпотентная операция `upsert_bundle`
+(см. `05-mcp-server.md` §5.2a): мысль + комментарий + свойства + связи +
+вложения одной транзакцией. Политика `on_duplicate` (`fail` / `reuse` /
+`update`) делает повторный импорт безопасным. Обязательный шаг —
+`etn.thoughts.find_duplicates` перед `upsert_bundle`, чтобы не плодить
+дубликаты, и сверка с `conventions` для типа.

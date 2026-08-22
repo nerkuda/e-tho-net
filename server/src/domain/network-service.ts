@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 
-import type { Network } from '@etn/shared';
+import { EtnError, type Network } from '@etn/shared';
 
 import type { SystemDb } from '../db/system-db.js';
 import { closeNetworkDb, openNetworkDb } from '../db/network-db.js';
@@ -42,6 +42,17 @@ export interface NetworkService {
    * `network_members`). Admin-only.
    */
   deleteNetwork(networkId: string): Promise<void>;
+
+  /**
+   * Validate the `node_section_type_id` value a caller wants to persist on a
+   * network (task O5, docs/05-mcp-server.md §3). `null` clears the field and
+   * is always valid. A non-null id must exist as a `thought_types.id` row in
+   * this network's `data.db`; a stale id would silently break
+   * `etn.networks.structure`, so it is rejected here with `VALIDATION_ERROR`.
+   *
+   * @returns the value to persist (`null` or a verified id).
+   */
+  validateNodeSectionType(networkId: string, typeId: string | null): string | null;
 }
 
 /**
@@ -125,5 +136,27 @@ export class NetworkServiceImpl implements NetworkService {
     // 3. Delete the registry row (cascades to network_members, user_preferences).
     this.systemDb.deleteNetworkRow(networkId);
     this.log?.info({ networkId }, 'network deleted');
+  }
+
+  validateNodeSectionType(networkId: string, typeId: string | null): string | null {
+    if (typeId === null) {
+      return null;
+    }
+    // The network DB is cached process-wide; opening it here also keeps it warm
+    // for the route's own follow-up requests. We deliberately do NOT close it
+    // — concurrent requests share the same connection (better-sqlite3 is
+    // synchronous and re-entrant inside a transaction).
+    const ndb = openNetworkDb(this.dataDir, networkId, this.log);
+    const row = ndb
+      .prepare('SELECT id FROM thought_types WHERE id = ? LIMIT 1')
+      .get(typeId) as { id: string } | undefined;
+    if (row === undefined) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'Указанный тип узловых разделов не найден в сети.',
+        { field: 'node_section_type_id', value: typeId },
+      );
+    }
+    return row.id;
   }
 }

@@ -18,12 +18,15 @@
  *
  * - **Пользователь** — own `display_name` (L1 user profile, edited via the
  *   new self-service `PATCH /me`). Username is read-only.
- * - **Мыслесеть** — network `display_name`/`description` (L2, owner-only,
- *   shown disabled otherwise) plus the per-user `show_inactive` L3 preference.
+ * - **Мыслесеть** — network `display_name` plus four markdown self-description
+ *   fields (L2, task O5: `description`, `when_to_use`, `conventions`,
+ *   `examples`), the per-network `node_section_type_id` dropdown and the
+ *   per-user `show_inactive` L3 preference. Markdown tabs are owner-only.
  * - **Клиент** — UI theme (L5 `client_meta.theme`) and `cloud_width` /
  *   `cloud_gap` (L4 `ui_state`), all clipped to the system constants.
  */
 
+import { renderMarkdown } from '@etn/markdown';
 import {
   CLIENT_META_KEY,
   CLOUD_GAP_MAX,
@@ -53,11 +56,39 @@ const SECTION_TITLES: Record<Section, string> = {
   client: 'Клиент',
 };
 
+/** Tabs inside the «Мыслесеть» section (task O5). */
+type NetworkTab = 'description' | 'when_to_use' | 'conventions' | 'examples';
+
+const NETWORK_TAB_TITLES: Record<NetworkTab, string> = {
+  description: 'Описание',
+  when_to_use: 'Когда использовать',
+  conventions: 'Правила',
+  examples: 'Примеры',
+};
+
+/** Placeholder text shown when a network markdown field is empty (O5). */
+const NETWORK_TAB_PLACEHOLDERS: Record<NetworkTab, string> = {
+  description:
+    'Назначение сети в одном-двух абзацах. Увидит и человек, и AI-агент при выборе сети.',
+  when_to_use:
+    'Когда агенту обращаться к этой сети. Для каждого use case — какие ещё поля сети читать.\n\n' +
+    'Пример:\n- Кодирование → conventions, structure\n- Ретроспектива проекта → examples, conventions',
+  conventions:
+    'Правила записи: формат хронологий, пометка active, нейминг, ссылки на типы и шаблоны.',
+  examples: 'Примеры хороших и плохих записей — чтобы агент не выдумывал форму.',
+};
+
+const NETWORK_FIELDS_TEXT_MAX = 20_000;
+
 /** Draft snapshot of every editable value in the dialog. */
 interface Draft {
   displayName: string;
   networkName: string;
   networkDescription: string;
+  networkWhenToUse: string;
+  networkConventions: string;
+  networkExamples: string;
+  networkNodeSectionTypeId: string | null;
   showInactive: boolean;
   theme: Theme;
   cloudWidth: number;
@@ -72,6 +103,10 @@ function readInitialDraft(): Draft {
     displayName: me?.display_name ?? '',
     networkName: net?.display_name ?? '',
     networkDescription: net?.description ?? '',
+    networkWhenToUse: net?.when_to_use ?? '',
+    networkConventions: net?.conventions ?? '',
+    networkExamples: net?.examples ?? '',
+    networkNodeSectionTypeId: net?.node_section_type_id ?? null,
     showInactive: store.state.showInactive,
     theme: store.state.theme,
     cloudWidth: store.state.cloudWidth,
@@ -85,6 +120,10 @@ function isDirtyDraft(a: Draft, b: Draft): boolean {
     a.displayName !== b.displayName ||
     a.networkName !== b.networkName ||
     a.networkDescription !== b.networkDescription ||
+    a.networkWhenToUse !== b.networkWhenToUse ||
+    a.networkConventions !== b.networkConventions ||
+    a.networkExamples !== b.networkExamples ||
+    a.networkNodeSectionTypeId !== b.networkNodeSectionTypeId ||
     a.showInactive !== b.showInactive ||
     a.theme !== b.theme ||
     a.cloudWidth !== b.cloudWidth ||
@@ -207,6 +246,44 @@ export function showSettingsDialog(): void {
     return root;
   }
 
+  /**
+   * Build the textarea + live-preview block for one network markdown field
+   * (task O5). The server stores raw markdown only; the preview is rendered
+   * on the client through the shared `@etn/markdown` pipeline. The textarea
+   * stays disabled for non-owners.
+   */
+  function renderMarkdownField(opts: {
+    tab: NetworkTab;
+    getValue: () => string;
+    setValue: (md: string) => void;
+    disabled: boolean;
+  }): HTMLElement {
+    const wrap = div('settings-md-field');
+
+    const editor = el('textarea', 'text-input settings-md-textarea');
+    editor.rows = 8;
+    editor.value = opts.getValue();
+    editor.maxLength = NETWORK_FIELDS_TEXT_MAX;
+    editor.disabled = opts.disabled;
+    editor.placeholder = NETWORK_TAB_PLACEHOLDERS[opts.tab];
+    editor.addEventListener('input', () => {
+      const next = editor.value;
+      opts.setValue(next);
+      renderPreview(preview, next);
+      markDirty();
+    });
+
+    const previewWrap = div('settings-md-preview-wrap');
+    previewWrap.append(el('span', 'settings-md-preview-label', 'Предпросмотр'));
+    const preview = div('md-field-view comment-view settings-md-preview');
+    previewWrap.append(preview);
+
+    renderPreview(preview, opts.getValue());
+
+    wrap.append(editor, previewWrap);
+    return wrap;
+  }
+
   function renderNetworkSection(): HTMLElement {
     const root = div('settings-section');
     const isOwner =
@@ -222,13 +299,87 @@ export function showSettingsDialog(): void {
       markDirty();
     });
 
-    const descInput = el('textarea', 'text-input');
-    descInput.rows = 3;
-    descInput.value = draft.networkDescription;
-    descInput.maxLength = 2000;
-    descInput.disabled = !isOwner;
-    descInput.addEventListener('input', () => {
-      draft.networkDescription = descInput.value;
+    // Tabs for the four markdown self-description fields (O5).
+    let activeTab: NetworkTab = 'description';
+    const tabsBar = el('div', 'settings-md-tabs');
+    const tabButtons: Record<NetworkTab, HTMLButtonElement> = {
+      description: el('button', 'settings-md-tab'),
+      when_to_use: el('button', 'settings-md-tab'),
+      conventions: el('button', 'settings-md-tab'),
+      examples: el('button', 'settings-md-tab'),
+    };
+    const tabPanel = div('settings-md-panel');
+
+    const fieldSetters: Record<NetworkTab, (md: string) => void> = {
+      description: (md) => {
+        draft.networkDescription = md;
+      },
+      when_to_use: (md) => {
+        draft.networkWhenToUse = md;
+      },
+      conventions: (md) => {
+        draft.networkConventions = md;
+      },
+      examples: (md) => {
+        draft.networkExamples = md;
+      },
+    };
+    const fieldGetters: Record<NetworkTab, () => string> = {
+      description: () => draft.networkDescription,
+      when_to_use: () => draft.networkWhenToUse,
+      conventions: () => draft.networkConventions,
+      examples: () => draft.networkExamples,
+    };
+
+    function paintTabs(): void {
+      for (const key of Object.keys(tabButtons) as NetworkTab[]) {
+        const btn = tabButtons[key];
+        const isActive = key === activeTab;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-current', isActive ? 'page' : 'false');
+      }
+      tabPanel.replaceChildren();
+      tabPanel.append(
+        renderMarkdownField({
+          tab: activeTab,
+          getValue: fieldGetters[activeTab],
+          setValue: fieldSetters[activeTab],
+          disabled: !isOwner,
+        }),
+      );
+    }
+    for (const key of Object.keys(tabButtons) as NetworkTab[]) {
+      const btn = tabButtons[key];
+      btn.type = 'button';
+      btn.textContent = NETWORK_TAB_TITLES[key];
+      btn.addEventListener('click', () => {
+        if (activeTab === key) return;
+        activeTab = key;
+        paintTabs();
+      });
+      tabsBar.append(btn);
+    }
+    paintTabs();
+
+    // Node-section type dropdown (O5). The list comes from the in-memory
+    // store (refreshed on type changes by realtime); `null` means "no
+    // structure".
+    const typeSelect = el('select', 'text-input');
+    typeSelect.disabled = !isOwner;
+    const noneOption = el('option');
+    noneOption.value = '';
+    noneOption.textContent = '— не задано —';
+    typeSelect.append(noneOption);
+    const thoughtTypes = store.state.thoughtTypes ?? [];
+    for (const t of thoughtTypes) {
+      const opt = el('option');
+      opt.value = t.id;
+      opt.textContent = t.name;
+      typeSelect.append(opt);
+    }
+    typeSelect.value = draft.networkNodeSectionTypeId ?? '';
+    typeSelect.addEventListener('change', () => {
+      draft.networkNodeSectionTypeId = typeSelect.value === '' ? null : typeSelect.value;
       markDirty();
     });
 
@@ -252,7 +403,19 @@ export function showSettingsDialog(): void {
     root.append(
       el('h3', 'settings-section-title', 'Настройки сети'),
       field('Название сети', nameInput),
-      field('Описание', descInput),
+      el(
+        'p',
+        'muted',
+        'Самоописание сети для людей и AI-агентов. Markdown: ссылки, списки, картинки. Во вкладке «Когда использовать» перечислите сценарии, для которых подходит сеть.',
+      ),
+      tabsBar,
+      tabPanel,
+      el(
+        'p',
+        'muted',
+        'Узловой тип раздела определяет структуру сети (читается через `etn.networks.structure`). Все активные мысли выбранного типа становятся разделами. Тип, выбранный здесь, нельзя удалить, пока ссылка не снята.',
+      ),
+      field('Узловой тип раздела', typeSelect),
       el('p', 'muted', ownerHint),
       el('h3', 'settings-section-title settings-section-title-spaced', 'Видимость'),
       showInactiveLabel,
@@ -360,17 +523,26 @@ export function showSettingsDialog(): void {
       );
     }
 
-    // Network: display_name / description (L2). Only the owner can change
-    // them; for non-owners the inputs are disabled, so this branch is a no-op.
-    if (
+    // Network: display_name + 4 markdown fields + node_section_type_id (L2 / O5).
+    // One PATCH so the server-side update is a single transaction; partial
+    // mismatches between client and server are tolerated because we always
+    // send the full current draft for changed fields.
+    const networkFieldsDirty =
       draft.networkName !== original.networkName ||
-      draft.networkDescription !== original.networkDescription
-    ) {
-      const fields: { display_name?: string; description?: string } = {
-        display_name: draft.networkName.trim(),
+      draft.networkDescription !== original.networkDescription ||
+      draft.networkWhenToUse !== original.networkWhenToUse ||
+      draft.networkConventions !== original.networkConventions ||
+      draft.networkExamples !== original.networkExamples ||
+      draft.networkNodeSectionTypeId !== original.networkNodeSectionTypeId;
+    if (networkFieldsDirty) {
+      const fields: Parameters<typeof etn.networks.update>[1] = {
+        display_name: draft.networkName.trim() || (store.state.network?.display_name ?? ''),
+        description: draft.networkDescription.trim() === '' ? null : draft.networkDescription,
+        when_to_use: draft.networkWhenToUse.trim() === '' ? null : draft.networkWhenToUse,
+        conventions: draft.networkConventions.trim() === '' ? null : draft.networkConventions,
+        examples: draft.networkExamples.trim() === '' ? null : draft.networkExamples,
+        node_section_type_id: draft.networkNodeSectionTypeId,
       };
-      const desc = draft.networkDescription.trim();
-      fields['description'] = desc;
       tasks.push(
         (async () => {
           const updated = await etn.networks.update(networkId, fields);
@@ -439,6 +611,10 @@ export function showSettingsDialog(): void {
       original.displayName = draft.displayName;
       original.networkName = draft.networkName;
       original.networkDescription = draft.networkDescription;
+      original.networkWhenToUse = draft.networkWhenToUse;
+      original.networkConventions = draft.networkConventions;
+      original.networkExamples = draft.networkExamples;
+      original.networkNodeSectionTypeId = draft.networkNodeSectionTypeId;
       original.showInactive = draft.showInactive;
       original.theme = draft.theme;
       original.cloudWidth = draft.cloudWidth;
@@ -458,7 +634,7 @@ export function showSettingsDialog(): void {
     title: 'Настройки',
     body,
     customFooter: footer,
-    width: 640,
+    width: 760,
     extraShortcuts: {
       shiftEnter: () => void applyDraft(false),
     },
@@ -466,6 +642,21 @@ export function showSettingsDialog(): void {
 
   renderContent();
   refreshApplyButtons();
+}
+
+/** Render markdown into the live preview pane using the shared pipeline. */
+function renderPreview(target: HTMLElement, md: string): void {
+  target.replaceChildren();
+  const trimmed = md.trim();
+  if (trimmed === '') {
+    target.append(el('span', 'muted', 'Поле пустое.'));
+    return;
+  }
+  try {
+    target.innerHTML = renderMarkdown(md);
+  } catch (err) {
+    target.append(errText(err));
+  }
 }
 
 /** Standard field builder (label + control wrapper). */

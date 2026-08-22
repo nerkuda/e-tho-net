@@ -118,27 +118,47 @@ PATCH  /api/v1/admin/networks/{network_id}/members  # принудительно
 ```
 GET /api/v1/networks
 → 200 { data: [ { id, display_name, owner: {id, display_name},
-                  role: "owner"|"member", members_count, my_focus_thought_id } ] }
+                  role: "owner"|"member", members_count, my_focus_thought_id,
+                  description, when_to_use,
+                  has_structure } ] }
+# `description`/`when_to_use` — markdown-самоописание (задача O5).
+# `conventions`/`examples` намеренно не возвращаются в списке — только в
+# GET /networks/{id}, чтобы не раздувать ответ при большом числе сетей.
+# `has_structure` — true, когда сеть объявляет node_section_type_id.
 ```
 
 ### 5.2. Создание
 ```
 POST /api/v1/networks
 { display_name: "Моя сеть", description? }
-→ 201 { data: { id, display_name, owner_id, created_at } }
+→ 201 { data: { id, display_name, owner_id, created_at,
+                description, when_to_use, conventions, examples,
+                node_section_type_id, has_structure } }
 # Автоматически: создатель становится owner, создаётся мысль "HOME".
 ```
 
 ### 5.3. Управление (владелец)
 ```
 GET   /api/v1/networks/{id}
-PATCH /api/v1/networks/{id}                { display_name?, description? }
+PATCH /api/v1/networks/{id}                { display_name?,
+                                            description?, when_to_use?,
+                                            conventions?, examples?,
+                                            node_section_type_id? }
 
 GET   /api/v1/networks/{id}/members        # список участников
 POST  /api/v1/networks/{id}/members        { user_id }     # добавить (member)
 PATCH /api/v1/networks/{id}/members/{uid}  { role }        # передача владения
 DELETE /api/v1/networks/{id}/members/{uid}                 # исключить
 ```
+
+`PATCH /networks/{id}` (задача O5):
+
+- Доступ — владелец сети или админ.
+- Все поля опциональны; неуказанные сохраняются. `null`/`""` — очистка.
+- `node_section_type_id` — UUID типа мысли из `data.db` этой сети либо `null`
+  (снять структуру). Несуществующий id → `VALIDATION_ERROR`.
+- Изменения публикуются событием `network.updated` (только реально изменённые
+  поля; см. `04-realtime.md` §4.6).
 
 Передача владения: `PATCH { role: "owner" }` переводит текущего владельца в
 `member`, нового — в `owner`, в одной транзакции.

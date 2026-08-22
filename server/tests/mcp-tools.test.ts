@@ -933,6 +933,358 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.networks.list exposes description/when_to_use/has_structure (O5)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Fill the four markdown fields directly through the system DB so the
+      // test does not depend on a (yet-to-exist) MCP wrapper for PATCH /networks.
+      const current = ctx.sys.getNetworkById(ctx.networkId);
+      assert.ok(current);
+      ctx.sys.updateNetwork(ctx.networkId, {
+        displayName: current!.display_name,
+        description: 'Назначение сети',
+        when_to_use: 'Coding → conventions',
+        conventions: null,
+        examples: null,
+        node_section_type_id: null,
+      });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const listed = await handle.client.callTool({
+          name: 'etn.networks.list',
+          arguments: {},
+        });
+        assert.equal(listed.isError, undefined, toolText(listed));
+        const data = toolJson<Array<{
+          id: string;
+          description: string | null;
+          when_to_use: string | null;
+          has_structure: boolean;
+          // These two must NOT be present in the compact list (O5).
+          conventions?: unknown;
+          examples?: unknown;
+          node_section_type_id?: unknown;
+        }>>(listed);
+        assert.equal(data.length, 1);
+        const item = data[0]!;
+        assert.equal(item.id, ctx.networkId);
+        assert.equal(item.description, 'Назначение сети');
+        assert.equal(item.when_to_use, 'Coding → conventions');
+        assert.equal(item.has_structure, false);
+        assert.equal(item.conventions, undefined);
+        assert.equal(item.examples, undefined);
+        assert.equal(item.node_section_type_id, undefined);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.networks.structure returns empty sections when no node_section_type_id (O5)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.networks.structure',
+          arguments: { network_id: ctx.networkId },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<{
+          network_id: string;
+          has_structure: boolean;
+          node_section_type_id: string | null;
+          sections: unknown[];
+          thought_types: unknown[];
+        }>(result);
+        assert.equal(data.network_id, ctx.networkId);
+        assert.equal(data.has_structure, false);
+        assert.equal(data.node_section_type_id, null);
+        assert.deepEqual(data.sections, []);
+        assert.deepEqual(data.thought_types, []);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.networks.structure returns active section nodes with counters + permanent preview (O5)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const sectionType = createThoughtType(ndb, { name: 'Раздел' }, ctx.adminId);
+      const noteType = createThoughtType(ndb, { name: 'Заметка' }, ctx.adminId);
+
+      // Two active section nodes + one inactive (must be skipped) + a child thought.
+      const sectionA = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'Введение', 'введение', ?, 1, 0, 0, 1, '2024', ?, '2024', ?)`,
+        )
+        .run(sectionA, sectionType.id, ctx.adminId, ctx.adminId);
+      const sectionB = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'Заключение', 'заключение', ?, 1, 0, 0, 1, '2024', ?, '2024', ?)`,
+        )
+        .run(sectionB, sectionType.id, ctx.adminId, ctx.adminId);
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'Скрытый', 'скрытый', ?, 0, 0, 0, 1, '2024', ?, '2024', ?)`,
+        )
+        .run(randomUUID(), sectionType.id, ctx.adminId, ctx.adminId);
+      // A child thought of sectionA (so counters.parents_count > 0 on the child
+      // is irrelevant; we just want a link from sectionA to a note to make
+      // usage_count sensible).
+      const note = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'Подтема', 'подтема', ?, 1, 0, 0, 1, '2024', ?, '2024', ?)`,
+        )
+        .run(note, noteType.id, ctx.adminId, ctx.adminId);
+      ndb
+        .prepare(
+          `INSERT INTO links (id, source_id, target_id, active, version,
+                              created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, 1, 1, '2024', '2024', ?, ?)`,
+        )
+        .run(randomUUID(), sectionA, note, ctx.adminId, ctx.adminId);
+
+      // Set the network node_section_type_id via the system DB.
+      const current = ctx.sys.getNetworkById(ctx.networkId)!;
+      ctx.sys.updateNetwork(ctx.networkId, {
+        displayName: current.display_name,
+        description: current.description,
+        when_to_use: current.when_to_use,
+        conventions: current.conventions,
+        examples: current.examples,
+        node_section_type_id: sectionType.id,
+      });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.networks.structure',
+          arguments: { network_id: ctx.networkId },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<{
+          network_id: string;
+          has_structure: boolean;
+          node_section_type_id: string;
+          node_section_type: { id: string; name: string };
+          sections: Array<{
+            id: string;
+            title: string;
+            counters: {
+              parents_count: number;
+              children_count: number;
+              attachments_count: number;
+              usage_count: number;
+            };
+          }>;
+          thought_types: Record<string, { id: string; name: string }>;
+        }>(result);
+
+        assert.equal(data.has_structure, true);
+        assert.equal(data.node_section_type_id, sectionType.id);
+        assert.equal(data.node_section_type.id, sectionType.id);
+
+        // Inactive "Скрытый" is excluded; only the two active section nodes remain.
+        assert.equal(data.sections.length, 2);
+        const titles = data.sections.map((s) => s.title).sort();
+        assert.deepEqual(titles, ['Введение', 'Заключение']);
+
+        // sectionA has an outgoing link → parents_count stays 0 (no parents),
+        // but children_count is at least 1 because of the link to Подтема.
+        const intro = data.sections.find((s) => s.id === sectionA);
+        assert.ok(intro, 'sectionA must be present');
+        assert.equal(intro!.counters.parents_count, 0);
+        assert.ok(intro!.counters.children_count >= 1);
+
+        // The catalogue includes the section type itself (noteType is a child
+        // thought but not a section — it's not in the catalogue). N6-style
+        // object keyed by id.
+        assert.ok(data.thought_types[sectionType.id]);
+        assert.equal(data.thought_types[sectionType.id].name, 'Раздел');
+        assert.equal(data.thought_types[noteType.id], undefined);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.networks.structure rejects a non-member (FORBIDDEN, O5)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Create a second user that is NOT a member of ctx.networkId.
+      const { id: outsiderId } = ctx.sys.createUser({
+        id: randomUUID(),
+        username: 'outsider',
+        displayName: 'Outsider',
+      });
+      const gen = generateApiKey();
+      ctx.sys.createApiKey({
+        id: randomUUID(),
+        userId: outsiderId,
+        label: 'p',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+      });
+      const handle = await connectMcpClient(ctx, gen.key);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.networks.structure',
+          arguments: { network_id: ctx.networkId },
+        });
+        assert.equal(result.isError, true);
+        assert.match(toolText(result), /FORBIDDEN/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.types.list with in_subtree_of returns only types used in the subtree (O16)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const sectionType = createThoughtType(ndb, { name: 'Раздел' }, ctx.adminId);
+      const noteType = createThoughtType(ndb, { name: 'Заметка' }, ctx.adminId);
+      // A second type that lives OUTSIDE the subtree and must not leak in.
+      const strayType = createThoughtType(ndb, { name: 'Сторонний' }, ctx.adminId);
+      const linkType = createLinkType(
+        ndb,
+        { name_forward: 'содержит', name_reverse: 'входит в' },
+        ctx.adminId,
+      );
+
+      // Seed → A (Раздел) → B (Заметка), one typed link.
+      const seedId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'Корень', 'корень', ?, 1, 0, 0, 1, '2024', ?, '2024', ?)`,
+        )
+        .run(seedId, sectionType.id, ctx.adminId, ctx.adminId);
+      const aId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'A', 'a', ?, 1, 0, 0, 1, '2024', ?, '2024', ?)`,
+        )
+        .run(aId, sectionType.id, ctx.adminId, ctx.adminId);
+      const bId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'B', 'b', ?, 1, 0, 0, 1, '2024', ?, '2024', ?)`,
+        )
+        .run(bId, noteType.id, ctx.adminId, ctx.adminId);
+      ndb
+        .prepare(
+          `INSERT INTO links (id, source_id, target_id, type_id, active, version,
+                              created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, ?, 1, 1, '2024', '2024', ?, ?)`,
+        )
+        .run(randomUUID(), seedId, aId, linkType.id, ctx.adminId, ctx.adminId);
+      ndb
+        .prepare(
+          `INSERT INTO links (id, source_id, target_id, type_id, active, version,
+                              created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, ?, 1, 1, '2024', '2024', ?, ?)`,
+        )
+        .run(randomUUID(), aId, bId, linkType.id, ctx.adminId, ctx.adminId);
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const listed = await handle.client.callTool({
+          name: 'etn.types.list',
+          arguments: { network_id: ctx.networkId, in_subtree_of: aId },
+        });
+        assert.equal(listed.isError, undefined, toolText(listed));
+        const data = toolJson<{
+          thought_types: Array<{ id: string; name: string; usage_count?: number }>;
+          link_types: Array<{ id: string; usage_count?: number }>;
+          scope?: {
+            in_subtree_of: string;
+            max_depth: number;
+            thought_types_total: number;
+            link_types_total: number;
+          };
+        }>(listed);
+
+        // The stray type is NOT in the subtree's reach — it must be excluded.
+        assert.ok(!data.thought_types.some((t) => t.id === strayType.id));
+        // Section + Note are inside the subtree of `aId` (a itself + b).
+        const thoughtNames = data.thought_types.map((t) => t.name).sort();
+        assert.deepEqual(thoughtNames, ['Заметка', 'Раздел']);
+        const sectionEntry = data.thought_types.find((t) => t.id === sectionType.id);
+        const noteEntry = data.thought_types.find((t) => t.id === noteType.id);
+        assert.ok(sectionEntry && noteEntry);
+        // The subtree rooted at `a` contains: a (Раздел), b (Заметка).
+        // The seed→a link has source outside the subtree, so it does not
+        // contribute a link count.
+        assert.equal(sectionEntry!.usage_count, 1);
+        assert.equal(noteEntry!.usage_count, 1);
+
+        // Only a→b sits fully inside the subtree → exactly one link.
+        const linkEntry = data.link_types.find((l) => l.id === linkType.id);
+        assert.ok(linkEntry);
+        assert.equal(linkEntry!.usage_count, 1);
+
+        // scope echo: subtree is rooted at A.
+        assert.ok(data.scope);
+        assert.equal(data.scope!.in_subtree_of, aId);
+        assert.equal(data.scope!.thought_types_total, 2);
+        assert.equal(data.scope!.link_types_total, 1);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.types.list with unknown in_subtree_of returns NOT_FOUND (O16)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const listed = await handle.client.callTool({
+          name: 'etn.types.list',
+          arguments: { network_id: ctx.networkId, in_subtree_of: randomUUID() },
+        });
+        assert.equal(listed.isError, true);
+        assert.match(toolText(listed), /NOT_FOUND/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('etn.thoughts.create resolves a thought type by name; rejects unknown/both forms (O4)', async () => {
     const ctx = await buildMcpContext();
     try {

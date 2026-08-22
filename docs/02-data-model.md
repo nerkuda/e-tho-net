@@ -74,11 +74,22 @@ API-key для авторизации клиентов и MCP-агентов. У
 | `id` | TEXT PK | UUID (он же — имя каталога `networks/<id>/`) |
 | `display_name` | TEXT NOT NULL | Имя (пользователь может менять) |
 | `owner_id` | TEXT NOT NULL FK → users.id ON DELETE RESTRICT | Владелец |
-| `description` | TEXT | |
+| `description` | TEXT | Назначение сети в 1–2 абзацах (видит и человек, и AI-агент при выборе сети) |
+| `when_to_use` | TEXT | Когда агенту обращаться к сети: список use cases, для каждого — какие поля сети читать |
+| `conventions` | TEXT | Правила записи: формат хронологий, пометка active, нейминг, ссылки на типы и шаблоны |
+| `examples` | TEXT | Примеры хороших и плохих записей |
+| `node_section_type_id` | TEXT | Тип мысли, активные мысли которого образуют структуру сети (`etn.networks.structure`). Без FK (cross-DB) — при удалении типа проверка использования |
 | `created_at` | TEXT NOT NULL | |
 | `updated_at` | TEXT NOT NULL | |
 
 Имя файла/каталога (`id`) неизменно. `display_name` меняется свободно.
+
+Четыре markdown-поля (`description`, `when_to_use`, `conventions`, `examples`) —
+это «самоописание сети» для AI-агентов (фаза O, задача O5, см. также
+`05-mcp-server.md` §3). Сервер хранит только исходник markdown; клиент
+рендерит preview на лету через общий `@etn/markdown`. В списке сетей
+`conventions` и `examples` не отдаются — только `description` и `when_to_use`
+(компактность ответа при большом числе сетей).
 
 ### 2.4. network_members
 

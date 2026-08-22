@@ -34,14 +34,48 @@ REST. Все изменения, сделанные агентом, иденти
 параметром в каждом tool-вызове, ключ пользователя уже даёт ему доступ ко всем
 его сетям.
 
-## 3. Ресурсы (Resources)
+## 3. Самоописание сети (Self-Description, O5)
+
+Чтобы агенту не приходилось угадывать «куда и как писать», владелец сети
+заполняет четыре markdown-поля в настройках (`networks.description`,
+`when_to_use`, `conventions`, `examples`, см. `02-data-model.md` §2.3) и
+выбирает **узловой тип раздела** (`node_section_type_id` — тип мысли, чьи
+активные экземпляры образуют «структуру» сети).
+
+Поля:
+
+| Поле | Что в нём | Кто читает |
+|------|-----------|-----------|
+| `description` | Назначение сети в 1–2 абзацах | Человек + агент при выборе сети |
+| `when_to_use` | Когда агенту обращаться к сети: список use cases, для каждого — какие поля сети читать | Агент при маршрутизации между сетями |
+| `conventions` | Правила записи: формат хронологий, пометка активности, нейминг, ссылки на типы и шаблоны | Агент перед `create` / `update` |
+| `examples` | Примеры хороших и плохих записей | Агент при сомнениях по форме |
+
+Конвенция заполнения `when_to_use`: для каждого use case указываются
+релевантные поля сети (например, «Кодирование → structure, conventions»).
+Агент не читает все поля подряд, а берёт только нужные текущей задаче.
+
+Структура сети: владелец выбирает тип мысли — узловой раздел. Все активные
+мысли этого типа становятся узловыми разделами структуры
+(`etn.networks.structure` §5.1). Иерархия — обычными parent-child связями.
+Тип, указанный в настройках сети, **нельзя удалить**
+(`DELETE /networks/{id}/thought-types/{tid}` отклоняется с `VALIDATION_ERROR`),
+пока ссылка не снята.
+
+`etn.networks.list` (§5.1) возвращает `description` и `when_to_use` целиком
+плюс `has_structure: true|false` — агенту этого достаточно, чтобы решить, в
+какую сеть идти. `conventions`/`examples` намеренно не отдаются в списке
+(компактность); агент запрашивает `GET /networks/{id}` или ресурс
+`etn://networks/{network_id}` когда уже выбрал сеть.
+
+## 4. Ресурсы (Resources)
 
 Ресурсы — данные, которые агент читает по URI (static + templated).
 
 | URI | Описание |
 |-----|----------|
-| `etn://networks` | Список сетей, доступных пользователю |
-| `etn://networks/{network_id}` | Метаданные сети |
+| `etn://networks` | Список сетей, доступных пользователю (включая `description`/`when_to_use`/`has_structure`, см. §3) |
+| `etn://networks/{network_id}` | Метаданные сети (все 4 markdown-поля + `node_section_type_id`, см. §3) |
 | `etn://networks/{network_id}/thoughts/{thought_id}` | Полная мысль: свойства, синонимы, тип, стили + блок `meta` (см. ниже) |
 | `etn://networks/{network_id}/thoughts/{thought_id}/neighbors` | Соседи (parents/children/siblings) + каталоги `link_types`/`thought_types` |
 | `etn://networks/{network_id}/thoughts/{thought_id}/usage` | «Использование» мысли: кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству |
@@ -81,17 +115,18 @@ null` означает висячую ссылку на удалённую мы�
 объясняет суть типа и его связей. Ресурс типа возвращает это описание первым
 классом.
 
-## 4. Инструменты (Tools)
+## 5. Инструменты (Tools)
 
 Все инструменты именуются по схеме `etn.<сущность>.<действие>`.
 
-### 4.1. Поиск и чтение
+### 5.1. Поиск и чтение
 
 | Tool | Описание | Параметры |
 |------|----------|-----------|
-| `etn.networks.list` | Доступные сети | — |
+| `etn.networks.list` | Доступные сети + `description`/`when_to_use`/`has_structure` (см. §3) | — |
+| `etn.networks.structure` | Структура сети: активные мысли узлового типа (превью постоянного комментария, свойства, счётчики, каталог типов). Когда `node_section_type_id` не задан — пустой `sections` | `network_id` |
 | `etn.thoughts.search` | Полнотекстовый поиск | `network_id`, `query`, `scope?` (`names`/`texts`/`links`/`chronology`/`all`), `in_subtree_of?`, `type_id?`, `limit?` |
-| `etn.thoughts.query` | Структурная выборка (список по критериям) | см. §4.1a |
+| `etn.thoughts.query` | Структурная выборка (список по критериям) | см. §5.1a |
 | `etn.thoughts.get` | Полная мысль (+ блок `meta`: счётчики связей/вложений/хроники, превью постоянного комментария; `thought_ref`-значения свойств резолвнуты в `{id, title}`) | `network_id`, `thought_id` |
 | `etn.thoughts.neighbors` | Соседи (+ каталоги `link_types`/`thought_types`) | `network_id`, `thought_id`, `dir`, `depth?` (1 = прямые соседи; >1 — обход) |
 | `etn.thoughts.subgraph` | Подграф в радиусе N рёбер (+ каталоги `thought_types`/`link_types`) | `network_id`, `seed_ids[]`, `radius`, `max_nodes`, `include_comments?` |
@@ -101,7 +136,22 @@ null` означает висячую ссылку на удалённую мы�
 | `etn.thoughts.usage` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`) | `network_id`, `thought_id` |
 | `etn.comments.get` | Полный текст одного комментария: по `comment_id` (любой) или по `thought_id` (постоянный). Нужен, когда превью (`meta.permanent`, комментарии `subgraph`) показывает `truncated: true` — id есть в самом превью | `network_id` + ровно одно из `comment_id`/`thought_id` |
 | `etn.export.subgraph` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
-| `etn.types.list` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §4.1b | `network_id` |
+| `etn.types.list` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §5.1b | `network_id` |
+
+`etn.networks.structure` — входная точка агента в базу знаний сети (O5).
+Возвращает активные мысли `node_section_type_id` с обогащением:
+
+- `permanent` — превью постоянного комментария по правилам N2/N5
+  (`chars_returned`/`chars_total`/`truncated` + `comment_id` для полного
+  чтения через `etn.comments.get`);
+- `properties` — резолвнутые значения свойств (`thought_ref` → `{id,title}`);
+- `counters` — `parents_count`, `children_count`, `attachments_count`,
+  `usage_count`;
+- `thought_types` — каталог типов мыслей, реально использованных в разделах
+  (плюс сам `node_section_type_id`).
+
+Когда у сети нет `node_section_type_id`, ответ — `{ has_structure: false,
+sections: [] }`: агенту остаётся `etn.thoughts.search` / `etn.thoughts.query`.
 
 `etn.thoughts.subgraph` — ключевой для RAG-сценариев: агент задаёт радиус
 обхода, лимит узлов, и получает JSON-граф с мыслями, связями и (опционально)
@@ -161,7 +211,7 @@ tables» (только реально использованные в ответ
 типы пропускаются (`type_id` без SQL FK). Формат у инструмента и парного
 ресурса (`etn://…/neighbors`) одинаковый.
 
-#### 4.1a. `etn.thoughts.query` — структурная выборка
+#### 5.1a. `etn.thoughts.query` — структурная выборка
 
 Список мыслей по критериям **без обязательного текстового запроса** (в
 отличие от `etn.thoughts.search`). Нужен, когда искать нечего, а критерий —
@@ -209,7 +259,7 @@ reason, thought_types }`. `depth` — расстояние от `in_subtree_of` 
 }
 ```
 
-#### 4.1b. `etn.types.list` — каталог типов с эффективными свойствами (task O4)
+#### 5.1b. `etn.types.list` — каталог типов с эффективными свойствами (task O4, O16)
 
 В отличие от reference-таблиц N6 (только типы, реально встретившиеся в
 ответе), `etn.types.list` отдаёт **оба каталога целиком**: все типы мыслей и
@@ -221,18 +271,41 @@ N6-каталога (`id`, `name`/`name_forward`+`name_reverse`, `parent_id`,
 `key`, `value_type`, `required`, `config` (в т.ч. `options`/
 `allowed_type_ids`/`default_value`), `inherited`, `defined_on`,
 `defined_on_name`, эффективный `default_value` (переопределение типа или
-собственный дефолт свойства), `overridden_here`. Параметров, кроме
-`network_id`, нет — фильтрации по одному типу нет (для этого — конкретный
-`type_id`/`type` в create-инструментах или ресурс `etn://…/thought-types/{id}`).
+собственный дефолт свойства), `overridden_here`.
 
-Вызывается агентом **перед созданием типизированной мысли/связи**, чтобы
-увидеть, какие свойства заполнить и что вообще доступно из типов; также
-источник для резолва типа по имени ниже.
+Параметры:
+
+- `network_id` — обязательный.
+- `in_subtree_of` *(task O16, опц.)* — `thought_id`. Когда задан, ответ
+  ограничивается только теми `thought_types`/`link_types`, чьи id
+  присутствуют в **поддереве** мысли (children по `source→target`,
+  `UNION`-дедупликация против циклов, лимит — `TRAVERSAL_DEFAULTS.MAX_DEPTH`,
+  переопределяется `max_depth`). У каждой записи появляется `usage_count` —
+  сколько мыслей этого типа в поддереве для `thought_types`, и сколько
+  активных связей этого типа (оба конца — в поддереве) для `link_types`.
+  Неактивные мысли и связи пропускаются, как и в `etn.thoughts.search`.
+- `max_depth` *(опц.)* — переопределение лимита глубины обхода
+  (1..`TRAVERSAL_DEFAULTS.MAX_DEPTH`).
+
+Когда `in_subtree_of` задан, ответ несёт блок `scope` с эхом параметров и
+счётчиками (`thought_types_total`, `link_types_total`). При несуществующем
+`thought_id` — `NOT_FOUND`. При пустом поддереве (нет детей) ответ —
+пустые `thought_types` / `link_types`, `scope` присутствует. Агент не
+загружает «всё подряд»: добавил/удалил мысль — выборка меняется сама, ручной
+поддержки нет.
+
+Типичный сценарий (cookbook в `docs/mcp-clients.md` §8.2): после
+`etn.networks.structure` агент получает список разделов сети; для
+конкретного раздела вызывает
+`etn.types.list { network_id, in_subtree_of: <section.id> }` — и видит
+только типы, реально используемые в этом разделе, с числом использований.
+
+##### Тип по имени вместо `type_id` (task O4)
 
 ##### Тип по имени вместо `type_id` (task O4)
 
 `etn.thoughts.create`, `etn.links.create` и `etn.thoughts.upsert_bundle`
-(§4.2, §4.2a) принимают параметр `type` (строка) как альтернативу `type_id` —
+(§5.2, §5.2a) принимают параметр `type` (строка) как альтернативу `type_id` —
 ровно одно из двух, иначе `VALIDATION_ERROR`. Резолв — по `name_key`
 (case-insensitive, та же нормализация, что и при проверке дублей имени типа);
 для связей — по `name_forward` **или** `name_reverse`. Ошибки: имя не найдено
@@ -242,14 +315,14 @@ N6-каталога (`id`, `name`/`name_forward`+`name_reverse`, `parent_id`,
 типа может совпасть с `name_reverse` другого, поскольку уникальна только
 **пара** имён).
 
-### 4.2. Создание и изменение
+### 5.2. Создание и изменение
 
 | Tool | Описание | Параметры |
 |------|----------|-----------|
-| `etn.thoughts.create` | Создать мысль; тип — `type_id` или `type` (по имени, task O4, см. §4.1b) | `network_id`, `title`, `synonyms?`, `type_id?`\|`type?`, `active?`, `link?` `{direction, target_thought_id, type_id?\|type?}` |
+| `etn.thoughts.create` | Создать мысль; тип — `type_id` или `type` (по имени, task O4, см. §5.1b) | `network_id`, `title`, `synonyms?`, `type_id?`\|`type?`, `active?`, `link?` `{direction, target_thought_id, type_id?\|type?}` |
 | `etn.thoughts.update` | Изменить мысль | `network_id`, `thought_id`, `changes`, `expected_version?` |
 | `etn.thoughts.delete` | Удалить | `network_id`, `thought_id`, `expected_version?` |
-| `etn.links.create` | Создать связь; тип — `type_id` или `type` (по `name_forward`/`name_reverse`, task O4, см. §4.1b) | `network_id`, `source_id`, `target_id`, `type_id?`\|`type?` |
+| `etn.links.create` | Создать связь; тип — `type_id` или `type` (по `name_forward`/`name_reverse`, task O4, см. §5.1b) | `network_id`, `source_id`, `target_id`, `type_id?`\|`type?` |
 | `etn.links.delete` | Удалить связь | `network_id`, `link_id` |
 | `etn.comments.upsert` | Создать/обновить комментарий; для `chronological` — ровно одно из `owner_type`+`owner_id` (одна привязка) или `targets[]` (несколько, 1..100, первый — первичный владелец; для `permanent` только одиночная форма) | `network_id`, `owner_type`+`owner_id` \| `targets[]` (`{owner_type, owner_id}`), `kind`, `title?`, `body_md`, `valid_from?`, `valid_to?` |
 | `etn.comments.update` | Изменить комментарий по `comment_id` (chronological или permanent; last-write-wins по полям, `valid_from`/`valid_to` применяются только к chronological) | `network_id`, `comment_id`, `changes` (`title?`, `body_md?`, `valid_from?`, `valid_to?`), `expected_version?` |
@@ -268,7 +341,7 @@ url/file_path пропускаются без ошибки и без запис�
 возвращает массив `Attachment[]`.
 | `etn.properties.set` | Установить свойство: одно (`key`+`value`) или набор (`values: {key: value\|null}` одной транзакцией) | `network_id`, `owner_type`, `owner_id` + ровно одно из `key`+`value` / `values` |
 | `etn.thoughts.set_active` | Изменить актуальность | `network_id`, `thought_id`, `active` |
-| `etn.thoughts.upsert_bundle` | Составная запись «единицы знания» одной транзакцией | см. §4.2a |
+| `etn.thoughts.upsert_bundle` | Составная запись «единицы знания» одной транзакцией | см. §5.2a |
 
 Все изменяющие инструменты:
 - принимают опциональный `expected_version` для optimistic concurrency
@@ -292,7 +365,7 @@ version: 0, request_id }`. Набор стоит одной записи для 
 > §5.1), при недоступном сервере клиенты догонят запись через `resume` при
 > переподключении.
 
-#### 4.2a. `etn.thoughts.upsert_bundle` — составная запись «единицы знания» (task O1)
+#### 5.2a. `etn.thoughts.upsert_bundle` — составная запись «единицы знания» (task O1)
 
 Создание одной осмысленной мысли обычным путём требует 5–8 последовательных
 вызовов (`thoughts.create` → `comments.upsert` → `properties.set` × N →
@@ -308,7 +381,7 @@ version: 0, request_id }`. Набор стоит одной записи для 
 |----------|-----|-------|
 | `network_id` | string | обязателен |
 | `thought_id` | string | адресует **существующую** мысль для дополнения на месте (без пересоздания). Обязателен ровно один из `thought_id`/`thought` |
-| `thought` | object | `{title, synonyms?, type_id?\|type?, active?}` — спецификация новой/сопоставляемой мысли; `type` резолвит тип по имени (task O4, см. §4.1b), ровно одно из `type_id`/`type` |
+| `thought` | object | `{title, synonyms?, type_id?\|type?, active?}` — спецификация новой/сопоставляемой мысли; `type` резолвит тип по имени (task O4, см. §5.1b), ровно одно из `type_id`/`type` |
 | `on_duplicate` | `fail`\|`reuse`\|`update` | политика при совпадении `thought.title`/`synonyms` с существующей мыслью (см. ниже); по умолчанию `fail`. Игнорируется, если задан `thought_id` |
 | `comment` | object | `{title?, body_md, valid_from?, valid_to?}` — постоянный комментарий владельца (create-or-update, как `etn.comments.upsert` с `kind: 'permanent'`) |
 | `properties` | object | карта `{key: value}` — по одному вызову `properties.set` на ключ, в общей транзакции |
@@ -342,7 +415,7 @@ Real-time и `audit_log`: событие своего типа на каждую
 для лимита `max_writes_per_minute` (§6.2) bundle всегда стоит как одна запись,
 сколько бы сущностей он ни затронул.
 
-### 4.3. Дедупликация (важна для агентов)
+### 5.3. Дедупликация (важна для агентов)
 
 | Tool | Описание | Параметры |
 |------|----------|-----------|
@@ -354,7 +427,7 @@ Real-time и `audit_log`: событие своего типа на каждую
 (02-data-model.md §3.2) учитываются: у мысли с синонимом `Игорян*` ввод
 `Игорянский` даст совпадение по синониму.
 
-## 5. Prompts (шаблоны запросов)
+## 6. Prompts (шаблоны запросов)
 
 Заранее определённые шаблоны для типовых задач агента:
 
@@ -368,7 +441,7 @@ Real-time и `audit_log`: событие своего типа на каждую
 Шаблоны параметризуются (например, `network_id`, `thought_id`), возвращают
 текстовый промпт, который агент передаёт своей LLM.
 
-## 6. Контроль операций агента
+## 7. Контроль операций агента
 
 ### 6.1. Журналирование
 Каждый изменяющий tool-вызов пишется в `audit_log` с `category = 'data'`,
@@ -393,7 +466,7 @@ Real-time и `audit_log`: событие своего типа на каждую
 ключ пропускает только resources и read-tools. Удобно для «посмотреть — не
 трогать». На уровне MCP-сервера проверяется перед каждым изменяющим tool-вызовом.
 
-## 7. Карта tool → внутренний вызов
+## 8. Карта tool → внутренний вызов
 
 MCP-сервер не дублирует логику REST — он обращается к тому же **доменному слою
 ядра** (use-cases). Например, `etn.thoughts.create` внутри вызывает
@@ -405,7 +478,7 @@ MCP-сервер не дублирует логику REST — он обраща
 
 REST и MCP — два фасада над одним ядром. Это гарантирует идентичность поведения.
 
-## 8. Пример сценария MCP
+## 9. Пример сценария MCP
 
 **«Агент собирает дайджест по теме»**
 
@@ -418,7 +491,7 @@ REST и MCP — два фасада над одним ядром. Это гар�
    комментарий у корневой мысли с этим дайджестом и `valid_from = сегодня`.
 6. Участники сети тут же видят новый комментарий через WebSocket.
 
-## 9. Версионирование и совместимость
+## 10. Версионирование и совместимость
 
 - MCP-сервер объявляет `protocolVersion` (по спецификации MCP) и список
   поддерживаемых инструментов/ресурсов в `initialize`.

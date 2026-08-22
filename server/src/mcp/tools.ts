@@ -28,6 +28,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { openNetworkDb } from '../db/network-db.js';
 
 import {
   ATTACHMENT_KINDS,
@@ -62,6 +63,7 @@ import {
   deleteComment,
   getComment,
   getCommentsPreview,
+  getPermanentPreview,
   listComments,
   updateComment,
 } from '../domain/comment-service.js';
@@ -77,7 +79,13 @@ import {
   setPropertyValue,
   setPropertyValues,
 } from '../domain/property-service.js';
-import { findDuplicates, findMentions, resolveThoughts, search } from '../domain/search-service.js';
+import {
+  collectSubtreeTypes,
+  findDuplicates,
+  findMentions,
+  resolveThoughts,
+  search,
+} from '../domain/search-service.js';
 import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
 import { queryThoughts } from '../domain/query-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
@@ -190,12 +198,131 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Список сетей',
       description:
-        "List every network the API key's user belongs to, with role and member counts. " +
+        "List every network the API key's user belongs to, with role and member counts, plus " +
+        "the network's `description` and `when_to_use` fields (task O5, docs/05-mcp-server.md §3). " +
+        'Each item carries `has_structure: true|false` — when true, the network declares a node ' +
+        'section type and exposes its machine-readable structure via `etn.networks.structure`. ' +
         'The agent may only operate on networks returned here.',
     },
     () =>
       runTool(async () => {
         return rt.deps.systemDb.listNetworksForUser(rt.deps.auth.userId);
+      }),
+  );
+
+  // etn.networks.structure — O5 read tool. Returns the active thoughts of the
+  // network's `node_section_type_id` (or an empty structure with `has_structure:
+  // false`). Each section is enriched with a permanent-comment preview, property
+  // values, neighbour counts and a usage_count (N3) — the same shape agents
+  // already know from `etn.thoughts.get` / `etn.thoughts.usage`, so an agent can
+  // dive from a structure node straight into a full read.
+  const NetworksStructureSchema = z.object({ network_id: NetworkId });
+  mcp.registerTool(
+    'etn.networks.structure',
+    {
+      title: 'Структура сети',
+      description:
+        'Read the network structure declared via the `node_section_type_id` setting ' +
+        '(task O5, docs/05-mcp-server.md §4.1). Returns the active thoughts of that type ' +
+        'with permanent-comment previews (2000 chars, `truncated` + `comment_id` to fetch ' +
+        'full text via `etn.comments.get`), resolved property values, neighbour counters ' +
+        '(`parents_count`, `children_count`, `attachments_count`, `usage_count`) and the ' +
+        'reference table of thought types actually used. When `has_structure: false`, the ' +
+        '`sections` list is empty and the agent should fall back to search/query.',
+      inputSchema: NetworksStructureSchema,
+    },
+    (args) =>
+      runTool(async () => {
+        const network = rt.deps.systemDb.getNetworkById(args.network_id);
+        if (network === null) {
+          throw new EtnError('NOT_FOUND', `Network ${args.network_id} not found.`);
+        }
+        // Membership re-check mirrors `openMemberNetwork` (here we only need a
+        // single read, so we do not need the ndb unless the network has a
+        // structure marker).
+        const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, args.network_id);
+        if (role === null) {
+          throw new EtnError(
+            'FORBIDDEN',
+            `You are not a member of network ${args.network_id}; this API key cannot access it.`,
+            { network_id: args.network_id },
+          );
+        }
+        if (network.node_section_type_id === null) {
+          return {
+            network_id: args.network_id,
+            has_structure: false as const,
+            node_section_type_id: null,
+            sections: [],
+            thought_types: [],
+          };
+        }
+        const ndb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger);
+        const sectionTypeId = network.node_section_type_id;
+        const rows = ndb
+          .prepare(
+            `SELECT id, title, type_id, active, version, created_at, updated_at
+               FROM thoughts
+              WHERE type_id = ? AND active = 1
+              ORDER BY created_at ASC`,
+          )
+          .all(sectionTypeId) as Array<{
+          id: string;
+          title: string;
+          type_id: string | null;
+          active: number;
+          version: number;
+          created_at: string;
+          updated_at: string;
+        }>;
+
+        const sections = rows.map((row) => {
+          const meta = getThoughtMeta(ndb, row.id);
+          const permanent = getPermanentPreview(ndb, 'thought', row.id);
+          const properties = getPropertyValuesResolved(ndb, 'thought', row.id);
+          const usage = findThoughtUsage(ndb, row.id);
+          return {
+            id: row.id,
+            title: row.title,
+            type_id: row.type_id,
+            version: row.version,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            counters: {
+              parents_count: meta.parents_count,
+              children_count: meta.children_count,
+              attachments_count: meta.attachments_count,
+              usage_count: usage.total,
+            },
+            permanent,
+            properties,
+          };
+        });
+
+        // Reference table: the network's section type plus every other type
+        // referenced by the section nodes (caller can dive further without an
+        // extra `etn.types.list` round trip).
+        const sectionType = getThoughtType(ndb, sectionTypeId);
+        const referencedTypeIds = Array.from(
+          new Set(
+            sections
+              .map((s) => s.type_id)
+              .filter((tid): tid is string => typeof tid === 'string'),
+          ),
+        );
+        const thoughtTypes = thoughtTypeCatalog(ndb, [
+          sectionTypeId,
+          ...referencedTypeIds.filter((tid) => tid !== sectionTypeId),
+        ]);
+
+        return {
+          network_id: args.network_id,
+          has_structure: true as const,
+          node_section_type_id: sectionTypeId,
+          node_section_type: sectionType,
+          sections,
+          thought_types: thoughtTypes,
+        };
       }),
   );
 
@@ -590,7 +717,19 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const TypesListSchema = z.object({ network_id: NetworkId });
+  const TypesListSchema = z.object({
+    network_id: NetworkId,
+    /**
+     * Task O16 — restrict the catalogue to the type ids that are actually
+     * used inside a thought's subtree (active thoughts + active links whose
+     * both endpoints lie in the subtree). Used together with
+     * `etn.networks.structure` to drill from a section into a context-aware
+     * type catalogue without paying for the whole network's worth of types.
+     */
+    in_subtree_of: ThoughtId.optional(),
+    /** Override the default subtree depth cap (task O16). */
+    max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
+  });
   mcp.registerTool(
     'etn.types.list',
     {
@@ -603,33 +742,88 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'L21 type chain (`key`, `value_type`, `required`, `config` incl. `options`/' +
         '`allowed_type_ids`, effective `default_value`, `inherited`, `defined_on`). Call before ' +
         'creating a typed thought/link to see what to fill; also lets `type_id` be replaced by a ' +
-        'type name in `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`.',
+        'type name in `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`. ' +
+        'Task O16: pass `in_subtree_of: <thought_id>` (optionally with `max_depth`) to scope ' +
+        'the response to the distinct thought/link types actually used inside that subtree, ' +
+        'each with a `usage_count` for ranking. Useful as the second step after ' +
+        '`etn.networks.structure` — pick a section, then pick a type relevant to that section.',
       inputSchema: TypesListSchema,
     },
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        const thoughtTypes = listThoughtTypes(ndb).map((t) => ({
-          id: t.id,
-          name: t.name,
-          parent_id: t.parent_id,
-          is_root: t.is_root,
-          description: t.description,
-          icon: t.icon,
-          properties: listEffectiveTypeProperties(ndb, 'thought_type', t.id),
-        }));
-        const linkTypes = listLinkTypes(ndb).map((t) => ({
-          id: t.id,
-          name_forward: t.name_forward,
-          name_reverse: t.name_reverse,
-          parent_id: t.parent_id,
-          is_root: t.is_root,
-          description: t.description,
-          color: t.color,
-          style: t.style,
-          properties: listEffectiveTypeProperties(ndb, 'link_type', t.id),
-        }));
-        return { thought_types: thoughtTypes, link_types: linkTypes } satisfies McpTypesListResult;
+
+        // O16: subtree-scoped catalogue. If `in_subtree_of` references an
+        // unknown thought, surface the same error a `thoughts.get` would.
+        let thoughtTypeCounts: Map<string, number> | null = null;
+        let linkTypeCounts: Map<string, number> | null = null;
+        if (args.in_subtree_of !== undefined) {
+          const seed = getThoughtOrThrow(ndb, args.in_subtree_of);
+          if (seed === null) {
+            throw new EtnError(
+              'NOT_FOUND',
+              `Thought ${args.in_subtree_of} not found.`,
+              { thought_id: args.in_subtree_of },
+            );
+          }
+          const subtree = collectSubtreeTypes(ndb, args.in_subtree_of, {
+            maxDepth: args.max_depth,
+          });
+          thoughtTypeCounts = subtree.thought_type_counts;
+          linkTypeCounts = subtree.link_type_counts;
+        }
+
+        const thoughtTypes = listThoughtTypes(ndb)
+          .filter((t) => thoughtTypeCounts === null || thoughtTypeCounts.has(t.id))
+          .map((t) => ({
+            id: t.id,
+            name: t.name,
+            parent_id: t.parent_id,
+            is_root: t.is_root,
+            description: t.description,
+            icon: t.icon,
+            properties: listEffectiveTypeProperties(ndb, 'thought_type', t.id),
+            ...(thoughtTypeCounts === null
+              ? {}
+              : { usage_count: thoughtTypeCounts.get(t.id) ?? 0 }),
+          }));
+        const linkTypes = listLinkTypes(ndb)
+          .filter((t) => linkTypeCounts === null || linkTypeCounts.has(t.id))
+          .map((t) => ({
+            id: t.id,
+            name_forward: t.name_forward,
+            name_reverse: t.name_reverse,
+            parent_id: t.parent_id,
+            is_root: t.is_root,
+            description: t.description,
+            color: t.color,
+            style: t.style,
+            properties: listEffectiveTypeProperties(ndb, 'link_type', t.id),
+            ...(linkTypeCounts === null
+              ? {}
+              : { usage_count: linkTypeCounts.get(t.id) ?? 0 }),
+          }));
+        return {
+          thought_types: thoughtTypes,
+          link_types: linkTypes,
+          ...(args.in_subtree_of === undefined
+            ? {}
+            : {
+                scope: {
+                  in_subtree_of: args.in_subtree_of,
+                  max_depth: args.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH,
+                  thought_types_total: thoughtTypes.length,
+                  link_types_total: linkTypes.length,
+                },
+              }),
+        } satisfies McpTypesListResult & {
+          scope?: {
+            in_subtree_of: string;
+            max_depth: number;
+            thought_types_total: number;
+            link_types_total: number;
+          };
+        };
       }),
   );
 

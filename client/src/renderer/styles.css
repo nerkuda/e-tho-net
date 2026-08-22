@@ -4023,6 +4023,67 @@ body.cloud-dragging * {
   border-top: 1px solid var(--border);
 }
 
+/* Task O5: tab strip + live preview for the four network markdown fields. */
+.settings-md-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-top: 4px;
+}
+.settings-md-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.settings-md-tab:hover:not(.active):not(:disabled) {
+  color: var(--fg);
+}
+.settings-md-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.settings-md-panel {
+  padding-top: 8px;
+}
+.settings-md-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-md-textarea {
+  resize: vertical;
+  min-height: 140px;
+  font-family: var(--mono-font);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.settings-md-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settings-md-preview-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.settings-md-preview {
+  min-height: 60px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+}
+
 .settings-error {
   margin-top: 8px;
 }
