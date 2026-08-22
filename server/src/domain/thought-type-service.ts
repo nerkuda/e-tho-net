@@ -48,6 +48,7 @@ interface ThoughtTypeRow {
   font_underline: number | null;
   font_strike: number | null;
   description: string | null;
+  comment_template_md: string | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -72,6 +73,7 @@ function rowToThoughtType(row: ThoughtTypeRow): ThoughtType {
     font_underline: row.font_underline === null ? null : row.font_underline === 1,
     font_strike: row.font_strike === null ? null : row.font_strike === 1,
     description: row.description,
+    comment_template_md: row.comment_template_md,
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -159,8 +161,9 @@ export function createThoughtType(
         `INSERT INTO thought_types (id, name, name_key, parent_id, is_root,
                                      icon, icon_kind, fg_color, bg_color,
                                      font_bold, font_italic, font_underline, font_strike,
-                                     description, version, created_at, updated_at, created_by)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+                                     description, comment_template_md,
+                                     version, created_at, updated_at, created_by)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
       )
       .run(
         id,
@@ -188,6 +191,7 @@ export function createThoughtType(
             ? 1
             : 0,
         input.description ?? null,
+        input.comment_template_md ?? null,
         now,
         now,
         actorUserId,
@@ -281,6 +285,7 @@ export function updateThoughtType(
     optStr(changes.fg_color, 'fg_color');
     optStr(changes.bg_color, 'bg_color');
     optStr(changes.description, 'description');
+    optStr(changes.comment_template_md, 'comment_template_md');
     const optFont = (v: boolean | null | undefined, col: string) => {
       if (v !== undefined) {
         sets.push(`${col} = ?`);

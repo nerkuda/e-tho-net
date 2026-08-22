@@ -30,6 +30,13 @@ export interface ThoughtType {
   font_strike: boolean | null;
   /** Free-form description used to give AI agents context about the type. */
   description: string | null;
+  /**
+   * Шаблон постоянного комментария мысли (02-data-model.md §3.3). Клиент
+   * применяет его при создании мысли с этим типом или при назначении/смене
+   * типа у существующей мысли — только если постоянного комментария ещё нет
+   * (08-ui-spec.md §8.1).
+   */
+  comment_template_md: string | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -50,6 +57,8 @@ export interface ThoughtTypeInput {
   font_underline?: boolean | null;
   font_strike?: boolean | null;
   description?: string | null;
+  /** Шаблон постоянного комментария мысли (см. {@link ThoughtType.comment_template_md}). */
+  comment_template_md?: string | null;
 }
 
 /** Input accepted by `PATCH /thought-types/{id}` (03-server-api.md §8). */
@@ -66,6 +75,8 @@ export interface ThoughtTypeUpdateInput {
   font_underline?: boolean | null;
   font_strike?: boolean | null;
   description?: string | null;
+  /** Шаблон постоянного комментария мысли (см. {@link ThoughtType.comment_template_md}). */
+  comment_template_md?: string | null;
 }
 
 /**

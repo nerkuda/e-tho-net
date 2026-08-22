@@ -119,6 +119,7 @@ function parseThoughtTypeBody(body: Record<string, unknown>, requestId: string):
     font_underline: fieldBoolean(body, 'font_underline', requestId),
     font_strike: fieldBoolean(body, 'font_strike', requestId),
     description: fieldNullableString(body, 'description', requestId),
+    comment_template_md: fieldNullableString(body, 'comment_template_md', requestId),
   };
 }
 
@@ -164,6 +165,9 @@ function parseThoughtTypeUpdateBody(
   }
   if (body.description !== undefined) {
     changes.description = fieldNullableString(body, 'description', requestId);
+  }
+  if (body.comment_template_md !== undefined) {
+    changes.comment_template_md = fieldNullableString(body, 'comment_template_md', requestId);
   }
   return changes;
 }
