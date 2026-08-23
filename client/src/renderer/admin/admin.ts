@@ -142,30 +142,34 @@ function addUserRow(): HTMLElement {
   const adminCheck = el('input');
   adminCheck.type = 'checkbox';
   adminLabel.append(adminCheck, span('админ'));
-  box.append(
-    usernameInput,
-    displayInput,
-    adminLabel,
-    button(
-      'Добавить пользователя',
-      () => {
-        void (async () => {
-          try {
-            const result = await etn.admin.createUser({
-              username: usernameInput.value.trim(),
-              displayName: displayInput.value.trim() || undefined,
-              isAdmin: adminCheck.checked,
-            });
-            showApiKey(result.apiKey);
-            void renderUsers(contentOf(box));
-          } catch (err) {
-            errorDialog('Добавить пользователя', err);
-          }
-        })();
-      },
-      'btn small primary',
-    ),
+  // «Добавить пользователя» is enabled only when `username` is non-empty
+  // (08-ui-spec.md §10.1; the server rejects empty usernames with
+  // VALIDATION_ERROR, so the button is useless until the field has a value).
+  const submit = button(
+    'Добавить пользователя',
+    () => {
+      void (async () => {
+        try {
+          const result = await etn.admin.createUser({
+            username: usernameInput.value.trim(),
+            displayName: displayInput.value.trim() || undefined,
+            isAdmin: adminCheck.checked,
+          });
+          showApiKey(result.apiKey);
+          void renderUsers(contentOf(box));
+        } catch (err) {
+          errorDialog('Добавить пользователя', err);
+        }
+      })();
+    },
+    'btn small primary',
   );
+  const syncSubmit = (): void => {
+    submit.disabled = usernameInput.value.trim() === '';
+  };
+  usernameInput.addEventListener('input', syncSubmit);
+  syncSubmit();
+  box.append(usernameInput, displayInput, adminLabel, submit);
   return box;
 }
 
