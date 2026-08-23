@@ -372,15 +372,17 @@ export const wikiIdPlugin = ViewPlugin.fromClass(
         // pick up any new unresolved tokens.
         return;
       }
-      this.inflight = true;
       const currentNetwork = safeCurrentNetwork();
       const state = this.view.state.field(wikiIdState, false);
-      if (state === undefined) {
-        this.inflight = false;
-        return;
-      }
+      if (state === undefined) return;
       const source = this.view.state.doc.toString();
       const unresolved = collectUnresolvedTokens(source, state.cache);
+      // Early exit: nothing to resolve. Without this guard, the `finally` block
+      // below would re-enter schedule() in a tight microtask loop (every
+      // dispatch of `setCacheEntries` triggers an update, which would schedule
+      // again), freezing the UI on every comment-field focus.
+      if (unresolved.size === 0) return;
+      this.inflight = true;
       // Convert every unresolved bucket into a `resolveAndApply` call.
       const tasks: Promise<void>[] = [];
       for (const [netId, ids] of unresolved) {
@@ -394,8 +396,10 @@ export const wikiIdPlugin = ViewPlugin.fromClass(
       }
       void Promise.all(tasks).finally(() => {
         this.inflight = false;
-        // After a resolve, re-scan: maybe more tokens appeared meanwhile.
-        this.schedule();
+        // Intentionally NOT calling this.schedule() here — `setCacheEntries`
+        // dispatches below trigger `ViewPlugin.update`, which re-schedules if
+        // the document or selection changed. Spinning without that signal
+        // would burn the event loop on an empty token set.
       });
     }
   },
@@ -429,4 +433,4 @@ export function refreshWikiIdCache(view: EditorView, networkId?: string): void {
 }
 
 /** Exposed for tests / debugging. */
-export const __testing = { parseIdLinks, buildDecorations, cacheKey };
+export const __testing = { parseIdLinks, buildDecorations, cacheKey, collectUnresolvedTokens };

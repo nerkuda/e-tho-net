@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import { __testing } from '../src/renderer/editor/wiki-id-plugin.js';
 
-const { parseIdLinks, buildDecorations, cacheKey } = __testing;
+const { parseIdLinks, buildDecorations, cacheKey, collectUnresolvedTokens } = __testing;
 
 const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
 const ID_B = '11111111-2222-3333-4444-555555555555';
@@ -159,4 +159,37 @@ test('buildDecorations: deleted мысль — декорация создаёт
 test('cacheKey: формирует "<net>:<id>"', () => {
   assert.equal(cacheKey('net1', 'id1'), 'net1:id1');
   assert.equal(cacheKey('__current__', ID_A), `__current__:${ID_A}`);
+});
+
+test('collectUnresolvedTokens: после полного resolve возвращает пустое множество', () => {
+  // Регрессионный тест для R6-bugfix: schedule() делает early return, если
+  // collectUnresolvedTokens возвращает пустое. Без early return возникает
+  // бесконечный цикл (resolve → dispatch → update → schedule → …).
+  const source = `[[#${ID_A}]] [[#${ID_B}]]`;
+  const cache = new Map([
+    [cacheKey('__current__', ID_A), { title: 'A', exists: true, networkId: '__current__' }],
+    [cacheKey('__current__', ID_B), { title: 'B', exists: true, networkId: '__current__' }],
+  ]);
+  const unresolved = collectUnresolvedTokens(source, cache);
+  assert.equal(unresolved.size, 0, 'полный кеш → unresolved пуст → schedule early return');
+});
+
+test('collectUnresolvedTokens: пустой кеш возвращает все токены', () => {
+  const source = `[[#${ID_A}]] [[#${ID_B}]]`;
+  const unresolved = collectUnresolvedTokens(source, new Map());
+  assert.equal(unresolved.size, 1);
+  assert.ok(unresolved.has('__current__'));
+  assert.equal(unresolved.get('__current__')!.size, 2);
+});
+
+test('collectUnresolvedTokens: только отсутствующие id попадают в результат', () => {
+  const source = `[[#${ID_A}]] [[#${ID_B}]]`;
+  const cache = new Map([
+    [cacheKey('__current__', ID_A), { title: 'A', exists: true, networkId: '__current__' }],
+  ]);
+  const unresolved = collectUnresolvedTokens(source, cache);
+  assert.equal(unresolved.size, 1);
+  assert.ok(unresolved.has('__current__'));
+  assert.equal(unresolved.get('__current__')!.size, 1);
+  assert.ok(unresolved.get('__current__')!.has(ID_B));
 });
