@@ -105,17 +105,18 @@ test('buildDecorations: normal-mode (selection вне ссылки) — replace 
   assert.equal(ranges[0]!.to, source.length);
 });
 
-test('buildDecorations: edit-mode (selection внутри) — replace только на #id-токен', () => {
+test('buildDecorations: edit-mode (selection внутри) — replace на #id-токен ВКЛЮЧАЯ `#`', () => {
   const source = `[[#${ID_A}]]`;
-  const idStart = 3; // после "[[#"
-  const idEnd = idStart + ID_A.length;
+  // В edit-mode диапазон декорации расширен на `#`, чтобы атомарность (через
+  // contenteditable="false") покрывала весь токен `#<uuid>` и стрелки
+  // навигации не «застревали» между `#` и виджетом.
+  const idStart = 2; // позиция `#` (после "[[")
+  const idEnd = idStart + 1 + ID_A.length; // после `]]`
   const cache = new Map([[cacheKey('__current__', ID_A), { title: 'Цель', exists: true, networkId: '__current__' }]]);
   // selection внутри ссылки
   const decos = buildDecorations(source, { from: 5, to: 10 }, cache);
   const ranges: Array<{ from: number; to: number }> = [];
   decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
-  // В edit-mode одна декорация replace на id-токене; атомарность обеспечивается
-  // contenteditable="false" внутри виджета.
   assert.equal(ranges.length, 1);
   assert.equal(ranges[0]!.from, idStart);
   assert.equal(ranges[0]!.to, idEnd);

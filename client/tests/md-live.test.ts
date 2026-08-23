@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { EditorState } from '@codemirror/state';
 
-import { isInRangeInclusive, isNearInline, livePreview, wikiLabel } from '../src/renderer/editor/md-live.js';
+import { isIdWikiLinkTarget, isInRangeInclusive, isNearInline, livePreview, wikiLabel } from '../src/renderer/editor/md-live.js';
 import { wikiLinkLanguage } from '../src/renderer/editor/wiki-link.js';
 
 /** Каретка в одной позиции. */
@@ -149,6 +149,22 @@ test('wiki-ссылка: вне — виджет; внутри — исходн�
   assert.equal(specs(inside, 0, 1).some((s) => s.widget !== undefined), false);
 });
 
+test('wiki-ссылка ID-форма: live-preview не ставит виджет (R6 плагин подтянет имя)', () => {
+  const ID = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+  const doc = `[[#${ID}]] x`;
+  // Каретка далеко: live-preview НЕ должен показывать `#<uuid>` как виджет —
+  // это работа `wikiIdPlugin` (R6), который умеет резолвить имя асинхронно.
+  const away = buildState(doc, doc.length);
+  assert.equal(
+    specs(away, 0, 1).some((s) => s.widget !== undefined),
+    false,
+    'ID-форма: live-preview не ставит виджет, чтобы не показывать `#<uuid>` как label',
+  );
+  // Каретка внутри — поведение прежнее (исходник виден, виджета нет).
+  const inside = buildState(doc, 4);
+  assert.equal(specs(inside, 0, 1).some((s) => s.widget !== undefined), false);
+});
+
 // ---------------------------------------------------------------------------
 // Правила активности (M6-фикс): блочные — включительно по диапазону,
 // инлайн — плюс одна позиция до/после элемента.
@@ -174,6 +190,37 @@ test('wikiLabel: не-ссылка и неполные формы — null; пу
   }
   // Пустой алиас допустим — рендерер показывает имя (паритет с markdown-пакетом).
   assert.deepEqual(wikiLabel('[[a|]]'), { target: 'a', label: 'a' });
+});
+
+// ---------------------------------------------------------------------------
+// Распознавание ID-формы wiki-ссылки (`[[#<uuid>]]` / `[[n:<net>#<uuid>]]`).
+// Для таких форм live-preview не ставит свой виджет: имя подтягивает на лету
+// `wikiIdPlugin` (R6), который умеет асинхронный резолв и atomic range.
+// Без этого проверка бы показала `#<uuid>` как label.
+// ---------------------------------------------------------------------------
+
+const ID_UUID = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+const NET_UUID = 'c4f9a3b2-1111-2222-3333-444455556666';
+
+test('isIdWikiLinkTarget: id-форма [[#<uuid>]]', () => {
+  assert.equal(isIdWikiLinkTarget(`#${ID_UUID}`), true);
+  assert.equal(isIdWikiLinkTarget(`#${ID_UUID.toUpperCase()}`), true);
+});
+
+test('isIdWikiLinkTarget: кросс-сеть [[n:<net>#<id>]]', () => {
+  assert.equal(isIdWikiLinkTarget(`n:${NET_UUID}#${ID_UUID}`), true);
+});
+
+test('isIdWikiLinkTarget: legacy [[Имя|алиас]] — false', () => {
+  assert.equal(isIdWikiLinkTarget('Имя мысли'), false);
+  assert.equal(isIdWikiLinkTarget('Имя|алиас'), false);
+});
+
+test('isIdWikiLinkTarget: невалидный UUID — false', () => {
+  assert.equal(isIdWikiLinkTarget('#not-a-uuid'), false);
+  assert.equal(isIdWikiLinkTarget(`n:not-a-uuid#${ID_UUID}`), false);
+  assert.equal(isIdWikiLinkTarget(`n:${NET_UUID}#not-a-uuid`), false);
+  assert.equal(isIdWikiLinkTarget('n:without-hash'), false);
 });
 
 // ---------------------------------------------------------------------------

@@ -276,14 +276,23 @@ function buildDecorations(
     const label = link.alias ?? (title !== '' ? title : link.thoughtId);
 
     if (intersects(link.from, link.to)) {
-      // edit-mode: replace ONLY the id token. Atomicity is provided by
-      // `contenteditable="false"` on the widget — the browser treats the
-      // span as a single atomic unit (Backspace/Delete remove it whole,
-      // cursor cannot enter, arrow keys skip over).
+      // edit-mode: replace the whole id token INCLUDING the leading `#` (or
+      // `n:<net>#` prefix). Atomicity is provided by `contenteditable="false"`
+      // on the widget — the browser treats the span as a single atomic unit
+      // (Backspace/Delete remove it whole, arrow keys skip over). The `#`
+      // character MUST be hidden too, otherwise the user sees `[[#UUID]]`
+      // with the `#` leaking outside the atomic span (it would be editable
+      // on its own and break arrow navigation: the cursor would land between
+      // `#` and the atomic widget).
       builder.add(
-        link.idFrom,
+        link.idFrom - 1,
         link.idTo,
-        Decoration.replace({ widget: new WikiLinkIdTokenWidget(title !== '' ? title : link.thoughtId, deleted) }),
+        Decoration.replace({
+          widget: new WikiLinkIdTokenWidget(
+            title !== '' ? title : '…', // пока резолв не пришёл — многоточие
+            deleted,
+          ),
+        }),
       );
     } else {
       // normal-mode: replace the WHOLE span with one label widget.

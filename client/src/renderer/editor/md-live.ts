@@ -157,6 +157,32 @@ export function wikiLabel(source: string): { target: string; label: string } | n
   return { target, label: alias !== '' ? alias : target };
 }
 
+/**
+ * Распознаёт ID-форму wiki-ссылки (`[[#<uuid>]]` / `[[#<uuid>|<alias>]]` /
+ * `[[n:<net>#<uuid>]]` и т.п.). Для таких форм live-preview не ставит свой
+ * виджет: имя подтягивает на лету плагин `wikiIdPlugin` (R6), который знает
+ * про резолв `etn.thoughts.resolve` и atomic range в edit-mode. Иначе
+ * `wikiLabel` отдал бы `target = "#<uuid>"` как label, и пользователь видел
+ * бы `#<uuid>` вместо имени мысли.
+ */
+export function isIdWikiLinkTarget(target: string): boolean {
+  if (target.startsWith('#')) {
+    const id = target.slice(1).trim();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  }
+  if (target.startsWith('n:')) {
+    const hashAt = target.indexOf('#', 2);
+    if (hashAt === -1) return false;
+    const net = target.slice(2, hashAt).trim();
+    const id = target.slice(hashAt + 1).trim();
+    return (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(net) &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    );
+  }
+  return false;
+}
+
 /** Строит набор декораций для текущего состояния. */
 function buildDecorations(state: EditorState): DecorationSet {
   // Диапазоны собираются в массив и сортируются в Decoration.set: hide-замены
@@ -331,6 +357,11 @@ function buildDecorations(state: EditorState): DecorationSet {
           if (!isNearInline(ranges, from, to)) {
             const parsed = wikiLabel(state.sliceDoc(from, to));
             if (parsed !== null) {
+              // ID-форма (`[[#<uuid>]]` / `[[n:<net>#<uuid>]]`) — пропускаем
+              // live-preview: имя подтягивает на лету `wikiIdPlugin` (R6),
+              // который умеет асинхронный резолв и atomic range в edit-mode.
+              // Иначе здесь пришлось бы показывать `#<uuid>` как label.
+              if (isIdWikiLinkTarget(parsed.target)) return false;
               parts.push({
                 from,
                 to,
