@@ -6,7 +6,9 @@
  *  - tab click → `etn.tabs.activate(tabId)` (Q4 turns this into a full
  *    snapshot hydration);
  *  - "✕" click → `etn.tabs.close(tabId)`;
- *  - "+" click → `showScreen('networks')`;
+ *  - "+" click → opens the in-workspace network picker overlay (so the tab
+ *    strip stays visible — clicking another tab or picking a network closes
+ *    it);
  *  - pointer-gesture drag-reorder among the **visible** tabs (overflow tabs
  *    are not draggable in v1, see Q3 DoD).
  */
@@ -16,7 +18,6 @@ import { etn } from '../../lib/etn.js';
 import { store } from '../../state.js';
 import type { TabDto } from '../../../main/ipc/contract.js';
 import { clearTabDirty, removeTab, upsertTab } from './tab-state.js';
-import { showScreen } from '../screens.js';
 import {
   buildOverflowButton,
   recomputeOverflow,
@@ -46,7 +47,11 @@ export function mountTabStrip(host: HTMLElement): HTMLDivElement {
   elements.plusButton.type = 'button';
   elements.plusButton.title = 'Открыть сеть';
   elements.plusButton.append(svgIcon('plus', 14));
-  elements.plusButton.addEventListener('click', () => showScreen('networks'));
+  elements.plusButton.addEventListener('click', () => {
+    // In-workspace picker overlay (Q-bugfix): the tab strip stays visible
+    // above the overlay, so clicking another tab or «+» again cancels.
+    store.update({ pickerOpen: true });
+  });
   root.append(elements.plusButton);
 
   const overflowBtn = el('button', 'tab-overflow hidden') as HTMLButtonElement;
@@ -87,6 +92,7 @@ function render(elements: StripElements): void {
   const activeId = store.state.activeTabId;
   const dirty = store.state.dirtyTabIds;
   const inaccessible = store.state.inaccessibleTabIds;
+  const pickerOpen = store.state.pickerOpen;
 
   // Clear existing tab buttons (keep + and overflow).
   for (const button of elements.visible) {
@@ -96,13 +102,18 @@ function render(elements: StripElements): void {
 
   for (const tab of tabs) {
     const button = buildTabButton(tab, {
-      active: tab.tab_id === activeId,
+      // Hide the active-tab highlight while the picker is open — the «+»
+      // button carries the focus instead.
+      active: !pickerOpen && tab.tab_id === activeId,
       dirty: dirty.has(tab.tab_id),
       inaccessible: inaccessible.has(tab.tab_id),
     });
     elements.visible.push(button);
     elements.root.insertBefore(button, elements.plusButton);
   }
+
+  // The «+» mirrors the picker's open state with a pressed look.
+  elements.plusButton.classList.toggle('tab-active', pickerOpen);
 
   recomputeOverflow(elements, TAB_W_DEFAULT_PX, TAB_W_MIN_PX);
   if (elements.overflowButton !== null) {
@@ -131,7 +142,7 @@ function buildTabButton(
   if (flags.inaccessible) button.classList.add('tab-inaccessible');
   if (flags.dirty) button.classList.add('tab-dirty');
 
-  const label = networkShortLabel(tab.network_id);
+  const label = networkLabel(tab.network_id);
   const title = el('span', 'tab-title', label);
   if (flags.dirty) title.prepend(span('* ', 'tab-marker'));
 
@@ -152,13 +163,22 @@ function buildTabButton(
   return button;
 }
 
-/** Short human label for a network id (first 8 chars + ellipsis). */
-function networkShortLabel(networkId: string): string {
+/**
+ * Human label for a tab — the network's `display_name` if known, else a
+ * truncated network id (during the brief window before `networkList` is
+ * populated, e.g. right after boot).
+ */
+function networkLabel(networkId: string): string {
+  const found = store.state.networkList.find((n) => n.id === networkId);
+  if (found !== undefined) return found.display_name;
   return networkId.length <= 8 ? networkId : `${networkId.slice(0, 8)}…`;
 }
 
 /** Activates a tab; delegates to IPC and lets Q4 wire snapshot hydration. */
 async function activateTab(tabId: string): Promise<void> {
+  // Picking any tab closes the picker — the user opened it via «+», clicking
+  // elsewhere (including the «+» again) is their way to dismiss.
+  store.update({ pickerOpen: false });
   try {
     const tab = await etn.tabs.activate(tabId);
     if (tab === null) return;

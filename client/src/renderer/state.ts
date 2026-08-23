@@ -22,6 +22,7 @@ import {
   type Link,
   type LinkType,
   type Network,
+  type NetworkListItem,
   type SortKind,
   type Thought,
   type ThoughtType,
@@ -131,6 +132,14 @@ export interface AppState {
   dirtyTabIds: Set<string>;
   /** Tab ids whose network the user no longer has access to (Q5). */
   inaccessibleTabIds: Set<string>;
+  /** Cached `etn.networks.list()` result — the tab strip uses `display_name`
+   *  by `network_id`; refreshes piggy-back on `refreshTabAccessibility` and
+   *  on the network list screen load. */
+  networkList: NetworkListItem[];
+  /** Network picker overlay (Q-bugfix): when `true`, the workspace body shows
+   *  the «Открыть сеть» panel on top of the canvas while the tab strip stays
+   *  visible — clicking any tab or picking a network closes it. */
+  pickerOpen: boolean;
 }
 
 /** Initial snapshot. */
@@ -173,6 +182,8 @@ const initial: AppState = {
   activeTabId: null,
   dirtyTabIds: new Set<string>(),
   inaccessibleTabIds: new Set<string>(),
+  networkList: [],
+  pickerOpen: false,
 };
 
 /**
@@ -218,6 +229,8 @@ class Store {
       activeTabId: null,
       dirtyTabIds: new Set<string>(),
       inaccessibleTabIds: new Set<string>(),
+      networkList: [],
+      pickerOpen: false,
     });
   }
 }

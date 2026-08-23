@@ -205,15 +205,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string) => {
       const profile = deps.getProfile();
       if (!profile) throw new Error('Not connected: call etn.server.connect first');
-      // If a tab for this network already exists, reuse it (Q2 DoD).
-      const existing = deps.localDb
-        .listTabs(profile.id)
-        .find((tab) => tab.network_id === networkId);
-      if (existing !== undefined) {
-        deps.getRealtimePool()?.acquire(networkId);
-        deps.localDb.touchTab(profile.id, existing.tab_id);
-        return rowToTabDto(existing);
-      }
+      // Bugfix Q-bug3: always create a new tab. Duplicates of the same
+      // network are explicitly allowed (per the original Q decision); if the
+      // user picks an already-open network from the picker we still want a
+      // fresh tab with its own snapshot.
       const tabs = deps.localDb.listTabs(profile.id);
       const slotIdx = tabs.length;
       const tabId = randomUUID();

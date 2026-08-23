@@ -672,9 +672,14 @@ export interface EtnApi {
   tabs: {
     /** List all open tabs of the active profile, ordered by `slot_idx` (Q1/Q2). */
     list(): Promise<TabDto[]>;
-    /** Open a new tab for `networkId`; acquires the realtime socket. Returns
-     *  the created tab. If a tab for the same network already exists, the
-     *  existing tab is returned (no duplicate open). */
+    /**
+     * Open a NEW tab for `networkId`; acquires the realtime socket.
+     *
+     * Duplicates of the same network are explicitly allowed — each tab keeps
+     * its own focus / view / filter snapshot and history. The picker uses
+     * this to give the user an independent workspace even when picking an
+     * already-open network.
+     */
     open(networkId: string): Promise<TabDto>;
     /** Activate a tab (returns snapshot for renderer store hydration). Returns
      *  `null` if the network is no longer accessible (Q5). */

@@ -67,8 +67,12 @@ export async function findRootThought(networkId: string): Promise<Thought> {
 /**
  * Opens a network (H3): loads L2 meta, L3 preferences and L4 ui_state, picks
  * the initial focus (stored focus → HOME) and mounts the workspace.
+ *
+ * When called from the picker with `tabId`, that specific tab becomes the
+ * active one — duplicates of the same network are explicitly allowed (each
+ * gets its own snapshot of focus / view / filters / history).
  */
-export async function openNetwork(networkId: string): Promise<void> {
+export async function openNetwork(networkId: string, tabId?: string): Promise<void> {
   const network = await etn.networks.open(networkId);
   const prefs = await etn.networks.getPreferences(networkId);
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
@@ -131,15 +135,26 @@ export async function openNetwork(networkId: string): Promise<void> {
     pins: (pinsRaw ?? []).map((p) => p.thought_id),
   });
 
-  // Q3: refresh tab list and activate the tab for the opened network so the
-  // strip highlights the right entry. The list mutation is awaited before
-  // showing the workspace, otherwise the active state would briefly flicker.
+  // Q3: refresh tab list and activate the right entry. When the caller
+  // supplies `tabId` (the picker), that exact tab wins — duplicate opens of
+  // the same network don't collapse onto the first existing tab.
   try {
-    const tabs = await etn.tabs.list();
-    const target = tabs.find((t) => t.network_id === networkId) ?? null;
+    let tabs = await etn.tabs.list();
+    let target: { tab_id: string } | null = null;
+    if (tabId !== undefined) {
+      target = tabs.find((t) => t.tab_id === tabId) ?? null;
+    }
+    // No matching tab yet? The networks screen entry opens without a tab —
+    // create one so the strip populates. Duplicates are explicit and
+    // re-openings of the same network still create a fresh tab.
+    if (target === null) {
+      const fresh = await etn.tabs.open(networkId);
+      tabs = await etn.tabs.list();
+      target = tabs.find((t) => t.tab_id === fresh.tab_id) ?? { tab_id: fresh.tab_id };
+    }
     store.update({
       tabs,
-      activeTabId: target?.tab_id ?? null,
+      activeTabId: target.tab_id,
     });
   } catch {
     // ignore — workspace still usable without tab strip state

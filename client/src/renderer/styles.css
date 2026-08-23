@@ -718,6 +718,66 @@ textarea {
   line-height: 1.4;
 }
 
+/* ----- network picker overlay (Q-bugfix) ----------------------------------
+   The «+» tab opens this overlay inside the workspace body. The top-row (with
+   the tab strip) stays visible above it so the user can cancel by clicking
+   any other tab. */
+
+.workspace-picker {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 24px;
+  background: var(--surface);
+  z-index: 60;
+  overflow: auto;
+}
+
+.workspace-picker.hidden {
+  display: none;
+}
+
+.workspace-picker .picker-card {
+  width: 560px;
+  max-width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workspace-picker .picker-title {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+}
+
+.workspace-picker .picker-sub {
+  margin: -8px 0 0;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+.workspace-picker .picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.workspace-picker .picker-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 /* Search row of the map view (L18): the search input + gear live under the top
    bar and belong to the map; the structures view hides the whole row. */
 .search-row {

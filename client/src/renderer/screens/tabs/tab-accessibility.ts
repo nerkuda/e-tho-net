@@ -23,17 +23,17 @@ import {
  * does one `networks.list()` round-trip and a per-tab local check.
  */
 export async function refreshTabAccessibility(): Promise<void> {
-  const tabs = store.state.tabs;
-  if (tabs.length === 0) return;
-  let visibleNetworks: Set<string> | null = null;
+  let list: Awaited<ReturnType<typeof etn.networks.list>>;
   try {
-    const list = await etn.networks.list();
-    visibleNetworks = new Set(list.map((n) => n.id));
+    list = await etn.networks.list();
   } catch {
     // Network unreachable — leave existing marks alone; nothing to update.
     return;
   }
-  for (const tab of tabs) {
+  // Cache the list for the tab strip (it needs display_name by network_id).
+  store.update({ networkList: list });
+  const visibleNetworks = new Set(list.map((n) => n.id));
+  for (const tab of store.state.tabs) {
     const accessible = visibleNetworks.has(tab.network_id);
     if (accessible) {
       clearTabInaccessible(tab.tab_id);

@@ -38,6 +38,7 @@ import { mountStructures } from './structures/structures.js';
 import { mountChronicle } from './chronicle/chronicle.js';
 import { setActiveView } from './active-view.js';
 import { mountPinnedBar } from './pinned-bar.js';
+import { mountPicker } from './tabs/picker.js';
 import { mountTabStrip } from './tabs/tabs.js';
 
 /** Hosts exposed to the content modules. */
@@ -228,6 +229,13 @@ export function buildWorkspace(): HTMLElement {
   body.append(placeholderHost);
   mountInaccessiblePlaceholder(placeholderHost);
 
+  // Q-bugfix: the «+» tab opens a network picker overlay that lives inside
+  // the workspace body. The top-row (with the tab strip) stays visible
+  // above it, so the user can cancel by clicking any other tab.
+  const pickerHost = div('workspace-picker hidden');
+  body.append(pickerHost);
+  mountPicker(pickerHost);
+
   // --- status bar ------------------------------------------------------------
   const statusbar = div('statusbar');
 
@@ -393,6 +401,9 @@ function mountInaccessiblePlaceholder(host: HTMLElement): void {
   update();
 }
 
+/** Best-effort display label for a network id; falls back to a short id. */
 function shortNetworkId(networkId: string): string {
+  const found = store.state.networkList.find((n) => n.id === networkId);
+  if (found !== undefined) return found.display_name;
   return networkId.length <= 8 ? networkId : `${networkId.slice(0, 8)}…`;
 }

@@ -66,6 +66,8 @@ export function buildNetworks(): HTMLElement {
     try {
       const networks = await etn.networks.list();
       if (!root.isConnected) return;
+      // Tab strip reads `display_name` from here; keep the cache fresh.
+      store.update({ networkList: networks });
       renderList(networks);
     } catch (err) {
       errorLine.textContent = errText(err);
