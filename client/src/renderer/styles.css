@@ -2786,6 +2786,26 @@ body.cloud-dragging * {
   text-decoration: underline;
 }
 
+/* ID-based wiki-link token (фаза R, R6): в edit-mode `#<id>` заменяется на
+   спан с актуальным именем мысли. Цветом показываем «это единый объект»,
+   атомарность обеспечивается Decoration.mark({ atomic: true }) — Backspace /
+   Delete удаляют токен целиком. */
+.cm-wiki-id {
+  color: var(--accent-strong, var(--accent));
+  font-weight: 500;
+}
+
+.cm-wiki-id-edit {
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Удалённая мысль в любом режиме — серый курсив без плейсхолдера. */
+.wiki-link-deleted {
+  color: var(--muted, #888);
+  font-style: italic;
+}
+
 /* Авто-упоминания мыслей в тексте комментариев (L24, 08-ui-spec.md §6.4):
    пунктирное подчёркивание отличает их от явных wiki-ссылок. */
 .thought-mention {
