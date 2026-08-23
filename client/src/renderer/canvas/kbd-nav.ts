@@ -337,7 +337,7 @@ async function reorderCursor(delta: -1 | 1): Promise<void> {
   const zone = cloudEl(id)?.closest<HTMLElement>('.zone') ?? null;
   const dir = zone?.dataset['dir'];
   if (dir !== 'parents' && dir !== 'children') return;
-  if (store.state.zoneSorts[dir] !== 'manual') {
+  if (store.state.zoneSorts[dir].sort !== 'manual') {
     notice('Упорядочивание работает при сортировке зоны «ручной» (правый клик по зоне → порядок).');
     return;
   }

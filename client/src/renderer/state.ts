@@ -24,6 +24,7 @@ import {
   type Network,
   type NetworkListItem,
   type SortKind,
+  type SortOrder,
   type Thought,
   type ThoughtType,
 } from '@etn/shared';
@@ -109,8 +110,15 @@ export interface AppState {
   lastEvent: string | null;
   /** Editor target; `null` means "follow the focused thought". */
   editorTarget: EditorTarget | null;
-  /** Per-zone sort of the open focus (drag-reorder is only allowed on `manual`). */
-  zoneSorts: { parents: SortKind; children: SortKind };
+  /** Per-zone sort of the open focus (drag-reorder is only allowed on
+   *  `manual`, so siblings only ever holds alpha/created/viewed). The full
+   *  `{ sort, order }` is kept so the zone context menu can highlight the
+   *  active entry (08-ui-spec.md §2.7). */
+  zoneSorts: {
+    parents: { sort: SortKind; order: SortOrder };
+    children: { sort: SortKind; order: SortOrder };
+    siblings: { sort: SortKind; order: SortOrder };
+  };
   /** Display order of orderable zones (deduped neighbour ids of the open focus). */
   zoneOrder: { parents: string[]; children: string[] };
   /** L4 `last_used_link_type_id` (add dialog default). */
@@ -171,7 +179,11 @@ const initial: AppState = {
   theme: 'light',
   lastEvent: null,
   editorTarget: null,
-  zoneSorts: { parents: 'created', children: 'created' },
+  zoneSorts: {
+    parents: { sort: 'created', order: 'asc' },
+    children: { sort: 'created', order: 'asc' },
+    siblings: { sort: 'created', order: 'asc' },
+  },
   zoneOrder: { parents: [], children: [] },
   lastUsedLinkTypeId: null,
   activeView: 'map',

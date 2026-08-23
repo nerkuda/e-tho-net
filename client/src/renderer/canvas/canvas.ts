@@ -761,7 +761,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   // the server-returned neighbours array (zoneOrder). This matches the
   // keyboard cursor model (↑/↓/←/→ step by row-major index) and
   // `Ctrl+Shift+↑/↓` (which moves by one position in zoneOrder).
-  const showPosition = dir !== 'siblings' && store.state.zoneSorts[dir] === 'manual';
+  const showPosition = dir !== 'siblings' && store.state.zoneSorts[dir].sort === 'manual';
   const first = startRow * cols;
   const last = endRow * cols;
   const rowClouds = new Map<number, HTMLElement[]>();

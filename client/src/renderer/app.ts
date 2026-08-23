@@ -281,7 +281,7 @@ async function ensureManualPositionsInitialized(
   zoneOrder: { parents: string[]; children: string[] },
 ): Promise<void> {
   for (const dir of ['parents', 'children'] as const) {
-    if (response.sorts[dir] !== 'manual') continue;
+    if (response.sorts[dir].sort !== 'manual') continue;
     const neighbourArr = dir === 'parents' ? response.parents : response.children;
     if (neighbourArr.length === 0) continue;
     const allUnpositioned = neighbourArr.every((n) => n.manual_position === null);

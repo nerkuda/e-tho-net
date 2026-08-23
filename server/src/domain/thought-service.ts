@@ -1027,8 +1027,9 @@ export function focus(
     siblings: grouped.siblings.map(annotate),
     edges,
     sorts: {
-      parents: parentPref?.sort ?? 'created',
-      children: childPref?.sort ?? 'created',
+      parents: { sort: parentPref?.sort ?? 'created', order: parentPref?.order ?? 'asc' },
+      children: { sort: childPref?.sort ?? 'created', order: childPref?.order ?? 'asc' },
+      siblings: { sort: siblingPref?.sort ?? 'created', order: siblingPref?.order ?? 'asc' },
     },
   };
 }

@@ -321,7 +321,7 @@ function onCloudMouseUp(event: MouseEvent): void {
         g.dir !== undefined &&
         (event.ctrlKey || event.metaKey) &&
         event.shiftKey &&
-        store.state.zoneSorts[g.dir] !== 'manual'
+        store.state.zoneSorts[g.dir].sort !== 'manual'
       ) {
         notice('Упорядочивание работает при сортировке зоны «ручной» (правый клик по зоне → порядок).');
       }
@@ -513,7 +513,7 @@ function reorderTarget(
   const dir = dragged.dir;
   if (dir === undefined) return { kind: 'none' }; // list entries have no zone
   if (zoneDir !== dir) return { kind: 'none' };
-  if (store.state.zoneSorts[dir] !== 'manual') return { kind: 'none' };
+  if (store.state.zoneSorts[dir].sort !== 'manual') return { kind: 'none' };
   return {
     kind: 'reorder',
     zoneDir: dir,
@@ -703,7 +703,7 @@ async function reparentThought(draggedId: string, targetId: string): Promise<voi
  * the zone order without the dragged thought.
  */
 export async function reorderZone(draggedId: string, dir: OrderableDir, insertIndex: number): Promise<void> {
-  if (store.state.zoneSorts[dir] !== 'manual') return; // bounce back, no change
+  if (store.state.zoneSorts[dir].sort !== 'manual') return; // bounce back, no change
   const networkId = requireNetworkId();
   const focus = store.state.focus;
   if (focus === null) return;

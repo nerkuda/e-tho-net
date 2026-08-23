@@ -606,6 +606,11 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
   const focus = store.state.focus;
   if (networkId === null || focus === null) return;
   const manual = dir !== 'siblings';
+  // The currently applied sort for this zone. The focus response carries the
+  // full `{ sort, order }` (08-ui-spec.md §2.7, docs/03-server-api.md §6.7/§6.8)
+  // so we can mark the matching row of the submenu — otherwise the user has
+  // no signal of which mode is currently active.
+  const current = focus.sorts[dir];
 
   const sortItem = (
     label: string,
@@ -613,6 +618,7 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
     order: 'asc' | 'desc',
   ): MenuItem => ({
     label,
+    checked: current.sort === sort && current.order === order,
     onClick: () => void setZoneSort(networkId, focus.focused.id, dir, sort, order),
   });
 
@@ -645,6 +651,7 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
         sortItem('по дате просмотра (убыв)', 'viewed', 'desc'),
         {
           label: 'ручной',
+          checked: current.sort === 'manual',
           disabled: !manual,
           onClick: () => {
             if (manual) void setZoneSort(networkId, focus.focused.id, dir, 'manual', 'asc');

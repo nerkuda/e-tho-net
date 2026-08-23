@@ -292,8 +292,15 @@ export interface FocusResponse {
   siblings: FocusNeighbor[];
   /** Every active link among the visible thoughts (focus + parents + children + siblings). */
   edges: FocusEdge[];
-  /** Per-zone sort currently applied for this user (siblings is not orderable). */
-  sorts: { parents: SortKind; children: SortKind };
+  /** Per-zone sort currently applied for this user (siblings is not orderable
+   *  to `manual`, but still carries an alpha/created/viewed preference). The
+   *  full `{ sort, order }` is returned so the UI can mark the active entry
+   *  in the zone context menu (08-ui-spec.md §2.7). */
+  sorts: {
+    parents: { sort: SortKind; order: SortOrder };
+    children: { sort: SortKind; order: SortOrder };
+    siblings: { sort: SortKind; order: SortOrder };
+  };
 }
 
 /** «Сигналы полноты» мысли для MCP-чтения (task N2, docs/05-mcp-server.md
