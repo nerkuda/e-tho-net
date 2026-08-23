@@ -25,7 +25,6 @@ import type { FocusEdge, FocusNeighbor, FocusResponse, IconKind, ThoughtRef } fr
 
 import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
-import { setCursor } from './kbd-nav.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
