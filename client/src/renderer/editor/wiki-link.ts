@@ -84,8 +84,10 @@ async function loadCompletions(networkId: string, prefix: string): Promise<Compl
     const res = await etn.thoughts.search(networkId, { q: prefix, scope: 'names', limit: 20 });
     return res.by_names.map((hit) => ({
       label: hit.title,
+      // ID-based wiki-link (фаза R): вставляем `[[#<id>]]`, чтобы ссылка
+      // пережила переименование. Имя подтянется view-резолвером.
       type: 'text',
-      apply: `${hit.title}]]`,
+      apply: `#${hit.thought_id}]]`,
     }));
   } catch {
     return [];
