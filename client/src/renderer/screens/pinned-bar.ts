@@ -170,10 +170,17 @@ function openOverflowMenu(restIds: string[], refs: Map<string, ThoughtRef>): voi
  * included), or `null` when the point is not over the panel. While the cursor
  * is over the panel the insertion marker follows the resolved position; it is
  * hidden as soon as the drag leaves (or ends).
+ *
+ * Coordinate fallback: when the panel is empty its only child is `.pinned-empty`,
+ * a small inline-flex chip — and `elementFromPoint` may return the surrounding
+ * `.toolbar`/`.pinned-bar` background or some overlay above it instead of a
+ * panel descendant (L18 fix). If the cursor is inside the panel rect we still
+ * treat it as a drop on the panel so the empty panel is a valid target.
  */
 function resolvePinTarget(
   el: HTMLElement,
   x: number,
+  y: number,
 ): { dropIndex: number; highlightEl: HTMLElement } | null {
   const bar = el.closest<HTMLElement>('.pinned-bar');
   if (bar !== null && host !== null) {
@@ -199,6 +206,17 @@ function resolvePinTarget(
     }
     showInsertMarker(markerX);
     return { dropIndex: index, highlightEl: bar };
+  }
+  // Coordinate fallback: cursor is over the panel but elementFromPoint did not
+  // land on a panel descendant — typical when the panel is empty (only
+  // `.pinned-empty` is a small inline chip) or when an overlay covers it.
+  if (host !== null) {
+    const rect = host.getBoundingClientRect();
+    if (x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom) {
+      const pins = store.state.pins;
+      showInsertMarker(10);
+      return { dropIndex: pins.length, highlightEl: host };
+    }
   }
   const row = el.closest<HTMLElement>('.pinned-menu .menu-item[data-drag-id]');
   if (row !== null && row.parentElement !== null) {

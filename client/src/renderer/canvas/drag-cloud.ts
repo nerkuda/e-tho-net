@@ -131,10 +131,16 @@ export interface ListDropActions {
   openEntry?: (id: string) => void;
   /**
    * The pinned panel resolves drops onto its own DOM: `el` under the cursor,
-   * `x` — the cursor X for the between-chips position. Returns the insertion
-   * index in the FULL pinned list, or `null` when the point is elsewhere.
+   * `x`/`y` — the cursor coordinates for the between-chips position and for a
+   * coordinate-based fallback when `el` is not a descendant of the panel.
+   * Returns the insertion index in the FULL pinned list, or `null` when the
+   * point is elsewhere.
    */
-  resolvePinTarget?: (el: HTMLElement, x: number) => { dropIndex: number; highlightEl: HTMLElement } | null;
+  resolvePinTarget?: (
+    el: HTMLElement,
+    x: number,
+    y: number,
+  ) => { dropIndex: number; highlightEl: HTMLElement } | null;
   /** Pins the thought at the drop index (re-pinning an existing pin reorders). */
   pinThought?: (id: string, dropIndex: number) => void;
   /** Chronicle (L20): attaches the dropped thought to the row's comment. */
@@ -407,7 +413,7 @@ function computeTarget(event: MouseEvent, dragged: DraggedCloud, acc: DragAccess
   // between the chips, at the start or at the end. Re-pinning a pinned thought
   // reorders it. Checked first: the pinned dropdown rows share the
   // `.menu-item[data-drag-id]` shape with the history dropdown.
-  const pinTarget = dropActions.resolvePinTarget?.(el, event.clientX);
+  const pinTarget = dropActions.resolvePinTarget?.(el, event.clientX, event.clientY);
   if (pinTarget !== undefined && pinTarget !== null) {
     return {
       kind: 'pin',

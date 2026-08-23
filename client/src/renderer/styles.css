@@ -866,6 +866,10 @@ textarea {
   color: var(--text-faint);
   font-size: 12px;
   white-space: nowrap;
+  /* The empty panel has only this placeholder inside it; an empty chip must
+     still receive pointer events so a drop into the empty pinned area is
+     resolved correctly (L18 fix). */
+  pointer-events: auto;
 }
 
 /* Drop-position marker: a thin accent bar shown between the chips while a
