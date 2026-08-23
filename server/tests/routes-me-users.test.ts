@@ -247,12 +247,17 @@ describe(
         });
         assert.equal(res.statusCode, 201);
         const data = res.json().data;
-        assert.match(data.key, /^etn_[0-9a-f]{32}$/);
+        // Response shape: { user: User, key: ApiKeyWithSecret } so the admin can
+        // refresh the users list and surface the one-time key in the same call.
+        assert.equal(data.user.username, 'newuser');
+        assert.equal(data.user.display_name, 'New');
+        assert.equal(data.user.is_admin, false);
+        assert.match(data.key.key, /^etn_[0-9a-f]{32}$/);
         // The new key must authenticate and point to the new user.
         const me = await app.inject({
           method: 'GET',
           url: '/api/v1/me',
-          headers: { authorization: `Bearer ${data.key}` },
+          headers: { authorization: `Bearer ${data.key.key}` },
         });
         assert.equal(me.statusCode, 200);
         assert.equal(me.json().data.username, 'newuser');

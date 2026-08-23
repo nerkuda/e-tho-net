@@ -141,7 +141,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
       const userId = randomUUID();
       const gen = generateApiKey();
-      const apiKey = app.systemDb.transaction(() => {
+      const created = app.systemDb.transaction(() => {
         const u = app.systemDb.createUser({
           id: userId,
           username,
@@ -171,10 +171,13 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           targetId: k.id,
           details: { label: 'primary', for_user: u.id },
         });
-        return k;
+        return { user: u, key: k };
       });
 
-      const dto: ApiKeyWithSecret = { ...keyPublicDto(apiKey), key: gen.key };
+      // `POST /admin/users` returns both the created user (without secrets) and
+      // the auto-generated key with its one-time secret, so the admin can show
+      // them in a single modal and hand the key off.
+      const dto = { user: userDto(created.user), key: { ...keyPublicDto(created.key), key: gen.key } };
       sendCreated(reply, dto);
     },
   );
