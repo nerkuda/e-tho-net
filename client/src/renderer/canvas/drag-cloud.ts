@@ -194,6 +194,7 @@ export function wireExternalDragSource(
     window.addEventListener('mousemove', onCloudMouseMove);
     window.addEventListener('mouseup', onCloudMouseUp);
     window.addEventListener('blur', cancelCloudDrag);
+    window.addEventListener('keydown', onCloudKeyDown);
   });
 }
 
@@ -228,6 +229,7 @@ function onCloudMouseDown(event: MouseEvent): void {
   window.addEventListener('mousemove', onCloudMouseMove);
   window.addEventListener('mouseup', onCloudMouseUp);
   window.addEventListener('blur', cancelCloudDrag);
+  window.addEventListener('keydown', onCloudKeyDown);
 }
 
 function onCloudMouseMove(event: MouseEvent): void {
@@ -259,6 +261,7 @@ function onCloudMouseUp(event: MouseEvent): void {
   window.removeEventListener('mousemove', onCloudMouseMove);
   window.removeEventListener('mouseup', onCloudMouseUp);
   window.removeEventListener('blur', cancelCloudDrag);
+  window.removeEventListener('keydown', onCloudKeyDown);
   if (!g.active) return; // a plain click — the cloud's own click handler runs
   document.body.classList.remove('cloud-dragging');
   g.source.classList.remove('drag-source');
@@ -337,6 +340,7 @@ function cancelCloudDrag(): void {
   window.removeEventListener('mousemove', onCloudMouseMove);
   window.removeEventListener('mouseup', onCloudMouseUp);
   window.removeEventListener('blur', cancelCloudDrag);
+  window.removeEventListener('keydown', onCloudKeyDown);
   if (g.fromMenu === true) closeMenu();
   if (g.active) {
     document.body.classList.remove('cloud-dragging');
@@ -345,6 +349,21 @@ function cancelCloudDrag(): void {
     clearHighlight();
     dropActions.onDragEnd?.();
   }
+}
+
+/**
+ * Esc during a drag aborts the gesture (no drop, no side effects, ghost/highlight
+ * cleaned up). `preventDefault` marks the press as consumed so the global Escape
+ * handler (`initKeyboard` in app.ts, bubble phase) does not also try to close
+ * a menu/dialog behind the drag; a held Esc (auto-repeat) is ignored so the
+ * drag is cancelled exactly once per press.
+ */
+function onCloudKeyDown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return;
+  if (event.repeat) return;
+  if (gesture === null) return;
+  event.preventDefault();
+  cancelCloudDrag();
 }
 
 /** A clone of the source cloud, fixed to the viewport, following the cursor. */
