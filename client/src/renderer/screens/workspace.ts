@@ -11,7 +11,8 @@
  * ├─────────┬──────────────────────────────────────────────┬────────┤
  * │ выделен.│                 холст (зоны)                 │ редак. │
  * ├─────────┴──────────────────────────────────────────────┴────────┤
- * │ Статус-бар: индикатор • сеть • фокус • история • последнее событ. │
+ * │ Статус-бар: индикатор • история • счётчик • масштаб • последнее      │
+ * │            событие • индикатор конфликта                              │
  * └──────────────────────────────────────────────────────────────────┘
  * ```
  *
@@ -75,7 +76,6 @@ export interface WorkspaceHandles {
   editorHost: HTMLElement;
   /** Status bar cells. */
   historyHost: HTMLElement;
-  focusLabel: HTMLSpanElement;
   countsLabel: HTMLSpanElement;
   eventLabel: HTMLSpanElement;
   conflictHost: HTMLElement;
@@ -248,7 +248,6 @@ export function buildWorkspace(): HTMLElement {
 
   const statusLeft = span('', 'status-light');
   const historyHost = div('history-bar');
-  const focusLabel = span('—', 'sb-item sb-focus');
   const sbSpacer = div('sb-spacer');
   const countsLabel = span('', 'sb-item sb-counts');
   const zoomLabel = span('', 'sb-item sb-zoom');
@@ -263,7 +262,6 @@ export function buildWorkspace(): HTMLElement {
   statusbar.append(
     statusLeft,
     historyHost,
-    focusLabel,
     sbSpacer,
     countsLabel,
     zoomLabel,
@@ -293,7 +291,6 @@ export function buildWorkspace(): HTMLElement {
     chronicleHost,
     editorHost,
     historyHost,
-    focusLabel,
     countsLabel,
     eventLabel,
     conflictHost,
@@ -336,8 +333,6 @@ export function buildWorkspace(): HTMLElement {
     // The selection panel (and its resizer) are visible only while the list is
     // non-empty (mountSelection toggles the panel's own hidden class).
     selectionResizer.classList.toggle('hidden', st.selection.length === 0);
-    focusLabel.textContent = st.focus?.focused.title ?? '—';
-    setTooltip(focusLabel, st.focus?.focused.title ?? '');
     zoomLabel.replaceChildren(svgIcon('search', 12), span(` ${Math.round(st.canvasZoom * 100)}%`));
     eventLabel.textContent = st.lastEvent ?? '';
 

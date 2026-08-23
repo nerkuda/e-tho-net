@@ -7,9 +7,11 @@
  * - each view has its own local history (L4): the map keeps thoughts that were
  *   in the canvas focus, the structures keep thoughts opened in the editor —
  *   the bar shows the history of the ACTIVE view (L15);
- * - the three freshest thoughts render as mini clouds (icon + ~40-char title,
- *   colors from the thought/type, dimmed when inactive);
+ * - the three freshest thoughts render as mini clouds (icon + title truncated
+ *   to {@link CHIP_TITLE_LIMIT} chars, real fg/bg/font styles from the thought
+ *   resolved via `applyCloudStyle`, dimmed when inactive);
  * - `▾ N` opens a dropdown with the remaining entries; N = 0 hides the button;
+ *   dropdown items truncate titles to {@link DROPDOWN_TITLE_LIMIT} chars;
  * - empty history hides the area entirely;
  * - entries are resolved via `thoughts.resolve` (id → metadata); deleted
  *   thoughts were already pruned locally by the main-process applier, and
@@ -27,15 +29,31 @@ import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
-import { applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
+import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { openStructuresThought } from './structures/structures.js';
 import { openChronicleLinkById, openChronicleThought } from './chronicle/chronicle.js';
 
-/** Max title length inside a history mini-cloud. */
-const TITLE_LIMIT = 40;
+/**
+ * Max title length inside a history mini-cloud (the chip on the bar). When the
+ * title is longer we append an ellipsis so the chip stays a single line.
+ */
+const CHIP_TITLE_LIMIT = 25;
+/**
+ * Max title length inside a dropdown row of the history bar. Longer titles are
+ * truncated with an ellipsis.
+ */
+const DROPDOWN_TITLE_LIMIT = 200;
 /** How many entries the dropdown shows at once. */
 const HISTORY_LIMIT = 50;
+
+/** Suffix appended when a title is truncated to one of the {@link *_LIMIT}. */
+const ELLIPSIS = '…';
+
+/** Truncates `text` to `limit` characters; appends an ellipsis when cut. */
+function clip(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit)}${ELLIPSIS}` : text;
+}
 
 let host: HTMLElement | null = null;
 /** Signature of the inputs the bar depends on — avoids redundant re-renders. */
@@ -154,7 +172,7 @@ async function render(): Promise<void> {
         const items: MenuItem[] = rest.map((id) => {
           const ref = refs.get(id);
           return {
-            label: `${ref?.icon ?? '💭'} ${ref?.title ?? id}`.slice(0, TITLE_LIMIT),
+            label: clip(`${ref?.icon ?? '💭'} ${ref?.title ?? id}`, DROPDOWN_TITLE_LIMIT),
             onClick: () => openEntry(id),
             dragId: id,
           };
@@ -232,10 +250,12 @@ async function renderChronicle(profileId: string, networkId: string): Promise<vo
       '',
       () => {
         const items: MenuItem[] = rest.map((entry) => ({
-          label:
+          label: clip(
             entry.kind === 'thought'
-              ? `${refs.get(entry.id)?.icon ?? '💭'} ${refs.get(entry.id)?.title ?? entry.id}`.slice(0, TITLE_LIMIT)
-              : `🔗 ${linkLabels.get(entry.id) ?? entry.id}`.slice(0, TITLE_LIMIT),
+              ? `${refs.get(entry.id)?.icon ?? '💭'} ${refs.get(entry.id)?.title ?? entry.id}`
+              : `🔗 ${linkLabels.get(entry.id) ?? entry.id}`,
+            DROPDOWN_TITLE_LIMIT,
+          ),
           onClick: () => openChronicleEntry(entry),
           dragId: entry.kind === 'thought' ? entry.id : undefined,
         }));
@@ -279,7 +299,7 @@ async function resolveLinkLabel(networkId: string, linkId: string): Promise<stri
 function buildLinkChip(id: string, label: string): HTMLElement {
   const chip = div('history-cloud');
   chip.dataset['id'] = id;
-  chip.append(el('span', 'mini-icon', '🔗'), el('span', 'hc-title', label.slice(0, TITLE_LIMIT)));
+  chip.append(el('span', 'mini-icon', '🔗'), el('span', 'hc-title', clip(label, CHIP_TITLE_LIMIT)));
   setTooltip(chip, label);
   chip.addEventListener('click', () => void openChronicleLinkById(id));
   return chip;
@@ -302,20 +322,17 @@ async function resolveRefs(
 function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined): HTMLElement {
   const chip = div('history-cloud');
   chip.dataset['id'] = id;
-  if (ref !== undefined && !ref.active) chip.classList.add('dim');
   if (ref !== undefined) {
-    const style = resolveCloudStyle(ref);
-    if (style.fg !== null) chip.style.color = style.fg;
-    if (style.bg !== null) chip.style.background = style.bg;
-    chip.classList.toggle('font-italic', style.italic);
+    applyCloudStyle(chip, resolveCloudStyle(ref));
   }
+  if (ref !== undefined && !ref.active) chip.classList.add('dim');
   const icon = el('span', 'mini-icon');
   if (ref !== undefined) {
     applyThoughtIcon(icon, ref);
   } else {
     icon.textContent = '💭';
   }
-  const title = el('span', 'hc-title', (ref?.title ?? id).slice(0, TITLE_LIMIT));
+  const title = el('span', 'hc-title', clip(ref?.title ?? id, CHIP_TITLE_LIMIT));
   setTooltip(chip, ref?.title ?? id);
   chip.append(icon, title);
   chip.addEventListener('click', () => openEntry(id));

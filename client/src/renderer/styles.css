@@ -1142,6 +1142,11 @@ textarea {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex: 1 1 auto;
+  /* The bar lives in the status bar between the connection indicator and the
+   * spacer; we let it claim the whole free width now that the current-thought
+   * title is no longer rendered next to it (08-ui-spec.md §11, fix bug:
+   * «Ошибки в панели истории на Карте мыслей»). */
 }
 
 .history-back {
