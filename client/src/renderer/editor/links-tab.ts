@@ -31,7 +31,7 @@ import type {
 } from '@etn/shared';
 
 import { requireNetworkId, setFocus } from '../app.js';
-import { applyThoughtIcon } from '../canvas/canvas.js';
+import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { deleteLink, deleteThought } from '../canvas/context-menu.js';
 import { onRealtimeEvent } from '../realtime.js';
@@ -46,6 +46,9 @@ import { patchFocusEdge, store } from '../state.js';
 import { openLinkInEditor, registerTabContent, type EditorContext } from './editor.js';
 import { groupSection, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
+
+/** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
+const RESOLVE_BATCH = 100;
 
 /** Registers the links tab content (thoughts and links). */
 export function registerLinksTab(): void {
@@ -328,18 +331,45 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
       box.append(el('p', 'muted', 'Название нигде не упоминается.'));
       return;
     }
+    // The mentions DTO (§13) carries only the owner/title/snippet/active; the
+    // thought's icon and visual style (fg/bg/font_* + icon) come from a batched
+    // `thoughts.resolve` so the row matches what the user sees elsewhere
+    // (history-bar.ts / chronicle.ts «thoughtChip» — the canonical pattern).
+    // Links have no per-link visual, so they fall back to the «🔗» glyph.
+    const thoughtIds = visible
+      .filter((hit) => hit.owner_type === 'thought')
+      .map((hit) => hit.owner_id);
+    let refs: ThoughtRef[] = [];
+    if (thoughtIds.length > 0) {
+      try {
+        refs = await etn.thoughts.resolve(networkId, thoughtIds.slice(0, RESOLVE_BATCH));
+      } catch {
+        // Stale rows in the search index — fall back to the default icon.
+        refs = [];
+      }
+    }
+    const refById = new Map(refs.map((r) => [r.id, r]));
     // The group body (this box) is the scroll area — items flow directly.
     for (const hit of visible) {
       const item = div('mention-item');
       if (!hit.active) item.classList.add('dim');
-      const kind = span(hit.owner_type === 'thought' ? '💭' : '🔗', 'muted');
-      const title = el('span', undefined, hit.title);
-      title.style.fontWeight = '600';
+      const ref = hit.owner_type === 'thought' ? refById.get(hit.owner_id) : undefined;
+      // Same chip pattern as `chronicle.ts`/`history-bar.ts`: icon first, then
+      // the styled title. For a deleted thought (ref missing) we still show
+      // the hit's title with the default icon, so the row is never blank.
+      const icon = el('span', 'mini-icon');
+      if (ref !== undefined) {
+        applyCloudStyle(item, resolveCloudStyle(ref));
+        applyThoughtIcon(icon, { ...ref, id: hit.owner_id });
+      } else {
+        icon.textContent = hit.owner_type === 'thought' ? '💭' : '🔗';
+      }
+      const title = el('span', 'link-item-title', hit.title);
       const snippet = el('div', 'muted mention-snippet');
       // The snippet carries server-side <mark> highlights around matches —
       // like the search panel, render it as (escaped, trusted) HTML.
       renderHtml(snippet, hit.snippet);
-      item.append(kind, title, snippet);
+      item.append(icon, title, snippet);
       item.addEventListener('click', () => void open(hit));
       box.append(item);
     }
