@@ -21,7 +21,12 @@ import { wikiLinkPlugin } from './wiki-link.js';
 
 export { parseAltSize } from './image.js';
 export { isSafeUrl } from './url.js';
-export { WIKI_LINK_CLASS, WIKI_LINK_TARGET_ATTR } from './wiki-link.js';
+export {
+  WIKI_LINK_CLASS,
+  WIKI_LINK_TARGET_ATTR,
+  WIKI_LINK_ID_ATTR,
+  WIKI_LINK_NETWORK_ATTR,
+} from './wiki-link.js';
 
 /**
  * Marker of the rendering pipeline version. The server re-renders the cached

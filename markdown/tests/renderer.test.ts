@@ -11,6 +11,8 @@ import {
   renderMarkdown,
   WIKI_LINK_CLASS,
   WIKI_LINK_TARGET_ATTR,
+  WIKI_LINK_ID_ATTR,
+  WIKI_LINK_NETWORK_ATTR,
 } from '../src/index.js';
 
 // ---------------------------------------------------------------------------
@@ -99,6 +101,86 @@ test('[[…]] внутри code span и fenced-блока не интерпре�
   const fenced = renderMarkdown('```\n[[x]]\n```');
   assert.ok(fenced.includes('[[x]]'));
   assert.ok(!fenced.includes(WIKI_LINK_CLASS));
+});
+
+test('[[#<uuid>]] — ID-форма, пустой body, data-wiki-id без data-wiki-network', () => {
+  const id = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+  const html = renderMarkdown(`см. [[#${id}]]`);
+  // span class=wiki-link с data-wiki-id, пустой body
+  assert.match(html, new RegExp(`<span class="${WIKI_LINK_CLASS}"[^>]*${WIKI_LINK_ID_ATTR}="${id}"`));
+  assert.match(html, new RegExp(`<span class="${WIKI_LINK_CLASS}"[^>]*${WIKI_LINK_TARGET_ATTR}="${id}"`));
+  assert.ok(!html.includes(WIKI_LINK_NETWORK_ATTR + '='));
+  assert.ok(!html.includes('>8e0d670e'), 'тело спана должно быть пустым, клиент заполнит');
+});
+
+test('[[#<uuid>|алиас]] — ID-форма с алиасом — клиент всё равно перезапишет body', () => {
+  const id = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+  const html = renderMarkdown(`[[#${id}|мой алиас]]`);
+  assert.match(html, new RegExp(`${WIKI_LINK_ID_ATTR}="${id}"`));
+  // Тело пустое — клиент подтянет имя, alias не рендерим в HTML для ID-форм
+  assert.ok(!html.includes('мой алиас'));
+});
+
+test('[[n:<net>#<id>]] — кросс-сеть: data-wiki-id + data-wiki-network', () => {
+  const net = 'c4f9a3b2-1111-2222-3333-444455556666';
+  const id = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+  const html = renderMarkdown(`[[n:${net}#${id}]]`);
+  assert.match(html, new RegExp(`${WIKI_LINK_ID_ATTR}="${id}"`));
+  assert.match(html, new RegExp(`${WIKI_LINK_NETWORK_ATTR}="${net}"`));
+  assert.ok(!html.includes('>8e0d670e'));
+});
+
+test('[[n:<net>#<id>|alias]] — кросс-сеть с алиасом', () => {
+  const net = 'c4f9a3b2-1111-2222-3333-444455556666';
+  const id = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+  const html = renderMarkdown(`[[n:${net}#${id}|заметка]]`);
+  assert.match(html, new RegExp(`${WIKI_LINK_ID_ATTR}="${id}"`));
+  assert.match(html, new RegExp(`${WIKI_LINK_NETWORK_ATTR}="${net}"`));
+  assert.ok(!html.includes('заметка'));
+});
+
+test('UUID в [[#…]] нормализуется в нижний регистр', () => {
+  const idUpper = '8E0D670E-DE61-4DA7-B13E-9232CD1C6CA5';
+  const idLower = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+  const html = renderMarkdown(`[[#${idUpper}]]`);
+  assert.ok(html.includes(`${WIKI_LINK_ID_ATTR}="${idLower}"`));
+});
+
+test('невалидный UUID в [[#…]] — fallback на legacy name-form', () => {
+  const html = renderMarkdown('[[#not-a-uuid]]');
+  // Не должно быть data-wiki-id — это legacy
+  assert.ok(!html.includes(WIKI_LINK_ID_ATTR + '='));
+  // Target = "#not-a-uuid"
+  assert.ok(html.includes(`${WIKI_LINK_TARGET_ATTR}="#not-a-uuid"`));
+  // body содержит имя
+  assert.ok(html.includes('>#not-a-uuid</span>'));
+});
+
+test('невалидный UUID в [[n:…#…]] — fallback на legacy', () => {
+  const html = renderMarkdown('[[n:abc#xyz]]');
+  assert.ok(!html.includes(WIKI_LINK_ID_ATTR + '='));
+  assert.ok(!html.includes(WIKI_LINK_NETWORK_ATTR + '='));
+  assert.ok(html.includes(`${WIKI_LINK_TARGET_ATTR}="n:abc#xyz"`));
+});
+
+test('кросс-сеть: невалидный network UUID при валидном id — fallback', () => {
+  const id = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+  const html = renderMarkdown(`[[n:not-a-uuid#${id}]]`);
+  assert.ok(!html.includes(WIKI_LINK_ID_ATTR + '='));
+});
+
+test('ID-форма: пробелы вокруг id триммятся', () => {
+  const id = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+  const html = renderMarkdown(`[[# ${id} ]]`);
+  assert.match(html, new RegExp(`${WIKI_LINK_ID_ATTR}="${id}"`));
+});
+
+test('ID-форма: [[#id]] внутри code span и fenced-блока не интерпретируется', () => {
+  const id = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+  assert.ok(renderMarkdown(`\`[[#${id}]]\``).includes(`<code>[[#${id}]]</code>`));
+  const fenced = renderMarkdown(`\`\`\`\n[[#${id}]]\n\`\`\``);
+  assert.ok(fenced.includes(`[[#${id}]]`));
+  assert.ok(!fenced.includes(WIKI_LINK_ID_ATTR));
 });
 
 test('обычные [текст](url) ссылки не задеваются', () => {
