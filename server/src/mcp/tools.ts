@@ -96,6 +96,7 @@ import {
   setPropertyValue,
   setPropertyValues,
 } from '../domain/property-service.js';
+import { findBacklinks } from '../domain/backlinks-service.js';
 import {
   collectSubtreeTypes,
   findDuplicates,
@@ -787,6 +788,30 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
         return findMentions(ndb, args.thought_id);
+      }),
+  );
+
+  const BacklinksSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId });
+  mcp.registerTool(
+    'etn.thoughts.backlinks',
+    {
+      title: 'Ссылки на мысль',
+      description:
+        'Comments whose `body_md` carries an explicit ID-based wiki reference ' +
+        '`[[#<id>]]` or `[[n:<net>#<id>]]` to this thought (task R3, ' +
+        'docs/03-server-api.md §13a). Distinct from `etn.thoughts.mentions` — ' +
+        'that one finds implicit text matches by title/synonyms via FTS5; ' +
+        'this one finds explicit UUID-based references by runtime regex. ' +
+        'Returns the same `MentionHit[]` shape as `etn.thoughts.mentions` ' +
+        '(one hit per (owner_type, owner_id) owner; the target thought own ' +
+        'comments are excluded; snippet is centred on the matched id).',
+      inputSchema: BacklinksSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.backlinks'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        return findBacklinks(ndb, args.thought_id);
       }),
   );
 

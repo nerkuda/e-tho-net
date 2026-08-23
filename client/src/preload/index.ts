@@ -61,6 +61,7 @@ function buildApi(): EtnApi {
       resolve: (networkId, ids) => invoke('thoughts.resolve', networkId, ids),
       search: (networkId, request) => invoke('thoughts.search', networkId, request),
       mentions: (networkId, id) => invoke('thoughts.mentions', networkId, id),
+      backlinks: (networkId, id) => invoke('thoughts.backlinks', networkId, id),
       mentionsScan: (networkId, request) => invoke('thoughts.mentionsScan', networkId, request),
       usage: (networkId, id) => invoke('thoughts.usage', networkId, id),
       findDuplicates: (networkId, title, synonyms, typeIds) =>

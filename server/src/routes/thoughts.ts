@@ -59,6 +59,7 @@ import {
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
 import { createLink, deleteLink, findLinksBetween, incomingLinksOf } from '../domain/link-service.js';
 import { findThoughtUsage } from '../domain/property-service.js';
+import { findBacklinks } from '../domain/backlinks-service.js';
 import { findDuplicates, findMentions } from '../domain/search-service.js';
 import {
   createThought,
@@ -767,6 +768,19 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const mentions = findMentions(ndb, id);
         sendList(reply, mentions, mentions.length, 0, mentions.length);
+      },
+    );
+
+    // --- Backlinks (03-server-api.md §13a, task R3) -------------------------
+
+    app.get(
+      '/networks/:networkId/thoughts/:id/backlinks',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as ThoughtIdParams;
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const backlinks = findBacklinks(ndb, id);
+        sendList(reply, backlinks, backlinks.length, 0, backlinks.length);
       },
     );
 

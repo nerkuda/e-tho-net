@@ -266,6 +266,8 @@ export interface EtnApi {
     resolve(networkId: string, ids: string[]): Promise<ThoughtRef[]>;
     search(networkId: string, request: SearchRequest): Promise<SearchResponse>;
     mentions(networkId: string, id: string): Promise<MentionHit[]>;
+    /** `GET /thoughts/{id}/backlinks` — comments with explicit `[[#<id>]]` references (R3). */
+    backlinks(networkId: string, id: string): Promise<MentionHit[]>;
     /** `POST /mentions/scan` — thought mentions in caller-supplied text (§21, L24). */
     mentionsScan(networkId: string, request: MentionsScanRequest): Promise<MentionsScanResponse>;
     /** `GET /thoughts/{id}/usage` — thoughts referencing this one via thought_ref (L7). */

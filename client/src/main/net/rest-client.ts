@@ -1384,6 +1384,21 @@ export class RestClient {
     );
   }
 
+  /**
+   * `GET /networks/{nid}/thoughts/{id}/backlinks` — explicit ID-based wiki
+   * references in `body_md` (task R3, docs/03-server-api.md §13a). Returns
+   * the same `MentionHit[]` shape as `listMentions`.
+   */
+  public async listBacklinks(
+    networkId: string,
+    thoughtId: string,
+  ): Promise<import('@etn/shared').MentionHit[]> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/backlinks`,
+    );
+  }
+
   /** `POST /networks/{nid}/mentions/scan` — thought mentions in text (§21, L24). */
   public async mentionsScan(
     networkId: string,

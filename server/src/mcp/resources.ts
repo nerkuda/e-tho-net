@@ -19,6 +19,7 @@ import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 import { getThoughtOrThrow } from '../domain/thought-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
 import { findThoughtUsage } from '../domain/property-service.js';
+import { findBacklinks } from '../domain/backlinks-service.js';
 import { getNeighbors } from '../domain/thought-service.js';
 import { getLink } from '../domain/link-service.js';
 import { listComments } from '../domain/comment-service.js';
@@ -200,6 +201,31 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetwork(rt, networkId);
         getThoughtOrThrow(ndb, thoughtId);
         return jsonContents(uri.href, findThoughtUsage(ndb, thoughtId));
+      }),
+  );
+
+  // --- backlinks (explicit ID-based wiki references, 03-server-api.md §13a) --
+  mcp.registerResource(
+    'etn.thought.backlinks',
+    new ResourceTemplate('etn://networks/{network_id}/thoughts/{thought_id}/backlinks', {
+      list: undefined,
+    }),
+    {
+      title: 'Ссылки на мысль',
+      description:
+        'Комментарии, в body_md которых есть явная ID-ссылка [[#<id>]] или ' +
+        '[[n:<net>#<id>]] на эту мысль (фаза R). Семантически отличается от ' +
+        'etn.thought.mentions (FTS5 по title/synonyms) — здесь явный UUID. ' +
+        'Возвращает массив MentionHit (один элемент на (owner_type, owner_id)).',
+      mimeType: JSON_MIME,
+    },
+    (uri, vars) =>
+      guarded(() => {
+        const networkId = requireVar(vars, 'network_id');
+        const thoughtId = requireVar(vars, 'thought_id');
+        const ndb = openMemberNetwork(rt, networkId);
+        getThoughtOrThrow(ndb, thoughtId);
+        return jsonContents(uri.href, findBacklinks(ndb, thoughtId));
       }),
   );
 
