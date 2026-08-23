@@ -59,20 +59,22 @@ test('CRLF нормализуется', () => {
 // Wiki-ссылки
 // ---------------------------------------------------------------------------
 
-test('[[имя]] рендерится как span с целевым именем', () => {
+test('[[имя]] рендерится как span с целевым именем и data-legacy-link', () => {
   const html = renderMarkdown('см. [[Мысль о главном]]');
   assert.ok(
     html.includes(
-      `<span class="${WIKI_LINK_CLASS}" ${WIKI_LINK_TARGET_ATTR}="Мысль о главном">Мысль о главном</span>`,
+      `<span class="${WIKI_LINK_CLASS}" ${WIKI_LINK_TARGET_ATTR}="Мысль о главном" data-legacy-link="true">Мысль о главном</span>`,
     ),
     html,
   );
 });
 
-test('[[имя|синоним]] показывает синоним, цель — имя', () => {
+test('[[имя|синоним]] показывает синоним, цель — имя, маркер legacy', () => {
   const html = renderMarkdown('[[имя мысли|синоним]]');
   assert.ok(
-    html.includes(`class="${WIKI_LINK_CLASS}" ${WIKI_LINK_TARGET_ATTR}="имя мысли">синоним</span>`),
+    html.includes(
+      `class="${WIKI_LINK_CLASS}" ${WIKI_LINK_TARGET_ATTR}="имя мысли" data-legacy-link="true">синоним</span>`,
+    ),
     html,
   );
 });
