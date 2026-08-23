@@ -94,7 +94,8 @@ export function mountPicker(host: HTMLElement): void {
   /**
    * Creates a new tab via `etn.tabs.open` (always a fresh tab per the Q
    * bugfix) and switches the workspace to it. The new tab becomes the
-   * active one immediately.
+   * active one immediately. Refreshes the `networkList` cache afterwards so
+   * the freshly created network's `display_name` shows up on the tab strip.
    */
   async function pickNetwork(networkId: string): Promise<void> {
     errorLine.hidden = true;
@@ -103,6 +104,7 @@ export function mountPicker(host: HTMLElement): void {
       upsertTab(tab);
       store.update({ activeTabId: tab.tab_id, pickerOpen: false });
       await openNetwork(networkId, tab.tab_id);
+      void refreshNetworkList();
     } catch (err) {
       errorLine.textContent = errText(err);
       errorLine.hidden = false;
@@ -146,6 +148,9 @@ export function mountPicker(host: HTMLElement): void {
               try {
                 const network = await etn.networks.create(name, descInput.value.trim() || undefined);
                 close();
+                // Refresh the cache BEFORE opening so the tab strip can show
+                // the freshly-created network's display_name right away.
+                await refreshNetworkList();
                 await pickNetwork(network.id);
               } catch (err) {
                 dialogError.textContent = errText(err);
@@ -158,6 +163,16 @@ export function mountPicker(host: HTMLElement): void {
       ],
       onMount: () => nameInput.focus(),
     });
+  }
+
+  /** Pulls the freshest `etn.networks.list()` into the store cache. */
+  async function refreshNetworkList(): Promise<void> {
+    try {
+      const list = await etn.networks.list();
+      store.update({ networkList: list });
+    } catch {
+      // best-effort; the next picker open will retry
+    }
   }
 
   function closePicker(): void {

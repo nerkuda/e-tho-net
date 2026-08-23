@@ -100,7 +100,9 @@ let edgesSignature = '';
 /** Which nodes have parents/children expanded. */
 let expansion: ExpansionMap = new Map();
 
-/** Whether the initial filter state and first query already ran for this network. */
+/** Composite cache key of the last init: `${networkId}:${tabId}` so the
+ *  view re-initialises when EITHER the network or the active tab changes
+ *  (per-tab filter snapshot, Q4). `null` until the first call. */
 let networkIdSeen: string | null = null;
 /** Loading guard so the tree does not flicker with stale data. */
 let querySeq = 0;
@@ -125,8 +127,12 @@ export async function ensureStructuresInitialised(): Promise<void> {
   const networkId = store.state.networkId;
   const tabId = store.state.activeTabId;
   if (networkId === null || host === null) return;
-  if (networkIdSeen === networkId) return;
-  networkIdSeen = networkId;
+  // Q-bugfix: cache key includes the active tab so switching tabs (same
+  // network, different snapshot) re-reads `tab.structures_state` instead of
+  // serving the previous tab's filter.
+  const key = `${networkId}:${tabId ?? ''}`;
+  if (networkIdSeen === key) return;
+  networkIdSeen = key;
 
   // Reset per-network state (a previous network may still be loaded).
   resultIds = [];
@@ -493,9 +499,10 @@ export function mountStructures(hostEl: HTMLElement): void {
   store.subscribe(() => {
     if (host === null || !host.isConnected) return;
     const networkId = store.state.networkId;
+    const tabId = store.state.activeTabId;
     if (
       networkId !== null &&
-      networkIdSeen !== networkId &&
+      networkIdSeen !== `${networkId}:${tabId ?? ''}` &&
       store.state.activeView === 'structures'
     ) {
       void ensureStructuresInitialised();
@@ -1260,7 +1267,8 @@ export function scheduleStructuresRefresh(): void {
 /** Reloads the page and all expanded hierarchy levels. */
 async function reloadAll(): Promise<void> {
   const networkId = store.state.networkId;
-  if (networkId === null || networkIdSeen !== networkId) return;
+  const tabId = store.state.activeTabId;
+  if (networkId === null || networkIdSeen !== `${networkId}:${tabId ?? ''}`) return;
   await applyQuery(true);
   // The visible set may be unchanged while the links themselves changed
   // (realtime) — force the edges refresh even for the same id signature.

@@ -52,7 +52,9 @@ import {
 import { fromDefinition, parseChronicleState, toDefinition } from './state.js';
 
 let host: HTMLElement | null = null;
-/** Per-network lazy init guard (like the structures view). */
+/** Composite cache key of the last init: `${networkId}:${tabId}` so the
+ *  view re-initialises when EITHER the network or the active tab changes
+ *  (per-tab filter snapshot, Q4). `null` until the first call. */
 let networkIdSeen: string | null = null;
 
 // ---------------------------------------------------------------------------
@@ -84,8 +86,12 @@ export async function ensureChronicleInitialised(): Promise<void> {
   const networkId = store.state.networkId;
   const tabId = store.state.activeTabId;
   if (networkId === null || host === null) return;
-  if (networkIdSeen === networkId) return;
-  networkIdSeen = networkId;
+  // Q-bugfix: cache key includes the active tab so switching tabs (same
+  // network, different snapshot) re-reads `tab.chronicle_state` instead of
+  // serving the previous tab's filter.
+  const key = `${networkId}:${tabId ?? ''}`;
+  if (networkIdSeen === key) return;
+  networkIdSeen = key;
 
   rows = [];
   total = 0;
@@ -183,9 +189,10 @@ export function mountChronicle(hostEl: HTMLElement): void {
   store.subscribe(() => {
     if (host === null || !host.isConnected) return;
     const networkId = store.state.networkId;
+    const tabId = store.state.activeTabId;
     if (
       networkId !== null &&
-      networkIdSeen !== networkId &&
+      networkIdSeen !== `${networkId}:${tabId ?? ''}` &&
       store.state.activeView === 'chronicle'
     ) {
       void ensureChronicleInitialised();

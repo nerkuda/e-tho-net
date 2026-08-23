@@ -12,6 +12,7 @@
  *  - pointer-gesture drag-reorder among the **visible** tabs (overflow tabs
  *    are not draggable in v1, see Q3 DoD).
  */
+import { openNetwork } from '../../app.js';
 import { div, el, setTooltip, span } from '../../lib/dom.js';
 import { svgIcon } from '../../lib/icons.js';
 import { etn } from '../../lib/etn.js';
@@ -174,21 +175,44 @@ function networkLabel(networkId: string): string {
   return networkId.length <= 8 ? networkId : `${networkId.slice(0, 8)}…`;
 }
 
-/** Activates a tab; delegates to IPC and lets Q4 wire snapshot hydration. */
+/**
+ * Activates a tab. The actual snapshot hydration (loading the tab's stored
+ * focus / view / filters, re-initialising the canvas and views) lives in
+ * `app.openNetwork` — we just route through it with the right `tabId` so
+ * the per-tab fields on the `tabs` row win over the legacy L4 keys.
+ */
 async function activateTab(tabId: string): Promise<void> {
   // Picking any tab closes the picker — the user opened it via «+», clicking
   // elsewhere (including the «+» again) is their way to dismiss.
   store.update({ pickerOpen: false });
+
+  const target = store.state.tabs.find((t) => t.tab_id === tabId);
+  if (target === undefined) return;
+  const sameTab = store.state.activeTabId === tabId;
+  const sameNetwork = store.state.networkId === target.network_id;
+  if (sameTab && sameNetwork) {
+    clearTabDirty(tabId);
+    return;
+  }
+
   try {
-    const tab = await etn.tabs.activate(tabId);
-    if (tab === null) return;
-    upsertTab(tab);
-    store.update({ activeTabId: tab.tab_id });
-    // Q4: activation clears the dirty marker (08-ui-spec.md §1.1).
+    await openNetworkTab(target.network_id, tabId);
     clearTabDirty(tabId);
   } catch {
-    // ignore — status bar / log
+    // ignore — workspace stays on its current state if the switch fails
   }
+}
+
+/**
+ * Loads the workspace for `tabId` and switches the active tab. Wraps
+ * `etn.tabs.activate` (touch the row in local DB) with the renderer's
+ * `openNetwork` so the canvas/views hydrate from the tab's snapshot.
+ */
+async function openNetworkTab(networkId: string, tabId: string): Promise<void> {
+  await etn.tabs.activate(tabId).catch(() => undefined);
+  const fresh = store.state.tabs.find((t) => t.tab_id === tabId);
+  if (fresh !== undefined) upsertTab(fresh);
+  await openNetwork(networkId, tabId);
 }
 
 /** Closes a tab via IPC and removes it from the store. */
