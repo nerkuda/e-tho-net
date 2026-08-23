@@ -103,13 +103,17 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
     },
     ctx.ownerId,
   );
+  // Parent «Упоминания» (task R9): содержит две подсекции — «Ссылки на мысль»
+  // (явные [[#<id>]] в body_md) и «Упоминания в тексте» (FTS5 по title/synonyms).
+  // Обе подсекции свёрнуты по умолчанию — пользователь явно решает, что готов
+  // подождать выполнения запроса.
   const mentions = groupSection(
     {
       id: 'mentions',
       title: 'Упоминания',
       lazyCount: true,
       defaultCollapsed: true,
-      buildBody: () => buildMentionsBody(ctx),
+      buildBody: () => buildMentionsParentBody(ctx),
     },
     ctx.ownerId,
   );
@@ -298,6 +302,138 @@ function buildLinkEndpointsBody(ctx: EditorContext): HTMLElement {
     }
     if (target !== undefined) {
       box.append(endpointRow('назначение', target, () => setFocus(target.id)));
+    }
+  }
+
+  return box;
+}
+
+/** Builds the parent «Упоминания» body: container with two child groups. */
+function buildMentionsParentBody(ctx: EditorContext): HTMLElement {
+  const networkId = requireNetworkId();
+  const box = div('mentions-parent-body');
+
+  const childReload: { current: (() => void) | null } = { current: null };
+
+  /** Loads both endpoints in parallel and reports the aggregate count. */
+  async function refreshCounts(): Promise<void> {
+    const [backlinks, mentions] = await Promise.all([
+      etn.thoughts.backlinks(networkId, ctx.ownerId).catch(() => []),
+      etn.thoughts.mentions(networkId, ctx.ownerId).catch(() => []),
+    ]);
+    const visibleBacklinks = backlinks.filter((h) => h.active || store.state.showInactive);
+    const visibleMentions = mentions.filter((h) => h.active || store.state.showInactive);
+    const total = visibleBacklinks.length + visibleMentions.length;
+    box.closest('.group')?.dispatchEvent(
+      new CustomEvent('etn:set-count', { detail: `(${total})` }),
+    );
+  }
+  void refreshCounts();
+
+  // Две дочерние группы — те же groupSection, что и везде.
+  const backlinksSection = groupSection(
+    {
+      id: 'mentions:backlinks',
+      title: 'Ссылки на мысль',
+      lazyCount: true,
+      defaultCollapsed: true,
+      buildBody: () => buildBacklinksBody(ctx),
+    },
+    ctx.ownerId,
+  );
+  const textMentionsSection = groupSection(
+    {
+      id: 'mentions:text',
+      title: 'Упоминания в тексте',
+      lazyCount: true,
+      defaultCollapsed: true,
+      buildBody: () => buildMentionsBody(ctx),
+    },
+    ctx.ownerId,
+  );
+  childReload.current = () => {
+    backlinksSection.replaceWith(
+      groupSection(
+        {
+          id: 'mentions:backlinks',
+          title: 'Ссылки на мысль',
+          lazyCount: true,
+          defaultCollapsed: false,
+          buildBody: () => buildBacklinksBody(ctx),
+        },
+        ctx.ownerId,
+      ),
+    );
+  };
+  box.append(backlinksSection, textMentionsSection);
+  return box;
+}
+
+/** Builds the «Ссылки на мысль» body — explicit `[[#<id>]]` references. */
+function buildBacklinksBody(ctx: EditorContext): HTMLElement {
+  const networkId = requireNetworkId();
+  const box = div('mentions-body');
+  void reload();
+
+  async function reload(): Promise<void> {
+    box.replaceChildren(el('span', 'muted', 'Поиск ссылок на мысль…'));
+    let hits: MentionHit[];
+    try {
+      hits = await etn.thoughts.backlinks(networkId, ctx.ownerId);
+    } catch (err) {
+      box.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      return;
+    }
+    const visible = hits.filter((hit) => hit.active || store.state.showInactive);
+    box.replaceChildren();
+    if (visible.length === 0) {
+      box.append(el('p', 'muted', 'Никто не ссылается на эту мысль через [[#<id>]]. '));
+      return;
+    }
+    // Тот же chip-паттерн, что и в buildMentionsBody — иконка/styling
+    // подтягиваются батчем через thoughts.resolve.
+    const thoughtIds = visible
+      .filter((hit) => hit.owner_type === 'thought')
+      .map((hit) => hit.owner_id);
+    let refs: ThoughtRef[] = [];
+    if (thoughtIds.length > 0) {
+      try {
+        refs = await etn.thoughts.resolve(networkId, thoughtIds.slice(0, RESOLVE_BATCH));
+      } catch {
+        refs = [];
+      }
+    }
+    const refById = new Map(refs.map((r) => [r.id, r]));
+    for (const hit of visible) {
+      const item = div('mention-item');
+      if (!hit.active) item.classList.add('dim');
+      const ref = hit.owner_type === 'thought' ? refById.get(hit.owner_id) : undefined;
+      const icon = el('span', 'mini-icon');
+      if (ref !== undefined) {
+        applyCloudStyle(item, resolveCloudStyle(ref));
+        applyThoughtIcon(icon, { ...ref, id: hit.owner_id });
+      } else {
+        icon.textContent = hit.owner_type === 'thought' ? '💭' : '🔗';
+      }
+      const title = el('span', 'link-item-title', hit.title);
+      const snippet = el('div', 'muted mention-snippet');
+      renderHtml(snippet, hit.snippet);
+      item.append(icon, title, snippet);
+      item.addEventListener('click', () => void open(hit));
+      box.append(item);
+    }
+  }
+
+  async function open(hit: MentionHit): Promise<void> {
+    if (hit.owner_type === 'thought') {
+      void setFocus(hit.owner_id);
+      return;
+    }
+    try {
+      const link = await etn.links.get(networkId, hit.owner_id);
+      openLinkInEditor(link);
+    } catch {
+      // stale link
     }
   }
 
