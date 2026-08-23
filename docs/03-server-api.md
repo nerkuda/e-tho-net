@@ -196,7 +196,9 @@ POST /api/v1/networks/{nid}/thoughts/{id}/focus
                 children: [ ... ],      # назначения связей
                 siblings: [ ... ],      # мысли с тем же родителем
                 edges:    [ ... ],      # все active-связи среди видимых мыслей
-                sorts:    { parents: "...", children: "..." } } }
+                sorts:    { parents: { sort, order },
+                            children: { sort, order },
+                            siblings: { sort, order } } } }
 # Фокус-мысль как «последняя просмотренная» НЕ сохраняется сервером — это
 # клиентское состояние (L4 в [11-settings-and-state.md](11-settings-and-state.md)).
 ```
@@ -220,8 +222,13 @@ siblings; [08-ui-spec.md](08-ui-spec.md) §2.1). `edges` от этого не з
 { "id": "...", "source_id": "...", "target_id": "...", "type_id": "..." }
 ```
 
-`sorts` — текущая сортировка порядка¬ble-зон для пользователя (`manual`/`alpha`/`created`/`viewed`),
-с дефолтом `created`; siblings порядка не имеют.
+`sorts` — текущая сортировка порядковых зон для пользователя: по зоне
+(`parents`/`children`/`siblings`) объект `{ sort, order }`, где `sort` —
+`manual`/`alpha`/`created`/`viewed` (дефолт `created`), `order` — `asc`/`desc`.
+Зона `siblings` не упорядочивается вручную (`manual` недоступен), но несёт
+свою `alpha`/`created`/`viewed`-настройку; полный объект возвращается для
+всех трёх зон, чтобы меню сортировки отмечало активный пункт (08-ui-spec.md
+§2.7).
 
 ### 6.3. Создание
 ```
