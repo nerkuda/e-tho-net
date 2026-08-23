@@ -12,8 +12,11 @@
  *   on the workspace), administration (when admin), disconnect. Personal
  *   preferences (display_name, cloud sizing, theme) live in the Settings
  *   dialog.
- * - View menu (☰, top row, right): show/hide editor only. Type catalogues
- *   and the Settings entry moved to «Мыслесеть».
+ * - View menu (☰, top row, right): show/hide editor and the unified
+ *   Settings entry («Все настройки», with a gear icon). The type catalogues
+ *   moved to «Мыслесеть»; the network-scoped Settings entry («Настройки
+ *   мыслесети») lives there too and opens the same dialog straight on the
+ *   «Мыслесеть» section.
  *
  * Menus are built lazily on click from the current store state.
  */
@@ -22,6 +25,7 @@ import { backToNetworks, disconnect, requireNetworkId } from '../app.js';
 import { openAdminPanel } from '../admin/admin.js';
 import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
+import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
@@ -273,16 +277,29 @@ export function wireViewMenu(handles: WorkspaceHandles): void {
 
 /**
  * Builds the «Вид» menu items from the current state (Q3-bugfix,
- * 08-ui-spec.md §8.3). Houses the single layout toggle (show/hide editor).
- * The type catalogues and the Settings entry moved to the «Мыслесеть»
- * menu (they are network-level concerns, not workspace-layout).
+ * 08-ui-spec.md §8.3). Houses the layout toggle (show/hide editor) and
+ * the unified Settings dialog entry («Все настройки», opens with the
+ * default section). The type catalogues moved to the «Мыслесеть» menu
+ * (they are network-level concerns, not workspace-layout); the
+ * network-scoped entry «Настройки мыслесети» lives in the same menu
+ * and opens the same dialog straight on the «Мыслесеть» section.
  */
 export function buildViewMenuItems(): MenuItem[] {
   const hidden = store.state.editorPosition === 'hidden';
+  // `MenuItem.icon` accepts a text glyph or a DOM node; passing the SVG
+  // node directly (instead of innerHTML) keeps `lib/menu.ts` safe —
+  // textContent-escaping would otherwise turn the markup into literal text.
+  const gear = svgIcon('settings', 14);
   return [
     {
       label: hidden ? 'Показать редактор' : 'Скрыть редактор',
       onClick: () => void toggleEditorVisibility(),
+    },
+    MENU_SEPARATOR,
+    {
+      label: 'Все настройки',
+      icon: gear,
+      onClick: () => showSettingsDialog(),
     },
   ];
 }
