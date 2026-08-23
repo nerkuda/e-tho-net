@@ -2247,6 +2247,15 @@ body.cloud-dragging * {
   max-height: 190px;
 }
 
+/* Pin the header row while the body scrolls — the same pattern as the
+   chronicle screen table (table.chron-table thead th, below). */
+.chrono-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+}
+
 .chrono-editor {
   flex: 1 1 auto;
   min-height: 0;
