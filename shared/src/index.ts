@@ -16,4 +16,5 @@ export * from './constants.js';
 export * from './errors.js';
 export * from './keywords.js';
 export * from './mentions.js';
+export * from './deep-link.js';
 export * from './types/index.js';
