@@ -85,8 +85,9 @@ interface WikiIdState {
    * for `[[#<id>]]` links — otherwise `[[#<id>]]` (same-network) and
    * `[[n:<net>#<id>]]` (cross-network) would route through different code
    * paths with different key prefixes and the same-network branch would
-   * never find its entries. Kept in sync with `requireNetworkId()` by
-   * `wikiIdPlugin.update` via the {@link setNetworkId} effect.
+   * never find its entries. Seeded from `requireNetworkId()` in `create()`
+   * and kept in sync on network switches by `wikiIdPlugin.update` via the
+   * {@link setNetworkId} effect.
    */
   networkId: string | null;
   /** Resolved metadata keyed by `<networkId>:<thoughtId>`. */
@@ -253,24 +254,26 @@ const setNetworkId = StateEffect.define<string | null>();
  */
 export const wikiIdState = StateField.define<WikiIdState>({
   create: (state) => {
-    // Build the initial decorations right away — the raw `[[#<id>]]` must
-    // never be painted even for the first frame. The network id is synced
-    // via setNetworkId on the first plugin update.
-    const { decorations, atomic } = computeWikiIdDecos(state.doc.toString(), state.selection.main, new Map(), null);
-    return { networkId: null, cache: new Map(), decorations, atomic };
+    // Seed the active network right away: the constructor's first resolve
+    // writes cache keys for this network, and the decorations must be able
+    // to find them from the very first frame. The setNetworkId effect fires
+    // only when the network *changes* after mount — if the field stayed
+    // null here, every `[[#<id>]]` lookup would miss the cache forever and
+    // the widgets would show `…` instead of the resolved titles.
+    const networkId = safeCurrentNetwork();
+    const { decorations, atomic } = computeWikiIdDecos(state.doc.toString(), state.selection.main, new Map(), networkId);
+    return { networkId, cache: new Map(), decorations, atomic };
   },
   update(state, tr) {
     let networkId = state.networkId;
     let cache = state.cache;
     for (const e of tr.effects) {
       if (e.is(setNetworkId)) {
-        // When the active network changes, drop the cache — entries from the
-        // previous network are not relevant (and stale ids in the new network
-        // would briefly show wrong titles if reused).
-        if (e.value !== state.networkId) {
-          networkId = e.value;
-          if (cache.size > 0) cache = new Map();
-        }
+        // Cache keys are prefixed with their network id (`<net>:<id>`), so
+        // entries of another network are simply unreachable — no need to
+        // drop the cache on switch. (A reset here would also race with the
+        // constructor's in-flight resolve and could wipe fresh entries.)
+        networkId = e.value;
       } else if (e.is(setCacheEntries)) {
         if (cache === state.cache) cache = new Map(cache);
         for (const { key, meta } of e.value) {
@@ -449,9 +452,9 @@ export const wikiIdPlugin = ViewPlugin.fromClass(
     lastNetwork: string | null = null;
 
     constructor(readonly view: EditorView) {
-      // The field's networkId starts null (the first update syncs it) — seed
-      // the live network here so the very first scan resolves same-network
-      // links immediately after mount.
+      // The field seeds its networkId from the live app state in `create()`,
+      // so same-network links resolve immediately after mount. lastNetwork
+      // mirrors that seed: setNetworkId fires only on an actual switch.
       this.lastNetwork = safeCurrentNetwork();
       this.schedule();
     }
@@ -483,9 +486,8 @@ export const wikiIdPlugin = ViewPlugin.fromClass(
       const state = this.view.state.field(wikiIdState, false);
       if (state === undefined) return;
       const source = this.view.state.doc.toString();
-      // The field's networkId may still be null right after mount (it is
-      // synced via setNetworkId on the first update) — fall back to the live
-      // network so same-network links resolve immediately.
+      // Fall back to the live network: the field seeds it in `create()`, but
+      // the fallback covers the brief window when no network was active yet.
       const networkId = state.networkId ?? safeCurrentNetwork();
       const unresolved = collectUnresolvedTokens(source, state.cache, networkId);
       // Early exit: nothing to resolve. Without this guard, the `finally` block
