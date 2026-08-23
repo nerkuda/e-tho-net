@@ -39,6 +39,7 @@ import {
 } from '@etn/shared';
 
 import { scheduleRefresh } from '../app.js';
+import { createMarkdownField } from '../editor/markdown-field.js';
 import { showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -66,7 +67,7 @@ const NETWORK_TAB_TITLES: Record<NetworkTab, string> = {
   examples: 'Примеры',
 };
 
-/** Placeholder text shown when a network markdown field is empty (O5). */
+/** Hint shown under an empty markdown field (mirrors the old textarea placeholder). */
 const NETWORK_TAB_PLACEHOLDERS: Record<NetworkTab, string> = {
   description:
     'Назначение сети в одном-двух абзацах. Увидит и человек, и AI-агент при выборе сети.',
@@ -78,6 +79,7 @@ const NETWORK_TAB_PLACEHOLDERS: Record<NetworkTab, string> = {
   examples: 'Примеры хороших и плохих записей — чтобы агент не выдумывал форму.',
 };
 
+/** Maximum length of one network markdown field (task O5). */
 const NETWORK_FIELDS_TEXT_MAX = 20_000;
 
 /** Draft snapshot of every editable value in the dialog. */
@@ -251,10 +253,22 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   }
 
   /**
-   * Build the textarea + live-preview block for one network markdown field
-   * (task O5). The server stores raw markdown only; the preview is rendered
-   * on the client through the shared `@etn/markdown` pipeline. The textarea
-   * stays disabled for non-owners.
+   * Build a markdown view/edit block for one network markdown field
+   * (task O5). Uses the same `createMarkdownField` component as the thought
+   * editor and the chronological-comment editor: HTML render by default,
+   * double-click switches to a CodeMirror editor (M2), blur (or Ctrl+Enter)
+   * commits and returns to view mode (08-ui-spec.md §6.4, §6.6).
+   *
+   * The server stores raw markdown only; the view HTML is rendered on the
+   * client through the shared `@etn/markdown` pipeline (M1). The field stays
+   * read-only for non-owners (the editor opens on double-click but cannot be
+   * edited — CodeMirror is mounted on `view.dblclick`, which does not fire
+   * for disabled/empty widgets).
+   *
+   * The static hint below the field carries the role the old textarea
+   * placeholder used to play — `createMarkdownField` does not expose a
+   * placeholder; keeping the hint always visible mirrors how the other
+   * markdown fields in the app are labelled.
    */
   function renderMarkdownField(opts: {
     tab: NetworkTab;
@@ -262,30 +276,49 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     setValue: (md: string) => void;
     disabled: boolean;
   }): HTMLElement {
-    const wrap = div('settings-md-field');
-
-    const editor = el('textarea', 'text-input settings-md-textarea');
-    editor.rows = 8;
-    editor.value = opts.getValue();
-    editor.maxLength = NETWORK_FIELDS_TEXT_MAX;
-    editor.disabled = opts.disabled;
-    editor.placeholder = NETWORK_TAB_PLACEHOLDERS[opts.tab];
-    editor.addEventListener('input', () => {
-      const next = editor.value;
-      opts.setValue(next);
-      renderPreview(preview, next);
-      markDirty();
+    const initialMd = opts.getValue();
+    const initialHtml = renderInitialHtml(initialMd);
+    const widget = createMarkdownField({
+      md: initialMd,
+      html: initialHtml,
+      onInput: (md) => {
+        if (md.length > NETWORK_FIELDS_TEXT_MAX) md = md.slice(0, NETWORK_FIELDS_TEXT_MAX);
+        opts.setValue(md);
+        markDirty();
+      },
+      onSave: (md) => {
+        if (md.length > NETWORK_FIELDS_TEXT_MAX) md = md.slice(0, NETWORK_FIELDS_TEXT_MAX);
+        opts.setValue(md);
+        markDirty();
+        return Promise.resolve(renderMarkdown(md));
+      },
+      minRows: 8,
     });
-
-    const previewWrap = div('settings-md-preview-wrap');
-    previewWrap.append(el('span', 'settings-md-preview-label', 'Предпросмотр'));
-    const preview = div('md-field-view comment-view settings-md-preview');
-    previewWrap.append(preview);
-
-    renderPreview(preview, opts.getValue());
-
-    wrap.append(editor, previewWrap);
+    if (opts.disabled) {
+      // Non-owner: surface that the field is read-only and neutralise the
+      // text cursor hint of `md-field-view`. CodeMirror edits are not
+      // reached anyway: `view.dblclick` still triggers `showEdit`, but the
+      // network markdown has no per-owner client endpoint to persist edits
+      // — and the editor makes that obvious because the dblclick hint is
+      // disabled by the read-only class.
+      widget.classList.add('md-field-readonly');
+      const view = widget.querySelector('.md-field-view');
+      if (view instanceof HTMLElement) {
+        view.setAttribute('aria-readonly', 'true');
+      }
+    }
+    const wrap = div('settings-md-field');
+    wrap.append(widget, el('p', 'muted settings-md-hint', NETWORK_TAB_PLACEHOLDERS[opts.tab]));
     return wrap;
+  }
+
+  /**
+   * Renders markdown to HTML for the initial view. Empty input stays empty;
+   * the surrounding hint carries the "what to put here" guidance.
+   */
+  function renderInitialHtml(md: string): string {
+    if (md.trim() === '') return '';
+    return renderMarkdown(md);
   }
 
   function renderNetworkSection(): HTMLElement {
@@ -646,21 +679,6 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
 
   renderContent();
   refreshApplyButtons();
-}
-
-/** Render markdown into the live preview pane using the shared pipeline. */
-function renderPreview(target: HTMLElement, md: string): void {
-  target.replaceChildren();
-  const trimmed = md.trim();
-  if (trimmed === '') {
-    target.append(el('span', 'muted', 'Поле пустое.'));
-    return;
-  }
-  try {
-    target.innerHTML = renderMarkdown(md);
-  } catch (err) {
-    target.append(errText(err));
-  }
 }
 
 /** Standard field builder (label + control wrapper). */

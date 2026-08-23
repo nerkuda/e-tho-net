@@ -4318,32 +4318,17 @@ body.cloud-dragging * {
 .settings-md-field {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
-.settings-md-textarea {
-  resize: vertical;
-  min-height: 140px;
-  font-family: var(--mono-font);
-  font-size: 12px;
-  line-height: 1.5;
-}
-.settings-md-preview-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.settings-md-preview-label {
+.settings-md-hint {
+  margin: 0;
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
+  white-space: pre-line;
 }
-.settings-md-preview {
-  min-height: 60px;
-  padding: 8px 10px;
-  border: 1px dashed var(--border);
-  border-radius: 4px;
-  background: var(--bg-secondary);
+/* Read-only network markdown field: non-owners see the rendered text without
+   the text-cursor hint that says "double-click to edit". */
+.settings-md-field .md-field-readonly .md-field-view {
+  cursor: default;
 }
 
 .settings-error {
