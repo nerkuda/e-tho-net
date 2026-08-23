@@ -267,6 +267,10 @@ async function toggleDisabled(user: User): Promise<void> {
       1,
     );
     notice('Учётная запись обновлена.');
+    // Re-render the list so the «включить»/«отключить» link and the
+    // «Статус» cell reflect the new state (08-ui-spec.md §10.1).
+    const content = document.querySelector<HTMLElement>('.admin-content');
+    if (content !== null) void renderUsers(content);
   } catch (err) {
     errorDialog('Изменить пользователя', err);
   }
