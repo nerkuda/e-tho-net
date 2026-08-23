@@ -44,7 +44,8 @@
 
 ## R1. Спецификация `docs/12-wiki-id-refs.md` + правки существующих документов
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** —
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** —
+- **Коммит:** `3ecfd4c docs(plan): R1 — спецификация wiki-id-refs и правки 03/05/08/README`
 - **Описание:** новый документ `docs/12-wiki-id-refs.md` с полным описанием
   фичи (формат `body_md`, парсер, рендер, deep-link, MCP-агенты, UX в CM6 и
   view-режиме, миграция legacy). Правки смежных документов:
@@ -68,7 +69,8 @@
 
 ## R2. Markdown-рендерер: парсер и HTML для `[[#<id>]]` / `[[n:<net>#<id>]]`
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** R1
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** R1
+- **Коммит:** `302d116 [R2] feat(markdown): парсер и HTML для [[#<id>]] / [[n:<net>#<id>]]`
 - **Описание:** расширить `markdown/src/wiki-link.ts` для поддержки двух
   новых префиксов внутри `[[…]]`. Парсер: если первый непробельный символ —
   `#`, валидируем UUID (regex из `client/src/renderer/lib/pure.ts:341`);
@@ -102,7 +104,8 @@
 
 ## R3. Серверный `etn.thoughts.backlinks` (REST + MCP)
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** R2
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** R2
+- **Коммит:** `50d5cdd [R3] feat(server): etn.thoughts.backlinks (REST + MCP)`
 - **Описание:** новый сервис для поиска упоминаний текущей мысли через
   явные `[[#<id>]]`-ссылки в `body_md` комментариев. Реализация — runtime
   regex по `body_md` (решение пользователя: без отдельной таблицы).
@@ -156,7 +159,8 @@
 
 ## R4. Общий хелпер `shared/src/deep-link.ts` для `etn://open?…`
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** —
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** —
+- **Коммит:** `943d77b [R4] feat(shared): хелпер buildDeepLinkUrl/parseDeepLinkUrl`
 - **Описание:** общий модуль для построения и парсинга deep-link URL.
   Используется клиентом (R11) и MCP-агентами (R5). Экспортирует:
   - `buildDeepLinkUrl({ networkId, thoughtId }): string` →
@@ -182,7 +186,8 @@
 
 ## R5. Расширение MCP-документации для `etn://open?…`
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** R4
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** R4
+- **Коммит:** `52d3efb [R5] docs(mcp-server): etn://open?… — ссылка на buildDeepLinkUrl`
 - **Описание:** дополнить `docs/05-mcp-server.md` §4 (таблицу ресурсов)
   строкой про шаблон `etn://open?net={network_id}&thought={thought_id}` как
   «human-friendly link». В БД и коде этого шаблона как MCP-ресурса нет — это
@@ -198,7 +203,8 @@
 
 ## R6. CM6-плагин wiki-link: ID-форма, декорации, кеш
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** R2
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** R2
+- **Коммит:** `111f604 [R6] feat(client): CM6-плагин wiki-link — ID-форма, normal/edit-mode, кеш`
 - **Описание:** расширить `client/src/renderer/editor/wiki-link.ts` для
   полноценной поддержки `[[#<id>]]`-ссылок в редакторе комментария. Lezer
   распознаёт ID-формы. Новый `StateField<Map<string, { title, exists,
@@ -233,7 +239,8 @@
 
 ## R7. Клиентский view-резолвер `data-wiki-id` → имя
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** R2
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** R2
+- **Коммит:** `599e5e6 [R7] feat(client): view-резолвер data-wiki-id → имя`
 - **Описание:** пост-процессор DOM для view-режима (карточка мысли,
   chronicle, экспорт) — заполняет пустые `<span data-wiki-id="…">` именами
   из БД. Батч `etn.thoughts.resolve` (до 100), локальный кеш на сессию.
@@ -255,7 +262,8 @@
 
 ## R8. Клик-handler: резолюция ID-ссылки и кросс-сеть
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** R6, R7
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** R6, R7
+- **Коммит:** `952a5c0 [R8] feat(client): клик-handler — резолюция ID-ссылки и кросс-сеть`
 - **Описание:** расширить `client/src/renderer/editor/wiki-link.ts:217-231`
   (`initWikiLinkNavigation`) — обработка `data-wiki-id` на клике. Если сеть
   совпадает с активной — `etn.thoughts.get` + `openThoughtByRef`. Если другая
@@ -278,7 +286,8 @@
 
 ## R9. Таб «Связи»: две подгруппы в «Упоминания»
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** R3
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** R3
+- **Коммит:** `abb4a34 [R9] feat(client): таб «Связи» — две подгруппы в «Упоминания»`
 - **Описание:** в `client/src/renderer/editor/links-tab.ts` существующая
   группа «Упоминания» заменяется на контейнер с двумя подсекциями —
   «Ссылки на мысль» (новый, через `etn.thoughts.backlinks`) и
@@ -302,7 +311,8 @@
 
 ## R10. Контекстное меню legacy «Обновить формат ссылки»
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** R6
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** R6
+- **Коммит:** `5d7cd3e [R10] feat(client): контекстное меню legacy «Обновить формат»`
 - **Описание:** плагин для CM6, добавляющий пункт контекстного меню на
   legacy-ссылках (только те, у которых нет `data-wiki-id`). Резолюция через
   `etn.thoughts.findDuplicates` или `search({scope:'names'})`. При
@@ -325,7 +335,8 @@
 
 ## R11. Протокол `etn://open?…` в Electron
 
-- **Статус:** `todo` · **Assignee:** zcode · **Зависимости:** R4, R8
+- **Статус:** `done` · **Assignee:** zcode · **Зависимости:** R4, R8
+- **Коммит:** `ec08b8d [R11] feat(client): протокол etn://open?… в Electron`
 - **Описание:** зарегистрировать кастомный протокол `etn://` в Electron.
   Single instance lock, обработчики `second-instance`/`open-url`.
   Парсинг `process.argv` при cold start. Доставка в renderer через
