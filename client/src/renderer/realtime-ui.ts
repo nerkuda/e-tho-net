@@ -28,6 +28,16 @@ import { invalidateSavedFilters } from './screens/structures/filter-panel.js';
 import { invalidateChronicleThought, scheduleChronicleRefresh } from './screens/chronicle/chronicle.js';
 import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chronicle/filter-panel.js';
 import { store } from './state.js';
+import { invalidateWikiLinkCache } from './editor/wiki-link-resolver.js';
+
+/**
+ * Tiny wrapper so the inline call sites above stay readable. Drops the cached
+ * entry for a thought across all networks — the resolver repaints on the
+ * next view render.
+ */
+function invalidateWikiLinkCacheById(thoughtId: string): void {
+  invalidateWikiLinkCache(thoughtId);
+}
 
 /** Reloads both type catalogues into the store (L21 — the hierarchy changed). */
 export async function reloadTypeCatalogues(): Promise<void> {
@@ -65,6 +75,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       invalidateHistoryBar();
       invalidateStructuresThought(evt.data.id);
       invalidateChronicleThought(evt.data.id);
+      // R7: drop cached wiki-link titles for the deleted thought so any
+      // visible ID-based link switches to the «deleted» muted style.
+      invalidateWikiLinkCacheById(evt.data.id);
       // The pin row cascades on the server (FK ON DELETE CASCADE) without a
       // `pinned-thoughts.updated` event — drop the chip locally (L18).
       if (store.state.pins.includes(evt.data.id)) {
@@ -86,6 +99,9 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
         invalidatePinnedRef(evt.data.id);
         invalidatePinnedBar();
       }
+      // R7: refresh wiki-link view-resolver cache for the renamed thought so
+      // existing ID-based links in view-mode re-render with the new title.
+      invalidateWikiLinkCacheById(evt.data.id);
       if (inNeighbourhood(evt.data.id)) scheduleRefresh();
       scheduleStructuresRefresh();
       scheduleChronicleRefresh();

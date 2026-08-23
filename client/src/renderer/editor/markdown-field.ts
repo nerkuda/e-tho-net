@@ -21,6 +21,7 @@ import { notice } from '../lib/notice.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
+import { resolveWikiLinksInDom } from './wiki-link-resolver.js';
 import {
   applyMdZoom,
   currentMdZoom,
@@ -150,6 +151,9 @@ export function createMarkdownField(opts: {
         excludeThoughtId: excludeThoughtId(),
         onInsertLink: insertMentionLink,
       });
+      // ID-based wiki-links are emitted as empty <span data-wiki-id> by
+      // @etn/markdown; resolve them to titles asynchronously (R7).
+      void resolveWikiLinksInDom(view, networkId);
     }
   };
 
