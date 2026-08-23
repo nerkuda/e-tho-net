@@ -8,6 +8,7 @@
 
 import { boot, initKeyboard } from './app.js';
 import { initDrafts } from './drafts.js';
+import { initDeepLinkHandler } from './editor/deep-link-handler.js';
 import { initWikiLinkNavigation } from './editor/wiki-link.js';
 import { div, el } from './lib/dom.js';
 import { initImageZoom } from './lib/image-zoom.js';
@@ -23,6 +24,7 @@ initKeyboard();
 initDrafts();
 initImageZoom();
 initWikiLinkNavigation();
+initDeepLinkHandler();
 
 void boot().catch((err: unknown) => {
   // Catastrophic boot failure (local DB unavailable) — render a static message.

@@ -230,6 +230,19 @@ function buildApi(): EtnApi {
       draftList: (networkId) => invoke('ui.draftList', networkId),
       draftDelete: (id) => invoke('ui.draftDelete', id),
     },
+    deepLink: {
+      /**
+       * Subscribe to `etn://open?net=<id>&thought=<id>` deep links dispatched
+       * by the main process (task R11). The callback receives the parsed
+       * payload `{ networkId, thoughtId }`.
+       */
+      onDeepLink(cb) {
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(payload as { networkId: string; thoughtId: string });
+        ipcRenderer.on('etn:deep-link', listener);
+        return () => ipcRenderer.removeListener('etn:deep-link', listener);
+      },
+    },
     meta: {
       get: (key) => invoke('meta.get', key),
       set: (key, value) => invoke('meta.set', key, value),

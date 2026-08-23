@@ -605,6 +605,14 @@ export interface EtnApi {
     /** Per-network terminal close (Q5) — `network.deleted` or membership lost. */
     onNetworkLost(cb: (payload: { networkId: string; reason: 'unauthorized' | 'not-found' }) => void): () => void;
   };
+  /**
+   * Deep-link subscription (task R11, docs/12-wiki-id-refs.md §7.4). The main
+   * process pushes `etn://open?net=<id>&thought=<id>` payloads here — cold
+   * start (Win/Linux), `second-instance`, or `open-url` (macOS).
+   */
+  deepLink: {
+    onDeepLink(cb: (payload: { networkId: string; thoughtId: string }) => void): () => void;
+  };
   ui: {
     getState(networkId: string, key: string, tabId?: string | null): Promise<string | null>;
     setState(networkId: string, key: string, value: string, tabId?: string | null): Promise<void>;

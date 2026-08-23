@@ -5,7 +5,9 @@
  *  - creates the application `BrowserWindow` (1280×800);
  *  - loads the Vite dev server in development, the packaged renderer in prod;
  *  - owns the local SQLite store (G3), `client_id` (G4) and the network/realtime
- *    clients (G5/G6) — wired in later tasks.
+ *    clients (G5/G6) — wired in later tasks;
+ *  - registers the `etn://open?…` custom protocol (task R11) so other apps
+ *    (Obsidian, browsers) can deep-link into a specific thought.
  *
  * The API-key never leaves this process: renderer talks to data exclusively over
  * IPC (G7).
@@ -14,11 +16,12 @@ import { app, BrowserWindow, protocol, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { CLIENT_META_KEY } from '@etn/shared';
+import { CLIENT_META_KEY, type DeepLink } from '@etn/shared';
 import { LocalDb } from './db/local-db.js';
 import { defaultMigrationsDir, localDbPath } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
 import { registerIpc } from './ipc/register.js';
+import { dispatchDeepLink, extractDeepLink } from './ipc/deep-link.js';
 import { initAutoUpdater } from './updater.js';
 
 /**
@@ -35,9 +38,35 @@ const isDev = !app.isPackaged;
 // from disk. Registered as privileged/secure so BOTH the dev http origin and
 // the packaged file:// page may load these images — a plain file:// URL is
 // blocked for http pages ("Not allowed to load local resource").
+//
+// `etn` (task R11): the deep-link custom protocol. We don't actually serve
+// any content for it — the URL is parsed in main (`parseDeepLink`) and the
+// payload is pushed to the renderer over `etn:deep-link`. Registering the
+// scheme with `standard: true` is required for `app.setAsDefaultProtocolClient`
+// to take effect, and `secure: true` lets the dev origin dispatch the URL
+// without mixed-content warnings. `supportFetchAPI: false` because we don't
+// want `fetch('etn://…')` to succeed — these URLs are only meaningful as
+// navigation events.
 protocol.registerSchemesAsPrivileged([
   { scheme: 'etnimg', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: 'etn', privileges: { standard: true, secure: true, supportFetchAPI: false } },
 ]);
+
+/**
+ * Register ETN as the default handler for `etn://` URLs (task R11). Idempotent
+ * — calling twice doesn't add another association. On Windows the dev path is
+ * the Electron binary inside the project; on macOS the helper registers the
+ * `Info.plist` `CFBundleURLTypes` entry.
+ */
+if (process.defaultApp && process.argv.length >= 2) {
+  // Dev: re-exec the script with the URL as argv[1] (Windows protocol
+  // dispatch passes the URL as argv, not via app.on('second-instance')).
+  app.setAsDefaultProtocolClient('etn', process.execPath, [
+    require('node:path').resolve(process.argv[1]!),
+  ]);
+} else {
+  app.setAsDefaultProtocolClient('etn');
+}
 
 /** Default window geometry (docs/07-client-electron.md §1, workplan G1). */
 const DEFAULT_WIDTH = 1280;
@@ -54,6 +83,14 @@ const THEME_BG: Record<'light' | 'dark', string> = {
   light: '#eef0f4',
   dark: '#0e1116',
 };
+
+/**
+ * Deep-link payload captured at cold start (task R11) before the main window
+ * exists. On Win/Linux the URL is in `process.argv`; on macOS it arrives
+ * asynchronously via `app.on('open-url')`. We buffer it here and dispatch
+ * once the renderer is ready.
+ */
+let pendingDeepLink: DeepLink | null = null;
 
 /** Reads the stored L5 theme, defaulting to light. */
 function storedTheme(db: LocalDb): 'light' | 'dark' {
@@ -167,6 +204,21 @@ function registerEtnimgProtocol(): void {
 app
   .whenReady()
   .then(() => {
+    // Single-instance lock (task R11): when a second `etn://open?…` arrives
+    // while we're already running, the OS spawns a new process that hands its
+    // argv to this one via `app.on('second-instance')` (Win/Linux) instead of
+    // opening another window. macOS uses `app.on('open-url')` for the same
+    // effect. Acquire the lock here, *after* `app.whenReady()` so the
+    // setAsDefaultProtocolClient call above has taken effect.
+    const gotLock = app.requestSingleInstanceLock();
+    if (!gotLock) {
+      // Another instance is already running — it will receive our argv via
+      // `second-instance` (handled below) and bring its window forward. We
+      // exit cleanly so the user doesn't see a duplicate UI.
+      app.quit();
+      return;
+    }
+
     // Open the local store and ensure the installation has a stable client_id
     // (G3/G4). The REST client (G5) reads this id to send the `Client-Id` header
     // on every request; the WebSocket client (G6) sends it on connect.
@@ -192,7 +244,21 @@ app
     // already matches (the renderer applies data-theme on boot, L10).
     const theme = storedTheme(localDb);
 
-    createWindow(theme);
+    const win = createWindow(theme);
+
+    // Pick up a deep link from this process's argv (Win/Linux cold start:
+    // the OS launches the registered protocol handler with the URL appended
+    // as the last argument). Buffer it — the renderer may not be ready yet.
+    const initial = extractDeepLink(process.argv);
+    if (initial !== null) {
+      pendingDeepLink = initial;
+      win.webContents.once('did-finish-load', () => {
+        if (pendingDeepLink !== null) {
+          dispatchDeepLink(win, pendingDeepLink);
+          pendingDeepLink = null;
+        }
+      });
+    }
 
     // Auto-update (K4): quiet check in packaged builds; inert in dev.
     void initAutoUpdater(!isDev, () => BrowserWindow.getAllWindows()[0] ?? null);
@@ -205,6 +271,39 @@ app
     // Surface boot failures before the window exists; Electron itself exits next.
     console.error('[ETN] Failed to start:', err);
   });
+
+/**
+ * Win/Linux: another instance was launched (typically by the OS opening an
+ * `etn://open?…` URL while we're already running). Pull the deep link from
+ * its argv and forward to the renderer; also bring our window to the front.
+ */
+app.on('second-instance', (_event, argv) => {
+  const link = extractDeepLink(argv);
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win !== undefined) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    if (link !== null) dispatchDeepLink(win, link);
+  }
+});
+
+/**
+ * macOS: an `etn://open?…` URL was opened (from Finder, browser, Obsidian
+ * deep-link, etc.). argv does not contain the URL on macOS — it arrives via
+ * this event. We buffer and dispatch when the window is ready (cold start)
+ * or directly (warm start, window exists).
+ */
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  const link = extractDeepLink([url]);
+  if (link === null) return;
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win === undefined) {
+    pendingDeepLink = link;
+  } else {
+    dispatchDeepLink(win, link);
+  }
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
