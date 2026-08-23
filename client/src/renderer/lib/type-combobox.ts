@@ -84,6 +84,13 @@ export function createTypeCombobox(opts: {
   const input = el('input', 'text-input type-combo-input');
   input.type = 'text';
   input.autocomplete = 'off';
+  // Disable IME/spellcheck/autocorrect so the field doesn't enter composition
+  // mode on Windows — the composition start can swallow system-level combos
+  // such as Ctrl+Shift (keyboard-layout switch) while the caret sits here.
+  input.spellcheck = false;
+  input.inputMode = 'text';
+  input.setAttribute('autocorrect', 'off');
+  input.setAttribute('autocapitalize', 'off');
   input.placeholder = opts.placeholder ?? '';
   const caret = span('', 'type-combo-caret');
   caret.append(svgIcon('chevron-down', 12));
@@ -309,7 +316,13 @@ export function createTypeCombobox(opts: {
     seedExpansion();
     renderList('');
     positionList();
-    input.select();
+    // Intentionally NOT calling `input.select()` here. Auto-selecting on
+    // every focus puts the field into a "replace-selected" state that, on
+    // Windows + Electron, swallows system-level key combos (Ctrl+Shift for
+    // keyboard-layout switch) because the input enters an IME-style
+    // composition flow as soon as its content is selected. The user can
+    // still erase via Backspace or Ctrl+A → Delete; this only sacrifices
+    // the one-keystroke replace convenience.
   }
 
   function closeList(): void {
