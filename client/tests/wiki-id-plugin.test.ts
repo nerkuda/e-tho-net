@@ -105,21 +105,28 @@ test('buildDecorations: normal-mode (selection вне ссылки) — replace 
   assert.equal(ranges[0]!.to, source.length);
 });
 
-test('buildDecorations: edit-mode (selection внутри) — replace на #id-токен ВКЛЮЧАЯ `#`', () => {
+test('buildDecorations: edit-mode (selection внутри) — два декорации на #id-токене (atomic mark + replace с виджетом)', () => {
   const source = `[[#${ID_A}]]`;
-  // В edit-mode диапазон декорации расширен на `#`, чтобы атомарность (через
-  // contenteditable="false") покрывала весь токен `#<uuid>` и стрелки
-  // навигации не «застревали» между `#` и виджетом.
+  // В edit-mode ставятся ДВЕ декорации на одном диапазоне `#<id>`:
+  // - Decoration.mark({ atomic: true }) — atomic range для CM6 (стрелки
+  //   перепрыгивают блок, курсор не входит);
+  // - Decoration.replace({ widget }) — рисует имя поверх исходника,
+  //   inclusive: true — чтобы граничные позиции не «выпадали» из декорации.
+  // Без atomic-марка стрелки влево/вправо заходят внутрь виджета и
+  // застревают там (contenteditable="false" блокирует ввод, но CM6 это не
+  // считает atomic). Без inclusive: true двойной клик ставит курсор на
+  // границу диапазона, и пользователь видит `#<uuid>` вместо виджета.
   const idStart = 2; // позиция `#` (после "[[")
   const idEnd = idStart + 1 + ID_A.length; // после `]]`
   const cache = new Map([[cacheKey('__current__', ID_A), { title: 'Цель', exists: true, networkId: '__current__' }]]);
-  // selection внутри ссылки
   const decos = buildDecorations(source, { from: 5, to: 10 }, cache);
   const ranges: Array<{ from: number; to: number }> = [];
   decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
-  assert.equal(ranges.length, 1);
+  assert.equal(ranges.length, 2, 'mark + replace на одном диапазоне');
   assert.equal(ranges[0]!.from, idStart);
   assert.equal(ranges[0]!.to, idEnd);
+  assert.equal(ranges[1]!.from, idStart);
+  assert.equal(ranges[1]!.to, idEnd);
 });
 
 test('buildDecorations: использует alias если задан — структурная проверка', () => {

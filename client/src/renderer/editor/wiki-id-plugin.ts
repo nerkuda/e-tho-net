@@ -27,7 +27,7 @@ import {
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view';
-import { RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
+import { StateEffect, StateField } from '@codemirror/state';
 
 import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_NETWORK_ATTR } from '@etn/markdown';
 import type { ThoughtRef } from '@etn/shared';
@@ -262,7 +262,11 @@ function buildDecorations(
   selection: { from: number; to: number },
   cache: Map<string, ResolvedMeta>,
 ): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
+  // Собираем декорации в массив и передаём в Decoration.set(): этот API
+  // держит несколько декораций на одном диапазоне (mark + replace) — нужно
+  // для atomic range в edit-mode. RangeSetBuilder.add() этого не позволяет
+  // (два range на одной позиции → сортировка ломается).
+  const parts: Array<{ from: number; to: number; value: Decoration }> = [];
   const links = parseIdLinks(source);
   const selFrom = Math.min(selection.from, selection.to);
   const selTo = Math.max(selection.from, selection.to);
@@ -276,37 +280,50 @@ function buildDecorations(
     const label = link.alias ?? (title !== '' ? title : link.thoughtId);
 
     if (intersects(link.from, link.to)) {
-      // edit-mode: replace the whole id token INCLUDING the leading `#` (or
-      // `n:<net>#` prefix). Atomicity is provided by `contenteditable="false"`
-      // on the widget — the browser treats the span as a single atomic unit
-      // (Backspace/Delete remove it whole, arrow keys skip over). The `#`
-      // character MUST be hidden too, otherwise the user sees `[[#UUID]]`
-      // with the `#` leaking outside the atomic span (it would be editable
-      // on its own and break arrow navigation: the cursor would land between
-      // `#` and the atomic widget).
-      builder.add(
-        link.idFrom - 1,
-        link.idTo,
-        Decoration.replace({
+      // edit-mode: replace the whole `#<id>` (or `n:<net>#<id>`) token with
+      // a single widget showing the resolved title (or `…` until the resolve
+      // returns). Two decorations on the same range:
+      // - `Decoration.mark({ atomic: true })` — CM6 API для atomic range:
+      //   стрелки влево/вправо перепрыгивают весь блок, курсор не входит.
+      //   `contenteditable="false"` в виджете — страховка для браузера, но
+      //   без `mark.atomic` CM6 не считает range атомарным и стрелка заходит
+      //   внутрь виджета, застревая там.
+      // - `Decoration.replace({ widget })` — рисует имя поверх исходника;
+      //   `inclusive: true` нужен чтобы граничные позиции (`from`/`to`)
+      //   тоже считались «внутри» декорации, иначе двойной клик ставит
+      //   курсор точно на `#` или сразу за UUID — и пользователь видит
+      //   `#<uuid>` вместо виджета.
+      const idStart = link.idFrom - 1; // включая `#`
+      const idEnd = link.idTo;
+      parts.push({
+        from: idStart,
+        to: idEnd,
+        value: Decoration.mark({ atomic: true, inclusive: true }),
+      });
+      parts.push({
+        from: idStart,
+        to: idEnd,
+        value: Decoration.replace({
           widget: new WikiLinkIdTokenWidget(
             title !== '' ? title : '…', // пока резолв не пришёл — многоточие
             deleted,
           ),
+          inclusive: true,
         }),
-      );
+      });
     } else {
       // normal-mode: replace the WHOLE span with one label widget.
-      builder.add(
-        link.from,
-        link.to,
-        Decoration.replace({
+      parts.push({
+        from: link.from,
+        to: link.to,
+        value: Decoration.replace({
           widget: new WikiLinkLabelWidget(label !== '' ? label : link.thoughtId, deleted),
           inclusive: false,
         }),
-      );
+      });
     }
   }
-  return builder.finish();
+  return Decoration.set(parts, true);
 }
 
 /** Extract unique id-tokens grouped by network from a source string. */
