@@ -27,6 +27,7 @@
 | 09 | [scenarios.md](09-scenarios.md) | Пользовательские сценарии (A–H) |
 | 10 | [glossary.md](10-glossary.md) | Словарь терминов |
 | 11 | [settings-and-state.md](11-settings-and-state.md) | Идентификация клиентов (Client-Id, last_seq), уровни настроек, порядок фокуса per-user, защита от зацикливания |
+| 12 | [wiki-id-refs.md](12-wiki-id-refs.md) | ID-based wiki-ссылки в комментариях, кросс-сетевые ссылки, протокол `etn://open?…` (фаза R) |
 
 ## Принципы проекта
 

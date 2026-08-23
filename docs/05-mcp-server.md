@@ -79,12 +79,14 @@ REST. Все изменения, сделанные агентом, иденти
 | `etn://networks/{network_id}/thoughts/{thought_id}` | Полная мысль: свойства, синонимы, тип, стили + блок `meta` (см. ниже) |
 | `etn://networks/{network_id}/thoughts/{thought_id}/neighbors` | Соседи (parents/children/siblings) + каталоги `link_types`/`thought_types` |
 | `etn://networks/{network_id}/thoughts/{thought_id}/usage` | «Использование» мысли: кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству |
+| `etn://networks/{network_id}/thoughts/{thought_id}/backlinks` | «Ссылки на мысль» (фаза R): комментарии, в `body_md` которых есть явная ID-ссылка `[[#<id>]]` или `[[n:<net>#<id>]]` на эту мысль. Аналог `mentions`, но для явных UUID-ссылок (R3) |
 | `etn://networks/{network_id}/thoughts/{thought_id}/comments` | Комментарии мысли |
 | `etn://networks/{network_id}/thoughts/{thought_id}/attachments` | Вложения мысли |
 | `etn://networks/{network_id}/links/{link_id}` | Связь с метаданными |
 | `etn://networks/{network_id}/thought-types` | Определения типов мыслей |
 | `etn://networks/{network_id}/link-types` | Определения типов связей |
 | `etn://networks/{network_id}/thought-types/{id}` | Тип и его свойства (включая description — для контекста агента) |
+| `etn://open?net={network_id}&thought={thought_id}` | **Human-friendly deep link** (фаза R): не MCP-ресурс, а URL-схема, которую агент строит через `buildDeepLinkUrl` (`@etn/shared`) и возвращает пользователю. Открывается в десктоп-клиенте ETN через кастомный протокол `etn://` (см. `07-client-electron.md` §4, `12-wiki-id-refs.md` §7) |
 
 Ресурсы отдаются как JSON (mime `application/json`). Комментарии — как Markdown
 (mime `text/markdown`) для прямой передачи агенту.
@@ -157,6 +159,7 @@ DoD — клиент по умолчанию показывает обычный
 | `etn.thoughts.path` | `read-only` | Путь между двумя мыслями (+ каталог `thought_types`) | `network_id`, `from_id`, `to_id`, `max_depth` |
 | `etn.links.get` | `read-only` | Связь | `network_id`, `link_id` |
 | `etn.thoughts.mentions` | `read-only` | Где упоминается мысль | `network_id`, `thought_id` |
+| `etn.thoughts.backlinks` | `read-only` | «Ссылки на мысль» (фаза R): комментарии, в `body_md` которых есть явная ID-ссылка `[[#<id>]]` или `[[n:<net>#<id>]]` на эту мысль. Семантически отличается от `mentions` (там — неявные совпадения по title/synonyms через FTS5) | `network_id`, `thought_id`, `view?` (O12, см. §5.1e) |
 | `etn.thoughts.usage` | `read-only` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`) | `network_id`, `thought_id`, `view?` (O12, см. §5.1e) |
 | `etn.comments.get` | `read-only` | Полный текст одного комментария: по `comment_id` (любой) или по `thought_id` (постоянный). Нужен, когда превью (`meta.permanent`, комментарии `subgraph`) показывает `truncated: true` — id есть в самом превью | `network_id` + ровно одно из `comment_id`/`thought_id` |
 | `etn.export.subgraph` | `read-only` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
