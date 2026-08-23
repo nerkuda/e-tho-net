@@ -86,7 +86,7 @@ REST. Все изменения, сделанные агентом, иденти
 | `etn://networks/{network_id}/thought-types` | Определения типов мыслей |
 | `etn://networks/{network_id}/link-types` | Определения типов связей |
 | `etn://networks/{network_id}/thought-types/{id}` | Тип и его свойства (включая description — для контекста агента) |
-| `etn://open?net={network_id}&thought={thought_id}` | **Human-friendly deep link** (фаза R): не MCP-ресурс, а URL-схема, которую агент строит через `buildDeepLinkUrl` (`@etn/shared`) и возвращает пользователю. Открывается в десктоп-клиенте ETN через кастомный протокол `etn://` (см. `07-client-electron.md` §4, `12-wiki-id-refs.md` §7) |
+| `etn://open?net={network_id}&thought={thought_id}` | **Human-friendly deep link** (фаза R): не MCP-ресурс, а URL-схема. Агент строит URL через хелпер `buildDeepLinkUrl({ networkId, thoughtId })` из `@etn/shared` (R4) и возвращает пользователю — например, чтобы вставить в Obsidian/markdown-файл или передать коллеге. Открывается в десктоп-клиенте ETN через кастомный протокол `etn://` (см. `07-client-electron.md` §4, `12-wiki-id-refs.md` §7, `shared/src/deep-link.ts`) |
 
 Ресурсы отдаются как JSON (mime `application/json`). Комментарии — как Markdown
 (mime `text/markdown`) для прямой передачи агенту.
