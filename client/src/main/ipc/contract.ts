@@ -557,6 +557,12 @@ export interface EtnApi {
   };
   me: {
     get(): Promise<CurrentUser>;
+    /**
+     * `PATCH /me` — edit own profile (display_name only on the MVP).
+     * Pass `null` to clear the display name; pass `''` (empty string) to
+     * clear it after trimming. The store is updated by the caller.
+     */
+    update(displayName: string | null): Promise<CurrentUser>;
     listKeys(): Promise<ApiKey[]>;
     createKey(
       label?: string,

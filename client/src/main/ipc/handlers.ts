@@ -947,6 +947,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind(() => requireRest(deps).getMe()),
   );
   handlers.set(
+    'me.update',
+    bind((displayName: string | null) => requireRest(deps).updateMe(displayName)),
+  );
+  handlers.set(
     'me.listKeys',
     bind(() => requireRest(deps).listMyKeys()),
   );

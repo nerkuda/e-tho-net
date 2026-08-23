@@ -189,6 +189,7 @@ function buildApi(): EtnApi {
     },
     me: {
       get: () => invoke('me.get'),
+      update: (displayName) => invoke('me.update', displayName),
       listKeys: () => invoke('me.listKeys'),
       createKey: (label, maxWritesPerMinute) => invoke('me.createKey', label, maxWritesPerMinute),
       removeKey: (id) => invoke('me.removeKey', id),
