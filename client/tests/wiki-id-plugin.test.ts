@@ -1,16 +1,22 @@
 /**
  * Unit tests for the ID-based wiki-link plugin (task R6,
- * docs/12-wiki-id-refs.md §3). Pure — no CM6 EditorView, no DOM. Tests the
- * internal `parseIdLinks` and `buildDecorations` helpers exposed via
+ * docs/12-wiki-id-refs.md §3). Headless — EditorState/StateField (no
+ * EditorView, no DOM). Tests the internal `parseIdLinks`,
+ * `computeWikiIdDecos`/`buildDecorations` helpers, the state field's
+ * selection-driven recompute and the arrow-key block navigation exposed via
  * `__testing`.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { __testing } from '../src/renderer/editor/wiki-id-plugin.js';
+import { EditorState, type TransactionSpec } from '@codemirror/state';
+import type { EditorView } from '@codemirror/view';
 
-const { parseIdLinks, buildDecorations, cacheKey, collectUnresolvedTokens } = __testing;
+import { __testing, wikiIdState } from '../src/renderer/editor/wiki-id-plugin.js';
+
+const { parseIdLinks, buildDecorations, computeWikiIdDecos, moveAcrossWikiIdBlock, cacheKey, collectUnresolvedTokens } =
+  __testing;
 
 const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
 const ID_B = '11111111-2222-3333-4444-555555555555';
@@ -22,6 +28,13 @@ const NET = 'c4f9a3b2-1111-2222-3333-444455556666';
  * for the `__current__` placeholder mismatch).
  */
 const CUR = 'cur-net-1111-2222-3333-444455556666';
+
+const idStart = 2; // позиция `#` (после "[[")
+
+/** Fake view for `moveAcrossWikiIdBlock` — the handler only needs state/dispatch. */
+function fakeView(state: EditorState, dispatch: (spec: TransactionSpec) => void): EditorView {
+  return { state, dispatch } as unknown as EditorView;
+}
 
 test('parseIdLinks: [[#<uuid>]] — пустая ссылка по id', () => {
   const links = parseIdLinks(`см. [[#${ID_A}]]`);
@@ -92,7 +105,6 @@ test('parseIdLinks: незакрытая скобка — не парсится'
 test('buildDecorations: пустой документ — пустые декорации', () => {
   const cache = new Map();
   const decos = buildDecorations('', { from: 0, to: 0 }, cache, CUR);
-  // DecorationSet has no public iterator; check via iteration of iter() result.
   const ranges: unknown[] = [];
   decos.between(0, 0, (from, to, value) => {
     ranges.push({ from, to, value });
@@ -112,63 +124,163 @@ test('buildDecorations: normal-mode (selection вне ссылки) — replace 
   assert.equal(ranges[0]!.to, source.length);
 });
 
-test('buildDecorations: edit-mode (selection внутри) — два декорации на #id-токене (atomic mark + replace с виджетом)', () => {
+test('computeWikiIdDecos: edit-mode (selection внутри) — replace на #id-токене + atomic range', () => {
   const source = `[[#${ID_A}]]`;
-  // В edit-mode ставятся ДВЕ декорации на одном диапазоне `#<id>`:
-  // - Decoration.mark({ atomic: true }) — atomic range для CM6 (стрелки
-  //   перепрыгивают блок, курсор не входит);
-  // - Decoration.replace({ widget }) — рисует имя поверх исходника,
-  //   inclusive: true — чтобы граничные позиции не «выпадали» из декорации.
-  // Без atomic-марка стрелки влево/вправо заходят внутрь виджета и
-  // застревают там (contenteditable="false" блокирует ввод, но CM6 это не
-  // считает atomic). Без inclusive: true двойной клик ставит курсор на
-  // границу диапазона, и пользователь видит `#<uuid>` вместо виджета.
-  const idStart = 2; // позиция `#` (после "[[")
-  const idEnd = idStart + 1 + ID_A.length; // после `]]`
+  const idEnd = idStart + 1 + ID_A.length;
   const cache = new Map([[cacheKey(CUR, ID_A), { title: 'Цель', exists: true, networkId: CUR }]]);
-  const decos = buildDecorations(source, { from: 5, to: 10 }, cache, CUR);
+  const { decorations, atomic } = computeWikiIdDecos(source, { from: 5, to: 10 }, cache, CUR);
   const ranges: Array<{ from: number; to: number }> = [];
-  decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
-  assert.equal(ranges.length, 2, 'mark + replace на одном диапазоне');
-  assert.equal(ranges[0]!.from, idStart);
-  assert.equal(ranges[0]!.to, idEnd);
-  assert.equal(ranges[1]!.from, idStart);
-  assert.equal(ranges[1]!.to, idEnd);
+  decorations.between(0, source.length, (from, to) => ranges.push({ from, to }));
+  assert.deepEqual(ranges, [{ from: idStart, to: idEnd }], 'одна replace-декорация на #id-токене');
+  const atoms: Array<{ from: number; to: number }> = [];
+  atomic.between(0, source.length, (from, to) => atoms.push({ from, to }));
+  assert.deepEqual(atoms, [{ from: idStart, to: idEnd }], 'atomic range покрывает #id-токен');
 });
 
-test('buildDecorations: использует alias если задан — структурная проверка', () => {
+test('computeWikiIdDecos: normal-mode — atomic set пуст (курсор может войти в скобки)', () => {
+  const source = `[[#${ID_A}]]`;
+  const cache = new Map([[cacheKey(CUR, ID_A), { title: 'Цель', exists: true, networkId: CUR }]]);
+  const { atomic } = computeWikiIdDecos(source, { from: 100, to: 100 }, cache, CUR);
+  const atoms: unknown[] = [];
+  atomic.between(0, source.length, (from, to) => atoms.push({ from, to }));
+  assert.equal(atoms.length, 0);
+});
+
+test('buildDecorations: label — alias приоритетнее title', () => {
   const source = `[[#${ID_A}|мой алиас]]`;
   const cache = new Map([[cacheKey(CUR, ID_A), { title: 'Цель', exists: true, networkId: CUR }]]);
   const decos = buildDecorations(source, { from: 100, to: 100 }, cache, CUR);
-  const ranges: Array<{ from: number; to: number }> = [];
-  decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
-  // В normal-mode одна декорация на всю длину ссылки.
-  assert.equal(ranges.length, 1);
-  assert.equal(ranges[0]!.from, 0);
-  assert.equal(ranges[0]!.to, source.length);
+  let label = '';
+  decos.between(0, source.length, (_f, _t, value) => {
+    label = value.spec.widget.label as string;
+  });
+  assert.equal(label, 'мой алиас');
 });
 
-test('buildDecorations: использует id как fallback когда cache пуст', () => {
+test('buildDecorations: пустой кеш — label «…», НИКОГДА не сырой id', () => {
   const source = `[[#${ID_A}]]`;
   const decos = buildDecorations(source, { from: 100, to: 100 }, new Map(), CUR);
-  const ranges: Array<{ from: number; to: number }> = [];
-  decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
-  assert.equal(ranges.length, 1, 'должна быть одна декорация даже с пустым cache');
-  assert.equal(ranges[0]!.from, 0);
-  assert.equal(ranges[0]!.to, source.length);
+  let label = '';
+  decos.between(0, source.length, (_f, _t, value) => {
+    label = value.spec.widget.label as string;
+  });
+  assert.equal(label, '…');
+  assert.notEqual(label, ID_A);
 });
 
-test('buildDecorations: deleted мысль — декорация создаётся', () => {
+test('buildDecorations: edit-mode — виджет показывает title или «…», не id', () => {
+  const source = `[[#${ID_A}]]`;
+  const cache = new Map([[cacheKey(CUR, ID_A), { title: 'Цель', exists: true, networkId: CUR }]]);
+  const withTitle = buildDecorations(source, { from: 5, to: 10 }, cache, CUR);
+  let label = '';
+  withTitle.between(0, source.length, (_f, _t, value) => {
+    label = value.spec.widget.label as string;
+  });
+  assert.equal(label, 'Цель');
+
+  const withoutTitle = buildDecorations(source, { from: 5, to: 10 }, new Map(), CUR);
+  withoutTitle.between(0, source.length, (_f, _t, value) => {
+    label = value.spec.widget.label as string;
+  });
+  assert.equal(label, '…');
+});
+
+test('buildDecorations: deleted мысль — виджет помечен deleted', () => {
   const source = `[[#${ID_A}]]`;
   const cache = new Map([
-    [cacheKey(CUR, ID_A), { title: 'Удалённая', exists: false, networkId: CUR }],
+    [cacheKey(CUR, ID_A), { title: '', exists: false, networkId: CUR }],
   ]);
   const decos = buildDecorations(source, { from: 100, to: 100 }, cache, CUR);
+  let deleted = false;
+  decos.between(0, source.length, (_f, _t, value) => {
+    deleted = value.spec.widget.deleted as boolean;
+  });
+  assert.equal(deleted, true);
+});
+
+test('buildDecorations: networkId=null — ссылка всё равно скрыта виджетом (сырой id не виден)', () => {
+  const source = `[[#${ID_A}]]`;
+  const decos = buildDecorations(source, { from: 100, to: 100 }, new Map(), null);
   const ranges: Array<{ from: number; to: number }> = [];
   decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
-  assert.equal(ranges.length, 1, 'одна декорация для удалённой мысли');
-  assert.equal(ranges[0]!.from, 0);
-  assert.equal(ranges[0]!.to, source.length);
+  assert.deepEqual(ranges, [{ from: 0, to: source.length }], 'вся ссылка под виджетом даже без сети');
+});
+
+test('wikiIdState: смена выделения переключает normal↔edit (пересчёт на selectionSet)', () => {
+  const source = `[[#${ID_A}]]`;
+  const state = EditorState.create({ doc: source, extensions: [wikiIdState] });
+  const ranges = (s: EditorState): Array<{ from: number; to: number }> => {
+    const out: Array<{ from: number; to: number }> = [];
+    s.field(wikiIdState).decorations.between(0, source.length, (from, to) => out.push({ from, to }));
+    return out;
+  };
+
+  // Курсор в начале документа — ссылка в normal-mode (виджет на всю ссылку).
+  assert.deepEqual(ranges(state), [{ from: 0, to: source.length }]);
+  // Курсор внутри ссылки — edit-mode: виджет только на #id-токене.
+  const inside = state.update({ selection: { anchor: 5 } }).state;
+  const idEnd = idStart + 1 + ID_A.length;
+  assert.deepEqual(ranges(inside), [{ from: idStart, to: idEnd }]);
+  // Atomic set появляется только в edit-mode.
+  const atoms: Array<{ from: number; to: number }> = [];
+  inside.field(wikiIdState).atomic.between(0, source.length, (from, to) => atoms.push({ from, to }));
+  assert.deepEqual(atoms, [{ from: idStart, to: idEnd }]);
+  // Обратно наружу — снова normal-mode.
+  const outside = inside.update({ selection: { anchor: 0 } }).state;
+  assert.deepEqual(ranges(outside), [{ from: 0, to: source.length }]);
+});
+
+test('moveAcrossWikiIdBlock: ← справа от блока — выделяет имя целиком', () => {
+  const source = `[[#${ID_A}]]`;
+  const idEnd = idStart + 1 + ID_A.length;
+  const dispatched: TransactionSpec[] = [];
+  const state = EditorState.create({ doc: source, selection: { anchor: idEnd } });
+  const handled = moveAcrossWikiIdBlock(fakeView(state, (s) => dispatched.push(s)), -1);
+  assert.equal(handled, true);
+  assert.deepEqual(dispatched, [
+    { selection: { anchor: idEnd, head: idStart }, scrollIntoView: true, userEvent: 'select' },
+  ]);
+});
+
+test('moveAcrossWikiIdBlock: ← при выделенном блоке — курсор влево от имени', () => {
+  const source = `[[#${ID_A}]]`;
+  const idEnd = idStart + 1 + ID_A.length;
+  const dispatched: TransactionSpec[] = [];
+  const state = EditorState.create({ doc: source, selection: { anchor: idEnd, head: idStart } });
+  const handled = moveAcrossWikiIdBlock(fakeView(state, (s) => dispatched.push(s)), -1);
+  assert.equal(handled, true);
+  assert.deepEqual(dispatched, [
+    { selection: { anchor: idStart }, scrollIntoView: true, userEvent: 'select' },
+  ]);
+});
+
+test('moveAcrossWikiIdBlock: → слева от блока — выделяет имя, ещё раз → курсор справа', () => {
+  const source = `[[#${ID_A}]]`;
+  const idEnd = idStart + 1 + ID_A.length;
+  const dispatched: TransactionSpec[] = [];
+  const atLeft = EditorState.create({ doc: source, selection: { anchor: idStart } });
+  const first = moveAcrossWikiIdBlock(fakeView(atLeft, (s) => dispatched.push(s)), 1);
+  assert.equal(first, true);
+  assert.deepEqual(dispatched, [
+    { selection: { anchor: idStart, head: idEnd }, scrollIntoView: true, userEvent: 'select' },
+  ]);
+
+  dispatched.length = 0;
+  const selected = EditorState.create({ doc: source, selection: { anchor: idStart, head: idEnd } });
+  const second = moveAcrossWikiIdBlock(fakeView(selected, (s) => dispatched.push(s)), 1);
+  assert.equal(second, true);
+  assert.deepEqual(dispatched, [
+    { selection: { anchor: idEnd }, scrollIntoView: true, userEvent: 'select' },
+  ]);
+});
+
+test('moveAcrossWikiIdBlock: курсор не у блока — отдаёт навигацию по умолчанию', () => {
+  const source = `хвост [[#${ID_A}]]`;
+  const dispatched: TransactionSpec[] = [];
+  const state = EditorState.create({ doc: source, selection: { anchor: 1 } });
+  const handled = moveAcrossWikiIdBlock(fakeView(state, (s) => dispatched.push(s)), -1);
+  assert.equal(handled, false);
+  assert.equal(dispatched.length, 0);
 });
 
 test('cacheKey: формирует "<net>:<id>"', () => {

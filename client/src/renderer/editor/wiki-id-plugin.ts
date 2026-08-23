@@ -12,11 +12,15 @@
  *     on the WHOLE `[[…]]` span, hiding `[[`, `]]`, `#id`, `|` behind a
  *     single widget that shows the resolved title (or alias).
  *   - Edit-mode (selection intersects the range): Decoration.replace only on
- *     the `#id` (or `n:<net>#id`) token, plus an atomic mark — user sees
- *     `[[<title>]]` / `[[<title>|<alias>]]` with the id hidden. Backspace
- *     and Delete remove the atomic token whole; arrow keys skip over it.
+ *     the `#id` (or `n:<net>#id`) token — the user sees `[[<title>]]` /
+ *     `[[<title>|<alias>]]` with the id hidden. The token is an atomic range
+ *     (exposed via `EditorView.atomicRanges` — `Decoration.mark({atomic})`
+ *     does nothing in CM6 ≥ 6.0): the cursor never enters it, Backspace and
+ *     Delete remove it whole, and ArrowLeft/ArrowRight select it as a unit
+ *     when moving across (see {@link wikiIdArrowKeymap}).
  *
- * The user never sees the raw `#<uuid>` — only the resolved title (or alias).
+ * The user never sees the raw `#<uuid>` — only the resolved title (or alias),
+ * or `…` while the resolve is in flight / when the thought is deleted.
  */
 
 import {
@@ -26,10 +30,17 @@ import {
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
+  keymap,
 } from '@codemirror/view';
-import { StateEffect, StateField } from '@codemirror/state';
+import {
+  type Extension,
+  Prec,
+  RangeSet,
+  StateEffect,
+  StateField,
+} from '@codemirror/state';
 
-import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_NETWORK_ATTR } from '@etn/markdown';
+import { WIKI_LINK_CLASS } from '@etn/markdown';
 import type { ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
@@ -70,7 +81,7 @@ interface ResolvedMeta {
 interface WikiIdState {
   /**
    * The active network id (or null when the network list is showing). Stored
-   * on the field so `buildDecorations` can use it as the cache-key prefix
+   * on the field so `computeWikiIdDecos` can use it as the cache-key prefix
    * for `[[#<id>]]` links — otherwise `[[#<id>]]` (same-network) and
    * `[[n:<net>#<id>]]` (cross-network) would route through different code
    * paths with different key prefixes and the same-network branch would
@@ -81,6 +92,8 @@ interface WikiIdState {
   /** Resolved metadata keyed by `<networkId>:<thoughtId>`. */
   cache: Map<string, ResolvedMeta>;
   decorations: DecorationSet;
+  /** Atomic ranges of the edit-mode name blocks (`#<id>` tokens). */
+  atomic: RangeSet<Decoration>;
 }
 
 const RESOLVE_BATCH = 100;
@@ -88,10 +101,6 @@ const CACHE_LIMIT = 1024;
 
 function cacheKey(networkId: string, thoughtId: string): string {
   return `${networkId}:${thoughtId}`;
-}
-
-function makeEmptyState(): WikiIdState {
-  return { networkId: null, cache: new Map(), decorations: Decoration.none };
 }
 
 /** Scan the document source for ID-form wiki-links. */
@@ -196,7 +205,8 @@ class WikiLinkLabelWidget extends WidgetType {
 /**
  * Widget that replaces the `#<id>` (or `n:<net>#<id>`) token in edit-mode.
  * Shows the resolved title on top of the (invisible) id. Color cue marks it
- * as an atomic object (atomic decoration is applied separately).
+ * as an atomic object (atomic ranges are exposed via
+ * `EditorView.atomicRanges`, see `wikiIdAtomicRanges`).
  */
 class WikiLinkIdTokenWidget extends WidgetType {
   constructor(
@@ -230,17 +240,25 @@ const setCacheEntries = StateEffect.define<{ key: string; meta: ResolvedMeta }[]
 
 /**
  * Effect to update the active network id (kept on the state field so
- * `buildDecorations` can resolve same-network `[[#<id>]]` cache keys).
+ * `computeWikiIdDecos` can resolve same-network `[[#<id>]]` cache keys).
  */
 const setNetworkId = StateEffect.define<string | null>();
 
 /**
  * StateField holding the resolved metadata cache and the current decoration
  * set. Decorations are recomputed whenever the document, selection or the
- * cache change.
+ * cache change — the selection matters because a link under the cursor
+ * renders in edit-mode (`[[`/`]]` visible, name token atomic) while all
+ * other links collapse into a single label widget.
  */
 export const wikiIdState = StateField.define<WikiIdState>({
-  create: () => makeEmptyState(),
+  create: (state) => {
+    // Build the initial decorations right away — the raw `[[#<id>]]` must
+    // never be painted even for the first frame. The network id is synced
+    // via setNetworkId on the first plugin update.
+    const { decorations, atomic } = computeWikiIdDecos(state.doc.toString(), state.selection.main, new Map(), null);
+    return { networkId: null, cache: new Map(), decorations, atomic };
+  },
   update(state, tr) {
     let networkId = state.networkId;
     let cache = state.cache;
@@ -271,33 +289,35 @@ export const wikiIdState = StateField.define<WikiIdState>({
       }
     }
 
-    if (!tr.docChanged && cache === state.cache && networkId === state.networkId) {
+    const selectionChanged = !tr.state.selection.eq(tr.startState.selection);
+    if (!tr.docChanged && !selectionChanged && cache === state.cache && networkId === state.networkId) {
       return state;
     }
 
-    const decorations = buildDecorations(
+    const { decorations, atomic } = computeWikiIdDecos(
       tr.state.doc.toString(),
       tr.state.selection.main,
       cache,
       networkId,
     );
-    return { networkId, cache, decorations };
+    return { networkId, cache, decorations, atomic };
   },
   provide: (f) => EditorView.decorations.from(f, (s) => s.decorations),
 });
 
-/** Build decorations for the given source + selection + cache + networkId. */
-function buildDecorations(
+/** Build decorations and atomic name-block ranges for the given state inputs. */
+function computeWikiIdDecos(
   source: string,
   selection: { from: number; to: number },
   cache: Map<string, ResolvedMeta>,
   networkId: string | null,
-): DecorationSet {
-  // Собираем декорации в массив и передаём в Decoration.set(): этот API
-  // держит несколько декораций на одном диапазоне (mark + replace) — нужно
-  // для atomic range в edit-mode. RangeSetBuilder.add() этого не позволяет
-  // (два range на одной позиции → сортировка ломается).
+): { decorations: DecorationSet; atomic: RangeSet<Decoration> } {
+  // Два набора: декорации рисуют виджеты поверх ссылок, атомарный набор
+  // (см. wikiIdAtomicRanges) держит диапазоны name-блоков edit-mode — CM6
+  // считает атомарными только диапазоны из EditorView.atomicRanges,
+  // `Decoration.mark({atomic})` в CM6 ≥ 6.0 не работает.
   const parts: Array<{ from: number; to: number; value: Decoration }> = [];
+  const atomParts: Array<{ from: number; to: number; value: Decoration }> = [];
   const links = parseIdLinks(source);
   const selFrom = Math.min(selection.from, selection.to);
   const selTo = Math.max(selection.from, selection.to);
@@ -306,61 +326,60 @@ function buildDecorations(
   for (const link of links) {
     // For [[#<id>]] the cache key uses the *active* network (link.networkId
     // is null). For [[n:<net>#<id>]] the key uses the explicit cross-network
-    // id. If we don't have an active network yet, fall back to the link's own
-    // network (which may be null for same-network links — entries will only
-    // be found once the user activates a network).
+    // id. Without an active network there is nothing to resolve against yet —
+    // the widget still covers the id and shows `…`.
     const keyNetworkId = link.networkId ?? networkId;
-    if (keyNetworkId === null) continue;
-    const meta = cache.get(cacheKey(keyNetworkId, link.thoughtId));
+    const meta = keyNetworkId === null ? undefined : cache.get(cacheKey(keyNetworkId, link.thoughtId));
     const title = meta?.title ?? '';
     const deleted = meta !== undefined && !meta.exists;
-    const label = link.alias ?? (title !== '' ? title : link.thoughtId);
+    // The raw id never leaks into the UI: `…` until the resolve returns.
+    const titleText = title !== '' ? title : '…';
 
     if (intersects(link.from, link.to)) {
-      // edit-mode: replace the whole `#<id>` (or `n:<net>#<id>`) token with
-      // a single widget showing the resolved title (or `…` until the resolve
-      // returns). Two decorations on the same range:
-      // - `Decoration.mark({ atomic: true })` — CM6 API для atomic range:
-      //   стрелки влево/вправо перепрыгивают весь блок, курсор не входит.
-      //   `contenteditable="false"` в виджете — страховка для браузера, но
-      //   без `mark.atomic` CM6 не считает range атомарным и стрелка заходит
-      //   внутрь виджета, застревая там.
-      // - `Decoration.replace({ widget })` — рисует имя поверх исходника;
-      //   `inclusive: true` нужен чтобы граничные позиции (`from`/`to`)
-      //   тоже считались «внутри» декорации, иначе двойной клик ставит
-      //   курсор точно на `#` или сразу за UUID — и пользователь видит
-      //   `#<uuid>` вместо виджета.
+      // Edit-mode: replace the whole `#<id>` (or `n:<net>#<id>`) token with
+      // a single widget showing the resolved title. The token becomes an
+      // atomic range: the cursor never enters it, Backspace/Delete remove it
+      // whole, arrow keys treat it as a unit. `[[`, `|`, `]]` stay visible.
+      // `inclusive` is deliberately false — with inclusive edges typed text
+      // landing exactly on the block boundary would be swallowed by the
+      // replacement range.
       const idStart = link.idFrom - 1; // включая `#`
       const idEnd = link.idTo;
-      parts.push({
-        from: idStart,
-        to: idEnd,
-        value: Decoration.mark({ atomic: true, inclusive: true }),
-      });
+      atomParts.push({ from: idStart, to: idEnd, value: Decoration.mark({}) });
       parts.push({
         from: idStart,
         to: idEnd,
         value: Decoration.replace({
-          widget: new WikiLinkIdTokenWidget(
-            title !== '' ? title : '…', // пока резолв не пришёл — многоточие
-            deleted,
-          ),
-          inclusive: true,
+          widget: new WikiLinkIdTokenWidget(titleText, deleted),
+          inclusive: false,
         }),
       });
     } else {
-      // normal-mode: replace the WHOLE span with one label widget.
+      // Normal-mode: replace the WHOLE span with one label widget.
       parts.push({
         from: link.from,
         to: link.to,
         value: Decoration.replace({
-          widget: new WikiLinkLabelWidget(label !== '' ? label : link.thoughtId, deleted),
+          widget: new WikiLinkLabelWidget(link.alias ?? titleText, deleted),
           inclusive: false,
         }),
       });
     }
   }
-  return Decoration.set(parts, true);
+  return {
+    decorations: Decoration.set(parts, true),
+    atomic: RangeSet.of(atomParts, true),
+  };
+}
+
+/** Test-facing wrapper: decorations only (the atomic set is computed separately). */
+function buildDecorations(
+  source: string,
+  selection: { from: number; to: number },
+  cache: Map<string, ResolvedMeta>,
+  networkId: string | null,
+): DecorationSet {
+  return computeWikiIdDecos(source, selection, cache, networkId).decorations;
 }
 
 /** Extract unique id-tokens grouped by network from a source string. */
@@ -371,7 +390,7 @@ function collectUnresolvedTokens(
 ): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   for (const link of parseIdLinks(source)) {
-    // Same routing as in `buildDecorations`: `[[#<id>]]` uses the active
+    // Same routing as in `computeWikiIdDecos`: `[[#<id>]]` uses the active
     // network; `[[n:<net>#<id>]]` uses the explicit one. We can only
     // collect tokens for which we know the network — same-network links
     // resolve once a network becomes active.
@@ -415,7 +434,7 @@ async function resolveAndApply(
     }
     view.dispatch({ effects: setCacheEntries.of(entries) });
   } catch {
-    // Silent failure: cache stays empty, widget renders the id as a fallback.
+    // Silent failure: cache stays empty, widgets show `…` (never the raw id).
   }
 }
 
@@ -430,16 +449,25 @@ export const wikiIdPlugin = ViewPlugin.fromClass(
     lastNetwork: string | null = null;
 
     constructor(readonly view: EditorView) {
+      // The field's networkId starts null (the first update syncs it) — seed
+      // the live network here so the very first scan resolves same-network
+      // links immediately after mount.
+      this.lastNetwork = safeCurrentNetwork();
       this.schedule();
     }
 
     update(update: ViewUpdate): void {
       // Keep the active network id in sync on the state field so
-      // `buildDecorations` can resolve same-network cache keys.
+      // `computeWikiIdDecos` can resolve same-network cache keys.
       const current = safeCurrentNetwork();
       if (current !== this.lastNetwork) {
         this.lastNetwork = current;
         this.view.dispatch({ effects: setNetworkId.of(current) });
+        // A network (de)activation alone fires neither a doc nor a selection
+        // change, but toggles which same-network tokens are resolvable.
+        if (!update.docChanged && !update.selectionSet) {
+          this.schedule();
+        }
       }
       if (update.docChanged || update.selectionSet) {
         this.schedule();
@@ -455,7 +483,11 @@ export const wikiIdPlugin = ViewPlugin.fromClass(
       const state = this.view.state.field(wikiIdState, false);
       if (state === undefined) return;
       const source = this.view.state.doc.toString();
-      const unresolved = collectUnresolvedTokens(source, state.cache, state.networkId);
+      // The field's networkId may still be null right after mount (it is
+      // synced via setNetworkId on the first update) — fall back to the live
+      // network so same-network links resolve immediately.
+      const networkId = state.networkId ?? safeCurrentNetwork();
+      const unresolved = collectUnresolvedTokens(source, state.cache, networkId);
       // Early exit: nothing to resolve. Without this guard, the `finally` block
       // below would re-enter schedule() in a tight microtask loop (every
       // dispatch of `setCacheEntries` triggers an update, which would schedule
@@ -489,6 +521,87 @@ function safeCurrentNetwork(): string | null {
 }
 
 /**
+ * ArrowLeft/ArrowRight across an edit-mode name block: the first press
+ * selects the whole block as a unit, the next press moves the cursor out
+ * on that side (per docs/12-wiki-id-refs.md §3: курсор внутри `[[`/`]]` —
+ * стрелка выделяет имя целиком, ещё одна — выход из блока). The selected
+ * block is removed by Backspace/Delete like any selection.
+ */
+function moveAcrossWikiIdBlock(view: EditorView, dir: -1 | 1): boolean {
+  const sel = view.state.selection.main;
+  const selFrom = Math.min(sel.from, sel.to);
+  const selTo = Math.max(sel.from, sel.to);
+
+  for (const link of parseIdLinks(view.state.doc.toString())) {
+    const from = link.idFrom - 1; // включая `#`
+    const to = link.idTo;
+
+    if (sel.from === sel.to) {
+      // Cursor sits on the far side of the block in the movement direction —
+      // moving across it selects the whole name.
+      if (dir < 0 && sel.head === to) {
+        view.dispatch({
+          selection: { anchor: to, head: from },
+          scrollIntoView: true,
+          userEvent: 'select',
+        });
+        return true;
+      }
+      if (dir > 0 && sel.head === from) {
+        view.dispatch({
+          selection: { anchor: from, head: to },
+          scrollIntoView: true,
+          userEvent: 'select',
+        });
+        return true;
+      }
+    } else if (selFrom === from && selTo === to) {
+      // The block is already selected: collapse the cursor to its near side,
+      // i.e. move it out of the block in the pressed direction.
+      view.dispatch({
+        selection: { anchor: dir < 0 ? from : to },
+        scrollIntoView: true,
+        userEvent: 'select',
+      });
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Keymap for the two-step select-then-exit arrow motion across the name
+ * block (see {@link moveAcrossWikiIdBlock}). `Prec.high` outranks the
+ * default keymap's char movement. Shift-modified arrows are not bound here —
+ * CM6 keymaps match modifier prefixes exactly, so Shift+Arrow keeps the
+ * default extend-selection behaviour.
+ */
+export const wikiIdArrowKeymap = Prec.high(
+  keymap.of([
+    { key: 'ArrowLeft', run: (view) => moveAcrossWikiIdBlock(view, -1) },
+    { key: 'ArrowRight', run: (view) => moveAcrossWikiIdBlock(view, 1) },
+  ]),
+);
+
+/**
+ * Exposes the edit-mode name blocks as atomic ranges. `Decoration.mark` has
+ * no `atomic` property in CM6 ≥ 6.0 — cursor motion and deletion respect
+ * atoms only when the ranges are provided through this facet.
+ */
+export const wikiIdAtomicRanges = EditorView.atomicRanges.of((view) => {
+  const state = view.state.field(wikiIdState, false);
+  return state === undefined ? RangeSet.empty : state.atomic;
+});
+
+/** All extensions of the ID wiki-link editor plugin, for md-editor.ts. */
+export const wikiIdExtensions: Extension[] = [
+  wikiIdState,
+  wikiIdPlugin,
+  wikiIdAtomicRanges,
+  wikiIdArrowKeymap,
+];
+
+/**
  * Refresh cached entries for ids that exist in the document. Called by
  * realtime handlers (`thought.updated` / `thought.deleted`) when the
  * editor is mounted.
@@ -508,4 +621,11 @@ export function refreshWikiIdCache(view: EditorView, networkId?: string): void {
 }
 
 /** Exposed for tests / debugging. */
-export const __testing = { parseIdLinks, buildDecorations, cacheKey, collectUnresolvedTokens };
+export const __testing = {
+  parseIdLinks,
+  buildDecorations,
+  computeWikiIdDecos,
+  moveAcrossWikiIdBlock,
+  cacheKey,
+  collectUnresolvedTokens,
+};
