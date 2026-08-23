@@ -16,6 +16,13 @@ const ID_A = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
 const ID_B = '11111111-2222-3333-4444-555555555555';
 const NET = 'c4f9a3b2-1111-2222-3333-444455556666';
 
+/**
+ * Active network id used by same-network `[[#<id>]]` cache lookups. The
+ * plugin routes those entries through `<networkId>:<id>` keys (see R12 fix
+ * for the `__current__` placeholder mismatch).
+ */
+const CUR = 'cur-net-1111-2222-3333-444455556666';
+
 test('parseIdLinks: [[#<uuid>]] — пустая ссылка по id', () => {
   const links = parseIdLinks(`см. [[#${ID_A}]]`);
   assert.equal(links.length, 1);
@@ -84,7 +91,7 @@ test('parseIdLinks: незакрытая скобка — не парсится'
 
 test('buildDecorations: пустой документ — пустые декорации', () => {
   const cache = new Map();
-  const decos = buildDecorations('', { from: 0, to: 0 }, cache);
+  const decos = buildDecorations('', { from: 0, to: 0 }, cache, CUR);
   // DecorationSet has no public iterator; check via iteration of iter() result.
   const ranges: unknown[] = [];
   decos.between(0, 0, (from, to, value) => {
@@ -95,8 +102,8 @@ test('buildDecorations: пустой документ — пустые деко�
 
 test('buildDecorations: normal-mode (selection вне ссылки) — replace на всю ссылку', () => {
   const source = `[[#${ID_A}]]`;
-  const cache = new Map([[cacheKey('__current__', ID_A), { title: 'Цель', exists: true, networkId: '__current__' }]]);
-  const decos = buildDecorations(source, { from: 100, to: 100 }, cache); // selection далеко
+  const cache = new Map([[cacheKey(CUR, ID_A), { title: 'Цель', exists: true, networkId: CUR }]]);
+  const decos = buildDecorations(source, { from: 100, to: 100 }, cache, CUR); // selection далеко
   const ranges: Array<{ from: number; to: number }> = [];
   decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
   // В normal-mode одна замена на всю длину ссылки.
@@ -118,8 +125,8 @@ test('buildDecorations: edit-mode (selection внутри) — два декор
   // границу диапазона, и пользователь видит `#<uuid>` вместо виджета.
   const idStart = 2; // позиция `#` (после "[[")
   const idEnd = idStart + 1 + ID_A.length; // после `]]`
-  const cache = new Map([[cacheKey('__current__', ID_A), { title: 'Цель', exists: true, networkId: '__current__' }]]);
-  const decos = buildDecorations(source, { from: 5, to: 10 }, cache);
+  const cache = new Map([[cacheKey(CUR, ID_A), { title: 'Цель', exists: true, networkId: CUR }]]);
+  const decos = buildDecorations(source, { from: 5, to: 10 }, cache, CUR);
   const ranges: Array<{ from: number; to: number }> = [];
   decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
   assert.equal(ranges.length, 2, 'mark + replace на одном диапазоне');
@@ -131,8 +138,8 @@ test('buildDecorations: edit-mode (selection внутри) — два декор
 
 test('buildDecorations: использует alias если задан — структурная проверка', () => {
   const source = `[[#${ID_A}|мой алиас]]`;
-  const cache = new Map([[cacheKey('__current__', ID_A), { title: 'Цель', exists: true, networkId: '__current__' }]]);
-  const decos = buildDecorations(source, { from: 100, to: 100 }, cache);
+  const cache = new Map([[cacheKey(CUR, ID_A), { title: 'Цель', exists: true, networkId: CUR }]]);
+  const decos = buildDecorations(source, { from: 100, to: 100 }, cache, CUR);
   const ranges: Array<{ from: number; to: number }> = [];
   decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
   // В normal-mode одна декорация на всю длину ссылки.
@@ -143,7 +150,7 @@ test('buildDecorations: использует alias если задан — ст�
 
 test('buildDecorations: использует id как fallback когда cache пуст', () => {
   const source = `[[#${ID_A}]]`;
-  const decos = buildDecorations(source, { from: 100, to: 100 }, new Map());
+  const decos = buildDecorations(source, { from: 100, to: 100 }, new Map(), CUR);
   const ranges: Array<{ from: number; to: number }> = [];
   decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
   assert.equal(ranges.length, 1, 'должна быть одна декорация даже с пустым cache');
@@ -154,9 +161,9 @@ test('buildDecorations: использует id как fallback когда cache
 test('buildDecorations: deleted мысль — декорация создаётся', () => {
   const source = `[[#${ID_A}]]`;
   const cache = new Map([
-    [cacheKey('__current__', ID_A), { title: 'Удалённая', exists: false, networkId: '__current__' }],
+    [cacheKey(CUR, ID_A), { title: 'Удалённая', exists: false, networkId: CUR }],
   ]);
-  const decos = buildDecorations(source, { from: 100, to: 100 }, cache);
+  const decos = buildDecorations(source, { from: 100, to: 100 }, cache, CUR);
   const ranges: Array<{ from: number; to: number }> = [];
   decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
   assert.equal(ranges.length, 1, 'одна декорация для удалённой мысли');
@@ -166,7 +173,7 @@ test('buildDecorations: deleted мысль — декорация создаёт
 
 test('cacheKey: формирует "<net>:<id>"', () => {
   assert.equal(cacheKey('net1', 'id1'), 'net1:id1');
-  assert.equal(cacheKey('__current__', ID_A), `__current__:${ID_A}`);
+  assert.equal(cacheKey(CUR, ID_A), `${CUR}:${ID_A}`);
 });
 
 test('collectUnresolvedTokens: после полного resolve возвращает пустое множество', () => {
@@ -175,29 +182,39 @@ test('collectUnresolvedTokens: после полного resolve возвращ�
   // бесконечный цикл (resolve → dispatch → update → schedule → …).
   const source = `[[#${ID_A}]] [[#${ID_B}]]`;
   const cache = new Map([
-    [cacheKey('__current__', ID_A), { title: 'A', exists: true, networkId: '__current__' }],
-    [cacheKey('__current__', ID_B), { title: 'B', exists: true, networkId: '__current__' }],
+    [cacheKey(CUR, ID_A), { title: 'A', exists: true, networkId: CUR }],
+    [cacheKey(CUR, ID_B), { title: 'B', exists: true, networkId: CUR }],
   ]);
-  const unresolved = collectUnresolvedTokens(source, cache);
+  const unresolved = collectUnresolvedTokens(source, cache, CUR);
   assert.equal(unresolved.size, 0, 'полный кеш → unresolved пуст → schedule early return');
 });
 
-test('collectUnresolvedTokens: пустой кеш возвращает все токены', () => {
+test('collectUnresolvedTokens: пустой кеш возвращает все токены активной сети', () => {
   const source = `[[#${ID_A}]] [[#${ID_B}]]`;
-  const unresolved = collectUnresolvedTokens(source, new Map());
+  const unresolved = collectUnresolvedTokens(source, new Map(), CUR);
   assert.equal(unresolved.size, 1);
-  assert.ok(unresolved.has('__current__'));
-  assert.equal(unresolved.get('__current__')!.size, 2);
+  assert.ok(unresolved.has(CUR));
+  assert.equal(unresolved.get(CUR)!.size, 2);
+});
+
+test('collectUnresolvedTokens: networkId=null — same-network ссылки пропускаются', () => {
+  // Без активной сети некуда резолвить `[[#<id>]]` — такие токены игнорируются.
+  // Cross-network ссылки (явный n:<net>) всё равно собираются.
+  const source = `[[#${ID_A}]] [[n:${NET}#${ID_B}]]`;
+  const unresolved = collectUnresolvedTokens(source, new Map(), null);
+  assert.equal(unresolved.size, 1, 'только cross-network');
+  assert.ok(unresolved.has(NET));
+  assert.ok(unresolved.get(NET)!.has(ID_B));
 });
 
 test('collectUnresolvedTokens: только отсутствующие id попадают в результат', () => {
   const source = `[[#${ID_A}]] [[#${ID_B}]]`;
   const cache = new Map([
-    [cacheKey('__current__', ID_A), { title: 'A', exists: true, networkId: '__current__' }],
+    [cacheKey(CUR, ID_A), { title: 'A', exists: true, networkId: CUR }],
   ]);
-  const unresolved = collectUnresolvedTokens(source, cache);
+  const unresolved = collectUnresolvedTokens(source, cache, CUR);
   assert.equal(unresolved.size, 1);
-  assert.ok(unresolved.has('__current__'));
-  assert.equal(unresolved.get('__current__')!.size, 1);
-  assert.ok(unresolved.get('__current__')!.has(ID_B));
+  assert.ok(unresolved.has(CUR));
+  assert.equal(unresolved.get(CUR)!.size, 1);
+  assert.ok(unresolved.get(CUR)!.has(ID_B));
 });

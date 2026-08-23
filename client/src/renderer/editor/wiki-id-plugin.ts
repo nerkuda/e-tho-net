@@ -68,6 +68,16 @@ interface ResolvedMeta {
 
 /** Per-plugin state: cache of resolved ids (per network) + the current decoration set. */
 interface WikiIdState {
+  /**
+   * The active network id (or null when the network list is showing). Stored
+   * on the field so `buildDecorations` can use it as the cache-key prefix
+   * for `[[#<id>]]` links — otherwise `[[#<id>]]` (same-network) and
+   * `[[n:<net>#<id>]]` (cross-network) would route through different code
+   * paths with different key prefixes and the same-network branch would
+   * never find its entries. Kept in sync with `requireNetworkId()` by
+   * `wikiIdPlugin.update` via the {@link setNetworkId} effect.
+   */
+  networkId: string | null;
   /** Resolved metadata keyed by `<networkId>:<thoughtId>`. */
   cache: Map<string, ResolvedMeta>;
   decorations: DecorationSet;
@@ -81,7 +91,7 @@ function cacheKey(networkId: string, thoughtId: string): string {
 }
 
 function makeEmptyState(): WikiIdState {
-  return { cache: new Map(), decorations: Decoration.none };
+  return { networkId: null, cache: new Map(), decorations: Decoration.none };
 }
 
 /** Scan the document source for ID-form wiki-links. */
@@ -219,6 +229,12 @@ class WikiLinkIdTokenWidget extends WidgetType {
 const setCacheEntries = StateEffect.define<{ key: string; meta: ResolvedMeta }[]>();
 
 /**
+ * Effect to update the active network id (kept on the state field so
+ * `buildDecorations` can resolve same-network `[[#<id>]]` cache keys).
+ */
+const setNetworkId = StateEffect.define<string | null>();
+
+/**
  * StateField holding the resolved metadata cache and the current decoration
  * set. Decorations are recomputed whenever the document, selection or the
  * cache change.
@@ -226,9 +242,18 @@ const setCacheEntries = StateEffect.define<{ key: string; meta: ResolvedMeta }[]
 export const wikiIdState = StateField.define<WikiIdState>({
   create: () => makeEmptyState(),
   update(state, tr) {
+    let networkId = state.networkId;
     let cache = state.cache;
     for (const e of tr.effects) {
-      if (e.is(setCacheEntries)) {
+      if (e.is(setNetworkId)) {
+        // When the active network changes, drop the cache — entries from the
+        // previous network are not relevant (and stale ids in the new network
+        // would briefly show wrong titles if reused).
+        if (e.value !== state.networkId) {
+          networkId = e.value;
+          if (cache.size > 0) cache = new Map();
+        }
+      } else if (e.is(setCacheEntries)) {
         if (cache === state.cache) cache = new Map(cache);
         for (const { key, meta } of e.value) {
           cache.set(key, meta);
@@ -246,21 +271,27 @@ export const wikiIdState = StateField.define<WikiIdState>({
       }
     }
 
-    if (!tr.docChanged && cache === state.cache) {
+    if (!tr.docChanged && cache === state.cache && networkId === state.networkId) {
       return state;
     }
 
-    const decorations = buildDecorations(tr.state.doc.toString(), tr.state.selection.main, cache);
-    return { cache, decorations };
+    const decorations = buildDecorations(
+      tr.state.doc.toString(),
+      tr.state.selection.main,
+      cache,
+      networkId,
+    );
+    return { networkId, cache, decorations };
   },
   provide: (f) => EditorView.decorations.from(f, (s) => s.decorations),
 });
 
-/** Build decorations for the given source + selection + cache. */
+/** Build decorations for the given source + selection + cache + networkId. */
 function buildDecorations(
   source: string,
   selection: { from: number; to: number },
   cache: Map<string, ResolvedMeta>,
+  networkId: string | null,
 ): DecorationSet {
   // Собираем декорации в массив и передаём в Decoration.set(): этот API
   // держит несколько декораций на одном диапазоне (mark + replace) — нужно
@@ -273,8 +304,14 @@ function buildDecorations(
   const intersects = (from: number, to: number): boolean => from < selTo && to > selFrom;
 
   for (const link of links) {
-    const networkId = link.networkId ?? '__current__';
-    const meta = cache.get(cacheKey(networkId, link.thoughtId));
+    // For [[#<id>]] the cache key uses the *active* network (link.networkId
+    // is null). For [[n:<net>#<id>]] the key uses the explicit cross-network
+    // id. If we don't have an active network yet, fall back to the link's own
+    // network (which may be null for same-network links — entries will only
+    // be found once the user activates a network).
+    const keyNetworkId = link.networkId ?? networkId;
+    if (keyNetworkId === null) continue;
+    const meta = cache.get(cacheKey(keyNetworkId, link.thoughtId));
     const title = meta?.title ?? '';
     const deleted = meta !== undefined && !meta.exists;
     const label = link.alias ?? (title !== '' ? title : link.thoughtId);
@@ -327,16 +364,25 @@ function buildDecorations(
 }
 
 /** Extract unique id-tokens grouped by network from a source string. */
-function collectUnresolvedTokens(source: string, cache: Map<string, ResolvedMeta>): Map<string, Set<string>> {
+function collectUnresolvedTokens(
+  source: string,
+  cache: Map<string, ResolvedMeta>,
+  networkId: string | null,
+): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   for (const link of parseIdLinks(source)) {
-    const networkId = link.networkId ?? '__current__';
-    const key = cacheKey(networkId, link.thoughtId);
+    // Same routing as in `buildDecorations`: `[[#<id>]]` uses the active
+    // network; `[[n:<net>#<id>]]` uses the explicit one. We can only
+    // collect tokens for which we know the network — same-network links
+    // resolve once a network becomes active.
+    const targetNet = link.networkId ?? networkId;
+    if (targetNet === null) continue;
+    const key = cacheKey(targetNet, link.thoughtId);
     if (cache.has(key)) continue;
-    let bucket = out.get(networkId);
+    let bucket = out.get(targetNet);
     if (bucket === undefined) {
       bucket = new Set();
-      out.set(networkId, bucket);
+      out.set(targetNet, bucket);
     }
     bucket.add(link.thoughtId);
   }
@@ -381,12 +427,20 @@ async function resolveAndApply(
 export const wikiIdPlugin = ViewPlugin.fromClass(
   class {
     inflight = false;
+    lastNetwork: string | null = null;
 
     constructor(readonly view: EditorView) {
       this.schedule();
     }
 
     update(update: ViewUpdate): void {
+      // Keep the active network id in sync on the state field so
+      // `buildDecorations` can resolve same-network cache keys.
+      const current = safeCurrentNetwork();
+      if (current !== this.lastNetwork) {
+        this.lastNetwork = current;
+        this.view.dispatch({ effects: setNetworkId.of(current) });
+      }
       if (update.docChanged || update.selectionSet) {
         this.schedule();
       }
@@ -398,11 +452,10 @@ export const wikiIdPlugin = ViewPlugin.fromClass(
         // pick up any new unresolved tokens.
         return;
       }
-      const currentNetwork = safeCurrentNetwork();
       const state = this.view.state.field(wikiIdState, false);
       if (state === undefined) return;
       const source = this.view.state.doc.toString();
-      const unresolved = collectUnresolvedTokens(source, state.cache);
+      const unresolved = collectUnresolvedTokens(source, state.cache, state.networkId);
       // Early exit: nothing to resolve. Without this guard, the `finally` block
       // below would re-enter schedule() in a tight microtask loop (every
       // dispatch of `setCacheEntries` triggers an update, which would schedule
@@ -412,13 +465,9 @@ export const wikiIdPlugin = ViewPlugin.fromClass(
       // Convert every unresolved bucket into a `resolveAndApply` call.
       const tasks: Promise<void>[] = [];
       for (const [netId, ids] of unresolved) {
-        if (netId === '__current__') {
-          if (currentNetwork === null) continue;
-          tasks.push(resolveAndApply(this.view, currentNetwork, [...ids]));
-        } else {
-          // Cross-network ids — best-effort, network may be inaccessible.
-          tasks.push(resolveAndApply(this.view, netId, [...ids]));
-        }
+        // netId is always a real network id at this point — collectUnresolvedTokens
+        // filters out unresolved same-network links when no network is active.
+        tasks.push(resolveAndApply(this.view, netId, [...ids]));
       }
       void Promise.all(tasks).finally(() => {
         this.inflight = false;
