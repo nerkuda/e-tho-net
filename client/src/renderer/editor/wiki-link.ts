@@ -15,10 +15,10 @@ import type { Extension } from '@codemirror/state';
 import { tags } from '@lezer/highlight';
 import type { MarkdownExtension } from '@lezer/markdown';
 
-import { WIKI_LINK_CLASS, WIKI_LINK_TARGET_ATTR } from '@etn/markdown';
+import { WIKI_LINK_CLASS, WIKI_LINK_TARGET_ATTR, WIKI_LINK_ID_ATTR, WIKI_LINK_NETWORK_ATTR } from '@etn/markdown';
 import type { Thought } from '@etn/shared';
 
-import { requireNetworkId, setFocus } from '../app.js';
+import { openNetwork, requireNetworkId, setFocus } from '../app.js';
 import { showDialog } from '../lib/dialog.js';
 import { el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -211,6 +211,52 @@ export async function openWikiTarget(name: string): Promise<void> {
   await openThoughtByRef(thought);
 }
 
+/**
+ * Разрешает ID-ссылку ([[#<id>]] / [[n:<net>#<id>]]) в мысль и открывает её
+ * (task R8). Если `targetNetworkId` отличается от текущей, сначала
+ * переключает активную сеть через {@link openNetwork} — это меняет
+ * `currentNetworkId` в store, после чего `etn.thoughts.get` уже работает в
+ * нужной сети. Если сеть недоступна (403/404) — сообщение пользователю.
+ */
+export async function openWikiIdTarget(targetNetworkId: string, thoughtId: string): Promise<void> {
+  const currentNetworkId = safeCurrentNetworkId();
+
+  if (targetNetworkId !== currentNetworkId) {
+    try {
+      await openNetwork(targetNetworkId);
+    } catch (err) {
+      notice(
+        `Сеть недоступна: ${errText(err)}. Ссылка на мысль в другой сети не может быть открыта.`,
+        'error',
+      );
+      return;
+    }
+  }
+
+  let thought: Thought;
+  try {
+    thought = await etn.thoughts.get(targetNetworkId, thoughtId);
+  } catch (err) {
+    notice(`Мысль удалена или недоступна: ${errText(err)}`, 'error');
+    return;
+  }
+
+  await openThoughtByRef(thought);
+}
+
+/**
+ * Wrapper around `requireNetworkId` that catches the synchronous throw
+ * (no active network) and returns null. The click handler can degrade
+ * gracefully instead of crashing when the user is on the network list.
+ */
+function safeCurrentNetworkId(): string | null {
+  try {
+    return requireNetworkId();
+  } catch {
+    return null;
+  }
+}
+
 let navigationWired = false;
 
 /** Installs the delegated view-mode click handler (call once from main.ts). */
@@ -224,6 +270,21 @@ export function initWikiLinkNavigation(): void {
     // Внутри редактора клик раскрывает исходник блока (M6), а не переходит;
     // снятые со страницы виджеты (клик уже раскрыл блок) тоже пропускаются.
     if (!link.isConnected || link.closest('.cm-editor') !== null) return;
+
+    // ID-based form (task R8): прямой lookup по UUID, без FTS-поиска.
+    // Кросс-сеть — сначала переключаем активную сеть через openNetwork.
+    const id = link.getAttribute(WIKI_LINK_ID_ATTR);
+    if (id !== null && id !== '') {
+      const targetNetworkId = link.getAttribute(WIKI_LINK_NETWORK_ATTR) ?? safeCurrentNetworkId();
+      if (targetNetworkId === null) {
+        notice('Сначала откройте сеть.', 'error');
+        return;
+      }
+      void openWikiIdTarget(targetNetworkId, id);
+      return;
+    }
+
+    // Legacy name-based form (M3): резолюция через FTS-поиск по имени.
     const name = link.getAttribute(WIKI_LINK_TARGET_ATTR);
     if (name === null || name === '') return;
     void openWikiTarget(name);

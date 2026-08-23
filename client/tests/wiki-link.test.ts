@@ -1,11 +1,16 @@
 /**
- * Unit tests of the wiki-link prefix parsing (task M3). Pure — no DOM.
+ * Unit tests of the wiki-link prefix parsing (task M3) and ID-target resolver
+ * (task R8). Pure — no DOM.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { wikiPrefixAt } from '../src/renderer/editor/wiki-link.js';
+
+// ---------------------------------------------------------------------------
+// wikiPrefixAt (M3)
+// ---------------------------------------------------------------------------
 
 test('открытая ссылка: позиция [[ и префикс', () => {
   assert.deepEqual(wikiPrefixAt('[[аб'), { open: 0, prefix: 'аб' });
