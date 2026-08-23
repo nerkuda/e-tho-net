@@ -108,24 +108,6 @@ function sanitizeFtsQuery(text: string, operator: 'AND' | 'OR' = 'AND'): string 
   return match;
 }
 
-/**
- * Build an FTS5 MATCH expression from whole search terms (a thought title or a
- * single synonym). Every term is matched as a unit: a one-word term as a prefix
- * literal, a multi-word term as a phrase of word-prefixes (words adjacent, in
- * the given order). Terms join with OR — a comment mentions the thought when
- * any of its names appears as a whole. Matching per-term (not per-token) is
- * what keeps a name like «Петров Василий» from hitting «Петрову Игорю».
- */
-function termsToFtsMatch(terms: string[]): string {
-  const phrases: string[] = [];
-  for (const term of terms) {
-    const tokens = tokenize(term);
-    if (tokens.length === 0) continue;
-    phrases.push(tokens.map((t) => `"${t}"*`).join(' '));
-  }
-  return phrases.join(' OR ');
-}
-
 /** HTML-escape the five significant characters of a text node. */
 function escapeHtml(input: string): string {
   return input
@@ -137,15 +119,16 @@ function escapeHtml(input: string): string {
 }
 
 /**
- * Build an FTS5 candidate MATCH expression for a wildcard synonym: one
- * phrase-prefix per pattern word (its literal prefix up to the first `*`),
- * AND-joined. Candidates are intentionally broad — exact word-boundary and
- * adjacency semantics are enforced by {@link synonymPatternToRegex} afterwards.
- * Returns `null` when a pattern word has no literal prefix (e.g. `*ян`) — such
- * synonyms need a full scan instead.
+ * Build an FTS5 candidate MATCH expression for one mention term (a compound
+ * title part or a synonym): a phrase where words without `*` are exact token
+ * literals and a pattern word contributes its literal prefix up to the first
+ * `*`. Candidates are intentionally broad — exact word-boundary and adjacency
+ * semantics are enforced by {@link synonymPatternToRegex} afterwards. Returns
+ * `null` when a pattern word has no literal prefix (e.g. `*ян`) — such terms
+ * need a full scan instead.
  */
-function wildcardCandidateMatch(synonym: string): string | null {
-  const words = synonym.trim().split(/\s+/).filter((w) => w !== '');
+function candidateMatchForTerm(term: string): string | null {
+  const words = term.trim().split(/\s+/).filter((w) => w !== '');
   if (words.length === 0) return null;
   const parts: string[] = [];
   for (const word of words) {
@@ -1050,16 +1033,26 @@ export function findDuplicates(
 
 /**
  * Find comments whose text mentions the given thought — i.e. contains the
- * thought's title or any of its synonyms (docs/03-server-api.md §13).
+ * thought's name or any of its synonyms (docs/03-server-api.md §13).
  *
- * Implementation: `*`-free terms are MATCHed against the comment-text indexes
- * as before (tokens joined with OR). Synonyms containing `*` are wildcard
- * patterns: FTS5 prefix queries fetch candidates, then
- * {@link synonymPatternToRegex} enforces the exact semantics (`*` never
- * crosses a word boundary, multi-word patterns require adjacent words in the
- * given order). Returns one hit per owning thought/link (a thought with
- * several matching comments collapses into a single hit); the target thought's
- * own comments are excluded.
+ * Matchable terms are the compound-title parts (docs/08-ui-spec.md §2.2.3 —
+ * for «Проект А,Закрытые ошибки» the parts «Проект А» and «Закрытые ошибки»
+ * are searched separately) plus the synonyms, deduplicated case-insensitively.
+ * Every term is compiled with {@link synonymPatternToRegex} and matched as a
+ * whole: multi-word terms must appear as adjacent words in the given order
+ * (any whitespace between), words without `*` match exactly, `*` inside a word
+ * matches any run of non-whitespace characters and never crosses a word
+ * boundary (docs/02-data-model.md §3.2). So the name «Проект А» finds
+ * «Проект А» and «Проект      А», but not «А Проект» or «проект аналогичный»;
+ * inflected forms are covered by `*`-synonyms («Прект* А» finds «проекту А»).
+ *
+ * Implementation: FTS5 phrase queries over literal word prefixes fetch
+ * candidates, then {@link synonymPatternToRegex} enforces the exact semantics.
+ * FTS5 alone cannot match whole terms: a phrase containing more than one
+ * prefix token silently degrades to AND (single words of a name), so the
+ * regex is the deciding matcher. Returns one hit per owning thought/link
+ * (a thought with several matching comments collapses into a single hit);
+ * the target thought's own comments are excluded.
  */
 export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
   const thought = ndb
@@ -1072,23 +1065,37 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     });
   }
   const synRows = ndb
-    .prepare('SELECT synonym, synonym_norm FROM thought_synonyms WHERE thought_id = ?')
-    .all(thoughtId) as Array<{ synonym: string; synonym_norm: string }>;
+    .prepare('SELECT synonym FROM thought_synonyms WHERE thought_id = ?')
+    .all(thoughtId) as Array<{ synonym: string }>;
+
+  // Matchable terms: compound-title parts (§2.2.3), then synonyms, without
+  // case-insensitive duplicates.
+  const terms: string[] = [];
+  const addTerm = (raw: string): void => {
+    const term = raw.trim();
+    if (term === '') return;
+    const key = term.toLowerCase();
+    if (terms.some((t) => t.toLowerCase() === key)) return;
+    terms.push(term);
+  };
+  for (const part of splitCompoundTitle(thought.title)) addTerm(part);
+  for (const s of synRows) addTerm(s.synonym);
 
   const out: MentionHit[] = [];
   const seen = new Set<string>();
 
   interface MentionRow {
-    owner_type: 'thought' | 'link';
+    comment_id: string;
     owner_id: string;
     title: string;
-    comment_id: string;
-    body: string;
     active: number;
+    body: string;
   }
   // One hit per owning thought/link (03-server-api.md §13 returns «мысли/связи»):
   // several matching comments of the same owner collapse into its first hit.
-  const push = (r: MentionRow, highlightTerms: string[]): void => {
+  // Highlight terms are the substrings actually matched, so the snippet
+  // highlights whole phrases, not their single words.
+  const push = (r: MentionRow & { owner_type: 'thought' | 'link' }, highlightTerms: string[]): void => {
     const key = `${r.owner_type}:${r.owner_id}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -1102,94 +1109,30 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     });
   };
 
-  // Literal terms are the `*`-free title/synonyms; terms containing `*`
-  // (a title is treated like a synonym here) become wildcard patterns.
-  const exactTerms = [thought.title, ...synRows.map((s) => s.synonym)].filter(
-    (t) => !t.includes('*'),
-  );
-  const wildcardPatterns = synRows
-    .filter((s) => s.synonym_norm.includes('*'))
-    .map((s) => s.synonym_norm);
-  if (thought.title.includes('*')) wildcardPatterns.push(thought.title);
-
-  // 1) Literal terms — plain FTS MATCH over the comment-text indexes. Each
-  //    `*`-free title/synonym is matched as a whole term (a phrase of
-  //    word-prefixes for multi-word names), alternatives joined with OR.
-  const match = termsToFtsMatch(exactTerms);
-  if (match !== '') {
-    const terms = tokenize(exactTerms.join(' '));
-
-    // Thought-owned comments: return the owning thought's title; exclude the
-    // target thought (a thought does not "mention" itself in its own comments).
-    const thoughtRows = ndb
-      .prepare(
-        `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title,
-                t.active AS active, c.body_md AS body
-         FROM fts_thought_texts f
-         JOIN comments c ON c.rowid = f.rowid
-         JOIN thoughts t ON t.id = c.owner_id
-         WHERE fts_thought_texts MATCH ? AND c.owner_id <> ?`,
-      )
-      .all(match, thoughtId) as Array<{
-      comment_id: string;
-      owner_id: string;
-      title: string;
-      active: number;
-      body: string;
-    }>;
-    for (const r of thoughtRows) {
-      push({ owner_type: 'thought', ...r }, terms);
-    }
-
-    // Link-owned comments: title is the link type's forward name (or empty).
-    // COALESCE keeps stale rows (deleted link) visible with active=1, as before.
-    const linkRows = ndb
-      .prepare(
-        `SELECT c.id AS comment_id, c.owner_id AS owner_id,
-                COALESCE(lt.name_forward, '') AS title, COALESCE(l.active, 1) AS active,
-                c.body_md AS body
-         FROM fts_link_texts f
-         JOIN comments c ON c.rowid = f.rowid
-         LEFT JOIN links l ON l.id = c.owner_id
-         LEFT JOIN link_types lt ON lt.id = l.type_id
-         WHERE fts_link_texts MATCH ?`,
-      )
-      .all(match) as Array<{
-      comment_id: string;
-      owner_id: string;
-      title: string;
-      active: number;
-      body: string;
-    }>;
-    for (const r of linkRows) {
-      push({ owner_type: 'link', ...r }, terms);
-    }
-  }
-
-  // 2) Wildcard synonyms — broad FTS candidates, then exact regex semantics.
-  //    Highlight terms are the matched substrings themselves.
-  for (const pattern of wildcardPatterns) {
-    const re = synonymPatternToRegex(pattern);
+  /** Substrings of `body` matched by one term regex (the leading boundary character dropped). */
+  const matchSpans = (re: RegExp, body: string): string[] => {
     const reAll = new RegExp(re.source, `${re.flags}g`);
-    const apply = (
-      rows: Array<{ comment_id: string; owner_id: string; title: string; active: number; body: string }>,
-      ownerType: 'thought' | 'link',
-    ): void => {
-      for (const r of rows) {
-        reAll.lastIndex = 0;
-        const spans: string[] = [];
-        let m: RegExpExecArray | null;
-        while ((m = reAll.exec(r.body)) !== null) {
-          spans.push(m[0]);
-          if (m[0] === '') reAll.lastIndex += 1; // guard against empty matches
-        }
-        if (spans.length > 0) {
-          push({ owner_type: ownerType, ...r }, spans);
-        }
-      }
-    };
+    const spans: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = reAll.exec(body)) !== null) {
+      const start = m.index + (m.index > 0 ? 1 : 0);
+      const end = m.index + m[0].length;
+      if (end > start) spans.push(body.slice(start, end));
+      if (m[0].length === 0) reAll.lastIndex += 1; // guard against empty matches
+    }
+    return spans;
+  };
 
-    const candidate = wildcardCandidateMatch(pattern);
+  const apply = (rows: MentionRow[], ownerType: 'thought' | 'link', re: RegExp): void => {
+    for (const r of rows) {
+      const spans = matchSpans(re, r.body);
+      if (spans.length > 0) push({ ...r, owner_type: ownerType }, spans);
+    }
+  };
+
+  for (const term of terms) {
+    const re = synonymPatternToRegex(term);
+    const candidate = candidateMatchForTerm(term);
     if (candidate !== null) {
       apply(
         ndb
@@ -1201,14 +1144,9 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
              JOIN thoughts t ON t.id = c.owner_id
              WHERE fts_thought_texts MATCH ? AND c.owner_id <> ?`,
           )
-          .all(candidate, thoughtId) as Array<{
-          comment_id: string;
-          owner_id: string;
-          title: string;
-          active: number;
-          body: string;
-        }>,
+          .all(candidate, thoughtId) as MentionRow[],
         'thought',
+        re,
       );
       apply(
         ndb
@@ -1222,14 +1160,9 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
              LEFT JOIN link_types lt ON lt.id = l.type_id
              WHERE fts_link_texts MATCH ?`,
           )
-          .all(candidate) as Array<{
-          comment_id: string;
-          owner_id: string;
-          title: string;
-          active: number;
-          body: string;
-        }>,
+          .all(candidate) as MentionRow[],
         'link',
+        re,
       );
     } else {
       // No literal prefix to query (e.g. `*ян`) — full scan of both comment
@@ -1243,14 +1176,9 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
              JOIN thoughts t ON t.id = c.owner_id
              WHERE c.owner_type = 'thought' AND c.owner_id <> ?`,
           )
-          .all(thoughtId) as Array<{
-          comment_id: string;
-          owner_id: string;
-          title: string;
-          active: number;
-          body: string;
-        }>,
+          .all(thoughtId) as MentionRow[],
         'thought',
+        re,
       );
       apply(
         ndb
@@ -1263,14 +1191,9 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
              LEFT JOIN link_types lt ON lt.id = l.type_id
              WHERE c.owner_type = 'link'`,
           )
-          .all() as Array<{
-          comment_id: string;
-          owner_id: string;
-          title: string;
-          active: number;
-          body: string;
-        }>,
+          .all() as MentionRow[],
         'link',
+        re,
       );
     }
   }
@@ -1430,11 +1353,12 @@ export function findMentionsInTexts(
             re.lastIndex += 1;
             continue;
           }
-          // `(?:^|\s)` may have consumed one leading whitespace char (only
-          // possible when the match doesn't start at position 0, since `^`
-          // without the `m` flag only matches the absolute string start);
-          // the trailing `(?=\s|$)` lookahead is zero-width and never
-          // consumed, so `m[0].length` already excludes it.
+          // The leading boundary group may have consumed one character (any
+          // non-letter/digit/underscore) — only possible when the match
+          // doesn't start at position 0, since `^` without the `m` flag only
+          // matches the absolute string start; the trailing lookahead is
+          // zero-width and never consumed, so `m[0].length` already excludes
+          // it.
           const start = m.index + (m.index > 0 ? 1 : 0);
           const end = m.index + m[0].length;
           if (end > start) raw.push({ start, end, candidate, priority: pattern.priority });

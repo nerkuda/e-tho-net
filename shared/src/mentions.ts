@@ -20,9 +20,11 @@ export function regexEscape(value: string): string {
  * boundary. Pattern words must appear in the text as whole adjacent words in
  * the given order; the text may differ from the pattern only at `*`
  * positions. The match is not anchored to the text — a pattern matches
- * anywhere inside. Works identically for `*`-free literal terms (a thought
- * title or a title part, §2.2.3), which just become an exact word-boundary
- * phrase.
+ * anywhere inside. A word boundary is the text start/end or any character
+ * that is not a letter, digit or underscore, so a name inside quotes or
+ * brackets («Проект А») is still found. Works identically for `*`-free
+ * literal terms (a thought title or a title part, §2.2.3), which just become
+ * an exact word-boundary phrase.
  */
 export function synonymPatternToRegex(synonym: string): RegExp {
   const words = synonym.trim().split(/\s+/).filter((w) => w !== '');
@@ -33,7 +35,7 @@ export function synonymPatternToRegex(synonym: string): RegExp {
       .map((part) => (part === '' ? '' : regexEscape(part)))
       .join('\\S*');
   const core = words.map(wordBody).join('\\s+');
-  return new RegExp(`(?:^|\\s)${core}(?=\\s|$)`, 'iu');
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${core}(?=[^\\p{L}\\p{N}_]|$)`, 'iu');
 }
 
 /**

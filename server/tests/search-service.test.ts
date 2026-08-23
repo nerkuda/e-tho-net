@@ -559,10 +559,92 @@ describe(
         const mentions = findMentions(ndb, target);
         const ids = mentions.map((m) => m.comment_id);
         assert.ok(ids.includes(dative), 'multi-word wildcard synonym matches the phrase');
-        assert.ok(ids.includes(genitive), 'title phrase matches');
+        assert.ok(ids.includes(genitive), 'wildcard synonym covers inflections');
         assert.ok(ids.includes(single), 'single-word wildcard synonym matches');
         assert.ok(!ids.includes(otherPerson), 'a single word of the phrase must not match');
         assert.ok(!ids.includes(otherFamily), 'a single word of the phrase must not match');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions matches a multi-word name as adjacent exact words (§13)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Проект А');
+        // One owning thought per case (mentions collapse per owner).
+        const exactOwner = seedThought(ndb, 'Заметки');
+        const exact = seedThoughtComment(ndb, exactOwner, 'работаем над Проект А давно');
+        const wideOwner = seedThought(ndb, 'Отчёт');
+        const wide = seedThoughtComment(ndb, wideOwner, 'Проект      А закрыт');
+        const prefixOwner = seedThought(ndb, 'Дневник');
+        const prefix = seedThoughtComment(ndb, prefixOwner, 'это проект аналогичный');
+        const reversedOwner = seedThought(ndb, 'Письма');
+        const reversed = seedThoughtComment(ndb, reversedOwner, 'а проект и всё');
+        const inflectedOwner = seedThought(ndb, 'Справка');
+        const inflected = seedThoughtComment(ndb, inflectedOwner, 'проекту А конец');
+        const quotedOwner = seedThought(ndb, 'Проверки');
+        const quoted = seedThoughtComment(ndb, quotedOwner, 'для мысли "Проект А" список');
+
+        const mentions = findMentions(ndb, target);
+        const ids = mentions.map((m) => m.comment_id);
+        assert.ok(ids.includes(exact), 'the exact phrase matches');
+        assert.ok(ids.includes(wide), 'any amount of whitespace between the words matches');
+        assert.ok(!ids.includes(prefix), 'words must not match by prefix («проект аналогичный»)');
+        assert.ok(!ids.includes(reversed), 'word order matters («а проект»)');
+        assert.ok(!ids.includes(inflected), 'inflected words need a `*` synonym («проекту А»)');
+        assert.ok(ids.includes(quoted), 'quotes around the name do not break the match');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions searches each part of a compound title separately (§2.2.3)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Проект А,Закрытые ошибки');
+        // One owning thought per case (mentions collapse per owner).
+        const firstOwner = seedThought(ndb, 'Заметки');
+        const first = seedThoughtComment(ndb, firstOwner, 'работаем над Проект А давно');
+        const secondOwner = seedThought(ndb, 'Отчёт');
+        const second = seedThoughtComment(ndb, secondOwner, 'разобрали Закрытые ошибки вчера');
+        const spreadOwner = seedThought(ndb, 'Дневник');
+        const spread = seedThoughtComment(ndb, spreadOwner, 'ошибки, закрытые в проекте');
+        const mixedOwner = seedThought(ndb, 'Письма');
+        const mixed = seedThoughtComment(ndb, mixedOwner, 'закрытые в проекте а ошибки');
+
+        const mentions = findMentions(ndb, target);
+        const ids = mentions.map((m) => m.comment_id);
+        assert.ok(ids.includes(first), 'the first part matches on its own');
+        assert.ok(ids.includes(second), 'the second part matches on its own');
+        assert.ok(!ids.includes(spread), 'parts are phrases, not word bags («ошибки, закрытые в проекте»)');
+        assert.ok(!ids.includes(mixed), 'words of a part must stay adjacent («закрытые в проекте а ошибки»)');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions honours exact words inside `*` synonyms (§3.2)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Нечто');
+        seedSynonym(ndb, target, 'Проект* А');
+        // One owning thought per case (mentions collapse per owner).
+        const dativeOwner = seedThought(ndb, 'Заметки');
+        const dative = seedThoughtComment(ndb, dativeOwner, 'проекту А уделили внимание');
+        const genitiveOwner = seedThought(ndb, 'Отчёт');
+        const genitive = seedThoughtComment(ndb, genitiveOwner, 'проектов А нет в списке');
+        const gapOwner = seedThought(ndb, 'Дневник');
+        const gap = seedThoughtComment(ndb, gapOwner, 'проектов не А оказалось');
+        const partOfWordOwner = seedThought(ndb, 'Письма');
+        const partOfWord = seedThoughtComment(ndb, partOfWordOwner, 'проект абсолютно новый');
+
+        const mentions = findMentions(ndb, target);
+        const ids = mentions.map((m) => m.comment_id);
+        assert.ok(ids.includes(dative), '`*` covers inflections («проекту А»)');
+        assert.ok(ids.includes(genitive), '`*` covers inflections («проектов А»)');
+        assert.ok(!ids.includes(gap), 'an extra word breaks the phrase («проектов не А»)');
+        assert.ok(!ids.includes(partOfWord), 'a word without `*` must match exactly («проект абсолютно»)');
       } finally {
         ndb.close();
       }
