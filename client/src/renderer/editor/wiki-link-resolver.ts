@@ -28,6 +28,25 @@ const cache = new Map<string, { title: string; exists: boolean }>();
 
 const RESOLVE_BATCH = 100;
 
+/**
+ * Matches ID-form wiki-links inside an HTML-escaped server snippet (the
+ * backlinks/mentions snippet format): the id may be wrapped in `<mark>…` by
+ * the server-side highlight, and an optional `|alias` may follow.
+ * Groups: 1 = cross-network id, 2 = `<mark>`, 3 = thought id, 4 = `</mark>`,
+ * 5 = `|alias`.
+ */
+const WIKI_ID_SNIPPET_RE =
+  /\[\[(?:n:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})#|#)(<mark>)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(<\/mark>)?(\|[^\]\n]*)?\]\]/gi;
+
+/** Local HTML escape for server-provided titles inserted into snippet text. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function cacheKey(networkId: string, thoughtId: string): string {
   return `${networkId}:${thoughtId}`;
 }
@@ -117,6 +136,75 @@ async function resolveBatch(networkId: string, ids: string[]): Promise<void> {
 }
 
 /**
+ * Pure replacement of ID-form wiki-links in an HTML-escaped snippet with
+ * display names. `lookup` provides resolved entries (see {@link getCached});
+ * a missing/deleted thought renders as `…` — the raw id never reaches the
+ * screen. A server-side `<mark>` highlight around the id is preserved on the
+ * substituted name.
+ */
+export function substituteWikiIdsInSnippet(
+  snippet: string,
+  defaultNetworkId: string,
+  lookup: (networkId: string, thoughtId: string) => { title: string; exists: boolean } | undefined,
+): string {
+  const re = new RegExp(WIKI_ID_SNIPPET_RE.source, 'gi');
+  return snippet.replace(re, (match, ...args: unknown[]) => {
+    const net = args[0] as string | undefined;
+    const openMark = args[1] as string | undefined;
+    const id = (args[2] as string).toLowerCase();
+    const alias = args[4] as string | undefined;
+    const networkId = net?.toLowerCase() ?? defaultNetworkId;
+
+    let text: string;
+    if (alias !== undefined && alias.length > 1) {
+      // Алиас уже HTML-эскейпнут (часть серверного сниппета).
+      text = alias.slice(1);
+    } else {
+      const entry = lookup(networkId, id);
+      text = entry !== undefined && entry.title !== '' ? escapeHtml(entry.title) : '…';
+    }
+    return openMark !== undefined ? `<mark>${text}</mark>` : text;
+  });
+}
+
+/** Синхронная подстановка имён по текущему кешу (без сетевых запросов). */
+export function paintWikiIdsInSnippet(snippet: string, defaultNetworkId: string): string {
+  return substituteWikiIdsInSnippet(snippet, defaultNetworkId, getCached);
+}
+
+/** Collect snippet ids not yet present in the cache, grouped by network. */
+function collectSnippetIds(snippet: string, defaultNetworkId: string): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  const re = new RegExp(WIKI_ID_SNIPPET_RE.source, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(snippet)) !== null) {
+    const id = m[3]!.toLowerCase();
+    const networkId = m[1]?.toLowerCase() ?? defaultNetworkId;
+    if (cache.has(cacheKey(networkId, id))) continue;
+    let bucket = out.get(networkId);
+    if (bucket === undefined) {
+      bucket = new Set();
+      out.set(networkId, bucket);
+    }
+    bucket.add(id);
+  }
+  return out;
+}
+
+/**
+ * Заменяет ID-формы wiki-ссылок в HTML-эскейпнутом сниппете на имена мыслей:
+ * сначала подставляет всё, что уже в сессионном кеше, затем дорезолвивает
+ * остальное батчем `etn.thoughts.resolve` (тот же кеш, что и у view-резолвера).
+ */
+export async function resolveWikiIdsInSnippet(snippet: string, defaultNetworkId: string): Promise<string> {
+  const unresolved = collectSnippetIds(snippet, defaultNetworkId);
+  if (unresolved.size > 0) {
+    await Promise.all([...unresolved].map(([netId, ids]) => resolveBatch(netId, [...ids])));
+  }
+  return paintWikiIdsInSnippet(snippet, defaultNetworkId);
+}
+
+/**
  * Resolve wiki-link spans inside `root` to their thought titles. Safe to call
  * repeatedly — cached entries are reused; new spans trigger a single batched
  * `etn.thoughts.resolve` per network.
@@ -162,4 +250,4 @@ export function refreshWikiLinkCache(thoughtId: string, title: string, active: b
 }
 
 /** Test-only hook. */
-export const __testing = { cache, RESOLVE_BATCH };
+export const __testing = { cache, RESOLVE_BATCH, substituteWikiIdsInSnippet, collectSnippetIds };

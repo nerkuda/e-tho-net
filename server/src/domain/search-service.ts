@@ -179,6 +179,9 @@ function highlight(rawText: string, terms: string[]): string {
 /** Default snippet window length (characters) around the first match. */
 const SNIPPET_WINDOW = 160;
 
+/** Closed `[[…]]` span — content without brackets/newlines, as in the parsers. */
+const WIKI_SPAN_RE = /\[\[[^[\]\n]*\]\]/g;
+
 /**
  * Build a short snippet with highlights: a window around the first match of any
  * term, ellipsised when truncated, with every term wrapped in `<mark>`.
@@ -198,6 +201,17 @@ export function makeSnippet(rawText: string, terms: string[]): string {
     end = Math.min(rawText.length, start + SNIPPET_WINDOW);
   } else if (rawText.length > SNIPPET_WINDOW) {
     end = SNIPPET_WINDOW;
+  }
+  // Не разрезать wiki-ссылки на границах окна: обрывок `…<uuid>]]` или
+  // `[[#<uuid>…` клиент не может резолвить в имя. Раздвигаем границы до
+  // краёв `[[…]]`, когда они попадают внутрь ссылки.
+  WIKI_SPAN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = WIKI_SPAN_RE.exec(rawText)) !== null) {
+    const from = m.index;
+    const to = from + m[0].length;
+    if (from <= start && start < to) start = from;
+    if (from < end && end < to) end = to;
   }
   let fragment = rawText.slice(start, end);
   if (start > 0) fragment = `…${fragment}`;

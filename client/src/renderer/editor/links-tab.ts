@@ -45,6 +45,7 @@ import { linkTypeOptions } from '../lib/type-tree.js';
 import { patchFocusEdge, store } from '../state.js';
 import { openLinkInEditor, registerTabContent, type EditorContext } from './editor.js';
 import { groupSection, type GroupSpec } from './group.js';
+import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from './wiki-link-resolver.js';
 import { rowSplitter } from './splitter.js';
 
 /** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
@@ -417,7 +418,12 @@ function buildBacklinksBody(ctx: EditorContext): HTMLElement {
       }
       const title = el('span', 'link-item-title', hit.title);
       const snippet = el('div', 'muted mention-snippet');
-      renderHtml(snippet, hit.snippet);
+      // Сниппет несёт сырой `[[#<id>]]` — подставляем имена мыслей: синхронно
+      // из кеша (id не мелькает на экране), затем дорезолвиваем батчем.
+      renderHtml(snippet, paintWikiIdsInSnippet(hit.snippet, networkId));
+      void resolveWikiIdsInSnippet(hit.snippet, networkId).then((resolved) => {
+        if (snippet.isConnected) renderHtml(snippet, resolved);
+      });
       item.append(icon, title, snippet);
       item.addEventListener('click', () => void open(hit));
       box.append(item);

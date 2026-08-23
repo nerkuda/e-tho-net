@@ -13,7 +13,7 @@ import { typeNameKey } from '@etn/shared';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
-import { findDuplicates, findMentions, findMentionsInTexts, search } from '../src/domain/search-service.js';
+import { findDuplicates, findMentions, findMentionsInTexts, makeSnippet, search } from '../src/domain/search-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -761,3 +761,36 @@ describe(
     });
   },
 );
+
+describe('makeSnippet — окно не разрезает wiki-ссылки (pure)', () => {
+  const ID = '6c3f9836-6b68-4d95-bec1-35ef35cefe19';
+  const OTHER = 'b82df9ab-ab1e-4540-b846-bff2b77dd0e0';
+
+  it('левая граница окна внутри соседней [[#<id>]] → окно расширяется до [[', () => {
+    // Сценарий из баг-репорта: соседняя ссылка (60..101) пересекает левую
+    // границу окна (105-40=65) — без выравнивания сниппет начинался бы с
+    // обрывка «…b82df…]]».
+    const body = `${'а'.repeat(60)}[[#${OTHER}]] [[#${ID}]]${'б'.repeat(200)}`;
+    const snippet = makeSnippet(body, [ID]);
+    assert.ok(/^…\[\[#/.test(snippet), `эллипсис сразу перед полной ссылкой: ${snippet}`);
+    assert.ok(snippet.includes(`[[#${OTHER}]]`), snippet);
+    assert.ok(snippet.includes(`[[#<mark>${ID}</mark>]]`), snippet);
+    assert.ok(!/…[0-9a-f-]{8,}\]\]/.test(snippet), `обрывка uuid нет: ${snippet}`);
+  });
+
+  it('правая граница окна внутри [[#<id>]] → окно расширяется до ]]', () => {
+    // Вторая ссылка начинается на 301, окно заканчивалось на 323 — внутри
+    // неё. После выравнивания сниппет заканчивается полной ссылкой.
+    const body = `${'а'.repeat(200)}[[#${ID}]]${'б'.repeat(60)}[[#${ID}]]${'в'.repeat(50)}`;
+    const snippet = makeSnippet(body, [ID]);
+    assert.ok(snippet.endsWith(`[[#<mark>${ID}</mark>]]…`), snippet);
+  });
+
+  it('без wiki-ссылок окно ведёт себя как раньше', () => {
+    const body = `${'х'.repeat(100)} слово ${'х'.repeat(200)}`;
+    const snippet = makeSnippet(body, ['слово']);
+    assert.ok(snippet.startsWith('…'), snippet);
+    assert.ok(snippet.endsWith('…'), snippet);
+    assert.ok(!snippet.includes('[['), snippet);
+  });
+});
