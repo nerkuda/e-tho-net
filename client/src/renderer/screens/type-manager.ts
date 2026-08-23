@@ -62,8 +62,9 @@ import {
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import { store } from '../state.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
-import { createMdEditor, type MdEditor } from '../editor/md-editor.js';
+import { createMarkdownField } from '../editor/markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dialog.js';
+import { renderMarkdown } from '@etn/markdown';
 
 /** Human-readable property value-type labels. */
 const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
@@ -423,9 +424,13 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   body.append(descArea);
 
   // Шаблон постоянного комментария мысли (08-ui-spec.md §8.1, 02-data-model.md
-  // §3.3). CodeMirror сразу в режиме редактирования (без view/edit
-  // переключения, без live preview — клиентского рендера markdown для шаблона
-  // нет). Автосохранение на blur через PATCH /thought-types/{id}.
+  // §3.3). Поле — как у всех markdown-полей приложения: HTML-просмотр по
+  // умолчанию, двойной клик переключает в CodeMirror-редактор, blur или
+  // Ctrl+Enter сохраняет, Esc — отмена (08-ui-spec.md §6.4).
+  // Сервер хранит только markdown (`comment_template_md`); HTML для
+  // просмотра рендерится клиентом через единый рендерер `@etn/markdown`,
+  // как в `screens/settings.ts`. Автосохранение на blur через
+  // PATCH /thought-types/{id}.
   const templateLabel = el(
     'p',
     'muted',
@@ -433,13 +438,13 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   );
   templateLabel.style.margin = '8px 0 2px';
   body.append(templateLabel);
-  let templateEditor: MdEditor | null = null;
+  /** Last markdown seen by the field (set in `onInput`/`onSave`). */
+  let templateMd = type?.comment_template_md ?? '';
+  let templateField: HTMLElement | null = null;
   let templateInert: HTMLElement | null = null;
   if (type !== null) {
-    templateEditor = createMdEditor(type.comment_template_md ?? '', {
-      onBlur: () => void saveTemplate(),
-    });
-    body.append(templateEditor.dom);
+    templateField = buildTemplateField(templateMd);
+    body.append(templateField);
   } else {
     templateInert = div('muted');
     templateInert.textContent = 'Шаблон станет доступен после создания типа.';
@@ -575,13 +580,12 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
       onChanged();
       errorLine.textContent = '';
       renderProps();
-      // Шаблон комментария: меняем inert-плейсхолдер на полноценный
-      // CM-редактор (08-ui-spec.md §8.1).
+      // Шаблон комментария: меняем inert-плейсхолдер на полноценное
+      // markdown-поле (08-ui-spec.md §6.4).
       if (templateInert !== null) {
-        templateEditor = createMdEditor(current.comment_template_md ?? '', {
-          onBlur: () => void saveTemplate(),
-        });
-        templateInert.replaceWith(templateEditor.dom);
+        templateMd = current.comment_template_md ?? '';
+        templateField = buildTemplateField(templateMd);
+        templateInert.replaceWith(templateField);
         templateInert = null;
       }
       nameInput.focus();
@@ -625,11 +629,14 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   descArea.addEventListener('blur', () => void saveNameDesc());
 
   /** Autosaves the comment-template field of an existing type on blur. */
-  async function saveTemplate(): Promise<void> {
-    if (current === null || templateEditor === null) return;
-    const md = templateEditor.getValue();
+  async function saveTemplate(md: string): Promise<string> {
+    if (current === null) return renderTemplateHtml(md);
+    templateMd = md;
     const next = md === '' ? null : md;
-    if (next === (current.comment_template_md ?? null)) return;
+    if (next === (current.comment_template_md ?? null)) {
+      // No-op: do not roundtrip the server, return the cached HTML for view.
+      return renderTemplateHtml(current.comment_template_md ?? '');
+    }
     try {
       current = await etn.types.updateThoughtType(
         networkId,
@@ -640,9 +647,34 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
       await refreshThoughtTypes();
       onChanged();
       errorLine.textContent = '';
+      return renderTemplateHtml(current.comment_template_md ?? '');
     } catch (err) {
       errorLine.textContent = errText(err);
+      throw err;
     }
+  }
+
+  /**
+   * Builds the markdown view/edit field for the template. Renders the initial
+   * markdown through the shared client renderer (`@etn/markdown`) since the
+   * server stores only markdown for `comment_template_md`.
+   */
+  function buildTemplateField(initialMd: string): HTMLElement {
+    return createMarkdownField({
+      md: initialMd,
+      html: renderTemplateHtml(initialMd),
+      onInput: (md) => {
+        templateMd = md;
+      },
+      onSave: (md) => saveTemplate(md),
+      minRows: 5,
+    });
+  }
+
+  /** Markdown → HTML для просмотра шаблона. Пустой ввод — пусто. */
+  function renderTemplateHtml(md: string): string {
+    if (md.trim() === '') return '';
+    return renderMarkdown(md);
   }
 
   showDialog({
