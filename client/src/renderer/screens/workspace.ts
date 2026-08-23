@@ -3,9 +3,9 @@
  *
  * ```
  * ┌──────────────────────────────────────────────────────────────────┐
- * │ [📂 Сеть ▾] [Tab1 *][Tab2][Tab3][+] [▾N]            [👤][☰]      │ ← top row (Q3)
+ * │ [Tab1 *][Tab2][Tab3][+] [▾N]                       [👤 User ▾]   │ ← top row (Q3)
  * ├──────────────────────────────────────────────────────────────────┤
- * │ [🗺][🌳] [📌 закреплённые мысли…]                                  │ ← toolbar (виды)
+ * │ [🌐 Мыслесеть ▾] [🗺][🌳][📜] [📌 закреплённые мысли…]            │ ← toolbar (виды)
  * ├──────────────────────────────────────────────────────────────────┤
  * │ [Поиск…] [⚙]                                              (карта)│
  * ├─────────┬──────────────────────────────────────────────┬────────┤
@@ -18,8 +18,8 @@
  * The module owns the chrome (toolbar/status bar/containers). Content modules
  * (canvas H4, editor H8, search H13, selection H16, history H7, pinned L18)
  * mount into the exposed hosts; the toolbar/status bar re-render from the
- * shared store. С фазой Q верхняя строка (`top-row`) вынесена из тулбара и
- * содержит меню сети, tab-strip и user/view меню.
+ * shared store. С фазой Q верхняя строка (`top-row`) содержит tab-strip и
+ * user-меню; подменю работы с мыслесетью переехало в toolbar видов (Q3-bugfix).
  */
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
@@ -44,9 +44,8 @@ import { mountTabStrip } from './tabs/tabs.js';
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
   root: HTMLElement;
-  /** Toolbar buttons/labels refreshed from the store. */
+  /** Toolbar dropdown for the open network (members/leave/types/settings). */
   netMenuButton: HTMLButtonElement;
-  netMenuLabel: HTMLSpanElement;
   userMenuButton: HTMLButtonElement;
   userMenuLabel: HTMLSpanElement;
   /** Toolbar dropdown for workspace-layout commands (show/hide editor, …). */
@@ -118,11 +117,17 @@ export function buildWorkspace(): HTMLElement {
   // --- toolbar ---------------------------------------------------------------
   const toolbar = div('toolbar');
 
+  // Network menu (Q3-bugfix, 08-ui-spec.md §8.1): sits in the toolbar to the
+  // left of the view switcher. The label is fixed ("Мыслесеть") — the active
+  // tab is the source of truth for the current network's name.
   const netMenuButton = el('button', 'tb-btn', '');
   netMenuButton.type = 'button';
-  const netMenuLabel = span('—', 'tb-label');
-  netMenuButton.append(svgIcon('network'), netMenuLabel, svgIcon('chevron-down', 12));
-  setTooltip(netMenuButton, 'Меню сети');
+  netMenuButton.append(
+    svgIcon('network'),
+    span('Мыслесеть', 'tb-label'),
+    svgIcon('chevron-down', 12),
+  );
+  setTooltip(netMenuButton, 'Меню мыслесети');
 
   // View switcher (L15, 08-ui-spec.md §15.1): immediately after the network
   // menu. The pressed button marks the active view.
@@ -181,19 +186,21 @@ export function buildWorkspace(): HTMLElement {
   // The pinned panel (L18) stretches across the whole free toolbar width —
   // it is one big drop target between the view switcher and the user menu.
   toolbar.append(
+    netMenuButton,
     mapViewButton,
     structuresViewButton,
     chronicleViewButton,
     pinnedHost,
   );
 
-  // --- top row (Q3) — net menu + tab strip + user/view ------------------------
-  // Mounts the tab strip; net/user/view menus live here.
+  // --- top row (Q3) — tab strip + user/view ----------------------------------
+  // Mounts the tab strip; user/view menus live here. The network menu used to
+  // sit in this row (Q3); it moved into the toolbar (Q3-bugfix).
   const tabStripHost = div('tab-strip-host');
   const topRow = div('top-row');
   const topRight = div('top-right');
   topRight.append(userMenuButton, viewMenuButton);
-  topRow.append(netMenuButton, tabStripHost, topRight);
+  topRow.append(tabStripHost, topRight);
   mountTabStrip(tabStripHost);
 
   // --- search drop panel -----------------------------------------------------
@@ -269,7 +276,6 @@ export function buildWorkspace(): HTMLElement {
   const handles: WorkspaceHandles = {
     root,
     netMenuButton,
-    netMenuLabel,
     userMenuButton,
     userMenuLabel,
     viewMenuButton,
@@ -315,7 +321,6 @@ export function buildWorkspace(): HTMLElement {
   let lastMapActive = true;
   function refresh(): void {
     const st = store.state;
-    netMenuLabel.textContent = st.network?.display_name ?? '—';
     const user = st.me?.display_name ?? st.me?.username ?? '—';
     userMenuLabel.textContent = user;
     const glyph = statusGlyph(st.rtStatus);

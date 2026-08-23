@@ -135,13 +135,17 @@ function isDirtyDraft(a: Draft, b: Draft): boolean {
  * Opens the unified settings dialog. No-op when no network is open (every
  * section depends on the network except the bare user profile; opening the
  * dialog without a network would show an empty state that adds no value).
+ *
+ * `initialSection` selects the section shown when the dialog opens
+ * (default — `user`). The «Мыслесеть» menu entry uses it to jump straight
+ * to the network section, matching the spec §8.1.
  */
-export function showSettingsDialog(): void {
+export function showSettingsDialog(initialSection: Section = 'user'): void {
   if (store.state.networkId === null) return;
 
   let draft: Draft = readInitialDraft();
   const original: Draft = { ...draft };
-  let active: Section = 'user';
+  let active: Section = initialSection;
   let busy = false;
   let closeDialog: () => void = (): void => undefined;
 

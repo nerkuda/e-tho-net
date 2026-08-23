@@ -1,15 +1,19 @@
 /**
- * Toolbar menus of the workspace (08-ui-spec.md §8, H3/H18).
+ * Toolbar menus of the workspace (08-ui-spec.md §8, H3/H18, Q3-bugfix).
  *
- * - Network menu: open network list, create network, members (owner), leave
- *   network (non-owner). Network settings (display_name / description) and
- *   the L3 visibility toggle moved to the unified Settings dialog
- *   (`screens/settings.ts`), opened from the View menu.
- * - User menu (H18): administration (when admin), disconnect. All personal
- *   preferences (display_name, visibility, cloud sizing, theme) live in
- *   Settings.
- * - View menu (☰): show/hide editor, type catalogues, the unified Settings
- *   entry (with a gear icon).
+ * Three menus split by concern (Q3-bugfix):
+ *
+ * - «Мыслесеть» menu (in the toolbar, to the left of the view switcher):
+ *   members (owner), leave network (non-owner), thought/link type catalogues
+ *   (a network-level concern), and the network section of the unified
+ *   Settings dialog. The network menu used to live in the top row; it
+ *   moved here because the active tab already shows the network name.
+ * - User menu (top row, right): open/create network (program-level actions
+ *   on the workspace), administration (when admin), disconnect. Personal
+ *   preferences (display_name, cloud sizing, theme) live in the Settings
+ *   dialog.
+ * - View menu (☰, top row, right): show/hide editor only. Type catalogues
+ *   and the Settings entry moved to «Мыслесеть».
  *
  * Menus are built lazily on click from the current store state.
  */
@@ -18,7 +22,6 @@ import { backToNetworks, disconnect, requireNetworkId } from '../app.js';
 import { openAdminPanel } from '../admin/admin.js';
 import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
-import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
@@ -37,21 +40,31 @@ export function wireNetMenu(handles: WorkspaceHandles): void {
   });
 }
 
-/** Builds the network menu items from the current state. */
+/**
+ * Builds the «Мыслесеть» menu items from the current state (Q3-bugfix,
+ * 08-ui-spec.md §8.1). The menu houses commands that act on the **open**
+ * network: members, leaving, type catalogues (a network-level concern),
+ * and the network section of the unified Settings dialog.
+ */
 export function buildNetMenuItems(): MenuItem[] {
   const net = store.state.network;
   const meId = store.state.me?.id ?? null;
   const isOwner = net !== null && net.owner_id === meId;
   return [
-    { label: 'Открыть сеть (список)', onClick: () => backToNetworks() },
-    { label: 'Создать сеть', onClick: () => void showCreateNetworkDialog() },
     { label: 'Участники сети', disabled: !isOwner, onClick: () => void membersDialog() },
-    MENU_SEPARATOR,
     {
       label: 'Выйти из сети',
       disabled: isOwner,
       danger: true,
       onClick: () => void leaveNetwork(),
+    },
+    MENU_SEPARATOR,
+    { label: 'Типы мыслей', onClick: () => showThoughtTypesDialog() },
+    { label: 'Типы связей', onClick: () => showLinkTypesDialog() },
+    MENU_SEPARATOR,
+    {
+      label: 'Настройки мыслесети',
+      onClick: () => showSettingsDialog('network'),
     },
   ];
 }
@@ -225,21 +238,24 @@ export function wireUserMenu(handles: WorkspaceHandles): void {
 }
 
 /**
- * Builds the user menu items (H18). Personal preferences (display_name,
- * visibility, cloud sizing, theme) live in the unified Settings dialog
- * (`showSettingsDialog`, opened from the View menu). This menu keeps the
- * admin entry and the disconnect action.
+ * Builds the user menu items (H18, Q3-bugfix, 08-ui-spec.md §8.2). Houses
+ * program-level commands: opening/creating networks (workspace-wide
+ * actions), administration (when admin), disconnect. Personal preferences
+ * (display_name, cloud sizing, theme) live in the unified Settings dialog
+ * (`showSettingsDialog`, opened from the «Мыслесеть» menu).
  */
 export function buildUserMenuItems(): MenuItem[] {
-  const items: MenuItem[] = [];
+  const items: MenuItem[] = [
+    { label: 'Открыть сеть (список)', onClick: () => backToNetworks() },
+    { label: 'Создать сеть', onClick: () => void showCreateNetworkDialog() },
+  ];
   if (store.state.me?.is_admin === true) {
-    items.push({
+    items.push(MENU_SEPARATOR, {
       label: 'Администрирование',
       onClick: () => openAdminPanel(),
     });
-    items.push(MENU_SEPARATOR);
   }
-  items.push({
+  items.push(MENU_SEPARATOR, {
     label: 'Отключиться',
     danger: true,
     onClick: () => void disconnect(),
@@ -247,7 +263,7 @@ export function buildUserMenuItems(): MenuItem[] {
   return items;
 }
 
-/** Wires the toolbar "View" menu button (08-ui-spec.md §8). */
+/** Wires the toolbar "View" menu button (08-ui-spec.md §8.3). */
 export function wireViewMenu(handles: WorkspaceHandles): void {
   handles.viewMenuButton.addEventListener('click', (event) => {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -256,34 +272,17 @@ export function wireViewMenu(handles: WorkspaceHandles): void {
 }
 
 /**
- * Builds the "View" menu items from the current state. Houses workspace-layout
- * commands (the first one toggles the editor panel — the only way back once
- * the editor and its own header dropdown are hidden), the type catalogues
- * (L6) and the unified Settings entry, opened with a gear icon.
- *
- * The UI theme moved to the Settings dialog (it's an L5 client setting, not
- * a layout toggle). The `Settings` row is a leaf that opens
- * `showSettingsDialog` from `screens/settings.ts`.
+ * Builds the «Вид» menu items from the current state (Q3-bugfix,
+ * 08-ui-spec.md §8.3). Houses the single layout toggle (show/hide editor).
+ * The type catalogues and the Settings entry moved to the «Мыслесеть»
+ * menu (they are network-level concerns, not workspace-layout).
  */
 export function buildViewMenuItems(): MenuItem[] {
   const hidden = store.state.editorPosition === 'hidden';
-  const items: MenuItem[] = [
+  return [
     {
       label: hidden ? 'Показать редактор' : 'Скрыть редактор',
       onClick: () => void toggleEditorVisibility(),
     },
-    { label: 'Типы мыслей', onClick: () => showThoughtTypesDialog() },
-    { label: 'Типы связей', onClick: () => showLinkTypesDialog() },
   ];
-  // The settings entry carries a lucide-style gear SVG. `MenuItem.icon`
-  // accepts either a text glyph or a DOM node; passing the SVG node directly
-  // (instead of innerHTML) keeps `lib/menu.ts` safe — textContent-escaping
-  // would otherwise turn the markup into literal text.
-  const gear = svgIcon('settings', 14);
-  items.push(MENU_SEPARATOR, {
-    label: 'Настройки',
-    icon: gear,
-    onClick: () => showSettingsDialog(),
-  });
-  return items;
 }
