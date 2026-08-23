@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 
 import DatabaseConstructor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
@@ -61,6 +61,8 @@ interface RunningApp {
   port: number;
   networkId: string;
   owner: SeededUser;
+  /** WS clients opened by the test — closed by the afterEach cleanup hook. */
+  sockets: WebSocket[];
 }
 
 /** Build a server on an ephemeral port with one network owned by `admin`. */
@@ -105,6 +107,7 @@ async function buildApp(realtimeOptions?: Partial<RealtimeGatewayOptions>): Prom
     port: address.port,
     networkId,
     owner: { userId: ownerId, key: gen.key },
+    sockets: [],
   };
 }
 
@@ -130,9 +133,14 @@ function seedUser(running: RunningApp, username: string, asMemberOf?: string): S
   return { userId, key: gen.key };
 }
 
-/** Open a WS client against `/api/v1/realtime`. */
-function connect(port: number, networkId: string, key: string, clientId?: string): WebSocket {
-  const url = new URL(`ws://127.0.0.1:${port}/api/v1/realtime`);
+/** Open a WS client against `/api/v1/realtime` and register it for cleanup. */
+function connect(
+  running: RunningApp,
+  networkId: string,
+  key: string,
+  clientId?: string,
+): WebSocket {
+  const url = new URL(`ws://127.0.0.1:${running.port}/api/v1/realtime`);
   url.searchParams.set('network_id', networkId);
   if (clientId !== undefined) {
     url.searchParams.set('client_id', clientId);
@@ -141,10 +149,12 @@ function connect(port: number, networkId: string, key: string, clientId?: string
   if (clientId !== undefined) {
     headers['client-id'] = clientId;
   }
-  return new WebSocket(url, { headers });
+  const ws = new WebSocket(url, { headers });
+  running.sockets.push(ws);
+  return ws;
 }
 
-function waitForOpen(ws: WebSocket, timeoutMs = 2000): Promise<void> {
+function waitForOpen(ws: WebSocket, timeoutMs = 10_000): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('ws: open timeout')), timeoutMs);
     ws.once('open', () => {
@@ -162,7 +172,7 @@ function waitForOpen(ws: WebSocket, timeoutMs = 2000): Promise<void> {
   });
 }
 
-function waitForClose(ws: WebSocket, timeoutMs = 2000): Promise<{ code: number; reason: string }> {
+function waitForClose(ws: WebSocket, timeoutMs = 10_000): Promise<{ code: number; reason: string }> {
   return new Promise((resolve, reject) => {
     if (ws.readyState === WebSocket.CLOSED) {
       reject(new Error('ws: already closed'));
@@ -218,7 +228,7 @@ class MessageQueue {
   /** Resolve with the next message matching `predicate` (default: any). */
   next(
     predicate: (m: ReceivedMessage) => boolean = () => true,
-    timeoutMs = 2000,
+    timeoutMs = 5000,
   ): Promise<ReceivedMessage> {
     const idx = this.queue.findIndex(predicate);
     if (idx >= 0) {
@@ -267,9 +277,23 @@ describe(
   'realtime gateway',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
+    // The app under test of the current test. Cleaned up in `afterEach` so a
+    // failure before a test's own `finally` (e.g. a `waitForOpen` timeout
+    // under heavy parallel load) cannot leave the Fastify server listening
+    // and hang the test process forever.
+    let running: RunningApp | undefined;
+
+    afterEach(async () => {
+      if (running === undefined) return;
+      await closeSockets(...running.sockets);
+      await running.app.close();
+      running.sys.close();
+      running = undefined;
+    });
+
     it('keeps a connection with a valid key open (E1)', async () => {
-      const running = await buildApp();
-      const ws = connect(running.port, running.networkId, running.owner.key, 'client-1');
+      running = await buildApp();
+      const ws = connect(running, running.networkId, running.owner.key, 'client-1');
       try {
         await waitForOpen(ws);
         await delay(150);
@@ -282,8 +306,8 @@ describe(
     });
 
     it('closes with 4401 when the API-key is invalid (E1)', async () => {
-      const running = await buildApp();
-      const ws = connect(running.port, running.networkId, 'etn_badkeybadkey', 'client-1');
+      running = await buildApp();
+      const ws = connect(running, running.networkId, 'etn_badkeybadkey', 'client-1');
       try {
         const closed = await waitForClose(ws);
         assert.equal(closed.code, 4401);
@@ -294,8 +318,8 @@ describe(
     });
 
     it('closes with 4404 when the network does not exist (E1)', async () => {
-      const running = await buildApp();
-      const ws = connect(running.port, randomUUID(), running.owner.key, 'client-1');
+      running = await buildApp();
+      const ws = connect(running, randomUUID(), running.owner.key, 'client-1');
       try {
         const closed = await waitForClose(ws);
         assert.equal(closed.code, 4404);
@@ -306,9 +330,9 @@ describe(
     });
 
     it('closes with 4401 for a non-member of an existing network (04-realtime.md §2)', async () => {
-      const running = await buildApp();
+      running = await buildApp();
       const outsider = seedUser(running, 'outsider');
-      const ws = connect(running.port, running.networkId, outsider.key, 'client-1');
+      const ws = connect(running, running.networkId, outsider.key, 'client-1');
       try {
         const closed = await waitForClose(ws);
         assert.equal(closed.code, 4401);
@@ -319,10 +343,10 @@ describe(
     });
 
     it('delivers network.updated to other members and suppresses the echo (E4)', async () => {
-      const running = await buildApp();
+      running = await buildApp();
       const member = seedUser(running, 'member', running.networkId);
-      const ownerWs = connect(running.port, running.networkId, running.owner.key, 'client-X');
-      const memberWs = connect(running.port, running.networkId, member.key, 'client-Y');
+      const ownerWs = connect(running, running.networkId, running.owner.key, 'client-X');
+      const memberWs = connect(running, running.networkId, member.key, 'client-Y');
       await waitForOpen(ownerWs);
       await waitForOpen(memberWs);
       const memberQ = new MessageQueue(memberWs);
@@ -354,10 +378,10 @@ describe(
     });
 
     it('emits member.added to existing members (E3)', async () => {
-      const running = await buildApp();
+      running = await buildApp();
       const member = seedUser(running, 'member', running.networkId);
       const newcomer = seedUser(running, 'newcomer');
-      const memberWs = connect(running.port, running.networkId, member.key, 'client-Y');
+      const memberWs = connect(running, running.networkId, member.key, 'client-Y');
       await waitForOpen(memberWs);
       const memberQ = new MessageQueue(memberWs);
       try {
@@ -381,11 +405,11 @@ describe(
     });
 
     it('routes audience=user events only to the same user (E4)', async () => {
-      const running = await buildApp();
+      running = await buildApp();
       const member = seedUser(running, 'member', running.networkId);
-      const ownerX = connect(running.port, running.networkId, running.owner.key, 'client-X');
-      const ownerZ = connect(running.port, running.networkId, running.owner.key, 'client-Z');
-      const memberY = connect(running.port, running.networkId, member.key, 'client-Y');
+      const ownerX = connect(running, running.networkId, running.owner.key, 'client-X');
+      const ownerZ = connect(running, running.networkId, running.owner.key, 'client-Z');
+      const memberY = connect(running, running.networkId, member.key, 'client-Y');
       await waitForOpen(ownerX);
       await waitForOpen(ownerZ);
       await waitForOpen(memberY);
@@ -418,7 +442,7 @@ describe(
     });
 
     it('replays missed events on resume and flags stale positions (E5)', async () => {
-      const running = await buildApp();
+      running = await buildApp();
       // History: seq 1..3 already emitted before this client connects.
       for (const id of ['e1', 'e2', 'e3']) {
         emitDomainEvent(
@@ -429,7 +453,7 @@ describe(
           { user_id: running.owner.userId, client_id: 'someone-else' },
         );
       }
-      const ws = connect(running.port, running.networkId, running.owner.key, 'client-1');
+      const ws = connect(running, running.networkId, running.owner.key, 'client-1');
       await waitForOpen(ws);
       const q = new MessageQueue(ws);
       try {
@@ -469,8 +493,8 @@ describe(
     });
 
     it('sends periodic pings and answers client pings (E5)', async () => {
-      const running = await buildApp({ pingIntervalMs: 100, pongTimeoutMs: 60_000 });
-      const ws = connect(running.port, running.networkId, running.owner.key, 'client-1');
+      running = await buildApp({ pingIntervalMs: 100, pongTimeoutMs: 60_000 });
+      const ws = connect(running, running.networkId, running.owner.key, 'client-1');
       await waitForOpen(ws);
       const q = new MessageQueue(ws);
       try {
@@ -488,8 +512,8 @@ describe(
     });
 
     it('closes a connection that stops answering pings (E5)', async () => {
-      const running = await buildApp({ pingIntervalMs: 100, pongTimeoutMs: 250 });
-      const ws = connect(running.port, running.networkId, running.owner.key, 'client-1');
+      running = await buildApp({ pingIntervalMs: 100, pongTimeoutMs: 250 });
+      const ws = connect(running, running.networkId, running.owner.key, 'client-1');
       await waitForOpen(ws);
       try {
         const closed = await waitForClose(ws, 3000);
@@ -501,10 +525,10 @@ describe(
     });
 
     it('streams to two clients of one user independently, with per-client echo (E6)', async () => {
-      const running = await buildApp();
+      running = await buildApp();
       const member = seedUser(running, 'member', running.networkId);
-      const ownerX = connect(running.port, running.networkId, running.owner.key, 'client-X');
-      const ownerY = connect(running.port, running.networkId, running.owner.key, 'client-Y');
+      const ownerX = connect(running, running.networkId, running.owner.key, 'client-X');
+      const ownerY = connect(running, running.networkId, running.owner.key, 'client-Y');
       await waitForOpen(ownerX);
       await waitForOpen(ownerY);
       const qX = new MessageQueue(ownerX);
@@ -546,13 +570,14 @@ describe(
     });
 
     it('accepts a client-id only via the hello frame (11-settings-and-state.md §1.1)', async () => {
-      const running = await buildApp();
+      running = await buildApp();
       // Connect without any client-id (header/query).
       const url = new URL(`ws://127.0.0.1:${running.port}/api/v1/realtime`);
       url.searchParams.set('network_id', running.networkId);
       const ws = new WebSocket(url, {
         headers: { authorization: `Bearer ${running.owner.key}` },
       });
+      running.sockets.push(ws);
       await waitForOpen(ws);
       const q = new MessageQueue(ws);
       try {

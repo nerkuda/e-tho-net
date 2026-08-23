@@ -23,6 +23,7 @@ import type { ServerConfig } from '../src/config.js';
 import { SystemDb } from '../src/db/system-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
+import type { NetworkDb } from '../src/db/network-db.js';
 import { systemMigrationsDir } from '../src/paths.js';
 import { createServer } from '../src/http/server.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
@@ -53,6 +54,8 @@ export interface RestTestContext {
   networkId: string;
   /** Id of the network's root HOME thought. */
   homeId: string;
+  /** Open handle of the network's `data.db` (released by {@link closeRestContext}). */
+  ndb: NetworkDb;
 }
 
 const TEST_CONFIG: ServerConfig = {
@@ -114,7 +117,7 @@ export async function buildRestContext(): Promise<RestTestContext> {
     id: string;
   };
 
-  return { app, sys, dataDir, adminKey: gen.key, adminId, networkId, homeId: home.id };
+  return { app, sys, dataDir, adminKey: gen.key, adminId, networkId, homeId: home.id, ndb };
 }
 
 /** Close the app, release the network DB handle and remove the temp directory. */

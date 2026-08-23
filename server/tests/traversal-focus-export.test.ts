@@ -175,14 +175,19 @@ describe(
       ndb.close();
     });
 
-    it('startExportJob produces done markdown/html jobs and rejects pdf', () => {
+    it('startExportJob produces done markdown/html jobs and rejects pdf', async () => {
       const ndb = createInMemoryNetworkDb();
       const a = thought(ndb, 'Alpha');
-      const job = startExportJob(ndb, [a], 'markdown');
+      const source = { network_id: 'net-1', network_name: 'Net', user_id: 'user-1' };
+      const job = await startExportJob(ndb, [a], 'markdown', { source });
       assert.equal(job.status, 'done');
       const fetched = getExportJob(job.job_id);
       assert.equal(fetched?.status, 'done');
-      assert.throws(() => startExportJob(ndb, [a], 'pdf'), EtnError);
+      await assert.rejects(
+        () => startExportJob(ndb, [a], 'pdf', { source }),
+        EtnError,
+        'pdf is rejected with a validation error',
+      );
       ndb.close();
     });
   },

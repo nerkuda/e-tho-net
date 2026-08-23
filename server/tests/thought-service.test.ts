@@ -462,7 +462,11 @@ describe(
             [sib],
           );
           // Per-zone sort defaults to 'created' when no preference is set.
-          assert.deepEqual(res.sorts, { parents: 'created', children: 'created' });
+          assert.deepEqual(res.sorts, {
+            parents: { sort: 'created', order: 'asc' },
+            children: { sort: 'created', order: 'asc' },
+            siblings: { sort: 'created', order: 'asc' },
+          });
 
           // Edges among visible thoughts include focus↔neighbour and
           // neighbour↔neighbour (P→SIB). C2 is inactive and hidden, so its edge

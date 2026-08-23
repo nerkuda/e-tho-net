@@ -41,6 +41,7 @@ const EXPECTED_FILES = [
   '020_saved_filters_view.sql',
   '021_type_hierarchy.sql',
   '022_thought_types_comment_template.sql',
+  '023_thought_read_metrics.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -64,6 +65,7 @@ const EXPECTED_TABLES = [
   'saved_filters',
   'user_pinned_thoughts',
   'embeddings',
+  'thought_read_metrics',
 ];
 
 /** True when the `better-sqlite3` native binding loads. */
