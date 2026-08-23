@@ -19,6 +19,7 @@ import { drawSelection, EditorView, keymap } from '@codemirror/view';
 import { livePreview, mdWidgetClick } from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdPlugin, wikiIdState } from './wiki-id-plugin.js';
+import { wikiLinkLegacyActions } from './wiki-link-legacy-actions.js';
 
 /** Callbacks of the editor (the field orchestrates view/edit modes). */
 export interface MdEditorCallbacks {
@@ -196,6 +197,7 @@ export function createMdEditor(initial: string, cb: MdEditorCallbacks = {}): MdE
         wikiLinkAutocompletion(),
         wikiIdState,
         wikiIdPlugin,
+        wikiLinkLegacyActions,
         livePreview,
         mdWidgetClick,
         mdTheme,

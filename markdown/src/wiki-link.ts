@@ -124,7 +124,10 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
     // Legacy name form: target is the human-readable name, body is alias
     // (or name when alias is missing). Resolution at click time.
     attrs.push(`${WIKI_LINK_TARGET_ATTR}="${esc(meta.target)}"`);
+    // Marker so the editor (task R10) and view-mode can offer the
+    // «Обновить формат на [[#<id>]]» action.
+    attrs.push('data-legacy-link="true"');
     const label = meta.alias ?? meta.target;
     return `<span ${attrs.join(' ')}>${esc(label)}</span>`;
-  };
+  }
 }
