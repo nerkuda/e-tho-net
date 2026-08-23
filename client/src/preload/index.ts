@@ -204,14 +204,22 @@ function buildApi(): EtnApi {
         return () => ipcRenderer.removeListener('realtime:event', listener);
       },
       onStatusChange(cb) {
-        const listener = (_event: unknown, status: string): void => cb(status);
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(payload as { networkId: string; status: string });
         ipcRenderer.on('realtime:status', listener);
         return () => ipcRenderer.removeListener('realtime:status', listener);
       },
       onStale(cb) {
-        const listener = (_event: unknown, lastSeq: number): void => cb(lastSeq);
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(payload as { networkId: string; lastSeq: number });
         ipcRenderer.on('realtime:stale', listener);
         return () => ipcRenderer.removeListener('realtime:stale', listener);
+      },
+      onNetworkLost(cb) {
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(payload as { networkId: string; reason: 'unauthorized' | 'not-found' });
+        ipcRenderer.on('realtime:networkLost', listener);
+        return () => ipcRenderer.removeListener('realtime:networkLost', listener);
       },
     },
     ui: {
@@ -226,21 +234,31 @@ function buildApi(): EtnApi {
       set: (key, value) => invoke('meta.set', key, value),
     },
     history: {
-      list: (profileId, networkId, limit, scope) =>
-        invoke('history.list', profileId, networkId, limit, scope),
-      push: (profileId, networkId, thoughtId, scope) =>
-        invoke('history.push', profileId, networkId, thoughtId, scope),
-      rotate: (oldId, newId, scope) => invoke('history.rotate', oldId, newId, scope),
-      remove: (thoughtId, scope) => invoke('history.remove', thoughtId, scope),
-      clear: (scope) => invoke('history.clear', scope),
-      chronicleList: (profileId, networkId, limit) =>
-        invoke('history.chronicleList', profileId, networkId, limit),
-      chroniclePush: (profileId, networkId, kind, id) =>
-        invoke('history.chroniclePush', profileId, networkId, kind, id),
-      chronicleRemove: (profileId, networkId, kind, id) =>
-        invoke('history.chronicleRemove', profileId, networkId, kind, id),
-      chronicleClear: (profileId, networkId) =>
-        invoke('history.chronicleClear', profileId, networkId),
+      list: (profileId, networkId, tabId, limit, scope) =>
+        invoke('history.list', profileId, networkId, tabId, limit, scope),
+      push: (profileId, networkId, tabId, thoughtId, scope) =>
+        invoke('history.push', profileId, networkId, tabId, thoughtId, scope),
+      rotate: (oldId, newId, tabId, scope) =>
+        invoke('history.rotate', oldId, newId, tabId, scope),
+      remove: (thoughtId, tabId, scope) =>
+        invoke('history.remove', thoughtId, tabId, scope),
+      clear: (tabId, scope) => invoke('history.clear', tabId, scope),
+      chronicleList: (profileId, networkId, tabId, limit) =>
+        invoke('history.chronicleList', profileId, networkId, tabId, limit),
+      chroniclePush: (profileId, networkId, tabId, kind, id) =>
+        invoke('history.chroniclePush', profileId, networkId, tabId, kind, id),
+      chronicleRemove: (profileId, networkId, tabId, kind, id) =>
+        invoke('history.chronicleRemove', profileId, networkId, tabId, kind, id),
+      chronicleClear: (profileId, networkId, tabId) =>
+        invoke('history.chronicleClear', profileId, networkId, tabId),
+    },
+    tabs: {
+      list: () => invoke('tabs.list'),
+      open: (networkId) => invoke('tabs.open', networkId),
+      activate: (tabId) => invoke('tabs.activate', tabId),
+      close: (tabId) => invoke('tabs.close', tabId),
+      reorder: (orderedIds) => invoke('tabs.reorder', orderedIds),
+      updateState: (tabId, partial) => invoke('tabs.updateState', tabId, partial),
     },
     system: {
       health: () => invoke('system.health'),

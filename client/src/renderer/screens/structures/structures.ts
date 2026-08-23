@@ -100,7 +100,9 @@ let edgesSignature = '';
 /** Which nodes have parents/children expanded. */
 let expansion: ExpansionMap = new Map();
 
-/** Whether the initial filter state and first query already ran for this network. */
+/** Composite cache key of the last init: `${networkId}:${tabId}` so the
+ *  view re-initialises when EITHER the network or the active tab changes
+ *  (per-tab filter snapshot, Q4). `null` until the first call. */
 let networkIdSeen: string | null = null;
 /** Loading guard so the tree does not flicker with stale data. */
 let querySeq = 0;
@@ -123,9 +125,14 @@ let appliedQuery: {
  *  Called by the shared view switcher (../active-view.js, L20). */
 export async function ensureStructuresInitialised(): Promise<void> {
   const networkId = store.state.networkId;
+  const tabId = store.state.activeTabId;
   if (networkId === null || host === null) return;
-  if (networkIdSeen === networkId) return;
-  networkIdSeen = networkId;
+  // Q-bugfix: cache key includes the active tab so switching tabs (same
+  // network, different snapshot) re-reads `tab.structures_state` instead of
+  // serving the previous tab's filter.
+  const key = `${networkId}:${tabId ?? ''}`;
+  if (networkIdSeen === key) return;
+  networkIdSeen = key;
 
   // Reset per-network state (a previous network may still be loaded).
   resultIds = [];
@@ -139,8 +146,17 @@ export async function ensureStructuresInitialised(): Promise<void> {
   appliedQuery = null;
   resetStructuresCursor();
 
+  // Q4: prefer per-tab persisted filter, fall back to legacy ui_state when
+  // the active tab has no entry (migration / fresh tab).
   try {
-    const raw = await etn.ui.getState(networkId, UI_STATE_KEY.STRUCTURES_STATE);
+    let raw: string | null = null;
+    if (tabId !== null) {
+      const tab = store.state.tabs.find((t) => t.tab_id === tabId);
+      raw = tab?.structures_state ?? null;
+    }
+    if (raw === null) {
+      raw = await etn.ui.getState(networkId, UI_STATE_KEY.STRUCTURES_STATE);
+    }
     if (raw !== null && raw !== '') setFilterState(parseFilterState(raw));
   } catch {
     // Fall back to the empty filter (HOME).
@@ -191,10 +207,10 @@ function parseFilterState(raw: string): FilterState {
 
 /** Persists the current filter state to the L4 `structures_state` key. */
 function persistFilterState(): void {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  void etn.ui
-    .setState(networkId, UI_STATE_KEY.STRUCTURES_STATE, JSON.stringify(getFilterState()))
+  const tabId = store.state.activeTabId;
+  if (tabId === null) return;
+  void etn.tabs
+    .updateState(tabId, { structures_state: JSON.stringify(getFilterState()) })
     .catch(() => undefined);
 }
 
@@ -381,8 +397,9 @@ export async function openStructuresThought(id: string): Promise<void> {
     return;
   }
   const profileId = store.state.profileId;
-  if (profileId !== null) {
-    await etn.history.push(profileId, networkId, id, 'structures').catch(() => undefined);
+  const tabId = store.state.activeTabId;
+  if (profileId !== null && tabId !== null) {
+    await etn.history.push(profileId, networkId, tabId, id, 'structures').catch(() => undefined);
   }
 }
 
@@ -463,7 +480,7 @@ export function mountStructures(hostEl: HTMLElement): void {
       persistFilterState();
       // A new filter may make the old structures-history entries unopenable —
       // drop the whole view history and refresh the bar (§15.9).
-      void etn.history.clear('structures');
+      void etn.history.clear(store.state.activeTabId, 'structures');
       invalidateHistoryBar();
       void applyQuery(true);
     },
@@ -482,9 +499,10 @@ export function mountStructures(hostEl: HTMLElement): void {
   store.subscribe(() => {
     if (host === null || !host.isConnected) return;
     const networkId = store.state.networkId;
+    const tabId = store.state.activeTabId;
     if (
       networkId !== null &&
-      networkIdSeen !== networkId &&
+      networkIdSeen !== `${networkId}:${tabId ?? ''}` &&
       store.state.activeView === 'structures'
     ) {
       void ensureStructuresInitialised();
@@ -1249,7 +1267,8 @@ export function scheduleStructuresRefresh(): void {
 /** Reloads the page and all expanded hierarchy levels. */
 async function reloadAll(): Promise<void> {
   const networkId = store.state.networkId;
-  if (networkId === null || networkIdSeen !== networkId) return;
+  const tabId = store.state.activeTabId;
+  if (networkId === null || networkIdSeen !== `${networkId}:${tabId ?? ''}`) return;
   await applyQuery(true);
   // The visible set may be unchanged while the links themselves changed
   // (realtime) — force the edges refresh even for the same id signature.

@@ -19,7 +19,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "dev:stop": "node -e \"const{execSync}=require('child_process');for(const n of['node','electron']){try{execSync('taskkill /F /IM '+n+'.exe /T',{stdio:'ignore'})}catch{}}\""
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

@@ -32,10 +32,11 @@ import { applyRealtimeToUi } from './realtime-ui.js';
 import { initTheme } from './lib/theme.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
+import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
 import { refreshSearchIfVisible } from './search/search.js';
 import { invalidateStructuresThought } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
-import { store } from './state.js';
+import { store, type WorkspaceView } from './state.js';
 
 /** Debounce for coalescing realtime-triggered refreshes, ms. */
 const REFRESH_DEBOUNCE_MS = 200;
@@ -66,8 +67,13 @@ export async function findRootThought(networkId: string): Promise<Thought> {
 /**
  * Opens a network (H3): loads L2 meta, L3 preferences and L4 ui_state, picks
  * the initial focus (stored focus → HOME) and mounts the workspace.
+ *
+ * When called with `tabId`, the per-tab snapshot (focus_id, view_mode)
+ * takes priority over the legacy network-level L4 keys — duplicates of the
+ * same network each get their own snapshot, and switching tabs inside the
+ * workspace restores the right focus / view.
  */
-export async function openNetwork(networkId: string): Promise<void> {
+export async function openNetwork(networkId: string, tabId?: string): Promise<void> {
   const network = await etn.networks.open(networkId);
   const prefs = await etn.networks.getPreferences(networkId);
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
@@ -118,10 +124,6 @@ export async function openNetwork(networkId: string): Promise<void> {
     linkTypes,
     thoughtTypes,
     lastUsedLinkTypeId: parseLinkTypeId(linkTypeRaw),
-    activeView:
-      activeViewRaw === 'structures' || activeViewRaw === 'chronicle'
-        ? activeViewRaw
-        : 'map',
     focus: null,
     selection: [],
     editorTarget: null,
@@ -130,19 +132,114 @@ export async function openNetwork(networkId: string): Promise<void> {
     pins: (pinsRaw ?? []).map((p) => p.thought_id),
   });
 
+  // Q3: refresh tab list and activate the right entry. When the caller
+  // supplies `tabId` (the picker / tab activation), that exact tab wins —
+  // duplicate opens of the same network don't collapse onto the first
+  // existing tab.
+  let activeTabId: string | null = null;
+  let activeTabView: WorkspaceView | null = null;
+  let activeTabFocusId: string | null = null;
+  try {
+    let tabs = await etn.tabs.list();
+    let target: { tab_id: string } | null = null;
+    if (tabId !== undefined) {
+      target = tabs.find((t) => t.tab_id === tabId) ?? null;
+    }
+    // No matching tab yet? The networks screen entry opens without a tab —
+    // create one so the strip populates. Duplicates are explicit and
+    // re-openings of the same network still create a fresh tab.
+    if (target === null) {
+      const fresh = await etn.tabs.open(networkId);
+      tabs = await etn.tabs.list();
+      target = tabs.find((t) => t.tab_id === fresh.tab_id) ?? { tab_id: fresh.tab_id };
+    }
+    const fullTarget = tabs.find((t) => t.tab_id === target!.tab_id) ?? null;
+    activeTabId = fullTarget?.tab_id ?? target!.tab_id;
+    activeTabView = fullTarget?.view_mode ?? null;
+    activeTabFocusId = fullTarget?.focus_id ?? null;
+    store.update({
+      tabs,
+      activeTabId,
+    });
+  } catch {
+    // ignore — workspace still usable without tab strip state
+  }
+
+  // Q-bugfix: per-tab view_mode takes priority over the legacy L4 key, so
+  // switching tabs inside a network actually swaps the view (not just the
+  // highlighted tab).
+  const viewFromTab = activeTabView;
+  const resolvedView: WorkspaceView =
+    viewFromTab === 'structures' || viewFromTab === 'chronicle'
+      ? viewFromTab
+      : activeViewRaw === 'structures' || activeViewRaw === 'chronicle'
+        ? activeViewRaw
+        : 'map';
+  store.update({ activeView: resolvedView });
+
   showScreen('workspace');
 
-  // Initial focus: stored L4 focus or the HOME thought.
+  // Q-bugfix: per-tab focus_id takes priority over the legacy L4 key. The
+  // tab's focus was already persisted by the previous `setFocus` call (or by
+  // a previous session), so we just LOAD it — `loadFocusForTab` does not
+  // rotate the per-tab history and does not re-persist.
   let initial: Thought | null = null;
-  if (focusRaw !== null && focusRaw !== '') {
+  const preferredFocusId = activeTabFocusId ?? focusRaw;
+  if (preferredFocusId !== null && preferredFocusId !== '') {
     try {
-      initial = await etn.thoughts.get(networkId, focusRaw);
+      initial = await etn.thoughts.get(networkId, preferredFocusId);
     } catch {
       initial = null; // stored focus vanished — fall through to HOME
     }
   }
-  const targetId = initial?.id ?? (await findRootThought(networkId)).id;
-  await setFocus(targetId);
+  if (initial !== null) {
+    await loadFocusForTab(initial.id, networkId, activeTabId);
+  } else {
+    const root = await findRootThought(networkId);
+    await loadFocusForTab(root.id, networkId, activeTabId);
+  }
+}
+
+/**
+ * Loads the focus response for `thoughtId` into the store WITHOUT rotating
+ * the per-tab history and WITHOUT re-persisting `focus_id` (it was already
+ * saved when the user originally navigated there). Used on tab activation
+ * and on `openNetwork`'s initial-focus path so the history of one tab does
+ * not get polluted with another tab's previous focus.
+ */
+export async function loadFocusForTab(
+  thoughtId: string,
+  networkId: string,
+  tabId: string | null,
+): Promise<void> {
+  try {
+    const response = await etn.thoughts.focus(networkId, thoughtId);
+    store.update({
+      focus: response,
+      editorTarget: null,
+      selectedLinkId: null,
+      ...zoneStateFromFocus(response),
+    });
+  } catch {
+    // The persisted thought vanished (deleted, no access) — fall back to a
+    // blank focus so the workspace isn't stuck showing the previous network's
+    // neighbourhood. The HOME recovery happens via `findRootThought` in
+    // `openNetwork` when this returns no focus at all.
+    return;
+  }
+  // Defensive: if the persisted focus_id on the tab row got lost somehow,
+  // restore it now — better than a workspace that opens on a stale HOME
+  // after every restart.
+  if (tabId !== null) {
+    const current = store.state.tabs.find((t) => t.tab_id === tabId);
+    if (current !== undefined && current.focus_id !== thoughtId) {
+      void etn.tabs.updateState(tabId, { focus_id: thoughtId }).catch(() => undefined);
+      const updated = store.state.tabs.map((t) =>
+        t.tab_id === tabId ? { ...t, focus_id: thoughtId } : t,
+      );
+      store.update({ tabs: updated });
+    }
+  }
 }
 
 /**
@@ -206,6 +303,7 @@ async function ensureManualPositionsInitialized(
  */
 export async function setFocus(id: string): Promise<void> {
   const networkId = requireNetworkId();
+  const tabId = store.state.activeTabId;
   const oldId = store.state.focus?.focused.id ?? null;
   const response = await etn.thoughts.focus(networkId, id);
   // Rotate the local history BEFORE the store update: the history bar re-renders
@@ -213,11 +311,23 @@ export async function setFocus(id: string): Promise<void> {
   // bar showed a pre-rotation snapshot (the new focus still listed, the
   // previous one missing). Awaiting the local SQLite write costs nothing.
   if (oldId !== null && oldId !== id) {
-    await etn.history.rotate(oldId, id).catch(() => undefined);
+    if (tabId !== null) {
+      // Q4: per-tab focus history — main uses `tabId IS ?` semantics.
+      await etn.history.rotate(oldId, id, tabId).catch(() => undefined);
+    } else {
+      await etn.history.rotate(oldId, id).catch(() => undefined);
+    }
   }
   const zoneState = zoneStateFromFocus(response);
   store.update({ focus: response, editorTarget: null, selectedLinkId: null, ...zoneState });
-  void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
+  // Q4: persist focus_id on the tab row so it survives restarts and tab
+  // switches. Falls back to the legacy ui_state key when no tab is active
+  // (shouldn't happen post-Q3, but defensible).
+  if (tabId !== null) {
+    void etn.tabs.updateState(tabId, { focus_id: id }).catch(() => undefined);
+  } else {
+    void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
+  }
   void ensureManualPositionsInitialized(networkId, id, response, zoneState.zoneOrder).catch(() => undefined);
 }
 
@@ -316,11 +426,11 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
   // history — prune it afterwards so it never lingers in «последние». Both
   // per-view histories (focus + structures, L15 §15.9) and the chronicle
   // history (L20) are pruned.
-  await etn.history.remove(deletedId).catch(() => undefined);
-  await etn.history.remove(deletedId, 'structures').catch(() => undefined);
+  await etn.history.remove(deletedId, store.state.activeTabId).catch(() => undefined);
+  await etn.history.remove(deletedId, store.state.activeTabId, 'structures').catch(() => undefined);
   const profileId = store.state.profileId;
   if (profileId !== null) {
-    await etn.history.chronicleRemove(profileId, networkId, 'thought', deletedId).catch(() => undefined);
+    await etn.history.chronicleRemove(profileId, networkId, store.state.activeTabId, 'thought', deletedId).catch(() => undefined);
   }
   invalidateIndicators(deletedId);
   invalidateRef(deletedId);
@@ -340,7 +450,7 @@ async function pickFocusAfterDeletion(
   const profileId = store.state.profileId;
   if (profileId !== null) {
     try {
-      const entries = await etn.history.list(profileId, networkId, 10);
+      const entries = await etn.history.list(profileId, networkId, store.state.activeTabId, 10);
       for (const entry of entries) {
         if (entry.thoughtId === deletedId) continue;
         try {
@@ -363,7 +473,9 @@ async function pickFocusAfterDeletion(
 
 /**
  * Boot: initialise realtime plumbing, then route to onboarding (no active
- * profile) or to the network list (active profile connects successfully).
+ * profile) or to the last-active tab (Q-bugfix) — when the user has
+ * previously opened tabs, drop them straight into the workspace; otherwise
+ * (first-time / cleared cache) show the network list.
  */
 export async function boot(): Promise<void> {
   // Theme first (L10): the attribute must be on the root before any screen
@@ -388,6 +500,25 @@ export async function boot(): Promise<void> {
     try {
       const me = await etn.server.connect(active.id);
       store.update({ profileId: active.id, me });
+      // Q5: mark tabs whose networks the user can no longer see.
+      void refreshTabAccessibility();
+
+      // Q-bugfix: if the user has open tabs from a previous session, restore
+      // straight into the most recently active one — no need to force a
+      // re-pick from the network list.
+      const tabs = await etn.tabs.list().catch(() => []);
+      if (tabs.length > 0) {
+        const sorted = [...tabs].sort((a, b) =>
+          b.last_active_at.localeCompare(a.last_active_at),
+        );
+        const mostRecent = sorted[0];
+        if (mostRecent !== undefined) {
+          await openNetwork(mostRecent.network_id, mostRecent.tab_id).catch(
+            () => undefined,
+          );
+          return;
+        }
+      }
       showScreen('networks');
       return;
     } catch {

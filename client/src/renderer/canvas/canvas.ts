@@ -54,7 +54,7 @@ import {
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
 import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
-import { initKbdNav, resetCanvasCursor, syncCanvasCursor } from './kbd-nav.js';
+import { initKbdNav, resetCanvasCursor, setCursor, syncCanvasCursor } from './kbd-nav.js';
 import { mountZoneSplitters } from './zone-splitters.js';
 
 /** Zone directions of the canvas (parents/siblings/children). */
@@ -505,6 +505,11 @@ function renderFocusRow(focus: FocusResponse): void {
   // the same thought — a no-op, so it is simply ignored.
   cloud.addEventListener('click', (event) => {
     if (event.detail >= 2) return;
+    // Click sets the keyboard cursor on this cloud so subsequent arrows
+    // (and Ctrl+Shift+←/→ in manual mode) move from the just-clicked
+    // cloud, not from wherever the cursor happened to be. The editor halo
+    // and the cursor frame are independent — both follow this click.
+    setCursor(thought.id);
     openThoughtInEditor(thought.id);
   });
   cloud.addEventListener('contextmenu', (event) => {

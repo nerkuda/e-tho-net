@@ -17,7 +17,13 @@ import { randomUUID } from 'node:crypto';
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import type { ApiKeyWithSecret, CreateApiKeyInput, CurrentUser, UpdateApiKeyInput, User } from '@etn/shared';
+import type {
+  ApiKeyWithSecret,
+  CreateApiKeyInput,
+  CurrentUser,
+  UpdateApiKeyInput,
+  User,
+} from '@etn/shared';
 
 import { EtnError } from '@etn/shared';
 

@@ -22,10 +22,12 @@ import {
   type Link,
   type LinkType,
   type Network,
+  type NetworkListItem,
   type SortKind,
   type Thought,
   type ThoughtType,
 } from '@etn/shared';
+import type { TabDto } from '../main/ipc/contract.js';
 
 /** Top-level screens of the application. */
 export type Screen = 'onboarding' | 'networks' | 'workspace';
@@ -94,8 +96,13 @@ export interface AppState {
   linkTypes: LinkType[];
   /** Thought type catalogue of the open network (editor header). */
   thoughtTypes: ThoughtType[];
-  /** Realtime status (🟢/🟡/🔴 indicator, H19 offline blocking). */
+  /** Realtime status (🟢/🟡/🔴 indicator, H19 offline blocking).
+   *  С фазой Q — derived (см. {@link getRtStatus}); для UI используется хелпер. */
   rtStatus: RtStatus;
+  /** Realtime status per network id (07-client-electron.md §2, Q2). Ключ —
+   *  `networkId` открытой сети. Активный статус берётся по
+   *  {@link AppState.networkId}; fallback — {@link AppState.rtStatus}. */
+  rtStatusByNetwork: Record<string, RtStatus>;
   /** UI theme applied to the document root (L5 `client_meta.theme`, L10). */
   theme: Theme;
   /** Last realtime event description for the status bar (auto-hides). */
@@ -117,6 +124,22 @@ export interface AppState {
   structuresActiveThought: Thought | null;
   /** Pinned thoughts of the open network (L18): ordered thought ids (L3). */
   pins: string[];
+  /** Open tabs (Q3, 08-ui-spec.md §1.1). */
+  tabs: TabDto[];
+  /** Currently active tab id (Q3/Q4). `null` when no tab is active. */
+  activeTabId: string | null;
+  /** Tab ids with unacknowledged realtime events (Q4). */
+  dirtyTabIds: Set<string>;
+  /** Tab ids whose network the user no longer has access to (Q5). */
+  inaccessibleTabIds: Set<string>;
+  /** Cached `etn.networks.list()` result — the tab strip uses `display_name`
+   *  by `network_id`; refreshes piggy-back on `refreshTabAccessibility` and
+   *  on the network list screen load. */
+  networkList: NetworkListItem[];
+  /** Network picker overlay (Q-bugfix): when `true`, the workspace body shows
+   *  the «Открыть сеть» panel on top of the canvas while the tab strip stays
+   *  visible — clicking any tab or picking a network closes it. */
+  pickerOpen: boolean;
 }
 
 /** Initial snapshot. */
@@ -144,6 +167,7 @@ const initial: AppState = {
   linkTypes: [],
   thoughtTypes: [],
   rtStatus: 'idle',
+  rtStatusByNetwork: {},
   theme: 'light',
   lastEvent: null,
   editorTarget: null,
@@ -154,6 +178,12 @@ const initial: AppState = {
   structuresActiveThoughtId: null,
   structuresActiveThought: null,
   pins: [],
+  tabs: [],
+  activeTabId: null,
+  dirtyTabIds: new Set<string>(),
+  inaccessibleTabIds: new Set<string>(),
+  networkList: [],
+  pickerOpen: false,
 };
 
 /**
@@ -195,6 +225,12 @@ class Store {
       structuresActiveThoughtId: null,
       structuresActiveThought: null,
       pins: [],
+      tabs: [],
+      activeTabId: null,
+      dirtyTabIds: new Set<string>(),
+      inaccessibleTabIds: new Set<string>(),
+      networkList: [],
+      pickerOpen: false,
     });
   }
 }

@@ -113,8 +113,10 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     actions.style.whiteSpace = 'nowrap';
     actions.append(
       button('ключ', () => void generateKey(user), 'link-btn', 'Сгенерировать API-key'),
+      span(' · '),
       button(user.disabled ? 'включить' : 'отключить', () => void toggleDisabled(user), 'link-btn'),
-      button('удалить', () => void removeUserRow(user), 'link-btn'),
+      span(' · '),
+      button('удалить', () => void removeUserRow(user, content), 'link-btn'),
     );
     row.append(actions);
     tbody.append(row);
@@ -271,11 +273,12 @@ async function toggleDisabled(user: User): Promise<void> {
 }
 
 /** Deletes a user after confirmation. */
-async function removeUserRow(user: User): Promise<void> {
+async function removeUserRow(user: User, content: HTMLElement): Promise<void> {
   if (!(await confirmDialog('Удалить пользователя', `Удалить «${user.username}»?`, true))) return;
   try {
     await etn.admin.removeUser(user.id, 1);
     notice('Пользователь удалён.');
+    void renderUsers(content);
   } catch (err) {
     errorDialog('Удалить пользователя', err);
   }

@@ -19,6 +19,8 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 import { etn } from './lib/etn.js';
 import { describeEvent, isRealtimeEvent } from './lib/pure.js';
 import { store, type RtStatus } from './state.js';
+import { markTabDirty } from './screens/tabs/tab-state.js';
+import { onNetworkLost } from './screens/tabs/tab-accessibility.js';
 
 /** Application-level effect callbacks (registered by the app controller). */
 export interface RealtimeEffects {
@@ -68,14 +70,45 @@ export function initRealtime(): void {
   if (initialized) return;
   initialized = true;
 
-  etn.realtime.onStatusChange((status) => {
+  etn.realtime.onStatusChange((payload) => {
+    // Q2: payload is `{networkId, status}` from TabRealtimePool.
     const valid: RtStatus[] = ['idle', 'connecting', 'connected', 'reconnecting', 'offline'];
-    const next: RtStatus = valid.includes(status as RtStatus) ? (status as RtStatus) : 'offline';
-    store.update({ rtStatus: next });
+    const obj = payload as { networkId?: unknown; status?: unknown };
+    const networkId = typeof obj.networkId === 'string' ? obj.networkId : null;
+    const statusStr = typeof obj.status === 'string' ? obj.status : null;
+    if (networkId === null || statusStr === null) return;
+    const next: RtStatus = valid.includes(statusStr as RtStatus)
+      ? (statusStr as RtStatus)
+      : 'offline';
+    const map = { ...store.state.rtStatusByNetwork, [networkId]: next };
+    const active = store.state.networkId;
+    const activeStatus =
+      active !== null && map[active] !== undefined ? map[active]! : next;
+    store.update({ rtStatusByNetwork: map, rtStatus: activeStatus });
   });
 
-  etn.realtime.onStale(() => {
+  etn.realtime.onStale((payload) => {
+    // Q2: payload is `{networkId, lastSeq}` from TabRealtimePool.
+    const obj = payload as { networkId?: unknown; lastSeq?: unknown };
+    const networkId = typeof obj.networkId === 'string' ? obj.networkId : null;
+    if (networkId === null) return;
+    // UI-wide "stale" applies to the active network — non-active tabs lose
+    // access silently (Q3/Q5 will surface them with the dirty marker).
+    if (networkId !== store.state.networkId) return;
     effects.onStale();
+  });
+
+  // Q5: realtime WS closed with 4401 (unauthorized) or 4404 (not-found) for a
+  // specific network. Mark every tab of that network as inaccessible and drop
+  // back to the networks list when the active network is affected.
+  etn.realtime.onNetworkLost((payload) => {
+    const obj = payload as { networkId?: unknown; reason?: unknown };
+    const networkId = typeof obj.networkId === 'string' ? obj.networkId : null;
+    if (networkId === null) return;
+    onNetworkLost(networkId);
+    if (networkId === store.state.networkId) {
+      effects.onNetworkLost();
+    }
   });
 
   etn.realtime.onEvent((raw: unknown) => {
@@ -83,6 +116,13 @@ export function initRealtime(): void {
     const evt = raw;
     store.update({ lastEvent: describeEvent(evt) });
     scheduleEventHide();
+
+    // Q4: mark every tab whose network received this event with a dirty
+    // marker «*». The active tab also gets the marker (cleared on activation).
+    const networkId = evt.network_id;
+    for (const tab of store.state.tabs) {
+      if (tab.network_id === networkId) markTabDirty(tab.tab_id);
+    }
 
     // Derived effects (04-realtime.md §7, G8 applier contracts).
     if (evt.type === 'thought.deleted' && store.state.focus?.focused.id === evt.data.id) {

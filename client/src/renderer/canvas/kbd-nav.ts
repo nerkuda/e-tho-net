@@ -214,7 +214,12 @@ function boxOf(el: HTMLElement): CloudBox {
   return { id: id === undefined ? '' : id, x: r.left, y: r.top, w: r.width, h: r.height };
 }
 
-/** Stores the cursor id and repaints the frame. */
+/**
+ * Stores the cursor id and repaints the frame. Exported so cloud clicks can
+ * set the cursor on the clicked thought (the halo and the cursor are two
+ * independent visual states; both follow the click — see 08-ui-spec.md §2.2.4
+ * and §2.9).
+ */
 export function setCursor(id: string | null): void {
   cursorId = id;
   syncCanvasCursor();

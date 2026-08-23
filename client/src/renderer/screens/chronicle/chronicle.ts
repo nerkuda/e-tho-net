@@ -52,7 +52,9 @@ import {
 import { fromDefinition, parseChronicleState, toDefinition } from './state.js';
 
 let host: HTMLElement | null = null;
-/** Per-network lazy init guard (like the structures view). */
+/** Composite cache key of the last init: `${networkId}:${tabId}` so the
+ *  view re-initialises when EITHER the network or the active tab changes
+ *  (per-tab filter snapshot, Q4). `null` until the first call. */
 let networkIdSeen: string | null = null;
 
 // ---------------------------------------------------------------------------
@@ -82,9 +84,14 @@ let querySeq = 0;
 /** Switches to the chronicle view — lazily loads persisted state (L4). */
 export async function ensureChronicleInitialised(): Promise<void> {
   const networkId = store.state.networkId;
+  const tabId = store.state.activeTabId;
   if (networkId === null || host === null) return;
-  if (networkIdSeen === networkId) return;
-  networkIdSeen = networkId;
+  // Q-bugfix: cache key includes the active tab so switching tabs (same
+  // network, different snapshot) re-reads `tab.chronicle_state` instead of
+  // serving the previous tab's filter.
+  const key = `${networkId}:${tabId ?? ''}`;
+  if (networkIdSeen === key) return;
+  networkIdSeen = key;
 
   rows = [];
   total = 0;
@@ -93,8 +100,16 @@ export async function ensureChronicleInitialised(): Promise<void> {
   newTargets = null;
   cursor = { row: -1, col: 0, chip: 0 };
 
+  // Q4: prefer per-tab persisted state, fall back to legacy ui_state.
   try {
-    const raw = await etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_STATE);
+    let raw: string | null = null;
+    if (tabId !== null) {
+      const tab = store.state.tabs.find((t) => t.tab_id === tabId);
+      raw = tab?.chronicle_state ?? null;
+    }
+    if (raw === null) {
+      raw = await etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_STATE);
+    }
     if (raw !== null && raw !== '') {
       const parsed = parseChronicleState(raw);
       setFilterState(fromDefinition(parsed.filter));
@@ -107,20 +122,18 @@ export async function ensureChronicleInitialised(): Promise<void> {
   await applyQuery(false);
 }
 
-/** Persists the current filter + page to L4. */
+/** Persists the current filter + page to L4 (per-tab, Q4). */
 function persistState(): void {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  void etn.ui
-    .setState(
-      networkId,
-      UI_STATE_KEY.CHRONICLE_STATE,
-      JSON.stringify({
+  const tabId = store.state.activeTabId;
+  if (tabId === null) return;
+  void etn.tabs
+    .updateState(tabId, {
+      chronicle_state: JSON.stringify({
         filter: toDefinition(getFilterState()),
         offset,
         savedFilterId: getSavedFilterId(),
       }),
-    )
+    })
     .catch(() => undefined);
 }
 
@@ -176,9 +189,10 @@ export function mountChronicle(hostEl: HTMLElement): void {
   store.subscribe(() => {
     if (host === null || !host.isConnected) return;
     const networkId = store.state.networkId;
+    const tabId = store.state.activeTabId;
     if (
       networkId !== null &&
-      networkIdSeen !== networkId &&
+      networkIdSeen !== `${networkId}:${tabId ?? ''}` &&
       store.state.activeView === 'chronicle'
     ) {
       void ensureChronicleInitialised();
@@ -199,7 +213,7 @@ async function applyQuery(reset: boolean): Promise<void> {
     // The visit history of the view is cleared on every «Применить» (§17).
     const profileId = store.state.profileId;
     if (profileId !== null) {
-      await etn.history.chronicleClear(profileId, networkId).catch(() => undefined);
+      await etn.history.chronicleClear(profileId, networkId, store.state.activeTabId).catch(() => undefined);
       invalidateHistoryBar();
     }
   }
@@ -1039,6 +1053,6 @@ async function pushChronicleHistory(kind: 'thought' | 'link', id: string): Promi
   const profileId = store.state.profileId;
   const networkId = store.state.networkId;
   if (profileId === null || networkId === null) return;
-  await etn.history.chroniclePush(profileId, networkId, kind, id);
+  await etn.history.chroniclePush(profileId, networkId, store.state.activeTabId, kind, id);
   invalidateHistoryBar();
 }

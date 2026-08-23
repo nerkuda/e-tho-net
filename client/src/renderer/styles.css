@@ -67,6 +67,7 @@
 
   /* chrome */
   --toolbar-h: 46px;
+  --top-row-h: 38px;
   --statusbar-h: 32px;
   --editor-w: 340px;
   --editor-h: 300px;
@@ -528,6 +529,258 @@ textarea {
 
 .toolbar-spacer {
   flex: 1;
+}
+
+/* ----- top row (Q3, 08-ui-spec.md §1) ------------------------------------- */
+
+.top-row {
+  flex: 0 0 var(--top-row-h);
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 0 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.top-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ----- tab strip (08-ui-spec.md §1.1) ----------------------------------- */
+
+.tab-strip-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.tab-strip {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tab {
+  --tab-w: 180px;
+  flex: 0 0 var(--tab-w);
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tab:hover {
+  background: var(--surface-3, var(--surface));
+}
+
+.tab.tab-active {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.tab.tab-inaccessible {
+  opacity: 0.5;
+}
+
+.tab.tab-dirty .tab-marker {
+  font-weight: 700;
+}
+
+.tab-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-close {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: var(--radius-sm);
+}
+
+.tab-close:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.tab-plus {
+  flex: 0 0 28px;
+  justify-content: center;
+  padding: 4px;
+}
+
+.tab-overflow {
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tab-overflow[hidden] {
+  display: none;
+}
+
+.tab-overflow-dropdown {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 220px;
+  padding: 4px;
+  z-index: 1000;
+}
+
+.tab-overflow-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.tab-overflow-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.tab-ghost {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 13px;
+  opacity: 0.85;
+  z-index: 1000;
+}
+
+.tab-dragging {
+  opacity: 0.5;
+}
+
+/* ----- inaccessible tab placeholder (Q5, 08-ui-spec.md §1.1) --------------- */
+
+.workspace-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--surface);
+  z-index: 50;
+  text-align: center;
+  padding: 24px;
+}
+
+.workspace-placeholder.hidden {
+  display: none;
+}
+
+.placeholder-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.placeholder-hint {
+  font-size: 13px;
+  color: var(--text-faint);
+  max-width: 420px;
+  line-height: 1.4;
+}
+
+/* ----- network picker overlay (Q-bugfix) ----------------------------------
+   The «+» tab opens this overlay inside the workspace body. The top-row (with
+   the tab strip) stays visible above it so the user can cancel by clicking
+   any other tab. */
+
+.workspace-picker {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 24px;
+  background: var(--surface);
+  z-index: 60;
+  overflow: auto;
+}
+
+.workspace-picker.hidden {
+  display: none;
+}
+
+.workspace-picker .picker-card {
+  width: 560px;
+  max-width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workspace-picker .picker-title {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+}
+
+.workspace-picker .picker-sub {
+  margin: -8px 0 0;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+.workspace-picker .picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.workspace-picker .picker-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 /* Search row of the map view (L18): the search input + gear live under the top

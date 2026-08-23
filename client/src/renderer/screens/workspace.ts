@@ -1,9 +1,11 @@
 /**
- * Workspace layout (H1, 08-ui-spec.md §1, §16):
+ * Workspace layout (H1, 08-ui-spec.md §1, §16, workplan Q3):
  *
  * ```
  * ┌──────────────────────────────────────────────────────────────────┐
- * │ [Меню сети] [🗺][🌳] [📌 закреплённые мысли (вся свободная ширина)] [👤][☰] │
+ * │ [📂 Сеть ▾] [Tab1 *][Tab2][Tab3][+] [▾N]            [👤][☰]      │ ← top row (Q3)
+ * ├──────────────────────────────────────────────────────────────────┤
+ * │ [🗺][🌳] [📌 закреплённые мысли…]                                  │ ← toolbar (виды)
  * ├──────────────────────────────────────────────────────────────────┤
  * │ [Поиск…] [⚙]                                              (карта)│
  * ├─────────┬──────────────────────────────────────────────┬────────┤
@@ -16,10 +18,12 @@
  * The module owns the chrome (toolbar/status bar/containers). Content modules
  * (canvas H4, editor H8, search H13, selection H16, history H7, pinned L18)
  * mount into the exposed hosts; the toolbar/status bar re-render from the
- * shared store.
+ * shared store. С фазой Q верхняя строка (`top-row`) вынесена из тулбара и
+ * содержит меню сети, tab-strip и user/view меню.
  */
 
 import { div, el, setTooltip, span } from '../lib/dom.js';
+import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { store, type RtStatus } from '../state.js';
 import { wireNetMenu, wireUserMenu, wireViewMenu } from './workspace-menus.js';
@@ -34,6 +38,8 @@ import { mountStructures } from './structures/structures.js';
 import { mountChronicle } from './chronicle/chronicle.js';
 import { setActiveView } from './active-view.js';
 import { mountPinnedBar } from './pinned-bar.js';
+import { mountPicker } from './tabs/picker.js';
+import { mountTabStrip } from './tabs/tabs.js';
 
 /** Hosts exposed to the content modules. */
 export interface WorkspaceHandles {
@@ -175,14 +181,20 @@ export function buildWorkspace(): HTMLElement {
   // The pinned panel (L18) stretches across the whole free toolbar width —
   // it is one big drop target between the view switcher and the user menu.
   toolbar.append(
-    netMenuButton,
     mapViewButton,
     structuresViewButton,
     chronicleViewButton,
     pinnedHost,
-    userMenuButton,
-    viewMenuButton,
   );
+
+  // --- top row (Q3) — net menu + tab strip + user/view ------------------------
+  // Mounts the tab strip; net/user/view menus live here.
+  const tabStripHost = div('tab-strip-host');
+  const topRow = div('top-row');
+  const topRight = div('top-right');
+  topRight.append(userMenuButton, viewMenuButton);
+  topRow.append(netMenuButton, tabStripHost, topRight);
+  mountTabStrip(tabStripHost);
 
   // --- search drop panel -----------------------------------------------------
   const searchHost = div('search-panel hidden');
@@ -209,6 +221,20 @@ export function buildWorkspace(): HTMLElement {
     editorResizer,
     selectionResizer,
   );
+
+  // Q5: full-body placeholder shown when the active tab is inaccessible
+  // (08-ui-spec.md §1.1). It subscribes to the store and toggles visibility on
+  // every change of `activeTabId`/`inaccessibleTabIds`.
+  const placeholderHost = div('workspace-placeholder hidden');
+  body.append(placeholderHost);
+  mountInaccessiblePlaceholder(placeholderHost);
+
+  // Q-bugfix: the «+» tab opens a network picker overlay that lives inside
+  // the workspace body. The top-row (with the tab strip) stays visible
+  // above it, so the user can cancel by clicking any other tab.
+  const pickerHost = div('workspace-picker hidden');
+  body.append(pickerHost);
+  mountPicker(pickerHost);
 
   // --- status bar ------------------------------------------------------------
   const statusbar = div('statusbar');
@@ -238,7 +264,7 @@ export function buildWorkspace(): HTMLElement {
     conflictHost,
   );
 
-  root.append(toolbar, searchRow, searchHost, body, statusbar);
+  root.append(topRow, toolbar, searchRow, searchHost, body, statusbar);
 
   const handles: WorkspaceHandles = {
     root,
@@ -333,4 +359,51 @@ export function buildWorkspace(): HTMLElement {
   });
   refresh();
   return root;
+}
+
+/**
+ * Renders the «Нет доступа к сети» placeholder inside `host`. Toggles visibility
+ * whenever the active tab becomes inaccessible (Q5, 08-ui-spec.md §1.1).
+ */
+function mountInaccessiblePlaceholder(host: HTMLElement): void {
+  const closeBtn = el('button', 'btn primary', 'Закрыть таб') as HTMLButtonElement;
+  closeBtn.type = 'button';
+  closeBtn.addEventListener('click', () => {
+    const id = store.state.activeTabId;
+    if (id === null) return;
+    void etn.tabs.close(id).catch(() => undefined);
+    // tabs.ts subscribes to the store and removes the tab locally.
+  });
+  const text = document.createElement('div');
+  text.className = 'placeholder-text';
+  text.textContent = 'Нет доступа к сети';
+  const hint = document.createElement('div');
+  hint.className = 'placeholder-hint';
+  hint.textContent =
+    'Сеть, открытая в этом табе, больше не доступна (вы исключены из участников или сеть удалена).';
+  host.append(text, hint, closeBtn);
+
+  const update = (): void => {
+    const id = store.state.activeTabId;
+    const inaccessible =
+      id !== null && store.state.inaccessibleTabIds.has(id);
+    host.classList.toggle('hidden', !inaccessible);
+    if (inaccessible) {
+      const tab = store.state.tabs.find((t) => t.tab_id === id);
+      text.textContent =
+        tab !== undefined
+          ? `Нет доступа к сети ${shortNetworkId(tab.network_id)}`
+          : 'Нет доступа к сети';
+    }
+  };
+
+  store.subscribe(update);
+  update();
+}
+
+/** Best-effort display label for a network id; falls back to a short id. */
+function shortNetworkId(networkId: string): string {
+  const found = store.state.networkList.find((n) => n.id === networkId);
+  if (found !== undefined) return found.display_name;
+  return networkId.length <= 8 ? networkId : `${networkId.slice(0, 8)}…`;
 }
