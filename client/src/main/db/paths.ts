@@ -32,9 +32,19 @@ export function localDbPath(userDataDir: string): string {
  * Default migrations directory.
  *
  * In development and tests `client/` is the working directory, so `./migrations`
- * resolves to `client/migrations`. For packaged builds (K1) this will be
- * remapped to `process.resourcesPath`; left for the packaging task.
+ * resolves to `client/migrations`. Packaged builds unpack the migrations next to
+ * the app (electron-builder `extraResources`) — the main process resolves them
+ * as `process.resourcesPath/migrations` and passes the path here (see
+ * `createWindow`'s caller in `index.ts`).
  */
 export function defaultMigrationsDir(): string {
   return path.join(process.cwd(), 'migrations');
+}
+
+/**
+ * Migrations directory for packaged builds: the app's `resources/` folder,
+ * where electron-builder's `extraResources` copies `client/migrations`.
+ */
+export function packagedMigrationsDir(): string {
+  return path.join(process.resourcesPath, 'migrations');
 }

@@ -11,6 +11,7 @@
  * `update:status` broadcast.
  */
 
+import type { AppUpdater } from 'electron-updater';
 import type { BrowserWindow } from 'electron';
 
 /**
@@ -29,7 +30,15 @@ export async function initAutoUpdater(
   try {
     // Dynamic import: electron-updater reads app-update.yml next to the
     // executable, so it is only resolvable in packaged builds.
-    const { autoUpdater } = await import('electron-updater');
+    //
+    // `electron-updater` is CommonJS; under ESM the CJS namespace lands on
+    // `default`, while its `autoUpdater` export is an accessor property that
+    // Node's CJS-ESM interop does not re-expose as a named export — destructure
+    // it from `default`, not from the module namespace.
+    const updaterModule = (await import('electron-updater')) as unknown as {
+      default: { autoUpdater: AppUpdater };
+    };
+    const { autoUpdater } = updaterModule.default;
 
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
@@ -51,7 +60,11 @@ export async function initAutoUpdater(
       console.warn('[ETN] auto-update error:', err.message);
     });
 
-    void autoUpdater.checkForUpdates();
+    // `checkForUpdates` rejects (e.g. missing `app-update.yml` in unpacked
+    // builds) instead of emitting `error` — swallow the rejection the same way.
+    void autoUpdater.checkForUpdates().catch((err: unknown) => {
+      console.debug('[ETN] auto-update check failed:', err);
+    });
   } catch (err) {
     // Missing dependency outside packaged builds — expected, not an error.
     console.debug('[ETN] auto-update unavailable:', err);

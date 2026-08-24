@@ -18,6 +18,13 @@ files:
   - out/**/*
   - package.json
 
+# Local SQLite migrations live outside the asar so `fs.readdirSync` can load
+# them at runtime: main resolves them as `<resources>/migrations` in packaged
+# builds (see defaultMigrationsDir in src/main/db/paths.ts).
+extraResources:
+  - from: migrations
+    to: migrations
+
 # Native module — rebuilt for Electron ABI by electron-builder automatically.
 asarUnpack:
   - '**/*.node'

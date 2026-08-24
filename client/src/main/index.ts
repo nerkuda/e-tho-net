@@ -18,7 +18,7 @@ import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { CLIENT_META_KEY, type DeepLink } from '@etn/shared';
 import { LocalDb } from './db/local-db.js';
-import { defaultMigrationsDir, localDbPath } from './db/paths.js';
+import { defaultMigrationsDir, localDbPath, packagedMigrationsDir } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
 import { registerIpc } from './ipc/register.js';
 import { dispatchDeepLink, extractDeepLink } from './ipc/deep-link.js';
@@ -325,8 +325,9 @@ app
     // on every request; the WebSocket client (G6) sends it on connect.
     localDb = new LocalDb({
       dbPath: localDbPath(app.getPath('userData')),
-      // TODO(K1): remap to process.resourcesPath for packaged builds.
-      migrationsDir: defaultMigrationsDir(),
+      // Packaged builds unpack the migrations into `<resources>/migrations`
+      // (electron-builder `extraResources`); dev runs use `client/migrations`.
+      migrationsDir: app.isPackaged ? packagedMigrationsDir() : defaultMigrationsDir(),
     });
     const clientId = getOrCreateClientId(localDb);
     if (isDev) console.log('[ETN] client_id =', clientId);
