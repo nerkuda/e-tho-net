@@ -36,8 +36,11 @@ var/
 *.swo
 *~
 
-# Agent workspace (ZCode)
-.zcode/
+# Agent workspace (ZCode). В .zcode лежат личные данные (API-ключи в
+# config.json, планы сессий) — коммитится только .zcode/skills/ (скиллы).
+.zcode/*
+!.zcode/skills/
+!.zcode/skills/**
 
 # OS
 .DS_Store
