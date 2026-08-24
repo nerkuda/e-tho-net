@@ -2,22 +2,27 @@
  * Visit history in the status bar (H7, 08-ui-spec.md §11.1/§15.9,
  * 11-settings-and-state.md §2.3, 09-scenarios.md B4):
  *
- * `[ ← ] [облачко₁] [облачко₂] [облачко₃] [▾ N]`
+ * `[ ← ] [облачко₁] [облачко₂] … [▾ N]`
  *
  * - each view has its own local history (L4): the map keeps thoughts that were
- *   in the canvas focus, the structures keep thoughts opened in the editor —
+ *   in the canvas focus, the structures keep thoughts opened in the editor,
+ *   and the chronicle keeps thoughts/links touched in the chronicle —
  *   the bar shows the history of the ACTIVE view (L15);
- * - the three freshest thoughts render as mini clouds (icon + title truncated
- *   to {@link CHIP_TITLE_LIMIT} chars, real fg/bg/font styles from the thought
- *   resolved via `applyCloudStyle`, dimmed when inactive);
- * - `▾ N` opens a dropdown with the remaining entries; N = 0 hides the button;
- *   dropdown items truncate titles to {@link DROPDOWN_TITLE_LIMIT} chars;
+ * - the bar claims the full free width of the status bar between the back
+ *   button and the counts/zoom block; as many mini clouds are rendered as
+ *   actually fit, the rest collapse into the `▾ N` dropdown;
+ * - each mini cloud renders the thought's icon + title (clipped to
+ *   {@link CHIP_TITLE_LIMIT} chars + ellipsis), real fg/bg/font styles via
+ *   `applyCloudStyle`, dimmed when inactive;
+ * - dropdown items mirror the search-panel rendering (08-ui-spec.md §6.7):
+ *   the same `mini-icon` DOM node, font/fg/bg/dim classes from the thought,
+ *   CSS ellipsis by width;
  * - empty history hides the area entirely;
  * - entries are resolved via `thoughts.resolve` (id → metadata); deleted
  *   thoughts were already pruned locally by the main-process applier, and
  *   inactive thoughts are hidden while `show_inactive` is off;
  * - clicking an entry switches the focus (map view) or opens the thought in
- *   the editor without moving the canvas focus (structures view);
+ *   the editor without moving the canvas focus (structures/chronicle view);
  * - entries drag onto the canvas like zone clouds (§11.1): link onto a cloud,
  *   Ctrl for reparent, drop into parents/children to link to focus; a canvas
  *   drag dropped onto the bar (or the dropdown) opens the dragged thought.
@@ -38,16 +43,18 @@ import { openChronicleLinkById, openChronicleThought } from './chronicle/chronic
  * Max title length inside a history mini-cloud (the chip on the bar). When the
  * title is longer we append an ellipsis so the chip stays a single line.
  */
-const CHIP_TITLE_LIMIT = 25;
-/**
- * Max title length inside a dropdown row of the history bar. Longer titles are
- * truncated with an ellipsis.
- */
-const DROPDOWN_TITLE_LIMIT = 200;
-/** How many entries the dropdown shows at once. */
+const CHIP_TITLE_LIMIT = 24;
+/** How many entries the dropdown source returns at once. */
 const HISTORY_LIMIT = 50;
+/**
+ * Reserved free width for the `▾ N` button. We leave this much space on the
+ * right of the strip before we start moving chips into the dropdown, so the
+ * button never gets pushed off-screen when there is anything left to show.
+ * Generous enough for a two-digit count.
+ */
+const MORE_BUTTON_RESERVE = 44;
 
-/** Suffix appended when a title is truncated to one of the {@link *_LIMIT}. */
+/** Suffix appended when a title is truncated to {@link CHIP_TITLE_LIMIT}. */
 const ELLIPSIS = '…';
 
 /** Truncates `text` to `limit` characters; appends an ellipsis when cut. */
@@ -58,6 +65,10 @@ function clip(text: string, limit: number): string {
 let host: HTMLElement | null = null;
 /** Signature of the inputs the bar depends on — avoids redundant re-renders. */
 let lastSignature = '';
+/** Coalesces `ResizeObserver` ticks into one render per animation frame. */
+let resizePending = false;
+/** Cached `ResizeObserver` so we don't re-create it on every render. */
+let resizeObserver: ResizeObserver | null = null;
 
 /** Mounts the history bar into the status bar host. */
 export function mountHistoryBar(historyHost: HTMLElement): void {
@@ -68,6 +79,18 @@ export function mountHistoryBar(historyHost: HTMLElement): void {
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
   });
+  // The number of visible chips depends on the strip width; recompute on
+  // window/status-bar resize (08-ui-spec.md §11.1: «при изменении ширины окна
+  // состав видимых облачков пересчитывается»).
+  resizeObserver = new ResizeObserver(() => {
+    if (resizePending) return;
+    resizePending = true;
+    requestAnimationFrame(() => {
+      resizePending = false;
+      if (host?.isConnected === true) void render();
+    });
+  });
+  resizeObserver.observe(historyHost);
   void render();
 }
 
@@ -109,7 +132,8 @@ async function render(): Promise<void> {
   const profileId = store.state.profileId;
   const networkId = store.state.networkId;
   const view = store.state.activeView;
-  const signature = `${profileId ?? ''}|${networkId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}`;
+  // The width is part of the signature: the visible chip set depends on it.
+  const signature = `${profileId ?? ''}|${networkId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}|${host.clientWidth}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
 
@@ -158,45 +182,158 @@ async function render(): Promise<void> {
   back.append(svgIcon('arrow-left', 13));
   host.append(back);
 
-  const shown = visible.slice(0, 3);
-  const rest = visible.slice(3);
-
-  for (const id of shown) {
-    host.append(buildChip(id, refs.get(id)));
-  }
+  const chips = visible.map((id) => ({
+    id,
+    ref: refs.get(id),
+    el: buildChip(id, refs.get(id)),
+  }));
+  const { shown, rest } = layoutChips(chips);
+  for (const chip of shown) host.append(chip.el);
 
   if (rest.length > 0) {
-    const more = button(
-      '',
-      () => {
-        const items: MenuItem[] = rest.map((id) => {
-          const ref = refs.get(id);
-          return {
-            label: clip(`${ref?.icon ?? '💭'} ${ref?.title ?? id}`, DROPDOWN_TITLE_LIMIT),
-            onClick: () => openEntry(id),
-            dragId: id,
-          };
-        });
-        const rect = more.getBoundingClientRect();
-        const root = showMenuAt(rect.left, rect.top - rest.length * 30 - 8, items);
-        // Dropdown rows drag onto the canvas like the mini-clouds (§11.1).
-        for (const row of root.querySelectorAll<HTMLElement>('.menu-item')) {
-          const rowId = row.dataset['dragId'];
-          if (rowId !== undefined) {
-            wireExternalDragSource(row, rowId, 'history', { fromMenu: true });
-          }
-        }
-      },
-      'history-more',
-      'Остальная история',
-    );
-    more.append(svgIcon('chevron-down', 11), span(` ${rest.length}`));
+    const more = buildMoreButton(rest.length, () => openHistoryMenu(rest, more));
     host.append(more);
+    // If the button itself overflows, peel one more chip and re-add it.
+    if (host.scrollWidth > host.clientWidth) {
+      host.removeChild(more);
+      const moved = shown.pop();
+      if (moved !== undefined) {
+        host.removeChild(moved.el);
+        rest.unshift(moved);
+      }
+      host.append(buildMoreButton(rest.length, () => openHistoryMenu(rest, more)));
+    }
   }
 }
 
 /** A chronicle history entry: a thought or a link. */
 type ChronicleHistoryEntry = { kind: 'thought' | 'link'; id: string };
+
+/**
+ * Splits a chip sequence into the chips that fit on the strip and the chips
+ * that must move into the dropdown. Reserving {@link MORE_BUTTON_RESERVE} of
+ * free space keeps the `▾ N` button visible whenever there is something left
+ * to hide. When the host has not been laid out yet (clientWidth === 0) we keep
+ * all chips on the strip — the next ResizeObserver tick will recompute.
+ */
+function layoutChips<T extends { el: HTMLElement }>(
+  chips: T[],
+): { shown: T[]; rest: T[] } {
+  if (host === null) return { shown: chips, rest: [] };
+  // Append every chip, then peel from the tail until the strip fits with the
+  // dropdown reserve accounted for. Single measurement per chip keeps this
+  // O(n) and avoids per-iteration reflow thrash.
+  for (const chip of chips) host.append(chip.el);
+  const clientWidth = host.clientWidth;
+  if (clientWidth <= 0) return { shown: chips.slice(), rest: [] };
+  let shownCount = chips.length;
+  const targetWithMore = clientWidth - MORE_BUTTON_RESERVE;
+  while (shownCount > 0 && host.scrollWidth > targetWithMore) {
+    shownCount--;
+    host.removeChild(chips[shownCount]!.el);
+  }
+  return {
+    shown: chips.slice(0, shownCount),
+    rest: chips.slice(shownCount),
+  };
+}
+
+/** Opens the dropdown for a list of history chips (thought refs). */
+function openHistoryMenu(
+  rest: Array<{ id: string; ref: import('@etn/shared').ThoughtRef | undefined; el: HTMLElement }>,
+  anchor: HTMLElement,
+): void {
+  const items: MenuItem[] = rest.map(({ id, ref }) => ({
+    icon: buildDropdownIcon(ref),
+    label: ref?.title ?? id,
+    dragId: id,
+    onClick: () => openEntry(id),
+  }));
+  const rect = anchor.getBoundingClientRect();
+  const root = showMenuAt(rect.left, rect.bottom + 2, items);
+  styleDropdownRows(root, rest.map((r) => r.ref));
+  // Dropdown rows drag onto the canvas like the mini-clouds (§11.1).
+  for (const row of root.querySelectorAll<HTMLElement>('.menu-item')) {
+    const rowId = row.dataset['dragId'];
+    if (rowId !== undefined) {
+      wireExternalDragSource(row, rowId, 'history', { fromMenu: true });
+    }
+  }
+}
+
+/** Opens the dropdown for chronicle history entries (thoughts + links). */
+function openChronicleMenu(
+  rest: ChronicleHistoryEntry[],
+  refs: Map<string, import('@etn/shared').ThoughtRef>,
+  linkLabels: Map<string, string>,
+  anchor: HTMLElement,
+): void {
+  const items: MenuItem[] = rest.map((entry) => {
+    if (entry.kind === 'thought') {
+      const ref = refs.get(entry.id);
+      return {
+        icon: buildDropdownIcon(ref),
+        label: ref?.title ?? entry.id,
+        dragId: entry.id,
+        onClick: () => void openChronicleThought(entry.id),
+      };
+    }
+    return {
+      icon: '🔗',
+      label: linkLabels.get(entry.id) ?? entry.id,
+      onClick: () => void openChronicleLinkById(entry.id),
+    };
+  });
+  const rect = anchor.getBoundingClientRect();
+  const root = showMenuAt(rect.left, rect.bottom + 2, items);
+  styleDropdownRows(root, rest.map((entry) => (entry.kind === 'thought' ? refs.get(entry.id) : undefined)));
+  for (const row of root.querySelectorAll<HTMLElement>('.menu-item')) {
+    const rowId = row.dataset['dragId'];
+    if (rowId !== undefined) {
+      wireExternalDragSource(row, rowId, 'history', { fromMenu: true });
+    }
+  }
+}
+
+/**
+ * Builds the icon node shown in a history dropdown row. Mirrors the
+ * search-panel rendering (08-ui-spec.md §6.7): a real `mini-icon` node with
+ * the same icon/image and font/fg/bg styles as the on-canvas cloud.
+ */
+function buildDropdownIcon(ref: import('@etn/shared').ThoughtRef | undefined): HTMLElement {
+  const icon = el('span', 'mini-icon');
+  if (ref !== undefined) {
+    applyThoughtIcon(icon, ref);
+  } else {
+    icon.textContent = '💭';
+  }
+  return icon;
+}
+
+/**
+ * Applies cloud-style classes (`font-*`, `dim`) to the dropdown rows after
+ * they are built — `showMenuAt` builds rows internally, so we walk them
+ * here in the same order as the items.
+ */
+function styleDropdownRows(
+  root: HTMLElement,
+  refs: Array<import('@etn/shared').ThoughtRef | undefined>,
+): void {
+  const rows = root.querySelectorAll<HTMLElement>(':scope > .menu-item');
+  refs.forEach((ref, index) => {
+    const row = rows[index];
+    if (row === undefined || ref === undefined) return;
+    applyCloudStyle(row, resolveCloudStyle(ref));
+    if (!ref.active) row.classList.add('dim');
+  });
+}
+
+/** Builds the `▾ N` button anchored to the right edge of the visible chips. */
+function buildMoreButton(count: number, onClick: () => void): HTMLElement {
+  const more = button('', onClick, 'history-more', 'Остальная история');
+  more.append(svgIcon('chevron-down', 11), span(` ${count}`));
+  return more;
+}
 
 /** Renders the chronicle view's own history (thoughts AND links, §17). */
 async function renderChronicle(profileId: string, networkId: string): Promise<void> {
@@ -232,47 +369,44 @@ async function renderChronicle(profileId: string, networkId: string): Promise<vo
     }
   }
 
-  const shown = entries.slice(0, 3);
-  const rest = entries.slice(3);
-
-  for (const entry of shown) {
-    if (entry.kind === 'thought') {
-      const chip = buildChip(entry.id, refs.get(entry.id));
-      wireExternalDragSource(chip, entry.id, 'history');
-      host.append(chip);
-    } else {
-      host.append(buildLinkChip(entry.id, linkLabels.get(entry.id) ?? '🔗'));
-    }
-  }
+  const chips = entries.map((entry) => ({
+    entry,
+    el:
+      entry.kind === 'thought'
+        ? buildChip(entry.id, refs.get(entry.id))
+        : buildLinkChip(entry.id, linkLabels.get(entry.id) ?? '🔗'),
+  }));
+  const { shown, rest } = layoutChips(chips);
+  for (const chip of shown) host.append(chip.el);
 
   if (rest.length > 0) {
-    const more = button(
-      '',
-      () => {
-        const items: MenuItem[] = rest.map((entry) => ({
-          label: clip(
-            entry.kind === 'thought'
-              ? `${refs.get(entry.id)?.icon ?? '💭'} ${refs.get(entry.id)?.title ?? entry.id}`
-              : `🔗 ${linkLabels.get(entry.id) ?? entry.id}`,
-            DROPDOWN_TITLE_LIMIT,
-          ),
-          onClick: () => openChronicleEntry(entry),
-          dragId: entry.kind === 'thought' ? entry.id : undefined,
-        }));
-        const rect = more.getBoundingClientRect();
-        const root = showMenuAt(rect.left, rect.top - rest.length * 30 - 8, items);
-        for (const row of root.querySelectorAll<HTMLElement>('.menu-item')) {
-          const rowId = row.dataset['dragId'];
-          if (rowId !== undefined) {
-            wireExternalDragSource(row, rowId, 'history', { fromMenu: true });
-          }
-        }
-      },
-      'history-more',
-      'Остальная история',
+    const more = buildMoreButton(rest.length, () =>
+      openChronicleMenu(
+        rest.map((c) => c.entry),
+        refs,
+        linkLabels,
+        more,
+      ),
     );
-    more.append(svgIcon('chevron-down', 11), span(` ${rest.length}`));
     host.append(more);
+    if (host.scrollWidth > host.clientWidth) {
+      host.removeChild(more);
+      const moved = shown.pop();
+      if (moved !== undefined) {
+        host.removeChild(moved.el);
+        rest.unshift(moved);
+      }
+      host.append(
+        buildMoreButton(rest.length, () =>
+          openChronicleMenu(
+            rest.map((c) => c.entry),
+            refs,
+            linkLabels,
+            more,
+          ),
+        ),
+      );
+    }
   }
 }
 

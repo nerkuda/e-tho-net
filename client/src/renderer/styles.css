@@ -1184,8 +1184,23 @@ textarea {
   text-overflow: ellipsis;
 }
 
+/* Thought font/fg/bg styles — mirror the on-canvas cloud and the search
+ * list (08-ui-spec.md §6.7, §11.1) so the chip respects bold/italic/etc. */
+.history-cloud.font-bold .hc-title {
+  font-weight: 700;
+}
+.history-cloud.font-italic .hc-title {
+  font-style: italic;
+}
+.history-cloud.font-underline .hc-title {
+  text-decoration: underline;
+}
+.history-cloud.font-strike .hc-title {
+  text-decoration: line-through;
+}
+
 .history-cloud.dim {
-  opacity: 0.5;
+  opacity: 0.55;
   font-style: italic;
 }
 
@@ -4131,6 +4146,28 @@ body.cloud-dragging * {
 .menu-item-checked .menu-item-label::before {
   content: '✓';
   color: var(--accent);
+}
+
+/* Thought font/fg/bg styles inside the menu — applied to rows that mirror
+ * the search-panel rendering (08-ui-spec.md §6.7, §11.1: history dropdown
+ * «оформляются так же, как строки результатов поиска»). The classes are
+ * added explicitly only by callers that want them, so other menus are
+ * unaffected. */
+.menu-item.font-bold .menu-item-label {
+  font-weight: 700;
+}
+.menu-item.font-italic .menu-item-label {
+  font-style: italic;
+}
+.menu-item.font-underline .menu-item-label {
+  text-decoration: underline;
+}
+.menu-item.font-strike .menu-item-label {
+  text-decoration: line-through;
+}
+.menu-item.dim {
+  opacity: 0.55;
+  font-style: italic;
 }
 
 /* ---------------------------------------------------------------------------
