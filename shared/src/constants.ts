@@ -163,6 +163,7 @@ export const CLIENT_META_KEY = {
   THEME: 'theme',
   ZOOM: 'zoom',
   ACTIVE_PROFILE_ID: 'active_profile_id',
+  WINDOW_BOUNDS: 'window_bounds',
 } as const satisfies Record<string, string>;
 export type ClientMetaKey = (typeof CLIENT_META_KEY)[keyof typeof CLIENT_META_KEY];
 

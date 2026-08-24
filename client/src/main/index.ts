@@ -12,7 +12,7 @@
  * The API-key never leaves this process: renderer talks to data exclusively over
  * IPC (G7).
  */
-import { app, BrowserWindow, protocol, shell } from 'electron';
+import { app, BrowserWindow, protocol, screen, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -23,6 +23,12 @@ import { getOrCreateClientId } from './client-id.js';
 import { registerIpc } from './ipc/register.js';
 import { dispatchDeepLink, extractDeepLink } from './ipc/deep-link.js';
 import { initAutoUpdater } from './updater.js';
+import {
+  loadWindowBounds,
+  sanitizeBounds,
+  saveWindowBounds,
+  type WindowBounds,
+} from './window-bounds.js';
 
 /**
  * Directory of the compiled main bundle (`out/main`). Renderer and preload
@@ -68,10 +74,6 @@ if (process.defaultApp && process.argv.length >= 2) {
   app.setAsDefaultProtocolClient('etn');
 }
 
-/** Default window geometry (docs/07-client-electron.md §1, workplan G1). */
-const DEFAULT_WIDTH = 1280;
-const DEFAULT_HEIGHT = 800;
-
 /**
  * Local SQLite store (G3). Opened once on app ready and closed on quit. Held at
  * module scope so IPC handlers (G7) and network clients (G5/G6) can share it.
@@ -100,16 +102,27 @@ function storedTheme(db: LocalDb): 'light' | 'dark' {
 /**
  * Creates and configures the main application window.
  *
+ * Window geometry (size + position) is persisted to `client_meta.window_bounds`
+ * and restored on the next launch — see {@link wireWindowBoundsPersistence}.
+ * When the stored value can't fit any connected display (e.g. the user
+ * unplugged an external monitor between runs) we fall back to a sensible
+ * default on the largest available display.
+ *
  * Security posture: `contextIsolation` on, `nodeIntegration` off, `sandbox` off —
  * the renderer has no direct Node access and reaches the main process only
  * through the preload `contextBridge` (see `src/preload/index.ts`). `sandbox`
  * is disabled because Electron's sandboxed loader cannot import the ESM preload
  * bundle; see the inline comment at the `sandbox` field below.
  */
-function createWindow(theme: 'light' | 'dark'): BrowserWindow {
+function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
+  const bounds = sanitizeBounds(loadWindowBounds(db), screen.getAllDisplays());
   const win = new BrowserWindow({
-    width: DEFAULT_WIDTH,
-    height: DEFAULT_HEIGHT,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: 640,
+    minHeight: 480,
     title: 'ETN',
     show: false,
     autoHideMenuBar: true,
@@ -145,7 +158,71 @@ function createWindow(theme: 'light' | 'dark'): BrowserWindow {
     void win.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
-    return win;
+  wireWindowBoundsPersistence(win, db);
+
+  return win;
+}
+
+/**
+ * Persists the main window's geometry to `client_meta.window_bounds` so it can
+ * be restored on the next launch (07-client-electron.md §1, bug ETN — «ETN не
+ * запоминает размер окна»).
+ *
+ * We capture only the **normal** bounds — when the user maximizes, minimizes
+ * or enters fullscreen, `getBounds()` would otherwise overwrite the
+ * remembered geometry with screen-filling values. `getNormalBounds()` always
+ * reports the pre-state bounds the window would return to on restore, so it's
+ * the right source of truth regardless of current window state.
+ *
+ * Saves happen:
+ *  - on `resize` / `move` (debounced 500 ms) — captures size/position while
+ *    the user drags or resizes;
+ *  - on `close` (immediate) — guarantees a final save even if the debounced
+ *    timer is still pending.
+ */
+function wireWindowBoundsPersistence(win: BrowserWindow, db: LocalDb): void {
+  let pending: NodeJS.Timeout | null = null;
+  let lastSaved: WindowBounds | null = null;
+
+  const saveCurrent = (): void => {
+    try {
+      if (win.isDestroyed()) return;
+      if (win.isMinimized()) return;
+      const b = win.getNormalBounds();
+      const next: WindowBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
+      if (
+        lastSaved !== null &&
+        lastSaved.x === next.x &&
+        lastSaved.y === next.y &&
+        lastSaved.width === next.width &&
+        lastSaved.height === next.height
+      ) {
+        return;
+      }
+      saveWindowBounds(db, next);
+      lastSaved = next;
+    } catch (err: unknown) {
+      console.error('[ETN] Failed to persist window bounds:', err);
+    }
+  };
+
+  const schedule = (): void => {
+    if (pending !== null) clearTimeout(pending);
+    pending = setTimeout(() => {
+      pending = null;
+      saveCurrent();
+    }, 500);
+  };
+
+  win.on('resize', schedule);
+  win.on('move', schedule);
+  win.on('close', () => {
+    if (pending !== null) {
+      clearTimeout(pending);
+      pending = null;
+    }
+    saveCurrent();
+  });
 }
 
 /** Content types for files served over the `etnimg` protocol. */
@@ -244,7 +321,7 @@ app
     // already matches (the renderer applies data-theme on boot, L10).
     const theme = storedTheme(localDb);
 
-    const win = createWindow(theme);
+    const win = createWindow(theme, localDb);
 
     // Pick up a deep link from this process's argv (Win/Linux cold start:
     // the OS launches the registered protocol handler with the URL appended
@@ -264,7 +341,9 @@ app
     void initAutoUpdater(!isDev, () => BrowserWindow.getAllWindows()[0] ?? null);
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow(theme);
+      if (BrowserWindow.getAllWindows().length === 0 && localDb !== null) {
+        createWindow(theme, localDb);
+      }
     });
   })
   .catch((err: unknown) => {
