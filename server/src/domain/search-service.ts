@@ -467,10 +467,15 @@ function searchTexts(
     inListClause('t.type_id', f.typeIds),
     subtreeClause('f.thought_id', f.subtreeIds),
   ]);
+  // One row per (thought, comment). The text FTS is keyed by comment rowid —
+  // a thought with N matching comments shows up N times. The result list must
+  // collapse to one hit per thought (UX expectation; `comment_id` keeps the
+  // first match so the user can navigate to it). `total` counts distinct
+  // thoughts, the inner `rank` ordering drives which comment wins.
   const total = (
     ndb
       .prepare(
-        `SELECT COUNT(*) AS c FROM fts_thought_texts f
+        `SELECT COUNT(DISTINCT f.thought_id) AS c FROM fts_thought_texts f
          JOIN comments c ON c.rowid = f.rowid
          JOIN thoughts t ON t.id = f.thought_id WHERE ${where}`,
       )
@@ -478,14 +483,21 @@ function searchTexts(
   ).c;
   const rows = ndb
     .prepare(
-      `SELECT c.id AS comment_id, f.thought_id AS thought_id, t.title AS title,
-              c.body_md AS body, t.icon AS icon, t.icon_kind AS icon_kind,
-              t.icon_attachment_id AS icon_attachment_id
-       FROM fts_thought_texts f
-       JOIN comments c ON c.rowid = f.rowid
-       JOIN thoughts t ON t.id = f.thought_id
-       WHERE ${where}
-       ORDER BY rank
+      `SELECT comment_id, thought_id, title, body, icon, icon_kind,
+              icon_attachment_id
+       FROM (
+         SELECT c.id AS comment_id, f.thought_id AS thought_id, t.title AS title,
+                c.body_md AS body, t.icon AS icon, t.icon_kind AS icon_kind,
+                t.icon_attachment_id AS icon_attachment_id,
+                rank AS _rank,
+                ROW_NUMBER() OVER (PARTITION BY f.thought_id ORDER BY rank) AS _rn
+         FROM fts_thought_texts f
+         JOIN comments c ON c.rowid = f.rowid
+         JOIN thoughts t ON t.id = f.thought_id
+         WHERE ${where}
+       )
+       WHERE _rn = 1
+       ORDER BY _rank
        LIMIT ? OFFSET ?`,
     )
     .all(...params, f.limit, f.offset) as Array<{
@@ -531,10 +543,12 @@ function searchLinks(
     { sql: '(l.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] },
     inListClause('l.type_id', f.linkTypeIds),
   ]);
+  // Same collapse as `searchTexts`: one hit per `link_id`. `total` counts
+  // distinct links, the inner `rank` picks the first comment per link.
   const total = (
     ndb
       .prepare(
-        `SELECT COUNT(*) AS c FROM fts_link_texts f
+        `SELECT COUNT(DISTINCT f.link_id) AS c FROM fts_link_texts f
          JOIN comments c ON c.rowid = f.rowid
          LEFT JOIN links l ON l.id = f.link_id WHERE ${where}`,
       )
@@ -542,13 +556,18 @@ function searchLinks(
   ).c;
   const rows = ndb
     .prepare(
-      `SELECT f.link_id AS link_id, lt.name_forward AS type_name, c.body_md AS body
-       FROM fts_link_texts f
-       JOIN comments c ON c.rowid = f.rowid
-       LEFT JOIN links l ON l.id = f.link_id
-       LEFT JOIN link_types lt ON lt.id = l.type_id
-       WHERE ${where}
-       ORDER BY rank
+      `SELECT link_id, type_name, body FROM (
+         SELECT f.link_id AS link_id, lt.name_forward AS type_name, c.body_md AS body,
+                rank AS _rank,
+                ROW_NUMBER() OVER (PARTITION BY f.link_id ORDER BY rank) AS _rn
+         FROM fts_link_texts f
+         JOIN comments c ON c.rowid = f.rowid
+         LEFT JOIN links l ON l.id = f.link_id
+         LEFT JOIN link_types lt ON lt.id = l.type_id
+         WHERE ${where}
+       )
+       WHERE _rn = 1
+       ORDER BY _rank
        LIMIT ? OFFSET ?`,
     )
     .all(...params, f.limit, f.offset) as Array<{
@@ -629,11 +648,30 @@ function searchChrono(
   const thought = buildChronoHalf('thought', match, f);
   const link = buildChronoHalf('link', match, f);
   const rows = ndb
-    .prepare(`${thought.sql}\nUNION ALL\n${link.sql}\nORDER BY valid_from`)
+    .prepare(`${thought.sql}\nUNION ALL\n${link.sql}`)
     .all(...thought.params, ...link.params) as ChronoRow[];
 
-  const total = rows.length;
-  const paged = rows.slice(f.offset, f.offset + f.limit);
+  // Each chronological comment is its own FTS row, so an owner with N matching
+  // entries shows up N times. Collapse to one hit per `(owner, owner_id)`,
+  // keeping the earliest `valid_from` (chronology's natural sort) and the id
+  // of the first match so the caller can still navigate to it.
+  const firstByOwner = new Map<string, ChronoRow>();
+  for (const r of rows) {
+    const key = `${r.owner}:${r.owner_id}`;
+    const current = firstByOwner.get(key);
+    if (
+      current === undefined ||
+      r.valid_from < current.valid_from ||
+      (r.valid_from === current.valid_from && r.comment_id < current.comment_id)
+    ) {
+      firstByOwner.set(key, r);
+    }
+  }
+  const ordered = [...firstByOwner.values()].sort((a, b) =>
+    a.valid_from < b.valid_from ? -1 : a.valid_from > b.valid_from ? 1 : 0,
+  );
+  const total = ordered.length;
+  const paged = ordered.slice(f.offset, f.offset + f.limit);
   return {
     hits: paged.map((r) => {
       const snippet = makeSnippet(r.body, f.terms);

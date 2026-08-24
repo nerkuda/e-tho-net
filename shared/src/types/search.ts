@@ -50,6 +50,7 @@ export interface SearchTextHit {
   /** Backing attachment of the icon for Ctrl-hover zoom (L16); `null` — none. */
   icon_attachment_id: string | null;
   snippet: string;
+  /** First matching comment of the thought (server collapses several). */
   comment_id: string;
   highlights: string[];
 }
@@ -66,6 +67,7 @@ export interface SearchLinkHit {
 export interface SearchChronoHit {
   owner: 'thought' | 'link';
   owner_id: string;
+  /** First matching comment of the owner (server collapses several). */
   comment_id: string;
   valid_from: string;
   valid_to: string | null;

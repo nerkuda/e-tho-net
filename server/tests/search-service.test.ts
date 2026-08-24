@@ -131,6 +131,27 @@ describe(
       }
     });
 
+    it('by_texts collapses several matching comments of one thought into a single hit', () => {
+      // Bug 1: the text FTS index is keyed by comment rowid, so a thought with
+      // N matching comments shows up N times. The result list must collapse to
+      // one hit per thought; `comment_id` keeps the first match so the user
+      // can navigate to it. `total` counts distinct thoughts, not comments.
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Owner');
+        seedThoughtComment(ndb, t, 'remember the milk in the fridge');
+        seedThoughtComment(ndb, t, 'oat milk for the coffee');
+        seedThoughtComment(ndb, t, 'milk expires tomorrow');
+        const res = search(ndb, { q: 'milk' });
+        assert.equal(res.by_texts.length, 1, 'one hit per thought, not per comment');
+        assert.equal(res.by_texts[0]!.thought_id, t);
+        assert.equal(res.meta.total_in_group.texts, 1, 'total counts distinct thoughts');
+        assert.ok(typeof res.by_texts[0]!.comment_id === 'string');
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('search finds link comment bodies in by_links', () => {
       const ndb = createInMemoryNetworkDb();
       try {
@@ -146,6 +167,23 @@ describe(
       }
     });
 
+    it('by_links collapses several matching comments of one link into a single hit', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'A');
+        const b = seedThought(ndb, 'B');
+        const link = seedLink(ndb, a, b);
+        seedLinkComment(ndb, link, 'wire notes one');
+        seedLinkComment(ndb, link, 'wire notes two');
+        const res = search(ndb, { q: 'wire' });
+        assert.equal(res.by_links.length, 1, 'one hit per link, not per comment');
+        assert.equal(res.by_links[0]!.link_id, link);
+        assert.equal(res.meta.total_in_group.links, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('search by_chrono only returns chronological comments', () => {
       const ndb = createInMemoryNetworkDb();
       try {
@@ -156,6 +194,26 @@ describe(
         assert.equal(res.by_chrono.length, 1, 'permanent excluded from chrono group');
         assert.equal(res.by_chrono[0]!.owner, 'thought');
         assert.equal(res.by_chrono[0]!.owner_id, t);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_chrono collapses several matching comments of one owner into a single hit', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'T');
+        seedThoughtComment(ndb, t, 'first chrono gamma', 'chronological', '2024-01-01');
+        seedThoughtComment(ndb, t, 'second chrono gamma', 'chronological', '2024-02-01');
+        seedThoughtComment(ndb, t, 'third chrono gamma', 'chronological', '2024-03-01');
+        const res = search(ndb, { q: 'gamma', scope: 'chronology' });
+        assert.equal(
+          res.by_chrono.length,
+          1,
+          'one hit per owner even when several chrono entries match',
+        );
+        assert.equal(res.by_chrono[0]!.owner_id, t);
+        assert.equal(res.meta.total_in_group.chronology, 1);
       } finally {
         ndb.close();
       }
