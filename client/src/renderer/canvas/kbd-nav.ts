@@ -163,6 +163,18 @@ export function resetCanvasCursor(): void {
 }
 
 /**
+ * Returns the thought id under the dashed cursor frame on the canvas, or null
+ * when no cursor is active. Read by the global Ctrl+C/V handlers
+ * (`app.ts:globalCopy`/`globalPaste`) so they target the cloud the user
+ * actually clicked, not the editor focus — clicking a cloud moves the cursor
+ * synchronously but the focus state only catches up when `setFocus` runs,
+ * so `store.state.focus.focused.id` is stale by the time Ctrl+C/V fires.
+ */
+export function getCanvasCursor(): string | null {
+  return cursorId;
+}
+
+/**
  * Re-applies the cursor frame after a re-render (the canvas rebuilds clouds on
  * every store change; virtualized zones rebuild them on scroll). A cursor
  * thought scrolled out of the virtualization window simply loses the frame

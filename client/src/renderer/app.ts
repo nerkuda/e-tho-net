@@ -19,6 +19,7 @@ import { closeMenu } from './lib/menu.js';
 import { notice } from './lib/notice.js';
 import { UI_STATE_KEY, PREF_KEY } from '@etn/shared';
 import { applyCanvasZoom } from './canvas/canvas-zoom.js';
+import { getCanvasCursor, resetCanvasCursor } from './canvas/kbd-nav.js';
 import {
   parseCanvasLayout,
   parseCanvasZoom,
@@ -75,6 +76,10 @@ export async function findRootThought(networkId: string): Promise<Thought> {
  * workspace restores the right focus / view.
  */
 export async function openNetwork(networkId: string, tabId?: string): Promise<void> {
+  // The cursor lives on a cloud from the previously open network — drop it
+  // before anything else, otherwise a quick Ctrl+V in the new network would
+  // target an id that no longer exists on the map.
+  resetCanvasCursor();
   const network = await etn.networks.open(networkId);
   const prefs = await etn.networks.getPreferences(networkId);
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
@@ -618,10 +623,14 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
-/** Ctrl+C: copy the focused thought, or the current selection if non-empty.
- *  Always returns a visible notice — silent failures (no focus, no selection,
- *  fetch error) were reported as "Ctrl+C does nothing at all" and the user
- *  had no way to tell whether the handler even fired. */
+/** Ctrl+C: copy the thought under the dashed cursor frame on the canvas,
+ *  or the current multi-selection if one is active. The cursor is updated
+ *  synchronously by the cloud click handler, while `store.state.focus.focused`
+ *  is only refreshed when `setFocus` runs (single-click only sets
+ *  `editorTarget`), so the cursor is the reliable "what the user actually
+ *  clicked" signal. Always returns a visible notice — silent failures (no
+ *  focus, no selection, fetch error) were reported as "Ctrl+C does nothing
+ *  at all" and the user had no way to tell whether the handler even fired. */
 async function globalCopy(): Promise<void> {
   const selection = store.state.selection;
   if (selection.length > 0) {
@@ -629,19 +638,21 @@ async function globalCopy(): Promise<void> {
     await copySelection();
     return;
   }
-  const focus = store.state.focus?.focused;
-  if (focus === undefined) {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const cursorId = getCanvasCursor();
+  const focusId = store.state.focus?.focused.id ?? null;
+  const targetId = cursorId ?? focusId;
+  if (targetId === null) {
     notice(
       'Не выбрана мысль для копирования. Кликните на мысль на карте, чтобы сфокусировать её.',
       'error',
     );
     return;
   }
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
   const { buildSingleThoughtSnapshot } = await import('./canvas/clipboard.js');
   try {
-    const thought = await etn.thoughts.get(networkId, focus.id);
+    const thought = await etn.thoughts.get(networkId, targetId);
     const { makeSelectionSnapshotDeps } = await import('./selection/selection.js');
     await buildSingleThoughtSnapshot(thought, makeSelectionSnapshotDeps(networkId));
     notice(`Скопировано: «${thought.title}»`);
@@ -650,19 +661,19 @@ async function globalCopy(): Promise<void> {
   }
 }
 
-/** Ctrl+V: paste the clipboard under the visually-highlighted cloud, or read
- *  the system clipboard's text and apply the "paste text into cloud" rules.
- *  L26 bug-fix (round 2): a single currently selected thought (the
- *  dashed-frame cloud on the map) wins over the canvas focus — the focus
- *  may still be on the previously focused thought when the user clicks a
- *  sibling and presses Ctrl+V, and we want the new thoughts to land under
- *  the cloud they actually clicked. With multiple thoughts selected we fall
- *  back to the canvas focus. */
+/** Ctrl+V: paste the clipboard under the cloud with the dashed cursor frame
+ *  on the canvas, or read the system clipboard's text and apply the "paste
+ *  text into cloud" rules. Same cursor-over-focus rule as `globalCopy`: the
+ *  cursor is the click-synchronous "where does the new content go" signal,
+ *  while the editor focus may still point at a previously focused thought.
+ *  With multiple thoughts selected we fall back to the canvas focus. */
 async function globalPaste(): Promise<void> {
   const selection = store.state.selection;
   let targetId: string | null = null;
   if (selection.length === 1 && selection[0] !== undefined) {
     targetId = selection[0];
+  } else if (selection.length === 0) {
+    targetId = getCanvasCursor() ?? store.state.focus?.focused.id ?? null;
   } else {
     targetId = store.state.focus?.focused.id ?? null;
   }
