@@ -144,8 +144,6 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
     },
   });
 
-  win.once('ready-to-show', () => win.show());
-
   // External links open in the system browser, never inside ETN.
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -158,13 +156,36 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
     void win.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
-  wireWindowBoundsPersistence(win, db);
+  // Save on close regardless of readiness — guarantees a final write if the
+  // window is closed during boot.
+  win.on('close', () => {
+    if (win.isDestroyed()) return;
+    if (win.isMinimized()) return;
+    try {
+      const b = win.getNormalBounds();
+      const next: WindowBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
+      saveWindowBounds(db, next);
+    } catch (err: unknown) {
+      console.error('[ETN] Failed to persist window bounds on close:', err);
+    }
+  });
+
+  win.once('ready-to-show', () => {
+    win.show();
+    // Subscribe to resize/move only AFTER the window is fully laid out, so
+    // Electron's auto-events (which can change the bounds to fit a display
+    // work area, DPI changes, etc.) don't get treated as user input and
+    // overwrite the saved intent. After this point any resize/move is a real
+    // user action.
+    wireWindowBoundsPersistence(win, db, bounds);
+  });
 
   return win;
 }
 
 /**
- * Persists the main window's geometry to `client_meta.window_bounds` so it can
+ * Subscribes to user-driven `resize` / `move` events on the main window and
+ * persists the resulting geometry to `client_meta.window_bounds` so it can
  * be restored on the next launch (07-client-electron.md §1, bug ETN — «ETN не
  * запоминает размер окна»).
  *
@@ -174,15 +195,26 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
  * reports the pre-state bounds the window would return to on restore, so it's
  * the right source of truth regardless of current window state.
  *
- * Saves happen:
- *  - on `resize` / `move` (debounced 500 ms) — captures size/position while
- *    the user drags or resizes;
- *  - on `close` (immediate) — guarantees a final save even if the debounced
- *    timer is still pending.
+ * `initialBounds` is the geometry we asked `BrowserWindow` to honour (the
+ * `createWindow` call site passes the result of `sanitizeBounds`). It's used
+ * to seed `lastSaved` so the first user-driven resize that happens to land on
+ * the same numbers as the initial layout deduplicates instead of re-writing.
+ *
+ * The `close` event is wired separately by `createWindow` itself so that a
+ * close during boot (before this function is called) still persists the final
+ * bounds.
+ *
+ * Saves happen on `resize` / `move` debounced by 500 ms — the user dragging or
+ * resizing fires dozens of events per second; the debounce captures the last
+ * settled state without thrashing SQLite.
  */
-function wireWindowBoundsPersistence(win: BrowserWindow, db: LocalDb): void {
+function wireWindowBoundsPersistence(
+  win: BrowserWindow,
+  db: LocalDb,
+  initialBounds: WindowBounds,
+): void {
   let pending: NodeJS.Timeout | null = null;
-  let lastSaved: WindowBounds | null = null;
+  let lastSaved: WindowBounds = initialBounds;
 
   const saveCurrent = (): void => {
     try {
@@ -191,7 +223,6 @@ function wireWindowBoundsPersistence(win: BrowserWindow, db: LocalDb): void {
       const b = win.getNormalBounds();
       const next: WindowBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
       if (
-        lastSaved !== null &&
         lastSaved.x === next.x &&
         lastSaved.y === next.y &&
         lastSaved.width === next.width &&
@@ -216,13 +247,6 @@ function wireWindowBoundsPersistence(win: BrowserWindow, db: LocalDb): void {
 
   win.on('resize', schedule);
   win.on('move', schedule);
-  win.on('close', () => {
-    if (pending !== null) {
-      clearTimeout(pending);
-      pending = null;
-    }
-    saveCurrent();
-  });
 }
 
 /** Content types for files served over the `etnimg` protocol. */
