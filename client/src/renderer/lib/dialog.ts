@@ -74,6 +74,40 @@ export interface DialogOptions {
 /** Open dialogs, bottom first. */
 const stack: HTMLDivElement[] = [];
 
+/** The subset of KeyboardEvent fields the dialog shortcuts inspect. */
+export interface ShortcutEventLike {
+  key: string;
+  repeat: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+}
+
+/**
+ * Whether a keydown is the plain Ctrl/Cmd+Enter confirm shortcut. Shift and
+ * Alt variants are separate shortcuts (Shift+Enter, Ctrl+Shift+Enter) and
+ * must NOT confirm: the confirm listener is registered first on `window`, so
+ * a Ctrl+Shift+Enter it accepted would `preventDefault` and swallow the press
+ * before the apply-with-focus handler ever sees it.
+ */
+export function isConfirmShortcut(event: ShortcutEventLike): boolean {
+  if (event.repeat) return false;
+  if (event.key !== 'Enter') return false;
+  if (!event.ctrlKey && !event.metaKey) return false;
+  if (event.shiftKey || event.altKey) return false;
+  return true;
+}
+
+/** Whether a keydown is the Ctrl/Cmd+Shift+Enter «apply + focus» shortcut (L19). */
+export function isCtrlShiftEnterShortcut(event: ShortcutEventLike): boolean {
+  if (event.repeat) return false;
+  if (event.key !== 'Enter') return false;
+  if (!event.ctrlKey && !event.metaKey) return false;
+  if (!event.shiftKey) return false;
+  return true;
+}
+
 /** Closes the topmost open dialog (no-op when none). */
 export function closeDialog(): void {
   const top = stack.pop();
@@ -153,11 +187,10 @@ export function showDialog(opts: DialogOptions): () => void {
   };
   window.addEventListener('keydown', onKey, true);
   const onConfirm = (event: KeyboardEvent): void => {
-    if (event.repeat) return;
-    if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
     // Bubble phase: field-level handlers (batch add, the thought picker,
     // thought_ref candidate lists) consume Ctrl+Enter first via
     // preventDefault; the dialog confirms only a still-unhandled press.
+    if (!isConfirmShortcut(event)) return;
     if (event.defaultPrevented) return;
     if (stack[stack.length - 1] !== backdrop) return;
     if (primaryBtn === null) return;
@@ -182,10 +215,7 @@ export function showDialog(opts: DialogOptions): () => void {
   window.addEventListener('keydown', onShiftEnter);
 
   const onCtrlShiftEnter = (event: KeyboardEvent): void => {
-    if (event.repeat) return;
-    if (event.key !== 'Enter') return;
-    if (!event.ctrlKey && !event.metaKey) return;
-    if (!event.shiftKey) return;
+    if (!isCtrlShiftEnterShortcut(event)) return;
     if (event.defaultPrevented) return;
     if (stack[stack.length - 1] !== backdrop) return;
     if (opts.extraShortcuts?.ctrlShiftEnter === undefined) return;
