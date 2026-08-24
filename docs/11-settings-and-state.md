@@ -556,7 +556,113 @@ function* traverse(seedIds: string[], opts: TraversalOpts) {
 - Связь A→B и B→A (двунаправленная через две разные связи) — обе обходятся, но
   каждый узел visited один раз.
 
-## 6. Изменения в остальных документах
+## 6. Локальный буфер обмена мыслей (L26)
+
+Снимок мыслей/связей, скопированных пользователем — основа операции
+«копировать и вставить мысль/подграф» (UI — 08-ui-spec.md §4.5;
+серверный эндпоинт — 03-server-api.md §6.13). Это **runtime-состояние
+одного клиента**: в БД не сохраняется, между клиентами одного
+пользователя не синхронизируется, при перезапуске приложения сбрасывается.
+
+### 6.1. Структура снапшота
+
+```ts
+interface ThoughtClipboardSnapshot {
+  source_network_id: string;          // откуда скопировано; фиксируется
+                                       // в момент копирования (для cross-net)
+  thoughts: Map<string, ThoughtCopyItem>;  // keyed by source_id (uuid)
+  links:   Array<{
+    source_id: string;                // оба конца — ключи из thoughts
+    target_id: string;
+    // type_id/type_name, color/style/width, permanent_comment, attachments
+  }>;
+  created_at: number;                 // Date.now() момента копирования
+}
+
+interface ThoughtCopyItem {
+  source_id: string;                  // uuid в source_network_id
+  thought: {
+    title: string;
+    synonyms: string[];
+    type_id: string | null;
+    type_name: string | null;         // резолв по имени в сети-получателе
+    active: boolean;
+    fg_color: string | null;
+    bg_color: string | null;
+    font_bold: boolean;
+    font_italic: boolean;
+    font_underline: boolean;
+    font_strike: boolean;
+    icon: string | null;              // emoji или url-строка
+    icon_kind: 'emoji' | 'image' | null;
+  };
+  permanent_comment: { title?: string | null; body_md: string } | null;
+  properties: Record<string, string | number | boolean | null>;
+  attachments: Array<{
+    kind: 'url' | 'file';
+    url: string | null;
+    file_path: string | null;
+    title: string | null;
+    description: string | null;
+  }>;
+}
+```
+
+Файл вложения **не копируется** в снапшот — только `url`/`file_path`.
+Сам файл лежит в `networks/<source_network_id>/attachments/<uuid>` и
+шаринг-логика L25 следит за «файл удаляется, когда никем не используется»
+([02-data-model.md](02-data-model.md) §11). Если к моменту вставки файл
+уже удалён (например, удалена последняя мысль, которая на него
+ссылалась) — сервер создаст строку вложения с тем же `url`/`file_path`,
+но скачать/открыть его уже не получится. Клиент показывает такой случай
+как «вложение недоступно» (без отдельной диагностики в copy/paste-флоу —
+это поведение обычной карточки вложения).
+
+### 6.2. Поведение буфера
+
+- **Скопировать одну мысль.** Контекстное меню мысли → «Копировать»
+  или `Ctrl+C` на холсте/структурах (08-ui-spec.md §13). Снапшот
+  перезаписывает буфер целиком.
+- **Скопировать несколько мыслей.** Меню «Действия» панели выделения
+  (§5) → «Скопировать мысли». Снапшот включает все выделенные мысли и
+  межмыслевые связи с обоими концами в выделении.
+- **Вставить.** Контекстное меню мысли → «Вставить» или `Ctrl+V`. Цель —
+  мысль под курсорной рамкой (kbd-cursor) с fallback на фокус редактора.
+  Вставка идёт через `POST /thoughts/copy-batch` (03-server-api.md §6.13)
+  с `source_network_id` из снапшота и `parent_thought_id` = id цели.
+- **Сбросить буфер** явно нельзя — следующая копия его перезаписывает.
+  При перезапуске приложения (или kill процесса) буфер пропадает.
+- **Кросс-сеть.** При копировании `source_network_id` фиксируется;
+  при последующей вставке в сеть, отличную от source, клиент переписывает
+  все `[[#<id>]]` в `permanent_comment` (и комментариях связей) на
+  `[[n:<source_network_id>#<id>]]`-формат ([12-wiki-id-refs.md](12-wiki-id-refs.md)).
+  Сервер такой перезаписи не делает — это клиентская обязанность
+  (подробно в 08-ui-spec.md §4.5.3).
+
+### 6.3. Уровень состояния и приватность
+
+- Уровень: **L1 (per-client runtime)** — не сохраняется на диск, не
+  попадает в real-time, не доступно другим клиентам того же
+  пользователя.
+- Никаких настроек для буфера не предусмотрено (ни «сохранять между
+  сессиями», ни «делиться с другими клиентами»). Если в будущем
+  потребуется, это будет новая задача с явным ID.
+
+### 6.4. Связь с курсорной рамкой (kbd-cursor)
+
+Глобальные `Ctrl+C`/`Ctrl+V` в workspace-экране используют не фокус
+редактора, а **курсорную рамку** холста (canvas/kbd-nav.ts `getCanvasCursor`).
+Причина: одиночный клик по облачку синхронно обновляет курсор через
+`setCursor(entry.id)`, но фокус редактора меняется асинхронно через
+`setFocus` (а `openThoughtInEditor`, вызываемый из обработчика клика,
+трогает только `editorTarget`, не `focus.focused`). Без курсора
+`Ctrl+C` после быстрого клика читал бы стейлый focus из прошлой сети/таба.
+
+При смене сети (`openNetwork`) курсор сбрасывается (`resetCanvasCursor()`),
+чтобы id из старой сети не залипал в `Ctrl+V`-обработчике. Буфер при
+этом сохраняется — вставка кросс-сетью работает.
+
+## 7. Изменения в остальных документах
 
 (Правки внесены в соответствующие файлы; этот раздел — индекс того, что
 меняется.)
@@ -564,7 +670,7 @@ function* traverse(seedIds: string[], opts: TraversalOpts) {
 | Документ | Что меняется |
 |----------|--------------|
 | [02-data-model.md](02-data-model.md) | Убрать `home_sort`, `last_viewed_at` из `thoughts`; переопределить `thought_views` (только last_viewed_at per user); добавить `user_focus_preferences`, `user_focus_order` |
-| [03-server-api.md](03-server-api.md) | Добавить endpoints: `PUT /focus/{tid}/preferences`, `POST /focus/{tid}/order`; убрать `focused_thought_id` из `/focus` response (фокус — клиентское) |
+| [03-server-api.md](03-server-api.md) | Добавить endpoints: `PUT /focus/{tid}/preferences`, `POST /focus/{tid}/order`, `POST /thoughts/copy-batch` (L26); убрать `focused_thought_id` из `/focus` response (фокус — клиентское) |
 | [04-realtime.md](04-realtime.md) | Расширить описание Client-Id и `last_seq` per client; добавить поле `audience`; добавить события L3 |
 | [07-client-electron.md](07-client-electron.md) | Локальное хранение `client_id`, `last_seq`; переразбить `ui_state` по уровням L4/L5; убрать дублирование серверных настроек |
-| [08-ui-spec.md](08-ui-spec.md) | Раздел «Настройки и их уровни» со ссылкой на этот документ |
+| [08-ui-spec.md](08-ui-spec.md) | Раздел «Настройки и их уровни» со ссылкой на этот документ; §4.5 «Копирование и вставка мыслей» (L26); §13 — `Ctrl+C`/`Ctrl+V` в клавиатурных командах |
