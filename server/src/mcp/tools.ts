@@ -55,7 +55,6 @@ import {
   type CommentTarget,
   type ExportFormat,
   type McpChangeEntry,
-  type McpChangesListParams,
   type McpChangesListResult,
   type McpMetricsReadsResult,
   type McpMutationResult,
@@ -66,7 +65,6 @@ import {
 } from '@etn/shared';
 
 import {
-  createThought,
   createThoughtWithWarnings,
   deleteThought,
   getNeighbors,
@@ -118,7 +116,6 @@ import {
   linkTypeCatalog,
   linkTypeCatalogCompact,
   thoughtTypeCatalog,
-  toCompactLink,
   toCompactThought,
   toCompactThoughtRef,
 } from './catalogs.js';

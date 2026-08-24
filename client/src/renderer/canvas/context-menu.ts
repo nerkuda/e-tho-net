@@ -21,7 +21,6 @@ import { onThoughtDeleted, scheduleRefresh, requireNetworkId, setFocus } from '.
 import { openAddDialog } from './add-dialog.js';
 import {
   buildSingleThoughtSnapshot,
-  getClipboard,
   hasClipboard,
   pasteThoughtsTo as pasteThoughtsToClipboard,
   type SnapshotDeps,

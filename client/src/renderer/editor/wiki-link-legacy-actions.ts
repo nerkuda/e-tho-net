@@ -21,8 +21,6 @@ import { etn } from '../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 
-const LEGACY_HIGHLIGHT_CLASS = 'wiki-link-legacy-menu';
-
 interface ResolvedName {
   thoughtId: string;
   title: string;
@@ -91,7 +89,6 @@ export const wikiLinkLegacyActions = ViewPlugin.fromClass(
     }
 
     onContextMenu = (event: MouseEvent): void => {
-      const view = this.view;
       const target = event.target as Element | null;
       if (target === null) return;
       const span = target.closest(`.wiki-link[data-legacy-link="true"]`);

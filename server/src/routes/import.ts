@@ -37,8 +37,6 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/networks/:networkId/import/preview',
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (request: FastifyRequest, reply) => {
-        const networkId = (request.params as { networkId: string }).networkId;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         const body = requestBody(request);
         const archiveB64 = readArchiveB64(body, request.id);
         const buf = decodeArchive(archiveB64, request.id);

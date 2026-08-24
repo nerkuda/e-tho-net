@@ -40,8 +40,8 @@ import type { Logger } from '../logger.js';
 import { getThought, getThoughtOrThrow } from './thought-service.js';
 import { listComments } from './comment-service.js';
 import { listAttachments } from './attachment-service.js';
-import { listThoughtTypes, getThoughtType } from './thought-type-service.js';
-import { listLinkTypes, getLinkType } from './link-type-service.js';
+import { getThoughtType } from './thought-type-service.js';
+import { getLinkType } from './link-type-service.js';
 import { listTypeProperties } from './property-service.js';
 import { traverse } from './graph-traversal.js';
 

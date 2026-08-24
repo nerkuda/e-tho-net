@@ -11,9 +11,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
-import path from 'node:path';
 
 import type { CurrentUser, FocusDir, Network, TypeOwnerType } from '@etn/shared';
 

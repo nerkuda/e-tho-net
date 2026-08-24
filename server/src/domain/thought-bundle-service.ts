@@ -21,7 +21,6 @@ import type {
   ThoughtBundleInput,
   ThoughtBundleResult,
   ThoughtBundleThoughtAction,
-  ThoughtCardWarning,
 } from '@etn/shared';
 import { EtnError } from '@etn/shared';
 

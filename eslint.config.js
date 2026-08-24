@@ -74,8 +74,9 @@ module.exports = tseslint.config(
   },
 
   {
-    // Root-level CommonJS scripts (this config file, future build helpers).
-    files: ['*.js', '*.cjs'],
+    // CommonJS scripts (this config file, .cjs tests like
+    // client/tests/window-bounds-restart.test.cjs).
+    files: ['*.js', '**/*.cjs'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'commonjs',
@@ -88,6 +89,8 @@ module.exports = tseslint.config(
         process: 'readonly',
         console: 'readonly',
         Buffer: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
       },
     },
     rules: {

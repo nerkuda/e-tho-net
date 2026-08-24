@@ -68,7 +68,7 @@ if (process.defaultApp && process.argv.length >= 2) {
   // Dev: re-exec the script with the URL as argv[1] (Windows protocol
   // dispatch passes the URL as argv, not via app.on('second-instance')).
   app.setAsDefaultProtocolClient('etn', process.execPath, [
-    require('node:path').resolve(process.argv[1]!),
+    path.resolve(process.argv[1]!),
   ]);
 } else {
   app.setAsDefaultProtocolClient('etn');
