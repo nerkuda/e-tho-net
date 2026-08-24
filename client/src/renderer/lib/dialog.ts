@@ -59,6 +59,12 @@ export interface DialogOptions {
   extraShortcuts?: {
     /** Fired when the user presses Shift+Enter on the topmost dialog. */
     shiftEnter?: () => void;
+    /**
+     * Fired when the user presses Ctrl/Cmd+Shift+Enter on the topmost dialog.
+     * The built-in Ctrl/Cmd+Enter only fires when Shift is NOT held, so this
+     * is the way to express a separate «apply-with-focus» shortcut (L19).
+     */
+    ctrlShiftEnter?: () => void;
   };
   width?: number;
   /** Called after the dialog is mounted (focus management, etc.). */
@@ -175,6 +181,19 @@ export function showDialog(opts: DialogOptions): () => void {
   };
   window.addEventListener('keydown', onShiftEnter);
 
+  const onCtrlShiftEnter = (event: KeyboardEvent): void => {
+    if (event.repeat) return;
+    if (event.key !== 'Enter') return;
+    if (!event.ctrlKey && !event.metaKey) return;
+    if (!event.shiftKey) return;
+    if (event.defaultPrevented) return;
+    if (stack[stack.length - 1] !== backdrop) return;
+    if (opts.extraShortcuts?.ctrlShiftEnter === undefined) return;
+    event.preventDefault();
+    opts.extraShortcuts.ctrlShiftEnter();
+  };
+  window.addEventListener('keydown', onCtrlShiftEnter);
+
   backdrop.append(box);
   document.body.append(backdrop);
   stack.push(backdrop);
@@ -182,6 +201,7 @@ export function showDialog(opts: DialogOptions): () => void {
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keydown', onConfirm);
     window.removeEventListener('keydown', onShiftEnter);
+    window.removeEventListener('keydown', onCtrlShiftEnter);
   });
   opts.onMount?.(close);
   return close;

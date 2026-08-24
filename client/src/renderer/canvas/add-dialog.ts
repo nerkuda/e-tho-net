@@ -760,6 +760,14 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
           onClick: () => apply(false),
         },
       ],
+      // Ctrl+Shift+Enter applies the list and focuses the first inserted item
+      // from any field except the found-thoughts list (the field-level handler
+      // on `input` already does `preventDefault`, so the dialog handler is a
+      // no-op there; the dup-item rows also call `preventDefault`, so the
+      // shortcut does not fire while the caret sits in the candidate list).
+      extraShortcuts: {
+        ctrlShiftEnter: () => apply(true),
+      },
       onMount: () => {
         renderLines();
         input.focus();
