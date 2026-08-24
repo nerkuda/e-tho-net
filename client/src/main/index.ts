@@ -18,7 +18,12 @@ import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { CLIENT_META_KEY, type DeepLink } from '@etn/shared';
 import { LocalDb } from './db/local-db.js';
-import { defaultMigrationsDir, localDbPath, packagedMigrationsDir } from './db/paths.js';
+import {
+  defaultMigrationsDir,
+  localDbPath,
+  packagedMigrationsDir,
+  parseUserDataDirArg,
+} from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
 import { registerIpc } from './ipc/register.js';
 import { dispatchDeepLink, extractDeepLink } from './ipc/deep-link.js';
@@ -39,6 +44,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** `true` when launched via `electron-vite dev`, `false` once packaged. */
 const isDev = !app.isPackaged;
+
+/**
+ * CLI profile directory (docs/07-client-electron.md §3): `--user-data-dir=<path>`
+ * points the entire local profile (local.db, server profiles, settings, window
+ * bounds) at a separate directory, so one installation can run several
+ * independent profiles. Electron 31 already honours the switch itself; we
+ * parse and re-apply it explicitly so the resolved absolute value is a single
+ * source of truth for everything below. Must run before `app.whenReady()` —
+ * the local store, client_id and window-bounds persistence all read
+ * `app.getPath('userData')`.
+ */
+const userDataDirArg = parseUserDataDirArg(process.argv);
+if (userDataDirArg !== null) {
+  app.setPath('userData', userDataDirArg);
+}
 
 // Local-image protocol (`etnimg://c/pics/img.png`): serves attachment files
 // from disk. Registered as privileged/secure so BOTH the dev http origin and

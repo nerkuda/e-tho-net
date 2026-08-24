@@ -29,6 +29,27 @@ export function localDbPath(userDataDir: string): string {
 }
 
 /**
+ * Parses the `--user-data-dir=<path>` CLI switch (docs/07-client-electron.md §3)
+ * which points the whole local profile (local.db, server profiles, settings,
+ * window bounds) at a separate directory.
+ *
+ * Returns the **absolute** profile directory, or `null` when the switch is
+ * absent or carries no value (`--user-data-dir=`). Relative values resolve
+ * against `process.cwd()`. Unknown arguments are ignored, and the switch may
+ * appear at any position in `argv` — the main process scans the full
+ * `process.argv` (in dev the Electron entry comes first, in packaged builds
+ * the executable path does).
+ */
+export function parseUserDataDirArg(argv: string[]): string | null {
+  const PREFIX = '--user-data-dir=';
+  const flag = argv.find((a) => a.startsWith(PREFIX));
+  if (flag === undefined) return null;
+  const value = flag.slice(PREFIX.length);
+  if (value === '') return null;
+  return path.resolve(value);
+}
+
+/**
  * Default migrations directory.
  *
  * In development and tests `client/` is the working directory, so `./migrations`
