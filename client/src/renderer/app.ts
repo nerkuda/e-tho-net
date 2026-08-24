@@ -631,14 +631,26 @@ async function globalCopy(): Promise<void> {
   }
 }
 
-/** Ctrl+V: paste the clipboard under the focused thought, or read the
- *  system clipboard's text and apply the "paste text into cloud" rules. */
+/** Ctrl+V: paste the clipboard under the visually-highlighted cloud, or read
+ *  the system clipboard's text and apply the "paste text into cloud" rules.
+ *  L26 bug-fix (round 2): a single currently selected thought (the
+ *  dashed-frame cloud on the map) wins over the canvas focus — the focus
+ *  may still be on the previously focused thought when the user clicks a
+ *  sibling and presses Ctrl+V, and we want the new thoughts to land under
+ *  the cloud they actually clicked. With multiple thoughts selected we fall
+ *  back to the canvas focus. */
 async function globalPaste(): Promise<void> {
-  const focus = store.state.focus?.focused;
-  if (focus === undefined) return;
+  const selection = store.state.selection;
+  let targetId: string | null = null;
+  if (selection.length === 1 && selection[0] !== undefined) {
+    targetId = selection[0];
+  } else {
+    targetId = store.state.focus?.focused.id ?? null;
+  }
+  if (targetId === null) return;
   const { pasteThoughtsTo, hasClipboard, pasteTextToCloud } = await import('./canvas/clipboard.js');
   if (hasClipboard()) {
-    await pasteThoughtsTo(focus.id);
+    await pasteThoughtsTo(targetId);
     scheduleRefresh();
     return;
   }
@@ -646,7 +658,7 @@ async function globalPaste(): Promise<void> {
   try {
     const text = await navigator.clipboard.readText();
     if (text.trim() === '') return;
-    await pasteTextToCloud(text, focus.id);
+    await pasteTextToCloud(text, targetId);
     scheduleRefresh();
   } catch {
     // Clipboard read denied or unavailable — silently ignore.

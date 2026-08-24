@@ -229,6 +229,22 @@ export function copyThoughtsBatch(
     const createdLinks: Link[] = [];
     const createdAttachments: Attachment[] = [];
 
+    // A copied thought must keep its parent-link only when its parent also
+    // belongs to the selection (else the link would dangle); on the paste
+    // path this same condition is reused to decide who gets a new
+    // parent-link to the destination cloud. Any thought that's the target
+    // of at least one copied inter-thought link is "internal" to the
+    // copied subgraph and will already have its hierarchy preserved
+    // through the copied links — attaching it to the paste target would
+    // create a second parent (and visually a duplicate child row in the
+    // children zone). The remaining thoughts — those that no copied link
+    // points to — are the roots of the subgraph and get exactly one new
+    // parent-link to the paste target.
+    const hasIncomingCopiedLink = new Set<string>();
+    for (const link of input.links) {
+      hasIncomingCopiedLink.add(link.target_id);
+    }
+
     for (const item of input.thoughts) {
       const created = createOneThought(ndb, item, actorUserId, createdAttachments);
       if (created === null) continue;
@@ -236,18 +252,18 @@ export function copyThoughtsBatch(
       thoughtIdMap[sourceId] = thought.id;
       createdThoughts.push(thought);
 
-      // Attach the new thought to the destination cloud with an untyped
-      // link — the spec says pasted thoughts become children of the paste
-      // target. Skip when the paste target is itself one of the copied
-      // thoughts (would be a self-loop).
-      if (input.parent_thought_id !== thought.id) {
-        const parentLink = createLink(
-          ndb,
-          { source_id: input.parent_thought_id, target_id: thought.id, type_id: null },
-          actorUserId,
-        );
-        createdLinks.push(parentLink);
-      }
+      // Skip the parent-link for internal thoughts (they already have a
+      // copied parent) and for the trivial self-loop case where the paste
+      // target is one of the copied thoughts.
+      const isInternal = sourceId !== '' && hasIncomingCopiedLink.has(sourceId);
+      if (isInternal) continue;
+      if (input.parent_thought_id === thought.id) continue;
+      const parentLink = createLink(
+        ndb,
+        { source_id: input.parent_thought_id, target_id: thought.id, type_id: null },
+        actorUserId,
+      );
+      createdLinks.push(parentLink);
     }
 
     for (const link of input.links) {
