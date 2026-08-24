@@ -58,6 +58,10 @@ const isDev = !app.isPackaged;
 const userDataDirArg = parseUserDataDirArg(process.argv);
 if (userDataDirArg !== null) {
   app.setPath('userData', userDataDirArg);
+} else if (!app.isPackaged) {
+  // Dev runs (electron-vite) get their own profile directory so they never
+  // share the installed app's local.db / server profiles / settings.
+  app.setPath('userData', path.join(app.getPath('appData'), '@etn-dev'));
 }
 
 // Local-image protocol (`etnimg://c/pics/img.png`): serves attachment files
