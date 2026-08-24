@@ -1,6 +1,6 @@
 {
   "name": "@etn/markdown",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "description": "ETN — единый XSS-безопасный markdown-рендерер (сервер + клиент): wiki-ссылки, размеры картинок, подсветка кода",
