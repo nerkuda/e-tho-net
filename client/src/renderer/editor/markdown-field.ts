@@ -22,6 +22,8 @@ import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 import { resolveWikiLinksInDom } from './wiki-link-resolver.js';
+import { buildCommentPasteLinks, getClipboard } from '../canvas/clipboard.js';
+import { store } from '../state.js';
 import {
   applyMdZoom,
   currentMdZoom,
@@ -219,9 +221,13 @@ export function createMarkdownField(opts: {
     // Pasting files (screenshots / copied files) saves them as server-stored
     // attachments of the owner entity and inserts a markdown reference at the
     // caret: images embed as `![alt](etnimg:…)`, other files as a link.
+    // Pasting an internal clipboard of thoughts inserts wiki-link references
+    // (workplan L26) — checked first so the file path doesn't run.
     editor.dom.addEventListener('paste', (event) => {
+      if (editor === null) return;
+      if (handleClipboardThoughtsPaste(event, editor)) return;
       const owner = opts.attachmentsOwner;
-      if (owner === undefined || editor === null) return;
+      if (owner === undefined) return;
       const files = event.clipboardData?.files;
       if (files === undefined || files.length === 0) return;
       event.preventDefault();
@@ -392,4 +398,29 @@ export function etnimgUrl(filePath: string): string {
 /** Markdown image alt text must not contain brackets. */
 function sanitizeAlt(text: string): string {
   return text.replace(/[[\]]/g, '').trim() || 'изображение';
+}
+
+/**
+ * Pasting an internal clipboard of thoughts into a comment inserts a
+ * comma-separated list of wiki-link references (workplan L26, task
+ * bb8277f6) — the same format the comment editor already accepts. When the
+ * clipboard is empty we let the original paste flow run (which handles
+ * files / text).
+ *
+ * Returns `true` when the handler consumed the event so the caller can
+ * skip the file-handling fallback.
+ */
+function handleClipboardThoughtsPaste(event: ClipboardEvent, editor: MdEditor): boolean {
+  const networkId = store.state.networkId;
+  if (networkId === null) return false;
+  if (!getClipboard()) return false;
+  // Only intercept when the clipboard carries no file payload — the file
+  // path has higher priority (screenshots are usually intended as images).
+  const files = event.clipboardData?.files;
+  if (files !== undefined && files.length > 0) return false;
+  const links = buildCommentPasteLinks(networkId);
+  if (links === '') return false;
+  event.preventDefault();
+  editor.insertAtCaret(links);
+  return true;
 }

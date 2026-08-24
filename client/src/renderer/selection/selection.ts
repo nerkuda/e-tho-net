@@ -16,7 +16,11 @@
  */
 
 import { scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
-import { setAddToSelectionHook, showSelectionThoughtContextMenu } from '../canvas/context-menu.js';
+import {
+  setAddToSelectionHook,
+  showSelectionThoughtContextMenu,
+} from '../canvas/context-menu.js';
+import { buildMultiThoughtSnapshot, type SnapshotDeps } from '../canvas/clipboard.js';
 import { applyThoughtIcon, invalidateRef, setSelectionClickHooks } from '../canvas/canvas.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
@@ -228,7 +232,14 @@ function buildSelectionMenu(): MenuItem[] {
 function buildActionsMenu(): MenuItem[] {
   const focusId = store.state.focus?.focused.id;
   const needFocus = focusId === undefined;
+  const hasSelection = store.state.selection.length > 0;
   return [
+    {
+      label: 'Скопировать мысли',
+      disabled: !hasSelection,
+      onClick: () => void copySelection(),
+    },
+    MENU_SEPARATOR,
     {
       label: 'Добавить мысль в фокусе к родительским…',
       disabled: needFocus,
@@ -357,6 +368,149 @@ async function addPickedThought(): Promise<void> {
 // ---------------------------------------------------------------------------
 // «Действия» operations
 // ---------------------------------------------------------------------------
+
+/**
+ * Captures every thought in the current selection into the clipboard
+ * (workplan L26). The snapshot includes each thought's permanent comment,
+ * property values and attachments, plus the inter-thought links that live
+ * entirely inside the selection.
+ *
+ * Exported so the global Ctrl+C handler (`app.ts:globalCopy`) can call it
+ * directly when the user presses the shortcut with a non-empty selection.
+ */
+export async function copySelection(): Promise<void> {
+  const networkId = requireNetworkId();
+  const ids = store.state.selection;
+  if (ids.length === 0) return;
+  try {
+    // Resolve lightweight metadata first to know each thought's type_id (so
+    // we can later look up the source property keys).
+    const refs = await etn.thoughts.resolve(networkId, ids.slice(0, 100));
+    // Fetch full Thought rows in parallel — `get` returns the style and
+    // type_id we need for the snapshot.
+    const thoughts = await Promise.all(
+      refs.map(async (r) => etn.thoughts.get(networkId, r.id).catch(() => null)),
+    );
+    const valid = thoughts.filter((t): t is NonNullable<typeof t> => t !== null);
+    if (valid.length === 0) {
+      notice('Не удалось получить мысли для копирования.', 'error');
+      return;
+    }
+    const deps = makeSelectionSnapshotDeps(networkId);
+    await buildMultiThoughtSnapshot(valid, deps);
+    notice(`Скопировано ${valid.length} ${pluraliseThoughtsRu(valid.length)}.`);
+  } catch (err) {
+    notice(`Не удалось скопировать: ${errText(err)}`, 'error');
+  }
+}
+
+function pluraliseThoughtsRu(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'мысль';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'мысли';
+  return 'мыслей';
+}
+
+/** Build a SnapshotDeps bound to the selection panel / current network.
+ *  Exported so the global Ctrl+C handler in `app.ts` can build the same
+ *  snapshot when the user copies the focused thought via keyboard. */
+export function makeSelectionSnapshotDeps(networkId: string): SnapshotDeps {
+  const typeNames = new Map<string | null, string | null>();
+  for (const t of store.state.thoughtTypes) {
+    typeNames.set(t.id, t.name);
+  }
+  const linkTypeNames = new Map<
+    string | null,
+    { name_forward: string | null; name_reverse: string | null }
+  >();
+  for (const t of store.state.linkTypes) {
+    linkTypeNames.set(t.id, { name_forward: t.name_forward, name_reverse: t.name_reverse });
+  }
+  const sourceName = store.state.networkList.find((n) => n.id === networkId)?.display_name;
+
+  // Same property-key cache the context menu uses — the PropertyValue DTO
+  // carries only the id, so we resolve the key through the type's effective
+  // property list (cached per type_id).
+  const propertyKeyCache = new Map<string, string>();
+  async function resolvePropertyKeys(thought: {
+    type_id: string | null;
+  }): Promise<Map<string, string>> {
+    if (thought.type_id === null) return new Map();
+    const cached = propertyKeyCache.get(thought.type_id);
+    if (cached !== undefined)
+      return new Map(Object.entries(JSON.parse(cached) as Record<string, string>));
+    try {
+      const defs = await etn.types.listTypeProperties(networkId, 'thought_type', thought.type_id);
+      const map = new Map<string, string>();
+      for (const def of defs) map.set(def.id, def.key);
+      propertyKeyCache.set(thought.type_id, JSON.stringify(Object.fromEntries(map)));
+      return map;
+    } catch {
+      return new Map();
+    }
+  }
+
+  return {
+    sourceNetworkId: networkId,
+    ...(sourceName !== undefined ? { sourceNetworkName: sourceName } : {}),
+    getThought: (id) => etn.thoughts.get(networkId, id).catch(() => null),
+    getPermanentComment: async (thoughtId) => {
+      const list = await etn.comments.list(networkId, 'thought', thoughtId).catch(() => []);
+      const perm = list.find((c) => c.kind === 'permanent');
+      if (perm === undefined) return null;
+      return { title: perm.title, body_md: perm.body_md };
+    },
+    getProperties: async (thoughtId) => {
+      const thought = await etn.thoughts.get(networkId, thoughtId).catch(() => null);
+      if (thought === null) return {};
+      const [values, keys] = await Promise.all([
+        etn.properties.get(networkId, 'thought', thoughtId).catch(() => []),
+        resolvePropertyKeys(thought),
+      ]);
+      const out: Record<string, unknown> = {};
+      for (const v of values) {
+        const key = keys.get(v.property_id);
+        if (key === undefined) continue;
+        out[key] = v.value;
+      }
+      return out;
+    },
+    getAttachments: async (thoughtId) => {
+      const list = await etn.attachments.list(networkId, 'thought', thoughtId).catch(() => []);
+      return list.map((a) => ({
+        kind: a.kind,
+        url: a.url,
+        file_path: a.file_path,
+        file_size: a.file_size,
+        mime_type: a.mime_type,
+        title: a.title,
+        description: a.description,
+      }));
+    },
+    getLinksForThought: async (thoughtId) => {
+      const grouped = await etn.links.listByThought(networkId, thoughtId, true).catch(() => null);
+      if (grouped === null) return [];
+      const all = [
+        ...grouped.by_type.flatMap((g) => g.items.map((i) => i.link)),
+        ...grouped.untyped_parents.map((u) => u.link),
+        ...grouped.untyped_children.map((u) => u.link),
+      ];
+      return all.map((l) => ({
+        id: l.id,
+        source_id: l.source_id,
+        target_id: l.target_id,
+        type_id: l.type_id,
+        color: l.color,
+        style: l.style,
+        width: l.width,
+        active: l.active,
+      }));
+    },
+    getThoughtTypeName: (typeId) => typeNames.get(typeId ?? null) ?? null,
+    getLinkTypeNames: (typeId) => linkTypeNames.get(typeId ?? null) ?? null,
+  };
+}
 
 /**
  * Creates focus↔selection links of the chosen type.

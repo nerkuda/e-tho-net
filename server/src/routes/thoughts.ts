@@ -34,6 +34,7 @@ import {
   type SortOrder,
   type ThoughtBatchFailure,
   type ThoughtBatchOp,
+  type ThoughtCopyInput,
   type ThoughtCreateInput,
   type ThoughtUpdateInput,
 } from '@etn/shared';
@@ -70,6 +71,7 @@ import {
   resolveThoughts,
   updateThought,
 } from '../domain/thought-service.js';
+import { copyThoughtsBatch } from '../domain/thought-copy-service.js';
 
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
@@ -134,6 +136,112 @@ function toSynonymArray(value: string[] | string | undefined): string[] | undefi
     return undefined;
   }
   return Array.isArray(value) ? value : value.split(',');
+}
+
+/** UUID shape used to validate the `source_id` extension on each snapshot. */
+const UUID_RE_FOR_SOURCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Parse and validate the body of `POST /thoughts/copy-batch`. The shape is
+ * wide (a list of thought snapshots + a list of inter-thought links) but
+ * the per-item validation is light — the service is the source of truth on
+ * what can actually be materialised. Here we just make sure the wrapper
+ * fields are well-formed and the arrays are non-empty.
+ */
+function parseThoughtCopyBody(
+  body: Record<string, unknown>,
+  requestId: string,
+): ThoughtCopyInput {
+  const sourceNetworkId = fieldString(body, 'source_network_id', requestId);
+  if (sourceNetworkId === undefined || sourceNetworkId === '') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'source_network_id обязателен и не может быть пустым.',
+      { field: 'source_network_id' },
+      requestId,
+    );
+  }
+  const parentThoughtId = fieldString(body, 'parent_thought_id', requestId);
+  if (parentThoughtId === undefined || parentThoughtId === '') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'parent_thought_id обязателен и не может быть пустым.',
+      { field: 'parent_thought_id' },
+      requestId,
+    );
+  }
+  const thoughtsRaw = body.thoughts;
+  const linksRaw = body.links;
+  if (!Array.isArray(thoughtsRaw) || thoughtsRaw.length === 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'thoughts должен быть непустым массивом снимков мыслей.',
+      { field: 'thoughts' },
+      requestId,
+    );
+  }
+  const thoughts: import('@etn/shared').ThoughtCopyItem[] = [];
+  for (const [idx, raw] of thoughtsRaw.entries()) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `thoughts[${idx}] должен быть объектом.`,
+        { field: `thoughts[${idx}]` },
+        requestId,
+      );
+    }
+    const item = raw as Record<string, unknown>;
+    // The snapshot is a copy-paste extension: it carries the original
+    // thought id under `source_id` so the result map can hand it back.
+    // We do not enforce that it parses as a UUID here — the server is
+    // permissive (a missing source_id yields `thought_id_map[''] = …`),
+    // but when present we make sure it has the canonical shape.
+    if (
+      item['source_id'] !== undefined &&
+      item['source_id'] !== null &&
+      item['source_id'] !== '' &&
+      (typeof item['source_id'] !== 'string' ||
+        !UUID_RE_FOR_SOURCE.test(item['source_id'] as string))
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `thoughts[${idx}].source_id должен быть UUID-строкой.`,
+        { field: `thoughts[${idx}].source_id` },
+        requestId,
+      );
+    }
+    thoughts.push(item as unknown as import('@etn/shared').ThoughtCopyItem);
+  }
+
+  const links: import('@etn/shared').ThoughtCopyLink[] = [];
+  if (linksRaw !== undefined) {
+    if (!Array.isArray(linksRaw)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'links должен быть массивом.',
+        { field: 'links' },
+        requestId,
+      );
+    }
+    for (const [idx, raw] of linksRaw.entries()) {
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `links[${idx}] должен быть объектом.`,
+          { field: `links[${idx}]` },
+          requestId,
+        );
+      }
+      links.push(raw as unknown as import('@etn/shared').ThoughtCopyLink);
+    }
+  }
+
+  return {
+    source_network_id: sourceNetworkId,
+    parent_thought_id: parentThoughtId,
+    thoughts,
+    links,
+  };
 }
 
 /** Parse and validate the body of `POST /thoughts`. */
@@ -732,6 +840,34 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           }
         }
         sendSuccess(reply, { affected, failures });
+      },
+    );
+
+    // --- Copy-batch (workplan L26, task bb8277f6) ----------------------------
+    // Paste a clipboard snapshot under `parent_thought_id` in this network.
+    // Type and link-type resolution falls back to "drop the type" per spec
+    // when nothing fits; thought_ref values are re-resolved by id → title.
+    // The whole batch is one transaction — partial failure rolls back.
+
+    app.post(
+      '/networks/:networkId/thoughts/copy-batch',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as NetworkIdParams;
+        const input = parseThoughtCopyBody(requestBody(req), req.id);
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const result = copyThoughtsBatch(ndb, input, req.auth!.user.id);
+        // Real-time: emit a `thought.created` for every new thought and a
+        // `link.created` for every new link so other connected clients
+        // refresh without polling. The actor has no echo (04-realtime.md §5);
+        // the local refresh below reconciles the canvas / structures view.
+        for (const thought of result.created_thoughts) {
+          deps.emit(req, networkId, 'thought.created', { thought });
+        }
+        for (const link of result.created_links) {
+          deps.emit(req, networkId, 'link.created', { link });
+        }
+        sendSuccess(reply, result);
       },
     );
 

@@ -13,9 +13,10 @@
 
 import type { FocusResponse, Thought } from '@etn/shared';
 
-import { closeDialog } from './lib/dialog.js';
+import { closeDialog, errorDialog } from './lib/dialog.js';
 import { etn } from './lib/etn.js';
 import { closeMenu } from './lib/menu.js';
+import { notice } from './lib/notice.js';
 import { UI_STATE_KEY, PREF_KEY } from '@etn/shared';
 import { applyCanvasZoom } from './canvas/canvas-zoom.js';
 import {
@@ -532,7 +533,8 @@ export async function boot(): Promise<void> {
   showScreen('onboarding');
 }
 
-/** Global keyboard shortcuts (08-ui-spec.md §13): Ctrl+F, Escape, Ctrl+±/0. */
+/** Global keyboard shortcuts (08-ui-spec.md §13): Ctrl+F, Escape, Ctrl+±/0,
+ *  and the copy/paste bindings of workplan L26 (Ctrl+C, Ctrl+V). */
 export function initKeyboard(): void {
   window.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
@@ -545,6 +547,27 @@ export function initKeyboard(): void {
       return;
     }
     if (event.ctrlKey || event.metaKey) {
+      // Copy / paste of thoughts (workplan L26). Only fire when the focus is
+      // *not* inside an editable surface — there the native Ctrl+C/V must
+      // run (CM6 comment editor, add dialog input, …). Same scope as the
+      // canvas kbd-nav handler (canvas/kbd-nav.ts:100).
+      const editable = isEditableTarget(event.target);
+      if (!editable) {
+        if (event.key.toLowerCase() === 'c' && !event.shiftKey && !event.altKey) {
+          if (store.state.screen === 'workspace' && store.state.networkId !== null) {
+            event.preventDefault();
+            void globalCopy();
+            return;
+          }
+        }
+        if (event.key.toLowerCase() === 'v' && !event.shiftKey && !event.altKey) {
+          if (store.state.screen === 'workspace' && store.state.networkId !== null) {
+            event.preventDefault();
+            void globalPaste();
+            return;
+          }
+        }
+      }
       if (event.key.toLowerCase() === 'f') {
         // Ctrl+F focuses the canvas search row — hidden in the structures
         // view (§15.1), so the shortcut does nothing there.
@@ -574,4 +597,58 @@ export function initKeyboard(): void {
       }
     }
   });
+}
+
+/** True when the keypress landed inside an editable surface the renderer
+ *  should leave alone (input, textarea, contenteditable, CM6). */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (target === null || !(target instanceof HTMLElement)) return false;
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return true;
+  if (target.isContentEditable) return true;
+  // CodeMirror 6 puts its editable element inside `.cm-content`.
+  if (target.closest('.cm-content') !== null) return true;
+  return false;
+}
+
+/** Ctrl+C: copy the focused thought, or the current selection if non-empty. */
+async function globalCopy(): Promise<void> {
+  const selection = store.state.selection;
+  if (selection.length > 0) {
+    const { copySelection } = await import('./selection/selection.js');
+    await copySelection();
+    return;
+  }
+  const focus = store.state.focus?.focused;
+  if (focus === undefined) return;
+  const { buildSingleThoughtSnapshot } = await import('./canvas/clipboard.js');
+  try {
+    const thought = await etn.thoughts.get(store.state.networkId!, focus.id);
+    const { makeSelectionSnapshotDeps } = await import('./selection/selection.js');
+    await buildSingleThoughtSnapshot(thought, makeSelectionSnapshotDeps(store.state.networkId!));
+    notice(`Скопировано: «${thought.title}»`);
+  } catch (err) {
+    errorDialog('Копировать', err);
+  }
+}
+
+/** Ctrl+V: paste the clipboard under the focused thought, or read the
+ *  system clipboard's text and apply the "paste text into cloud" rules. */
+async function globalPaste(): Promise<void> {
+  const focus = store.state.focus?.focused;
+  if (focus === undefined) return;
+  const { pasteThoughtsTo, hasClipboard, pasteTextToCloud } = await import('./canvas/clipboard.js');
+  if (hasClipboard()) {
+    await pasteThoughtsTo(focus.id);
+    scheduleRefresh();
+    return;
+  }
+  // No internal clipboard — try the system clipboard text (paste into cloud).
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text.trim() === '') return;
+    await pasteTextToCloud(text, focus.id);
+    scheduleRefresh();
+  } catch {
+    // Clipboard read denied or unavailable — silently ignore.
+  }
 }

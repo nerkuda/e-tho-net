@@ -19,6 +19,13 @@ import type { FocusDir, Link } from '@etn/shared';
 
 import { onThoughtDeleted, scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
 import { openAddDialog } from './add-dialog.js';
+import {
+  buildSingleThoughtSnapshot,
+  getClipboard,
+  hasClipboard,
+  pasteThoughtsTo as pasteThoughtsToClipboard,
+  type SnapshotDeps,
+} from './clipboard.js';
 import { invalidateRef, requestZoneAnimation } from './canvas.js';
 import { patchFocusEdge, store } from '../state.js';
 import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
@@ -125,9 +132,6 @@ interface CloudMenuTarget {
   title: string;
   dir: ZoneDir;
 }
-
-/** The thought/type clipboard (copy/cut/paste). */
-let clipboard: { id: string; cut: boolean } | null = null;
 
 /** Thought ids that may be reordered (parents/children only). */
 type OrderableDir = 'parents' | 'children';
@@ -475,22 +479,12 @@ function buildThoughtMenuItems(
     ...selectionItem,
     {
       label: 'Копировать',
-      onClick: () => {
-        clipboard = { id: target.id, cut: false };
-        notice(`Скопировано: «${target.title}»`);
-      },
-    },
-    {
-      label: 'Вырезать',
-      onClick: () => {
-        clipboard = { id: target.id, cut: true };
-        notice(`Вырезано: «${target.title}»`);
-      },
+      onClick: () => void copyThought(target, networkId),
     },
     {
       label: 'Вставить',
-      disabled: clipboard === null,
-      onClick: () => void pasteTo(networkId, target.id),
+      disabled: !hasClipboard(),
+      onClick: () => void pasteThoughtsTo(networkId, target.id),
     },
     {
       label: 'Копировать ID',
@@ -581,20 +575,124 @@ async function changeIcon(networkId: string, id: string): Promise<void> {
   }
 }
 
-/** Pastes the clipboard as a source linked to the target thought. */
-async function pasteTo(networkId: string, targetId: string): Promise<void> {
-  if (clipboard === null) return;
+/**
+ * Captures the thought the user clicked "Copy" on into the in-memory
+ * clipboard (workplan L26). The full snapshot — title, synonyms, style,
+ * type tag, permanent comment, property values, attachments — is fetched
+ * lazily, so a click feels instant even on a thought with many attachments.
+ */
+async function copyThought(
+  target: { id: string; title: string },
+  networkId: string,
+): Promise<void> {
   try {
-    await etn.links.create(networkId, {
-      source_id: clipboard.id,
-      target_id: targetId,
-    });
-    if (clipboard.cut) clipboard = null;
-    notice('Связь создана.');
-    scheduleRefresh();
+    const thought = await etn.thoughts.get(networkId, target.id);
+    const deps = makeSnapshotDeps(networkId);
+    await buildSingleThoughtSnapshot(thought, deps);
+    notice(`Скопировано: «${thought.title}»`);
   } catch (err) {
-    errorDialog('Вставить', err);
+    errorDialog('Копировать', err);
   }
+}
+
+/** Thin context-menu wrapper around the clipboard paste helper. */
+async function pasteThoughtsTo(networkId: string, targetId: string): Promise<void> {
+  void networkId; // the helper pulls the current network from store state.
+  await pasteThoughtsToClipboard(targetId);
+  scheduleRefresh();
+}
+
+/** Build a SnapshotDeps bound to the current renderer / network. */
+function makeSnapshotDeps(networkId: string): SnapshotDeps {
+  const typeNames = new Map<string | null, string | null>();
+  for (const t of store.state.thoughtTypes) {
+    typeNames.set(t.id, t.name);
+  }
+  const linkTypeNames = new Map<string | null, { name_forward: string | null; name_reverse: string | null }>();
+  for (const t of store.state.linkTypes) {
+    linkTypeNames.set(t.id, { name_forward: t.name_forward, name_reverse: t.name_reverse });
+  }
+  const sourceName = store.state.networkList.find((n) => n.id === networkId)?.display_name;
+
+  // Cache for `property_id → key` lookups. The PropertyValue DTO carries
+  // only the id, so we resolve the key through the type's effective
+  // property list. Each thought type is looked up at most once.
+  const propertyKeyCache = new Map<string, string>();
+  async function resolvePropertyKeys(thought: { type_id: string | null }): Promise<Map<string, string>> {
+    if (thought.type_id === null) return new Map();
+    const cached = propertyKeyCache.get(thought.type_id);
+    if (cached !== undefined) return new Map(Object.entries(JSON.parse(cached) as Record<string, string>));
+    try {
+      const defs = await etn.types.listTypeProperties(networkId, 'thought_type', thought.type_id);
+      const map = new Map<string, string>();
+      for (const def of defs) map.set(def.id, def.key);
+      propertyKeyCache.set(thought.type_id, JSON.stringify(Object.fromEntries(map)));
+      return map;
+    } catch {
+      return new Map();
+    }
+  }
+
+  return {
+    sourceNetworkId: networkId,
+    ...(sourceName !== undefined ? { sourceNetworkName: sourceName } : {}),
+    getThought: (id) =>
+      etn.thoughts.get(networkId, id).catch(() => null),
+    getPermanentComment: async (thoughtId) => {
+      const list = await etn.comments.list(networkId, 'thought', thoughtId).catch(() => []);
+      const perm = list.find((c) => c.kind === 'permanent');
+      if (perm === undefined) return null;
+      return { title: perm.title, body_md: perm.body_md };
+    },
+    getProperties: async (thoughtId) => {
+      const thought = await etn.thoughts.get(networkId, thoughtId).catch(() => null);
+      if (thought === null) return {};
+      const [values, keys] = await Promise.all([
+        etn.properties.get(networkId, 'thought', thoughtId).catch(() => []),
+        resolvePropertyKeys(thought),
+      ]);
+      const out: Record<string, unknown> = {};
+      for (const v of values) {
+        const key = keys.get(v.property_id);
+        if (key === undefined) continue;
+        out[key] = v.value;
+      }
+      return out;
+    },
+    getAttachments: async (thoughtId) => {
+      const list = await etn.attachments.list(networkId, 'thought', thoughtId).catch(() => []);
+      return list.map((a) => ({
+        kind: a.kind,
+        url: a.url,
+        file_path: a.file_path,
+        file_size: a.file_size,
+        mime_type: a.mime_type,
+        title: a.title,
+        description: a.description,
+      }));
+    },
+    getLinksForThought: async (thoughtId) => {
+      const grouped = await etn.links.listByThought(networkId, thoughtId, true).catch(() => null);
+      if (grouped === null) return [];
+      const all = [
+        ...grouped.by_type.flatMap((g) => g.items.map((i) => i.link)),
+        ...grouped.untyped_parents.map((u) => u.link),
+        ...grouped.untyped_children.map((u) => u.link),
+      ];
+      return all.map((l) => ({
+        id: l.id,
+        source_id: l.source_id,
+        target_id: l.target_id,
+        type_id: l.type_id,
+        color: l.color,
+        style: l.style,
+        width: l.width,
+        active: l.active,
+      }));
+    },
+    getThoughtTypeName: (typeId) => typeNames.get(typeId ?? null) ?? null,
+    getLinkTypeNames: (typeId) => linkTypeNames.get(typeId ?? null) ?? null,
+  };
 }
 
 /**

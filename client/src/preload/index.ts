@@ -58,6 +58,7 @@ function buildApi(): EtnApi {
       neighbors: (networkId, id, dir, limit, offset) =>
         invoke('thoughts.neighbors', networkId, id, dir, limit, offset),
       batch: (networkId, input) => invoke('thoughts.batch', networkId, input),
+      copyBatch: (networkId, input) => invoke('thoughts.copyBatch', networkId, input),
       resolve: (networkId, ids) => invoke('thoughts.resolve', networkId, ids),
       search: (networkId, request) => invoke('thoughts.search', networkId, request),
       mentions: (networkId, id) => invoke('thoughts.mentions', networkId, id),

@@ -13,6 +13,7 @@ export * from './comment.js';
 export * from './attachment.js';
 export * from './thought-bundle.js';
 export * from './thought-card-warning.js';
+export * from './thought-copy.js';
 export * from './search.js';
 export * from './query.js';
 export * from './structure.js';

@@ -340,6 +340,16 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     }),
   );
   handlers.set(
+    'thoughts.copyBatch',
+    bind((networkId: string, input: Parameters<RestClient['copyThoughtsBatch']>[1]) =>
+      // Idempotency key per paste (workplan L26): two successive pastes of
+      // the same clipboard must both land even when the request bodies match.
+      requireRest(deps).copyThoughtsBatch(networkId, input, {
+        clientRequestId: randomUUID(),
+      }),
+    ),
+  );
+  handlers.set(
     'thoughts.resolve',
     bind((networkId: string, ids: string[]) => requireRest(deps).resolveThoughts(networkId, ids)),
   );

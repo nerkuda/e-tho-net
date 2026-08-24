@@ -22,6 +22,8 @@
  * (`{ data, meta }`); `meta` is exposed via {@link lastMeta} when a caller needs the
  * version/request_id of the most recent call.
  */
+import { randomUUID } from 'node:crypto';
+
 import {
   EtnError,
   type ApiList,
@@ -638,6 +640,25 @@ export class RestClient {
     return this.request('POST', `/networks/${encodeURIComponent(networkId)}/thoughts/batch`, {
       body: input,
       requestOptions: opts,
+    });
+  }
+
+  /**
+   * `POST /networks/{nid}/thoughts/copy-batch` — paste a clipboard snapshot
+   * under `parent_thought_id` (workplan L26). The whole batch runs in one
+   * server transaction; the response carries the id-map the client may want
+   * to remap references to. A fresh `Client-Request-Id` is generated per
+   * call so the server's idempotency layer does not collapse retries of
+   * different pastes.
+   */
+  public async copyThoughtsBatch(
+    networkId: string,
+    input: import('@etn/shared').ThoughtCopyInput,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ThoughtCopyResult> {
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/thoughts/copy-batch`, {
+      body: input,
+      requestOptions: { ...opts, clientRequestId: opts?.clientRequestId ?? randomUUID() },
     });
   }
 

@@ -72,6 +72,8 @@ import type {
   Thought,
   ThoughtBatchInput,
   ThoughtBatchResult,
+  ThoughtCopyInput,
+  ThoughtCopyResult,
   ThoughtCreateInput,
   ThoughtLinksGrouped,
   ThoughtRef,
@@ -263,6 +265,12 @@ export interface EtnApi {
       offset?: number,
     ): Promise<FocusNeighbor[]>;
     batch(networkId: string, input: ThoughtBatchInput): Promise<ThoughtBatchResult>;
+    /**
+     * `POST /thoughts/copy-batch` — paste a clipboard snapshot under
+     * `parent_thought_id` (workplan L26, task bb8277f6). Atomic on the
+     * server; emits `thought.created`/`link.created` for the realtime bus.
+     */
+    copyBatch(networkId: string, input: ThoughtCopyInput): Promise<ThoughtCopyResult>;
     resolve(networkId: string, ids: string[]): Promise<ThoughtRef[]>;
     search(networkId: string, request: SearchRequest): Promise<SearchResponse>;
     mentions(networkId: string, id: string): Promise<MentionHit[]>;
