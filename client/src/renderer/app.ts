@@ -553,14 +553,22 @@ export function initKeyboard(): void {
       // canvas kbd-nav handler (canvas/kbd-nav.ts:100).
       const editable = isEditableTarget(event.target);
       if (!editable) {
-        if (event.key.toLowerCase() === 'c' && !event.shiftKey && !event.altKey) {
+        // Check `event.code` in addition to `event.key` — some keyboard
+        // layouts (notably Cyrillic) report `event.key` as the layout's
+        // character (e.g. 'с') while the physical key (event.code = 'KeyC')
+        // is stable. Without the code fallback Ctrl+C/V silently stop
+        // matching when the user types in a non-Latin layout.
+        const isC = event.key.toLowerCase() === 'c' || event.code === 'KeyC';
+        const isV = event.key.toLowerCase() === 'v' || event.code === 'KeyV';
+        const noMod = !event.shiftKey && !event.altKey;
+        if (noMod && isC) {
           if (store.state.screen === 'workspace' && store.state.networkId !== null) {
             event.preventDefault();
             void globalCopy();
             return;
           }
         }
-        if (event.key.toLowerCase() === 'v' && !event.shiftKey && !event.altKey) {
+        if (noMod && isV) {
           if (store.state.screen === 'workspace' && store.state.networkId !== null) {
             event.preventDefault();
             void globalPaste();
@@ -610,7 +618,10 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
-/** Ctrl+C: copy the focused thought, or the current selection if non-empty. */
+/** Ctrl+C: copy the focused thought, or the current selection if non-empty.
+ *  Always returns a visible notice — silent failures (no focus, no selection,
+ *  fetch error) were reported as "Ctrl+C does nothing at all" and the user
+ *  had no way to tell whether the handler even fired. */
 async function globalCopy(): Promise<void> {
   const selection = store.state.selection;
   if (selection.length > 0) {
@@ -619,12 +630,20 @@ async function globalCopy(): Promise<void> {
     return;
   }
   const focus = store.state.focus?.focused;
-  if (focus === undefined) return;
+  if (focus === undefined) {
+    notice(
+      'Не выбрана мысль для копирования. Кликните на мысль на карте, чтобы сфокусировать её.',
+      'error',
+    );
+    return;
+  }
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
   const { buildSingleThoughtSnapshot } = await import('./canvas/clipboard.js');
   try {
-    const thought = await etn.thoughts.get(store.state.networkId!, focus.id);
+    const thought = await etn.thoughts.get(networkId, focus.id);
     const { makeSelectionSnapshotDeps } = await import('./selection/selection.js');
-    await buildSingleThoughtSnapshot(thought, makeSelectionSnapshotDeps(store.state.networkId!));
+    await buildSingleThoughtSnapshot(thought, makeSelectionSnapshotDeps(networkId));
     notice(`Скопировано: «${thought.title}»`);
   } catch (err) {
     errorDialog('Копировать', err);
@@ -647,7 +666,15 @@ async function globalPaste(): Promise<void> {
   } else {
     targetId = store.state.focus?.focused.id ?? null;
   }
-  if (targetId === null) return;
+  if (targetId === null) {
+    notice(
+      'Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.',
+      'error',
+    );
+    return;
+  }
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
   const { pasteThoughtsTo, hasClipboard, pasteTextToCloud } = await import('./canvas/clipboard.js');
   if (hasClipboard()) {
     await pasteThoughtsTo(targetId);
@@ -660,7 +687,12 @@ async function globalPaste(): Promise<void> {
     if (text.trim() === '') return;
     await pasteTextToCloud(text, targetId);
     scheduleRefresh();
-  } catch {
-    // Clipboard read denied or unavailable — silently ignore.
+  } catch (err) {
+    // Clipboard read denied or unavailable — surface the error so the user
+    // isn't left wondering why nothing happened.
+    notice(
+      `Не удалось прочитать системный буфер: ${err instanceof Error ? err.message : String(err)}`,
+      'error',
+    );
   }
 }
