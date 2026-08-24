@@ -739,6 +739,7 @@ function buildOptionsRow(row: HTMLElement): void {
   subtreeCheck.addEventListener('change', () => {
     options = { ...options, subtree: subtreeCheck.checked };
     persistState();
+    refreshSearchIfVisible();
   });
   subtreeLabel.append(subtreeCheck, span('только в подчинённых мыслях'));
 
@@ -755,6 +756,7 @@ function buildOptionsRow(row: HTMLElement): void {
           options = { ...options, subrootId: id };
           rebuildOptionsRow();
           persistState();
+          refreshSearchIfVisible();
         }
       });
     },
@@ -774,6 +776,7 @@ function buildOptionsRow(row: HTMLElement): void {
     check.addEventListener('change', () => {
       options = { ...options, [key]: check.checked };
       persistState();
+      refreshSearchIfVisible();
     });
     wrap.append(check, span(label));
     return wrap;
@@ -797,6 +800,7 @@ function buildOptionsRow(row: HTMLElement): void {
   typeSelect.addEventListener('change', () => {
     options = { ...options, typeIds: typeSelect.value === '' ? [] : [typeSelect.value] };
     persistState();
+    refreshSearchIfVisible();
   });
 
   const linkTypeSelect = el('select', 'select-input');
@@ -821,6 +825,7 @@ function buildOptionsRow(row: HTMLElement): void {
       linkTypeIds: linkTypeSelect.value === '' ? [] : [linkTypeSelect.value],
     };
     persistState();
+    refreshSearchIfVisible();
   });
 
   const inactiveLabel = el('label', 'checkbox-row');
@@ -830,6 +835,7 @@ function buildOptionsRow(row: HTMLElement): void {
   inactiveCheck.addEventListener('change', () => {
     options = { ...options, showInactive: inactiveCheck.checked };
     persistState();
+    refreshSearchIfVisible();
   });
   inactiveLabel.append(inactiveCheck, span('показывать неактуальные'));
 
