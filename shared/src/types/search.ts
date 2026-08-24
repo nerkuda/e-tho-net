@@ -36,6 +36,18 @@ export interface SearchNameHit {
   icon_kind: IconKind;
   /** Backing attachment of the icon for Ctrl-hover zoom (L16); `null` — none. */
   icon_attachment_id: string | null;
+  /** Visual style of the thought (matches the cloud on the canvas). */
+  fg_color: string | null;
+  bg_color: string | null;
+  /** Manual font flags; `null` — inherit from the type (§3.1.1). */
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
+  /** Thought id of the thought's type; `null` — untyped. */
+  type_id: string | null;
+  /** Актуальность мысли (отображается «бледным» при `false`). */
+  active: boolean;
   snippet: string;
   highlights: string[];
 }
@@ -49,6 +61,18 @@ export interface SearchTextHit {
   icon_kind: IconKind;
   /** Backing attachment of the icon for Ctrl-hover zoom (L16); `null` — none. */
   icon_attachment_id: string | null;
+  /** Visual style of the thought (matches the cloud on the canvas). */
+  fg_color: string | null;
+  bg_color: string | null;
+  /** Manual font flags; `null` — inherit from the type (§3.1.1). */
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
+  /** Thought id of the thought's type; `null` — untyped. */
+  type_id: string | null;
+  /** Актуальность мысли (отображается «бледным» при `false`). */
+  active: boolean;
   snippet: string;
   /** First matching comment of the thought (server collapses several). */
   comment_id: string;

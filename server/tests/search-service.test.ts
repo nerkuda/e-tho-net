@@ -13,6 +13,7 @@ import { typeNameKey } from '@etn/shared';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
+import { FONT_BOLD_BIT } from '../src/domain/font-style.js';
 import { findDuplicates, findMentions, findMentionsInTexts, makeSnippet, search } from '../src/domain/search-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
@@ -214,6 +215,65 @@ describe(
         );
         assert.equal(res.by_chrono[0]!.owner_id, t);
         assert.equal(res.meta.total_in_group.chronology, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search hits carry the thought icon and visual style (cloud parity)', () => {
+      // Bug 2: the search list must show the same icon/colour/font/active as
+      // the cloud on the canvas so the two views match. The font_* fields are
+      // surfaced as `boolean | null` (null = inherit from the type), exactly
+      // like the `Thought` DTO.
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Styled');
+        // Manual `false` on font_bold (must override a `true` type default)
+        // requires `font_manual` to mark the bit; null `font_bold` would mean
+        // "inherit" instead.
+        ndb
+          .prepare(
+            `UPDATE thoughts SET fg_color = ?, bg_color = ?,
+              font_bold = ?, font_italic = ?, font_underline = ?, font_strike = ?,
+              font_manual = ?
+             WHERE id = ?`,
+          )
+          .run(
+            '#ff0000',
+            '#ffff00',
+            0,
+            1,
+            1,
+            0,
+            1 | 2 | 4, // FONT_BOLD_BIT | FONT_ITALIC_BIT | FONT_UNDERLINE_BIT
+            t,
+          );
+        seedThoughtComment(ndb, t, 'styled body text');
+        const textsRes = search(ndb, { q: 'styled' });
+        assert.equal(textsRes.by_texts.length, 1);
+        const hit = textsRes.by_texts[0]!;
+        assert.equal(hit.fg_color, '#ff0000');
+        assert.equal(hit.bg_color, '#ffff00');
+        assert.equal(hit.font_bold, false, 'explicit manual false');
+        assert.equal(hit.font_italic, true);
+        assert.equal(hit.font_underline, true);
+        assert.equal(hit.font_strike, null, 'unset bit means "inherit"');
+        assert.equal(hit.active, true);
+
+        // Inactive thought — searched with `show_inactive: true` so it surfaces
+        // both in `by_names` and in the visual-style fields.
+        const inactive = seedThought(ndb, 'Faded', { active: 0 });
+        ndb
+          .prepare('UPDATE thoughts SET fg_color = ?, font_manual = ? WHERE id = ?')
+          .run('#888888', FONT_BOLD_BIT, inactive);
+        const inactiveRes = search(ndb, { q: 'faded', show_inactive: true });
+        assert.equal(inactiveRes.by_names.length, 1);
+        assert.equal(inactiveRes.by_names[0]!.fg_color, '#888888');
+        assert.equal(inactiveRes.by_names[0]!.active, false);
+
+        const namesRes = search(ndb, { q: 'styled' });
+        assert.equal(namesRes.by_names.length, 1);
+        assert.equal(namesRes.by_names[0]!.fg_color, '#ff0000');
       } finally {
         ndb.close();
       }

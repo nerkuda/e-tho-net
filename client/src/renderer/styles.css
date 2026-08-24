@@ -3224,6 +3224,25 @@ body.cloud-dragging * {
   border-radius: 2px;
 }
 
+/* Thought-hit cloud style (icon/colour/font) — mirrors the canvas cloud so
+ * the search list matches what the user sees on the map (08-ui-spec.md §2.2,
+ * §6.7). `.dim` is shared with `.cloud.dim`/`.mention-item.dim` etc. */
+.search-hit.font-bold .hit-title {
+  font-weight: 700;
+}
+.search-hit.font-italic .hit-title {
+  font-style: italic;
+}
+.search-hit.font-underline .hit-title {
+  text-decoration: underline;
+}
+.search-hit.font-strike .hit-title {
+  text-decoration: line-through;
+}
+.search-hit.dim {
+  opacity: 0.55;
+}
+
 .search-empty {
   color: var(--text-faint);
   padding: 12px 4px;

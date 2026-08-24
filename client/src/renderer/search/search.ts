@@ -26,7 +26,11 @@
  */
 
 import { setFocus } from '../app.js';
-import { applyThoughtIcon } from '../canvas/canvas.js';
+import {
+  applyCloudStyle,
+  applyThoughtIcon,
+  resolveCloudStyle,
+} from '../canvas/canvas.js';
 import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { openLinkInEditor } from '../editor/editor.js';
 import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
@@ -35,8 +39,10 @@ import { isNotFoundError, parseThoughtIdQuery } from '../lib/pure.js';
 import { orderedTypeRows } from '../lib/type-tree.js';
 import {
   UI_STATE_KEY,
+  type SearchNameHit,
   type SearchResponse,
   type SearchScope,
+  type SearchTextHit,
   type Thought,
 } from '@etn/shared';
 import { store } from '../state.js';
@@ -480,9 +486,23 @@ function renderIdResult(thought: Thought | null): void {
         icon: thought.icon,
         icon_kind: thought.icon_kind,
         icon_attachment_id: thought.icon_attachment_id,
+        type_id: thought.type_id,
       }),
       info,
     );
+    // The «Мысль по ID» row is the only thought fetched via `thoughts.get`,
+    // so its full DTO carries every cloud-style field. Apply it here too so
+    // the search list matches the canvas uniformly (08-ui-spec.md §2.2).
+    applyThoughtHitStyle(row, {
+      fg_color: thought.fg_color,
+      bg_color: thought.bg_color,
+      font_bold: thought.font_bold,
+      font_italic: thought.font_italic,
+      font_underline: thought.font_underline,
+      font_strike: thought.font_strike,
+      type_id: thought.type_id,
+      active: thought.active,
+    });
     row.addEventListener('click', () => {
       lastSelectedKey = key;
       applySelection(key, true);
@@ -507,16 +527,54 @@ function thoughtIconEl(hit: {
   icon: string | null;
   icon_kind: import('@etn/shared').IconKind;
   icon_attachment_id: string | null;
+  type_id: string | null;
 }): HTMLElement {
   const icon = span('', 'mini-icon');
   applyThoughtIcon(icon, {
     id: hit.thought_id,
     icon: hit.icon,
     icon_kind: hit.icon_kind,
-    type_id: null,
+    // `type_id` is needed for the type-chain icon fallback — without it the
+    // row would show 💭 for every thought whose own icon is unset, even when
+    // its type carries one (08-ui-spec.md §2.2).
+    type_id: hit.type_id,
     icon_attachment_id: hit.icon_attachment_id,
   });
   return icon;
+}
+
+/**
+ * Visual style of a thought hit: the same colour/font/active flags the cloud
+ * carries on the canvas. Reused for `by_names`, `by_texts` and the «Мысль по
+ * ID» row (which carries the full `Thought` DTO). Link/chrono rows do not
+ * carry a thought style (no thought to inherit from).
+ */
+function applyThoughtHitStyle(
+  row: HTMLElement,
+  hit: {
+    fg_color: string | null;
+    bg_color: string | null;
+    font_bold: boolean | null;
+    font_italic: boolean | null;
+    font_underline: boolean | null;
+    font_strike: boolean | null;
+    type_id: string | null;
+    active: boolean;
+  },
+): void {
+  const style = resolveCloudStyle({
+    fg_color: hit.fg_color,
+    bg_color: hit.bg_color,
+    font_bold: hit.font_bold,
+    font_italic: hit.font_italic,
+    font_underline: hit.font_underline,
+    font_strike: hit.font_strike,
+    type_id: hit.type_id,
+  });
+  applyCloudStyle(row, style);
+  // Inactive thoughts render dim — the same treatment the canvas applies to
+  // an inactive neighbour's cloud (08-ui-spec.md §6.7).
+  if (!hit.active) row.classList.add('dim');
 }
 
 /** Renders the four result groups. */
@@ -538,6 +596,8 @@ function renderResults(response: SearchResponse | null): void {
       snippet: string;
       /** Stable row key for selection restore + keyboard navigation. */
       key: string;
+      /** Original hit — used by `applyThoughtHitStyle` to colour the row. */
+      hit?: SearchNameHit | SearchTextHit;
       open: () => void;
     }>;
   }> = [
@@ -549,6 +609,7 @@ function renderResults(response: SearchResponse | null): void {
         title: hit.title,
         snippet: hit.snippet,
         key: `thought:${hit.thought_id}`,
+        hit,
         open: () => void setFocus(hit.thought_id),
       })),
     },
@@ -560,6 +621,7 @@ function renderResults(response: SearchResponse | null): void {
         title: hit.title,
         snippet: hit.snippet,
         key: `thought:${hit.thought_id}`,
+        hit,
         open: () => void setFocus(hit.thought_id),
       })),
     },
@@ -617,6 +679,11 @@ function renderResults(response: SearchResponse | null): void {
         renderHtml(snippet, hit.snippet);
         info.append(title, snippet);
         row.append(hit.iconEl, info);
+        // Thought hits pick up the cloud's own colour/font/active (08-ui-spec.md
+        // §2.2, §6.7) — the search list shows the same icon and style as the
+        // canvas. Link/chrono rows have no thought to inherit from and stay
+        // on the default theme.
+        if (hit.hit !== undefined) applyThoughtHitStyle(row, hit.hit);
         row.addEventListener('click', () => {
           lastSelectedKey = hit.key;
           applySelection(hit.key, true);

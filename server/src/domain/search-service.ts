@@ -415,10 +415,19 @@ function searchNames(
       )
       .get(...params) as { c: number }
   ).c;
+  // The names FTS index is keyed by `thought_id`/`synonym_norm`, so one row
+  // already maps to one thought — no per-comment collapse is needed here.
+  // Visual style and `active` are joined from `thoughts` so the client can
+  // render the hit row like a cloud on the canvas (08-ui-spec.md §2.2).
   const rows = ndb
     .prepare(
       `SELECT f.thought_id AS thought_id, t.title AS title, t.icon AS icon,
-              t.icon_kind AS icon_kind, t.icon_attachment_id AS icon_attachment_id
+              t.icon_kind AS icon_kind, t.icon_attachment_id AS icon_attachment_id,
+              t.fg_color AS fg_color, t.bg_color AS bg_color,
+              t.font_bold AS font_bold, t.font_italic AS font_italic,
+              t.font_underline AS font_underline, t.font_strike AS font_strike,
+              t.font_manual AS font_manual,
+              t.type_id AS type_id, t.active AS active
        FROM fts_thought_names f
        JOIN thoughts t ON t.id = f.thought_id
        WHERE ${where}
@@ -431,6 +440,15 @@ function searchNames(
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    fg_color: string | null;
+    bg_color: string | null;
+    font_bold: number;
+    font_italic: number;
+    font_underline: number;
+    font_strike: number;
+    font_manual: number;
+    type_id: string | null;
+    active: number;
   }>;
   return {
     hits: rows.map((r) => {
@@ -441,6 +459,14 @@ function searchNames(
         icon: r.icon,
         icon_kind: r.icon_kind as IconKind,
         icon_attachment_id: r.icon_attachment_id,
+        fg_color: r.fg_color,
+        bg_color: r.bg_color,
+        font_bold: readFont(r.font_manual, FONT_BOLD_BIT, r.font_bold),
+        font_italic: readFont(r.font_manual, FONT_ITALIC_BIT, r.font_italic),
+        font_underline: readFont(r.font_manual, FONT_UNDERLINE_BIT, r.font_underline),
+        font_strike: readFont(r.font_manual, FONT_STRIKE_BIT, r.font_strike),
+        type_id: r.type_id,
+        active: r.active === 1,
         snippet,
         highlights: [snippet],
       };
@@ -484,11 +510,18 @@ function searchTexts(
   const rows = ndb
     .prepare(
       `SELECT comment_id, thought_id, title, body, icon, icon_kind,
-              icon_attachment_id
+              icon_attachment_id, fg_color, bg_color,
+              font_bold, font_italic, font_underline, font_strike,
+              font_manual, type_id, active
        FROM (
          SELECT c.id AS comment_id, f.thought_id AS thought_id, t.title AS title,
                 c.body_md AS body, t.icon AS icon, t.icon_kind AS icon_kind,
                 t.icon_attachment_id AS icon_attachment_id,
+                t.fg_color AS fg_color, t.bg_color AS bg_color,
+                t.font_bold AS font_bold, t.font_italic AS font_italic,
+                t.font_underline AS font_underline, t.font_strike AS font_strike,
+                t.font_manual AS font_manual,
+                t.type_id AS type_id, t.active AS active,
                 rank AS _rank,
                 ROW_NUMBER() OVER (PARTITION BY f.thought_id ORDER BY rank) AS _rn
          FROM fts_thought_texts f
@@ -508,6 +541,15 @@ function searchTexts(
     icon: string | null;
     icon_kind: string;
     icon_attachment_id: string | null;
+    fg_color: string | null;
+    bg_color: string | null;
+    font_bold: number;
+    font_italic: number;
+    font_underline: number;
+    font_strike: number;
+    font_manual: number;
+    type_id: string | null;
+    active: number;
   }>;
   return {
     hits: rows.map((r) => {
@@ -518,6 +560,14 @@ function searchTexts(
         icon: r.icon,
         icon_kind: r.icon_kind as IconKind,
         icon_attachment_id: r.icon_attachment_id,
+        fg_color: r.fg_color,
+        bg_color: r.bg_color,
+        font_bold: readFont(r.font_manual, FONT_BOLD_BIT, r.font_bold),
+        font_italic: readFont(r.font_manual, FONT_ITALIC_BIT, r.font_italic),
+        font_underline: readFont(r.font_manual, FONT_UNDERLINE_BIT, r.font_underline),
+        font_strike: readFont(r.font_manual, FONT_STRIKE_BIT, r.font_strike),
+        type_id: r.type_id,
+        active: r.active === 1,
         snippet,
         comment_id: r.comment_id,
         highlights: [snippet],
