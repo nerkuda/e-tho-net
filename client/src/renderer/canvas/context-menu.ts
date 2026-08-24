@@ -313,10 +313,28 @@ function buildThoughtMenuItems(
   } = {},
 ): MenuItem[] {
   const focus = store.state.focus;
-  const isFocus = focus?.focused.id === target.id;
   const focusHasParent = focus !== null && focus.parents.length > 0;
   const siblingParentId = focus?.parents[0]?.id;
   const inSelection = store.state.selection.includes(target.id);
+  // Manual order is only available in the parents/children zones while the
+  // active sort is «ручной» (08-ui-spec.md §2.7, docs/03-server-api.md §6.2).
+  // Compute the thought's index in the zone up-front so each submenu row can
+  // gate itself on its own position-based condition (not first / not last).
+  const zoneSort =
+    focus !== null ? focus.sorts[target.dir].sort : 'alpha';
+  const canReorder =
+    focus !== null &&
+    (target.dir === 'parents' || target.dir === 'children') &&
+    zoneSort === 'manual';
+  let zoneIdx = -1;
+  let zoneLen = 0;
+  if (canReorder && (target.dir === 'parents' || target.dir === 'children')) {
+    const order = store.state.zoneOrder[target.dir];
+    zoneLen = order.length;
+    zoneIdx = order.indexOf(target.id);
+  }
+  const isZoneFirst = canReorder && zoneIdx === 0;
+  const isZoneLast = canReorder && zoneIdx === zoneLen - 1;
 
   const selectionItem: MenuItem[] =
     opts.hideSelectionCommand === true
@@ -356,16 +374,51 @@ function buildThoughtMenuItems(
       onClick: () => void toggleActive(networkId, target.id),
     },
     {
+      // Submenu is enabled only while the zone is sorted «ручной» (08-ui-spec.md
+      // §2.7). Siblings never accept manual order (§6.2); for parents/children
+      // each row self-gates on its own position condition so the user gets a
+      // precise signal of what is and is not possible right now.
       label: 'Изменить порядок',
-      disabled: target.dir === 'siblings' || !isFocus,
+      disabled: !canReorder,
       submenu: [
         {
-          label: 'сдвинуть вверх / первым',
-          onClick: () => void moveInZone(networkId, target.id, target.dir as OrderableDir, -1),
+          label: 'сделать первой',
+          disabled: !canReorder || isZoneFirst,
+          onClick: () =>
+            void moveInZone(networkId, target.id, target.dir as OrderableDir, 0),
         },
         {
-          label: 'сдвинуть вниз / последним',
-          onClick: () => void moveInZone(networkId, target.id, target.dir as OrderableDir, 1),
+          label: 'сдвинуть назад',
+          disabled: !canReorder || isZoneFirst,
+          onClick: () =>
+            void moveInZone(
+              networkId,
+              target.id,
+              target.dir as OrderableDir,
+              zoneIdx - 1,
+            ),
+        },
+        {
+          label: 'сдвинуть вперёд',
+          disabled: !canReorder || isZoneLast,
+          onClick: () =>
+            void moveInZone(
+              networkId,
+              target.id,
+              target.dir as OrderableDir,
+              zoneIdx + 1,
+            ),
+        },
+        {
+          label: 'сделать последней',
+          disabled: !canReorder || isZoneLast,
+          onClick: () =>
+            void moveInZone(
+              networkId,
+              target.id,
+              target.dir as OrderableDir,
+              zoneLen - 1,
+            ),
         },
       ],
     },
@@ -566,12 +619,19 @@ export async function deleteThought(
   }
 }
 
-/** Moves a thought one step in its zone (manual order). */
+/**
+ * Moves a thought to the given slot in its zone's manual order
+ * (08-ui-spec.md §2.6, §2.7). Called by the «Изменить порядок» submenu rows
+ * for the four actions — make-first, shift-back, shift-forward, make-last —
+ * each of which passes the appropriate absolute `toIndex`. The caller is
+ * responsible for gating on `sort=manual` and on the position condition; this
+ * function bails out only when the move is a no-op or the focus is gone.
+ */
 async function moveInZone(
   networkId: string,
   id: string,
   dir: OrderableDir,
-  delta: number,
+  toIndex: number,
 ): Promise<void> {
   const focus = store.state.focus;
   if (focus === null) return;
@@ -579,10 +639,10 @@ async function moveInZone(
   const ids = [...new Set(list.map((n) => n.id))];
   const index = ids.indexOf(id);
   if (index < 0) return;
-  const targetIndex = Math.max(0, Math.min(ids.length - 1, index + delta));
-  if (targetIndex === index) return;
+  const clamped = Math.max(0, Math.min(ids.length - 1, toIndex));
+  if (clamped === index) return;
   ids.splice(index, 1);
-  ids.splice(targetIndex, 0, id);
+  ids.splice(clamped, 0, id);
   try {
     await etn.thoughts.setFocusOrder(networkId, focus.focused.id, { dir, ordered_ids: ids });
     await etn.thoughts.setFocusPreferences(networkId, focus.focused.id, {
@@ -590,6 +650,9 @@ async function moveInZone(
       sort: 'manual',
       order: 'asc',
     });
+    // Mirror drag-cloud.ts: arm the FLIP animation so the refreshed zone
+    // shifts its clouds to their new positions instead of snapping.
+    requestZoneAnimation();
     scheduleRefresh();
   } catch (err) {
     errorDialog('Изменить порядок', err);
