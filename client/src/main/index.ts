@@ -115,17 +115,7 @@ function storedTheme(db: LocalDb): 'light' | 'dark' {
  * bundle; see the inline comment at the `sandbox` field below.
  */
 function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
-  const persisted = loadWindowBounds(db);
-  const displays = screen.getAllDisplays();
-  const bounds = sanitizeBounds(persisted, displays);
-  if (isDev) {
-    console.log(
-      '[ETN][bounds] persisted=%j displays=%j → applied=%j',
-      persisted,
-      displays.map((d) => ({ x: d.bounds.x, y: d.bounds.y, w: d.bounds.width, h: d.bounds.height })),
-      bounds,
-    );
-  }
+  const bounds = sanitizeBounds(loadWindowBounds(db), screen.getAllDisplays());
   const win = new BrowserWindow({
     x: bounds.x,
     y: bounds.y,
@@ -182,13 +172,6 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
 
   win.once('ready-to-show', () => {
     win.show();
-    if (isDev) {
-      console.log(
-        '[ETN][bounds] after ready-to-show: getBounds=%j getNormalBounds=%j',
-        win.getBounds(),
-        win.getNormalBounds(),
-      );
-    }
     // Subscribe to resize/move only AFTER the window is fully laid out, so
     // Electron's auto-events (which can change the bounds to fit a display
     // work area, DPI changes, etc.) don't get treated as user input and

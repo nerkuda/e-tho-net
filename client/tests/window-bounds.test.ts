@@ -29,7 +29,7 @@ const DUAL: DisplayLike[] = [
 ];
 
 test('parseBounds: валидный JSON-объект → WindowBounds', () => {
-  assert.deepEqual(parseBounds('{"x":10,"y":20,"w":800,"h":600}'), {
+  assert.deepEqual(parseBounds('{"x":10,"y":20,"width":800,"height":600}'), {
     x: 10,
     y: 20,
     width: 800,
@@ -38,11 +38,20 @@ test('parseBounds: валидный JSON-объект → WindowBounds', () => {
 });
 
 test('parseBounds: дробные значения округляются', () => {
-  assert.deepEqual(parseBounds('{"x":10.4,"y":20.6,"w":800.5,"h":600.5}'), {
+  assert.deepEqual(parseBounds('{"x":10.4,"y":20.6,"width":800.5,"height":600.5}'), {
     x: 10,
     y: 21,
     width: 801,
     height: 601,
+  });
+});
+
+test('parseBounds: legacy-формат с w/h тоже читается (для старых строк в БД)', () => {
+  assert.deepEqual(parseBounds('{"x":10,"y":20,"w":800,"h":600}'), {
+    x: 10,
+    y: 20,
+    width: 800,
+    height: 600,
   });
 });
 
@@ -59,17 +68,17 @@ test('parseBounds: отсутствующие поля → null', () => {
 });
 
 test('parseBounds: нечисловые поля → null', () => {
-  assert.equal(parseBounds('{"x":"a","y":0,"w":0,"h":0}'), null);
+  assert.equal(parseBounds('{"x":"a","y":0,"width":0,"height":0}'), null);
 });
 
 test('parseBounds: NaN/Infinity → null', () => {
-  assert.equal(parseBounds('{"x":1e400,"y":0,"w":100,"h":100}'), null);
-  assert.equal(parseBounds('{"x":NaN,"y":0,"w":100,"h":100}'), null);
+  assert.equal(parseBounds('{"x":1e400,"y":0,"width":100,"height":100}'), null);
+  assert.equal(parseBounds('{"x":NaN,"y":0,"width":100,"height":100}'), null);
 });
 
 test('parseBounds: нулевой/отрицательный размер → null', () => {
-  assert.equal(parseBounds('{"x":0,"y":0,"w":0,"h":100}'), null);
-  assert.equal(parseBounds('{"x":0,"y":0,"w":100,"h":-10}'), null);
+  assert.equal(parseBounds('{"x":0,"y":0,"width":0,"height":100}'), null);
+  assert.equal(parseBounds('{"x":0,"y":0,"width":100,"height":-10}'), null);
 });
 
 test('sanitizeBounds: null → дефолт в центре largest-дисплея', () => {

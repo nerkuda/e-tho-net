@@ -2,7 +2,9 @@
  * Persisted window geometry for the main Electron window.
  *
  * Stored in `client_meta` (L5, per-installation) under `WINDOW_BOUNDS`. JSON:
- * `{ "x": px, "y": px, "w": px, "h": px }`. Values are rounded integers.
+ * `{ "x": px, "y": px, "width": px, "height": px }`. Values are rounded
+ * integers. Key names mirror the {@link WindowBounds} interface so a plain
+ * `JSON.stringify(bounds)` round-trips through `parseBounds`.
  */
 import type { LocalDb } from './db/local-db.js';
 import { CLIENT_META_KEY } from '@etn/shared';
@@ -94,8 +96,11 @@ export function parseBounds(raw: string): WindowBounds | null {
   const o = data as Record<string, unknown>;
   const x = num(o['x']);
   const y = num(o['y']);
-  const w = num(o['w']);
-  const h = num(o['h']);
+  // Field names match {@link WindowBounds} (`width` / `height`) so the value
+  // round-trips through `JSON.stringify`. Legacy rows from the early draft
+  // (which used `w` / `h`) are still readable — see unit tests.
+  const w = num(o['width']) ?? num(o['w']);
+  const h = num(o['height']) ?? num(o['h']);
   if (x === null || y === null || w === null || h === null) return null;
   const bounds: WindowBounds = {
     x: Math.round(x),
