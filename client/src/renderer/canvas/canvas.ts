@@ -1198,7 +1198,27 @@ function wireEllipseDrag(
   });
 }
 
-/** Tracks the drag, highlighting the cloud under the cursor. */
+/**
+ * Elements the ellipse drag can land on for a direct link: a zone cloud, a
+ * pinned chip, a history mini-cloud (toolbar or dropdown) or a pinned/history
+ * dropdown row — every place a single thought is rendered as more than plain
+ * text (08-ui-spec.md §2.3.1). A drop anywhere else falls through to the
+ * add-thought dialog. Cloud-drag (drag-cloud.ts) treats the list panels
+ * differently (open/pin/select) because dragging a *whole* cloud there reads
+ * as "do something with this thought here"; dragging just an *ellipse* is an
+ * explicit link gesture, so every thought representation is a valid target
+ * regardless of where it lives (bug: dropping onto a pinned chip used to miss
+ * the `.cloud` check and open the add dialog instead of linking).
+ */
+const ELLIPSE_DROP_TARGET_SELECTOR =
+  '.cloud[data-id], .pinned-chip[data-id], .history-cloud[data-id], .menu-item[data-drag-id]';
+
+/** Reads the thought id off a resolved ellipse-drop target element. */
+function ellipseDropId(dropEl: HTMLElement): string | null {
+  return dropEl.dataset['id'] ?? dropEl.dataset['dragId'] ?? null;
+}
+
+/** Tracks the drag, highlighting the thought (cloud or list chip) under the cursor. */
 function onDragMove(event: MouseEvent): void {
   if (drag === null) return;
   if (!drag.active) {
@@ -1216,14 +1236,17 @@ function onDragMove(event: MouseEvent): void {
     to: { x: event.clientX, y: event.clientY },
   });
   const target = document.elementFromPoint(event.clientX, event.clientY);
-  const cloud = target instanceof HTMLElement ? target.closest<HTMLElement>('.cloud') : null;
-  if (drag.hovered !== null && drag.hovered !== cloud) {
+  const dropEl =
+    target instanceof HTMLElement
+      ? target.closest<HTMLElement>(ELLIPSE_DROP_TARGET_SELECTOR)
+      : null;
+  if (drag.hovered !== null && drag.hovered !== dropEl) {
     drag.hovered.classList.remove('drop-target');
   }
-  drag.hovered = cloud;
-  if (cloud !== null && cloud.dataset['id'] !== drag.anchorId) {
-    cloud.classList.add('drop-target');
-  } else if (cloud !== null) {
+  drag.hovered = dropEl;
+  if (dropEl !== null && ellipseDropId(dropEl) !== drag.anchorId) {
+    dropEl.classList.add('drop-target');
+  } else if (dropEl !== null) {
     drag.hovered = null;
   }
 }
@@ -1236,7 +1259,7 @@ function onDragEnd(_event: MouseEvent): void {
   const wasActive = drag.active;
   const anchorId = drag.anchorId;
   const direction = drag.direction;
-  const hoveredId = drag.hovered?.dataset['id'] ?? null;
+  const hoveredId = drag.hovered !== null ? ellipseDropId(drag.hovered) : null;
   if (drag.hovered !== null) drag.hovered.classList.remove('drop-target');
   drag.sourceEl.classList.remove('drag-source');
   setDragLinkLine(null);
