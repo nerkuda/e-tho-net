@@ -134,6 +134,7 @@ import {
   resolveLinkTypeIdByName,
 } from '../domain/link-type-service.js';
 import {
+  assertNetworkAccess,
   auditAgentCall,
   emitAgentEvent,
   openMemberNetwork,
@@ -305,17 +306,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         if (network === null) {
           throw new EtnError('NOT_FOUND', `Network ${args.network_id} not found.`);
         }
-        // Membership re-check mirrors `openMemberNetwork` (here we only need a
+        // Access re-check mirrors `openMemberNetwork` (here we only need a
         // single read, so we do not need the ndb unless the network has a
-        // structure marker).
-        const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, args.network_id);
-        if (role === null) {
-          throw new EtnError(
-            'FORBIDDEN',
-            `You are not a member of network ${args.network_id}; this API key cannot access it.`,
-            { network_id: args.network_id },
-          );
-        }
+        // structure marker); member or global admin (06-auth.md §4.1).
+        assertNetworkAccess(rt, args.network_id);
         const examplesField =
           args.include_examples === true ? { examples: network.examples } : {};
         if (network.node_section_type_id === null) {
@@ -1169,14 +1163,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         if (network === null) {
           throw new EtnError('NOT_FOUND', `Network ${args.network_id} not found.`);
         }
-        const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, args.network_id);
-        if (role === null) {
-          throw new EtnError(
-            'FORBIDDEN',
-            `You are not a member of network ${args.network_id}; this API key cannot access it.`,
-            { network_id: args.network_id },
-          );
-        }
+        assertNetworkAccess(rt, args.network_id);
 
         const limit = args.limit ?? DEFAULT_CHANGES_LIMIT;
         const minSeq = rt.deps.systemDb.getMinEventSeq(args.network_id);
@@ -1251,14 +1238,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         if (network === null) {
           throw new EtnError('NOT_FOUND', `Network ${args.network_id} not found.`);
         }
-        const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, args.network_id);
-        if (role === null) {
-          throw new EtnError(
-            'FORBIDDEN',
-            `You are not a member of network ${args.network_id}; this API key cannot access it.`,
-            { network_id: args.network_id },
-          );
-        }
+        assertNetworkAccess(rt, args.network_id);
         const { kind, limit } = clampReadMetricsParams({
           kind: args.kind,
           limit: args.limit,

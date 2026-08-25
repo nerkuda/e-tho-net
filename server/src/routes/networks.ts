@@ -14,8 +14,11 @@
  *   PUT    /networks/:networkId/preferences/:key      — set a preference (show_inactive)
  *
  * Membership management is gated by "owner OR admin"; reading network data and
- * setting one's own preferences requires any membership. Real network creation
- * (directory + data.db + HOME) is delegated to {@link NetworkService} (task C10).
+ * setting one's own preferences requires any membership — except a global
+ * admin, who passes `requireNetworkMember` for every network regardless of an
+ * explicit `network_members` row (06-auth.md §4.1, task 0.4.2 bug-fix). Real
+ * network creation (directory + data.db + HOME) is delegated to
+ * {@link NetworkService} (task C10).
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -109,7 +112,8 @@ function normalizeOptionalText(
 
 /**
  * Guard: the caller must be the network owner OR a system admin. Assumes
- * `requireNetworkMember` has already run (so the caller is at least a member).
+ * `requireNetworkMember` has already run (so the caller is at least a member,
+ * or a global admin who bypasses membership entirely — 06-auth.md §4.1).
  * Replies 403 and returns `false` when unauthorised.
  */
 async function requireOwnerOrAdmin(

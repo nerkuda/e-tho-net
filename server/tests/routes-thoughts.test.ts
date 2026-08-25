@@ -11,6 +11,8 @@ import {
   authHeaders,
   buildRestContext,
   closeRestContext,
+  createPlainUser,
+  createSecondAdminUser,
   nativeAvailable,
   type RestTestContext,
 } from './rest-helpers.js';
@@ -566,17 +568,85 @@ describe(
         });
         assert.equal(noKey.statusCode, 401);
 
-        const second = await buildRestContext();
-        try {
-          const foreign = await second.app.inject({
-            method: 'GET',
-            url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}`,
-            headers: authHeaders(second),
-          });
-          assert.equal(foreign.statusCode, 403);
-        } finally {
-          await closeRestContext(second);
-        }
+        // A plain (non-admin, non-member) user is forbidden — `buildRestContext`'s
+        // own user is always a global admin, which now bypasses membership by
+        // design (task 0.4.2 bug-fix), so a genuine "no rights at all" caller
+        // must be a non-admin (see the dedicated admin-bypass test below).
+        const foreign = createPlainUser(ctx);
+        const res = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}`,
+          headers: { authorization: `Bearer ${foreign.key}` },
+        });
+        assert.equal(res.statusCode, 403);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('a plain member (added, not owner, not admin) has full write rights on the graph (task 0.4.2)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const member = createPlainUser(ctx);
+        const add = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/members`,
+          headers: authHeaders(ctx),
+          payload: { user_id: member.userId },
+        });
+        assert.equal(add.statusCode, 201);
+        const memberHeaders = { authorization: `Bearer ${member.key}` };
+
+        const created = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts`,
+          headers: memberHeaders,
+          payload: { title: 'Создано участником' },
+        });
+        assert.equal(created.statusCode, 201);
+        const thoughtId = (created.json().data as { id: string }).id;
+
+        const patched = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}`,
+          headers: { ...memberHeaders, 'if-match': '1' },
+          payload: { title: 'Переименовано участником' },
+        });
+        assert.equal(patched.statusCode, 200);
+
+        const deleted = await ctx.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}`,
+          headers: { ...memberHeaders, 'if-match': '2' },
+        });
+        assert.equal(deleted.statusCode, 204);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('a global admin without explicit membership can read and write a foreign network (task 0.4.2)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Second admin, on the same server, never added to ctx.networkId's
+        // network_members row.
+        const secondAdmin = createSecondAdminUser(ctx);
+        const headers = { authorization: `Bearer ${secondAdmin.key}` };
+
+        const get = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}`,
+          headers,
+        });
+        assert.equal(get.statusCode, 200);
+
+        const created = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts`,
+          headers,
+          payload: { title: 'Создано чужим админом' },
+        });
+        assert.equal(created.statusCode, 201);
       } finally {
         await closeRestContext(ctx);
       }

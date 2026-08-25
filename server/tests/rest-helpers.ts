@@ -133,6 +133,51 @@ export function authHeaders(ctx: RestTestContext): Record<string, string> {
   return { authorization: `Bearer ${ctx.adminKey}` };
 }
 
+/**
+ * Create a plain, non-admin, non-member user with an API-key inside the
+ * context's system DB (task 0.4.2 bug-fix tests: `buildRestContext`'s own
+ * user is always a global admin, which now bypasses membership checks by
+ * design — a genuine "foreign, no rights at all" caller must be a non-admin).
+ */
+export function createPlainUser(ctx: RestTestContext): { userId: string; key: string } {
+  const userId = randomUUID();
+  ctx.sys.createUser({ id: userId, username: `user-${userId.slice(0, 8)}`, displayName: null });
+  const gen = generateApiKey();
+  ctx.sys.createApiKey({
+    id: randomUUID(),
+    userId,
+    label: 'plain',
+    keyHash: hashApiKey(gen.key),
+    keyPrefix: gen.keyPrefix,
+  });
+  return { userId, key: gen.key };
+}
+
+/**
+ * Create a second global-admin user with an API-key inside the context's own
+ * system DB/app (same process, same `dataDir`) — unlike a second
+ * `buildRestContext()`, this shares the running server so it can exercise the
+ * admin's cross-network access to `ctx.networkId` (task 0.4.2 bug-fix).
+ */
+export function createSecondAdminUser(ctx: RestTestContext): { userId: string; key: string } {
+  const userId = randomUUID();
+  ctx.sys.createUser({
+    id: userId,
+    username: `admin2-${userId.slice(0, 8)}`,
+    displayName: null,
+    isAdmin: true,
+  });
+  const gen = generateApiKey();
+  ctx.sys.createApiKey({
+    id: randomUUID(),
+    userId,
+    label: 'admin2',
+    keyHash: hashApiKey(gen.key),
+    keyPrefix: gen.keyPrefix,
+  });
+  return { userId, key: gen.key };
+}
+
 /** Create a thought via the REST API and return the parsed `data`. */
 export async function apiCreateThought(
   ctx: RestTestContext,

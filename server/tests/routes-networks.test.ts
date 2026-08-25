@@ -288,6 +288,98 @@ describe(
       }
     });
 
+    it('a plain member (not owner, not admin) may only read the member list, not manage it (task 0.4.2)', async () => {
+      const { app, sys, db } = await buildApp();
+      // A genuinely non-admin owner, so the outcome is not muddied by the
+      // separate global-admin bypass (`buildApp`'s own `admin` is a global
+      // admin used only to seed the server; the network owner here is not).
+      const ownerId = randomUUID();
+      sys.createUser({ id: ownerId, username: 'owner', displayName: 'Owner' });
+      const ownerGen = generateApiKey();
+      sys.createApiKey({
+        id: randomUUID(),
+        userId: ownerId,
+        label: 'p',
+        keyHash: hashApiKey(ownerGen.key),
+        keyPrefix: ownerGen.keyPrefix,
+      });
+      const networkId = seedNetwork(db, ownerId);
+      const member = seedMember(sys, db, networkId, ownerId, 'member1');
+      const other = randomUUID();
+      sys.createUser({ id: other, username: 'other', displayName: 'Other' });
+      try {
+        // The member can list members (read-only).
+        const list = await app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${networkId}/members`,
+          headers: { authorization: `Bearer ${member.key}` },
+        });
+        assert.equal(list.statusCode, 200);
+        assert.equal((list.json().data as unknown[]).length, 2);
+
+        // The member cannot add another member.
+        const add = await app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${networkId}/members`,
+          headers: { authorization: `Bearer ${member.key}` },
+          payload: { user_id: other },
+        });
+        assert.equal(add.statusCode, 403);
+        assert.equal(add.json().error.code, 'FORBIDDEN');
+
+        // Nor remove one.
+        const del = await app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${networkId}/members/${member.userId}`,
+          headers: { authorization: `Bearer ${member.key}` },
+        });
+        assert.equal(del.statusCode, 403);
+
+        // The owner, in contrast, can add.
+        const ownerAdd = await app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${networkId}/members`,
+          headers: { authorization: `Bearer ${ownerGen.key}` },
+          payload: { user_id: other },
+        });
+        assert.equal(ownerAdd.statusCode, 201);
+      } finally {
+        await app.close();
+        sys.close();
+      }
+    });
+
+    it('a global admin manages membership and reads a network without an explicit membership row (task 0.4.2)', async () => {
+      const { app, sys, db, admin } = await buildApp();
+      // `admin` is a global admin but is never added to `network_members`.
+      const ownerId = randomUUID();
+      sys.createUser({ id: ownerId, username: 'owner2', displayName: 'Owner2' });
+      const networkId = seedNetwork(db, ownerId);
+      const other = randomUUID();
+      sys.createUser({ id: other, username: 'other2', displayName: 'Other2' });
+      try {
+        assert.equal(sys.getMemberRole(admin.userId, networkId), null);
+
+        const read = await app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${networkId}`,
+          headers: { authorization: `Bearer ${admin.key}` },
+        });
+        assert.equal(read.statusCode, 200);
+
+        const add = await app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${networkId}/members`,
+          headers: { authorization: `Bearer ${admin.key}` },
+          payload: { user_id: other },
+        });
+        assert.equal(add.statusCode, 201);
+      } finally {
+        await app.close();
+        sys.close();
+      }
+    });
+
     it('sets and reads a preference (show_inactive)', async () => {
       const { app, sys, db, admin } = await buildApp();
       const networkId = seedNetwork(db, admin.userId);

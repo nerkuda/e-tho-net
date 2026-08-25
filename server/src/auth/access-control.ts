@@ -7,11 +7,14 @@
  *   * {@link requireNetworkMember}(role?) — membership in the network named by
  *     the route's `:networkId` param (or `:id`), optionally requiring `owner`.
  *
- * Membership is resolved through the cached {@link NetworkMembersService};
- * admins may *manage* any network's membership (B13) but still need a membership
- * row to *read* network data (06-auth.md §4.3). Each guard re-checks `auth`
- * defensively, so a route that wires only `requireAdmin` (without the auth
- * preHandler) still rejects anonymous requests with 401 rather than crashing.
+ * Membership is resolved through the cached {@link NetworkMembersService}.
+ * A global system administrator (`user.is_admin`) is granted the *effective*
+ * access of an owner on every network, with or without an explicit
+ * `network_members` row (06-auth.md §4.1/§4.3, task 0.4.2 bug-fix): this
+ * covers both reading network data and every mutating operation. Each guard
+ * re-checks `auth` defensively, so a route that wires only `requireAdmin`
+ * (without the auth preHandler) still rejects anonymous requests with 401
+ * rather than crashing.
  */
 
 import type { FastifyRequest } from 'fastify';
@@ -49,9 +52,9 @@ export interface AccessControl {
   requireAdmin: Guard;
   /**
    * Member of the network in `:networkId`. Pass `'owner'` to require the owner
-   * role. Admins without membership are rejected for *reading* data
-   * (06-auth.md §4.3); membership management is authorised by the route layer
-   * calling {@link requireAdmin} instead.
+   * role. A global admin passes this guard for *any* network — with or
+   * without an explicit membership row, and regardless of the requested role
+   * — since admins hold owner-equivalent rights everywhere (06-auth.md §4.1).
    */
   requireNetworkMember: (role?: NetworkRole) => Guard;
 }
@@ -99,6 +102,11 @@ export function createAccessControl(members: NetworkMembersService): AccessContr
         return;
       }
       const role = members.getMemberRole(auth.user.id, networkId);
+      // A global admin has owner-equivalent access to every network, whether
+      // or not they hold an explicit membership row (06-auth.md §4.1).
+      if (auth.user.is_admin) {
+        return;
+      }
       if (role === null) {
         sendEtnError(
           reply,

@@ -37,18 +37,37 @@ export function createRuntime(deps: McpDeps): McpRuntime {
 }
 
 /**
- * Open the network's `data.db`, asserting the authenticated user is a member
- * first (FORBIDDEN otherwise — mirrors the REST `requireNetworkMember` guard).
+ * Whether the authenticated principal may access this network: an explicit
+ * `network_members` row, or a global system administrator, who holds
+ * owner-equivalent access to every network regardless of membership
+ * (06-auth.md §4.1, task 0.4.2 bug-fix). Single source of truth for every
+ * network-scoped MCP tool/resource — mirrors the REST `requireNetworkMember`
+ * guard in `auth/access-control.ts`.
  */
-export function openMemberNetwork(rt: McpRuntime, networkId: string): NetworkDb {
-  const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, networkId);
-  if (role === null) {
+export function hasNetworkAccess(rt: McpRuntime, networkId: string): boolean {
+  if (rt.deps.auth.isAdmin) {
+    return true;
+  }
+  return rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, networkId) !== null;
+}
+
+/** Throw `FORBIDDEN` unless {@link hasNetworkAccess} holds for this network. */
+export function assertNetworkAccess(rt: McpRuntime, networkId: string): void {
+  if (!hasNetworkAccess(rt, networkId)) {
     throw new EtnError(
       'FORBIDDEN',
       `You are not a member of network ${networkId}; this API key cannot access it.`,
       { network_id: networkId },
     );
   }
+}
+
+/**
+ * Open the network's `data.db`, asserting the authenticated user has access
+ * first ({@link assertNetworkAccess} — member or global admin).
+ */
+export function openMemberNetwork(rt: McpRuntime, networkId: string): NetworkDb {
+  assertNetworkAccess(rt, networkId);
   return openNetworkDb(rt.deps.dataDir, networkId, rt.deps.logger);
 }
 

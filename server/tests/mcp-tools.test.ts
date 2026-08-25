@@ -134,6 +134,84 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('a global admin without explicit membership can read and write the network via MCP (task 0.4.2)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const secondAdminId = randomUUID();
+      ctx.sys.createUser({
+        id: secondAdminId,
+        username: 'admin2',
+        displayName: null,
+        isAdmin: true,
+      });
+      const secondAdminKey = generateApiKey();
+      ctx.sys.createApiKey({
+        id: randomUUID(),
+        userId: secondAdminId,
+        label: 'admin2',
+        keyHash: hashApiKey(secondAdminKey.key),
+        keyPrefix: secondAdminKey.keyPrefix,
+      });
+      assert.equal(ctx.sys.getMemberRole(secondAdminId, ctx.networkId), null);
+
+      const handle = await connectMcpClient(ctx, secondAdminKey.key);
+      try {
+        const get = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: ctx.homeId },
+        });
+        assert.equal(get.isError, undefined);
+
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Создано вторым админом' },
+        });
+        assert.equal(created.isError, undefined);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('a plain member (added, not owner, not admin) has full write rights via MCP (task 0.4.2)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const memberId = randomUUID();
+      ctx.sys.createUser({ id: memberId, username: 'member1', displayName: null });
+      const memberKey = generateApiKey();
+      ctx.sys.createApiKey({
+        id: randomUUID(),
+        userId: memberId,
+        label: 'member1',
+        keyHash: hashApiKey(memberKey.key),
+        keyPrefix: memberKey.keyPrefix,
+      });
+      ctx.sys.addNetworkMember(ctx.networkId, memberId, 'member', ctx.adminId);
+
+      const handle = await connectMcpClient(ctx, memberKey.key);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Создано участником' },
+        });
+        assert.equal(created.isError, undefined);
+        const thoughtId = toolJson<{ id: string }>(created).id;
+
+        const deleted = await handle.client.callTool({
+          name: 'etn.thoughts.delete',
+          arguments: { network_id: ctx.networkId, thought_id: thoughtId },
+        });
+        assert.equal(deleted.isError, undefined);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('a user with a key but no membership cannot touch the network (F2)', async () => {
     const ctx = await buildMcpContext();
     try {
