@@ -31,6 +31,8 @@ import { applyThoughtIcon, invalidateIndicators, invalidateRef, resolveCloudStyl
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { inNeighbourhood } from '../realtime-ui.js';
+import { invalidateHistoryBar } from '../screens/history-bar.js';
+import { invalidatePinnedBar, invalidatePinnedRef } from '../screens/pinned-bar.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
 import { canSave, clearDraft, clearDraftsFor, findDraft, offlineNotice, saveDraft } from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
@@ -558,6 +560,15 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
     // The structures results list is server-rendered; reload it so the saved
     // icon/title/type appear right away.
     scheduleStructuresRefresh();
+    // The pinned bar and the history bar render the thought from their own
+    // cached/last-signature state and don't pick up a store patch alone (the
+    // actor gets no realtime echo — same reasoning as above). Force both to
+    // refetch so a changed icon/colour/title shows up there too.
+    if (store.state.pins.includes(ctx.ownerId)) {
+      invalidatePinnedRef(ctx.ownerId);
+      invalidatePinnedBar();
+    }
+    invalidateHistoryBar();
     return true;
   } catch (err) {
     if (isVersionConflict(err)) {
