@@ -135,7 +135,11 @@ function subtreeClause(column: string, depths: Map<string, number> | null): Clau
   return { sql: `${column} IN (${placeholders})`, params: ids };
 }
 
-/** Join clause fragments into `c1 AND c2 AND …`. */
+/**
+ * Join clause fragments into `c1 AND c2 AND …`. When no clause applies (e.g.
+ * `active: "any"` with no other filter) fall back to `1=1` so the caller
+ * never builds a dangling `WHERE ` with nothing after it.
+ */
 function joinClauses(clauses: Array<Clause | null>): { where: string; params: unknown[] } {
   const parts: string[] = [];
   const params: unknown[] = [];
@@ -144,7 +148,7 @@ function joinClauses(clauses: Array<Clause | null>): { where: string; params: un
     parts.push(c.sql);
     params.push(...c.params);
   }
-  return { where: parts.join(' AND '), params };
+  return { where: parts.length > 0 ? parts.join(' AND ') : '1=1', params };
 }
 
 /** Normalise a keyword the way the thought service normalises titles. */

@@ -155,6 +155,24 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     assert.equal(res.truncated, false);
   });
 
+  it('returns every thought when active is "any" and no other filter is set', () => {
+    // Regression: joinClauses used to produce an empty WHERE clause when
+    // active === 'any' was the only criterion, yielding a dangling
+    // `WHERE ` and "incomplete input" from SQLite.
+    const ndb = createInMemoryNetworkDb();
+    seedThought(ndb, 'Active thought', { active: 1 });
+    seedThought(ndb, 'Inactive thought', { active: 0 });
+    const res = run(ndb, { active: 'any' });
+    assert.equal(res.total, 2);
+    assert.deepEqual(
+      res.hits.map((h) => h.title).sort(),
+      ['Active thought', 'Inactive thought'],
+    );
+    const limited = run(ndb, { active: 'any', limit: 1 });
+    assert.equal(limited.total, 2);
+    assert.equal(limited.hits.length, 1);
+  });
+
   it('walks the directed subtree downwards and reports depth', () => {
     const ndb = createInMemoryNetworkDb();
     const root = seedThought(ndb, 'Root');
