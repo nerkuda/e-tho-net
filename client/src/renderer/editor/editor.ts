@@ -613,7 +613,36 @@ async function saveLink(link: Link, patch: LinkUpdateInput): Promise<void> {
 // Thought header
 // ---------------------------------------------------------------------------
 
-/** Builds the thought header form (08-ui-spec.md §6.2.1). */
+/** Parses the comma-separated synonyms field into a trimmed, non-empty list. */
+function parseSynonymsField(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+}
+
+/** Order-sensitive equality of two synonym lists. */
+function synonymsEqual(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((s, i) => s === b[i]);
+}
+
+/**
+ * Builds the thought header form (08-ui-spec.md §6.2.1).
+ *
+ * Bug fix (editor shaking on Tab after a title edit): `blur` on the synonyms
+ * field used to save unconditionally, even when the field was untouched.
+ * Renaming a thought via Tab triggers an async `saveThought` that, on
+ * success, bumps the entity version in the store and forces a full editor
+ * re-render (`render()`'s signature guard). Rebuilding the DOM removes the
+ * still-focused (but unedited) synonyms input — and removing a focused
+ * element fires a synchronous native `blur` on it. That blur used to save
+ * synonyms again (a no-op write that still bumps the version), triggering
+ * another re-render, another forced blur, another save — an infinite
+ * rebuild/save loop the user saw as "shaking", until a real click/Tab moved
+ * the focus away mid-loop and the in-flight save above lost the version race
+ * (`VERSION_CONFLICT`). The title field already guarded against saving an
+ * unchanged value (see `commitTitle` below); the synonyms field now does too.
+ */
 function buildThoughtHeader(thought: Thought): HTMLElement {
   const box = div('editor-fields');
   const networkId = requireNetworkId();
@@ -726,10 +755,12 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   synonymsInput.value = thought.synonyms.join(', ');
   synonymsInput.placeholder = 'Синонимы (через запятую)';
   const commitSynonyms = (): void => {
-    const synonyms = synonymsInput.value
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s) => s !== '');
+    const synonyms = parseSynonymsField(synonymsInput.value);
+    if (synonymsEqual(synonyms, thought.synonyms)) return;
+    if (!canSave()) {
+      offlineNotice();
+      return;
+    }
     void saveThought({ synonyms });
   };
   synonymsInput.addEventListener('blur', commitSynonyms);
@@ -913,4 +944,8 @@ function openLinkSettings(link: Link): void {
 export const editorInternals = {
   /** Registered «Основное» sections — must not grow per `mountEditor` call. */
   mainSectionCount: (): number => mainSectionBuilders.length,
+  /** Comma-separated synonyms field parser (editor-shaking regression). */
+  parseSynonymsField,
+  /** Order-sensitive synonym list equality (editor-shaking regression). */
+  synonymsEqual,
 };

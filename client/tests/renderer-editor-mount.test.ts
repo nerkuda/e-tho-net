@@ -120,3 +120,50 @@ describe('editor mount (DOM-shimmed)', () => {
     );
   });
 });
+
+/**
+ * Regression test for the "editor shaking" bug (renaming a thought via Tab).
+ *
+ * `blur` on the synonyms field used to call `saveThought` unconditionally. A
+ * successful title save bumps the entity version and forces a full editor
+ * rebuild, which removes the still-focused-but-untouched synonyms input —
+ * removing a focused element fires a native `blur` on it — which used to
+ * re-save synonyms (a no-op write that still bumps the version), forcing yet
+ * another rebuild/blur/save, looping. This exercises the pure guard that now
+ * short-circuits an unchanged synonyms field (`editor.ts`'s
+ * `parseSynonymsField` + `synonymsEqual`, used by `commitSynonyms`).
+ */
+describe('editor synonyms field — unchanged-value guard', () => {
+  it('treats a re-serialised, untouched value as unchanged (no save)', async () => {
+    shimDom();
+    const { editorInternals } = await import('../src/renderer/editor/editor.js');
+    const original = ['синоним 1', 'синоним 2'];
+    // What the input shows: `thought.synonyms.join(', ')` — parsing it back
+    // must round-trip to the same list, so a forced blur triggers no save.
+    const raw = original.join(', ');
+    const parsed = editorInternals.parseSynonymsField(raw);
+    assert.deepEqual(parsed, original);
+    assert.equal(
+      editorInternals.synonymsEqual(parsed, original),
+      true,
+      'round-tripped value must compare equal — the blur-on-rebuild guard depends on this',
+    );
+  });
+
+  it('still detects a real edit as changed (save must proceed)', async () => {
+    shimDom();
+    const { editorInternals } = await import('../src/renderer/editor/editor.js');
+    const original = ['синоним 1'];
+    const parsed = editorInternals.parseSynonymsField('синоним 1, синоним 2');
+    assert.equal(editorInternals.synonymsEqual(parsed, original), false);
+  });
+
+  it('collapses blank/whitespace-only entries the same way on both sides', async () => {
+    shimDom();
+    const { editorInternals } = await import('../src/renderer/editor/editor.js');
+    const original: string[] = [];
+    const parsed = editorInternals.parseSynonymsField('  ,  ,');
+    assert.deepEqual(parsed, original);
+    assert.equal(editorInternals.synonymsEqual(parsed, original), true);
+  });
+});
