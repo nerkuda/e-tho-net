@@ -1197,14 +1197,73 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           network_id: string;
           has_structure: boolean;
           node_section_type_id: string | null;
+          conventions: string | null;
+          examples?: unknown;
           sections: unknown[];
           thought_types: unknown[];
         }>(result);
         assert.equal(data.network_id, ctx.networkId);
         assert.equal(data.has_structure, false);
         assert.equal(data.node_section_type_id, null);
+        // Bug fix: `conventions` must always come back (null when unset), even
+        // when the network has no structure at all — the field is unrelated
+        // to `node_section_type_id`.
+        assert.equal(data.conventions, null);
+        // `examples` is intentionally omitted unless `include_examples: true`.
+        assert.equal(data.examples, undefined);
         assert.deepEqual(data.sections, []);
         assert.deepEqual(data.thought_types, []);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.networks.structure surfaces `conventions` and, on request, `examples` (bug fix)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const current = ctx.sys.getNetworkById(ctx.networkId)!;
+      ctx.sys.updateNetwork(ctx.networkId, {
+        displayName: current.display_name,
+        description: current.description,
+        when_to_use: current.when_to_use,
+        conventions: 'Пиши хронологию с датой в ISO-8601.',
+        examples: 'Хорошо: "2026-08-25 — релиз 0.4.2". Плохо: "вчера".',
+        node_section_type_id: null,
+      });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const withoutExamples = await handle.client.callTool({
+          name: 'etn.networks.structure',
+          arguments: { network_id: ctx.networkId },
+        });
+        assert.equal(withoutExamples.isError, undefined, toolText(withoutExamples));
+        const dataDefault = toolJson<{
+          conventions: string | null;
+          examples?: unknown;
+        }>(withoutExamples);
+        assert.equal(dataDefault.conventions, 'Пиши хронологию с датой в ISO-8601.');
+        // Default call does not carry `examples` — it can be long and most
+        // orientation flows do not need it.
+        assert.equal(dataDefault.examples, undefined);
+
+        const withExamples = await handle.client.callTool({
+          name: 'etn.networks.structure',
+          arguments: { network_id: ctx.networkId, include_examples: true },
+        });
+        assert.equal(withExamples.isError, undefined, toolText(withExamples));
+        const dataWithExamples = toolJson<{
+          conventions: string | null;
+          examples: string | null;
+        }>(withExamples);
+        assert.equal(dataWithExamples.conventions, 'Пиши хронологию с датой в ISO-8601.');
+        assert.equal(
+          dataWithExamples.examples,
+          'Хорошо: "2026-08-25 — релиз 0.4.2". Плохо: "вчера".',
+        );
       } finally {
         await handle.close();
       }
@@ -1269,7 +1328,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         displayName: current.display_name,
         description: current.description,
         when_to_use: current.when_to_use,
-        conventions: current.conventions,
+        conventions: 'Именуй разделы существительными в единственном числе.',
         examples: current.examples,
         node_section_type_id: sectionType.id,
       });
@@ -1286,6 +1345,8 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           has_structure: boolean;
           node_section_type_id: string;
           node_section_type: { id: string; name: string };
+          conventions: string | null;
+          examples?: unknown;
           sections: Array<{
             id: string;
             title: string;
@@ -1302,6 +1363,11 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(data.has_structure, true);
         assert.equal(data.node_section_type_id, sectionType.id);
         assert.equal(data.node_section_type.id, sectionType.id);
+        // Bug fix: `conventions` rides along with the structure response even
+        // when `has_structure: true` (the field it fixes is independent of
+        // the node-section mechanism). `examples` stays out by default.
+        assert.equal(data.conventions, 'Именуй разделы существительными в единственном числе.');
+        assert.equal(data.examples, undefined);
 
         // Inactive "Скрытый" is excluded; only the two active section nodes remain.
         assert.equal(data.sections.length, 2);

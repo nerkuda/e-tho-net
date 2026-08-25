@@ -261,7 +261,24 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // values, neighbour counts and a usage_count (N3) — the same shape agents
   // already know from `etn.thoughts.get` / `etn.thoughts.usage`, so an agent can
   // dive from a structure node straight into a full read.
-  const NetworksStructureSchema = z.object({ network_id: NetworkId });
+  //
+  // Bug fix (self-description reachability): §3/§4 of docs/05-mcp-server.md
+  // describe FOUR markdown self-description fields (`description`,
+  // `when_to_use`, `conventions`, `examples`), read via `GET /networks/{id}`
+  // or the `etn://networks/{id}` resource. Neither exists as an MCP tool
+  // (there is no `etn.networks.get`, and the ZCode MCP client does not expose
+  // resources to the agent at all), so `conventions`/`examples` were
+  // write-only from the agent's point of view. `etn.networks.structure` is
+  // already the tool an agent calls first when orienting in a network, so we
+  // piggy-back `conventions` on its response — no extra round trip. `examples`
+  // stays out of the default payload (worked examples tend to be long, and
+  // most orientation flows don't need them): it is returned only when the
+  // caller opts in via `include_examples`, mirroring the "explicit request"
+  // resolution the bug report itself proposed for that field.
+  const NetworksStructureSchema = z.object({
+    network_id: NetworkId,
+    include_examples: z.boolean().optional(),
+  });
   mcp.registerTool(
     'etn.networks.structure',
     {
@@ -272,8 +289,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'with permanent-comment previews (2000 chars, `truncated` + `comment_id` to fetch ' +
         'full text via `etn.comments.get`), resolved property values, neighbour counters ' +
         '(`parents_count`, `children_count`, `attachments_count`, `usage_count`) and the ' +
-        'reference table of thought types actually used. When `has_structure: false`, the ' +
-        '`sections` list is empty and the agent should fall back to search/query.',
+        'reference table of thought types actually used. Also carries the network\'s ' +
+        '`conventions` field (write rules: chronicle format, active-flag usage, naming, ' +
+        'links to types/templates) — read this before `create`/`update`/`upsert_bundle`. ' +
+        'Pass `include_examples: true` to additionally receive the network\'s `examples` ' +
+        'field (worked good/bad records); omitted by default because it tends to be long. ' +
+        'When `has_structure: false`, the `sections` list is empty and the agent should ' +
+        'fall back to search/query, but `conventions`/`examples` are still returned.',
       inputSchema: NetworksStructureSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.networks.structure'],
     },
@@ -294,11 +316,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             { network_id: args.network_id },
           );
         }
+        const examplesField =
+          args.include_examples === true ? { examples: network.examples } : {};
         if (network.node_section_type_id === null) {
           return {
             network_id: args.network_id,
             has_structure: false as const,
             node_section_type_id: null,
+            conventions: network.conventions,
+            ...examplesField,
             sections: [],
             thought_types: [],
           };
@@ -376,6 +402,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           has_structure: true as const,
           node_section_type_id: sectionTypeId,
           node_section_type: sectionType,
+          conventions: network.conventions,
+          ...examplesField,
           sections,
           thought_types: thoughtTypes,
         };
