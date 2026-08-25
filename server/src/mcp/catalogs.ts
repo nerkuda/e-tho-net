@@ -25,6 +25,38 @@ import type { NetworkDb } from '../db/network-db.js';
 import { getLinkType } from '../domain/link-type-service.js';
 import { getThoughtType } from '../domain/thought-type-service.js';
 
+// ---------------------------------------------------------------------------
+// Icon sanitisation (bug fix, docs/05-mcp-server.md §5.1e) — image icons are
+// stored as self-contained `data:image/...;base64,...` URLs up to 256 KiB
+// (docs/02-data-model.md §3.1 «Мысли», §3.3 «thought_types»; the client's
+// «Файл» icon-picker tab inlines the picked file this way, `icon_attachment_id`
+// only points at the *original* attachment for the human «Ctrl+hover» preview).
+// That payload is essential for the desktop client to *render* the icon, but
+// pure noise to an MCP agent that cannot see images — one type used across a
+// response added ~3 KB per occurrence, a single 50 KiB SVG thought icon added
+// ~50 KiB to one `search` call, both burning the `max_chars` budget instead of
+// carrying knowledge (§5.1e already promises the agent only the *semantic*
+// icon — an emoji or a short path/URL). Icons picked via the «URL» tab (a real
+// `http(s)://…` link, still `icon_kind: 'image'`) are short and are passed
+// through unchanged; only the inline `data:` payload is ever replaced.
+// ---------------------------------------------------------------------------
+
+/** Placeholder returned instead of an inline `data:` icon URL (see above). */
+export const ICON_DATA_URL_PLACEHOLDER = '(image icon omitted by MCP — inline data URL, not resolvable)';
+
+/** Replace an inline `data:` icon URL with {@link ICON_DATA_URL_PLACEHOLDER};
+ *  `null`, an emoji or a real `http(s)://` URL pass through unchanged. */
+export function sanitizeIcon(icon: string | null): string | null {
+  return icon !== null && icon.startsWith('data:') ? ICON_DATA_URL_PLACEHOLDER : icon;
+}
+
+/** {@link sanitizeIcon} applied in place to any object carrying an
+ *  `icon: string | null` field (thoughts, thought types, thought refs). */
+export function withSanitizedIcon<T extends { icon: string | null }>(obj: T): T {
+  const sanitized = sanitizeIcon(obj.icon);
+  return sanitized === obj.icon ? obj : { ...obj, icon: sanitized };
+}
+
 /**
  * Catalogue of thought types keyed by type id: `{ [type_id]: {id, name,
  * description, icon} }`. Unknown/removed ids are skipped (`thoughts.type_id`
@@ -44,7 +76,7 @@ export function thoughtTypeCatalog(
         parent_id: type.parent_id,
         is_root: type.is_root,
         description: type.description,
-        icon: type.icon,
+        icon: sanitizeIcon(type.icon),
       };
     }
   }
@@ -121,7 +153,7 @@ export function toCompactThought(thought: Thought): CompactThought {
     id: thought.id,
     title: thought.title,
     type_id: thought.type_id,
-    icon: thought.icon,
+    icon: sanitizeIcon(thought.icon),
     active: thought.active,
     synonyms: thought.synonyms,
     version: thought.version,
@@ -142,7 +174,7 @@ export function toCompactThoughtRef(ref: ThoughtRef): CompactThoughtRef {
     id: ref.id,
     title: ref.title,
     type_id: ref.type_id,
-    icon: ref.icon,
+    icon: sanitizeIcon(ref.icon),
     active: ref.active,
   };
 }

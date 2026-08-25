@@ -115,9 +115,11 @@ import {
 import {
   linkTypeCatalog,
   linkTypeCatalogCompact,
+  sanitizeIcon,
   thoughtTypeCatalog,
   toCompactThought,
   toCompactThoughtRef,
+  withSanitizedIcon,
 } from './catalogs.js';
 import { exportToMarkdown, getExportJobContent, startExportJob } from '../domain/export-service.js';
 import { findPath, subgraph, traverse } from '../domain/graph-traversal.js';
@@ -352,7 +354,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         // Reference table: the network's section type plus every other type
         // referenced by the section nodes (caller can dive further without an
         // extra `etn.types.list` round trip).
-        const sectionType = getThoughtType(ndb, sectionTypeId);
+        // Bug fix (§5.1e): sanitize the section type's own icon — the
+        // `thought_types` catalogue below is already sanitized via
+        // `thoughtTypeCatalog`, but `node_section_type` is the raw type record.
+        const rawSectionType = getThoughtType(ndb, sectionTypeId);
+        const sectionType = rawSectionType === null ? null : withSanitizedIcon(rawSectionType);
         const referencedTypeIds = Array.from(
           new Set(
             sections
@@ -421,7 +427,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             .map((h) => h.owner_id),
         ];
         recordReads(ndb, thoughtIds, { now: new Date().toISOString() });
-        return result;
+        // Bug fix (§5.1e): `search` is shared with the REST `/search` route
+        // (which needs the real icon to render results), so sanitize only at
+        // this MCP-facing call site. `by_names`/`by_texts` carry the thought's
+        // `icon`; `by_links`/`by_chrono` do not.
+        return {
+          ...result,
+          by_names: result.by_names.map((h) => withSanitizedIcon(h)),
+          by_texts: result.by_texts.map((h) => withSanitizedIcon(h)),
+        };
       }),
   );
 
@@ -496,13 +510,19 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        const thought = getThoughtOrThrow(ndb, args.thought_id);
-        const type = thought.type_id === null ? null : getThoughtType(ndb, thought.type_id);
+        const rawThought = getThoughtOrThrow(ndb, args.thought_id);
+        const rawType = rawThought.type_id === null ? null : getThoughtType(ndb, rawThought.type_id);
         const properties = getPropertyValuesResolved(ndb, 'thought', args.thought_id);
         // O10: count this single read for `etn.metrics.reads` analytics.
-        recordReads(ndb, [thought.id], { now: new Date().toISOString() });
+        recordReads(ndb, [rawThought.id], { now: new Date().toISOString() });
         const meta = getThoughtMeta(ndb, args.thought_id);
         const view: McpViewMode = args.view ?? 'compact';
+        // Bug fix (docs/05-mcp-server.md §5.1e): a `data:` icon URL is dropped
+        // in every view — see `sanitizeIcon`/`withSanitizedIcon` in
+        // ./catalogs.ts for the rationale. Applied before the O12 branch so
+        // both `full` and `compact` get the same treatment.
+        const thought = withSanitizedIcon(rawThought);
+        const type = rawType === null ? null : withSanitizedIcon(rawType);
         // Keep the response envelope identical between views — only the
         // thought-level fields differ. `type`, `properties` and `meta` were
         // never affected by the O12 projection change.
@@ -539,12 +559,14 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const view: McpViewMode = args.view ?? 'compact';
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
-          const neighbors = getNeighbors(ndb, args.thought_id, args.dir, {
+          const rawNeighbors = getNeighbors(ndb, args.thought_id, args.dir, {
             userId: rt.deps.auth.userId,
           });
           // `FocusNeighbor` carries no visual fields of its own (only `icon`,
           // which is semantic), so the only O12 effect at depth=1 is on the
-          // link-type catalogue.
+          // link-type catalogue. Bug fix (§5.1e): sanitize the `icon` itself —
+          // it is not gated by `view`, a `data:` URL leaks at depth=1 either way.
+          const neighbors = rawNeighbors.map((n) => withSanitizedIcon(n));
           const linkTypes =
             view === 'full'
               ? linkTypeCatalog(ndb, neighbors.map((n) => n.link_type_id))
@@ -563,7 +585,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           maxDepth: depth,
           maxNodes: rt.limits.maxNodesPerSubgraph,
         });
-        const thoughts = resolveThoughts(ndb, walk.ids);
+        // Bug fix (§5.1e): sanitize before the O12 branch so both `view`s drop
+        // any inline `data:` icon URL, not just the compact projection.
+        const thoughts = resolveThoughts(ndb, walk.ids).map((t) => withSanitizedIcon(t));
         // Depth>1 returns ThoughtRef rows (the lightweight identity slice);
         // project each entry to its compact shape under `view: 'compact'`.
         const projected =
@@ -631,7 +655,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           rt.limits.maxNodesPerSubgraph,
         );
         const result = subgraph(ndb, args.seed_ids, args.radius, { maxNodes: effectiveMax });
-        const nodes = result.nodes.map((id) => getThoughtOrThrow(ndb, id));
+        // Bug fix (§5.1e): sanitize before the O12 branch so `view: 'full'`
+        // subgraphs cannot leak inline `data:` icon URLs either.
+        const nodes = result.nodes.map((id) => withSanitizedIcon(getThoughtOrThrow(ndb, id)));
         const comments =
           args.include_comments === true
             ? result.nodes.map((id) => ({
@@ -830,8 +856,18 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        const usage = findThoughtUsage(ndb, args.thought_id);
+        const rawUsage = findThoughtUsage(ndb, args.thought_id);
         const view: McpViewMode = args.view ?? 'compact';
+        // Bug fix (§5.1e): sanitize before the O12 branch so `view: 'full'`
+        // cannot leak an inline `data:` icon URL either.
+        const usage = {
+          total: rawUsage.total,
+          groups: rawUsage.groups.map((g) => ({
+            property_id: g.property_id,
+            key: g.key,
+            thoughts: g.thoughts.map((t) => withSanitizedIcon(t)),
+          })),
+        };
         // `groups[].thoughts[]` is a ThoughtRef[] — project each entry under
         // the compact view. The `total` and `groups` skeleton are preserved.
         const groups =
@@ -1020,7 +1056,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             parent_id: t.parent_id,
             is_root: t.is_root,
             description: t.description,
-            icon: t.icon,
+            // Bug fix (§5.1e): `etn.types.list` has no `view` param — always
+            // sanitize the inline `data:` icon URL.
+            icon: sanitizeIcon(t.icon),
             properties: listEffectiveTypeProperties(ndb, 'thought_type', t.id),
             ...(thoughtTypeCounts === null
               ? {}
@@ -2168,7 +2206,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        return findDuplicates(ndb, args.title, args.synonyms ?? []);
+        // Bug fix (§5.1e): `findDuplicates` is shared with the REST add-thought
+        // dialog (which needs the real icon to render candidates), so sanitize
+        // only at this MCP-facing call site.
+        return findDuplicates(ndb, args.title, args.synonyms ?? []).map((hit) =>
+          withSanitizedIcon(hit),
+        );
       }),
   );
 }

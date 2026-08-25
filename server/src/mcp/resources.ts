@@ -27,7 +27,7 @@ import { listAttachments } from '../domain/attachment-service.js';
 import { getThoughtType, listThoughtTypes } from '../domain/thought-type-service.js';
 import { getLinkType, listLinkTypes } from '../domain/link-type-service.js';
 import { getPropertyValuesResolved, listTypeProperties } from '../domain/property-service.js';
-import { linkTypeCatalog, thoughtTypeCatalog } from './catalogs.js';
+import { linkTypeCatalog, thoughtTypeCatalog, withSanitizedIcon } from './catalogs.js';
 import { etnErrorText, openMemberNetwork, type McpRuntime } from './context.js';
 
 /** JSON content of one resource read (pretty-printed for the agent). */
@@ -135,12 +135,14 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         const networkId = requireVar(vars, 'network_id');
         const thoughtId = requireVar(vars, 'thought_id');
         const ndb = openMemberNetwork(rt, networkId);
-        const thought = getThoughtOrThrow(ndb, thoughtId);
-        const type = thought.type_id === null ? null : getThoughtType(ndb, thought.type_id);
+        const rawThought = getThoughtOrThrow(ndb, thoughtId);
+        const rawType = rawThought.type_id === null ? null : getThoughtType(ndb, rawThought.type_id);
         const properties = getPropertyValuesResolved(ndb, 'thought', thoughtId);
+        // Bug fix (docs/05-mcp-server.md §5.1e): drop an inline `data:` icon
+        // URL — see `withSanitizedIcon` in ./catalogs.ts for the rationale.
         return jsonContents(uri.href, {
-          ...thought,
-          type,
+          ...withSanitizedIcon(rawThought),
+          type: rawType === null ? null : withSanitizedIcon(rawType),
           properties,
           meta: getThoughtMeta(ndb, thoughtId),
         });
@@ -166,9 +168,17 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         const thoughtId = requireVar(vars, 'thought_id');
         const ndb = openMemberNetwork(rt, networkId);
         const thought = getThoughtOrThrow(ndb, thoughtId);
-        const parents = getNeighbors(ndb, thoughtId, 'parents', { userId: rt.deps.auth.userId });
-        const children = getNeighbors(ndb, thoughtId, 'children', { userId: rt.deps.auth.userId });
-        const siblings = getNeighbors(ndb, thoughtId, 'siblings', { userId: rt.deps.auth.userId });
+        // Bug fix (§5.1e): sanitize each neighbour's `icon` — `FocusNeighbor`
+        // is not gated by a `view` param, a `data:` URL would otherwise leak.
+        const parents = getNeighbors(ndb, thoughtId, 'parents', { userId: rt.deps.auth.userId }).map(
+          (n) => withSanitizedIcon(n),
+        );
+        const children = getNeighbors(ndb, thoughtId, 'children', {
+          userId: rt.deps.auth.userId,
+        }).map((n) => withSanitizedIcon(n));
+        const siblings = getNeighbors(ndb, thoughtId, 'siblings', {
+          userId: rt.deps.auth.userId,
+        }).map((n) => withSanitizedIcon(n));
         const all = [...parents, ...children, ...siblings];
         return jsonContents(uri.href, {
           thought: { id: thought.id, title: thought.title },
@@ -309,7 +319,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     (uri, vars) =>
       guarded(() => {
         const ndb = openMemberNetwork(rt, requireVar(vars, 'network_id'));
-        return jsonContents(uri.href, listThoughtTypes(ndb));
+        // Bug fix (§5.1e): drop inline `data:` icon URLs from every type.
+        return jsonContents(uri.href, listThoughtTypes(ndb).map((t) => withSanitizedIcon(t)));
       }),
   );
 
@@ -348,8 +359,9 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         if (type === null) {
           throw new Error(`ETN error [NOT_FOUND]: thought type ${typeId} not found`);
         }
+        // Bug fix (§5.1e): drop an inline `data:` icon URL.
         return jsonContents(uri.href, {
-          ...type,
+          ...withSanitizedIcon(type),
           properties: listTypeProperties(ndb, 'thought_type', typeId),
         });
       }),

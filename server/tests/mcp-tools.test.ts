@@ -19,6 +19,7 @@ import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
+import { ICON_DATA_URL_PLACEHOLDER } from '../src/mcp/catalogs.js';
 import {
   buildMcpContext,
   closeMcpContext,
@@ -3172,6 +3173,166 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             const bad = await handle.client.callTool({ name, arguments: args });
             assert.equal(bad.isError, true, `${name} must reject unknown view`);
           }
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    /**
+     * Bug fix: image icons (`icon_kind: 'image'`) are stored as self-contained
+     * `data:image/...;base64,...` URLs (docs/02-data-model.md §3.1/§3.3, up to
+     * 256 KiB) — the client needs the raw payload to render them, but every MCP
+     * read tool must drop it and return {@link ICON_DATA_URL_PLACEHOLDER}
+     * instead, in every `view`, since an agent can never resolve a picture.
+     */
+    function seedImageIconGraph(ctx: McpTestContextLocal): {
+      typeId: string;
+      parentId: string;
+      childId: string;
+    } {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const typeIconDataUrl = `data:image/png;base64,${'A'.repeat(64)}`;
+      const typeId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thought_types (id, name, icon, icon_kind, description,
+                                      version, created_at, updated_at, created_by)
+           VALUES (?, 'задача с картинкой', ?, 'image', 'Тип с картиночной иконкой',
+                   1, '2024', '2024', 'u')`,
+        )
+        .run(typeId, typeIconDataUrl);
+
+      const thoughtIconDataUrl = `data:image/svg+xml;base64,${'B'.repeat(64)}`;
+      const parentId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                 icon, icon_kind,
+                                 version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'Мысль с картинкой', 'мысль с картинкой', ?, 1, 0, 0,
+                   ?, 'image',
+                   1, '2024', 'u', '2024', 'u')`,
+        )
+        .run(parentId, typeId, thoughtIconDataUrl);
+
+      const childId = randomUUID();
+      ndb
+        .prepare(
+          `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
+                                 icon, icon_kind,
+                                 version, created_at, created_by, updated_at, updated_by)
+           VALUES (?, 'Дочерняя мысль', 'дочерняя мысль', NULL, 1, 0, 0,
+                   NULL, 'emoji',
+                   1, '2024', 'u', '2024', 'u')`,
+        )
+        .run(childId);
+      ndb
+        .prepare(
+          `INSERT INTO links (id, source_id, target_id, type_id, active, version,
+                              created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, NULL, 1, 1, '2024', '2024', 'u', 'u')`,
+        )
+        .run(randomUUID(), parentId, childId);
+
+      return { typeId, parentId, childId };
+    }
+
+    it('image icons (`data:` URLs) never leak into MCP responses', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const { typeId, parentId, childId } = seedImageIconGraph(ctx);
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const calls: Array<{ name: string; args: Record<string, unknown> }> = [
+            { name: 'etn.thoughts.get', args: { network_id: ctx.networkId, thought_id: parentId } },
+            {
+              name: 'etn.thoughts.get',
+              args: { network_id: ctx.networkId, thought_id: parentId, view: 'full' },
+            },
+            {
+              name: 'etn.thoughts.search',
+              args: { network_id: ctx.networkId, query: 'картинкой' },
+            },
+            {
+              name: 'etn.thoughts.query',
+              args: { network_id: ctx.networkId, type_id: [typeId] },
+            },
+            {
+              name: 'etn.thoughts.neighbors',
+              args: { network_id: ctx.networkId, thought_id: childId, dir: 'parents' },
+            },
+            {
+              name: 'etn.thoughts.neighbors',
+              args: {
+                network_id: ctx.networkId,
+                thought_id: childId,
+                dir: 'parents',
+                view: 'full',
+              },
+            },
+            {
+              name: 'etn.thoughts.neighbors',
+              args: {
+                network_id: ctx.networkId,
+                thought_id: childId,
+                dir: 'parents',
+                depth: 2,
+                view: 'full',
+              },
+            },
+            {
+              name: 'etn.thoughts.subgraph',
+              args: { network_id: ctx.networkId, seed_ids: [parentId], radius: 1, view: 'full' },
+            },
+            {
+              name: 'etn.thoughts.usage',
+              args: { network_id: ctx.networkId, thought_id: parentId, view: 'full' },
+            },
+            { name: 'etn.types.list', args: { network_id: ctx.networkId } },
+            {
+              name: 'etn.thoughts.find_duplicates',
+              args: { network_id: ctx.networkId, title: 'Мысль с картинкой' },
+            },
+          ];
+          for (const { name, args } of calls) {
+            const result = await handle.client.callTool({ name, arguments: args });
+            const text = toolText(result);
+            assert.equal(
+              text.includes('data:image'),
+              false,
+              `${name} must not leak a data:image icon URL; got ${text.slice(0, 200)}...`,
+            );
+          }
+
+          // Spot-check the exact replacement value on a couple of tools.
+          const get = toolJson<{ icon: string | null }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.get',
+              arguments: { network_id: ctx.networkId, thought_id: parentId },
+            }),
+          );
+          assert.equal(get.icon, ICON_DATA_URL_PLACEHOLDER);
+
+          const types = toolJson<{ thought_types: Array<{ id: string; icon: string | null }> }>(
+            await handle.client.callTool({
+              name: 'etn.types.list',
+              arguments: { network_id: ctx.networkId },
+            }),
+          );
+          const seededType = types.thought_types.find((t) => t.id === typeId);
+          assert.ok(seededType, 'etn.types.list must include the seeded type');
+          assert.equal(seededType!.icon, ICON_DATA_URL_PLACEHOLDER);
+
+          const dup = toolJson<Array<{ icon: string | null }>>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.find_duplicates',
+              arguments: { network_id: ctx.networkId, title: 'Мысль с картинкой' },
+            }),
+          );
+          assert.equal(dup[0]?.icon, ICON_DATA_URL_PLACEHOLDER);
         } finally {
           await handle.close();
         }
