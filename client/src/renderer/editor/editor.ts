@@ -112,11 +112,29 @@ export function openLinkInEditor(link: Link): void {
  * entity rides along as soon as it loads — until then the editor falls back to
  * the focused thought (same mechanism as the structures/chronicle views). The
  * focused thought itself needs no target (editorTarget=null → follow focus).
+ *
+ * Bug fix (editor shaking on a repeat click of the same thought): this used
+ * to unconditionally overwrite `editorTarget` — even when the click landed on
+ * the thought already shown in the editor. Re-assigning `{ kind: 'thought',
+ * id }` drops the already-loaded `thought` payload, so `render()`'s signature
+ * (which reads `ctx.thought?.version`) changes and forces a full DOM rebuild
+ * with stale/fallback content; the redundant `etn.thoughts.get` refetch then
+ * resolves and forces a second rebuild once the entity comes back — two
+ * visible re-renders back to back for a click that changed nothing. A repeat
+ * click on the thought already targeted (loaded or still in flight) is now a
+ * no-op: same for re-clicking the focused thought while the editor already
+ * follows the focus.
  */
 export function openThoughtInEditor(id: string): void {
   const focusId = store.state.focus?.focused.id ?? null;
   if (id === focusId) {
+    if (store.state.editorTarget === null && store.state.selectedLinkId === null) return;
     store.update({ editorTarget: null, selectedLinkId: null });
+    return;
+  }
+  const current = store.state.editorTarget;
+  if (current !== null && current.kind === 'thought' && current.id === id) {
+    if (store.state.selectedLinkId !== null) store.update({ selectedLinkId: null });
     return;
   }
   store.update({ editorTarget: { kind: 'thought', id }, selectedLinkId: null });

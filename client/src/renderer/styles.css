@@ -1986,16 +1986,28 @@ body.cloud-dragging * {
 
 /* --- Editor tabs (L7, 08-ui-spec.md §6.3) --------------------------------- */
 
+/* Soft fade on a real editor content swap (different thought/link) — the
+   header form and tab bar are freshly created DOM nodes on every full
+   `render()`, so a plain opacity keyframe on them plays automatically without
+   any JS class toggling. Keeps the DOM-replace rebuild but takes the harsh
+   instant "jump" edge off it (08-ui-spec.md §6, "дергание редактора"). */
+@keyframes editor-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* The header form keeps its own padding: the scroll box itself has none so
    the sticky tab bar can hug the top edge. */
 .editor-fields {
   padding: 10px 10px 0;
+  animation: editor-fade-in 120ms ease-out;
 }
 
 .editor-tabs {
   position: sticky;
   top: 0;
   z-index: 5;
+  animation: editor-fade-in 120ms ease-out;
   display: flex;
   gap: 2px;
   padding: 8px 10px 0;

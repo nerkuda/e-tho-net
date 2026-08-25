@@ -77,7 +77,21 @@ class ShimElement {
   }
 }
 
-/** Minimal `document`/`window` shims (CodeMirror probing handled upstream). */
+/**
+ * Minimal `document`/`window` shims (CodeMirror probing handled upstream).
+ *
+ * `../lib/etn.js` captures `window` in a module-level `liveTarget` on its
+ * *first* import (to survive the Vite dev-mode preload race) and never
+ * re-reads the `window` global afterwards — only `liveTarget.etn`'s own
+ * properties are re-read on every access. Since this whole test file shares
+ * one module cache, `etn.ts` is imported once, during the very first
+ * `shimDom()` call. Replacing `globalThis.window` with a brand-new object on
+ * later calls (as this used to do) would silently orphan that first object —
+ * any `window.etn.thoughts` a later test adds would never be seen by the
+ * already-imported `etn` proxy. Mutating the same window object in place
+ * (falling back to a fresh one only when none exists yet) keeps `liveTarget`
+ * valid for every test in the file.
+ */
 function shimDom(): void {
   // `render` runs `activeElement instanceof HTMLElement` — provide the class.
   (globalThis as any).HTMLElement = class {};
@@ -91,12 +105,16 @@ function shimDom(): void {
     querySelector: () => null,
     activeElement: null,
   };
-  (globalThis as any).window = {
-    etn: { ui: { setState: async () => undefined } },
-    setTimeout,
-    clearTimeout,
-    dispatchEvent: () => undefined,
-  };
+  const win = ((globalThis as any).window ?? ((globalThis as any).window = {})) as Record<
+    string,
+    unknown
+  >;
+  win.etn = { ui: { setState: async () => undefined } };
+  win.setTimeout = setTimeout;
+  win.clearTimeout = clearTimeout;
+  win.dispatchEvent = () => undefined;
+  win.addEventListener = () => undefined;
+  win.removeEventListener = () => undefined;
 }
 
 describe('editor mount (DOM-shimmed)', () => {
@@ -118,6 +136,117 @@ describe('editor mount (DOM-shimmed)', () => {
       countAfterFirstMount,
       'section registry must not grow per mount',
     );
+  });
+});
+
+/**
+ * Regression test for "editor jerks on a repeat click of the same thought"
+ * (5b8319bc-c9e5-4409-b7eb-df4132806b19).
+ *
+ * `openThoughtInEditor` used to unconditionally overwrite `editorTarget` on
+ * every call, even when the click landed on the thought already shown in the
+ * editor. Re-assigning `{ kind: 'thought', id }` drops the already-loaded
+ * `thought` payload, which changes `render()`'s signature (it reads
+ * `ctx.thought?.version`) and forces a full DOM rebuild with stale/fallback
+ * content; the redundant `etn.thoughts.get` refetch then resolves and forces
+ * a *second* rebuild once the entity comes back — two visible re-renders for
+ * a click that changed nothing. A repeat click on the thought already
+ * targeted (loaded or still in flight) must now be a no-op: same object
+ * reference, no extra store notification, no extra fetch.
+ */
+/**
+ * Minimal but *complete* `Thought` shape — a lingering `store.subscribe`
+ * callback from the `mountEditor` test above (module-level state shared
+ * across this file's `describe` blocks) fires a real, full `render()` on
+ * every `store.update`, which reaches `buildThoughtHeader` and reads every
+ * field below; a partial mock throws asynchronously after the test ends.
+ */
+const mockThought = {
+  id: 't1',
+  title: 'T1',
+  type_id: null,
+  icon: null,
+  icon_kind: 'emoji',
+  icon_attachment_id: null,
+  active: true,
+  is_protected: false,
+  is_root: false,
+  fg_color: null,
+  bg_color: null,
+  font_bold: null,
+  font_italic: null,
+  font_underline: null,
+  font_strike: null,
+  synonyms: [],
+  version: 1,
+  created_at: '2024-01-01T00:00:00.000Z',
+  updated_at: '2024-01-01T00:00:00.000Z',
+};
+
+describe('openThoughtInEditor — repeat click on the same thought', () => {
+  it('is a no-op while the first fetch is still in flight', async () => {
+    shimDom();
+    let fetchCount = 0;
+    (globalThis as any).window.etn.thoughts = {
+      get: async () => {
+        fetchCount++;
+        return { ...mockThought };
+      },
+    };
+    const { openThoughtInEditor } = await import('../src/renderer/editor/editor.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1', focus: null, editorTarget: null, selectedLinkId: null } as any);
+
+    let notifyCount = 0;
+    store.subscribe(() => {
+      notifyCount++;
+    });
+
+    openThoughtInEditor('t1');
+    const targetAfterFirstClick = store.state.editorTarget;
+    assert.deepEqual(targetAfterFirstClick, { kind: 'thought', id: 't1' });
+    const notifyAfterFirstClick = notifyCount;
+
+    // Repeat click on the same (still loading) thought.
+    openThoughtInEditor('t1');
+    assert.strictEqual(
+      store.state.editorTarget,
+      targetAfterFirstClick,
+      'target object reference must not change on a repeat click',
+    );
+    assert.equal(notifyCount, notifyAfterFirstClick, 'the store must not be notified again');
+    assert.equal(fetchCount, 1, 'the second click must not trigger another fetch');
+  });
+
+  it('is a no-op once the thought has already loaded', async () => {
+    shimDom();
+    (globalThis as any).window.etn.thoughts = {
+      get: async () => ({ ...mockThought }),
+    };
+    const { openThoughtInEditor } = await import('../src/renderer/editor/editor.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1', focus: null, editorTarget: null, selectedLinkId: null } as any);
+
+    openThoughtInEditor('t1');
+    // Flush the fetch's microtask chain (`.get(...)` then `.then(...)`).
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    const loadedTarget = store.state.editorTarget as any;
+    assert.equal(loadedTarget?.thought?.version, 1, 'precondition: the thought must have loaded');
+
+    let notifyCount = 0;
+    store.subscribe(() => {
+      notifyCount++;
+    });
+
+    openThoughtInEditor('t1');
+    assert.strictEqual(
+      store.state.editorTarget,
+      loadedTarget,
+      'a loaded target must survive a repeat click unchanged',
+    );
+    assert.equal(notifyCount, 0, 'a repeat click on an already-loaded thought must not notify the store');
   });
 });
 
