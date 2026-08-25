@@ -104,6 +104,32 @@ export function normaliseError(
     };
   }
 
+  // Fastify's built-in body/content-type parser already classifies malformed
+  // request bodies as 400 before our handlers ever run — e.g. a body that
+  // isn't valid JSON (`SyntaxError`, statusCode 400) or, notably, a body sent
+  // in a non-UTF-8 encoding: `payload.setEncoding('utf8')` silently replaces
+  // invalid byte sequences with U+FFFD, which then makes the re-encoded byte
+  // length disagree with the client's `Content-Length` header
+  // (`FST_ERR_CTP_INVALID_CONTENT_LENGTH`) or leaves an empty/unparsable body
+  // (`FST_ERR_CTP_EMPTY_JSON_BODY`). None of these carry `.validation`, so
+  // without this branch they used to fall through to a generic 500 — a client
+  // mistake masquerading as a server failure. Treat any such pre-classified
+  // 400 as `BAD_REQUEST` (03-server-api.md §2.1: "Невалидное тело запроса")
+  // instead of discarding the statusCode Fastify already computed.
+  if (maybeValidation.statusCode === 400) {
+    const rawMessage = maybeValidation.message ?? 'invalid request body';
+    return {
+      statusCode: 400,
+      body: buildErrorBody(
+        'BAD_REQUEST',
+        `Тело запроса не удалось разобрать как JSON в кодировке UTF-8: ${rawMessage}`,
+        undefined,
+        requestId,
+      ),
+      internalMessage: rawMessage,
+    };
+  }
+
   const message = err instanceof Error ? err.message : String(err);
   return {
     statusCode: 500,

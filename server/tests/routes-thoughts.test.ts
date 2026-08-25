@@ -597,5 +597,52 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('a body that is not valid UTF-8 JSON is rejected with 400 BAD_REQUEST, not 500', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Raw bytes that are not a valid UTF-8 sequence: simulates a client
+        // sending its console's native (non-UTF-8) encoding for a body with
+        // non-ASCII text — e.g. `curl -d '{"title":"<кириллица>"}'` from Git
+        // Bash on Windows, where the argument is encoded via the active code
+        // page (cp866/cp1251) rather than UTF-8. `0xcf 0xf0 0xe8 0xe2 0xe5
+        // 0xf2` below is "Привет" as cp1251 bytes, which decode to invalid
+        // UTF-8 (each byte replaced by U+FFFD, changing the byte length and
+        // tripping Fastify's Content-Length check) instead of throwing a
+        // recognisable "bad JSON" error — this used to fall through the
+        // global error handler as a generic 500 INTERNAL.
+        const invalidUtf8Body = Buffer.from([
+          0x7b,
+          0x22,
+          0x74,
+          0x69,
+          0x74,
+          0x6c,
+          0x65,
+          0x22,
+          0x3a,
+          0x22, // {"title":"
+          0xcf,
+          0xf0,
+          0xe8,
+          0xe2,
+          0xe5,
+          0xf2, // cp1251 "Привет" — invalid as UTF-8
+          0x22,
+          0x7d, // "}
+        ]);
+
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts`,
+          headers: { ...authHeaders(ctx), 'content-type': 'application/json' },
+          payload: invalidUtf8Body,
+        });
+        assert.equal(res.statusCode, 400);
+        assert.equal(res.json().error.code, 'BAD_REQUEST');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );
