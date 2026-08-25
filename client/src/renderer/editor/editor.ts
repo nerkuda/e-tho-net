@@ -163,11 +163,16 @@ export function currentEditorContext(): EditorContext | null {
       return { ownerType: 'thought', ownerId: target.id, thought: target.thought, link: null };
     }
     // Opened from the structures view (L15): the full entity rides along in
-    // the store; until it arrives the editor falls back to the focus.
+    // the store; until it arrives the editor shows a loading placeholder.
     const thought = store.state.structuresActiveThought;
     if (thought !== null && thought.id === target.id) {
       return { ownerType: 'thought', ownerId: target.id, thought, link: null };
     }
+    // Neither payload has arrived yet (etn.thoughts.get / structures fetch in
+    // flight): a loading placeholder for the *target* thought, not a fallback
+    // to the focused thought — falling back here used to flash the focused
+    // thought's content for a frame before the real payload replaced it.
+    return { ownerType: 'thought', ownerId: target.id, thought: null, link: null };
   }
   const focus = store.state.focus;
   if (focus === null) return null;
