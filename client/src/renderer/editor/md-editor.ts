@@ -138,8 +138,11 @@ const mdTheme = EditorView.theme({
   },
   '&.cm-focused': { outline: 'none' },
   '.cm-cursor': { borderLeftColor: 'var(--accent)' },
+  // Выделение текста (06b18f19): тот же акцентный фон, что и ::selection
+  // просмотра (.comment-view в styles.css) — одинаковые цвета в обоих
+  // режимах; текст под выделением сохраняет свой цвет (включая подсветку).
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
-    backgroundColor: 'var(--accent-soft)',
+    backgroundColor: 'var(--selection-bg)',
   },
   '.cm-activeLine': { backgroundColor: 'transparent' },
   '.cm-placeholder': { color: 'var(--text-faint)' },

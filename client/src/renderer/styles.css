@@ -28,6 +28,11 @@
   /* Hover tone for accent-filled controls (primary buttons, focus ellipse). */
   --accent-strong: #245cc9;
   --accent-soft: #e4ecfd;
+  /* Фон текстового выделения (::selection и .cm-selectionBackground) —
+     акцент с альфой: текст выделенного фрагмента сохраняет свой цвет
+     (обычный, код, ссылки) и остаётся контрастным. Оба режима markdown-поля
+     — просмотр и редактор — красятся одной переменной (06b18f19). */
+  --selection-bg: rgba(47, 111, 237, 0.4);
   /* Selection outline of clouds picked into the selection panel — teal, so it
    * never reads as the editor halo (§5, L22 review). */
   --selection: #0f8f86;
@@ -127,6 +132,10 @@
   --accent: #5b8cff;
   --accent-strong: #7ba1ff;
   --accent-soft: #22304d;
+  /* Фон текстового выделения (06b18f19): акцент #5b8cff с альфой — на тёмных
+     фонах поля и блоков кода смесь достаточно светлая и заметная, светлый
+     текст и подсветка кода остаются контрастными. */
+  --selection-bg: rgba(91, 140, 255, 0.5);
   /* Selection outline of clouds picked into the selection panel — teal. */
   --selection: #2fbfae;
   --danger: #e06a6a;
@@ -2739,6 +2748,26 @@ body.cloud-dragging * {
   font-size: var(--md-font-size);
   line-height: 1.55;
   overflow-wrap: break-word;
+}
+
+/* Выделение текста в markdown-полях (06b18f19): акцентный полупрозрачный
+   фон из темы. Класс .comment-view покрывает режим просмотра (постоянный
+   комментарий, хронология, вложения) и виджеты live preview в редакторе;
+   выделение строк самого редактора рисует CodeMirror (.cm-selectionBackground
+   в md-editor.ts) той же переменной — цвета в обоих режимах одинаковые.
+   Фон с альфой не перекрашивает текст: обычный текст, код, цитаты и ссылки
+   сохраняют свои цвета и остаются контрастными. */
+.comment-view ::selection,
+.comment-view::selection {
+  background-color: var(--selection-bg);
+}
+
+/* Виджеты live preview лежат внутри .cm-line, где drawSelection CodeMirror
+   прячет нативное выделение (`background: transparent !important`); больший
+   вес селектора возвращает фон при нативном drag-выделении внутри виджета. */
+.cm-editor .cm-line .md-widget ::selection,
+.cm-editor .cm-line .md-widget::selection {
+  background-color: var(--selection-bg) !important;
 }
 
 .comment-view img {
