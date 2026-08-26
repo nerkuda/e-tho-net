@@ -482,6 +482,31 @@ describe(
       }
     });
 
+    it('findDuplicates matches a wildcard synonym against the whole input title (0.4.3)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Грабли');
+        seedSynonym(ndb, a, 'грабл*');
+        // The pattern covers the entire proposed title → the thought is a
+        // duplicate of the input «грабли» (exact title here; a wildcard-only
+        // match is covered by the «Игорян*» case above).
+        assert.ok(
+          findDuplicates(ndb, 'грабли').some((h) => h.id === a),
+          '«грабл*» matches the input «грабли»',
+        );
+        // The pattern must NOT match a word inside a longer phrase — «Грабли»
+        // is not a duplicate of «не наступать на грабли» (08-ui-spec.md §4.4).
+        const phrase = findDuplicates(ndb, 'не наступать на грабли');
+        assert.equal(
+          phrase.some((h) => h.id === a),
+          false,
+          'a wildcard synonym must not match a word inside the phrase',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('findDuplicates finds partial matches inside synonyms (08-ui-spec §4.4)', () => {
       const ndb = createInMemoryNetworkDb();
       try {

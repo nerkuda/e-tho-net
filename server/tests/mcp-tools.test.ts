@@ -107,6 +107,44 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.thoughts.create applies comment_template_md of the type (0.4.3)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const type = createThoughtType(
+        ndb,
+        { name: 'Карточка', comment_template_md: '## Суть\n\n- факт: \n- вывод: ' },
+        ctx.adminId,
+      );
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Серверная карточка', type_id: type.id },
+        });
+        assert.equal(created.isError, undefined, toolText(created));
+        const { id } = toolJson<{ id: string }>(created);
+
+        const got = await handle.client.callTool({
+          name: 'etn.comments.get',
+          arguments: { network_id: ctx.networkId, thought_id: id },
+        });
+        assert.equal(got.isError, undefined, toolText(got));
+        const comment = toolJson<{
+          thought_id: string;
+          permanent: { body_md: string } | null;
+        }>(got);
+        assert.ok(comment.permanent, 'permanent comment must be seeded from the template');
+        assert.equal(comment.permanent.body_md, '## Суть\n\n- факт: \n- вывод: ');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('read-only key: reads pass, mutating tools are rejected (F2)', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -1203,6 +1241,46 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.ok(linkEntry, 'link type must be listed');
         assert.equal(linkEntry.name_forward, 'содержит');
         assert.equal(linkEntry.name_reverse, 'входит в');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.types.list scope returns a single catalogue (0.4.3)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      createThoughtType(ndb, { name: 'Заметка' }, ctx.adminId);
+      createLinkType(ndb, { name_forward: 'ссылается', name_reverse: 'ссылка' }, ctx.adminId);
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const linksOnly = await handle.client.callTool({
+          name: 'etn.types.list',
+          arguments: { network_id: ctx.networkId, scope: 'links' },
+        });
+        assert.equal(linksOnly.isError, undefined, toolText(linksOnly));
+        const linksJson = toolJson<{
+          thought_types?: Array<{ id: string }>;
+          link_types: Array<{ id: string; name_forward: string }>;
+        }>(linksOnly);
+        assert.equal(linksJson.thought_types, undefined, 'thought_types must be omitted');
+        assert.ok(linksJson.link_types.length >= 1, 'link catalogue must be present');
+
+        const thoughtsOnly = await handle.client.callTool({
+          name: 'etn.types.list',
+          arguments: { network_id: ctx.networkId, scope: 'thoughts' },
+        });
+        assert.equal(thoughtsOnly.isError, undefined, toolText(thoughtsOnly));
+        const thoughtsJson = toolJson<{
+          thought_types: Array<{ id: string }>;
+          link_types?: Array<{ id: string }>;
+        }>(thoughtsOnly);
+        assert.equal(thoughtsJson.link_types, undefined, 'link_types must be omitted');
+        assert.ok(thoughtsJson.thought_types.length >= 1, 'thought catalogue must be present');
       } finally {
         await handle.close();
       }

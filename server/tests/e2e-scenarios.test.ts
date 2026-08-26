@@ -125,6 +125,42 @@ describe(
       }
     });
 
+    it('REST thoughts/query rejects unknown body keys with 422 (0.4.3)', async () => {
+      const ctx: RestTestContext = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+
+        // A valid body works.
+        const ok = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thoughts/query`,
+          headers: h,
+          payload: { keywords: 'x', limit: 100 },
+        });
+        assert.equal(ok.statusCode, 200);
+
+        // The MCP filter name `in_subtree_of` must NOT be silently ignored:
+        // it used to return 200 with an empty page and mislead the caller.
+        const bad = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thoughts/query`,
+          headers: h,
+          payload: { in_subtree_of: ctx.homeId, limit: 100 },
+        });
+        assert.equal(bad.statusCode, 422);
+        const err = bad.json().error as {
+          code: string;
+          details?: { fields?: string[]; allowed?: string[] };
+        };
+        assert.equal(err.code, 'VALIDATION_ERROR');
+        assert.deepEqual(err.details?.fields, ['in_subtree_of']);
+        assert.ok(err.details?.allowed?.includes('parent_ids'));
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('realtime: network events reach the other user, user-audience events do not', async () => {
       const ctx = await buildRestContext();
       const app = ctx.app;
