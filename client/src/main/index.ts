@@ -12,7 +12,7 @@
  * The API-key never leaves this process: renderer talks to data exclusively over
  * IPC (G7).
  */
-import { app, BrowserWindow, protocol, screen, shell } from 'electron';
+import { app, BrowserWindow, powerMonitor, protocol, screen, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -360,11 +360,22 @@ app
 
     // Wire the renderer bridge (G7): single `etn:invoke` channel + realtime
     // event/status broadcast to whichever window is front-most.
-    registerIpc({
+    const ipc = registerIpc({
       localDb,
       clientId,
       getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
     });
+
+    // Liveness after system sleep (defect 7f4cef31): a WebSocket that lived
+    // through a sleep is often half-open — the server closed its side after the
+    // pong timeout, but the FIN/RST never reached the sleeping client, so
+    // neither 'close' nor 'error' fires and the UI keeps showing `connected`
+    // while no events arrive. On resume, force every pooled realtime socket to
+    // reconnect right away (each network catches up via its own `resume`/
+    // last_seq; the receive-idle watchdog in ws-client covers the cases where
+    // no system event fires at all). `powerMonitor` is only usable after
+    // `app.ready`, hence the subscription lives here.
+    powerMonitor.on('resume', () => ipc.forceReconnectRealtime());
 
     // Window background follows the stored theme so the very first paint
     // already matches (the renderer applies data-theme on boot, L10).

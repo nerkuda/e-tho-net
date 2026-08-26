@@ -223,6 +223,13 @@ function buildApi(): EtnApi {
         ipcRenderer.on('realtime:networkLost', listener);
         return () => ipcRenderer.removeListener('realtime:networkLost', listener);
       },
+      /**
+       * Renderer `window.online` → main force-reconnects the realtime pool
+       * (defect 7f4cef31). One-way, fire-and-forget.
+       */
+      notifyOnline() {
+        ipcRenderer.send('etn:realtime:online');
+      },
     },
     ui: {
       getState: (networkId, key) => invoke('ui.getState', networkId, key),

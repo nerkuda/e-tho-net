@@ -33,9 +33,14 @@ export interface RegisterIpcOptions {
 
 /**
  * Wire the single `etn:invoke` channel plus realtime event/status forwarding.
- * Returns a handle with `shutdown()` for orderly teardown.
+ * Returns a handle with `shutdown()` for orderly teardown and
+ * `forceReconnectRealtime()` for system resume / network-online events
+ * (defect 7f4cef31).
  */
-export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
+export function registerIpc(opts: RegisterIpcOptions): {
+  shutdown(): void;
+  forceReconnectRealtime(): void;
+} {
   let rest: RestClient | null = null;
   let pool: TabRealtimePool | null = null;
   let profile: ServerProfileRow | null = null;
@@ -155,6 +160,21 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
     currentUser = null;
   };
 
+  /**
+   * Force-reconnect every pooled realtime socket (defect 7f4cef31). Called on
+   * system resume (powerMonitor, index.ts) and on the renderer `online` event
+   * (forwarded here as `etn:realtime:online` from the preload bridge): a socket
+   * that lived through a sleep or a network switch is often half-open, so we
+   * proactively re-establish instead of waiting for the idle watchdog.
+   */
+  const forceReconnectRealtime = (): void => {
+    try {
+      pool?.forceReconnectAll();
+    } catch {
+      // best-effort — individual clients also swallow their own errors
+    }
+  };
+
   const openNetwork = async (networkId: string): Promise<Network> => {
     if (!rest) throw new Error('Not connected: call etn.server.connect first');
     const network = await rest.getNetwork(networkId);
@@ -191,9 +211,18 @@ export function registerIpc(opts: RegisterIpcOptions): { shutdown(): void } {
     return await handler(payload.args ?? []);
   });
 
+  // One-way channel from the renderer's `window.online` DOM event (defect
+  // 7f4cef31): main owns the sockets, so network-restored notifications must
+  // cross the bridge even though they carry no request/response payload.
+  const onRendererOnline = (): void => forceReconnectRealtime();
+  ipcMain.on('etn:realtime:online', onRendererOnline);
+
   return {
     shutdown() {
+      ipcMain.removeListener('etn:realtime:online', onRendererOnline);
       disconnect();
     },
+    /** Force-reconnect every pooled realtime socket (resume/online, 7f4cef31). */
+    forceReconnectRealtime,
   };
 }

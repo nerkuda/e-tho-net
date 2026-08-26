@@ -70,6 +70,12 @@ export function initRealtime(): void {
   if (initialized) return;
   initialized = true;
 
+  // Network is back after an outage (defect 7f4cef31): tell main so it can
+  // force-reconnect the realtime sockets immediately — a socket that survived
+  // the outage half-open would otherwise sit deaf until the idle watchdog
+  // fires (~100 s) or forever, if no close frame ever arrives.
+  window.addEventListener('online', () => etn.realtime.notifyOnline());
+
   etn.realtime.onStatusChange((payload) => {
     // Q2: payload is `{networkId, status}` from TabRealtimePool.
     const valid: RtStatus[] = ['idle', 'connecting', 'connected', 'reconnecting', 'offline'];

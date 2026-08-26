@@ -15,6 +15,11 @@
  *    these are terminal and re-emitted as `unauthorized`/`not-found`;
  *  - any other close/error triggers exponential backoff reconnect with full jitter
  *    (1 s → 30 s), capped, and a fresh `resume` on the next `open`;
+ *  - receive-idle watchdog (defect 7f4cef31): when no frame of any kind arrives
+ *    for ~100 s (3 server ping intervals + slack, 04-realtime.md §2.1) the
+ *    socket is presumed half-open (OS sleep / network switch) and terminated,
+ *    routing into the same backoff + `resume` path; `forceReconnect()` does the
+ *    same immediately for system resume/online events;
  *  - `resume.stale` (event-log window exceeded) is re-emitted as `stale` so the UI
  *    can trigger a full re-focus (04-realtime.md §6).
  *
@@ -40,6 +45,16 @@ const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 /** Maximum reconnect attempts before giving up (safety valve). */
 const RECONNECT_MAX_ATTEMPTS = 50;
+/**
+ * Receive-idle watchdog, in milliseconds (defect 7f4cef31). The server pings
+ * every 30 s (04-realtime.md §2.1), so a healthy connection is never silent
+ * longer than one ping interval. When no frame of any kind arrives for 3
+ * intervals + slack, the socket is presumed half-open (typical after OS sleep
+ * or a network switch: the server already closed its side after the pong
+ * timeout, but the FIN/RST never reached the client) and gets hard-terminated
+ * so the regular close → backoff-reconnect → `resume` path takes over.
+ */
+const RECV_IDLE_TIMEOUT_MS = 100_000;
 
 /** Connection status surfaced to the UI (07-client-electron.md §5.1). */
 export type RealtimeStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
@@ -84,6 +99,11 @@ export interface RealtimeClientOptions {
   random?: () => number;
   /** Optional scheduler override (for deterministic tests). */
   setTimeout?: typeof setTimeout;
+  /**
+   * Receive-idle watchdog timeout override, in milliseconds (defect 7f4cef31).
+   * Defaults to {@link RECV_IDLE_TIMEOUT_MS}; tests use short values.
+   */
+  idleTimeoutMs?: number;
 }
 
 /**
@@ -106,6 +126,7 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
   private readonly WebSocketCtor: typeof WebSocket;
   private readonly random: () => number;
   private readonly setTimeoutFn: typeof setTimeout;
+  private readonly idleTimeoutMs: number;
 
   /** Active socket, or `null` when closed. */
   private socket: WebSocket | null = null;
@@ -117,7 +138,10 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
   private reconnectTimer: NodeJS.Timeout | null = null;
   /** `true` while a user-initiated `disconnect()` is in progress (suppress reconnect). */
   private manualClose = false;
-  /** `true` after the connection reached `connected` at least once (for status UX). */
+  /** Pending receive-idle watchdog timer, or `null` (defect 7f4cef31). */
+  private idleTimer: NodeJS.Timeout | null = null;
+  /** `true` after a terminal close (4401/4404) — suppresses forceReconnect. */
+  private terminalClosed = false;
 
   public constructor(opts: RealtimeClientOptions) {
     super();
@@ -129,6 +153,7 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     this.WebSocketCtor = opts.WebSocketCtor ?? WebSocket;
     this.random = opts.random ?? Math.random;
     this.setTimeoutFn = opts.setTimeout ?? setTimeout;
+    this.idleTimeoutMs = opts.idleTimeoutMs ?? RECV_IDLE_TIMEOUT_MS;
   }
 
   /** Returns the current connection status. */
@@ -150,6 +175,7 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
       return; // already connected or connecting
     }
     this.manualClose = false;
+    this.terminalClosed = false;
     this.openSocket(networkId);
   }
 
@@ -161,6 +187,7 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
   public disconnect(code = 1000, reason = 'client disconnect'): void {
     this.manualClose = true;
     this.clearReconnectTimer();
+    this.clearIdleWatchdog();
     const socket = this.socket;
     this.socket = null;
     if (socket !== null) {
@@ -181,6 +208,38 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
       }
     }
     this.setStatus('idle');
+  }
+
+  /**
+   * Forces an immediate reconnect: drops the current socket (even one that
+   * still looks healthy) and reconnects without the backoff delay (defect
+   * 7f4cef31). Called on system resume / network-online because a socket that
+   * lived through a sleep is often half-open — no `close`/`error` will ever
+   * arrive, so passive detection alone is too slow. Resets the attempt counter
+   * (each system event grants a fresh reconnect budget). No-op when the client
+   * was torn down by the user (`disconnect`) or terminally rejected
+   * (4401/4404 — membership/auth lost, reconnecting is pointless until the
+   * user re-opens the network).
+   */
+  public forceReconnect(): void {
+    if (this.manualClose || this.terminalClosed) return;
+    const networkId = this.getNetworkId();
+    if (networkId === null) return;
+    this.clearReconnectTimer();
+    this.clearIdleWatchdog();
+    this.reconnectAttempts = 0;
+    const stale = this.socket;
+    this.socket = null;
+    if (stale !== null) {
+      try {
+        // Works for OPEN and CONNECTING sockets alike; the late 'close' of the
+        // abandoned socket is ignored by the stale-socket guard in openSocket.
+        stale.terminate();
+      } catch {
+        // best effort — the guard makes the outcome irrelevant
+      }
+    }
+    void this.openSocket(networkId);
   }
 
   // -------------------------------------------------------------------------
@@ -261,18 +320,25 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     socket.once('open', () => this.onOpen(networkId));
     socket.on('message', (data) => this.onMessage(data));
     socket.on('ping', (data) => this.onWsPing(data));
-    socket.on('pong', () => {
-      // WS-level pong from the server; nothing to do. Keep-alive is driven by the
-      // server's application-level ping too (handled in onMessage).
+    socket.on('pong', () => this.onWsPong());
+    // Stale-socket guard: `forceReconnect()` may have replaced `this.socket`
+    // already; a late `close`/`error` from the abandoned socket must not null
+    // the successor or trigger a spurious reconnect (defect 7f4cef31).
+    socket.once('close', (code, reason) => {
+      if (this.socket === socket) this.onClose(code, reason);
     });
-    socket.once('close', (code, reason) => this.onClose(code, reason));
-    socket.on('error', (err) => this.guardedEmitError(err));
+    socket.on('error', (err) => {
+      if (this.socket === socket) this.guardedEmitError(err);
+    });
   }
 
   /** Called when the socket completes the handshake. Sends `resume`. */
   private onOpen(networkId: string): void {
     this.reconnectAttempts = 0;
     this.setStatus('connected');
+    // Arm the receive-idle watchdog: a healthy server pings every 30 s, so
+    // prolonged silence after `open` means the socket is half-open.
+    this.armIdleWatchdog();
     const lastSeq = this.getLastSeq(networkId);
     this.sendRaw(JSON.stringify({ type: 'resume', last_seq: lastSeq }));
   }
@@ -283,6 +349,9 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
    * real-time event: parsed, re-emitted, and `last_seq` advanced.
    */
   private onMessage(data: WebSocket.RawData): void {
+    // Any inbound frame proves liveness — re-arm the idle watchdog before
+    // even trying to parse (malformed frames count too, defect 7f4cef31).
+    this.armIdleWatchdog();
     let payload: unknown;
     try {
       payload = JSON.parse(data.toString());
@@ -332,24 +401,32 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
 
   /**
    * Handles a WS-level protocol `ping` frame. `ws` already answers with a `pong`
-   * automatically; this hook exists for logging/extension only — we do nothing
-   * extra so the library's automatic pong path stays intact.
+   * automatically; the hook only re-arms the idle watchdog (any inbound frame
+   * proves liveness — defect 7f4cef31).
    */
   private onWsPing(_data: Buffer): void {
-    // Intentional no-op: `ws` auto-replies with a protocol-level pong.
+    this.armIdleWatchdog();
+  }
+
+  /** WS-level `pong` from the server — re-arms the idle watchdog (7f4cef31). */
+  private onWsPong(): void {
+    this.armIdleWatchdog();
   }
 
   /** Handles a socket close — terminal codes vs reconnectable. */
   private onClose(code: number, _reason: Buffer): void {
     this.socket = null;
+    this.clearIdleWatchdog();
     if (this.manualClose) return; // user asked to leave; do not reconnect.
 
     if (code === REALTIME_CLOSE_CODES.UNAUTHORIZED) {
+      this.terminalClosed = true;
       this.setStatus('offline');
       this.emitTyped('unauthorized');
       return;
     }
     if (code === REALTIME_CLOSE_CODES.NOT_FOUND) {
+      this.terminalClosed = true;
       this.setStatus('offline');
       this.emitTyped('not-found');
       return;
@@ -400,6 +477,52 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  /**
+   * (Re-)arms the receive-idle watchdog (defect 7f4cef31). Every inbound frame
+   * — app-level or protocol-level — calls this; a single deadline timer then
+   * covers the gap until the next frame. When it fires, the socket is presumed
+   * half-open (OS sleep / network switch swallowed the server's close) and is
+   * hard-terminated, routing into the standard close → backoff-reconnect →
+   * `resume` path.
+   */
+  private armIdleWatchdog(): void {
+    this.clearIdleWatchdog();
+    this.idleTimer = this.setTimeoutFn(() => {
+      this.idleTimer = null;
+      this.onIdleTimeout();
+    }, this.idleTimeoutMs);
+    // Never hold the process (or the test runner) alive on its own.
+    this.idleTimer.unref?.();
+  }
+
+  /** Cancels the receive-idle watchdog, if armed. */
+  private clearIdleWatchdog(): void {
+    if (this.idleTimer !== null) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  /** No frame for `idleTimeoutMs` — the socket is half-open; terminate it. */
+  private onIdleTimeout(): void {
+    if (this.manualClose) return;
+    const socket = this.socket;
+    if (socket === null) return;
+    this.guardedEmitError(
+      new Error(
+        `Realtime: нет данных от сервера ${Math.round(this.idleTimeoutMs / 1000)} с ` +
+          '(half-open после сна/смены сети?) — соединение переустанавливается.',
+      ),
+    );
+    try {
+      // Hard drop: emits 'close' (1006) → scheduleReconnect → fresh resume.
+      socket.terminate();
+    } catch {
+      // The socket died between the check and the call; its own 'close' takes
+      // care of the reconnect.
     }
   }
 

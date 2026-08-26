@@ -612,6 +612,12 @@ export interface EtnApi {
     onStale(cb: (payload: { networkId: string; lastSeq: number }) => void): () => void;
     /** Per-network terminal close (Q5) — `network.deleted` or membership lost. */
     onNetworkLost(cb: (payload: { networkId: string; reason: 'unauthorized' | 'not-found' }) => void): () => void;
+    /**
+     * Notifies main that the network came back (renderer `window.online` DOM
+     * event, defect 7f4cef31). One-way, fire-and-forget: main force-reconnects
+     * every pooled realtime socket instead of waiting for the idle watchdog.
+     */
+    notifyOnline(): void;
   };
   /**
    * Deep-link subscription (task R11, docs/12-wiki-id-refs.md §7.4). The main

@@ -160,6 +160,27 @@ export class TabRealtimePool {
   }
 
   /**
+   * Force-reconnect every pooled socket right now (defect 7f4cef31): called on
+   * system resume (`powerMonitor` 'resume') and on the renderer `online`
+   * event, because a socket that lived through a sleep/network switch is often
+   * half-open — it still reports `connected` but never delivers frames, and no
+   * `close`/`error` will arrive. Pool entries keep their refcounts; each client
+   * drops its socket, reconnects immediately (no backoff) and catches up via
+   * its per-network `last_seq` with a fresh `resume` (04-realtime.md §6).
+   * Entries closed by the user or terminally rejected (4401/4404) are skipped
+   * by `RealtimeClient.forceReconnect` itself.
+   */
+  public forceReconnectAll(): void {
+    for (const [, entry] of this.entries) {
+      try {
+        entry.client.forceReconnect();
+      } catch {
+        // best-effort: one broken network must not block the others
+      }
+    }
+  }
+
+  /**
    * Re-emits a socket event into the renderer with `networkId` annotation.
    * Status changes are forwarded as `{networkId, status}`; per-network
    * terminal events (`unauthorized`/`not-found`) become `realtime:networkLost`

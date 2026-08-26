@@ -4,8 +4,10 @@
  * A real `ws` {@link WebSocketServer} is spun up on an ephemeral port so the
  * handshake, resume handshake, event/last_seq propagation, `resume.stale`,
  * ping/pong and the close-code branching (4401/4404 vs reconnect) are exercised
- * end-to-end without any real ETN server. `LocalDb` is stubbed in-memory so the
- * tests do not depend on the better-sqlite3 native build.
+ * end-to-end without any real ETN server. The 7f4cef31 block additionally
+ * covers the receive-idle watchdog (half-open sockets after OS sleep) and
+ * `forceReconnect` (system resume / network online). `LocalDb` is stubbed
+ * in-memory so the tests do not depend on the better-sqlite3 native build.
  */
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
@@ -31,12 +33,26 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Resolves once `cond()` turns true, polling every 15 ms (deadline `ms`).
+ * Used instead of fixed sleeps where a watchdog/reconnect races with asserts.
+ */
+async function until(cond: () => boolean, ms = 1_500): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > deadline) {
+      throw new Error(`condition not met within ${ms}ms`);
+    }
+    await wait(15);
+  }
+}
+
 /** Builds a client pointing at `serverUrl`. */
 function makeClient(
   serverUrl: string,
   db: LocalDb,
   networkId: string | null = 'net1',
-  opts: { random?: () => number } = {},
+  opts: { random?: () => number; idleTimeoutMs?: number } = {},
 ): RealtimeClient {
   return new RealtimeClient({
     baseUrl: serverUrl,
@@ -45,6 +61,7 @@ function makeClient(
     getNetworkId: () => networkId,
     localDb: db,
     random: opts.random ?? (() => 0),
+    idleTimeoutMs: opts.idleTimeoutMs,
   });
 }
 
@@ -335,6 +352,162 @@ describe('RealtimeClient — close codes & reconnect', () => {
       `expected a reconnect, saw ${connections.length} connections`,
     );
     client.disconnect();
+  });
+});
+
+describe('RealtimeClient — receive-idle watchdog & forceReconnect (defect 7f4cef31)', () => {
+  it('terminates a silent (half-open) socket after the idle timeout and reconnects with resume', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({ last_seq: JSON.stringify({ net1: 12 }) });
+    const client = makeClient(url, db, 'net1', { idleTimeoutMs: 120 });
+
+    const statuses: string[] = [];
+    client.onTyped('status', (s) => statuses.push(s));
+    const errors: Error[] = [];
+    client.onTyped('error', (e) => errors.push(e));
+    const events: unknown[] = [];
+    client.onTyped('event', (e) => events.push(e));
+
+    const connections = trackSockets(server);
+    const conn1 = nextConnection(server);
+    const conn2 = nextConnection(server); // collects frames from the reconnect
+    const evt = {
+      type: 'thought.created',
+      seq: 13,
+      ts: '2026-08-26T00:00:00.000Z',
+      actor: { user_id: 'u1', client_id: 'other' },
+      network_id: 'net1',
+      audience: 'network',
+      data: { thought: { id: 't1' } },
+    };
+    // The replacement connection must be fully functional: deliver an event
+    // the moment it opens (no race with the next watchdog cycle — the frame
+    // goes out at handshake time, milliseconds after the client's `open`).
+    server.on('connection', (ws) => {
+      if (connections.indexOf(ws) === 1) ws.send(JSON.stringify(evt));
+    });
+    client.connect();
+    await conn1;
+    await wait(20);
+    assert.equal(connections.length, 1);
+    assert.equal(client.getStatus(), 'connected');
+
+    // The server stays SILENT — simulating a half-open socket after OS sleep:
+    // no close frame ever arrives and no frames are delivered, so neither
+    // 'close' nor 'error' would fire without the watchdog.
+    await until(() => connections.length >= 2);
+    assert.ok(statuses.includes('reconnecting'), statuses.join(','));
+    assert.ok(
+      errors.some((e) => /half-open/i.test(e.message)),
+      errors.map((e) => e.message).join('; '),
+    );
+
+    // A fresh resume with the persisted last_seq was sent on the new socket,
+    // and the replayed event went through: emitted and last_seq advanced.
+    const ws2 = await conn2;
+    await until(() => ws2.messages.some((m) => m.includes('"resume"')));
+    await until(() => events.length >= 1);
+    assert.equal(client.getLastSeq('net1'), 13);
+    client.disconnect();
+  });
+
+  it('does NOT kill the connection while frames keep arriving', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({});
+    const client = makeClient(url, db, 'net1', { idleTimeoutMs: 100 });
+
+    const connections = trackSockets(server);
+    const conn = nextConnection(server);
+    client.connect();
+    const ws = await conn;
+    await wait(15);
+
+    // Any frame resets the watchdog — the app-level ping is answered with pong.
+    let ticks = 0;
+    const iv = setInterval(() => {
+      ticks += 1;
+      if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
+    }, 30);
+    await wait(250); // ~8 frames, each well within the 100 ms window
+    clearInterval(iv);
+    assert.ok(ticks >= 6, `expected frames to flow, saw ${ticks}`);
+    assert.equal(connections.length, 1); // watchdog never fired
+
+    // Silence resumes the countdown → the watchdog fires now.
+    await until(() => connections.length >= 2);
+    client.disconnect();
+  });
+
+  it('forceReconnect drops a live socket immediately and resumes without backoff', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({ last_seq: JSON.stringify({ net1: 5 }) });
+    const client = makeClient(url, db);
+
+    const connections = trackSockets(server);
+    const conn1 = nextConnection(server);
+    const conn2 = nextConnection(server);
+    client.connect();
+    await conn1;
+    await wait(15);
+    assert.equal(connections.length, 1);
+
+    client.forceReconnect(); // e.g. powerMonitor 'resume'
+    const ws2 = await conn2;
+    await wait(20);
+
+    assert.equal(connections.length, 2);
+    assert.equal(client.getStatus(), 'connected');
+    const resumes = ws2.messages.map((m) => JSON.parse(m) as { type: string; last_seq?: number });
+    assert.ok(
+      resumes.some((m) => m.type === 'resume' && m.last_seq === 5),
+      JSON.stringify(resumes),
+    );
+    client.disconnect();
+  });
+
+  it('forceReconnect is a no-op after a user-initiated disconnect', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({});
+    const client = makeClient(url, db);
+
+    const connections = trackSockets(server);
+    const conn1 = nextConnection(server);
+    client.connect();
+    await conn1;
+    await wait(10);
+    client.disconnect(); // e.g. the last tab of the network closed
+    await wait(50);
+
+    client.forceReconnect();
+    await wait(80);
+
+    assert.equal(connections.length, 1); // nothing resurrected
+    assert.equal(client.getStatus(), 'idle');
+  });
+
+  it('forceReconnect is a no-op after a terminal 4401 close', async () => {
+    const { server, url, close } = await startServer();
+    teardowns.push(close);
+    const db = makeFakeDb({});
+    const client = makeClient(url, db);
+
+    const connections = trackSockets(server);
+    const conn1 = nextConnection(server);
+    client.connect();
+    const ws1 = await conn1;
+    await wait(10);
+    ws1.close(4401, 'membership lost');
+    await wait(50);
+
+    client.forceReconnect();
+    await wait(80);
+
+    assert.equal(connections.length, 1); // no futile retry on a lost membership
+    assert.equal(client.getStatus(), 'offline');
   });
 });
 
