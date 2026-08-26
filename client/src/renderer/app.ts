@@ -554,6 +554,12 @@ export async function boot(): Promise<void> {
 /** Global keyboard shortcuts (08-ui-spec.md §13): Ctrl+F, Escape, Ctrl+±/0,
  *  and the copy/paste bindings of workplan L26 (Ctrl+C, Ctrl+V). */
 export function initKeyboard(): void {
+  // Native text copies (the CM6 editor, inputs, text selections outside
+  // editables) must supersede the internal thought clipboard — the same
+  // "every copy displaces the previous one" rule as the system clipboard
+  // (bug 731a9d16). Thought copies never fire a native copy event, so they
+  // keep the snapshot.
+  void import('./canvas/clipboard.js').then((m) => m.initNativeCopyTracking());
   window.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       // A dialog that consumed the press (the top dialog's capture handler

@@ -223,16 +223,27 @@ export function createMarkdownField(opts: {
     // caret: images embed as `![alt](etnimg:…)`, other files as a link.
     // Pasting an internal clipboard of thoughts inserts wiki-link references
     // (workplan L26) — checked first so the file path doesn't run.
-    editor.dom.addEventListener('paste', (event) => {
-      if (editor === null) return;
-      if (handleClipboardThoughtsPaste(event, editor)) return;
-      const owner = opts.attachmentsOwner;
-      if (owner === undefined) return;
-      const files = event.clipboardData?.files;
-      if (files === undefined || files.length === 0) return;
-      event.preventDefault();
-      void insertClipboardFiles(editor, owner, Array.from(files));
-    });
+    //
+    // Capture phase: CodeMirror handles `paste` on its contentDOM (a child of
+    // `editor.dom`), so a bubble-phase listener here would run *after* CM6
+    // had already inserted the system-clipboard text — our preventDefault
+    // could no longer undo that and the paste produced "text + wiki-link"
+    // (bug 731a9d16). In capture we run first; CM6 skips events that are
+    // already defaultPrevented, so exactly one of the two inserts happens.
+    editor.dom.addEventListener(
+      'paste',
+      (event) => {
+        if (editor === null) return;
+        if (handleClipboardThoughtsPaste(event, editor)) return;
+        const owner = opts.attachmentsOwner;
+        if (owner === undefined) return;
+        const files = event.clipboardData?.files;
+        if (files === undefined || files.length === 0) return;
+        event.preventDefault();
+        void insertClipboardFiles(editor, owner, Array.from(files));
+      },
+      true,
+    );
     // Контекстное меню: «Вставить текст шаблона из типа мысли»
     // (08-ui-spec.md §6.4). Пункт появляется только когда тип назначен и
     // шаблон непустой — тогда нативное контекстное меню редактора не

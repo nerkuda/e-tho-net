@@ -68,6 +68,32 @@ export function subscribe(listener: () => void): () => void {
   };
 }
 
+/**
+ * Supersede the snapshot on native text copies (bug 731a9d16: «Скопированная
+ * мысль не удаляется из "буфера обмена"»). The internal clipboard must behave
+ * like the system one — every later copy displaces whatever was there before,
+ * including a text copy displacing a copied thought.
+ *
+ * Native text copies (the CM6 comment editor, plain inputs, a visible text
+ * selection outside editables, Ctrl+X) fire a `copy`/`cut` event on the
+ * window. The thought-copy path never does: its Ctrl+C keydown is
+ * `preventDefault()`-ed (app.ts `initKeyboard`) before the browser runs the
+ * default copy action, and the context-menu commands call
+ * {@link setClipboard} directly. So every `copy`/`cut` event seen here is a
+ * *text* copy — clear the snapshot.
+ *
+ * Copies made in other applications change the system clipboard without our
+ * window seeing an event; that case is not tracked (polling the OS clipboard
+ * is out of scope).
+ */
+export function initNativeCopyTracking(target: EventTarget = window): void {
+  const supersede = (): void => {
+    setClipboard(null);
+  };
+  target.addEventListener('copy', supersede);
+  target.addEventListener('cut', supersede);
+}
+
 /** Build a short notice string for "Скопировано: …". */
 export function clipboardSummary(): string {
   if (snapshot === null) return '';

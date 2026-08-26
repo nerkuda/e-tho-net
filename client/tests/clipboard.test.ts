@@ -11,8 +11,10 @@ import { describe, it } from 'node:test';
 
 import {
   getClipboard,
+  initNativeCopyTracking,
   rewriteCrossNetworkLinks,
   setClipboard,
+  subscribe,
   thoughtIdLink,
 } from '../src/renderer/canvas/clipboard.js';
 
@@ -96,5 +98,47 @@ describe('clipboard.set/get', () => {
     assert.equal(getClipboard(), snap);
     setClipboard(null);
     assert.equal(getClipboard(), null);
+  });
+});
+
+describe('clipboard.initNativeCopyTracking', () => {
+  // Bug 731a9d16 («Скопированная мысль не удаляется из "буфера обмена"»):
+  // a native text copy/cut must supersede the internal thought snapshot —
+  // the same "every copy displaces the previous one" rule as the system
+  // clipboard. The thought-copy path never fires a native `copy` event
+  // (its Ctrl+C keydown is preventDefault-ed), so any event seen here is a
+  // text copy.
+  const snap = (): Parameters<typeof setClipboard>[0] => ({
+    sourceNetworkId: NET_A,
+    thoughts: [],
+    links: [],
+  });
+
+  it('a native copy event clears the snapshot', () => {
+    const target = new EventTarget();
+    initNativeCopyTracking(target);
+    setClipboard(snap());
+    target.dispatchEvent(new Event('copy'));
+    assert.equal(getClipboard(), null);
+  });
+
+  it('a native cut event clears the snapshot', () => {
+    const target = new EventTarget();
+    initNativeCopyTracking(target);
+    setClipboard(snap());
+    target.dispatchEvent(new Event('cut'));
+    assert.equal(getClipboard(), null);
+  });
+
+  it('clearing an already-empty clipboard does not notify subscribers', () => {
+    const target = new EventTarget();
+    initNativeCopyTracking(target);
+    setClipboard(null);
+    let notified = 0;
+    subscribe(() => {
+      notified += 1;
+    });
+    target.dispatchEvent(new Event('copy'));
+    assert.equal(notified, 0);
   });
 });
