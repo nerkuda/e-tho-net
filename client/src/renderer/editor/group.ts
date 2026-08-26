@@ -2,9 +2,11 @@
  * Collapsible editor group (08-ui-spec.md §6.3).
  *
  * Each group has a stable id, a header (caret, title, count badge, actions)
- * and a body. The collapsed state is kept per entity in
- * `store.state.collapsedGroups` (L4 `editor_collapsed_groups`); the editor
- * module persists it to the local DB through the debounced
+ * and a body. The collapsed state is kept globally per group id in
+ * `store.state.collapsedGroups` (L4 `editor_collapsed_groups`, bug ee745368:
+ * it is NOT per entity — switching to another thought must not restore the
+ * default expansion of a group the user collapsed); the editor module
+ * persists it to the local DB through the debounced
  * {@link setCollapseChangeHandler} hook.
  *
  * Inside tabbed layouts the groups double as sub-groups (`compact`), and lazy
@@ -17,7 +19,7 @@ import { svgIcon } from '../lib/icons.js';
 import { store } from '../state.js';
 
 /** Callback fired when a group is collapsed/expanded (persistence hook). */
-export type CollapseChange = (entityId: string, groupId: string, collapsed: boolean) => void;
+export type CollapseChange = (groupId: string, collapsed: boolean) => void;
 
 let collapseChange: CollapseChange | null = null;
 
@@ -62,8 +64,8 @@ const LAZY_COUNT_PLACEHOLDER = '…';
  * `lazyCount`) after the first expansion. The body can publish a count itself
  * by dispatching `etn:set-count` (detail: badge text) on any child element.
  */
-export function groupSection(spec: GroupSpec, entityId: string): HTMLElement {
-  const saved = store.state.collapsedGroups[entityId]?.[spec.id];
+export function groupSection(spec: GroupSpec): HTMLElement {
+  const saved = store.state.collapsedGroups[spec.id];
   let collapsed = saved === undefined ? spec.defaultCollapsed === true : saved;
   let built = !collapsed;
 
@@ -138,7 +140,7 @@ export function groupSection(spec: GroupSpec, entityId: string): HTMLElement {
     }
     collapsed = !collapsed;
     built = true;
-    collapseChange?.(entityId, spec.id, collapsed);
+    collapseChange?.(spec.id, collapsed);
     if (!collapsed && lazy && !countLoaded) updateCount();
     apply();
   });

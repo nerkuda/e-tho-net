@@ -177,7 +177,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
   const bottom = div('attachment-viewer-area');
   // Resizes the list only; the drop zone and the button stay fixed. The top
   // area never grows past its natural content (one attachment row minimum).
-  root.append(top, rowSplitter(() => list, { min: 48, max: () => list.scrollHeight }), bottom);
+  // The drag is remembered as the list's max height (ee745368).
+  root.append(
+    top,
+    rowSplitter(() => list, { min: 48, max: () => list.scrollHeight, persistKey: 'attachments' }),
+    bottom,
+  );
 
   let selectedId: string | null = null;
   /** Row elements of the current list, by attachment id. */

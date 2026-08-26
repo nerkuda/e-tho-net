@@ -28,8 +28,10 @@ import {
   parseCloudGap,
   parseCloudWidth,
   parseLinkTypeId,
+  parseListHeights,
   parseWindowLayout,
 } from './lib/pure.js';
+import { initListClamps } from './editor/list-heights.js';
 import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js';
 import { applyRealtimeToUi } from './realtime-ui.js';
 import { initTheme } from './lib/theme.js';
@@ -87,7 +89,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
 
-  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw, activeViewRaw, pinsRaw] =
+  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw, activeViewRaw, pinsRaw, heightsRaw] =
     await Promise.all([
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
@@ -100,6 +102,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
       etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_ZOOM),
       etn.ui.getState(networkId, UI_STATE_KEY.ACTIVE_VIEW),
       etn.pins.list(networkId),
+      etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_LIST_HEIGHTS),
     ]);
 
   const editorPosition = (
@@ -108,6 +111,9 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
 
   const editorSize = parseWindowLayout(layoutRaw);
   const canvasLayout = parseCanvasLayout(canvasLayoutRaw);
+  // Saved editor list max-heights (ee745368): into the list-heights module —
+  // mountEditor applies them as --clamp-* variables on the scroll box.
+  initListClamps(parseListHeights(heightsRaw));
 
   const [linkTypes, thoughtTypes] = await Promise.all([
     etn.types.listLinkTypes(networkId),

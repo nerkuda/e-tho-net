@@ -45,6 +45,7 @@ import { linkTypeOptions } from '../lib/type-tree.js';
 import { patchFocusEdge, store } from '../state.js';
 import { openLinkInEditor, registerTabContent, type EditorContext } from './editor.js';
 import { groupSection, type GroupSpec } from './group.js';
+import { applyGroupClamp } from './list-heights.js';
 import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from './wiki-link-resolver.js';
 import { rowSplitter } from './splitter.js';
 
@@ -69,7 +70,6 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
           count: '(2)',
           buildBody: () => buildLinkEndpointsBody(ctx),
         },
-        ctx.ownerId,
       ),
     );
     return root;
@@ -102,7 +102,6 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
       buildBody: () => buildDirectLinksBody(ctx, (reload) => { reloadLinks = reload; }),
       actions: [actionsBtn],
     },
-    ctx.ownerId,
   );
   // Parent «Упоминания» (task R9): содержит две подсекции — «Ссылки на мысль»
   // (явные [[#<id>]] в body_md) и «Упоминания в тексте» (FTS5 по title/synonyms).
@@ -116,7 +115,6 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
       defaultCollapsed: true,
       buildBody: () => buildMentionsParentBody(ctx),
     },
-    ctx.ownerId,
   );
   const usage = groupSection(
     {
@@ -126,19 +124,23 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
       defaultCollapsed: true,
       buildBody: () => buildUsageBody(ctx),
     },
-    ctx.ownerId,
   );
   // Splitters clamp the whole group above them (header + body) — expanded
   // groups flex-fill the tab, so a clamp must stop the group itself, not just
   // its body. A collapsed group (no body) is not resizable: its splitter is
   // inert and never leaves a stale clamp behind (08-ui-spec.md §6.3).
+  // The drag is remembered as the group's max height: a clamped group shrinks
+  // to its content (flex-grow 0) instead of filling the tab, and the cap
+  // survives entity changes and restarts (ee745368, list-heights.ts).
   const resizable = (group: HTMLElement): HTMLElement | null =>
     group.querySelector(':scope > .group-body') !== null ? group : null;
+  applyGroupClamp(direct, 'links.direct');
+  applyGroupClamp(mentions, 'links.mentions');
   root.append(
     direct,
-    rowSplitter(() => resizable(direct), { min: 50 }),
+    rowSplitter(() => resizable(direct), { min: 50, persistKey: 'links.direct' }),
     mentions,
-    rowSplitter(() => resizable(mentions), { min: 50 }),
+    rowSplitter(() => resizable(mentions), { min: 50, persistKey: 'links.mentions' }),
     usage,
   );
   return root;
@@ -204,9 +206,9 @@ function buildDirectLinksBody(
     };
     // The group body itself is the scroll area (CSS caps it at 15 rows,
     // 08-ui-spec.md §6.7); sub-groups are rebuilt on every reload, their
-    // collapsed state persisting per entity through groupSection ids.
+    // collapsed state persisting globally per group id through groupSection.
     const appendSection = (spec: GroupSpec): void => {
-      box.append(groupSection(spec, ctx.ownerId));
+      box.append(groupSection(spec));
     };
 
     let count = 0;
@@ -340,7 +342,6 @@ function buildMentionsParentBody(ctx: EditorContext): HTMLElement {
       defaultCollapsed: true,
       buildBody: () => buildBacklinksBody(ctx),
     },
-    ctx.ownerId,
   );
   const textMentionsSection = groupSection(
     {
@@ -350,7 +351,6 @@ function buildMentionsParentBody(ctx: EditorContext): HTMLElement {
       defaultCollapsed: true,
       buildBody: () => buildMentionsBody(ctx),
     },
-    ctx.ownerId,
   );
   childReload.current = () => {
     backlinksSection.replaceWith(
@@ -362,7 +362,6 @@ function buildMentionsParentBody(ctx: EditorContext): HTMLElement {
           defaultCollapsed: false,
           buildBody: () => buildBacklinksBody(ctx),
         },
-        ctx.ownerId,
       ),
     );
   };
@@ -610,7 +609,6 @@ function buildUsageBody(ctx: EditorContext): HTMLElement {
               return body;
             },
           },
-          ctx.ownerId,
         ),
       );
     }

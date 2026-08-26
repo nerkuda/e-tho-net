@@ -87,8 +87,10 @@ export interface AppState {
   zoneTopSplit: number;
   /** L4 `canvas_layout` share of the canvas height for the children zone. */
   zoneChildrenShare: number;
-  /** L4 `editor_collapsed_groups`, keyed by entity id. */
-  collapsedGroups: Record<string, Record<string, boolean>>;
+  /** L4 `editor_collapsed_groups`: collapsed flag per group id (ee745368 —
+   *  global for the editor, NOT per entity: the state survives entity
+   *  changes, so a collapsed group does not re-expand on another thought). */
+  collapsedGroups: Record<string, boolean>;
   /** Selection panel contents (ordered ids). */
   selection: string[];
   /** Link id highlighted on the canvas (sticky until a click elsewhere). */

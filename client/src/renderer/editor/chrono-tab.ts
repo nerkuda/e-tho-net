@@ -66,7 +66,12 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   const bottom = div('chrono-editor');
   root.append(
     top,
-    rowSplitter(() => tableWrap, { min: 34, max: () => tableWrap.scrollHeight }),
+    // The drag is remembered as the table's max height (ee745368).
+    rowSplitter(() => tableWrap, {
+      min: 34,
+      max: () => tableWrap.scrollHeight,
+      persistKey: 'chrono',
+    }),
     bottom,
   );
 

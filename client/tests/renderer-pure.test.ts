@@ -43,6 +43,7 @@ import {
   parseCloudWidth,
   parseCollapsedGroups,
   parseLinkTypeId,
+  parseListHeights,
   parseTitleWithSynonyms,
   parseWindowLayout,
   shortenCompoundName,
@@ -302,9 +303,10 @@ describe('parseAddLines', () => {
 });
 
 describe('parseCollapsedGroups', () => {
-  it('parses valid JSON', () => {
-    assert.deepEqual(parseCollapsedGroups('{"t1":{"permanent":true}}'), {
-      t1: { permanent: true },
+  it('parses the flat per-group map (global collapse state, ee745368)', () => {
+    assert.deepEqual(parseCollapsedGroups('{"permanent":true,"links":false}'), {
+      permanent: true,
+      links: false,
     });
   });
 
@@ -315,8 +317,38 @@ describe('parseCollapsedGroups', () => {
     assert.deepEqual(parseCollapsedGroups('{"t1":"x"}'), {});
   });
 
-  it('keeps only boolean flags', () => {
-    assert.deepEqual(parseCollapsedGroups('{"t1":{"a":true,"b":"no"}}'), { t1: { a: true } });
+  it('keeps only boolean flags and drops the legacy per-entity shape', () => {
+    // The legacy `{ [entityId]: { groupId: bool } }` values are objects —
+    // they fall out through the boolean filter and start from defaults.
+    assert.deepEqual(parseCollapsedGroups('{"t1":{"a":true,"b":"no"}}'), {});
+    assert.deepEqual(parseCollapsedGroups('{"a":true,"b":"no","c":1}'), { a: true });
+  });
+});
+
+describe('parseListHeights (ee745368)', () => {
+  it('parses valid saved max-heights, rounding fractional pixels', () => {
+    assert.deepEqual(parseListHeights('{"props":120,"chrono":260.4}'), {
+      props: 120,
+      chrono: 260,
+    });
+  });
+
+  it('tolerates garbage and non-object shapes', () => {
+    assert.deepEqual(parseListHeights(null), {});
+    assert.deepEqual(parseListHeights('nope'), {});
+    assert.deepEqual(parseListHeights('[120]'), {});
+  });
+
+  it('drops non-numeric and out-of-range values, keeps boundary values', () => {
+    assert.deepEqual(
+      parseListHeights('{"props":"120","chrono":-5,"attachments":999999,"links.direct":true}'),
+      {},
+    );
+    assert.deepEqual(parseListHeights('{"props":20,"chrono":10000,"attachments":21}'), {
+      props: 20,
+      chrono: 10000,
+      attachments: 21,
+    });
   });
 });
 

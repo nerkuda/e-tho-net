@@ -45,6 +45,7 @@ import { linkTypeOptions, resolveLinkTypeVisual, thoughtTypeOptions } from '../l
 import { focusEdgesSignature, patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
+import { setClampRoot } from './list-heights.js';
 import { registerCommentSections } from './comments.js';
 import { registerAttachmentsTab } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
@@ -244,13 +245,17 @@ export function mountEditor(editorHost: HTMLElement): void {
   setTooltip(positionButton, 'Положение редактора');
   header.append(titleEl, positionButton);
   scrollBox = div('editor-scroll');
+  // Carries the saved list max-heights as --clamp-* variables (ee745368).
+  setClampRoot(scrollBox);
   host.append(header, scrollBox);
 
-  setCollapseChangeHandler((entityId, groupId, collapsed) => {
-    const map = store.state.collapsedGroups;
-    const entity = { ...(map[entityId] ?? {}) };
-    entity[groupId] = collapsed;
-    store.update({ collapsedGroups: { ...map, [entityId]: entity } });
+  // The collapse state is global per group id (ee745368): it survives entity
+  // changes and restarts, so switching to another thought does not restore
+  // the default expansion of a group the user collapsed.
+  setCollapseChangeHandler((groupId, collapsed) => {
+    store.update({
+      collapsedGroups: { ...store.state.collapsedGroups, [groupId]: collapsed },
+    });
     persistCollapsed();
   });
 
@@ -393,23 +398,24 @@ async function render(): Promise<void> {
       const bottomSpec = specs[specs.length - 1]!;
       let top: HTMLElement | null = null;
       for (const spec of topSpecs) {
-        top = groupSection(spec, ctx.ownerId);
+        top = groupSection(spec);
         top.classList.add('tab-top');
         pane.append(top);
       }
       if (top !== null) {
         // Resizes the top group's scrollable table (`.prop-wrap`); inert when
-        // the group is collapsed (no body at all, §6.3).
+        // the group is collapsed (no body at all, §6.3). The drag is
+        // remembered as the table's max height (ee745368, list-heights.ts).
         const topEl = top;
         pane.append(
           rowSplitter(
             () => topEl.querySelector('.prop-wrap') ?? topEl.querySelector('.group-body'),
-            { min: 34 },
+            { min: 34, persistKey: 'props' },
           ),
         );
       }
       const bottom = div('main-bottom');
-      bottom.append(groupSection(bottomSpec, ctx.ownerId));
+      bottom.append(groupSection(bottomSpec));
       pane.append(bottom);
       return pane;
     }

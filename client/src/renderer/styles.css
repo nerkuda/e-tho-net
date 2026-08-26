@@ -2177,7 +2177,10 @@ body.cloud-dragging * {
 /* Default list height: five rows, then it scrolls (§6.5). */
 .attachments-list {
   overflow-y: auto;
-  max-height: 260px;
+  /* Manual splitter drags persist as the list's max height (ee745368): the
+     cap lives in --clamp-attachments on the editor scroll box (list-heights.ts),
+     the fallback is the spec default — five rows (§6.5). */
+  max-height: var(--clamp-attachments, 260px);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 2px 4px;
@@ -2287,7 +2290,8 @@ body.cloud-dragging * {
 
 /* Default table height: five rows, then it scrolls (§6.6). */
 .chrono-table {
-  max-height: 190px;
+  /* Saved manual max height (ee745368, list-heights.ts); default — five rows. */
+  max-height: var(--clamp-chrono, 190px);
 }
 
 /* Pin the header row while the body scrolls — the same pattern as the
@@ -2354,7 +2358,8 @@ body.cloud-dragging * {
 /* --- Properties table: headerless, at most five rows (L7, §6.3.1) ---------- */
 
 .prop-wrap {
-  max-height: 190px;
+  /* Saved manual max height (ee745368, list-heights.ts); default — five rows. */
+  max-height: var(--clamp-props, 190px);
 }
 
 .editor-field {

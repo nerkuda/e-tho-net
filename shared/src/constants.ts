@@ -142,6 +142,7 @@ export const UI_STATE_KEY = {
   SEARCH_STATE: 'search_state',
   EDITOR_POSITION: 'editor_position',
   EDITOR_COLLAPSED_GROUPS: 'editor_collapsed_groups',
+  EDITOR_LIST_HEIGHTS: 'editor_list_heights',
   WINDOW_LAYOUT: 'window_layout',
   CANVAS_LAYOUT: 'canvas_layout',
   CANVAS_ZOOM: 'canvas_zoom',

@@ -21,7 +21,15 @@ class ShimElement {
   tagName: string;
   className = '';
   children: ShimElement[] = [];
-  style: Record<string, string> = {};
+  /** The real style is a CSSStyleDeclaration; the mount path only writes
+   *  custom properties (`--clamp-*`, list-heights.ts) — stub those two. */
+  style: Record<string, string> & {
+    setProperty: (name: string, value: string) => void;
+    removeProperty: (name: string) => void;
+  } = {
+    setProperty: () => undefined,
+    removeProperty: () => undefined,
+  };
   dataset: Record<string, string> = {};
   textContent = '';
   value = '';

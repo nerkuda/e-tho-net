@@ -411,20 +411,44 @@ export function shortenCompoundName(title: string, relatedTitles: readonly strin
 // ui_state parsing (L4)
 // ---------------------------------------------------------------------------
 
-/** Parses `editor_collapsed_groups` ui_state JSON, tolerating garbage. */
-export function parseCollapsedGroups(raw: string | null): Record<string, Record<string, boolean>> {
+/**
+ * Parses `editor_collapsed_groups` ui_state JSON, tolerating garbage.
+ *
+ * Flat `{ groupId: boolean }` (ee745368: the collapse state is global for the
+ * editor, not per entity). The legacy per-entity shape `{ [entityId]: {...} }`
+ * has object values and is dropped by the boolean filter — clients start from
+ * the defaults once and then store the flat map.
+ */
+export function parseCollapsedGroups(raw: string | null): Record<string, boolean> {
   if (raw === null) return {};
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
-    const out: Record<string, Record<string, boolean>> = {};
-    for (const [entityId, groups] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof groups !== 'object' || groups === null || Array.isArray(groups)) continue;
-      const flags: Record<string, boolean> = {};
-      for (const [key, value] of Object.entries(groups as Record<string, unknown>)) {
-        if (typeof value === 'boolean') flags[key] = value;
-      }
-      out[entityId] = flags;
+    const out: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === 'boolean') out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Parses `editor_list_heights` ui_state JSON (bug ee745368), tolerating
+ * garbage. Keeps finite pixel numbers in a sane range only (a corrupted or
+ * hand-edited value must not blank a list or blow up the layout).
+ */
+export function parseListHeights(raw: string | null): Record<string, number> {
+  if (raw === null) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+      if (value < 20 || value > 10_000) continue;
+      out[key] = Math.round(value);
     }
     return out;
   } catch {
