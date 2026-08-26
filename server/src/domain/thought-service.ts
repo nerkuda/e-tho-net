@@ -38,9 +38,10 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { createComment } from './comment-service.js';
 import { purgeThoughtDeletionDependants } from './owner-cleanup.js';
 import { computeThoughtCardWarnings } from './property-service.js';
-import { assertThoughtTypeAssignable } from './thought-type-service.js';
+import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
 
 import { getAttachment } from './attachment-service.js';
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
@@ -466,6 +467,24 @@ export function createThought(
     setSynonyms(ndb, id, synonyms);
     if (input.create_link) {
       createLinkForNewThought(ndb, id, input.create_link, actorUserId, now);
+    }
+    // Server-side comment template application (0.4.3): a thought created with
+    // a type that carries a non-empty `comment_template_md` gets its permanent
+    // comment seeded with the template text, so agent-created cards (MCP/REST,
+    // which cannot pass a comment body on create) match the UI behaviour.
+    // `upsert_bundle` with an explicit comment overwrites this later in the
+    // same transaction.
+    if (input.type_id !== undefined && input.type_id !== null) {
+      const template = getThoughtType(ndb, input.type_id)?.comment_template_md;
+      if (template !== null && template !== undefined && template.trim() !== '') {
+        createComment(
+          ndb,
+          'thought',
+          id,
+          { kind: 'permanent', title: null, body_md: template },
+          actorUserId,
+        );
+      }
     }
     // Re-read to pick up default columns and synonyms verbatim.
     return getThoughtOrThrow(ndb, id);
