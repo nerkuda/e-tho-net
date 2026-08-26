@@ -150,6 +150,7 @@ export const UI_STATE_KEY = {
   ACTIVE_VIEW: 'active_view',
   STRUCTURES_STATE: 'structures_state',
   CHRONICLE_STATE: 'chronicle_state',
+  CHRONICLE_LIST_HEIGHTS: 'chronicle_list_heights',
   MD_ZOOM: 'md_zoom',
 } as const satisfies Record<string, string>;
 export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];

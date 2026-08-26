@@ -89,7 +89,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
 
-  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw, activeViewRaw, pinsRaw, heightsRaw] =
+  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw, activeViewRaw, pinsRaw, heightsRaw, chronicleHeightsRaw] =
     await Promise.all([
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
       etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
@@ -103,6 +103,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
       etn.ui.getState(networkId, UI_STATE_KEY.ACTIVE_VIEW),
       etn.pins.list(networkId),
       etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_LIST_HEIGHTS),
+      etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_LIST_HEIGHTS),
     ]);
 
   const editorPosition = (
@@ -111,9 +112,14 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
 
   const editorSize = parseWindowLayout(layoutRaw);
   const canvasLayout = parseCanvasLayout(canvasLayoutRaw);
-  // Saved editor list max-heights (ee745368): into the list-heights module —
-  // mountEditor applies them as --clamp-* variables on the scroll box.
-  initListClamps(parseListHeights(heightsRaw));
+  // Saved list max-heights (ee745368): both L4 blobs merge into one map —
+  // the editor applies its keys as --clamp-* variables on the scroll box,
+  // the chronicle screen clamps its areas inline on mount (persistKeys are
+  // namespaced: `chronicle.*` vs the editor keys).
+  initListClamps({
+    ...parseListHeights(heightsRaw),
+    ...parseListHeights(chronicleHeightsRaw),
+  });
 
   const [linkTypes, thoughtTypes] = await Promise.all([
     etn.types.listLinkTypes(networkId),

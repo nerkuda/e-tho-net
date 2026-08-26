@@ -333,6 +333,13 @@ describe('parseListHeights (ee745368)', () => {
     });
   });
 
+  it('accepts the chronicle screen keys of the second L4 blob as-is', () => {
+    assert.deepEqual(parseListHeights('{"chronicle.filters":81,"chronicle.table":320.6}'), {
+      'chronicle.filters': 81,
+      'chronicle.table': 321,
+    });
+  });
+
   it('tolerates garbage and non-object shapes', () => {
     assert.deepEqual(parseListHeights(null), {});
     assert.deepEqual(parseListHeights('nope'), {});

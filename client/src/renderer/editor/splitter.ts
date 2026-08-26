@@ -13,10 +13,10 @@
  *
  * With `persistKey` (bug ee745368) the dragged height is remembered as the
  * list's MAXIMUM: it survives entity changes and restarts (L4
- * `editor_list_heights`, see list-heights.ts) and caps the list on every
- * content refresh — the visible height follows the row count but never
- * exceeds the saved cap. Without `persistKey` (chronicle screen) the size
- * stays session-only and resets when the view is rebuilt.
+ * `editor_list_heights` / `chronicle_list_heights`, see list-heights.ts) and
+ * caps the list on every content refresh — the visible height follows the row
+ * count but never exceeds the saved cap. Without `persistKey` the size stays
+ * session-only and resets when the view is rebuilt.
  *
  * Follows the pointer-capture drag pattern of `screens/editor-resizer.ts`.
  */

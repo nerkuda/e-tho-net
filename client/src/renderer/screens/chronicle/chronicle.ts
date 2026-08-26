@@ -30,6 +30,7 @@ import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js
 import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canvas/canvas.js';
 import { wireExternalDragSource, registerDropActions } from '../../canvas/drag-cloud.js';
 import { openLinkInEditor } from '../../editor/editor.js';
+import { applyGroupClamp } from '../../editor/list-heights.js';
 import { createMarkdownField, editMarkdownField } from '../../editor/markdown-field.js';
 import { rowSplitter } from '../../editor/splitter.js';
 import { confirmDialog } from '../../lib/dialog.js';
@@ -144,12 +145,17 @@ export function mountChronicle(hostEl: HTMLElement): void {
 
   const filterArea = div('chron-filter-area');
   // Horizontal grab strip between the filter panel and the table: dragging
-  // changes the panel's max-height (rowSplitter), the rest flows below.
+  // changes the panel's max-height (rowSplitter), the rest flows below. The
+  // drag is remembered as the panel's max height (ee745368, L4
+  // `chronicle_list_heights`) — the cap is applied inline at mount, because
+  // the area element lives for the whole mount (only its content changes).
   const splitter = rowSplitter(() => filterArea, {
     min: 80,
     max: () => filterArea.scrollHeight,
+    persistKey: 'chronicle.filters',
   });
   splitter.classList.add('chron-splitter');
+  applyGroupClamp(filterArea, 'chronicle.filters');
   const main = div('chron-main');
   hostEl.append(filterArea, splitter, main);
 
@@ -170,9 +176,17 @@ export function mountChronicle(hostEl: HTMLElement): void {
   top.append(wrap, pager);
   editorArea = div('chron-editor');
 
+  // The drag is remembered as the table's max height (ee745368, L4
+  // `chronicle_list_heights`); the cap is applied inline — the wrap element is
+  // stable for the whole mount, only rows are re-rendered inside it.
+  applyGroupClamp(wrap, 'chronicle.table');
   main.append(
     top,
-    rowSplitter(() => wrap, { min: 48, max: () => wrap.scrollHeight }),
+    rowSplitter(() => wrap, {
+      min: 48,
+      max: () => wrap.scrollHeight,
+      persistKey: 'chronicle.table',
+    }),
     editorArea,
   );
 
