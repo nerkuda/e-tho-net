@@ -2220,8 +2220,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Поиск дубликатов',
       description:
         'Find existing thoughts matching a proposed title/synonyms (exact title, exact synonym, ' +
-        'partial). Each candidate carries its icon/style and one `parent_title` for disambiguation. ' +
-        'Always call before `etn.thoughts.create` to avoid duplicates.',
+        'partial). A partial match requires every word of the input to occur as a WHOLE word in ' +
+        'the title or a synonym («Диана» does not match «обсидиана»); `*` inside a word opts into ' +
+        'infix matching. Each candidate carries its icon/style and one `parent_title` for ' +
+        'disambiguation. Always call before `etn.thoughts.create` to avoid duplicates.',
       inputSchema: FindDuplicatesSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.find_duplicates'],
     },

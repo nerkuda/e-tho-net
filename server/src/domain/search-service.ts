@@ -867,9 +867,11 @@ function norm(value: string): string {
  *
  * Match priority (strongest wins per candidate): exact `title_norm`, exact
  * `synonym_norm`, then partial — the keywords mini-syntax (03-server-api.md
- * §6.10): every include word as an infix `LIKE` over `title_norm`/`synonym_norm`
- * (`*` wildcards), `-word` exclusions, words joined with AND. Results are
- * ordered by match strength.
+ * §6.10): every include word must occur in the title or one of the synonyms,
+ * a `-word` must not occur in either. A bare word (no `*`) matches a whole
+ * word only — the same word-boundary semantics as `*`-synonym patterns
+ * (02-data-model.md §3.2), so «Диана» does not match «обсидиана»; `*` inside
+ * a word is an infix wildcard. Results are ordered by match strength.
  *
  * @param title - proposed thought title.
  * @param synonyms - optional proposed synonyms.
@@ -1034,15 +1036,25 @@ export function findDuplicates(
         hit.matched_synonym = r.synonym;
       }
     }
-    // Partial (LIKE) — lowest priority; ensure() defaults to 'partial'.
+    // Partial — lowest priority; ensure() defaults to 'partial'.
     // The keywords mini-syntax of the map search (03-server-api.md §6.10):
-    // every include word must occur in the title or one of the synonyms
-    // (infix, `*` wildcards), a `-word` must not occur in either. Without
-    // include words there is nothing to anchor the candidates to — a pure
-    // negative query returns no partial hits (unlike the structures filter,
-    // the dialog must not list the whole network).
+    // every include word must occur in the title or one of the synonyms,
+    // a `-word` must not occur in either. Without include words there is
+    // nothing to anchor the candidates to — a pure negative query returns
+    // no partial hits (unlike the structures filter, the dialog must not
+    // list the whole network).
+    //
+    // 0.4.3: a bare word (no `*`) must match a WHOLE word — the same word
+    // boundaries as `*`-synonym patterns (02-data-model.md §3.2), otherwise
+    // «Диана» partial-matches «обсидиана» inside a synonym. Infix LIKE
+    // cannot express boundaries, so it stays a cheap SQL pre-filter for
+    // include words while the exact semantics are enforced in JS over the
+    // surviving rows; `-word` exclusions without `*` are JS-only (a SQL
+    // NOT LIKE '%диана%' would wrongly drop «обсидиана» too).
     const keywords = parseFilterKeywords(n);
     if (keywords.include.length > 0) {
+      const bareInclude = keywords.include.filter((w) => !w.includes('*'));
+      const bareExclude = keywords.exclude.filter((w) => !w.includes('*'));
       const conditions: string[] = [];
       const params: unknown[] = [];
       const push = (word: string, negate: boolean): void => {
@@ -1054,8 +1066,10 @@ export function findDuplicates(
         params.push(pattern, pattern);
       };
       for (const word of keywords.include) push(word, false);
-      for (const word of keywords.exclude) push(word, true);
-      const partialRows = ndb
+      for (const word of keywords.exclude) {
+        if (word.includes('*')) push(word, true);
+      }
+      let partialRows = ndb
         .prepare(
           `SELECT ${DUP_COLUMNS} FROM thoughts WHERE ${conditions.join(' AND ')}${typeDirect}`,
         )
@@ -1073,6 +1087,45 @@ export function findDuplicates(
         font_strike: number;
         font_manual: number;
       }>;
+      if (bareInclude.length > 0 || bareExclude.length > 0) {
+        // Synonym norms of the candidates in one query, then the word-boundary
+        // check per bare word against the title and every synonym.
+        const ids = partialRows.map((r) => r.id);
+        const synRows =
+          ids.length > 0
+            ? (ndb
+                .prepare(
+                  `SELECT thought_id, synonym_norm FROM thought_synonyms
+                   WHERE thought_id IN (${ids.map(() => '?').join(',')})`,
+                )
+                .all(...ids) as Array<{ thought_id: string; synonym_norm: string }>)
+            : [];
+        const synsByThought = new Map<string, string[]>();
+        for (const s of synRows) {
+          const list = synsByThought.get(s.thought_id);
+          if (list) list.push(s.synonym_norm);
+          else synsByThought.set(s.thought_id, [s.synonym_norm]);
+        }
+        const bareRegex = new Map<string, RegExp>();
+        for (const w of [...bareInclude, ...bareExclude]) {
+          bareRegex.set(w, synonymPatternToRegex(w));
+        }
+        const matchesSomewhere = (id: string, title: string, re: RegExp): boolean => {
+          const hay = [norm(title), ...(synsByThought.get(id) ?? [])];
+          return hay.some((h) => re.test(h));
+        };
+        partialRows = partialRows.filter((r) => {
+          for (const w of bareInclude) {
+            const re = bareRegex.get(w);
+            if (re !== undefined && !matchesSomewhere(r.id, r.title, re)) return false;
+          }
+          for (const w of bareExclude) {
+            const re = bareRegex.get(w);
+            if (re !== undefined && matchesSomewhere(r.id, r.title, re)) return false;
+          }
+          return true;
+        });
+      }
       for (const r of partialRows) {
         ensure(r);
       }
