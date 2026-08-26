@@ -103,8 +103,43 @@ function parseOrder(value: unknown, requestId?: string): SortOrder {
   return value as SortOrder;
 }
 
+/**
+ * Keys `POST /thoughts/query` accepts (03-server-api.md §6.10 + `ids_only`/
+ * `limit`/`offset`). Any other body key is a caller error: the REST and MCP
+ * filter names diverge (`parent_ids` vs `in_subtree_of`), and an MCP name
+ * leaked into a REST body used to be silently ignored — the server answered
+ * `200` with an empty page and the caller drew a wrong conclusion (0.4.3).
+ */
+const QUERY_BODY_KEYS = new Set([
+  'keywords',
+  'parent_ids',
+  'type_ids',
+  'link_type_ids',
+  'show_inactive',
+  'has_properties',
+  'has_comment',
+  'has_attachments',
+  'has_chronology',
+  'active',
+  'properties',
+  'sort',
+  'order',
+  'ids_only',
+  'limit',
+  'offset',
+]);
+
 /** Parse the body of `POST /thoughts/query` into a typed request. */
 function parseQueryBody(body: Record<string, unknown>, requestId: string): StructureQueryRequest {
+  const unknown = Object.keys(body).filter((key) => !QUERY_BODY_KEYS.has(key));
+  if (unknown.length > 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Неизвестные поля запроса: ${unknown.join(', ')}.`,
+      { fields: unknown, allowed: [...QUERY_BODY_KEYS] },
+      requestId,
+    );
+  }
   const filter = parseStructureFilter(body, requestId);
   const sort = parseSort(body['sort'] ?? 'created', requestId);
   const order = parseOrder(body['order'] ?? 'asc', requestId);
