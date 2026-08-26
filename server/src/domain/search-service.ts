@@ -1077,9 +1077,16 @@ export function findDuplicates(
         ensure(r);
       }
     }
-    // Wildcard synonyms: stored `*`-patterns the input matches.
+    // Wildcard synonyms: stored `*`-patterns the input matches. The pattern
+    // is a NAME template («Игорян*» matches the proposed title «Игорянский»),
+    // so it must match the whole input term, not a word inside it — otherwise
+    // a synonym «грабл*» would match the phrase «не наступать на грабли» and
+    // the add-thought dialog would treat «Грабли» as an exact duplicate of
+    // the whole phrase (08-ui-spec.md §4.4: «`*`-паттерн синонима совпал со
+    // вводом»).
     for (const r of wildSynRows) {
-      if (!synonymPatternToRegex(r.synonym_norm).test(n)) continue;
+      const anchored = new RegExp(`^(?:${synonymPatternToRegex(r.synonym_norm).source})$`, 'iu');
+      if (!anchored.test(n)) continue;
       const hit = ensure(r);
       if (hit.matched_on === 'partial') {
         hit.matched_on = 'synonym';
