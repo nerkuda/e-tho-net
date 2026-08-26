@@ -175,7 +175,7 @@ DoD — клиент по умолчанию показывает обычный
 | `etn.thoughts.usage` | `read-only` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`) | `network_id`, `thought_id`, `view?` (O12, см. §5.1e) |
 | `etn.comments.get` | `read-only` | Полный текст одного комментария: по `comment_id` (любой) или по `thought_id` (постоянный). Нужен, когда превью (`meta.permanent`, комментарии `subgraph`) показывает `truncated: true` — id есть в самом превью | `network_id` + ровно одно из `comment_id`/`thought_id` |
 | `etn.export.subgraph` | `read-only` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
-| `etn.types.list` | `read-only` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §5.1b | `network_id` |
+| `etn.types.list` | `read-only` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §5.1b; `scope` позволяет запросить один каталог отдельно | `network_id`, `scope?` (`thoughts`/`links`/`all`), `in_subtree_of?`, `max_depth?` |
 | `etn.changes.list` | `read-only` | Дельта событий из `event_log` для долгоживущего агента с кэшем (`seq > since_seq`, с признаком усечения буфера и фильтром `audience`) — см. §5.1c | `network_id`, `since_seq`, `limit?` |
 | `etn.metrics.reads` | `read-only` | Метрики чтений мыслей агентами: «топ читаемых» / «мёртвые зоны с даты», см. §5.1d. Счётчик инкрементится автоматически `etn.thoughts.get`/`subgraph`/`query`/`search`/`networks.structure` (см. `02-data-model.md` §3.13) | `network_id`, `kind?` (`top`/`cold`), `since?`, `limit?` (1..200), `include_inactive?` |
 
@@ -325,8 +325,9 @@ reason, thought_types }`. `depth` — расстояние от `in_subtree_of` 
 #### 5.1b. `etn.types.list` — каталог типов с эффективными свойствами (task O4, O16)
 
 В отличие от reference-таблиц N6 (только типы, реально встретившиеся в
-ответе), `etn.types.list` отдаёт **оба каталога целиком**: все типы мыслей и
-все типы связей сети, включая корневой тип. У каждой записи, помимо полей
+ответе), `etn.types.list` отдаёт каталоги типов целиком (по умолчанию оба: все
+типы мыслей и все типы связей сети, включая корневой тип; параметр `scope`
+позволяет запросить только один из каталогов). У каждой записи, помимо полей
 N6-каталога (`id`, `name`/`name_forward`+`name_reverse`, `parent_id`,
 `is_root`, `description`, ...), — `properties[]`: **эффективный** список
 определений свойств типа (L21, docs/03-server-api.md §8.2) — собственные плюс
@@ -339,6 +340,12 @@ N6-каталога (`id`, `name`/`name_forward`+`name_reverse`, `parent_id`,
 Параметры:
 
 - `network_id` — обязательный.
+- `scope` *(опц.)* — `"thoughts" | "links" | "all"`, по умолчанию `"all"`. Когда
+  задан `"thoughts"` — ответ несёт только `thought_types`; `"links"` — только
+  `link_types`. Зачем: на зрелой сети полный ответ (типы мыслей с
+  эффективными списками свойств идут первыми) может превысить клиентский
+  лимит размера ответа, и хвост `link_types` до агента не доезжает; раздельный
+  запрос каталога связей решает это без пагинации.
 - `in_subtree_of` *(task O16, опц.)* — `thought_id`. Когда задан, ответ
   ограничивается только теми `thought_types`/`link_types`, чьи id
   присутствуют в **поддереве** мысли (children по `source→target`,
@@ -704,7 +711,7 @@ Cookbook (`docs/mcp-clients.md` §8.2):
 
 | Tool | Аннотации | Описание | Параметры |
 |------|-----------|----------|-----------|
-| `etn.thoughts.create` | — | Создать мысль; тип — `type_id` или `type` (по имени, task O4, см. §5.1b) | `network_id`, `title`, `synonyms?`, `type_id?`\|`type?`, `active?`, `link?` `{direction, target_thought_id, type_id?\|type?}` |
+| `etn.thoughts.create` | — | Создать мысль; тип — `type_id` или `type` (по имени, task O4, см. §5.1b). Если у типа непустой `comment_template_md` — мысль сразу получает постоянный комментарий с текстом шаблона (как в UI, см. 02-data-model.md §3.3) | `network_id`, `title`, `synonyms?`, `type_id?`\|`type?`, `active?`, `link?` `{direction, target_thought_id, type_id?\|type?}` |
 | `etn.thoughts.update` | — | Изменить мысль | `network_id`, `thought_id`, `changes`, `expected_version?` |
 | `etn.thoughts.delete` | `destructive` | Удалить | `network_id`, `thought_id`, `expected_version?` |
 | `etn.links.create` | — | Создать связь; тип — `type_id` или `type` (по `name_forward`/`name_reverse`, task O4, см. §5.1b) | `network_id`, `source_id`, `target_id`, `type_id?`\|`type?` |
@@ -807,7 +814,7 @@ version: 0, request_id }`. Набор стоит одной записи для 
 | `thought_id` | string | адресует **существующую** мысль для дополнения на месте (без пересоздания). Обязателен ровно один из `thought_id`/`thought` |
 | `thought` | object | `{title, synonyms?, type_id?\|type?, active?}` — спецификация новой/сопоставляемой мысли; `type` резолвит тип по имени (task O4, см. §5.1b), ровно одно из `type_id`/`type` |
 | `on_duplicate` | `fail`\|`reuse`\|`update` | политика при совпадении `thought.title`/`synonyms` с существующей мыслью (см. ниже); по умолчанию `fail`. Игнорируется, если задан `thought_id` |
-| `comment` | object | `{title?, body_md, valid_from?, valid_to?}` — постоянный комментарий владельца (create-or-update, как `etn.comments.upsert` с `kind: 'permanent'`) |
+| `comment` | object | `{title?, body_md, valid_from?, valid_to?}` — постоянный комментарий владельца (create-or-update, как `etn.comments.upsert` с `kind: 'permanent'`). Когда не задан, а у типа мысли непустой `comment_template_md` — постоянный комментарий создаётся с текстом шаблона (как при `etn.thoughts.create`) |
 | `properties` | object | карта `{key: value}` — по одному вызову `properties.set` на ключ, в общей транзакции |
 | `links` | array | `[{direction, target_thought_id, type_id?\|type?}]` — связи мысли-владельца с другими мыслями (направление — как у `link` в `etn.thoughts.create`); `type` резолвит тип связи по имени (task O4), ровно одно из `type_id`/`type` на каждую связь |
 | `attachments` | array | `[{kind, url?/file_path?, title?, description?}]` |
