@@ -14,6 +14,7 @@
 import type { FocusResponse, Thought } from '@etn/shared';
 
 import { closeDialog, errorDialog } from './lib/dialog.js';
+import { hasTextSelection } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { closeMenu } from './lib/menu.js';
 import { notice } from './lib/notice.js';
@@ -567,7 +568,14 @@ export function initKeyboard(): void {
         const isV = event.key.toLowerCase() === 'v' || event.code === 'KeyV';
         const noMod = !event.shiftKey && !event.altKey;
         if (noMod && isC) {
-          if (store.state.screen === 'workspace' && store.state.networkId !== null) {
+          // A visible DOM text selection (e.g. inside the comment view mode,
+          // b6690109) outranks the thought copy: no preventDefault, the
+          // native copy puts the selected text on the system clipboard.
+          if (
+            store.state.screen === 'workspace' &&
+            store.state.networkId !== null &&
+            !hasTextSelection(document.getSelection())
+          ) {
             event.preventDefault();
             void globalCopy();
             return;

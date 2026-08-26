@@ -125,6 +125,36 @@ export function orDefault<T>(value: T | null | undefined, fallback: T): T {
 }
 
 /**
+ * Minimal selection shape {@link hasTextSelection} reads — a structural
+ * subset of DOM `Selection` so the predicate stays unit-testable under Node
+ * (the same trick as `ShortcutEventLike` in lib/dialog.ts).
+ */
+export interface TextSelectionLike {
+  rangeCount: number;
+  isCollapsed: boolean;
+  toString(): string;
+  getRangeAt(index: number): { getClientRects(): { length: number } };
+}
+
+/**
+ * True when the selection is a real, visible DOM text selection that the
+ * native Ctrl+C must honour instead of the global thought-copy handler
+ * (error b6690109): non-collapsed, non-whitespace text inside *rendered*
+ * content — e.g. text selected in a comment's view mode (`.comment-view`),
+ * which is not an editable surface.
+ *
+ * The client-rects check drops phantom selections: a range can survive in
+ * DOM that is no longer rendered (e.g. the hidden CM6 subtree after a
+ * markdown field returns to view mode). Such a selection has no rects and
+ * must not block the thought copy.
+ */
+export function hasTextSelection(selection: TextSelectionLike | null): boolean {
+  if (selection === null || selection.rangeCount === 0 || selection.isCollapsed) return false;
+  if (selection.toString().trim() === '') return false;
+  return selection.getRangeAt(0).getClientRects().length > 0;
+}
+
+/**
  * Places a body-mounted, fixed-position dropdown under `anchor`, flipping up
  * when the bottom screen edge interferes — the shared placement of the
  * property-value pickers (08-ui-spec.md §6.3). The list is never narrower than
