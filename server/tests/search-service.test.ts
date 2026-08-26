@@ -507,15 +507,58 @@ describe(
       }
     });
 
-    it('findDuplicates finds partial matches inside synonyms (08-ui-spec §4.4)', () => {
+    it('findDuplicates partial-matches whole words only, not infixes (0.4.3)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
-        const a = seedThought(ndb, 'Cats');
-        seedSynonym(ndb, a, 'Felines');
-        const hits = findDuplicates(ndb, 'line');
-        const hit = hits.find((h) => h.id === a);
-        assert.ok(hit, 'input substring of a synonym is a partial candidate');
-        assert.equal(hit!.matched_on, 'partial');
+        const a = seedThought(ndb, 'Alpha dog');
+        // Whole words of the input occur in the title (order differs, the
+        // input is not the exact title) → a partial candidate.
+        const whole = findDuplicates(ndb, 'dog alpha');
+        const wholeHit = whole.find((h) => h.id === a);
+        assert.ok(wholeHit, 'whole input words are a partial candidate');
+        assert.equal(wholeHit!.matched_on, 'partial');
+        // A word occurring only INSIDE another word is not (0.4.3:
+        // «Диана» must not match «обсидиана»).
+        assert.equal(
+          findDuplicates(ndb, 'lpha').some((h) => h.id === a),
+          false,
+          'an infix occurrence is not a match',
+        );
+        // An explicit `*` wildcard opts back into infix matching.
+        assert.ok(
+          findDuplicates(ndb, 'lpha*').some((h) => h.id === a),
+          '`*` matches inside a word',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findDuplicates: «Диана» does not match «обсидиана» in a synonym (0.4.3)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Перенести знание из Obsidian');
+        seedSynonym(ndb, a, 'миграция из обсидиана');
+        // The reported false positive: a person's name inside another word.
+        assert.equal(
+          findDuplicates(ndb, 'Диана').some((h) => h.id === a),
+          false,
+          '«Диана» ≠ «обсидиана»',
+        );
+        assert.equal(
+          findDuplicates(ndb, 'Бахышова Диана').some((h) => h.id === a),
+          false,
+          'the full proposed name is not a duplicate either',
+        );
+        // Whole words of the title/synonym still match.
+        assert.ok(findDuplicates(ndb, 'миграция').some((h) => h.id === a));
+        assert.ok(findDuplicates(ndb, 'знание').some((h) => h.id === a));
+        // A `-word` exclusion must not be triggered by an infix occurrence:
+        // «-диана» must not exclude a thought that only contains «обсидиана».
+        assert.ok(
+          findDuplicates(ndb, 'знание -диана').some((h) => h.id === a),
+          'an exclusion binds to a whole word only',
+        );
       } finally {
         ndb.close();
       }

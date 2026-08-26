@@ -537,9 +537,11 @@ describe(
           'synonym',
         );
 
+        // 0.4.3: partial binds to whole words — one word of the title is a
+        // partial candidate, an infix fragment is not.
         const partial = await ctx.app.inject({
           method: 'GET',
-          url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механи')}`,
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механика')}`,
           headers: authHeaders(ctx),
         });
         assert.equal(partial.statusCode, 200);
@@ -547,6 +549,14 @@ describe(
           (partial.json().data as Array<{ matched_on: string }>)[0]!.matched_on,
           'partial',
         );
+
+        const infix = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механи')}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(infix.statusCode, 200);
+        assert.equal((infix.json().data as unknown[]).length, 0);
 
         const missingTitle = await ctx.app.inject({
           method: 'GET',
