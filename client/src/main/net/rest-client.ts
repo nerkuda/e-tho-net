@@ -1331,6 +1331,36 @@ export class RestClient {
   }
 
   /**
+   * `GET /networks/{nid}/attachments/raw?path=…` — raw bytes of a server-stored
+   * attachment file. Bypasses the JSON envelope path used by {@link request}
+   * (the body is binary), like {@link downloadJob}. Used when the client's own
+   * filesystem has no copy of the attachment path (remote-server setups).
+   */
+  public async getAttachmentRaw(
+    networkId: string,
+    filePath: string,
+  ): Promise<{ contentType: string; body: Buffer }> {
+    const url =
+      `${this.baseUrl}/api/v1/networks/${encodeURIComponent(networkId)}` +
+      `/attachments/raw?path=${encodeURIComponent(filePath)}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${await this.getApiKey()}`,
+      'Client-Id': this.getClientId(),
+      Accept: '*/*',
+    };
+    const res = await this.fetchImpl(url, { method: 'GET', headers });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new EtnError(
+        mapHttpStatus(res.status),
+        `attachment download failed: HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
+      );
+    }
+    const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
+    return { contentType, body: Buffer.from(await res.arrayBuffer()) };
+  }
+
+  /**
    * `POST /networks/{nid}/attachments/{id}/copy` — copy the attachment to one
    * or more target owners (workplan L25). Each target receives a new row with
    * the same visible fields; targets that already own the same attachment

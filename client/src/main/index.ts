@@ -25,7 +25,7 @@ import {
   parseUserDataDirArg,
 } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
-import { registerIpc } from './ipc/register.js';
+import { registerIpc, type IpcHandle } from './ipc/register.js';
 import { dispatchDeepLink, extractDeepLink } from './ipc/deep-link.js';
 import { initAutoUpdater } from './updater.js';
 import {
@@ -273,7 +273,9 @@ function wireWindowBoundsPersistence(
   win.on('move', schedule);
 }
 
-/** Content types for files served over the `etnimg` protocol. */
+/**
+ * Content types for files served over the `etnimg` protocol.
+ */
 const ETNIMG_TYPES: Record<string, string> = {
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -288,37 +290,66 @@ const ETNIMG_TYPES: Record<string, string> = {
   markdown: 'text/plain; charset=utf-8',
 };
 
+/** A server-downloaded attachment file (etnimg fallback for remote servers). */
+interface ServerAttachmentFile {
+  contentType: string;
+  body: Buffer;
+}
+
 /**
- * Serves `etnimg://<drive>/<path…>` from the local filesystem (read-only).
- * The URL host is a single drive letter (Windows) or the first path segment
- * (absolute POSIX path); `..`/`.` segments are rejected.
+ * Serves `etnimg://<host>/<path…>` read-only. The URL host is a single drive
+ * letter (a Windows path like `C:\pics\img.png`) or the first segment of an
+ * absolute POSIX path; `..`/`.` segments are rejected.
+ *
+ * The file is first looked up on the local filesystem. When it is missing
+ * there (the attachment was stored by a **remote** server — its `file_path`
+ * only exists on the server machine), `getServerFile` downloads the stored
+ * copy over the REST API of the active connection; both preview images and
+ * `![](etnimg:…)` pictures embedded in comments resolve through here.
  */
-function registerEtnimgProtocol(): void {
-  protocol.handle('etnimg', (request) => {
+function registerEtnimgProtocol(
+  getServerFile: (filePath: string) => Promise<ServerAttachmentFile | null>,
+): void {
+  protocol.handle('etnimg', async (request) => {
     const url = new URL(request.url);
     const host = decodeURIComponent(url.hostname).toLowerCase();
     const segments = decodeURIComponent(url.pathname)
       .split('/')
       .filter((s) => s !== '' && s !== '.' && s !== '..');
-    if (host === '' || !/^[a-z]$/.test(host) || segments.length === 0) {
+    if (host === '' || segments.length === 0) {
       return new Response('bad etnimg path', { status: 400 });
     }
-    const filePath = path.join(`${host}:`, ...segments);
+    // Windows drive host ("c") → `C:\…`; anything else → a POSIX absolute path
+    // (`/host/segments…`) whose local read simply fails on Windows clients.
+    const filePath = /^[a-z]$/.test(host)
+      ? path.join(`${host}:`, ...segments)
+      : `/${[host, ...segments].join('/')}`;
     try {
       const stat = statSync(filePath);
-      if (!stat.isFile()) {
-        return new Response('not a file', { status: 404 });
+      if (stat.isFile()) {
+        const ext = filePath.toLowerCase().split('.').pop() ?? '';
+        return new Response(readFileSync(filePath), {
+          headers: {
+            'Content-Type': ETNIMG_TYPES[ext] ?? 'application/octet-stream',
+            'Cache-Control': 'max-age=3600',
+          },
+        });
       }
-      const ext = filePath.toLowerCase().split('.').pop() ?? '';
-      return new Response(readFileSync(filePath), {
-        headers: {
-          'Content-Type': ETNIMG_TYPES[ext] ?? 'application/octet-stream',
-          'Cache-Control': 'max-age=3600',
-        },
-      });
     } catch {
+      // No local file — fall through to the server download below.
+    }
+    const serverFile = await getServerFile(filePath);
+    if (serverFile === null) {
       return new Response('not found', { status: 404 });
     }
+    // `new Uint8Array(buffer)` re-types the Node Buffer into the DOM
+    // `Uint8Array<ArrayBuffer>` accepted as BodyInit.
+    return new Response(new Uint8Array(serverFile.body), {
+      headers: {
+        'Content-Type': serverFile.contentType,
+        'Cache-Control': 'max-age=3600',
+      },
+    });
   });
 }
 
@@ -356,11 +387,26 @@ app
     const clientId = getOrCreateClientId(localDb);
     if (isDev) console.log('[ETN] client_id =', clientId);
 
-    registerEtnimgProtocol();
+    // The etnimg protocol downloads server-stored attachment files through the
+    // active connection; `ipc` is assigned right after `registerIpc` below, so
+    // the resolver closure reads it lazily on every request.
+    let ipc: IpcHandle | null = null;
+    registerEtnimgProtocol(async (filePath) => {
+      const rest = ipc?.getRest() ?? null;
+      const networkId = ipc?.getCurrentNetworkId() ?? null;
+      if (rest === null || networkId === null) return null;
+      try {
+        return await rest.getAttachmentRaw(networkId, filePath);
+      } catch {
+        // Not a server-stored file (a client-local path) or the server is
+        // unreachable — to the caller this is the same as a missing file.
+        return null;
+      }
+    });
 
     // Wire the renderer bridge (G7): single `etn:invoke` channel + realtime
     // event/status broadcast to whichever window is front-most.
-    const ipc = registerIpc({
+    ipc = registerIpc({
       localDb,
       clientId,
       getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,

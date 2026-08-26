@@ -209,6 +209,54 @@ describe(
       }
     });
 
+    it('attachments: GET /attachments/raw serves stored file bytes by path', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const thoughtId = await createThought(ctx, 'Хозяин картинки');
+
+        // Missing ?path → 422.
+        const noPath = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/raw`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(noPath.statusCode, 422);
+
+        // Upload a stored copy (this is what remote clients then download).
+        const upload = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/attachments/file`,
+          headers: authHeaders(ctx),
+          payload: {
+            title: 'Фото',
+            mime_type: 'image/png',
+            data_base64: Buffer.from('fakepng').toString('base64'),
+          },
+        });
+        assert.equal(upload.statusCode, 201);
+        const att = upload.json().data as { file_path: string };
+
+        const raw = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/raw?path=${encodeURIComponent(att.file_path)}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(raw.statusCode, 200);
+        assert.match(raw.headers['content-type'] ?? '', /image\/png/);
+        assert.equal(raw.rawPayload.toString(), 'fakepng');
+
+        // A client-local path (existing row or not) is never served.
+        const local = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/attachments/raw?path=${encodeURIComponent('C:\\docs\\note.txt')}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(local.statusCode, 404);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('attachments: POST /attachments/:id/copy — multi-target, skip duplicates, 404/422', async () => {
       const ctx = await buildRestContext();
       try {

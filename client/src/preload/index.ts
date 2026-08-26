@@ -305,6 +305,7 @@ function buildApi(): EtnApi {
       pickImage: () => invoke('system.pickImage'),
       pickFile: () => invoke('system.pickFile'),
       openPath: (filePath: string) => invoke('system.openPath', filePath),
+      openAttachmentFile: (filePath: string) => invoke('system.openAttachment', filePath),
       openExternal: (url: string) => invoke('system.openExternal', url),
     },
   };

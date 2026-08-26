@@ -26,6 +26,7 @@ import {
   extractHtmlTitle,
   getAttachment,
   getAttachmentContent,
+  getAttachmentRawByPath,
   listAttachments,
   searchAttachments,
   updateAttachment,
@@ -627,6 +628,60 @@ describe(
         // Bad base64 → 422.
         assert.throws(
           () => updateAttachmentContent(ndb, md.id, { data_base64: '!!not-base64!!' }),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('getAttachmentRawByPath serves stored files and rejects everything else', () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), 'etn-att-'));
+      const db = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, networkMigrationsDir());
+      const ndb = new NetworkDb(db, 'att-raw', path.join(tmp, 'data.db'));
+      try {
+        const t = seedThought(ndb);
+        const stored = createAttachmentFile(
+          ndb,
+          'thought',
+          t,
+          {
+            title: 'Фото',
+            mime_type: 'image/jpeg',
+            data_base64: Buffer.from('fakejpg').toString('base64'),
+          },
+          USER,
+        );
+        const raw = getAttachmentRawByPath(ndb, stored.file_path!);
+        assert.equal(raw.body.toString(), 'fakejpg');
+        assert.equal(raw.mime_type, 'image/jpeg');
+        assert.equal(raw.filename, path.basename(stored.file_path!));
+
+        // A client-local path (outside the network attachments dir) is never
+        // served even when a row references it.
+        const local = path.join(tmp, 'local.txt');
+        writeFileSync(local, 'secret');
+        createAttachment(ndb, 'thought', t, { kind: 'file', file_path: local }, USER);
+        assert.throws(
+          () => getAttachmentRawByPath(ndb, local),
+          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+        );
+
+        // Inside the stored dir but referenced by no attachment row.
+        const orphan = path.join(path.dirname(stored.file_path!), 'no-such.bin');
+        assert.throws(
+          () => getAttachmentRawByPath(ndb, orphan),
+          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+        );
+
+        // The row exists but the backing file is gone.
+        rmSync(stored.file_path!);
+        assert.throws(
+          () => getAttachmentRawByPath(ndb, stored.file_path!),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
       } finally {

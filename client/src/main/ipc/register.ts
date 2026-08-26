@@ -31,16 +31,26 @@ export interface RegisterIpcOptions {
   getWindow: () => BrowserWindow | null;
 }
 
+/** Handle returned by {@link registerIpc} (see its docs). */
+export interface IpcHandle {
+  /** Orderly teardown of the IPC channel and the active connection. */
+  shutdown(): void;
+  /** Force-reconnect every pooled realtime socket (resume/online, 7f4cef31). */
+  forceReconnectRealtime(): void;
+  /** Active `RestClient`, or `null` when disconnected. */
+  getRest(): RestClient | null;
+  /** Network the renderer currently works in, or `null`. */
+  getCurrentNetworkId(): string | null;
+}
+
 /**
  * Wire the single `etn:invoke` channel plus realtime event/status forwarding.
- * Returns a handle with `shutdown()` for orderly teardown and
+ * Returns a handle with `shutdown()` for orderly teardown,
  * `forceReconnectRealtime()` for system resume / network-online events
- * (defect 7f4cef31).
+ * (defect 7f4cef31), and accessors for the active connection — used by the
+ * `etnimg` protocol fallback that downloads server-stored attachment files.
  */
-export function registerIpc(opts: RegisterIpcOptions): {
-  shutdown(): void;
-  forceReconnectRealtime(): void;
-} {
+export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   let rest: RestClient | null = null;
   let pool: TabRealtimePool | null = null;
   let profile: ServerProfileRow | null = null;
@@ -224,5 +234,7 @@ export function registerIpc(opts: RegisterIpcOptions): {
     },
     /** Force-reconnect every pooled realtime socket (resume/online, 7f4cef31). */
     forceReconnectRealtime,
+    getRest: () => rest,
+    getCurrentNetworkId: () => currentNetworkId,
   };
 }

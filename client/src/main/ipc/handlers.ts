@@ -11,7 +11,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { Buffer } from 'node:buffer';
 
 import type { CurrentUser, FocusDir, Network, TypeOwnerType } from '@etn/shared';
@@ -1245,6 +1246,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set('system.pickImage', bind(() => pickImageFile()));
   handlers.set('system.pickFile', bind(() => pickAnyFile()));
   handlers.set('system.openPath', bind((filePath: string) => openPathShell(filePath)));
+  handlers.set(
+    'system.openAttachment',
+    bind((filePath: string) => openAttachmentFile(deps, filePath)),
+  );
   handlers.set('system.openExternal', bind((url: string) => openExternalShell(url)));
   handlers.set(
     'system.downloadExport',
@@ -1522,6 +1527,42 @@ async function openPathShell(filePath: string): Promise<string> {
     return 'Пустой путь к файлу.';
   }
   return shell.openPath(filePath);
+}
+
+/**
+ * Opens an attachment file in the OS default application. When the path does
+ * not exist on this machine (the attachment was stored by a **remote**
+ * server, so its `file_path` only resolves there), the stored copy is
+ * downloaded into `<temp>/etn-attachments/` under its original name and that
+ * copy is opened — editing it does not touch the server file. Returns '' on
+ * success or a human-readable error (mirrors {@link openPathShell}).
+ */
+async function openAttachmentFile(deps: HandlerDeps, filePath: string): Promise<string> {
+  if (typeof filePath !== 'string' || filePath.trim() === '') {
+    return 'Пустой путь к файлу.';
+  }
+  let localPath = filePath;
+  try {
+    if (!statSync(filePath).isFile()) throw new Error('not a file');
+  } catch {
+    // Missing on this machine — fetch the stored copy from the active server.
+    const rest = deps.getRest();
+    const networkId = deps.getCurrentNetworkId();
+    if (rest === null || networkId === null) {
+      return 'Файл не найден на этом компьютере, а сервер не подключён.';
+    }
+    try {
+      const { body } = await rest.getAttachmentRaw(networkId, filePath);
+      const { app } = await import('electron');
+      const dir = path.join(app.getPath('temp'), 'etn-attachments');
+      mkdirSync(dir, { recursive: true });
+      localPath = path.join(dir, path.basename(filePath) || 'attachment.bin');
+      writeFileSync(localPath, body);
+    } catch (err) {
+      return `Не удалось получить файл вложения с сервера: ${errText(err)}`;
+    }
+  }
+  return openPathShell(localPath);
 }
 
 /**

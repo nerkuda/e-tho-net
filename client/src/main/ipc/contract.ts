@@ -822,6 +822,13 @@ export interface EtnApi {
      */
     openPath(path: string): Promise<string>;
     /**
+     * Opens an attachment file in the OS default application. When the file is
+     * missing locally (its `file_path` lives on a remote server), the stored
+     * copy is downloaded to a temp file first and that copy is opened.
+     * Resolves an error message string (empty on success).
+     */
+    openAttachmentFile(filePath: string): Promise<string>;
+    /**
      * Opens an external target with the OS default application: http/https and
      * other registered protocols (e.g. `obsidian://`) via `shell.openExternal`,
      * `file://` URLs and bare local paths via `shell.openPath`. Resolves an

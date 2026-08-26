@@ -369,11 +369,16 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
     showViewer(attachment);
   }
 
-  /** Opens the attachment in the OS default app / browser (L1). */
+  /**
+   * Opens the attachment in the OS default app / browser (L1). File
+   * attachments go through `system.openAttachmentFile`: when the path is
+   * missing locally (a remote server stored its own copy), the main process
+   * downloads it to a temp file and opens that copy.
+   */
   async function openDefault(attachment: Attachment): Promise<void> {
     try {
       if (attachment.kind === 'file' && attachment.file_path !== null) {
-        const err = await etn.system.openPath(attachment.file_path);
+        const err = await etn.system.openAttachmentFile(attachment.file_path);
         if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
       } else if (attachment.kind === 'url' && attachment.url !== null) {
         const err = await etn.system.openExternal(attachment.url);

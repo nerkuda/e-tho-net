@@ -3,6 +3,7 @@
  *
  *   GET/POST /networks/:networkId/thoughts/:id/attachments — list/create on a thought
  *   GET/POST /networks/:networkId/links/:id/attachments    — list/create on a link
+ *   GET      /networks/:networkId/attachments/raw?path=…    — raw bytes of a stored file
  *   PATCH    /networks/:networkId/attachments/:id          — update (last-write-wins)
  *   DELETE   /networks/:networkId/attachments/:id          — delete
  *
@@ -40,6 +41,7 @@ import {
   enrichUrlAttachment,
   getAttachment,
   getAttachmentContent,
+  getAttachmentRawByPath,
   listAttachments,
   searchAttachments,
   updateAttachment,
@@ -348,6 +350,33 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const limit = query.limit ?? 50;
         const offset = query.offset ?? 0;
         sendList(reply, items, total, offset, limit);
+      },
+    );
+
+    // Raw bytes of a server-stored attachment file by absolute `file_path` —
+    // what remote clients download when their local filesystem has no such
+    // path (the `etnimg:` scheme falls back to this endpoint). Registered
+    // next to the search route, before the `:id` routes: the static `raw`
+    // segment wins over the `:id` parameter.
+    app.get(
+      '/networks/:networkId/attachments/raw',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as { networkId: string };
+        const query = req.query as Record<string, unknown>;
+        const filePath = typeof query['path'] === 'string' ? (query['path'] as string) : '';
+        if (filePath.trim() === '') {
+          throw new EtnError('VALIDATION_ERROR', 'path обязателен.', { field: 'path' }, req.id);
+        }
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const file = getAttachmentRawByPath(ndb, filePath);
+        reply
+          .header('content-type', file.mime_type)
+          .header(
+            'content-disposition',
+            `inline; filename="${encodeURIComponent(file.filename)}"`,
+          )
+          .send(file.body);
       },
     );
 

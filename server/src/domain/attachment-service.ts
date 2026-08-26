@@ -743,6 +743,58 @@ export function getAttachmentContent(ndb: NetworkDb, id: string): AttachmentCont
 }
 
 /**
+ * A server-stored attachment file served as raw bytes (remote clients).
+ * `filename` is the base name of the stored copy; `mime_type` falls back to
+ * `application/octet-stream` when the row carries no hint.
+ */
+export interface AttachmentRawFile {
+  mime_type: string;
+  filename: string;
+  body: Buffer;
+}
+
+/**
+ * Read the raw bytes of a server-stored attachment file by its absolute
+ * `file_path` (the path the `etnimg:` scheme of a remote client resolves to).
+ *
+ * Only files stored **inside the network's `attachments/` directory** (uploads
+ * of `POST …/attachments/file`, the same rule as {@link removeStoredFile}) are
+ * served: a `file_path` pointing elsewhere belongs to some client's local disk
+ * and must not be exposed through the API.
+ *
+ * Throws `NOT_FOUND` (404) when no `kind='file'` attachment resolves to the
+ * path, the path is outside the stored-files directory or the backing file is
+ * missing; `VALIDATION_ERROR` (422) when it cannot be read.
+ */
+export function getAttachmentRawByPath(ndb: NetworkDb, filePath: string): AttachmentRawFile {
+  const resolved = path.resolve(filePath);
+  const storedDir = path.resolve(path.dirname(ndb.dbPath), 'attachments');
+  if (!resolved.startsWith(storedDir + path.sep)) {
+    throw new EtnError('NOT_FOUND', 'файл вложения не найден', { field: 'path' });
+  }
+  const rows = ndb
+    .prepare("SELECT mime_type, file_path FROM attachments WHERE kind = 'file' AND file_path IS NOT NULL")
+    .all() as { mime_type: string | null; file_path: string }[];
+  const row = rows.find((r) => path.resolve(r.file_path) === resolved);
+  if (row === undefined) {
+    throw new EtnError('NOT_FOUND', 'файл вложения не найден', { field: 'path' });
+  }
+  let body: Buffer;
+  try {
+    body = readFileSync(resolved);
+  } catch {
+    throw new EtnError('VALIDATION_ERROR', 'файл вложения недоступен для чтения', {
+      field: 'path',
+    });
+  }
+  return {
+    mime_type: row.mime_type ?? 'application/octet-stream',
+    filename: path.basename(resolved),
+    body,
+  };
+}
+
+/**
  * Overwrite the file of a text-like attachment (docs/03-server-api.md §11).
  * Decodes `data_base64` (≤10 MiB), writes it to `file_path` and refreshes
  * `file_size`/`mime_type` in the row. Last-write-wins (no version column).

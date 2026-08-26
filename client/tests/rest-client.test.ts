@@ -439,3 +439,48 @@ describe('RestClient — chronicle (L20)', () => {
     assert.equal(calls[3]!.url, 'http://localhost:3000/api/v1/networks/net1/comments/c1/targets/thought/t2');
   });
 });
+
+describe('RestClient — attachment raw download', () => {
+  /** fetch stub that replies with binary bytes (makeFetch is text-only). */
+  function binaryFetch(status: number, bytes: Uint8Array, contentType: string): {
+    fetch: typeof fetch;
+    calls: FetchCall[];
+  } {
+    const calls: FetchCall[] = [];
+    const fetch = mock.fn((url: string, init?: RequestInit): Promise<Response> => {
+      calls.push({ url, init: init ?? {} });
+      return Promise.resolve(
+        new Response(bytes, { status, headers: { 'content-type': contentType } }),
+      );
+    }) as unknown as typeof fetch;
+    return { fetch, calls };
+  }
+
+  it('getAttachmentRaw GETs the encoded path and returns the raw bytes', async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const { fetch, calls } = binaryFetch(200, bytes, 'image/png');
+    const client = makeClient(fetch);
+    const filePath = 'C:\\data\\фото 1.png';
+
+    const file = await client.getAttachmentRaw('net1', filePath);
+    assert.equal(
+      calls[0]!.url,
+      'http://localhost:3000/api/v1/networks/net1/attachments/raw' +
+        '?path=' + encodeURIComponent(filePath),
+    );
+    assert.equal((calls[0]!.init.headers as Record<string, string>)['Authorization'], 'Bearer etn_testkey');
+    assert.equal(file.contentType, 'image/png');
+    assert.deepEqual(new Uint8Array(file.body), bytes);
+  });
+
+  it('getAttachmentRaw maps a non-2xx reply to an EtnError without retries', async () => {
+    const { fetch, calls } = binaryFetch(404, new TextEncoder().encode('nope'), 'text/plain');
+    const client = makeClient(fetch);
+
+    await assert.rejects(
+      client.getAttachmentRaw('net1', 'C:\\missing.png'),
+      (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
+    );
+    assert.equal(calls.length, 1);
+  });
+});
