@@ -166,7 +166,8 @@ byNetwork:   Map<network_id, Set<connectionHandle>>
 | `cloud_gap` | Отступ между ячейками на холсте, px. Лимиты см. п. 2.4 |
 | `search_state` | Последний поисковый запрос (текст, опции, результаты) для восстановления |
 | `editor_position` | left/right/top/bottom/hidden |
-| `editor_collapsed_groups` | `{ [entity_id]: { permanent: bool, chrono: bool, ... } }` |
+| `editor_collapsed_groups` | Свёрнутость групп редактора, плоская карта `{ [group_id]: bool }` — глобально для всех мыслей/связей (08-ui-spec.md §6.3) |
+| `editor_list_heights` | Максимумы высот списков редактора: `{ [key]: px }`, ключи `props` / `chrono` / `attachments` / `links.direct` / `links.mentions` (08-ui-spec.md §6.3) |
 | `window_layout` | Размеры панелей: `{"w": px, "h": px, "s": px}` — ширина редактора (док left/right, 240..720, деф. 340), высота редактора (док top/bottom, 120..700, деф. 300), ширина панели выделения (140..480, деф. 210). Клиппится к лимитам; отсутствующие поля — дефолт |
 | `canvas_layout` | Пропорции разделителей зон холста: `{"topSplit": 0…1, "childrenShare": 0…1}` — доля левой зоны верхней полосы (деф. 0.5) и доля высоты холста под нижнюю зону (деф. 0.34). Клиппится в 0.1–0.9 |
 | `canvas_zoom` | Масштаб холста, множитель 0.5–2.0 с шагом 0.05 (деф. 1.0). Лимиты см. п. 2.4 |
