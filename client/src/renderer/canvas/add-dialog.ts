@@ -426,9 +426,10 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         scheduleSearch();
         return;
       }
-      // Single mode: the strongest exact match is picked; otherwise a new
-      // thought is queued (when allowed), else the first candidate.
-      finishSingle(lineFromInput(raw));
+      // Single mode: a new thought is queued when allowed — a listed
+      // candidate is picked explicitly (click/Enter on its row, 08-ui-spec.md
+      // §4.3); otherwise the strongest match is taken.
+      finishSingle(lineFromInput(raw, allowCreate ? false : true));
     });
 
     /** Shows/hides the accumulated-list UI. */
@@ -437,16 +438,19 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     }
 
     /**
-     * Builds the list entry for a typed query: an exact title/synonym match
-     * reuses the existing thought; otherwise a new one is queued when allowed,
-     * else the first candidate is taken (creation forbidden → pick from found).
+     * Builds the list entry for a typed query. With `preferExact` an exact
+     * title/synonym match reuses the existing thought; otherwise (single-mode
+     * Enter with creation allowed) a new one is queued — the typed text is
+     * the proposed name, and a listed candidate is used only when the user
+     * picks it explicitly. When creation is forbidden, the first candidate is
+     * taken (pick from found).
      */
-    function lineFromInput(raw: string): AddLine | null {
+    function lineFromInput(raw: string, preferExact: boolean): AddLine | null {
       const parsed = parseTitleWithSynonyms(raw);
       const exact = lastCandidates.find(
         (c) => c.matched_on === 'title' || c.matched_on === 'synonym',
       );
-      if (exact !== undefined) {
+      if (preferExact && exact !== undefined) {
         return {
           raw,
           title: parsed.title,
@@ -474,7 +478,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
 
     /** Enter in multi mode: appends the typed query to the list. */
     function addLineFromInput(raw: string): void {
-      const line = lineFromInput(raw);
+      const line = lineFromInput(raw, true);
       if (line !== null) addLine(line.raw, line.title, line.synonyms, line.existingId, line.matchKind);
     }
 
@@ -677,7 +681,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     function apply(shift: boolean): void {
       const raw = input.value.trim();
       if (raw !== '') {
-        const line = lineFromInput(raw);
+        const line = lineFromInput(raw, multi ? true : allowCreate ? false : true);
         if (line !== null) lines.push(line);
       }
       if (lines.length === 0) {
