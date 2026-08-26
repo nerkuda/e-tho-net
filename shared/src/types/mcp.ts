@@ -220,12 +220,17 @@ export interface McpLinkTypeEntry extends LinkTypeRef {
   properties: EffectiveTypeProperty[];
 }
 
+/** Which catalogue(s) `etn.types.list` returns (05-mcp-server.md §5.1b). */
+export const TYPES_LIST_SCOPES = ['thoughts', 'links', 'all'] as const;
+export type TypesListScope = (typeof TYPES_LIST_SCOPES)[number];
+
 /** Result of `etn.types.list` — both catalogues in full (not just the types
  *  used in some other response, unlike {@link ThoughtTypeRef}/{@link LinkTypeRef}
- *  reference tables). */
+ *  reference tables). With `scope: "thoughts"` / `"links"` only the matching
+ *  field is present. */
 export interface McpTypesListResult {
-  thought_types: McpThoughtTypeEntry[];
-  link_types: McpLinkTypeEntry[];
+  thought_types?: McpThoughtTypeEntry[];
+  link_types?: McpLinkTypeEntry[];
 }
 
 // ---------------------------------------------------------------------------

@@ -51,6 +51,7 @@ import {
   PROPERTY_OWNER_TYPES,
   REALTIME_DEFAULTS,
   SEARCH_SCOPES,
+  TYPES_LIST_SCOPES,
   TRAVERSAL_DEFAULTS,
   type CommentTarget,
   type ExportFormat,
@@ -1025,6 +1026,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     in_subtree_of: ThoughtId.optional(),
     /** Override the default subtree depth cap (task O16). */
     max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
+    /**
+     * Which catalogue(s) to return: `"thoughts"` / `"links"` for a single
+     * catalogue, `"all"` (default) for both. On large networks the full
+     * response (thought types with effective property lists first) can
+     * exceed a client response limit and the `link_types` tail never
+     * arrives — fetch the link catalogue separately with
+     * `scope: "links"`.
+     */
+    scope: z.enum(TYPES_LIST_SCOPES).optional(),
   });
   mcp.registerTool(
     'etn.types.list',
@@ -1042,7 +1052,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Task O16: pass `in_subtree_of: <thought_id>` (optionally with `max_depth`) to scope ' +
         'the response to the distinct thought/link types actually used inside that subtree, ' +
         'each with a `usage_count` for ranking. Useful as the second step after ' +
-        '`etn.networks.structure` — pick a section, then pick a type relevant to that section.',
+        '`etn.networks.structure` — pick a section, then pick a type relevant to that section. ' +
+        'On large networks the full response may exceed client response limits and the ' +
+        '`link_types` tail can be cut off — pass `scope: "links"` to fetch the link catalogue ' +
+        'alone (or `scope: "thoughts"` for the thought catalogue only).',
       inputSchema: TypesListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.types.list'],
     },
@@ -1102,9 +1115,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
               ? {}
               : { usage_count: linkTypeCounts.get(t.id) ?? 0 }),
           }));
+        const scope = args.scope ?? 'all';
         return {
-          thought_types: thoughtTypes,
-          link_types: linkTypes,
+          ...(scope === 'thoughts' || scope === 'all' ? { thought_types: thoughtTypes } : {}),
+          ...(scope === 'links' || scope === 'all' ? { link_types: linkTypes } : {}),
           ...(args.in_subtree_of === undefined
             ? {}
             : {
