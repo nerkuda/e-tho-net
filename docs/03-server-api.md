@@ -473,7 +473,9 @@ POST /api/v1/networks/{nid}/thoughts/query
   (`value_text/value_number/value_date/value_bool/value_thought_ref`); допустимые
   `op` зависят от `value_type`: text/url — `contains|eq|in|not_in`;
   number/date — `eq|gt|lt`; bool — `eq`; thought_ref — `eq|in|not_in`.
-  `in`/`not_in` принимают массив значений (OR внутри списка).
+  `in`/`not_in` принимают массив значений (OR внутри списка). Для thought_ref
+  `eq`/`in`/`not_in` сопоставляют и id внутри JSON-массивов множественных
+  значений (`config.multiple`, 02-data-model.md §3.5), не только одиночные id.
 - **`has_properties`/`has_comment`/`has_attachments`/`has_chronology`** — три
   состояния: `true` — только мысли с хотя бы одним значением/записью,
   `false` — только без них, поле не передано — критерий не участвует
@@ -764,6 +766,9 @@ PUT    …/types/{id}/properties/{propertyId}/default  { value: ... | null }  (L
        # value_type свойства.
 # config — JSON; config.default_value хранит значение по умолчанию (L6).
 # value_type: text | date | number | bool | thought_ref | url (url → value_text).
+# config.multiple: для text — несколько значений через запятую (с options);
+#   для thought_ref — несколько ссылок: значение/чтение — массив id
+#   (02-data-model.md §3.5, хранится JSON-массивом в value_thought_ref).
 # PATCH value_type — сервер в той же транзакции преобразует все хранимые
 #   значения свойства к новому типу, несовместимые — удаляет (L6).
 # PATCH key — переименование; хранимые значения остаются привязаны (property_id).
@@ -780,6 +785,9 @@ PUT    /api/v1/networks/{nid}/thoughts/{id}/properties/{key}   { value: ... }
 DELETE /api/v1/networks/{nid}/thoughts/{id}/properties/{key}
 # Аналогично для /links/{id}/properties
 # PUT — upsert; валидация по определению свойства в типе.
+# value для thought_ref с config.multiple — массив id (string[]): пустой
+#   массив очищает значение, одиночный id нормализуется в массив из одного;
+#   массив без флага multiple — 422. GET возвращает массив id.
 # L21: определение ищется по ЦЕПОЧКЕ типов (сам тип → предки → корень);
 #   мысль/связь БЕЗ типа резолвит свойства корневого типа.
 #   allowed_type_ids у thought_ref раскрываются до поддеревьев (L21).
@@ -790,8 +798,9 @@ DELETE /api/v1/networks/{nid}/thoughts/{id}/properties/{key}
 ```
 GET /api/v1/networks/{nid}/thoughts/{id}/usage
 # Все мысли, в свойствах которых (value_type="thought_ref") использована
-# данная мысль. Группировка по свойствам, сортировка по имени свойства,
-# затем по заголовку мысли.
+# данная мысль — включая id внутри JSON-массивов множественных значений
+# (config.multiple, 02-data-model.md §3.5). Группировка по свойствам,
+# сортировка по имени свойства, затем по заголовку мысли.
 → 200 { data: { total: <число ссылок>,
                 groups: [ { property_id, key, thoughts: [ThoughtRef] } ] } }
 ```
