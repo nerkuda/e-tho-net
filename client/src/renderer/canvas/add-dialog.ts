@@ -2,8 +2,11 @@
  * Universal thought picker/add dialog (H14, 08-ui-spec.md §4; 09-scenarios.md
  * C1, C2; universalized for every thought-picking site, L20).
  *
- * Live duplicate search over `thoughts.findDuplicates` (the keywords
- * mini-syntax of 03-server-api.md §6.10: all words AND, `*`, `-word`); the
+ * Live duplicate search over `thoughts.findDuplicates` (the synonym-pattern
+ * principle of 02-data-model.md §3.2 with an implicit `*` around every typed
+ * word: fragments must hit consecutive words of the title or one synonym in
+ * the typed order, «дор» → «Доработать!»; `-word` excludes infix
+ * occurrences); the
  * anchor thought is excluded from the candidates — a thought cannot link to
  * itself; a whole-query UUID resolves the thought directly via `thoughts.get`
  * (§4.1) into a single exact-match candidate («Мысль с указанным ID

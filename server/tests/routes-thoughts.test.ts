@@ -537,8 +537,7 @@ describe(
           'synonym',
         );
 
-        // 0.4.3: partial binds to whole words — one word of the title is a
-        // partial candidate, an infix fragment is not.
+        // 0.4.5: partial matches a whole word of the title…
         const partial = await ctx.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механика')}`,
@@ -550,13 +549,17 @@ describe(
           'partial',
         );
 
+        // 0.4.5: partial matches infix fragments of a word — «механи» finds
+        // «Квантовая механика» as a weak partial candidate (never as a duplicate).
         const infix = await ctx.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/duplicates?title=${encodeURIComponent('механи')}`,
           headers: authHeaders(ctx),
         });
         assert.equal(infix.statusCode, 200);
-        assert.equal((infix.json().data as unknown[]).length, 0);
+        const infixHits = infix.json().data as Array<{ matched_on: string }>;
+        assert.equal(infixHits.length, 1);
+        assert.equal(infixHits[0]!.matched_on, 'partial');
 
         const missingTitle = await ctx.app.inject({
           method: 'GET',

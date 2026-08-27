@@ -507,57 +507,101 @@ describe(
       }
     });
 
-    it('findDuplicates partial-matches whole words only, not infixes (0.4.3)', () => {
+    it('findDuplicates finds infix word fragments (0.4.5: «дор» → «Доработать!»)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const work = seedThought(ndb, 'Доработать!');
+        const price = seedThought(ndb, 'Подорожание 2026 года');
+        const road = seedThought(ndb, 'Дорога в лето');
+        const ways = seedThought(ndb, 'Пути');
+        seedSynonym(ndb, ways, 'дороги');
+        const other = seedThought(ndb, 'Работа над ошибками');
+        const hits = findDuplicates(ndb, 'дор');
+        const ids = hits.map((h) => h.id);
+        assert.ok(ids.includes(work), '«дор» → «Доработать!»');
+        assert.ok(ids.includes(price), '«дор» → «Подорожание 2026 года»');
+        assert.ok(ids.includes(road), '«дор» → «Дорога в лето»');
+        assert.ok(ids.includes(ways), '«дор» finds the synonym «дороги»');
+        assert.equal(ids.includes(other), false, 'a thought without the fragment is not listed');
+        // A fragment hit is always the weak tier — never an exact duplicate.
+        for (const h of hits) {
+          assert.equal(h.matched_on, 'partial');
+        }
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findDuplicates: fragments must hit consecutive words in order (0.4.5)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const fixed = seedThought(ndb, 'Исправленные ошибки');
+        const pg = seedThought(ndb, 'Исправить ошибку № PG-2388');
+        const gap = seedThought(ndb, 'Исправить старую ошибку');
+        const reversed = seedThought(ndb, 'Ошибки исправления');
+        const syn = seedThought(ndb, 'Баги');
+        seedSynonym(ndb, syn, 'исправленные ошибки');
+        const hits = findDuplicates(ndb, 'исправ ошиб');
+        const ids = hits.map((h) => h.id);
+        assert.ok(ids.includes(fixed), '«исправ ошиб» → «Исправленные ошибки»');
+        assert.ok(ids.includes(pg), '«исправ ошиб» → «Исправить ошибку № PG-2388»');
+        assert.ok(ids.includes(syn), 'the fragments may sit in one synonym');
+        assert.equal(ids.includes(gap), false, 'a word gap breaks the sequence');
+        assert.equal(ids.includes(reversed), false, 'the order must match the input');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findDuplicates partial-matches infixes (0.4.5 reverts the 0.4.3 whole-word rule)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const a = seedThought(ndb, 'Alpha dog');
-        // Whole words of the input occur in the title (order differs, the
-        // input is not the exact title) → a partial candidate.
-        const whole = findDuplicates(ndb, 'dog alpha');
-        const wholeHit = whole.find((h) => h.id === a);
-        assert.ok(wholeHit, 'whole input words are a partial candidate');
-        assert.equal(wholeHit!.matched_on, 'partial');
-        // A word occurring only INSIDE another word is not (0.4.3:
-        // «Диана» must not match «обсидиана»).
+        // Fragments must follow the input order: «dog alpha» has no
+        // consecutive-word sequence «dog»→«alpha» in «Alpha dog».
         assert.equal(
-          findDuplicates(ndb, 'lpha').some((h) => h.id === a),
+          findDuplicates(ndb, 'dog alpha').some((h) => h.id === a),
           false,
-          'an infix occurrence is not a match',
+          'fragments must follow the input order',
         );
-        // An explicit `*` wildcard opts back into infix matching.
+        // An infix occurrence matches without typing `*` (0.4.3 wrongly
+        // required a whole word — the «Сломался поиск дублей» regression).
+        const infix = findDuplicates(ndb, 'lpha');
+        const infixHit = infix.find((h) => h.id === a);
+        assert.ok(infixHit, 'an infix occurrence is a partial candidate');
+        assert.equal(infixHit!.matched_on, 'partial');
+        // An explicit `*` wildcard still works (absorbed by the implicit ones).
         assert.ok(
           findDuplicates(ndb, 'lpha*').some((h) => h.id === a),
-          '`*` matches inside a word',
+          '`*` keeps matching inside a word',
         );
       } finally {
         ndb.close();
       }
     });
 
-    it('findDuplicates: «Диана» does not match «обсидиана» in a synonym (0.4.3)', () => {
+    it('findDuplicates: «Диана» matches «обсидиана» only as a partial candidate (0.4.5)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const a = seedThought(ndb, 'Перенести знание из Obsidian');
         seedSynonym(ndb, a, 'миграция из обсидиана');
-        // The reported false positive: a person's name inside another word.
-        assert.equal(
-          findDuplicates(ndb, 'Диана').some((h) => h.id === a),
-          false,
-          '«Диана» ≠ «обсидиана»',
-        );
-        assert.equal(
-          findDuplicates(ndb, 'Бахышова Диана').some((h) => h.id === a),
-          false,
-          'the full proposed name is not a duplicate either',
-        );
-        // Whole words of the title/synonym still match.
+        // 0.4.3 hid the thought behind a whole-word rule; 0.4.5 restores the
+        // infix search, but the hit must stay in the weak 'partial' tier —
+        // the dialog never treats it as an exact duplicate (Enter creates a
+        // new thought; the row is picked explicitly).
+        const hits = findDuplicates(ndb, 'Диана');
+        const hit = hits.find((h) => h.id === a);
+        assert.ok(hit, '«Диана» finds «обсидиана» by the infix fragment');
+        assert.equal(hit!.matched_on, 'partial');
+        assert.equal(hit!.matched_synonym, undefined);
+        // Whole words still match.
         assert.ok(findDuplicates(ndb, 'миграция').some((h) => h.id === a));
         assert.ok(findDuplicates(ndb, 'знание').some((h) => h.id === a));
-        // A `-word` exclusion must not be triggered by an infix occurrence:
-        // «-диана» must not exclude a thought that only contains «обсидиана».
-        assert.ok(
+        // A `-word` exclusion is infix too: «-диана» drops the thought.
+        assert.equal(
           findDuplicates(ndb, 'знание -диана').some((h) => h.id === a),
-          'an exclusion binds to a whole word only',
+          false,
+          'an exclusion binds to the infix occurrence',
         );
       } finally {
         ndb.close();
@@ -606,23 +650,33 @@ describe(
       }
     });
 
-    it('findDuplicates matches every include word, not the whole phrase', () => {
+    it('findDuplicates matches consecutive input words inside the phrase (0.4.5)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const spread = seedThought(ndb, 'Ivan Petrovich Sidorov');
         seedSynonym(ndb, spread, 'Ваня');
-        // Words in the input occur in the title but not as the typed phrase.
-        const hits = findDuplicates(ndb, 'ivan sidorov');
+        // Fragments inside consecutive words of the title (the input is not
+        // the exact title) → a partial candidate.
         assert.ok(
-          hits.some((h) => h.id === spread),
-          'all words present (anywhere) → a candidate',
+          findDuplicates(ndb, 'ivan petrovich').some((h) => h.id === spread),
+          'consecutive title words are a partial candidate',
         );
-        // One of the words may sit in a synonym while others sit in the title.
-        const mixed = findDuplicates(ndb, 'sidorov ваня');
-        assert.ok(mixed.some((h) => h.id === spread), 'words may come from the synonyms');
-        // A word that is nowhere → not a candidate.
+        // Non-adjacent words are not a sequence.
         assert.equal(
-          findDuplicates(ndb, 'ivan sidorov smith').some((h) => h.id === spread),
+          findDuplicates(ndb, 'ivan sidorov').some((h) => h.id === spread),
+          false,
+          'a word gap breaks the sequence',
+        );
+        // The sequence must sit inside ONE field (the title or one synonym) —
+        // fragments cannot span the title and a synonym.
+        assert.equal(
+          findDuplicates(ndb, 'sidorov ваня').some((h) => h.id === spread),
+          false,
+          'fragments cannot span the title and a synonym',
+        );
+        // A fragment that is nowhere → not a candidate.
+        assert.equal(
+          findDuplicates(ndb, 'ivan petrovich smith').some((h) => h.id === spread),
           false,
         );
       } finally {

@@ -866,12 +866,16 @@ function norm(value: string): string {
  * `find_duplicates`).
  *
  * Match priority (strongest wins per candidate): exact `title_norm`, exact
- * `synonym_norm`, then partial — the keywords mini-syntax (03-server-api.md
- * §6.10): every include word must occur in the title or one of the synonyms,
- * a `-word` must not occur in either. A bare word (no `*`) matches a whole
- * word only — the same word-boundary semantics as `*`-synonym patterns
- * (02-data-model.md §3.2), so «Диана» does not match «обсидиана»; `*` inside
- * a word is an infix wildcard. Results are ordered by match strength.
+ * `synonym_norm`, then partial. Partial follows the synonym-pattern principle
+ * (02-data-model.md §3.2) with an implicit `*` around every typed word, so
+ * the user never types `*`: a single fragment matches inside a word of the
+ * title or of one synonym («дор» → «Доработать!», «Подорожание 2026 года»,
+ * «Дорога в лето»); several fragments must occur inside CONSECUTIVE words in
+ * the typed order («исправ ошиб» → «Исправленные ошибки», but not «исправить
+ * старую ошибку»). A `-word` exclusion (03-server-api.md §6.10) uses the same
+ * infix semantics and drops a candidate whose title/synonyms contain the
+ * fragment anywhere. An explicit `*` in a word is allowed and is absorbed by
+ * the implicit wrappers. Results are ordered by match strength.
  *
  * @param title - proposed thought title.
  * @param synonyms - optional proposed synonyms.
@@ -1037,24 +1041,28 @@ export function findDuplicates(
       }
     }
     // Partial — lowest priority; ensure() defaults to 'partial'.
-    // The keywords mini-syntax of the map search (03-server-api.md §6.10):
-    // every include word must occur in the title or one of the synonyms,
-    // a `-word` must not occur in either. Without include words there is
-    // nothing to anchor the candidates to — a pure negative query returns
-    // no partial hits (unlike the structures filter, the dialog must not
-    // list the whole network).
+    // The synonym-pattern principle (02-data-model.md §3.2) with an implicit
+    // `*` around every typed fragment, so the user never types `*`
+    // (08-ui-spec.md §4.3): a single fragment must occur inside a word of
+    // the title or of one synonym, several fragments must occur inside
+    // CONSECUTIVE words in the typed order. A `-word` exclusion (§6.10)
+    // drops a candidate whose title/synonyms contain the fragment anywhere.
+    // Without include words there is nothing to anchor the candidates to —
+    // a pure negative query returns no partial hits (unlike the structures
+    // filter, the dialog must not list the whole network).
     //
-    // 0.4.3: a bare word (no `*`) must match a WHOLE word — the same word
-    // boundaries as `*`-synonym patterns (02-data-model.md §3.2), otherwise
-    // «Диана» partial-matches «обсидиана» inside a synonym. Infix LIKE
-    // cannot express boundaries, so it stays a cheap SQL pre-filter for
-    // include words while the exact semantics are enforced in JS over the
-    // surviving rows; `-word` exclusions without `*` are JS-only (a SQL
-    // NOT LIKE '%диана%' would wrongly drop «обсидиана» too).
+    // 0.4.5: the 0.4.3 whole-word rule («Диана» ≠ «обсидиана») broke the
+    // infix search of the add-thought dialog («дор» stopped finding
+    // «Доработать!») and is reverted here. Partial is the weak "candidate"
+    // tier — the exact title/synonym tiers above (plus the anchored
+    // `*`-synonym match below) keep the duplicate semantics, so a
+    // partial-only hit never auto-substitutes in the dialog.
+    //
+    // Infix LIKE cannot express the consecutive-words rule, so it stays a
+    // cheap SQL pre-filter for every word while the exact semantics are
+    // enforced in JS over the surviving rows.
     const keywords = parseFilterKeywords(n);
     if (keywords.include.length > 0) {
-      const bareInclude = keywords.include.filter((w) => !w.includes('*'));
-      const bareExclude = keywords.exclude.filter((w) => !w.includes('*'));
       const conditions: string[] = [];
       const params: unknown[] = [];
       const push = (word: string, negate: boolean): void => {
@@ -1066,9 +1074,7 @@ export function findDuplicates(
         params.push(pattern, pattern);
       };
       for (const word of keywords.include) push(word, false);
-      for (const word of keywords.exclude) {
-        if (word.includes('*')) push(word, true);
-      }
+      for (const word of keywords.exclude) push(word, true);
       let partialRows = ndb
         .prepare(
           `SELECT ${DUP_COLUMNS} FROM thoughts WHERE ${conditions.join(' AND ')}${typeDirect}`,
@@ -1087,43 +1093,34 @@ export function findDuplicates(
         font_strike: number;
         font_manual: number;
       }>;
-      if (bareInclude.length > 0 || bareExclude.length > 0) {
-        // Synonym norms of the candidates in one query, then the word-boundary
-        // check per bare word against the title and every synonym.
+      // The include fragments (each implicitly `*`-wrapped) must hit
+      // consecutive words of the title or of ONE synonym, in the typed
+      // order. synonymPatternToRegex already encodes the word-boundary and
+      // adjacency rules; the `*` wrappers turn its exact-word matcher into
+      // the infix one.
+      const includeRe = synonymPatternToRegex(
+        keywords.include.map((w) => `*${w}*`).join(' '),
+      );
+      if (partialRows.length > 0) {
+        // Synonym norms of the candidates in one query, then the
+        // consecutive-words check per candidate against its title and
+        // every synonym.
         const ids = partialRows.map((r) => r.id);
-        const synRows =
-          ids.length > 0
-            ? (ndb
-                .prepare(
-                  `SELECT thought_id, synonym_norm FROM thought_synonyms
-                   WHERE thought_id IN (${ids.map(() => '?').join(',')})`,
-                )
-                .all(...ids) as Array<{ thought_id: string; synonym_norm: string }>)
-            : [];
+        const synRows = ndb
+          .prepare(
+            `SELECT thought_id, synonym_norm FROM thought_synonyms
+             WHERE thought_id IN (${ids.map(() => '?').join(',')})`,
+          )
+          .all(...ids) as Array<{ thought_id: string; synonym_norm: string }>;
         const synsByThought = new Map<string, string[]>();
         for (const s of synRows) {
           const list = synsByThought.get(s.thought_id);
           if (list) list.push(s.synonym_norm);
           else synsByThought.set(s.thought_id, [s.synonym_norm]);
         }
-        const bareRegex = new Map<string, RegExp>();
-        for (const w of [...bareInclude, ...bareExclude]) {
-          bareRegex.set(w, synonymPatternToRegex(w));
-        }
-        const matchesSomewhere = (id: string, title: string, re: RegExp): boolean => {
-          const hay = [norm(title), ...(synsByThought.get(id) ?? [])];
-          return hay.some((h) => re.test(h));
-        };
         partialRows = partialRows.filter((r) => {
-          for (const w of bareInclude) {
-            const re = bareRegex.get(w);
-            if (re !== undefined && !matchesSomewhere(r.id, r.title, re)) return false;
-          }
-          for (const w of bareExclude) {
-            const re = bareRegex.get(w);
-            if (re !== undefined && matchesSomewhere(r.id, r.title, re)) return false;
-          }
-          return true;
+          const hay = [norm(r.title), ...(synsByThought.get(r.id) ?? [])];
+          return hay.some((h) => includeRe.test(h));
         });
       }
       for (const r of partialRows) {
