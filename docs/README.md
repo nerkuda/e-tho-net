@@ -28,6 +28,7 @@
 | 10 | [glossary.md](10-glossary.md) | Словарь терминов |
 | 11 | [settings-and-state.md](11-settings-and-state.md) | Идентификация клиентов (Client-Id, last_seq), уровни настроек, порядок фокуса per-user, защита от зацикливания |
 | 12 | [wiki-id-refs.md](12-wiki-id-refs.md) | ID-based wiki-ссылки в комментариях, кросс-сетевые ссылки, протокол `etn://open?…` (фаза R) |
+| 13 | [layers.md](13-layers.md) | Слои изменений: copy-on-write иерархия, разрешение по цепочке, слияние, матрица возможностей (фаза S) |
 
 ## Принципы проекта
 
