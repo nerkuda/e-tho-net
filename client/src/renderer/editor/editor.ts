@@ -531,9 +531,64 @@ function isVersionConflict(err: unknown): boolean {
 }
 
 /**
- * Saves thought header fields. On success the store focus is patched with the
- * updated entity; on a version conflict the focus is refetched and the user is
- * notified (09-scenarios.md F2). Resolves `true` on success.
+ * Reflects a successfully updated thought in every place it may currently be
+ * shown: the canvas focus cloud / zone clouds, the editor (the focus follower
+ * or a picked target), the structures results list, the pinned bar and the
+ * history bar. The server never echoes realtime events to the acting client
+ * (04-realtime.md §5), so the REST response is the only immediate feedback —
+ * without this the old icon/title/style would stay until the next focus fetch.
+ *
+ * Used by `saveThought` (header edits) and the attachments-tab command
+ * «Назначить иконкой мысли» (attachments.ts) — both mutate the same visual
+ * fields of a thought the actor may see in several views at once.
+ */
+export function reflectThoughtUpdate(updated: Thought): void {
+  const id = updated.id;
+  const focus = store.state.focus;
+  if (focus !== null) {
+    if (focus.focused.id === id) {
+      // The editor (focus follower) and the focus cloud repaint from the store.
+      store.update({ focus: { ...focus, focused: updated } });
+    } else if (inNeighbourhood(id)) {
+      // The thought is visible on the canvas as a focus neighbour — refetch
+      // the focus so its icon/type/colours repaint right away. The actor gets
+      // no realtime echo, so the stale cached ref must go first.
+      invalidateRef(id);
+      scheduleRefresh();
+    }
+  }
+  const target = store.state.editorTarget;
+  if (target?.kind === 'thought' && target.id === id) {
+    // Refresh whichever passenger carries the entity: the canvas click keeps
+    // it inside the target, the structures/chronicle views — in
+    // `structuresActiveThought`.
+    store.update({
+      ...(target.thought !== undefined
+        ? { editorTarget: { kind: 'thought' as const, id, thought: updated } }
+        : {}),
+      structuresActiveThought: updated,
+      structuresActiveThoughtId: id,
+    });
+  }
+  // The structures results list is server-rendered; reload it so the saved
+  // icon/title/type appear right away.
+  scheduleStructuresRefresh();
+  // The pinned bar and the history bar render the thought from their own
+  // cached/last-signature state and don't pick up a store patch alone (the
+  // actor gets no realtime echo — same reasoning as above). Force both to
+  // refetch so a changed icon/colour/title shows up there too.
+  if (store.state.pins.includes(id)) {
+    invalidatePinnedRef(id);
+    invalidatePinnedBar();
+  }
+  invalidateHistoryBar();
+}
+
+/**
+ * Saves thought header fields. On success the change is reflected everywhere
+ * through {@link reflectThoughtUpdate}; on a version conflict the focus is
+ * refetched and the user is notified (09-scenarios.md F2). Resolves `true` on
+ * success.
  */
 async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
   const networkId = requireNetworkId();
@@ -546,38 +601,10 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
       patch,
       ctx.thought.version,
     );
-    // Reflect the change wherever the entity is shown: the canvas focus (the
-    // cloud repaints at once) and/or the structures view (the editor header
-    // re-renders, the results list reloads) — the actor gets no realtime echo,
-    // so both stores are patched from the save response.
-    const focus = store.state.focus;
-    if (focus !== null) {
-      if (focus.focused.id === ctx.ownerId) {
-        store.update({ focus: { ...focus, focused: updated } });
-      } else if (inNeighbourhood(ctx.ownerId)) {
-        // The thought is visible on the canvas as a focus neighbour — refetch
-        // the focus so its icon/type/colours repaint right away. The actor gets
-        // no realtime echo, so the stale cached ref must go first.
-        invalidateRef(ctx.ownerId);
-        scheduleRefresh();
-      }
-    }
-    if (
-      store.state.editorTarget?.kind === 'thought' &&
-      store.state.editorTarget.id === ctx.ownerId
-    ) {
-      // Refresh whichever passenger carries the entity: the canvas click keeps
-      // it inside the target, the structures/chronicle views — in
-      // `structuresActiveThought`.
-      const target = store.state.editorTarget;
-      store.update({
-        ...(target.thought !== undefined
-          ? { editorTarget: { kind: 'thought' as const, id: ctx.ownerId, thought: updated } }
-          : {}),
-        structuresActiveThought: updated,
-        structuresActiveThoughtId: ctx.ownerId,
-      });
-    }
+    // Reflect the change wherever the entity is shown (see the helper) — the
+    // actor gets no realtime echo, so the stores are patched from the save
+    // response.
+    reflectThoughtUpdate(updated);
     // A type change re-skins the focus cloud (type icon/colours) — reconcile
     // the whole focus from the server so nothing lags behind the patch.
     if (patch.type_id !== undefined) {
@@ -586,18 +613,6 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
       // пустому постоянному комментарию сразу после назначения/смены типа.
       await applyCommentTemplateIfEmpty(networkId, ctx.ownerId, patch.type_id);
     }
-    // The structures results list is server-rendered; reload it so the saved
-    // icon/title/type appear right away.
-    scheduleStructuresRefresh();
-    // The pinned bar and the history bar render the thought from their own
-    // cached/last-signature state and don't pick up a store patch alone (the
-    // actor gets no realtime echo — same reasoning as above). Force both to
-    // refetch so a changed icon/colour/title shows up there too.
-    if (store.state.pins.includes(ctx.ownerId)) {
-      invalidatePinnedRef(ctx.ownerId);
-      invalidatePinnedBar();
-    }
-    invalidateHistoryBar();
     return true;
   } catch (err) {
     if (isVersionConflict(err)) {

@@ -33,6 +33,7 @@ import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { orderedTypeRows } from '../lib/type-tree.js';
 import { isPinned, togglePinned } from '../pinned/pins.js';
+import { reflectThoughtUpdate } from '../editor/editor.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { errText } from '../lib/dom.js';
 import { showExportEtnxDialog } from '../import-export/export-dialog.js';
@@ -561,14 +562,17 @@ async function changeIcon(networkId: string, id: string): Promise<void> {
   if (value === null) return;
   try {
     const thought = await etn.thoughts.get(networkId, id);
-    await etn.thoughts.update(
+    const updated = await etn.thoughts.update(
       networkId,
       id,
       { icon: value.trim() === '' ? null : value.trim(), icon_kind: 'emoji' },
       thought.version,
     );
-    invalidateRef(id);
-    scheduleRefresh();
+    // The menu is reachable from every thought representation (canvas clouds,
+    // pinned chips, structures clouds, selection rows) — reflect the new icon
+    // in all of them at once, not just on the canvas (fixes/045, same class
+    // as the attachments-tab «Назначить иконкой мысли» command).
+    reflectThoughtUpdate(updated);
   } catch (err) {
     errorDialog('Изменить иконку', err);
   }

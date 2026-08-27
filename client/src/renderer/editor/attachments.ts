@@ -18,7 +18,7 @@
 
 import type { Attachment } from '@etn/shared';
 
-import { invalidateIndicators, invalidateRef } from '../canvas/canvas.js';
+import { invalidateIndicators } from '../canvas/canvas.js';
 import { closeDialog, confirmDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, isHttpUrl, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -26,11 +26,11 @@ import { ICON_MAX_BYTES, dataUrlBytes, makeIconPreview } from '../lib/image-prev
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { requireNetworkId } from '../app.js';
-import { store } from '../state.js';
 import { firstPickedThoughtId, pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
 import { etnimgUrl, createMarkdownField, guessMimeFromName } from './markdown-field.js';
 import {
   refreshTabCount,
+  reflectThoughtUpdate,
   registerTabContent,
   registerTabCount,
   type EditorContext,
@@ -532,11 +532,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
         icon_kind: 'image',
         icon_attachment_id: attachment.id,
       }, thought.version);
-      const focus = store.state.focus;
-      if (focus !== null && focus.focused.id === updated.id) {
-        store.update({ focus: { ...focus, focused: updated } });
-      }
-      invalidateRef(thought.id);
+      // The new icon must repaint everywhere at once — the editor header, the
+      // canvas clouds, the pinned/history bars, the structures results. The
+      // actor gets no realtime echo (04-realtime.md §5); patching only the
+      // store focus used to leave every other view stale until the next focus
+      // switch (bug fixes/045).
+      reflectThoughtUpdate(updated);
       notice('Иконка мысли обновлена.');
     } catch (err) {
       notice(`Не удалось назначить иконку: ${errText(err)}`, 'error');
