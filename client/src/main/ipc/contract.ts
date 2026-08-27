@@ -125,6 +125,22 @@ export type PickFileResult =
   | { status: 'ok'; path: string; name: string }
   | { status: 'cancel' };
 
+/**
+ * Client application info for the «О программе» dialog (08-ui-spec.md §8.2).
+ * All fields are read in the main process (`app.getVersion()` /
+ * `process.versions`) — no server connection is involved.
+ */
+export interface AppInfo {
+  /** ETN client version (`client/package.json`). */
+  version: string;
+  /** Electron runtime version. */
+  electron: string;
+  /** Chromium runtime version. */
+  chrome: string;
+  /** Node.js runtime version. */
+  node: string;
+}
+
 /** Which view's visit history a `history.*` call addresses (L15, 11 §2.3.1). */
 export type HistoryScope = 'focus' | 'structures';
 
@@ -740,6 +756,13 @@ export interface EtnApi {
     updateState(tabId: string, partial: TabStatePatch): Promise<void>;
   };
   system: {
+    /**
+     * Client application info for the «О программе» dialog: the client version
+     * (`app.getVersion()`) plus the Electron/Chromium/Node runtime versions.
+     * Unlike {@link version} this never touches the server — it works without
+     * a connection.
+     */
+    appInfo(): Promise<AppInfo>;
     health(): Promise<HealthResponse>;
     version(): Promise<VersionResponse>;
     export(networkId: string, request: ExportRequest): Promise<{ job_id: string }>;

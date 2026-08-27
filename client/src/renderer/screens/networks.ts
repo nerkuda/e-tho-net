@@ -11,6 +11,7 @@
  */
 
 import { disconnect, openNetwork } from '../app.js';
+import { showAboutDialog } from './about-dialog.js';
 import { confirmDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -35,8 +36,9 @@ export function buildNetworks(): HTMLElement {
   const title = el('h1', 'networks-title', 'Мыслесети');
   title.style.flex = '1';
   const createButton = button('Создать сеть', () => void showCreateNetworkDialog(), 'btn primary');
+  const aboutButton = button('О программе', () => showAboutDialog(), 'btn');
   const logoutButton = button('Отключиться', () => void confirmDisconnect(), 'btn');
-  header.append(title, createButton, logoutButton);
+  header.append(title, createButton, aboutButton, logoutButton);
   card.append(header);
 
   const logo = el('img', 'networks-logo');

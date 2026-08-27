@@ -1,0 +1,75 @@
+/**
+ * «О программе» dialog (task 4cba7d74, 08-ui-spec.md §8.2): the client
+ * version, authorship, licence and project links (changelog, releases).
+ *
+ * Purely client-side: opens without a server connection — the version and
+ * runtime info come from the main process over `etn.system.appInfo`
+ * (docs/07-client-electron.md §6). The project links open in the OS browser
+ * via `etn.system.openExternal`; failures surface as an error toast.
+ */
+
+import { showDialog } from '../lib/dialog.js';
+import { button, div, el } from '../lib/dom.js';
+import { etn } from '../lib/etn.js';
+import { notice } from '../lib/notice.js';
+
+/** Project repository — mirrors `client/package.json` `homepage`. */
+const APP_URL = 'https://github.com/nerkuda/e-tho-net';
+
+/** Author and licence (root `LICENSE`: MIT © 2026). */
+const APP_COPYRIGHT = '© 2026 В. Зайцев';
+const APP_LICENSE = 'MIT';
+
+/** External links shown in the dialog (08-ui-spec.md §8.2). */
+const ABOUT_LINKS: Array<{ label: string; url: string }> = [
+  { label: 'Новое в версии', url: `${APP_URL}/blob/main/CHANGELOG.md` },
+  { label: 'Собранные релизы', url: `${APP_URL}/releases` },
+  { label: 'Текст лицензии', url: `${APP_URL}/blob/main/LICENSE` },
+];
+
+/** Opens the «О программе» dialog. */
+export function showAboutDialog(): void {
+  const body = div('about-body');
+
+  const logo = el('img', 'about-logo');
+  logo.src = './logo.svg';
+  logo.alt = 'ETN';
+
+  const versionLine = el('p', 'about-version', 'Версия …');
+  const techLine = el('p', 'about-tech muted', '');
+  techLine.hidden = true;
+
+  const linksRow = div('about-links');
+  for (const link of ABOUT_LINKS) {
+    linksRow.append(button(link.label, () => void openLink(link.url), 'link-btn'));
+  }
+
+  body.append(
+    logo,
+    el('h2', 'about-title', 'ETN'),
+    el('p', 'about-tagline muted', 'The Endless Thought Network — self-hosted граф мыслей'),
+    versionLine,
+    el('p', 'about-meta', `${APP_COPYRIGHT} · Лицензия ${APP_LICENSE}`),
+    linksRow,
+    techLine,
+  );
+
+  showDialog({
+    title: 'О программе',
+    body,
+    width: 420,
+    buttons: [{ label: 'Закрыть', primary: true }],
+  });
+
+  void etn.system.appInfo().then((info) => {
+    versionLine.textContent = `Версия ${info.version}`;
+    techLine.textContent = `Electron ${info.electron} · Chromium ${info.chrome} · Node ${info.node}`;
+    techLine.hidden = false;
+  });
+}
+
+/** Opens an external link in the OS browser; failures surface as a toast. */
+async function openLink(url: string): Promise<void> {
+  const err = await etn.system.openExternal(url);
+  if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
+}

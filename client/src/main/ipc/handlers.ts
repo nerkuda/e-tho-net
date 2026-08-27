@@ -19,7 +19,7 @@ import type { CurrentUser, FocusDir, Network, TypeOwnerType } from '@etn/shared'
 
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
-import type { PickFileResult, PickImageResult } from './contract.js';
+import type { AppInfo, PickFileResult, PickImageResult } from './contract.js';
 import { classifyOpenTarget } from './open-target.js';
 import { errText } from '../../renderer/lib/dom.js';
 
@@ -1225,6 +1225,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       deps.localDb.clearChronicleHistory(profileId, networkId, tabId ?? null);
     }),
   );
+  handlers.set('system.appInfo', bind(() => appInfo()));
   handlers.set(
     'system.health',
     bind(() => requireRest(deps).getHealth()),
@@ -1527,6 +1528,23 @@ async function openPathShell(filePath: string): Promise<string> {
     return 'Пустой путь к файлу.';
   }
   return shell.openPath(filePath);
+}
+
+/**
+ * Client build/runtime info for the «О программе» dialog: the client version
+ * plus the Electron/Chromium/Node runtime versions. Purely local — never
+ * touches the server (unlike `system.version`).
+ */
+async function appInfo(): Promise<AppInfo> {
+  // electron is imported lazily so this module stays loadable in the Node test
+  // runner (which resolves `electron` to a stub without the named exports).
+  const { app } = await import('electron');
+  return {
+    version: app.getVersion(),
+    electron: process.versions.electron ?? '',
+    chrome: process.versions.chrome ?? '',
+    node: process.versions.node ?? '',
+  };
 }
 
 /**

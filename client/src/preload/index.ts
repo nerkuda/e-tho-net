@@ -283,6 +283,7 @@ function buildApi(): EtnApi {
       updateState: (tabId, partial) => invoke('tabs.updateState', tabId, partial),
     },
     system: {
+      appInfo: () => invoke('system.appInfo'),
       health: () => invoke('system.health'),
       version: () => invoke('system.version'),
       export: (networkId, request) => invoke('system.export', networkId, request),

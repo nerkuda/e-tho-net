@@ -4338,6 +4338,53 @@ body.cloud-dragging * {
   border-bottom: 1px solid var(--border);
 }
 
+/* --- «О программе» dialog (08-ui-spec.md §8.2) ----------------------------- */
+
+.about-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  padding: 6px 4px 2px;
+}
+
+.about-logo {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 4px;
+}
+
+.about-title {
+  margin: 0;
+  font-size: 20px;
+}
+
+.about-tagline {
+  margin: 0;
+}
+
+.about-version {
+  margin: 10px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.about-meta {
+  margin: 0;
+}
+
+.about-links {
+  display: flex;
+  gap: 14px;
+  margin: 10px 0 2px;
+}
+
+.about-tech {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
 /* --- unified settings dialog (H18+, 08-ui-spec.md §9) --------------------- */
 
 /* When the dialog carries a custom footer (currently only the Settings

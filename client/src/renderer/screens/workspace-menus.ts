@@ -23,6 +23,7 @@
 
 import { backToNetworks, disconnect, requireNetworkId } from '../app.js';
 import { openAdminPanel } from '../admin/admin.js';
+import { showAboutDialog } from './about-dialog.js';
 import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';
@@ -244,9 +245,10 @@ export function wireUserMenu(handles: WorkspaceHandles): void {
 /**
  * Builds the user menu items (H18, Q3-bugfix, 08-ui-spec.md §8.2). Houses
  * program-level commands: opening/creating networks (workspace-wide
- * actions), administration (when admin), disconnect. Personal preferences
- * (display_name, cloud sizing, theme) live in the unified Settings dialog
- * (`showSettingsDialog`, opened from the «Мыслесеть» menu).
+ * actions), administration (when admin), the About dialog, disconnect.
+ * Personal preferences (display_name, cloud sizing, theme) live in the
+ * unified Settings dialog (`showSettingsDialog`, opened from the
+ * «Мыслесеть» menu).
  */
 export function buildUserMenuItems(): MenuItem[] {
   const items: MenuItem[] = [
@@ -259,11 +261,15 @@ export function buildUserMenuItems(): MenuItem[] {
       onClick: () => openAdminPanel(),
     });
   }
-  items.push(MENU_SEPARATOR, {
-    label: 'Отключиться',
-    danger: true,
-    onClick: () => void disconnect(),
-  });
+  items.push(
+    MENU_SEPARATOR,
+    { label: 'О программе', onClick: () => showAboutDialog() },
+    {
+      label: 'Отключиться',
+      danger: true,
+      onClick: () => void disconnect(),
+    },
+  );
   return items;
 }
 
