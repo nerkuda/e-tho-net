@@ -624,7 +624,7 @@ function insertPropertyValue(
          id, owner_type, owner_id, property_id,
          value_text, value_date, value_number, value_bool, value_thought_ref,
          updated_at
-       ) VALUES (?, ?, ?, ?, ${colInit(column)}, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ${colInit(column)}, ?)
        ON CONFLICT(owner_type, owner_id, property_id) DO UPDATE SET
          value_text = NULL,
          value_date = NULL,
@@ -645,9 +645,14 @@ function insertPropertyValue(
 }
 
 /** Map a property value to its canonical storage column. */
-function columnFor(value: PropertyValueValue): 'value_text' | 'value_number' | 'value_bool' {
+function columnFor(
+  value: PropertyValueValue,
+): 'value_text' | 'value_number' | 'value_bool' | 'value_thought_ref' {
   if (typeof value === 'number') return 'value_number';
   if (typeof value === 'boolean') return 'value_bool';
+  // Multiple thought_ref values are stored as a JSON array of ids
+  // (02-data-model.md §3.5).
+  if (Array.isArray(value)) return 'value_thought_ref';
   return 'value_text';
 }
 
@@ -655,15 +660,17 @@ function columnFor(value: PropertyValueValue): 'value_text' | 'value_number' | '
 function coerce(value: PropertyValueValue): string | number | null {
   if (value === null) return null;
   if (typeof value === 'boolean') return value ? 1 : 0;
+  if (Array.isArray(value)) return JSON.stringify(value);
   return value;
 }
 
-/** SQL fragment for the INSERT clause (only the chosen column gets the raw value). */
+/** SQL fragment for the five value_* slots of the INSERT clause — the chosen
+ * column's placeholder stands in its own position, the rest are NULL. */
 function colInit(column: string): string {
-  if (column === 'value_text') return 'NULL, NULL, NULL, NULL,';
-  if (column === 'value_number') return 'NULL, NULL, ?, NULL, NULL,';
-  if (column === 'value_bool') return 'NULL, NULL, NULL, ?, NULL,';
-  return 'NULL, NULL, NULL, NULL, NULL,';
+  if (column === 'value_text') return '?, NULL, NULL, NULL, NULL';
+  if (column === 'value_number') return 'NULL, NULL, ?, NULL, NULL';
+  if (column === 'value_bool') return 'NULL, NULL, NULL, ?, NULL';
+  return 'NULL, NULL, NULL, NULL, ?';
 }
 
 /** SQL fragment for the UPDATE clause (same idea, but written with `excluded.`). */
@@ -671,7 +678,7 @@ function colSet(column: string): string {
   if (column === 'value_text') return 'value_text = excluded.value_text';
   if (column === 'value_number') return 'value_number = excluded.value_number';
   if (column === 'value_bool') return 'value_bool = excluded.value_bool';
-  return 'value_text = excluded.value_text';
+  return 'value_thought_ref = excluded.value_thought_ref';
 }
 
 /** Argument slot for the column (others stay NULL). */

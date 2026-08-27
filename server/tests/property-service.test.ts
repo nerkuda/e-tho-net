@@ -3,8 +3,9 @@
  *
  * Covers: resolution of a value through the owner's type, per-value_type
  * validation, the single-column write rule, thought_ref type enforcement, and
- * upsert/delete. Skipped entirely when the `better-sqlite3` native binding is
- * unavailable.
+ * upsert/delete; the multiple `thought_ref` form (config.multiple — arrays of
+ * ids stored as JSON in value_thought_ref). Skipped entirely when the
+ * `better-sqlite3` native binding is unavailable.
  */
 
 import assert from 'node:assert/strict';
@@ -421,6 +422,231 @@ describe(
         assert.equal(otherUsage.total, 1);
         assert.equal(otherUsage.groups[0]!.key, 'editor');
         assert.equal(otherUsage.groups[0]!.thoughts[0]!.id, b2);
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
+
+describe(
+  'property-service (multiple thought_ref)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    const USER = 'user-1';
+
+    /** Seed a `multiple` thought_ref property and return def + thoughts. */
+    function seedMulti(ndb: NetworkDb, config: Record<string, unknown> = {}): {
+      def: { id: string; key: string };
+      a: string;
+      b: string;
+      owner: string;
+    } {
+      const person = createThoughtType(ndb, { name: 'PersonM' }, USER);
+      const book = createThoughtType(ndb, { name: 'BookM' }, USER);
+      const def = createTypeProperty(ndb, 'thought_type', book.id, {
+        key: 'authors',
+        value_type: 'thought_ref',
+        config: { multiple: true, ...config },
+      });
+      return {
+        def,
+        a: seedTypedThought(ndb, person.id),
+        b: seedTypedThought(ndb, person.id),
+        owner: seedTypedThought(ndb, book.id),
+      };
+    }
+
+    /** Raw value_thought_ref of a property value row. */
+    function rawRef(ndb: NetworkDb, ownerId: string, propertyId: string): string | null {
+      const row = ndb
+        .prepare(
+          'SELECT value_thought_ref FROM property_values WHERE owner_id = ? AND property_id = ?',
+        )
+        .get(ownerId, propertyId) as { value_thought_ref: string | null };
+      return row.value_thought_ref;
+    }
+
+    it('stores an id array as JSON and reads it back as string[]', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, a, b, owner } = seedMulti(ndb);
+        setPropertyValue(ndb, 'thought', owner, 'authors', [a, b]);
+        assert.deepEqual(JSON.parse(rawRef(ndb, owner, def.id)!), [a, b]);
+        const values = getPropertyValues(ndb, 'thought', owner);
+        assert.deepEqual(values[0]!.value, [a, b]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('dedupes ids and validates every id (existence + type filter)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const authorType = createThoughtType(ndb, { name: 'AuthorMM' }, USER);
+        const bookType = createThoughtType(ndb, { name: 'BookMM' }, USER);
+        const def = createTypeProperty(ndb, 'thought_type', bookType.id, {
+          key: 'authors',
+          value_type: 'thought_ref',
+          config: { multiple: true, allowed_type_ids: [authorType.id] },
+        });
+        const good = seedTypedThought(ndb, authorType.id);
+        const wrongType = seedTypedThought(ndb, bookType.id);
+        const owner = seedTypedThought(ndb, bookType.id);
+
+        // Duplicate ids collapse.
+        setPropertyValue(ndb, 'thought', owner, 'authors', [good, good]);
+        assert.deepEqual(JSON.parse(rawRef(ndb, owner, def.id)!), [good]);
+
+        // A missing id rejects the whole write.
+        assert.throws(
+          () => setPropertyValue(ndb, 'thought', owner, 'authors', [good, 'no-such-thought']),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        // An id of a wrong (filtered-out) type rejects too.
+        assert.throws(
+          () => setPropertyValue(ndb, 'thought', owner, 'authors', [good, wrongType]),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        // The last successful write is still in place.
+        assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [good]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('rejects arrays on definitions without config.multiple', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Single' }, USER);
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'ref', value_type: 'thought_ref' });
+        const target = seedTypedThought(ndb, tt.id);
+        const owner = seedTypedThought(ndb, tt.id);
+        assert.throws(
+          () => setPropertyValue(ndb, 'thought', owner, 'ref', [target]),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('normalizes a single id to a one-element array on multiple definitions', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, a, owner } = seedMulti(ndb);
+        setPropertyValue(ndb, 'thought', owner, 'authors', a);
+        assert.deepEqual(JSON.parse(rawRef(ndb, owner, def.id)!), [a]);
+        assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [a]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('treats an empty array as a clear', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, a, owner } = seedMulti(ndb);
+        setPropertyValue(ndb, 'thought', owner, 'authors', [a]);
+        setPropertyValue(ndb, 'thought', owner, 'authors', []);
+        assert.equal(rawRef(ndb, owner, def.id), null);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('reads a legacy bare id as an array when multiple is on', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, a, owner } = seedMulti(ndb);
+        // A pre-multiple row: a bare id in value_thought_ref.
+        ndb
+          .prepare(
+            `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_thought_ref, updated_at)
+             VALUES (?, 'thought', ?, ?, ?, '2024')`,
+          )
+          .run(randomUUID(), owner, def.id, a);
+        assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [a]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('resolves multiple values to [{id, title}] with dangling ids as title null', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, a, b, owner } = seedMulti(ndb);
+        setPropertyValue(ndb, 'thought', owner, 'authors', [a, b]);
+        // Sneak a dangling id into the stored array (no SQL FK).
+        ndb
+          .prepare('UPDATE property_values SET value_thought_ref = ? WHERE owner_id = ? AND property_id = ?')
+          .run(JSON.stringify([a, 'gone', b]), owner, def.id);
+
+        const resolved = getPropertyValuesResolved(ndb, 'thought', owner);
+        assert.deepEqual(resolved[0]!.value, [
+          { id: a, title: 'T' },
+          { id: 'gone', title: null },
+          { id: b, title: 'T' },
+        ]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findThoughtUsage matches ids stored inside multi arrays', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { a, b, owner } = seedMulti(ndb);
+        setPropertyValue(ndb, 'thought', owner, 'authors', [a, b]);
+
+        const usageA = findThoughtUsage(ndb, a);
+        assert.equal(usageA.total, 1);
+        assert.equal(usageA.groups[0]!.key, 'authors');
+        assert.equal(usageA.groups[0]!.thoughts[0]!.id, owner);
+
+        // An id that merely prefixes another stored id must NOT match.
+        const usage = findThoughtUsage(ndb, `${a}x`);
+        assert.equal(usage.total, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('converting value_type to text joins the ids with commas', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, a, b, owner } = seedMulti(ndb);
+        setPropertyValue(ndb, 'thought', owner, 'authors', [a, b]);
+        updateTypeProperty(ndb, def.id, { value_type: 'text' });
+        assert.equal(getPropertyValues(ndb, 'thought', owner)[0]!.value, `${a}, ${b}`);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('a required multi property with an (hand-made) empty array still warns', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'ReqMulti' }, USER);
+        const def = createTypeProperty(ndb, 'thought_type', tt.id, {
+          key: 'refs',
+          value_type: 'thought_ref',
+          required: true,
+          config: { multiple: true },
+        });
+        const target = seedTypedThought(ndb, tt.id);
+        const owner = seedTypedThought(ndb, tt.id);
+        // Hand-made empty array row (writes normalize empty to a clear).
+        ndb
+          .prepare(
+            `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_thought_ref, updated_at)
+             VALUES (?, 'thought', ?, ?, '[]', '2024')`,
+          )
+          .run(randomUUID(), owner, def.id);
+        assert.equal(computeThoughtCardWarnings(ndb, owner).length, 1);
+        // A filled array clears the warning.
+        setPropertyValue(ndb, 'thought', owner, 'refs', [target]);
+        assert.deepEqual(computeThoughtCardWarnings(ndb, owner), []);
       } finally {
         ndb.close();
       }

@@ -275,6 +275,36 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     assert.deepEqual(combined.hits.map((h) => h.title), ['Задача 1']);
   });
 
+  it('property eq also matches ids inside multiple thought_ref arrays', () => {
+    const ndb = createInMemoryNetworkDb();
+    const projectDef = seedPropertyDefinition(ndb, 'team', 'thought_ref');
+    const project = seedThought(ndb, 'Проект Бета');
+    const member1 = seedThought(ndb, 'Задача 1');
+    const member2 = seedThought(ndb, 'Задача 2');
+    // A multiple thought_ref value: a JSON array of ids in value_thought_ref
+    // (02-data-model.md §3.5).
+    seedPropertyValue(ndb, member1, projectDef, 'thought_ref', JSON.stringify([project, member2]));
+    seedPropertyValue(ndb, member2, projectDef, 'thought_ref', member2);
+
+    // eq by an id inside the array matches; so does a plain single id.
+    const viaArray = run(ndb, {
+      properties: [{ key: 'team', operator: 'eq', value: project }],
+    });
+    assert.deepEqual(viaArray.hits.map((h) => h.title), ['Задача 1']);
+    const viaSingle = run(ndb, {
+      properties: [{ key: 'team', operator: 'eq', value: member2 }],
+    });
+    assert.deepEqual(
+      viaSingle.hits.map((h) => h.title).sort(),
+      ['Задача 1', 'Задача 2'],
+    );
+    // A look-alike id (prefix of a stored one) must not match.
+    const lookAlike = run(ndb, {
+      properties: [{ key: 'team', operator: 'eq', value: `${project}x` }],
+    });
+    assert.equal(lookAlike.total, 0);
+  });
+
   it('filters by creation/update date ranges', () => {
     const ndb = createInMemoryNetworkDb();
     seedThought(ndb, 'Старая', { created_at: '2024-01-01T00:00:00.000Z' });

@@ -161,6 +161,11 @@ function normaliseRefCandidate(
  * no thought on the destination. Other value types are passed through
  * verbatim — the property service rejects anything that doesn't fit the
  * destination type's `value_type`.
+ *
+ * Multiple `thought_ref` values (arrays of ids, `config.multiple`) are
+ * resolved element-wise. When the destination definition is single-valued,
+ * only the first resolvable id survives (the property service would reject
+ * an array without the flag).
  */
 function resolveProperties(
   ndb: NetworkDb,
@@ -168,31 +173,54 @@ function resolveProperties(
   raw: Record<string, PropertyValueValue>,
 ): void {
   // Look up the thought's effective type once so we know which keys are
-  // `thought_ref`. Other value types skip this branch.
+  // `thought_ref` (and which of them allow multiple values). Other value
+  // types skip this branch.
   const row = ndb.prepare('SELECT type_id FROM thoughts WHERE id = ?').get(thoughtId) as
     | { type_id: string | null }
     | undefined;
   if (row === undefined) return;
   const thoughtTypeId = row.type_id;
 
-  const refKeys = new Set<string>();
+  const refKeys = new Map<string, boolean>();
   if (thoughtTypeId !== null) {
     const propRows = ndb
       .prepare(
-        `SELECT tp.key FROM type_properties tp
+        `SELECT tp.key, tp.config FROM type_properties tp
          WHERE tp.owner_type = 'thought_type' AND tp.owner_id = ?
            AND tp.value_type = 'thought_ref'`,
       )
-      .all(thoughtTypeId) as Array<{ key: string }>;
-    for (const p of propRows) refKeys.add(p.key);
+      .all(thoughtTypeId) as Array<{ key: string; config: string | null }>;
+    for (const p of propRows) {
+      let multiple = false;
+      if (p.config !== null) {
+        try {
+          multiple = (JSON.parse(p.config) as { multiple?: unknown }).multiple === true;
+        } catch {
+          multiple = false;
+        }
+      }
+      refKeys.set(p.key, multiple);
+    }
   }
 
   const resolved: Record<string, PropertyValueValue> = {};
   for (const [key, value] of Object.entries(raw)) {
-    if (refKeys.has(key)) {
+    const multiple = refKeys.get(key);
+    if (multiple !== undefined) {
+      if (Array.isArray(value)) {
+        const ids = value
+          .map((item) => resolveThoughtRefValue(ndb, item))
+          .filter((id): id is string => id !== null);
+        const unique = [...new Set(ids)];
+        if (unique.length === 0) continue;
+        resolved[key] = unique;
+        continue;
+      }
       const id = resolveThoughtRefValue(ndb, value);
       if (id === null) continue;
-      resolved[key] = id;
+      // Keep the array shape on multiple definitions (the property service
+      // normalizes anyway, but stay shape-honest).
+      resolved[key] = multiple ? [id] : id;
     } else {
       resolved[key] = value;
     }

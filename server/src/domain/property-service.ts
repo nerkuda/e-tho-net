@@ -391,11 +391,19 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}($|T)/;
  * raw SQL value to rewrite, or `null` when the value cannot be represented —
  * the caller then clears it. Deliberately conservative: dates never become
  * numbers, thought refs never convert into anything but text.
+ *
+ * A multiple `thought_ref` value (`string[]`) degrades to its comma-joined
+ * id list when converted to text — mirroring how multiple text values are
+ * stored — and is cleared for every other target type.
  */
 function convertStoredValue(
-  value: string | number | boolean,
+  value: string | number | boolean | string[],
   to: PropertyValueType,
 ): { column: string; raw: string | number | null } | null {
+  if (Array.isArray(value)) {
+    if (to === 'text' || to === 'url') return { column: 'value_text', raw: value.join(', ') };
+    return null;
+  }
   switch (to) {
     case 'text':
     case 'url': {
@@ -452,6 +460,8 @@ function migratePropertyValues(
     .all(propertyId) as PropertyValueRow[];
   const now = new Date().toISOString();
   for (const row of rows) {
+    // No definition here (only the source value type) — the data-driven array
+    // parse inside readValue covers stored multiple values without the flag.
     const value = readValue(row, from);
     const converted = value === null ? null : convertStoredValue(value, to);
     if (converted === null) {
@@ -584,8 +594,19 @@ interface PropertyValueRow {
 /**
  * Map a stored row back into the typed {@link PropertyValue.value} according to
  * the definition's `value_type`, reading only the matching column.
+ *
+ * `thought_ref` (multiple form, 02-data-model.md §3.5): `value_thought_ref`
+ * stores either a single raw id or a JSON array of ids. The stored shape wins
+ * over the definition's `multiple` flag — an array is always parsed back into
+ * `string[]` (never leaked as raw JSON text); with the flag on, a legacy
+ * single id is wrapped into a one-element array. Turning `multiple` off never
+ * reprocesses already stored values (same rule as `options`/`allowed_type_ids`).
  */
-function readValue(row: PropertyValueRow, valueType: PropertyValueType): PropertyValueValue {
+function readValue(
+  row: PropertyValueRow,
+  valueType: PropertyValueType,
+  multiple = false,
+): PropertyValueValue {
   switch (valueType) {
     case 'text':
     case 'url':
@@ -596,8 +617,41 @@ function readValue(row: PropertyValueRow, valueType: PropertyValueType): Propert
       return row.value_number;
     case 'bool':
       return row.value_bool === null ? null : row.value_bool === 1;
-    case 'thought_ref':
-      return row.value_thought_ref;
+    case 'thought_ref': {
+      const raw = row.value_thought_ref;
+      if (raw === null) return null;
+      if (raw.startsWith('[')) return parseRefIds(raw);
+      return multiple ? [raw] : raw;
+    }
+  }
+}
+
+/** `true` when the definition allows several `thought_ref` values. */
+function isMultipleRef(def: PropertyDefinition): boolean {
+  return def.value_type === 'thought_ref' && def.config?.multiple === true;
+}
+
+/**
+ * LIKE pattern matching an id inside a stored JSON array of ids
+ * (`["a","b"]` → `%"a"%`). Quoting makes the match exact — `%"a"%` does not
+ * hit `"ab"`. `%`/`_`/`\` are escaped; pair with `LIKE ? ESCAPE '\'`.
+ */
+function refLikePattern(id: string): string {
+  return `%"${id.replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`;
+}
+
+/**
+ * Parse a stored multiple `thought_ref` payload (`["id", …]` JSON) into ids.
+ * Defensive against malformed/legacy content: anything that is not a JSON
+ * array of strings yields an empty list.
+ */
+function parseRefIds(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === 'string' && v !== '');
+  } catch {
+    return [];
   }
 }
 
@@ -665,7 +719,7 @@ export function getPropertyValues(
       owner_type: ownerType,
       owner_id: ownerId,
       property_id: row.property_id,
-      value: readValue(row, def.value_type),
+      value: readValue(row, def.value_type, isMultipleRef(def)),
       updated_at: row.updated_at,
     });
   }
@@ -675,9 +729,11 @@ export function getPropertyValues(
 /**
  * MCP-чтение значений свойств (task N4, docs/05-mcp-server.md §4.1): то же,
  * что {@link getPropertyValues}, но `thought_ref`-значения резолвнуты в
- * `{id, title}` одним LEFT JOIN — агенту не нужны отдельные вызовы
- * `etn.thoughts.get` на каждую ссылку. REST-ответ не меняется. `title: null`
- * означает висячую ссылку на удалённую мысль (`value_thought_ref` без SQL FK).
+ * `{id, title}` — агенту не нужны отдельные вызовы `etn.thoughts.get` на
+ * каждую ссылку. Одиночные значения резолвятся LEFT JOIN'ом; множественные
+ * (`config.multiple`, массив id) — одним пакетным запросом по всем id массивов.
+ * REST-ответ не меняется. `title: null` означает висячую ссылку на удалённую
+ * мысль (`value_thought_ref` без SQL FK).
  */
 export function getPropertyValuesResolved(
   ndb: NetworkDb,
@@ -692,22 +748,50 @@ export function getPropertyValuesResolved(
        WHERE pv.owner_type = ? AND pv.owner_id = ?`,
     )
     .all(ownerType, ownerId) as Array<PropertyValueRow & { ref_title: string | null }>;
-  const out: ResolvedPropertyValue[] = [];
+  const prepared: Array<{
+    row: PropertyValueRow & { ref_title: string | null };
+    def: PropertyDefinition;
+    value: PropertyValueValue;
+  }> = [];
   for (const row of rows) {
     const def = getTypeProperty(ndb, row.property_id);
     // Skip orphaned values whose definition was deleted — should not happen
     // (the FK cascades), but stay defensive.
     if (!def) continue;
-    const value = readValue(row, def.value_type);
+    prepared.push({ row, def, value: readValue(row, def.value_type, isMultipleRef(def)) });
+  }
+  // Titles of every id stored inside multiple-ref arrays (single refs come
+  // from the LEFT JOIN above): one batched lookup.
+  const arrayIds = new Set<string>();
+  for (const { def, value } of prepared) {
+    if (def.value_type === 'thought_ref' && Array.isArray(value)) {
+      for (const id of value) arrayIds.add(id);
+    }
+  }
+  const titlesById = new Map<string, string>();
+  if (arrayIds.size > 0) {
+    const ids = [...arrayIds];
+    const titleRows = ndb
+      .prepare(`SELECT id, title FROM thoughts WHERE id IN (${ids.map(() => '?').join(',')})`)
+      .all(...ids) as Array<{ id: string; title: string }>;
+    for (const t of titleRows) titlesById.set(t.id, t.title);
+  }
+  const out: ResolvedPropertyValue[] = [];
+  for (const { row, def, value } of prepared) {
+    let resolved: ResolvedPropertyValue['value'] = value;
+    if (def.value_type === 'thought_ref') {
+      if (Array.isArray(value)) {
+        resolved = value.map((id) => ({ id, title: titlesById.get(id) ?? null }));
+      } else if (typeof value === 'string') {
+        resolved = { id: value, title: row.ref_title };
+      }
+    }
     out.push({
       id: row.id,
       owner_type: ownerType,
       owner_id: ownerId,
       property_id: row.property_id,
-      value:
-        def.value_type === 'thought_ref' && typeof value === 'string'
-          ? { id: value, title: row.ref_title }
-          : value,
+      value: resolved,
       updated_at: row.updated_at,
     });
   }
@@ -719,6 +803,10 @@ export function getPropertyValuesResolved(
  * whose property values reference `thoughtId`, grouped by property. Only
  * values on thoughts are searched (`owner_type = 'thought'`). Groups are
  * ordered by property name, items by the owner's normalized title.
+ *
+ * Multiple `thought_ref` values are stored as a JSON array of ids
+ * (02-data-model.md §3.5), so the match is `= ?` for single ids plus a LIKE
+ * on the quoted `%"id"%` fragment for ids inside arrays.
  */
 export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsage {
   const rows = ndb
@@ -731,10 +819,11 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
        FROM property_values pv
        JOIN type_properties tp ON tp.id = pv.property_id
        JOIN thoughts t ON t.id = pv.owner_id
-       WHERE pv.owner_type = 'thought' AND pv.value_thought_ref = ?
+       WHERE pv.owner_type = 'thought'
+         AND (pv.value_thought_ref = ? OR pv.value_thought_ref LIKE ? ESCAPE '\\')
        ORDER BY tp.key COLLATE NOCASE, t.title_norm COLLATE NOCASE`,
     )
-    .all(thoughtId) as Array<{
+    .all(thoughtId, refLikePattern(thoughtId)) as Array<{
     property_id: string;
     property_key: string;
     id: string;
@@ -775,6 +864,12 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
  * from `value_type` (never user input), which is what makes it safe to splice
  * into the upsert statement. For `thought_ref`, when the definition's config
  * names an `allowed_type_id`, the referenced thought must be of that type.
+ *
+ * Multiple `thought_ref` (`config.multiple = true`, 02-data-model.md §3.4):
+ * the value may be an array of thought ids — every id is validated exactly
+ * like a single one, duplicates collapse, an empty array clears the value
+ * (same as `null`). A single id is still accepted and stored as a one-element
+ * array. Definitions without the flag reject arrays outright.
  *
  * @returns the column name and the raw SQL value (or `null` to clear).
  */
@@ -828,45 +923,83 @@ function validateAndCoerce(
       }
       return { column, raw: value ? 1 : 0 };
     case 'thought_ref': {
+      // Multiple form first: an array of ids, each validated like a single one.
+      if (Array.isArray(value)) {
+        if (!isMultipleRef(def)) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `property "${def.key}" does not allow multiple values`,
+            { key: def.key, expected: 'thought_ref', multiple: false },
+          );
+        }
+        const ids = [...new Set(value)];
+        if (ids.length === 0) {
+          // An empty selection clears the value (same as null).
+          return { column, raw: null };
+        }
+        if (ids.some((id) => typeof id !== 'string')) {
+          throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects thought ids`, {
+            key: def.key,
+            expected: 'thought_ref',
+          });
+        }
+        for (const id of ids) {
+          validateThoughtRefTarget(ndb, def, id);
+        }
+        return { column, raw: JSON.stringify(ids) };
+      }
       if (typeof value !== 'string') {
         throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects a thought id`, {
           key: def.key,
           expected: 'thought_ref',
         });
       }
-      const target = ndb.prepare('SELECT type_id FROM thoughts WHERE id = ?').get(value) as
-        { type_id: string | null } | undefined;
-      if (!target) {
-        throw new EtnError('VALIDATION_ERROR', `referenced thought ${value} does not exist`, {
-          key: def.key,
-          ref: value,
-        });
-      }
-      // Type filter: the list form supersedes the legacy single allowed_type_id.
-      // Only writes are checked — already stored values are never reprocessed
-      // when the filter changes (02-data-model.md §3.4). Since L21 the filter
-      // matches whole subtrees: a referenced thought passes when its type is
-      // a descendant of (or equal to) any allowed type (docs/08-ui-spec.md §8.1).
-      const allowedIds = expandTypeIdsToSubtree(
-        ndb,
-        'thought_types',
-        (
-          def.config?.allowed_type_ids ??
-          (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
-        ).filter((id) => id !== ''),
-      );
-      if (
-        allowedIds.length > 0 &&
-        (target.type_id === null || !allowedIds.includes(target.type_id))
-      ) {
-        throw new EtnError(
-          'VALIDATION_ERROR',
-          `thought ${value} is not of a required type`,
-          { key: def.key, ref: value, allowed_type_ids: allowedIds, actual_type_id: target.type_id },
-        );
-      }
-      return { column, raw: value };
+      validateThoughtRefTarget(ndb, def, value);
+      // On a multiple definition a single id is normalized to a one-element
+      // array, so the stored shape matches the definition.
+      return { column, raw: isMultipleRef(def) ? JSON.stringify([value]) : value };
     }
+  }
+}
+
+/**
+ * Validate one `thought_ref` id against the definition: the thought must
+ * exist, and when the config names allowed types the target's type must be
+ * among them (subtree-expanded, L21).
+ */
+function validateThoughtRefTarget(
+  ndb: NetworkDb,
+  def: PropertyDefinition,
+  id: string,
+): void {
+  const target = ndb.prepare('SELECT type_id FROM thoughts WHERE id = ?').get(id) as
+    { type_id: string | null } | undefined;
+  if (!target) {
+    throw new EtnError('VALIDATION_ERROR', `referenced thought ${id} does not exist`, {
+      key: def.key,
+      ref: id,
+    });
+  }
+  // Type filter: the list form supersedes the legacy single allowed_type_id.
+  // Only writes are checked — already stored values are never reprocessed
+  // when the filter changes (02-data-model.md §3.4). Since L21 the filter
+  // matches whole subtrees: a referenced thought passes when its type is
+  // a descendant of (or equal to) any allowed type (docs/08-ui-spec.md §8.1).
+  const allowedIds = expandTypeIdsToSubtree(
+    ndb,
+    'thought_types',
+    (
+      def.config?.allowed_type_ids ??
+      (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
+    ).filter((id) => id !== ''),
+  );
+  if (allowedIds.length > 0 && (target.type_id === null || !allowedIds.includes(target.type_id))) {
+    throw new EtnError('VALIDATION_ERROR', `thought ${id} is not of a required type`, {
+      key: def.key,
+      ref: id,
+      allowed_type_ids: allowedIds,
+      actual_type_id: target.type_id,
+    });
   }
 }
 
@@ -944,7 +1077,7 @@ export function setPropertyValue(
       owner_type: ownerType,
       owner_id: ownerId,
       property_id: def.id,
-      value: readValue(stored, def.value_type),
+      value: readValue(stored, def.value_type, isMultipleRef(def)),
       updated_at: stored.updated_at,
     };
   });
@@ -1036,10 +1169,13 @@ function keyOf(ndb: NetworkDb, propertyId: string): string {
  * warnings when it is not the absence marker (`null`). Empty strings are
  * treated as filled for `text`/`url`/`date` — they are legitimate values
  * (e.g. an empty note is still a note), and conflating them with "unset"
- * would surprise callers who set `""` deliberately.
+ * would surprise callers who set `""` deliberately. An empty `thought_ref`
+ * array, in contrast, is an empty selection (writes normalize it away, so
+ * this only guards hand-crafted rows) and counts as unset.
  */
 function hasValue(value: PropertyValueValue | undefined): boolean {
-  return value !== undefined && value !== null;
+  if (value === undefined || value === null) return false;
+  return !(Array.isArray(value) && value.length === 0);
 }
 
 /**

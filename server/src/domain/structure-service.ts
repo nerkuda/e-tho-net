@@ -500,6 +500,11 @@ function buildFilterQuerySql(
       );
     }
     const column = `pv.${VALUE_COLUMN[def.value_type]}`;
+    // thought_ref values may be stored as a JSON array of ids (config.multiple,
+    // 02-data-model.md §3.5): exact arms match single ids, LIKE arms match ids
+    // inside arrays. Quotes in the pattern make the id match exact.
+    const refLike = def.value_type === 'thought_ref';
+    const likePattern = (v: string): string => `%"${v.replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`;
     if (cond.op === 'in' || cond.op === 'not_in') {
       if (!Array.isArray(cond.value) || cond.value.length === 0) {
         throw new EtnError(
@@ -510,11 +515,16 @@ function buildFilterQuerySql(
         );
       }
       const values = cond.value.map((v) => sqlScalar(def, v, requestId));
+      const likeFrags = refLike ? values.map(() => `${column} LIKE ? ESCAPE '\\'`) : [];
       const listSql = `SELECT 1 FROM property_values pv
          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-           AND ${column} IN (${values.map(() => '?').join(',')})`;
+           AND (${column} IN (${values.map(() => '?').join(',')})${likeFrags.length > 0 ? ` OR ${likeFrags.join(' OR ')}` : ''})`;
       where.push(cond.op === 'in' ? `EXISTS (${listSql})` : `NOT EXISTS (${listSql})`);
-      params.push(cond.property_id, ...values);
+      params.push(
+        cond.property_id,
+        ...values,
+        ...(refLike ? values.map((v) => likePattern(String(v))) : []),
+      );
       continue;
     }
     if (cond.op === 'contains') {
@@ -529,12 +539,15 @@ function buildFilterQuerySql(
     }
     const value = sqlScalar(def, cond.value as StructurePropertyValue, requestId);
     const opSql = cond.op === 'eq' ? '=' : cond.op === 'gt' ? '>' : '<';
+    // thought_ref allows eq only (see OPS_BY_VALUE_TYPE) — the LIKE arm there
+    // covers multiple-ref arrays.
+    const eqLike = refLike && cond.op === 'eq' ? ` OR ${column} LIKE ? ESCAPE '\\'` : '';
     where.push(
       `EXISTS (SELECT 1 FROM property_values pv
          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-           AND ${column} ${opSql} ?)`,
+           AND (${column} ${opSql} ?${eqLike}))`,
     );
-    params.push(cond.property_id, value);
+    params.push(cond.property_id, value, ...(eqLike !== '' ? [likePattern(String(value))] : []));
   }
 
   if (req.link_type_ids !== undefined && req.link_type_ids.length > 0) {

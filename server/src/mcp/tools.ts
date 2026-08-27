@@ -1941,16 +1941,21 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
+  const PropertyValueSchema = z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.array(z.string().min(1)),
+    z.null(),
+  ]);
   const SetPropertySchema = z
     .object({
       network_id: NetworkId,
       owner_type: z.enum(PROPERTY_OWNER_TYPES),
       owner_id: z.string().min(1),
       key: z.string().min(1).optional(),
-      value: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
-      values: z
-        .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
-        .optional(),
+      value: PropertyValueSchema.optional(),
+      values: z.record(z.string(), PropertyValueSchema).optional(),
     })
     .refine(
       (v) => (v.key !== undefined && v.value !== undefined) !== (v.values !== undefined),
@@ -1962,7 +1967,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Установить свойство',
       description:
         'Set (or clear with `value: null`) a property value on a thought/link, addressed by key; ' +
-        "the value must match the property definition's value_type. Either provide one " +
+        "the value must match the property definition's value_type. A `thought_ref` property with " +
+        '`config.multiple = true` also accepts an array of thought ids (multiple values); an empty ' +
+        'array clears the value. Either provide one ' +
         '`key`+`value`, or a map `values: {key: value|null}` to write several properties in a ' +
         'single transaction (any invalid key rolls back the whole set). Single form returns ' +
         '{ id, version: 0 }; bulk form returns { values: {key: {id}}, version: 0 }.',
@@ -2070,7 +2077,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       thought: BundleThoughtSchema.optional(),
       on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
       comment: BundleCommentSchema.optional(),
-      properties: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+      properties: z.record(z.string(), PropertyValueSchema).optional(),
       links: z.array(BundleLinkSchema).optional(),
       attachments: z.array(BundleAttachmentSchema).optional(),
     })

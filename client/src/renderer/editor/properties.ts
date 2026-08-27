@@ -11,7 +11,9 @@
  *  - bool → checkbox;
  *  - thought_ref → editable field doubling as a live candidate search (plus
  *    the duplicate-search dialog picker); stores the referenced thought id,
- *    titles resolved via `thoughts.resolve`.
+ *    titles resolved via `thoughts.resolve`. With `config.multiple` the cell
+ *    becomes a chip list of the selected thoughts: clicking it (or «выбрать»)
+ *    opens the same search dialog in multi mode, each chip is removable.
  *
  * Values are written with `properties.set`, cleared with `properties.remove`;
  * realtime `property-value.*` events reload the table when the open entity is
@@ -29,7 +31,11 @@ import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { registerMainSection, type EditorContext } from './editor.js';
 import { wireThoughtRefSearch } from './thought-picker.js';
-import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
+import {
+  firstPickedThoughtId,
+  pickThoughtsDialog,
+  pickedThoughtIds,
+} from '../canvas/add-dialog.js';
 
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
@@ -123,7 +129,19 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         etn.types.listTypeProperties(networkId, 'thought_type', typedId),
         etn.properties.get(networkId, 'thought', thoughtId),
       ]);
-      const refIds = values.map((v) => v.value).filter((v): v is string => typeof v === 'string');
+      // Titles of every referenced thought — single ids and multiple-ref
+      // arrays alike (one resolve call, capped at 100 ids).
+      const refIds = [
+        ...new Set(
+          values.flatMap((v) =>
+            typeof v.value === 'string'
+              ? [v.value]
+              : Array.isArray(v.value)
+                ? v.value
+                : [],
+          ),
+        ),
+      ];
       if (refIds.length > 0) {
         const resolved = await etn.thoughts.resolve(networkId, refIds.slice(0, 100));
         for (const ref of resolved) refTitles.set(ref.id, ref.title);
@@ -287,12 +305,6 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         break;
       }
       case 'thought_ref': {
-        const input = el('input', 'text-input prop-editor');
-        input.type = 'text';
-        input.autocomplete = 'off';
-        const storedId = typeof stored === 'string' ? stored : null;
-        input.value = storedId !== null ? (refTitles.get(storedId) ?? storedId) : '';
-        input.placeholder = 'введите название для поиска…';
         // Type filter from the definition config (list form supersedes the
         // legacy single id); an input aid — stored values are untouched.
         // L21: the filter expands to whole subtrees — a parent type matches
@@ -306,6 +318,35 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
               : [])
           ).filter((id) => id !== ''),
         );
+        // Multiple form (02-data-model.md §3.4): a chip list of the selected
+        // thoughts; the dialog picker runs in multi mode (prefilled), each
+        // chip is removable (08-ui-spec.md §6.3.1).
+        if (definition.config?.multiple === true) {
+          const storedIds = Array.isArray(stored)
+            ? stored
+            : typeof stored === 'string'
+              ? [stored]
+              : [];
+          cell.append(
+            buildMultiThoughtRefEditor({
+              networkId,
+              filterIds,
+              titles: refTitles,
+              ids: storedIds,
+              save: async (ids) => {
+                const ok = await save(ids.length > 0 ? ids : null);
+                if (ok) void reload();
+              },
+            }),
+          );
+          break;
+        }
+        const input = el('input', 'text-input prop-editor');
+        input.type = 'text';
+        input.autocomplete = 'off';
+        const storedId = typeof stored === 'string' ? stored : null;
+        input.value = storedId !== null ? (refTitles.get(storedId) ?? storedId) : '';
+        input.placeholder = 'введите название для поиска…';
         // The field doubles as a live search: typing lists candidates (with
         // the type filter applied); only a picked candidate writes the value.
         // The modal picker stays as an alternative way to choose.
@@ -385,6 +426,108 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
 
 /** Test seam for unit tests. */
 export const propertiesInternals = { buildPropertiesBody };
+
+// ---------------------------------------------------------------------------
+// Multiple thought_ref picker (08-ui-spec.md §6.3.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds the multi-value `thought_ref` editor (definitions with
+ * `config.multiple`): a chip field listing the selected thoughts (the same
+ * chip styling as the structures filter panel) plus a «выбрать» button.
+ * Clicking either opens the universal thought picker in **multi mode**
+ * (prefilled with the current ids, honouring the definition's type filter);
+ * applying writes the full replacement list through `save`. Every chip has a
+ * «×» removing that single value; removing the last one clears the property.
+ *
+ * Missing chip titles are resolved in the background via `thoughts.resolve`
+ * into the shared `titles` cache, then the chips re-render.
+ *
+ * Also reused by the selection panel's property-values dialog: there `save`
+ * writes the list into the dialog state instead of saving it immediately.
+ */
+export function buildMultiThoughtRefEditor(opts: {
+  networkId: string;
+  /** Thought-type filter of the definition config (input aid). */
+  filterIds: string[];
+  /** Shared id → title cache used for chip labels. */
+  titles: Map<string, string>;
+  /** Currently selected thought ids. */
+  ids: string[];
+  /** Writes the full replacement list; an empty list clears the value. */
+  save: (ids: string[]) => Promise<unknown> | unknown;
+}): HTMLElement {
+  const field = div('st-f-chipfield');
+  field.tabIndex = 0;
+  field.title = 'Выбрать мысли (несколько)';
+
+  const renderChips = (): void => {
+    field.replaceChildren();
+    if (opts.ids.length === 0) {
+      field.append(span('— не задано —', 'st-f-chip-empty'));
+      return;
+    }
+    opts.ids.forEach((id, index) => {
+      const chip = div('st-f-chip');
+      const label = span(opts.titles.get(id) ?? id, 'st-f-chip-label');
+      label.title = opts.titles.get(id) ?? id;
+      chip.append(label);
+      const removeBtn = el('button', 'st-f-clear-inline', '×');
+      removeBtn.type = 'button';
+      removeBtn.title = 'Убрать значение';
+      removeBtn.addEventListener('click', (event) => {
+        // The field's own click opens the picker — stop it here.
+        event.stopPropagation();
+        void opts.save(opts.ids.filter((_, i) => i !== index));
+      });
+      chip.append(removeBtn);
+      field.append(chip);
+    });
+  };
+
+  const openPicker = (): void => {
+    void pickThoughtsDialog({
+      networkId: opts.networkId,
+      allowCreate: false,
+      allowLinkType: false,
+      searchTypeIds: opts.filterIds,
+      // Prefill switches the dialog into multi mode automatically.
+      selectedIds: opts.ids,
+      title: 'Выбрать мысли',
+      applyLabel: 'Выбрать',
+    }).then((result) => {
+      if (result === null) return;
+      void opts.save(pickedThoughtIds(result));
+    });
+  };
+
+  field.addEventListener('click', openPicker);
+  field.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') openPicker();
+  });
+
+  // Resolve chip titles that are not in the cache yet (fresh picks), then
+  // re-render; the raw id stays visible when resolve fails.
+  const missing = opts.ids.filter((id) => !opts.titles.has(id));
+  if (missing.length > 0) {
+    void etn.thoughts
+      .resolve(opts.networkId, missing)
+      .then((refs) => {
+        for (const ref of refs) opts.titles.set(ref.id, ref.title);
+        renderChips();
+      })
+      .catch(() => undefined);
+  }
+
+  renderChips();
+  const row = div('form-row');
+  row.style.marginBottom = '0';
+  row.append(
+    field,
+    button('выбрать', openPicker, 'btn small', 'Выбрать мысли (несколько)'),
+  );
+  return row;
+}
 
 // ---------------------------------------------------------------------------
 // Predefined text options picker (08-ui-spec.md §6.3)

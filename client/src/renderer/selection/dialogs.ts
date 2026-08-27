@@ -15,7 +15,7 @@ import type { PropertyDefinition, PropertyValueType, ThoughtRef } from '@etn/sha
 
 import { requireNetworkId } from '../app.js';
 import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
-import { buildValueOptionsCaret } from '../editor/properties.js';
+import { buildMultiThoughtRefEditor, buildValueOptionsCaret } from '../editor/properties.js';
 import { wireThoughtRefSearch } from '../editor/thought-picker.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
@@ -318,19 +318,40 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     }
     // thought_ref: the field doubles as a live candidate search (with the
     // definition's type filter), exactly like the editor's properties table;
-    // only a picked candidate becomes the value.
+    // only a picked candidate becomes the value. Multiple definitions
+    // (config.multiple) get the chip-list editor with the multi-mode dialog.
     const rebuild = (): void => {
       cell.replaceChildren();
+      const filterIds = (
+        def.config?.allowed_type_ids ??
+        (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
+      ).filter((id) => id !== '');
+      if (def.config?.multiple === true) {
+        const ids = Array.isArray(state.value)
+          ? state.value
+          : typeof state.value === 'string'
+            ? [state.value]
+            : [];
+        cell.append(
+          buildMultiThoughtRefEditor({
+            networkId,
+            filterIds,
+            titles: refTitles,
+            ids,
+            save: (next) => {
+              state.value = next.length > 0 ? next : null;
+              rebuild();
+            },
+          }),
+        );
+        return;
+      }
       const input = el('input', 'text-input prop-editor');
       input.type = 'text';
       input.autocomplete = 'off';
       const storedId = typeof state.value === 'string' ? state.value : null;
       input.value = storedId !== null ? (refTitles.get(storedId) ?? storedId) : '';
       input.placeholder = 'введите название для поиска…';
-      const filterIds = (
-        def.config?.allowed_type_ids ??
-        (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
-      ).filter((id) => id !== '');
       wireThoughtRefSearch(input, {
         networkId,
         typeIds: filterIds,

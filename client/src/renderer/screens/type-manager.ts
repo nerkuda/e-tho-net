@@ -1086,7 +1086,9 @@ function openPropertyDialog(opts: {
   // Text options («выбирать из списка» + «несколько значений», 08-ui-spec.md
   // §8.1): an input aid for filling values, never a restriction — arbitrary
   // typed values stay allowed, and trimming the list never touches stored
-  // values (02-data-model.md §3.4).
+  // values (02-data-model.md §3.4). The same `multiple` flag also drives the
+  // thought_ref variant (an array of referenced thoughts) rendered inside
+  // renderRefFilter.
   let choiceOn = def?.value_type === 'text' && (def.config?.options?.length ?? 0) > 0;
   let multipleOn = def?.config?.multiple === true;
   let optionsText = choiceOn ? (def?.config?.options ?? []).join('\n') : '';
@@ -1138,7 +1140,23 @@ function openPropertyDialog(opts: {
   const renderRefFilter = (): void => {
     refFilterHost.replaceChildren();
     if (typeSelect.value !== 'thought_ref') return;
-    const label = el('p', 'muted', 'Отбор по типам (вместе с подчинёнными) — поиск идёт только по ним:');
+    // «несколько значений» (02-data-model.md §3.4): the property holds an
+    // array of referenced thoughts. Independent of the text variant — no
+    // predefined list involved, values are picked via the thought search.
+    const multiRow = el('label', 'checkbox-row');
+    const multiCheck = el('input');
+    multiCheck.type = 'checkbox';
+    multiCheck.checked = multipleOn;
+    multiCheck.addEventListener('change', () => {
+      multipleOn = multiCheck.checked;
+    });
+    multiRow.append(multiCheck, span('несколько значений'));
+    refFilterHost.append(multiRow);
+    const label = el(
+      'p',
+      'muted',
+      'Отбор по типам (вместе с подчинёнными) — поиск идёт только по ним:',
+    );
     label.style.margin = '0';
     refFilterHost.append(label);
     const boxEl = div('type-filter-box');
@@ -1213,16 +1231,19 @@ function openPropertyDialog(opts: {
       }
     } else {
       delete config['options'];
-      delete config['multiple'];
     }
     if (typeSelect.value === 'thought_ref') {
       // The list form supersedes the legacy single `allowed_type_id`.
       delete config['allowed_type_id'];
+      if (multipleOn) config['multiple'] = true;
+      else delete config['multiple'];
       if (typeFilter.size > 0) config['allowed_type_ids'] = [...typeFilter];
       else delete config['allowed_type_ids'];
     } else {
       delete config['allowed_type_id'];
       delete config['allowed_type_ids'];
+      // `multiple` survives only on text (with options) and thought_ref.
+      if (typeSelect.value !== 'text') delete config['multiple'];
     }
     return { config: (Object.keys(config).length === 0 ? null : config) as PropertyDefinition['config'] | null };
   };

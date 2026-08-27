@@ -116,7 +116,9 @@ export interface PropertyConfig {
    *  not a restriction: arbitrary typed values stay allowed. */
   options?: string[];
   /** For `value_type = 'text'` with `options`: allow several comma-separated
-   *  values to be picked. */
+   *  values to be picked. For `value_type = 'thought_ref'`: allow several
+   *  referenced thoughts — the value is an array of ids (stored as a JSON
+   *  array in `value_thought_ref`, 02-data-model.md §3.4–3.5). */
   multiple?: boolean;
   /** Arbitrary extra configuration keys. */
   [key: string]: unknown;
@@ -171,8 +173,12 @@ export interface PropertyDefaultOverrideInput {
  * one of the storage columns (`value_text`/`value_date`/`value_number`/
  * `value_bool`/`value_thought_ref`) is populated; the API exposes a single
  * `value` field whose runtime type matches {@link PropertyValueType}.
+ *
+ * `string[]` is the multiple form of a `thought_ref` property (definitions
+ * with `config.multiple = true`): an array of thought ids, stored as a JSON
+ * array inside `value_thought_ref` (02-data-model.md §3.5).
  */
-export type PropertyValueValue = string | number | boolean | null;
+export type PropertyValueValue = string | number | boolean | string[] | null;
 
 /** A stored property value — polymorphic EAV (02-data-model.md §3.5). */
 export interface PropertyValue {
@@ -194,9 +200,11 @@ export interface ResolvedThoughtRefValue {
 }
 
 /** PropertyValue MCP-чтения (task N4): `thought_ref`-значения резолвнуты
- * в {@link ResolvedThoughtRefValue}; REST-контракт не меняется. */
+ * в {@link ResolvedThoughtRefValue} (одиночные) либо в массив
+ * {@link ResolvedThoughtRefValue} (множественные, `config.multiple`);
+ * REST-контракт не меняется. */
 export interface ResolvedPropertyValue extends Omit<PropertyValue, 'value'> {
-  value: PropertyValueValue | ResolvedThoughtRefValue;
+  value: PropertyValueValue | ResolvedThoughtRefValue | ResolvedThoughtRefValue[];
 }
 
 /** Body of `PUT …/{id}/properties/{key}` (03-server-api.md §9). */

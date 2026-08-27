@@ -2317,6 +2317,96 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.properties.set writes and resolves multiple thought_ref values', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Seed a multiple thought_ref property (direct inserts).
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const bookType = createThoughtType(ndb, { name: 'BookMR' }, ctx.adminId);
+      const def = createTypeProperty(ndb, 'thought_type', bookType.id, {
+        key: 'authors',
+        value_type: 'thought_ref',
+        config: { multiple: true },
+      });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const author1 = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Автор 1' },
+        });
+        const author2 = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Автор 2' },
+        });
+        const a1 = toolJson<{ id: string }>(author1).id;
+        const a2 = toolJson<{ id: string }>(author2).id;
+        const book = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Книга', type_id: bookType.id },
+        });
+        const bookId = toolJson<{ id: string }>(book).id;
+
+        // Array form — accepted for config.multiple thought_ref properties.
+        const res = await handle.client.callTool({
+          name: 'etn.properties.set',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: bookId,
+            key: 'authors',
+            value: [a1, a2],
+          },
+        });
+        assert.equal(res.isError, undefined, res.isError === true ? toolText(res) : undefined);
+        const stored = ndb
+          .prepare('SELECT value_thought_ref FROM property_values WHERE owner_id = ? AND property_id = ?')
+          .get(bookId, def.id) as { value_thought_ref: string };
+        assert.deepEqual(JSON.parse(stored.value_thought_ref), [a1, a2]);
+
+        // etn.thoughts.get resolves the array into [{id, title}] (N4).
+        const got = await handle.client.callTool({
+          name: 'etn.thoughts.get',
+          arguments: { network_id: ctx.networkId, thought_id: bookId },
+        });
+        assert.equal(got.isError, undefined);
+        const card = toolJson<{ properties: Array<{ property_id: string; value: unknown }> }>(got);
+        const prop = card.properties.find((p) => p.property_id === def.id);
+        assert.deepEqual(prop?.value, [
+          { id: a1, title: 'Автор 1' },
+          { id: a2, title: 'Автор 2' },
+        ]);
+
+        // An array on a single-valued property is rejected.
+        const personType = createThoughtType(ndb, { name: 'PersonMR' }, ctx.adminId);
+        createTypeProperty(ndb, 'thought_type', personType.id, {
+          key: 'ref',
+          value_type: 'thought_ref',
+        });
+        const owner = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Владелец', type_id: personType.id },
+        });
+        const ownerId = toolJson<{ id: string }>(owner).id;
+        const rejected = await handle.client.callTool({
+          name: 'etn.properties.set',
+          arguments: {
+            network_id: ctx.networkId,
+            owner_type: 'thought',
+            owner_id: ownerId,
+            key: 'ref',
+            value: [a1],
+          },
+        });
+        assert.equal(rejected.isError, true);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('etn.thoughts.create surfaces warnings when the assigned type has ' +
     'unfilled required properties (O6)', async () => {
     const ctx = await buildMcpContext();

@@ -113,6 +113,16 @@ async function buildWithFixtures(): Promise<ShimElement> {
             required: false,
             position: 2,
           },
+          {
+            id: 'p4',
+            owner_type: 'thought_type',
+            owner_id: 'ty1',
+            key: 'Соавторы',
+            value_type: 'thought_ref',
+            config: { multiple: true },
+            required: false,
+            position: 3,
+          },
         ],
       },
       properties: {
@@ -125,9 +135,22 @@ async function buildWithFixtures(): Promise<ShimElement> {
             value: 'https://example.com',
             updated_at: '2026',
           },
+          {
+            id: 'v4',
+            owner_type: 'thought',
+            owner_id: 't1',
+            property_id: 'p4',
+            value: ['ta1', 'ta2'],
+            updated_at: '2026',
+          },
         ],
       },
-      thoughts: { resolve: async () => [] },
+      thoughts: {
+        resolve: async () => [
+          { id: 'ta1', title: 'Автор 1' },
+          { id: 'ta2', title: 'Автор 2' },
+        ],
+      },
     },
   };
 
@@ -177,7 +200,7 @@ describe('editor properties group body (DOM-shimmed)', () => {
     // Headerless table (L7, 08-ui-spec.md §6.3.1): the tbody is the first child.
     const tbody = table.children[0];
     assert.ok(tbody !== undefined, 'tbody present');
-    assert.equal(tbody.children.length, 3, 'one row per property definition');
+    assert.equal(tbody.children.length, 4, 'one row per property definition');
     // The text property with options carries the picker caret button.
     const textCell = tbody.children[0]?.children[1];
     const buttons = textCell?.children[0]?.children.filter((c) => c.tagName === 'button') ?? [];
@@ -202,6 +225,24 @@ describe('editor properties group body (DOM-shimmed)', () => {
     assert.ok(urlInput !== undefined, 'url input rendered');
     assert.ok(openBtn !== undefined, 'url «Открыть» button rendered');
     assert.notEqual((openBtn as ShimElement & { disabled?: boolean }).disabled, true);
+    // A multiple thought_ref property (config.multiple) renders the chip field
+    // with one removable chip per stored id plus the «выбрать» button that
+    // opens the search dialog in multi mode (08-ui-spec.md §6.3.1).
+    const multiCell = tbody.children[3]?.children[1];
+    const multiRow = multiCell?.children[0];
+    assert.ok(multiRow !== undefined, 'multi thought_ref editor rendered');
+    const chipField = multiRow?.children.find((c) => c.className === 'st-f-chipfield');
+    assert.ok(chipField !== undefined, 'chip field rendered');
+    // Let the background title resolve settle, then check the chips.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const chips = chipField?.children.filter((c) => c.className === 'st-f-chip') ?? [];
+    assert.equal(chips.length, 2, 'one chip per stored id');
+    const chipRemove = chips[0]?.children.find((c) => c.tagName === 'button');
+    assert.ok(chipRemove !== undefined, 'each chip carries a remove button');
+    const pickBtn = multiRow?.children.find(
+      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    );
+    assert.ok(pickBtn !== undefined, 'multi picker button rendered');
   });
 });
 

@@ -484,6 +484,52 @@ describe(
         }
       });
 
+      it('thought_ref eq/in/not_in also match ids inside multiple-ref arrays', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const type = seedThoughtType(ndb, 'Проект');
+          const team = seedProperty(ndb, type, 'команда', 'thought_ref');
+
+          const dev1 = seedThought(ndb, { title: 'Разработчик 1' });
+          const dev2 = seedThought(ndb, { title: 'Разработчик 2' });
+          // A multiple thought_ref value — a JSON array of ids
+          // (02-data-model.md §3.5); a single bare id for the other owner.
+          const multi = seedThought(ndb, { title: 'Проект А', type_id: type });
+          const single = seedThought(ndb, { title: 'Проект Б', type_id: type });
+          seedPropertyValue(ndb, multi, team, 'value_thought_ref', JSON.stringify([dev1, dev2]));
+          seedPropertyValue(ndb, single, team, 'value_thought_ref', dev2);
+
+          const eq = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: team, op: 'eq', value: dev1 }],
+          }));
+          assert.deepEqual(eq.items.map((t) => t.id), [multi]);
+
+          const inList = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: team, op: 'in', value: [dev1, dev2] }],
+          }));
+          assert.deepEqual(
+            inList.items.map((t) => t.id).sort(),
+            [multi, single].sort(),
+          );
+
+          // not_in excludes a thought only when NONE of its ids is listed;
+          // thoughts without the property value (Home, dev1, dev2) pass.
+          const notIn = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: team, op: 'not_in', value: [dev1] }],
+          }));
+          const home = (
+            ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1').get() as { id: string }
+          ).id;
+          assert.deepEqual(
+            notIn.items.map((t) => t.id).sort(),
+            [home, dev1, dev2, single].sort(),
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
       it('rejects an operator incompatible with the value type and ignores deleted properties', () => {
         const ndb = createInMemoryNetworkDb();
         try {

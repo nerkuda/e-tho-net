@@ -20,7 +20,8 @@
  *   * `boolean` → `value_bool` (eq/ne);
  *   * `string`  → `contains` on `value_text`; `gt/gte/lt/lte` on
  *     `value_date` (ISO-8601 lexicographic); `eq/ne` on any of
- *     `value_text`/`value_date`/`value_thought_ref`.
+ *     `value_text`/`value_date`/`value_thought_ref` (`eq` also matches ids
+ *     inside the JSON arrays of multiple `thought_ref` values).
  * An unknown property key simply matches nothing for that condition.
  */
 
@@ -225,15 +226,24 @@ function propertyClause(cond: PropertyQueryCondition): Clause {
     column = 'value_text';
     compare = 'LIKE';
   } else if (op === 'eq' || op === 'ne') {
-    // String equality: any textual column (text / date / thought ref).
+    // String equality: any textual column (text / date / thought ref). The
+    // extra LIKE arm on value_thought_ref also matches ids stored inside the
+    // JSON arrays of multiple thought_ref values (02-data-model.md §3.5);
+    // single ids keep matching through the `=` arms.
     const cmp = SQL_OPS[op];
+    const params: unknown[] = [cond.key, value, value, value];
+    const refLike =
+      op === 'eq' ? ` OR pv.value_thought_ref LIKE ? ESCAPE '\\'` : '';
+    if (refLike !== '') {
+      params.push(`%"${escapeLike(String(value))}"%`);
+    }
     return {
       sql: `EXISTS (
         SELECT 1 FROM property_values pv
         JOIN type_properties tp ON tp.id = pv.property_id
         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND tp.key = ?
-          AND (pv.value_text ${cmp} ? OR pv.value_date ${cmp} ? OR pv.value_thought_ref ${cmp} ?))`,
-      params: [cond.key, value, value, value],
+          AND (pv.value_text ${cmp} ? OR pv.value_date ${cmp} ? OR pv.value_thought_ref ${cmp} ?${refLike}))`,
+      params,
     };
   } else {
     // gt/gte/lt/lte over ISO-8601 date strings (lexicographic order).
