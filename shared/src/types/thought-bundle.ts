@@ -31,7 +31,10 @@ export interface ThoughtBundleThoughtInput {
 /** A link attached to the bundle's thought, direction relative to it. */
 export interface ThoughtBundleLinkInput {
   /** `parent` — the bundle thought sources a link to `target_thought_id`;
-   *  `child` — `target_thought_id` sources a link to the bundle thought. */
+   *  `child` — `target_thought_id` sources a link to the bundle thought.
+   *  NOTE: the MCP tool `etn.thoughts.upsert_bundle` uses the opposite,
+   *  agent-facing semantics (bug fix 045) and inverts the value at its
+   *  boundary before calling the domain service. */
   direction: 'parent' | 'child';
   target_thought_id: string;
   type_id?: string | null;

@@ -50,14 +50,14 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           assert.equal(dups.isError, undefined);
           assert.deepEqual(toolJson(dups), []);
 
-          // Create with a child link to HOME.
+          // Create with a parent link to HOME (new thought hangs UNDER HOME).
           const created = await handle.client.callTool({
             name: 'etn.thoughts.create',
             arguments: {
               network_id: ctx.networkId,
               title: 'Конкуренты 1С',
               synonyms: ['конкуренты', 'ERP-альтернативы'],
-              link: { direction: 'child', target_thought_id: ctx.homeId },
+              link: { direction: 'parent', target_thought_id: ctx.homeId },
             },
           });
           assert.equal(created.isError, undefined);
@@ -102,6 +102,123 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       assert.equal(audit[0]?.actor_user_id, ctx.adminId);
       assert.equal(audit[0]?.network_id, ctx.networkId);
       assert.equal((audit[0]?.details as { title?: string }).title, 'Конкуренты 1С');
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('thoughts.create link.direction: "parent" — new thought UNDER target, "child" — new thought ABOVE target (045)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // An anchor thought with no links.
+        const anchorRes = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Раздел' },
+        });
+        assert.equal(anchorRes.isError, undefined, toolText(anchorRes));
+        const anchorId = toolJson<{ id: string }>(anchorRes).id;
+
+        // direction: "parent" — the new thought must hang UNDER the target:
+        // target_thought_id becomes its parent (link source).
+        const underRes = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: {
+            network_id: ctx.networkId,
+            title: 'Подумка под разделом',
+            link: { direction: 'parent', target_thought_id: anchorId },
+          },
+        });
+        assert.equal(underRes.isError, undefined, toolText(underRes));
+        const underId = toolJson<{ id: string }>(underRes).id;
+
+        // direction: "child" — the new thought becomes the parent of the
+        // target: the new thought is the link source.
+        const aboveRes = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: {
+            network_id: ctx.networkId,
+            title: 'Родитель раздела',
+            link: { direction: 'child', target_thought_id: anchorId },
+          },
+        });
+        assert.equal(aboveRes.isError, undefined, toolText(aboveRes));
+        const aboveId = toolJson<{ id: string }>(aboveRes).id;
+
+        // The links table holds the exact source→target pairs.
+        const links = openNetworkDb(ctx.dataDir, ctx.networkId)
+          .prepare('SELECT source_id, target_id FROM links ORDER BY created_at')
+          .all() as Array<{ source_id: string; target_id: string }>;
+        assert.deepEqual(links, [
+          { source_id: anchorId, target_id: underId },
+          { source_id: aboveId, target_id: anchorId },
+        ]);
+
+        // The same picture through the read API: anchor sees both thoughts.
+        const neigh = await handle.client.callTool({
+          name: 'etn.thoughts.neighbors',
+          arguments: { network_id: ctx.networkId, thought_id: anchorId, dir: 'parents' },
+        });
+        const parents = toolJson<{ neighbors: Array<{ id: string }> }>(neigh).neighbors;
+        assert.deepEqual(
+          parents.map((n) => n.id),
+          [aboveId],
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('upsert_bundle links[].direction: "parent" — bundle thought UNDER target, "child" — bundle thought ABOVE target (045)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const anchorRes = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Опорная' },
+        });
+        assert.equal(anchorRes.isError, undefined, toolText(anchorRes));
+        const anchorId = toolJson<{ id: string }>(anchorRes).id;
+
+        // "parent" — the bundle thought hangs UNDER the target.
+        const under = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: {
+            network_id: ctx.networkId,
+            thought: { title: 'Бандл под опорной' },
+            links: [{ direction: 'parent', target_thought_id: anchorId }],
+          },
+        });
+        assert.equal(under.isError, undefined, toolText(under));
+        const underId = toolJson<{ id: string }>(under).id;
+
+        // "child" — the bundle thought becomes the parent of the target.
+        const above = await handle.client.callTool({
+          name: 'etn.thoughts.upsert_bundle',
+          arguments: {
+            network_id: ctx.networkId,
+            thought: { title: 'Бандл над опорной' },
+            links: [{ direction: 'child', target_thought_id: anchorId }],
+          },
+        });
+        assert.equal(above.isError, undefined, toolText(above));
+        const aboveId = toolJson<{ id: string }>(above).id;
+
+        const links = openNetworkDb(ctx.dataDir, ctx.networkId)
+          .prepare('SELECT source_id, target_id FROM links ORDER BY created_at')
+          .all() as Array<{ source_id: string; target_id: string }>;
+        assert.deepEqual(links, [
+          { source_id: anchorId, target_id: underId },
+          { source_id: aboveId, target_id: anchorId },
+        ]);
+      } finally {
+        await handle.close();
+      }
     } finally {
       await closeMcpContext(ctx);
     }
@@ -295,7 +412,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           arguments: {
             network_id: ctx.networkId,
             title: 'Вторая мысль',
-            link: { direction: 'child', target_thought_id: ctx.homeId },
+            link: { direction: 'parent', target_thought_id: ctx.homeId },
           },
         });
         const { id: childId } = toolJson<{ id: string; version: number }>(created);
@@ -551,7 +668,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             arguments: {
               network_id: ctx.networkId,
               title: `Узел ${i}`,
-              link: { direction: 'child', target_thought_id: ctx.homeId },
+              link: { direction: 'parent', target_thought_id: ctx.homeId },
             },
           });
           ids.push(toolJson<{ id: string }>(created).id);
@@ -635,7 +752,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             arguments: {
               network_id: ctx.networkId,
               title: `Цепь ${i}`,
-              link: { direction: 'child', target_thought_id: lastId },
+              link: { direction: 'parent', target_thought_id: lastId },
             },
           });
           const id = toolJson<{ id: string }>(created).id;
@@ -765,7 +882,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             network_id: ctx.networkId,
             title: 'Баг: фокус',
             type_id: thoughtTypeId,
-            link: { direction: 'child', target_thought_id: ctx.homeId, type_id: linkTypeId },
+            link: { direction: 'parent', target_thought_id: ctx.homeId, type_id: linkTypeId },
           },
         });
         const { id } = toolJson<{ id: string }>(created);
@@ -1861,7 +1978,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           arguments: {
             network_id: ctx.networkId,
             thought: { title: 'Забыли про часовой пояс', type: 'грабли' },
-            links: [{ direction: 'child', target_thought_id: ctx.homeId, type: 'иллюстрирует' }],
+            links: [{ direction: 'parent', target_thought_id: ctx.homeId, type: 'иллюстрирует' }],
           },
         });
         assert.equal(bundled.isError, undefined, toolText(bundled));
@@ -1944,7 +2061,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
               network_id: ctx.networkId,
               thought: { title: 'Дюна' },
               comment: { body_md: 'Роман Фрэнка Герберта.' },
-              links: [{ direction: 'child', target_thought_id: ctx.homeId }],
+              links: [{ direction: 'parent', target_thought_id: ctx.homeId }],
               attachments: [{ kind: 'url', url: 'https://example.com/dune' }],
             },
           });
@@ -2044,7 +2161,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           network_id: ctx.networkId,
           thought: { title },
           comment: { body_md: 'x' },
-          links: [{ direction: 'child', target_thought_id: ctx.homeId }],
+          links: [{ direction: 'parent', target_thought_id: ctx.homeId }],
           attachments: [{ kind: 'url', url: 'https://example.com/x' }],
         });
 
@@ -2462,7 +2579,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           arguments: {
             network_id: ctx.networkId,
             title: 'Конкуренты 1С',
-            link: { direction: 'child', target_thought_id: ctx.homeId },
+            link: { direction: 'parent', target_thought_id: ctx.homeId },
           },
         });
         assert.equal(created.isError, undefined);
