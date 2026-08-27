@@ -711,10 +711,10 @@ Cookbook (`docs/mcp-clients.md` §8.2):
 
 | Tool | Аннотации | Описание | Параметры |
 |------|-----------|----------|-----------|
-| `etn.thoughts.create` | — | Создать мысль; тип — `type_id` или `type` (по имени, task O4, см. §5.1b). Если у типа непустой `comment_template_md` — мысль сразу получает постоянный комментарий с текстом шаблона (как в UI, см. 02-data-model.md §3.3) | `network_id`, `title`, `synonyms?`, `type_id?`\|`type?`, `active?`, `link?` `{direction, target_thought_id, type_id?\|type?}` |
+| `etn.thoughts.create` | — | Создать мысль; тип — `type_id` или `type` (по имени, task O4, см. §5.1b). Если у типа непустой `comment_template_md` — мысль сразу получает постоянный комментарий с текстом шаблона (как в UI, см. 02-data-model.md §3.3). Семантика `link.direction` — см. ниже | `network_id`, `title`, `synonyms?`, `type_id?`\|`type?`, `active?`, `link?` `{direction, target_thought_id, type_id?\|type?}` |
 | `etn.thoughts.update` | — | Изменить мысль | `network_id`, `thought_id`, `changes`, `expected_version?` |
 | `etn.thoughts.delete` | `destructive` | Удалить | `network_id`, `thought_id`, `expected_version?` |
-| `etn.links.create` | — | Создать связь; тип — `type_id` или `type` (по `name_forward`/`name_reverse`, task O4, см. §5.1b) | `network_id`, `source_id`, `target_id`, `type_id?`\|`type?` |
+| `etn.links.create` | — | Создать связь source → target; `source_id` — родитель, `target_id` — ребёнок; тип — `type_id` или `type` (по `name_forward`/`name_reverse`, task O4, см. §5.1b) | `network_id`, `source_id`, `target_id`, `type_id?`\|`type?` |
 | `etn.links.delete` | `destructive` | Удалить связь | `network_id`, `link_id` |
 | `etn.comments.upsert` | — | Создать/обновить комментарий; для `chronological` — ровно одно из `owner_type`+`owner_id` (одна привязка) или `targets[]` (несколько, 1..100, первый — первичный владелец; для `permanent` только одиночная форма) | `network_id`, `owner_type`+`owner_id` \| `targets[]` (`{owner_type, owner_id}`), `kind`, `title?`, `body_md`, `valid_from?`, `valid_to?` |
 | `etn.comments.update` | — | Изменить комментарий по `comment_id` (chronological или permanent; last-write-wins по полям, `valid_from`/`valid_to` применяются только к chronological) | `network_id`, `comment_id`, `changes` (`title?`, `body_md?`, `valid_from?`, `valid_to?`), `expected_version?` |
@@ -722,6 +722,21 @@ Cookbook (`docs/mcp-clients.md` §8.2):
 | `etn.attachments.add` | — | Добавить вложение | `network_id`, `owner_type`, `owner_id`, `kind`, `url?`/`file_path?`, `title?`, `description?` |
 | `etn.attachments.copy` | — | Скопировать вложение в одну или несколько мыслей (workplan L25) | `network_id`, `attachment_id`, `target_owner_type: "thought"`, `target_owner_ids[]` |
 | `etn.attachments.search` | `read-only` | Поиск вложений сети (workplan L25) | `network_id`, `q`, `exclude_owner_type?`, `exclude_owner_id?`, `kind?`, `limit?`, `offset?` |
+
+**Семантика `direction` у inline-связей (баг-фикс 045).** Поле `direction`
+инструментов `etn.thoughts.create` (`link`) и `etn.thoughts.upsert_bundle`
+(`links[]`) называет роль `target_thought_id` для НОВОЙ мысли:
+
+- `"parent"` — новая мысль подвешивается ПОД `target_thought_id` (target
+  становится её родителем); типичный кейс — «создать мысль в разделе X»;
+- `"child"` — новая мысль становится родителем `target_thought_id`
+  (target подвешивается под неё).
+
+Это противоположно REST-полю `create_link.direction` (03-server-api.md §6.3,
+где `"parent"` = новая мысль — источник связи): MCP-слой переводит значение
+на своей границе, REST-контракт не менялся. `etn.links.create` семантики
+`direction` не имеет вовсе — там связь задаётся явно `source_id` (родитель) →
+`target_id` (ребёнок).
 
 `etn.attachments.copy` возвращает массив `McpMutationResult` — по одному на
 каждую созданную строку; цели с уже имеющимся вложением того же kind и того же
@@ -816,7 +831,7 @@ version: 0, request_id }`. Набор стоит одной записи для 
 | `on_duplicate` | `fail`\|`reuse`\|`update` | политика при совпадении `thought.title`/`synonyms` с существующей мыслью (см. ниже); по умолчанию `fail`. Игнорируется, если задан `thought_id` |
 | `comment` | object | `{title?, body_md, valid_from?, valid_to?}` — постоянный комментарий владельца (create-or-update, как `etn.comments.upsert` с `kind: 'permanent'`). Когда не задан, а у типа мысли непустой `comment_template_md` — постоянный комментарий создаётся с текстом шаблона (как при `etn.thoughts.create`) |
 | `properties` | object | карта `{key: value}` — по одному вызову `properties.set` на ключ, в общей транзакции |
-| `links` | array | `[{direction, target_thought_id, type_id?\|type?}]` — связи мысли-владельца с другими мыслями (направление — как у `link` в `etn.thoughts.create`); `type` резолвит тип связи по имени (task O4), ровно одно из `type_id`/`type` на каждую связь |
+| `links` | array | `[{direction, target_thought_id, type_id?\|type?}]` — связи мысли-владельца с другими мыслями; `direction` называет роль `target_thought_id` для мысли-владельца: `"parent"` — владелец подвешивается ПОД target (target — его родитель), `"child"` — владелец становится родителем target (семантика баг-фикса 045, см. §5.2); `type` резолвит тип связи по имени (task O4), ровно одно из `type_id`/`type` на каждую связь |
 | `attachments` | array | `[{kind, url?/file_path?, title?, description?}]` |
 
 Если `thought_id` не задан, мысль ищется/создаётся так же, как в паре
