@@ -649,21 +649,24 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
-/** Ctrl+C: copy the thought under the dashed cursor frame on the canvas,
- *  or the current multi-selection if one is active. The cursor is updated
+/** Ctrl+C: copy the thought under the dashed cursor frame on the canvas, or —
+ *  when no cursor is active — the focused thought. The cursor is updated
  *  synchronously by the cloud click handler, while `store.state.focus.focused`
  *  is only refreshed when `setFocus` runs (single-click only sets
  *  `editorTarget`), so the cursor is the reliable "what the user actually
- *  clicked" signal. Always returns a visible notice — silent failures (no
- *  focus, no selection, fetch error) were reported as "Ctrl+C does nothing
- *  at all" and the user had no way to tell whether the handler even fired. */
+ *  clicked" signal.
+ *
+ *  The selection panel is NEVER a source for Ctrl+C (bug 627a0822: with a
+ *  non-empty panel the shortcut used to copy the whole panel instead of the
+ *  clicked thought, and a later Ctrl+V in a comment editor pasted references
+ *  to every panel thought). Copying the panel's thoughts is available only
+ *  through the «Скопировать мысли» command of the panel's «Действия» menu —
+ *  deliberately without a hotkey. Every thought copy also mirrors the copied
+ *  thoughts' wiki-links into the system clipboard (bug 290a50c0). Always
+ *  returns a visible notice — silent failures (no focus, fetch error) were
+ *  reported as "Ctrl+C does nothing at all" and the user had no way to tell
+ *  whether the handler even fired. */
 async function globalCopy(): Promise<void> {
-  const selection = store.state.selection;
-  if (selection.length > 0) {
-    const { copySelection } = await import('./selection/selection.js');
-    await copySelection();
-    return;
-  }
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const cursorId = getCanvasCursor();
@@ -740,3 +743,8 @@ async function globalPaste(): Promise<void> {
     );
   }
 }
+
+/** Test seam: the global Ctrl+C handler. Guards the regression of bug
+ *  627a0822 — Ctrl+C must copy the cursor/focus thought even while the
+ *  selection panel holds thoughts, never the panel's contents. */
+export const appInternals = { globalCopy };

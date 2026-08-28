@@ -375,8 +375,9 @@ async function addPickedThought(): Promise<void> {
  * property values and attachments, plus the inter-thought links that live
  * entirely inside the selection.
  *
- * Exported so the global Ctrl+C handler (`app.ts:globalCopy`) can call it
- * directly when the user presses the shortcut with a non-empty selection.
+ * Called only by the «Скопировать мысли» item of the panel's «Действия»
+ * menu — deliberately NOT wired to any hotkey (bug 627a0822): Ctrl+C always
+ * copies the clicked/focused thought, never the panel's contents.
  */
 export async function copySelection(): Promise<void> {
   const networkId = requireNetworkId();
