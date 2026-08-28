@@ -712,13 +712,20 @@ async function globalPaste(): Promise<void> {
   }
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const { pasteThoughtsTo, hasClipboard, pasteTextToCloud } = await import('./canvas/clipboard.js');
-  if (hasClipboard()) {
+  const { pasteThoughtsTo, hasClipboard, pasteTextToCloud, systemClipboardHasThoughts } =
+    await import('./canvas/clipboard.js');
+  // Bug 290a50c0: the internal snapshot is only valid while the system
+  // clipboard still holds the wiki-links our copy wrote there. When another
+  // program (or a native text copy) has overwritten the buffer since, the
+  // snapshot is stale — paste the system text by the §4.3.4 rules instead,
+  // exactly as when there is no snapshot at all.
+  if (hasClipboard() && (await systemClipboardHasThoughts())) {
     await pasteThoughtsTo(targetId);
     scheduleRefresh();
     return;
   }
-  // No internal clipboard — try the system clipboard text (paste into cloud).
+  // Snapshot absent or stale — the system clipboard text wins (paste into
+  // cloud by the §4.3.4 text rules).
   try {
     const text = await navigator.clipboard.readText();
     if (text.trim() === '') return;

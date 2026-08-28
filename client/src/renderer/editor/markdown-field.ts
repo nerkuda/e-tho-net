@@ -22,7 +22,11 @@ import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 import { resolveWikiLinksInDom } from './wiki-link-resolver.js';
-import { buildCommentPasteLinks, getClipboard } from '../canvas/clipboard.js';
+import {
+  buildCommentPasteLinks,
+  getClipboard,
+  systemClipboardMatchesText,
+} from '../canvas/clipboard.js';
 import { store } from '../state.js';
 import {
   applyMdZoom,
@@ -414,9 +418,15 @@ function sanitizeAlt(text: string): string {
 /**
  * Pasting an internal clipboard of thoughts into a comment inserts a
  * comma-separated list of wiki-link references (workplan L26, task
- * bb8277f6) — the same format the comment editor already accepts. When the
- * clipboard is empty we let the original paste flow run (which handles
- * files / text).
+ * bb8277f6) — the same format the comment editor already accepts.
+ *
+ * Bug 290a50c0 («Не работает вставка текста, скопированного из другой
+ * программы»): the internal snapshot is only valid while the SYSTEM
+ * clipboard still carries the wiki-links ETN wrote at copy time. The text
+ * of this very paste event is compared against that string — when it
+ * differs, the user copied something else later (typically in another
+ * program) and the event is left alone so the editor's native paste inserts
+ * that text. A file payload (screenshots) outranks the thought links.
  *
  * Returns `true` when the handler consumed the event so the caller can
  * skip the file-handling fallback.
@@ -429,9 +439,16 @@ function handleClipboardThoughtsPaste(event: ClipboardEvent, editor: MdEditor): 
   // path has higher priority (screenshots are usually intended as images).
   const files = event.clipboardData?.files;
   if (files !== undefined && files.length > 0) return false;
+  // The system clipboard must still hold what our last thought copy wrote;
+  // anything else means a later copy superseded the snapshot.
+  const systemText = event.clipboardData?.getData('text/plain') ?? '';
+  if (!systemClipboardMatchesText(systemText)) return false;
   const links = buildCommentPasteLinks(networkId);
   if (links === '') return false;
   event.preventDefault();
   editor.insertAtCaret(links);
   return true;
 }
+
+/** Test seam: the comment-paste decision of bug 290a50c0. */
+export const mdFieldInternals = { handleClipboardThoughtsPaste };

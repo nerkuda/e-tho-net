@@ -9,9 +9,13 @@
  * different network.
  *
  * Scope: the clipboard is **per-renderer-process** and is lost on reload.
- * It is **not** mirrored to the system clipboard — comments can carry private
- * text and we don't want to leak them outside ETN. A future L26+ task may
- * revisit this.
+ * Snapshot bodies are NOT mirrored to the system clipboard — comments can
+ * carry private text — but every thought copy DOES mirror the copied
+ * thoughts' **wiki-links** into the system clipboard (bug 290a50c0), so the
+ * OS buffer always carries meaningful content. The exact mirrored string is
+ * remembered ({@link systemClipboardMatchesText}) and the paste paths treat
+ * the internal snapshot as stale as soon as the system clipboard no longer
+ * holds it (another program copied something later).
  *
  * Subscribers (the context-menu, the selection panel, the canvas paste
  * handler) call {@link subscribe} to be notified when the snapshot changes.
@@ -36,11 +40,20 @@ export interface ThoughtClipboardSnapshot {
 
 /** Mutable singleton state. */
 let snapshot: ThoughtClipboardSnapshot | null = null;
+/**
+ * The wiki-link text the last thought copy wrote to the system clipboard
+ * (bug 290a50c0). The paste paths compare the live system-clipboard text
+ * against it to decide whether the internal snapshot is still fresh:
+ * anything else in the buffer means a later copy (usually in another
+ * program) has superseded the snapshot.
+ */
+let systemClipboardText: string | null = null;
 const listeners = new Set<() => void>();
 
 /** Replace the clipboard with a new snapshot; notifies subscribers. */
 export function setClipboard(next: ThoughtClipboardSnapshot | null): void {
   if (next === null) {
+    systemClipboardText = null;
     if (snapshot === null) return;
     snapshot = null;
     notify();
@@ -303,6 +316,119 @@ export function buildCommentPasteLinks(targetNetworkId: string): string {
     .join(', ');
 }
 
+// ---------------------------------------------------------------------------
+// System-clipboard mirroring and staleness tracking (bug 290a50c0)
+// ---------------------------------------------------------------------------
+
+/**
+ * Safe access to the system clipboard via `navigator.clipboard` — the only
+ * path the renderer already uses (context-menu «Копировать ID», the canvas
+ * text paste). Returns bound methods so they can be called standalone, and
+ * empty stubs in non-browser test environments (Node ships a `navigator`
+ * without `.clipboard`).
+ */
+function systemClipboardApi(): {
+  writeText?: (text: string) => Promise<void>;
+  readText?: () => Promise<string>;
+} {
+  const clip = (
+    globalThis as {
+      navigator?: {
+        clipboard?: {
+          writeText?: (text: string) => Promise<void>;
+          readText?: () => Promise<string>;
+        };
+      };
+    }
+  ).navigator?.clipboard;
+  if (clip === undefined) return {};
+  return {
+    ...(clip.writeText !== undefined ? { writeText: clip.writeText.bind(clip) } : {}),
+    ...(clip.readText !== undefined ? { readText: clip.readText.bind(clip) } : {}),
+  };
+}
+
+/**
+ * Mirror the freshly captured snapshot to the SYSTEM clipboard as
+ * wiki-links built for the source network (`[[#<id>]]`, comma-separated).
+ * The exact string is remembered in {@link systemClipboardText}; the paste
+ * paths compare the live buffer against it — anything else there means the
+ * snapshot is stale and the system text must win (bug 290a50c0: a Ctrl+V in
+ * a comment editor used to paste thought links copied long before, ignoring
+ * the text the user had just copied in another program).
+ *
+ * A failed write is not fatal: the token is still remembered, and since the
+ * buffer then does not hold it, paste paths correctly fall back to the
+ * buffer's actual content.
+ */
+async function syncSystemClipboard(): Promise<void> {
+  const snap = snapshot;
+  if (snap === null || snap.thoughts.length === 0) {
+    systemClipboardText = null;
+    return;
+  }
+  const links = buildCommentPasteLinks(snap.sourceNetworkId);
+  systemClipboardText = links === '' ? null : links;
+  if (systemClipboardText === null) return;
+  const { writeText } = systemClipboardApi();
+  if (writeText === undefined) return;
+  try {
+    await writeText(systemClipboardText);
+  } catch {
+    // Window out of focus / clipboard locked — the token stays; pastes will
+    // compare against whatever the buffer really holds.
+  }
+}
+
+/** One ETN id-based wiki-link: `[[#<uuid>]]` or `[[n:<net>#<uuid>]]`. */
+const ETN_WIKI_LINK_RE =
+  /^\[\[(?:n:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?#[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\]\]$/i;
+
+/**
+ * True when `text` looks like ETN wiki-links — a single `[[#<uuid>]]` /
+ * `[[n:<net>#<uuid>]]` or a comma-separated list of them (the exact shape
+ * {@link syncSystemClipboard} writes). Fallback heuristic used when the
+ * mirrored token was lost; the UUID shape makes false positives from
+ * ordinary copied text practically impossible.
+ */
+export function looksLikeEtnWikiLinks(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === '') return false;
+  return trimmed.split(',').every((part) => ETN_WIKI_LINK_RE.test(part.trim()));
+}
+
+/**
+ * Does `systemText` (the current content of the system clipboard) confirm
+ * that the internal snapshot is still the freshest copy? The snapshot must
+ * be non-empty and the text must either equal the string ETN mirrored at
+ * copy time or — when the token was never recorded — look like ETN
+ * wiki-links on its own.
+ */
+export function systemClipboardMatchesText(systemText: string): boolean {
+  if (snapshot === null || snapshot.thoughts.length === 0) return false;
+  if (systemClipboardText !== null) return systemText === systemClipboardText;
+  return looksLikeEtnWikiLinks(systemText);
+}
+
+/**
+ * Async flavour of {@link systemClipboardMatchesText} for the canvas paste
+ * path: reads the system clipboard and reports whether the internal
+ * snapshot may still be pasted as thoughts. When the buffer cannot be read
+ * there is no proof it was overwritten — don't block the paste.
+ */
+export async function systemClipboardHasThoughts(): Promise<boolean> {
+  if (snapshot === null || snapshot.thoughts.length === 0) return false;
+  const { readText } = systemClipboardApi();
+  if (readText === undefined) return true;
+  let text: string;
+  try {
+    text = await readText();
+  } catch {
+    return true;
+  }
+  return systemClipboardMatchesText(text);
+}
+
 function pluraliseRu(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
@@ -411,6 +537,9 @@ export async function buildSingleThoughtSnapshot(
     thoughts: [item],
     links: [],
   });
+  // Bug 290a50c0: mirror the copy to the system clipboard as wiki-links so
+  // later pastes can tell "still ours" from "overwritten elsewhere".
+  await syncSystemClipboard();
 }
 
 /**
@@ -445,6 +574,10 @@ export async function buildMultiThoughtSnapshot(
     thoughts: items,
     links,
   });
+  // Bug 290a50c0: same system-clipboard mirroring as the single copy — the
+  // selection-panel command's snapshot also stays valid only while the OS
+  // buffer still carries these wiki-links.
+  await syncSystemClipboard();
 }
 
 /** Internal: package one thought + its permanent comment + props + attachments. */
