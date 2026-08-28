@@ -294,12 +294,19 @@ export function queryThoughts(
   });
 
   const active: ThoughtQueryActive = request.active ?? 'true';
+  const trashed = request.trashed ?? 'false';
   const clauses: Array<Clause | null> = [
     // L21: a selected parent type matches its whole subtree (OR semantics).
     inListClause('t.type_id', expandTypeIdsToSubtree(ndb, 'thought_types', request.type_id ?? [])),
     active === 'true' ? { sql: 't.active = 1', params: [] }
       : active === 'false'
         ? { sql: 't.active = 0', params: [] }
+        : null,
+    // Пометка на удаление (S13, 05-mcp-server.md §5.1a): default `false` —
+    // only unmarked; `any` disables the filter entirely.
+    trashed === 'true' ? { sql: 't.marked_for_deletion = 1', params: [] }
+      : trashed === 'false'
+        ? { sql: 't.marked_for_deletion = 0', params: [] }
         : null,
     keywordsClause(request.keywords),
     dateRangeClause('created_at', request.created_after, request.created_before),

@@ -29,7 +29,7 @@ import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canv
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { buildValueOptionsCaret } from '../../editor/properties.js';
 import { wireThoughtRefSearch } from '../../editor/thought-picker.js';
-import { clear, div, el, setTooltip } from '../../lib/dom.js';
+import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
 import { confirmDialog, errorDialog, promptDialog, showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
@@ -65,6 +65,8 @@ export interface FilterState {
   hasChronology: TriState;
   /** «Актуальность»: true/false; null — «не важно» (§15.3 «Дополнительно»). */
   active: TriState;
+  /** S13: показывать помеченные на удаление (по умолчанию выключено). */
+  trashed: boolean;
   sort: StructureSort;
   order: SortOrder;
   savedFilterId: string | null;
@@ -130,6 +132,7 @@ function defaultState(): FilterState {
     hasAttachments: null,
     hasChronology: null,
     active: null,
+    trashed: false,
     sort: 'created',
     order: 'asc',
     savedFilterId: null,
@@ -188,6 +191,7 @@ export function setFilterState(next: FilterState): void {
     state.hasComment === null &&
     state.hasAttachments === null &&
     state.hasChronology === null &&
+    state.trashed === false &&
     state.active === null;
   renderPanel();
 }
@@ -238,7 +242,13 @@ export function buildConditions(): StructurePropertyCondition[] {
 /** The «Родительские мысли»/«Дополнительно» fields of the wire filter (§15.3). */
 export function buildExtraFilter(): Pick<
   StructureFilter,
-  'parent_ids' | 'has_properties' | 'has_comment' | 'has_attachments' | 'has_chronology' | 'active'
+  | 'parent_ids'
+  | 'has_properties'
+  | 'has_comment'
+  | 'has_attachments'
+  | 'has_chronology'
+  | 'active'
+  | 'trashed'
 > {
   const out: ReturnType<typeof buildExtraFilter> = {};
   if (state.parentIds.length > 0) out.parent_ids = state.parentIds;
@@ -249,6 +259,8 @@ export function buildExtraFilter(): Pick<
   // «Актуальность» only participates while «Показывать неактуальное» is on —
   // otherwise inactive thoughts are not in the candidate set at all (§15.3).
   if (state.active !== null && store.state.showInactive) out.active = state.active;
+  // S13: a marked-for-deletion filter is an independent checkbox (default off).
+  if (state.trashed) out.trashed = true;
   return out;
 }
 
@@ -638,6 +650,7 @@ function renderPanel(): void {
       state.hasComment !== null ||
       state.hasAttachments !== null ||
       state.hasChronology !== null ||
+      state.trashed === true ||
       (state.active !== null && store.state.showInactive),
   );
   extraTitle = extra.head;
@@ -687,6 +700,22 @@ function renderPanel(): void {
       tooltip: 'Доступно при включённой настройке «Показывать неактуальное» (Вид → Неактуальные)',
     }),
   );
+
+  // S13: marked-for-deletion is an independent on/off checkbox, not a tri-state
+  // (§5a.5, §15.3): off (default) hides marked thoughts, on includes them.
+  const trashedRow = div('st-f-tri-row');
+  const trashedLabel = el('label', 'checkbox-row');
+  const trashedCheck = el('input');
+  trashedCheck.type = 'checkbox';
+  trashedCheck.checked = state.trashed;
+  trashedCheck.addEventListener('change', () => {
+    state.trashed = trashedCheck.checked;
+    touch();
+    extra.refresh();
+  });
+  trashedLabel.append(trashedCheck, span('помеченные на удаление'));
+  trashedRow.append(el('span', 'st-f-tri-label', 'Корзина'), trashedLabel);
+  extra.body.append(trashedRow);
   scroll.append(extra.box);
 
   // --- sort -----------------------------------------------------------------
@@ -1435,6 +1464,7 @@ function applySavedFilter(filter: SavedFilter): void {
     hasAttachments: def.has_attachments ?? null,
     hasChronology: def.has_chronology ?? null,
     active: def.active ?? null,
+    trashed: def.trashed ?? false,
     sort: def.sort,
     order: def.order,
     savedFilterId: filter.id,

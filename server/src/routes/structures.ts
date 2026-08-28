@@ -121,6 +121,7 @@ const QUERY_BODY_KEYS = new Set([
   'has_attachments',
   'has_chronology',
   'active',
+  'trashed',
   'properties',
   'sort',
   'order',

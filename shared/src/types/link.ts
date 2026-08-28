@@ -23,6 +23,12 @@ export interface Link {
   /** Override of the type's line width; `null` = inherit from the type. */
   width: number | null;
   active: boolean;
+  /** In the trash, awaiting physical deletion (02-data-model.md §3.1.2). */
+  marked_for_deletion: boolean;
+  /** ISO-8601 moment of the mark; `null` when not marked. */
+  marked_for_deletion_at: string | null;
+  /** user_id that set the mark; `null` when not marked. */
+  marked_for_deletion_by: string | null;
   version: number;
   /** ISO-8601 UTC. */
   created_at: string;
@@ -57,6 +63,8 @@ export interface LinkUpdateInput {
   style?: LinkStyle | null;
   width?: number | null;
   active?: boolean;
+  /** «Поместить в корзину» / «Вернуть из корзины» (03-server-api.md §7.1). */
+  marked_for_deletion?: boolean;
 }
 
 /** A typed group of links returned for the editor (03-server-api.md §7.2). */

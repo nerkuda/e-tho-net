@@ -59,10 +59,11 @@ import {
 } from './helpers.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
 import { createLink, deleteLink, findLinksBetween, incomingLinksOf } from '../domain/link-service.js';
-import { findThoughtUsage } from '../domain/property-service.js';
+import { clearThoughtRefUsages, findThoughtUsage } from '../domain/property-service.js';
 import { findBacklinks } from '../domain/backlinks-service.js';
 import { findDuplicates, findMentions } from '../domain/search-service.js';
 import {
+  checkThoughtDeletion,
   createThought,
   deleteThought,
   focus,
@@ -97,6 +98,8 @@ const BATCH_OPS: readonly ThoughtBatchOp[] = [
   'set_active',
   'set_inactive',
   'delete',
+  'trash',
+  'purge',
   'link_to_focus',
   'unlink_from_focus',
   'link_parents',
@@ -354,6 +357,9 @@ function parseThoughtUpdateBody(
   if (body.active !== undefined) {
     changes.active = fieldBoolean(body, 'active', requestId);
   }
+  if (body.marked_for_deletion !== undefined) {
+    changes.marked_for_deletion = fieldBoolean(body, 'marked_for_deletion', requestId);
+  }
   if (body.fg_color !== undefined) {
     changes.fg_color = fieldNullableString(body, 'fg_color', requestId);
   }
@@ -508,6 +514,41 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         deleteThought(ndb, id, expectedVersion);
         deps.emit(req, networkId, 'thought.deleted', { id });
         reply.code(204).send();
+      },
+    );
+
+    // --- Deletion check (03-server-api.md §6.5a, task S13) -------------------
+
+    app.get(
+      '/networks/:networkId/thoughts/:id/deletion-check',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as ThoughtIdParams;
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        sendSuccess(reply, checkThoughtDeletion(ndb, id));
+      },
+    );
+
+    app.post(
+      '/networks/:networkId/thoughts/deletion-check-batch',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as NetworkIdParams;
+        const ids = fieldStringArray(requestBody(req), 'ids', req.id);
+        if (ids === undefined || ids.length === 0) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'ids обязателен (непустой массив строк).',
+            { field: 'ids' },
+            req.id,
+          );
+        }
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const result: Record<string, import('@etn/shared').ThoughtDeletionCheckResult> = {};
+        for (const id of [...new Set(ids)]) {
+          result[id] = checkThoughtDeletion(ndb, id);
+        }
+        sendSuccess(reply, result);
       },
     );
 
@@ -734,9 +775,28 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                 break;
               }
               case 'delete':
+              case 'purge':
+                // S13: `delete` is an alias of `purge` — both physically delete
+                // with the same blocking check (deleteThought refuses when the
+                // thought is referenced by a property).
                 deleteThought(ndb, id, undefined);
                 deps.emit(req, networkId, 'thought.deleted', { id });
                 break;
+              case 'trash': {
+                const updated = updateThought(
+                  ndb,
+                  id,
+                  { marked_for_deletion: true },
+                  undefined,
+                  userId,
+                );
+                deps.emit(req, networkId, 'thought.updated', {
+                  id,
+                  changes: { marked_for_deletion: true },
+                  version: updated.version,
+                });
+                break;
+              }
               case 'link_to_focus': {
                 const [sourceId, targetId] =
                   direction === 'parent' ? [id, focusThoughtId!] : [focusThoughtId!, id];
@@ -929,6 +989,19 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as ThoughtIdParams;
         const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
         sendSuccess(reply, findThoughtUsage(ndb, id));
+      },
+    );
+
+    // --- Clear usage (03-server-api.md §9.2, task S13) -----------------------
+
+    app.post(
+      '/networks/:networkId/thoughts/:id/usage/clear',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as ThoughtIdParams;
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const cleared = clearThoughtRefUsages(ndb, id);
+        sendSuccess(reply, { cleared });
       },
     );
 

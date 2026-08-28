@@ -287,6 +287,14 @@ function buildChip(id: string, ref: ThoughtRef | undefined): HTMLElement {
   const title = el('span', 'pc-title', (ref?.title ?? id).slice(0, TITLE_LIMIT));
   setTooltip(chip, ref?.title ?? id);
   chip.append(icon, title);
+  // A thought in the trash (S13, §5a.2): the chip dims and carries the red
+  // trash glyph — the same marked reading as the canvas badge, chip-sized.
+  if (ref?.marked_for_deletion === true) {
+    chip.classList.add('dim');
+    const mark = span('', 'list-trash-mark');
+    mark.append(svgIcon('trash', 11));
+    chip.append(mark);
+  }
   chip.addEventListener('click', () => openPinnedEntry(id));
   chip.addEventListener('contextmenu', (event) => {
     event.preventDefault();

@@ -123,6 +123,16 @@ async function buildWithFixtures(): Promise<ShimElement> {
             required: false,
             position: 3,
           },
+          {
+            id: 'p5',
+            owner_type: 'thought_type',
+            owner_id: 'ty1',
+            key: 'Источник',
+            value_type: 'thought_ref',
+            config: {},
+            required: false,
+            position: 4,
+          },
         ],
       },
       properties: {
@@ -143,12 +153,50 @@ async function buildWithFixtures(): Promise<ShimElement> {
             value: ['ta1', 'ta2'],
             updated_at: '2026',
           },
+          {
+            id: 'v5',
+            owner_type: 'thought',
+            owner_id: 't1',
+            property_id: 'p5',
+            value: 'ta1',
+            updated_at: '2026',
+          },
         ],
       },
       thoughts: {
         resolve: async () => [
-          { id: 'ta1', title: 'Автор 1' },
-          { id: 'ta2', title: 'Автор 2' },
+          {
+            id: 'ta1',
+            title: 'Автор 1',
+            type_id: null,
+            icon: '📚',
+            icon_kind: 'emoji',
+            icon_attachment_id: null,
+            active: true,
+            marked_for_deletion: false,
+            fg_color: null,
+            bg_color: null,
+            font_bold: null,
+            font_italic: null,
+            font_underline: null,
+            font_strike: null,
+          },
+          {
+            id: 'ta2',
+            title: 'Автор 2',
+            type_id: null,
+            icon: null,
+            icon_kind: 'emoji',
+            icon_attachment_id: null,
+            active: true,
+            marked_for_deletion: false,
+            fg_color: null,
+            bg_color: null,
+            font_bold: null,
+            font_italic: null,
+            font_underline: null,
+            font_strike: null,
+          },
         ],
       },
     },
@@ -200,13 +248,13 @@ describe('editor properties group body (DOM-shimmed)', () => {
     // Headerless table (L7, 08-ui-spec.md §6.3.1): the tbody is the first child.
     const tbody = table.children[0];
     assert.ok(tbody !== undefined, 'tbody present');
-    assert.equal(tbody.children.length, 4, 'one row per property definition');
+    assert.equal(tbody.children.length, 5, 'one row per property definition');
     // The text property with options carries the picker caret button.
     const textCell = tbody.children[0]?.children[1];
     const buttons = textCell?.children[0]?.children.filter((c) => c.tagName === 'button') ?? [];
     assert.equal(buttons.length, 1, 'options picker caret rendered');
-    // The thought_ref property is an editable search field plus the dialog
-    // picker button (no readonly display).
+    // An EMPTY single thought_ref property is an editable search field plus the
+    // dialog picker button (no value stored — nothing to show as a cloud).
     const refCell = tbody.children[1]?.children[1];
     const refRow = refCell?.children[0];
     const refInput = refRow?.children.find((c) => c.tagName === 'input');
@@ -225,9 +273,38 @@ describe('editor properties group body (DOM-shimmed)', () => {
     assert.ok(urlInput !== undefined, 'url input rendered');
     assert.ok(openBtn !== undefined, 'url «Открыть» button rendered');
     assert.notEqual((openBtn as ShimElement & { disabled?: boolean }).disabled, true);
+    // A STORED single thought_ref value renders as the thought's mini cloud
+    // (icon + title + the «×» clear button); the live-search input appears
+    // only while the value is empty; «выбрать» stays available
+    // (08-ui-spec.md §6.3.1).
+    const srcCell = tbody.children[4]?.children[1];
+    const srcRow = srcCell?.children[0];
+    assert.ok(srcRow !== undefined, 'stored single thought_ref row rendered');
+    const cloud = srcRow?.children.find((c) => c.className === 'prop-ref-cloud');
+    assert.ok(cloud !== undefined, 'stored value rendered as a mini cloud');
+    assert.equal(cloud?.dataset['id'], 'ta1', 'cloud carries the thought id');
+    const cloudIcon = cloud?.children.find((c) => c.className === 'mini-icon');
+    assert.equal(cloudIcon?.textContent, '📚', 'cloud carries the thought icon');
+    const cloudTitle = cloud?.children.find((c) => c.className === 'prc-title');
+    assert.equal(cloudTitle?.textContent, 'Автор 1', 'cloud carries the thought title');
+    const cloudRemove = cloud?.children.find((c) => c.tagName === 'button');
+    assert.ok(cloudRemove !== undefined, 'cloud carries the «×» clear button');
+    assert.equal(
+      (cloudRemove as ShimElement).title,
+      'Очистить значение',
+      'clear button titled',
+    );
+    assert.ok(
+      srcRow?.children.find((c) => c.tagName === 'input') === undefined,
+      'no live-search input while a value is stored',
+    );
+    const srcPick = srcRow?.children.find(
+      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    );
+    assert.ok(srcPick !== undefined, '«выбрать» stays available next to the cloud');
     // A multiple thought_ref property (config.multiple) renders the chip field
-    // with one removable chip per stored id plus the «выбрать» button that
-    // opens the search dialog in multi mode (08-ui-spec.md §6.3.1).
+    // with one removable mini-cloud chip per stored id plus the «выбрать»
+    // button that opens the search dialog in multi mode (08-ui-spec.md §6.3.1).
     const multiCell = tbody.children[3]?.children[1];
     const multiRow = multiCell?.children[0];
     assert.ok(multiRow !== undefined, 'multi thought_ref editor rendered');
@@ -237,6 +314,13 @@ describe('editor properties group body (DOM-shimmed)', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     const chips = chipField?.children.filter((c) => c.className === 'st-f-chip') ?? [];
     assert.equal(chips.length, 2, 'one chip per stored id');
+    // Each chip is a mini cloud of the thought: icon node + styled label
+    // (08-ui-spec.md §6.3.1) + the «×» removing that single value.
+    const chipIcon = chips[0]?.children.find((c) => c.className === 'st-f-chip-icon');
+    assert.ok(chipIcon !== undefined, 'chip carries the thought icon node');
+    assert.equal(chipIcon?.textContent, '📚', 'chip icon resolved from the ref');
+    const chipLabel = chips[0]?.children.find((c) => c.className === 'st-f-chip-label');
+    assert.equal(chipLabel?.textContent, 'Автор 1', 'chip label resolved from the ref');
     const chipRemove = chips[0]?.children.find((c) => c.tagName === 'button');
     assert.ok(chipRemove !== undefined, 'each chip carries a remove button');
     const pickBtn = multiRow?.children.find(

@@ -39,7 +39,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('lists the 12 etn:// resources (1 static + 11 templated)', async () => {
+  it('lists the 13 etn:// resources (1 static + 12 templated)', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -51,12 +51,13 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
           ...listed.resources.map((r) => r.uri),
           ...templates.resourceTemplates.map((r) => r.uriTemplate),
         ].sort();
-        assert.equal(uris.length, 12);
+        assert.equal(uris.length, 13);
         assert.ok(uris.includes('etn://networks'));
         assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}'));
         assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}/usage'));
         assert.ok(uris.includes('etn://networks/{network_id}/thoughts/{thought_id}/backlinks'));
         assert.ok(uris.includes('etn://networks/{network_id}/thought-types/{type_id}'));
+        assert.ok(uris.includes('etn://networks/{network_id}/trash'));
       } finally {
         await handle.close();
       }
@@ -241,10 +242,10 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         const hintIdempotent = MCP_TOOL_NAMES.filter(
           (n) => MCP_TOOL_ANNOTATIONS[n]?.idempotentHint === true,
         ).length;
-        assert.equal(annotated, 25);
-        assert.equal(hintReadOnly, 19);
-        assert.equal(hintDestructive, 3);
-        assert.equal(hintIdempotent, 3);
+        assert.equal(annotated, 31);
+        assert.equal(hintReadOnly, 22);
+        assert.equal(hintDestructive, 4);
+        assert.equal(hintIdempotent, 5);
       } finally {
         await handle.close();
       }

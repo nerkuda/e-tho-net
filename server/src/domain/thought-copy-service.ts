@@ -538,6 +538,9 @@ function reReadLink(ndb: NetworkDb, id: string): Link {
         style: string | null;
         width: number | null;
         active: number;
+        marked_for_deletion: number;
+        marked_for_deletion_at: string | null;
+        marked_for_deletion_by: string | null;
         version: number;
         created_at: string;
         updated_at: string;
@@ -557,6 +560,9 @@ function reReadLink(ndb: NetworkDb, id: string): Link {
     style: row.style as LinkStyle | null,
     width: row.width,
     active: row.active === 1,
+    marked_for_deletion: row.marked_for_deletion === 1,
+    marked_for_deletion_at: row.marked_for_deletion_at,
+    marked_for_deletion_by: row.marked_for_deletion_by,
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,

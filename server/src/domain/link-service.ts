@@ -19,6 +19,7 @@ import {
   type IconKind,
   type Link,
   type LinkCreateInput,
+  type LinkDeletionCheckResult,
   type LinkStyle,
   type LinkUpdateInput,
   type ThoughtLinkItem,
@@ -53,6 +54,9 @@ interface LinkRow {
   style: string | null;
   width: number | null;
   active: number;
+  marked_for_deletion: number;
+  marked_for_deletion_at: string | null;
+  marked_for_deletion_by: string | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -71,6 +75,9 @@ function rowToLink(row: LinkRow): Link {
     style: row.style as LinkStyle | null,
     width: row.width,
     active: row.active === 1,
+    marked_for_deletion: row.marked_for_deletion === 1,
+    marked_for_deletion_at: row.marked_for_deletion_at,
+    marked_for_deletion_by: row.marked_for_deletion_by,
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -89,6 +96,9 @@ interface IncidentLinkRow {
   style: string | null;
   width: number | null;
   active: number;
+  marked_for_deletion: number;
+  marked_for_deletion_at: string | null;
+  marked_for_deletion_by: string | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -103,6 +113,7 @@ interface IncidentLinkRow {
   other_icon_kind: string;
   other_icon_attachment_id: string | null;
   other_active: number;
+  other_marked_for_deletion: number;
   other_fg_color: string | null;
   other_bg_color: string | null;
   other_font_bold: number;
@@ -125,6 +136,7 @@ function incidentRowToRef(row: IncidentLinkRow): ThoughtRef {
     icon_kind: row.other_icon_kind as IconKind,
     icon_attachment_id: row.other_icon_attachment_id,
     active: row.other_active === 1,
+    marked_for_deletion: row.other_marked_for_deletion === 1,
     fg_color: row.other_fg_color,
     bg_color: row.other_bg_color,
     font_bold: readFont(fm, FONT_BOLD_BIT, row.other_font_bold),
@@ -432,6 +444,16 @@ export function updateLink(
       sets.push('active = ?');
       args.push(changes.active ? 1 : 0);
     }
+    // Mark-for-deletion (S13, 02-data-model.md §3.1.2): reversible flag + audit.
+    if (changes.marked_for_deletion !== undefined) {
+      if (changes.marked_for_deletion) {
+        sets.push('marked_for_deletion = ?', 'marked_for_deletion_at = ?', 'marked_for_deletion_by = ?');
+        args.push(1, new Date().toISOString(), actorUserId);
+      } else {
+        sets.push('marked_for_deletion = ?', 'marked_for_deletion_at = ?', 'marked_for_deletion_by = ?');
+        args.push(0, null, null);
+      }
+    }
 
     // If type_id is changing, verify the new type exists and is not the root
     // (the root is never assignable, L21).
@@ -470,13 +492,30 @@ export function updateLink(
 // ---------------------------------------------------------------------------
 
 /**
+ * Check whether a link can be physically deleted (docs/03-server-api.md §6.5a).
+ * Links have no `thought_ref` usage and no children, so the only blocking arm
+ * is the layer shadow row — which stays empty until layers land in 0.5.2
+ * (02-data-model.md §3.1.2). For 0.5.1 a link is therefore never blocked.
+ *
+ * Throws `NOT_FOUND` (404) when the link does not exist.
+ */
+export function checkLinkDeletion(ndb: NetworkDb, id: string): LinkDeletionCheckResult {
+  const row = ndb.prepare('SELECT 1 FROM links WHERE id = ?').get(id);
+  if (!row) {
+    throw new EtnError('NOT_FOUND', `link ${id} not found`, { entity: 'link', id });
+  }
+  return { blocked: false, blocking: { layers: [] } };
+}
+
+/**
  * Delete a link (docs/03-server-api.md §7.1). The link's polymorphic
  * dependants (comments, attachments incl. server-stored files, property
  * values — no SQL FK) are purged in the same transaction
  * (see {@link purgeOwnerDependants}).
  *
  * Throws `NOT_FOUND` (404) if the link does not exist and `VERSION_CONFLICT`
- * (409) if `expectedVersion` is set and does not match.
+ * (409) if `expectedVersion` is set and does not match; `VALIDATION_ERROR`
+ * (422) when deletion is blocked (S13, §6.5a — always `false` until 0.5.2).
  */
 export function deleteLink(ndb: NetworkDb, id: string, expectedVersion: number | undefined): void {
   ndb.transaction(() => {
@@ -487,6 +526,15 @@ export function deleteLink(ndb: NetworkDb, id: string, expectedVersion: number |
         id,
         expected: expectedVersion,
         current: current.version,
+      });
+    }
+    // S13: refuse physical deletion while blocked (§6.5a).
+    const check = checkLinkDeletion(ndb, id);
+    if (check.blocked) {
+      throw new EtnError('VALIDATION_ERROR', 'link is held by a layer and cannot be deleted', {
+        entity: 'link',
+        id,
+        blocking: check.blocking,
       });
     }
     // Polymorphic owners without SQL FK: clean up explicitly (mirrors
@@ -529,13 +577,15 @@ export function listLinksByThought(
   const rows = ndb
     .prepare(
       `SELECT l.id, l.source_id, l.target_id, l.type_id, l.color, l.style, l.width,
-              l.active, l.version,
+              l.active, l.marked_for_deletion, l.marked_for_deletion_at, l.marked_for_deletion_by,
+              l.version,
               l.created_at, l.updated_at, l.created_by, l.updated_by,
               lt.name_forward, lt.name_reverse,
               CASE WHEN l.target_id = ? THEN l.source_id ELSE l.target_id END AS other_id,
               t.title AS other_title, t.type_id AS other_type_id, t.icon AS other_icon,
               t.icon_kind AS other_icon_kind, t.icon_attachment_id AS other_icon_attachment_id,
               t.active AS other_active,
+              t.marked_for_deletion AS other_marked_for_deletion,
               t.fg_color AS other_fg_color, t.bg_color AS other_bg_color,
               t.font_bold AS other_font_bold, t.font_italic AS other_font_italic,
               t.font_underline AS other_font_underline, t.font_strike AS other_font_strike,

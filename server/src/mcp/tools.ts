@@ -67,13 +67,21 @@ import {
 
 import {
   createThoughtWithWarnings,
+  checkThoughtDeletion,
   deleteThought,
   getNeighbors,
   getThoughtOrThrow,
   updateThought,
   updateThoughtWithWarnings,
 } from '../domain/thought-service.js';
-import { createLink, deleteLink, findLinksBetween, getLink } from '../domain/link-service.js';
+import {
+  checkLinkDeletion,
+  createLink,
+  deleteLink,
+  findLinksBetween,
+  getLink,
+  updateLink,
+} from '../domain/link-service.js';
 import {
   createCommentWithTargets,
   deleteComment,
@@ -89,6 +97,7 @@ import {
   searchAttachments,
 } from '../domain/attachment-service.js';
 import {
+  clearThoughtRefUsages,
   findThoughtUsage,
   getPropertyValuesResolved,
   listEffectiveTypeProperties,
@@ -96,6 +105,7 @@ import {
   setPropertyValues,
 } from '../domain/property-service.js';
 import { findBacklinks } from '../domain/backlinks-service.js';
+import { listTrash, purgeTrash } from '../domain/trash-service.js';
 import {
   collectSubtreeTypes,
   findDuplicates,
@@ -502,6 +512,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
     type_id: z.array(z.string().min(1)).optional(),
     active: z.enum(['true', 'false', 'any']).optional(),
+    trashed: z.enum(['true', 'false', 'any']).optional(),
     keywords: z.string().min(1).optional(),
     properties: z.array(QueryPropertySchema).optional(),
     created_after: z.string().min(1).optional(),
@@ -521,7 +532,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'List thoughts by criteria (docs/05-mcp-server.md §4.1) — no text query required. ' +
         'Filters combine with AND: `in_subtree_of` (+`max_depth`) restricts to the directed ' +
         'descendants of a thought (each hit carries its `depth`), `type_id[]` filters by type, ' +
-        '`active` by актуальность (`true`/`false`/`any`), `keywords` by title/synonym LIKE, ' +
+        '`active` by актуальность (`true`/`false`/`any`), `trashed` by пометка на удаление ' +
+        '(`true`/`false`/`any`, default `false` — only unmarked; S13), `keywords` by title/synonym LIKE, ' +
         '`properties` by property values (key + operator eq/ne/contains/gt/gte/lt/lte + value; ' +
         'the value type selects the column: number/boolean/string), `created_*`/`updated_*` by ' +
         'ISO-8601 date ranges. The response carries a `thought_types` reference table (name + ' +
@@ -933,11 +945,84 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         return {
           total: usage.total,
           groups,
+          holding_layers: rawUsage.holding_layers,
           thought_types: thoughtTypeCatalog(
             ndb,
             usage.groups.flatMap((g) => g.thoughts.map((t) => t.type_id)),
           ),
         };
+      }),
+  );
+
+  const DeletionCheckThoughtsSchema = z.object({
+    network_id: NetworkId,
+    thought_ids: z.array(ThoughtId).min(1).max(200),
+  });
+  mcp.registerTool(
+    'etn.thoughts.deletion_check',
+    {
+      title: 'Проверка блокировки удаления мысли',
+      description:
+        'Check what blocks a thought from being physically deleted (S13, 03-server-api.md ' +
+        '§6.5a): use in thought_ref properties, holding layers, and future orphans among its ' +
+        'children. Accepts an array — one call covers both single and group checks. Returns a map ' +
+        'id → { blocked, blocking, orphaned_children }.',
+      inputSchema: DeletionCheckThoughtsSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.deletion_check'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const result: Record<string, unknown> = {};
+        for (const id of [...new Set(args.thought_ids)]) {
+          result[id] = checkThoughtDeletion(ndb, id);
+        }
+        return result;
+      }),
+  );
+
+  const DeletionCheckLinksSchema = z.object({
+    network_id: NetworkId,
+    link_ids: z.array(LinkId).min(1).max(200),
+  });
+  mcp.registerTool(
+    'etn.links.deletion_check',
+    {
+      title: 'Проверка блокировки удаления связи',
+      description:
+        'Check what blocks a link from being physically deleted (S13, 03-server-api.md §6.5a): ' +
+        'only holding layers (no thought_ref usage and no children for links). Accepts an array; ' +
+        'returns a map id → { blocked, blocking }.',
+      inputSchema: DeletionCheckLinksSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.links.deletion_check'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const result: Record<string, unknown> = {};
+        for (const id of [...new Set(args.link_ids)]) {
+          result[id] = checkLinkDeletion(ndb, id);
+        }
+        return result;
+      }),
+  );
+
+  const TrashListSchema = z.object({ network_id: NetworkId });
+  mcp.registerTool(
+    'etn.trash.list',
+    {
+      title: 'Корзина сети',
+      description:
+        'The trash of the network (S13, 03-server-api.md §14b): every thought and link with ' +
+        '`marked_for_deletion=true`, each with its precomputed blocking check — so the agent ' +
+        'sees at once what is purgeable without a per-row `deletion_check` call.',
+      inputSchema: TrashListSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.trash.list'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        return listTrash(ndb);
       }),
   );
 
@@ -1452,6 +1537,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Удалить мысль',
       description:
         'Delete a thought (cascades to links, comments, attachments, property values). ' +
+        'With S13 the same blocking check as `etn.thoughts.deletion_check` runs first: when ' +
+        'another thought references this one through a thought_ref property the call fails with ' +
+        'a `blocking` error instead of deleting — `marked_for_deletion` need not be set first. ' +
         'Protected thoughts (HOME) are rejected. Returns { id, version: 0 }.',
       inputSchema: DeleteThoughtSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.delete'],
@@ -1475,6 +1563,52 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         return {
           id: args.thought_id,
           version: 0,
+          request_id: String(extra.requestId),
+        } satisfies McpMutationResult;
+      }),
+  );
+
+  const TrashThoughtSchema = z.object({
+    network_id: NetworkId,
+    thought_id: ThoughtId,
+    trashed: z.boolean(),
+  });
+  mcp.registerTool(
+    'etn.thoughts.trash',
+    {
+      title: 'Поместить мысль в корзину / вернуть',
+      description:
+        'Mark a thought for deletion (`trashed: true`) or restore it from the trash ' +
+        '(`trashed: false`) — S13. Does NOT run the blocking check: that only applies to the ' +
+        'physical `etn.thoughts.delete`. Returns { id, version }.',
+      inputSchema: TrashThoughtSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.trash'],
+    },
+    (args, extra) =>
+      runTool(async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const thought = updateThought(
+          ndb,
+          args.thought_id,
+          { marked_for_deletion: args.trashed },
+          undefined,
+          rt.deps.auth.userId,
+        );
+        emitAgentEvent(
+          rt,
+          args.network_id,
+          'thought.updated',
+          { id: thought.id, changes: { marked_for_deletion: args.trashed }, version: thought.version },
+          extra.requestId,
+        );
+        auditAgentCall(rt, 'etn.thoughts.trash', args.network_id, 'thought', thought.id, {
+          trashed: args.trashed,
+        });
+        return {
+          id: thought.id,
+          version: thought.version,
           request_id: String(extra.requestId),
         } satisfies McpMutationResult;
       }),
@@ -1577,7 +1711,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     'etn.links.delete',
     {
       title: 'Удалить связь',
-      description: 'Delete a link. Returns { id, version: 0 }.',
+      description:
+        'Delete a link. With S13 the same blocking check as `etn.links.deletion_check` runs first ' +
+        '(empty until 0.5.2). Returns { id, version: 0 }.',
       inputSchema: DeleteLinkSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.delete'],
     },
@@ -1594,6 +1730,51 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         return {
           id: args.link_id,
           version: 0,
+          request_id: String(extra.requestId),
+        } satisfies McpMutationResult;
+      }),
+  );
+
+  const TrashLinkSchema = z.object({
+    network_id: NetworkId,
+    link_id: LinkId,
+    trashed: z.boolean(),
+  });
+  mcp.registerTool(
+    'etn.links.trash',
+    {
+      title: 'Поместить связь в корзину / вернуть',
+      description:
+        'Mark a link for deletion (`trashed: true`) or restore it from the trash ' +
+        '(`trashed: false`) — S13. Does NOT run the blocking check. Returns { id, version }.',
+      inputSchema: TrashLinkSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.links.trash'],
+    },
+    (args, extra) =>
+      runTool(async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const link = updateLink(
+          ndb,
+          args.link_id,
+          { marked_for_deletion: args.trashed },
+          undefined,
+          rt.deps.auth.userId,
+        );
+        emitAgentEvent(
+          rt,
+          args.network_id,
+          'link.updated',
+          { id: link.id, changes: { marked_for_deletion: args.trashed }, version: link.version },
+          extra.requestId,
+        );
+        auditAgentCall(rt, 'etn.links.trash', args.network_id, 'link', link.id, {
+          trashed: args.trashed,
+        });
+        return {
+          id: link.id,
+          version: link.version,
           request_id: String(extra.requestId),
         } satisfies McpMutationResult;
       }),
@@ -2250,6 +2431,70 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           warnings: result.warnings ?? [],
           request_id: String(extra.requestId),
         } satisfies McpUpsertBundleResult;
+      }),
+  );
+
+  // =========================================================================
+  // Trash + usage-clear (S13)
+  // =========================================================================
+
+  const TrashPurgeSchema = z.object({ network_id: NetworkId });
+  mcp.registerTool(
+    'etn.trash.purge',
+    {
+      title: 'Очистить корзину',
+      description:
+        '«Удалить всё, что возможно» (S13, 03-server-api.md §14b): physically delete every marked ' +
+        'thought/link for which `deletion_check` reports no blocking; blocked ones are skipped ' +
+        'silently. Returns { purged, skipped }.',
+      inputSchema: TrashPurgeSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.trash.purge'],
+    },
+    (args, extra) =>
+      runTool(async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const { purged, skipped, deleted_thought_ids, deleted_link_ids } = purgeTrash(ndb);
+        for (const id of deleted_thought_ids) {
+          emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
+        }
+        for (const id of deleted_link_ids) {
+          emitAgentEvent(rt, args.network_id, 'link.deleted', { id }, extra.requestId);
+        }
+        auditAgentCall(rt, 'etn.trash.purge', args.network_id, 'network', args.network_id, {
+          purged,
+          skipped,
+        });
+        return { purged, skipped };
+      }),
+  );
+
+  const UsageClearSchema = z.object({
+    network_id: NetworkId,
+    thought_id: ThoughtId,
+  });
+  mcp.registerTool(
+    'etn.thoughts.usage_clear',
+    {
+      title: 'Очистить использование мысли',
+      description:
+        'Null out every thought_ref property value of other thoughts that references this one ' +
+        '(S13, 03-server-api.md §9.2) — clears the «использование в свойствах» blocking arm in ' +
+        'one call instead of editing each property. Returns { cleared }.',
+      inputSchema: UsageClearSchema,
+    },
+    (args, extra) =>
+      runTool(async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        getThoughtOrThrow(ndb, args.thought_id);
+        const cleared = clearThoughtRefUsages(ndb, args.thought_id);
+        auditAgentCall(rt, 'etn.thoughts.usage_clear', args.network_id, 'thought', args.thought_id, {
+          cleared,
+        });
+        return { cleared, request_id: String(extra.requestId) };
       }),
   );
 

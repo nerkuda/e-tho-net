@@ -14,6 +14,7 @@ import { describe, it } from 'node:test';
 import type { FocusNeighbor, FocusResponse, Thought } from '@etn/shared';
 
 import { menuInternals } from '../src/renderer/canvas/context-menu.js';
+import { canvasInternals } from '../src/renderer/canvas/canvas.js';
 import { store } from '../src/renderer/state.js';
 
 const { buildThoughtMenuItems } = menuInternals;
@@ -34,7 +35,7 @@ function findSubmenu(
   return row.submenu.map((s) => ({ label: s.label, disabled: s.disabled === true }));
 }
 
-function thought(id: string): Thought {
+function thought(id: string, marked = false): Thought {
   return {
     id,
     title: id,
@@ -44,6 +45,9 @@ function thought(id: string): Thought {
     active: true,
     is_protected: false,
     is_root: false,
+    marked_for_deletion: marked,
+    marked_for_deletion_at: marked ? '2026-01-01T00:00:00.000Z' : null,
+    marked_for_deletion_by: null,
     fg_color: null,
     bg_color: null,
     font_bold: null,
@@ -78,12 +82,13 @@ function focusFor(opts: {
   children?: string[];
   sort: 'manual' | 'created' | 'alpha' | 'viewed';
   zone?: 'parents' | 'children';
+  focusedMarked?: boolean;
 }): FocusResponse {
   const zone = opts.zone ?? 'parents';
   const parents: FocusNeighbor[] = (opts.parents ?? []).map((id) => neighbor(id, `lp-${id}`));
   const children: FocusNeighbor[] = (opts.children ?? []).map((id) => neighbor(id, `lc-${id}`));
   return {
-    focused: thought('f'),
+    focused: thought('f', opts.focusedMarked === true),
     parents,
     children,
     siblings: [],
@@ -255,6 +260,64 @@ describe('buildThoughtMenuItems — «Изменить порядок» submenu 
     assert.equal(last[2]?.disabled, true, 'сдвинуть вперёд — disabled on the last child');
     assert.equal(last[3]?.disabled, true, 'сделать последней — disabled on the last child');
     store.update({ focus: null });
+  });
+});
+
+describe('buildThoughtMenuItems — «Удалить» / «Удалить/восстановить» (S13)', () => {
+  it('labels the command «Удалить» for an unmarked thought', () => {
+    store.update({ focus: null });
+    const labelsOf = labels(buildThoughtMenuItems('net', target));
+    assert.ok(labelsOf.includes('Удалить'), 'the plain «Удалить» row must be present');
+    assert.ok(!labelsOf.includes('Удалить/восстановить'), 'no restore wording for an unmarked thought');
+  });
+
+  it('labels the command «Удалить/восстановить» for the marked focused thought', () => {
+    const focus = focusFor({ parents: [], sort: 'created', focusedMarked: true });
+    store.update({ focus, zoneSorts: focus.sorts, networkId: 'net' });
+    const labelsOf = labels(
+      buildThoughtMenuItems('net', { id: 'f', title: 'f', dir: 'siblings' }),
+    );
+    assert.ok(
+      labelsOf.includes('Удалить/восстановить'),
+      'the focused (marked) thought must offer «Удалить/восстановить»',
+    );
+    assert.ok(!labelsOf.includes('Удалить'), 'the plain «Удалить» row must be replaced');
+    store.update({ focus: null });
+  });
+
+  it('labels the command «Удалить/восстановить» for a marked zone neighbour', () => {
+    // Zone clouds read the trash flag from the canvas ThoughtRef cache — the
+    // same source the 🗑 badge uses (08-ui-spec.md §2.2).
+    const focus = focusFor({ parents: ['t1'], sort: 'created' });
+    store.update({ focus, zoneSorts: focus.sorts, networkId: 'net' });
+    canvasInternals.refCache.set('t1', {
+      id: 't1',
+      title: 't1',
+      type_id: null,
+      icon: null,
+      icon_kind: 'emoji',
+      icon_attachment_id: null,
+      active: true,
+      marked_for_deletion: true,
+      fg_color: null,
+      bg_color: null,
+      font_bold: null,
+      font_italic: null,
+      font_underline: null,
+      font_strike: null,
+    });
+    try {
+      const labelsOf = labels(
+        buildThoughtMenuItems('net', { id: 't1', title: 't1', dir: 'parents' }),
+      );
+      assert.ok(
+        labelsOf.includes('Удалить/восстановить'),
+        'a marked neighbour must offer «Удалить/восстановить»',
+      );
+    } finally {
+      canvasInternals.refCache.delete('t1');
+      store.update({ focus: null });
+    }
   });
 });
 

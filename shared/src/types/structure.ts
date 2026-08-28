@@ -59,6 +59,12 @@ export interface StructureFilter {
    * is on (§15.3 «Дополнительно»).
    */
   active?: StructureTriState;
+  /**
+   * Пометка на удаление (S13): `false` (default) — exclude marked thoughts,
+   * `true` — include them on equal footing with ordinary ones. The trash list
+   * itself comes from `GET /trash`, not from this filter.
+   */
+  trashed?: boolean;
   show_inactive?: boolean;
 }
 

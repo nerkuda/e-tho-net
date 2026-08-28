@@ -224,16 +224,16 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       table,
     );
   })();
-  /** Titles of picked thought_ref values (resolved once, then cached). */
-  const refTitles = new Map<string, string>();
+  /** Metadata of picked thought_ref values (resolved once, then cached). */
+  const refTitles = new Map<string, ThoughtRef>();
 
-  /** Resolves a thought title for a thought_ref input. */
+  /** Resolves a thought ref for a thought_ref input. */
   async function ensureRefTitle(id: string): Promise<void> {
     if (refTitles.has(id)) return;
     try {
       const resolved = await etn.thoughts.resolve(networkId, [id]);
-      const title = resolved[0]?.title;
-      if (title !== undefined) refTitles.set(id, title);
+      const ref = resolved[0];
+      if (ref !== undefined) refTitles.set(id, ref);
     } catch {
       // The raw id is shown when resolve fails.
     }
@@ -336,7 +336,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
           buildMultiThoughtRefEditor({
             networkId,
             filterIds,
-            titles: refTitles,
+            refs: refTitles,
             ids,
             save: (next) => {
               state.value = next.length > 0 ? next : null;
@@ -350,7 +350,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       input.type = 'text';
       input.autocomplete = 'off';
       const storedId = typeof state.value === 'string' ? state.value : null;
-      input.value = storedId !== null ? (refTitles.get(storedId) ?? storedId) : '';
+      input.value = storedId !== null ? (refTitles.get(storedId)?.title ?? storedId) : '';
       input.placeholder = 'введите название для поиска…';
       wireThoughtRefSearch(input, {
         networkId,

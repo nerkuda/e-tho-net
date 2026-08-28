@@ -42,6 +42,7 @@ const EXPECTED_FILES = [
   '021_type_hierarchy.sql',
   '022_thought_types_comment_template.sql',
   '023_thought_read_metrics.sql',
+  '024_marked_for_deletion.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -167,6 +168,10 @@ describe(
           thoughtCols.includes('icon_attachment_id'),
           'missing thoughts.icon_attachment_id',
         );
+
+        // 024 mark-for-deletion columns (02-data-model.md §3.1.2, task S13).
+        assert.ok(thoughtCols.includes('marked_for_deletion'), 'missing thoughts.marked_for_deletion');
+        assert.ok(linkCols.includes('marked_for_deletion'), 'missing links.marked_for_deletion');
 
         // 019 comment_targets: m2m attachments with the primary owner as index.
         const targetCols = (

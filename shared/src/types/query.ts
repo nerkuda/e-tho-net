@@ -9,6 +9,10 @@
  * только неактивные, `'any'` — без фильтра. */
 export type ThoughtQueryActive = 'true' | 'false' | 'any';
 
+/** Пометка на удаление в выборке (S13): `'true'` — только помеченные,
+ * `'false'` (default) — только непомеченные, `'any'` — без фильтра. */
+export type ThoughtQueryTrashed = 'true' | 'false' | 'any';
+
 /** Оператор условия по значению свойства. */
 export type PropertyQueryOperator = 'eq' | 'ne' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte';
 
@@ -42,6 +46,11 @@ export interface ThoughtQueryRequest {
   type_id?: string[];
   /** Актуальность (по умолчанию `'true'` — только активные). */
   active?: ThoughtQueryActive;
+  /**
+   * Пометка на удаление (S13): `'true'` — только помеченные, `'false'`
+   * (default) — только непомеченные, `'any'` — без фильтра. Независим от `active`.
+   */
+  trashed?: ThoughtQueryTrashed;
   /** Необязательный текстовый фильтр по названию и синонимам (LIKE). */
   keywords?: string;
   /** Условия по значениям свойств (AND). */

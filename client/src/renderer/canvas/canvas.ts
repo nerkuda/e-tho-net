@@ -27,6 +27,7 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { svgIcon } from '../lib/icons.js';
 import { notice } from '../lib/notice.js';
 import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import {
@@ -45,16 +46,13 @@ import {
   setDragLinkLine,
   LINK_LABEL_FONT_BASE,
 } from './links.js';
-import {
-  captureClouds,
-  playFocusTransition,
-  prefersReducedMotion,
-} from './transition.js';
+import { captureClouds, playFocusTransition, prefersReducedMotion } from './transition.js';
 import { mountAddDialog, wireZoneExternalDrops } from './add-dialog.js';
 import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
 import { initKbdNav, resetCanvasCursor, setCursor, syncCanvasCursor } from './kbd-nav.js';
 import { mountZoneSplitters } from './zone-splitters.js';
+import { openThoughtDeleteDialog } from '../trash.js';
 
 /** Zone directions of the canvas (parents/siblings/children). */
 export type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -184,7 +182,14 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   emptyEl = empty;
   redrawLinks = initLinksOverlay(host).redraw;
   applyCanvasScaleVars(host);
-  mountZoneSplitters({ host, top, focusRow, vertical: zoneSplitterV, horizontal: zoneSplitterH, onLayoutChange: updateFocusBand });
+  mountZoneSplitters({
+    host,
+    top,
+    focusRow,
+    vertical: zoneSplitterV,
+    horizontal: zoneSplitterH,
+    onLayoutChange: updateFocusBand,
+  });
 
   // Add-thought dialog (H14) and external file/URL drops (08-ui-spec.md §7).
   mountAddDialog();
@@ -459,6 +464,28 @@ export function requestZoneAnimation(): void {
 }
 
 /**
+ * Mark-for-deletion badge (S13, 08-ui-spec.md §2.2): shown on any visible
+ * cloud whose thought is in the trash, regardless of the `trashed` filter
+ * (the canvas never hides marked thoughts — only search/query results do).
+ * A marked cloud is also dimmed like an inactive one (§2.2). The badge circle
+ * is 70% larger than the position badge and carries a bright-red trash glyph;
+ * a click opens the single-delete dialog (restore/delete) directly from the
+ * badge.
+ */
+function buildTrashBadge(id: string, title: string): HTMLElement {
+  const badge = span('', 'cloud-trash-badge');
+  badge.append(svgIcon('trash', 17));
+  setTooltip(badge, 'Мысль находится в корзине. Нажмите для удаления/восстановления');
+  badge.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    void openThoughtDeleteDialog(networkId, { id, title });
+  });
+  return badge;
+}
+
+/**
  * Renders the focus cloud (08-ui-spec.md §2.2.2): variable width, up to 3
  * title lines, ellipses filled when incoming/outgoing links exist.
  */
@@ -470,7 +497,10 @@ function renderFocusRow(focus: FocusResponse): void {
 
   const cloud = div('cloud focus-cloud');
   cloud.dataset['id'] = thought.id;
-  if (!thought.active) cloud.classList.add('dim');
+  // A marked (trashed) thought is dimmed exactly like an inactive one
+  // (08-ui-spec.md §2.2): both states read as "faded", the trash badge on
+  // top is what tells them apart.
+  if (!thought.active || thought.marked_for_deletion) cloud.classList.add('dim');
   applyCloudStyle(cloud, resolveCloudStyle(thought));
 
   const parents = groupByThought(focus.parents).length;
@@ -497,6 +527,9 @@ function renderFocusRow(focus: FocusResponse): void {
   main.append(title, ind);
 
   cloud.append(topEllipse, iconBox, main, bottomEllipse);
+  if (thought.marked_for_deletion) {
+    cloud.append(buildTrashBadge(thought.id, thought.title));
+  }
   focusRow.append(cloud);
   focusCloudEl = cloud;
   // A click on the focus cloud returns the editor to the focused thought
@@ -709,7 +742,11 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   const geom = cloudGeom(store.state.cloudWidth, store.state.cloudGap, store.state.canvasZoom);
   // Estimate for not-yet-measured rows: the minimum cloud height (1 title
   // line) — most clouds render at it, so scrolling stays stable.
-  const estimate = cloudHeight(store.state.cloudWidth, store.state.canvasZoom, CLOUD_TITLE_LINES_MIN);
+  const estimate = cloudHeight(
+    store.state.cloudWidth,
+    store.state.canvasZoom,
+    CLOUD_TITLE_LINES_MIN,
+  );
 
   if (entries.length === 0) {
     spacer.style.height = '0px';
@@ -727,7 +764,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
 
   grid.style.gridTemplateColumns = `repeat(${cols}, ${geom.width}px)`;
   grid.style.gridAutoRows = 'auto'; // each row is as tall as its tallest cloud
-  grid.style.gridAutoFlow = 'row';  // row-major: DOM order = entries order; default, fixed for safety
+  grid.style.gridAutoFlow = 'row'; // row-major: DOM order = entries order; default, fixed for safety
   grid.style.columnGap = `${geom.gap}px`;
   grid.style.rowGap = `${geom.gap}px`;
 
@@ -835,10 +872,10 @@ export function resolveCloudStyle(
     bg: thought.bg_color ?? type.bg_color,
     // font_* use null-coalesce (NOT OR): a manual `false` must override a `true`
     // type default, which `||` would wrongly collapse (02-data-model.md §3.1.1).
-    bold: thought.font_bold ?? (type.font_bold ?? false),
-    italic: thought.font_italic ?? (type.font_italic ?? false),
-    underline: thought.font_underline ?? (type.font_underline ?? false),
-    strike: thought.font_strike ?? (type.font_strike ?? false),
+    bold: thought.font_bold ?? type.font_bold ?? false,
+    italic: thought.font_italic ?? type.font_italic ?? false,
+    underline: thought.font_underline ?? type.font_underline ?? false,
+    strike: thought.font_strike ?? type.font_strike ?? false,
   };
 }
 
@@ -929,8 +966,15 @@ function buildCloud(
   // The live neighbour carries a fresh `active` flag in every focus response —
   // prefer it over the cached ref, which can lag after a local toggle until the
   // ref is re-resolved (no realtime echo to the actor, 04-realtime.md §5).
+  // `marked_for_deletion` lives only on the ref (FocusNeighbor does not carry
+  // it), so the trash state follows the ref cache — refreshed via
+  // invalidateRef() + scheduleRefresh() right after a mark/restore.
+  const isMarked = ref?.marked_for_deletion === true;
   const isInactive = (entry.links[0]?.active ?? ref?.active) === false;
-  if (isInactive) cloud.classList.add('dim');
+  // Marked (trashed) clouds are dimmed like inactive ones (08-ui-spec.md
+  // §2.2); when both states combine the cloud is simply dim with the badge
+  // on top.
+  if (isInactive || isMarked) cloud.classList.add('dim');
   if (store.state.selection.includes(entry.id)) cloud.classList.add('selected');
   // Halo: the thought is open in the editor (§2.2.4) — a single click, Enter
   // or a pick from the structures/chronicle view.
@@ -1001,6 +1045,9 @@ function buildCloud(
   }
 
   cloud.append(topEllipse, iconBox, main, bottomEllipse, posBadge);
+  if (isMarked) {
+    cloud.append(buildTrashBadge(entry.id, cloudTitleFull));
+  }
 
   // Single click → open the thought in the editor + halo (§2.2.4); double
   // click → focus (B1); Ctrl+click toggles selection (H16); right-click opens

@@ -27,14 +27,26 @@ import {
 } from '@etn/shared';
 
 import { refreshFocus, requireNetworkId, scheduleRefresh } from '../app.js';
-import { applyThoughtIcon, invalidateIndicators, invalidateRef, resolveCloudStyle } from '../canvas/canvas.js';
+import {
+  applyThoughtIcon,
+  invalidateIndicators,
+  invalidateRef,
+  resolveCloudStyle,
+} from '../canvas/canvas.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
 import { inNeighbourhood } from '../realtime-ui.js';
 import { invalidateHistoryBar } from '../screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from '../screens/pinned-bar.js';
 import { scheduleStructuresRefresh } from '../screens/structures/structures.js';
-import { canSave, clearDraft, clearDraftsFor, findDraft, offlineNotice, saveDraft } from '../drafts.js';
+import {
+  canSave,
+  clearDraft,
+  clearDraftsFor,
+  findDraft,
+  offlineNotice,
+  saveDraft,
+} from '../drafts.js';
 import { button, clear, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
@@ -102,7 +114,7 @@ export function registerTabCount(id: EditorTabId, loader: TabCountLoader): void 
 /** Registers a collapsible section of the «Основное» tab (L7). */
 export function registerMainSection(builder: MainSectionBuilder): void {
   mainSectionBuilders.push(builder);
-}/** Opens a link in the editor without changing the focus (H6/H11). */
+} /** Opens a link in the editor without changing the focus (H6/H11). */
 export function openLinkInEditor(link: Link): void {
   store.update({ editorTarget: { kind: 'link', id: link.id, link } });
 }
@@ -305,9 +317,19 @@ async function render(): Promise<void> {
   if (host === null || scrollBox === null || positionButton === null) return;
   const ctx = currentEditorContext();
 
-  // Panel title reflects what is selected (08-ui-spec.md §6.2).
+  // Panel title reflects what is selected (08-ui-spec.md §6.2). A thought in
+  // the trash (S13) additionally shows the bright-red trash marker before the
+  // word «Мысль» — the editor must state the trashed state explicitly, not
+  // only the canvas badge.
   if (titleEl !== null) {
-    titleEl.textContent = ctx === null ? '' : ctx.ownerType === 'link' ? 'Связь' : 'Мысль';
+    clear(titleEl);
+    if (ctx !== null && ctx.ownerType === 'thought' && ctx.thought?.marked_for_deletion === true) {
+      const mark = span('', 'editor-trash-mark');
+      mark.append(svgIcon('trash', 14));
+      setTooltip(mark, 'Мысль находится в корзине');
+      titleEl.append(mark);
+    }
+    titleEl.append(ctx === null ? '' : ctx.ownerType === 'link' ? 'Связь' : 'Мысль');
   }
 
   const signature =
@@ -595,12 +617,7 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
   const ctx = currentEditorContext();
   if (ctx === null || ctx.ownerType !== 'thought' || ctx.thought === null) return false;
   try {
-    const updated = await etn.thoughts.update(
-      networkId,
-      ctx.ownerId,
-      patch,
-      ctx.thought.version,
-    );
+    const updated = await etn.thoughts.update(networkId, ctx.ownerId, patch, ctx.thought.version);
     // Reflect the change wherever the entity is shown (see the helper) — the
     // actor gets no realtime echo, so the stores are patched from the save
     // response.
@@ -706,6 +723,10 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   titleArea.maxLength = 400;
   titleArea.rows = 1;
   titleArea.placeholder = 'Заголовок';
+  // A trashed thought shows its title struck-through (S13, 08-ui-spec.md
+  // §6.2.1): the field stays fully editable — only the rendering is crossed
+  // out, mirroring the dimmed canvas cloud.
+  if (thought.marked_for_deletion) titleArea.classList.add('title-strike');
   const resizeTitle = (): void => {
     titleArea.style.height = 'auto';
     // CSS caps the visible height at ~5 lines (max-height + overflow).
@@ -902,16 +923,11 @@ async function savePickedIcon(thought: Thought, result: IconPickResult): Promise
     const comma = result.source.dataUrl.indexOf(',');
     const dataBase64 = comma === -1 ? '' : result.source.dataUrl.slice(comma + 1);
     try {
-      const attachment = await etn.attachments.uploadFile(
-        networkId,
-        'thought',
-        thought.id,
-        {
-          title: result.source.name.trim() !== '' ? result.source.name.trim() : 'file',
-          mime_type: result.source.mime,
-          data_base64: dataBase64,
-        },
-      );
+      const attachment = await etn.attachments.uploadFile(networkId, 'thought', thought.id, {
+        title: result.source.name.trim() !== '' ? result.source.name.trim() : 'file',
+        mime_type: result.source.mime,
+        data_base64: dataBase64,
+      });
       attachmentId = attachment.id;
     } catch (err) {
       notice(`Не удалось загрузить файл во вложения: ${errText(err)}`, 'error');

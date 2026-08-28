@@ -378,6 +378,16 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string, id: string) => requireRest(deps).getThoughtUsage(networkId, id)),
   );
   handlers.set(
+    'thoughts.deletionCheck',
+    bind((networkId: string, ids: string[]) =>
+      requireRest(deps).checkThoughtDeletion(networkId, ids),
+    ),
+  );
+  handlers.set(
+    'thoughts.usageClear',
+    bind((networkId: string, id: string) => requireRest(deps).clearThoughtUsage(networkId, id)),
+  );
+  handlers.set(
     'thoughts.findDuplicates',
     bind((networkId: string, title: string, synonyms?: string[], typeIds?: string[]) =>
       requireRest(deps).findDuplicates(networkId, title, synonyms ?? [], typeIds ?? []),
@@ -556,6 +566,22 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string, thoughtId: string, showInactive?: boolean) =>
       requireRest(deps).listLinksByThought(networkId, thoughtId, showInactive),
     ),
+  );
+  handlers.set(
+    'links.deletionCheck',
+    bind((networkId: string, ids: string[]) =>
+      requireRest(deps).checkLinkDeletion(networkId, ids),
+    ),
+  );
+
+  // --- trash (S13, 03-server-api.md §14b) -----------------------------------
+  handlers.set(
+    'trash.list',
+    bind((networkId: string) => requireRest(deps).listTrash(networkId)),
+  );
+  handlers.set(
+    'trash.purge',
+    bind((networkId: string) => requireRest(deps).purgeTrash(networkId)),
   );
 
   // --- types ----------------------------------------------------------------

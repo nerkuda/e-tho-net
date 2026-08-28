@@ -33,7 +33,7 @@ import type {
 import { requireNetworkId, setFocus } from '../app.js';
 import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
-import { deleteLink, deleteThought } from '../canvas/context-menu.js';
+import { openLinkDeleteDialog, openThoughtDeleteDialog } from '../trash.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { errorDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
@@ -721,16 +721,16 @@ function buildRowMenuItems(link: Link, other: ThoughtRef, onChanged: () => void)
   ];
 }
 
-/** Deletes the link (confirmation inside `deleteLink`), then reloads the body. */
+/** Opens the two-phase delete dialog for the link, then reloads the body. */
 async function removeLink(link: Link, onChanged: () => void): Promise<void> {
   const networkId = requireNetworkId();
-  if (await deleteLink(networkId, link.id)) onChanged();
+  await openLinkDeleteDialog(networkId, link.id, onChanged);
 }
 
-/** Deletes the thought (confirmation inside `deleteThought`), then reloads. */
+/** Opens the two-phase delete dialog for the thought, then reloads. */
 async function removeThought(other: ThoughtRef, onChanged: () => void): Promise<void> {
   const networkId = requireNetworkId();
-  if (await deleteThought(networkId, { id: other.id, title: other.title })) onChanged();
+  await openThoughtDeleteDialog(networkId, { id: other.id, title: other.title }, onChanged);
 }
 
 /** Opens the link-type dialog and saves the picked type (L5). */

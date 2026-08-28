@@ -1548,7 +1548,9 @@ body.resizing-h {
    * focus row (the clouds must keep their own hover/click/drag). */
   pointer-events: auto;
   /* NB: no overflow clip — the on-frame ellipses stick half-outside (L12). */
-  transition: box-shadow 0.12s ease, border-color 0.12s ease;
+  transition:
+    box-shadow 0.12s ease,
+    border-color 0.12s ease;
 }
 
 /* Fade-out ghosts of clouds removed by a focus change (08-ui-spec §2.8). */
@@ -1671,7 +1673,9 @@ body.resizing-h {
 
 .cloud.drag-ghost {
   opacity: 0.95;
-  box-shadow: var(--shadow), 0 0 0 2px var(--accent-soft);
+  box-shadow:
+    var(--shadow),
+    0 0 0 2px var(--accent-soft);
   cursor: grabbing;
 }
 
@@ -1738,7 +1742,9 @@ body.resizing-h {
 .pinned-chip.drag-ghost,
 .menu-item.drag-ghost {
   background: var(--surface);
-  box-shadow: var(--shadow), 0 0 0 2px var(--accent-soft);
+  box-shadow:
+    var(--shadow),
+    0 0 0 2px var(--accent-soft);
   opacity: 0.95;
   cursor: grabbing;
 }
@@ -1893,6 +1899,36 @@ body.cloud-dragging * {
   display: none;
 }
 
+/* Mark-for-deletion badge (S13, 08-ui-spec.md §2.2): top-left corner, always
+   visible regardless of the `trashed` search/query filter. Clickable — opens
+   the single-delete dialog for this thought. The circle is 70% larger than
+   the position badge (27.2px vs 16px) so the bright-red trash glyph inside
+   stays readable at a glance; the circle centre still coincides with the
+   cloud's top-left corner (left/top = -size/2). */
+.cloud-trash-badge {
+  position: absolute;
+  left: -13.6px;
+  top: -13.6px;
+  width: 27.2px;
+  height: 27.2px;
+  border-radius: 50%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+/* The trash glyph (lucide «trash», lib/icons.ts) is drawn bright red on the
+   black circle — well readable on both light and dark themes. */
+.cloud-trash-badge svg {
+  color: #e53935;
+}
+
 .cloud.font-bold .cloud-title {
   font-weight: 700;
 }
@@ -1979,6 +2015,23 @@ body.cloud-dragging * {
   white-space: nowrap;
 }
 
+/* Trash marker in the editor panel header (S13, 08-ui-spec.md §6.2): shown
+   next to the word «Мысль» when the edited thought is in the trash — same
+   bright-red trash glyph as the canvas badge. */
+.editor-title .editor-trash-mark {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  color: #e53935;
+}
+
+/* The title field of a trashed thought (S13, 08-ui-spec.md §6.2.1): shown
+   struck-through while staying editable — the text is typed/edited normally,
+   only its rendering is crossed out. */
+.editor-title-input.title-strike {
+  text-decoration: line-through;
+}
+
 .editor-scroll {
   flex: 1;
   min-height: 0;
@@ -2001,8 +2054,12 @@ body.cloud-dragging * {
    any JS class toggling. Keeps the DOM-replace rebuild but takes the harsh
    instant "jump" edge off it (08-ui-spec.md §6, "дергание редактора"). */
 @keyframes editor-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* The header form keeps its own padding: the scroll box itself has none so
@@ -3154,6 +3211,76 @@ body.cloud-dragging * {
   width: 100%;
 }
 
+/* --- thought_ref values: the thought's mini cloud (§6.3.1) ------------------ */
+
+/* A stored single thought_ref value: a self-contained mini cloud of the
+ * referenced thought — icon + title in its own colours/font (inline styles
+ * from applyCloudStyle), click opens the thought on the map, the inline «×»
+ * clears the value. Styled after the history-bar chips (§11.1). */
+.prop-ref-cloud {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 2px 1px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.prop-ref-cloud:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.prop-ref-cloud .prc-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Thought font styles respect the same class set as the history chips. */
+.prop-ref-cloud.font-bold .prc-title {
+  font-weight: 700;
+}
+
+.prop-ref-cloud.font-italic .prc-title {
+  font-style: italic;
+}
+
+.prop-ref-cloud.font-underline .prc-title {
+  text-decoration: underline;
+}
+
+.prop-ref-cloud.font-strike .prc-title {
+  text-decoration: line-through;
+}
+
+.prop-ref-cloud.dim {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+/* The «×» inside the cloud: smaller than the filter-panel inline clear so it
+ * fits the pill shape (still a comfortable click target). */
+.prop-ref-cloud .st-f-clear-inline {
+  width: 18px;
+  height: 18px;
+  font-size: 12px;
+  border: none;
+  border-radius: 999px;
+}
+
+/* A marked-for-deletion or inactive thought in the multi-value chip list
+ * (st-f-chip) reads dimmed like everywhere else. */
+.st-f-chip.dim {
+  opacity: 0.55;
+  font-style: italic;
+}
+
 .link-group-item {
   display: flex;
   gap: 8px;
@@ -3368,6 +3495,14 @@ body.cloud-dragging * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A thought in the trash (S13, 08-ui-spec.md §5a.2): its selection row dims
+ * and carries the red trash glyph between the icon and the title — the same
+ * marked reading as the canvas badge, scaled down to the list. The glyph
+ * itself is the shared `.list-trash-mark` (see the group-delete dialog). */
+.selection-item.dim {
+  opacity: 0.55;
 }
 
 /* Top menu bar of the selection panel (Выделение / Действия / Свойства).
@@ -4336,6 +4471,173 @@ body.cloud-dragging * {
   font-weight: 700;
   color: var(--text);
   border-bottom: 1px solid var(--border);
+}
+
+/* --- Групповое удаление (S13, 08-ui-spec.md §5a.2) ------------------------- */
+
+/* Ширина диалога: не меньше 400px и не больше 1000px, «сколько поместится на
+ * экране» — clamp растёт с окном, а собственный max-width `.dialog-box`
+ * (100vw − 40px) удерживает диалог внутри маленького экрана. */
+.dialog-box.group-delete-box {
+  width: clamp(400px, 60vw, 1000px);
+}
+
+/* Таблица: две колонки — мини-облачко мысли и переключатель «Удалить /
+ * В корзину». Высота строки фиксирована (однострочный заголовок с
+ * многоточием), поэтому лимит «10 строк + шапка» стабилен; дальше — прокрутка. */
+.group-delete {
+  --gd-row-h: 42px;
+  --gd-head-h: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Панель массового переключения НАД таблицей: «Переключить: [все в корзину]
+ * [удалять возможное]» — переключатели строк живут здесь, нижний колонтитул
+ * остаётся только для действий всего диалога (§5a.2). */
+.group-delete-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.group-delete-toolbar-label {
+  color: var(--text-dim);
+}
+
+.group-delete-table {
+  max-height: calc(var(--gd-row-h) * 10 + var(--gd-head-h));
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.group-delete-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: var(--gd-row-h);
+  border-bottom: 1px solid var(--border);
+}
+
+.group-delete-row:last-child {
+  border-bottom: none;
+}
+
+/* Шапка «Мысль | Действие» — прилипает к верху при прокрутке. */
+.group-delete-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: var(--gd-head-h);
+  background: var(--surface);
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.group-delete-head-cloud {
+  padding: 4px 6px 4px 12px;
+}
+
+.group-delete-head-toggle {
+  padding: 4px 12px 4px 16px;
+  border-left: 1px solid var(--border);
+  text-align: right;
+}
+
+/* Первая колонка — мини-облачко: иконка + заголовок с настоящими цветами и
+ * начертанием мысли (applyCloudStyle пишет их инлайн-стилями). Помеченная на
+ * удаление мысль — бледная, с красной меткой-корзиной, как на карте (§2.2). */
+.group-delete-cloud {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 4px 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-cloud);
+  background: var(--surface-2);
+}
+
+.group-delete-cloud.dim {
+  opacity: 0.55;
+}
+
+.group-delete-cloud-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-delete-cloud.font-bold .group-delete-cloud-title {
+  font-weight: 700;
+}
+
+.group-delete-cloud.font-italic .group-delete-cloud-title {
+  font-style: italic;
+}
+
+.group-delete-cloud.font-underline .group-delete-cloud-title {
+  text-decoration: underline;
+}
+
+.group-delete-cloud.font-strike .group-delete-cloud-title {
+  text-decoration: line-through;
+}
+
+/* Вторая колонка — переключатель строки, визуально отделён от облачка
+ * разделителем и отбита от него отступом (жалоба тестировщика: переключатель
+ * «прилеплен» к названию). */
+.group-delete-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 4px 12px 4px 16px;
+  border-left: 1px solid var(--border);
+}
+
+.group-delete-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.group-delete-option input[type='radio'] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.group-delete-option:has(input:disabled) {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.group-delete-option:has(input:disabled) input[type='radio'] {
+  cursor: default;
+}
+
+/* Красная метка-корзина в списочных строках (S13): уменьшенный аналог бейджа
+ * облачка (§2.2) — тот же ярко-красный цвет на любой теме. Используется
+ * строками панели выделения, мини-облачками истории, закреплёнными чипами и
+ * таблицей группового удаления. */
+.list-trash-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: #e53935;
+}
+
+.group-delete-warning {
+  margin: 0;
+  color: var(--text-dim);
 }
 
 /* --- «О программе» dialog (08-ui-spec.md §8.2) ----------------------------- */

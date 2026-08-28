@@ -35,13 +35,28 @@ import type { WorkspaceHandles } from './workspace.js';
 import { showCreateNetworkDialog } from './networks.js';
 import { showSettingsDialog } from './settings.js';
 import { showLinkTypesDialog, showThoughtTypesDialog } from './type-manager.js';
+import { openTrashDialog } from '../trash.js';
 import type { NetworkMember, User } from '@etn/shared';
 
 /** Wires the toolbar network menu button. */
 export function wireNetMenu(handles: WorkspaceHandles): void {
   handles.netMenuButton.addEventListener('click', (event) => {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    showMenuAt(rect.left, rect.bottom + 4, buildNetMenuItems());
+    // «Корзина (N)» needs a fresh count (08-ui-spec.md §8.1) — fetched once
+    // per menu open rather than kept live in the store.
+    void (async () => {
+      const networkId = store.state.networkId;
+      let trashCount = 0;
+      if (networkId !== null) {
+        try {
+          const trash = await etn.trash.list(networkId);
+          trashCount = trash.thoughts.length + trash.links.length;
+        } catch {
+          trashCount = 0;
+        }
+      }
+      showMenuAt(rect.left, rect.bottom + 4, buildNetMenuItems(trashCount));
+    })();
   });
 }
 
@@ -49,9 +64,9 @@ export function wireNetMenu(handles: WorkspaceHandles): void {
  * Builds the «Мыслесеть» menu items from the current state (Q3-bugfix,
  * 08-ui-spec.md §8.1). The menu houses commands that act on the **open**
  * network: members, leaving, type catalogues (a network-level concern),
- * and the network section of the unified Settings dialog.
+ * the trash (S13), and the network section of the unified Settings dialog.
  */
-export function buildNetMenuItems(): MenuItem[] {
+export function buildNetMenuItems(trashCount = 0): MenuItem[] {
   const net = store.state.network;
   const meId = store.state.me?.id ?? null;
   const isOwner = net !== null && net.owner_id === meId;
@@ -66,6 +81,14 @@ export function buildNetMenuItems(): MenuItem[] {
     MENU_SEPARATOR,
     { label: 'Типы мыслей', onClick: () => showThoughtTypesDialog() },
     { label: 'Типы связей', onClick: () => showLinkTypesDialog() },
+    MENU_SEPARATOR,
+    {
+      label: `Корзина (${trashCount})`,
+      onClick: () => {
+        const networkId = store.state.networkId;
+        if (networkId !== null) void openTrashDialog(networkId);
+      },
+    },
     MENU_SEPARATOR,
     {
       label: 'Настройки мыслесети',

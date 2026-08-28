@@ -258,6 +258,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           type_id: queryStrings(query.type_id),
           link_type_id: queryStrings(query.link_type_id),
           show_inactive: queryBoolean(query.show_inactive, 'show_inactive', req.id),
+          trashed: queryBoolean(query.trashed, 'trashed', req.id),
           limit,
           offset,
         };

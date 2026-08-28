@@ -33,6 +33,7 @@ import {
   type Thought,
   type ThoughtCardWarning,
   type ThoughtCreateInput,
+  type ThoughtDeletionCheckResult,
   type ThoughtRef,
   type ThoughtUpdateInput,
 } from '@etn/shared';
@@ -40,7 +41,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { createComment } from './comment-service.js';
 import { purgeThoughtDeletionDependants } from './owner-cleanup.js';
-import { computeThoughtCardWarnings } from './property-service.js';
+import { computeThoughtCardWarnings, countThoughtRefUsages } from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
 
 import { getAttachment } from './attachment-service.js';
@@ -69,6 +70,9 @@ interface ThoughtRow {
   active: number;
   is_protected: number;
   is_root: number;
+  marked_for_deletion: number;
+  marked_for_deletion_at: string | null;
+  marked_for_deletion_by: string | null;
   fg_color: string | null;
   bg_color: string | null;
   font_bold: number;
@@ -115,6 +119,9 @@ function rowToThought(row: ThoughtRow, synonyms: string[]): Thought {
     active: row.active === 1,
     is_protected: row.is_protected === 1,
     is_root: row.is_root === 1,
+    marked_for_deletion: row.marked_for_deletion === 1,
+    marked_for_deletion_at: row.marked_for_deletion_at,
+    marked_for_deletion_by: row.marked_for_deletion_by,
     fg_color: row.fg_color,
     bg_color: row.bg_color,
     font_bold: readFont(fm, FONT_BOLD_BIT, row.font_bold),
@@ -144,6 +151,8 @@ export function rowToThoughtRef(row: {
   /** Optional — SELECTs that do not carry the column yield `null`. */
   icon_attachment_id?: string | null;
   active: number;
+  /** Optional — SELECTs that do not carry the column yield `false` (S13). */
+  marked_for_deletion?: number;
   fg_color: string | null;
   bg_color: string | null;
   font_bold: number;
@@ -161,6 +170,7 @@ export function rowToThoughtRef(row: {
     icon_kind: row.icon_kind as IconKind,
     icon_attachment_id: row.icon_attachment_id ?? null,
     active: row.active === 1,
+    marked_for_deletion: row.marked_for_deletion === 1,
     fg_color: row.fg_color,
     bg_color: row.bg_color,
     font_bold: readFont(fm, FONT_BOLD_BIT, row.font_bold),
@@ -322,6 +332,7 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
   const rows = ndb
     .prepare(
       `SELECT id, title, type_id, icon, icon_kind, icon_attachment_id, active,
+              marked_for_deletion,
               fg_color, bg_color,
               font_bold, font_italic, font_underline, font_strike, font_manual
        FROM thoughts WHERE id IN (${placeholders})`,
@@ -334,6 +345,7 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
     icon_kind: string;
     icon_attachment_id: string | null;
     active: number;
+    marked_for_deletion: number;
     fg_color: string | null;
     bg_color: string | null;
     font_bold: number;
@@ -591,6 +603,18 @@ export function updateThought(
       sets.push('active = ?');
       args.push(changes.active ? 1 : 0);
     }
+    // Mark-for-deletion (S13, 02-data-model.md §3.1.2): `true` sets the flag and
+    // records when/by whom; `false` clears the flag and its audit columns. No
+    // blocking check here — marking is always allowed and reversible.
+    if (changes.marked_for_deletion !== undefined) {
+      if (changes.marked_for_deletion) {
+        sets.push('marked_for_deletion = ?', 'marked_for_deletion_at = ?', 'marked_for_deletion_by = ?');
+        args.push(1, new Date().toISOString(), actorUserId);
+      } else {
+        sets.push('marked_for_deletion = ?', 'marked_for_deletion_at = ?', 'marked_for_deletion_by = ?');
+        args.push(0, null, null);
+      }
+    }
     if (changes.fg_color !== undefined) {
       sets.push('fg_color = ?');
       args.push(changes.fg_color);
@@ -649,6 +673,54 @@ export function updateThought(
 // ---------------------------------------------------------------------------
 
 /**
+ * Number of children that would be left with no parent after deleting
+ * `thoughtId`: the distinct targets of the thought's active outgoing links
+ * that have no other active incoming link. The cascade removes link rows, not
+ * child thoughts, so this is the "будущие сироты" warning of §6.5/§6.5a.
+ */
+function countOrphanedChildren(ndb: NetworkDb, thoughtId: string): number {
+  const row = ndb
+    .prepare(
+      `SELECT COUNT(*) AS c FROM (
+         SELECT l.target_id
+         FROM links l
+         WHERE l.source_id = ? AND l.active = 1
+           AND l.target_id <> ?
+           AND NOT EXISTS (
+             SELECT 1 FROM links l2
+             WHERE l2.target_id = l.target_id
+               AND l2.active = 1
+               AND l2.source_id <> ?
+           )
+         GROUP BY l.target_id
+       )`,
+    )
+    .get(thoughtId, thoughtId, thoughtId) as { c: number };
+  return row.c;
+}
+
+/**
+ * Check whether a thought can be physically deleted (docs/03-server-api.md
+ * §6.5a). Blocking is the "использование в свойствах" arm only for 0.5.1 —
+ * `blocking.layers` stays empty until layers land in 0.5.2 (02-data-model.md
+ * §3.1.2). Also reports how many children would become orphans.
+ *
+ * Throws `NOT_FOUND` (404) when the thought does not exist.
+ */
+export function checkThoughtDeletion(ndb: NetworkDb, id: string): ThoughtDeletionCheckResult {
+  const row = ndb.prepare('SELECT 1 FROM thoughts WHERE id = ?').get(id);
+  if (!row) {
+    throw new EtnError('NOT_FOUND', `thought ${id} not found`, { entity: 'thought', id });
+  }
+  const properties = countThoughtRefUsages(ndb, id);
+  return {
+    blocked: properties > 0,
+    blocking: { properties, layers: [] },
+    orphaned_children: countOrphanedChildren(ndb, id),
+  };
+}
+
+/**
  * Delete a thought (docs/03-server-api.md §6.5). Cascades through FK-bearing
  * tables (synonyms, links, thought_views, user_focus_*); the polymorphic
  * dependants of the thought **and of its incident links** (comments,
@@ -658,7 +730,9 @@ export function updateThought(
  * Throws:
  *   * `NOT_FOUND` (404) if the thought does not exist;
  *   * `VERSION_CONFLICT` (409) if `expectedVersion` is set and does not match;
- *   * `PROTECTED_ENTITY` (422) for `is_protected` thoughts (HOME).
+ *   * `PROTECTED_ENTITY` (422) for `is_protected` thoughts (HOME);
+ *   * `VALIDATION_ERROR` (422, `details.blocking`) when deletion is blocked by
+ *     referencing properties (S13, §6.5a).
  */
 export function deleteThought(
   ndb: NetworkDb,
@@ -679,6 +753,16 @@ export function deleteThought(
       throw new EtnError('PROTECTED_ENTITY', 'protected thoughts cannot be deleted', {
         entity: 'thought',
         id,
+      });
+    }
+    // S13: refuse physical deletion while other thoughts reference this one
+    // through a thought_ref property (02-data-model.md §3.1.2).
+    const check = checkThoughtDeletion(ndb, id);
+    if (check.blocked) {
+      throw new EtnError('VALIDATION_ERROR', 'thought is used in properties and cannot be deleted', {
+        entity: 'thought',
+        id,
+        blocking: check.blocking,
       });
     }
     // Polymorphic owners without SQL FK: clean up explicitly. This covers the

@@ -334,6 +334,8 @@ export function collectSubtreeTypes(
 /** Resolved filters shared by all four search groups. */
 interface SearchFilters {
   showInactive: boolean;
+  /** S13: when false (default) marked-for-deletion rows are hidden. */
+  trashed: boolean;
   typeIds: string[] | null;
   linkTypeIds: string[] | null;
   subtreeIds: Set<string> | null;
@@ -404,6 +406,7 @@ function searchNames(
   const { where, params } = joinClauses([
     { sql: 'fts_thought_names MATCH ?', params: [match] },
     { sql: '(t.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] },
+    { sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
     inListClause('t.type_id', f.typeIds),
     subtreeClause('f.thought_id', f.subtreeIds),
   ]);
@@ -490,6 +493,7 @@ function searchTexts(
     { sql: 'fts_thought_texts MATCH ?', params: [match] },
     { sql: "c.owner_type = 'thought'", params: [] },
     { sql: '(t.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] },
+    { sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
     inListClause('t.type_id', f.typeIds),
     subtreeClause('f.thought_id', f.subtreeIds),
   ]);
@@ -591,6 +595,7 @@ function searchLinks(
     { sql: 'fts_link_texts MATCH ?', params: [match] },
     { sql: "c.owner_type = 'link'", params: [] },
     { sql: '(l.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] },
+    { sql: '(l.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
     inListClause('l.type_id', f.linkTypeIds),
   ]);
   // Same collapse as `searchTexts`: one hit per `link_id`. `total` counts
@@ -671,11 +676,13 @@ function buildChronoHalf(
   let joins = '';
   if (side === 'thought') {
     clauses.push({ sql: '(t.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] });
+    clauses.push({ sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] });
     clauses.push(inListClause('t.type_id', f.typeIds));
     clauses.push(subtreeClause('f.thought_id', f.subtreeIds));
     joins = 'JOIN thoughts t ON t.id = c.owner_id';
   } else {
     clauses.push({ sql: '(l.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] });
+    clauses.push({ sql: '(l.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] });
     clauses.push(inListClause('l.type_id', f.linkTypeIds));
     joins = 'LEFT JOIN links l ON l.id = c.owner_id';
   }
@@ -774,6 +781,7 @@ export function search(
 
   const filters: SearchFilters = {
     showInactive: request.show_inactive ?? showInactiveDefault,
+    trashed: request.trashed === true,
     // L21: a selected parent type matches its whole subtree (OR semantics).
     typeIds: request.type_id ? expandTypeIdsToSubtree(ndb, 'thought_types', request.type_id) : null,
     linkTypeIds: request.link_type_id

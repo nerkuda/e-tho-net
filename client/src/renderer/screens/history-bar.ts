@@ -324,7 +324,7 @@ function styleDropdownRows(
     const row = rows[index];
     if (row === undefined || ref === undefined) return;
     applyCloudStyle(row, resolveCloudStyle(ref));
-    if (!ref.active) row.classList.add('dim');
+    if (!ref.active || ref.marked_for_deletion) row.classList.add('dim');
   });
 }
 
@@ -469,6 +469,20 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
   const title = el('span', 'hc-title', clip(ref?.title ?? id, CHIP_TITLE_LIMIT));
   setTooltip(chip, ref?.title ?? id);
   chip.append(icon, title);
+  // A thought in the trash (S13, §5a.2): the mini-cloud dims and carries the
+  // red trash glyph — the same marked reading as the canvas badge, scaled
+  // down to the strip.
+  if (ref?.marked_for_deletion === true) {
+    chip.classList.add('dim');
+    chip.append(buildTrashMark());
+  }
   chip.addEventListener('click', () => openEntry(id));
   return chip;
+}
+
+/** Builds the small red trash glyph appended to marked history mini-clouds. */
+function buildTrashMark(): HTMLElement {
+  const mark = span('', 'list-trash-mark');
+  mark.append(svgIcon('trash', 11));
+  return mark;
 }

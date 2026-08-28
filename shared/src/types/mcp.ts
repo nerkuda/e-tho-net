@@ -49,6 +49,9 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.mentions',
   'etn.thoughts.backlinks',
   'etn.thoughts.usage',
+  'etn.thoughts.deletion_check',
+  'etn.links.deletion_check',
+  'etn.trash.list',
   'etn.comments.get',
   'etn.export.subgraph',
   'etn.types.list',
@@ -58,9 +61,11 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.create',
   'etn.thoughts.update',
   'etn.thoughts.delete',
+  'etn.thoughts.trash',
   'etn.thoughts.set_active',
   'etn.links.create',
   'etn.links.delete',
+  'etn.links.trash',
   'etn.comments.upsert',
   'etn.comments.update',
   'etn.comments.delete',
@@ -69,6 +74,8 @@ export const MCP_TOOL_NAMES = [
   'etn.attachments.search',
   'etn.properties.set',
   'etn.thoughts.upsert_bundle',
+  'etn.trash.purge',
+  'etn.thoughts.usage_clear',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -120,6 +127,9 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.thoughts.mentions': { readOnlyHint: true },
   'etn.thoughts.backlinks': { readOnlyHint: true },
   'etn.thoughts.usage': { readOnlyHint: true },
+  'etn.thoughts.deletion_check': { readOnlyHint: true },
+  'etn.links.deletion_check': { readOnlyHint: true },
+  'etn.trash.list': { readOnlyHint: true },
   'etn.comments.get': { readOnlyHint: true },
   'etn.export.subgraph': { readOnlyHint: true },
   'etn.types.list': { readOnlyHint: true },
@@ -132,9 +142,12 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.thoughts.delete': { destructiveHint: true },
   'etn.links.delete': { destructiveHint: true },
   'etn.comments.delete': { destructiveHint: true },
+  'etn.trash.purge': { destructiveHint: true },
 
   // ---- mutating tools — idempotentHint ----------------------------
   'etn.thoughts.set_active': { idempotentHint: true },
+  'etn.thoughts.trash': { idempotentHint: true },
+  'etn.links.trash': { idempotentHint: true },
   'etn.properties.set': { idempotentHint: true },
   'etn.thoughts.upsert_bundle': { idempotentHint: true },
 };

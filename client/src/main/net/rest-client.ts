@@ -1419,6 +1419,7 @@ export class RestClient {
     if (request.type_id !== undefined) q['type_id'] = request.type_id;
     if (request.link_type_id !== undefined) q['link_type_id'] = request.link_type_id;
     if (request.show_inactive !== undefined) q['show_inactive'] = request.show_inactive;
+    if (request.trashed !== undefined) q['trashed'] = request.trashed;
     if (request.limit !== undefined) q['limit'] = request.limit;
     if (request.offset !== undefined) q['offset'] = request.offset;
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/search`, { query: q });
@@ -1469,6 +1470,64 @@ export class RestClient {
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/usage`,
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // §6.5a/§9.2/§14b — deletion check, usage clear, trash (S13)
+  // -------------------------------------------------------------------------
+
+  /** `POST /networks/{nid}/thoughts/deletion-check-batch` (03-server-api.md §6.5a). */
+  public async checkThoughtDeletion(
+    networkId: string,
+    ids: string[],
+  ): Promise<Record<string, import('@etn/shared').ThoughtDeletionCheckResult>> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/deletion-check-batch`,
+      { body: { ids } },
+    );
+  }
+
+  /** `POST /networks/{nid}/links/deletion-check-batch` (03-server-api.md §6.5a). */
+  public async checkLinkDeletion(
+    networkId: string,
+    ids: string[],
+  ): Promise<Record<string, import('@etn/shared').LinkDeletionCheckResult>> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/links/deletion-check-batch`,
+      { body: { ids } },
+    );
+  }
+
+  /** `POST /networks/{nid}/thoughts/{id}/usage/clear` (03-server-api.md §9.2). */
+  public async clearThoughtUsage(
+    networkId: string,
+    thoughtId: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').UsageClearResult> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/usage/clear`,
+      { requestOptions: opts },
+    );
+  }
+
+  /** `GET /networks/{nid}/trash` (03-server-api.md §14b). */
+  public async listTrash(
+    networkId: string,
+  ): Promise<import('@etn/shared').TrashListResult> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/trash`);
+  }
+
+  /** `POST /networks/{nid}/trash/purge` (03-server-api.md §14b). */
+  public async purgeTrash(
+    networkId: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').TrashPurgeResult> {
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/trash/purge`, {
+      requestOptions: opts,
+    });
   }
 
   /**

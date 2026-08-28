@@ -58,6 +58,8 @@ export interface SearchOptions {
   typeIds: string[];
   linkTypeIds: string[];
   showInactive: boolean;
+  /** S13: include thoughts/links marked for deletion in search results. */
+  trashed: boolean;
 }
 
 /** Minimum trimmed query length for a server search (08-ui-spec.md §3.1). */
@@ -77,6 +79,7 @@ const DEFAULT_OPTIONS: SearchOptions = {
   typeIds: [],
   linkTypeIds: [],
   showInactive: false,
+  trashed: false,
 };
 
 /** Search panel chrome (input + gear + results panel). */
@@ -414,6 +417,7 @@ async function run(): Promise<void> {
           type_id: options.typeIds.length > 0 ? options.typeIds : undefined,
           link_type_id: options.linkTypeIds.length > 0 ? options.linkTypeIds : undefined,
           show_inactive: options.showInactive,
+          trashed: options.trashed,
         }),
       ),
     );
@@ -839,6 +843,17 @@ function buildOptionsRow(row: HTMLElement): void {
   });
   inactiveLabel.append(inactiveCheck, span('показывать неактуальные'));
 
+  const trashedLabel = el('label', 'checkbox-row');
+  const trashedCheck = el('input');
+  trashedCheck.type = 'checkbox';
+  trashedCheck.checked = options.trashed;
+  trashedCheck.addEventListener('change', () => {
+    options = { ...options, trashed: trashedCheck.checked };
+    persistState();
+    refreshSearchIfVisible();
+  });
+  trashedLabel.append(trashedCheck, span('показывать помеченные на удаление'));
+
   row.append(
     subtreeLabel,
     subrootButton,
@@ -848,6 +863,7 @@ function buildOptionsRow(row: HTMLElement): void {
     typeSelect,
     linkTypeSelect,
     inactiveLabel,
+    trashedLabel,
   );
 }
 

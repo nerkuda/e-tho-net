@@ -9,6 +9,7 @@
 
 import type { EtnErrorCode } from '../errors.js';
 import type { FocusDir, IconKind, LinkStyle, SortKind, SortOrder } from '../enums.js';
+import type { HoldingLayerRef } from './trash.js';
 
 /** A thought entity (02-data-model.md §3.1, 03-server-api.md §6.1). */
 export interface Thought {
@@ -28,6 +29,12 @@ export interface Thought {
   is_protected: boolean;
   /** Root thought of the network (HOME). */
   is_root: boolean;
+  /** In the trash, awaiting physical deletion (02-data-model.md §3.1.2). */
+  marked_for_deletion: boolean;
+  /** ISO-8601 moment of the mark; `null` when not marked. */
+  marked_for_deletion_at: string | null;
+  /** user_id that set the mark; `null` when not marked. */
+  marked_for_deletion_by: string | null;
   fg_color: string | null;
   bg_color: string | null;
   /**
@@ -92,6 +99,8 @@ export interface ThoughtUpdateInput {
   /** Attachment shown by Ctrl-hover over the icon; `null` clears the link (L16). */
   icon_attachment_id?: string | null;
   active?: boolean;
+  /** «Поместить в корзину» / «Вернуть из корзины» (03-server-api.md §6.4). */
+  marked_for_deletion?: boolean;
   fg_color?: string | null;
   bg_color?: string | null;
   /**
@@ -111,6 +120,8 @@ export type ThoughtBatchOp =
   | 'set_active'
   | 'set_inactive'
   | 'delete'
+  | 'trash'
+  | 'purge'
   | 'link_to_focus'
   | 'unlink_from_focus'
   // Bulk link operations of the structures filter commands (L22, §6.6):
@@ -168,6 +179,8 @@ export interface ThoughtRef {
   /** Backing attachment of the icon for Ctrl-hover zoom (L16); `null` — none. */
   icon_attachment_id: string | null;
   active: boolean;
+  /** In the trash, awaiting physical deletion (S13, 02-data-model.md §3.1.2). */
+  marked_for_deletion: boolean;
   fg_color: string | null;
   bg_color: string | null;
   /** Manual (`true`/`false`) or `null` = inherit from the type (§3.1.1). */
@@ -193,6 +206,11 @@ export interface ThoughtUsage {
   /** Total number of referencing values across all groups. */
   total: number;
   groups: ThoughtUsageGroup[];
+  /**
+   * Layers holding a changed (non-tombstone) shadow row of this thought
+   * (13-layers.md §5.1). Empty until layers land in version 0.5.2 (S2).
+   */
+  holding_layers: HoldingLayerRef[];
 }
 
 /** Per-user view mark, drives the "viewed" sort (02-data-model.md §3.10.2). */

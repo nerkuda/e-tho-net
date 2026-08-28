@@ -155,6 +155,9 @@ export function toCompactThought(thought: Thought): CompactThought {
     type_id: thought.type_id,
     icon: sanitizeIcon(thought.icon),
     active: thought.active,
+    marked_for_deletion: thought.marked_for_deletion,
+    marked_for_deletion_at: thought.marked_for_deletion_at,
+    marked_for_deletion_by: thought.marked_for_deletion_by,
     synonyms: thought.synonyms,
     version: thought.version,
     created_at: thought.created_at,
@@ -176,6 +179,7 @@ export function toCompactThoughtRef(ref: ThoughtRef): CompactThoughtRef {
     type_id: ref.type_id,
     icon: sanitizeIcon(ref.icon),
     active: ref.active,
+    marked_for_deletion: ref.marked_for_deletion,
   };
 }
 
@@ -193,6 +197,9 @@ export function toCompactLink(link: Link): CompactLink {
     target_id: link.target_id,
     type_id: link.type_id,
     active: link.active,
+    marked_for_deletion: link.marked_for_deletion,
+    marked_for_deletion_at: link.marked_for_deletion_at,
+    marked_for_deletion_by: link.marked_for_deletion_by,
     version: link.version,
     created_at: link.created_at,
     updated_at: link.updated_at,

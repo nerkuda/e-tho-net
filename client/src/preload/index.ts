@@ -65,6 +65,8 @@ function buildApi(): EtnApi {
       backlinks: (networkId, id) => invoke('thoughts.backlinks', networkId, id),
       mentionsScan: (networkId, request) => invoke('thoughts.mentionsScan', networkId, request),
       usage: (networkId, id) => invoke('thoughts.usage', networkId, id),
+      deletionCheck: (networkId, ids) => invoke('thoughts.deletionCheck', networkId, ids),
+      usageClear: (networkId, id) => invoke('thoughts.usageClear', networkId, id),
       findDuplicates: (networkId, title, synonyms, typeIds) =>
         invoke('thoughts.findDuplicates', networkId, title, synonyms, typeIds),
       setFocusPreferences: (networkId, focusId, input) =>
@@ -110,6 +112,11 @@ function buildApi(): EtnApi {
         invoke('links.remove', networkId, id, expectedVersion),
       listByThought: (networkId, thoughtId, showInactive) =>
         invoke('links.listByThought', networkId, thoughtId, showInactive),
+      deletionCheck: (networkId, ids) => invoke('links.deletionCheck', networkId, ids),
+    },
+    trash: {
+      list: (networkId) => invoke('trash.list', networkId),
+      purge: (networkId) => invoke('trash.purge', networkId),
     },
     types: {
       listThoughtTypes: (networkId) => invoke('types.listThoughtTypes', networkId),

@@ -67,6 +67,12 @@ export interface DialogOptions {
     ctrlShiftEnter?: () => void;
   };
   width?: number;
+  /**
+   * Extra class on the dialog box — for CSS-driven sizing that a fixed px
+   * {@link width} cannot express (e.g. the group-delete table dialog,
+   * §5a.2: `clamp(400px, …, 1000px)` "as much as fits the screen").
+   */
+  boxClass?: string;
   /** Called after the dialog is mounted (focus management, etc.). */
   onMount?: (close: () => void) => void;
 }
@@ -121,6 +127,7 @@ export function closeDialog(): void {
 export function showDialog(opts: DialogOptions): () => void {
   const backdrop = div('dialog-backdrop');
   const box = div('dialog-box');
+  if (opts.boxClass !== undefined) box.classList.add(...opts.boxClass.split(/\s+/));
   if (opts.width !== undefined) box.style.width = `${opts.width}px`;
   // Custom footers (e.g. the unified settings dialog) want a scrollable body
   // and a sticky bottom bar; opt in via the `dialog-box-tall` class so the

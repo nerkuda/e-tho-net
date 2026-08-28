@@ -21,7 +21,7 @@ import {
   showSelectionThoughtContextMenu,
 } from '../canvas/context-menu.js';
 import { buildMultiThoughtSnapshot, type SnapshotDeps } from '../canvas/clipboard.js';
-import { applyThoughtIcon, invalidateRef, setSelectionClickHooks } from '../canvas/canvas.js';
+import { applyThoughtIcon, getRef, invalidateRef, setSelectionClickHooks } from '../canvas/canvas.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
 import { showThoughtStyleDialog, type ThoughtStylePatch } from '../editor/style-dialog.js';
@@ -30,11 +30,13 @@ import { showImportEtnxDialog } from '../import-export/import-dialog.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { svgIcon } from '../lib/icons.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import { store } from '../state.js';
 import { pickLinkType, pickThoughtType, showSelectionPropertiesDialog } from './dialogs.js';
+import { openThoughtDeleteDialog, openThoughtGroupDeleteDialog } from '../trash.js';
 import { THOUGHT_RESOLVE_MAX_IDS, type ExportEtnxOptions, type ExportFormat, type ExportRequest } from '@etn/shared';
 
 /** Panel chrome the selection module renders into. */
@@ -93,6 +95,16 @@ function refresh(): void {
   void renderList(ids);
 }
 
+/**
+ * Forces a selection-list re-render (S13): the rows re-resolve their refs, so
+ * thoughts that just moved to/from the trash repaint their marks. Called after
+ * the group-delete dialog applies its batch — the panel stays open with the
+ * same contents, only the per-row state (trash mark) may change.
+ */
+export function refreshSelectionPanel(): void {
+  if (host?.isConnected === true) refresh();
+}
+
 /** Resolves and renders the selection list. */
 async function renderList(ids: string[]): Promise<void> {
   if (listHost === null) return;
@@ -126,6 +138,15 @@ async function renderList(ids: string[]): Promise<void> {
       iconBox.textContent = '💭';
     }
     item.append(iconBox);
+    // A thought in the trash (S13, §5a.2): the row shows the red trash mark
+    // next to the title and dims — the same "marked" reading as the canvas
+    // badge, scaled down to the list.
+    if (ref?.marked_for_deletion === true) {
+      item.classList.add('dim');
+      const mark = span('', 'list-trash-mark');
+      mark.append(svgIcon('trash', 12));
+      item.append(mark);
+    }
     const title = el('span', 'sel-title', refs.get(id)?.title ?? id);
     item.append(title);
     const removeBtn = button('✕', () => toggleSelection([id]), 'btn small', 'Убрать из выделения');
@@ -711,13 +732,25 @@ async function batch(input: {
   }
 }
 
-/** Batch delete with confirmation. */
+/**
+ * Delete command (08-ui-spec.md §5.3, §5a): a single selected thought opens the
+ * one-off delete dialog (§5a.1); two or more open the group-delete dialog
+ * (§5a.2), which handles the trash/purge split itself. Neither path clears or
+ * closes the selection panel (§5a.2): physically deleted thoughts are pruned
+ * one by one by `onThoughtDeleted`, marked ones stay in the list with their
+ * trash marks refreshed.
+ */
 async function batchDelete(): Promise<void> {
+  const networkId = requireNetworkId();
   const ids = store.state.selection;
   if (ids.length === 0) return;
-  if (!(await confirmDialog('Удалить мысли', `Удалить ${ids.length} мыслей?`, true))) return;
-  await batch({ op: 'delete', args: {} });
-  store.update({ selection: [] });
+  if (ids.length === 1) {
+    const id = ids[0]!;
+    const title = getRef(id)?.title ?? id;
+    await openThoughtDeleteDialog(networkId, { id, title });
+    return;
+  }
+  await openThoughtGroupDeleteDialog(networkId, ids);
 }
 
 /** Starts an export job and saves the result through main process. */

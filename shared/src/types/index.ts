@@ -20,6 +20,7 @@ export * from './structure.js';
 export * from './chronicle.js';
 export * from './pin.js';
 export * from './realtime.js';
+export * from './trash.js';
 export * from './api.js';
 export * from './mcp.js';
 export * from './etnx.js';

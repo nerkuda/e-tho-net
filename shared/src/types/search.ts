@@ -23,6 +23,9 @@ export interface SearchRequest {
   link_type_id?: string[];
   /** Override the user's `show_inactive` preference for this request. */
   show_inactive?: boolean;
+  /** Include thoughts/links marked for deletion (S13, 03-server-api.md §12);
+   *  default `false` — marked rows are hidden. */
+  trashed?: boolean;
   limit?: number;
   offset?: number;
 }

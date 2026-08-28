@@ -25,7 +25,7 @@ import {
   pasteThoughtsTo as pasteThoughtsToClipboard,
   type SnapshotDeps,
 } from './clipboard.js';
-import { invalidateRef, requestZoneAnimation } from './canvas.js';
+import { getRef, invalidateRef, requestZoneAnimation } from './canvas.js';
 import { patchFocusEdge, store } from '../state.js';
 import { confirmDialog, errorDialog, promptDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
@@ -38,6 +38,7 @@ import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { errText } from '../lib/dom.js';
 import { showExportEtnxDialog } from '../import-export/export-dialog.js';
 import { showImportEtnxDialog } from '../import-export/import-dialog.js';
+import { openLinkDeleteDialog, openThoughtDeleteDialog } from '../trash.js';
 
 /** Run an `.etnx` export for a single thought (phase P, task P7). The polling
  *  loop and save flow mirror `selection.ts:runExport`; we keep a local copy
@@ -247,27 +248,11 @@ async function invertLink(networkId: string, linkId: string): Promise<void> {
 }
 
 /**
- * Deletes a link after a confirmation. Shared by the canvas link menu and the
- * editor's links group. Resolves `true` when the link was actually deleted.
+ * Opens the two-phase delete dialog for a link (08-ui-spec.md §5a.1). Shared
+ * by the canvas link menu and the editor's links group.
  */
-export async function deleteLink(networkId: string, linkId: string): Promise<boolean> {
-  if (!(await confirmDialog('Удалить связь', 'Удалить связь?', true))) return false;
-  try {
-    const link = await etn.links.get(networkId, linkId);
-    await etn.links.remove(networkId, linkId, link.version);
-    // Drop the line at once; the debounced refresh reconciles the zones.
-    patchFocusEdge({ ...link, active: false });
-    // If the deleted link was open in the editor, drop the editor target.
-    const target = store.state.editorTarget;
-    if (target !== null && target.kind === 'link' && target.id === linkId) {
-      store.update({ editorTarget: null, selectedLinkId: null });
-    }
-    scheduleRefresh();
-    return true;
-  } catch (err) {
-    errorDialog('Удалить связь', err);
-    return false;
-  }
+export async function deleteLink(networkId: string, linkId: string): Promise<void> {
+  await openLinkDeleteDialog(networkId, linkId);
 }
 
 /** Opens the thought context menu at the event position. */
@@ -339,6 +324,17 @@ function buildThoughtMenuItems(
   }
   const isZoneFirst = canReorder && zoneIdx === 0;
   const isZoneLast = canReorder && zoneIdx === zoneLen - 1;
+
+  // «Удалить/восстановить» for a thought already in the trash (S13): the
+  // click still opens the same §5a.1 dialog, but the label signals that the
+  // dialog offers «Вернуть из корзины» as well. The flag mirrors the badge
+  // sources of the canvas (08-ui-spec.md §2.2): the fresh focused entity for
+  // the focus cloud, the resolved ThoughtRef for the zone clouds — so the
+  // label is always in step with the 🗑 badge.
+  const trashed =
+    focus !== null && focus.focused.id === target.id
+      ? focus.focused.marked_for_deletion
+      : getRef(target.id)?.marked_for_deletion === true;
 
   const selectionItem: MenuItem[] =
     opts.hideSelectionCommand === true
@@ -497,7 +493,10 @@ function buildThoughtMenuItems(
     },
     MENU_SEPARATOR,
     {
-      label: 'Удалить',
+      // For a thought already in the trash the label becomes
+      // «Удалить/восстановить» (S13, 08-ui-spec.md §2.6) — the action is the
+      // same two-phase dialog either way.
+      label: trashed ? 'Удалить/восстановить' : 'Удалить',
       danger: true,
       onClick: () => void deleteThought(networkId, target),
     },
@@ -699,25 +698,14 @@ function makeSnapshotDeps(networkId: string): SnapshotDeps {
 }
 
 /**
- * Deletes a thought after confirmation. Shared by the canvas thought menu and
- * the editor's links group. Resolves `true` when it was actually deleted.
+ * Opens the two-phase delete dialog for a thought (08-ui-spec.md §5a.1). Shared
+ * by the canvas thought menu and the editor's links group.
  */
 export async function deleteThought(
   networkId: string,
   target: { id: string; title: string },
-): Promise<boolean> {
-  if (!(await confirmDialog('Удалить мысль', `Удалить «${target.title}»?`, true))) return false;
-  try {
-    const thought = await etn.thoughts.get(networkId, target.id);
-    await etn.thoughts.remove(networkId, target.id, thought.version);
-    // No realtime echo to the actor (04-realtime.md §5) — clean up locally:
-    // history, caches, and (for the focused thought) the next focus (L4).
-    await onThoughtDeleted(target.id);
-    return true;
-  } catch (err) {
-    errorDialog('Удалить мысль', err);
-    return false;
-  }
+): Promise<void> {
+  await openThoughtDeleteDialog(networkId, target);
 }
 
 /**

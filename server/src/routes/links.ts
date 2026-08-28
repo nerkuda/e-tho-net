@@ -21,6 +21,7 @@ import {
   fieldNullableInt,
   fieldNullableString,
   fieldString,
+  fieldStringArray,
   openRouteNetworkDb,
   parseIfMatch,
   parseLinkStyle,
@@ -30,6 +31,7 @@ import {
   type RouteDeps,
 } from './helpers.js';
 import {
+  checkLinkDeletion,
   createLink,
   deleteLink,
   getLink,
@@ -105,6 +107,9 @@ function parseLinkUpdateBody(body: Record<string, unknown>, requestId: string): 
   if (body.active !== undefined) {
     changes.active = fieldBoolean(body, 'active', requestId);
   }
+  if (body.marked_for_deletion !== undefined) {
+    changes.marked_for_deletion = fieldBoolean(body, 'marked_for_deletion', requestId);
+  }
   return changes;
 }
 
@@ -176,6 +181,41 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
         deleteLink(ndb, id, expectedVersion);
         deps.emit(req, networkId, 'link.deleted', { id });
         reply.code(204).send();
+      },
+    );
+
+    // --- Deletion check (03-server-api.md §6.5a, task S13) -------------------
+
+    app.get(
+      '/networks/:networkId/links/:id/deletion-check',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as LinkIdParams;
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        sendSuccess(reply, checkLinkDeletion(ndb, id));
+      },
+    );
+
+    app.post(
+      '/networks/:networkId/links/deletion-check-batch',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as LinkIdParams;
+        const ids = fieldStringArray(requestBody(req), 'ids', req.id);
+        if (ids === undefined || ids.length === 0) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'ids обязателен (непустой массив строк).',
+            { field: 'ids' },
+            req.id,
+          );
+        }
+        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const result: Record<string, import('@etn/shared').LinkDeletionCheckResult> = {};
+        for (const id of [...new Set(ids)]) {
+          result[id] = checkLinkDeletion(ndb, id);
+        }
+        sendSuccess(reply, result);
       },
     );
 

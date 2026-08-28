@@ -45,6 +45,7 @@ import { createPropertiesRoutes } from '../routes/properties.js';
 import { createCommentsRoutes } from '../routes/comments.js';
 import { createAttachmentsRoutes } from '../routes/attachments.js';
 import { createSearchRoutes } from '../routes/search.js';
+import { createTrashRoutes } from '../routes/trash.js';
 import { createAdminNetworksRoutes } from '../routes/admin-networks.js';
 import type { RouteDeps } from '../routes/helpers.js';
 import { emitDomainEvent } from '../realtime/emit.js';
@@ -268,6 +269,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // Search, export and job routes (task D6, 03-server-api.md §12, §14).
   await app.register(createSearchRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Trash routes (task S13, 03-server-api.md §14b).
+  await app.register(createTrashRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Import routes (phase P, P4): preview + commit a `.etnx` archive.
   await app.register(createImportRoutes(routeDeps), { prefix: '/api/v1' });

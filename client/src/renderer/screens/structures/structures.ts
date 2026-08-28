@@ -191,6 +191,7 @@ function parseFilterState(raw: string): FilterState {
       hasAttachments: parseTriState(parsed.hasAttachments),
       hasChronology: parseTriState(parsed.hasChronology),
       active: parseTriState(parsed.active),
+      trashed: parsed.trashed === true,
       sort: parsed.sort === 'alpha' || parsed.sort === 'created' || parsed.sort === 'viewed' ? parsed.sort : 'created',
       order: parsed.order === 'asc' || parsed.order === 'desc' ? parsed.order : 'asc',
       savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,

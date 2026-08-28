@@ -853,7 +853,41 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     }
     group.thoughts.push(rowToThoughtRef(row));
   }
-  return { total: rows.length, groups };
+  return { total: rows.length, groups, holding_layers: [] };
+}
+
+/**
+ * Number of distinct thoughts referencing `thoughtId` through a `thought_ref`
+ * property value (single or inside a multiple-ref JSON array). Backs the
+ * "использование в свойствах" blocking arm of the S13 deletion check
+ * (02-data-model.md §3.1.2, 03-server-api.md §6.5a).
+ */
+export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
+  const row = ndb
+    .prepare(
+      `SELECT COUNT(DISTINCT pv.owner_id) AS c
+       FROM property_values pv
+       WHERE pv.owner_type = 'thought'
+         AND (pv.value_thought_ref = ? OR pv.value_thought_ref LIKE ? ESCAPE '\\')`,
+    )
+    .get(thoughtId, refLikePattern(thoughtId)) as { c: number };
+  return row.c;
+}
+
+/**
+ * Null out every `thought_ref` value referencing `thoughtId` (single and
+ * multiple form) in one sweep — «Очистить использование» (03-server-api.md
+ * §9.2). Returns how many property-value rows were cleared.
+ */
+export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
+  const result = ndb
+    .prepare(
+      `UPDATE property_values SET value_thought_ref = NULL, updated_at = ?
+       WHERE owner_type = 'thought'
+         AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')`,
+    )
+    .run(new Date().toISOString(), thoughtId, refLikePattern(thoughtId));
+  return result.changes;
 }
 
 /**

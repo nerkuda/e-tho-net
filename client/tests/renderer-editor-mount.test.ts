@@ -54,9 +54,14 @@ class ShimElement {
   get firstChild(): ShimElement | null {
     return this.children[0] ?? null;
   }
-  append(...nodes: ShimElement[]): void {
-    for (const node of nodes) node.parent = this;
-    this.children.push(...nodes);
+  append(...nodes: Array<ShimElement | string>): void {
+    for (const node of nodes) {
+      // The real DOM accepts strings in append() (text nodes) — the editor
+      // panel title appends its text next to the trash marker (S13).
+      const el = typeof node === 'string' ? new ShimElement('#text', undefined, node) : node;
+      el.parent = this;
+      this.children.push(el);
+    }
   }
   replaceChildren(...nodes: ShimElement[]): void {
     this.children = [...nodes];
@@ -179,6 +184,7 @@ const mockThought = {
   active: true,
   is_protected: false,
   is_root: false,
+  marked_for_deletion: false,
   fg_color: null,
   bg_color: null,
   font_bold: null,
@@ -254,7 +260,11 @@ describe('openThoughtInEditor — repeat click on the same thought', () => {
       loadedTarget,
       'a loaded target must survive a repeat click unchanged',
     );
-    assert.equal(notifyCount, 0, 'a repeat click on an already-loaded thought must not notify the store');
+    assert.equal(
+      notifyCount,
+      0,
+      'a repeat click on an already-loaded thought must not notify the store',
+    );
   });
 });
 

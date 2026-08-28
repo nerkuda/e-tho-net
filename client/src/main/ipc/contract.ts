@@ -45,6 +45,7 @@ import type {
   HierarchyResponse,
   Link,
   LinkCreateInput,
+  LinkDeletionCheckResult,
   LinkType,
   LinkTypeInput,
   LinkTypeUpdateInput,
@@ -75,6 +76,7 @@ import type {
   ThoughtCopyInput,
   ThoughtCopyResult,
   ThoughtCreateInput,
+  ThoughtDeletionCheckResult,
   ThoughtLinksGrouped,
   ThoughtRef,
   ThoughtType,
@@ -82,10 +84,13 @@ import type {
   ThoughtTypeUpdateInput,
   ThoughtUpdateInput,
   ThoughtUsage,
+  TrashListResult,
+  TrashPurgeResult,
   TypeOwnerType,
   User,
   UserFocusPreferences,
   UserPreferenceEntry,
+  UsageClearResult,
   VersionResponse,
 } from '@etn/shared';
 
@@ -296,6 +301,16 @@ export interface EtnApi {
     mentionsScan(networkId: string, request: MentionsScanRequest): Promise<MentionsScanResponse>;
     /** `GET /thoughts/{id}/usage` — thoughts referencing this one via thought_ref (L7). */
     usage(networkId: string, id: string): Promise<ThoughtUsage>;
+    /**
+     * `POST /thoughts/deletion-check-batch` — blocking check before physical
+     * deletion (S13, 03-server-api.md §6.5a). One call covers single + group.
+     */
+    deletionCheck(
+      networkId: string,
+      ids: string[],
+    ): Promise<Record<string, ThoughtDeletionCheckResult>>;
+    /** `POST /thoughts/{id}/usage/clear` — null every thought_ref referencing this (S13). */
+    usageClear(networkId: string, id: string): Promise<UsageClearResult>;
     /** `GET /thoughts/duplicates` — live duplicate candidates for the add dialog (H14). */
     findDuplicates(
       networkId: string,
@@ -399,6 +414,17 @@ export interface EtnApi {
       thoughtId: string,
       showInactive?: boolean,
     ): Promise<ThoughtLinksGrouped>;
+    /** `POST /links/deletion-check-batch` (S13, 03-server-api.md §6.5a). */
+    deletionCheck(
+      networkId: string,
+      ids: string[],
+    ): Promise<Record<string, LinkDeletionCheckResult>>;
+  };
+  trash: {
+    /** `GET /trash` — marked-for-deletion thoughts/links with precomputed blocking (S13). */
+    list(networkId: string): Promise<TrashListResult>;
+    /** `POST /trash/purge` — delete every unblocked marked row (S13). */
+    purge(networkId: string): Promise<TrashPurgeResult>;
   };
   types: {
     listThoughtTypes(networkId: string): Promise<ThoughtType[]>;

@@ -22,6 +22,7 @@ import { findThoughtUsage } from '../domain/property-service.js';
 import { findBacklinks } from '../domain/backlinks-service.js';
 import { getNeighbors } from '../domain/thought-service.js';
 import { getLink } from '../domain/link-service.js';
+import { listTrash } from '../domain/trash-service.js';
 import { listComments } from '../domain/comment-service.js';
 import { listAttachments } from '../domain/attachment-service.js';
 import { getThoughtType, listThoughtTypes } from '../domain/thought-type-service.js';
@@ -304,6 +305,24 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         }
         const type = link.type_id === null ? null : getLinkType(ndb, link.type_id);
         return jsonContents(uri.href, { ...link, type });
+      }),
+  );
+
+  // --- trash (S13, 03-server-api.md §14b) ------------------------------------
+  mcp.registerResource(
+    'etn.trash',
+    new ResourceTemplate('etn://networks/{network_id}/trash', { list: undefined }),
+    {
+      title: 'Корзина сети',
+      description:
+        'Помеченные на удаление мысли и связи сети, каждая — с предрасчитанной блокировкой ' +
+        '(S13, см. `etn.trash.list`).',
+      mimeType: JSON_MIME,
+    },
+    (uri, vars) =>
+      guarded(() => {
+        const ndb = openMemberNetwork(rt, requireVar(vars, 'network_id'));
+        return jsonContents(uri.href, listTrash(ndb));
       }),
   );
 

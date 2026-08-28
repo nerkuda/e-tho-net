@@ -158,7 +158,7 @@ export function parseStructureFilter(
     filter.show_inactive = showInactive;
   }
 
-  for (const field of ['has_properties', 'has_comment', 'has_attachments', 'has_chronology', 'active'] as const) {
+  for (const field of ['has_properties', 'has_comment', 'has_attachments', 'has_chronology', 'active', 'trashed'] as const) {
     const raw = body[field];
     if (raw !== undefined) {
       if (typeof raw !== 'boolean') {
@@ -437,6 +437,12 @@ function buildFilterQuerySql(
     where.push(req.active ? 't.active = 1' : 't.active = 0');
   } else if (showInactive !== 1) {
     where.push('t.active = 1');
+  }
+
+  // Пометка на удаление (S13, 03-server-api.md §6.10): default `false` hides
+  // marked thoughts; `true` includes them on equal footing with ordinary ones.
+  if (req.trashed !== true) {
+    where.push('t.marked_for_deletion = 0');
   }
 
   if (req.parent_ids !== undefined && req.parent_ids.length > 0) {
