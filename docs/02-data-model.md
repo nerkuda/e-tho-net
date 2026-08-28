@@ -165,14 +165,98 @@ TTL: 10 минут. Очистка по джобе.
 
 ## 3. `networks/<id>/data.db`
 
-### 3.1. thoughts
+> **Слои изменений (фаза S).** Содержательные таблицы сети делятся на
+> **ветвимые** и **неветвимые** (§3.0): первые адресуются парой
+> `(логический id, layer_id)` и поддерживают copy-on-write слои, вторые общие
+> для всех слоёв. Полная модель слоёв — источник истины в
+> [13-layers.md](13-layers.md); здесь — только её отражение в схеме БД.
+
+### 3.0. layers — слои изменений (S2)
+
+Таблица самого слоя изменений; **не ветвится**. Строки сети живут в контексте
+слоя: основа — материализованная строка `is_base = 1` (ровно одна на сеть),
+создаётся миграцией 025 одновременно с первой инициализацией БД сети и той же
+`is_protected`-семантикой: удалить, переименовать или перевести в служебные
+нельзя. Фиксированный id основы — `BASE_LAYER_ID`
+(`shared/src/constants.ts`, единый во всех сетях, как корневые типы из
+миграции 021): он же стоит в `DEFAULT layer_id` ветвимых таблиц, поэтому код,
+не знающий про слои, пишет в основу без изменений.
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
 | `id` | TEXT PK | UUID |
+| `parent_id` | TEXT FK → layers.id ON DELETE CASCADE | `NULL` только у основы. Каскад: удаление слоя удаляет поддерево слоёв вместе с их теневыми строками (13-layers.md §2.4) |
+| `title` | TEXT NOT NULL | Имя слоя. У основы фиксировано («Основа»), не редактируется |
+| `comment` | TEXT | Необязательный, но настоятельно рекомендуемый |
+| `git_branch` | TEXT | Необязательная строка — ровно ветка репозитория; на MVP автоматически не проверяется |
+| `is_service` | INTEGER NOT NULL DEFAULT 0 | 1 — резервный слой (13-layers.md §8.2): не показывается в списке выбора |
+| `is_base` | INTEGER NOT NULL DEFAULT 0 | 1 ровно у одной строки на сеть |
+| `depth` | INTEGER NOT NULL | Денормализованная глубина (0 — основа); до 4 обычных слоёв поверх основы (13-layers.md §2.1) |
+| `created_by` | TEXT NOT NULL | user_id (у засеянной миграцией основы — `system`) |
+| `created_at` | TEXT NOT NULL | ISO-8601, точность до секунды |
+| `last_activity_at` | TEXT NOT NULL | Момент последней записи в любую ветвимую строку слоя — чтобы находить заброшенные |
+| `version` | INTEGER NOT NULL DEFAULT 1 | Обычная оптимистическая блокировка метаданных (таблица не ветвится) |
+
+Индексы: `idx_layers_parent`, частичный `idx_layers_service`.
+
+#### 3.0.1. Ветвимые таблицы и адресация строк
+
+**Ветвимые** (13-layers.md §3; список закрыт — расширение требует правки того
+документа): `thoughts`, `thought_synonyms`, `links`, `thought_types`,
+`link_types`, `type_properties`, `type_property_overrides`, `property_values`,
+`comments`, `comment_targets`, `attachments` — плюс FTS-индексы §3.11 (несут
+`layer_id UNINDEXED`, это подготовка S6).
+
+Каждая ветвимая таблица:
+
+- адресует строку парой **`(id, layer_id)`**: `UNIQUE (id, layer_id)`,
+  первичный ключ — суррогатный `pk INTEGER PRIMARY KEY AUTOINCREMENT`;
+- несёт `layer_id TEXT NOT NULL DEFAULT <BASE_LAYER_ID>`
+  `REFERENCES layers(id) ON DELETE CASCADE` (удаление слоя физически удаляет
+  его теневые строки и надгробия), `deleted INTEGER NOT NULL DEFAULT 0`
+  (надгробие — copy-on-write пометка «удалено в этом слое», 13-layers.md §5.2)
+  и `base_version INTEGER NOT NULL DEFAULT 0` — версия строки предка на момент
+  материализации теневой строки, для детекции конфликтов при слиянии
+  (13-layers.md §5.1, §8.1; надгробия несут её так же; 0 — у строк основы,
+  у которых предка нет);
+- **не имеет SQL-FK между сущностями**: ссылки (`type_id`, `source_id`,
+  `owner_id`, `property_id`, `parent_id` типов и т.п.) идут на логический id,
+  который в пределах таблицы больше не уникален. Осознанная потеря целостности
+  на уровне СУБД (13-layers.md §3); целостность поддерживает приложение;
+- имеет прежние естественные UNIQUE-ограничения **в пределах слоя** — с
+  `layer_id` в составе (например `links (source_id, target_id, type_id,
+  layer_id)`; глобальная уникальность связей проверяется после разрешения
+  слоёв). `thought_synonyms` и `comment_targets`, не имевшие собственного id,
+  получили `id` (UUID, `DEFAULT gen_uuid()` — SQL-функция, регистрируемая
+  сервером на соединении).
+
+**Неветвимые** (без `layer_id`, общие для всех слоёв): `layers`,
+`thought_read_metrics`, `user_preferences` (серверные и сетевые),
+`thought_views`, `user_focus_preferences`, `user_focus_order`,
+`saved_filters`, `user_pinned_thoughts`, `embeddings` — и журнал событий
+`event_log` (живёт в `_system.db`, см. [04-realtime.md](04-realtime.md);
+событие несёт слой как атрибут полезной нагрузки, но не ветвится).
+Обоснование — 13-layers.md §3. Поскольку `thoughts.id` перестал быть
+уникальным, SQL-FK на него из этих таблиц также сняты (FK обязан указывать на
+уникальный ключ); очистку при физическом удалении мысли выполняет приложение
+(`owner-cleanup.ts`).
+
+Чтение в контексте слоя (правило разрешения «ближайший слой цепочки»,
+view-представления) и запись (материализация теневых строк) специфицированы в
+13-layers.md §4–§5; REST/MCP-контур слоёв — задачи S3+/S7.
+
+### 3.1. thoughts
+
+| Столбец | Тип | Описание |
+|---------|-----|----------|
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | Логический UUID; адресация — пара `(id, layer_id)`, `UNIQUE (id, layer_id)` (§3.0.1) |
+| `layer_id` | TEXT NOT NULL FK → layers.id ON DELETE CASCADE | Слой строки (§3.0.1); `DEFAULT <BASE_LAYER_ID>` |
+| `deleted` | INTEGER NOT NULL DEFAULT 0 | Надгробие слоя (13-layers.md §5.2) |
+| `base_version` | INTEGER NOT NULL DEFAULT 0 | Версия предка на момент материализации (13-layers.md §5.1) |
 | `title` | TEXT NOT NULL | Заголовок (до 400 символов; длина проверяется приложением) |
 | `title_norm` | TEXT NOT NULL | Нормализованный заголовок для поиска (lowercase, trim, Unicode NFC) |
-| `type_id` | TEXT FK → thought_types.id ON DELETE SET NULL | Тип мысли |
+| `type_id` | TEXT | Тип мысли. SQL-FK снят (S2, §3.0.1): ссылка на логический id, валидируется приложением |
 | `icon` | TEXT | Эмодзи или путь/URL картинки |
 | `icon_kind` | TEXT NOT NULL DEFAULT `'emoji'` | `'emoji'` \| `'image'` |
 | `icon_attachment_id` | TEXT | Id вложения-картинки этой мысли, чей оригинал показывается по `Ctrl+наведению` на иконку (L16). `NULL` — обычная иконка без вложения-источника |
@@ -233,13 +317,15 @@ TTL: 10 минут. Очистка по джобе.
 | `updated_at` | TEXT NOT NULL | |
 | `updated_by` | TEXT NOT NULL | user_id |
 
-> `last_viewed_at` и ручной порядок отображения — **per-user**, хранятся в
-> таблицах `thought_views` и `user_focus_*` (см. п. 3.10), не в самой мысли.
+> `last_viewed_at` — **per-user**, хранится в `thought_views` (см. п. 3.10),
+> не в самой мысли. Ручной порядок отображения **связей** — поле связи
+> `links.position` (решение T1, §3.6); порядок мыслей зоны фокуса — per-user,
+> `user_focus_order` (§3.10.4).
 
 Индексы: `idx_thoughts_title_norm`, `idx_thoughts_type`, `idx_thoughts_active`,
 `idx_thoughts_updated_at`, `idx_thoughts_marked_for_deletion` (частичный,
 `WHERE marked_for_deletion = 1` — таблица корзины читает только эту узкую
-выборку).
+выборку), `idx_thoughts_layer` (S2).
 
 Инвариант: ровно одна мысль с `is_root = 1` в сети (создаётся при инициализации
 сети как «HOME»). Эта же мысль имеет `is_protected = 1`; пометить на удаление
@@ -267,13 +353,13 @@ TTL: 10 минут. Очистка по джобе.
 
 1. **Использование в значениях свойств** (`thought_ref` из других мыслей,
    §3.5) — только для мыслей, у связей такого не бывает.
-2. **Изменённая теневая строка этой мысли в любом слое**, не помеченная на
-   удаление в том слое ([13-layers.md](13-layers.md) §5.1) — действует
-   только после появления слоёв (S2, версия 0.5.2); до этого момента список
-   всегда пуст.
+2. **Изменённая теневая строка этой мысли в любом слое** (`deleted = 0` в
+   не-основе), не помеченная на удаление в том слое
+   ([13-layers.md](13-layers.md) §5.1) — работает со схемы S2; пока слои
+   нельзя создавать (S7), список фактически пуст.
 3. **Изменённая теневая строка связи, у которой эта мысль — конец**, не
-   помеченная на удаление ([13-layers.md](13-layers.md) §6.3) — тоже с
-   версии 0.5.2. Для связи блокировка — только этот пункт (в применении к
+   помеченная на удаление ([13-layers.md](13-layers.md) §6.3) — тоже со схемы
+   S2. Для связи блокировка — только этот пункт (в применении к
    самой связи, не к её концам).
 
 **Что НЕ проверяется:** wiki-ссылки `[[#id]]`, ссылки из других мыслесетей,
@@ -281,7 +367,10 @@ TTL: 10 минут. Очистка по джобе.
 (дороже проверять, чем терпеть).
 
 **Что уходит каскадом при физическом удалении мысли:** собственные связи (с
-обеих сторон), комментарии, значения свойств, синонимы, привязки вложений.
+обеих сторон), комментарии, значения свойств, синонимы, привязки вложений, а
+также per-user состояние (просмотры, фокус-настройки и порядок, закрепления,
+метрики чтений) — с S2 весь каскад выполняет приложение в одной транзакции
+(`owner-cleanup.ts`), SQL-FK больше нет.
 **Дети не удаляются** — каскад бьёт по строкам связей, а не по дочерним
 мыслям: ребёнок остаётся, но теряет эту связь и, если других родителей нет,
 выпадает из навигации (см. отчёт «осиротеет детей», 03-server-api.md §6.5).
@@ -298,10 +387,13 @@ TTL: 10 минут. Очистка по джобе.
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `thought_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | |
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | UUID строки (`DEFAULT gen_uuid()`, §3.0.1) |
+| `layer_id` / `deleted` / `base_version` | | Слой-колонки (§3.0.1) |
+| `thought_id` | TEXT NOT NULL | Логический id мысли; SQL-FK снят (S2), очистка — приложением |
 | `synonym` | TEXT NOT NULL | |
 | `synonym_norm` | TEXT NOT NULL | |
-| PRIMARY KEY | `(thought_id, synonym_norm)` | |
+| UNIQUE | `(id, layer_id)` и `(thought_id, synonym_norm, layer_id)` | Естественный ключ — в пределах слоя |
 
 Индекс: `idx_synonyms_norm` для быстрого поиска дубликатов.
 
@@ -331,10 +423,12 @@ TTL: 10 минут. Очистка по джобе.
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `id` | TEXT PK | UUID |
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | Логический UUID; `UNIQUE (id, layer_id)` (§3.0.1) |
+| `layer_id` / `deleted` / `base_version` | | Слой-колонки (§3.0.1) |
 | `name` | TEXT NOT NULL | Имя типа |
-| `name_key` | TEXT NOT NULL UNIQUE | Нормализованное имя (`trim` + lowercase) — сравнение имён регистронезависимо: `Тип` = `тип` = `ТИП` |
-| `parent_id` | TEXT FK → thought_types.id | Родительский тип; `NULL` только у корневого типа. Смена родителя запрещена, пока тип используется мыслями |
+| `name_key` | TEXT NOT NULL | Нормализованное имя (`trim` + lowercase) — сравнение имён регистронезависимо: `Тип` = `тип` = `ТИП`; уникально **в пределах слоя** |
+| `parent_id` | TEXT | Родительский тип; `NULL` только у корневого типа. SQL-FK снят (S2, §3.0.1); смена родителя запрещена, пока тип используется мыслями |
 | `is_root` | INTEGER NOT NULL DEFAULT 0 | `1` ровно у одного типа — корневого «основной тип» |
 | `icon` | TEXT | Иконка типа по умолчанию (`NULL` — от родителя) |
 | `icon_kind` | TEXT NOT NULL DEFAULT `'emoji'` | `'emoji'` \| `'image'` — вид иконки по умолчанию |
@@ -352,15 +446,17 @@ TTL: 10 минут. Очистка по джобе.
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `id` | TEXT PK | UUID |
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | Логический UUID; `UNIQUE (id, layer_id)` (§3.0.1) |
+| `layer_id` / `deleted` / `base_version` | | Слой-колонки (§3.0.1) |
 | `owner_type` | TEXT NOT NULL | `'thought_type'` \| `'link_type'` |
-| `owner_id` | TEXT NOT NULL | FK на thought_types.id или link_types.id (без SQL-FK, полиморфно) |
+| `owner_id` | TEXT NOT NULL | Логический id типа; SQL-FK снят (S2, §3.0.1), полиморфно |
 | `key` | TEXT NOT NULL | Имя свойства |
 | `value_type` | TEXT NOT NULL | `'text'` \| `'date'` \| `'number'` \| `'bool'` \| `'thought_ref'` \| `'url'` (хранится в `value_text` как `text`) |
 | `config` | TEXT | JSON-конфигурация свойства. Ключи: `default_value` — значение по умолчанию (L6, не задаётся для `thought_ref`); для `value_type = 'text'` — `options` (предустановленный список значений — подсказка ввода, не ограничение) и `multiple` (разрешить несколько значений через запятую); для `value_type = 'thought_ref'` — `multiple` (разрешить несколько ссылок: значение — массив id, хранится JSON-массивом в `value_thought_ref`, §3.5) и `allowed_type_id` (легаси-форма: один тип) / `allowed_type_ids` (список типов: поиск при заполнении идёт только по ним; при записи каждый id проверяется по этому списку). Смена `options` / `multiple` / `allowed_type_ids` никогда не обрабатывает уже сохранённые значения |
 | `required` | INTEGER NOT NULL DEFAULT 0 | |
 | `position` | INTEGER NOT NULL DEFAULT 0 | Порядок отображения |
-| UNIQUE | `(owner_type, owner_id, key)` | |
+| UNIQUE | `(owner_type, owner_id, key, layer_id)` | В пределах слоя (S2) |
 
 Смена `value_type` существующего свойства (L6): сервер в той же транзакции
 преобразует все хранимые значения к новому типу (текст↔число/булево/дата —
@@ -393,17 +489,19 @@ TTL: 10 минут. Очистка по джобе.
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `id` | TEXT PK | UUID |
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | Логический UUID; `UNIQUE (id, layer_id)` (§3.0.1) |
+| `layer_id` / `deleted` / `base_version` | | Слой-колонки (§3.0.1) |
 | `owner_type` | TEXT NOT NULL | `'thought'` \| `'link'` |
-| `owner_id` | TEXT NOT NULL | FK на thoughts.id или links.id |
-| `property_id` | TEXT NOT NULL | FK на type_properties.id |
+| `owner_id` | TEXT NOT NULL | Логический id мысли/связи (без SQL-FK, валидируется приложением) |
+| `property_id` | TEXT NOT NULL | Логический id определения; SQL-FK снят (S2, §3.0.1) — значения чистит приложение |
 | `value_text` | TEXT | |
 | `value_date` | TEXT | ISO-8601 |
 | `value_number` | REAL | |
 | `value_bool` | INTEGER | |
 | `value_thought_ref` | TEXT | FK на thoughts.id (без SQL-FK; валидируется приложением). Для свойств с `config.multiple` — JSON-массив id (`["id1","id2"]`); одиночное значение хранится «сырым» id. При чтении массив всегда разбирается в `string[]` (форма данных важнее флага), одиночный id у multiple-свойства читается как массив из одного элемента |
 | `updated_at` | TEXT NOT NULL | |
-| UNIQUE | `(owner_type, owner_id, property_id)` | |
+| UNIQUE | `(owner_type, owner_id, property_id, layer_id)` | В пределах слоя (S2) |
 
 Значение пишется только в один столбец `value_*` согласно `value_type` свойства.
 Остальные — NULL. Множественные значения (строки через запятую, массивы
@@ -420,7 +518,7 @@ TTL: 10 минут. Очистка по джобе.
 
 Владелец полиморфный (без SQL-FK): при удалении мысли/связи их значения чистятся
 приложением в той же транзакции (03-server-api.md §6.5, §7.1), включая значения
-связей, удаляемых FK-каскадом вместе с мыслью.
+связей, удаляемых вместе с мыслью явным каскадом приложения (S2, §3.0.1).
 
 ### 3.6. links
 
@@ -428,10 +526,13 @@ TTL: 10 минут. Очистка по джобе.
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `id` | TEXT PK | UUID |
-| `source_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | Мысль-источник |
-| `target_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | Мысль-назначение |
-| `type_id` | TEXT FK → link_types.id ON DELETE SET NULL | Тип связи |
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | Логический UUID; `UNIQUE (id, layer_id)` (§3.0.1) |
+| `layer_id` / `deleted` / `base_version` | | Слой-колонки (§3.0.1) |
+| `source_id` | TEXT NOT NULL | Мысль-источник. SQL-FK снят (S2, §3.0.1): валидация — приложение |
+| `target_id` | TEXT NOT NULL | Мысль-назначение. SQL-FK снят (S2) |
+| `type_id` | TEXT | Тип связи. SQL-FK снят (S2); при удалении типа приложение ставит NULL |
+| `position` | INTEGER NOT NULL DEFAULT 0 | Ручной порядок отображения — поле самой связи (решение T1): общее для всех пользователей и **ветвится** вместе со связью (13-layers.md §3, §6.5). Перенос данных из `user_focus_order` — задача T1; до неё поле не используется |
 | `color` | TEXT | Переопределение цвета линии. `NULL` — наследуется от типа связи |
 | `style` | TEXT | Переопределение стиля (`'solid'`/`'dashed'`/`'dotted'`). `NULL` — от типа |
 | `width` | INTEGER | Переопределение толщины. `NULL` — от типа |
@@ -441,7 +542,7 @@ TTL: 10 минут. Очистка по джобе.
 | `marked_for_deletion_by` | TEXT | user_id, поставивший пометку. `NULL`, если `marked_for_deletion = 0` |
 | `version` | INTEGER NOT NULL DEFAULT 1 | |
 | `created_at` / `updated_at` / `created_by` / `updated_by` | | |
-| UNIQUE | `(source_id, target_id, type_id)` | Запрет дублирования связей того же типа между той же парой |
+| UNIQUE | `(source_id, target_id, type_id, layer_id)` | Запрет дублирования связей того же типа между той же парой — **в пределах слоя** (S2, 13-layers.md §3); глобальная уникальность проверяется после разрешения слоёв. Нетипизированные (`type_id IS NULL`) дубли по-прежнему не ловятся UNIQUE (NULL-семантика SQLite) — их отвергает приложение |
 
 > Стиль линии связи разрешается как `link.color ?? link.type.color`,
 > `link.style ?? link.type.style`, `link.width ?? link.type.width`. `NULL`
@@ -449,12 +550,13 @@ TTL: 10 минут. Очистка по джобе.
 > override конкретной связи (виден на холсте). Кнопка «Сброс» в диалоге настроек
 > связи выставляет эти поля в `NULL`.
 
-> Ручной порядок отображения связей — per-user, хранится в `user_focus_order`
-> (см. п. 3.10.4), а не в самой связи.
+> Ручной порядок отображения — поле связи `position` (решение T1, см. таблицу
+> выше). Наследующая T1 реализация перенесёт данные из per-user
+> `user_focus_order` (п. 3.10.4) сюда; до этого работает прежний механизм.
 
 Индексы: `idx_links_source`, `idx_links_target`, `idx_links_type`,
 `idx_links_active`, `idx_links_marked_for_deletion` (частичный,
-`WHERE marked_for_deletion = 1`).
+`WHERE marked_for_deletion = 1`), `idx_links_layer` (S2).
 
 Правила пометки на удаление и физического удаления — общие для мыслей и
 связей, см. §3.1.2.
@@ -473,12 +575,14 @@ TTL: 10 минут. Очистка по джобе.
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `id` | TEXT PK | UUID |
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | Логический UUID; `UNIQUE (id, layer_id)` (§3.0.1) |
+| `layer_id` / `deleted` / `base_version` | | Слой-колонки (§3.0.1) |
 | `name_forward` | TEXT NOT NULL | Имя от источника к назначению |
-| `name_forward_key` | TEXT NOT NULL | Нормализованное имя (регистронезависимое сравнение) |
+| `name_forward_key` | TEXT NOT NULL | Нормализованное имя (регистронезависительное сравнение) |
 | `name_reverse` | TEXT NOT NULL | Имя от назначения к источнику |
-| `name_reverse_key` | TEXT NOT NULL | Нормализованное имя (регистронезависимое сравнение) |
-| `parent_id` | TEXT FK → link_types.id | Родительский тип; `NULL` только у корня. Смена родителя запрещена, пока тип используется связями |
+| `name_reverse_key` | TEXT NOT NULL | Нормализованное имя (регистронезависительное сравнение) |
+| `parent_id` | TEXT | Родительский тип; `NULL` только у корня. SQL-FK снят (S2, §3.0.1); смена родителя запрещена, пока тип используется связями |
 | `is_root` | INTEGER NOT NULL DEFAULT 0 | `1` ровно у одного типа — корневого «основной тип» |
 | `color` | TEXT | Цвет линии (`NULL` — от родителя) |
 | `style` | TEXT NOT NULL DEFAULT `'solid'` | `'solid'` \| `'dashed'` \| `'dotted'` — физическое значение при `style_set = 1` |
@@ -487,9 +591,9 @@ TTL: 10 минут. Очистка по джобе.
 | `description` | TEXT | Комментарий типа (для AI и пользователя) |
 | `version` / `created_at` / `updated_at` / `created_by` | | |
 
-UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уникальна
-регистронезависимо; перестановка имён (`parent/child` и `child/parent`) — это
-другой тип (направленность значима).
+UNIQUE на `(name_forward_key, name_reverse_key, layer_id)` — пара имён уникальна
+регистронезависимо **в пределах слоя** (S2); перестановка имён (`parent/child` и
+`child/parent`) — это другой тип (направленность значима).
 
 ### 3.7.1. type_property_overrides (L21)
 
@@ -501,13 +605,15 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `id` | TEXT PK | UUID |
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | Логический UUID; `UNIQUE (id, layer_id)` (§3.0.1) |
+| `layer_id` / `deleted` / `base_version` | | Слой-колонки (§3.0.1) |
 | `owner_type` | TEXT NOT NULL | `'thought_type'` \| `'link_type'` |
 | `type_id` | TEXT NOT NULL | Тип, переопределяющий дефолт |
-| `property_id` | TEXT NOT NULL FK → type_properties.id ON DELETE CASCADE | Унаследованное свойство |
+| `property_id` | TEXT NOT NULL | Унаследованное свойство; SQL-FK снят (S2, §3.0.1) — чистит приложение |
 | `default_value` | TEXT NOT NULL | Значение по умолчанию, JSON-кодированное (string/number/boolean; `NULL` в SQL не используется — отсутствие строки = нет переопределения) |
 | `created_at` / `updated_at` | | |
-| UNIQUE | `(owner_type, type_id, property_id)` | |
+| UNIQUE | `(owner_type, type_id, property_id, layer_id)` | В пределах слоя (S2) |
 
 ### 3.8. comments
 
@@ -515,9 +621,11 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `id` | TEXT PK | UUID |
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | Логический UUID; `UNIQUE (id, layer_id)` (§3.0.1) |
+| `layer_id` / `deleted` / `base_version` | | Слой-колонки (§3.0.1) |
 | `owner_type` | TEXT NOT NULL | `'thought'` \| `'link'` |
-| `owner_id` | TEXT NOT NULL | |
+| `owner_id` | TEXT NOT NULL | Логический id владельца (без SQL-FK) |
 | `kind` | TEXT NOT NULL | `'permanent'` \| `'chronological'` |
 | `title` | TEXT | Заголовок (для хронологических) |
 | `body_md` | TEXT NOT NULL | Markdown-текст |
@@ -528,7 +636,10 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 | `created_at` / `updated_at` / `created_by` / `updated_by` | | |
 
 Индексы: `idx_comments_owner` `(owner_type, owner_id)`,
-`idx_comments_chrono` `(owner_type, owner_id, valid_from)`.
+`idx_comments_chrono` `(owner_type, owner_id, valid_from)`,
+`idx_comments_layer` (S2); частичный уникальный `idx_comments_permanent_one`
+`(owner_type, owner_id, layer_id) WHERE kind = 'permanent'` — один постоянный
+комментарий на владельца **в пределах слоя** (S2).
 
 #### 3.8.1. comment_targets (L20)
 
@@ -539,15 +650,18 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `comment_id` | TEXT NOT NULL | → `comments.id` (без SQL-FK, полиморфность) |
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | UUID строки (`DEFAULT gen_uuid()`, §3.0.1); `UNIQUE (id, layer_id)` |
+| `layer_id` / `deleted` / `base_version` | | Слой-колонки (§3.0.1) |
+| `comment_id` | TEXT NOT NULL | → логический id `comments` (без SQL-FK, полиморфность) |
 | `owner_type` | TEXT NOT NULL | `'thought'` \| `'link'` |
 | `owner_id` | TEXT NOT NULL | |
-| PRIMARY KEY | `(comment_id, owner_type, owner_id)` | Контроль дублей привязок |
+| UNIQUE | `(comment_id, owner_type, owner_id, layer_id)` | Контроль дублей привязок — в пределах слоя (S2; до S2 это был PRIMARY KEY) |
 
 Индекс: `idx_comment_targets_owner` `(owner_type, owner_id)` — список
-комментариев владельца (включая вторичные привязки). Миграция 019 выполняет
-бэкфилл: каждый существующий комментарий получает одну строку со своим
-первичным владельцем.
+комментариев владельца (включая вторичные привязки), `idx_comment_targets_layer`
+(S2). Миграция 019 выполняет бэкфилл: каждый существующий комментарий получает
+одну строку со своим первичным владельцем.
 
 Инварианты:
 - для пары `(owner_type, owner_id)` допускается **один** комментарий с
@@ -571,9 +685,11 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `id` | TEXT PK | UUID |
+| `pk` | INTEGER PK AUTOINCREMENT | Суррогат (S2) |
+| `id` | TEXT NOT NULL | Логический UUID; `UNIQUE (id, layer_id)` (§3.0.1) |
+| `layer_id` / `deleted` / `base_version` | | Слой-колонки (§3.0.1) |
 | `owner_type` | TEXT NOT NULL | `'thought'` \| `'link'` |
-| `owner_id` | TEXT NOT NULL | |
+| `owner_id` | TEXT NOT NULL | Логический id владельца (без SQL-FK) |
 | `kind` | TEXT NOT NULL | `'url'` \| `'file'` |
 | `url` | TEXT | Для `kind = 'url'` |
 | `file_path` | TEXT | Для `kind = 'file'` (путь в ОС пользователя) |
@@ -585,7 +701,13 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 | `position` | INTEGER NOT NULL DEFAULT 0 | Порядок |
 | `created_at` / `created_by` | | |
 
-Индекс: `idx_attachments_owner` `(owner_type, owner_id)`.
+Индекс: `idx_attachments_owner` `(owner_type, owner_id)`,
+`idx_attachments_layer` (S2).
+
+Вложение и слои: привязка `attachments` ветвится (надгробие в слое прячет
+вложение из этого слоя), но **физический файл один на все слои** — файл можно
+удалять с диска только когда ссылок на него не осталось ни в одном слое сети
+(13-layers.md §5.3).
 
 Вложение-файл может быть:
 - **загружено на сервер** (`POST …/attachments/file`): бинарник сохраняется в
@@ -636,7 +758,7 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 | Столбец | Тип | Описание |
 |---------|-----|----------|
 | `user_id` | TEXT NOT NULL | |
-| `thought_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | |
+| `thought_id` | TEXT NOT NULL | Логический id мысли; SQL-FK снят (S2, §3.0.1) |
 | `last_viewed_at` | TEXT NOT NULL | |
 | PRIMARY KEY | `(user_id, thought_id)` | |
 
@@ -647,7 +769,7 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 | Столбец | Тип | Описание |
 |---------|-----|----------|
 | `user_id` | TEXT NOT NULL | |
-| `focus_thought_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | |
+| `focus_thought_id` | TEXT NOT NULL | SQL-FK снят (S2, §3.0.1) |
 | `dir` | TEXT NOT NULL | `'children'` \| `'parents'` \| `'siblings'` |
 | `sort` | TEXT NOT NULL | `'manual'` \| `'alpha'` \| `'created'` \| `'viewed'` |
 | `sort_order` | TEXT NOT NULL | `'asc'` \| `'desc'` |
@@ -662,9 +784,9 @@ UNIQUE на `(name_forward_key, name_reverse_key)` — пара имён уни�
 | Столбец | Тип | Описание |
 |---------|-----|----------|
 | `user_id` | TEXT NOT NULL | |
-| `focus_thought_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | |
+| `focus_thought_id` | TEXT NOT NULL | SQL-FK снят (S2, §3.0.1) |
 | `dir` | TEXT NOT NULL | `'children'` \| `'parents'` |
-| `thought_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | Ребёнок или родитель |
+| `thought_id` | TEXT NOT NULL | Ребёнок или родитель; SQL-FK снят (S2, §3.0.1) |
 | `position` | INTEGER NOT NULL | Линейный индекс в row-major-порядке зоны (08-ui-spec.md §2.1.1) |
 | `updated_at` | TEXT NOT NULL | |
 | PRIMARY KEY | `(user_id, focus_thought_id, dir, thought_id)` | |
@@ -684,8 +806,9 @@ row-major-раскладке (08-ui-spec.md §2.1.1).
 `POST focus-order` для этого `(focus, dir)` (replace-семантика,
 `DELETE … WHERE focus_thought_id = ? AND dir = ?`).
 
-Удаление фокус-мысли или самой мысли-члена зоны каскадно чистит все записи
-по обоим FK (`ON DELETE CASCADE`).
+Удаление фокус-мысли или самой мысли-члена зоны чистит все записи по обоим
+идентификаторам — с S2 явно приложением (SQL-FK снят, §3.0.1), а не каскадом
+СУБД.
 
 Алгоритм применения сортировки и поведения при изменении порядка —
 см. [11-settings-and-state.md](11-settings-and-state.md), п. 3.
@@ -722,7 +845,7 @@ row-major-раскладке (08-ui-spec.md §2.1.1).
 | Столбец | Тип | Описание |
 |---------|-----|----------|
 | `user_id` | TEXT NOT NULL | Владелец (только свой список доступен через API) |
-| `thought_id` | TEXT NOT NULL FK → thoughts.id ON DELETE CASCADE | Закреплённая мысль |
+| `thought_id` | TEXT NOT NULL | Закреплённая мысль; SQL-FK снят (S2, §3.0.1) |
 | `position` | INTEGER NOT NULL | 0-based порядок в списке |
 | `pinned_at` | TEXT NOT NULL | ISO-8601 UTC момента закрепления |
 | PRIMARY KEY | `(user_id, thought_id)` | Дубли закреплённых не допускаются |
@@ -731,8 +854,8 @@ row-major-раскладке (08-ui-spec.md §2.1.1).
 
 Лимит 20 закреплённых — ограничение приложения (`PINNED_THOUGHTS_LIMIT` в
 shared), а не CHECK: сервис отклоняет более длинные списки `VALIDATION_ERROR`.
-При удалении мысли её запись удаляется каскадом (FK); отдельное событие не
-эмитится — клиенты убирают чип по `thought.deleted`.
+При удалении мысли её запись чистит приложение (SQL-FK снят с S2, §3.0.1);
+отдельное событие не эмитится — клиенты убирают чип по `thought.deleted`.
 
 ### 3.11. Полнотекстовый поиск (FTS5)
 
@@ -743,6 +866,7 @@ shared), а не CHECK: сервис отклоняет более длинны�
 -- 1. По именам мыслей и синонимам
 CREATE VIRTUAL TABLE fts_thought_names USING fts5(
     thought_id UNINDEXED,
+    layer_id UNINDEXED,
     text,
     tokenize = 'unicode61 remove_diacritics 2'
 );
@@ -750,6 +874,7 @@ CREATE VIRTUAL TABLE fts_thought_names USING fts5(
 -- 2. По текстам постоянных и хронологических комментариев мыслей
 CREATE VIRTUAL TABLE fts_thought_texts USING fts5(
     thought_id UNINDEXED,
+    layer_id UNINDEXED,
     text,
     tokenize = 'unicode61 remove_diacritics 2'
 );
@@ -757,6 +882,7 @@ CREATE VIRTUAL TABLE fts_thought_texts USING fts5(
 -- 3. По заголовкам и текстам комментариев связей
 CREATE VIRTUAL TABLE fts_link_texts USING fts5(
     link_id UNINDEXED,
+    layer_id UNINDEXED,
     text,
     tokenize = 'unicode61 remove_diacritics 2'
 );
@@ -766,11 +892,19 @@ CREATE VIRTUAL TABLE fts_link_texts USING fts5(
 > отдельным фильтром по `comments.kind = 'chronological'` поверх
 > `fts_thought_texts`/`fts_link_texts`.
 
-Триггеры синхронизируют FTS с изменениями:
+`layer_id UNINDEXED` (S2) — подготовка к поиску по слоям (S6): FTS-таблицы
+автономные (не external-content), пересборки индекса не требуется. FTS5
+сначала ранжирует, потом видимость слоя фильтруется поверх результата с
+дедупликацией по логическому `id` — подробности в 13-layers.md §9.
+
+Триггеры синхронизируют FTS с изменениями (rowid FTS-строки = `pk` источника,
+слой — той строки, из которой текст взят):
 - `INSERT/UPDATE/DELETE` на `thoughts` → обновить `fts_thought_names`
-  (text = title + синонимы).
-- `INSERT/UPDATE/DELETE` на `thought_synonyms` → обновить `fts_thought_names`.
-- `INSERT/UPDATE/DELETE` на `comments` → обновить соответствующую FTS.
+  (text = title + синонимы **того же слоя**);
+- `INSERT/UPDATE/DELETE` на `thought_synonyms` → обновить `fts_thought_names`
+  строки мысли того же слоя;
+- `INSERT/UPDATE/DELETE` на `comments` → обновить соответствующую FTS
+  (`layer_id` — слой комментария).
 
 `tokenize = 'unicode61 remove_diacritics 2'` корректно работает с кириллицей и
 латиницей без дополнительных словарей.
@@ -800,7 +934,7 @@ CREATE VIRTUAL TABLE fts_link_texts USING fts5(
 
 | Столбец | Тип | Описание |
 |---------|-----|----------|
-| `thought_id` | TEXT PK | UUID, FK → `thoughts.id` ON DELETE CASCADE |
+| `thought_id` | TEXT PK | UUID; SQL-FK снят (S2, §3.0.1), счётчик чистит приложение |
 | `reads_count` | INTEGER NOT NULL DEFAULT 0 | Сколько раз мысль была возвращена MCP read-tools |
 | `first_read_at` | TEXT NOT NULL | ISO-8601 UTC момента первого чтения |
 | `last_read_at` | TEXT NOT NULL | ISO-8601 UTC момента последнего чтения |
@@ -824,8 +958,8 @@ CREATE VIRTUAL TABLE fts_link_texts USING fts5(
 `INSERT … SELECT … FROM json_each(?) ON CONFLICT DO UPDATE` на инкремент —
 N идентификаторов за один SQL-запрос (см. `read-metrics-service.ts`).
 Дедупликация на стороне сервера до SQL; несуществующие `thought_id`
-отбрасываются `INNER JOIN thoughts`, FK-каскад чистит счётчик при удалении
-мысли.
+отбрасываются `INNER JOIN thoughts`; при удалении мысли счётчик чистит
+приложение (S2, §3.0.1).
 
 **Доступ:** чтение через `etn.metrics.reads` доступно любому члену сети
 (`member`/`owner`); запись происходит прозрачно как побочный эффект других
@@ -838,13 +972,16 @@ read-tools (отдельный вызов не нужен). Записи в `aud
 1. Генерирует `network_id` (UUID).
 2. Создаёт каталог `networks/<network_id>/` и `attachments/`, `snapshots/`
    внутри.
-3. Открывает `data.db`, выполняет миграции схемы (см. п. 6).
+3. Открывает `data.db`, выполняет миграции схемы (см. п. 5). Миграция 025
+   одновременно с этим создаёт строку основы в `layers` (`is_base = 1`,
+   фиксированный `BASE_LAYER_ID`, §3.0) — основа существует до первой мысли.
 4. В транзакции создаёт корневую мысль:
    ```sql
    INSERT INTO thoughts (id, title, title_norm, is_protected, is_root,
                          active, version, created_at, created_by, updated_at, updated_by)
    VALUES (:id, 'HOME', 'home', 1, 1, 1, 1, :now, :owner, :now, :owner);
    ```
+   (`layer_id` не указывается — срабатывает `DEFAULT <BASE_LAYER_ID>`.)
 5. В `_system.db` добавляет запись в `networks` и `network_members`
    (`role = 'owner'`).
 6. Эмитит `network.created` (по необходимости).
