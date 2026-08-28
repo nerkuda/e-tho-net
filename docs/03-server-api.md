@@ -275,6 +275,7 @@ POST /api/v1/networks/{nid}/thoughts
 PATCH /api/v1/networks/{nid}/thoughts/{id}
 If-Match: <version>
 { title?, synonyms?, type_id?, icon?, icon_kind?, icon_attachment_id?, active?,
+  marked_for_deletion?,
   fg_color?, bg_color?, font_bold?, font_italic?, font_underline?, font_strike? }
 → 200 { data: {..., version: N+1} }
 # icon_attachment_id (L16) — вложение-картинка этой мысли, чей оригинал
@@ -283,6 +284,11 @@ If-Match: <version>
 # на эмодзи/URL или её очистка (без явного icon_attachment_id) сбрасывает
 # ссылку в NULL; удаление и перенос вложения — тоже.
 # 422 если is_protected=1 и попытка удалить (через DELETE) или сменить active у is_root.
+# marked_for_deletion (S13, 02-data-model.md §3.1.2) — «Поместить в корзину»/
+# «Вернуть из корзины»: true ставит пометку и заполняет marked_for_deletion_at/by,
+# false снимает. Не проверяет блокирующие ссылки (это только у физического
+# удаления, §6.5) и не запрещена для is_protected — саму корзину использовать
+# можно, нельзя только физически стереть защищённую мысль.
 ```
 
 ### 6.5. Удаление
@@ -291,13 +297,51 @@ DELETE /api/v1/networks/{nid}/thoughts/{id}
 If-Match: <version>
 → 204
 # 422 для is_protected=1
-# Каскад: thoughts → thought_synonyms, links (с обеих сторон). Комментарии,
-# вложения и значения свойств — полиморфные владельцы без SQL-FK — чистятся
-# приложением в той же транзакции: и самой мысли, и её связей, удаляемых
-# FK-каскадом. Серверные копии файлов-вложений удаляются с диска, как при
-# DELETE /attachments/{id} (§11); отдельные события для зависимых строк
-# не эмитятся.
+# 422 VALIDATION_ERROR, если удаление заблокировано (см. §6.5a) — тело
+# ошибки несёт details.blocking в том же формате, что и deletion-check;
+# запись НЕ удаляется, marked_for_deletion не меняется.
+# Не требует предварительной пометки: «Удалить совсем» может быть вызвано
+# и для непомеченной мысли — DELETE всегда означает «удалить прямо сейчас,
+# если не заблокировано», а не «принять решение о корзине».
+# Каскад (если не заблокировано): thoughts → thought_synonyms, links (с обеих
+# сторон). Комментарии, вложения и значения свойств — полиморфные владельцы
+# без SQL-FK — чистятся приложением в той же транзакции: и самой мысли, и её
+# связей, удаляемых FK-каскадом. Серверные копии файлов-вложений удаляются с
+# диска, как при DELETE /attachments/{id} (§11); отдельные события для
+# зависимых строк не эмитятся. Дети мысли НЕ удаляются — каскад бьёт по
+# строкам связей, а не по дочерним мыслям; ответ на удаление несёт
+# meta.orphaned_children — сколько дочерних мыслей лишились этой связи
+# (для клиентского предупреждения «N потомков останется без родителей»,
+# показывается ДО удаления через §6.5a, а не постфактум).
 ```
+
+### 6.5a. Проверка возможности удаления (S13)
+
+```
+GET /api/v1/networks/{nid}/thoughts/{id}/deletion-check
+→ 200 { data: {
+  blocked: boolean,
+  blocking: { properties: <число ссылающихся мыслей>,
+              layers: [ { id, title } ] },
+  orphaned_children: <число>
+} }
+
+POST /api/v1/networks/{nid}/thoughts/deletion-check-batch
+{ ids: ["...", "..."] }
+→ 200 { data: { "<id>": { blocked, blocking, orphaned_children }, ... } }
+
+# Аналогично для связей — тот же формат без `properties` и без
+# `orphaned_children` (у связи нет ни ссылающихся свойств, ни детей):
+GET  /api/v1/networks/{nid}/links/{id}/deletion-check
+POST /api/v1/networks/{nid}/links/deletion-check-batch
+→ 200 { data: { blocked, blocking: { layers: [ { id, title } ] } } }
+```
+
+Правила блокировки — 02-data-model.md §3.1.2. `blocking.layers` пуст до
+появления слоёв (S2, версия 0.5.2) — до тех пор блокирует только пункт
+«использование в свойствах». Batch-вариант — источник данных для диалога
+группового удаления (08-ui-spec.md, панель выделения) и для диалога
+«Корзина» (§14b): один запрос вместо N.
 
 ### 6.6. Групповые операции
 ```
@@ -305,6 +349,7 @@ POST /api/v1/networks/{nid}/thoughts/batch
 {
   ids: ["...", "..."],
   op: "set_type"|"clear_type"|"set_active"|"set_inactive"|"delete"|
+       "trash"|"purge"|
        "link_to_focus"|"unlink_from_focus"|
        "link_parents"|"link_children"|"set_only_parents"|
        "unlink_parents"|"unlink_children",
@@ -313,6 +358,19 @@ POST /api/v1/networks/{nid}/thoughts/batch
 }
 → 200 { data: { affected: N, failures: [ {id, code, message} ] } }
 ```
+
+`trash` — поставить `marked_for_deletion = true` каждой из `ids` (снятие
+пометки батчем не предусмотрено — восстановление из корзины делается по
+одной мысли, §14b). `purge` — физически удалить каждую из `ids`; для
+заблокированных (§6.5a) — запись остаётся, попадает в `failures` с
+`code: "VALIDATION_ERROR"` вместо общей отмены всей операции. Это то, что
+вызывает кнопка «Применить» в диалоге группового удаления: клиент заранее
+разводит `ids` на два вызова (`trash`/`purge`) по выбору переключателя в
+каждой строке, а не передаёт выбор построчно одним запросом.
+
+С S13 `op: "delete"` становится алиасом `"purge"` (та же проверка блокировки,
+тот же формат `failures`) — значение сохранено в перечне ради обратной
+совместимости уже написанных клиентов, новый код использует `"purge"` явно.
 
 `link_to_focus` — создать связи между всеми `ids` и мыслью в фокусе клиента
 (`focus_thought_id` передаётся явно). `direction` — `parent`/`child`.
@@ -420,6 +478,11 @@ POST /api/v1/networks/{nid}/thoughts/query
                                   # — «не важно» (действует show_inactive).
                                   # Явное значение переопределяет show_inactive
   show_inactive?: false,          # как в focus/поиске
+  trashed?: false,                # S13: false (default) — исключить помеченные
+                                  # на удаление, true — включить их в общую
+                                  # выдачу наравне с обычными. Список самой
+                                  # корзины отдаёт отдельный GET /trash (§14b),
+                                  # не этот фильтр
   sort: "alpha"|"created"|"viewed",
   order: "asc"|"desc",
   limit: 100, offset: 0,          # limit клампится в 1..100
@@ -671,9 +734,17 @@ POST   /api/v1/networks/{nid}/links
        { source_id, target_id, type_id?, active? }
 GET    /api/v1/networks/{nid}/links/{id}
 PATCH  /api/v1/networks/{nid}/links/{id}    If-Match
-       { source_id?, target_id?, type_id?, active? }
+       { source_id?, target_id?, type_id?, active?, marked_for_deletion? }
 DELETE /api/v1/networks/{nid}/links/{id}    If-Match
 ```
+
+`marked_for_deletion` (S13, 02-data-model.md §3.1.2) — «Поместить в
+корзину»/«Вернуть из корзины», как у мыслей (§6.4). `DELETE` теперь
+физически удаляет только если связь не заблокирована (§6.5a); при
+блокировке — 422 `VALIDATION_ERROR` с `details.blocking`, связь не
+изменяется. У связи нет собственного `thought_ref`-использования и нет
+детей — блокировать может только удерживающая теневая строка в слое
+(появляется с версии 0.5.2).
 
 Инварианты:
 - `source_id <> target_id` → 422.
@@ -802,8 +873,30 @@ GET /api/v1/networks/{nid}/thoughts/{id}/usage
 # (config.multiple, 02-data-model.md §3.5). Группировка по свойствам,
 # сортировка по имени свойства, затем по заголовку мысли.
 → 200 { data: { total: <число ссылок>,
-                groups: [ { property_id, key, thoughts: [ThoughtRef] } ] } }
+                groups: [ { property_id, key, thoughts: [ThoughtRef] } ],
+                holding_layers: [ { id, title } ] } }
 ```
+
+`holding_layers` (S13) — слои, в которых у этой мысли есть изменённая
+теневая строка, не помеченная на удаление ([13-layers.md](13-layers.md)
+§5.1) — именно они удерживают мысль от физического удаления вместе с
+`groups` (§6.5a, пункты 1–2). Пуст до появления слоёв (версия 0.5.2).
+Для связей — тот же эндпоинт (`GET /links/{id}/usage`) отдаёт только
+`holding_layers`, без `total`/`groups` (thought_ref не ссылается на связи).
+
+### 9.2. Очистить использование (S13)
+
+```
+POST /api/v1/networks/{nid}/thoughts/{id}/usage/clear
+→ 200 { data: { cleared: N } }
+```
+
+Обнуляет (`value: null`) все `thought_ref`-свойства всех мыслей сети,
+ссылающиеся на данную мысль (то есть каждую запись из `groups[].thoughts`
+§9.1 одним вызовом) — снимает пункт 1 блокировки разом, вместо очистки по
+одному свойству через уже существующий `DELETE /thoughts/{owner_id}/
+properties/{key}` (§9). `cleared` — сколько значений обнулено. Для связей
+не существует — у них нет `groups`.
 
 ## 10. Комментарии
 
@@ -957,6 +1050,9 @@ GET /api/v1/networks/{nid}/search?q=<text>&...
                                        # L21: каждый id раскрывается до поддерева)
   link_type_id=<id>                    # фильтр по типам связей (L21: поддерево)
   show_inactive=true|false             # default: из preferences.show_inactive
+  trashed=true|false                   # default false — S13, скрывает/показывает
+                                       # marked_for_deletion=true (независимо от
+                                       # show_inactive, 02-data-model.md §3.1.2)
   limit=50&offset=0
 → 200 { data: {
   by_names:   [ {thought_id, title, icon, icon_kind, snippet, highlights: [...]} ],
@@ -1077,6 +1173,33 @@ JSON-конверте; максимальный размер — `ETNX_MAX_BYTES
 `parent_thought_id` как дети. Ответ содержит счётчики
 `thoughts_created`/`thoughts_updated`/`links_created`/`attachments_imported`
 и т. п.
+
+## 14b. Корзина (S13)
+
+```
+GET /api/v1/networks/{nid}/trash
+→ 200 { data: {
+  thoughts: [ { ...Thought, blocked: boolean, blocking: {...} } ],
+  links:    [ { ...Link,    blocked: boolean, blocking: {...} } ]
+} }
+
+POST /api/v1/networks/{nid}/trash/purge
+→ 200 { data: { purged: N, skipped: M } }
+```
+
+`GET /trash` — все мысли и связи сети с `marked_for_deletion = true`
+(видимые в текущем слое, [13-layers.md](13-layers.md) §4.1), каждая — сразу
+с результатом проверки блокировки (§6.5a), чтобы диалог «Корзина»
+(08-ui-spec.md) не делал по запросу на строку. Список не постраничный на
+MVP — объём корзины предполагается небольшим по построению (пункт «Удалить
+всё, что возможно» регулярно её опустошает).
+
+`POST /trash/purge` — «Удалить всё, что возможно»: физически удаляет каждую
+помеченную мысль/связь, для которой `blocked = false`; заблокированные
+пропускаются без ошибки (это ожидаемый исход, не сбой). `purged` — сколько
+удалено, `skipped` — сколько осталось из-за блокировки. Тот же метод сервер
+вызывает сам сразу после удаления слоя и после слияния слоя
+([13-layers.md](13-layers.md) §2.4, §8.4) — автоочистка снятых удержаний.
 
 ## 15. Журнал аудита (только admin)
 

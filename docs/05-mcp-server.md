@@ -90,7 +90,8 @@ REST. Все изменения, сделанные агентом, иденти
 | `etn://networks/{network_id}` | Метаданные сети (все 4 markdown-поля + `node_section_type_id`, см. §3) |
 | `etn://networks/{network_id}/thoughts/{thought_id}` | Полная мысль: свойства, синонимы, тип, стили + блок `meta` (см. ниже) |
 | `etn://networks/{network_id}/thoughts/{thought_id}/neighbors` | Соседи (parents/children/siblings) + каталоги `link_types`/`thought_types` |
-| `etn://networks/{network_id}/thoughts/{thought_id}/usage` | «Использование» мысли: кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству |
+| `etn://networks/{network_id}/thoughts/{thought_id}/usage` | «Использование» мысли: кто ссылается на неё через thought_ref-свойства (сгруппировано по свойству) + `holding_layers` (S13) |
+| `etn://networks/{network_id}/trash` | Корзина сети: помеченные на удаление мысли и связи с предрасчитанной блокировкой (S13, см. `etn.trash.list`) |
 | `etn://networks/{network_id}/thoughts/{thought_id}/backlinks` | «Ссылки на мысль» (фаза R): комментарии, в `body_md` которых есть явная ID-ссылка `[[#<id>]]` или `[[n:<net>#<id>]]` на эту мысль. Аналог `mentions`, но для явных UUID-ссылок (R3) |
 | `etn://networks/{network_id}/thoughts/{thought_id}/comments` | Комментарии мысли |
 | `etn://networks/{network_id}/thoughts/{thought_id}/attachments` | Вложения мысли |
@@ -141,9 +142,9 @@ null` означает висячую ссылку на удалённую мы�
 
 | Хинт | Смысл | Кому ставим |
 |------|-------|-------------|
-| `readOnlyHint: true` | Инструмент не меняет состояние сети (нет DB-записей, real-time событий, `audit_log`-строк). Клиент может выдавать доступ без ручного подтверждения | всем read-инструментам §5.1 + `etn.thoughts.find_duplicates` (4.3) + `etn.attachments.search` |
-| `destructiveHint: true` | Инструмент удаляет сущности (откатить нельзя) — клиент обязан запросить подтверждение пользователя | `etn.thoughts.delete`, `etn.links.delete`, `etn.comments.delete` |
-| `idempotentHint: true` | Повторный вызов с теми же аргументами не даёт дополнительного эффекта (финальное состояние то же) — клиент может безопасно ретраить | `etn.thoughts.set_active`, `etn.properties.set`, `etn.thoughts.upsert_bundle` (upsert-семантика O1) |
+| `readOnlyHint: true` | Инструмент не меняет состояние сети (нет DB-записей, real-time событий, `audit_log`-строк). Клиент может выдавать доступ без ручного подтверждения | всем read-инструментам §5.1 + `etn.thoughts.find_duplicates` (4.3) + `etn.attachments.search` + `etn.thoughts.deletion_check`, `etn.links.deletion_check`, `etn.trash.list` (S13) |
+| `destructiveHint: true` | Инструмент удаляет сущности (откатить нельзя) — клиент обязан запросить подтверждение пользователя | `etn.thoughts.delete`, `etn.links.delete`, `etn.comments.delete`, `etn.trash.purge` (S13 — массовое физическое удаление) |
+| `idempotentHint: true` | Повторный вызов с теми же аргументами не даёт дополнительного эффекта (финальное состояние то же) — клиент может безопасно ретраить | `etn.thoughts.set_active`, `etn.properties.set`, `etn.thoughts.upsert_bundle` (upsert-семантика O1), `etn.thoughts.trash`, `etn.links.trash` (S13 — тот же `trashed`, тот же итог) |
 
 Остальные мутирующие инструменты (`create`/`update`/`links.create`,
 `comments.upsert`/`update`, `attachments.add`/`copy`) аннотаций не несут:
@@ -172,7 +173,10 @@ DoD — клиент по умолчанию показывает обычный
 | `etn.links.get` | `read-only` | Связь | `network_id`, `link_id` |
 | `etn.thoughts.mentions` | `read-only` | Где упоминается мысль | `network_id`, `thought_id` |
 | `etn.thoughts.backlinks` | `read-only` | «Ссылки на мысль» (фаза R): комментарии, в `body_md` которых есть явная ID-ссылка `[[#<id>]]` или `[[n:<net>#<id>]]` на эту мысль. Семантически отличается от `mentions` (там — неявные совпадения по title/synonyms через FTS5) | `network_id`, `thought_id`, `view?` (O12, см. §5.1e) |
-| `etn.thoughts.usage` | `read-only` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`) | `network_id`, `thought_id`, `view?` (O12, см. §5.1e) |
+| `etn.thoughts.usage` | `read-only` | «Использование» мысли (формальные связи): кто ссылается на неё через thought_ref-свойства, сгруппировано по свойству (+ каталог `thought_types`), плюс `holding_layers` — слои, удерживающие мысль от удаления (S13, пуст до версии 0.5.2). Для связи (`GET .../links/{id}/usage` — 03-server-api.md §9.1) отдаёт только `holding_layers` | `network_id`, `thought_id`, `view?` (O12, см. §5.1e) |
+| `etn.thoughts.deletion_check` | `read-only` | Проверка блокировки перед физическим удалением (S13, 03-server-api.md §6.5a): использование в свойствах, удерживающие слои, будущие «сироты» среди детей. Принимает массив — один вызов покрывает и одиночную, и групповую проверку | `network_id`, `thought_ids[]` |
+| `etn.links.deletion_check` | `read-only` | То же для связей — только удерживающие слои, без использования в свойствах и сирот | `network_id`, `link_ids[]` |
+| `etn.trash.list` | `read-only` | Корзина сети: все мысли и связи с `marked_for_deletion=true`, каждая — сразу с результатом проверки блокировки (без отдельного вызова `deletion_check` на строку) | `network_id` |
 | `etn.comments.get` | `read-only` | Полный текст одного комментария: по `comment_id` (любой) или по `thought_id` (постоянный). Нужен, когда превью (`meta.permanent`, комментарии `subgraph`) показывает `truncated: true` — id есть в самом превью | `network_id` + ровно одно из `comment_id`/`thought_id` |
 | `etn.export.subgraph` | `read-only` | Подграф как Markdown-документ | `network_id`, `seed_ids[]`, `radius`, `format?` (md/html) |
 | `etn.types.list` | `read-only` | Оба каталога типов целиком (не только использованные в другом ответе), с иерархией и эффективными свойствами — см. §5.1b; `scope` позволяет запросить один каталог отдельно | `network_id`, `scope?` (`thoughts`/`links`/`all`), `in_subtree_of?`, `max_depth?` |
@@ -289,6 +293,7 @@ tables» (только реально использованные в ответ
 | `max_depth` | int | максимальная глубина обхода (по умолчанию 20) |
 | `type_id` | string[] | фильтр по типам мыслей |
 | `active` | `true`/`false`/`any` | актуальность (по умолчанию `true` — только актуальные) |
+| `trashed` | `true`/`false`/`any` | S13: пометка на удаление (по умолчанию `false` — только непомеченные); независим от `active` |
 | `keywords` | string | LIKE-фильтр по названию и синонимам (без FTS) |
 | `properties` | array | условия по значениям свойств: `{key, operator, value}` |
 | `created_after`/`created_before` | string | ISO-8601, диапазон создания |
@@ -713,9 +718,11 @@ Cookbook (`docs/mcp-clients.md` §8.2):
 |------|-----------|----------|-----------|
 | `etn.thoughts.create` | — | Создать мысль; тип — `type_id` или `type` (по имени, task O4, см. §5.1b). Если у типа непустой `comment_template_md` — мысль сразу получает постоянный комментарий с текстом шаблона (как в UI, см. 02-data-model.md §3.3). Семантика `link.direction` — см. ниже | `network_id`, `title`, `synonyms?`, `type_id?`\|`type?`, `active?`, `link?` `{direction, target_thought_id, type_id?\|type?}` |
 | `etn.thoughts.update` | — | Изменить мысль | `network_id`, `thought_id`, `changes`, `expected_version?` |
-| `etn.thoughts.delete` | `destructive` | Удалить | `network_id`, `thought_id`, `expected_version?` |
+| `etn.thoughts.delete` | `destructive` | Удалить физически. С S13 сначала выполняет ту же проверку блокировки, что и `etn.thoughts.deletion_check`; при блокировке — ошибка с деталями `blocking` вместо удаления, `marked_for_deletion` предварительно ставить не обязательно | `network_id`, `thought_id`, `expected_version?` |
+| `etn.thoughts.trash` | `idempotent` | Поместить в корзину (`trashed: true`) / вернуть из корзины (`trashed: false`); блокировку не проверяет — это только у `delete` (S13) | `network_id`, `thought_id`, `trashed` |
 | `etn.links.create` | — | Создать связь source → target; `source_id` — родитель, `target_id` — ребёнок; тип — `type_id` или `type` (по `name_forward`/`name_reverse`, task O4, см. §5.1b) | `network_id`, `source_id`, `target_id`, `type_id?`\|`type?` |
-| `etn.links.delete` | `destructive` | Удалить связь | `network_id`, `link_id` |
+| `etn.links.delete` | `destructive` | Удалить связь физически, с той же проверкой блокировки, что и `etn.links.deletion_check` (S13) | `network_id`, `link_id` |
+| `etn.links.trash` | `idempotent` | Поместить связь в корзину / вернуть из корзины (S13) | `network_id`, `link_id`, `trashed` |
 | `etn.comments.upsert` | — | Создать/обновить комментарий; для `chronological` — ровно одно из `owner_type`+`owner_id` (одна привязка) или `targets[]` (несколько, 1..100, первый — первичный владелец; для `permanent` только одиночная форма) | `network_id`, `owner_type`+`owner_id` \| `targets[]` (`{owner_type, owner_id}`), `kind`, `title?`, `body_md`, `valid_from?`, `valid_to?` |
 | `etn.comments.update` | — | Изменить комментарий по `comment_id` (chronological или permanent; last-write-wins по полям, `valid_from`/`valid_to` применяются только к chronological) | `network_id`, `comment_id`, `changes` (`title?`, `body_md?`, `valid_from?`, `valid_to?`), `expected_version?` |
 | `etn.comments.delete` | `destructive` | Удалить комментарий (вместе со всеми привязками к владельцам) | `network_id`, `comment_id`, `expected_version?` |
@@ -749,6 +756,8 @@ url/file_path пропускаются без ошибки и без запис�
 | `etn.properties.set` | `idempotent` | Установить свойство: одно (`key`+`value`) или набор (`values: {key: value\|null}` одной транзакцией) | `network_id`, `owner_type`, `owner_id` + ровно одно из `key`+`value` / `values` |
 | `etn.thoughts.set_active` | `idempotent` | Изменить актуальность | `network_id`, `thought_id`, `active` |
 | `etn.thoughts.upsert_bundle` | `idempotent` | Составная запись «единицы знания» одной транзакцией | см. §5.2a |
+| `etn.trash.purge` | `destructive` | «Удалить всё, что возможно» (S13): физически удаляет все помеченные мысли/связи сети, для которых `deletion_check` не даёт блокировку; заблокированные пропускаются без ошибки | `network_id` |
+| `etn.thoughts.usage_clear` | — | Обнулить разом все `thought_ref`-свойства других мыслей, ссылающиеся на данную (S13) — снимает пункт «использование в свойствах» без похода по одному через `etn.properties.set` | `network_id`, `thought_id` |
 
 Все изменяющие инструменты:
 - принимают опциональный `expected_version` для optimistic concurrency
