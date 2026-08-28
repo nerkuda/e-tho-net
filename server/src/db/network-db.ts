@@ -24,6 +24,7 @@
 
 import path from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 
 import type Database from 'better-sqlite3';
 import DatabaseConstructor from 'better-sqlite3';
@@ -106,16 +107,22 @@ export class NetworkDb {
 }
 
 /**
- * Register SQL helpers used by network migrations. `type_name_key` computes
- * the normalized type-name key (trim + lowercase, same as shared `typeNameKey`)
- * for the backfill in migration 017; it must exist on the connection before
- * `runMigrations` executes. Exported so tests that apply migrations to their
- * own connections can register the helpers the same way production code does.
+ * Register SQL helpers used by network migrations.
+ *
+ * `type_name_key` computes the normalized type-name key (trim + lowercase,
+ * same as shared `typeNameKey`) for the backfill in migration 017; `gen_uuid`
+ * (deterministic flag only to satisfy SQLite's rules for `DEFAULT (expr)`,
+ * each call still returns a fresh UUID, see migration 025) supplies row ids
+ * for `thought_synonyms`/`comment_targets` rows created without an explicit id.
+ * Both must exist on the connection before `runMigrations` executes. Exported
+ * so tests that apply migrations to their own connections can register the
+ * helpers the same way production code does.
  */
 export function registerMigrationHelpers(db: Database.Database): void {
   db.function('type_name_key', (value: unknown) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   );
+  db.function('gen_uuid', { deterministic: true }, () => randomUUID());
 }
 
 /**

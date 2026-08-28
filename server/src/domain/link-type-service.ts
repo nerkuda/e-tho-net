@@ -365,8 +365,9 @@ export interface DeleteLinkTypeOptions {
  * links still reference the type without `force`. The links themselves stay —
  * with `force` their `type_id` is nulled first.
  *
- * The type's property definitions are deleted along with it; stored values
- * cascade via the `property_values.property_id` FK (ON DELETE CASCADE).
+ * The type's property definitions are deleted along with it — and, since S2
+ * dropped the `property_id` FKs (docs/13-layers.md §3), their stored values and
+ * default overrides are removed explicitly in the same transaction.
  */
 export function deleteLinkType(
   ndb: NetworkDb,
@@ -413,6 +414,21 @@ export function deleteLinkType(
     if (usage.c > 0) {
       ndb.prepare('UPDATE links SET type_id = NULL WHERE type_id = ?').run(id);
     }
+    // The type's property definitions go with it — together with their stored
+    // values and default overrides, which had no other SQL path anyway and,
+    // since S2, no FK either (docs/13-layers.md §3).
+    ndb
+      .prepare(
+        `DELETE FROM property_values WHERE property_id IN
+           (SELECT id FROM type_properties WHERE owner_type = 'link_type' AND owner_id = ?)`,
+      )
+      .run(id);
+    ndb
+      .prepare(
+        `DELETE FROM type_property_overrides WHERE property_id IN
+           (SELECT id FROM type_properties WHERE owner_type = 'link_type' AND owner_id = ?)`,
+      )
+      .run(id);
     ndb
       .prepare("DELETE FROM type_properties WHERE owner_type = 'link_type' AND owner_id = ?")
       .run(id);

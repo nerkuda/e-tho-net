@@ -352,8 +352,9 @@ export interface DeleteThoughtTypeOptions {
  *     `type_id` is set to NULL (and their `updated_at`/`updated_by` refreshed)
  *     before the type row is removed.
  *
- * The type's property definitions are deleted along with it; stored values
- * cascade via the `property_values.property_id` FK (ON DELETE CASCADE). Child
+ * The type's property definitions are deleted along with it — and, since S2
+ * dropped the `property_id` FKs (docs/13-layers.md §3), their stored values and
+ * default overrides are removed explicitly in the same transaction. Child
  * types are impossible here (rejected up front), so no orphaned parents remain.
  */
 export function deleteThoughtType(
@@ -406,6 +407,21 @@ export function deleteThoughtType(
         )
         .run(now, opts.actorUserId ?? 'system', id);
     }
+    // The type's property definitions go with it — together with their stored
+    // values and default overrides, which had no other SQL path anyway and,
+    // since S2, no FK either (docs/13-layers.md §3).
+    ndb
+      .prepare(
+        `DELETE FROM property_values WHERE property_id IN
+           (SELECT id FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?)`,
+      )
+      .run(id);
+    ndb
+      .prepare(
+        `DELETE FROM type_property_overrides WHERE property_id IN
+           (SELECT id FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?)`,
+      )
+      .run(id);
     ndb
       .prepare("DELETE FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?")
       .run(id);

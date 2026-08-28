@@ -1,7 +1,8 @@
 /**
- * Cascade cleanup of polymorphic dependants when their owner disappears
- * (docs/03-server-api.md §6.5, §7.1, §10.1, §11; docs/02-data-model.md §3.5,
- * §3.8, §3.9).
+ * Cascade cleanup of polymorphic dependants — and, since S2, of every table
+ * that used to reach a deleted thought through an SQL FK — when their owner
+ * disappears (docs/03-server-api.md §6.5, §7.1, §10.1, §11;
+ * docs/02-data-model.md §3.5, §3.8, §3.9, §3.10, §3.13).
  *
  * `comments`, `attachments` and `property_values` reference their owner as a
  * polymorphic `(owner_type, owner_id)` pair **without an SQL FK**, so neither
@@ -13,6 +14,11 @@
  *   * `DELETE /thoughts/{id}` cascades the incident `links` rows silently, so
  *     the comments/attachments/property values owned by those links need the
  *     same treatment as the thought's own ones.
+ *
+ * Additionally, since S2 removed the SQL FKs from `links`,
+ * `thought_synonyms` and the per-user tables to `thoughts` (the logical id is
+ * no longer unique, docs/13-layers.md §3), the former FK cascades of a thought
+ * deletion run explicitly here as well ({@link purgeThoughtDeletionDependants}).
  *
  * Server-stored attachment files (`networks/<nid>/attachments/`) are removed
  * from disk as well; client-local file paths are never touched.
@@ -53,9 +59,12 @@ export function purgeOwnerDependants(
 }
 
 /**
- * Purge the dependants removed together with a thought deletion: the thought's
- * own ones **and** those of its incident links — the latter are cascade-deleted
- * by the `links` FK, which never reaches the polymorphic tables.
+ * Purge everything removed together with a thought deletion: the thought's
+ * polymorphic dependants **and** those of its incident links, then — since S2,
+ * when the SQL FKs to `thoughts` were dropped — the former FK cascades
+ * themselves: the incident `links` rows, the thought's synonyms and the
+ * per-user state pointing at it (views, focus preferences/order, pins, read
+ * metrics).
  */
 export function purgeThoughtDeletionDependants(ndb: NetworkDb, thoughtId: string): void {
   const linkIds = (
@@ -65,6 +74,19 @@ export function purgeThoughtDeletionDependants(ndb: NetworkDb, thoughtId: string
   ).map((row) => row.id);
   purgeOwnerDependants(ndb, 'link', linkIds);
   purgeOwnerDependants(ndb, 'thought', [thoughtId]);
+
+  // Former FK cascades (docs/13-layers.md §3): `thoughts.id` is no longer a
+  // unique parent key, so these tables have no SQL FK any more and the app
+  // owns the cleanup.
+  ndb.prepare('DELETE FROM links WHERE source_id = ? OR target_id = ?').run(thoughtId, thoughtId);
+  ndb.prepare('DELETE FROM thought_synonyms WHERE thought_id = ?').run(thoughtId);
+  ndb.prepare('DELETE FROM thought_views WHERE thought_id = ?').run(thoughtId);
+  ndb.prepare('DELETE FROM user_focus_preferences WHERE focus_thought_id = ?').run(thoughtId);
+  ndb
+    .prepare('DELETE FROM user_focus_order WHERE focus_thought_id = ? OR thought_id = ?')
+    .run(thoughtId, thoughtId);
+  ndb.prepare('DELETE FROM user_pinned_thoughts WHERE thought_id = ?').run(thoughtId);
+  ndb.prepare('DELETE FROM thought_read_metrics WHERE thought_id = ?').run(thoughtId);
 }
 
 /** Single-chunk purge; `ownerIds` must be non-empty and ≤ OWNER_CHUNK_SIZE. */

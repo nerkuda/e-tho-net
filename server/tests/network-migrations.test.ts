@@ -43,11 +43,13 @@ const EXPECTED_FILES = [
   '022_thought_types_comment_template.sql',
   '023_thought_read_metrics.sql',
   '024_marked_for_deletion.sql',
+  '025_layers.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
 const EXPECTED_TABLES = [
   '_migrations',
+  'layers',
   'thoughts',
   'thought_synonyms',
   'thought_types',
@@ -190,6 +192,54 @@ describe(
           }[]
         ).map((r) => r.name);
         assert.ok(filterCols.includes('view'), 'missing saved_filters.view');
+
+        // 025 change layers (S2, 13-layers.md §3): the layers table exists with
+        // exactly one base row, and every branchable table carries the layer
+        // columns (layer_id / deleted / base_version) plus a surrogate pk.
+        const base = db
+          .prepare('SELECT id, is_base, depth, title FROM layers WHERE is_base = 1')
+          .get() as { id: string; is_base: number; depth: number; title: string };
+        assert.equal(base.is_base, 1);
+        assert.equal(base.depth, 0);
+        assert.equal(base.title, 'Основа');
+        for (const table of [
+          'thoughts',
+          'thought_synonyms',
+          'thought_types',
+          'link_types',
+          'type_properties',
+          'type_property_overrides',
+          'property_values',
+          'links',
+          'comments',
+          'comment_targets',
+          'attachments',
+        ]) {
+          const cols = (
+            db.prepare('SELECT name FROM pragma_table_info(?)').all(table) as { name: string }[]
+          ).map((r) => r.name);
+          assert.ok(cols.includes('layer_id'), `missing ${table}.layer_id`);
+          assert.ok(cols.includes('deleted'), `missing ${table}.deleted`);
+          assert.ok(cols.includes('base_version'), `missing ${table}.base_version`);
+          assert.ok(cols.includes('pk'), `missing ${table}.pk (surrogate)`);
+        }
+        // thought_synonyms/comment_targets gained a row id; links gained the
+        // T1 order field.
+        const synCols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('thought_synonyms') as {
+            name: string;
+          }[]
+        ).map((r) => r.name);
+        assert.ok(synCols.includes('id'), 'missing thought_synonyms.id');
+        assert.ok(linkCols.includes('position'), 'missing links.position');
+        // FTS carries layer_id (S6 preparation).
+        for (const fts of ['fts_thought_names', 'fts_thought_texts', 'fts_link_texts']) {
+          const ftsCols = db.prepare(`PRAGMA table_info(${fts})`).all() as { name: string }[];
+          assert.ok(
+            ftsCols.some((c) => c.name === 'layer_id'),
+            `missing ${fts}.layer_id`,
+          );
+        }
       } finally {
         db.close();
       }

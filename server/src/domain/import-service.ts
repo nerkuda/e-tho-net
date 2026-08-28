@@ -625,7 +625,7 @@ function insertPropertyValue(
          value_text, value_date, value_number, value_bool, value_thought_ref,
          updated_at
        ) VALUES (?, ?, ?, ?, ${colInit(column)}, ?)
-       ON CONFLICT(owner_type, owner_id, property_id) DO UPDATE SET
+       ON CONFLICT(owner_type, owner_id, property_id, layer_id) DO UPDATE SET
          value_text = NULL,
          value_date = NULL,
          value_number = NULL,

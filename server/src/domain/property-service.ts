@@ -303,7 +303,7 @@ export function setTypePropertyDefaultOverride(
       .prepare(
         `INSERT INTO type_property_overrides (id, owner_type, type_id, property_id, default_value, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (owner_type, type_id, property_id) DO UPDATE SET
+         ON CONFLICT (owner_type, type_id, property_id, layer_id) DO UPDATE SET
            default_value = excluded.default_value,
            updated_at = excluded.updated_at`,
       )
@@ -540,13 +540,23 @@ export function updateTypeProperty(
   });
 }
 
-/** Delete a property definition. Cascades to stored values via SQL FK. */
+/**
+ * Delete a property definition. Since S2 the definition's stored values and
+ * default overrides have no SQL FK to `type_properties` (the logical id is no
+ * longer unique), so both are deleted explicitly in the same transaction.
+ */
 export function deleteTypeProperty(ndb: NetworkDb, id: string): void {
   const current = getTypeProperty(ndb, id);
   if (!current) {
     throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'type_property', id });
   }
-  ndb.prepare('DELETE FROM type_properties WHERE id = ?').run(id);
+  ndb.transaction(() => {
+    ndb.prepare('DELETE FROM property_values WHERE property_id = ?').run(id);
+    // Overrides set on OTHER types for this inherited property go with it too
+    // (the former FK cascade), not only the owning type's own ones.
+    ndb.prepare('DELETE FROM type_property_overrides WHERE property_id = ?').run(id);
+    ndb.prepare('DELETE FROM type_properties WHERE id = ?').run(id);
+  });
 }
 
 /**
@@ -1090,7 +1100,7 @@ export function setPropertyValue(
       .prepare(
         `INSERT INTO property_values (id, owner_type, owner_id, property_id, ${column}, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(owner_type, owner_id, property_id) DO UPDATE SET
+         ON CONFLICT(owner_type, owner_id, property_id, layer_id) DO UPDATE SET
            value_text = NULL,
            value_date = NULL,
            value_number = NULL,

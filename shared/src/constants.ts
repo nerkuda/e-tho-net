@@ -238,6 +238,22 @@ export const TRAVERSAL_DEFAULTS = {
 export const THOUGHT_RESOLVE_MAX_IDS = 100;
 
 // ---------------------------------------------------------------------------
+// Слои изменений (фаза S, docs/13-layers.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fixed id of the base layer row (`layers.is_base = 1`, `depth = 0`) that every
+ * network database owns exactly one of (docs/13-layers.md §2.1). The id is the
+ * same constant across all networks — layer ids only need to be unique inside
+ * one `data.db`, and a fixed value lets the S2 schema declare
+ * `layer_id TEXT NOT NULL DEFAULT <BASE_LAYER_ID>` on every branchable table,
+ * so pre-layer code keeps writing into the base unchanged (writes gain an
+ * explicit layer only in S3). Seeded by migration 025; same pattern as the
+ * fixed root type ids of migration 021.
+ */
+export const BASE_LAYER_ID = '00000000-0000-4000-8000-0000000000ba5e' as const;
+
+// ---------------------------------------------------------------------------
 // «Структуры мыслей» view (L15)
 // ---------------------------------------------------------------------------
 

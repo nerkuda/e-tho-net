@@ -29,6 +29,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { listLinkHoldingLayers } from './holding-layers.js';
 import { purgeOwnerDependants } from './owner-cleanup.js';
 import { assertLinkTypeAssignable } from './link-type-service.js';
 
@@ -494,8 +495,9 @@ export function updateLink(
 /**
  * Check whether a link can be physically deleted (docs/03-server-api.md §6.5a).
  * Links have no `thought_ref` usage and no children, so the only blocking arm
- * is the layer shadow row — which stays empty until layers land in 0.5.2
- * (02-data-model.md §3.1.2). For 0.5.1 a link is therefore never blocked.
+ * is a live (`deleted = 0`) shadow row of the link in a non-base layer
+ * (02-data-model.md §3.1.2 п.3; until layers are created via S7 the list is
+ * always empty).
  *
  * Throws `NOT_FOUND` (404) when the link does not exist.
  */
@@ -504,7 +506,8 @@ export function checkLinkDeletion(ndb: NetworkDb, id: string): LinkDeletionCheck
   if (!row) {
     throw new EtnError('NOT_FOUND', `link ${id} not found`, { entity: 'link', id });
   }
-  return { blocked: false, blocking: { layers: [] } };
+  const holdingLayers = listLinkHoldingLayers(ndb, id);
+  return { blocked: holdingLayers.length > 0, blocking: { layers: holdingLayers } };
 }
 
 /**
@@ -515,7 +518,8 @@ export function checkLinkDeletion(ndb: NetworkDb, id: string): LinkDeletionCheck
  *
  * Throws `NOT_FOUND` (404) if the link does not exist and `VERSION_CONFLICT`
  * (409) if `expectedVersion` is set and does not match; `VALIDATION_ERROR`
- * (422) when deletion is blocked (S13, §6.5a — always `false` until 0.5.2).
+ * (422) when deletion is blocked by a holding layer (S13/S2, §6.5a — the list
+ * is empty until layers can be created, S7).
  */
 export function deleteLink(ndb: NetworkDb, id: string, expectedVersion: number | undefined): void {
   ndb.transaction(() => {

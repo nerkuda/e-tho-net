@@ -84,7 +84,9 @@ export class NetworkServiceImpl implements NetworkService {
     const networkId = randomUUID();
     this.log?.debug({ networkId, ownerId, displayName }, 'creating network');
 
-    // 1. Allocate directory tree + open data.db with migrations applied.
+    // 1. Allocate directory tree + open data.db with migrations applied. The
+    //    migrations seed the base layer row (025, fixed BASE_LAYER_ID) — the
+    //    base exists before any thought, per docs/13-layers.md §2.1.
     const ndb = openNetworkDb(this.dataDir, networkId, this.log);
 
     // 2. Seed the protected HOME thought in a single transaction.

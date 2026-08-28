@@ -40,6 +40,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { createComment } from './comment-service.js';
+import { listThoughtHoldingLayers } from './holding-layers.js';
 import { purgeThoughtDeletionDependants } from './owner-cleanup.js';
 import { computeThoughtCardWarnings, countThoughtRefUsages } from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
@@ -701,9 +702,11 @@ function countOrphanedChildren(ndb: NetworkDb, thoughtId: string): number {
 
 /**
  * Check whether a thought can be physically deleted (docs/03-server-api.md
- * §6.5a). Blocking is the "использование в свойствах" arm only for 0.5.1 —
- * `blocking.layers` stays empty until layers land in 0.5.2 (02-data-model.md
- * §3.1.2). Also reports how many children would become orphans.
+ * §6.5a). Blocking arms: "использование в свойствах" (`thought_ref` from other
+ * thoughts) and — since the layers schema landed in S2 — live (`deleted = 0`)
+ * shadow rows of the thought itself or of links where it is an endpoint in any
+ * non-base layer (docs/02-data-model.md §3.1.2 п.2–3). Also reports how many
+ * children would become orphans.
  *
  * Throws `NOT_FOUND` (404) when the thought does not exist.
  */
@@ -713,26 +716,28 @@ export function checkThoughtDeletion(ndb: NetworkDb, id: string): ThoughtDeletio
     throw new EtnError('NOT_FOUND', `thought ${id} not found`, { entity: 'thought', id });
   }
   const properties = countThoughtRefUsages(ndb, id);
+  const holdingLayers = listThoughtHoldingLayers(ndb, id);
   return {
-    blocked: properties > 0,
-    blocking: { properties, layers: [] },
+    blocked: properties > 0 || holdingLayers.length > 0,
+    blocking: { properties, layers: holdingLayers },
     orphaned_children: countOrphanedChildren(ndb, id),
   };
 }
 
 /**
- * Delete a thought (docs/03-server-api.md §6.5). Cascades through FK-bearing
- * tables (synonyms, links, thought_views, user_focus_*); the polymorphic
- * dependants of the thought **and of its incident links** (comments,
- * attachments, property_values — no SQL FK) are removed explicitly in the
- * same transaction (see {@link purgeThoughtDeletionDependants}).
+ * Delete a thought (docs/03-server-api.md §6.5). Since S2 there are no SQL FKs
+ * from other entity tables to `thoughts` (the logical id is no longer unique),
+ * so the whole cascade — incident links (with their polymorphic dependants),
+ * synonyms, comments, attachments, property values and the per-user state
+ * (views, focus, pins, read metrics) — runs explicitly in the same transaction
+ * (see {@link purgeThoughtDeletionDependants}).
  *
  * Throws:
  *   * `NOT_FOUND` (404) if the thought does not exist;
  *   * `VERSION_CONFLICT` (409) if `expectedVersion` is set and does not match;
  *   * `PROTECTED_ENTITY` (422) for `is_protected` thoughts (HOME);
  *   * `VALIDATION_ERROR` (422, `details.blocking`) when deletion is blocked by
- *     referencing properties (S13, §6.5a).
+ *     referencing properties or by a holding layer (S13/S2, §6.5a).
  */
 export function deleteThought(
   ndb: NetworkDb,
@@ -756,22 +761,25 @@ export function deleteThought(
       });
     }
     // S13: refuse physical deletion while other thoughts reference this one
-    // through a thought_ref property (02-data-model.md §3.1.2).
+    // through a thought_ref property, or while a non-base layer holds a live
+    // shadow row of it / of a link where it is an endpoint
+    // (02-data-model.md §3.1.2).
     const check = checkThoughtDeletion(ndb, id);
     if (check.blocked) {
-      throw new EtnError('VALIDATION_ERROR', 'thought is used in properties and cannot be deleted', {
-        entity: 'thought',
-        id,
-        blocking: check.blocking,
-      });
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'thought is used in properties or held by a layer and cannot be deleted',
+        {
+          entity: 'thought',
+          id,
+          blocking: check.blocking,
+        },
+      );
     }
-    // Polymorphic owners without SQL FK: clean up explicitly. This covers the
-    // thought's own comments (primary owner — deleted with m2m targets;
-    // secondary targets — detached, L20), attachments (incl. server-stored
-    // files) and property values, plus the same dependants of the incident
-    // links that the FK cascade below removes silently.
+    // Everything that used to ride on SQL FKs (links, synonyms, per-user
+    // state) or has none (comments, attachments, property values) is cleaned
+    // up explicitly, in this transaction — see purgeThoughtDeletionDependants.
     purgeThoughtDeletionDependants(ndb, id);
-    // FK-bearing tables cascade automatically.
     ndb.prepare('DELETE FROM thoughts WHERE id = ?').run(id);
   });
 }
