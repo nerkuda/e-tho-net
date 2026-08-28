@@ -2,7 +2,8 @@
  * Inline thought-reference search used by `thought_ref` value inputs (H11):
  * typing runs the same live duplicate search as the universal picker dialog
  * (`canvas/add-dialog.ts`, L20) and shows the candidates in a body-mounted
- * dropdown; clicking one calls `onPick` with the thought id.
+ * dropdown; clicking a row — or pressing Enter over the highlighted one —
+ * calls `onPick` with the thought id.
  *
  * `typeIds` restricts the search to thoughts of the given types — used by
  * `thought_ref` properties whose definition configures a type filter (the
@@ -31,8 +32,10 @@ function navIndex(cursor: number | null, count: number, delta: 1 | -1): number |
 /**
  * Wires an inline candidate search to a `thought_ref` value input: typing runs
  * the live duplicate search (honouring the type filter) and shows the
- * candidates in a body-mounted dropdown; clicking one calls `onPick` with the
- * thought id.
+ * candidates in a body-mounted dropdown; clicking a row — or pressing
+ * Enter/Ctrl+Enter over the highlighted one (↑/↓ move the highlight,
+ * Ctrl+↑/↓ jump to the ends, Escape closes) — calls `onPick` with the thought
+ * id.
  *
  * The typed text itself is never a value — on blur the field falls back to the
  * title it showed when the search started, so only an explicitly picked
@@ -52,7 +55,7 @@ export function wireThoughtRefSearch(
   let list: HTMLDivElement | null = null;
   let timer: number | null = null;
   let seq = 0;
-  /** Keyboard cursor over the dropdown rows (↑/↓, Ctrl+↑/↓, Ctrl+Enter). */
+  /** Keyboard cursor over the dropdown rows (↑/↓, Ctrl+↑/↓, Enter/Ctrl+Enter). */
   let cursor: number | null = null;
 
   const close = (): void => {
@@ -163,7 +166,16 @@ export function wireThoughtRefSearch(
       if (next === null) return;
       cursor = next;
       paintRows();
-    } else if (event.ctrlKey && event.key === 'Enter') {
+    } else if (
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey
+    ) {
+      // Enter (with or without Ctrl) picks the highlighted row — the same
+      // effect as clicking it; without a keyboard highlight the first row
+      // wins (08-ui-spec.md §6.3.1). Shift/Alt-modified presses are left
+      // for the outer shortcuts (Shift+Enter — «apply» in dialogs).
       if (rows.length === 0) return;
       event.preventDefault();
       rows[cursor ?? 0]?.click();
