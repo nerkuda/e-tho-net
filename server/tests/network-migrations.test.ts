@@ -44,6 +44,7 @@ const EXPECTED_FILES = [
   '023_thought_read_metrics.sql',
   '024_marked_for_deletion.sql',
   '025_layers.sql',
+  '026_fts_layer_tombstones.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
