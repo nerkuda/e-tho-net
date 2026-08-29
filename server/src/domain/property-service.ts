@@ -260,8 +260,12 @@ export function setTypePropertyDefaultOverride(
 ): void {
   validateTypeOwnerType(ownerType);
   ndb.transaction(() => {
+    // S5 (13-layers.md §13): the owner must resolve in the connection's layer
+    // context — the `_v` view hides types tombstoned in this chain and keeps
+    // layer-only types invisible to the base, so an override can never attach
+    // to a type the current layer cannot see.
     const typeRow = ndb
-      .prepare(`SELECT id FROM ${ownerTypeTable(ownerType)} WHERE id = ?`)
+      .prepare(`SELECT id FROM ${ownerTypeTable(ownerType)}_v WHERE id = ?`)
       .get(ownerId);
     if (!typeRow) {
       throw new EtnError('NOT_FOUND', `type ${ownerId} not found`, { entity: 'type', id: ownerId });
@@ -303,6 +307,19 @@ export function setTypePropertyDefaultOverride(
         deleteRowLayered(ndb, 'type_property_overrides', row.id);
       }
       return;
+    }
+    // S5 (13-layers.md §5.1): a visible ancestor row for this natural key is
+    // shadowed FIRST — a fresh logical id would leave both rows live in this
+    // layer's view (resolution goes per logical id, §4.1), and the effective
+    // default would depend on row order. The shadow keeps the copy-on-write
+    // chain: one visible override per (type, property) in every context.
+    const existingOverride = ndb
+      .prepare(
+        'SELECT id FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ? LIMIT 1',
+      )
+      .get(ownerType, ownerId, propertyId) as { id: string } | undefined;
+    if (existingOverride) {
+      materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
     }
     ndb
       .prepare(
@@ -349,11 +366,17 @@ function assertKeyAvailableInTree(
 
 /**
  * Create a property definition on a type (docs/03-server-api.md §8). `position`
- * defaults to one past the current maximum so new properties land last.
+ * defaults to one past the current maximum so new properties land last. The
+ * row lands in the connection's layer; a definition with the same key deleted
+ * earlier **in the same layer** is woken from its tombstone (it keeps the
+ * original id and `base_version`, 13-layers.md §5.2).
  *
- * Throws `DUPLICATE` (409) if a property with the same key already exists on
- * the owner or on any related type in its ancestor chain / subtree — the
- * effective property list must stay unambiguous (L21).
+ * Throws `NOT_FOUND` (404) when the owner type does not resolve in the
+ * connection's layer context (S5, 13-layers.md §13 — a base write cannot
+ * attach a definition to a layer-only type), or `DUPLICATE` (409) if a
+ * property with the same key already exists on the owner or on any related
+ * type in its ancestor chain / subtree — the effective property list must
+ * stay unambiguous (L21).
  */
 export function createTypeProperty(
   ndb: NetworkDb,
@@ -367,6 +390,15 @@ export function createTypeProperty(
   const id = randomUUID();
 
   return ndb.transaction(() => {
+    // S5 (13-layers.md §13): the owner must resolve in the connection's layer
+    // context — a base write cannot attach a definition to a layer-only type,
+    // and a layer write cannot attach one to a type tombstoned in its chain.
+    const owner = ndb
+      .prepare(`SELECT id FROM ${ownerTypeTable(ownerType)}_v WHERE id = ?`)
+      .get(ownerId);
+    if (!owner) {
+      throw new EtnError('NOT_FOUND', `type ${ownerId} not found`, { entity: 'type', id: ownerId });
+    }
     assertKeyAvailableInTree(ndb, ownerType, ownerId, key, null);
     const position =
       input.position ??
@@ -391,7 +423,10 @@ export function createTypeProperty(
            position = excluded.position`,
       )
       .run(id, ndb.layerId, ownerType, ownerId, key, valueType, configJson, input.required ? 1 : 0, position);
-    return getTypeProperty(ndb, id)!;
+    // S5: the upsert's conflict arm wakes a same-key tombstone of this layer
+    // (`deleted = 0`) — the woken row keeps its ORIGINAL id, so re-read by
+    // (owner, key), never by the fresh uuid (it resolves only on a clean INSERT).
+    return getTypePropertyByKey(ndb, ownerType, ownerId, key)!;
   });
 }
 
@@ -1172,6 +1207,20 @@ export function setPropertyValue(
     const { column, raw } = validateAndCoerce(ndb, def, value);
     const now = new Date().toISOString();
     const id = randomUUID();
+    // S5 (13-layers.md §5.1): a visible ancestor row for this natural key is
+    // shadowed FIRST — writing with a fresh logical id would leave both rows
+    // live in this layer's view (resolution goes per logical id, §4.1) and
+    // break the «one value per (owner, property)» invariant of §3.5. The
+    // shadow carries the ancestor's identity, so the view resolves to a
+    // single row and `base_version` accumulates for the S8 merge.
+    const existing = ndb
+      .prepare(
+        'SELECT id FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ? LIMIT 1',
+      )
+      .get(ownerType, ownerId, def.id) as { id: string } | undefined;
+    if (existing) {
+      materializeShadow(ndb, 'property_values', existing.id);
+    }
     // Upsert: write the raw value into the matching column on INSERT, and on
     // conflict reset every value_* column before copying the matching one back,
     // so the single-column rule holds even if value_type changed since the last

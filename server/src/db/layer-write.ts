@@ -58,6 +58,32 @@ export function isBaseContext(ndb: NetworkDb): boolean {
   return ndb.layerId === BASE_LAYER_ID;
 }
 
+/**
+ * True when the logical row `id` has a live row **in the base layer itself**.
+ *
+ * S5 detector for the merge closure (13-layers.md §13, §8.1, §6.7): before a
+ * layer is merged, every `type_id` referenced by the merged thoughts/links
+ * must either already exist in the base or be part of the same merge — this
+ * predicate is the reliable way to tell «тип существует только в слое»
+ * (`false` here) from a type the base already owns (`true`). No REST surface:
+ * it is a building block for S8, not a user-facing fact.
+ *
+ * Deliberately a physical read, not a `*_v` lookup: the question is about the
+ * base layer's own rows, not about the connection's chain — a type
+ * tombstoned in some working layer but alive in the base still «exists in the
+ * base» (that tombstone is the layer's private disagreement, §4.1), and a
+ * type visible from the base through a child layer's row does not (the row
+ * physically lives in that layer only).
+ */
+export function existsInBaseLayer(ndb: NetworkDb, table: BranchableTable, id: string): boolean {
+  // layers:physical-read — вопрос о собственной строке основы, не о цепочке.
+  return (
+    ndb
+      .prepare(`SELECT 1 FROM ${table} WHERE id = ? AND layer_id = ? AND deleted = 0 LIMIT 1`)
+      .get(id, BASE_LAYER_ID) !== undefined
+  );
+}
+
 /** Touch `layers.last_activity_at` of the current layer (docs/13-layers.md §2.2). */
 function touchLayerActivity(ndb: NetworkDb): void {
   ndb
