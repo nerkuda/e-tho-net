@@ -192,7 +192,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
         const query = parseQueryBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         // ids_only (L22): bare ids for the bulk filter commands — the same
         // candidate set and ordering, a higher limit ceiling, no meta flags.
         if (query.ids_only === true) {
@@ -228,7 +228,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
           typeof offsetRaw === 'string' && offsetRaw !== '' && Number.isInteger(Number(offsetRaw))
             ? Math.max(0, Number(offsetRaw))
             : 0;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const data = getHierarchy(ndb, id, dir, {
           showInactive,
           excludeIds: parseExcludeIds(query['exclude_ids']),
@@ -254,7 +254,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         const showInactive = body['show_inactive'] === true;
         const ids = (idsRaw as string[]).slice(0, STRUCTURES_EDGES_MAX_IDS);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const edges = getEdgesAmong(ndb, ids, showInactive).map((l) => ({
           id: l.id,
           source_id: l.source_id,
@@ -277,7 +277,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
         const view = parseView((req.query as Record<string, unknown>)['view'], req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         sendSuccess(reply, listSavedFilters(ndb, req.auth!.user.id, view));
       },
     );
@@ -303,7 +303,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
           view === 'chronicle'
             ? parseChronicleFilterDefinition(definitionRaw as Record<string, unknown>, req.id)
             : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const filter = createSavedFilter(ndb, req.auth!.user.id, view, name, definition);
         deps.emit(req, networkId, 'saved-filter.created', { filter }, { audience: 'user' });
         sendCreated(reply, filter, { request_id: req.id });
@@ -331,7 +331,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
               ? parseChronicleFilterDefinition(definitionRaw as Record<string, unknown>, req.id)
               : parseSavedFilterDefinition(definitionRaw as Record<string, unknown>, req.id);
         }
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const filter = updateSavedFilter(ndb, req.auth!.user.id, fid, {
           ...(name !== undefined ? { name } : {}),
           ...(definition !== undefined ? { definition } : {}),
@@ -346,7 +346,7 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, fid } = req.params as SavedFilterIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         deleteSavedFilter(ndb, req.auth!.user.id, fid);
         deps.emit(req, networkId, 'saved-filter.deleted', { id: fid }, { audience: 'user' });
         sendSuccess(reply, { id: fid });

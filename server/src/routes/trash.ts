@@ -31,7 +31,7 @@ export function createTrashRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         sendSuccess(reply, listTrash(ndb));
       },
     );
@@ -41,7 +41,7 @@ export function createTrashRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const { purged, skipped, deleted_thought_ids, deleted_link_ids } = purgeTrash(ndb);
         // Fan out the standard deletion events so connected clients refresh.
         for (const id of deleted_thought_ids) {

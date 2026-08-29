@@ -173,7 +173,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         { preHandler: [app.authPreHandler, requireNetworkMember()] },
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as OwnerParams;
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const comments = listComments(ndb, ownerType, id);
           sendList(reply, comments, comments.length, 0, comments.length);
         },
@@ -185,7 +185,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as OwnerParams;
           const input = parseCommentBody(requestBody(req), req.id);
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const comment = createComment(ndb, ownerType, id, input, req.auth!.user.id);
           deps.emit(req, networkId, 'comment.created', { comment });
           sendCreated(reply, comment, {
@@ -209,7 +209,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const body = requestBody(req);
         const input = parseCommentBody(body, req.id);
         const targets = parseTargets(body, req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const comment = createCommentWithTargets(ndb, targets, input, req.auth!.user.id);
         deps.emit(req, networkId, 'comment.created', { comment });
         sendCreated(reply, comment, {
@@ -226,7 +226,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as CommentIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const comment = getComment(ndb, id);
         if (comment === null) {
           throw new EtnError('NOT_FOUND', `comment ${id} not found`, { entity: 'comment', id }, req.id);
@@ -242,7 +242,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as CommentIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const changes = parseCommentUpdateBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const comment = updateComment(ndb, id, changes, expectedVersion, req.auth!.user.id);
         deps.emit(req, networkId, 'comment.updated', {
           id,
@@ -263,7 +263,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as CommentIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const existing = getComment(ndb, id);
         deleteComment(ndb, id, expectedVersion);
         if (existing) {
@@ -295,7 +295,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             req.id,
           );
         }
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const comment = addCommentTarget(
           ndb,
           id,
@@ -324,7 +324,7 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id, ownerType, ownerId } = req.params as TargetParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const comment = removeCommentTarget(
           ndb,
           id,

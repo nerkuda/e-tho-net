@@ -285,7 +285,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         { preHandler: [app.authPreHandler, requireNetworkMember()] },
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as OwnerParams;
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const attachments = listAttachments(ndb, ownerType, id);
           sendList(reply, attachments, attachments.length, 0, attachments.length);
         },
@@ -297,7 +297,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as OwnerParams;
           const input = parseAttachmentBody(requestBody(req), req.id);
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           let attachment = createAttachment(ndb, ownerType, id, input, req.auth!.user.id);
           // URL attachments are enriched (page title + favicon) before the
           // response/event so clients render a filled row at once (L1).
@@ -321,7 +321,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as OwnerParams;
           const input = parseAttachmentFileBody(requestBody(req), req.id);
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const attachment = createAttachmentFile(ndb, ownerType, id, input, req.auth!.user.id);
           deps.emit(req, networkId, 'attachment.created', { attachment });
           sendCreated(reply, attachment, { request_id: req.id });
@@ -345,7 +345,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           req.query as Record<string, unknown>,
           req.id,
         );
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const { items, total } = searchAttachments(ndb, query);
         const limit = query.limit ?? 50;
         const offset = query.offset ?? 0;
@@ -368,7 +368,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (filePath.trim() === '') {
           throw new EtnError('VALIDATION_ERROR', 'path обязателен.', { field: 'path' }, req.id);
         }
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const file = getAttachmentRawByPath(ndb, filePath);
         reply
           .header('content-type', file.mime_type)
@@ -389,7 +389,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as AttachmentIdParams;
         const input = parseAttachmentCopyBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const result = copyAttachment(ndb, id, input, req.auth!.user.id);
         // One event per created row so realtime subscribers can react
         // individually (re-render the target's attachments tab, refresh the
@@ -407,7 +407,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as AttachmentIdParams;
         const changes = parseAttachmentUpdateBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const attachment = updateAttachment(ndb, id, changes);
         deps.emit(req, networkId, 'attachment.updated', { id, changes });
         sendSuccess(reply, attachment);
@@ -419,7 +419,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as AttachmentIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         deleteAttachment(ndb, id);
         deps.emit(req, networkId, 'attachment.deleted', { id });
         reply.code(204).send();
@@ -434,7 +434,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as AttachmentIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         sendSuccess(reply, getAttachmentContent(ndb, id));
       },
     );
@@ -456,7 +456,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         const mime = fieldString(body, 'mime_type', req.id);
         const input = { data_base64: data, mime_type: mime };
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const result = updateAttachmentContent(ndb, id, input);
         const updated = getAttachment(ndb, id);
         deps.emit(req, networkId, 'attachment.updated', {

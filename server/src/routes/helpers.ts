@@ -12,10 +12,12 @@
 import type { FastifyRequest } from 'fastify';
 
 import {
+  BASE_LAYER_ID,
   EtnError,
   ICON_KINDS,
   LINK_STYLES,
   type IconKind,
+  type LayerEcho,
   type LinkStyle,
   type RealtimeAudience,
   type RealtimeEventMap,
@@ -24,7 +26,20 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { openNetworkDb } from '../db/network-db.js';
+import { resolveSessionLayer } from '../domain/layer-service.js';
 import type { Logger } from '../logger.js';
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /**
+     * Session layer of this request (task S7, 13-layers.md §7.1), resolved
+     * lazily from `session_layers` by the first call of
+     * {@link openRouteNetworkDb} (or the onSend echo hook) and memoised for
+     * the request lifetime. `undefined` until resolved.
+     */
+    layerEcho: LayerEcho | undefined;
+  }
+}
 
 /**
  * Emitter signature used by phase-D routes: derive the actor from the request
@@ -47,9 +62,56 @@ export interface RouteDeps {
   emit: RouteEmit;
 }
 
-/** Open (or reuse) the network database for a route request. */
-export function openRouteNetworkDb(deps: RouteDeps, networkId: string, log?: Logger): NetworkDb {
-  return openNetworkDb(deps.dataDir, networkId, log);
+/**
+ * Resolve (and memoise on the request) the session's current layer for
+ * `networkId` (task S7, 13-layers.md §7.1): the `(user_id, client_id)` default
+ * from `session_layers`, base layer when nothing is recorded. The lookup runs
+ * on the network's base-layer connection — `session_layers` is not branchable,
+ * and the base context is always valid.
+ */
+export function resolveRequestLayer(
+  dataDir: string,
+  req: FastifyRequest,
+  networkId: string,
+  log?: Logger,
+): LayerEcho {
+  if (req.layerEcho === undefined) {
+    const auth = req.auth;
+    req.layerEcho =
+      auth !== null
+        ? resolveSessionLayer(openNetworkDb(dataDir, networkId, log, BASE_LAYER_ID), auth.user.id, auth.clientId)
+        : { id: BASE_LAYER_ID, title: 'Основа' };
+  }
+  return req.layerEcho;
+}
+
+/**
+ * Open (or reuse) the network database for a route request **in the context of
+ * the session's current layer** (task S7, 13-layers.md §7): reads through the
+ * `*_v` views and layered writes of everything this session does resolve along
+ * that layer's ancestor chain. The resolved layer is memoised on the request
+ * for the `meta.layer` echo of the onSend hook.
+ */
+export function openRouteNetworkDb(
+  deps: RouteDeps,
+  req: FastifyRequest,
+  networkId: string,
+  log?: Logger,
+): NetworkDb {
+  const layer = resolveRequestLayer(deps.dataDir, req, networkId, log);
+  return openNetworkDb(deps.dataDir, networkId, log, layer.id);
+}
+
+/**
+ * Open (or reuse) the network database **in the base-layer context** — for
+ * route families that operate on layer-independent data (the `layers`
+ * metadata itself, `session_layers`) or must act physically regardless of the
+ * session's selection (the layer-delete cascade + trash auto-purge). The
+ * session's layer default is resolved separately via
+ * {@link resolveRequestLayer}.
+ */
+export function openRouteNetworkDbBase(deps: RouteDeps, networkId: string, log?: Logger): NetworkDb {
+  return openNetworkDb(deps.dataDir, networkId, log, BASE_LAYER_ID);
 }
 
 /** Assert that the parsed JSON body is an object and return it typed. */
@@ -333,12 +395,24 @@ export function queryStrings(value: unknown): string[] {
 /**
  * Parse a positive-integer query parameter. Returns the `fallback` when the
  * parameter is absent; rejects non-integer values with `VALIDATION_ERROR`.
+ * The `undefined` overload lets optional parameters (e.g. the layer-delete
+ * `cascade` confirmation) stay absent.
  */
 export function queryInt(
   value: unknown,
   fallback: number,
   opts: { field: string; min: number; requestId?: string },
-): number {
+): number;
+export function queryInt(
+  value: unknown,
+  fallback: undefined,
+  opts: { field: string; min: number; requestId?: string },
+): number | undefined;
+export function queryInt(
+  value: unknown,
+  fallback: number | undefined,
+  opts: { field: string; min: number; requestId?: string },
+): number | undefined {
   if (value === undefined) {
     return fallback;
   }

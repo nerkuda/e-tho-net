@@ -124,7 +124,7 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as LinkIdParams;
         const input = parseLinkCreateBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const link = createLink(ndb, input, req.auth!.user.id);
         deps.emit(req, networkId, 'link.created', { link });
         sendCreated(reply, link, {
@@ -140,7 +140,7 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as LinkIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const link = getLink(ndb, id);
         if (link === null) {
           throw new EtnError('NOT_FOUND', 'Связь не найдена.', undefined, req.id);
@@ -156,7 +156,7 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as LinkIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const changes = parseLinkUpdateBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const link = updateLink(ndb, id, changes, expectedVersion, req.auth!.user.id);
         deps.emit(req, networkId, 'link.updated', {
           id,
@@ -177,7 +177,7 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as LinkIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         deleteLink(ndb, id, expectedVersion);
         deps.emit(req, networkId, 'link.deleted', { id });
         reply.code(204).send();
@@ -191,7 +191,7 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as LinkIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         sendSuccess(reply, checkLinkDeletion(ndb, id));
       },
     );
@@ -210,7 +210,7 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
             req.id,
           );
         }
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const result: Record<string, import('@etn/shared').LinkDeletionCheckResult> = {};
         for (const id of [...new Set(ids)]) {
           result[id] = checkLinkDeletion(ndb, id);
@@ -236,7 +236,7 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
             req.id,
           );
         }
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const grouped = listLinksByThought(ndb, id, {
           showInactive: queryBoolean(query.show_inactive, 'show_inactive', req.id) === true,
         });

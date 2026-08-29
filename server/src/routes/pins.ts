@@ -31,7 +31,7 @@ export function createPinsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         sendSuccess(reply, listPinnedThoughts(ndb, req.auth!.user.id));
       },
     );
@@ -48,7 +48,7 @@ export function createPinsRoutes(deps: RouteDeps): FastifyPluginAsync {
             field: 'ordered_ids',
           }, req.id);
         }
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const pins = setPinnedThoughts(ndb, req.auth!.user.id, orderedIds);
         deps.emit(req, networkId, 'pinned-thoughts.updated', { ordered_ids: orderedIds }, {
           audience: 'user',

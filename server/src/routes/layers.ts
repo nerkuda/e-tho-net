@@ -1,0 +1,192 @@
+/**
+ * Change-layer routes (task S7, 03-server-api.md §5a; docs/13-layers.md
+ * §2, §7, §10.1).
+ *
+ *   GET    /networks/:networkId/layers                  — list (+hierarchy meta)
+ *   POST   /networks/:networkId/layers                  — create under a parent
+ *   PATCH  /networks/:networkId/layers/:layerId         — rename / edit comment
+ *   DELETE /networks/:networkId/layers/:layerId?cascade=N — subtree delete
+ *   POST   /networks/:networkId/layers/:layerId/select  — switch session layer
+ *
+ * Rights (13-layers.md §7.2): identical for every network member. The layer
+ * metadata lives outside the branchable tables, so these handlers run on the
+ * base-layer connection; the session's selected layer still marks the `current`
+ * element of the list. Merge is a separate route (S8), not part of this CRUD.
+ */
+
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
+
+import { BASE_LAYER_ID, EtnError } from '@etn/shared';
+
+import { sendSuccess } from '../http/responses.js';
+import {
+  bodyObject,
+  fieldNullableString,
+  fieldString,
+  openRouteNetworkDbBase,
+  parseIfMatch,
+  queryBoolean,
+  queryInt,
+  resolveRequestLayer,
+  type RouteDeps,
+} from './helpers.js';
+import {
+  createLayer,
+  deleteLayerWithEvents,
+  layerSubtreeIds,
+  listLayers,
+  setSessionLayer,
+  updateLayer,
+} from '../domain/layer-service.js';
+import { closeNetworkDb } from '../db/network-db.js';
+
+/** Route params for a network id. */
+interface NetworkIdParams {
+  networkId: string;
+}
+
+/** Route params for a network + layer id. */
+interface LayerParams {
+  networkId: string;
+  layerId: string;
+}
+
+/** `/api/v1/networks*` layer routes plugin factory. */
+export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
+  return async (app: FastifyInstance) => {
+    const { requireNetworkMember } = app.accessControl;
+
+    // --- List (§10.1): hierarchy + metadata; service layers hidden by default.
+    app.get(
+      '/networks/:networkId/layers',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as NetworkIdParams;
+        const query = req.query as Record<string, unknown>;
+        const includeService = queryBoolean(query.include_service, 'include_service', req.id);
+        const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
+        const current = resolveRequestLayer(deps.dataDir, req, networkId, app.appLogger);
+        sendSuccess(reply, listLayers(ndb, { includeService, currentLayerId: current.id }));
+      },
+    );
+
+    // --- Create (§2.3): under the given parent, default — the session's
+    // current layer. Depth limit enforced in the service (422 above 4 levels).
+    app.post(
+      '/networks/:networkId/layers',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as NetworkIdParams;
+        const body = bodyObject(req.body, req.id);
+        const title = fieldString(body, 'title', req.id);
+        if (title === undefined || title.trim().length === 0) {
+          throw new EtnError('VALIDATION_ERROR', 'title обязателен.', { field: 'title' }, req.id);
+        }
+        const explicitParent = fieldNullableString(body, 'parent_id', req.id);
+        const comment = fieldNullableString(body, 'comment', req.id);
+        const gitBranch = fieldNullableString(body, 'git_branch', req.id);
+
+        const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
+        // §2.3: «от указанного родителя (по умолчанию — текущий слой сессии)».
+        const parent =
+          explicitParent !== undefined && explicitParent !== null
+            ? explicitParent
+            : resolveRequestLayer(deps.dataDir, req, networkId, app.appLogger).id;
+        const layer = createLayer(ndb, {
+          parentId: parent,
+          title,
+          comment,
+          gitBranch,
+          createdBy: req.auth!.user.id,
+        });
+        sendSuccess(reply, layer, { version: layer.version }, 201);
+      },
+    );
+
+    // --- Rename / edit comment (§2.2): base title is fixed (422).
+    app.patch(
+      '/networks/:networkId/layers/:layerId',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, layerId } = req.params as LayerParams;
+        const body = bodyObject(req.body, req.id);
+        const title = fieldString(body, 'title', req.id);
+        const comment = fieldNullableString(body, 'comment', req.id);
+        if (title === undefined && comment === undefined) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'нечего менять: передайте title и/или comment.',
+            { fields: ['title', 'comment'] },
+            req.id,
+          );
+        }
+        const expectedVersion = parseIfMatch(
+          req.headers['if-match'] as string | undefined,
+          req.id,
+        );
+        const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
+        const layer = updateLayer(
+          ndb,
+          layerId,
+          { ...(title !== undefined ? { title } : {}), ...(comment !== undefined ? { comment } : {}) },
+          expectedVersion,
+        );
+        sendSuccess(reply, layer, { version: layer.version, updated_at: layer.last_activity_at });
+      },
+    );
+
+    // --- Delete (§2.4): subtree cascade with an explicit confirmation.
+    app.delete(
+      '/networks/:networkId/layers/:layerId',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, layerId } = req.params as LayerParams;
+        const query = req.query as Record<string, unknown>;
+        const cascade = queryInt(query.cascade, undefined, {
+          field: 'cascade',
+          min: 0,
+          requestId: req.id,
+        });
+
+        // Close the doomed layers' pooled connections first: their temp
+        // `layer_chain` would otherwise keep referencing deleted layers.
+        const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
+        for (const id of layerSubtreeIds(ndb, layerId)) {
+          if (id !== BASE_LAYER_ID) {
+            closeNetworkDb(networkId, id);
+          }
+        }
+
+        const result = deleteLayerWithEvents(ndb, layerId, cascade);
+        // Sessions sitting on the deleted subtree were re-pointed to the
+        // parent inside the transaction — drop this request's memoised echo
+        // so the onSend hook resolves the post-switch layer.
+        req.layerEcho = undefined;
+        // Fan out the standard deletion events of the trash auto-purge so
+        // connected clients refresh (same fan-out as POST /trash/purge).
+        for (const id of result.deleted_thought_ids) {
+          deps.emit(req, networkId, 'thought.deleted', { id });
+        }
+        for (const id of result.deleted_link_ids) {
+          deps.emit(req, networkId, 'link.deleted', { id });
+        }
+        sendSuccess(reply, { deleted: result.deleted, purged: result.purged, skipped: result.skipped });
+      },
+    );
+
+    // --- Switch the session's current layer (§7.1): all later requests of
+    // this (user, client) — reads and writes — run in the new layer.
+    app.post(
+      '/networks/:networkId/layers/:layerId/select',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, layerId } = req.params as LayerParams;
+        const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
+        const layer = setSessionLayer(ndb, req.auth!.user.id, req.auth!.clientId, layerId);
+        // The mutating-response echo must reflect the *new* session layer.
+        req.layerEcho = layer;
+        sendSuccess(reply, layer);
+      },
+    );
+  };
+}

@@ -250,7 +250,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         const limit = queryInt(query.limit, 50, { field: 'limit', min: 1, requestId: req.id });
         const offset = queryInt(query.offset, 0, { field: 'offset', min: 0, requestId: req.id });
 
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const requestBase = {
           q,
           in: inParam as 'subtree' | undefined,
@@ -317,7 +317,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         const showInactive = fieldBoolean(body, 'show_inactive', req.id) ?? false;
         const excludeThoughtId = fieldString(body, 'exclude_thought_id', req.id);
 
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const results: MentionsScanMatch[][] = findMentionsInTexts(ndb, texts, {
           showInactive,
           excludeThoughtId,
@@ -363,7 +363,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         // is allowed for forward compatibility.
         const etnxOpts = parseEtnxOptions(body, req.id);
 
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         // PDF is rejected by the service on MVP (VALIDATION_ERROR → 422).
         const job = await startExportJob(ndb, thoughtIds, format as ExportFormat, {
           etnx: etnxOpts,

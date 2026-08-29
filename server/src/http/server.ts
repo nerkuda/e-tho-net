@@ -13,6 +13,8 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
+import { BASE_LAYER_ID } from '@etn/shared';
+
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import corsPlugin from '@fastify/cors';
 import websocketPlugin from '@fastify/websocket';
@@ -46,8 +48,9 @@ import { createCommentsRoutes } from '../routes/comments.js';
 import { createAttachmentsRoutes } from '../routes/attachments.js';
 import { createSearchRoutes } from '../routes/search.js';
 import { createTrashRoutes } from '../routes/trash.js';
+import { createLayersRoutes } from '../routes/layers.js';
 import { createAdminNetworksRoutes } from '../routes/admin-networks.js';
-import type { RouteDeps } from '../routes/helpers.js';
+import { resolveRequestLayer, type RouteDeps } from '../routes/helpers.js';
 import { emitDomainEvent } from '../realtime/emit.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
 import { createApiKeyAuthProvider } from '../mcp/auth.js';
@@ -148,6 +151,15 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       'request completed',
     );
   });
+
+  // --- Layer echo (task S7, 13-layers.md §7.1) ------------------------------
+  // Every successful mutating REST response of a network carries the session's
+  // current layer: `meta.layer: { id, title }` in JSON bodies, and the
+  // `X-Etn-Layer`/`X-Etn-Layer-Title` headers on bodiless 204 replies. The
+  // hidden per-session default is dangerous exactly because a restarted
+  // client could write into the wrong layer — the echo makes it discoverable
+  // immediately. Registered before any route so it applies to all of them.
+  registerLayerEchoHook(app, config.dataDir);
 
   // --- Plugins -------------------------------------------------------------
   await app.register(corsPlugin, {
@@ -273,6 +285,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Trash routes (task S13, 03-server-api.md §14b).
   await app.register(createTrashRoutes(routeDeps), { prefix: '/api/v1' });
 
+  // Change-layer routes (task S7, 03-server-api.md §5a): list/create/rename/
+  // delete layers and switch the session's current layer.
+  await app.register(createLayersRoutes(routeDeps), { prefix: '/api/v1' });
+
   // Import routes (phase P, P4): preview + commit a `.etnx` archive.
   await app.register(createImportRoutes(routeDeps), { prefix: '/api/v1' });
 
@@ -309,3 +325,104 @@ export { HEALTH_STARTED_AT };
 
 /** Health response skeleton (uptime filled in per-request). */
 export { HEALTH_RESPONSE };
+
+/** Response header carrying the echoed layer id (13-layers.md §7.1, task S7). */
+export const LAYER_ECHO_HEADER = 'x-etn-layer';
+
+/** Response header carrying the echoed layer title (pairs with the id one). */
+export const LAYER_ECHO_TITLE_HEADER = 'x-etn-layer-title';
+
+/** Mutating HTTP methods whose network responses echo the session layer. */
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** Matches `/api/v1/networks/<uuid>` and captures the network id. */
+const NETWORK_URL_RE = /^\/api\/v1\/networks\/([^/?#]+)/;
+
+/** The base-layer echo used when no session default can be resolved. */
+const BASE_ECHO = { id: BASE_LAYER_ID, title: 'Основа' } as const;
+
+/**
+ * onSend hook implementing the layer echo (13-layers.md §7.1, task S7): every
+ * successful mutating response under `/api/v1/networks…` carries the
+ * session's current layer — `meta.layer: { id, title }` merged into JSON
+ * bodies, and the {@link LAYER_ECHO_HEADER}/{@link LAYER_ECHO_TITLE_HEADER}
+ * headers on bodiless 204 replies (a 204 has no meta to extend; the headers
+ * are the additive way to keep the DELETE contract unchanged). Responses to
+ * reads carry no echo by design (§7.1) — the read is already implicitly bound
+ * to the session layer.
+ */
+/**
+ * onSend hook implementing the layer echo (13-layers.md §7.1, task S7): every
+ * successful mutating response under `/api/v1/networks…` carries the
+ * session's current layer — `meta.layer: { id, title }` merged into JSON
+ * bodies, and the {@link LAYER_ECHO_HEADER}/{@link LAYER_ECHO_TITLE_HEADER}
+ * headers on bodiless 204 replies (a 204 has no meta to extend; the headers
+ * are the additive way to keep the DELETE contract unchanged). Responses to
+ * reads carry no echo by design (§7.1) — the read is already implicitly bound
+ * to the session layer.
+ *
+ * Deliberately a **synchronous done-style** hook: an extra async onSend hook
+ * adds a microtask hop to the send chain and changes the outcome of Fastify's
+ * `wrapThenable` race (an async handler that already called `reply.send` and
+ * resolves before the headers are flushed triggers a duplicate
+ * `reply.send(undefined)`, ERR_HTTP_HEADERS_SENT). The session-layer lookup is
+ * synchronous anyway (better-sqlite3), so no await is needed.
+ */
+function registerLayerEchoHook(app: FastifyInstance, dataDir: string): void {
+  app.addHook(
+    'onSend',
+    (req: FastifyRequest, reply: FastifyReply, payload: unknown, done: (err?: Error | null, res?: unknown) => void) => {
+      if (!MUTATING_METHODS.has(req.method)) {
+        done();
+        return;
+      }
+      const status = reply.statusCode;
+      if (status < 200 || status >= 300) {
+        done();
+        return;
+      }
+      const path = (req.url ?? '').split('?')[0] ?? '';
+      if (!path.startsWith('/api/v1/networks')) {
+        done();
+        return;
+      }
+
+      const match = NETWORK_URL_RE.exec(path);
+      let layer = req.layerEcho ?? BASE_ECHO;
+      if (match !== null && req.layerEcho === undefined && req.auth !== null) {
+        // The handler never opened the network db (e.g. member/preference
+        // routes): resolve the session default now — access was already
+        // checked by the route, the status is a success. Any failure degrades
+        // to the base echo instead of failing an otherwise-successful response.
+        try {
+          layer = resolveRequestLayer(dataDir, req, match[1] as string);
+        } catch {
+          layer = BASE_ECHO;
+        }
+      }
+
+      // JSON bodies get meta.layer; everything else (204 empty, buffers,
+      // streams, non-JSON strings) gets the header pair. Header values must be
+      // ASCII, so the title is percent-encoded there (decodeURIComponent on
+      // the client).
+      if (typeof payload === 'string' && payload.startsWith('{')) {
+        const contentType = reply.getHeader('content-type');
+        if (typeof contentType === 'string' && contentType.includes('application/json')) {
+          try {
+            const body = JSON.parse(payload) as { meta?: Record<string, unknown> } | null;
+            if (body !== null && typeof body === 'object' && !Array.isArray(body)) {
+              body.meta = { ...(body.meta ?? {}), layer };
+              done(null, JSON.stringify(body));
+              return;
+            }
+          } catch {
+            // malformed body string — fall through to the header fallback
+          }
+        }
+      }
+      reply.header(LAYER_ECHO_HEADER, layer.id);
+      reply.header(LAYER_ECHO_TITLE_HEADER, encodeURIComponent(layer.title));
+      done();
+    },
+  );
+}

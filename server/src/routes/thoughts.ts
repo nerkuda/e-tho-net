@@ -415,7 +415,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const thought = getThought(ndb, id);
         if (thought === null) {
           throw new EtnError('NOT_FOUND', 'Мысль не найдена.', undefined, req.id);
@@ -434,7 +434,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const body = requestBody(req);
         const override = fieldBoolean(body, 'show_inactive', req.id);
         const showInactive = resolveShowInactive(app, req, networkId, override);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const response = focus(ndb, req.auth!.user.id, id, { showInactive });
         deps.emit(req, networkId, 'thought-view.updated', {
           thought_id: id,
@@ -452,7 +452,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
         const input = parseThoughtCreateBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const thought = createThought(ndb, input, req.auth!.user.id);
         deps.emit(req, networkId, 'thought.created', { thought });
         if (input.create_link) {
@@ -487,7 +487,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as ThoughtIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const changes = parseThoughtUpdateBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const thought = updateThought(ndb, id, changes, expectedVersion, req.auth!.user.id);
         deps.emit(req, networkId, 'thought.updated', {
           id,
@@ -510,7 +510,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         deleteThought(ndb, id, expectedVersion);
         deps.emit(req, networkId, 'thought.deleted', { id });
         reply.code(204).send();
@@ -524,7 +524,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         sendSuccess(reply, checkThoughtDeletion(ndb, id));
       },
     );
@@ -543,7 +543,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
             req.id,
           );
         }
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const result: Record<string, import('@etn/shared').ThoughtDeletionCheckResult> = {};
         for (const id of [...new Set(ids)]) {
           result[id] = checkThoughtDeletion(ndb, id);
@@ -592,7 +592,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const limit = queryInt(query.limit, 50, { field: 'limit', min: 1, requestId: req.id });
         const offset = queryInt(query.offset, 0, { field: 'offset', min: 0, requestId: req.id });
 
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const neighbors = getNeighbors(ndb, id, dirRaw as FocusDir, {
           userId: req.auth!.user.id,
           showInactive: resolveShowInactive(
@@ -731,7 +731,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           bulkLinkType = rawLinkType ?? null;
         }
 
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const userId = req.auth!.user.id;
         const failures: ThoughtBatchFailure[] = [];
         let affected = 0;
@@ -915,7 +915,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as NetworkIdParams;
         const input = parseThoughtCopyBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const result = copyThoughtsBatch(ndb, input, req.auth!.user.id);
         // Real-time: emit a `thought.created` for every new thought and a
         // `link.created` for every new link so other connected clients
@@ -948,7 +948,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
             req.id,
           );
         }
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const refs = resolveThoughts(ndb, ids);
         sendList(reply, refs, refs.length, 0, refs.length);
       },
@@ -961,7 +961,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const mentions = findMentions(ndb, id);
         sendList(reply, mentions, mentions.length, 0, mentions.length);
       },
@@ -974,7 +974,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const backlinks = findBacklinks(ndb, id);
         sendList(reply, backlinks, backlinks.length, 0, backlinks.length);
       },
@@ -987,7 +987,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         sendSuccess(reply, findThoughtUsage(ndb, id));
       },
     );
@@ -999,7 +999,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const cleared = clearThoughtRefUsages(ndb, id);
         sendSuccess(reply, { cleared });
       },
@@ -1028,7 +1028,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         // Optional thought-type filter (thought_ref property pickers): repeatable
         // ?type_ids=… or a comma-separated value.
         const typeIds = queryStrings(query.type_ids).flatMap((value) => value.split(','));
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const hits = findDuplicates(ndb, title, synonyms, typeIds);
         sendList(reply, hits, hits.length, 0, hits.length);
       },
@@ -1059,7 +1059,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           sort: sort as SortKind,
           order: order as SortOrder,
         };
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const result = setFocusPreferences(ndb, req.auth!.user.id, fid, input);
         deps.emit(req, networkId, 'user-focus-preferences.updated', {
           focus_thought_id: fid,
@@ -1093,7 +1093,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           dir: dir as FocusOrderInput['dir'],
           ordered_ids: orderedIds,
         };
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         setFocusOrder(ndb, req.auth!.user.id, fid, input);
         deps.emit(req, networkId, 'user-focus-order.updated', {
           focus_thought_id: fid,

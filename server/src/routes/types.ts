@@ -326,7 +326,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as TypeIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const types = listThoughtTypes(ndb);
         sendList(reply, types, types.length, 0, types.length);
       },
@@ -338,7 +338,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as TypeIdParams;
         const input = parseThoughtTypeBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const type = createThoughtType(ndb, input, req.auth!.user.id);
         deps.emit(req, networkId, 'thought-type.created', { type });
         sendCreated(reply, type, {
@@ -356,7 +356,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as TypeIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const changes = parseThoughtTypeUpdateBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const type = updateThoughtType(ndb, id, changes, expectedVersion);
         deps.emit(req, networkId, 'thought-type.updated', {
           id,
@@ -392,7 +392,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
             req.id,
           );
         }
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         deleteThoughtType(ndb, id, expectedVersion, { force, actorUserId: req.auth!.user.id });
         deps.emit(req, networkId, 'thought-type.deleted', { id });
         reply.code(204).send();
@@ -408,7 +408,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as TypeIdParams;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const types = listLinkTypes(ndb);
         sendList(reply, types, types.length, 0, types.length);
       },
@@ -420,7 +420,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId } = req.params as TypeIdParams;
         const input = parseLinkTypeBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const type = createLinkType(ndb, input, req.auth!.user.id);
         deps.emit(req, networkId, 'link-type.created', { type });
         sendCreated(reply, type, {
@@ -438,7 +438,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as TypeIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const changes = parseLinkTypeUpdateBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const type = updateLinkType(ndb, id, changes, expectedVersion);
         deps.emit(req, networkId, 'link-type.updated', {
           id,
@@ -461,7 +461,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const query = req.query as Record<string, unknown>;
         const force = queryBoolean(query.force, 'force', req.id) === true;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         deleteLinkType(ndb, id, expectedVersion, { force, actorUserId: req.auth!.user.id });
         deps.emit(req, networkId, 'link-type.deleted', { id });
         reply.code(204).send();
@@ -479,7 +479,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         { preHandler: [app.authPreHandler, requireNetworkMember()] },
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as TypeIdParams;
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           // L21: the list is the effective (inheritance-aware) one — the
           // type's own definitions plus everything inherited from ancestors.
           const props = listEffectiveTypeProperties(ndb, ownerType, id);
@@ -493,7 +493,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as TypeIdParams;
           const input = parseTypePropertyBody(requestBody(req), req.id);
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const prop = createTypeProperty(ndb, ownerType, id, input);
           deps.emit(req, networkId, 'property-definition.created', { definition: prop });
           sendCreated(reply, prop, { request_id: req.id });
@@ -506,7 +506,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const { networkId, propertyId } = req.params as TypePropertyParams;
           const changes = parseTypePropertyUpdateBody(requestBody(req), req.id);
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const prop = updateTypeProperty(ndb, propertyId, changes);
           deps.emit(req, networkId, 'property-definition.updated', {
             id: propertyId,
@@ -521,7 +521,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
         async (req: FastifyRequest, reply) => {
           const { networkId, propertyId } = req.params as TypePropertyParams;
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           deleteTypeProperty(ndb, propertyId);
           deps.emit(req, networkId, 'property-definition.deleted', { id: propertyId });
           reply.code(204).send();
@@ -543,7 +543,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
               req.id,
             );
           }
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const props = reorderTypeProperties(ndb, ownerType, id, orderedIds);
           sendList(reply, props, props.length, 0, props.length);
         },
@@ -579,7 +579,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
               req.id,
             );
           }
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           setTypePropertyDefaultOverride(ndb, ownerType, id, propertyId, value);
           const def = getTypeProperty(ndb, propertyId);
           deps.emit(req, networkId, 'property-definition.updated', {

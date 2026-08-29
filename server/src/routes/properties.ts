@@ -49,7 +49,7 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
         { preHandler: [app.authPreHandler, requireNetworkMember()] },
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as OwnerParams;
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const values = getPropertyValues(ndb, ownerType, id);
           sendList(reply, values, values.length, 0, values.length);
         },
@@ -77,7 +77,7 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
               req.id,
             );
           }
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const value = setPropertyValue(ndb, ownerType, id, key, body.value as PropertyValueValue);
           deps.emit(req, networkId, 'property-value.set', {
             owner_type: ownerType,
@@ -94,7 +94,7 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
         { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
         async (req: FastifyRequest, reply) => {
           const { networkId, id, key } = req.params as OwnerKeyParams;
-          const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const removed = deletePropertyValue(ndb, ownerType, id, key);
           deps.emit(req, networkId, 'property-value.deleted', {
             owner_type: ownerType,

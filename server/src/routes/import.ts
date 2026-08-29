@@ -53,7 +53,7 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
       async (request: FastifyRequest, reply) => {
         const networkId = (request.params as { networkId: string }).networkId;
-        const ndb = openRouteNetworkDb(deps, networkId, app.appLogger);
+        const ndb = openRouteNetworkDb(deps, request, networkId, app.appLogger);
         const body = requestBody(request);
         const archiveB64 = readArchiveB64(body, request.id);
         const parentThoughtId = readParentThoughtId(body, request.id);
