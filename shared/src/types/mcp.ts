@@ -511,6 +511,14 @@ export interface McpChangeEntry {
    */
   data: unknown;
   audience: RealtimeAudience;
+  /**
+   * The change-layer the underlying write materialised in (task S9,
+   * docs/13-layers.md §12) — the same field the WebSocket envelope carries.
+   * Informational for the agent (which layer produced the change): the server
+   * has already applied the caller's session-layer visibility filter, so only
+   * changes visible to the caller are listed.
+   */
+  layer_id: string;
 }
 
 /** Result of `etn.changes.list`. */
@@ -529,10 +537,13 @@ export interface McpChangesListResult {
   /**
    * `true` when `since_seq` falls outside the retained buffer window (either
    * the requested position is older than `min_seq - 1`, or the buffer was
-   * truncated by the cleanup job while the agent was offline). The agent
-   * must do a full resync (e.g. `etn.thoughts.search` + `etn.thoughts.get`)
-   * before it can resume delta tracking. Always `false` for an empty buffer
-   * (nothing was lost — the agent just starts at the beginning).
+   * truncated by the cleanup job while the agent was offline), or when the
+   * caller's session layer changed after `since_seq` (task S9, 13-layers.md
+   * §12 — a delta spanning the switch would mix two layers' visibility
+   * filters). The agent must do a full resync (e.g. `etn.thoughts.search` +
+   * `etn.thoughts.get`) before it can resume delta tracking. Always `false`
+   * for an empty buffer (nothing was lost — the agent just starts at the
+   * beginning).
    */
   truncated: boolean;
   /** Effective cap actually applied (echoes `limit` or the default). */

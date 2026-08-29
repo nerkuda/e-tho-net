@@ -151,17 +151,36 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         // Close the doomed layers' pooled connections first: their temp
         // `layer_chain` would otherwise keep referencing deleted layers.
         const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
-        for (const id of layerSubtreeIds(ndb, layerId)) {
+        const subtreeIds = layerSubtreeIds(ndb, layerId);
+        const parentRow = ndb
+          .prepare('SELECT parent_id, title FROM layers WHERE id = ?')
+          .get(layerId) as { parent_id: string | null; title: string } | undefined;
+        for (const id of subtreeIds) {
           if (id !== BASE_LAYER_ID) {
             closeNetworkDb(networkId, id);
           }
         }
 
-        const result = deleteLayerWithEvents(ndb, layerId, cascade);
+        // Task S9 (13-layers.md §2.4, §12): re-pointed sessions must be
+        // forced into a full resync — record the network's current seq
+        // before the cascade so `switched_at_seq` reflects "everything from
+        // here on assumes the new layer".
+        const switchedAtSeq = app.systemDb.getMaxEventSeq(networkId) ?? 0;
+        const result = deleteLayerWithEvents(ndb, layerId, cascade, switchedAtSeq);
         // Sessions sitting on the deleted subtree were re-pointed to the
         // parent inside the transaction — drop this request's memoised echo
         // so the onSend hook resolves the post-switch layer.
         req.layerEcho = undefined;
+        // Push a forced-resync control frame to every already-connected
+        // socket sitting on the deleted subtree (13-layers.md §2.4).
+        const newLayerId = parentRow?.parent_id ?? BASE_LAYER_ID;
+        const newLayerRow = ndb.prepare('SELECT title FROM layers WHERE id = ?').get(newLayerId) as
+          | { title: string }
+          | undefined;
+        app.realtimeGateway.notifyLayerDeleted(networkId, new Set(subtreeIds), {
+          id: newLayerId,
+          title: newLayerRow?.title ?? 'Основа',
+        });
         // Fan out the standard deletion events of the trash auto-purge so
         // connected clients refresh (same fan-out as POST /trash/purge).
         for (const id of result.deleted_thought_ids) {
@@ -182,9 +201,23 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, layerId } = req.params as LayerParams;
         const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
-        const layer = setSessionLayer(ndb, req.auth!.user.id, req.auth!.clientId, layerId);
+        // Task S9 (13-layers.md §12): record the seq boundary of the switch
+        // so this session's next `resume`/`etn.changes.list` forces a full
+        // resync instead of a delta spanning two different layers' filters.
+        const switchedAtSeq = app.systemDb.getMaxEventSeq(networkId) ?? 0;
+        const layer = setSessionLayer(
+          ndb,
+          req.auth!.user.id,
+          req.auth!.clientId,
+          layerId,
+          switchedAtSeq,
+        );
         // The mutating-response echo must reflect the *new* session layer.
         req.layerEcho = layer;
+        // Already-connected sockets of this exact (user, client) session must
+        // switch their live delivery filter now and learn their cache is
+        // stale — the REST response alone would not reach an open WS.
+        app.realtimeGateway.notifyLayerSwitch(networkId, req.auth!.user.id, req.auth!.clientId, layer);
         sendSuccess(reply, layer);
       },
     );

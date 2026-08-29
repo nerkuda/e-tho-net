@@ -31,7 +31,7 @@ import type {
   RealtimeMeta,
   User,
 } from '@etn/shared';
-import { IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
+import { BASE_LAYER_ID, IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
 
 import type { Logger } from '../logger.js';
 import { systemDbPath, systemMigrationsDir } from '../paths.js';
@@ -983,6 +983,9 @@ export class SystemDb {
       throw new Error(`event_log: missing payload for network ${networkId} seq ${row.seq}`);
     }
     const meta = p.meta;
+    // Rows written before task S9 carry no `layer_id` — they predate layers
+    // entirely, so the base layer is the correct default (13-layers.md §12).
+    const layerId = typeof p.layer_id === 'string' ? p.layer_id : BASE_LAYER_ID;
     // `AnyRealtimeEvent` is a discriminated union; assembling a `type` from a
     // runtime string cannot be proven by the compiler, so cast the rebuilt
     // envelope (shape-validated above) into the union type.
@@ -994,6 +997,7 @@ export class SystemDb {
       network_id: networkId,
       audience: p.audience,
       data: p.data as AnyRealtimeEvent['data'],
+      layer_id: layerId,
       ...(typeof meta === 'object' && meta !== null ? { meta: meta as RealtimeMeta } : {}),
     } as unknown as AnyRealtimeEvent;
   }

@@ -28,7 +28,9 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { WebSocket, type RawData } from 'ws';
 
 import {
+  BASE_LAYER_ID,
   REALTIME_CLOSE_CODES,
+  type AnyRealtimeEvent,
   type RealtimeClientMessage,
   type RealtimeEvent,
   type RealtimeEventType,
@@ -39,7 +41,17 @@ import { hashApiKey, isValidApiKeyFormat } from '../auth/api-key.js';
 import { extractBearerToken, readClientId } from '../http/context.js';
 import type { SystemDb } from '../db/system-db.js';
 import type { Logger } from '../logger.js';
+import { openNetworkDb } from '../db/network-db.js';
+import { resolveSessionLayer, resolveSessionSwitchSeq } from '../domain/layer-service.js';
+import { isEventVisibleInLayer } from './layer-visibility.js';
 import type { PubSub } from './pubsub.js';
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** Shared WebSocket gateway (task S9: routes push forced-resync frames). */
+    realtimeGateway: RealtimeGateway;
+  }
+}
 
 /** Tunables for the gateway (shortened intervals make tests fast). */
 export interface RealtimeGatewayOptions {
@@ -68,6 +80,14 @@ interface Connection {
   /** May change once, via a `hello` frame, when no id was sent at connect. */
   clientId: string | null;
   networkId: string;
+  /**
+   * This connection's session layer (task S9, 13-layers.md §7.1, §12) —
+   * resolved from `session_layers` at connect time (and refreshed on a late
+   * `hello`), kept in sync by {@link RealtimeGateway.notifyLayerSwitch} /
+   * {@link RealtimeGateway.notifyLayerDeleted} when the session's layer
+   * changes server-side while the socket stays open.
+   */
+  layerId: string;
   /** True after a server ping that has not been answered yet. */
   awaitingPong: boolean;
   pingTimer: NodeJS.Timeout;
@@ -91,6 +111,13 @@ export interface RealtimeGatewayDeps {
   systemDb: SystemDb;
   /** In-process broker carrying live events for the subscribed networks. */
   pubsub: PubSub;
+  /**
+   * Absolute ETN data directory (task S9, 13-layers.md §12): needed to open
+   * per-layer `data.db` connections for visibility checks
+   * ({@link isEventVisibleInLayer}) and to resolve a connecting session's
+   * current layer.
+   */
+  dataDir: string;
   /** Optional application logger. */
   logger?: Logger;
   /** Partial option overrides (tests). */
@@ -145,6 +172,7 @@ function sendJson(socket: WebSocket, payload: unknown, log?: Logger): void {
 export class RealtimeGateway {
   private readonly systemDb: SystemDb;
   private readonly pubsub: PubSub;
+  private readonly dataDir: string;
   private readonly logger?: Logger;
   private readonly options: RealtimeGatewayOptions;
 
@@ -158,6 +186,7 @@ export class RealtimeGateway {
   constructor(deps: RealtimeGatewayDeps) {
     this.systemDb = deps.systemDb;
     this.pubsub = deps.pubsub;
+    this.dataDir = deps.dataDir;
     this.logger = deps.logger;
     this.options = { ...DEFAULT_REALTIME_GATEWAY_OPTIONS, ...deps.options };
   }
@@ -209,11 +238,13 @@ export class RealtimeGateway {
       return;
     }
 
+    const clientId = this.clientIdFromRequest(req);
     const conn: Connection = {
       socket,
       userId: auth.userId,
-      clientId: this.clientIdFromRequest(req),
+      clientId,
       networkId,
+      layerId: this.resolveConnLayer(networkId, auth.userId, clientId),
       awaitingPong: false,
       pingTimer: setInterval(() => this.heartbeat(conn), this.options.pingIntervalMs),
       unsubscribe: () => {},
@@ -266,10 +297,17 @@ export class RealtimeGateway {
     });
   }
 
-  /** Live delivery with audience routing and echo suppression (E4). */
+  /** Live delivery with audience routing, layer visibility and echo suppression (E4, S9). */
   private deliver<E extends RealtimeEventType>(conn: Connection, event: RealtimeEvent<E>): void {
     // audience=user events reach only the same user's connections (§4.3).
-    if (event.audience === 'user' && event.actor.user_id !== conn.userId) {
+    // These are non-branchable data (13-layers.md §3) — no layer check.
+    if (event.audience === 'user') {
+      if (event.actor.user_id !== conn.userId) {
+        return;
+      }
+    } else if (!this.isVisible(conn, event as unknown as AnyRealtimeEvent)) {
+      // audience=network content event the subscriber's layer overrides or
+      // that never happened on its ancestor chain (task S9, 13-layers.md §12).
       return;
     }
     // Echo suppression: the originating client already has the state from its
@@ -283,6 +321,33 @@ export class RealtimeGateway {
       return;
     }
     sendJson(conn.socket, event, this.logger);
+  }
+
+  /** {@link isEventVisibleInLayer} bound to `conn`'s own layer connection. */
+  private isVisible(conn: Connection, event: AnyRealtimeEvent): boolean {
+    if (event.layer_id === conn.layerId) {
+      return true;
+    }
+    try {
+      const ndb = openNetworkDb(this.dataDir, conn.networkId, this.logger, conn.layerId);
+      return isEventVisibleInLayer(ndb, event, conn.layerId);
+    } catch (err) {
+      // A visibility-check failure must not silently over- or under-deliver;
+      // fail closed (skip) and log — same policy as the onSend layer echo.
+      this.logger?.warn({ err, networkId: conn.networkId, layerId: conn.layerId }, 'realtime: layer visibility check failed, skipping event');
+      return false;
+    }
+  }
+
+  /** Resolve a connecting session's current layer (task S9, 13-layers.md §7.1). */
+  private resolveConnLayer(networkId: string, userId: string, clientId: string | null): string {
+    try {
+      const base = openNetworkDb(this.dataDir, networkId, this.logger);
+      return resolveSessionLayer(base, userId, clientId).id;
+    } catch (err) {
+      this.logger?.warn({ err, networkId, userId }, 'realtime: session layer resolution failed, defaulting to base');
+      return BASE_LAYER_ID;
+    }
   }
 
   /** Handle an inbound control frame. */
@@ -322,11 +387,15 @@ export class RealtimeGateway {
 
   /**
    * Replay retained events with `seq > lastSeq` (04-realtime.md §6). Only
-   * network-wide events and the caller's own private (`audience=user`) events
+   * network-wide events **visible in the session's current layer** (task S9,
+   * 13-layers.md §12) and the caller's own private (`audience=user`) events
    * are sent — private settings of *other* users never replay. When the
-   * position predates the retained window (a gap in `event_log`), answer
-   * `resume.stale` so the client performs a full re-sync — the gap check runs
-   * first, because retained rows may exist *after* the hole.
+   * position predates the retained window (a gap in `event_log`), or predates
+   * this session's last layer switch (`switched_at_seq`, migration 028 — the
+   * client's cache was built under a different layer and a delta cannot
+   * bridge that), answer `resume.stale` so the client performs a full
+   * re-sync. Both checks run before replay, because retained rows may exist
+   * *after* either hole.
    */
   private replay(conn: Connection, lastSeq: number): void {
     const minSeq = this.systemDb.getMinEventSeq(conn.networkId);
@@ -338,11 +407,32 @@ export class RealtimeGateway {
       );
       return;
     }
+    const switchedAtSeq = this.resolveConnSwitchSeq(conn);
+    if (switchedAtSeq > 0 && lastSeq < switchedAtSeq) {
+      sendJson(
+        conn.socket,
+        { type: 'resume.stale', last_seq: switchedAtSeq } satisfies RealtimeServerControlMessage,
+        this.logger,
+      );
+      return;
+    }
     const events = this.systemDb
       .readEventsAfter(conn.networkId, lastSeq, this.options.resumeBatchLimit)
-      .filter((e) => e.audience === 'network' || e.actor.user_id === conn.userId);
+      .filter((e) => e.audience === 'network' || e.actor.user_id === conn.userId)
+      .filter((e) => e.audience === 'user' || this.isVisible(conn, e));
     for (const event of events) {
       sendJson(conn.socket, event, this.logger);
+    }
+  }
+
+  /** {@link resolveSessionSwitchSeq} for `conn`'s coordinates. */
+  private resolveConnSwitchSeq(conn: Connection): number {
+    try {
+      const base = openNetworkDb(this.dataDir, conn.networkId, this.logger);
+      return resolveSessionSwitchSeq(base, conn.userId, conn.clientId);
+    } catch (err) {
+      this.logger?.warn({ err, networkId: conn.networkId }, 'realtime: switch-seq resolution failed');
+      return 0;
     }
   }
 
@@ -372,6 +462,68 @@ export class RealtimeGateway {
     }
     conn.clientId = clientId;
     this.indexByClient(conn);
+    // The session_layers coordinate is (user_id, client_id) — a late `hello`
+    // may move it from the "no Client-Id" bucket to the real one (task S9).
+    conn.layerId = this.resolveConnLayer(conn.networkId, conn.userId, conn.clientId);
+  }
+
+  /**
+   * Force-resync the live connections of one `(user_id, client_id)` session in
+   * `networkId` after its layer changed server-side (task S9, 13-layers.md
+   * §7.1, §12 — the REST `POST .../layers/:id/select` route calls this right
+   * after `setSessionLayer` (domain/layer-service.ts) succeeds). Updates the
+   * cached `layerId` so live delivery immediately uses
+   * the new layer, and pushes `layer.switched` so the client knows its cache
+   * predates the switch and must fully re-sync — a plain reconnect would
+   * otherwise resume from `last_seq` under the *new* layer's filter while the
+   * client's cache still reflects the old one (13-layers.md §12).
+   */
+  notifyLayerSwitch(
+    networkId: string,
+    userId: string,
+    clientId: string | null,
+    layer: { id: string; title: string },
+  ): void {
+    const set = this.byClient.get(clientKey(userId, clientId));
+    if (set === undefined) {
+      return;
+    }
+    for (const conn of set) {
+      if (conn.networkId !== networkId) continue;
+      conn.layerId = layer.id;
+      sendJson(
+        conn.socket,
+        { type: 'layer.switched', layer } satisfies RealtimeServerControlMessage,
+        this.logger,
+      );
+    }
+  }
+
+  /**
+   * Force-resync every live connection of `networkId` currently sitting on
+   * one of `affectedLayerIds` (the deleted layer + its whole subtree, task
+   * S9, 13-layers.md §2.4) — the delete route re-points their
+   * `session_layers` row to `newLayer` (the deleted layer's parent) in the
+   * same transaction; this call mirrors that for already-connected sockets.
+   */
+  notifyLayerDeleted(
+    networkId: string,
+    affectedLayerIds: ReadonlySet<string>,
+    newLayer: { id: string; title: string },
+  ): void {
+    const set = this.byNetwork.get(networkId);
+    if (set === undefined) {
+      return;
+    }
+    for (const conn of set) {
+      if (!affectedLayerIds.has(conn.layerId)) continue;
+      conn.layerId = newLayer.id;
+      sendJson(
+        conn.socket,
+        { type: 'layer.deleted', layer: newLayer } satisfies RealtimeServerControlMessage,
+        this.logger,
+      );
+    }
   }
 
   private indexByNetwork(conn: Connection): void {

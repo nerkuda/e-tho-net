@@ -36,6 +36,8 @@ import { z } from 'zod';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { openNetworkDb } from '../db/network-db.js';
+import { resolveSessionLayer, resolveSessionSwitchSeq } from '../domain/layer-service.js';
+import { isEventVisibleInLayer } from '../realtime/layer-visibility.js';
 
 import {
   ATTACHMENT_KINDS,
@@ -1275,13 +1277,16 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Дельта событий',
       description:
         'Delta feed over the real-time `event_log` for long-lived agents with their own cache ' +
-        '(task O9, docs/05-mcp-server.md §4.1). Returns events with `seq > since_seq` in ' +
+        '(task O9, docs/05-mcp-server.md §5.1c). Returns events with `seq > since_seq` in ' +
         'ascending order, capped at `limit` (default 1000). The `cursor` echoes the current ' +
-        'retained window (`min_seq`/`max_seq`, `null` when the log is empty). When `since_seq` ' +
-        'falls outside that window the response carries `truncated: true` — the agent must do a ' +
-        'full resync (`etn.thoughts.search` + `etn.thoughts.get`) before resuming. Events with ' +
+        'retained window (`min_seq`/`max_seq`, `null` when the log is empty). Events with ' +
         '`audience: "user"` are filtered: only events authored by the calling user are returned ' +
-        '(mirrors WebSocket audience routing, 04-realtime.md §5).',
+        '(mirrors WebSocket audience routing, 04-realtime.md §5). Since task S9 the delta also ' +
+        'respects the caller\'s session layer (13-layers.md §12): network-audience events ' +
+        'invisible in that layer are dropped, and `truncated: true` is returned when `since_seq` ' +
+        'predates the session\'s last layer switch (migration 028) — in both cases the agent ' +
+        'must do a full resync (`etn.thoughts.search` + `etn.thoughts.get`) before resuming. ' +
+        'Each entry carries `layer_id` — the change-layer the write materialised in.',
       inputSchema: ChangesListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.changes.list'],
     },
@@ -1302,22 +1307,45 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           limit,
         );
         const authUserId = rt.deps.auth.userId;
+
+        // Task S9 (13-layers.md §12): the delta must respect the caller's
+        // session layer, same as the WebSocket gateway. MCP tools have no
+        // per-client transport id (Client-Id is a REST/WS concept, S10 has
+        // not landed a layer-select MCP tool yet), so the coordinate is
+        // `(user_id, '')` — the same "no Client-Id" bucket `session_layers`
+        // already uses for headerless REST callers. Until S10, every agent
+        // write happens on the base layer, so this resolves to the base
+        // unless a test/administrator manipulated `session_layers` directly.
+        const baseNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger);
+        const sessionLayer = resolveSessionLayer(baseNdb, authUserId, null);
+        const switchedAtSeq = resolveSessionSwitchSeq(baseNdb, authUserId, null);
+        const layerNdb =
+          sessionLayer.id === baseNdb.layerId
+            ? baseNdb
+            : openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, sessionLayer.id);
+
         const filtered: McpChangeEntry[] = events
           .filter((e) => e.audience === 'network' || e.actor.user_id === authUserId)
+          .filter((e) => e.audience === 'user' || isEventVisibleInLayer(layerNdb, e, sessionLayer.id))
           .map((e) => ({
             type: e.type,
             seq: e.seq,
             ts: e.ts,
             data: e.data,
             audience: e.audience,
+            layer_id: e.layer_id,
           }));
-        // `truncated` fires only when an explicit (non-zero) `since_seq` is
-        // older than the first retained row: a zero `since_seq` means
-        // "from the start of the buffer" and is never truncated. An empty
-        // buffer (`min_seq === null`) is also not truncated — there was
-        // nothing to lose.
+        // `truncated` fires when an explicit (non-zero) `since_seq` is either
+        // older than the first retained row, or older than this session's
+        // last layer switch (`switched_at_seq`, migration 028 — a delta
+        // spanning a switch mixes two different layers' visibility filters,
+        // 13-layers.md §12). A zero `since_seq` ("from the start") is never
+        // truncated by either check; an empty buffer is not truncated by the
+        // window check — nothing was lost.
         const truncated =
-          args.since_seq !== 0 && minSeq !== null && args.since_seq < minSeq - 1;
+          args.since_seq !== 0 &&
+          ((minSeq !== null && args.since_seq < minSeq - 1) ||
+            (switchedAtSeq > 0 && args.since_seq < switchedAtSeq));
 
         return {
           network_id: args.network_id,

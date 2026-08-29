@@ -337,6 +337,19 @@ export interface RealtimeEvent<E extends RealtimeEventType = RealtimeEventType> 
   network_id: string;
   audience: RealtimeAudience;
   data: RealtimeEventMap[E];
+  /**
+   * The change-layer the underlying write materialised in (task S9,
+   * docs/13-layers.md §12). `BASE_LAYER_ID` for writes in the base and for
+   * non-branchable events (network/membership/presence/user-scoped settings,
+   * 13-layers.md §3) — those are layer-independent, the field is still
+   * populated for a uniform envelope shape. The WebSocket gateway and
+   * `etn.changes.list` use it to compute per-subscriber visibility: a
+   * subscriber in layer `L` sees an event with `layer_id = EL` only when `EL`
+   * is on `L`'s ancestor chain **and** `L` has not materialised a nearer row
+   * for the same logical id (13-layers.md §4.1) — see
+   * `server/src/realtime/layer-visibility.ts`.
+   */
+  layer_id: string;
   meta?: RealtimeMeta;
 }
 
@@ -404,9 +417,24 @@ export const REALTIME_EVENT_AUDIENCE = {
 export type RealtimeClientMessage =
   { type: 'hello'; client_id: string } | { type: 'resume'; last_seq: number } | { type: 'ping' };
 
-/** Non-event frames the server may send to a client. */
+/**
+ * Non-event frames the server may send to a client. `layer.switched` and
+ * `layer.deleted` (task S9, docs/13-layers.md §7.1, §2.4, §12) are per-session
+ * pushes — sent only to the connections of the exact `(user_id, client_id)`
+ * whose session layer just changed server-side, not broadcast by `audience`
+ * like catalogue events — because neither `network` (every participant) nor
+ * `user` (every client of that user) matches "this one client session"
+ * (04-realtime.md §11). Both carry no `seq`/`network_id`, so they are
+ * intentionally invisible to the generic `RealtimeEvent` parser: an older
+ * client that does not know about layers safely ignores them (falls through
+ * the "unknown, but not a valid event envelope either" branch).
+ */
 export type RealtimeServerControlMessage =
-  { type: 'ping' } | { type: 'pong' } | { type: 'resume.stale'; last_seq: number };
+  | { type: 'ping' }
+  | { type: 'pong' }
+  | { type: 'resume.stale'; last_seq: number }
+  | { type: 'layer.switched'; layer: { id: string; title: string } }
+  | { type: 'layer.deleted'; layer: { id: string; title: string } };
 
 /** WebSocket close codes used by the gateway (04-realtime.md §2). */
 export const REALTIME_CLOSE_CODES = {

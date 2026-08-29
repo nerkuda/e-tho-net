@@ -277,8 +277,17 @@ export function layerSubtreeIds(ndb: NetworkDb, id: string): string[] {
  *     back from physical deletion.
  *
  * Must run on the base-layer connection (the auto-purge physically deletes).
+ *
+ * @param switchedAtSeq - the network's real-time `max_seq` at call time (task
+ *   S9), recorded on every re-pointed session so their next resync is forced
+ *   (see `switched_at_seq` above).
  */
-export function deleteLayer(ndb: NetworkDb, id: string, cascade?: number): LayerDeleteResult {
+export function deleteLayer(
+  ndb: NetworkDb,
+  id: string,
+  cascade: number | undefined,
+  switchedAtSeq: number,
+): LayerDeleteResult {
   return ndb.transaction(() => {
     const row = requireLayer(ndb, id);
     if (row.is_base === 1) {
@@ -307,12 +316,15 @@ export function deleteLayer(ndb: NetworkDb, id: string, cascade?: number): Layer
 
     // Sessions on the deleted subtree move to the deleted layer's parent
     // (§2.4) — never to a dangling layer id. The parent always exists: the
-    // base is not deletable, so a non-base layer always has one.
+    // base is not deletable, so a non-base layer always has one. This is a
+    // forced layer switch (task S9, 13-layers.md §12): `switched_at_seq`
+    // (migration 028) is bumped too, so those sessions' next `resume`/
+    // `etn.changes.list` forces a full resync instead of a stale delta.
     const placeholders = subtree.map(() => '?').join(', ');
     ndb.prepare(
-      `UPDATE session_layers SET layer_id = ?, updated_at = ?
+      `UPDATE session_layers SET layer_id = ?, updated_at = ?, switched_at_seq = ?
        WHERE layer_id IN (${placeholders})`,
-    ).run(row.parent_id, nowSeconds(), ...subtree);
+    ).run(row.parent_id, nowSeconds(), switchedAtSeq, ...subtree);
 
     // Physical delete: FK cascades remove the subtree (parent_id) and every
     // shadow row / tombstone of the branchable tables (layer_id).
@@ -340,7 +352,12 @@ export interface LayerDeleteOutcome extends LayerDeleteResult {
  * rows) or through the layer cascade itself (its only physical row lived in
  * the deleted subtree) — both warrant a `*.deleted` event.
  */
-export function deleteLayerWithEvents(ndb: NetworkDb, id: string, cascade?: number): LayerDeleteOutcome {
+export function deleteLayerWithEvents(
+  ndb: NetworkDb,
+  id: string,
+  cascade: number | undefined,
+  switchedAtSeq: number,
+): LayerDeleteOutcome {
   const markedBefore = {
     // layers:physical-read — дифф помеченных строк всех слоёв для событий автоочистки.
     thoughts: (
@@ -350,7 +367,7 @@ export function deleteLayerWithEvents(ndb: NetworkDb, id: string, cascade?: numb
       ndb.prepare('SELECT id FROM links WHERE marked_for_deletion = 1 -- layers:physical-read').all() as { id: string }[]
     ).map((r) => r.id),
   };
-  const result = deleteLayer(ndb, id, cascade);
+  const result = deleteLayer(ndb, id, cascade, switchedAtSeq);
   const survivedThoughts = new Set(
     (
       ndb.prepare('SELECT id FROM thoughts WHERE marked_for_deletion = 1 -- layers:physical-read').all() as { id: string }[]
@@ -397,12 +414,20 @@ export function resolveSessionLayer(
  * Switch the session's current layer (§7.1): every later request of this
  * `(user_id, client_id)` — reads and writes — runs in the new layer's context.
  * Service layers cannot be selected (§2.1/§8.2: hidden from selection).
+ *
+ * @param switchedAtSeq - the network's real-time `max_seq` at call time (task
+ *   S9, 13-layers.md §12). Recorded in `switched_at_seq` (migration 028) only
+ *   when the layer actually changes — selecting the already-current layer is
+ *   a no-op, not a switch, and must not force a resync. The gateway's
+ *   `resume` handler and `etn.changes.list` use the stored value to detect a
+ *   stale cache spanning the switch.
  */
 export function setSessionLayer(
   ndb: NetworkDb,
   userId: string,
   clientId: string | null,
   layerId: string,
+  switchedAtSeq: number,
 ): { id: string; title: string } {
   const row = requireLayer(ndb, layerId);
   if (row.is_service === 1) {
@@ -411,11 +436,33 @@ export function setSessionLayer(
       layer_id: layerId,
     });
   }
+  const cid = clientId ?? '';
+  const current = ndb
+    .prepare('SELECT layer_id, switched_at_seq FROM session_layers WHERE user_id = ? AND client_id = ? LIMIT 1')
+    .get(userId, cid) as { layer_id: string; switched_at_seq: number } | undefined;
+  const isRealSwitch = current === undefined || current.layer_id !== layerId;
+  const effectiveSwitchSeq = isRealSwitch ? switchedAtSeq : (current?.switched_at_seq ?? 0);
   ndb.prepare(
-    `INSERT INTO session_layers (user_id, client_id, layer_id, updated_at)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO session_layers (user_id, client_id, layer_id, updated_at, switched_at_seq)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(user_id, client_id) DO UPDATE SET layer_id = excluded.layer_id,
-                                                   updated_at = excluded.updated_at`,
-  ).run(userId, clientId ?? '', layerId, nowSeconds());
+                                                   updated_at = excluded.updated_at,
+                                                   switched_at_seq = excluded.switched_at_seq`,
+  ).run(userId, cid, layerId, nowSeconds(), effectiveSwitchSeq);
   return { id: row.id, title: row.title };
+}
+
+/**
+ * The session's recorded `switched_at_seq` (task S9, 13-layers.md §12): the
+ * network's `max_seq` at the moment this `(user_id, client_id)` session's
+ * layer last changed, or `0` when it never switched (still on the base by
+ * default, or has never called {@link setSessionLayer}/hit the delete cascade
+ * of {@link deleteLayer}). Callers with `since_seq`/`last_seq` older than this
+ * value must force a full resync (13-layers.md §12).
+ */
+export function resolveSessionSwitchSeq(ndb: NetworkDb, userId: string, clientId: string | null): number {
+  const row = ndb
+    .prepare('SELECT switched_at_seq FROM session_layers WHERE user_id = ? AND client_id = ? LIMIT 1')
+    .get(userId, clientId ?? '') as { switched_at_seq: number } | undefined;
+  return row?.switched_at_seq ?? 0;
 }

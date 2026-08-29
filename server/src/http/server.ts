@@ -191,10 +191,14 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   const gateway = new RealtimeGateway({
     systemDb,
     pubsub,
+    dataDir: config.dataDir,
     logger,
     options: deps.realtimeOptions,
   });
   gateway.register(app);
+  // Task S9 (13-layers.md §12): routes/layers.ts pushes forced-resync control
+  // frames after a session's layer changes server-side.
+  app.decorate('realtimeGateway', gateway);
   const stopEventLogCleanup = startEventLogCleanup(systemDb, logger);
   app.addHook('onClose', () => stopEventLogCleanup());
 
@@ -246,6 +250,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
         {
           ...(options?.audience !== undefined ? { audience: options.audience } : {}),
           meta: { request_id: req.id },
+          // Task S9, 13-layers.md §12: tag the event with the write's layer so
+          // the gateway/changes.list can compute per-subscriber visibility.
+          // `req.layerEcho` is already memoised by the route's
+          // `openRouteNetworkDb` call before it emits.
+          layerId: req.layerEcho?.id ?? BASE_LAYER_ID,
         },
       );
     },

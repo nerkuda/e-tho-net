@@ -51,6 +51,7 @@
  */
 
 import {
+  BASE_LAYER_ID,
   REALTIME_EVENT_AUDIENCE,
   type AnyRealtimeEvent,
   type RealtimeActor,
@@ -89,6 +90,15 @@ export interface EmitDomainEventOptions {
   audience?: RealtimeAudience;
   /** Extra metadata, e.g. `{ request_id: req.id }`. */
   meta?: RealtimeMeta;
+  /**
+   * The change-layer the underlying write materialised in (task S9,
+   * docs/13-layers.md §12, §7.1). Defaults to {@link BASE_LAYER_ID} — correct
+   * for every non-branchable event (network/membership/presence/user-scoped
+   * settings) and for callers that do not yet resolve a session layer (MCP
+   * tools until S10 lands). REST routes pass the request's resolved
+   * `req.layerEcho.id` (see `routes/helpers.ts`).
+   */
+  layerId?: string;
 }
 
 /**
@@ -113,6 +123,7 @@ export function emitDomainEvent<E extends RealtimeEventType>(
   options?: EmitDomainEventOptions,
 ): RealtimeEvent<E> {
   const audience = options?.audience ?? REALTIME_EVENT_AUDIENCE[type];
+  const layerId = options?.layerId ?? BASE_LAYER_ID;
   const ts = new Date().toISOString();
   const storedActor: RealtimeActor = {
     user_id: actor.user_id,
@@ -123,7 +134,13 @@ export function emitDomainEvent<E extends RealtimeEventType>(
   // incremented counter without the matching event_log row.
   const seq = deps.systemDb.transaction(() => {
     const assigned = deps.systemDb.nextNetworkSeq(networkId);
-    const stored: unknown = { actor: storedActor, audience, data, meta: options?.meta };
+    const stored: unknown = {
+      actor: storedActor,
+      audience,
+      data,
+      meta: options?.meta,
+      layer_id: layerId,
+    };
     deps.systemDb.appendEvent(networkId, assigned, type, JSON.stringify(stored), ts);
     return assigned;
   });
@@ -136,6 +153,7 @@ export function emitDomainEvent<E extends RealtimeEventType>(
     network_id: networkId,
     audience,
     data,
+    layer_id: layerId,
     ...(options?.meta !== undefined ? { meta: options.meta } : {}),
   };
   // The broker accepts the AnyRealtimeEvent union; a generic `RealtimeEvent<E>`

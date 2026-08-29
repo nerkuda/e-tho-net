@@ -12,7 +12,12 @@
  */
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { EtnError, type RealtimeEventMap, type RealtimeEventType } from '@etn/shared';
+import {
+  BASE_LAYER_ID,
+  EtnError,
+  type RealtimeEventMap,
+  type RealtimeEventType,
+} from '@etn/shared';
 
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { recordAudit } from '../auth/audit.js';
@@ -111,7 +116,14 @@ export function emitAgentEvent<E extends RealtimeEventType>(
     type,
     data,
     actorOf(rt),
-    requestId === undefined ? undefined : { meta: { request_id: String(requestId) } },
+    {
+      ...(requestId === undefined ? {} : { meta: { request_id: String(requestId) } }),
+      // MCP tools do not yet resolve a session layer (that lands with S10,
+      // 13-layers.md §10.2) — every agent write happens on the base layer for
+      // now, so tag events accordingly (explicit for readability; matches the
+      // `emitDomainEvent` default).
+      layerId: BASE_LAYER_ID,
+    },
   );
 }
 
