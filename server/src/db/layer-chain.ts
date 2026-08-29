@@ -24,8 +24,8 @@
  * рассинхронизироваться со схемой.
  *
  * Репозитории читают только из `*_v` (линт-тест layers-s3 это требует);
- * запись идёт в физические таблицы (материализация теневых строк — задачи
- * S4+; пока весь код пишет в основу через DEFAULT layer_id).
+ * запись идёт в физические таблицы с материализацией теневых строк/надгробий
+ * текущего слоя (S4, db/layer-write.ts) — представления её немедленно видят.
  */
 
 import type Database from 'better-sqlite3';
@@ -56,6 +56,29 @@ export function layerViewName(table: string): string {
 
 /** Guard against corrupt parent cycles: цепочка не длиннее 5 уровней (§2.1). */
 const MAX_CHAIN_DEPTH = 16;
+
+/**
+ * Предикат видимости конца связи: мысль `t.<col>` разрешается по той же
+ * цепочке (§4.1) и обязана быть живой. Связь, у которой хотя бы один конец
+ * скрыт надгробием в цепочке текущего слоя, невидима — иначе чтения начнут
+ * отдавать висячие рёбра (13-layers.md §5.2: каскад удаления мысли ставит
+ * надгробия её связям, но конец может быть скрыт и независимо от связи).
+ * Формулировка — тот же анти-джойн «нет более близкой строки того же id»,
+ * что и у самих представлений.
+ */
+function endpointVisiblePredicate(col: string): string {
+  return `
+     AND EXISTS (
+       SELECT 1 FROM main.thoughts e
+       JOIN temp.layer_chain elc ON elc.layer_id = e.layer_id
+       WHERE e.id = t.${col} AND e.deleted = 0
+         AND NOT EXISTS (
+           SELECT 1 FROM main.thoughts e2
+           JOIN temp.layer_chain elc2 ON elc2.layer_id = e2.layer_id
+           WHERE e2.id = e.id AND elc2.depth < elc.depth
+         )
+     )`;
+}
 
 /**
  * Создать temp-представления всех ветвимых таблиц (идемпотентно).
@@ -89,12 +112,14 @@ export function ensureLayerViews(db: Database.Database): void {
       .filter((name) => name !== 'deleted')
       .map((name) => `t.${name}`)
       .join(', ');
+    // Связи дополнительно фильтруются по видимости концов (см. выше).
+    const endpoints = table === 'links' ? `${endpointVisiblePredicate('source_id')}${endpointVisiblePredicate('target_id')}` : '';
     db.exec(
       `CREATE TEMP VIEW IF NOT EXISTS ${layerViewName(table)} AS
        SELECT ${cols}, t.rowid AS rowid
        FROM main.${table} t
        JOIN temp.layer_chain lc ON lc.layer_id = t.layer_id
-       WHERE t.deleted = 0
+       WHERE t.deleted = 0${endpoints}
          AND NOT EXISTS (
            SELECT 1
            FROM main.${table} t2
