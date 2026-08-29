@@ -254,11 +254,11 @@ describe(
         // The upgrade: runMigrations applies only the pending layer files
         // (025 + the S6 trigger fix that follows it).
         const res = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(res.applied, ['025_layers.sql', '026_fts_layer_tombstones.sql']);
+        assert.deepEqual(res.applied, ['025_layers.sql', '026_fts_layer_tombstones.sql', '027_session_layers.sql']);
 
         // 1. Row counts unchanged (the layers table is new, everything else kept).
         const after = tableCounts(db);
-        assert.deepEqual(after, { ...before, layers: 1 });
+        assert.deepEqual(after, { ...before, layers: 1, session_layers: 0 });
 
         // 2. The base layer row.
         const base = db

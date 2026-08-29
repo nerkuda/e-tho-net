@@ -6,6 +6,7 @@
 
 import type { AuditCategory, ExportFormat, JobStatus } from '../enums.js';
 import type { EtnErrorBody } from '../errors.js';
+import type { LayerEcho } from './layer.js';
 
 /** Optional metadata returned on a single-item success response. */
 export interface SuccessMeta {
@@ -15,6 +16,13 @@ export interface SuccessMeta {
   updated_at?: string;
   /** Echoes the `Client-Request-Id` header of the request. */
   request_id?: string;
+  /**
+   * Echo of the session's current layer (task S7, 13-layers.md §7.1): every
+   * mutating REST response of a network carries it, so a write landing in a
+   * foreign layer is discoverable immediately. Injected centrally by the
+   * server's onSend hook — route handlers do not fill it manually.
+   */
+  layer?: LayerEcho;
 }
 
 /** Single-item success envelope: `{ data, meta }` (03-server-api.md §2). */
