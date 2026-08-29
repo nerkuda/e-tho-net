@@ -40,6 +40,12 @@ import {
 import { renderMarkdown } from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
+import {
+  deleteRowLayered,
+  isBaseContext,
+  materializeShadow,
+  materializeTombstone,
+} from '../db/layer-write.js';
 
 /** Raw `comments` row shape (dates as strings, no booleans). */
 interface CommentRow {
@@ -145,10 +151,12 @@ function validateOwnerType(ownerType: unknown): CommentOwnerType {
 
 /**
  * Ensure the polymorphic owner exists. Comments have no SQL FK, so this guard
- * prevents orphaned comments and gives the caller a precise 404.
+ * prevents orphaned comments and gives the caller a precise 404. Reads through
+ * the layer-resolving views (13-layers.md §4.2): an owner tombstoned in the
+ * connection's layer is a valid 404 for a layer-scoped comment.
  */
 function ensureOwnerExists(ndb: NetworkDb, ownerType: CommentOwnerType, ownerId: string): void {
-  const table = ownerType === 'thought' ? 'thoughts' : 'links';
+  const table = ownerType === 'thought' ? 'thoughts_v' : 'links_v';
   const row = ndb.prepare(`SELECT 1 FROM ${table} WHERE id = ? LIMIT 1`).get(ownerId);
   if (!row) {
     throw new EtnError('NOT_FOUND', `${ownerType} ${ownerId} not found`, {
@@ -440,13 +448,14 @@ export function createCommentWithTargets(
 
     ndb
       .prepare(
-        `INSERT INTO comments (id, owner_type, owner_id, kind, title, body_md, body_html,
+        `INSERT INTO comments (id, layer_id, owner_type, owner_id, kind, title, body_md, body_html,
                                valid_from, valid_to, version,
                                created_at, updated_at, created_by, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
       )
       .run(
         id,
+        ndb.layerId,
         primary.owner_type,
         primary.owner_id,
         kind,
@@ -461,10 +470,10 @@ export function createCommentWithTargets(
         actorUserId,
       );
     const insertTarget = ndb.prepare(
-      'INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES (?, ?, ?)',
+      'INSERT INTO comment_targets (comment_id, owner_type, owner_id, layer_id) VALUES (?, ?, ?, ?)',
     );
     for (const t of targets) {
-      insertTarget.run(id, t.owner_type, t.owner_id);
+      insertTarget.run(id, t.owner_type, t.owner_id, ndb.layerId);
     }
     return getCommentOrThrow(ndb, id);
   });
@@ -525,14 +534,23 @@ export function updateComment(
     const now = new Date().toISOString();
     sets.push('version = ?', 'updated_at = ?', 'updated_by = ?');
     args.push(current.version + 1, now, actorUserId);
-    args.push(id);
-    ndb.prepare(`UPDATE comments SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    // S4 (13-layers.md §5.1): first edit in a working layer materialises a
+    // shadow copy; the UPDATE targets the connection's layer row only.
+    materializeShadow(ndb, 'comments', id);
+    args.push(id, ndb.layerId);
+    ndb
+      .prepare(`UPDATE comments SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
+      .run(...args);
     return getCommentOrThrow(ndb, id);
   });
 }
 
 /**
  * Delete a comment (docs/03-server-api.md §10) together with its m2m targets.
+ *
+ * S4 (13-layers.md §5.2): in a working layer the deletion materialises
+ * tombstones for the comment and its visible targets instead of deleting
+ * physically; the base rows stay intact.
  *
  * Throws `NOT_FOUND` (404) or `VERSION_CONFLICT` (409).
  */
@@ -550,6 +568,16 @@ export function deleteComment(
         expected: expectedVersion,
         current: current.version,
       });
+    }
+    if (!isBaseContext(ndb)) {
+      const targetIds = (
+        ndb.prepare('SELECT id FROM comment_targets_v WHERE comment_id = ?').all(id) as {
+          id: string;
+        }[]
+      ).map((r) => r.id);
+      for (const targetId of targetIds) materializeTombstone(ndb, 'comment_targets', targetId);
+      materializeTombstone(ndb, 'comments', id);
+      return;
     }
     ndb.prepare('DELETE FROM comment_targets WHERE comment_id = ?').run(id);
     ndb.prepare('DELETE FROM comments WHERE id = ?').run(id);
@@ -601,8 +629,10 @@ export function addCommentTarget(
       });
     }
     ndb
-      .prepare('INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES (?, ?, ?)')
-      .run(commentId, ot, ownerId);
+      .prepare(
+        'INSERT INTO comment_targets (comment_id, owner_type, owner_id, layer_id) VALUES (?, ?, ?, ?)',
+      )
+      .run(commentId, ot, ownerId, ndb.layerId);
     bumpVersion(ndb, commentId, current.version, actorUserId);
     return getCommentOrThrow(ndb, commentId);
   });
@@ -642,10 +672,17 @@ export function removeCommentTarget(
         field: 'targets',
       });
     }
-    const result = ndb
-      .prepare('DELETE FROM comment_targets WHERE comment_id = ? AND owner_type = ? AND owner_id = ?')
-      .run(commentId, ot, ownerId);
-    if (result.changes === 0) {
+    // S4: the target rows resolved in this layer's chain go first — physically
+    // in the base, as tombstones in a working layer (13-layers.md §5.2).
+    const targetRows = ndb
+      .prepare(
+        'SELECT id FROM comment_targets_v WHERE comment_id = ? AND owner_type = ? AND owner_id = ?',
+      )
+      .all(commentId, ot, ownerId) as { id: string }[];
+    for (const row of targetRows) {
+      deleteRowLayered(ndb, 'comment_targets', row.id);
+    }
+    if (targetRows.length === 0) {
       throw new EtnError('NOT_FOUND', 'the comment is not attached to this owner', {
         owner_type: ot,
         owner_id: ownerId,
@@ -671,8 +708,10 @@ export function removeCommentTarget(
         throw new EtnError('INTERNAL', 'network has no HOME thought', {});
       }
       ndb
-        .prepare('INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES (?, ?, ?)')
-        .run(commentId, 'thought', home.id);
+        .prepare(
+          'INSERT INTO comment_targets (comment_id, owner_type, owner_id, layer_id) VALUES (?, ?, ?, ?)',
+        )
+        .run(commentId, 'thought', home.id, ndb.layerId);
       rest = [{ owner_type: 'thought', owner_id: home.id }];
     }
 
@@ -683,12 +722,23 @@ export function removeCommentTarget(
     }
     const now = new Date().toISOString();
     if (wasPrimary) {
+      // S4: the primary move is an edit of the comment row — materialise the
+      // shadow copy first, then update the connection's layer row only.
+      materializeShadow(ndb, 'comments', commentId);
       ndb
         .prepare(
           `UPDATE comments SET owner_type = ?, owner_id = ?, version = ?, updated_at = ?, updated_by = ?
-           WHERE id = ?`,
+           WHERE id = ? AND layer_id = ?`,
         )
-        .run(nextPrimary.owner_type, nextPrimary.owner_id, current.version + 1, now, actorUserId, commentId);
+        .run(
+          nextPrimary.owner_type,
+          nextPrimary.owner_id,
+          current.version + 1,
+          now,
+          actorUserId,
+          commentId,
+          ndb.layerId,
+        );
     } else {
       bumpVersion(ndb, commentId, current.version, actorUserId);
     }
@@ -696,12 +746,15 @@ export function removeCommentTarget(
   });
 }
 
-/** Bump `version`/`updated_at`/`updated_by` of a comment. */
+/** Bump `version`/`updated_at`/`updated_by` of a comment (its layer row). */
 function bumpVersion(ndb: NetworkDb, commentId: string, currentVersion: number, actorUserId: string): void {
   const now = new Date().toISOString();
+  materializeShadow(ndb, 'comments', commentId);
   ndb
-    .prepare('UPDATE comments SET version = ?, updated_at = ?, updated_by = ? WHERE id = ?')
-    .run(currentVersion + 1, now, actorUserId, commentId);
+    .prepare(
+      'UPDATE comments SET version = ?, updated_at = ?, updated_by = ? WHERE id = ? AND layer_id = ?',
+    )
+    .run(currentVersion + 1, now, actorUserId, commentId, ndb.layerId);
 }
 
 /**

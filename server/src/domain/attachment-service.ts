@@ -40,6 +40,7 @@ import {
 import { renderMarkdown } from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
 
 /** Raw `attachments` row shape. */
 interface AttachmentRow {
@@ -202,13 +203,14 @@ export function createAttachment(
     const position = typeof input.position === 'number' ? Math.trunc(input.position) : 0;
     ndb
       .prepare(
-        `INSERT INTO attachments (id, owner_type, owner_id, kind, url, file_path,
+        `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, file_path,
                                   file_size, mime_type, title, description, position,
                                   created_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
+        ndb.layerId,
         ot,
         ownerId,
         kind,
@@ -412,10 +414,10 @@ export function copyAttachment(
     const created: Attachment[] = [];
     const skipped: string[] = [];
     const insertStmt = ndb.prepare(
-      `INSERT INTO attachments (id, owner_type, owner_id, kind, url, file_path,
+      `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, file_path,
                                file_size, mime_type, title, description, icon,
                                position, created_at, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const selectById = ndb.prepare('SELECT * FROM attachments_v WHERE id = ? LIMIT 1');
     for (const targetId of targetIds) {
@@ -426,6 +428,7 @@ export function copyAttachment(
       const newId = randomUUID();
       insertStmt.run(
         newId,
+        ndb.layerId,
         targetOwnerType,
         targetId,
         source.kind,
@@ -606,14 +609,32 @@ export function updateAttachment(
     if (sets.length === 0) {
       return current;
     }
-    args.push(id);
-    ndb.prepare(`UPDATE attachments SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    // S4 (13-layers.md §5.1): first edit in a working layer materialises a
+    // shadow copy (the table has no version column — the copy is verbatim);
+    // the UPDATE targets the connection's layer row only.
+    materializeShadow(ndb, 'attachments', id);
+    args.push(id, ndb.layerId);
+    ndb
+      .prepare(`UPDATE attachments SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
+      .run(...args);
     // An owner move orphans any thought icon backed by this attachment (L16) —
-    // drop the dangling reference; the icon preview itself stays.
+    // drop the dangling reference (in a working layer: materialise the visible
+    // thoughts and null the field in their shadow rows); the icon preview
+    // itself stays.
     if (moved) {
-      ndb
-        .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
-        .run(id);
+      const iconOwners = (
+        ndb.prepare('SELECT id FROM thoughts_v WHERE icon_attachment_id = ?').all(id) as {
+          id: string;
+        }[]
+      ).map((r) => r.id);
+      for (const ownerId of iconOwners) {
+        materializeShadow(ndb, 'thoughts', ownerId);
+        ndb
+          .prepare(
+            'UPDATE thoughts SET icon_attachment_id = NULL WHERE id = ? AND layer_id = ?',
+          )
+          .run(ownerId, ndb.layerId);
+      }
     }
     return getAttachmentOrThrow(ndb, id);
   });
@@ -643,15 +664,19 @@ export function removeStoredFile(
 }
 
 /**
- * True when a live attachment row still resolves to the same stored file.
+ * True when a **live** attachment row still resolves to the same stored file.
  * Callers run this AFTER deleting the row(s) they are purging, so every row
- * left in the table is a real remaining user of the file.
+ * left in the table is a real remaining user of the file. Tombstoned rows
+ * (`deleted = 1`, 13-layers.md §5.2–§5.3) do not count: the binding is gone
+ * from that layer, and a tombstone must not pin the shared file forever.
  */
 export function storedFileInUse(ndb: NetworkDb, resolvedPath: string): boolean {
   // layers:physical-read — файл один на все слои (13-layers.md §5.3): его судьбу
-  // решают привязки ВСЕХ слоёв, а не только разрешённые в текущем контексте.
+  // решают живые привязки ВСЕХ слоёв, а не только разрешённые в текущем контексте.
   const rows = ndb
-    .prepare("SELECT file_path FROM attachments WHERE kind = 'file' AND file_path IS NOT NULL") // layers:physical-read
+    .prepare(
+      "SELECT file_path FROM attachments WHERE kind = 'file' AND file_path IS NOT NULL AND deleted = 0", // layers:physical-read
+    )
     .all() as { file_path: string }[];
   return rows.some((row) => path.resolve(row.file_path) === resolvedPath);
 }
@@ -659,25 +684,36 @@ export function storedFileInUse(ndb: NetworkDb, resolvedPath: string): boolean {
 /**
  * Delete an attachment (docs/03-server-api.md §11). Throws `NOT_FOUND` (404).
  *
- * When the attachment is `kind='file'` and its `file_path` points **inside the
- * network's `attachments/` directory** (a server-stored upload), the stored
- * file is removed together with the row (see {@link removeStoredFile}) — but
- * only when nothing else uses it: another attachment resolving to the same
- * file keeps it (a second reference is possible via `PATCH …/file_path`), and
- * so does a thought icon backed by this attachment (`icon_attachment_id`,
- * Ctrl-hover reads the full picture from the file). Otherwise only the row is
- * deleted and the file stays.
+ * S4 (13-layers.md §5.3): in a working layer the deletion materialises a
+ * tombstone over the binding only — the physical file is shared by all layers
+ * and is never touched from a layer context. Physically (base-layer context)
+ * the file goes away with the row — but only when nothing else uses it:
+ * another live attachment resolving to the same file keeps it (a second
+ * reference is possible via `PATCH …/file_path`), and so does a live thought
+ * icon backed by this attachment (`icon_attachment_id`, Ctrl-hover reads the
+ * full picture from the file). Otherwise only the row is deleted and the file
+ * stays.
  */
 export function deleteAttachment(ndb: NetworkDb, id: string): void {
   ndb.transaction(() => {
     const current = getAttachmentOrThrow(ndb, id);
+    if (!isBaseContext(ndb)) {
+      // A layer never deletes the shared file — tombstone the binding (§5.3).
+      materializeTombstone(ndb, 'attachments', id);
+      return;
+    }
     // Check the icon reference BEFORE it is reset below — the file must
-    // outlive the row for the icon's full picture (L16).
-    // layers:physical-read — файл один на все слои (13-layers.md §5.3): иконка в любом слое удерживает его.
+    // outlive the row for the icon's full picture (L16). Tombstoned icon
+    // references (deleted = 1) do not pin the file: the thought is invisible
+    // in that layer anyway.
+    // layers:physical-read — файл один на все слои (13-layers.md §5.3): живая иконка в любом слое удерживает его.
     const iconBacksFile =
       current.kind === 'file' &&
-      ndb.prepare('SELECT 1 FROM thoughts WHERE icon_attachment_id = ? LIMIT 1').get(id) !== // layers:physical-read
-      undefined;
+      ndb
+        .prepare(
+          'SELECT 1 FROM thoughts WHERE icon_attachment_id = ? AND deleted = 0 LIMIT 1', // layers:physical-read
+        )
+        .get(id) !== undefined;
     ndb.prepare('DELETE FROM attachments WHERE id = ?').run(id);
     // Thoughts may reference this attachment as the backing picture of their
     // icon (L16) — drop the dangling reference; the icon preview itself stays.
@@ -855,9 +891,12 @@ export function updateAttachmentContent(
       input.mime_type !== undefined && input.mime_type.trim() !== ''
         ? input.mime_type.trim().toLowerCase()
         : current.mime_type;
+    materializeShadow(ndb, 'attachments', id);
     ndb
-      .prepare('UPDATE attachments SET file_size = ?, mime_type = ? WHERE id = ?')
-      .run(buffer.length, nextMime, id);
+      .prepare(
+        'UPDATE attachments SET file_size = ?, mime_type = ? WHERE id = ? AND layer_id = ?',
+      )
+      .run(buffer.length, nextMime, id, ndb.layerId);
 
     const text = buffer.toString('utf8');
     const html = isMarkdownFile({ ...current, mime_type: nextMime })

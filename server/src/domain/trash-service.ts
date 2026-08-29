@@ -20,6 +20,7 @@ import type {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { isBaseContext } from '../db/layer-write.js';
 import { getLink, checkLinkDeletion, deleteLink } from './link-service.js';
 import { getThought, checkThoughtDeletion, deleteThought } from './thought-service.js';
 
@@ -32,6 +33,24 @@ import { getThought, checkThoughtDeletion, deleteThought } from './thought-servi
 export interface TrashPurgeOutcome extends TrashPurgeResult {
   deleted_thought_ids: string[];
   deleted_link_ids: string[];
+}
+
+/**
+ * Blocking check of one trash entry. In a working layer the answer is always
+ * "not blocked": the deletion there is a tombstone (13-layers.md §5.2), which
+ * never needs the physical-delete guards of 02-data-model.md §3.1.2.
+ */
+function trashCheckThought(ndb: NetworkDb, id: string) {
+  return isBaseContext(ndb)
+    ? checkThoughtDeletion(ndb, id)
+    : { blocked: false as const, blocking: { properties: 0, layers: [] }, orphaned_children: 0 };
+}
+
+/** Link counterpart of {@link trashCheckThought}. */
+function trashCheckLink(ndb: NetworkDb, id: string) {
+  return isBaseContext(ndb)
+    ? checkLinkDeletion(ndb, id)
+    : { blocked: false as const, blocking: { layers: [] } };
 }
 
 /**
@@ -52,7 +71,7 @@ export function listTrash(ndb: NetworkDb): TrashListResult {
   for (const id of thoughtIds) {
     const thought = getThought(ndb, id);
     if (thought === null) continue; // deleted concurrently — defensive
-    const check = checkThoughtDeletion(ndb, id);
+    const check = trashCheckThought(ndb, id);
     thoughts.push({ ...thought, blocked: check.blocked, blocking: check.blocking });
   }
 
@@ -60,7 +79,7 @@ export function listTrash(ndb: NetworkDb): TrashListResult {
   for (const id of linkIds) {
     const link = getLink(ndb, id);
     if (link === null) continue; // deleted concurrently — defensive
-    const check = checkLinkDeletion(ndb, id);
+    const check = trashCheckLink(ndb, id);
     links.push({ ...link, blocked: check.blocked, blocking: check.blocking });
   }
 
@@ -72,9 +91,11 @@ export function listTrash(ndb: NetworkDb): TrashListResult {
  * marked thought/link that is not blocked; blocked ones are skipped silently
  * (an expected outcome, not a failure). Returns purged/skipped counts.
  *
- * Runs each deletion in its own transaction (a blocked row must not roll back
- * the ones that could be deleted); the caller may wrap the whole sweep in a
- * single outer transaction for auto-cleanup after layer operations.
+ * S4: in a working layer every marked row is deletable (by tombstone,
+ * 13-layers.md §5.2), so nothing is skipped there. Runs each deletion in its
+ * own transaction (a blocked row must not roll back the ones that could be
+ * deleted); the caller may wrap the whole sweep in a single outer transaction
+ * for auto-cleanup after layer operations.
  */
 export function purgeTrash(ndb: NetworkDb): TrashPurgeOutcome {
   let purged = 0;
@@ -90,7 +111,7 @@ export function purgeTrash(ndb: NetworkDb): TrashPurgeOutcome {
   ).map((r) => r.id);
 
   for (const id of thoughtIds) {
-    if (checkThoughtDeletion(ndb, id).blocked) {
+    if (trashCheckThought(ndb, id).blocked) {
       skipped += 1;
       continue;
     }
@@ -99,7 +120,7 @@ export function purgeTrash(ndb: NetworkDb): TrashPurgeOutcome {
     purged += 1;
   }
   for (const id of linkIds) {
-    if (checkLinkDeletion(ndb, id).blocked) {
+    if (trashCheckLink(ndb, id).blocked) {
       skipped += 1;
       continue;
     }

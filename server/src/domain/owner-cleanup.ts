@@ -20,6 +20,17 @@
  * no longer unique, docs/13-layers.md §3), the former FK cascades of a thought
  * deletion run explicitly here as well ({@link purgeThoughtDeletionDependants}).
  *
+ * Since S4 there are two flavours of the same cascade:
+ *
+ *   * **physical** (`purge*`, base-layer context) — the former behaviour: rows
+ *     of every layer are deleted outright together with the owner;
+ *   * **tombstone** (`tombstone*`, a non-base layer context,
+ *     docs/13-layers.md §5.2) — deletion in a layer materialises tombstones for
+ *     every *visible* dependent row in that layer: incident links (both ends),
+ *     comments, attachments, property values, synonyms and comment targets.
+ *     Children are NOT deleted — the cascade hits link rows, not child
+ *     thoughts. Server-stored attachment files are never touched here (§5.3).
+ *
  * Server-stored attachment files (`networks/<nid>/attachments/`) are removed
  * from disk as well; client-local file paths are never touched.
  */
@@ -29,6 +40,7 @@ import { type AttachmentKind } from '@etn/shared';
 import path from 'node:path';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { materializeTombstone } from '../db/layer-write.js';
 import { removeStoredFile, storedFileInUse } from './attachment-service.js';
 
 /** Polymorphic owner of comments/attachments/property values. */
@@ -88,6 +100,106 @@ export function purgeThoughtDeletionDependants(ndb: NetworkDb, thoughtId: string
     .run(thoughtId, thoughtId);
   ndb.prepare('DELETE FROM user_pinned_thoughts WHERE thought_id = ?').run(thoughtId);
   ndb.prepare('DELETE FROM thought_read_metrics WHERE thought_id = ?').run(thoughtId);
+}
+
+// ---------------------------------------------------------------------------
+// Tombstone cascade (a layer context, 13-layers.md §5.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Надгробия на все видимые зависимые строки владельцев в текущем слое:
+ * комментарии (вместе с их привязками `comment_targets`), вторичные привязки
+ * комментариев к владельцу, вложения (только строки — физический файл общий
+ * для всех слоёв, §5.3) и значения свойств. Для владельца-мысли — ещё и её
+ * видимые синонимы. No-op для пустого списка; чтения — только через
+ * представления `*_v` (надгробие нужно ставить лишь строкам, которые слой
+ * сейчас показывает).
+ */
+export function tombstoneOwnerDependants(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): void {
+  for (let i = 0; i < ownerIds.length; i += OWNER_CHUNK_SIZE) {
+    tombstoneChunk(ndb, ownerType, ownerIds.slice(i, i + OWNER_CHUNK_SIZE));
+  }
+}
+
+/** Single-chunk tombstone sweep; `ownerIds` must be non-empty and ≤ OWNER_CHUNK_SIZE. */
+function tombstoneChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): void {
+  if (ownerIds.length === 0) return;
+  const owners = ownerIds.map(() => '?').join(', ');
+
+  // Комментарии, где владелец — первичный: надгробие самому комментарию и
+  // всем его видимым привязкам (m2m).
+  const commentIds = (
+    ndb
+      .prepare(`SELECT id FROM comments_v WHERE owner_type = ? AND owner_id IN (${owners})`)
+      .all(ownerType, ...ownerIds) as { id: string }[]
+  ).map((r) => r.id);
+  for (const commentId of commentIds) {
+    const targetIds = (
+      ndb.prepare('SELECT id FROM comment_targets_v WHERE comment_id = ?').all(commentId) as {
+        id: string;
+      }[]
+    ).map((r) => r.id);
+    for (const targetId of targetIds) materializeTombstone(ndb, 'comment_targets', targetId);
+    materializeTombstone(ndb, 'comments', commentId);
+  }
+
+  // Вторичные привязки чужих комментариев к этому владельцу — отвязываются
+  // (надгробие на строку привязки, L20 §10.1).
+  const secondaryIds = (
+    ndb
+      .prepare(`SELECT id FROM comment_targets_v WHERE owner_type = ? AND owner_id IN (${owners})`)
+      .all(ownerType, ...ownerIds) as { id: string }[]
+  ).map((r) => r.id);
+  for (const targetId of secondaryIds) materializeTombstone(ndb, 'comment_targets', targetId);
+
+  // Вложения: только привязки. Файл на диске один на все слои — его судьбу
+  // решает счётчик живых ссылок по всем слоям (§5.3), а не удаление в слое.
+  const attachmentIds = (
+    ndb
+      .prepare(`SELECT id FROM attachments_v WHERE owner_type = ? AND owner_id IN (${owners})`)
+      .all(ownerType, ...ownerIds) as { id: string }[]
+  ).map((r) => r.id);
+  for (const attachmentId of attachmentIds) materializeTombstone(ndb, 'attachments', attachmentId);
+
+  // Значения свойств владельца (и его связей — вызывающий код передаёт их id
+  // отдельным вызовом с ownerType='link').
+  const valueIds = (
+    ndb
+      .prepare(`SELECT id FROM property_values_v WHERE owner_type = ? AND owner_id IN (${owners})`)
+      .all(ownerType, ...ownerIds) as { id: string }[]
+  ).map((r) => r.id);
+  for (const valueId of valueIds) materializeTombstone(ndb, 'property_values', valueId);
+
+  // Синонимы есть только у мыслей.
+  if (ownerType === 'thought') {
+    const synonymIds = (
+      ndb
+        .prepare(`SELECT id FROM thought_synonyms_v WHERE thought_id IN (${owners})`)
+        .all(...ownerIds) as { id: string }[]
+    ).map((r) => r.id);
+    for (const synonymId of synonymIds) materializeTombstone(ndb, 'thought_synonyms', synonymId);
+  }
+}
+
+/**
+ * Надгробия на всё поддерево зависимых строк мысли в текущем слое
+ * (13-layers.md §5.2): сама мысль, её видимые связи (с обеих сторон) вместе с
+ * их зависимыми строками, комментарии, вложения, значения свойств и синонимы.
+ * Дети не удаляются — каскад бьёт по строкам связей, а не по дочерним мыслям:
+ * ребёнок остаётся, но теряет эту связь.
+ */
+export function tombstoneThoughtDeletionDependants(ndb: NetworkDb, thoughtId: string): void {
+  // Сначала зависимые строки инцидентных связей, затем сами связи, затем
+  // зависимые строки самой мысли и она сама.
+  const linkIds = (
+    ndb
+      .prepare('SELECT id FROM links_v WHERE source_id = ? OR target_id = ?')
+      .all(thoughtId, thoughtId) as { id: string }[]
+  ).map((r) => r.id);
+  tombstoneOwnerDependants(ndb, 'link', linkIds);
+  for (const linkId of linkIds) materializeTombstone(ndb, 'links', linkId);
+  tombstoneOwnerDependants(ndb, 'thought', [thoughtId]);
+  materializeTombstone(ndb, 'thoughts', thoughtId);
 }
 
 /** Single-chunk purge; `ownerIds` must be non-empty and ≤ OWNER_CHUNK_SIZE. */

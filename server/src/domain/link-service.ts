@@ -29,8 +29,9 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
 import { listLinkHoldingLayers } from './holding-layers.js';
-import { purgeOwnerDependants } from './owner-cleanup.js';
+import { purgeOwnerDependants, tombstoneOwnerDependants } from './owner-cleanup.js';
 import { assertLinkTypeAssignable } from './link-type-service.js';
 
 import {
@@ -326,12 +327,13 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
     const now = new Date().toISOString();
     ndb
       .prepare(
-        `INSERT INTO links (id, source_id, target_id, type_id, color, style, width, active, version,
+        `INSERT INTO links (id, layer_id, source_id, target_id, type_id, color, style, width, active, version,
                             created_at, updated_at, created_by, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
       )
       .run(
         id,
+        ndb.layerId,
         input.source_id,
         input.target_id,
         typeId,
@@ -481,8 +483,13 @@ export function updateLink(
     const now = new Date().toISOString();
     sets.push('version = ?', 'updated_at = ?', 'updated_by = ?');
     args.push(current.version + 1, now, actorUserId);
-    args.push(id);
-    ndb.prepare(`UPDATE links SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    // S4 (13-layers.md §5.1): first edit in a working layer materialises a
+    // shadow copy; the UPDATE targets the connection's layer row only.
+    materializeShadow(ndb, 'links', id);
+    args.push(id, ndb.layerId);
+    ndb
+      .prepare(`UPDATE links SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
+      .run(...args);
 
     return getLinkOrThrow(ndb, id);
   });
@@ -516,10 +523,15 @@ export function checkLinkDeletion(ndb: NetworkDb, id: string): LinkDeletionCheck
  * values — no SQL FK) are purged in the same transaction
  * (see {@link purgeOwnerDependants}).
  *
+ * S4 (13-layers.md §5.2): in a working layer the deletion materialises
+ * tombstones — the link row and its visible dependants (comments, comment
+ * targets, attachments without touching the shared file, property values) —
+ * instead of deleting physically; the base rows stay intact.
+ *
  * Throws `NOT_FOUND` (404) if the link does not exist and `VERSION_CONFLICT`
  * (409) if `expectedVersion` is set and does not match; `VALIDATION_ERROR`
- * (422) when deletion is blocked by a holding layer (S13/S2, §6.5a — the list
- * is empty until layers can be created, S7).
+ * (422) when deletion is blocked by a holding layer (S13/S2, §6.5a — base
+ * layer / physical deletion only).
  */
 export function deleteLink(ndb: NetworkDb, id: string, expectedVersion: number | undefined): void {
   ndb.transaction(() => {
@@ -531,6 +543,12 @@ export function deleteLink(ndb: NetworkDb, id: string, expectedVersion: number |
         expected: expectedVersion,
         current: current.version,
       });
+    }
+    // S4: a working layer deletes by tombstone — §5.2.
+    if (!isBaseContext(ndb)) {
+      tombstoneOwnerDependants(ndb, 'link', [id]);
+      materializeTombstone(ndb, 'links', id);
+      return;
     }
     // S13: refuse physical deletion while blocked (§6.5a).
     const check = checkLinkDeletion(ndb, id);

@@ -27,6 +27,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
 import {
   assertParentValid,
   getRootTypeId,
@@ -184,15 +185,16 @@ export function createThoughtType(
     }
     ndb
       .prepare(
-        `INSERT INTO thought_types (id, name, name_key, parent_id, is_root,
+        `INSERT INTO thought_types (id, layer_id, name, name_key, parent_id, is_root,
                                      icon, icon_kind, fg_color, bg_color,
                                      font_bold, font_italic, font_underline, font_strike,
                                      description, comment_template_md,
                                      version, created_at, updated_at, created_by)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
       )
       .run(
         id,
+        ndb.layerId,
         name,
         nameKey,
         parentId,
@@ -326,8 +328,13 @@ export function updateThoughtType(
     const now = new Date().toISOString();
     sets.push('version = ?', 'updated_at = ?');
     args.push(current.version + 1, now);
-    args.push(id);
-    ndb.prepare(`UPDATE thought_types SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer;
+    // the UPDATE targets the connection's layer row only.
+    materializeShadow(ndb, 'thought_types', id);
+    args.push(id, ndb.layerId);
+    ndb
+      .prepare(`UPDATE thought_types SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
+      .run(...args);
     return getThoughtTypeOrThrow(ndb, id);
   });
 }
@@ -356,6 +363,12 @@ export interface DeleteThoughtTypeOptions {
  * dropped the `property_id` FKs (docs/13-layers.md §3), their stored values and
  * default overrides are removed explicitly in the same transaction. Child
  * types are impossible here (rejected up front), so no orphaned parents remain.
+ *
+ * S4 (13-layers.md §5.2, §13): in a working layer the deletion materialises
+ * tombstones over the type's visible subtree — the type row, its property
+ * definitions, their values/overrides — and (with `force`) shadows of the
+ * visible thoughts referencing the type with `type_id = NULL`; the base rows
+ * stay intact.
  */
 export function deleteThoughtType(
   ndb: NetworkDb,
@@ -399,13 +412,19 @@ export function deleteThoughtType(
         { entity: 'thought_type', id, in_use: usage.c },
       );
     }
+    if (!isBaseContext(ndb)) {
+      tombstoneThoughtTypeSubtree(ndb, id, opts.actorUserId ?? 'system');
+      return;
+    }
     if (usage.c > 0) {
       const now = new Date().toISOString();
+      // Scoped to the base layer row: a live shadow of a thought in another
+      // layer keeps its `type_id` (the layer has not agreed to the detach).
       ndb
         .prepare(
-          'UPDATE thoughts SET type_id = NULL, updated_at = ?, updated_by = ? WHERE type_id = ?',
+          'UPDATE thoughts SET type_id = NULL, updated_at = ?, updated_by = ? WHERE type_id = ? AND layer_id = ?',
         )
-        .run(now, opts.actorUserId ?? 'system', id);
+        .run(now, opts.actorUserId ?? 'system', id, ndb.layerId);
     }
     // The type's property definitions go with it — together with their stored
     // values and default overrides, which had no other SQL path anyway and,
@@ -432,6 +451,61 @@ export function deleteThoughtType(
       .run(id);
     ndb.prepare('DELETE FROM thought_types WHERE id = ?').run(id);
   });
+}
+
+/**
+ * Tombstone cascade of a thought type deletion in a working layer
+ * (13-layers.md §5.2, §13): visible values/overrides/definitions of the type's
+ * subtree, then the visible thoughts' `type_id = NULL` (as shadow edits), then
+ * the type row itself.
+ */
+function tombstoneThoughtTypeSubtree(ndb: NetworkDb, typeId: string, actorUserId: string): void {
+  const defIds = (
+    ndb
+      .prepare(
+        "SELECT id FROM type_properties_v WHERE owner_type = 'thought_type' AND owner_id = ?",
+      )
+      .all(typeId) as { id: string }[]
+  ).map((r) => r.id);
+  const defList = defIds.map(() => '?').join(', ');
+  // Values of the definitions (visible in this layer's chain).
+  if (defIds.length > 0) {
+    const valueIds = (
+      ndb
+        .prepare(`SELECT id FROM property_values_v WHERE property_id IN (${defList})`)
+        .all(...defIds) as { id: string }[]
+    ).map((r) => r.id);
+    for (const valueId of valueIds) materializeTombstone(ndb, 'property_values', valueId);
+  }
+  // Overrides: set on this type, or on other types for these properties.
+  const overrideIds = (
+    ndb
+      .prepare(
+        `SELECT id FROM type_property_overrides_v
+         WHERE owner_type = 'thought_type'
+           AND (type_id = ?${defIds.length > 0 ? ` OR property_id IN (${defList})` : ''})`,
+      )
+      .all(...[typeId, ...defIds]) as { id: string }[]
+  ).map((r) => r.id);
+  for (const overrideId of overrideIds) {
+    materializeTombstone(ndb, 'type_property_overrides', overrideId);
+  }
+  for (const defId of defIds) materializeTombstone(ndb, 'type_properties', defId);
+  // Thoughts still pointing at the type get a shadow with type_id = NULL
+  // (same detach semantics as `force` in the base).
+  const now = new Date().toISOString();
+  const thoughtIds = (
+    ndb.prepare('SELECT id FROM thoughts_v WHERE type_id = ?').all(typeId) as { id: string }[]
+  ).map((r) => r.id);
+  for (const thoughtId of thoughtIds) {
+    materializeShadow(ndb, 'thoughts', thoughtId);
+    ndb
+      .prepare(
+        'UPDATE thoughts SET type_id = NULL, version = version + 1, updated_at = ?, updated_by = ? WHERE id = ? AND layer_id = ?',
+      )
+      .run(now, actorUserId, thoughtId, ndb.layerId);
+  }
+  materializeTombstone(ndb, 'thought_types', typeId);
 }
 
 /**

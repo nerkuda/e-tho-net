@@ -5,6 +5,10 @@
  * («основной тип», `is_root = 1`). Both tables expose the same `parent_id`
  * column, so every helper below is table-parameterised. The trees are tiny,
  * so plain per-row parent walks are fine — no recursive CTEs needed.
+ *
+ * Reads go through the layer-resolving views (`${table}_v`,
+ * docs/13-layers.md §13): the inheritance chain is computed over the rows the
+ * connection's layer resolves, not over raw physical rows of every layer.
  */
 
 import { EtnError } from '@etn/shared';
@@ -26,13 +30,13 @@ export interface TypeNodeRow {
 
 /** Read the id/parent_id/is_root projection of every row of a type table. */
 export function listTypeNodes(ndb: NetworkDb, table: TypeTable): TypeNodeRow[] {
-  return ndb.prepare(`SELECT id, parent_id, is_root FROM ${table}`).all() as TypeNodeRow[];
+  return ndb.prepare(`SELECT id, parent_id, is_root FROM ${table}_v`).all() as TypeNodeRow[];
 }
 
 /** The single root type of a table, or `null` (only possible mid-migration). */
 export function getRootTypeId(ndb: NetworkDb, table: TypeTable): string | null {
   const row = ndb
-    .prepare(`SELECT id FROM ${table} WHERE is_root = 1`)
+    .prepare(`SELECT id FROM ${table}_v WHERE is_root = 1`)
     .get() as { id: string } | undefined;
   return row?.id ?? null;
 }
@@ -141,7 +145,7 @@ export function assertParentValid(
 ): void {
   // null parent means «directly under the root» — nothing to validate.
   if (parentId === null) return;
-  const parent = ndb.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(parentId) as
+  const parent = ndb.prepare(`SELECT id FROM ${table}_v WHERE id = ?`).get(parentId) as
     | { id: string }
     | undefined;
   if (!parent) {

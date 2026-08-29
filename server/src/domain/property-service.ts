@@ -35,6 +35,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { deleteRowLayered, isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
 import { rowToThoughtRef } from './thought-service.js';
 import {
   expandTypeIdsToSubtree,
@@ -292,22 +293,27 @@ export function setTypePropertyDefaultOverride(
     }
     const now = new Date().toISOString();
     if (value === null) {
-      ndb
+      // S4: физически в основе, надгробием в слое (13-layers.md §5.2).
+      const rows = ndb
         .prepare(
-          'DELETE FROM type_property_overrides WHERE owner_type = ? AND type_id = ? AND property_id = ?',
+          'SELECT id FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
         )
-        .run(ownerType, ownerId, propertyId);
+        .all(ownerType, ownerId, propertyId) as { id: string }[];
+      for (const row of rows) {
+        deleteRowLayered(ndb, 'type_property_overrides', row.id);
+      }
       return;
     }
     ndb
       .prepare(
-        `INSERT INTO type_property_overrides (id, owner_type, type_id, property_id, default_value, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO type_property_overrides (id, layer_id, owner_type, type_id, property_id, default_value, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (owner_type, type_id, property_id, layer_id) DO UPDATE SET
            default_value = excluded.default_value,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at,
+           deleted = 0`,
       )
-      .run(randomUUID(), ownerType, ownerId, propertyId, JSON.stringify(value), now, now);
+      .run(randomUUID(), ndb.layerId, ownerType, ownerId, propertyId, JSON.stringify(value), now, now);
   });
 }
 
@@ -375,10 +381,16 @@ export function createTypeProperty(
       input.config === undefined || input.config === null ? null : JSON.stringify(input.config);
     ndb
       .prepare(
-        `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, config, required, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, key, value_type, config, required, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (owner_type, owner_id, key, layer_id) DO UPDATE SET
+           deleted = 0,
+           value_type = excluded.value_type,
+           config = excluded.config,
+           required = excluded.required,
+           position = excluded.position`,
       )
-      .run(id, ownerType, ownerId, key, valueType, configJson, input.required ? 1 : 0, position);
+      .run(id, ndb.layerId, ownerType, ownerId, key, valueType, configJson, input.required ? 1 : 0, position);
     return getTypeProperty(ndb, id)!;
   });
 }
@@ -465,18 +477,20 @@ function migratePropertyValues(
     const value = readValue(row, from);
     const converted = value === null ? null : convertStoredValue(value, to);
     if (converted === null) {
-      ndb.prepare('DELETE FROM property_values WHERE id = ?').run(row.id);
+      // S4: физически в основе, надгробием в слое (13-layers.md §5.2).
+      deleteRowLayered(ndb, 'property_values', row.id);
       continue;
     }
+    materializeShadow(ndb, 'property_values', row.id);
     ndb
       .prepare(
         `UPDATE property_values SET
            value_text = NULL, value_date = NULL, value_number = NULL,
            value_bool = NULL, value_thought_ref = NULL,
            ${converted.column} = ?, updated_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND layer_id = ?`,
       )
-      .run(converted.raw, now, row.id);
+      .run(converted.raw, now, row.id, ndb.layerId);
   }
 }
 
@@ -534,8 +548,13 @@ export function updateTypeProperty(
     if (sets.length === 0) {
       return current;
     }
-    args.push(id);
-    ndb.prepare(`UPDATE type_properties SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer;
+    // the UPDATE targets the connection's layer row only.
+    materializeShadow(ndb, 'type_properties', id);
+    args.push(id, ndb.layerId);
+    ndb
+      .prepare(`UPDATE type_properties SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
+      .run(...args);
     return getTypeProperty(ndb, id)!;
   });
 }
@@ -544,6 +563,10 @@ export function updateTypeProperty(
  * Delete a property definition. Since S2 the definition's stored values and
  * default overrides have no SQL FK to `type_properties` (the logical id is no
  * longer unique), so both are deleted explicitly in the same transaction.
+ *
+ * S4 (13-layers.md §5.2): in a working layer the deletion materialises
+ * tombstones over the definition, its visible values and overrides instead of
+ * deleting physically; the base rows stay intact.
  */
 export function deleteTypeProperty(ndb: NetworkDb, id: string): void {
   const current = getTypeProperty(ndb, id);
@@ -551,6 +574,24 @@ export function deleteTypeProperty(ndb: NetworkDb, id: string): void {
     throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'type_property', id });
   }
   ndb.transaction(() => {
+    if (!isBaseContext(ndb)) {
+      const valueIds = (
+        ndb.prepare('SELECT id FROM property_values_v WHERE property_id = ?').all(id) as {
+          id: string;
+        }[]
+      ).map((r) => r.id);
+      for (const valueId of valueIds) materializeTombstone(ndb, 'property_values', valueId);
+      const overrideIds = (
+        ndb.prepare('SELECT id FROM type_property_overrides_v WHERE property_id = ?').all(id) as {
+          id: string;
+        }[]
+      ).map((r) => r.id);
+      for (const overrideId of overrideIds) {
+        materializeTombstone(ndb, 'type_property_overrides', overrideId);
+      }
+      materializeTombstone(ndb, 'type_properties', id);
+      return;
+    }
     ndb.prepare('DELETE FROM property_values WHERE property_id = ?').run(id);
     // Overrides set on OTHER types for this inherited property go with it too
     // (the former FK cascade), not only the owning type's own ones.
@@ -571,10 +612,14 @@ export function reorderTypeProperties(
   orderedPropertyIds: string[],
 ): PropertyDefinition[] {
   return ndb.transaction(() => {
+    // S4: в слое порядок — правка теневых копий определений (13-layers.md §5.1).
     const stmt = ndb.prepare(
-      'UPDATE type_properties SET position = ? WHERE id = ? AND owner_type = ? AND owner_id = ?',
+      'UPDATE type_properties SET position = ? WHERE id = ? AND owner_type = ? AND owner_id = ? AND layer_id = ?',
     );
-    orderedPropertyIds.forEach((propId, index) => stmt.run(index, propId, ownerType, ownerId));
+    orderedPropertyIds.forEach((propId, index) => {
+      materializeShadow(ndb, 'type_properties', propId);
+      stmt.run(index, propId, ownerType, ownerId, ndb.layerId);
+    });
     return listTypeProperties(ndb, ownerType, ownerId);
   });
 }
@@ -675,8 +720,13 @@ function storageColumn(valueType: PropertyValueType): string {
 }
 
 /** The table that holds the owner row for a given value owner_type. */
-function ownerTable(ownerType: PropertyOwnerType): 'thoughts' | 'links' {
-  return ownerType === 'thought' ? 'thoughts' : 'links';
+/**
+ * The layer-resolving view of an owner's table (13-layers.md §4.2): owner
+ * validation must respect the connection's layer context — a tombstoned owner
+ * is a 404 in that layer.
+ */
+function ownerTable(ownerType: PropertyOwnerType): 'thoughts_v' | 'links_v' {
+  return ownerType === 'thought' ? 'thoughts_v' : 'links_v';
 }
 
 /**
@@ -871,13 +921,19 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
  * property value (single or inside a multiple-ref JSON array). Backs the
  * "использование в свойствах" blocking arm of the S13 deletion check
  * (02-data-model.md §3.1.2, 03-server-api.md §6.5a).
+ *
+ * The check must see **live values of every layer** (same as arms 2–3 of
+ * §3.1.2): a live shadow row of a value would otherwise turn into a dangling
+ * reference after the physical delete. Tombstones (`deleted = 1`) do not
+ * block — the layer that placed them has already agreed to the removal.
  */
 export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
+  // layers:physical-read — блокирующее плечо удаления: аудит живых значений ВСЕХ слоёв.
   const row = ndb
     .prepare(
       `SELECT COUNT(DISTINCT pv.owner_id) AS c
-       FROM property_values_v pv
-       WHERE pv.owner_type = 'thought'
+       FROM property_values pv -- layers:physical-read
+       WHERE pv.owner_type = 'thought' AND pv.deleted = 0
          AND (pv.value_thought_ref = ? OR pv.value_thought_ref LIKE ? ESCAPE '\\')`,
     )
     .get(thoughtId, refLikePattern(thoughtId)) as { c: number };
@@ -888,16 +944,40 @@ export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
  * Null out every `thought_ref` value referencing `thoughtId` (single and
  * multiple form) in one sweep — «Очистить использование» (03-server-api.md
  * §9.2). Returns how many property-value rows were cleared.
+ *
+ * S4: the base-layer sweep clears **live rows of every layer** (matching the
+ * blocking arm above — otherwise the physical delete could not proceed); a
+ * working layer clears its visible values as shadow edits only.
  */
 export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
-  const result = ndb
+  const now = new Date().toISOString();
+  if (isBaseContext(ndb)) {
+    // layers:physical-read — зеркально плечу блокировки: живые значения всех слоёв.
+    const result = ndb
+      .prepare(
+        `UPDATE property_values SET value_thought_ref = NULL, updated_at = ?
+         WHERE owner_type = 'thought' AND deleted = 0
+           AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')`, // layers:physical-read
+      )
+      .run(now, thoughtId, refLikePattern(thoughtId));
+    return result.changes;
+  }
+  const rows = ndb
     .prepare(
-      `UPDATE property_values SET value_thought_ref = NULL, updated_at = ?
+      `SELECT id FROM property_values_v
        WHERE owner_type = 'thought'
          AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')`,
     )
-    .run(new Date().toISOString(), thoughtId, refLikePattern(thoughtId));
-  return result.changes;
+    .all(thoughtId, refLikePattern(thoughtId)) as { id: string }[];
+  for (const row of rows) {
+    materializeShadow(ndb, 'property_values', row.id);
+    ndb
+      .prepare(
+        'UPDATE property_values SET value_thought_ref = NULL, updated_at = ? WHERE id = ? AND layer_id = ?',
+      )
+      .run(now, row.id, ndb.layerId);
+  }
+  return rows.length;
 }
 
 /**
@@ -1096,11 +1176,14 @@ export function setPropertyValue(
     // conflict reset every value_* column before copying the matching one back,
     // so the single-column rule holds even if value_type changed since the last
     // write. `column` is a fixed `value_*` literal derived from value_type.
+    // S4: the row lands in the connection's layer; `deleted = 0` wakes a
+    // same-key tombstone of this layer instead of dropping the write silently.
     ndb
       .prepare(
-        `INSERT INTO property_values (id, owner_type, owner_id, property_id, ${column}, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, ${column}, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(owner_type, owner_id, property_id, layer_id) DO UPDATE SET
+           deleted = 0,
            value_text = NULL,
            value_date = NULL,
            value_number = NULL,
@@ -1109,7 +1192,7 @@ export function setPropertyValue(
            ${column} = excluded.${column},
            updated_at = excluded.updated_at`,
       )
-      .run(id, ownerType, ownerId, def.id, raw, now);
+      .run(id, ndb.layerId, ownerType, ownerId, def.id, raw, now);
 
     const stored = ndb
       .prepare(
@@ -1245,6 +1328,24 @@ export function deletePropertyValue(
         owner_id: ownerId,
         key,
       });
+    }
+    // S4: в слое значение скрывается надгробием (13-layers.md §5.2), в основе —
+    // прежний физический DELETE.
+    if (!isBaseContext(ndb)) {
+      const rows = ndb
+        .prepare(
+          'SELECT id FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+        )
+        .all(ownerType, ownerId, def.id) as { id: string }[];
+      if (rows.length === 0) {
+        throw new EtnError('NOT_FOUND', `no value stored for property "${key}"`, {
+          owner_type: ownerType,
+          owner_id: ownerId,
+          key,
+        });
+      }
+      for (const row of rows) materializeTombstone(ndb, 'property_values', row.id);
+      return { property_id: def.id };
     }
     const result = ndb
       .prepare(

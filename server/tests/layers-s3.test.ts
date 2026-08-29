@@ -95,16 +95,19 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         insertHierarchyLayers(ndb);
-        // The connection's layer context (the resolution views follow it).
-        ndb.useLayer(LAYER_B);
 
-        // Base rows via the service (writes still go to the base layer, S3).
+        // Base rows via the service (S4: writes go to the connection's layer,
+        // so the service calls run in the base context; the resolution checks
+        // below then switch to B).
         const tBase = createThought(ndb, { title: 'Только основа' }, USER);
         const tA = createThought(ndb, { title: 'A-основа' }, USER);
         const tB = createThought(ndb, { title: 'B-основа' }, USER);
         const tAB = createThought(ndb, { title: 'AB-основа' }, USER);
         const tTombA = createThought(ndb, { title: 'Надгробие в A' }, USER);
         const tTombB = createThought(ndb, { title: 'Надгробие в B' }, USER);
+
+        // The connection's layer context (the resolution views follow it).
+        ndb.useLayer(LAYER_B);
 
         // Shadow rows (raw SQL — materialisation itself is S4+).
         insertThoughtShadow(ndb, tA.id, LAYER_A, 'A-слой', false);
@@ -161,11 +164,11 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         insertHierarchyLayers(ndb);
-        ndb.useLayer(LAYER_B);
         const a = createThought(ndb, { title: 'A' }, USER);
         const b = createThought(ndb, { title: 'B' }, USER);
         const c = createThought(ndb, { title: 'C' }, USER);
         const now = new Date().toISOString();
+        ndb.useLayer(LAYER_B);
 
         // l1: active in base, deactivated in B — the edge exists in both
         // contexts but resolves to different rows.

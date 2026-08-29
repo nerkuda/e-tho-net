@@ -28,6 +28,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
 import {
   assertParentValid,
   getRootTypeId,
@@ -207,13 +208,14 @@ export function createLinkType(
     }
     ndb
       .prepare(
-        `INSERT INTO link_types (id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+        `INSERT INTO link_types (id, layer_id, name_forward, name_forward_key, name_reverse, name_reverse_key,
                                   parent_id, is_root, color, style, width, style_set, width_set,
                                   description, version, created_at, updated_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
       )
       .run(
         id,
+        ndb.layerId,
         nameForward,
         nameForwardKey,
         nameReverse,
@@ -343,8 +345,13 @@ export function updateLinkType(
     const now = new Date().toISOString();
     sets.push('version = ?', 'updated_at = ?');
     args.push(current.version + 1, now);
-    args.push(id);
-    ndb.prepare(`UPDATE link_types SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer;
+    // the UPDATE targets the connection's layer row only.
+    materializeShadow(ndb, 'link_types', id);
+    args.push(id, ndb.layerId);
+    ndb
+      .prepare(`UPDATE link_types SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
+      .run(...args);
     return getLinkTypeOrThrow(ndb, id);
   });
 }
@@ -411,8 +418,16 @@ export function deleteLinkType(
         { entity: 'link_type', id, in_use: usage.c },
       );
     }
+    if (!isBaseContext(ndb)) {
+      tombstoneLinkTypeSubtree(ndb, id);
+      return;
+    }
     if (usage.c > 0) {
-      ndb.prepare('UPDATE links SET type_id = NULL WHERE type_id = ?').run(id);
+      // Scoped to the base layer row: a live shadow of a link in another layer
+      // keeps its `type_id` (the layer has not agreed to the detach).
+      ndb
+        .prepare('UPDATE links SET type_id = NULL WHERE type_id = ? AND layer_id = ?')
+        .run(id, ndb.layerId);
     }
     // The type's property definitions go with it — together with their stored
     // values and default overrides, which had no other SQL path anyway and,
@@ -437,6 +452,55 @@ export function deleteLinkType(
       .run(id);
     ndb.prepare('DELETE FROM link_types WHERE id = ?').run(id);
   });
+}
+
+/**
+ * Tombstone cascade of a link type deletion in a working layer (13-layers.md
+ * §5.2, §13): visible values/overrides/definitions of the type's subtree, then
+ * the visible links' `type_id = NULL` (as shadow edits), then the type row
+ * itself.
+ */
+function tombstoneLinkTypeSubtree(ndb: NetworkDb, typeId: string): void {
+  const defIds = (
+    ndb
+      .prepare("SELECT id FROM type_properties_v WHERE owner_type = 'link_type' AND owner_id = ?")
+      .all(typeId) as { id: string }[]
+  ).map((r) => r.id);
+  const defList = defIds.map(() => '?').join(', ');
+  if (defIds.length > 0) {
+    const valueIds = (
+      ndb
+        .prepare(`SELECT id FROM property_values_v WHERE property_id IN (${defList})`)
+        .all(...defIds) as { id: string }[]
+    ).map((r) => r.id);
+    for (const valueId of valueIds) materializeTombstone(ndb, 'property_values', valueId);
+  }
+  const overrideIds = (
+    ndb
+      .prepare(
+        `SELECT id FROM type_property_overrides_v
+         WHERE owner_type = 'link_type'
+           AND (type_id = ?${defIds.length > 0 ? ` OR property_id IN (${defList})` : ''})`,
+      )
+      .all(...[typeId, ...defIds]) as { id: string }[]
+  ).map((r) => r.id);
+  for (const overrideId of overrideIds) {
+    materializeTombstone(ndb, 'type_property_overrides', overrideId);
+  }
+  for (const defId of defIds) materializeTombstone(ndb, 'type_properties', defId);
+  const linkIds = (
+    ndb.prepare('SELECT id FROM links_v WHERE type_id = ?').all(typeId) as { id: string }[]
+  ).map((r) => r.id);
+  const now = new Date().toISOString();
+  for (const linkId of linkIds) {
+    materializeShadow(ndb, 'links', linkId);
+    ndb
+      .prepare(
+        'UPDATE links SET type_id = NULL, version = version + 1, updated_at = ?, updated_by = ? WHERE id = ? AND layer_id = ?',
+      )
+      .run(now, 'system', linkId, ndb.layerId);
+  }
+  materializeTombstone(ndb, 'link_types', typeId);
 }
 
 /**

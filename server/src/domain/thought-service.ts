@@ -39,9 +39,13 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
 import { createComment } from './comment-service.js';
 import { listThoughtHoldingLayers } from './holding-layers.js';
-import { purgeThoughtDeletionDependants } from './owner-cleanup.js';
+import {
+  purgeThoughtDeletionDependants,
+  tombstoneThoughtDeletionDependants,
+} from './owner-cleanup.js';
 import { computeThoughtCardWarnings, countThoughtRefUsages } from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
 
@@ -268,17 +272,34 @@ export function parseSynonyms(input: SynonymInput): string[] {
 }
 
 /**
- * Replace a thought's synonyms atomically. Caller is responsible for the
- * surrounding transaction (so a title+synonym update commits together).
+ * Replace a thought's synonyms atomically in the connection's layer context
+ * (S4). Caller is responsible for the surrounding transaction (so a
+ * title+synonym update commits together).
+ *
+ * The previously visible rows are removed first — physically in the base
+ * layer (former replace semantics), as tombstones in a working layer
+ * (13-layers.md §5.2) — and the new set is inserted with the connection's
+ * `layer_id`. The `ON CONFLICT … DO UPDATE` wakes a same-norm tombstone of the
+ * same layer back up instead of silently dropping the row.
  */
 function setSynonyms(ndb: NetworkDb, thoughtId: string, synonyms: string[]): void {
-  ndb.prepare('DELETE FROM thought_synonyms WHERE thought_id = ?').run(thoughtId);
+  const oldIds = (
+    ndb.prepare('SELECT id FROM thought_synonyms_v WHERE thought_id = ?').all(thoughtId) as {
+      id: string;
+    }[]
+  ).map((row) => row.id);
+  for (const rowId of oldIds) {
+    deleteRowLayered(ndb, 'thought_synonyms', rowId);
+  }
   if (synonyms.length === 0) return;
   const stmt = ndb.prepare(
-    'INSERT OR IGNORE INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES (?, ?, ?)',
+    `INSERT INTO thought_synonyms (thought_id, synonym, synonym_norm, layer_id)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (thought_id, synonym_norm, layer_id) DO UPDATE SET
+       deleted = 0, synonym = excluded.synonym`,
   );
   for (const synonym of synonyms) {
-    stmt.run(thoughtId, synonym, normalizeTitle(synonym));
+    stmt.run(thoughtId, synonym, normalizeTitle(synonym), ndb.layerId);
   }
 }
 
@@ -410,11 +431,11 @@ function createLinkForNewThought(
   }
   ndb
     .prepare(
-      `INSERT INTO links (id, source_id, target_id, type_id, active, version,
-                        created_at, updated_at, created_by, updated_by)
-     VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?, ?)`,
+      `INSERT INTO links (id, layer_id, source_id, target_id, type_id, active, version,
+                          created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?)`,
     )
-    .run(randomUUID(), sourceId, linkTargetId, typeId, now, now, actorUserId, actorUserId);
+    .run(randomUUID(), ndb.layerId, sourceId, linkTargetId, typeId, now, now, actorUserId, actorUserId);
 }
 
 /**
@@ -451,14 +472,15 @@ export function createThought(
       (input.font_strike !== undefined ? FONT_STRIKE_BIT : 0);
     ndb
       .prepare(
-        `INSERT INTO thoughts (id, title, title_norm, type_id, icon, icon_kind, active,
+        `INSERT INTO thoughts (id, layer_id, title, title_norm, type_id, icon, icon_kind, active,
                              is_protected, is_root, fg_color, bg_color,
                              font_bold, font_italic, font_underline, font_strike, font_manual,
                              version, created_at, created_by, updated_at, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
       )
       .run(
         id,
+        ndb.layerId,
         title,
         normalizeTitle(title),
         input.type_id ?? null,
@@ -659,8 +681,15 @@ export function updateThought(
     sets.push('version = ?', 'updated_at = ?', 'updated_by = ?');
     args.push(current.version + 1, now, actorUserId);
 
-    args.push(id);
-    ndb.prepare(`UPDATE thoughts SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    // S4 (13-layers.md §5.1): the first edit in a working layer materialises a
+    // shadow copy of the resolved row; the UPDATE then targets the row of the
+    // connection's layer only, so an edit in the base never rewrites a layer's
+    // shadow (the shadow would lose its frozen base_version meaning).
+    materializeShadow(ndb, 'thoughts', id);
+    args.push(id, ndb.layerId);
+    ndb
+      .prepare(`UPDATE thoughts SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
+      .run(...args);
 
     if (changes.synonyms !== undefined) {
       setSynonyms(ndb, id, parseSynonyms(changes.synonyms));
@@ -732,12 +761,22 @@ export function checkThoughtDeletion(ndb: NetworkDb, id: string): ThoughtDeletio
  * (views, focus, pins, read metrics) — runs explicitly in the same transaction
  * (see {@link purgeThoughtDeletionDependants}).
  *
+ * S4 (13-layers.md §5.2): in a working layer the deletion is **not** physical
+ * — it materialises tombstones over the thought's whole dependent subtree
+ * ({@link tombstoneThoughtDeletionDependants}): the thought itself, its
+ * incident links (both ends) with their dependants, comments, attachments
+ * (rows only — the file is shared by all layers, §5.3), property values and
+ * synonyms. Children are not deleted: the cascade hits link rows, not child
+ * thoughts. The S13 blocking check (§6.5a) guards *physical* deletion and is
+ * therefore skipped in a layer; only the `is_protected` guard remains.
+ *
  * Throws:
  *   * `NOT_FOUND` (404) if the thought does not exist;
  *   * `VERSION_CONFLICT` (409) if `expectedVersion` is set and does not match;
  *   * `PROTECTED_ENTITY` (422) for `is_protected` thoughts (HOME);
  *   * `VALIDATION_ERROR` (422, `details.blocking`) when deletion is blocked by
- *     referencing properties or by a holding layer (S13/S2, §6.5a).
+ *     referencing properties or by a holding layer (S13/S2, §6.5a) — base
+ *     layer only, physical deletion.
  */
 export function deleteThought(
   ndb: NetworkDb,
@@ -759,6 +798,12 @@ export function deleteThought(
         entity: 'thought',
         id,
       });
+    }
+    // S4: a working layer deletes by tombstone — the base row stays intact,
+    // the entity just disappears from this layer's chain (§5.2).
+    if (!isBaseContext(ndb)) {
+      tombstoneThoughtDeletionDependants(ndb, id);
+      return;
     }
     // S13: refuse physical deletion while other thoughts reference this one
     // through a thought_ref property, or while a non-base layer holds a live
@@ -794,10 +839,13 @@ export function addSynonyms(ndb: NetworkDb, thoughtId: string, input: SynonymInp
     getThoughtOrThrow(ndb, thoughtId);
     const additions = parseSynonyms(input);
     const stmt = ndb.prepare(
-      'INSERT OR IGNORE INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES (?, ?, ?)',
+      `INSERT INTO thought_synonyms (thought_id, synonym, synonym_norm, layer_id)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (thought_id, synonym_norm, layer_id) DO UPDATE SET
+         deleted = 0, synonym = excluded.synonym`,
     );
     for (const synonym of additions) {
-      stmt.run(thoughtId, synonym, normalizeTitle(synonym));
+      stmt.run(thoughtId, synonym, normalizeTitle(synonym), ndb.layerId);
     }
     return readSynonyms(ndb, thoughtId);
   });
@@ -807,9 +855,15 @@ export function addSynonyms(ndb: NetworkDb, thoughtId: string, input: SynonymInp
 export function removeSynonym(ndb: NetworkDb, thoughtId: string, synonym: string): string[] {
   return ndb.transaction(() => {
     getThoughtOrThrow(ndb, thoughtId);
-    ndb
-      .prepare('DELETE FROM thought_synonyms WHERE thought_id = ? AND synonym_norm = ?')
-      .run(thoughtId, normalizeTitle(synonym));
+    const rows = ndb
+      .prepare(
+        'SELECT id FROM thought_synonyms_v WHERE thought_id = ? AND synonym_norm = ?',
+      )
+      .all(thoughtId, normalizeTitle(synonym)) as { id: string }[];
+    for (const row of rows) {
+      // S4: physical delete in the base, tombstone in a working layer (§5.2).
+      deleteRowLayered(ndb, 'thought_synonyms', row.id);
+    }
     return readSynonyms(ndb, thoughtId);
   });
 }
