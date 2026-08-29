@@ -359,6 +359,15 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
  * `source_id`/`target_id` must be provided together — swapping them inverts
  * the link's direction.
  *
+ * S14 (13-layers.md §6.1): in a working layer an endpoint change is NOT an
+ * `UPDATE` — the link's identity is its `id`, but its meaning is the triple
+ * `(source_id, target_id, type_id)`, so re-pointing it tombstones the old row
+ * (with the same dependent-row cascade as a deletion) and inserts a new link
+ * under a new `id` (version 1, no ancestor — `base_version` 0). The returned
+ * link carries the new `id`; callers that emit events must treat the change as
+ * delete + create. In the base layer and for no-op endpoint values the plain
+ * in-place `UPDATE` semantics stay.
+ *
  * Throws:
  *   * `NOT_FOUND` (404) if the link does not exist;
  *   * `VERSION_CONFLICT` (409) if `expectedVersion` is set and does not match;
@@ -414,6 +423,45 @@ export function updateLink(
     }
     const newSourceId = changes.source_id ?? current.source_id;
     const newTargetId = changes.target_id ?? current.target_id;
+    // A PATCH that repeats the current endpoint values does not re-point the
+    // link — identity must not flip for a no-op (§6.1).
+    const endpointsRepointed =
+      endpointsChanging &&
+      (newSourceId !== current.source_id || newTargetId !== current.target_id);
+
+    let newTypeId = current.type_id;
+    if (changes.type_id !== undefined) {
+      newTypeId = changes.type_id;
+    }
+    // If type_id is changing, verify the new type exists and is not the root
+    // (the root is never assignable, L21).
+    if (changes.type_id !== undefined && newTypeId !== null) {
+      assertLinkTypeAssignable(ndb, newTypeId);
+    }
+    // Duplicate guard for the resulting pair: direction or type may have changed.
+    if (changes.type_id !== undefined || endpointsChanging) {
+      const dup = ndb
+        .prepare(
+          `SELECT 1 FROM links_v WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ?
+           AND id <> ? LIMIT 1`,
+        )
+        .get(newSourceId, newTargetId, NULL_TYPE_SENTINEL, typeIdOrSentinel(newTypeId), id);
+      if (dup) {
+        throw new EtnError('DUPLICATE', 'an equivalent link already exists', {
+          source_id: newSourceId,
+          target_id: newTargetId,
+          type_id: newTypeId,
+        });
+      }
+    }
+
+    // S14 (13-layers.md §6.1): re-pointing in a working layer is
+    // tombstone + insert, not an UPDATE — the base row stays untouched, the
+    // layer's final state is "old link deleted, new link created", and the
+    // merge replays exactly that.
+    if (endpointsRepointed && !isBaseContext(ndb)) {
+      return repointLinkInLayer(ndb, current, changes, newTypeId, actorUserId);
+    }
 
     const sets: string[] = [];
     const args: unknown[] = [];
@@ -425,9 +473,7 @@ export function updateLink(
       sets.push('target_id = ?');
       args.push(changes.target_id);
     }
-    let newTypeId = current.type_id;
     if (changes.type_id !== undefined) {
-      newTypeId = changes.type_id;
       sets.push('type_id = ?');
       args.push(changes.type_id);
     }
@@ -458,28 +504,6 @@ export function updateLink(
       }
     }
 
-    // If type_id is changing, verify the new type exists and is not the root
-    // (the root is never assignable, L21).
-    if (changes.type_id !== undefined && newTypeId !== null) {
-      assertLinkTypeAssignable(ndb, newTypeId);
-    }
-    // Duplicate guard for the resulting pair: direction or type may have changed.
-    if (changes.type_id !== undefined || endpointsChanging) {
-      const dup = ndb
-        .prepare(
-          `SELECT 1 FROM links_v WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ?
-           AND id <> ? LIMIT 1`,
-        )
-        .get(newSourceId, newTargetId, NULL_TYPE_SENTINEL, typeIdOrSentinel(newTypeId), id);
-      if (dup) {
-        throw new EtnError('DUPLICATE', 'an equivalent link already exists', {
-          source_id: newSourceId,
-          target_id: newTargetId,
-          type_id: newTypeId,
-        });
-      }
-    }
-
     const now = new Date().toISOString();
     sets.push('version = ?', 'updated_at = ?', 'updated_by = ?');
     args.push(current.version + 1, now, actorUserId);
@@ -493,6 +517,71 @@ export function updateLink(
 
     return getLinkOrThrow(ndb, id);
   });
+}
+
+/**
+ * S14 (13-layers.md §6.1): re-point a link inside a working layer — tombstone
+ * the old row together with its visible dependants (same cascade as a layer
+ * deletion, §5.2), then insert a new link under a new `id`. The new row is a
+ * layer insert: `version = 1`, `base_version = 0` (no ancestor). The triple of
+ * the tombstone is freed by the partial unique index (migration 029), so the
+ * insert cannot collide with the row it replaces. `position` moves with the
+ * link — the manual order is a field of the row itself (T1).
+ */
+function repointLinkInLayer(
+  ndb: NetworkDb,
+  current: Link,
+  changes: LinkUpdateInput,
+  newTypeId: string | null,
+  actorUserId: string,
+): Link {
+  // `position` is not part of the API Link yet (T1 owns its surfacing) —
+  // carry it over from the resolved row so the manual order survives a
+  // re-point (13-layers.md §6.5: the order is a field of the row itself).
+  // Read BEFORE the tombstone: the view hides the row once deleted = 1.
+  const winner = ndb
+    .prepare('SELECT position FROM links_v WHERE id = ? LIMIT 1')
+    .get(current.id) as { position: number } | undefined;
+  const position = winner?.position ?? 0;
+  // Dependants follow the old identity: comments, attachments and property
+  // values of the old link get tombstoned in this layer, exactly as if the
+  // user had deleted the link and created a new one.
+  tombstoneOwnerDependants(ndb, 'link', [current.id]);
+  materializeTombstone(ndb, 'links', current.id);
+
+  const marked = changes.marked_for_deletion !== undefined
+    ? changes.marked_for_deletion
+    : current.marked_for_deletion;
+  const markedChanged = changes.marked_for_deletion !== undefined;
+  const now = new Date().toISOString();
+  const newId = randomUUID();
+  ndb
+    .prepare(
+      `INSERT INTO links (id, layer_id, source_id, target_id, type_id, position, color, style, width,
+                          active, marked_for_deletion, marked_for_deletion_at, marked_for_deletion_by,
+                          version, created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+    )
+    .run(
+      newId,
+      ndb.layerId,
+      changes.source_id ?? current.source_id,
+      changes.target_id ?? current.target_id,
+      newTypeId,
+      position,
+      changes.color !== undefined ? changes.color : current.color,
+      changes.style !== undefined ? changes.style : current.style,
+      changes.width !== undefined ? changes.width : current.width,
+      (changes.active !== undefined ? changes.active : current.active) ? 1 : 0,
+      marked ? 1 : 0,
+      markedChanged ? (marked ? now : null) : current.marked_for_deletion_at,
+      markedChanged ? (marked ? actorUserId : null) : current.marked_for_deletion_by,
+      now,
+      now,
+      actorUserId,
+      actorUserId,
+    );
+  return getLinkOrThrow(ndb, newId);
 }
 
 // ---------------------------------------------------------------------------

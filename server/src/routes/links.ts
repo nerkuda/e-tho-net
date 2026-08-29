@@ -158,11 +158,19 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
         const changes = parseLinkUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const link = updateLink(ndb, id, changes, expectedVersion, req.auth!.user.id);
-        deps.emit(req, networkId, 'link.updated', {
-          id,
-          changes,
-          version: link.version,
-        });
+        if (link.id !== id) {
+          // S14 (13-layers.md §6.1): an endpoint change in a working layer is
+          // tombstone + insert — the link identity changes, so subscribers see
+          // delete + create, not an update of a row they may no longer resolve.
+          deps.emit(req, networkId, 'link.deleted', { id });
+          deps.emit(req, networkId, 'link.created', { link });
+        } else {
+          deps.emit(req, networkId, 'link.updated', {
+            id,
+            changes,
+            version: link.version,
+          });
+        }
         sendSuccess(reply, link, {
           version: link.version,
           updated_at: link.updated_at,
