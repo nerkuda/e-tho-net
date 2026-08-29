@@ -9,6 +9,7 @@
  *    contents;
  *  - the user can only close the tab.
  */
+import type { TabDto } from '../../../main/ipc/contract.js';
 import { etn } from '../../lib/etn.js';
 import { store } from '../../state.js';
 import {
@@ -16,6 +17,23 @@ import {
   getTabById,
   markTabInaccessible,
 } from './tab-state.js';
+
+/**
+ * Pure pass of the Q5 rule: which of `tabs` must be marked inaccessible when
+ * the set of networks visible to the user is exactly `visibleNetworkIds`.
+ * Kept free of store/IPC dependencies so the marking rule is unit-testable
+ * (defect 8efd5cf8).
+ */
+export function computeInaccessibleTabIds(
+  tabs: ReadonlyArray<Pick<TabDto, 'tab_id' | 'network_id'>>,
+  visibleNetworkIds: ReadonlySet<string>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const tab of tabs) {
+    if (!visibleNetworkIds.has(tab.network_id)) ids.add(tab.tab_id);
+  }
+  return ids;
+}
 
 /**
  * Walks every saved tab and checks whether its network is still visible to
@@ -33,12 +51,12 @@ export async function refreshTabAccessibility(): Promise<void> {
   // Cache the list for the tab strip (it needs display_name by network_id).
   store.update({ networkList: list });
   const visibleNetworks = new Set(list.map((n) => n.id));
+  const inaccessible = computeInaccessibleTabIds(store.state.tabs, visibleNetworks);
   for (const tab of store.state.tabs) {
-    const accessible = visibleNetworks.has(tab.network_id);
-    if (accessible) {
-      clearTabInaccessible(tab.tab_id);
-    } else {
+    if (inaccessible.has(tab.tab_id)) {
       markTabInaccessible(tab.tab_id);
+    } else {
+      clearTabInaccessible(tab.tab_id);
     }
   }
 }

@@ -218,6 +218,16 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     const root = await findRootThought(networkId);
     await loadFocusForTab(root.id, networkId, activeTabId);
   }
+
+  // 8efd5cf8 (Q5): `store.tabs` is only populated HERE — the accessibility
+  // pass fired right after `server.connect` (boot / restoreSession) runs
+  // against an empty tab list and marks nothing, so a tab whose network died
+  // while the client was away stays unmarked until the «+» picker happens to
+  // open. Re-running the pass at the end of every open covers every path that
+  // fills the store (session restore, the networks screen, the picker, tab
+  // activation) and also clears stale marks when a network becomes visible
+  // again.
+  void refreshTabAccessibility();
 }
 
 /**
@@ -392,7 +402,10 @@ export function backToNetworks(): void {
  * be430215: every re-pick opened a duplicate tab of an already open network).
  */
 export async function restoreSession(): Promise<void> {
-  // Q5: mark tabs whose networks the user can no longer see.
+  // Q5: warm the `networkList` cache early so the first tab-strip render has
+  // display_names. The accessibility marking itself re-runs at the end of
+  // `openNetwork`, once `store.tabs` is populated — marking here raced an
+  // empty tab list and never fired (defect 8efd5cf8).
   void refreshTabAccessibility();
   const tabs = await etn.tabs.list().catch(() => []);
   const mostRecent = pickMostRecentTab(tabs);

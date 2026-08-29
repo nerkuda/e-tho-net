@@ -180,14 +180,30 @@ function networkLabel(networkId: string): string {
  * focus / view / filters, re-initialising the canvas and views) lives in
  * `app.openNetwork` — we just route through it with the right `tabId` so
  * the per-tab fields on the `tabs` row win over the legacy L4 keys.
+ *
+ * An inaccessible tab (Q5, 08-ui-spec.md §1.1) is switched to WITHOUT loading
+ * its network: the workspace placeholder «Нет доступа к сети» covers the body
+ * (its visibility follows `activeTabId` ∈ `inaccessibleTabIds`), the previous
+ * workspace state stays beneath it, and closing the tab or picking another
+ * one is the way out. Before 8efd5cf8 the failed `openNetwork` was swallowed
+ * here, so the click on a marked-but-dead tab did nothing at all.
+ *
+ * Exported for unit tests.
  */
-async function activateTab(tabId: string): Promise<void> {
+export async function activateTab(tabId: string): Promise<void> {
   // Picking any tab closes the picker — the user opened it via «+», clicking
   // elsewhere (including the «+» again) is their way to dismiss.
   store.update({ pickerOpen: false });
 
   const target = store.state.tabs.find((t) => t.tab_id === tabId);
   if (target === undefined) return;
+  // Q5/8efd5cf8: the network is known to be unavailable — switch the active
+  // tab so the placeholder shows; do not attempt `openNetwork` (its failure
+  // would be swallowed below, turning the click into a silent no-op).
+  if (store.state.inaccessibleTabIds.has(tabId)) {
+    store.update({ activeTabId: tabId });
+    return;
+  }
   const sameTab = store.state.activeTabId === tabId;
   const sameNetwork = store.state.networkId === target.network_id;
   if (sameTab && sameNetwork) {
