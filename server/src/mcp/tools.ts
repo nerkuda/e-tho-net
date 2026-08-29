@@ -368,7 +368,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const rows = ndb
           .prepare(
             `SELECT id, title, type_id, active, version, created_at, updated_at
-               FROM thoughts
+               FROM thoughts_v
               WHERE type_id = ? AND active = 1
               ORDER BY created_at ASC`,
           )

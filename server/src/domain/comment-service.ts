@@ -101,7 +101,7 @@ function loadTargets(
   const placeholders = rows.map(() => '?').join(', ');
   const targetRows = ndb
     .prepare(
-      `SELECT comment_id, owner_type, owner_id FROM comment_targets
+      `SELECT comment_id, owner_type, owner_id FROM comment_targets_v
        WHERE comment_id IN (${placeholders})`,
     )
     .all(...rows.map((r) => r.id)) as Array<{ comment_id: string; owner_type: string; owner_id: string }>;
@@ -160,7 +160,7 @@ function ensureOwnerExists(ndb: NetworkDb, ownerType: CommentOwnerType, ownerId:
 
 /** Return a comment by id, or `null` when absent. */
 export function getComment(ndb: NetworkDb, id: string): Comment | null {
-  const row = ndb.prepare('SELECT * FROM comments WHERE id = ? LIMIT 1').get(id) as
+  const row = ndb.prepare('SELECT * FROM comments_v WHERE id = ? LIMIT 1').get(id) as
     CommentRow | undefined;
   if (row === undefined) return null;
   const targets = loadTargets(ndb, [row]).get(id) ?? [];
@@ -190,10 +190,10 @@ export function listComments(
   validateOwnerType(ownerType);
   const rows = ndb
     .prepare(
-      `SELECT * FROM comments c
+      `SELECT * FROM comments_v c
        WHERE (c.owner_type = ? AND c.owner_id = ?)
           OR EXISTS (
-            SELECT 1 FROM comment_targets ct
+            SELECT 1 FROM comment_targets_v ct
             WHERE ct.comment_id = c.id AND ct.owner_type = ? AND ct.owner_id = ?
           )
        ORDER BY (c.kind <> 'permanent'), c.valid_from ASC, c.created_at ASC`,
@@ -217,7 +217,7 @@ export function getPermanentPreview(
   validateOwnerType(ownerType);
   const row = ndb
     .prepare(
-      `SELECT id, body_md, valid_from, created_at, updated_at FROM comments
+      `SELECT id, body_md, valid_from, created_at, updated_at FROM comments_v
        WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent'
        LIMIT 1`,
     )
@@ -266,11 +266,11 @@ export function getCommentsPreview(
   const total = (
     ndb
       .prepare(
-        `SELECT COUNT(*) AS c FROM comments c
+        `SELECT COUNT(*) AS c FROM comments_v c
          WHERE c.kind = 'chronological'
            AND ((c.owner_type = ? AND c.owner_id = ?)
                 OR EXISTS (
-                  SELECT 1 FROM comment_targets ct
+                  SELECT 1 FROM comment_targets_v ct
                   WHERE ct.comment_id = c.id AND ct.owner_type = ? AND ct.owner_id = ?
                 ))`,
       )
@@ -279,11 +279,11 @@ export function getCommentsPreview(
   const rows = ndb
     .prepare(
       `SELECT c.id, c.title, c.body_md, c.valid_from, c.valid_to, c.created_by, c.created_at
-       FROM comments c
+       FROM comments_v c
        WHERE c.kind = 'chronological'
          AND ((c.owner_type = ? AND c.owner_id = ?)
               OR EXISTS (
-                SELECT 1 FROM comment_targets ct
+                SELECT 1 FROM comment_targets_v ct
                 WHERE ct.comment_id = c.id AND ct.owner_type = ? AND ct.owner_id = ?
               ))
        ORDER BY c.valid_from DESC, c.created_at DESC
@@ -419,7 +419,7 @@ export function createCommentWithTargets(
       // index so we can raise the canonical DUPLICATE error explicitly.
       const existing = ndb
         .prepare(
-          `SELECT 1 FROM comments
+          `SELECT 1 FROM comments_v
            WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent' LIMIT 1`,
         )
         .get(primary.owner_type, primary.owner_id);
@@ -591,7 +591,7 @@ export function addCommentTarget(
     ensureOwnerExists(ndb, ot, ownerId);
     const duplicate = ndb
       .prepare(
-        'SELECT 1 FROM comment_targets WHERE comment_id = ? AND owner_type = ? AND owner_id = ? LIMIT 1',
+        'SELECT 1 FROM comment_targets_v WHERE comment_id = ? AND owner_type = ? AND owner_id = ? LIMIT 1',
       )
       .get(commentId, ot, ownerId);
     if (duplicate) {
@@ -654,7 +654,7 @@ export function removeCommentTarget(
 
     const restRows = ndb
       .prepare(
-        `SELECT owner_type, owner_id FROM comment_targets WHERE comment_id = ?
+        `SELECT owner_type, owner_id FROM comment_targets_v WHERE comment_id = ?
          ORDER BY owner_type ASC, owner_id ASC`,
       )
       .all(commentId) as Array<{ owner_type: string; owner_id: string }>;
@@ -664,7 +664,7 @@ export function removeCommentTarget(
     }));
     if (rest.length === 0) {
       // Last target detached — fall back to the protected HOME thought.
-      const home = ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1 LIMIT 1').get() as
+      const home = ndb.prepare('SELECT id FROM thoughts_v WHERE is_root = 1 LIMIT 1').get() as
         | { id: string }
         | undefined;
       if (home === undefined) {

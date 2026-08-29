@@ -67,9 +67,10 @@ export function purgeOwnerDependants(
  * metrics).
  */
 export function purgeThoughtDeletionDependants(ndb: NetworkDb, thoughtId: string): void {
+  // layers:physical-read — физический каскад удаляет строки ВО ВСЕХ слоях, поэтому и собирает инцидентные связи по физической таблице (13-layers.md §3.1.2).
   const linkIds = (
     ndb
-      .prepare('SELECT id FROM links WHERE source_id = ? OR target_id = ?')
+      .prepare('SELECT id FROM links WHERE source_id = ? OR target_id = ?') // layers:physical-read
       .all(thoughtId, thoughtId) as { id: string }[]
   ).map((row) => row.id);
   purgeOwnerDependants(ndb, 'link', linkIds);
@@ -96,10 +97,12 @@ function purgeChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): v
 
   // Comments where an owner is the primary owner are deleted with all their
   // m2m targets; target rows pointing at the owner are detached (L20 §10.1).
+  // layers:physical-read — суб-SELECT перечисляет логические id по ВСЕМ слоям:
+  // физический DELETE ниже выметает строки каждого слоя, включая надгробия.
   ndb
     .prepare(
       `DELETE FROM comment_targets WHERE comment_id IN
-         (SELECT id FROM comments WHERE owner_type = ? AND owner_id IN (${owners}))`,
+         (SELECT id FROM comments WHERE owner_type = ? AND owner_id IN (${owners}))`, // layers:physical-read
     )
     .run(ownerType, ...ownerIds);
   ndb
@@ -109,9 +112,10 @@ function purgeChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): v
     .prepare(`DELETE FROM comment_targets WHERE owner_type = ? AND owner_id IN (${owners})`)
     .run(ownerType, ...ownerIds);
 
+  // layers:physical-read — судьба ФАЙЛА вложения решается по строкам всех слоёв (13-layers.md §5.3).
   const attachmentRows = ndb
     .prepare(
-      `SELECT id, kind, file_path FROM attachments WHERE owner_type = ? AND owner_id IN (${owners})`,
+      `SELECT id, kind, file_path FROM attachments WHERE owner_type = ? AND owner_id IN (${owners})`, // layers:physical-read
     )
     .all(ownerType, ...ownerIds) as { id: string; kind: AttachmentKind; file_path: string | null }[];
   if (attachmentRows.length > 0) {

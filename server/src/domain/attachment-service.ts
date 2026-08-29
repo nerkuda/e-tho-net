@@ -109,7 +109,8 @@ function validateOwnerType(ownerType: unknown): AttachmentOwnerType {
  * prevents orphaned rows and gives the caller a precise 404.
  */
 function ensureOwnerExists(ndb: NetworkDb, ownerType: AttachmentOwnerType, ownerId: string): void {
-  const table = ownerType === 'thought' ? 'thoughts' : 'links';
+  // Reads go through the layer-resolving views (13-layers.md §4.2).
+  const table = ownerType === 'thought' ? 'thoughts_v' : 'links_v';
   const row = ndb.prepare(`SELECT 1 FROM ${table} WHERE id = ? LIMIT 1`).get(ownerId);
   if (!row) {
     throw new EtnError('NOT_FOUND', `${ownerType} ${ownerId} not found`, {
@@ -128,7 +129,7 @@ function nullable(value: string | null | undefined): string | null {
 
 /** Return an attachment by id, or `null` when absent. */
 export function getAttachment(ndb: NetworkDb, id: string): Attachment | null {
-  const row = ndb.prepare('SELECT * FROM attachments WHERE id = ? LIMIT 1').get(id) as
+  const row = ndb.prepare('SELECT * FROM attachments_v WHERE id = ? LIMIT 1').get(id) as
     AttachmentRow | undefined;
   return row ? rowToAttachment(row) : null;
 }
@@ -154,7 +155,7 @@ export function listAttachments(
   validateOwnerType(ownerType);
   const rows = ndb
     .prepare(
-      'SELECT * FROM attachments WHERE owner_type = ? AND owner_id = ? ORDER BY position ASC, created_at ASC',
+      'SELECT * FROM attachments_v WHERE owner_type = ? AND owner_id = ? ORDER BY position ASC, created_at ASC',
     )
     .all(ownerType, ownerId) as AttachmentRow[];
   return rows.map(rowToAttachment);
@@ -376,7 +377,7 @@ export function copyAttachment(
     const existingThoughtIds = new Set(
       (
         ndb
-          .prepare(`SELECT id FROM thoughts WHERE id IN (${placeholders})`)
+          .prepare(`SELECT id FROM thoughts_v WHERE id IN (${placeholders})`)
           .all(...targetIds) as { id: string }[]
       ).map((r) => r.id),
     );
@@ -392,7 +393,7 @@ export function copyAttachment(
     // The url/file_path leg is split by kind to keep NULL-handling clean in SQL.
     const dupRows = ndb
       .prepare(
-        `SELECT owner_id FROM attachments
+        `SELECT owner_id FROM attachments_v
          WHERE owner_type = ? AND kind = ? AND owner_id IN (${placeholders})
            AND ((? IS NOT NULL AND url = ?) OR (? IS NULL AND file_path = ?))`,
       )
@@ -416,7 +417,7 @@ export function copyAttachment(
                                position, created_at, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    const selectById = ndb.prepare('SELECT * FROM attachments WHERE id = ? LIMIT 1');
+    const selectById = ndb.prepare('SELECT * FROM attachments_v WHERE id = ? LIMIT 1');
     for (const targetId of targetIds) {
       if (duplicateIds.has(targetId)) {
         skipped.push(targetId);
@@ -496,11 +497,11 @@ export function searchAttachments(
 
   const whereSql = where.join(' AND ');
   const totalRow = ndb
-    .prepare(`SELECT COUNT(*) AS n FROM attachments WHERE ${whereSql}`)
+    .prepare(`SELECT COUNT(*) AS n FROM attachments_v WHERE ${whereSql}`)
     .get(...params) as { n: number };
   const rows = ndb
     .prepare(
-      `SELECT * FROM attachments WHERE ${whereSql}
+      `SELECT * FROM attachments_v WHERE ${whereSql}
        ORDER BY created_at DESC LIMIT ? OFFSET ?`,
     )
     .all(...params, limit, offset) as AttachmentRow[];
@@ -647,8 +648,10 @@ export function removeStoredFile(
  * left in the table is a real remaining user of the file.
  */
 export function storedFileInUse(ndb: NetworkDb, resolvedPath: string): boolean {
+  // layers:physical-read — файл один на все слои (13-layers.md §5.3): его судьбу
+  // решают привязки ВСЕХ слоёв, а не только разрешённые в текущем контексте.
   const rows = ndb
-    .prepare("SELECT file_path FROM attachments WHERE kind = 'file' AND file_path IS NOT NULL")
+    .prepare("SELECT file_path FROM attachments WHERE kind = 'file' AND file_path IS NOT NULL") // layers:physical-read
     .all() as { file_path: string }[];
   return rows.some((row) => path.resolve(row.file_path) === resolvedPath);
 }
@@ -670,9 +673,10 @@ export function deleteAttachment(ndb: NetworkDb, id: string): void {
     const current = getAttachmentOrThrow(ndb, id);
     // Check the icon reference BEFORE it is reset below — the file must
     // outlive the row for the icon's full picture (L16).
+    // layers:physical-read — файл один на все слои (13-layers.md §5.3): иконка в любом слое удерживает его.
     const iconBacksFile =
       current.kind === 'file' &&
-      ndb.prepare('SELECT 1 FROM thoughts WHERE icon_attachment_id = ? LIMIT 1').get(id) !==
+      ndb.prepare('SELECT 1 FROM thoughts WHERE icon_attachment_id = ? LIMIT 1').get(id) !== // layers:physical-read
       undefined;
     ndb.prepare('DELETE FROM attachments WHERE id = ?').run(id);
     // Thoughts may reference this attachment as the backing picture of their
@@ -773,7 +777,7 @@ export function getAttachmentRawByPath(ndb: NetworkDb, filePath: string): Attach
     throw new EtnError('NOT_FOUND', 'файл вложения не найден', { field: 'path' });
   }
   const rows = ndb
-    .prepare("SELECT mime_type, file_path FROM attachments WHERE kind = 'file' AND file_path IS NOT NULL")
+    .prepare("SELECT mime_type, file_path FROM attachments_v WHERE kind = 'file' AND file_path IS NOT NULL")
     .all() as { mime_type: string | null; file_path: string }[];
   const row = rows.find((r) => path.resolve(r.file_path) === resolved);
   if (row === undefined) {

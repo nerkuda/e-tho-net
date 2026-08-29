@@ -28,8 +28,9 @@ export function sweepCommentHtml(dataDir: string, systemDb: SystemDb, log: Logge
   for (const networkId of systemDb.listAllNetworkIds()) {
     try {
       const ndb = openNetworkDb(dataDir, networkId, log);
+      // layers:physical-read — пересборка кэша рендера по ВСЕМ строкам всех слоёв, включая тени и надгробия.
       const rows = ndb
-        .prepare("SELECT id, body_md FROM comments WHERE body_md <> ''")
+        .prepare("SELECT id, body_md FROM comments WHERE body_md <> ''") // layers:physical-read
         .all() as Array<{ id: string; body_md: string }>;
       const update = ndb.prepare('UPDATE comments SET body_html = ? WHERE id = ?');
       ndb.transaction(() => {

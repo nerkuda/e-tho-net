@@ -69,7 +69,7 @@ export function recordReads(
     .prepare(
       `INSERT INTO thought_read_metrics (thought_id, reads_count, first_read_at, last_read_at)
          SELECT t.id, 1, ?, ?
-           FROM thoughts t
+           FROM thoughts_v t
            JOIN json_each(?) AS j ON j.value = t.id
        ON CONFLICT(thought_id) DO UPDATE SET
               reads_count = reads_count + 1,
@@ -106,7 +106,7 @@ export function getTopReads(
               m.first_read_at AS first_read_at,
               m.last_read_at  AS last_read_at
          FROM thought_read_metrics m
-         JOIN thoughts t ON t.id = m.thought_id
+         JOIN thoughts_v t ON t.id = m.thought_id
         WHERE (? = 1 OR t.active = 1)
         ORDER BY m.reads_count DESC, m.last_read_at DESC
         LIMIT ?`,
@@ -139,7 +139,7 @@ export function getColdReads(
               COALESCE(m.reads_count, 0) AS reads_count,
               m.first_read_at AS first_read_at,
               m.last_read_at  AS last_read_at
-         FROM thoughts t
+         FROM thoughts_v t
          LEFT JOIN thought_read_metrics m ON m.thought_id = t.id
         WHERE (m.thought_id IS NULL
                OR m.last_read_at IS NULL

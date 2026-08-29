@@ -85,7 +85,7 @@ function walkSubtree(ndb: NetworkDb, seedId: string | undefined, opts: {
   let reason: WalkResult['reason'] = null;
 
   const childrenOf = ndb.prepare(
-    'SELECT target_id AS nid FROM links WHERE source_id = ? AND active = 1',
+    'SELECT target_id AS nid FROM links_v WHERE source_id = ? AND active = 1',
   );
 
   while (queue.length > 0) {
@@ -163,7 +163,7 @@ function keywordsClause(keywords: string | undefined): Clause | null {
   const pattern = `%${escapeLike(norm(keywords))}%`;
   return {
     sql: `(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (
-            SELECT 1 FROM thought_synonyms ts
+            SELECT 1 FROM thought_synonyms_v ts
             WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))`,
     params: [pattern, pattern],
   };
@@ -239,8 +239,8 @@ function propertyClause(cond: PropertyQueryCondition): Clause {
     }
     return {
       sql: `EXISTS (
-        SELECT 1 FROM property_values pv
-        JOIN type_properties tp ON tp.id = pv.property_id
+        SELECT 1 FROM property_values_v pv
+        JOIN type_properties_v tp ON tp.id = pv.property_id
         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND tp.key = ?
           AND (pv.value_text ${cmp} ? OR pv.value_date ${cmp} ? OR pv.value_thought_ref ${cmp} ?${refLike}))`,
       params,
@@ -255,8 +255,8 @@ function propertyClause(cond: PropertyQueryCondition): Clause {
     typeof value === 'boolean' ? (value ? 1 : 0) : op === 'contains' ? `%${escapeLike(String(value))}%` : value;
   return {
     sql: `EXISTS (
-      SELECT 1 FROM property_values pv
-      JOIN type_properties tp ON tp.id = pv.property_id
+      SELECT 1 FROM property_values_v pv
+      JOIN type_properties_v tp ON tp.id = pv.property_id
       WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND tp.key = ?
         AND pv.${column} ${compare} ?)`,
     params: [cond.key, param],
@@ -326,13 +326,13 @@ export function queryThoughts(
 
   const total = (
     ndb
-      .prepare(`SELECT COUNT(*) AS c FROM thoughts t WHERE ${where}`)
+      .prepare(`SELECT COUNT(*) AS c FROM thoughts_v t WHERE ${where}`)
       .get(...params) as { c: number }
   ).c;
   const rows = ndb
     .prepare(
       `SELECT t.id AS id, t.title AS title, t.type_id AS type_id, t.active AS active
-       FROM thoughts t WHERE ${where}
+       FROM thoughts_v t WHERE ${where}
        ORDER BY ${orderBy}
        LIMIT ? OFFSET ?`,
     )

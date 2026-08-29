@@ -103,7 +103,7 @@ function resolveParentId(ndb: NetworkDb, parentId: string | null | undefined): s
 
 /** Return a link type by id, or `null` when absent. */
 export function getLinkType(ndb: NetworkDb, id: string): LinkType | null {
-  const row = ndb.prepare('SELECT * FROM link_types WHERE id = ?').get(id) as
+  const row = ndb.prepare('SELECT * FROM link_types_v WHERE id = ?').get(id) as
     LinkTypeRow | undefined;
   return row ? rowToLinkType(row) : null;
 }
@@ -124,7 +124,7 @@ export function getRootLinkType(ndb: NetworkDb): LinkType | null {
 
 /** List all link types, ordered by forward name. */
 export function listLinkTypes(ndb: NetworkDb): LinkType[] {
-  const rows = ndb.prepare('SELECT * FROM link_types ORDER BY name_forward').all() as LinkTypeRow[];
+  const rows = ndb.prepare('SELECT * FROM link_types_v ORDER BY name_forward').all() as LinkTypeRow[];
   return rows.map(rowToLinkType);
 }
 
@@ -141,7 +141,7 @@ export function resolveLinkTypeIdByName(ndb: NetworkDb, name: string): string {
   const key = typeNameKey(name);
   const rows = ndb
     .prepare(
-      `SELECT id, name_forward, name_reverse, parent_id FROM link_types
+      `SELECT id, name_forward, name_reverse, parent_id FROM link_types_v
        WHERE name_forward_key = ? OR name_reverse_key = ?`,
     )
     .all(key, key) as Array<{
@@ -192,7 +192,7 @@ export function createLinkType(
   return ndb.transaction(() => {
     const existing = ndb
       .prepare(
-        'SELECT 1 FROM link_types WHERE name_forward_key = ? AND name_reverse_key = ?',
+        'SELECT 1 FROM link_types_v WHERE name_forward_key = ? AND name_reverse_key = ?',
       )
       .get(nameForwardKey, nameReverseKey);
     if (existing) {
@@ -275,7 +275,7 @@ export function updateLinkType(
     ) {
       const clash = ndb
         .prepare(
-          'SELECT 1 FROM link_types WHERE name_forward_key = ? AND name_reverse_key = ? AND id <> ?',
+          'SELECT 1 FROM link_types_v WHERE name_forward_key = ? AND name_reverse_key = ? AND id <> ?',
         )
         .get(typeNameKey(newNameForward), typeNameKey(newNameReverse), id);
       if (clash) {
@@ -306,7 +306,7 @@ export function updateLinkType(
       }
       const nextParent = resolveParentId(ndb, changes.parent_id);
       if (nextParent !== current.parent_id) {
-        const usage = ndb.prepare('SELECT COUNT(*) AS c FROM links WHERE type_id = ?').get(id) as {
+        const usage = ndb.prepare('SELECT COUNT(*) AS c FROM links_v WHERE type_id = ?').get(id) as {
           c: number;
         };
         if (usage.c > 0) {
@@ -392,7 +392,7 @@ export function deleteLinkType(
       });
     }
     const childCount = ndb
-      .prepare('SELECT COUNT(*) AS c FROM link_types WHERE parent_id = ?')
+      .prepare('SELECT COUNT(*) AS c FROM link_types_v WHERE parent_id = ?')
       .get(id) as { c: number };
     if (childCount.c > 0) {
       throw new EtnError(
@@ -401,7 +401,7 @@ export function deleteLinkType(
         { entity: 'link_type', id, children: childCount.c },
       );
     }
-    const usage = ndb.prepare('SELECT COUNT(*) AS c FROM links WHERE type_id = ?').get(id) as {
+    const usage = ndb.prepare('SELECT COUNT(*) AS c FROM links_v WHERE type_id = ?').get(id) as {
       c: number;
     };
     if (usage.c > 0 && !opts.force) {
@@ -420,13 +420,13 @@ export function deleteLinkType(
     ndb
       .prepare(
         `DELETE FROM property_values WHERE property_id IN
-           (SELECT id FROM type_properties WHERE owner_type = 'link_type' AND owner_id = ?)`,
+           (SELECT id FROM type_properties_v WHERE owner_type = 'link_type' AND owner_id = ?)`,
       )
       .run(id);
     ndb
       .prepare(
         `DELETE FROM type_property_overrides WHERE property_id IN
-           (SELECT id FROM type_properties WHERE owner_type = 'link_type' AND owner_id = ?)`,
+           (SELECT id FROM type_properties_v WHERE owner_type = 'link_type' AND owner_id = ?)`,
       )
       .run(id);
     ndb
@@ -445,7 +445,7 @@ export function deleteLinkType(
  * implicitly — it is not assignable, docs/08-ui-spec.md §8.1).
  */
 export function assertLinkTypeAssignable(ndb: NetworkDb, typeId: string): void {
-  const row = ndb.prepare('SELECT is_root FROM link_types WHERE id = ?').get(typeId) as
+  const row = ndb.prepare('SELECT is_root FROM link_types_v WHERE id = ?').get(typeId) as
     | { is_root: number }
     | undefined;
   if (!row) {

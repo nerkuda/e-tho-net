@@ -116,9 +116,9 @@ export function exportToMarkdown(ndb: NetworkDb, thoughtIds: string[]): string {
     const children = ndb
       .prepare(
         `SELECT t.title, lt.name_forward
-           FROM links l
-           JOIN thoughts t ON t.id = l.target_id
-           LEFT JOIN link_types lt ON lt.id = l.type_id
+           FROM links_v l
+           JOIN thoughts_v t ON t.id = l.target_id
+           LEFT JOIN link_types_v lt ON lt.id = l.type_id
           WHERE l.source_id = ? AND l.active = 1
           ORDER BY t.title COLLATE NOCASE`,
       )

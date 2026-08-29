@@ -78,7 +78,7 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
         for (const id of result.createdThoughtIds) {
           const thought = ndb
             .prepare(
-              'SELECT id, title, title_norm, type_id, icon, icon_kind, active, is_protected, is_root, fg_color, bg_color, font_bold, font_italic, font_underline, font_strike, version, created_at, created_by, updated_at, updated_by FROM thoughts WHERE id = ?',
+              'SELECT id, title, title_norm, type_id, icon, icon_kind, active, is_protected, is_root, fg_color, bg_color, font_bold, font_italic, font_underline, font_strike, version, created_at, created_by, updated_at, updated_by FROM thoughts_v WHERE id = ?',
             )
             .get(id) as unknown as import('@etn/shared').Thought | undefined;
           if (thought === undefined) continue;
@@ -87,7 +87,7 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
         for (const id of result.createdLinkIds) {
           const link = ndb
             .prepare(
-              'SELECT id, source_id, target_id, type_id, color, style, width, active, version, created_at, updated_at, created_by, updated_by FROM links WHERE id = ?',
+              'SELECT id, source_id, target_id, type_id, color, style, width, active, version, created_at, updated_at, created_by, updated_by FROM links_v WHERE id = ?',
             )
             .get(id) as unknown as import('@etn/shared').Link | undefined;
           if (link === undefined) continue;
@@ -96,7 +96,7 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
         for (const id of result.updatedCommentIds) {
           const comment = ndb
             .prepare(
-              'SELECT id, owner_type, owner_id, kind, title, body_md, body_html, valid_from, valid_to, version, created_at, updated_at, created_by, updated_by FROM comments WHERE id = ?',
+              'SELECT id, owner_type, owner_id, kind, title, body_md, body_html, valid_from, valid_to, version, created_at, updated_at, created_by, updated_by FROM comments_v WHERE id = ?',
             )
             .get(id) as unknown as import('@etn/shared').Comment | undefined;
           if (comment === undefined) continue;

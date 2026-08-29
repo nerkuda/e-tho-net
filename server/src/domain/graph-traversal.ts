@@ -72,11 +72,11 @@ export function traverse(
 
   const neighborOf = ndb.prepare(
     direction === 'parents'
-      ? `SELECT source_id AS nid FROM links WHERE target_id = ? AND (active = 1 OR ?)`
+      ? `SELECT source_id AS nid FROM links_v WHERE target_id = ? AND (active = 1 OR ?)`
       : direction === 'children'
-        ? `SELECT target_id AS nid FROM links WHERE source_id = ? AND (active = 1 OR ?)`
+        ? `SELECT target_id AS nid FROM links_v WHERE source_id = ? AND (active = 1 OR ?)`
         : `SELECT CASE WHEN source_id = ? THEN target_id ELSE source_id END AS nid
-             FROM links WHERE (source_id = ? OR target_id = ?) AND (active = 1 OR ?)`,
+             FROM links_v WHERE (source_id = ? OR target_id = ?) AND (active = 1 OR ?)`,
   );
 
   while (queue.length > 0) {
@@ -138,7 +138,7 @@ export function subgraph(
   const edges = ndb
     .prepare(
       `SELECT id, source_id, target_id, type_id
-         FROM links
+         FROM links_v
         WHERE active = 1
           AND source_id IN (${placeholders})
           AND target_id IN (${placeholders})`,
@@ -177,7 +177,7 @@ export function findPath(
     const neighbors = ndb
       .prepare(
         `SELECT CASE WHEN source_id = ? THEN target_id ELSE source_id END AS nid
-           FROM links WHERE (source_id = ? OR target_id = ?) AND active = 1`,
+           FROM links_v WHERE (source_id = ? OR target_id = ?) AND active = 1`,
       )
       .all(id, id, id) as Array<{ nid: string }>;
 

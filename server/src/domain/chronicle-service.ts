@@ -231,7 +231,7 @@ function collectRootAndSubtreeIds(
   const roots = request.thought_ids ?? [];
   if (roots.length === 0) return null;
   const rootRows = ndb
-    .prepare(`SELECT id FROM thoughts WHERE id IN (${placeholders(roots.length)})`)
+    .prepare(`SELECT id FROM thoughts_v WHERE id IN (${placeholders(roots.length)})`)
     .all(...roots) as Array<{ id: string }>;
   const ids = new Set(rootRows.map((r) => r.id));
   if (ids.size === 0) return [];
@@ -242,12 +242,12 @@ function collectRootAndSubtreeIds(
       `WITH RECURSIVE
         descend(id, depth) AS (
           SELECT t.id, 0
-          FROM thoughts t
+          FROM thoughts_v t
           WHERE t.id IN (${placeholders(ids.size)})
           UNION
           SELECT l.target_id, d.depth + 1
           FROM descend d
-          JOIN links l ON l.source_id = d.id AND l.active = 1
+          JOIN links_v l ON l.source_id = d.id AND l.active = 1
           WHERE d.depth < ?
         )
        SELECT DISTINCT id FROM descend`,
@@ -259,16 +259,16 @@ function collectRootAndSubtreeIds(
 /** Keywords condition for one word against a thought (titles, synonyms, comment
  *  texts of the thought and of its incident links on both sides). */
 const THOUGHT_KEYWORD_COND = `(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (
-  SELECT 1 FROM thought_synonyms ts
+  SELECT 1 FROM thought_synonyms_v ts
   WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'
 ) OR EXISTS (
-  SELECT 1 FROM comments c1
-  JOIN comment_targets ct1 ON ct1.comment_id = c1.id AND ct1.owner_type = 'thought'
+  SELECT 1 FROM comments_v c1
+  JOIN comment_targets_v ct1 ON ct1.comment_id = c1.id AND ct1.owner_type = 'thought'
   WHERE ct1.owner_id = t.id AND c1.body_md LIKE ? ESCAPE '\\'
 ) OR EXISTS (
-  SELECT 1 FROM comments c2
-  JOIN comment_targets ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'
-  JOIN links l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)
+  SELECT 1 FROM comments_v c2
+  JOIN comment_targets_v ct2 ON ct2.comment_id = c2.id AND ct2.owner_type = 'link'
+  JOIN links_v l2 ON l2.id = ct2.owner_id AND (l2.source_id = t.id OR l2.target_id = t.id)
   WHERE c2.body_md LIKE ? ESCAPE '\\'
 ))`;
 
@@ -310,7 +310,7 @@ function selectThoughts(
     where.push(`NOT ${THOUGHT_KEYWORD_COND}`);
     args.push(pattern, pattern, pattern, pattern);
   }
-  const sql = `SELECT t.id FROM thoughts t ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}`;
+  const sql = `SELECT t.id FROM thoughts_v t ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}`;
   const rows = ndb.prepare(sql).all(...args) as Array<{ id: string }>;
   return rows.map((r) => r.id);
 }
@@ -345,7 +345,7 @@ function buildRowsWhere(
   // Attachment to a selected thought…
   const thoughtConds: string[] = [];
   thoughtConds.push(
-    `EXISTS (SELECT 1 FROM comment_targets ct
+    `EXISTS (SELECT 1 FROM comment_targets_v ct
              WHERE ct.comment_id = c.id AND ct.owner_type = 'thought'
                AND ct.owner_id IN (${placeholders(selectedIds.length)}))`,
   );
@@ -362,8 +362,8 @@ function buildRowsWhere(
     endpointConds.push(`l.target_id IN (${placeholders(selectedIds.length)})`);
     args.push(...selectedIds);
   }
-  let linkCond = `EXISTS (SELECT 1 FROM comment_targets ctl
-    JOIN links l ON l.id = ctl.owner_id AND ctl.owner_type = 'link'
+  let linkCond = `EXISTS (SELECT 1 FROM comment_targets_v ctl
+    JOIN links_v l ON l.id = ctl.owner_id AND ctl.owner_type = 'link'
     WHERE ctl.comment_id = c.id AND (${endpointConds.join(' OR ')})`;
   if ((request.link_type_ids ?? []).length > 0) {
     // L21: subtree expansion, same as the thought-type filter above.
@@ -402,7 +402,7 @@ function buildRows(
   return rows.map((row) => {
     const targetRows = ndb
       .prepare(
-        `SELECT owner_type, owner_id FROM comment_targets WHERE comment_id = ?
+        `SELECT owner_type, owner_id FROM comment_targets_v WHERE comment_id = ?
          ORDER BY owner_type ASC, owner_id ASC`,
       )
       .all(row.id) as Array<{ owner_type: string; owner_id: string }>;
@@ -488,7 +488,7 @@ export function queryChronicle(
   const { cond, args } = buildRowsWhere(ndb, selectedIds, request);
   const dir = request.order === 'desc' ? 'DESC' : 'ASC';
   const totalRow = ndb
-    .prepare(`SELECT COUNT(*) AS c FROM comments c WHERE ${cond}`)
+    .prepare(`SELECT COUNT(*) AS c FROM comments_v c WHERE ${cond}`)
     .get(...args) as { c: number };
   const total = totalRow.c;
 
@@ -496,7 +496,7 @@ export function queryChronicle(
     .prepare(
       `SELECT c.id, c.owner_type, c.owner_id, c.title, c.body_md, c.valid_from, c.valid_to,
               c.version, c.created_at, c.updated_at, c.created_by, c.updated_by
-       FROM comments c
+       FROM comments_v c
        WHERE ${cond}
        ORDER BY c.valid_from ${dir},
                 (c.valid_to IS NULL) ASC,
@@ -512,7 +512,7 @@ export function queryChronicle(
   const linkIds = new Set<string>();
   for (const row of rows) {
     const targetRows = ndb
-      .prepare('SELECT owner_type, owner_id FROM comment_targets WHERE comment_id = ?')
+      .prepare('SELECT owner_type, owner_id FROM comment_targets_v WHERE comment_id = ?')
       .all(row.id) as Array<{ owner_type: string; owner_id: string }>;
     for (const t of targetRows) {
       if (t.owner_type === 'thought') thoughtIds.add(t.owner_id);
@@ -526,8 +526,8 @@ export function queryChronicle(
         .prepare(
           `SELECT l.id, l.type_id, l.active, l.source_id, l.target_id,
                   lt.name_forward, lt.name_reverse
-           FROM links l
-           LEFT JOIN link_types lt ON lt.id = l.type_id
+           FROM links_v l
+           LEFT JOIN link_types_v lt ON lt.id = l.type_id
            WHERE l.id IN (${placeholders(linkIds.size)})`,
         )
         .all(...linkIds) as Array<{
@@ -546,7 +546,7 @@ export function queryChronicle(
   const uniqueRefIds = [...new Set(allRefIds)];
   if (uniqueRefIds.length > 0) {
     const refRows = ndb
-      .prepare(`SELECT ${REF_COLUMNS} FROM thoughts t WHERE t.id IN (${placeholders(uniqueRefIds.length)})`)
+      .prepare(`SELECT ${REF_COLUMNS} FROM thoughts_v t WHERE t.id IN (${placeholders(uniqueRefIds.length)})`)
       .all(...uniqueRefIds) as ThoughtRefRow[];
     for (const r of refRows) refs.set(r.id, r);
   }

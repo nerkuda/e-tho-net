@@ -274,7 +274,7 @@ function listSynonyms(ndb: NetworkDb, thoughtId: string): ThoughtSynonym[] {
   return (
     ndb
       .prepare(
-        'SELECT thought_id, synonym, synonym_norm FROM thought_synonyms WHERE thought_id = ? ORDER BY synonym_norm',
+        'SELECT thought_id, synonym, synonym_norm FROM thought_synonyms_v WHERE thought_id = ? ORDER BY synonym_norm',
       )
       .all(thoughtId) as ThoughtSynonym[]
   );
@@ -283,11 +283,16 @@ function listSynonyms(ndb: NetworkDb, thoughtId: string): ThoughtSynonym[] {
 function collectLinks(ndb: NetworkDb, ids: string[]): Link[] {
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(',');
-  return ndb
+  // `rowid` — служебный столбец представлений слоёв (S3), в манифест не едет.
+  const rows = ndb
     .prepare(
-      `SELECT * FROM links WHERE source_id IN (${placeholders}) AND target_id IN (${placeholders}) ORDER BY created_at`,
+      `SELECT * FROM links_v WHERE source_id IN (${placeholders}) AND target_id IN (${placeholders}) ORDER BY created_at`,
     )
-    .all(...ids, ...ids) as Link[];
+    .all(...ids, ...ids) as Array<Link & { rowid: number }>;
+  return rows.map(({ rowid: _rowid, ...link }) => {
+    void _rowid;
+    return link;
+  });
 }
 
 function collectComments(
@@ -315,13 +320,18 @@ function collectComments(
 function collectPropertyValues(ndb: NetworkDb, ids: string[]): PropertyValue[] {
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(',');
-  return ndb
+  // `rowid` — служебный столбец представлений слоёв (S3), в манифест не едет.
+  const rows = ndb
     .prepare(
-      `SELECT * FROM property_values
+      `SELECT * FROM property_values_v
         WHERE owner_type = 'thought' AND owner_id IN (${placeholders})
         ORDER BY owner_id, property_id`,
     )
-    .all(...ids) as PropertyValue[];
+    .all(...ids) as Array<PropertyValue & { rowid: number }>;
+  return rows.map(({ rowid: _rowid, ...value }) => {
+    void _rowid;
+    return value;
+  });
 }
 
 function collectAttachments(ndb: NetworkDb, ids: string[]): EtnxManifest['attachments'] {
@@ -356,7 +366,7 @@ function collectThoughtTypeIds(ndb: NetworkDb, thoughts: Thought[]): Set<string>
     if (t.type_id !== null) ids.add(t.type_id);
   }
   // Always include the root thought type so the imported graph is anchored.
-  const root = ndb.prepare('SELECT id FROM thought_types WHERE is_root = 1 LIMIT 1').get() as
+  const root = ndb.prepare('SELECT id FROM thought_types_v WHERE is_root = 1 LIMIT 1').get() as
     | { id: string }
     | undefined;
   if (root !== undefined) ids.add(root.id);
@@ -368,7 +378,7 @@ function collectLinkTypeIds(ndb: NetworkDb, links: Link[]): Set<string> {
   for (const l of links) {
     if (l.type_id !== null) ids.add(l.type_id);
   }
-  const root = ndb.prepare('SELECT id FROM link_types WHERE is_root = 1 LIMIT 1').get() as
+  const root = ndb.prepare('SELECT id FROM link_types_v WHERE is_root = 1 LIMIT 1').get() as
     | { id: string }
     | undefined;
   if (root !== undefined) ids.add(root.id);

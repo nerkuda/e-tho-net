@@ -100,7 +100,7 @@ function resolveParentId(ndb: NetworkDb, parentId: string | null | undefined): s
 
 /** Return a thought type by id, or `null` when absent. */
 export function getThoughtType(ndb: NetworkDb, id: string): ThoughtType | null {
-  const row = ndb.prepare('SELECT * FROM thought_types WHERE id = ?').get(id) as
+  const row = ndb.prepare('SELECT * FROM thought_types_v WHERE id = ?').get(id) as
     ThoughtTypeRow | undefined;
   return row ? rowToThoughtType(row) : null;
 }
@@ -124,7 +124,7 @@ export function getRootThoughtType(ndb: NetworkDb): ThoughtType | null {
 
 /** List all thought types, ordered by name. */
 export function listThoughtTypes(ndb: NetworkDb): ThoughtType[] {
-  const rows = ndb.prepare('SELECT * FROM thought_types ORDER BY name').all() as ThoughtTypeRow[];
+  const rows = ndb.prepare('SELECT * FROM thought_types_v ORDER BY name').all() as ThoughtTypeRow[];
   return rows.map(rowToThoughtType);
 }
 
@@ -139,7 +139,7 @@ export function listThoughtTypes(ndb: NetworkDb): ThoughtType[] {
 export function resolveThoughtTypeIdByName(ndb: NetworkDb, name: string): string {
   const key = typeNameKey(name);
   const rows = ndb
-    .prepare('SELECT id, name, parent_id FROM thought_types WHERE name_key = ?')
+    .prepare('SELECT id, name, parent_id FROM thought_types_v WHERE name_key = ?')
     .all(key) as Array<{ id: string; name: string; parent_id: string | null }>;
   if (rows.length === 0) {
     throw new EtnError('NOT_FOUND', `thought type "${name}" not found`, { field: 'type', name });
@@ -174,7 +174,7 @@ export function createThoughtType(
   const now = new Date().toISOString();
 
   return ndb.transaction(() => {
-    const existing = ndb.prepare('SELECT 1 FROM thought_types WHERE name_key = ?').get(nameKey);
+    const existing = ndb.prepare('SELECT 1 FROM thought_types_v WHERE name_key = ?').get(nameKey);
     if (existing) {
       throw new EtnError('DUPLICATE', `thought type "${name}" already exists`, { name });
     }
@@ -256,7 +256,7 @@ export function updateThoughtType(
       newName = validateName(changes.name);
       if (typeNameKey(newName) !== typeNameKey(current.name)) {
         const clash = ndb
-          .prepare('SELECT 1 FROM thought_types WHERE name_key = ? AND id <> ?')
+          .prepare('SELECT 1 FROM thought_types_v WHERE name_key = ? AND id <> ?')
           .get(typeNameKey(newName), id);
         if (clash) {
           throw new EtnError('DUPLICATE', `thought type "${newName}" already exists`, {
@@ -283,7 +283,7 @@ export function updateThoughtType(
       if (nextParent !== current.parent_id) {
         // Reparenting is locked while any thought still uses the type
         // (docs/08-ui-spec.md §8.1).
-        const usage = ndb.prepare('SELECT COUNT(*) AS c FROM thoughts WHERE type_id = ?').get(id) as {
+        const usage = ndb.prepare('SELECT COUNT(*) AS c FROM thoughts_v WHERE type_id = ?').get(id) as {
           c: number;
         };
         if (usage.c > 0) {
@@ -380,7 +380,7 @@ export function deleteThoughtType(
       });
     }
     const childCount = ndb
-      .prepare('SELECT COUNT(*) AS c FROM thought_types WHERE parent_id = ?')
+      .prepare('SELECT COUNT(*) AS c FROM thought_types_v WHERE parent_id = ?')
       .get(id) as { c: number };
     if (childCount.c > 0) {
       throw new EtnError(
@@ -389,7 +389,7 @@ export function deleteThoughtType(
         { entity: 'thought_type', id, children: childCount.c },
       );
     }
-    const usage = ndb.prepare('SELECT COUNT(*) AS c FROM thoughts WHERE type_id = ?').get(id) as {
+    const usage = ndb.prepare('SELECT COUNT(*) AS c FROM thoughts_v WHERE type_id = ?').get(id) as {
       c: number;
     };
     if (usage.c > 0 && !opts.force) {
@@ -413,13 +413,13 @@ export function deleteThoughtType(
     ndb
       .prepare(
         `DELETE FROM property_values WHERE property_id IN
-           (SELECT id FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?)`,
+           (SELECT id FROM type_properties_v WHERE owner_type = 'thought_type' AND owner_id = ?)`,
       )
       .run(id);
     ndb
       .prepare(
         `DELETE FROM type_property_overrides WHERE property_id IN
-           (SELECT id FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?)`,
+           (SELECT id FROM type_properties_v WHERE owner_type = 'thought_type' AND owner_id = ?)`,
       )
       .run(id);
     ndb
@@ -441,7 +441,7 @@ export function deleteThoughtType(
  */
 export function assertThoughtTypeAssignable(ndb: NetworkDb, typeId: string): void {
   const row = ndb
-    .prepare('SELECT is_root FROM thought_types WHERE id = ?')
+    .prepare('SELECT is_root FROM thought_types_v WHERE id = ?')
     .get(typeId) as { is_root: number } | undefined;
   if (!row) {
     throw new EtnError('NOT_FOUND', `thought type ${typeId} not found`, {

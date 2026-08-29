@@ -59,7 +59,7 @@ import { createThought, getThoughtOrThrow } from './thought-service.js';
  */
 function resolveThoughtTypeId(ndb: NetworkDb, snap: ThoughtCopySnapshot): string | null {
   if (snap.type.id !== null && snap.type.id !== '') {
-    const row = ndb.prepare('SELECT id, is_root FROM thought_types WHERE id = ?').get(snap.type.id) as
+    const row = ndb.prepare('SELECT id, is_root FROM thought_types_v WHERE id = ?').get(snap.type.id) as
       | { id: string; is_root: number }
       | undefined;
     if (row !== undefined && row.is_root !== 1) return row.id;
@@ -85,7 +85,7 @@ function resolveLinkTypeId(
   snap: ThoughtCopyLink['type'],
 ): string | null {
   if (snap.id !== null && snap.id !== '') {
-    const row = ndb.prepare('SELECT id, is_root FROM link_types WHERE id = ?').get(snap.id) as
+    const row = ndb.prepare('SELECT id, is_root FROM link_types_v WHERE id = ?').get(snap.id) as
       | { id: string; is_root: number }
       | undefined;
     if (row !== undefined && row.is_root !== 1) return row.id;
@@ -126,7 +126,7 @@ function resolveThoughtRefValue(
   if (candidate === null) return null;
   const { id, title } = candidate;
   if (id !== null && id !== '') {
-    const row = ndb.prepare('SELECT id FROM thoughts WHERE id = ? LIMIT 1').get(id) as
+    const row = ndb.prepare('SELECT id FROM thoughts_v WHERE id = ? LIMIT 1').get(id) as
       | { id: string }
       | undefined;
     if (row !== undefined) return row.id;
@@ -134,7 +134,7 @@ function resolveThoughtRefValue(
   if (title !== null && title.trim() !== '') {
     const normalised = title.trim().toLowerCase();
     const row = ndb
-      .prepare('SELECT id FROM thoughts WHERE title_norm = ? LIMIT 1')
+      .prepare('SELECT id FROM thoughts_v WHERE title_norm = ? LIMIT 1')
       .get(normalised) as { id: string } | undefined;
     if (row !== undefined) return row.id;
   }
@@ -175,7 +175,7 @@ function resolveProperties(
   // Look up the thought's effective type once so we know which keys are
   // `thought_ref` (and which of them allow multiple values). Other value
   // types skip this branch.
-  const row = ndb.prepare('SELECT type_id FROM thoughts WHERE id = ?').get(thoughtId) as
+  const row = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(thoughtId) as
     | { type_id: string | null }
     | undefined;
   if (row === undefined) return;
@@ -185,7 +185,7 @@ function resolveProperties(
   if (thoughtTypeId !== null) {
     const propRows = ndb
       .prepare(
-        `SELECT tp.key, tp.config FROM type_properties tp
+        `SELECT tp.key, tp.config FROM type_properties_v tp
          WHERE tp.owner_type = 'thought_type' AND tp.owner_id = ?
            AND tp.value_type = 'thought_ref'`,
       )
@@ -528,7 +528,7 @@ function createOneLink(
 
 /** Re-read a freshly created link so its `version`/`updated_at` are exact. */
 function reReadLink(ndb: NetworkDb, id: string): Link {
-  const row = ndb.prepare('SELECT * FROM links WHERE id = ? LIMIT 1').get(id) as
+  const row = ndb.prepare('SELECT * FROM links_v WHERE id = ? LIMIT 1').get(id) as
     | {
         id: string;
         source_id: string;

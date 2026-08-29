@@ -122,7 +122,7 @@ export function listTypeProperties(
 ): PropertyDefinition[] {
   const rows = ndb
     .prepare(
-      'SELECT * FROM type_properties WHERE owner_type = ? AND owner_id = ? ORDER BY position, key',
+      'SELECT * FROM type_properties_v WHERE owner_type = ? AND owner_id = ? ORDER BY position, key',
     )
     .all(ownerType, ownerId) as TypePropertyRow[];
   return rows.map(rowToPropertyDefinition);
@@ -130,7 +130,7 @@ export function listTypeProperties(
 
 /** Return a property definition by id, or `null` when absent. */
 export function getTypeProperty(ndb: NetworkDb, id: string): PropertyDefinition | null {
-  const row = ndb.prepare('SELECT * FROM type_properties WHERE id = ?').get(id) as
+  const row = ndb.prepare('SELECT * FROM type_properties_v WHERE id = ?').get(id) as
     TypePropertyRow | undefined;
   return row ? rowToPropertyDefinition(row) : null;
 }
@@ -146,7 +146,7 @@ export function getTypePropertyByKey(
   key: string,
 ): PropertyDefinition | null {
   const row = ndb
-    .prepare('SELECT * FROM type_properties WHERE owner_type = ? AND owner_id = ? AND key = ?')
+    .prepare('SELECT * FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND key = ?')
     .get(ownerType, ownerId, key) as TypePropertyRow | undefined;
   return row ? rowToPropertyDefinition(row) : null;
 }
@@ -163,13 +163,13 @@ function ownerTypeTable(ownerType: TypeOwnerType): TypeTable {
 /** Display name of a type from its owner table (link types: «fwd / rev»). */
 function ownerTypeName(ndb: NetworkDb, ownerType: TypeOwnerType, ownerId: string): string {
   if (ownerType === 'thought_type') {
-    const row = ndb.prepare('SELECT name FROM thought_types WHERE id = ?').get(ownerId) as
+    const row = ndb.prepare('SELECT name FROM thought_types_v WHERE id = ?').get(ownerId) as
       | { name: string }
       | undefined;
     return row?.name ?? ownerId;
   }
   const row = ndb
-    .prepare('SELECT name_forward, name_reverse FROM link_types WHERE id = ?')
+    .prepare('SELECT name_forward, name_reverse FROM link_types_v WHERE id = ?')
     .get(ownerId) as { name_forward: string; name_reverse: string } | undefined;
   return row ? `${row.name_forward} / ${row.name_reverse}` : ownerId;
 }
@@ -202,7 +202,7 @@ function visibleTypeChain(
 ): PropertyValueValue {
   const row = ndb
     .prepare(
-      'SELECT default_value FROM type_property_overrides WHERE owner_type = ? AND type_id = ? AND property_id = ?',
+      'SELECT default_value FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
     )
     .get(ownerType, typeId, propertyId) as { default_value: string } | undefined;
   return row ? (JSON.parse(row.default_value) as PropertyValueValue) : null;
@@ -327,7 +327,7 @@ function assertKeyAvailableInTree(
   const scope = new Set<string>(typeAncestors(ndb, table, ownerId));
   for (const id of subtreeIds(ndb, table, ownerId)) scope.add(id);
   const stmt = ndb.prepare(
-    'SELECT id FROM type_properties WHERE owner_type = ? AND owner_id = ? AND key = ?',
+    'SELECT id FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND key = ?',
   );
   for (const typeId of scope) {
     const clash = stmt.get(ownerType, typeId, key) as { id: string } | undefined;
@@ -367,7 +367,7 @@ export function createTypeProperty(
       (
         ndb
           .prepare(
-            'SELECT COALESCE(MAX(position), -1) + 1 AS p FROM type_properties WHERE owner_type = ? AND owner_id = ?',
+            'SELECT COALESCE(MAX(position), -1) + 1 AS p FROM type_properties_v WHERE owner_type = ? AND owner_id = ?',
           )
           .get(ownerType, ownerId) as { p: number }
       ).p;
@@ -456,7 +456,7 @@ function migratePropertyValues(
   to: PropertyValueType,
 ): void {
   const rows = ndb
-    .prepare('SELECT * FROM property_values WHERE property_id = ?')
+    .prepare('SELECT * FROM property_values_v WHERE property_id = ?')
     .all(propertyId) as PropertyValueRow[];
   const now = new Date().toISOString();
   for (const row of rows) {
@@ -716,7 +716,7 @@ export function getPropertyValues(
   ownerId: string,
 ): PropertyValue[] {
   const rows = ndb
-    .prepare('SELECT * FROM property_values WHERE owner_type = ? AND owner_id = ?')
+    .prepare('SELECT * FROM property_values_v WHERE owner_type = ? AND owner_id = ?')
     .all(ownerType, ownerId) as PropertyValueRow[];
   const out: PropertyValue[] = [];
   for (const row of rows) {
@@ -753,8 +753,8 @@ export function getPropertyValuesResolved(
   const rows = ndb
     .prepare(
       `SELECT pv.*, t.title AS ref_title
-       FROM property_values pv
-       LEFT JOIN thoughts t ON t.id = pv.value_thought_ref
+       FROM property_values_v pv
+       LEFT JOIN thoughts_v t ON t.id = pv.value_thought_ref
        WHERE pv.owner_type = ? AND pv.owner_id = ?`,
     )
     .all(ownerType, ownerId) as Array<PropertyValueRow & { ref_title: string | null }>;
@@ -782,7 +782,7 @@ export function getPropertyValuesResolved(
   if (arrayIds.size > 0) {
     const ids = [...arrayIds];
     const titleRows = ndb
-      .prepare(`SELECT id, title FROM thoughts WHERE id IN (${ids.map(() => '?').join(',')})`)
+      .prepare(`SELECT id, title FROM thoughts_v WHERE id IN (${ids.map(() => '?').join(',')})`)
       .all(...ids) as Array<{ id: string; title: string }>;
     for (const t of titleRows) titlesById.set(t.id, t.title);
   }
@@ -826,9 +826,9 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
               t.active,
               t.fg_color, t.bg_color, t.font_bold, t.font_italic,
               t.font_underline, t.font_strike, t.font_manual
-       FROM property_values pv
-       JOIN type_properties tp ON tp.id = pv.property_id
-       JOIN thoughts t ON t.id = pv.owner_id
+       FROM property_values_v pv
+       JOIN type_properties_v tp ON tp.id = pv.property_id
+       JOIN thoughts_v t ON t.id = pv.owner_id
        WHERE pv.owner_type = 'thought'
          AND (pv.value_thought_ref = ? OR pv.value_thought_ref LIKE ? ESCAPE '\\')
        ORDER BY tp.key COLLATE NOCASE, t.title_norm COLLATE NOCASE`,
@@ -876,7 +876,7 @@ export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
   const row = ndb
     .prepare(
       `SELECT COUNT(DISTINCT pv.owner_id) AS c
-       FROM property_values pv
+       FROM property_values_v pv
        WHERE pv.owner_type = 'thought'
          AND (pv.value_thought_ref = ? OR pv.value_thought_ref LIKE ? ESCAPE '\\')`,
     )
@@ -1016,7 +1016,7 @@ function validateThoughtRefTarget(
   def: PropertyDefinition,
   id: string,
 ): void {
-  const target = ndb.prepare('SELECT type_id FROM thoughts WHERE id = ?').get(id) as
+  const target = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(id) as
     { type_id: string | null } | undefined;
   if (!target) {
     throw new EtnError('VALIDATION_ERROR', `referenced thought ${id} does not exist`, {
@@ -1113,7 +1113,7 @@ export function setPropertyValue(
 
     const stored = ndb
       .prepare(
-        'SELECT * FROM property_values WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+        'SELECT * FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
       )
       .get(ownerType, ownerId, def.id) as PropertyValueRow;
     return {
@@ -1169,7 +1169,7 @@ export function computeThoughtCardWarnings(
   ndb: NetworkDb,
   thoughtId: string,
 ): ThoughtCardWarning[] {
-  const row = ndb.prepare('SELECT type_id FROM thoughts WHERE id = ?').get(thoughtId) as
+  const row = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(thoughtId) as
     | { type_id: string | null }
     | undefined;
   if (row === undefined || row.type_id === null) {
@@ -1202,7 +1202,7 @@ export function computeThoughtCardWarnings(
 
 /** Resolve a property definition's `key` from its id (small N, in-memory). */
 function keyOf(ndb: NetworkDb, propertyId: string): string {
-  const row = ndb.prepare('SELECT key FROM type_properties WHERE id = ?').get(propertyId) as
+  const row = ndb.prepare('SELECT key FROM type_properties_v WHERE id = ?').get(propertyId) as
     | { key: string }
     | undefined;
   return row?.key ?? propertyId;

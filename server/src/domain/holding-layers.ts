@@ -29,15 +29,16 @@ type LayerRefRow = HoldingLayerRef;
  * caller's list is stable.
  */
 export function listThoughtHoldingLayers(ndb: NetworkDb, thoughtId: string): HoldingLayerRef[] {
+  // layers:physical-read — аудит теней ВСЕХ слоёв сети, а не разрешение цепочки.
   return (
     ndb
       .prepare(
         `SELECT l.id, l.title
          FROM layers l
          WHERE l.is_base = 0 AND l.id IN (
-           SELECT layer_id FROM thoughts WHERE id = ? AND deleted = 0
+           SELECT layer_id FROM thoughts WHERE id = ? AND deleted = 0 -- layers:physical-read
            UNION
-           SELECT layer_id FROM links WHERE (source_id = ? OR target_id = ?) AND deleted = 0
+           SELECT layer_id FROM links WHERE (source_id = ? OR target_id = ?) AND deleted = 0 -- layers:physical-read
          )
          ORDER BY l.created_at, l.id`,
       )
@@ -51,13 +52,14 @@ export function listThoughtHoldingLayers(ndb: NetworkDb, thoughtId: string): Hol
  * «использование в свойствах» не бывает — 02-data-model.md §3.1.2.)
  */
 export function listLinkHoldingLayers(ndb: NetworkDb, linkId: string): HoldingLayerRef[] {
+  // layers:physical-read — аудит теней ВСЕХ слоёв сети, а не разрешение цепочки.
   return (
     ndb
       .prepare(
         `SELECT l.id, l.title
          FROM layers l
          WHERE l.is_base = 0 AND l.id IN (
-           SELECT layer_id FROM links WHERE id = ? AND deleted = 0
+           SELECT layer_id FROM links WHERE id = ? AND deleted = 0 -- layers:physical-read
          )
          ORDER BY l.created_at, l.id`,
       )

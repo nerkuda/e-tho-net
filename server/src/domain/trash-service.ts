@@ -42,10 +42,10 @@ export interface TrashPurgeOutcome extends TrashPurgeResult {
  */
 export function listTrash(ndb: NetworkDb): TrashListResult {
   const thoughtIds = (
-    ndb.prepare('SELECT id FROM thoughts WHERE marked_for_deletion = 1').all() as { id: string }[]
+    ndb.prepare('SELECT id FROM thoughts_v WHERE marked_for_deletion = 1').all() as { id: string }[]
   ).map((r) => r.id);
   const linkIds = (
-    ndb.prepare('SELECT id FROM links WHERE marked_for_deletion = 1').all() as { id: string }[]
+    ndb.prepare('SELECT id FROM links_v WHERE marked_for_deletion = 1').all() as { id: string }[]
   ).map((r) => r.id);
 
   const thoughts: TrashThoughtEntry[] = [];
@@ -83,10 +83,10 @@ export function purgeTrash(ndb: NetworkDb): TrashPurgeOutcome {
   const deletedLinkIds: string[] = [];
 
   const thoughtIds = (
-    ndb.prepare('SELECT id FROM thoughts WHERE marked_for_deletion = 1').all() as { id: string }[]
+    ndb.prepare('SELECT id FROM thoughts_v WHERE marked_for_deletion = 1').all() as { id: string }[]
   ).map((r) => r.id);
   const linkIds = (
-    ndb.prepare('SELECT id FROM links WHERE marked_for_deletion = 1').all() as { id: string }[]
+    ndb.prepare('SELECT id FROM links_v WHERE marked_for_deletion = 1').all() as { id: string }[]
   ).map((r) => r.id);
 
   for (const id of thoughtIds) {

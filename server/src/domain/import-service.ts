@@ -229,17 +229,17 @@ async function readArchive(
 // Dedup helpers
 // ---------------------------------------------------------------------------
 
-/** `SELECT id, title_norm FROM thoughts WHERE id IN (...)` — id existence map. */
+/** `SELECT id, title_norm FROM thoughts_v WHERE id IN (...)` — id existence map. */
 function readExistingThoughtIds(ndb: NetworkDb, ids: string[]): Map<string, string> {
   if (ids.length === 0) return new Map();
   const placeholders = ids.map(() => '?').join(',');
   const rows = ndb
-    .prepare(`SELECT id, title_norm FROM thoughts WHERE id IN (${placeholders})`)
+    .prepare(`SELECT id, title_norm FROM thoughts_v WHERE id IN (${placeholders})`)
     .all(...ids) as Array<{ id: string; title_norm: string }>;
   return new Map(rows.map((r) => [r.id, r.title_norm]));
 }
 
-/** `SELECT id, title_norm FROM thoughts WHERE title_norm IN (...)`. */
+/** `SELECT id, title_norm FROM thoughts_v WHERE title_norm IN (...)`. */
 function readExistingThoughtsByTitle(
   ndb: NetworkDb,
   titleNorms: string[],
@@ -247,7 +247,7 @@ function readExistingThoughtsByTitle(
   if (titleNorms.length === 0) return new Map();
   const placeholders = titleNorms.map(() => '?').join(',');
   const rows = ndb
-    .prepare(`SELECT id, title_norm FROM thoughts WHERE title_norm IN (${placeholders})`)
+    .prepare(`SELECT id, title_norm FROM thoughts_v WHERE title_norm IN (${placeholders})`)
     .all(...titleNorms) as Array<{ id: string; title_norm: string }>;
   return new Map(rows.map((r) => [r.title_norm, r.id]));
 }
@@ -256,7 +256,7 @@ function readExistingThoughtTypeIds(ndb: NetworkDb, ids: string[]): Set<string> 
   if (ids.length === 0) return new Set();
   const placeholders = ids.map(() => '?').join(',');
   const rows = ndb
-    .prepare(`SELECT id FROM thought_types WHERE id IN (${placeholders})`)
+    .prepare(`SELECT id FROM thought_types_v WHERE id IN (${placeholders})`)
     .all(...ids) as Array<{ id: string }>;
   return new Set(rows.map((r) => r.id));
 }
@@ -265,7 +265,7 @@ function readExistingLinkTypeIds(ndb: NetworkDb, ids: string[]): Set<string> {
   if (ids.length === 0) return new Set();
   const placeholders = ids.map(() => '?').join(',');
   const rows = ndb
-    .prepare(`SELECT id FROM link_types WHERE id IN (${placeholders})`)
+    .prepare(`SELECT id FROM link_types_v WHERE id IN (${placeholders})`)
     .all(...ids) as Array<{ id: string }>;
   return new Set(rows.map((r) => r.id));
 }
@@ -274,7 +274,7 @@ function readExistingPropertyIds(ndb: NetworkDb, ids: string[]): Set<string> {
   if (ids.length === 0) return new Set();
   const placeholders = ids.map(() => '?').join(',');
   const rows = ndb
-    .prepare(`SELECT id FROM type_properties WHERE id IN (${placeholders})`)
+    .prepare(`SELECT id FROM type_properties_v WHERE id IN (${placeholders})`)
     .all(...ids) as Array<{ id: string }>;
   return new Set(rows.map((r) => r.id));
 }
@@ -380,7 +380,7 @@ function insertOrUpdateThought(
   actorUserId: string,
   now: string,
 ): { id: string; action: 'created' | 'updated' | 'reused' } {
-  const existing = ndb.prepare('SELECT id FROM thoughts WHERE id = ?').get(t.id) as
+  const existing = ndb.prepare('SELECT id FROM thoughts_v WHERE id = ?').get(t.id) as
     | { id: string }
     | undefined;
   if (existing === undefined) {
@@ -540,7 +540,7 @@ function insertComment(
   if (c.kind === 'permanent') {
     const existing = ndb
       .prepare(
-        "SELECT id FROM comments WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'permanent'",
+        "SELECT id FROM comments_v WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'permanent'",
       )
       .get(resolvedOwnerId) as { id: string } | undefined;
     if (existing !== undefined) {

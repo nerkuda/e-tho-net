@@ -88,7 +88,7 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
  */
 const KEYWORD_MATCH =
   "(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (" +
-  'SELECT 1 FROM thought_synonyms ts' +
+  'SELECT 1 FROM thought_synonyms_v ts' +
   " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
 
 // ---------------------------------------------------------------------------
@@ -338,11 +338,11 @@ function expandParentIdsToSubtree(ndb: NetworkDb, rootIds: string[], showInactiv
     .prepare(
       `WITH RECURSIVE subtree(id, depth) AS (
          SELECT l.target_id, 1
-         FROM links l
+         FROM links_v l
          WHERE l.source_id IN (${placeholders}) AND (l.active = 1 OR ?)
          UNION
          SELECT l.target_id, s.depth + 1
-         FROM links l
+         FROM links_v l
          JOIN subtree s ON l.source_id = s.id
          WHERE (l.active = 1 OR ?) AND s.depth < ?
        )
@@ -394,7 +394,7 @@ function sortClause(
  * an empty result (unknown `parent_ids` scope roots).
  */
 interface FilterQuerySql {
-  /** `FROM thoughts t … WHERE …` with `?` placeholders (join params first). */
+  /** `FROM thoughts_v t … WHERE …` with `?` placeholders (join params first). */
   baseSql: string;
   /** JOIN parameters, bound before the WHERE parameters. */
   joinParams: unknown[];
@@ -416,10 +416,10 @@ function buildFilterQuerySql(
     const showInactive = req.show_inactive === true ? 1 : 0;
     const { sortSql, joinSql, joinParams } = sortClause(userId, req);
     return {
-      baseSql: `FROM thoughts t ${joinSql}
+      baseSql: `FROM thoughts_v t ${joinSql}
        WHERE t.is_root = 1 OR (
          t.is_root = 0 AND (t.active = 1 OR ?) AND NOT EXISTS (
-           SELECT 1 FROM links l WHERE l.target_id = t.id AND l.active = 1))`,
+           SELECT 1 FROM links_v l WHERE l.target_id = t.id AND l.active = 1))`,
       joinParams,
       params: [showInactive],
       sortSql,
@@ -453,21 +453,21 @@ function buildFilterQuerySql(
   }
 
   if (req.has_properties !== undefined) {
-    const sql = "EXISTS (SELECT 1 FROM property_values pv WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id)";
+    const sql = "EXISTS (SELECT 1 FROM property_values_v pv WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id)";
     where.push(req.has_properties ? sql : `NOT ${sql}`);
   }
   if (req.has_comment !== undefined) {
     const sql =
-      "EXISTS (SELECT 1 FROM comments c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'permanent')";
+      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'permanent')";
     where.push(req.has_comment ? sql : `NOT ${sql}`);
   }
   if (req.has_attachments !== undefined) {
-    const sql = "EXISTS (SELECT 1 FROM attachments a WHERE a.owner_type = 'thought' AND a.owner_id = t.id)";
+    const sql = "EXISTS (SELECT 1 FROM attachments_v a WHERE a.owner_type = 'thought' AND a.owner_id = t.id)";
     where.push(req.has_attachments ? sql : `NOT ${sql}`);
   }
   if (req.has_chronology !== undefined) {
     const sql =
-      "EXISTS (SELECT 1 FROM comments c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'chronological')";
+      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id AND c.kind = 'chronological')";
     where.push(req.has_chronology ? sql : `NOT ${sql}`);
   }
 
@@ -522,7 +522,7 @@ function buildFilterQuerySql(
       }
       const values = cond.value.map((v) => sqlScalar(def, v, requestId));
       const likeFrags = refLike ? values.map(() => `${column} LIKE ? ESCAPE '\\'`) : [];
-      const listSql = `SELECT 1 FROM property_values pv
+      const listSql = `SELECT 1 FROM property_values_v pv
          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
            AND (${column} IN (${values.map(() => '?').join(',')})${likeFrags.length > 0 ? ` OR ${likeFrags.join(' OR ')}` : ''})`;
       where.push(cond.op === 'in' ? `EXISTS (${listSql})` : `NOT EXISTS (${listSql})`);
@@ -536,7 +536,7 @@ function buildFilterQuerySql(
     if (cond.op === 'contains') {
       const pattern = buildLikePattern(String(cond.value));
       where.push(
-        `EXISTS (SELECT 1 FROM property_values pv
+        `EXISTS (SELECT 1 FROM property_values_v pv
            WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
              AND ${column} LIKE ? ESCAPE '\\')`,
       );
@@ -549,7 +549,7 @@ function buildFilterQuerySql(
     // covers multiple-ref arrays.
     const eqLike = refLike && cond.op === 'eq' ? ` OR ${column} LIKE ? ESCAPE '\\'` : '';
     where.push(
-      `EXISTS (SELECT 1 FROM property_values pv
+      `EXISTS (SELECT 1 FROM property_values_v pv
          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
            AND (${column} ${opSql} ?${eqLike}))`,
     );
@@ -561,7 +561,7 @@ function buildFilterQuerySql(
     const expandedLinks = expandTypeIdsToSubtree(ndb, 'link_types', req.link_type_ids);
     if (expandedLinks.length > 0) {
       where.push(
-        `EXISTS (SELECT 1 FROM links l WHERE l.active = 1
+        `EXISTS (SELECT 1 FROM links_v l WHERE l.active = 1
            AND l.type_id IN (${expandedLinks.map(() => '?').join(',')})
            AND (l.source_id = t.id OR l.target_id = t.id))`,
       );
@@ -573,7 +573,7 @@ function buildFilterQuerySql(
   // fragments only. `viewed` needs the per-user view-mark join.
   const { sortSql, joinSql, joinParams } = sortClause(userId, req);
   return {
-    baseSql: `FROM thoughts t ${joinSql} WHERE ${where.join(' AND ')}`,
+    baseSql: `FROM thoughts_v t ${joinSql} WHERE ${where.join(' AND ')}`,
     joinParams,
     params,
     sortSql,
@@ -697,8 +697,8 @@ export function getHierarchy(
   const rows = ndb
     .prepare(
       `SELECT DISTINCT ${REF_COLUMNS}
-       FROM links l
-       JOIN thoughts t ON t.id = ${neighbourJoin}
+       FROM links_v l
+       JOIN thoughts_v t ON t.id = ${neighbourJoin}
        WHERE ${focusSide} = ? AND (l.active = 1 OR ?) AND (t.active = 1 OR ?)
        ORDER BY t.title COLLATE NOCASE ASC`,
     )

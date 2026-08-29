@@ -70,7 +70,7 @@ function findMatchingId(body: string, targetIdLowercased: string): string | null
  */
 export function findBacklinks(ndb: NetworkDb, thoughtId: string): MentionHit[] {
   // 1) Verify the target thought exists; mirror `findMentions` semantics.
-  const exists = ndb.prepare('SELECT 1 FROM thoughts WHERE id = ?').get(thoughtId);
+  const exists = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(thoughtId);
   if (!exists) {
     throw new EtnError('NOT_FOUND', `thought ${thoughtId} not found`, {
       entity: 'thought',
@@ -83,14 +83,14 @@ export function findBacklinks(ndb: NetworkDb, thoughtId: string): MentionHit[] {
   const seen = new Set<string>();
 
   // 2) Pull thought-owned comments (excluding the target thought itself).
-  //    Same `JOIN thoughts` pattern as `findMentions` — keeps `title` and
+  //    Same `JOIN thoughts_v` pattern as `findMentions` — keeps `title` and
   //    `active` aligned with the owner's actual row.
   const thoughtRows = ndb
     .prepare(
       `SELECT c.id AS comment_id, c.owner_id AS owner_id,
               t.title AS title, t.active AS active, c.body_md AS body
-       FROM comments c
-       JOIN thoughts t ON t.id = c.owner_id
+       FROM comments_v c
+       JOIN thoughts_v t ON t.id = c.owner_id
        WHERE c.owner_type = 'thought' AND c.owner_id <> ?`,
     )
     .all(thoughtId) as BacklinkRow[];
@@ -102,9 +102,9 @@ export function findBacklinks(ndb: NetworkDb, thoughtId: string): MentionHit[] {
               COALESCE(lt.name_forward, '') AS title,
               COALESCE(l.active, 1) AS active,
               c.body_md AS body
-       FROM comments c
-       LEFT JOIN links l ON l.id = c.owner_id
-       LEFT JOIN link_types lt ON lt.id = l.type_id
+       FROM comments_v c
+       LEFT JOIN links_v l ON l.id = c.owner_id
+       LEFT JOIN link_types_v lt ON lt.id = l.type_id
        WHERE c.owner_type = 'link'`,
     )
     .all() as BacklinkRow[];

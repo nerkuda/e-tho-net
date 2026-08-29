@@ -35,20 +35,20 @@ export function getThoughtMeta(ndb: NetworkDb, thoughtId: string): ThoughtMeta {
   const count = (sql: string, ...params: unknown[]): number =>
     (ndb.prepare(`SELECT COUNT(*) AS c FROM ${sql}`).get(...params) as { c: number }).c;
 
-  const parents_count = count('links WHERE target_id = ? AND active = 1', thoughtId);
-  const children_count = count('links WHERE source_id = ? AND active = 1', thoughtId);
+  const parents_count = count('links_v WHERE target_id = ? AND active = 1', thoughtId);
+  const children_count = count('links_v WHERE source_id = ? AND active = 1', thoughtId);
   const attachments_count = count(
-    "attachments WHERE owner_type = 'thought' AND owner_id = ?",
+    "attachments_v WHERE owner_type = 'thought' AND owner_id = ?",
     thoughtId,
   );
   const chrono_count = count(
-    "comments WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'chronological'",
+    "comments_v WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'chronological'",
     thoughtId,
   );
   // Multiple thought_ref values are stored as a JSON array of ids
   // (02-data-model.md §3.5) — the LIKE arm matches ids inside such arrays.
   const usage_count = count(
-    "property_values WHERE owner_type = 'thought'" +
+    "property_values_v WHERE owner_type = 'thought'" +
       " AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')",
     thoughtId,
     `%"${escapeLike(thoughtId)}"%`,

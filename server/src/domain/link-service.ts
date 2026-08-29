@@ -169,7 +169,7 @@ function typeIdOrSentinel(typeId: string | null | undefined): string {
 
 /** Return a link by id, or `null` when absent. */
 export function getLink(ndb: NetworkDb, id: string): Link | null {
-  const row = ndb.prepare('SELECT * FROM links WHERE id = ? LIMIT 1').get(id) as
+  const row = ndb.prepare('SELECT * FROM links_v WHERE id = ? LIMIT 1').get(id) as
     LinkRow | undefined;
   return row ? rowToLink(row) : null;
 }
@@ -200,11 +200,11 @@ export function findLinksBetween(
   const rows =
     typeId === undefined
       ? (ndb
-          .prepare('SELECT * FROM links WHERE source_id = ? AND target_id = ?')
+          .prepare('SELECT * FROM links_v WHERE source_id = ? AND target_id = ?')
           .all(sourceId, targetId) as LinkRow[])
       : (ndb
           .prepare(
-            `SELECT * FROM links WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ?`,
+            `SELECT * FROM links_v WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ?`,
           )
           .all(sourceId, targetId, NULL_TYPE_SENTINEL, typeIdOrSentinel(typeId)) as LinkRow[]);
   return rows.map(rowToLink);
@@ -217,7 +217,7 @@ export function findLinksBetween(
  */
 export function incomingLinksOf(ndb: NetworkDb, thoughtId: string): Link[] {
   const rows = ndb
-    .prepare('SELECT * FROM links WHERE target_id = ?')
+    .prepare('SELECT * FROM links_v WHERE target_id = ?')
     .all(thoughtId) as LinkRow[];
   return rows.map(rowToLink);
 }
@@ -232,7 +232,7 @@ export function getEdgesAmong(ndb: NetworkDb, ids: string[], showInactive: boole
   const placeholders = ids.map(() => '?').join(',');
   const rows = ndb
     .prepare(
-      `SELECT * FROM links
+      `SELECT * FROM links_v
        WHERE source_id IN (${placeholders}) AND target_id IN (${placeholders})
          AND (active = 1 OR ?)`,
     )
@@ -255,7 +255,7 @@ export function getLinkDirections(
   const placeholders = ids.map(() => '?').join(',');
   const rows = ndb
     .prepare(
-      `SELECT source_id, target_id FROM links WHERE active = 1
+      `SELECT source_id, target_id FROM links_v WHERE active = 1
          AND (source_id IN (${placeholders}) OR target_id IN (${placeholders}))`,
     )
     .all(...ids, ...ids) as Array<{ source_id: string; target_id: string }>;
@@ -290,14 +290,14 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
 
   return ndb.transaction(() => {
     // Both endpoints must exist.
-    const src = ndb.prepare('SELECT 1 FROM thoughts WHERE id = ?').get(input.source_id);
+    const src = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(input.source_id);
     if (!src) {
       throw new EtnError('NOT_FOUND', `source thought ${input.source_id} not found`, {
         entity: 'thought',
         id: input.source_id,
       });
     }
-    const tgt = ndb.prepare('SELECT 1 FROM thoughts WHERE id = ?').get(input.target_id);
+    const tgt = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(input.target_id);
     if (!tgt) {
       throw new EtnError('NOT_FOUND', `target thought ${input.target_id} not found`, {
         entity: 'thought',
@@ -311,7 +311,7 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
     // Duplicate guard, NULL-safe on both sides.
     const dup = ndb
       .prepare(
-        'SELECT 1 FROM links WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ? LIMIT 1',
+        'SELECT 1 FROM links_v WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ? LIMIT 1',
       )
       .get(input.source_id, input.target_id, NULL_TYPE_SENTINEL, typeIdOrSentinel(typeId));
     if (dup) {
@@ -401,7 +401,7 @@ export function updateLink(
         ['source', changes.source_id],
         ['target', changes.target_id],
       ] as const) {
-        const exists = ndb.prepare('SELECT 1 FROM thoughts WHERE id = ?').get(endpointId);
+        const exists = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(endpointId);
         if (!exists) {
           throw new EtnError('NOT_FOUND', `${role} thought ${endpointId} not found`, {
             entity: 'thought',
@@ -465,7 +465,7 @@ export function updateLink(
     if (changes.type_id !== undefined || endpointsChanging) {
       const dup = ndb
         .prepare(
-          `SELECT 1 FROM links WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ?
+          `SELECT 1 FROM links_v WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ?
            AND id <> ? LIMIT 1`,
         )
         .get(newSourceId, newTargetId, NULL_TYPE_SENTINEL, typeIdOrSentinel(newTypeId), id);
@@ -502,7 +502,7 @@ export function updateLink(
  * Throws `NOT_FOUND` (404) when the link does not exist.
  */
 export function checkLinkDeletion(ndb: NetworkDb, id: string): LinkDeletionCheckResult {
-  const row = ndb.prepare('SELECT 1 FROM links WHERE id = ?').get(id);
+  const row = ndb.prepare('SELECT 1 FROM links_v WHERE id = ?').get(id);
   if (!row) {
     throw new EtnError('NOT_FOUND', `link ${id} not found`, { entity: 'link', id });
   }
@@ -595,9 +595,9 @@ export function listLinksByThought(
               t.font_underline AS other_font_underline, t.font_strike AS other_font_strike,
               t.font_manual AS other_font_manual,
               CASE WHEN l.target_id = ? THEN 'parent' ELSE 'child' END AS side
-       FROM links l
-       LEFT JOIN link_types lt ON lt.id = l.type_id
-       JOIN thoughts t ON t.id = (CASE WHEN l.target_id = ? THEN l.source_id ELSE l.target_id END)
+       FROM links_v l
+       LEFT JOIN link_types_v lt ON lt.id = l.type_id
+       JOIN thoughts_v t ON t.id = (CASE WHEN l.target_id = ? THEN l.source_id ELSE l.target_id END)
        WHERE (l.source_id = ? OR l.target_id = ?)
          AND (l.active = 1 OR ?)
          AND (t.active = 1 OR ?)`,

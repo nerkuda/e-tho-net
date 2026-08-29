@@ -244,7 +244,7 @@ export function collectSubtreeIds(
           UNION
           SELECT l.target_id, d.depth + 1
           FROM descend d
-          JOIN links l ON l.source_id = d.id AND (l.active = 1 OR :show_inactive)
+          JOIN links_v l ON l.source_id = d.id AND (l.active = 1 OR :show_inactive)
           WHERE d.depth < :max_depth
         )
        SELECT DISTINCT id FROM descend`,
@@ -295,7 +295,7 @@ export function collectSubtreeTypes(
   const thoughtRows = ndb
     .prepare(
       `SELECT type_id, COUNT(*) AS c
-         FROM thoughts
+         FROM thoughts_v
         WHERE id IN (${idList.map(() => '?').join(',')})
           ${includeInactiveThoughts ? '' : 'AND active = 1'}
           AND type_id IS NOT NULL
@@ -313,7 +313,7 @@ export function collectSubtreeTypes(
   const linkRows = ndb
     .prepare(
       `SELECT type_id, COUNT(*) AS c
-         FROM links
+         FROM links_v
         WHERE source_id IN (${idList.map(() => '?').join(',')})
           AND target_id IN (${idList.map(() => '?').join(',')})
           AND active = 1
@@ -414,7 +414,7 @@ function searchNames(
     ndb
       .prepare(
         `SELECT COUNT(*) AS c FROM fts_thought_names f
-         JOIN thoughts t ON t.id = f.thought_id WHERE ${where}`,
+         JOIN thoughts_v t ON t.id = f.thought_id WHERE ${where}`,
       )
       .get(...params) as { c: number }
   ).c;
@@ -432,7 +432,7 @@ function searchNames(
               t.font_manual AS font_manual,
               t.type_id AS type_id, t.active AS active
        FROM fts_thought_names f
-       JOIN thoughts t ON t.id = f.thought_id
+       JOIN thoughts_v t ON t.id = f.thought_id
        WHERE ${where}
        ORDER BY rank
        LIMIT ? OFFSET ?`,
@@ -506,8 +506,8 @@ function searchTexts(
     ndb
       .prepare(
         `SELECT COUNT(DISTINCT f.thought_id) AS c FROM fts_thought_texts f
-         JOIN comments c ON c.rowid = f.rowid
-         JOIN thoughts t ON t.id = f.thought_id WHERE ${where}`,
+         JOIN comments_v c ON c.rowid = f.rowid
+         JOIN thoughts_v t ON t.id = f.thought_id WHERE ${where}`,
       )
       .get(...params) as { c: number }
   ).c;
@@ -529,8 +529,8 @@ function searchTexts(
                 rank AS _rank,
                 ROW_NUMBER() OVER (PARTITION BY f.thought_id ORDER BY rank) AS _rn
          FROM fts_thought_texts f
-         JOIN comments c ON c.rowid = f.rowid
-         JOIN thoughts t ON t.id = f.thought_id
+         JOIN comments_v c ON c.rowid = f.rowid
+         JOIN thoughts_v t ON t.id = f.thought_id
          WHERE ${where}
        )
        WHERE _rn = 1
@@ -604,8 +604,8 @@ function searchLinks(
     ndb
       .prepare(
         `SELECT COUNT(DISTINCT f.link_id) AS c FROM fts_link_texts f
-         JOIN comments c ON c.rowid = f.rowid
-         LEFT JOIN links l ON l.id = f.link_id WHERE ${where}`,
+         JOIN comments_v c ON c.rowid = f.rowid
+         LEFT JOIN links_v l ON l.id = f.link_id WHERE ${where}`,
       )
       .get(...params) as { c: number }
   ).c;
@@ -616,9 +616,9 @@ function searchLinks(
                 rank AS _rank,
                 ROW_NUMBER() OVER (PARTITION BY f.link_id ORDER BY rank) AS _rn
          FROM fts_link_texts f
-         JOIN comments c ON c.rowid = f.rowid
-         LEFT JOIN links l ON l.id = f.link_id
-         LEFT JOIN link_types lt ON lt.id = l.type_id
+         JOIN comments_v c ON c.rowid = f.rowid
+         LEFT JOIN links_v l ON l.id = f.link_id
+         LEFT JOIN link_types_v lt ON lt.id = l.type_id
          WHERE ${where}
        )
        WHERE _rn = 1
@@ -679,18 +679,18 @@ function buildChronoHalf(
     clauses.push({ sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] });
     clauses.push(inListClause('t.type_id', f.typeIds));
     clauses.push(subtreeClause('f.thought_id', f.subtreeIds));
-    joins = 'JOIN thoughts t ON t.id = c.owner_id';
+    joins = 'JOIN thoughts_v t ON t.id = c.owner_id';
   } else {
     clauses.push({ sql: '(l.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] });
     clauses.push({ sql: '(l.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] });
     clauses.push(inListClause('l.type_id', f.linkTypeIds));
-    joins = 'LEFT JOIN links l ON l.id = c.owner_id';
+    joins = 'LEFT JOIN links_v l ON l.id = c.owner_id';
   }
   const { where, params } = joinClauses(clauses);
   const sql = `SELECT c.id AS comment_id, '${side}' AS owner, c.owner_id AS owner_id,
                  c.valid_from AS valid_from, c.valid_to AS valid_to, c.body_md AS body
                FROM ${ftsTable} f
-               JOIN comments c ON c.rowid = f.rowid
+               JOIN comments_v c ON c.rowid = f.rowid
                ${joins}
                WHERE ${where}`;
   return { sql, params };
@@ -936,7 +936,7 @@ export function findDuplicates(
     let hit = byId.get(row.id);
     if (!hit) {
       const synRows = ndb
-        .prepare('SELECT synonym FROM thought_synonyms WHERE thought_id = ? ORDER BY synonym')
+        .prepare('SELECT synonym FROM thought_synonyms_v WHERE thought_id = ? ORDER BY synonym')
         .all(row.id) as Array<{ synonym: string }>;
       hit = {
         id: row.id,
@@ -971,7 +971,7 @@ export function findDuplicates(
               t.font_underline AS font_underline, t.font_strike AS font_strike,
               t.font_manual AS font_manual,
               ts.synonym AS synonym, ts.synonym_norm AS synonym_norm
-       FROM thought_synonyms ts JOIN thoughts t ON t.id = ts.thought_id
+       FROM thought_synonyms_v ts JOIN thoughts_v t ON t.id = ts.thought_id
        WHERE ts.synonym LIKE '%*%'${typeJoin}`,
     )
     .all(...typeArgs) as Array<{
@@ -995,7 +995,7 @@ export function findDuplicates(
     const n = norm(term);
     // Exact title_norm match (strongest).
     const titleRows = ndb
-      .prepare(`SELECT ${DUP_COLUMNS} FROM thoughts WHERE title_norm = ?${typeDirect}`)
+      .prepare(`SELECT ${DUP_COLUMNS} FROM thoughts_v WHERE title_norm = ?${typeDirect}`)
       .all(n, ...typeArgs) as Array<{
       id: string;
       title: string;
@@ -1023,7 +1023,7 @@ export function findDuplicates(
                 t.font_underline AS font_underline, t.font_strike AS font_strike,
                 t.font_manual AS font_manual,
                 ts.synonym AS synonym
-         FROM thought_synonyms ts JOIN thoughts t ON t.id = ts.thought_id
+         FROM thought_synonyms_v ts JOIN thoughts_v t ON t.id = ts.thought_id
          WHERE ts.synonym_norm = ?${typeJoin}`,
       )
       .all(n, ...typeArgs) as Array<{
@@ -1076,16 +1076,18 @@ export function findDuplicates(
       const push = (word: string, negate: boolean): void => {
         const pattern = buildLikePattern(word);
         const clause =
-          "(title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms ts" +
+          "(title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
           " WHERE ts.thought_id = thoughts.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
         conditions.push(negate ? `NOT ${clause}` : clause);
         params.push(pattern, pattern);
       };
       for (const word of keywords.include) push(word, false);
       for (const word of keywords.exclude) push(word, true);
+      // `thoughts_v thoughts` — alias keeps the correlated EXISTS reference
+      // (`thoughts.id`) valid against the view.
       let partialRows = ndb
         .prepare(
-          `SELECT ${DUP_COLUMNS} FROM thoughts WHERE ${conditions.join(' AND ')}${typeDirect}`,
+          `SELECT ${DUP_COLUMNS} FROM thoughts_v thoughts WHERE ${conditions.join(' AND ')}${typeDirect}`,
         )
         .all(...params, ...typeArgs) as Array<{
         id: string;
@@ -1116,7 +1118,7 @@ export function findDuplicates(
         const ids = partialRows.map((r) => r.id);
         const synRows = ndb
           .prepare(
-            `SELECT thought_id, synonym_norm FROM thought_synonyms
+            `SELECT thought_id, synonym_norm FROM thought_synonyms_v
              WHERE thought_id IN (${ids.map(() => '?').join(',')})`,
           )
           .all(...ids) as Array<{ thought_id: string; synonym_norm: string }>;
@@ -1160,7 +1162,7 @@ export function findDuplicates(
     const parentRows = ndb
       .prepare(
         `SELECT l.target_id AS child_id, t.title AS parent_title
-         FROM links l JOIN thoughts t ON t.id = l.source_id
+         FROM links_v l JOIN thoughts_v t ON t.id = l.source_id
          WHERE l.target_id IN (${ids.map(() => '?').join(',')}) AND l.active = 1
          ORDER BY l.target_id, t.title_norm`,
       )
@@ -1209,7 +1211,7 @@ export function findDuplicates(
  */
 export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
   const thought = ndb
-    .prepare('SELECT id, title FROM thoughts WHERE id = ? LIMIT 1')
+    .prepare('SELECT id, title FROM thoughts_v WHERE id = ? LIMIT 1')
     .get(thoughtId) as { id: string; title: string } | undefined;
   if (!thought) {
     throw new EtnError('NOT_FOUND', `thought ${thoughtId} not found`, {
@@ -1218,7 +1220,7 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     });
   }
   const synRows = ndb
-    .prepare('SELECT synonym FROM thought_synonyms WHERE thought_id = ?')
+    .prepare('SELECT synonym FROM thought_synonyms_v WHERE thought_id = ?')
     .all(thoughtId) as Array<{ synonym: string }>;
 
   // Matchable terms: compound-title parts (§2.2.3), then synonyms, without
@@ -1293,8 +1295,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
             `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title,
                     t.active AS active, c.body_md AS body
              FROM fts_thought_texts f
-             JOIN comments c ON c.rowid = f.rowid
-             JOIN thoughts t ON t.id = c.owner_id
+             JOIN comments_v c ON c.rowid = f.rowid
+             JOIN thoughts_v t ON t.id = c.owner_id
              WHERE fts_thought_texts MATCH ? AND c.owner_id <> ?`,
           )
           .all(candidate, thoughtId) as MentionRow[],
@@ -1308,9 +1310,9 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
                     COALESCE(lt.name_forward, '') AS title, COALESCE(l.active, 1) AS active,
                     c.body_md AS body
              FROM fts_link_texts f
-             JOIN comments c ON c.rowid = f.rowid
-             LEFT JOIN links l ON l.id = c.owner_id
-             LEFT JOIN link_types lt ON lt.id = l.type_id
+             JOIN comments_v c ON c.rowid = f.rowid
+             LEFT JOIN links_v l ON l.id = c.owner_id
+             LEFT JOIN link_types_v lt ON lt.id = l.type_id
              WHERE fts_link_texts MATCH ?`,
           )
           .all(candidate) as MentionRow[],
@@ -1325,8 +1327,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
           .prepare(
             `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title,
                     t.active AS active, c.body_md AS body
-             FROM comments c
-             JOIN thoughts t ON t.id = c.owner_id
+             FROM comments_v c
+             JOIN thoughts_v t ON t.id = c.owner_id
              WHERE c.owner_type = 'thought' AND c.owner_id <> ?`,
           )
           .all(thoughtId) as MentionRow[],
@@ -1339,9 +1341,9 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
             `SELECT c.id AS comment_id, c.owner_id AS owner_id,
                     COALESCE(lt.name_forward, '') AS title, COALESCE(l.active, 1) AS active,
                     c.body_md AS body
-             FROM comments c
-             LEFT JOIN links l ON l.id = c.owner_id
-             LEFT JOIN link_types lt ON lt.id = l.type_id
+             FROM comments_v c
+             LEFT JOIN links_v l ON l.id = c.owner_id
+             LEFT JOIN link_types_v lt ON lt.id = l.type_id
              WHERE c.owner_type = 'link'`,
           )
           .all() as MentionRow[],
@@ -1373,7 +1375,7 @@ function buildMentionCandidates(
   opts: { showInactive: boolean; excludeThoughtId?: string },
 ): MentionCandidate[] {
   const thoughtRows = ndb
-    .prepare('SELECT id, title, active FROM thoughts WHERE :show_inactive OR active = 1')
+    .prepare('SELECT id, title, active FROM thoughts_v WHERE :show_inactive OR active = 1')
     .all({ show_inactive: opts.showInactive ? 1 : 0 }) as Array<{
     id: string;
     title: string;
@@ -1382,7 +1384,7 @@ function buildMentionCandidates(
   const thoughts = thoughtRows.filter((t) => t.id !== opts.excludeThoughtId);
   if (thoughts.length === 0) return [];
 
-  const synRows = ndb.prepare('SELECT thought_id, synonym FROM thought_synonyms').all() as Array<{
+  const synRows = ndb.prepare('SELECT thought_id, synonym FROM thought_synonyms_v').all() as Array<{
     thought_id: string;
     synonym: string;
   }>;

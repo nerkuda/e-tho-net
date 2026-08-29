@@ -150,7 +150,7 @@ export class NetworkServiceImpl implements NetworkService {
     // synchronous and re-entrant inside a transaction).
     const ndb = openNetworkDb(this.dataDir, networkId, this.log);
     const row = ndb
-      .prepare('SELECT id FROM thought_types WHERE id = ? LIMIT 1')
+      .prepare('SELECT id FROM thought_types_v WHERE id = ? LIMIT 1')
       .get(typeId) as { id: string } | undefined;
     if (row === undefined) {
       throw new EtnError(

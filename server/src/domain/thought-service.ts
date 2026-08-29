@@ -285,7 +285,7 @@ function setSynonyms(ndb: NetworkDb, thoughtId: string, synonyms: string[]): voi
 /** Read the ordered display forms of a thought's synonyms. */
 function readSynonyms(ndb: NetworkDb, thoughtId: string): string[] {
   const rows = ndb
-    .prepare('SELECT synonym FROM thought_synonyms WHERE thought_id = ? ORDER BY synonym')
+    .prepare('SELECT synonym FROM thought_synonyms_v WHERE thought_id = ? ORDER BY synonym')
     .all(thoughtId) as { synonym: string }[];
   return rows.map((r) => r.synonym);
 }
@@ -298,7 +298,7 @@ function readSynonyms(ndb: NetworkDb, thoughtId: string): string[] {
  * Return a thought with its synonyms, or `null` when not found.
  */
 export function getThought(ndb: NetworkDb, id: string): Thought | null {
-  const row = ndb.prepare('SELECT * FROM thoughts WHERE id = ? LIMIT 1').get(id) as
+  const row = ndb.prepare('SELECT * FROM thoughts_v WHERE id = ? LIMIT 1').get(id) as
     ThoughtRow | undefined;
   if (!row) {
     return null;
@@ -336,7 +336,7 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
               marked_for_deletion,
               fg_color, bg_color,
               font_bold, font_italic, font_underline, font_strike, font_manual
-       FROM thoughts WHERE id IN (${placeholders})`,
+       FROM thoughts_v WHERE id IN (${placeholders})`,
     )
     .all(...capped) as Array<{
     id: string;
@@ -384,7 +384,7 @@ function createLinkForNewThought(
   if (targetId === newThoughtId) {
     throw new EtnError('VALIDATION_ERROR', 'a thought cannot link to itself');
   }
-  const exists = ndb.prepare('SELECT 1 FROM thoughts WHERE id = ?').get(targetId);
+  const exists = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(targetId);
   if (!exists) {
     throw new EtnError('NOT_FOUND', `target thought ${targetId} not found`, {
       entity: 'thought',
@@ -398,7 +398,7 @@ function createLinkForNewThought(
   // Duplicate guard, NULL-safe on both sides (UNIQUE treats NULL as distinct).
   const dup = ndb
     .prepare(
-      'SELECT 1 FROM links WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ? LIMIT 1',
+      'SELECT 1 FROM links_v WHERE source_id = ? AND target_id = ? AND ifnull(type_id, ?) = ? LIMIT 1',
     )
     .get(sourceId, linkTargetId, '\u0000', typeId ?? '\u0000');
   if (dup) {
@@ -684,11 +684,11 @@ function countOrphanedChildren(ndb: NetworkDb, thoughtId: string): number {
     .prepare(
       `SELECT COUNT(*) AS c FROM (
          SELECT l.target_id
-         FROM links l
+         FROM links_v l
          WHERE l.source_id = ? AND l.active = 1
            AND l.target_id <> ?
            AND NOT EXISTS (
-             SELECT 1 FROM links l2
+             SELECT 1 FROM links_v l2
              WHERE l2.target_id = l.target_id
                AND l2.active = 1
                AND l2.source_id <> ?
@@ -711,7 +711,7 @@ function countOrphanedChildren(ndb: NetworkDb, thoughtId: string): number {
  * Throws `NOT_FOUND` (404) when the thought does not exist.
  */
 export function checkThoughtDeletion(ndb: NetworkDb, id: string): ThoughtDeletionCheckResult {
-  const row = ndb.prepare('SELECT 1 FROM thoughts WHERE id = ?').get(id);
+  const row = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(id);
   if (!row) {
     throw new EtnError('NOT_FOUND', `thought ${id} not found`, { entity: 'thought', id });
   }
@@ -948,13 +948,13 @@ function buildNeighborsQuery(
   const params: unknown[] = [];
 
   if (dir === 'parents') {
-    joins.push('JOIN thoughts t ON t.id = l.source_id');
+    joins.push('JOIN thoughts_v t ON t.id = l.source_id');
   } else if (dir === 'children') {
-    joins.push('JOIN thoughts t ON t.id = l.target_id');
+    joins.push('JOIN thoughts_v t ON t.id = l.target_id');
   } else {
     // siblings: pick the focus's parents, then their other children.
-    joins.push('JOIN links lp ON lp.source_id = l.source_id');
-    joins.push('JOIN thoughts t ON t.id = l.target_id');
+    joins.push('JOIN links_v lp ON lp.source_id = l.source_id');
+    joins.push('JOIN thoughts_v t ON t.id = l.target_id');
   }
   if (useViewedJoin) {
     joins.push('LEFT JOIN thought_views tv ON tv.user_id = ? AND tv.thought_id = t.id');
@@ -993,7 +993,7 @@ function buildNeighborsQuery(
     params.push(opts.typeId);
   }
 
-  const sqlParts = [select, 'FROM links l', ...joins.map((j) => j.trimStart())];
+  const sqlParts = [select, 'FROM links_v l', ...joins.map((j) => j.trimStart())];
   sqlParts.push('WHERE ' + where.join(' AND '));
   if (dir === 'siblings') {
     sqlParts.push('GROUP BY t.id');
