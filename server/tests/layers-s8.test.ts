@@ -520,5 +520,72 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('merging into a non-base parent materialises shadows and tombstones in it, base untouched', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // chain: base ← L1 ← L2. L2 edits base rows; the merge target is L1.
+        const a = await thought(ctx, 'A');
+        const b = await thought(ctx, 'B');
+        const l1 = await createLayer(ctx, 'L1');
+        await selectLayer(ctx, l1.id, 'worker-1');
+        const l2res = await call(ctx, 'POST', '/layers', { title: 'L2', parent_id: l1.id });
+        assert.equal(l2res.statusCode, 201);
+        const l2 = l2res.json().data as Layer;
+        await selectLayer(ctx, l2.id, 'worker-2');
+
+        const patchA = await call(ctx, 'PATCH', `/thoughts/${a}`, { title: 'A (L2)' }, { clientId: 'worker-2' });
+        assert.equal(patchA.statusCode, 200);
+        const delB = await call(ctx, 'DELETE', `/thoughts/${b}`, undefined, { clientId: 'worker-2' });
+        assert.equal(delB.statusCode, 204);
+
+        const res = await merge(ctx, l2.id);
+        assert.equal(res.statusCode, 200, JSON.stringify(res.json()));
+        const report = res.json().data as LayerMergeReport;
+        assert.equal(report.applied.thoughts, 2);
+        // The winners lived in the base (above L1), but the reserve still
+        // backs them up — it must show the pre-merge state visible from L1
+        // (13-layers.md §8.2), so it is created as a service child of L1.
+        assert.ok(report.reserve_layer_id);
+        const reserveRows = ctx.ndb
+          .prepare('SELECT COUNT(*) AS c FROM thoughts WHERE layer_id = ?')
+          .get(report.reserve_layer_id) as { c: number };
+        assert.equal(reserveRows.c, 2);
+
+        // L1 sees the merged state: A's shadow (version continuity, base
+        // version pinned to the base row it was replayed against) and B's
+        // tombstone.
+        const aShadow = ctx.ndb
+          .prepare('SELECT title, version, base_version, deleted FROM thoughts WHERE id = ? AND layer_id = ?')
+          .get(a, l1.id) as { title: string; version: number; base_version: number; deleted: number };
+        assert.equal(aShadow.title, 'A (L2)');
+        assert.equal(aShadow.version, 2);
+        assert.equal(aShadow.base_version, 1);
+        const bTomb = ctx.ndb
+          .prepare('SELECT deleted, base_version FROM thoughts WHERE id = ? AND layer_id = ?')
+          .get(b, l1.id) as { deleted: number; base_version: number };
+        assert.equal(bTomb.deleted, 1);
+        assert.equal(bTomb.base_version, 1);
+        const seenInL1 = await call(ctx, 'GET', `/thoughts/${a}`, undefined, { clientId: 'worker-1' });
+        assert.equal(seenInL1.json().data.title, 'A (L2)');
+        const bInL1 = await call(ctx, 'GET', `/thoughts/${b}`, undefined, { clientId: 'worker-1' });
+        assert.equal(bInL1.statusCode, 404);
+
+        // The base underneath is untouched; L2 is emptied.
+        const aInBase = await call(ctx, 'GET', `/thoughts/${a}`);
+        assert.equal(aInBase.json().data.title, 'A');
+        const bInBase = await call(ctx, 'GET', `/thoughts/${b}`);
+        assert.equal(bInBase.statusCode, 200);
+        assert.equal(layerRows(ctx, 'thoughts', l2.id), 0);
+
+        // The single layer.merged event names L1 (the target), not the base.
+        const events = ctx.app.systemDb.readEventsAfter(ctx.networkId, 0, 100);
+        const merged = events.filter((e) => e.type === 'layer.merged');
+        assert.equal(merged.length, 1);
+        assert.equal(merged[0]?.layer_id, l1.id);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );
