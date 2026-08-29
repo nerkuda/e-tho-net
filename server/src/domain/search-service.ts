@@ -20,6 +20,19 @@
  * `link_type_id[]`, `show_inactive`. Results are bounded per group by
  * `limit`/`offset` (default 50 / 0).
  *
+ * Change layers (task S6, docs/13-layers.md §9): every group joins the FTS
+ * row with the resolution view by the winner row's `rowid`
+ * (`thoughts_v.rowid = fts_thought_names.rowid`,
+ * `comments_v.rowid = fts_thought_texts.rowid`, …) — the FTS tables carry one
+ * row per PHYSICAL row of every layer, and the rowid join keeps only the
+ * text of the row that wins in the connection's layer chain. FTS5 ranks
+ * first; layer visibility filtering and per-logical-id deduplication run in
+ * the join/CTE on top of the ranked scan (a `LIMIT` is never pushed into the
+ * FTS query), so `meta.total_in_group` counts AFTER the deduplication — exact
+ * on MVP volumes, possibly more expensive than a plain COUNT.
+ * Tombstones are excluded by construction: a tombstoned row has no view row
+ * to join, so the base text does not surface even when it matches.
+ *
  * {@link findDuplicates} powers the add-thought dialog and the MCP
  * `find_duplicates` tool; {@link findMentions} powers the editor mentions
  * panel; {@link findMentionsInTexts} powers the comment view-mode
@@ -410,17 +423,24 @@ function searchNames(
     inListClause('t.type_id', f.typeIds),
     subtreeClause('f.thought_id', f.subtreeIds),
   ]);
+  // S6 (13-layers.md §9): the names index carries one FTS row per PHYSICAL
+  // thought row (rowid = thoughts.pk), so an overridden thought has rows for
+  // every layer of the chain. The join is by rowid with `thoughts_v` — the
+  // view exposes the winner row's rowid — so only the winner's text matches:
+  // stale ancestor revisions, other layers' rows and tombstones (no view row)
+  // never reach the result. Dedup by logical id comes free: one FTS row joins
+  // per visible thought (`UNIQUE (id, layer_id)`). FTS5 ranks first, the
+  // layer visibility filter runs on top — `LIMIT`/`OFFSET` and the total are
+  // computed after the filtering/dedup, never pushed into the FTS scan.
   const total = (
     ndb
       .prepare(
         `SELECT COUNT(*) AS c FROM fts_thought_names f
-         JOIN thoughts_v t ON t.id = f.thought_id WHERE ${where}`,
+         JOIN thoughts_v t ON t.rowid = f.rowid WHERE ${where}`,
       )
       .get(...params) as { c: number }
   ).c;
-  // The names FTS index is keyed by `thought_id`/`synonym_norm`, so one row
-  // already maps to one thought — no per-comment collapse is needed here.
-  // Visual style and `active` are joined from `thoughts` so the client can
+  // Visual style and `active` are joined from the winner row so the client can
   // render the hit row like a cloud on the canvas (08-ui-spec.md §2.2).
   const rows = ndb
     .prepare(
@@ -432,7 +452,7 @@ function searchNames(
               t.font_manual AS font_manual,
               t.type_id AS type_id, t.active AS active
        FROM fts_thought_names f
-       JOIN thoughts_v t ON t.id = f.thought_id
+       JOIN thoughts_v t ON t.rowid = f.rowid
        WHERE ${where}
        ORDER BY rank
        LIMIT ? OFFSET ?`,

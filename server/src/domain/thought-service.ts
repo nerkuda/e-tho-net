@@ -283,6 +283,13 @@ export function parseSynonyms(input: SynonymInput): string[] {
  * same layer back up instead of silently dropping the row.
  */
 function setSynonyms(ndb: NetworkDb, thoughtId: string, synonyms: string[]): void {
+  // S6 (02-data-model.md §3.11): the names index text of a thought row is
+  // `title + synonyms of the SAME layer`, rebuilt by triggers keyed to the
+  // thought row of that layer. In a working layer the thought shadow must
+  // exist BEFORE the synonym rows move into it — otherwise the triggers
+  // rebuild nothing and the index keeps serving the ancestor's stale text
+  // (a removed synonym keeps matching, a added one is never found).
+  materializeShadow(ndb, 'thoughts', thoughtId);
   const oldIds = (
     ndb.prepare('SELECT id FROM thought_synonyms_v WHERE thought_id = ?').all(thoughtId) as {
       id: string;
@@ -837,6 +844,9 @@ export function deleteThought(
 export function addSynonyms(ndb: NetworkDb, thoughtId: string, input: SynonymInput): string[] {
   return ndb.transaction(() => {
     getThoughtOrThrow(ndb, thoughtId);
+    // S6: the layer's thought row must exist so the synonym triggers rebuild
+    // its FTS names row (see setSynonyms).
+    materializeShadow(ndb, 'thoughts', thoughtId);
     const additions = parseSynonyms(input);
     const stmt = ndb.prepare(
       `INSERT INTO thought_synonyms (thought_id, synonym, synonym_norm, layer_id)
@@ -855,6 +865,9 @@ export function addSynonyms(ndb: NetworkDb, thoughtId: string, input: SynonymInp
 export function removeSynonym(ndb: NetworkDb, thoughtId: string, synonym: string): string[] {
   return ndb.transaction(() => {
     getThoughtOrThrow(ndb, thoughtId);
+    // S6: the layer's thought row must exist so the synonym triggers rebuild
+    // its FTS names row (see setSynonyms).
+    materializeShadow(ndb, 'thoughts', thoughtId);
     const rows = ndb
       .prepare(
         'SELECT id FROM thought_synonyms_v WHERE thought_id = ? AND synonym_norm = ?',
