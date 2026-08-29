@@ -116,7 +116,14 @@ function seedPreLayersData(db: DatabaseConstructor.Database): void {
     now,
     now,
   );
+  // Several synonyms: 025 gives each row its own gen_uuid() id — a
+  // deterministic no-arg function would fold into one UUID per statement and
+  // trip UNIQUE (id, layer_id) on the second row, so a realistic fixture needs
+  // ≥2 rows here to expose that regression (the real database has dozens).
   ins(`INSERT INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES ('t1','Идея','идея')`);
+  ins(`INSERT INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES ('t1','Замысел','замысел')`);
+  ins(`INSERT INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES ('t1','Мыслишка','мыслишка')`);
+  ins(`INSERT INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES ('t2','Дубль','дубль')`);
 
   ins(
     `INSERT INTO thought_types (id,name,name_key,parent_id,is_root,icon,icon_kind,fg_color,
@@ -181,8 +188,12 @@ function seedPreLayersData(db: DatabaseConstructor.Database): void {
     now,
     now,
   );
-  // Secondary m2m target beyond the primary backfilled ones.
+  // One chronological comment fanned out to several owners (the multi-target
+  // shape of 019): exercises the same gen_uuid() backfill with ≥3 rows, like
+  // the secondary targets on a real database.
   ins(`INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES ('c2','thought','t2')`);
+  ins(`INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES ('c2','thought','t1')`);
+  ins(`INSERT INTO comment_targets (comment_id, owner_type, owner_id) VALUES ('c2','thought','home')`);
 
   ins(
     `INSERT INTO attachments (id,owner_type,owner_id,kind,url,file_path,file_size,mime_type,title,

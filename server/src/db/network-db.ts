@@ -153,9 +153,13 @@ export class NetworkDb {
  *
  * `type_name_key` computes the normalized type-name key (trim + lowercase,
  * same as shared `typeNameKey`) for the backfill in migration 017; `gen_uuid`
- * (deterministic flag only to satisfy SQLite's rules for `DEFAULT (expr)`,
- * each call still returns a fresh UUID, see migration 025) supplies row ids
- * for `thought_synonyms`/`comment_targets` rows created without an explicit id.
+ * supplies row ids for `thought_synonyms`/`comment_targets` rows created
+ * without an explicit id (migration 025). Deliberately registered WITHOUT the
+ * `deterministic` flag: SQLite folds a deterministic no-argument function into
+ * a constant per statement, so `INSERT … SELECT gen_uuid()` in 025 would give
+ * every row the same UUID and trip `UNIQUE (id, layer_id)`; `DEFAULT (expr)`
+ * does not require determinism (only generated columns and index expressions
+ * do), so nothing is lost by leaving the flag off.
  * Both must exist on the connection before `runMigrations` executes. Exported
  * so tests that apply migrations to their own connections can register the
  * helpers the same way production code does.
@@ -164,7 +168,7 @@ export function registerMigrationHelpers(db: Database.Database): void {
   db.function('type_name_key', (value: unknown) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   );
-  db.function('gen_uuid', { deterministic: true }, () => randomUUID());
+  db.function('gen_uuid', () => randomUUID());
 }
 
 /**
