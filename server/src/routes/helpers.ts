@@ -45,13 +45,17 @@ declare module 'fastify' {
  * Emitter signature used by phase-D routes: derive the actor from the request
  * (auth context + `Client-Id`) and emit the catalogue-typed event after a
  * successful mutation (docs/04-realtime.md §4–5, task E3).
+ *
+ * `options.layerId` overrides the event's layer attribution (task S8): the
+ * merge route attributes its single `layer.merged` event to the merge target,
+ * not to the acting session's current layer.
  */
 export type RouteEmit = <E extends RealtimeEventType>(
   req: FastifyRequest,
   networkId: string,
   type: E,
   data: RealtimeEventMap[E],
-  options?: { audience?: RealtimeAudience },
+  options?: { audience?: RealtimeAudience; layerId?: string },
 ) => void;
 
 /** Dependencies injected into the phase-D route plugin factories. */

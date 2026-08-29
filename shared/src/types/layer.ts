@@ -59,3 +59,54 @@ export interface LayerDeleteResult {
   /** Trash rows that stayed behind because they are still blocked. */
   skipped: number;
 }
+
+// ---------------------------------------------------------------------------
+// Merge (task S8, docs/13-layers.md §8; docs/03-server-api.md §5a.6)
+// ---------------------------------------------------------------------------
+
+/** One `base_version` divergence that rejected a merge (13-layers.md §8.3). */
+export interface LayerMergeConflict {
+  table: string;
+  id: string;
+  expected_base_version: number;
+  current_version: number;
+}
+
+/** One reference that kept a merge set from being closed (§8.1). */
+export interface LayerMergeMissingClosure {
+  table: string;
+  id: string;
+  /** The merged row that references the missing entity. */
+  referenced_by: { table: string; id: string };
+}
+
+/** One residual §6.4 case: a link whose endpoint is physically gone. */
+export interface LayerMergeSkip {
+  table: string;
+  id: string;
+  reason: 'endpoint_missing';
+  /** Which endpoint is gone: `source` or `target`. */
+  missing: 'source' | 'target';
+}
+
+/** A collapsed batch of position-only link updates (13-layers.md §6.5). */
+export interface LayerMergeReorderCollapsed {
+  /** The thought whose children were reordered (`links.source_id`). */
+  thought_id: string;
+  count: number;
+}
+
+/** Response of `POST /networks/{nid}/layers/{id}/merge` (§8.3). */
+export interface LayerMergeReport {
+  /** How many logical rows moved to the parent, per branchable table. */
+  applied: Record<string, number>;
+  /** Residual §6.4 cases — link not created, merge continued. */
+  skipped: LayerMergeSkip[];
+  /** Position-only link batches collapsed into single report entries. */
+  reorder_collapsed: LayerMergeReorderCollapsed[];
+  /** Service layer holding the pre-merge state of the affected rows (§8.2);
+   * `null` when there was nothing to overwrite. */
+  reserve_layer_id: string | null;
+  /** Rows removed by the trash auto-purge right after the merge (§8.4). */
+  purged: number;
+}

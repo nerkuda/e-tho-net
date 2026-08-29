@@ -7,6 +7,7 @@
  *   PATCH  /networks/:networkId/layers/:layerId         — rename / edit comment
  *   DELETE /networks/:networkId/layers/:layerId?cascade=N — subtree delete
  *   POST   /networks/:networkId/layers/:layerId/select  — switch session layer
+ *   POST   /networks/:networkId/layers/:layerId/merge   — merge into the parent (S8)
  *
  * Rights (13-layers.md §7.2): identical for every network member. The layer
  * metadata lives outside the branchable tables, so these handlers run on the
@@ -16,7 +17,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { BASE_LAYER_ID, EtnError } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError, type LayerMergeReport } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
 import {
@@ -27,6 +28,7 @@ import {
   parseIfMatch,
   queryBoolean,
   queryInt,
+  requestBody,
   resolveRequestLayer,
   type RouteDeps,
 } from './helpers.js';
@@ -38,6 +40,9 @@ import {
   setSessionLayer,
   updateLayer,
 } from '../domain/layer-service.js';
+import { mergeLayer, type MergeSelection } from '../domain/merge-service.js';
+import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
+import type { BranchableTable } from '../db/layer-write.js';
 import { closeNetworkDb } from '../db/network-db.js';
 
 /** Route params for a network id. */
@@ -219,6 +224,82 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         // stale — the REST response alone would not reach an open WS.
         app.realtimeGateway.notifyLayerSwitch(networkId, req.auth!.user.id, req.auth!.clientId, layer);
         sendSuccess(reply, layer);
+      },
+    );
+
+    // --- Merge the layer into its parent (S8, 13-layers.md §8; 03-server-api.md
+    // §5a.6). Full merge (no `tables`) or a closed partial subset; any
+    // conflict/closure failure is a 422 carrying the lists. The route runs on
+    // the base-layer connection — the replay writes the target's rows
+    // physically and the trash auto-purge deletes physically.
+    app.post(
+      '/networks/:networkId/layers/:layerId/merge',
+      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, layerId } = req.params as LayerParams;
+        const body = requestBody(req);
+
+        let selection: MergeSelection | undefined;
+        const tablesValue = body.tables;
+        if (tablesValue !== undefined) {
+          if (typeof tablesValue !== 'object' || tablesValue === null || Array.isArray(tablesValue)) {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'tables должен быть объектом { таблица: [id, …] }.',
+              { field: 'tables' },
+              req.id,
+            );
+          }
+          selection = {};
+          for (const [table, ids] of Object.entries(tablesValue as Record<string, unknown>)) {
+            if (!(BRANCHABLE_TABLES as readonly string[]).includes(table)) {
+              throw new EtnError(
+                'VALIDATION_ERROR',
+                `неизвестная ветвимая таблица «${table}».`,
+                { field: 'tables', table, allowed: BRANCHABLE_TABLES },
+                req.id,
+              );
+            }
+            if (!Array.isArray(ids) || ids.some((item) => typeof item !== 'string')) {
+              throw new EtnError(
+                'VALIDATION_ERROR',
+                `tables.${table} должен быть массивом строк (логических id строк слоя).`,
+                { field: 'tables', table },
+                req.id,
+              );
+            }
+            selection[table as BranchableTable] = ids as string[];
+          }
+        }
+
+        const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
+        const result = mergeLayer(ndb, layerId, selection, req.auth!.user.id);
+
+        // Exactly one `layer.merged` event per merge (04-realtime.md §11.4):
+        // no per-row fan-out of the replayed rows — recipients resync fully.
+        // The event's layer attribution is the merge target, not the session.
+        const report: LayerMergeReport = {
+          applied: result.applied,
+          skipped: result.skipped,
+          reorder_collapsed: result.reorder_collapsed,
+          reserve_layer_id: result.reserve_layer_id,
+          purged: result.purged,
+        };
+        deps.emit(req, networkId, 'layer.merged', {
+          ...report,
+          layer: result.merged_layer,
+          target_layer: result.target_layer,
+        }, { layerId: result.target_layer.id });
+        // The trash auto-purge victims are ordinary deletions outside the
+        // merge row set — fan out the standard events for them (as the layer
+        // delete route does).
+        for (const id of result.deleted_thought_ids) {
+          deps.emit(req, networkId, 'thought.deleted', { id });
+        }
+        for (const id of result.deleted_link_ids) {
+          deps.emit(req, networkId, 'link.deleted', { id });
+        }
+        sendSuccess(reply, report);
       },
     );
   };

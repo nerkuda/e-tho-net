@@ -25,6 +25,7 @@ import type { ChronicleSavedFilter } from './chronicle.js';
 import type { Thought, ThoughtUpdateInput } from './thought.js';
 import type { PropertyDefinition, PropertyValueValue, ThoughtType } from './thought-type.js';
 import type { SavedFilter } from './structure.js';
+import type { LayerMergeReport } from './layer.js';
 
 // ---------------------------------------------------------------------------
 // Envelope
@@ -97,6 +98,8 @@ export const REALTIME_EVENT_TYPES = [
   'saved-filter.updated',
   'saved-filter.deleted',
   'pinned-thoughts.updated',
+  // change layers (§4.9, task S8)
+  'layer.merged',
 ] as const;
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];
 
@@ -280,6 +283,18 @@ export interface PinnedThoughtsUpdatedData {
 }
 
 /**
+ * `layer.merged` (task S8, 04-realtime.md §4.9/§11.4): the single event a
+ * successful layer merge emits — the full merge report plus both layers'
+ * identities. Recipients must fully re-sync their visible state.
+ */
+export interface LayerMergedData extends LayerMergeReport {
+  /** The merged (now emptied) layer. */
+  layer: { id: string; title: string };
+  /** The merge target — the parent the rows moved into. */
+  target_layer: { id: string; title: string };
+}
+
+/**
  * Maps each {@link RealtimeEventType} to its `data` payload type.
  * Used by {@link RealtimeEvent} and {@link AnyRealtimeEvent}.
  */
@@ -324,6 +339,7 @@ export interface RealtimeEventMap {
   'saved-filter.updated': SavedFilterUpdatedData;
   'saved-filter.deleted': SavedFilterDeletedData;
   'pinned-thoughts.updated': PinnedThoughtsUpdatedData;
+  'layer.merged': LayerMergedData;
 }
 
 /** Strongly-typed event envelope for a specific event name. */
@@ -407,6 +423,7 @@ export const REALTIME_EVENT_AUDIENCE = {
   'saved-filter.updated': 'user',
   'saved-filter.deleted': 'user',
   'pinned-thoughts.updated': 'user',
+  'layer.merged': 'network',
 } as const satisfies Record<RealtimeEventType, RealtimeAudience>;
 
 // ---------------------------------------------------------------------------

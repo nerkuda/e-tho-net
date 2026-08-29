@@ -548,6 +548,7 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'saved-filter.updated': 'изменён отбор',
   'saved-filter.deleted': 'удалён отбор',
   'pinned-thoughts.updated': 'обновлены закреплённые',
+  'layer.merged': 'слит слой',
 };
 
 /**

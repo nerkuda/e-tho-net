@@ -253,8 +253,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
           // Task S9, 13-layers.md §12: tag the event with the write's layer so
           // the gateway/changes.list can compute per-subscriber visibility.
           // `req.layerEcho` is already memoised by the route's
-          // `openRouteNetworkDb` call before it emits.
-          layerId: req.layerEcho?.id ?? BASE_LAYER_ID,
+          // `openRouteNetworkDb` call before it emits. Task S8: the merge
+          // route attributes its `layer.merged` event to the merge target
+          // explicitly — the acting session may sit anywhere.
+          layerId: options?.layerId ?? req.layerEcho?.id ?? BASE_LAYER_ID,
         },
       );
     },
