@@ -2317,6 +2317,104 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.properties.set single form coerces stringified bool/number scalars, garbage still rejected (0.5.3)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      // Seed a type with bool/number/text properties (direct inserts).
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const typeId = createThoughtType(ndb, { name: 'Coerce' }, ctx.adminId).id;
+      const boolProp = createTypeProperty(ndb, 'thought_type', typeId, {
+        key: 'enabled',
+        value_type: 'bool',
+      });
+      const numProp = createTypeProperty(ndb, 'thought_type', typeId, {
+        key: 'rank',
+        value_type: 'number',
+      });
+      const textProp = createTypeProperty(ndb, 'thought_type', typeId, {
+        key: 'label',
+        value_type: 'text',
+      });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = await handle.client.callTool({
+          name: 'etn.thoughts.create',
+          arguments: { network_id: ctx.networkId, title: 'Коэрс', type_id: typeId },
+        });
+        assert.equal(created.isError, undefined, toolText(created));
+        const thoughtId = toolJson<{ id: string }>(created).id;
+
+        const setProp = (key: string, value: unknown) =>
+          handle.client.callTool({
+            name: 'etn.properties.set',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: thoughtId,
+              key,
+              value,
+            },
+          });
+        const readRow = (propertyId: string) =>
+          ndb
+            .prepare(
+              'SELECT value_bool, value_number, value_text FROM property_values WHERE owner_id = ? AND property_id = ?',
+            )
+            .get(thoughtId, propertyId) as {
+            value_bool: number | null;
+            value_number: number | null;
+            value_text: string | null;
+          };
+
+        // Stringified booleans are coerced back (case-insensitive)…
+        let res = await setProp('enabled', 'true');
+        assert.equal(res.isError, undefined, toolText(res));
+        assert.equal(readRow(boolProp.id).value_bool, 1);
+        res = await setProp('enabled', 'FALSE');
+        assert.equal(res.isError, undefined, toolText(res));
+        assert.equal(readRow(boolProp.id).value_bool, 0);
+        // …and real booleans keep working unchanged.
+        res = await setProp('enabled', true);
+        assert.equal(res.isError, undefined, toolText(res));
+        assert.equal(readRow(boolProp.id).value_bool, 1);
+
+        // Stringified finite numbers are coerced…
+        res = await setProp('rank', '42');
+        assert.equal(res.isError, undefined, toolText(res));
+        assert.equal(readRow(numProp.id).value_number, 42);
+        res = await setProp('rank', '3.5');
+        assert.equal(res.isError, undefined, toolText(res));
+        assert.equal(readRow(numProp.id).value_number, 3.5);
+        // …and real numbers keep working unchanged.
+        res = await setProp('rank', 7);
+        assert.equal(res.isError, undefined, toolText(res));
+        assert.equal(readRow(numProp.id).value_number, 7);
+
+        // Text properties never coerce: "true" stays a string.
+        res = await setProp('label', 'true');
+        assert.equal(res.isError, undefined, toolText(res));
+        assert.equal(readRow(textProp.id).value_text, 'true');
+
+        // Garbage strings fall through the coercion and are rejected by the
+        // (untouched) domain validation.
+        for (const [key, value, pattern] of [
+          ['enabled', 'да', /expects a boolean/],
+          ['rank', 'abc', /expects a number/],
+          ['rank', '', /expects a number/],
+        ] as const) {
+          const rejected = await setProp(key, value);
+          assert.equal(rejected.isError, true);
+          assert.match(toolText(rejected), pattern);
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('etn.properties.set writes and resolves multiple thought_ref values', async () => {
     const ctx = await buildMcpContext();
     try {

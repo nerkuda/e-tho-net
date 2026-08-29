@@ -770,8 +770,12 @@ function ownerTable(ownerType: PropertyOwnerType): 'thoughts_v' | 'links_v' {
  * nearest definition with the key wins. An untyped owner sees the root type's
  * properties — the root's settings apply to every element without a type
  * (docs/08-ui-spec.md §8.1). Returns `null` when nothing matches.
+ *
+ * Exported for the MCP facade (`etn.properties.set`), which needs the resolved
+ * `value_type` to coerce stringified scalars back at the transport boundary
+ * (docs/05-mcp-server.md §5.2) before delegating to {@link setPropertyValue}.
  */
-function resolveDefinition(
+export function resolveDefinition(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,

@@ -65,6 +65,8 @@ import {
   type McpTypesListResult,
   type McpUpsertBundleResult,
   type McpViewMode,
+  type PropertyDefinition,
+  type PropertyValueValue,
 } from '@etn/shared';
 
 import {
@@ -103,6 +105,7 @@ import {
   findThoughtUsage,
   getPropertyValuesResolved,
   listEffectiveTypeProperties,
+  resolveDefinition,
   setPropertyValue,
   setPropertyValues,
 } from '../domain/property-service.js';
@@ -2157,6 +2160,35 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     z.array(z.string().min(1)),
     z.null(),
   ]);
+  /**
+   * Coerce stringified scalars back to their JSON types at the MCP boundary
+   * (0.5.3 bugfix, docs/05-mcp-server.md §5.2). Some MCP hosts (ZCode among
+   * them) stringify the scalar `value` parameter of a union-typed tool input,
+   * so `value: true` arrives as `"true"`; nested objects (`values`,
+   * `properties`) pass through untouched, which is why only the single form of
+   * `etn.properties.set` needs this. The rules stay strict on purpose:
+   *   * `bool` — only the exact strings "true"/"false" (case-insensitive);
+   *   * `number` — only strings `Number()` parses into a finite number
+   *     (so "42", "3.5", "1e3" pass; "", "abc", "Infinity" fall through and
+   *     are rejected by the domain validation, which itself stays untouched).
+   * Text-like properties (`text`, `url`, `date`) never coerce: "true" stays a
+   * string there.
+   */
+  const coerceStringifiedScalar = (
+    def: PropertyDefinition,
+    value: PropertyValueValue,
+  ): PropertyValueValue => {
+    if (typeof value !== 'string') {
+      return value;
+    }
+    if (def.value_type === 'bool' && /^(true|false)$/i.test(value)) {
+      return value.toLowerCase() === 'true';
+    }
+    if (def.value_type === 'number' && value.trim() !== '' && Number.isFinite(Number(value))) {
+      return Number(value);
+    }
+    return value;
+  };
   const SetPropertySchema = z
     .object({
       network_id: NetworkId,
@@ -2178,7 +2210,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Set (or clear with `value: null`) a property value on a thought/link, addressed by key; ' +
         "the value must match the property definition's value_type. A `thought_ref` property with " +
         '`config.multiple = true` also accepts an array of thought ids (multiple values); an empty ' +
-        'array clears the value. Either provide one ' +
+        'array clears the value. Hosts that stringify scalar parameters are tolerated in the single ' +
+        'form: for `bool` the exact strings "true"/"false" (case-insensitive) and for `number` finite ' +
+        'numeric strings are coerced back to their JSON types before validation. Either provide one ' +
         '`key`+`value`, or a map `values: {key: value|null}` to write several properties in a ' +
         'single transaction (any invalid key rolls back the whole set). Single form returns ' +
         '{ id, version: 0 }; bulk form returns { values: {key: {id}}, version: 0 }.',
@@ -2224,7 +2258,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         if (key === undefined || value === undefined) {
           throw new Error('ETN error [VALIDATION_ERROR]: key and value are required');
         }
-        const stored = setPropertyValue(ndb, args.owner_type, args.owner_id, key, value);
+        // Some MCP hosts stringify scalar union parameters ("true" instead of
+        // true) — coerce the string back per the resolved definition's
+        // value_type before the domain call (docs/05-mcp-server.md §5.2).
+        // A missing definition is left to setPropertyValue to report (NOT_FOUND).
+        const def = resolveDefinition(ndb, args.owner_type, args.owner_id, key);
+        const coerced = def === null ? value : coerceStringifiedScalar(def, value);
+        const stored = setPropertyValue(ndb, args.owner_type, args.owner_id, key, coerced);
         emitAgentEvent(
           rt,
           args.network_id,
@@ -2239,7 +2279,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         );
         auditAgentCall(rt, 'etn.properties.set', args.network_id, args.owner_type, args.owner_id, {
           key,
-          value,
+          value: coerced,
         });
         return {
           id: stored.id,
