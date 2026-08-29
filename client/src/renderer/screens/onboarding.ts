@@ -9,7 +9,7 @@
  *  - understandable errors (bad key / unreachable server / version mismatch).
  */
 
-import { openNetworkScreen } from '../app.js';
+import { restoreSession } from '../app.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { store } from '../state.js';
@@ -74,14 +74,17 @@ export function buildOnboarding(): HTMLElement {
 
   root.append(card);
 
-  /** Connects a saved profile; on success switches to the network list. */
+  /** Connects a saved profile; on success restores the saved session (bug
+   *  be430215): a previously used server reopens its last tab instead of
+   *  offering a network re-pick. A first-time connect has no saved tabs and
+   *  still lands on the network list. */
   async function connectProfile(profileId: string): Promise<void> {
     connectError.hidden = true;
     submit.disabled = true;
     try {
       const me = await etn.server.connect(profileId);
       store.update({ profileId, me });
-      openNetworkScreen();
+      await restoreSession();
     } catch (err) {
       connectError.textContent = errText(err);
       connectError.hidden = false;
@@ -128,7 +131,9 @@ export function buildOnboarding(): HTMLElement {
       const profiles = await etn.server.listProfiles();
       const active = profiles.find((p) => p.isActive);
       store.update({ profileId: active?.id ?? null, me });
-      openNetworkScreen();
+      // New profile → no saved tabs → `restoreSession` shows the network
+      // list, same as before (H3 first-connect flow).
+      await restoreSession();
     } catch (err) {
       formError.textContent = errText(err);
     } finally {

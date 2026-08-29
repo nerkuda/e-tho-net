@@ -30,6 +30,7 @@ import {
   parseLinkTypeId,
   parseListHeights,
   parseWindowLayout,
+  pickMostRecentTab,
 } from './lib/pure.js';
 import { initListClamps } from './editor/list-heights.js';
 import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js';
@@ -379,8 +380,30 @@ export function backToNetworks(): void {
   showScreen('networks');
 }
 
-/** Switches to the network list after a successful connect (H2). */
-export function openNetworkScreen(): void {
+/**
+ * Restores the saved session after a successful connect: when the profile has
+ * locally saved tabs (open networks, per-tab focus / view — the settings of a
+ * previous run), drop the user straight into the most recently active one —
+ * exactly like a client restart (Q-bugfix). Without saved tabs (first-time
+ * connect, cleared cache) the network list offers the choice (H3).
+ *
+ * Shared by `boot()` and by the onboarding reconnect paths, so reconnecting to
+ * a previously used server no longer forces a network re-pick (bug
+ * be430215: every re-pick opened a duplicate tab of an already open network).
+ */
+export async function restoreSession(): Promise<void> {
+  // Q5: mark tabs whose networks the user can no longer see.
+  void refreshTabAccessibility();
+  const tabs = await etn.tabs.list().catch(() => []);
+  const mostRecent = pickMostRecentTab(tabs);
+  if (mostRecent !== null) {
+    const opened = await openNetwork(mostRecent.network_id, mostRecent.tab_id)
+      .then(() => true)
+      .catch(() => false);
+    if (opened) return;
+    // The saved tab's network can't be opened (deleted server-side, access
+    // revoked) — the network list is the sane fallback, not a blank window.
+  }
   showScreen('networks');
 }
 
@@ -519,26 +542,9 @@ export async function boot(): Promise<void> {
     try {
       const me = await etn.server.connect(active.id);
       store.update({ profileId: active.id, me });
-      // Q5: mark tabs whose networks the user can no longer see.
-      void refreshTabAccessibility();
-
-      // Q-bugfix: if the user has open tabs from a previous session, restore
-      // straight into the most recently active one — no need to force a
-      // re-pick from the network list.
-      const tabs = await etn.tabs.list().catch(() => []);
-      if (tabs.length > 0) {
-        const sorted = [...tabs].sort((a, b) =>
-          b.last_active_at.localeCompare(a.last_active_at),
-        );
-        const mostRecent = sorted[0];
-        if (mostRecent !== undefined) {
-          await openNetwork(mostRecent.network_id, mostRecent.tab_id).catch(
-            () => undefined,
-          );
-          return;
-        }
-      }
-      showScreen('networks');
+      // Q-bugfix: restore the previous session — saved tabs go straight to
+      // the most recently active one, no forced re-pick from the network list.
+      await restoreSession();
       return;
     } catch {
       // Connection failed (server down, key revoked) — onboarding offers a retry.

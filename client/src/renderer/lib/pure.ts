@@ -362,6 +362,28 @@ export function isNotFoundError(err: unknown): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Session restore (bug be430215: reconnect must reuse the saved tabs)
+// ---------------------------------------------------------------------------
+
+/**
+ * Picks the tab to restore after a (re)connect: the one with the newest
+ * `last_active_at` (ISO-8601, lexicographically comparable). `null` when there
+ * is nothing to restore — a first-time connect that should show the network
+ * list instead of the workspace.
+ */
+export function pickMostRecentTab<T extends { last_active_at: string }>(
+  tabs: readonly T[],
+): T | null {
+  let best: T | null = null;
+  for (const tab of tabs) {
+    if (best === null || tab.last_active_at.localeCompare(best.last_active_at) > 0) {
+      best = tab;
+    }
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------------
 // Compound thought names (08-ui-spec.md §2.2.3)
 // ---------------------------------------------------------------------------
 

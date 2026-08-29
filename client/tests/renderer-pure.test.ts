@@ -46,6 +46,7 @@ import {
   parseListHeights,
   parseTitleWithSynonyms,
   parseWindowLayout,
+  pickMostRecentTab,
   shortenCompoundName,
   splitCompoundName,
   zoomStep,
@@ -364,6 +365,35 @@ describe('parseLinkTypeId', () => {
     assert.equal(parseLinkTypeId(null), null);
     assert.equal(parseLinkTypeId('  '), null);
     assert.equal(parseLinkTypeId('abc-123'), 'abc-123');
+  });
+});
+
+describe('pickMostRecentTab (bug be430215: reconnect restores the saved session)', () => {
+  const tab = (id: string, lastActiveAt: string) => ({
+    tab_id: id,
+    last_active_at: lastActiveAt,
+  });
+
+  it('returns null for an empty list — nothing to restore, show the network list', () => {
+    assert.equal(pickMostRecentTab([]), null);
+  });
+
+  it('picks the tab with the newest last_active_at regardless of input order', () => {
+    const tabs = [tab('old', '2026-08-28T10:00:00.000Z'), tab('new', '2026-08-29T09:00:00.000Z')];
+    assert.equal(pickMostRecentTab(tabs)?.tab_id, 'new');
+    assert.equal(pickMostRecentTab([...tabs].reverse())?.tab_id, 'new');
+  });
+
+  it('a single tab is the answer for a single-tab session', () => {
+    assert.equal(pickMostRecentTab([tab('only', '2026-01-01T00:00:00.000Z')])?.tab_id, 'only');
+  });
+
+  it('ISO-8601 timestamps compare lexicographically, including same-prefix dates', () => {
+    const tabs = [
+      tab('a', '2026-08-29T09:00:01.000Z'),
+      tab('b', '2026-08-29T09:00:00.999Z'),
+    ];
+    assert.equal(pickMostRecentTab(tabs)?.tab_id, 'a');
   });
 });
 
