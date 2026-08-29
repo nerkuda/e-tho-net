@@ -2815,8 +2815,8 @@ body.cloud-dragging * {
 /* Выделение текста в markdown-полях (06b18f19): акцентный полупрозрачный
    фон из темы. Класс .comment-view покрывает режим просмотра (постоянный
    комментарий, хронология, вложения) и виджеты live preview в редакторе;
-   выделение строк самого редактора рисует CodeMirror (.cm-selectionBackground
-   в md-editor.ts) той же переменной — цвета в обоих режимах одинаковые.
+   выделение строк самого редактора рисует CodeMirror (.cm-selectionBackground)
+   той же переменной — цвета в обоих режимах одинаковые.
    Фон с альфой не перекрашивает текст: обычный текст, код, цитаты и ссылки
    сохраняют свои цвета и остаются контрастными. */
 .comment-view ::selection,
@@ -2824,11 +2824,32 @@ body.cloud-dragging * {
   background-color: var(--selection-bg);
 }
 
+/* Слой выделения CodeMirror (e8146cdc). Встроенный baseTheme CM задаёт
+   светло-серые фоны (#d9d9d9 без фокуса, #d7d4f0 в фокусе): тема mdTheme
+   не помечена тёмной, поэтому CM держит редактор в ветке &light в обеих
+   темах приложения, а его селекторы (.cm-baseTheme.cm-light.cm-focused > …)
+   специфичнее правила из md-editor.ts — предыдущий фикс (06b18f19) слой не
+   перекрывал, и на тёмной теме светлый текст ложился на светло-серый фон.
+   !important здесь перекрывает оба встроенных правила, а --selection-bg из
+   темы приложения контрастен тексту в светлой и тёмной темах. */
+.cm-editor .cm-selectionBackground {
+  background: var(--selection-bg) !important;
+}
+
 /* Виджеты live preview лежат внутри .cm-line, где drawSelection CodeMirror
    прячет нативное выделение (`background: transparent !important`); больший
    вес селектора возвращает фон при нативном drag-выделении внутри виджета. */
 .cm-editor .cm-line .md-widget ::selection,
 .cm-editor .cm-line .md-widget::selection {
+  background-color: var(--selection-bg) !important;
+}
+
+/* Плашка inline-кода (e8146cdc): её фон (--surface-2) непрозрачен и лежит
+   ПОВЕРХ слоя .cm-selectionLayer — прямоугольники выделения под плашкой не
+   видны. Нативное выделение внутри плашки возвращаем тем же приёмом, что
+   и в виджетах: фон поверх плашки рисует сам браузер. */
+.cm-editor .cm-line .cm-md-inline-code ::selection,
+.cm-editor .cm-line .cm-md-inline-code::selection {
   background-color: var(--selection-bg) !important;
 }
 
