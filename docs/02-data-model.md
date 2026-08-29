@@ -902,7 +902,8 @@ CREATE VIRTUAL TABLE fts_link_texts USING fts5(
 Триггеры синхронизируют FTS с изменениями (rowid FTS-строки = `pk` источника,
 слой — той строки, из которой текст взят):
 - `INSERT/UPDATE/DELETE` на `thoughts` → обновить `fts_thought_names`
-  (text = title + синонимы **того же слоя**);
+  (text = title + синонимы **того же слоя**, живые — надгробия синонимов
+  (§3.0.1) в агрегат не попадают, миграция 026);
 - `INSERT/UPDATE/DELETE` на `thought_synonyms` → обновить `fts_thought_names`
   строки мысли того же слоя;
 - `INSERT/UPDATE/DELETE` на `comments` → обновить соответствующую FTS
