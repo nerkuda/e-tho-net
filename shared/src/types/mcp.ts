@@ -57,6 +57,7 @@ export const MCP_TOOL_NAMES = [
   'etn.types.list',
   'etn.changes.list',
   'etn.metrics.reads',
+  'etn.layers.list',
   // mutate (§4.2)
   'etn.thoughts.create',
   'etn.thoughts.update',
@@ -76,6 +77,12 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.upsert_bundle',
   'etn.trash.purge',
   'etn.thoughts.usage_clear',
+  // layers (S10, §4.2)
+  'etn.layers.create',
+  'etn.layers.update',
+  'etn.layers.delete',
+  'etn.layers.select',
+  'etn.layers.merge',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -137,12 +144,15 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.metrics.reads': { readOnlyHint: true },
   'etn.attachments.search': { readOnlyHint: true },
   'etn.thoughts.find_duplicates': { readOnlyHint: true },
+  'etn.layers.list': { readOnlyHint: true },
 
   // ---- mutating tools — destructiveHint ---------------------------
   'etn.thoughts.delete': { destructiveHint: true },
   'etn.links.delete': { destructiveHint: true },
   'etn.comments.delete': { destructiveHint: true },
   'etn.trash.purge': { destructiveHint: true },
+  'etn.layers.delete': { destructiveHint: true },
+  'etn.layers.merge': { destructiveHint: true },
 
   // ---- mutating tools — idempotentHint ----------------------------
   'etn.thoughts.set_active': { idempotentHint: true },
@@ -150,6 +160,8 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.links.trash': { idempotentHint: true },
   'etn.properties.set': { idempotentHint: true },
   'etn.thoughts.upsert_bundle': { idempotentHint: true },
+  'etn.layers.update': { idempotentHint: true },
+  'etn.layers.select': { idempotentHint: true },
 };
 
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5). */

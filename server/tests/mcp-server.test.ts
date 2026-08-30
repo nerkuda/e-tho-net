@@ -242,10 +242,13 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         const hintIdempotent = MCP_TOOL_NAMES.filter(
           (n) => MCP_TOOL_ANNOTATIONS[n]?.idempotentHint === true,
         ).length;
-        assert.equal(annotated, 31);
-        assert.equal(hintReadOnly, 22);
-        assert.equal(hintDestructive, 4);
-        assert.equal(hintIdempotent, 5);
+        // S10 added 6 layer tools: 1 read (readOnlyHint), 2 destructive
+        // (delete, merge) and 2 idempotent (update, select) — `create` has no
+        // hint (matches `thoughts.create`/`links.create`).
+        assert.equal(annotated, 36);
+        assert.equal(hintReadOnly, 23);
+        assert.equal(hintDestructive, 6);
+        assert.equal(hintIdempotent, 7);
       } finally {
         await handle.close();
       }

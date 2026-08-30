@@ -1,14 +1,23 @@
 /**
  * MCP tools (task F4, docs/05-mcp-server.md §4).
  *
- * Thirty-one tools in three groups:
+ * Forty-five tools in four groups (see {@link MCP_TOOL_NAMES} for the exact
+ * roster — counts drift with every phase, this is a map, not a tally):
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
  *     path, links get, mentions, usage, comments get, export, types list,
- *     changes list (O9), metrics.reads (O10);
+ *     changes list (O9), metrics.reads (O10), layers.list (S10);
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert/update/delete,
  *     attachments.add, properties.set, set_active, thoughts.upsert_bundle,
- *     attachments.search;
+ *     attachments.search, layers.create/update/delete/select/merge (S10);
  *   * dedupe (§4.3) — find_duplicates.
+ *
+ * **Layer awareness is sequential, not a separate concern (S10, 13-layers.md
+ * §10.2):** every read/write tool above resolves the calling API key's own
+ * session layer through `openMemberNetwork` (`mcp/context.ts`) — there is no
+ * parallel "layer-aware" variant of `etn.thoughts.get` etc. The six
+ * `etn.layers.*` tools manage the layers themselves (list/create/rename/
+ * delete/select/merge) and, like the REST layer routes, run on the base-layer
+ * connection because `layers`/`session_layers` are not branchable (§3).
  *
  * `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`
  * additionally accept a type **by name** (`type`, task O4) as an alternative
@@ -35,12 +44,25 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { openNetworkDb } from '../db/network-db.js';
-import { resolveSessionLayer, resolveSessionSwitchSeq } from '../domain/layer-service.js';
+import { closeNetworkDb, openNetworkDb } from '../db/network-db.js';
+import {
+  createLayer,
+  deleteLayerWithEvents,
+  layerSubtreeIds,
+  listLayers,
+  resolveSessionLayer,
+  resolveSessionSwitchSeq,
+  setSessionLayer,
+  updateLayer,
+} from '../domain/layer-service.js';
+import { mergeLayer, type MergeSelection } from '../domain/merge-service.js';
+import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
+import type { BranchableTable } from '../db/layer-write.js';
 import { isEventVisibleInLayer } from '../realtime/layer-visibility.js';
 
 import {
   ATTACHMENT_KINDS,
+  BASE_LAYER_ID,
   COMMENT_KINDS,
   COMMENT_OWNER_TYPES,
   COMMENT_TARGETS_MAX,
@@ -57,6 +79,8 @@ import {
   TRAVERSAL_DEFAULTS,
   type CommentTarget,
   type ExportFormat,
+  type Layer,
+  type LayerMergeReport,
   type McpChangeEntry,
   type McpChangesListResult,
   type McpMetricsReadsResult,
@@ -158,6 +182,7 @@ import {
   openMemberNetworkBase,
   requireWriteBudget,
   requireWritable,
+  resolveRuntimeLayer,
   runTool,
   runWriteTool,
   type McpRuntime,
@@ -170,6 +195,7 @@ import {
 const NetworkId = z.string().min(1);
 const ThoughtId = z.string().min(1);
 const LinkId = z.string().min(1);
+const LayerId = z.string().min(1);
 const ExpectedVersion = z.number().int().min(1).optional();
 
 /**
@@ -1420,9 +1446,299 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
+  // etn.layers.list — S10 read tool, paritet with REST `GET .../layers`
+  // (03-server-api.md §5a, 13-layers.md §10.1). Runs on the base-layer
+  // connection: `layers`/`session_layers` are not branchable (§3), and the
+  // session's own current layer id must be resolved independently of which
+  // layer the list itself is read from.
+  const LayersListSchema = z.object({
+    network_id: NetworkId,
+    include_service: z.boolean().optional(),
+  });
+  mcp.registerTool(
+    'etn.layers.list',
+    {
+      title: 'Список слоёв',
+      description:
+        'All layers of the network with hierarchy metadata (task S10, 13-layers.md §2.2, §10.1): ' +
+        'id, parent_id, title, comment, git_branch, depth, children_count (the DELETE cascade ' +
+        'confirmation, §2.4) and `current` — true on the calling key\'s own session layer. ' +
+        'Service (reserve) layers are hidden unless `include_service: true` (§8.2).',
+      inputSchema: LayersListSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.layers.list'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetworkBase(rt, args.network_id);
+        const current = resolveRuntimeLayer(rt, args.network_id);
+        return listLayers(ndb, { includeService: args.include_service, currentLayerId: current.id });
+      }),
+  );
+
   // =========================================================================
   // Mutating tools (§4.2) — domain services + real-time events + audit log
   // =========================================================================
+
+  // ---- Layers (task S10, 13-layers.md §10.2) — paritet with REST §5a -------
+  // All five run on the base-layer connection (`layers`/`session_layers` are
+  // not branchable, §3), mirroring `routes/layers.ts` line for line.
+
+  const LayersCreateSchema = z.object({
+    network_id: NetworkId,
+    title: z.string().min(1),
+    /** Defaults to the calling key's current session layer (§2.3). */
+    parent_id: LayerId.optional(),
+    comment: z.string().nullable().optional(),
+    git_branch: z.string().nullable().optional(),
+  });
+  mcp.registerTool(
+    'etn.layers.create',
+    {
+      title: 'Создать слой',
+      description:
+        'Create a layer under the given parent (task S10, 13-layers.md §2.3) — defaults to the ' +
+        'calling key\'s current session layer when `parent_id` is omitted. `comment` is optional ' +
+        'but strongly encouraged (§2.2): it is how the next agent understands the layer\'s purpose ' +
+        'without asking. Depth is capped at 4 ordinary layers above the base (§2.1) — a parent ' +
+        'already at that depth rejects with VALIDATION_ERROR. Does not switch the session to the ' +
+        'new layer — call `etn.layers.select` for that.',
+      inputSchema: LayersCreateSchema,
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetworkBase(rt, args.network_id);
+        const parent = args.parent_id ?? resolveRuntimeLayer(rt, args.network_id).id;
+        const layer = createLayer(ndb, {
+          parentId: parent,
+          title: args.title,
+          comment: args.comment ?? null,
+          gitBranch: args.git_branch ?? null,
+          createdBy: rt.deps.auth.userId,
+        });
+        auditAgentCall(rt, 'etn.layers.create', args.network_id, 'layer', layer.id, {
+          title: args.title,
+          parent_id: parent,
+        });
+        return { ...layer, request_id: String(extra.requestId) };
+      }),
+  );
+
+  const LayersUpdateSchema = z.object({
+    network_id: NetworkId,
+    layer_id: LayerId,
+    title: z.string().min(1).optional(),
+    comment: z.string().nullable().optional(),
+    expected_version: ExpectedVersion,
+  });
+  mcp.registerTool(
+    'etn.layers.update',
+    {
+      title: 'Переименовать слой / изменить комментарий',
+      description:
+        'Rename a layer and/or edit its comment (task S10, 13-layers.md §2.2, §10.1). The base ' +
+        'layer\'s title is fixed («Основа») — renaming it is a VALIDATION_ERROR; editing its ' +
+        'comment is allowed. `expected_version` is the usual optimistic-lock check (409 ' +
+        'VERSION_CONFLICT on mismatch).',
+      inputSchema: LayersUpdateSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.layers.update'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        if (args.title === undefined && args.comment === undefined) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'нечего менять: передайте title и/или comment.',
+            { fields: ['title', 'comment'] },
+          );
+        }
+        const ndb = openMemberNetworkBase(rt, args.network_id);
+        const layer = updateLayer(
+          ndb,
+          args.layer_id,
+          {
+            ...(args.title !== undefined ? { title: args.title } : {}),
+            ...(args.comment !== undefined ? { comment: args.comment } : {}),
+          },
+          args.expected_version,
+        );
+        auditAgentCall(rt, 'etn.layers.update', args.network_id, 'layer', layer.id, {
+          title: args.title,
+          comment: args.comment,
+        });
+        return { ...layer, request_id: String(extra.requestId) };
+      }),
+  );
+
+  const LayersDeleteSchema = z.object({
+    network_id: NetworkId,
+    layer_id: LayerId,
+    /** Required confirmation once the layer has descendants (§2.4) — the
+     * `children_count` the agent just read from `etn.layers.list`. */
+    cascade: z.number().int().min(0).optional(),
+  });
+  mcp.registerTool(
+    'etn.layers.delete',
+    {
+      title: 'Удалить слой',
+      description:
+        'Delete a layer together with its whole descendant subtree (task S10, 13-layers.md §2.4). ' +
+        'A layer with descendants requires `cascade` to echo `children_count` from `etn.layers.list` ' +
+        '— a mismatch is 409, a missing value with living descendants is 422 carrying the actual ' +
+        'count. Physically removes every shadow row and tombstone of the subtree (not a merge — ' +
+        'nothing is transferred to the parent) and auto-purges the trash right after (rows the ' +
+        'deleted shadows were holding back). The base layer cannot be deleted. Returns ' +
+        '{ deleted, purged, skipped }.',
+      inputSchema: LayersDeleteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.layers.delete'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        // Close the doomed layers' pooled connections first (mirrors the REST
+        // route): their temp `layer_chain` would otherwise keep referencing
+        // deleted layers.
+        const ndb = openMemberNetworkBase(rt, args.network_id);
+        const subtreeIds = layerSubtreeIds(ndb, args.layer_id);
+        for (const id of subtreeIds) {
+          if (id !== BASE_LAYER_ID) {
+            closeNetworkDb(args.network_id, id);
+          }
+        }
+        const switchedAtSeq = rt.deps.systemDb.getMaxEventSeq(args.network_id) ?? 0;
+        const result = deleteLayerWithEvents(ndb, args.layer_id, args.cascade, switchedAtSeq);
+        for (const id of result.deleted_thought_ids) {
+          emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
+        }
+        for (const id of result.deleted_link_ids) {
+          emitAgentEvent(rt, args.network_id, 'link.deleted', { id }, extra.requestId);
+        }
+        auditAgentCall(rt, 'etn.layers.delete', args.network_id, 'layer', args.layer_id, {
+          cascade: args.cascade,
+          deleted: result.deleted,
+        });
+        return {
+          deleted: result.deleted,
+          purged: result.purged,
+          skipped: result.skipped,
+          request_id: String(extra.requestId),
+        };
+      }),
+  );
+
+  const LayersSelectSchema = z.object({
+    network_id: NetworkId,
+    layer_id: LayerId,
+  });
+  mcp.registerTool(
+    'etn.layers.select',
+    {
+      title: 'Переключить текущий слой',
+      description:
+        'Switch the calling API key\'s current session layer (task S10, 13-layers.md §7.1): every ' +
+        'later call of this key — reads and writes alike — runs in the new layer\'s context, ' +
+        'exactly like every other read/write tool that funnels through `etn.layers.list`\'s ' +
+        '`current` flag. A service (reserve) layer cannot be selected. Selecting the current layer ' +
+        'again is a no-op. `etn.changes.list` forces a full resync once `since_seq` predates this ' +
+        'switch (§12).',
+      inputSchema: LayersSelectSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.layers.select'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetworkBase(rt, args.network_id);
+        const switchedAtSeq = rt.deps.systemDb.getMaxEventSeq(args.network_id) ?? 0;
+        const layer = setSessionLayer(
+          ndb,
+          rt.deps.auth.userId,
+          mcpLayerClientId(rt),
+          args.layer_id,
+          switchedAtSeq,
+        );
+        auditAgentCall(rt, 'etn.layers.select', args.network_id, 'layer', layer.id, {});
+        return { ...layer, request_id: String(extra.requestId) };
+      }),
+  );
+
+  const LayersMergeSchema = z.object({
+    network_id: NetworkId,
+    layer_id: LayerId,
+    /** Closed subset `{ table: [logical row ids…] }` — omit for a full merge. */
+    tables: z.record(z.string(), z.array(z.string().min(1))).optional(),
+  });
+  mcp.registerTool(
+    'etn.layers.merge',
+    {
+      title: 'Слить слой в родителя',
+      description:
+        'Merge a layer into its parent — full (default) or a closed partial subset `tables: ' +
+        '{ <branchable table>: [row ids…] }` (task S10, 13-layers.md §8). A replay conflict (the ' +
+        'parent row changed since the layer was born) or an unclosed partial selection rejects the ' +
+        'WHOLE operation with VALIDATION_ERROR carrying `conflicts`/`missing_closure` — no partial ' +
+        'application. On success returns { applied, skipped, reorder_collapsed, reserve_layer_id, ' +
+        'purged }: `skipped` lists §6.4 residual link-endpoint-gone cases (merge still succeeds), ' +
+        '`reserve_layer_id` is the auto-created service layer holding the pre-merge state for a ' +
+        'manual rollback (§8.2). Emits one `layer.merged` event attributed to the merge target.',
+      inputSchema: LayersMergeSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.layers.merge'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        let selection: MergeSelection | undefined;
+        if (args.tables !== undefined) {
+          selection = {};
+          for (const [table, ids] of Object.entries(args.tables)) {
+            if (!(BRANCHABLE_TABLES as readonly string[]).includes(table)) {
+              throw new EtnError(
+                'VALIDATION_ERROR',
+                `неизвестная ветвимая таблица «${table}».`,
+                { field: 'tables', table, allowed: BRANCHABLE_TABLES },
+              );
+            }
+            selection[table as BranchableTable] = ids;
+          }
+        }
+        const ndb = openMemberNetworkBase(rt, args.network_id);
+        const result = mergeLayer(ndb, args.layer_id, selection, rt.deps.auth.userId);
+
+        // Exactly one `layer.merged` event per merge (04-realtime.md §11.4),
+        // attributed to the merge target — not the agent's session layer.
+        const report: LayerMergeReport = {
+          applied: result.applied,
+          skipped: result.skipped,
+          reorder_collapsed: result.reorder_collapsed,
+          reserve_layer_id: result.reserve_layer_id,
+          purged: result.purged,
+        };
+        emitAgentEvent(
+          rt,
+          args.network_id,
+          'layer.merged',
+          { ...report, layer: result.merged_layer, target_layer: result.target_layer },
+          extra.requestId,
+          result.target_layer.id,
+        );
+        for (const id of result.deleted_thought_ids) {
+          emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
+        }
+        for (const id of result.deleted_link_ids) {
+          emitAgentEvent(rt, args.network_id, 'link.deleted', { id }, extra.requestId);
+        }
+        auditAgentCall(rt, 'etn.layers.merge', args.network_id, 'layer', args.layer_id, {
+          tables: args.tables,
+          applied: report.applied,
+        });
+        return { ...report, request_id: String(extra.requestId) };
+      }),
+  );
 
   const CreateThoughtSchema = z
     .object({

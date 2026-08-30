@@ -148,13 +148,22 @@ export function actorOf(rt: McpRuntime): DomainEventActor {
   return { user_id: rt.deps.auth.userId, client_id: null };
 }
 
-/** Emit a domain event so agent-made changes fan out like human ones (05 §7). */
+/**
+ * Emit a domain event so agent-made changes fan out like human ones (05 §7).
+ *
+ * @param layerIdOverride - attribute the event to a specific layer instead of
+ *   the calling key's session layer — used exactly once, by `etn.layers.merge`
+ *   (task S10): its single `layer.merged` event is attributed to the merge
+ *   **target**, not to whatever layer the agent happens to be sitting on
+ *   (mirrors the REST merge route, 13-layers.md §12).
+ */
 export function emitAgentEvent<E extends RealtimeEventType>(
   rt: McpRuntime,
   networkId: string,
   type: E,
   data: RealtimeEventMap[E],
   requestId?: string | number,
+  layerIdOverride?: string,
 ): void {
   emitDomainEvent(
     { systemDb: rt.deps.systemDb, pubsub: rt.deps.pubsub },
@@ -167,7 +176,7 @@ export function emitAgentEvent<E extends RealtimeEventType>(
       // Task S10 (13-layers.md §10.2): tag the event with the calling key's
       // actual session layer, not a hardcoded base — visibility fan-out
       // (04-realtime.md §11) depends on it just like it does for REST writes.
-      layerId: resolveRuntimeLayer(rt, networkId).id,
+      layerId: layerIdOverride ?? resolveRuntimeLayer(rt, networkId).id,
     },
   );
 }
