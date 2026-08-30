@@ -5740,7 +5740,9 @@ table.chron-table thead th {
    layer icon on a dark circle, tooltip explains the semantics. */
 .cloud-layer-badge {
   position: absolute;
-  left: -13.6px;
+  /* Right-top corner: the trash badge occupies the left-top one — same round
+     format, opposite corners keeps them distinguishable at a glance. */
+  right: -13.6px;
   top: -13.6px;
   width: 27.2px;
   height: 27.2px;
