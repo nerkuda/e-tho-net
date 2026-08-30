@@ -46,7 +46,12 @@ import {
   purgeThoughtDeletionDependants,
   tombstoneThoughtDeletionDependants,
 } from './owner-cleanup.js';
-import { computeThoughtCardWarnings, countThoughtRefUsages } from './property-service.js';
+import {
+  computeThoughtCardWarnings,
+  countThoughtRefUsages,
+  listEffectiveTypeProperties,
+  setPropertyValue,
+} from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
 
 import { getAttachment } from './attachment-service.js';
@@ -509,6 +514,19 @@ export function createThought(
     setSynonyms(ndb, id, synonyms);
     if (input.create_link) {
       createLinkForNewThought(ndb, id, input.create_link, actorUserId, now);
+    }
+    // Bug-fix (0.5.4, 2976daa1): a freshly created thought never picked up its
+    // type's effective default property values — on the canvas, over REST or
+    // via MCP alike, since all three funnel through this function. Untyped
+    // thoughts are skipped on purpose: the root type's settings apply to them
+    // implicitly (L21, docs/08-ui-spec.md §8.1) but intentionally carries no
+    // defaults of its own, mirroring `computeThoughtCardWarnings` above.
+    if (input.type_id !== undefined && input.type_id !== null) {
+      for (const def of listEffectiveTypeProperties(ndb, 'thought_type', input.type_id)) {
+        if (def.default_value !== null) {
+          setPropertyValue(ndb, 'thought', id, def.key, def.default_value);
+        }
+      }
     }
     // Server-side comment template application (0.4.3): a thought created with
     // a type that carries a non-empty `comment_template_md` gets its permanent

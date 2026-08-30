@@ -33,6 +33,8 @@ import {
   updateThought,
 } from '../src/domain/thought-service.js';
 import { setFocusPreferences } from '../src/domain/focus-service.js';
+import { createTypeProperty, getPropertyValues } from '../src/domain/property-service.js';
+import { createThoughtType } from '../src/domain/thought-type-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -155,6 +157,37 @@ describe(
           };
           assert.equal(link.source_id, parent.id);
           assert.equal(link.target_id, child.id);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('applies the type\'s effective default property values (bug 2976daa1)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const tt = createThoughtType(ndb, { name: 'Работа' }, USER);
+          createTypeProperty(ndb, 'thought_type', tt.id, {
+            key: 'статус',
+            value_type: 'text',
+            config: { default_value: 'черновик' },
+          });
+          // A property with no default must stay unset.
+          createTypeProperty(ndb, 'thought_type', tt.id, { key: 'note', value_type: 'text' });
+
+          const t = createThought(ndb, { title: 'Задача X', type_id: tt.id }, USER);
+          const values = getPropertyValues(ndb, 'thought', t.id);
+          assert.equal(values.length, 1);
+          assert.equal(values[0]?.value, 'черновик');
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('leaves an untyped thought without any property values', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const t = createThought(ndb, { title: 'Untyped' }, USER);
+          assert.deepEqual(getPropertyValues(ndb, 'thought', t.id), []);
         } finally {
           ndb.close();
         }
