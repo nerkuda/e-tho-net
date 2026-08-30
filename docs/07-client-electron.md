@@ -288,6 +288,7 @@ SELECT thought_id FROM focus_history
 | `view_mode` | TEXT NULL | `'map'` \| `'structures'` \| `'chronicle'` (08-ui-spec.md §15.1) |
 | `structures_state` | TEXT NULL | JSON `FilterState` (08-ui-spec.md §15.3) |
 | `chronicle_state` | TEXT NULL | JSON `ChronicleFilterState` (08-ui-spec.md §17.7) |
+| `layer_id` | TEXT NULL | Слой изменений таба (S11, 13-layers.md §10.3); NULL — основа |
 | `last_active_at` | TEXT NOT NULL | ISO-8601 последней активации (для сортировки при необходимости) |
 | PRIMARY KEY | `(profile_id, tab_id)` | |
 
@@ -302,6 +303,14 @@ SELECT thought_id FROM focus_history
   следующем запуске такие табы не появятся, и строки тихо игнорируются).
 - При reorder — обновляются только `slot_idx` в одной транзакции
   (метод `reorderTabs(profileId, orderedIds[])`).
+- **Слой — свойство таба (S11, 13-layers.md §10.3).** Серверная сессия
+  слоёв одна на клиента (ключ `(user_id, client_id)`), поэтому таб хранит
+  выбранный слой локально в `layer_id`; при активации таба рендерер
+  переключает серверную сессию (`POST …/layers/{id}/select`) и грузит
+  список слоёв + перекрытия **до** чтения фокуса — все последующие чтения
+  и записи таба идут в его слое. Протухший `layer_id` (слой удалён из
+  другого сеанса) ремонтируется сбросом в NULL; серверный control-фрейм
+  `layer.deleted` (realtime) делает то же самое живой сессии.
 - `focus_id`, `view_mode`, `structures_state`, `chronicle_state` — **не**
   дублируются в `ui_state` для табов, открытых после введения этой
   схемы; пишутся только сюда. Для legacy-таба (`tab_id = 'LEGACY'`)
@@ -412,6 +421,14 @@ window.etn = {
     close(tabId): Promise<void>,
     reorder(orderedIds: string[]): Promise<void>,
     updateState(tabId, partial: TabStatePatch): Promise<void>,
+  },
+  layers: {                       // S11, 13-layers.md §10.3 (REST §5a)
+    list(networkId), create(networkId, input),
+    update(networkId, layerId, changes, expectedVersion?),
+    remove(networkId, layerId, cascade?),
+    select(networkId, layerId),
+    merge(networkId, layerId, tables?),
+    diff(networkId, layerId), diffDoc(networkId, layerId),
   },
   ui: {
     getState(networkId, key, tabId?): Promise<string | null>,
