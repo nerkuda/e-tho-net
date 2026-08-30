@@ -15,12 +15,14 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   BASE_LAYER_ID,
   EtnError,
+  type LayerEcho,
   type RealtimeEventMap,
   type RealtimeEventType,
 } from '@etn/shared';
 
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { recordAudit } from '../auth/audit.js';
+import { resolveSessionLayer } from '../domain/layer-service.js';
 import { emitDomainEvent, type DomainEventActor } from '../realtime/emit.js';
 import type { ResolvedMcpLimits } from './limits.js';
 import { resolveMcpLimits, WriteRateLimiter } from './limits.js';
@@ -68,12 +70,56 @@ export function assertNetworkAccess(rt: McpRuntime, networkId: string): void {
 }
 
 /**
- * Open the network's `data.db`, asserting the authenticated user has access
- * first ({@link assertNetworkAccess} — member or global admin).
+ * Synthetic "client id" MCP sessions use for `session_layers` (task S10,
+ * 13-layers.md §7.1). MCP has no per-installation `Client-Id` concept (05
+ * §2.2 — an agent just passes `network_id` in every call), so the API key is
+ * the closest thing to a stable channel identity: each key keeps its own
+ * independently selected layer, the same way two REST clients with different
+ * `Client-Id` headers never share one. Prefixed so it can never collide with
+ * a real REST client UUID.
+ */
+export function mcpLayerClientId(rt: McpRuntime): string {
+  return `mcp:${rt.deps.auth.keyId}`;
+}
+
+/**
+ * Resolve the calling API key's current layer for `networkId` (task S10,
+ * 13-layers.md §7.1) — the MCP counterpart of `routes/helpers.ts`'s
+ * `resolveRequestLayer`, keyed by {@link mcpLayerClientId} instead of a REST
+ * `Client-Id`. Always re-reads `session_layers`: unlike a REST request, one
+ * {@link McpRuntime} outlives many tool calls, possibly against different
+ * networks, so nothing is memoised on `rt` itself.
+ */
+export function resolveRuntimeLayer(rt: McpRuntime, networkId: string): LayerEcho {
+  const base = openNetworkDb(rt.deps.dataDir, networkId, rt.deps.logger, BASE_LAYER_ID);
+  return resolveSessionLayer(base, rt.deps.auth.userId, mcpLayerClientId(rt));
+}
+
+/**
+ * Open the network's `data.db` **in the session's current layer** (task S10,
+ * 13-layers.md §10.2), asserting the authenticated user has access first
+ * ({@link assertNetworkAccess} — member or global admin). This is the default
+ * open path used by every read/write tool, so layer-awareness is a property
+ * of this one function rather than a change repeated at each call site —
+ * matching the spec's "не отдельный набор инструментов, а сквозное свойство
+ * существующих" (13-layers.md §10.2).
  */
 export function openMemberNetwork(rt: McpRuntime, networkId: string): NetworkDb {
   assertNetworkAccess(rt, networkId);
-  return openNetworkDb(rt.deps.dataDir, networkId, rt.deps.logger);
+  const layer = resolveRuntimeLayer(rt, networkId);
+  return openNetworkDb(rt.deps.dataDir, networkId, rt.deps.logger, layer.id);
+}
+
+/**
+ * Open the network's `data.db` **on the base layer** regardless of the
+ * session's selection — for the layer-management tools themselves (`layers`
+ * and `session_layers` are not branchable, 13-layers.md §3) and for merge,
+ * which must replay physically into the target layer's own connection.
+ * Mirrors `routes/helpers.ts`'s `openRouteNetworkDbBase`.
+ */
+export function openMemberNetworkBase(rt: McpRuntime, networkId: string): NetworkDb {
+  assertNetworkAccess(rt, networkId);
+  return openNetworkDb(rt.deps.dataDir, networkId, rt.deps.logger, BASE_LAYER_ID);
 }
 
 /** Reject mutating tools for read-only keys (05 §6.3). */
@@ -118,11 +164,10 @@ export function emitAgentEvent<E extends RealtimeEventType>(
     actorOf(rt),
     {
       ...(requestId === undefined ? {} : { meta: { request_id: String(requestId) } }),
-      // MCP tools do not yet resolve a session layer (that lands with S10,
-      // 13-layers.md §10.2) — every agent write happens on the base layer for
-      // now, so tag events accordingly (explicit for readability; matches the
-      // `emitDomainEvent` default).
-      layerId: BASE_LAYER_ID,
+      // Task S10 (13-layers.md §10.2): tag the event with the calling key's
+      // actual session layer, not a hardcoded base — visibility fan-out
+      // (04-realtime.md §11) depends on it just like it does for REST writes.
+      layerId: resolveRuntimeLayer(rt, networkId).id,
     },
   );
 }
@@ -184,6 +229,40 @@ export function textToolResult(text: string): CallToolResult {
 export async function runTool(fn: () => unknown | Promise<unknown>): Promise<CallToolResult> {
   try {
     return jsonToolResult(await fn());
+  } catch (err) {
+    return { content: [{ type: 'text', text: etnErrorText(err) }], isError: true };
+  }
+}
+
+/** Add a `layer` echo field to one mutation result (object) or every element
+ * of an array of them; anything else (there is none on MVP) passes through. */
+function withLayerEcho(value: unknown, layer: LayerEcho): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => withLayerEcho(item, layer));
+  }
+  if (typeof value === 'object' && value !== null) {
+    return { ...(value as Record<string, unknown>), layer };
+  }
+  return value;
+}
+
+/**
+ * {@link runTool}, but for mutating tools: echoes the calling session's
+ * current layer on the result — `layer: { id, title }` — matching the REST
+ * `meta.layer` echo required by 13-layers.md §7.1 ("каждый ответ на запись…
+ * обязан содержать эхо текущего слоя"). REST implements the same rule via a
+ * single `onSend` hook (server.ts); MCP has no equivalent middleware stage,
+ * so this wrapper is the one place every mutating tool funnels through.
+ */
+export async function runWriteTool(
+  rt: McpRuntime,
+  networkId: string,
+  fn: () => unknown | Promise<unknown>,
+): Promise<CallToolResult> {
+  try {
+    const result = await fn();
+    const layer = resolveRuntimeLayer(rt, networkId);
+    return jsonToolResult(withLayerEcho(result, layer));
   } catch (err) {
     return { content: [{ type: 'text', text: etnErrorText(err) }], isError: true };
   }

@@ -153,10 +153,13 @@ import {
   assertNetworkAccess,
   auditAgentCall,
   emitAgentEvent,
+  mcpLayerClientId,
   openMemberNetwork,
+  openMemberNetworkBase,
   requireWriteBudget,
   requireWritable,
   runTool,
+  runWriteTool,
   type McpRuntime,
 } from './context.js';
 
@@ -1311,17 +1314,14 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         );
         const authUserId = rt.deps.auth.userId;
 
-        // Task S9 (13-layers.md §12): the delta must respect the caller's
-        // session layer, same as the WebSocket gateway. MCP tools have no
-        // per-client transport id (Client-Id is a REST/WS concept, S10 has
-        // not landed a layer-select MCP tool yet), so the coordinate is
-        // `(user_id, '')` — the same "no Client-Id" bucket `session_layers`
-        // already uses for headerless REST callers. Until S10, every agent
-        // write happens on the base layer, so this resolves to the base
-        // unless a test/administrator manipulated `session_layers` directly.
+        // Task S10 (13-layers.md §12): the delta must respect the caller's
+        // session layer, same as the WebSocket gateway — keyed by the calling
+        // API key ({@link mcpLayerClientId}), the same coordinate every other
+        // read/write tool now resolves through `openMemberNetwork`.
         const baseNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger);
-        const sessionLayer = resolveSessionLayer(baseNdb, authUserId, null);
-        const switchedAtSeq = resolveSessionSwitchSeq(baseNdb, authUserId, null);
+        const clientId = mcpLayerClientId(rt);
+        const sessionLayer = resolveSessionLayer(baseNdb, authUserId, clientId);
+        const switchedAtSeq = resolveSessionSwitchSeq(baseNdb, authUserId, clientId);
         const layerNdb =
           sessionLayer.id === baseNdb.layerId
             ? baseNdb
@@ -1453,7 +1453,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: CreateThoughtSchema,
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -1529,7 +1529,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: UpdateThoughtSchema,
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -1576,7 +1576,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.delete'],
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -1616,7 +1616,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.trash'],
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -1659,7 +1659,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.set_active'],
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -1709,7 +1709,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: CreateLinkSchema,
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -1749,7 +1749,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.delete'],
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -1782,7 +1782,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.trash'],
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -1847,7 +1847,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: UpsertCommentSchema,
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -1933,7 +1933,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: UpdateCommentSchema,
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -1976,7 +1976,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.comments.delete'],
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -2027,7 +2027,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: AddAttachmentSchema,
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -2080,7 +2080,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: CopyAttachmentSchema,
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -2220,7 +2220,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.set'],
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -2357,7 +2357,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.upsert_bundle'],
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -2519,7 +2519,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       annotations: MCP_TOOL_ANNOTATIONS['etn.trash.purge'],
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
@@ -2553,7 +2553,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       inputSchema: UsageClearSchema,
     },
     (args, extra) =>
-      runTool(async () => {
+      runWriteTool(rt, args.network_id, async () => {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);

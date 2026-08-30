@@ -63,6 +63,8 @@ const TEST_CONFIG: ServerConfig = {
 interface SeededUser {
   userId: string;
   key: string;
+  /** `api_keys.id` — needed to reproduce the MCP layer client id (S10). */
+  keyId: string;
 }
 
 interface RunningApp {
@@ -90,8 +92,9 @@ async function buildApp(): Promise<RunningApp> {
   const ownerId = randomUUID();
   sys.createUser({ id: ownerId, username: 'owner', displayName: 'Owner', isAdmin: true });
   const gen = generateApiKey();
+  const ownerKeyId = randomUUID();
   sys.createApiKey({
-    id: randomUUID(),
+    id: ownerKeyId,
     userId: ownerId,
     label: 'primary',
     keyHash: hashApiKey(gen.key),
@@ -123,7 +126,7 @@ async function buildApp(): Promise<RunningApp> {
     dataDir,
     port: address.port,
     networkId,
-    owner: { userId: ownerId, key: gen.key },
+    owner: { userId: ownerId, key: gen.key, keyId: ownerKeyId },
     sockets: [],
   };
 }
@@ -132,8 +135,9 @@ function seedUser(running: RunningApp, username: string, asMemberOf?: string): S
   const userId = randomUUID();
   running.sys.createUser({ id: userId, username, displayName: username });
   const gen = generateApiKey();
+  const keyId = randomUUID();
   running.sys.createApiKey({
-    id: randomUUID(),
+    id: keyId,
     userId,
     label: 'p',
     keyHash: hashApiKey(gen.key),
@@ -146,7 +150,7 @@ function seedUser(running: RunningApp, username: string, asMemberOf?: string): S
       )
       .run(asMemberOf, userId, new Date().toISOString(), running.owner.userId);
   }
-  return { userId, key: gen.key };
+  return { userId, key: gen.key, keyId };
 }
 
 function connect(running: RunningApp, key: string, clientId: string): WebSocket {
@@ -540,16 +544,17 @@ describe(
         assert.equal(before.truncated, false);
 
         // Simulate the agent's session switching layer — the same coordinate
-        // (`user_id`, '') `etn.changes.list` resolves (S10 has not landed an
-        // MCP layer-select tool yet, so the test drives the domain service
-        // directly, exactly like the future tool will).
+        // (`user_id`, `mcp:<keyId>`) `etn.changes.list` resolves via
+        // `mcpLayerClientId` (S10, 13-layers.md §7.1). The test drives the
+        // domain service directly rather than `etn.layers.select` (exercised
+        // separately) to keep this test focused on the delta-feed contract.
         const ndb = openNetworkDb(running.dataDir, running.networkId, undefined);
         const newLayer = createLayer(ndb, {
           parentId: BASE_LAYER_ID,
           title: 'Слой агента',
           createdBy: running.owner.userId,
         });
-        setSessionLayer(ndb, running.owner.userId, null, newLayer.id, seenSeq + 1);
+        setSessionLayer(ndb, running.owner.userId, `mcp:${running.owner.keyId}`, newLayer.id, seenSeq + 1);
 
         // The old cursor now spans the switch: forced full resync.
         const after = toolJson<McpChangesListResult>(
