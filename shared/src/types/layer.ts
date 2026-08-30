@@ -110,3 +110,65 @@ export interface LayerMergeReport {
   /** Rows removed by the trash auto-purge right after the merge (§8.4). */
   purged: number;
 }
+
+// ---------------------------------------------------------------------------
+// Structural + textual layer diffs (task S11, docs/13-layers.md §10.3;
+// docs/03-server-api.md §5a.7)
+// ---------------------------------------------------------------------------
+
+/** One visible link row of a diff context — enough to compare structure. */
+export interface LayerDiffLinkRow {
+  id: string;
+  source_id: string;
+  target_id: string;
+  type_id: string | null;
+  /** Manual child order (T1); surfaced only in the diff, not in the Link API. */
+  position: number;
+}
+
+/** A link visible in both contexts whose `type_id` changed (§6.1 UPDATE path). */
+export interface LayerDiffTypeChange {
+  id: string;
+  from_type_id: string | null;
+  to_type_id: string | null;
+}
+
+/** A thought that swapped its single parent link: one incoming link removed,
+ * one added — the S14 «перецепка» read as a reparenting (§10.3). */
+export interface LayerDiffReparented {
+  thought_id: string;
+  from_parent_id: string;
+  to_parent_id: string;
+}
+
+/** Link changes of the layer relative to its merge target. */
+export interface LayerDiffLinks {
+  added: LayerDiffLinkRow[];
+  removed: LayerDiffLinkRow[];
+  type_changed: LayerDiffTypeChange[];
+  /** Position-only batches collapsed per parent thought (§6.5): `{ thought_id,
+   * count }` — the same shape the merge report uses. */
+  reorder_collapsed: LayerMergeReorderCollapsed[];
+  /** 1:1 parent-link swaps; anything more complex stays as added/removed. */
+  reparented: LayerDiffReparented[];
+}
+
+/** Structural diff response of `GET /networks/{nid}/layers/{id}/diff`. */
+export interface LayerDiffResult {
+  layer: LayerEcho;
+  target_layer: LayerEcho;
+  links: LayerDiffLinks;
+  /** Ids that physically exist in the layer (shadow rows, inserts AND
+   * tombstones alike) — exactly what the canvas marks as «перекрыто». */
+  overridden: { thought_ids: string[]; link_ids: string[] };
+}
+
+/** Textual diff response of `GET /networks/{nid}/layers/{id}/diff/doc`: two
+ * deterministically assembled markdown documents (§10.3, «дешёвый дифф
+ * закрывает содержание, но не структуру»). */
+export interface LayerDiffDoc {
+  layer: LayerEcho;
+  target_layer: LayerEcho;
+  layer_doc: string;
+  target_doc: string;
+}

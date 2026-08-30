@@ -8,6 +8,8 @@
  *   DELETE /networks/:networkId/layers/:layerId?cascade=N — subtree delete
  *   POST   /networks/:networkId/layers/:layerId/select  — switch session layer
  *   POST   /networks/:networkId/layers/:layerId/merge   — merge into the parent (S8)
+ *   GET    /networks/:networkId/layers/:layerId/diff     — structural diff (S11)
+ *   GET    /networks/:networkId/layers/:layerId/diff/doc — textual diff (S11)
  *
  * Rights (13-layers.md §7.2): identical for every network member. The layer
  * metadata lives outside the branchable tables, so these handlers run on the
@@ -41,9 +43,10 @@ import {
   updateLayer,
 } from '../domain/layer-service.js';
 import { mergeLayer, type MergeSelection } from '../domain/merge-service.js';
+import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../domain/layer-diff-service.js';
 import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
 import type { BranchableTable } from '../db/layer-write.js';
-import { closeNetworkDb } from '../db/network-db.js';
+import { closeNetworkDb, openNetworkDb } from '../db/network-db.js';
 
 /** Route params for a network id. */
 interface NetworkIdParams {
@@ -300,6 +303,37 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
           deps.emit(req, networkId, 'link.deleted', { id });
         }
         sendSuccess(reply, report);
+      },
+    );
+
+    // --- Structural diff (S11, 13-layers.md §10.3; 03-server-api.md §5a.7):
+    // the compact link-structure list the textual diff is blind to. Reads run
+    // on two connections — the layer's own context and its parent's.
+    app.get(
+      '/networks/:networkId/layers/:layerId/diff',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, layerId } = req.params as LayerParams;
+        const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
+        const { layer, target } = resolveDiffTarget(ndb, layerId);
+        const layerNdb = openNetworkDb(deps.dataDir, networkId, app.appLogger, layer.id);
+        const targetNdb = openNetworkDb(deps.dataDir, networkId, app.appLogger, target.id);
+        sendSuccess(reply, structuralLayerDiff(layerNdb, targetNdb, layer, target));
+      },
+    );
+
+    // --- Textual diff (S11, §10.3): two deterministically assembled markdown
+    // documents for a plain text diff on the client.
+    app.get(
+      '/networks/:networkId/layers/:layerId/diff/doc',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, layerId } = req.params as LayerParams;
+        const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
+        const { layer, target } = resolveDiffTarget(ndb, layerId);
+        const layerNdb = openNetworkDb(deps.dataDir, networkId, app.appLogger, layer.id);
+        const targetNdb = openNetworkDb(deps.dataDir, networkId, app.appLogger, target.id);
+        sendSuccess(reply, layerDiffDoc(layerNdb, targetNdb, layer, target));
       },
     );
   };
