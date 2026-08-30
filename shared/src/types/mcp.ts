@@ -58,6 +58,8 @@ export const MCP_TOOL_NAMES = [
   'etn.changes.list',
   'etn.metrics.reads',
   'etn.layers.list',
+  'etn.layers.diff',
+  'etn.layers.diff_doc',
   // mutate (§4.2)
   'etn.thoughts.create',
   'etn.thoughts.update',
@@ -145,6 +147,8 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.attachments.search': { readOnlyHint: true },
   'etn.thoughts.find_duplicates': { readOnlyHint: true },
   'etn.layers.list': { readOnlyHint: true },
+  'etn.layers.diff': { readOnlyHint: true },
+  'etn.layers.diff_doc': { readOnlyHint: true },
 
   // ---- mutating tools — destructiveHint ---------------------------
   'etn.thoughts.delete': { destructiveHint: true },

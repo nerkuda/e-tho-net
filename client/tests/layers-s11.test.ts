@@ -78,6 +78,7 @@ describe('buildLayerMenuItems (S11)', () => {
       'Правки',
       '—',
       'Создать новый слой…',
+      'Свойства основы…',
     ]);
     const baseItem = items.find((i) => i.label === 'Основа');
     assert.equal(baseItem?.checked, true);
@@ -91,6 +92,7 @@ describe('buildLayerMenuItems (S11)', () => {
     const work = layer({ id: 'l1', title: 'Правки', parent_id: 'base', current: true });
 
     const onLayer = buildLayerMenuItems('net', [base, work]).map((i) => i.label);
+    assert.ok(onLayer.includes('Свойства слоя…'));
     assert.ok(onLayer.includes('Отличия от «Основа»…'));
     assert.ok(onLayer.includes('Слить «Правки» в «Основа»…'));
     assert.ok(onLayer.includes('Удалить «Правки»…'));
@@ -99,6 +101,7 @@ describe('buildLayerMenuItems (S11)', () => {
       { ...base, current: true },
       work,
     ]).map((i) => i.label);
+    assert.ok(onBase.includes('Свойства основы…'));
     assert.ok(!onBase.some((l) => l.includes('Слить')));
     assert.ok(!onBase.some((l) => l.includes('Удалить')));
     assert.ok(!onBase.some((l) => l.includes('Отличия')));

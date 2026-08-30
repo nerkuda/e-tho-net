@@ -55,6 +55,7 @@ import {
   setSessionLayer,
   updateLayer,
 } from '../domain/layer-service.js';
+import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../domain/layer-diff-service.js';
 import { mergeLayer, type MergeSelection } from '../domain/merge-service.js';
 import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
 import type { BranchableTable } from '../db/layer-write.js';
@@ -1472,6 +1473,58 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetworkBase(rt, args.network_id);
         const current = resolveRuntimeLayer(rt, args.network_id);
         return listLayers(ndb, { includeService: args.include_service, currentLayerId: current.id });
+      }),
+  );
+
+  // etn.layers.diff / etn.layers.diff_doc — S11 read tools, the two views of
+  // «чем слой отличается» (13-layers.md §10.3, §15): the structural link
+  // diff and the deterministic textual documents. Both read on two
+  // connections — the layer's own context and its parent's.
+  const LayersDiffSchema = z.object({
+    network_id: NetworkId,
+    layer_id: LayerId,
+  });
+  mcp.registerTool(
+    'etn.layers.diff',
+    {
+      title: 'Структурное отличие слоя',
+      description:
+        'Structural diff of a layer against its parent (task S11, 13-layers.md §10.3; ' +
+        '03-server-api.md §5a.7): `links` — added/removed/type_changed/reparented (1:1 swaps of ' +
+        'the parent link)/reorder_collapsed (position-only batches, §6.5); `overridden` — the ids ' +
+        'physically present in the layer (shadow rows, inserts and tombstones). The textual diff ' +
+        '(`etn.layers.diff_doc`) is blind to all of these — use both.',
+      inputSchema: LayersDiffSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.layers.diff'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetworkBase(rt, args.network_id);
+        const { layer, target } = resolveDiffTarget(ndb, args.layer_id);
+        const layerNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, layer.id);
+        const targetNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, target.id);
+        return structuralLayerDiff(layerNdb, targetNdb, layer, target);
+      }),
+  );
+  mcp.registerTool(
+    'etn.layers.diff_doc',
+    {
+      title: 'Содержательное отличие слоя (документы)',
+      description:
+        'Textual diff payload of a layer against its parent (task S11, 13-layers.md §10.3; ' +
+        '03-server-api.md §5a.7): two deterministically assembled markdown documents ' +
+        '(`layer_doc`/`target_doc`) for a plain line-by-line comparison. Deterministic flat ' +
+        'assembly (all visible thoughts ordered by id); the hierarchical document is task T2.',
+      inputSchema: LayersDiffSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.layers.diff_doc'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetworkBase(rt, args.network_id);
+        const { layer, target } = resolveDiffTarget(ndb, args.layer_id);
+        const layerNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, layer.id);
+        const targetNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, target.id);
+        return layerDiffDoc(layerNdb, targetNdb, layer, target);
       }),
   );
 

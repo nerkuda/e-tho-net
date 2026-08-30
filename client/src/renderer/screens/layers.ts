@@ -124,6 +124,12 @@ export function buildLayerMenuItems(networkId: string, layers: Layer[]): MenuIte
   }
   items.push(MENU_SEPARATOR);
   items.push({ label: 'Создать новый слой…', onClick: () => void openCreateLayerDialog(networkId) });
+  if (current !== undefined) {
+    items.push({
+      label: current.is_base ? 'Свойства основы…' : 'Свойства слоя…',
+      onClick: () => void openLayerPropsDialog(networkId, current.id),
+    });
+  }
   if (current !== undefined && !current.is_base) {
     const targetTitle =
       layers.find((l) => l.id === current.parent_id)?.title ?? 'Основу';
@@ -161,8 +167,61 @@ async function selectLayerForTab(networkId: string, layerId: string): Promise<vo
   await syncLayersForTab(networkId, layer.is_base ? null : layerId);
 }
 
-/** Create-layer dialog (§10.3: the explaining one-liner + comment + git branch). */
-function openCreateLayerDialog(networkId: string): void {
+/**
+ * Layer properties dialog (§10.1, matrix §15 «Править комментарий слоя»):
+ * rename and/or edit the comment. The base title is fixed (input disabled) —
+ * only its comment is editable.
+ */
+function openLayerPropsDialog(networkId: string, layerId: string): void {
+  const layer = store.state.layers.find((l) => l.id === layerId);
+  if (layer === undefined) return;
+
+  const titleInput = el('input', 'text-input') as HTMLInputElement;
+  titleInput.value = layer.title;
+  if (layer.is_base) titleInput.disabled = true;
+  const commentInput = el('textarea', 'textarea-input') as HTMLTextAreaElement;
+  commentInput.value = layer.comment ?? '';
+
+  const body = div('form-stack');
+  body.append(field('Название', titleInput), field('Комментарий', commentInput));
+
+  showDialog({
+    title: layer.is_base ? 'Свойства основы' : `Свойства слоя «${layer.title}»`,
+    body,
+    width: 460,
+    buttons: [
+      { label: 'Отмена', onClick: (close) => close() },
+      {
+        label: 'Сохранить',
+        primary: true,
+        onClick: async (close) => {
+          const title = titleInput.value.trim();
+          const comment = commentInput.value.trim();
+          if (!layer.is_base && title.length === 0) return;
+          try {
+            const updated = await etn.layers.update(
+              networkId,
+              layerId,
+              {
+                ...(layer.is_base || title === layer.title ? {} : { title }),
+                ...(comment === (layer.comment ?? '') ? {} : { comment: comment.length > 0 ? comment : null }),
+              },
+              layer.version,
+            );
+            close();
+            await syncLayersForTab(networkId, store.state.currentLayer?.id ?? null);
+            void updated;
+          } catch (err) {
+            errorDialog('Не удалось сохранить слой', err);
+          }
+        },
+      },
+    ],
+    onMount: () => titleInput.focus(),
+  });
+}
+
+/** Create-layer dialog (§10.3: the explaining one-liner + comment + git branch). */function openCreateLayerDialog(networkId: string): void {
   const titleInput = el('input', 'text-input') as HTMLInputElement;
   titleInput.placeholder = 'Например: Правки августа';
   const commentInput = el('textarea', 'textarea-input') as HTMLTextAreaElement;
