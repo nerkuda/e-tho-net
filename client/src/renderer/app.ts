@@ -43,6 +43,7 @@ import { refreshSearchIfVisible } from './search/search.js';
 import { invalidateStructuresThought } from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
 import { store, type WorkspaceView } from './state.js';
+import { syncLayersForTab } from './screens/layers.js';
 
 /** Debounce for coalescing realtime-triggered refreshes, ms. */
 const REFRESH_DEBOUNCE_MS = 200;
@@ -159,6 +160,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   let activeTabId: string | null = null;
   let activeTabView: WorkspaceView | null = null;
   let activeTabFocusId: string | null = null;
+  let activeTabLayerId: string | null = null;
   try {
     let tabs = await etn.tabs.list();
     let target: { tab_id: string } | null = null;
@@ -177,12 +179,24 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     activeTabId = fullTarget?.tab_id ?? target!.tab_id;
     activeTabView = fullTarget?.view_mode ?? null;
     activeTabFocusId = fullTarget?.focus_id ?? null;
+    activeTabLayerId = fullTarget?.layer_id ?? null;
     store.update({
       tabs,
       activeTabId,
     });
   } catch {
     // ignore — workspace still usable without tab strip state
+  }
+
+  // S11 (13-layers.md §10.3): the layer is a property of the TAB. Align the
+  // server-side session to the tab's layer BEFORE the focus loads — the focus
+  // (and every later read/write) must resolve in this tab's layer, not in
+  // whatever layer the previous tab left behind. Failures keep the base layer
+  // and an empty layer list; the menu recovers on the next open.
+  try {
+    await syncLayersForTab(networkId, activeTabLayerId);
+  } catch {
+    // offline / layer deleted elsewhere — the workspace stays usable
   }
 
   // Q-bugfix: per-tab view_mode takes priority over the legacy L4 key, so
@@ -546,6 +560,14 @@ export async function boot(): Promise<void> {
       if (deletedId !== undefined) void onThoughtDeleted(deletedId);
     },
     onNetworkLost: () => backToNetworks(),
+    onLayerControl: (payload) => {
+      // S11: the session's layer changed server-side — re-sync layers +
+      // overrides and fully re-read the visible state (13-layers.md §12).
+      if (payload.networkId !== store.state.networkId) return;
+      void syncLayersForTab(store.state.networkId, payload.layer.id).then(() =>
+        scheduleRefresh(),
+      );
+    },
   });
   onRealtimeEvent(applyRealtimeToUi);
 

@@ -28,6 +28,7 @@ import { invalidateSavedFilters } from './screens/structures/filter-panel.js';
 import { invalidateChronicleThought, scheduleChronicleRefresh } from './screens/chronicle/chronicle.js';
 import { reloadSavedFilters as reloadChronicleSavedFilters } from './screens/chronicle/filter-panel.js';
 import { store } from './state.js';
+import { syncLayersForTab } from './screens/layers.js';
 import { invalidateWikiLinkCache } from './editor/wiki-link-resolver.js';
 
 /**
@@ -196,6 +197,21 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'network.updated': {
       const network = store.state.network;
       if (network !== null) store.update({ network: { ...network, ...evt.data } });
+      break;
+    }
+
+    case 'layer.merged': {
+      // S11 (04-realtime.md §11.4): a merge emits exactly one event and the
+      // recipients resync fully — the visible state changed wholesale, so
+      // re-read layers/overrides and refresh the canvas.
+      const networkId = store.state.networkId;
+      if (networkId !== null) {
+        void syncLayersForTab(networkId, store.state.currentLayer?.id ?? null).then(() => {
+          scheduleRefresh();
+          scheduleStructuresRefresh();
+          scheduleChronicleRefresh();
+        });
+      }
       break;
     }
 

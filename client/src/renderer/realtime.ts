@@ -30,12 +30,16 @@ export interface RealtimeEffects {
   onFocusLost: () => void;
   /** The open network is gone or the user lost membership. */
   onNetworkLost: () => void;
+  /** The session's layer changed server-side (S11): switched by another tab of
+   * this client or deleted — the whole visible state must be re-synced. */
+  onLayerControl: (payload: { kind: 'switched' | 'deleted'; networkId: string; layer: { id: string; title: string } }) => void;
 }
 
 const effects: RealtimeEffects = {
   onStale: () => undefined,
   onFocusLost: () => undefined,
   onNetworkLost: () => undefined,
+  onLayerControl: () => undefined,
 };
 
 /** Event listeners — content modules register their own without clobbering. */
@@ -115,6 +119,24 @@ export function initRealtime(): void {
     if (networkId === store.state.networkId) {
       effects.onNetworkLost();
     }
+  });
+
+  // S11 (13-layers.md §12, §2.4): the server switched this session's layer
+  // (another tab of this client did it, or the layer was deleted) — the
+  // cached visible state no longer matches, so delegate the resync to the app
+  // controller.
+  etn.realtime.onLayerControl((payload) => {
+    const obj = payload as { kind?: unknown; networkId?: unknown; layer?: unknown };
+    const networkId = typeof obj.networkId === 'string' ? obj.networkId : null;
+    if (networkId === null) return;
+    if (obj.kind !== 'switched' && obj.kind !== 'deleted') return;
+    const layerObj = obj.layer as { id?: unknown; title?: unknown } | undefined;
+    if (layerObj === undefined || typeof layerObj.id !== 'string') return;
+    effects.onLayerControl({
+      kind: obj.kind,
+      networkId,
+      layer: { id: layerObj.id, title: String(layerObj.title ?? '') },
+    });
   });
 
   etn.realtime.onEvent((raw: unknown) => {

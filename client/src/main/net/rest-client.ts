@@ -1530,6 +1530,105 @@ export class RestClient {
     });
   }
 
+  // -------------------------------------------------------------------------
+  // Change layers (S11, docs/03-server-api.md §5a)
+  // -------------------------------------------------------------------------
+
+  /** `GET /networks/{nid}/layers` — layer list with hierarchy metadata. */
+  public async listLayers(networkId: string): Promise<import('@etn/shared').Layer[]> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/layers`);
+  }
+
+  /** `POST /networks/{nid}/layers` — create a layer under a parent. */
+  public async createLayer(
+    networkId: string,
+    input: { title: string; parent_id?: string; comment?: string | null; git_branch?: string | null },
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Layer> {
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/layers`, {
+      body: input,
+      requestOptions: opts,
+    });
+  }
+
+  /** `PATCH /networks/{nid}/layers/{id}` — rename / edit the comment. */
+  public async updateLayer(
+    networkId: string,
+    layerId: string,
+    changes: { title?: string; comment?: string | null },
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Layer> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}`,
+      { body: changes, requestOptions: opts },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/layers/{id}?cascade=N` — subtree delete (§2.4). */
+  public async deleteLayer(
+    networkId: string,
+    layerId: string,
+    cascade?: number,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').LayerDeleteResult> {
+    const query = cascade !== undefined ? { cascade: String(cascade) } : undefined;
+    return this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}`,
+      { query, requestOptions: opts },
+    );
+  }
+
+  /** `POST /networks/{nid}/layers/{id}/select` — switch the session layer. */
+  public async selectLayer(
+    networkId: string,
+    layerId: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').LayerEcho> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}/select`,
+      { requestOptions: opts },
+    );
+  }
+
+  /** `POST /networks/{nid}/layers/{id}/merge` — merge into the parent (S8). */
+  public async mergeLayer(
+    networkId: string,
+    layerId: string,
+    tables?: Record<string, string[]>,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').LayerMergeReport> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}/merge`,
+      { body: tables === undefined ? {} : { tables }, requestOptions: opts },
+    );
+  }
+
+  /** `GET /networks/{nid}/layers/{id}/diff` — structural diff (S11). */
+  public async getLayerDiff(
+    networkId: string,
+    layerId: string,
+  ): Promise<import('@etn/shared').LayerDiffResult> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}/diff`,
+    );
+  }
+
+  /** `GET /networks/{nid}/layers/{id}/diff/doc` — textual diff docs (S11). */
+  public async getLayerDiffDoc(
+    networkId: string,
+    layerId: string,
+  ): Promise<import('@etn/shared').LayerDiffDoc> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/layers/${encodeURIComponent(layerId)}/diff/doc`,
+    );
+  }
+
   /**
    * `GET /networks/{nid}/thoughts/duplicates` — live duplicate lookup powering
    * the add-thought dialog (H14, docs/03-server-api.md §6.3, 08-ui-spec.md §4.4)

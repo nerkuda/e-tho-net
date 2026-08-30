@@ -230,6 +230,21 @@ function buildApi(): EtnApi {
         ipcRenderer.on('realtime:networkLost', listener);
         return () => ipcRenderer.removeListener('realtime:networkLost', listener);
       },
+      /** Layer control frames (S11): the server switched this session's layer
+       * (`layer.switched`, §12) or deleted the layer it was sitting on
+       * (`layer.deleted`, §2.4) — both force a full resync. */
+      onLayerControl(cb) {
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(
+            payload as {
+              kind: 'switched' | 'deleted';
+              networkId: string;
+              layer: { id: string; title: string };
+            },
+          );
+        ipcRenderer.on('realtime:layer', listener);
+        return () => ipcRenderer.removeListener('realtime:layer', listener);
+      },
       /**
        * Renderer `window.online` → main force-reconnects the realtime pool
        * (defect 7f4cef31). One-way, fire-and-forget.
@@ -288,6 +303,17 @@ function buildApi(): EtnApi {
       close: (tabId) => invoke('tabs.close', tabId),
       reorder: (orderedIds) => invoke('tabs.reorder', orderedIds),
       updateState: (tabId, partial) => invoke('tabs.updateState', tabId, partial),
+    },
+    layers: {
+      list: (networkId) => invoke('layers.list', networkId),
+      create: (networkId, input) => invoke('layers.create', networkId, input),
+      update: (networkId, layerId, changes, expectedVersion) =>
+        invoke('layers.update', networkId, layerId, changes, expectedVersion),
+      remove: (networkId, layerId, cascade) => invoke('layers.remove', networkId, layerId, cascade),
+      select: (networkId, layerId) => invoke('layers.select', networkId, layerId),
+      merge: (networkId, layerId, tables) => invoke('layers.merge', networkId, layerId, tables),
+      diff: (networkId, layerId) => invoke('layers.diff', networkId, layerId),
+      diffDoc: (networkId, layerId) => invoke('layers.diffDoc', networkId, layerId),
     },
     system: {
       appInfo: () => invoke('system.appInfo'),

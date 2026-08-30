@@ -212,6 +212,9 @@ export class TabRealtimePool {
       const payload: RealtimeStalePayload = { networkId, lastSeq };
       this.opts.broadcast('realtime:stale', payload);
     });
+    client.onTyped('layer-control', (control) => {
+      this.opts.broadcast('realtime:layer', { ...control, networkId });
+    });
     client.onTyped('unauthorized', () => {
       const payload: RealtimeNetworkLostPayload = {
         networkId,

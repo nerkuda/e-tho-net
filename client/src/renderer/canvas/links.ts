@@ -569,6 +569,12 @@ function drawVisualLine(
   line.setAttribute('fill', 'none');
   line.dataset['key'] = bundle.key;
   line.dataset['links'] = bundle.edges.map((e) => e.id).join(',');
+  // S11 (§10.3): mark bundles where at least one edge is overridden by the
+  // current layer — dashed violet styling tells the user the link carries a
+  // layer version without changing its geometry.
+  if (bundle.edges.some((e) => store.state.layerOverrides.link_ids.includes(e.id))) {
+    line.classList.add('link-overridden');
+  }
   svg.append(line);
 
   const midX = geo.mid.x;

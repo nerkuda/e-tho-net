@@ -485,6 +485,27 @@ function buildTrashBadge(id: string, title: string): HTMLElement {
   return badge;
 }
 
+/** Ids physically overridden by the session's current layer (S11, §10.3) —
+ * rebuilt per render; the lists are small (the layer's own shadow rows). */
+function overriddenThoughtIds(): Set<string> {
+  return new Set(store.state.layerOverrides.thought_ids);
+}
+
+/**
+ * Marks a cloud whose thought is overridden by the current layer (S11):
+ * a dashed outline plus a small layer badge in the top-right corner — the
+ * canvas always shows the RESOLVED state (§4.1), the badge tells the user
+ * this particular card carries a layer version and will travel with a merge.
+ */
+function markOverriddenCloud(cloud: HTMLElement, id: string): void {
+  if (!overriddenThoughtIds().has(id)) return;
+  cloud.classList.add('overridden');
+  const badge = span('', 'cloud-layer-badge');
+  badge.append(svgIcon('layers', 15));
+  setTooltip(badge, 'Мысль изменена в текущем слое — её правка уедет в основу при слиянии');
+  cloud.append(badge);
+}
+
 /**
  * Renders the focus cloud (08-ui-spec.md §2.2.2): variable width, up to 3
  * title lines, ellipses filled when incoming/outgoing links exist.
@@ -530,6 +551,7 @@ function renderFocusRow(focus: FocusResponse): void {
   if (thought.marked_for_deletion) {
     cloud.append(buildTrashBadge(thought.id, thought.title));
   }
+  markOverriddenCloud(cloud, thought.id);
   focusRow.append(cloud);
   focusCloudEl = cloud;
   // A click on the focus cloud returns the editor to the focused thought
@@ -1048,6 +1070,7 @@ function buildCloud(
   if (isMarked) {
     cloud.append(buildTrashBadge(entry.id, cloudTitleFull));
   }
+  markOverriddenCloud(cloud, entry.id);
 
   // Single click → open the thought in the editor + halo (§2.2.4); double
   // click → focus (B1); Ctrl+click toggles selection (H16); right-click opens

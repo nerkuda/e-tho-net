@@ -93,6 +93,7 @@ function rowToTabDto(row: import('../db/local-db.js').TabRow): import('./contrac
     view_mode: row.view_mode,
     structures_state: row.structures_state,
     chronicle_state: row.chronicle_state,
+    layer_id: row.layer_id,
     last_active_at: row.last_active_at,
   };
 }
@@ -582,6 +583,61 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'trash.purge',
     bind((networkId: string) => requireRest(deps).purgeTrash(networkId)),
+  );
+
+  // --- layers (S11, 13-layers.md §10.3; 03-server-api.md §5a) --------------
+  handlers.set(
+    'layers.list',
+    bind((networkId: string) => requireRest(deps).listLayers(networkId)),
+  );
+  handlers.set(
+    'layers.create',
+    bind(
+      (
+        networkId: string,
+        input: { title: string; parent_id?: string; comment?: string | null; git_branch?: string | null },
+      ) => requireRest(deps).createLayer(networkId, input),
+    ),
+  );
+  handlers.set(
+    'layers.update',
+    bind(
+      (
+        networkId: string,
+        layerId: string,
+        changes: { title?: string; comment?: string | null },
+        expectedVersion?: number,
+      ) =>
+        requireRest(deps).updateLayer(networkId, layerId, changes, {
+          ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+        }),
+    ),
+  );
+  handlers.set(
+    'layers.remove',
+    bind((networkId: string, layerId: string, cascade?: number) =>
+      requireRest(deps).deleteLayer(networkId, layerId, cascade),
+    ),
+  );
+  handlers.set(
+    'layers.select',
+    bind((networkId: string, layerId: string) => requireRest(deps).selectLayer(networkId, layerId)),
+  );
+  handlers.set(
+    'layers.merge',
+    bind((networkId: string, layerId: string, tables?: Record<string, string[]>) =>
+      requireRest(deps).mergeLayer(networkId, layerId, tables),
+    ),
+  );
+  handlers.set(
+    'layers.diff',
+    bind((networkId: string, layerId: string) => requireRest(deps).getLayerDiff(networkId, layerId)),
+  );
+  handlers.set(
+    'layers.diffDoc',
+    bind((networkId: string, layerId: string) =>
+      requireRest(deps).getLayerDiffDoc(networkId, layerId),
+    ),
   );
 
   // --- types ----------------------------------------------------------------

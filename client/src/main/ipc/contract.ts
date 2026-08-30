@@ -92,6 +92,12 @@ import type {
   UserPreferenceEntry,
   UsageClearResult,
   VersionResponse,
+  Layer,
+  LayerDeleteResult,
+  LayerDiffDoc,
+  LayerDiffResult,
+  LayerEcho,
+  LayerMergeReport,
 } from '@etn/shared';
 
 /** Payload of the single `etn:invoke` channel used by the preload bridge. */
@@ -164,6 +170,8 @@ export interface TabDto {
   view_mode: TabViewMode | null;
   structures_state: string | null;
   chronicle_state: string | null;
+  /** Change-layer of the tab (S11, 13-layers.md §10.3); `null` — the base. */
+  layer_id: string | null;
   last_active_at: string;
 }
 
@@ -177,6 +185,8 @@ export interface TabStatePatch {
   view_mode?: TabViewMode | null;
   structures_state?: string | null;
   chronicle_state?: string | null;
+  /** Change-layer of the tab (S11); `null` — back to the base. */
+  layer_id?: string | null;
 }
 
 /** How a duplicate candidate matched the proposed title (add-thought dialog). */
@@ -655,6 +665,19 @@ export interface EtnApi {
     /** Per-network terminal close (Q5) — `network.deleted` or membership lost. */
     onNetworkLost(cb: (payload: { networkId: string; reason: 'unauthorized' | 'not-found' }) => void): () => void;
     /**
+     * Layer control frames (S11, 13-layers.md §12, §2.4): the server switched
+     * this session's layer (`switched`) or deleted the layer the session was
+     * sitting on (`deleted` — the session is re-pointed to the parent). Both
+     * require a full resync of the visible state.
+     */
+    onLayerControl(
+      cb: (payload: {
+        kind: 'switched' | 'deleted';
+        networkId: string;
+        layer: { id: string; title: string };
+      }) => void,
+    ): () => void;
+    /**
      * Notifies main that the network came back (renderer `window.online` DOM
      * event, defect 7f4cef31). One-way, fire-and-forget: main force-reconnects
      * every pooled realtime socket instead of waiting for the idle watchdog.
@@ -780,6 +803,42 @@ export interface EtnApi {
     reorder(orderedIds: string[]): Promise<void>;
     /** Update a tab's state (focus_id, view_mode, filter_state, slot_idx). */
     updateState(tabId: string, partial: TabStatePatch): Promise<void>;
+  };
+  /** Change layers (S11, 13-layers.md §10.3): the same surface as REST §5a. */
+  layers: {
+    /** All layers with hierarchy metadata; `current` marks the session's one. */
+    list(networkId: string): Promise<Layer[]>;
+    /** Create a layer (default parent — the session's current layer). */
+    create(
+      networkId: string,
+      input: {
+        title: string;
+        parent_id?: string;
+        comment?: string | null;
+        git_branch?: string | null;
+      },
+    ): Promise<Layer>;
+    /** Rename a layer / edit its comment. */
+    update(
+      networkId: string,
+      layerId: string,
+      changes: { title?: string; comment?: string | null },
+      expectedVersion?: number,
+    ): Promise<Layer>;
+    /** Delete a layer + its subtree (cascade confirmation, §2.4). */
+    remove(networkId: string, layerId: string, cascade?: number): Promise<LayerDeleteResult>;
+    /** Switch the session's current layer (§7.1). */
+    select(networkId: string, layerId: string): Promise<LayerEcho>;
+    /** Merge the layer into its parent, fully or a closed partial subset. */
+    merge(
+      networkId: string,
+      layerId: string,
+      tables?: Record<string, string[]>,
+    ): Promise<LayerMergeReport>;
+    /** Structural diff + overridden ids (§10.3). */
+    diff(networkId: string, layerId: string): Promise<LayerDiffResult>;
+    /** Textual diff: two deterministic markdown documents (§10.3). */
+    diffDoc(networkId: string, layerId: string): Promise<LayerDiffDoc>;
   };
   system: {
     /**

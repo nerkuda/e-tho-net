@@ -5723,3 +5723,134 @@ table.chron-table thead th {
   gap: 4px;
   align-items: center;
 }
+
+/* ---------------------------------------------------------------------------
+   Change layers (S11, 13-layers.md §10.3; 08-ui-spec.md §8.2)
+   --------------------------------------------------------------------------- */
+
+/* A cloud whose thought is overridden by the current layer: dashed outline —
+   the card shows the RESOLVED state, the mark says «this one travels with a
+   merge». */
+.cloud.overridden {
+  outline: 2px dashed var(--accent, #6a7dff);
+  outline-offset: 2px;
+}
+
+/* Layer badge — same corner language as the trash badge, but violet: the
+   layer icon on a dark circle, tooltip explains the semantics. */
+.cloud-layer-badge {
+  position: absolute;
+  left: -13.6px;
+  top: -13.6px;
+  width: 27.2px;
+  height: 27.2px;
+  border-radius: 50%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  cursor: default;
+  user-select: none;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.cloud-layer-badge svg {
+  color: #8c9eff;
+}
+
+/* A link overridden by the current layer: dashed, slightly thicker stroke
+   with a violet tint so layer-edited links stand out on the canvas. */
+.link-line.link-overridden {
+  stroke: #8c9eff;
+  stroke-dasharray: 5 4;
+  stroke-opacity: 0.95;
+}
+
+/* Layer dialogs: the explaining one-liner and the safe-delete note. */
+.layer-hint {
+  font-size: 12px;
+  color: var(--text-dim, #777);
+  line-height: 1.45;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.04));
+}
+
+.layer-hint-safe {
+  color: var(--text, #222);
+}
+
+.layer-report-line {
+  font-size: 13px;
+  padding: 2px 0;
+}
+
+/* Diff dialog (S11): tab bar + two views. */
+.diff-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.diff-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.diff-tab {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #ccc);
+  background: transparent;
+  cursor: pointer;
+}
+
+.diff-tab.active {
+  background: var(--accent, #6a7dff);
+  color: #fff;
+  border-color: var(--accent, #6a7dff);
+}
+
+.diff-content {
+  max-height: 55vh;
+  overflow: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-family: var(--mono, Consolas, monospace);
+}
+
+.diff-group-title {
+  margin-top: 8px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--text, #222);
+}
+
+.diff-group-line {
+  padding: 1px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diff-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0 4px;
+}
+
+.diff-add {
+  background: rgba(46, 160, 67, 0.14);
+  color: #2ea043;
+}
+
+.diff-del {
+  background: rgba(248, 81, 73, 0.12);
+  color: #e5484d;
+}
+
+.diff-same {
+  color: var(--text-dim, #777);
+}

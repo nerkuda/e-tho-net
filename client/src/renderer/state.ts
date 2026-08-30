@@ -19,6 +19,8 @@ import {
   type CurrentUser,
   type FocusEdge,
   type FocusResponse,
+  type Layer,
+  type LayerEcho,
   type Link,
   type LinkType,
   type Network,
@@ -150,6 +152,12 @@ export interface AppState {
    *  the «Открыть сеть» panel on top of the canvas while the tab strip stays
    *  visible — clicking any tab or picking a network closes it. */
   pickerOpen: boolean;
+  /** Change layers of the open network (S11, 13-layers.md §10.3). */
+  layers: Layer[];
+  /** Session's current layer — the title of the «Основа» menu. */
+  currentLayer: LayerEcho | null;
+  /** Ids physically overridden by the current layer — marked on the canvas. */
+  layerOverrides: { thought_ids: string[]; link_ids: string[] };
 }
 
 /** Initial snapshot. */
@@ -198,6 +206,9 @@ const initial: AppState = {
   inaccessibleTabIds: new Set<string>(),
   networkList: [],
   pickerOpen: false,
+  layers: [],
+  currentLayer: null,
+  layerOverrides: { thought_ids: [], link_ids: [] },
 };
 
 /**
@@ -245,6 +256,9 @@ class Store {
       inaccessibleTabIds: new Set<string>(),
       networkList: [],
       pickerOpen: false,
+      layers: [],
+      currentLayer: null,
+      layerOverrides: { thought_ids: [], link_ids: [] },
     });
   }
 }

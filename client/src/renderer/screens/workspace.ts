@@ -28,6 +28,7 @@ import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { store, type RtStatus } from '../state.js';
 import { wireNetMenu, wireUserMenu, wireViewMenu } from './workspace-menus.js';
+import { wireLayerMenu } from './layers.js';
 import { mountCanvas } from '../canvas/canvas.js';
 import { mountHistoryBar } from './history-bar.js';
 import { mountEditor } from '../editor/editor.js';
@@ -47,6 +48,9 @@ export interface WorkspaceHandles {
   root: HTMLElement;
   /** Toolbar dropdown for the open network (members/leave/types/settings). */
   netMenuButton: HTMLButtonElement;
+  /** Toolbar dropdown for change layers (S11): its label IS the current layer. */
+  layerMenuButton: HTMLButtonElement;
+  layerMenuLabel: HTMLSpanElement;
   userMenuButton: HTMLButtonElement;
   userMenuLabel: HTMLSpanElement;
   /** Toolbar dropdown for workspace-layout commands (show/hide editor, …). */
@@ -129,6 +133,19 @@ export function buildWorkspace(): HTMLElement {
   );
   setTooltip(netMenuButton, 'Меню мыслесети');
 
+  // Layer menu (S11, 08-ui-spec.md §8.2): right after «Мыслесеть». The label
+  // is the session's current layer title — «Основа» by default — which makes
+  // the menu itself the constant «where am I» indicator (§10.3).
+  const layerMenuButton = el('button', 'tb-btn', '');
+  layerMenuButton.type = 'button';
+  const layerMenuLabel = span('Основа', 'tb-label');
+  layerMenuButton.append(
+    svgIcon('layers'),
+    layerMenuLabel,
+    svgIcon('chevron-down', 12),
+  );
+  setTooltip(layerMenuButton, 'Слои изменений');
+
   // View switcher (L15, 08-ui-spec.md §15.1): immediately after the network
   // menu. The pressed button marks the active view.
   const mapViewButton = el('button', 'tb-btn tb-icon view-btn', '');
@@ -187,6 +204,7 @@ export function buildWorkspace(): HTMLElement {
   // it is one big drop target between the view switcher and the user menu.
   toolbar.append(
     netMenuButton,
+    layerMenuButton,
     mapViewButton,
     structuresViewButton,
     chronicleViewButton,
@@ -274,6 +292,8 @@ export function buildWorkspace(): HTMLElement {
   const handles: WorkspaceHandles = {
     root,
     netMenuButton,
+    layerMenuButton,
+    layerMenuLabel,
     userMenuButton,
     userMenuLabel,
     viewMenuButton,
@@ -301,6 +321,7 @@ export function buildWorkspace(): HTMLElement {
   // Toolbar dropdown menus (H3/H18), canvas (H4), history (H7), editor (H8),
   // search (H13), structures view (L15).
   wireNetMenu(handles);
+  wireLayerMenu(handles);
   wireUserMenu(handles);
   wireViewMenu(handles);
   mountCanvas(canvasHost);
@@ -320,6 +341,8 @@ export function buildWorkspace(): HTMLElement {
     const st = store.state;
     const user = st.me?.display_name ?? st.me?.username ?? '—';
     userMenuLabel.textContent = user;
+    // The layer menu label is the current layer indicator (S11, §10.3).
+    layerMenuLabel.textContent = st.currentLayer?.title ?? 'Основа';
     const glyph = statusGlyph(st.rtStatus);
     statusLeft.className = `status-light ${glyph.cls}`;
     setTooltip(statusLeft, glyph.text);

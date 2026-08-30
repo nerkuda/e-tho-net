@@ -67,6 +67,14 @@ export interface RealtimeClientEvents extends EventMap {
   status: [status: RealtimeStatus];
   /** `resume.stale` — event-log window exceeded; caller must do a full re-focus. */
   stale: [lastSeq: number];
+  /**
+   * A layer control frame (S11, 13-layers.md §12, §2.4): the server switched
+   * this session's layer or deleted the layer it was sitting on. Both require
+   * a full resync of the visible state.
+   */
+  'layer-control': [
+    payload: { kind: 'switched' | 'deleted'; layer: { id: string; title: string } },
+  ];
   /** Server closed with `4401` — API-key rejected or membership lost. */
   unauthorized: [];
   /** Server closed with `4404` — network does not exist. */
@@ -381,6 +389,19 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
         const networkId = this.getNetworkId();
         if (networkId) this.setLastSeq(networkId, lastSeq);
         this.emitTyped('stale', lastSeq);
+      }
+      return;
+    }
+    if (obj.type === 'layer.switched' || obj.type === 'layer.deleted') {
+      const ctrl = payload as { layer?: { id?: unknown; title?: unknown } };
+      if (ctrl.layer !== undefined && typeof ctrl.layer.id === 'string') {
+        // A layer switch/deletion invalidates the entire visible state
+        // (13-layers.md §12) — the session's own writes from now on resolve
+        // in a different layer, so subscribers must resync fully.
+        this.emitTyped('layer-control', {
+          kind: obj.type === 'layer.switched' ? 'switched' : 'deleted',
+          layer: { id: ctrl.layer.id, title: String(ctrl.layer.title ?? '') },
+        });
       }
       return;
     }
