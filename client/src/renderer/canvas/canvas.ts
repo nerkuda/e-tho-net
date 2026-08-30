@@ -353,6 +353,11 @@ function canvasRenderKey(): string {
     thoughtTypes: s.thoughtTypes,
     editorTarget: s.editorTarget,
     selectedLinkId: s.selectedLinkId,
+    // Live override marking (08-ui-spec.md §2.2): the badge/dashed outline is
+    // painted by a full render — without this field a post-mutation override
+    // refresh hit the selection-only fast path and the badge only appeared
+    // after the next focus/layer change repainted the canvas.
+    layerOverrides: s.layerOverrides,
     zoneAnimationPending,
   });
 }

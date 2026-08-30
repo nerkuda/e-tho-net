@@ -220,4 +220,17 @@ describe('canvasRenderKey / selectionKey (2e418bc3)', () => {
     store.update({ focus: focusResponse(), editorTarget: { kind: 'thought', id: 'f' } });
     assert.notEqual(canvasRenderKey(), base, 'editor target — new key');
   });
+
+  it('changes with the layer overrides — the badge repaints after a mutation (71d7e27a)', () => {
+    store.update({
+      focus: focusResponse(),
+      layerOverrides: { thought_ids: [], link_ids: [] },
+    });
+    const base = canvasRenderKey();
+    // A post-mutation override refresh (08-ui-spec §2.2) must produce a new
+    // key: without it the subscriber took the selection-only fast path and
+    // the layer badge only appeared after the next focus/layer change.
+    store.update({ layerOverrides: { thought_ids: ['f'], link_ids: [] } });
+    assert.notEqual(canvasRenderKey(), base, 'override list — new key');
+  });
 });
