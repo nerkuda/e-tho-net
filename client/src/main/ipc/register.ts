@@ -19,7 +19,7 @@ import { decryptApiKey, encryptApiKey } from '../safe-storage.js';
 import { RestClient } from '../net/rest-client.js';
 import { RealtimeState } from '../realtime/applier.js';
 import { TabRealtimePool } from '../realtime/tab-rt-pool.js';
-import { createHandlers } from './handlers.js';
+import { createHandlers, selfMutationNetwork } from './handlers.js';
 import type { IpcInvokePayload } from './contract.js';
 
 /** Options for {@link registerIpc}. */
@@ -218,7 +218,16 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     if (!handler) {
       throw new Error(`Unknown IPC method: ${payload.method}`);
     }
-    return await handler(payload.args ?? []);
+    const result = await handler(payload.args ?? []);
+    // Own network mutation (08-ui-spec.md §2.2): the server suppresses own
+    // echoes (04-realtime.md §5), so the renderer never hears about the write
+    // over the realtime socket — flag it so the canvas layer-override marking
+    // refreshes right away instead of on the next layer/tab switch.
+    const mutatedNetwork = selfMutationNetwork(payload.method, payload.args ?? []);
+    if (mutatedNetwork !== null) {
+      broadcast('realtime:selfmut', { networkId: mutatedNetwork });
+    }
+    return result;
   });
 
   // One-way channel from the renderer's `window.online` DOM event (defect

@@ -202,17 +202,7 @@ export class TabRealtimePool {
         },
         event,
       );
-      if (result.applied) {
-        this.opts.broadcast('realtime:event', event);
-        return;
-      }
-      // Own echo — the mutation came from THIS client, so the renderer never
-      // sees the event (echo suppression above). Layer-override tracking
-      // (08-ui-spec.md §2.2) still needs a nudge: a layer write may have
-      // created a shadow row, so flag the network on a dedicated channel.
-      if (event.actor.client_id === this.opts.getClientId()) {
-        this.opts.broadcast('realtime:selfmut', { networkId });
-      }
+      if (result.applied) this.opts.broadcast('realtime:event', event);
     });
     client.onTyped('status', (status: RealtimeStatus) => {
       const payload: RealtimeStatusPayload = { networkId, status };

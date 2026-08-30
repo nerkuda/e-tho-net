@@ -1690,3 +1690,55 @@ async function openExternalShell(target: string): Promise<string> {
     return `Не удалось открыть «${classified.url}»${hint}: ${detail}`;
   }
 }
+
+/**
+ * IPC channels whose successful call mutates branchable network data
+ * (13-layers.md §3): the write may have created a layer shadow row. The
+ * invoke dispatcher flags these to the renderer as `realtime:selfmut`
+ * (08-ui-spec.md §2.2) — the SERVER suppresses own echoes (04-realtime.md §5:
+ * a `deliver` with `actor.client_id === conn.clientId` never sends), so no WS
+ * event arrives for them and the canvas override marking would refresh only
+ * on the next layer/tab switch.
+ *
+ * Excluded on purpose: local-only channels (tabs/ui/meta/pins/savedFilters),
+ * user-scoped preferences and orders (non-branchable tables), the type
+ * catalogues (they produce no thought/link shadow rows) and every read.
+ */
+const SELF_MUTATING_IPC_METHODS: ReadonlySet<string> = new Set([
+  'thoughts.create',
+  'thoughts.update',
+  'thoughts.remove',
+  'thoughts.batch',
+  'thoughts.copyBatch',
+  'thoughts.usageClear',
+  'links.create',
+  'links.update',
+  'links.remove',
+  'properties.set',
+  'properties.remove',
+  'comments.create',
+  'comments.update',
+  'comments.remove',
+  'comments.createMulti',
+  'comments.addTarget',
+  'comments.removeTarget',
+  'attachments.add',
+  'attachments.update',
+  'attachments.remove',
+  'attachments.uploadFile',
+  'attachments.updateContent',
+  'attachments.copy',
+  'trash.purge',
+  'system.importEtnx',
+]);
+
+/**
+ * The mutated network id for a `selfmut` flag, or `null` when the method is
+ * not a network mutation. Every mutating channel takes the network id as its
+ * first positional argument.
+ */
+export function selfMutationNetwork(method: string, args: unknown[]): string | null {
+  if (!SELF_MUTATING_IPC_METHODS.has(method)) return null;
+  const networkId = args[0];
+  return typeof networkId === 'string' && networkId.length > 0 ? networkId : null;
+}
