@@ -23,6 +23,7 @@ import { closeMenu, MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/men
 import { errorDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, span } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';
+import { resyncAfterLayerSwitch } from '../app.js';
 import { store, requireNetworkId } from '../state.js';
 import { upsertTab } from './tabs/tab-state.js';
 import type { WorkspaceHandles } from './workspace.js';
@@ -151,9 +152,23 @@ export function buildLayerMenuItems(networkId: string, layers: Layer[]): MenuIte
   return items;
 }
 
-/** Select a layer: switch the server session, record it on the active tab. */
+/** Select a layer: switch the server session, record it on the active tab,
+ *  then fully resync the visible state (13-layers.md §12 — the layer switch
+ *  invalidates the client cache as a whole, not just the layer list). */
 async function selectLayerForTab(networkId: string, layerId: string): Promise<void> {
-  const layer = store.state.layers.find((l) => l.id === layerId);
+  let layer = store.state.layers.find((l) => l.id === layerId);
+  if (layer === undefined) {
+    // The layer may be fresh — created a moment ago (the create dialog),
+    // while `store.layers` predates it. Re-read the list once instead of
+    // silently doing nothing (bug: no switch to a newly created layer).
+    try {
+      const layers = await etn.layers.list(networkId);
+      store.update({ layers });
+      layer = layers.find((l) => l.id === layerId);
+    } catch {
+      // Offline — nothing to select; the next menu open repairs the list.
+    }
+  }
   if (layer === undefined) return;
   await etn.layers.select(networkId, layerId);
   const tab = store.state.tabs.find((t) => t.network_id === networkId && t.tab_id === store.state.activeTabId);
@@ -165,6 +180,7 @@ async function selectLayerForTab(networkId: string, layerId: string): Promise<vo
     if (fresh !== undefined) upsertTab(fresh);
   }
   await syncLayersForTab(networkId, layer.is_base ? null : layerId);
+  await resyncAfterLayerSwitch();
 }
 
 /**

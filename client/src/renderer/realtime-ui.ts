@@ -15,7 +15,7 @@
 
 import type { AnyRealtimeEvent } from '@etn/shared';
 
-import { scheduleRefresh } from './app.js';
+import { resyncAfterLayerSwitch, scheduleRefresh } from './app.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { etn } from './lib/etn.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
@@ -203,11 +203,13 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
     case 'layer.merged': {
       // S11 (04-realtime.md §11.4): a merge emits exactly one event and the
       // recipients resync fully — the visible state changed wholesale, so
-      // re-read layers/overrides and refresh the canvas.
+      // re-read layers/overrides and drop the cached editor/structures
+      // snapshots (13-layers.md §12: a layer change invalidates the whole
+      // client cache, not just the canvas).
       const networkId = store.state.networkId;
       if (networkId !== null) {
         void syncLayersForTab(networkId, store.state.currentLayer?.id ?? null).then(() => {
-          scheduleRefresh();
+          void resyncAfterLayerSwitch();
           scheduleStructuresRefresh();
           scheduleChronicleRefresh();
         });

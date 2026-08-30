@@ -36,11 +36,15 @@ import { initListClamps } from './editor/list-heights.js';
 import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js';
 import { applyRealtimeToUi } from './realtime-ui.js';
 import { initTheme } from './lib/theme.js';
+import { scheduleChronicleRefresh } from './screens/chronicle/chronicle.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
 import { refreshSearchIfVisible } from './search/search.js';
-import { invalidateStructuresThought } from './screens/structures/structures.js';
+import {
+  invalidateStructuresThought,
+  scheduleStructuresRefresh,
+} from './screens/structures/structures.js';
 import { showScreen } from './screens/screens.js';
 import { store, type WorkspaceView } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
@@ -398,6 +402,33 @@ export function scheduleRefresh(): void {
   }, REFRESH_DEBOUNCE_MS);
 }
 
+/**
+ * Full resync of the visible state after the session's layer changed
+ * (13-layers.md §12: the layer switch invalidates the client cache as a
+ * whole). `refreshFocus` alone is not enough: the editor and the
+ * structures/chronicle views carry their own cached snapshots (a thought
+ * loaded into `editorTarget`, the active structures thought) that were read
+ * in the previous layer's context — drop them and re-read everything the
+ * new layer resolves. Called on the local layer switch (`selectLayerForTab`)
+ * and on the server-side `layer.switched`/`layer.deleted` control frames.
+ */
+export async function resyncAfterLayerSwitch(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  // Re-read the focus FIRST: the editor follows it once the cached snapshots
+  // are dropped below, and this way it renders straight into the new layer's
+  // data instead of flashing the old layer's focus for a frame.
+  await refreshFocus().catch(() => undefined);
+  store.update({
+    editorTarget: null,
+    selectedLinkId: null,
+    structuresActiveThoughtId: null,
+    structuresActiveThought: null,
+  });
+  scheduleStructuresRefresh();
+  scheduleChronicleRefresh();
+}
+
 /** Returns to the network list (e.g. after `network-lost`). */
 export function backToNetworks(): void {
   store.resetNetwork();
@@ -562,10 +593,11 @@ export async function boot(): Promise<void> {
     onNetworkLost: () => backToNetworks(),
     onLayerControl: (payload) => {
       // S11: the session's layer changed server-side — re-sync layers +
-      // overrides and fully re-read the visible state (13-layers.md §12).
+      // overrides and fully re-read the visible state (13-layers.md §12),
+      // dropping the cached editor/structures snapshots of the old layer.
       if (payload.networkId !== store.state.networkId) return;
       void syncLayersForTab(store.state.networkId, payload.layer.id).then(() =>
-        scheduleRefresh(),
+        resyncAfterLayerSwitch(),
       );
     },
   });
