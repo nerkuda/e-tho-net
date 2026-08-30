@@ -412,7 +412,11 @@ window.etn = {
   me: { get, listKeys, createKey, deleteKey },
   realtime: {
     onEvent(cb),         // подписка на события в renderer
-    onStatusChange(cb)
+    onStatusChange(cb),
+    onStale(cb), onNetworkLost(cb),
+    onLayerControl(cb),  // S11: layer.switched / layer.deleted — полный ресинк
+    onSelfMutated(cb)    // S11: своё подавленное эхо (`realtime:selfmut`
+                         // {networkId}) — живое обновление перекрытий (08 §2.2)
   },
   tabs: {
     list(): Promise<TabDto[]>,
