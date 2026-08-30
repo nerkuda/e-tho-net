@@ -23,6 +23,7 @@ import { closeMenu, MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/men
 import { errorDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, span } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';
+import { onRealtimeEvent } from '../realtime.js';
 import { resyncAfterLayerSwitch } from '../app.js';
 import { store, requireNetworkId } from '../state.js';
 import { upsertTab } from './tabs/tab-state.js';
@@ -181,6 +182,86 @@ async function selectLayerForTab(networkId: string, layerId: string): Promise<vo
   }
   await syncLayersForTab(networkId, layer.is_base ? null : layerId);
   await resyncAfterLayerSwitch();
+}
+
+/** Debounce for coalescing post-mutation override refreshes, ms. */
+const OVERRIDES_REFRESH_MS = 300;
+let overridesTimer: number | null = null;
+
+/** Re-reads the current layer's overridden ids and stores them for the
+ *  canvas marking (08-ui-spec.md §2.2). No-op while the base layer is
+ *  current — there is nothing to mark. */
+async function refreshLayerOverrides(): Promise<void> {
+  const networkId = store.state.networkId;
+  const current = store.state.currentLayer;
+  if (networkId === null || current === null || current.id === BASE_LAYER_ID) return;
+  try {
+    const diff = await etn.layers.diff(networkId, current.id);
+    if (store.state.currentLayer?.id !== current.id) return; // switched away meanwhile
+    store.update({
+      layerOverrides: {
+        thought_ids: diff.overridden.thought_ids,
+        link_ids: diff.overridden.link_ids,
+      },
+    });
+  } catch {
+    // Offline / the layer died — the next syncLayersForTab repairs the state.
+  }
+}
+
+/**
+ * Schedules an override refresh after something may have changed the current
+ * layer's rows (08-ui-spec.md §2.2): own mutations (flagged by main as
+ * `realtime:selfmut` — the server echo is suppressed for the applier) and
+ * foreign realtime events. The badge must appear the moment a thought gains
+ * a layer version, not on the next layer/tab switch.
+ */
+export function scheduleLayerOverridesRefresh(): void {
+  const current = store.state.currentLayer;
+  if (current === null || current.id === BASE_LAYER_ID) return;
+  if (overridesTimer !== null) window.clearTimeout(overridesTimer);
+  overridesTimer = window.setTimeout(() => {
+    overridesTimer = null;
+    void refreshLayerOverrides();
+  }, OVERRIDES_REFRESH_MS);
+}
+
+/** Event types whose application can create/drop layer shadow rows. */
+const OVERRIDE_RELEVANT_EVENTS = new Set([
+  'thought.created',
+  'thought.updated',
+  'thought.reordered',
+  'thought.deleted',
+  'link.created',
+  'link.updated',
+  'link.deleted',
+  'property-value.set',
+  'property-value.deleted',
+  'comment.created',
+  'comment.updated',
+  'comment.deleted',
+  'attachment.created',
+  'attachment.updated',
+  'attachment.deleted',
+]);
+
+let overridesTrackingInitialized = false;
+
+/**
+ * Wires the live override tracking (08-ui-spec.md §2.2): own mutations via
+ * the `realtime:selfmut` flag from main, foreign changes via the realtime
+ * event bus. Idempotent — call once when the workspace mounts.
+ */
+export function initLayerOverridesTracking(): void {
+  if (overridesTrackingInitialized) return;
+  overridesTrackingInitialized = true;
+  etn.realtime.onSelfMutated((payload) => {
+    if (payload.networkId === store.state.networkId) scheduleLayerOverridesRefresh();
+  });
+  onRealtimeEvent((evt) => {
+    if (evt.network_id !== store.state.networkId) return;
+    if (OVERRIDE_RELEVANT_EVENTS.has(evt.type)) scheduleLayerOverridesRefresh();
+  });
 }
 
 /**

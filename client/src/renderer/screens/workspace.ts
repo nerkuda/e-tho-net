@@ -28,7 +28,7 @@ import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { store, type RtStatus } from '../state.js';
 import { wireNetMenu, wireUserMenu, wireViewMenu } from './workspace-menus.js';
-import { wireLayerMenu } from './layers.js';
+import { initLayerOverridesTracking, wireLayerMenu } from './layers.js';
 import { mountCanvas } from '../canvas/canvas.js';
 import { mountHistoryBar } from './history-bar.js';
 import { mountEditor } from '../editor/editor.js';
@@ -322,6 +322,9 @@ export function buildWorkspace(): HTMLElement {
   // search (H13), structures view (L15).
   wireNetMenu(handles);
   wireLayerMenu(handles);
+  // Live override marking (08-ui-spec.md §2.2): the canvas badge appears the
+  // moment a layer write happens, not on the next layer/tab switch.
+  initLayerOverridesTracking();
   wireUserMenu(handles);
   wireViewMenu(handles);
   mountCanvas(canvasHost);

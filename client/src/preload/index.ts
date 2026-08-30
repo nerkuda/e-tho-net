@@ -245,6 +245,15 @@ function buildApi(): EtnApi {
         ipcRenderer.on('realtime:layer', listener);
         return () => ipcRenderer.removeListener('realtime:layer', listener);
       },
+      /** Own-mutation flag (S11, 08-ui-spec.md §2.2): the event was suppressed
+       * as this client's echo, but the write may have created a layer shadow
+       * row — the renderer refreshes the override marking. */
+      onSelfMutated(cb) {
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(payload as { networkId: string });
+        ipcRenderer.on('realtime:selfmut', listener);
+        return () => ipcRenderer.removeListener('realtime:selfmut', listener);
+      },
       /**
        * Renderer `window.online` → main force-reconnects the realtime pool
        * (defect 7f4cef31). One-way, fire-and-forget.

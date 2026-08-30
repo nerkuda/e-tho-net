@@ -678,6 +678,13 @@ export interface EtnApi {
       }) => void,
     ): () => void;
     /**
+     * Own-mutation flag (S11, 08-ui-spec.md §2.2): main suppressed the event
+     * as this client's echo, but the write may have created a layer shadow
+     * row — the renderer refreshes the canvas override marking. Payload:
+     * `{networkId}`.
+     */
+    onSelfMutated(cb: (payload: { networkId: string }) => void): () => void;
+    /**
      * Notifies main that the network came back (renderer `window.online` DOM
      * event, defect 7f4cef31). One-way, fire-and-forget: main force-reconnects
      * every pooled realtime socket instead of waiting for the idle watchdog.
