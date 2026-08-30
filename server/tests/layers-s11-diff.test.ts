@@ -221,6 +221,80 @@ describe(
       }
     });
 
+    it('dependent-row edits (property value, comment, synonym) mark their owners overridden', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Base: thoughts A (plain) and B (typed, so a property value can be
+        // set on it later). Only the layer touches their dependent rows.
+        const a = await postThought(ctx, 'А');
+        const b = await postThought(ctx, 'Б');
+
+        const typeRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types`,
+          headers: authHeaders(ctx),
+          payload: { name: 'Карточка' },
+        });
+        assert.equal(typeRes.statusCode, 201, typeRes.body?.toString());
+        const typeId = (typeRes.json().data as { id: string }).id;
+        const propRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/properties`,
+          headers: authHeaders(ctx),
+          payload: { key: 'Статус', value_type: 'text' },
+        });
+        assert.equal(propRes.statusCode, 201, propRes.body?.toString());
+        const patchB = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${b}`,
+          headers: authHeaders(ctx),
+          payload: { type_id: typeId },
+        });
+        assert.equal(patchB.statusCode, 200, patchB.body?.toString());
+
+        const layer = await createLayer(ctx, 'Правки зависимых строк');
+        await selectLayer(ctx, layer.id);
+
+        // In the layer: a permanent comment on A and a property value on B —
+        // neither materialises the thought row itself.
+        const commentRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${a}/comments`,
+          headers: authHeaders(ctx),
+          payload: { kind: 'permanent', body_md: 'правка в слое' },
+        });
+        assert.equal(commentRes.statusCode, 201, commentRes.body?.toString());
+
+        const valueRes = await ctx.app.inject({
+          method: 'PUT',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${b}/properties/Статус`,
+          headers: authHeaders(ctx),
+          payload: { value: 'в слое' },
+        });
+        assert.equal(valueRes.statusCode, 200, valueRes.body?.toString());
+
+        const diff = await getDiff(ctx, layer.id);
+        // The owners are overridden through their dependent rows alone.
+        assert.ok(diff.overridden.thought_ids.includes(a), 'comment owner must be overridden');
+        assert.ok(diff.overridden.thought_ids.includes(b), 'property-value owner must be overridden');
+        // A pure comment edit does not appear as a structural link change.
+        assert.deepEqual(diff.links.added, []);
+        assert.deepEqual(diff.links.removed, []);
+
+        // Sanity: no physical `thoughts` shadow rows — the overrides came
+        // from `comments` / `property_values`, not from entity-row edits.
+        const layerNdb = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layer.id);
+        for (const id of [a, b]) {
+          const row = layerNdb
+            .prepare('SELECT COUNT(*) AS c FROM thoughts WHERE id = ? AND layer_id = ?')
+            .get(id, layer.id) as { c: number };
+          assert.equal(row.c, 0);
+        }
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('textual diff is deterministic and reflects content changes', async () => {
       const ctx = await buildRestContext();
       try {

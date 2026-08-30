@@ -61,6 +61,63 @@ function physicalIds(ndb: NetworkDb, table: 'thoughts' | 'links', layerId: strin
   ).map((r) => r.id);
 }
 
+/**
+ * Owners of the layer's own rows in one polymorphic branchable table
+ * (`property_values` / `comments` / `comment_targets` / `attachments`).
+ * A shadow of a dependent row is as much «the entity carries a layer version»
+ * as a shadow of the entity row itself — editing a thought's property or
+ * comment in a layer must mark the thought overridden (03-server-api.md
+ * §5a.7), not only a title/type/style edit.
+ */
+function physicalOwners(
+  ndb: NetworkDb,
+  table: 'property_values' | 'comments' | 'comment_targets' | 'attachments',
+  layerId: string,
+): { thought: string[]; link: string[] } {
+  const rows = ndb
+    .prepare(
+      `SELECT owner_type, owner_id FROM ${table} WHERE layer_id = ? -- layers:physical-read`,
+    )
+    .all(layerId) as { owner_type: string; owner_id: string }[];
+  const thought: string[] = [];
+  const link: string[] = [];
+  for (const row of rows) {
+    if (row.owner_type === 'link') link.push(row.owner_id);
+    else thought.push(row.owner_id);
+  }
+  return { thought, link };
+}
+
+/**
+ * The full `overridden` sets: entity rows of the layer plus owners of its
+ * dependent rows (synonyms, property values, comments, comment targets,
+ * attachments) — everything that travels to the parent on merge and therefore
+ * everything the canvas badge means by «изменена в текущем слое».
+ */
+function overriddenIds(
+  layerNdb: NetworkDb,
+  layerId: string,
+): { thought_ids: string[]; link_ids: string[] } {
+  const thoughts = new Set(physicalIds(layerNdb, 'thoughts', layerId));
+  const links = new Set(physicalIds(layerNdb, 'links', layerId));
+
+  const synonyms = layerNdb
+    .prepare('SELECT thought_id FROM thought_synonyms WHERE layer_id = ? -- layers:physical-read')
+    .all(layerId) as { thought_id: string }[];
+  for (const row of synonyms) thoughts.add(row.thought_id);
+
+  for (const table of ['property_values', 'comments', 'comment_targets', 'attachments'] as const) {
+    const owners = physicalOwners(layerNdb, table, layerId);
+    for (const id of owners.thought) thoughts.add(id);
+    for (const id of owners.link) links.add(id);
+  }
+
+  return {
+    thought_ids: [...thoughts].sort(),
+    link_ids: [...links].sort(),
+  };
+}
+
 /** Column name for a row's position-only comparison (all non-id, non-position
  * fields that define the triple and its styling). */
 function sameTriple(a: VisibleLinkRow, b: VisibleLinkRow): boolean {
@@ -172,10 +229,7 @@ export function structuralLayerDiff(
     layer,
     target_layer: targetLayer,
     links,
-    overridden: {
-      thought_ids: physicalIds(layerNdb, 'thoughts', layer.id),
-      link_ids: physicalIds(layerNdb, 'links', layer.id),
-    },
+    overridden: overriddenIds(layerNdb, layer.id),
   };
 }
 
