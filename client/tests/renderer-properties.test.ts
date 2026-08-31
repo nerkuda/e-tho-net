@@ -48,8 +48,18 @@ class ShimElement {
     this.parent = null;
   }
   parent: ShimElement | null = null;
-  addEventListener(): void {}
-  removeEventListener(): void {}
+  listeners: Record<string, Array<(event?: any) => void>> = {};
+  addEventListener(type: string, handler: (event?: any) => void): void {
+    (this.listeners[type] ??= []).push(handler);
+  }
+  removeEventListener(type: string, handler: (event?: any) => void): void {
+    const list = this.listeners[type];
+    if (list === undefined) return;
+    this.listeners[type] = list.filter((h) => h !== handler);
+  }
+  dispatch(type: string, event?: any): void {
+    for (const handler of this.listeners[type] ?? []) handler(event);
+  }
   closest(): ShimElement | null {
     return null;
   }
@@ -73,6 +83,7 @@ function shimDocument(): void {
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     documentElement: { style: {} },
+    body: new ShimElement('body'),
   };
 }
 
@@ -363,5 +374,46 @@ describe('property value autocomplete helpers (pure)', () => {
     const { splitMultiValue } = await loadPropsModule();
     assert.deepEqual(splitMultiValue('a, b ,, в '), ['a', 'b', 'в']);
     assert.deepEqual(splitMultiValue(''), []);
+  });
+
+  /** Extracts the option labels currently rendered in the dropdown list. */
+  function visibleRowLabels(list: ShimElement): string[] {
+    return list.children
+      .filter((row) => row.className === 'type-combo-item')
+      .map((row) => row.children[row.children.length - 1]?.textContent ?? '');
+  }
+
+  it('buildValueOptionsCaret: caret click on a filled field shows the whole catalogue, typing narrows it (defect 19105687)', async () => {
+    const { buildValueOptionsCaret } = await loadPropsModule();
+    (globalThis as any).window = {
+      etn: {},
+      innerWidth: 1024,
+      innerHeight: 768,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    };
+
+    const input = new ShimElement('input') as unknown as HTMLInputElement;
+    (input as unknown as ShimElement).value = 'Москва';
+    const options = ['Москва', 'СПб', 'Нижний Новгород'];
+    const caret = buildValueOptionsCaret(
+      input,
+      options,
+      false,
+      () => undefined,
+      () => undefined,
+    ) as unknown as ShimElement;
+
+    // Explicit open via the caret button (no typing) must show every option,
+    // not just the one matching the field's current value.
+    caret.dispatch('click');
+    const body = (globalThis as any).document.body as ShimElement;
+    const list = body.children[body.children.length - 1];
+    assert.deepEqual(visibleRowLabels(list), options);
+
+    // Typing narrows the already-open list down to the typed fragment.
+    (input as unknown as ShimElement).value = 'моск';
+    (input as unknown as ShimElement).dispatch('input');
+    assert.deepEqual(visibleRowLabels(list), ['Москва']);
   });
 });

@@ -722,9 +722,9 @@ export function buildValueOptionsCaret(
     }
   };
 
-  function renderRows(): void {
+  function renderRows(showAll: boolean): void {
     if (list === null) return;
-    const fragment = autocompleteFragment(input.value, multiple);
+    const fragment = showAll ? '' : autocompleteFragment(input.value, multiple);
     const visible = filterOptionsByFragment(options, fragment);
     const selected = new Set(multiple ? splitMultiValue(input.value) : []);
     list.replaceChildren();
@@ -764,21 +764,21 @@ export function buildValueOptionsCaret(
     }
   }
 
-  const openList = (): void => {
+  const openList = (showAll: boolean): void => {
     if (list !== null) {
-      renderRows();
+      renderRows(showAll);
       return;
     }
     list = div('type-combo-list');
-    renderRows();
+    renderRows(showAll);
     document.body.append(list);
     positionBodyDropdown(list, input);
     window.addEventListener('mousedown', onOutside, true);
   };
 
   // Typing (re)opens the list with rows narrowed to the typed fragment; the
-  // caret shows the full catalogue (an empty fragment matches everything).
-  input.addEventListener('input', openList);
+  // caret shows the full catalogue regardless of the current input value.
+  input.addEventListener('input', () => openList(false));
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && list !== null) {
       event.stopPropagation();
@@ -790,7 +790,7 @@ export function buildValueOptionsCaret(
     '▾',
     () => {
       if (list !== null) close('commit');
-      else openList();
+      else openList(true);
     },
     'btn small',
     multiple ? 'Выбрать несколько значений' : 'Выбрать значение из списка',
