@@ -19,6 +19,7 @@ import {
   type SavedFilter,
   type SortOrder,
   type StructureFilter,
+  type StructureKeywordScope,
   type StructurePropertyCondition,
   type StructurePropertyOp,
   type StructureSort,
@@ -54,6 +55,15 @@ type TriState = boolean | null;
 /** Full filter-panel state (persisted as the L4 `structures_state` JSON). */
 export interface FilterState {
   keywords: string;
+  /**
+   * Where `keywords` searches (§15.3, bug fix 0.5.5): «наименование» /
+   * «синонимы» / «комментарий» checkboxes under the keywords field. The
+   * panel enforces at least one of «наименование»/«синонимы» checked at all
+   * times — unchecking the last one auto-reverts to the default pair.
+   */
+  keywordInTitle: boolean;
+  keywordInSynonyms: boolean;
+  keywordInComment: boolean;
   /** Restrict the candidate set to the subtrees of these thoughts (§15.3). */
   parentIds: string[];
   typeIds: string[];
@@ -123,6 +133,9 @@ const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; la
 function defaultState(): FilterState {
   return {
     keywords: '',
+    keywordInTitle: true,
+    keywordInSynonyms: true,
+    keywordInComment: false,
     parentIds: [],
     typeIds: [],
     linkTypeIds: [],
@@ -210,6 +223,21 @@ export function applyPanelWidth(): void {
   const width = state.panelWidth;
   if (width === null) host.style.removeProperty('--st-filter-w');
   else host.style.setProperty('--st-filter-w', `${Math.round(width)}px`);
+}
+
+/**
+ * Wire `keyword_scope` from the panel checkboxes (bug fix 0.5.5). Returns
+ * `undefined` when it matches the server default (title+synonyms) — keeps
+ * the wire filter and saved-filter definitions minimal, same convention as
+ * the other optional §15.3 fields.
+ */
+export function buildKeywordScope(): StructureKeywordScope[] | undefined {
+  const scope: StructureKeywordScope[] = [];
+  if (state.keywordInTitle) scope.push('title');
+  if (state.keywordInSynonyms) scope.push('synonyms');
+  if (state.keywordInComment) scope.push('comment');
+  if (scope.length === 2 && scope.includes('title') && scope.includes('synonyms')) return undefined;
+  return scope;
 }
 
 /** Wire property conditions built from the panel rows (typed conversion). */
@@ -410,6 +438,66 @@ function block(title: string): { box: HTMLElement; body: HTMLElement; head: HTML
   return { box, body, head };
 }
 
+/**
+ * The «наименование/синонимы/комментарий» checkbox row under the keywords
+ * field (§15.3, bug fix 0.5.5): one line, three checkboxes. Unchecking the
+ * last checked box auto-reverts to the default pair («наименование» +
+ * «синонимы») instead of leaving the search scope empty.
+ */
+function buildKeywordScopeRow(): HTMLElement {
+  const row = div('st-f-kw-scope');
+  const items: Array<{
+    label: string;
+    tooltip: string;
+    get: () => boolean;
+    set: (v: boolean) => void;
+    input: HTMLInputElement | null;
+  }> = [
+    {
+      label: 'наименование',
+      tooltip: 'Искать в наименованиях мыслей',
+      get: () => state.keywordInTitle,
+      set: (v) => (state.keywordInTitle = v),
+      input: null,
+    },
+    {
+      label: 'синонимы',
+      tooltip: 'Искать в синонимах мыслей',
+      get: () => state.keywordInSynonyms,
+      set: (v) => (state.keywordInSynonyms = v),
+      input: null,
+    },
+    {
+      label: 'комментарий',
+      tooltip: 'Искать в постоянном комментарии мыслей',
+      get: () => state.keywordInComment,
+      set: (v) => (state.keywordInComment = v),
+      input: null,
+    },
+  ];
+  for (const item of items) {
+    const lbl = el('label', 'checkbox-row st-f-kw-scope-item');
+    const input = el('input') as HTMLInputElement;
+    input.type = 'checkbox';
+    input.checked = item.get();
+    item.input = input;
+    setTooltip(lbl, item.tooltip);
+    input.addEventListener('change', () => {
+      item.set(input.checked);
+      // Cleared all three — revert to the default pair (§15.3 proposal).
+      if (!state.keywordInTitle && !state.keywordInSynonyms && !state.keywordInComment) {
+        state.keywordInTitle = true;
+        state.keywordInSynonyms = true;
+      }
+      for (const other of items) other.input!.checked = other.get();
+      touch();
+    });
+    lbl.append(input, span(item.label));
+    row.append(lbl);
+  }
+  return row;
+}
+
 // Group-title elements of the current panel (refreshGroupTitles toggles them).
 let kwTitle: HTMLElement | null = null;
 let parentTitle: HTMLElement | null = null;
@@ -534,6 +622,7 @@ function renderPanel(): void {
   });
   kwWrap.append(keywordsInput, kwClear);
   kw.body.append(kwWrap);
+  kw.body.append(buildKeywordScopeRow());
   scroll.append(kw.box);
 
   // --- parent thoughts (scope, §15.3) ------------------------------------
@@ -1449,8 +1538,12 @@ function renderSavedList(): void {
 /** Applies a saved filter to the panel and reruns the query. */
 function applySavedFilter(filter: SavedFilter): void {
   const def = filter.definition;
+  const scope = def.keyword_scope ?? [];
   setFilterState({
     keywords: def.keywords ?? '',
+    keywordInTitle: scope.length === 0 ? true : scope.includes('title'),
+    keywordInSynonyms: scope.length === 0 ? true : scope.includes('synonyms'),
+    keywordInComment: scope.includes('comment'),
     parentIds: def.parent_ids ?? [],
     typeIds: def.type_ids ?? [],
     linkTypeIds: def.link_type_ids ?? [],
@@ -1483,8 +1576,10 @@ async function saveCurrentFilter(): Promise<void> {
     notice('Введите имя отбора');
     return;
   }
+  const keywordScope = buildKeywordScope();
   const definition = {
     ...(state.keywords.trim() !== '' ? { keywords: state.keywords.trim() } : {}),
+    ...(state.keywords.trim() !== '' && keywordScope !== undefined ? { keyword_scope: keywordScope } : {}),
     ...(state.parentIds.length > 0 ? { parent_ids: state.parentIds } : {}),
     ...(state.typeIds.length > 0 ? { type_ids: state.typeIds } : {}),
     ...(state.linkTypeIds.length > 0 ? { link_type_ids: state.linkTypeIds } : {}),

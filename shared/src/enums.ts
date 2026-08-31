@@ -92,6 +92,15 @@ export type StructureSort = (typeof STRUCTURE_SORTS)[number];
 export const STRUCTURE_PROPERTY_OPS = ['eq', 'contains', 'gt', 'lt', 'in', 'not_in'] as const;
 export type StructurePropertyOp = (typeof STRUCTURE_PROPERTY_OPS)[number];
 
+/**
+ * Where the structures `keywords` mini-syntax searches (03-server-api.md
+ * §6.10): thought title, synonyms and/or the permanent comment. An absent or
+ * empty `keyword_scope` defaults to `['title', 'synonyms']` — the original
+ * behaviour before the comment scope existed.
+ */
+export const STRUCTURE_KEYWORD_SCOPES = ['title', 'synonyms', 'comment'] as const;
+export type StructureKeywordScope = (typeof STRUCTURE_KEYWORD_SCOPES)[number];
+
 /** Who receives a real-time event (04-realtime.md §3, 11-settings-and-state.md §4). */
 export const REALTIME_AUDIENCES = ['network', 'user'] as const;
 export type RealtimeAudience = (typeof REALTIME_AUDIENCES)[number];

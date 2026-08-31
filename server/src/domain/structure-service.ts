@@ -23,6 +23,7 @@ import {
   STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
   STRUCTURES_QUERY_IDS_MAX_LIMIT,
   STRUCTURES_QUERY_MAX_LIMIT,
+  STRUCTURE_KEYWORD_SCOPES,
   STRUCTURE_PROPERTY_OPS,
   STRUCTURE_SORTS,
   SORT_ORDERS,
@@ -36,6 +37,7 @@ import {
   type SavedFilterView,
   type SortOrder,
   type StructureFilter,
+  type StructureKeywordScope,
   type StructurePropertyCondition,
   type StructurePropertyOp,
   type StructurePropertyValue,
@@ -81,15 +83,49 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   thought_ref: 'value_thought_ref',
 };
 
+/** Default keyword scope (03-server-api.md §6.10): title + synonyms only —
+ *  the original behaviour before the «комментарий» scope existed. */
+const DEFAULT_KEYWORD_SCOPE: readonly StructureKeywordScope[] = ['title', 'synonyms'];
+
 /**
- * Title/synonym match clause of one keyword. The LIKE pattern is built by
- * {@link buildLikePattern} (escaping `%`/`_`/`\`, `*` → `%`) against the
- * normalised columns, so the match is case-insensitive and infix.
+ * Resolves the effective keyword scope: an absent/empty `keyword_scope`
+ * falls back to {@link DEFAULT_KEYWORD_SCOPE} (bug fix 0.5.5 — the panel
+ * auto-reverts to the same default when the user unchecks all three boxes,
+ * this is the server-side mirror of that rule for saved filters / MCP
+ * callers that omit the field or send an empty array).
  */
-const KEYWORD_MATCH =
-  "(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (" +
-  'SELECT 1 FROM thought_synonyms_v ts' +
-  " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
+function resolveKeywordScope(scope: StructureKeywordScope[] | undefined): Set<StructureKeywordScope> {
+  return new Set(scope !== undefined && scope.length > 0 ? scope : DEFAULT_KEYWORD_SCOPE);
+}
+
+/**
+ * One keyword match clause built for the effective scope: title and/or
+ * synonyms and/or the permanent comment (OR between the selected sources).
+ * The LIKE pattern is built by {@link buildLikePattern} (escaping
+ * `%`/`_`/`\`, `*` → `%`), so the match is infix; case-insensitivity comes
+ * from `title_norm`/`synonym_norm` being stored lower-cased and from the
+ * `unicode_lower()` SQL helper for the comment body (SQLite's built-in
+ * `LOWER()` is ASCII-only, `network-db.ts`). Returns the parenthesised SQL
+ * fragment plus how many `?` placeholders it needs (same pattern value
+ * repeated for each selected source).
+ */
+function buildKeywordClause(scope: Set<StructureKeywordScope>): { sql: string; paramCount: number } {
+  const parts: string[] = [];
+  if (scope.has('title')) parts.push("t.title_norm LIKE ? ESCAPE '\\'");
+  if (scope.has('synonyms')) {
+    parts.push(
+      'EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+        " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\')",
+    );
+  }
+  if (scope.has('comment')) {
+    parts.push(
+      "EXISTS (SELECT 1 FROM comments_v c WHERE c.owner_type = 'thought' AND c.owner_id = t.id" +
+        " AND c.kind = 'permanent' AND unicode_lower(c.body_md) LIKE ? ESCAPE '\\')",
+    );
+  }
+  return { sql: `(${parts.join(' OR ')})`, paramCount: parts.length };
+}
 
 // ---------------------------------------------------------------------------
 // Filter parsing / validation
@@ -110,6 +146,24 @@ export function parseStructureFilter(
       }, requestId);
     }
     if (keywords.trim() !== '') filter.keywords = keywords;
+  }
+
+  const keywordScope = body['keyword_scope'];
+  if (keywordScope !== undefined) {
+    if (
+      !Array.isArray(keywordScope) ||
+      keywordScope.some(
+        (v) => typeof v !== 'string' || !(STRUCTURE_KEYWORD_SCOPES as readonly string[]).includes(v),
+      )
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'keyword_scope должен быть массивом из "title"/"synonyms"/"comment".',
+        { field: 'keyword_scope', allowed: STRUCTURE_KEYWORD_SCOPES },
+        requestId,
+      );
+    }
+    if (keywordScope.length > 0) filter.keyword_scope = [...new Set(keywordScope as StructureKeywordScope[])];
   }
 
   const parentIds = body['parent_ids'];
@@ -472,16 +526,19 @@ function buildFilterQuerySql(
   }
 
   const keywords = parseFilterKeywords(req.keywords ?? '');
+  const keywordScope = resolveKeywordScope(req.keyword_scope);
+  const keywordClause = buildKeywordClause(keywordScope);
   for (const word of keywords.include) {
-    // title_norm/synonym_norm are stored lowercase — fold the word too.
+    // title_norm/synonym_norm are stored lowercase, comment body is folded by
+    // unicode_lower() at query time — fold the word the same way.
     const pattern = buildLikePattern(word.toLowerCase());
-    where.push(KEYWORD_MATCH);
-    params.push(pattern, pattern);
+    where.push(keywordClause.sql);
+    for (let i = 0; i < keywordClause.paramCount; i += 1) params.push(pattern);
   }
   for (const word of keywords.exclude) {
     const pattern = buildLikePattern(word.toLowerCase());
-    where.push(`NOT ${KEYWORD_MATCH}`);
-    params.push(pattern, pattern);
+    where.push(`NOT ${keywordClause.sql}`);
+    for (let i = 0; i < keywordClause.paramCount; i += 1) params.push(pattern);
   }
 
   if (req.type_ids !== undefined && req.type_ids.length > 0) {

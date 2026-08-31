@@ -6,7 +6,13 @@
  * docs/02-data-model.md §3.10.5.
  */
 
-import type { SavedFilterView, SortOrder, StructurePropertyOp, StructureSort } from '../enums.js';
+import type {
+  SavedFilterView,
+  SortOrder,
+  StructureKeywordScope,
+  StructurePropertyOp,
+  StructureSort,
+} from '../enums.js';
 import type { FocusEdge, ThoughtRef } from './thought.js';
 
 /** A single scalar of a property condition (shape depends on the value type). */
@@ -32,6 +38,12 @@ export type StructureTriState = boolean | undefined;
 export interface StructureFilter {
   /** Keywords mini-syntax: whitespace-separated words, `*` wildcard, `-` exclusion. */
   keywords?: string;
+  /**
+   * Where `keywords` searches (bug fix 0.5.5): any subset of `title` (thought
+   * title) / `synonyms` / `comment` (permanent comment). Absent or an empty
+   * array defaults to `['title', 'synonyms']` — the original behaviour.
+   */
+  keyword_scope?: StructureKeywordScope[];
   /**
    * Restrict the candidate set to the union of the subtrees of these thoughts
    * (OR between roots, depth ≤ `STRUCTURES_PARENT_SCOPE_MAX_DEPTH`, deduped;

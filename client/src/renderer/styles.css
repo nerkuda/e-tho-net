@@ -3733,6 +3733,19 @@ body.cloud-dragging * {
   min-width: 0;
 }
 
+/* Keyword scope checkboxes («наименование»/«синонимы»/«комментарий», §15.3,
+ * bug fix 0.5.5): one compact row under the keywords field. */
+.st-f-kw-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.st-f-kw-scope-item {
+  margin-bottom: 0;
+  font-size: 12px;
+}
+
 .st-f-dropdown {
   position: absolute;
   z-index: 20;

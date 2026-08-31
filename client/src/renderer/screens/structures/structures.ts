@@ -58,6 +58,7 @@ import {
   applyPanelWidth,
   buildConditions,
   buildExtraFilter,
+  buildKeywordScope,
   FILTER_W_MAX,
   FILTER_W_MIN,
   getFilterState,
@@ -175,6 +176,9 @@ function parseFilterState(raw: string): FilterState {
     const parsed = JSON.parse(raw) as Partial<FilterState>;
     return {
       keywords: typeof parsed.keywords === 'string' ? parsed.keywords : '',
+      keywordInTitle: parsed.keywordInTitle !== false,
+      keywordInSynonyms: parsed.keywordInSynonyms !== false,
+      keywordInComment: parsed.keywordInComment === true,
       parentIds: Array.isArray(parsed.parentIds) ? parsed.parentIds.filter((v) => typeof v === 'string') : [],
       typeIds: Array.isArray(parsed.typeIds) ? parsed.typeIds.filter((v) => typeof v === 'string') : [],
       linkTypeIds: Array.isArray(parsed.linkTypeIds)
@@ -223,7 +227,11 @@ function persistFilterState(): void {
 function buildFilter(): StructureFilter {
   const state = getFilterState();
   const filter: StructureFilter = { ...buildExtraFilter() };
-  if (state.keywords.trim() !== '') filter.keywords = state.keywords.trim();
+  if (state.keywords.trim() !== '') {
+    filter.keywords = state.keywords.trim();
+    const scope = buildKeywordScope();
+    if (scope !== undefined) filter.keyword_scope = scope;
+  }
   if (state.typeIds.length > 0) filter.type_ids = state.typeIds;
   if (state.linkTypeIds.length > 0) filter.link_type_ids = state.linkTypeIds;
   const conditions = buildConditionsFromPanel();

@@ -112,6 +112,7 @@ function parseOrder(value: unknown, requestId?: string): SortOrder {
  */
 const QUERY_BODY_KEYS = new Set([
   'keywords',
+  'keyword_scope',
   'parent_ids',
   'type_ids',
   'link_type_ids',

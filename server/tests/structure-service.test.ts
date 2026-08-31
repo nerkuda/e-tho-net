@@ -139,15 +139,20 @@ function seedProperty(ndb: NetworkDb, ownerId: string, key: string, valueType: s
 }
 
 /** Insert a comment row for a thought owner (`permanent` or `chronological`). */
-function seedComment(ndb: NetworkDb, thoughtId: string, kind: 'permanent' | 'chronological'): void {
+function seedComment(
+  ndb: NetworkDb,
+  thoughtId: string,
+  kind: 'permanent' | 'chronological',
+  bodyMd = 'x',
+): void {
   ndb
     .prepare(
       `INSERT INTO comments (id, owner_type, owner_id, kind, body_md, body_html, valid_from,
                              version, created_at, updated_at, created_by, updated_by)
-       VALUES (?, 'thought', ?, ?, 'x', '<p>x</p>', '2024-01-01T00:00:00Z', 1,
+       VALUES (?, 'thought', ?, ?, ?, '<p>x</p>', '2024-01-01T00:00:00Z', 1,
                '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'u', 'u')`,
     )
-    .run(randomUUID(), thoughtId, kind);
+    .run(randomUUID(), thoughtId, kind, bodyMd);
 }
 
 /** Insert a URL attachment row for a thought owner. */
@@ -372,6 +377,149 @@ describe(
             result.items.map((t) => t.id),
             [a],
           );
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
+    describe('queryThoughts: keyword_scope (bug fix 0.5.5)', () => {
+      it('defaults to title+synonyms and ignores comment text when keyword_scope is absent', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const inComment = seedThought(ndb, { title: 'Абонемент' });
+          seedComment(ndb, inComment, 'permanent', 'домашние счета за электричество');
+
+          const result = queryThoughts(ndb, USER, query({ keywords: 'счета' }));
+          assert.deepEqual(result.items, []);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('an empty keyword_scope array falls back to the default title+synonyms scope', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const a = seedThought(ndb, { title: 'Счетчик электричества' });
+
+          const result = queryThoughts(ndb, USER, query({ keywords: 'счет*', keyword_scope: [] }));
+          assert.deepEqual(
+            result.items.map((t) => t.id),
+            [a],
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('searches the permanent comment when "comment" is in keyword_scope, case-insensitively', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const withComment = seedThought(ndb, { title: 'Абонемент' });
+          seedComment(ndb, withComment, 'permanent', 'Домашние Счета за Электричество');
+          seedThought(ndb, { title: 'Без комментария' });
+
+          const result = queryThoughts(
+            ndb,
+            USER,
+            query({ keywords: 'счета', keyword_scope: ['comment'] }),
+          );
+          assert.deepEqual(
+            result.items.map((t) => t.id),
+            [withComment],
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('does not match a chronological comment, only the permanent one', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const chronoOnly = seedThought(ndb, { title: 'Хроника' });
+          seedComment(ndb, chronoOnly, 'chronological', 'счета за воду');
+
+          const result = queryThoughts(
+            ndb,
+            USER,
+            query({ keywords: 'счета', keyword_scope: ['comment'] }),
+          );
+          assert.deepEqual(result.items, []);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('OR-combines several scopes: title OR synonyms OR comment', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const byTitle = seedThought(ndb, { title: 'Счетчик воды' });
+          const bySynonym = seedThought(ndb, { title: 'Показания' });
+          seedSynonym(ndb, bySynonym, 'счетчик газа');
+          const byComment = seedThought(ndb, { title: 'Абонемент' });
+          seedComment(ndb, byComment, 'permanent', 'счетчик тепла');
+          seedThought(ndb, { title: 'Не подходит' });
+
+          const result = queryThoughts(
+            ndb,
+            USER,
+            query({ keywords: 'счетчик', keyword_scope: ['title', 'synonyms', 'comment'] }),
+          );
+          assert.deepEqual(
+            result.items.map((t) => t.id).sort(),
+            [byTitle, bySynonym, byComment].sort(),
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('- exclusion applies to the selected scope only', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const kept = seedThought(ndb, { title: 'Счетчик электричества' });
+          const excludedByComment = seedThought(ndb, { title: 'Счетчик газа' });
+          seedComment(ndb, excludedByComment, 'permanent', 'счета за воду');
+
+          const result = queryThoughts(
+            ndb,
+            USER,
+            query({ keywords: 'счет* -вод*', keyword_scope: ['title', 'comment'] }),
+          );
+          assert.deepEqual(
+            result.items.map((t) => t.id),
+            [kept],
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('queryThoughtIds applies the same keyword_scope as queryThoughts', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const byComment = seedThought(ndb, { title: 'Абонемент' });
+          seedComment(ndb, byComment, 'permanent', 'счета за электричество');
+
+          const refs = queryThoughts(
+            ndb,
+            USER,
+            query({ keywords: 'счета', keyword_scope: ['comment'] }),
+          );
+          const ids = queryThoughtIds(
+            ndb,
+            USER,
+            query({ keywords: 'счета', keyword_scope: ['comment'] }),
+          );
+          assert.deepEqual(ids.ids, refs.items.map((t) => t.id));
+          assert.deepEqual(ids.ids, [byComment]);
         } finally {
           ndb.close();
         }
