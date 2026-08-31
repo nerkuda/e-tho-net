@@ -2,16 +2,25 @@
  * Mark-for-deletion and trash UI (task S13, docs/08-ui-spec.md §5a).
  *
  * Two-phase deletion: the single-delete dialog refuses to "Удалить совсем" while
- * the entity is blocked (used in a `thought_ref` property), offering "Поместить
- * в корзину" as the safe default. The trash dialog (`GET /trash`) lists every
- * marked thought/link with its precomputed blocking and lets the user restore,
- * delete, or purge everything that is unblocked.
- *
- * Layer-based blocking (`holding_layers`) is empty until 0.5.2; the UI here only
- * ever sees the property-usage arm, but renders whatever the server returns.
+ * the entity is blocked, offering "Поместить в корзину" as the safe default.
+ * The blocking check is layer-aware (0.5.4): the session's own layer never
+ * holds, but a live base row does while working in a layer — «удалить совсем»
+ * there is only a tombstone, so the dialog offers marking instead. The trash
+ * dialog (`GET /trash`) lists every marked thought/link with its precomputed
+ * blocking and lets the user restore, delete, or purge everything that is
+ * unblocked.
  */
 
-import type { Link, TrashLinkEntry, TrashThoughtEntry, Thought } from '@etn/shared';
+import {
+  BASE_LAYER_ID,
+  type Link,
+  type LinkDeletionBlocking,
+  type Thought,
+  type ThoughtDeletionBlocking,
+  type ThoughtDeletionCheckResult,
+  type TrashLinkEntry,
+  type TrashThoughtEntry,
+} from '@etn/shared';
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
 import {
@@ -30,6 +39,31 @@ import { button, div, el, setTooltip, span } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { svgIcon } from './lib/icons.js';
 import { notice } from './lib/notice.js';
+
+/**
+ * Human-readable reasons of a blocked deletion-check (bug 0.5.4: the dialog
+ * used to blame «использование в свойствах» for any block). The base-layer
+ * entry means «существует в основе — в рабочем слое можно только пометить»;
+ * every other entry is a layer that changed the row. `noun` matches the entity.
+ */
+export function blockingReasons(
+  noun: 'мысль' | 'связь',
+  blocking: ThoughtDeletionBlocking | LinkDeletionBlocking,
+): string[] {
+  const reasons: string[] = [];
+  if ('properties' in blocking && blocking.properties > 0) {
+    reasons.push(`${noun} используется в свойствах других мыслей`);
+  }
+  const layers = blocking.layers;
+  if (layers.some((l) => l.id === BASE_LAYER_ID)) {
+    reasons.push(`${noun} существует в основе — в слое её можно только пометить на удаление`);
+  }
+  const others = layers.filter((l) => l.id !== BASE_LAYER_ID);
+  if (others.length > 0) {
+    reasons.push(`${noun} изменена в слоях: ${others.map((l) => `«${l.title}»`).join(', ')}`);
+  }
+  return reasons;
+}
 
 /** Resolve the current version of a thought (for If-Match on mark/delete). */
 async function thoughtVersion(networkId: string, id: string): Promise<number> {
@@ -52,11 +86,12 @@ export async function openThoughtDeleteDialog(
   onDeleted?: () => void,
 ): Promise<void> {
   let thought: Thought;
-  let check: { blocked: boolean; orphaned_children: number };
+  let check: ThoughtDeletionCheckResult;
   try {
     thought = await etn.thoughts.get(networkId, target.id);
     check = (await etn.thoughts.deletionCheck(networkId, [target.id]))[target.id] ?? {
       blocked: false,
+      blocking: { properties: 0, layers: [] },
       orphaned_children: 0,
     };
   } catch (err) {
@@ -67,13 +102,9 @@ export async function openThoughtDeleteDialog(
   const alreadyMarked = thought.marked_for_deletion;
   const body = div('form-stack');
   if (check.blocked) {
-    body.append(
-      el(
-        'p',
-        'dialog-text',
-        'Нельзя удалить совсем — мысль используется в свойствах других мыслей.',
-      ),
-    );
+    for (const reason of blockingReasons('мысль', check.blocking)) {
+      body.append(el('p', 'dialog-text', `Нельзя удалить совсем — ${reason}.`));
+    }
   }
   if (check.orphaned_children > 0) {
     body.append(
@@ -149,8 +180,9 @@ export async function openThoughtDeleteDialog(
 
 /**
  * Single-delete dialog for a link (08-ui-spec.md §5a.1). Links have no property
- * usage and no children, so only the layer arm can block — always false before
- * 0.5.2; the dialog still renders the general shape.
+ * usage and no children, so only the layer arm can block — the base entry when
+ * the link lives in the base and the session works in a layer, or other layers
+ * that changed the link.
  */
 export async function openLinkDeleteDialog(
   networkId: string,
@@ -159,10 +191,15 @@ export async function openLinkDeleteDialog(
 ): Promise<void> {
   let link: Link;
   let blocked: boolean;
+  let blocking: LinkDeletionBlocking;
   try {
     link = await etn.links.get(networkId, linkId);
-    blocked = ((await etn.links.deletionCheck(networkId, [linkId]))[linkId] ?? { blocked: false })
-      .blocked;
+    const result = (await etn.links.deletionCheck(networkId, [linkId]))[linkId] ?? {
+      blocked: false,
+      blocking: { layers: [] },
+    };
+    blocked = result.blocked;
+    blocking = result.blocking;
   } catch (err) {
     errorDialog('Удалить связь', err);
     return;
@@ -171,7 +208,9 @@ export async function openLinkDeleteDialog(
   const alreadyMarked = link.marked_for_deletion;
   const body = div('form-stack');
   if (blocked) {
-    body.append(el('p', 'dialog-text', 'Нельзя удалить совсем — связь удерживается слоем.'));
+    for (const reason of blockingReasons('связь', blocking)) {
+      body.append(el('p', 'dialog-text', `Нельзя удалить совсем — ${reason}.`));
+    }
   }
 
   showDialog({
@@ -274,13 +313,13 @@ function splitChoice(
 }
 
 /** Pure model of the group-delete dialog (08-ui-spec.md §5a.2), unit-tested. */
-export const trashInternals = { defaultChoice, applyMassToggle, splitChoice };
+export const trashInternals = { defaultChoice, applyMassToggle, splitChoice, blockingReasons };
 
 export async function openThoughtGroupDeleteDialog(
   networkId: string,
   ids: string[],
 ): Promise<void> {
-  let checks: Record<string, { blocked: boolean; orphaned_children: number }>;
+  let checks: Record<string, ThoughtDeletionCheckResult>;
   let refs: import('@etn/shared').ThoughtRef[];
   try {
     [checks, refs] = await Promise.all([
@@ -373,7 +412,11 @@ export async function openThoughtGroupDeleteDialog(
     purgeRadio.name = `gd-${id}`;
     purgeRadio.checked = choice.get(id) === true;
     purgeRadio.disabled = blocked;
-    setTooltip(purgeRadio, blocked ? 'Нельзя удалить совсем — мысль используется в свойствах' : 'Удалить совсем');
+    const blockedTooltip = `Нельзя удалить совсем — ${blockingReasons(
+      'мысль',
+      checks[id]?.blocking ?? { properties: 0, layers: [] },
+    ).join('; ')}`;
+    setTooltip(purgeRadio, blocked ? blockedTooltip : 'Удалить совсем');
     purgeRadio.addEventListener('change', () => {
       if (purgeRadio.checked) choice.set(id, true);
     });
@@ -515,6 +558,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     const renderRow = (
       label: string,
       locked: boolean,
+      reason: string,
       onRestore: () => Promise<void>,
       onDelete: () => Promise<void>,
     ): HTMLElement => {
@@ -526,6 +570,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       actions.append(button('↩ Вернуть', () => void onRestore(), 'link-btn', 'Вернуть из корзины'));
       const delBtn = button('🗑 Удалить', () => void onDelete(), 'link-btn danger', 'Удалить');
       delBtn.disabled = locked;
+      if (locked) setTooltip(delBtn, `Удалить нельзя — ${reason || 'заблокировано'}`);
       actions.append(delBtn);
       row.append(actions);
       return row;
@@ -536,6 +581,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
         renderRow(
           `📝 ${t.title}`,
           t.blocked,
+          blockingReasons('мысль', t.blocking).join('; '),
           () => restoreThought(networkId, t.id),
           () => deleteFromTrash(networkId, t.id),
         ),
@@ -546,6 +592,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
         renderRow(
           `🔗 ${l.source_id} → ${l.target_id}`,
           l.blocked,
+          blockingReasons('связь', l.blocking).join('; '),
           () => restoreLink(networkId, l.id),
           () => deleteLinkFromTrash(networkId, l.id),
         ),
