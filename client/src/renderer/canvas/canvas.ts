@@ -261,6 +261,16 @@ export function invalidateRef(id: string): void {
   refCache.delete(id);
 }
 
+/**
+ * Drops every cached thought ref — used on layer switches (13-layers.md §12):
+ * refs resolved in the previous layer's context carry that layer's flags
+ * (trash mark, active, colors), and a stale trash badge would otherwise
+ * survive the switch until the thought is re-read by some other path.
+ */
+export function invalidateAllRefs(): void {
+  refCache.clear();
+}
+
 /** Returns the currently rendered focus cloud (H6 line anchoring). */
 export function getFocusCloudEl(): HTMLElement | null {
   return focusCloudEl;

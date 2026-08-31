@@ -37,7 +37,7 @@ import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js
 import { applyRealtimeToUi } from './realtime-ui.js';
 import { initTheme } from './lib/theme.js';
 import { scheduleChronicleRefresh } from './screens/chronicle/chronicle.js';
-import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
+import { invalidateAllRefs, invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { refreshTabAccessibility } from './screens/tabs/tab-accessibility.js';
 import { refreshSearchIfVisible } from './search/search.js';
@@ -415,6 +415,13 @@ export function scheduleRefresh(): void {
 export async function resyncAfterLayerSwitch(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
+  // Cloud metadata (trash mark, active, colors) and the indicator counts were
+  // resolved in the previous layer's context — drop them so the re-read below
+  // re-resolves everything through the new layer chain (13-layers.md §12).
+  // A stale trash badge here is exactly bug 0.5.4: a mark lifted in a layer
+  // kept hiding on the base cloud after switching back.
+  invalidateAllRefs();
+  invalidateIndicators(null);
   // Re-read the focus FIRST: the editor follows it once the cached snapshots
   // are dropped below, and this way it renders straight into the new layer's
   // data instead of flashing the old layer's focus for a frame.
