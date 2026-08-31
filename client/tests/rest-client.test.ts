@@ -484,3 +484,32 @@ describe('RestClient — attachment raw download', () => {
     assert.equal(calls.length, 1);
   });
 });
+
+describe('RestClient — §16 system endpoints', () => {
+  it('getHealth targets /api/v1/health without an Authorization header', async () => {
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { status: 'ok', version: '0.5.5', uptime: 12.5 } },
+    ]);
+    const client = makeClient(fetch);
+    const health = await client.getHealth();
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/health');
+    const headers = new Headers(calls[0]!.init.headers as HeadersInit);
+    assert.equal(headers.get('Authorization'), null);
+    assert.equal(health.status, 'ok');
+    assert.equal(health.version, '0.5.5');
+  });
+
+  it('getVersion targets /api/v1/version and returns the server version', async () => {
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { version: '0.5.5', client_compatibility: '>=0.5.0 <1.0.0' } },
+    ]);
+    const client = makeClient(fetch);
+    const version = await client.getVersion();
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/version');
+    assert.equal(version.version, '0.5.5');
+  });
+});

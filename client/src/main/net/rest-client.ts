@@ -1959,25 +1959,24 @@ export class RestClient {
   // §16 System endpoints
   // -------------------------------------------------------------------------
 
-  /** `GET /health` — not under `/api/v1` prefix. */
+  /** `GET /api/v1/health` (03-server-api.md §16) — public, без авторизации. */
   public async getHealth(): Promise<import('@etn/shared').HealthResponse> {
-    // Health bypasses /api/v1; hit the root path directly with the same engine but
-    // without the prefix.
     return this.requestRaw('GET', '/health');
   }
 
-  /** `GET /version` — not under `/api/v1` prefix; used for compatibility check. */
+  /** `GET /api/v1/version` (03-server-api.md §16) — public, без авторизации;
+   *  используется для проверки совместимости и в диалоге «О программе». */
   public async getVersion(): Promise<import('@etn/shared').VersionResponse> {
     return this.requestRaw('GET', '/version');
   }
 
   /**
-   * Variant of {@link request} that targets the server root (no `/api/v1` prefix
-   * and no auth header — health/version are public). Used by {@link getHealth} and
-   * {@link getVersion}.
+   * Variant of {@link request} without the auth header — health/version are
+   * public (§16). The path still goes under `/api/v1` like every other
+   * endpoint (the server serves no root-level routes).
    */
   private async requestRaw<T>(method: string, path: string): Promise<T> {
-    const url = `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+    const url = `${this.baseUrl}/api/v1${path.startsWith('/') ? path : `/${path}`}`;
     const res = await this.fetchImpl(url, {
       method,
       headers: { Accept: 'application/json', 'Client-Id': this.getClientId() },

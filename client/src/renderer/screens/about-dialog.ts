@@ -7,11 +7,12 @@
  * and runtime info come from the main process over `etn.system.appInfo`
  * (docs/07-client-electron.md §6). The server block is optional: it reuses
  * the already-known active profile (`etn.server.listProfiles`) and the
- * public `GET /version` endpoint (`etn.system.version`, 03-server-api.md
- * §16–17) — no new IPC/server surface. Without a connection (or on a fetch
- * failure) it shows «нет подключения» instead of hiding, same spirit as the
- * optional blocks elsewhere in this dialog. The project links open in the OS
- * browser via `etn.system.openExternal`; failures surface as an error toast.
+ * public `GET /api/v1/version` endpoint (`etn.system.version`,
+ * 03-server-api.md §16–17) — no new IPC/server surface. Without a connection
+ * (or on a fetch failure) it shows «нет подключения» instead of hiding, same
+ * spirit as the optional blocks elsewhere in this dialog. The project links
+ * open in the OS browser via `etn.system.openExternal`; failures surface as
+ * an error toast.
  */
 
 import { showDialog } from '../lib/dialog.js';
