@@ -28,6 +28,8 @@
 import {
   EtnError,
   TRAVERSAL_DEFAULTS,
+  buildLikePattern,
+  parseFilterKeywords,
   type PropertyQueryCondition,
   type PropertyQueryOperator,
   type ThoughtQueryActive,
@@ -39,6 +41,17 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
+
+/**
+ * Title/synonym match clause of one keyword — the same shape as
+ * `structure-service`'s KEYWORD_MATCH (03-server-api.md §6.10): the LIKE
+ * pattern is built by {@link buildLikePattern} against the normalised
+ * columns, so the match is case-insensitive and infix.
+ */
+const KEYWORD_MATCH =
+  "(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (" +
+  'SELECT 1 FROM thought_synonyms_v ts' +
+  " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
 
 /** Limits applied by the caller (MCP runtime limits, task F6). */
 export interface QueryBounds {
@@ -152,21 +165,32 @@ function joinClauses(clauses: Array<Clause | null>): { where: string; params: un
   return { where: parts.length > 0 ? parts.join(' AND ') : '1=1', params };
 }
 
-/** Normalise a keyword the way the thought service normalises titles. */
-function norm(value: string): string {
-  return value.normalize('NFC').trim().toLowerCase();
-}
-
-/** Keyword filter: LIKE over the title and each synonym. */
-function keywordsClause(keywords: string | undefined): Clause | null {
-  if (keywords === undefined || keywords.trim() === '') return null;
-  const pattern = `%${escapeLike(norm(keywords))}%`;
-  return {
-    sql: `(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (
-            SELECT 1 FROM thought_synonyms_v ts
-            WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))`,
-    params: [pattern, pattern],
-  };
+/** Keyword filter — the §6.10 mini-syntax (03-server-api.md), shared with the
+ * structures filter: whitespace-separated words, all required (AND), `*`
+ * infix wildcard, `-слово` exclusion. Every word matches the title or a
+ * synonym, case-insensitively; `title_norm`/`synonym_norm` are stored
+ * lowercase, so the word is folded the same way (NFC at write time).
+ *
+ * Bug 0.5.4: the previous `keywordsClause` searched the whole input as one
+ * literal substring — `*`/`-слово`/multi-word AND never worked here, while
+ * the shared {@link parseFilterKeywords}/{@link buildLikePattern} pair already
+ * powers the structures filter and the attachments search. An input of only
+ * exclusions is a valid «everything except» filter (same as
+ * `structure-service`, §6.10 clarification).
+ */
+function keywordsClauses(keywords: string | undefined): Clause[] {
+  if (keywords === undefined || keywords.trim() === '') return [];
+  const { include, exclude } = parseFilterKeywords(keywords);
+  const clauses: Clause[] = [];
+  for (const word of include) {
+    const pattern = buildLikePattern(word.toLowerCase());
+    clauses.push({ sql: KEYWORD_MATCH, params: [pattern, pattern] });
+  }
+  for (const word of exclude) {
+    const pattern = buildLikePattern(word.toLowerCase());
+    clauses.push({ sql: `NOT ${KEYWORD_MATCH}`, params: [pattern, pattern] });
+  }
+  return clauses;
 }
 
 /** Date-range clause for a column holding ISO-8601 timestamps. */
@@ -308,7 +332,7 @@ export function queryThoughts(
       : trashed === 'false'
         ? { sql: 't.marked_for_deletion = 0', params: [] }
         : null,
-    keywordsClause(request.keywords),
+    ...keywordsClauses(request.keywords),
     dateRangeClause('created_at', request.created_after, request.created_before),
     dateRangeClause('updated_at', request.updated_after, request.updated_before),
     subtreeClause('t.id', walk.depths),

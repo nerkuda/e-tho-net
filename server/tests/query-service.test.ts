@@ -226,6 +226,56 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     assert.deepEqual(byExactWord.hits.map((h) => h.title), ['Смета']);
   });
 
+  it('applies the §6.10 keywords mini-syntax: * wildcard, -exclusion, AND, escaping, only-exclusions', () => {
+    const ndb = createInMemoryNetworkDb();
+    const typeInst = seedThoughtType(ndb, 'инструкция');
+    const typeSmeta = seedThoughtType(ndb, 'смета');
+    seedThought(ndb, 'Начать разработку версии', { type_id: typeInst });
+    seedThought(ndb, 'Разработка сметы', { type_id: typeSmeta });
+    const plan = seedThought(ndb, 'План работ', { type_id: typeInst });
+    seedThought(ndb, 'План отдыха', { type_id: typeInst });
+    seedThought(ndb, 'Смета', { type_id: typeSmeta });
+    seedThought(ndb, 'Готово на 100%', { type_id: typeInst });
+    seedThought(ndb, 'Готово на 100', { type_id: typeInst });
+    seedThought(ndb, 'a_b', { type_id: typeInst });
+    seedThought(ndb, 'axb', { type_id: typeInst });
+    seedSynonym(ndb, plan, 'roadmap');
+
+    // `*` — infix wildcard (regression 0.5.4: it used to be a literal char).
+    const wildcard = run(ndb, { keywords: 'план*', active: 'any' });
+    assert.deepEqual(wildcard.hits.map((h) => h.title).sort(), ['План отдыха', 'План работ']);
+
+    const infix = run(ndb, { keywords: 'с*та', active: 'any' });
+    assert.deepEqual(infix.hits.map((h) => h.title), ['Смета']);
+
+    // `-слово` — exclusion.
+    const excluded = run(ndb, { keywords: 'план* -отдых*', active: 'any' });
+    assert.deepEqual(excluded.hits.map((h) => h.title), ['План работ']);
+
+    // AND of words, order arbitrary; a word may hit the synonym instead of the title.
+    const andSynonym = run(ndb, { keywords: 'roadmap план', active: 'any' });
+    assert.deepEqual(andSynonym.hits.map((h) => h.title), ['План работ']);
+
+    // The live finding: `разработк*` with a type filter used to return 0.
+    const typedWildcard = run(ndb, { keywords: 'разработк*', type_id: [typeInst] });
+    assert.deepEqual(typedWildcard.hits.map((h) => h.title), ['Начать разработку версии']);
+
+    // LIKE specials are escaped: `%` and `_` match themselves, not anything.
+    const percent = run(ndb, { keywords: '100%', active: 'any' });
+    assert.deepEqual(percent.hits.map((h) => h.title), ['Готово на 100%']);
+    const underscore = run(ndb, { keywords: 'a_b', active: 'any' });
+    assert.deepEqual(underscore.hits.map((h) => h.title), ['a_b']);
+
+    // Only exclusions — «everything except» (same behaviour as the structures filter).
+    const onlyExclude = run(ndb, { keywords: '-план', active: 'any' });
+    assert.ok(!onlyExclude.hits.some((h) => h.title.includes('План')));
+    assert.equal(onlyExclude.total, 7); // 9 seeded − 2 «План…»
+
+    // Whitespace-only input behaves as no filter.
+    const blank = run(ndb, { keywords: '   ', active: 'any' });
+    assert.equal(blank.total, 9);
+  });
+
   it('filters by property values: number, bool, text contains, thought_ref', () => {
     const ndb = createInMemoryNetworkDb();
     const statusDef = seedPropertyDefinition(ndb, 'status', 'text');

@@ -568,7 +568,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Filters combine with AND: `in_subtree_of` (+`max_depth`) restricts to the directed ' +
         'descendants of a thought (each hit carries its `depth`), `type_id[]` filters by type, ' +
         '`active` by актуальность (`true`/`false`/`any`), `trashed` by пометка на удаление ' +
-        '(`true`/`false`/`any`, default `false` — only unmarked; S13), `keywords` by title/synonym LIKE, ' +
+        '(`true`/`false`/`any`, default `false` — only unmarked; S13), `keywords` — the §6.10 ' +
+        'mini-syntax (whitespace-separated words, all required; `*` infix wildcard; `-слово` ' +
+        'exclusion; matched against title and synonyms), ' +
         '`properties` by property values (key + operator eq/ne/contains/gt/gte/lt/lte + value; ' +
         'the value type selects the column: number/boolean/string), `created_*`/`updated_*` by ' +
         'ISO-8601 date ranges. The response carries a `thought_types` reference table (name + ' +
