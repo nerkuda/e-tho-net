@@ -287,23 +287,12 @@ function buildApi(): EtnApi {
       set: (key, value) => invoke('meta.set', key, value),
     },
     history: {
-      list: (profileId, networkId, tabId, limit, scope) =>
-        invoke('history.list', profileId, networkId, tabId, limit, scope),
-      push: (profileId, networkId, tabId, thoughtId, scope) =>
-        invoke('history.push', profileId, networkId, tabId, thoughtId, scope),
-      rotate: (oldId, newId, tabId, scope) =>
-        invoke('history.rotate', oldId, newId, tabId, scope),
-      remove: (thoughtId, tabId, scope) =>
-        invoke('history.remove', thoughtId, tabId, scope),
-      clear: (tabId, scope) => invoke('history.clear', tabId, scope),
-      chronicleList: (profileId, networkId, tabId, limit) =>
-        invoke('history.chronicleList', profileId, networkId, tabId, limit),
-      chroniclePush: (profileId, networkId, tabId, kind, id) =>
-        invoke('history.chroniclePush', profileId, networkId, tabId, kind, id),
-      chronicleRemove: (profileId, networkId, tabId, kind, id) =>
-        invoke('history.chronicleRemove', profileId, networkId, tabId, kind, id),
-      chronicleClear: (profileId, networkId, tabId) =>
-        invoke('history.chronicleClear', profileId, networkId, tabId),
+      list: (profileId, networkId, tabId, limit) => invoke('history.list', profileId, networkId, tabId, limit),
+      push: (profileId, networkId, tabId, thoughtId) =>
+        invoke('history.push', profileId, networkId, tabId, thoughtId),
+      rotate: (oldId, newId, tabId) => invoke('history.rotate', oldId, newId, tabId),
+      remove: (thoughtId, tabId) => invoke('history.remove', thoughtId, tabId),
+      clear: (tabId) => invoke('history.clear', tabId),
     },
     tabs: {
       list: () => invoke('tabs.list'),

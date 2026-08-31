@@ -1162,12 +1162,6 @@ textarea {
    * «Ошибки в панели истории на Карте мыслей»). */
 }
 
-.history-back {
-  color: var(--text-faint);
-  font-size: 12px;
-  cursor: pointer;
-}
-
 .history-cloud {
   display: inline-flex;
   align-items: center;

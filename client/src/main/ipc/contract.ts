@@ -111,7 +111,7 @@ export interface IpcInvokePayload {
 /** Current connection state surfaced to the renderer (server domain). */
 export type ServerStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
-/** Focus-history entry shape returned to the renderer (L4, docs §2.3). */
+/** Visit-history entry shape returned to the renderer (L4, docs §2.3). */
 export interface FocusHistoryEntry {
   thoughtId: string;
   visitedAt: string;
@@ -151,9 +151,6 @@ export interface AppInfo {
   /** Node.js runtime version. */
   node: string;
 }
-
-/** Which view's visit history a `history.*` call addresses (L15, 11 §2.3.1). */
-export type HistoryScope = 'focus' | 'structures';
 
 /** Workspace view modes (08-ui-spec.md §15.1). */
 export type TabViewMode = 'map' | 'structures' | 'chronicle';
@@ -718,76 +715,39 @@ export interface EtnApi {
     /** Upserts an L5 `client_meta` key. */
     set(key: string, value: string): Promise<void>;
   };
+  /**
+   * Unified visit history (0.5.5, task «Переделать историю посещения
+   * мыслей»): ONE list per tab of thoughts opened in the thought editor —
+   * common to every screen (map/structures/chronicle). Replaces the old
+   * per-view scoping (focus/structures) and the chronicle's own thought+link
+   * history.
+   */
   history: {
     list(
       profileId: string,
       networkId: string,
       tabId?: string | null,
       limit?: number,
-      scope?: HistoryScope,
     ): Promise<FocusHistoryEntry[]>;
-    push(
-      profileId: string,
-      networkId: string,
-      tabId: string | null,
-      thoughtId: string,
-      scope?: HistoryScope,
-    ): Promise<void>;
+    push(profileId: string, networkId: string, tabId: string | null, thoughtId: string): Promise<void>;
     /**
-     * Rotates focus history on a focus change `oldId → newId` in one local
-     * transaction (11-settings-and-state.md §2.3, H7, Q4). Uses the active
-     * profile and the currently open network. `tabId` keys the per-tab history
-     * (07-client-electron.md §3.5).
+     * Rotates the visit history on an editor-thought change `oldId → newId`
+     * in one local transaction (11-settings-and-state.md §2.3, H7, Q4). Uses
+     * the active profile and the currently open network. `tabId` keys the
+     * per-tab history (07-client-electron.md §3.5).
      */
-    rotate(
-      oldId: string | null,
-      newId: string,
-      tabId?: string | null,
-      scope?: HistoryScope,
-    ): Promise<void>;
+    rotate(oldId: string | null, newId: string, tabId?: string | null): Promise<void>;
     /**
-     * Drops a thought from a visit history of the active profile/network —
+     * Drops a thought from the visit history of the active profile/network —
      * the actor-side companion of the applier's prune on `thought.deleted`
      * (the server sends no realtime echo to the deleting client, L4). `tabId`
      * scopes the removal to one tab; `null` clears across all tabs of the
      * network (server-side deletion cleanup).
      */
-    remove(thoughtId: string, tabId?: string | null, scope?: HistoryScope): Promise<void>;
-    /**
-     * Clears the whole visit history of one view of the active
-     * profile/network — the structures view clears its history when a new
-     * filter is applied (§15.9). `tabId` scopes; `null` clears all tabs.
-     */
-    clear(tabId?: string | null, scope?: HistoryScope): Promise<void>;
-    /** Chronicles (L20): lists the chronicle view's visit history, freshest first. */
-    chronicleList(
-      profileId: string,
-      networkId: string,
-      tabId?: string | null,
-      limit?: number,
-    ): Promise<Array<{ kind: 'thought' | 'link'; id: string }>>;
-    /** Chronicles (L20): (re)inserts a thought or link at the front of the history. */
-    chroniclePush(
-      profileId: string,
-      networkId: string,
-      tabId: string | null,
-      kind: 'thought' | 'link',
-      id: string,
-    ): Promise<void>;
-    /** Chronicles (L20): drops a single entry (thought deletion cleanup). */
-    chronicleRemove(
-      profileId: string,
-      networkId: string,
-      tabId: string | null,
-      kind: 'thought' | 'link',
-      id: string,
-    ): Promise<void>;
-    /** Chronicles (L20): clears the chronicle view's history (on «Применить»). */
-    chronicleClear(
-      profileId: string,
-      networkId: string,
-      tabId?: string | null,
-    ): Promise<void>;
+    remove(thoughtId: string, tabId?: string | null): Promise<void>;
+    /** Clears the whole visit history of the active profile/network. `tabId`
+     *  scopes; `null` clears all tabs. */
+    clear(tabId?: string | null): Promise<void>;
   };
   tabs: {
     /** List all open tabs of the active profile, ordered by `slot_idx` (Q1/Q2). */

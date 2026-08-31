@@ -64,7 +64,7 @@ let linkScopeButton: HTMLButtonElement | null = null;
 
 /** Actions the panel delegates to the host module. */
 interface PanelActions {
-  /** «Применить» pressed (or Ctrl+Enter) — run the query and clear history. */
+  /** «Применить» pressed (or Ctrl+Enter) — run the query. */
   apply: () => void;
 }
 

@@ -10,7 +10,8 @@
  *    focus and lights its halo; a connector click opens the link and drops
  *    the halo (§15.6–15.7);
  *  - Ctrl+click on clouds/ellipses feeds the shared selection (§15.8);
- *  - clicking a thought pushes it into the per-view structures history (L4).
+ *  - an opened thought lands in the unified visit history (0.5.5) shared by
+ *    every screen.
  */
 
 import {
@@ -32,10 +33,11 @@ import {
 import { setFocus } from '../../app.js';
 import { showLinkContextMenu, showThoughtContextMenu } from '../../canvas/context-menu.js';
 import { edgeGeometry } from '../../canvas/links.js';
+import { setThoughtEditorTarget } from '../../editor/editor.js';
+import { currentThoughtId } from '../../history.js';
 import { ELLIPSE_INSIDE } from '../../lib/pure.js';
 import { resolveLinkTypeVisual } from '../../lib/type-tree.js';
 import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
-import { invalidateHistoryBar } from '../history-bar.js';
 import { setActiveView } from '../active-view.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
@@ -387,28 +389,17 @@ async function loadMoreNeighbors(nodeKey: string, thoughtId: string, rootId: str
 // ---------------------------------------------------------------------------
 
 /**
- * Opens a thought in the editor without switching the canvas focus (§15.7) and
- * pushes it into the per-view structures history (§15.9).
+ * Opens a thought in the editor without switching the canvas focus (§15.7)
+ * and records it in the unified visit history (0.5.5).
  */
 export async function openStructuresThought(id: string): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   try {
     const thought = await etn.thoughts.get(networkId, id);
-    store.update({
-      editorTarget: { kind: 'thought', id },
-      structuresActiveThought: thought,
-      structuresActiveThoughtId: id,
-      selectedLinkId: null,
-    });
+    await setThoughtEditorTarget(thought);
   } catch (err) {
     notice(`Не удалось открыть мысль: ${errText(err)}`, 'error');
-    return;
-  }
-  const profileId = store.state.profileId;
-  const tabId = store.state.activeTabId;
-  if (profileId !== null && tabId !== null) {
-    await etn.history.push(profileId, networkId, tabId, id, 'structures').catch(() => undefined);
   }
 }
 
@@ -487,10 +478,6 @@ export function mountStructures(hostEl: HTMLElement): void {
   mountFilterPanel(panel, {
     onApply: () => {
       persistFilterState();
-      // A new filter may make the old structures-history entries unopenable —
-      // drop the whole view history and refresh the bar (§15.9).
-      void etn.history.clear(store.state.activeTabId, 'structures');
-      invalidateHistoryBar();
       void applyQuery(true);
     },
     onStatePersist: () => persistFilterState(),
@@ -587,6 +574,7 @@ function renderSignature(): string {
     st.selectedLinkId,
     st.structuresActiveThoughtId,
     st.editorTarget?.kind ?? '',
+    st.focus?.focused.id ?? '',
     st.linkTypes.length,
     [...expansion.keys()],
   ]);
@@ -838,9 +826,13 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   if (ref !== null && !ref.active) cloud.classList.add('dim');
   if (selection.has(row.thoughtId)) cloud.classList.add('selected');
   // Halo of the active thought (§15.7): the same accent ring around the cloud
-  // as the canvas (§2.2.4) instead of the old full-width band; it fades out
-  // while a link is open in the editor (the link takes the spotlight).
-  if (store.state.structuresActiveThoughtId === row.thoughtId && store.state.editorTarget?.kind !== 'link') {
+  // as the canvas (§2.2.4) instead of the old full-width band. The "current
+  // thought" is the thought open in the editor, else the canvas focus — the
+  // same definition on every screen (0.5.5, unified visit history), so the
+  // frame follows the thought across screen switches. While a link is open in
+  // the editor there is no current thought and the halo fades (the link takes
+  // the spotlight).
+  if (currentThoughtId() === row.thoughtId) {
     cloud.classList.add('halo');
   }
 

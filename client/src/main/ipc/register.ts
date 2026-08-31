@@ -89,14 +89,12 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       rtState,
       getCurrentUserId: () => currentUser?.id ?? p.user_id ?? null,
       removeFromFocusHistoryEverywhere: (thoughtId: string) => {
-        // Both per-view histories (focus + structures, 11 §2.3.1). Pool only
-        // carries one active network at a time per applier invocation; we
-        // sweep every known network via the saved tabs (Q2/Q3).
+        // The unified visit history (11 §2.3.1, 0.5.5). Pool only carries one
+        // active network at a time per applier invocation; we sweep every
+        // known network via the saved tabs (Q2/Q3).
         for (const saved of opts.localDb.listProfiles()) {
-          for (const scope of ['focus', 'structures'] as const) {
-            for (const tab of opts.localDb.listTabs(saved.id)) {
-              opts.localDb.removeFocusHistory(saved.id, tab.network_id, tab.tab_id, thoughtId, scope);
-            }
+          for (const tab of opts.localDb.listTabs(saved.id)) {
+            opts.localDb.removeVisitHistory(saved.id, tab.network_id, tab.tab_id, thoughtId);
           }
         }
       },

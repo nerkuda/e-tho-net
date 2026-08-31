@@ -35,6 +35,7 @@ import {
 } from '../canvas/canvas.js';
 import { setLinkSettingsOpener } from '../canvas/context-menu.js';
 import { setLinkEditorOpener } from '../canvas/links.js';
+import { noteThoughtWillOpen } from '../history.js';
 import { inNeighbourhood } from '../realtime-ui.js';
 import { invalidateHistoryBar } from '../screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from '../screens/pinned-bar.js';
@@ -141,8 +142,23 @@ export function openLinkInEditor(link: Link): void {
 export function openThoughtInEditor(id: string): void {
   const focusId = store.state.focus?.focused.id ?? null;
   if (id === focusId) {
-    if (store.state.editorTarget === null && store.state.selectedLinkId === null) return;
-    store.update({ editorTarget: null, selectedLinkId: null });
+    if (
+      store.state.editorTarget === null &&
+      store.state.selectedLinkId === null &&
+      store.state.structuresActiveThoughtId === null
+    ) {
+      return;
+    }
+    // Following the focus again: the halo/current-thought pointer is the
+    // focus itself everywhere — drop the (possibly stale) override so
+    // structures/chronicle screens stop highlighting a thought that is no
+    // longer "current" (task «Переделать историю посещения мыслей»).
+    store.update({
+      editorTarget: null,
+      selectedLinkId: null,
+      structuresActiveThoughtId: null,
+      structuresActiveThought: null,
+    });
     return;
   }
   const current = store.state.editorTarget;
@@ -150,7 +166,21 @@ export function openThoughtInEditor(id: string): void {
     if (store.state.selectedLinkId !== null) store.update({ selectedLinkId: null });
     return;
   }
-  store.update({ editorTarget: { kind: 'thought', id }, selectedLinkId: null });
+  // Visit history (0.5.5): the thought that WAS current leaves for the front
+  // of the unified history now — must run before the store update below, on
+  // the pre-change state. Fire-and-forget here (this call site is
+  // synchronous, unlike `setFocus`) — the history panel re-renders once the
+  // write lands (`setHistoryChangeListener`).
+  void noteThoughtWillOpen(id);
+  store.update({
+    editorTarget: { kind: 'thought', id },
+    selectedLinkId: null,
+    // Cross-screen halo (task requirement): any screen that opens a thought
+    // becomes the source of truth for "current thought" everywhere — the
+    // structures/chronicle views read these same fields for their own halo.
+    structuresActiveThoughtId: id,
+    structuresActiveThought: null,
+  });
   const networkId = store.state.networkId;
   if (networkId === null) return;
   void etn.thoughts
@@ -158,10 +188,27 @@ export function openThoughtInEditor(id: string): void {
     .then((thought) => {
       const target = store.state.editorTarget;
       if (target?.kind === 'thought' && target.id === id) {
-        store.update({ editorTarget: { kind: 'thought', id, thought } });
+        store.update({ editorTarget: { kind: 'thought', id, thought }, structuresActiveThought: thought });
       }
     })
     .catch(() => undefined);
+}
+
+/**
+ * Applies an already-fetched thought as the editor target from the
+ * structures/chronicle views (which do their own fetch to keep their
+ * existing error notices — 08-ui-spec.md §15.7/§17) and records it in the
+ * unified visit history. Mirrors what {@link openThoughtInEditor} does for
+ * the canvas, so every screen feeds the same "current thought" state.
+ */
+export async function setThoughtEditorTarget(thought: Thought): Promise<void> {
+  await noteThoughtWillOpen(thought.id);
+  store.update({
+    editorTarget: { kind: 'thought', id: thought.id, thought },
+    structuresActiveThought: thought,
+    structuresActiveThoughtId: thought.id,
+    selectedLinkId: null,
+  });
 }
 
 /** Current editor context: a picked thought/link, else the focused thought. */

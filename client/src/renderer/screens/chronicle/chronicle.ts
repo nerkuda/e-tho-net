@@ -4,8 +4,9 @@
  * The third workspace view: a filter panel on top (four rows), the table of
  * chronological comments (С / По / Заголовок / Мысли·связи / Кратко, paged by
  * 50), the bottom view/edit area (same as the editor's «Хроника» tab, plus
- * target chips) and its own visit history (thoughts AND links, L4
- * `chronicle_history`).
+ * target chips). Thoughts opened here land in the unified visit history
+ * (0.5.5) shared by every screen — the chronicle keeps no history of its own
+ * anymore.
  *
  * The table is keyboard-navigable: ↑/↓ move between rows, ←/→ between
  * columns (inside the «мысли/связи» column — between chips), Tab skips to the
@@ -29,7 +30,7 @@ import { findRootThought, requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
 import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canvas/canvas.js';
 import { wireExternalDragSource, registerDropActions } from '../../canvas/drag-cloud.js';
-import { openLinkInEditor } from '../../editor/editor.js';
+import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
 import { applyGroupClamp } from '../../editor/list-heights.js';
 import { createMarkdownField, editMarkdownField } from '../../editor/markdown-field.js';
 import { rowSplitter } from '../../editor/splitter.js';
@@ -40,7 +41,6 @@ import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { addToSelection, toggleSelection } from '../../selection/selection.js';
 import { store } from '../../state.js';
-import { invalidateHistoryBar } from '../history-bar.js';
 import {
   addThoughtToFilter,
   getFilterState,
@@ -224,12 +224,6 @@ async function applyQuery(reset: boolean): Promise<void> {
   if (networkId === null || tableWrap === null) return;
   if (reset) {
     offset = 0;
-    // The visit history of the view is cleared on every «Применить» (§17).
-    const profileId = store.state.profileId;
-    if (profileId !== null) {
-      await etn.history.chronicleClear(profileId, networkId, store.state.activeTabId).catch(() => undefined);
-      invalidateHistoryBar();
-    }
   }
   persistState();
 
@@ -1034,39 +1028,25 @@ async function attachThoughtToRow(thoughtId: string, rowId: string): Promise<voi
 // Opening entities from the chronicle view (editor + history)
 // ---------------------------------------------------------------------------
 
-/** Opens a thought in the editor (the canvas focus stays) and pushes it into
- *  the chronicle visit history. The full entity rides along in the store
- *  (`structuresActiveThought*`) — without the passenger the editor falls
- *  back to the focused thought (same mechanism as the structures view, L15). */
+/** Opens a thought in the editor (the canvas focus stays) and records it in
+ *  the unified visit history (0.5.5). The full entity rides along in the
+ *  store (`structuresActiveThought*`) — without the passenger the editor
+ *  falls back to the focused thought (same mechanism as the structures view,
+ *  L15). */
 export async function openChronicleThought(id: string): Promise<void> {
   const networkId = requireNetworkId();
   const thought = await etn.thoughts.get(networkId, id);
-  store.update({
-    editorTarget: { kind: 'thought', id: thought.id },
-    structuresActiveThought: thought,
-    structuresActiveThoughtId: thought.id,
-    selectedLinkId: null,
-  });
-  await pushChronicleHistory('thought', id);
+  await setThoughtEditorTarget(thought);
 }
 
-/** Opens a link in the editor and pushes it into the chronicle visit history. */
+/** Opens a link in the editor (a link is not a thought — it does not enter
+ *  the visit history). */
 export async function openChronicleLink(link: Link): Promise<void> {
   openLinkInEditor(link);
-  await pushChronicleHistory('link', link.id);
 }
 
 /** Resolves and opens a link by id (from chips / history entries). */
 export async function openChronicleLinkById(id: string): Promise<void> {
   const link = await etn.links.get(requireNetworkId(), id);
   await openChronicleLink(link);
-}
-
-/** Pushes a thought/link into the chronicle history and repaints the bar. */
-async function pushChronicleHistory(kind: 'thought' | 'link', id: string): Promise<void> {
-  const profileId = store.state.profileId;
-  const networkId = store.state.networkId;
-  if (profileId === null || networkId === null) return;
-  await etn.history.chroniclePush(profileId, networkId, store.state.activeTabId, kind, id);
-  invalidateHistoryBar();
 }

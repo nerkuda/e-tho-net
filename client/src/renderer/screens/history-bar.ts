@@ -1,15 +1,14 @@
 /**
- * Visit history in the status bar (H7, 08-ui-spec.md §11.1/§15.9,
- * 11-settings-and-state.md §2.3, 09-scenarios.md B4):
+ * Visit history in the status bar (H7, 08-ui-spec.md §11.1, 11-settings-and-state.md
+ * §2.3, 09-scenarios.md B4):
  *
- * `[ ← ] [облачко₁] [облачко₂] … [▾ N]`
+ * `[облачко₁] [облачко₂] … [▾ N]`
  *
- * - each view has its own local history (L4): the map keeps thoughts that were
- *   in the canvas focus, the structures keep thoughts opened in the editor,
- *   and the chronicle keeps thoughts/links touched in the chronicle —
- *   the bar shows the history of the ACTIVE view (L15);
- * - the bar claims the full free width of the status bar between the back
- *   button and the counts/zoom block; as many mini clouds are rendered as
+ * - ONE history shared by every screen (map/structures/chronicle, 0.5.5):
+ *   the list of thoughts opened in the thought editor, wherever they were
+ *   opened from — there is no per-view scoping anymore;
+ * - the bar claims the full free width of the status bar between the left
+ *   edge and the counts/zoom block; as many mini clouds are rendered as
  *   actually fit, the rest collapse into the `▾ N` dropdown;
  * - each mini cloud renders the thought's icon + title (clipped to
  *   {@link CHIP_TITLE_LIMIT} chars + ellipsis), real fg/bg/font styles via
@@ -21,8 +20,10 @@
  * - entries are resolved via `thoughts.resolve` (id → metadata); deleted
  *   thoughts were already pruned locally by the main-process applier, and
  *   inactive thoughts are hidden while `show_inactive` is off;
- * - clicking an entry switches the focus (map view) or opens the thought in
- *   the editor without moving the canvas focus (structures/chronicle view);
+ * - clicking an entry opens the thought in the editor: switches the focus
+ *   (map view) or opens the thought without moving the canvas focus
+ *   (structures/chronicle view) — the current-thought frame follows the pick
+ *   on every screen;
  * - entries drag onto the canvas like zone clouds (§11.1): link onto a cloud,
  *   Ctrl for reparent, drop into parents/children to link to focus; a canvas
  *   drag dropped onto the bar (or the dropdown) opens the dragged thought.
@@ -34,10 +35,11 @@ import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
+import { currentThoughtId, setHistoryChangeListener } from '../history.js';
 import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { openStructuresThought } from './structures/structures.js';
-import { openChronicleLinkById, openChronicleThought } from './chronicle/chronicle.js';
+import { openChronicleThought } from './chronicle/chronicle.js';
 
 /**
  * Max title length inside a history mini-cloud (the chip on the bar). When the
@@ -79,6 +81,12 @@ export function mountHistoryBar(historyHost: HTMLElement): void {
   store.subscribe(() => {
     if (host?.isConnected === true) void render();
   });
+  // History writes land outside the store snapshot (history.js is not part of
+  // the reactive state) — the module notifies via this listener so the bar
+  // repaints even when no store field changed.
+  setHistoryChangeListener(() => {
+    invalidateHistoryBar();
+  });
   // The number of visible chips depends on the strip width; recompute on
   // window/status-bar resize (08-ui-spec.md §11.1: «при изменении ширины окна
   // состав видимых облачков пересчитывается»).
@@ -104,7 +112,7 @@ export function invalidateHistoryBar(): void {
   if (host?.isConnected === true) void render();
 }
 
-/** Opens a history entry in the way its view implies (§15.9, §17). */
+/** Opens a history entry in the way its view implies (§11.1). */
 function openEntry(id: string): void {
   if (store.state.activeView === 'structures') {
     void openStructuresThought(id);
@@ -115,15 +123,13 @@ function openEntry(id: string): void {
   }
 }
 
-/** The id excluded from the list as "current": the view's active thought. */
+/**
+ * The id excluded from the list as "current": the thought open in the editor,
+ * else the canvas focus. A link open in the editor means no current thought
+ * (a link is never a history entry anyway).
+ */
 function currentId(): string | null {
-  if (store.state.activeView === 'structures') {
-    return store.state.structuresActiveThoughtId;
-  }
-  if (store.state.activeView === 'chronicle') {
-    return null; // the chronicle history has no «current» entity (§17)
-  }
-  return store.state.focus?.focused.id ?? null;
+  return currentThoughtId();
 }
 
 /** Re-renders the history bar from the local history + server metadata. */
@@ -133,6 +139,7 @@ async function render(): Promise<void> {
   const networkId = store.state.networkId;
   const view = store.state.activeView;
   // The width is part of the signature: the visible chip set depends on it.
+  // The view is part of it too: chips route the click per the active screen.
   const signature = `${profileId ?? ''}|${networkId ?? ''}|${view}|${currentId() ?? ''}|${String(store.state.showInactive)}|${host.clientWidth}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
@@ -142,17 +149,11 @@ async function render(): Promise<void> {
     return;
   }
 
-  if (view === 'chronicle') {
-    await renderChronicle(profileId, networkId);
-    return;
-  }
-
   const entries = await etn.history.list(
     profileId,
     networkId,
     store.state.activeTabId,
     HISTORY_LIMIT,
-    view === 'structures' ? 'structures' : 'focus',
   );
   if (host === null || !host.isConnected) return;
   const ids = entries.map((entry) => entry.thoughtId);
@@ -170,17 +171,10 @@ async function render(): Promise<void> {
   clear(host);
   if (visible.length === 0) {
     const empty = div('history-empty');
-    empty.textContent = view === 'structures' ? 'нет открытых мыслей' : 'нет предыдущих мыслей';
+    empty.textContent = 'нет предыдущих мыслей';
     host.append(empty);
     return;
   }
-
-  const back = button('', () => {
-    const first = visible[0];
-    if (first !== undefined) openEntry(first);
-  }, 'history-back', 'Назад к предыдущей мысли');
-  back.append(svgIcon('arrow-left', 13));
-  host.append(back);
 
   const chips = visible.map((id) => ({
     id,
@@ -205,9 +199,6 @@ async function render(): Promise<void> {
     }
   }
 }
-
-/** A chronicle history entry: a thought or a link. */
-type ChronicleHistoryEntry = { kind: 'thought' | 'link'; id: string };
 
 /**
  * Splits a chip sequence into the chips that fit on the strip and the chips
@@ -261,40 +252,6 @@ function openHistoryMenu(
   }
 }
 
-/** Opens the dropdown for chronicle history entries (thoughts + links). */
-function openChronicleMenu(
-  rest: ChronicleHistoryEntry[],
-  refs: Map<string, import('@etn/shared').ThoughtRef>,
-  linkLabels: Map<string, string>,
-  anchor: HTMLElement,
-): void {
-  const items: MenuItem[] = rest.map((entry) => {
-    if (entry.kind === 'thought') {
-      const ref = refs.get(entry.id);
-      return {
-        icon: buildDropdownIcon(ref),
-        label: ref?.title ?? entry.id,
-        dragId: entry.id,
-        onClick: () => void openChronicleThought(entry.id),
-      };
-    }
-    return {
-      icon: '🔗',
-      label: linkLabels.get(entry.id) ?? entry.id,
-      onClick: () => void openChronicleLinkById(entry.id),
-    };
-  });
-  const rect = anchor.getBoundingClientRect();
-  const root = showMenuAt(rect.left, rect.bottom + 2, items);
-  styleDropdownRows(root, rest.map((entry) => (entry.kind === 'thought' ? refs.get(entry.id) : undefined)));
-  for (const row of root.querySelectorAll<HTMLElement>('.menu-item')) {
-    const rowId = row.dataset['dragId'];
-    if (rowId !== undefined) {
-      wireExternalDragSource(row, rowId, 'history', { fromMenu: true });
-    }
-  }
-}
-
 /**
  * Builds the icon node shown in a history dropdown row. Mirrors the
  * search-panel rendering (08-ui-spec.md §6.7): a real `mini-icon` node with
@@ -333,110 +290,6 @@ function buildMoreButton(count: number, onClick: () => void): HTMLElement {
   const more = button('', onClick, 'history-more', 'Остальная история');
   more.append(svgIcon('chevron-down', 11), span(` ${count}`));
   return more;
-}
-
-/** Renders the chronicle view's own history (thoughts AND links, §17). */
-async function renderChronicle(profileId: string, networkId: string): Promise<void> {
-  const entries = await etn.history.chronicleList(
-    profileId,
-    networkId,
-    store.state.activeTabId,
-    HISTORY_LIMIT,
-  );
-  if (host === null || !host.isConnected) return;
-
-  clear(host);
-  if (entries.length === 0) {
-    const empty = div('history-empty');
-    empty.textContent = 'нет открытых мыслей и связей';
-    host.append(empty);
-    return;
-  }
-
-  const back = button('', () => {
-    const first = entries[0];
-    if (first !== undefined) openChronicleEntry(first);
-  }, 'history-back', 'Назад к предыдущей записи');
-  back.append(svgIcon('arrow-left', 13));
-  host.append(back);
-
-  const thoughtIds = entries.filter((e) => e.kind === 'thought').map((e) => e.id);
-  const refs = thoughtIds.length > 0 ? await resolveRefs(networkId, thoughtIds) : new Map();
-  const linkLabels = new Map<string, string>();
-  for (const entry of entries) {
-    if (entry.kind === 'link' && !linkLabels.has(entry.id)) {
-      linkLabels.set(entry.id, await resolveLinkLabel(networkId, entry.id));
-    }
-  }
-
-  const chips = entries.map((entry) => ({
-    entry,
-    el:
-      entry.kind === 'thought'
-        ? buildChip(entry.id, refs.get(entry.id))
-        : buildLinkChip(entry.id, linkLabels.get(entry.id) ?? '🔗'),
-  }));
-  const { shown, rest } = layoutChips(chips);
-  for (const chip of shown) host.append(chip.el);
-
-  if (rest.length > 0) {
-    const more = buildMoreButton(rest.length, () =>
-      openChronicleMenu(
-        rest.map((c) => c.entry),
-        refs,
-        linkLabels,
-        more,
-      ),
-    );
-    host.append(more);
-    if (host.scrollWidth > host.clientWidth) {
-      host.removeChild(more);
-      const moved = shown.pop();
-      if (moved !== undefined) {
-        host.removeChild(moved.el);
-        rest.unshift(moved);
-      }
-      host.append(
-        buildMoreButton(rest.length, () =>
-          openChronicleMenu(
-            rest.map((c) => c.entry),
-            refs,
-            linkLabels,
-            more,
-          ),
-        ),
-      );
-    }
-  }
-}
-
-/** Opens a chronicle history entry (thought or link) in the editor. */
-function openChronicleEntry(entry: ChronicleHistoryEntry): void {
-  if (entry.kind === 'thought') void openChronicleThought(entry.id);
-  else void openChronicleLinkById(entry.id);
-}
-
-/** Resolves the display label of a link history entry («источник — назначение»). */
-async function resolveLinkLabel(networkId: string, linkId: string): Promise<string> {
-  try {
-    const link = await etn.links.get(networkId, linkId);
-    const refs = await etn.thoughts.resolve(networkId, [link.source_id, link.target_id]);
-    const src = refs.find((r) => r.id === link.source_id);
-    const dst = refs.find((r) => r.id === link.target_id);
-    return `${src?.title ?? link.source_id} → ${dst?.title ?? link.target_id}`;
-  } catch {
-    return linkId;
-  }
-}
-
-/** Builds a link mini-chip of the chronicle history. */
-function buildLinkChip(id: string, label: string): HTMLElement {
-  const chip = div('history-cloud');
-  chip.dataset['id'] = id;
-  chip.append(el('span', 'mini-icon', '🔗'), el('span', 'hc-title', clip(label, CHIP_TITLE_LIMIT)));
-  setTooltip(chip, label);
-  chip.addEventListener('click', () => void openChronicleLinkById(id));
-  return chip;
 }
 
 /** Resolves metadata for history ids (single batched call). */

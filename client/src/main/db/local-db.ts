@@ -9,7 +9,8 @@
  *  - `server_profiles`— saved server connections with an encrypted API-key;
  *  - `ui_state`       — per-client UI state, L4;
  *  - `drafts`         — pending edits, offline safety net;
- *  - `focus_history`  — recently focused thoughts, L4.
+ *  - `visit_history`  — thoughts opened in the editor, common to every
+ *    screen of a tab (L4, unified in 0.5.5).
  *
  * The store holds **no** authoritative network data — the client is online-only
  * and every data request goes to the server.
@@ -91,31 +92,18 @@ export interface NewDraft {
   status?: DraftStatus;
 }
 
-/** Row of `focus_history` (07-client-electron.md §3.5, фаза Q). */
-export interface FocusHistoryRow {
+/**
+ * Row of `visit_history` (07-client-electron.md §3.5, фаза Q; unified in
+ * 0.5.5, task «Переделать историю посещения мыслей»): one common list of
+ * thoughts opened in the thought editor, shared by every screen of a tab
+ * (map/structures/chronicle) — there is no more per-view scoping.
+ */
+export interface VisitHistoryRow {
   profile_id: string;
   network_id: string;
   /** `null` для legacy-строк (миграции 001–004 до введения табов). */
   tab_id: string | null;
   thought_id: string;
-  seq: number;
-  visited_at: string;
-}
-
-/** Which view a visit history belongs to (docs/11-settings-and-state.md §2.3.1). */
-export type HistoryScope = 'focus' | 'structures';
-
-/** Kind of a chronicle history entry (thought or link, L20). */
-export type ChronicleEntryKind = 'thought' | 'link';
-
-/** Row of `chronicle_history` (07-client-electron.md §3.5, L20, фаза Q). */
-export interface ChronicleHistoryRow {
-  profile_id: string;
-  network_id: string;
-  /** `null` для legacy-строк. */
-  tab_id: string | null;
-  entry_kind: ChronicleEntryKind;
-  entry_id: string;
   seq: number;
   visited_at: string;
 }
@@ -161,25 +149,6 @@ export interface TabStatePatch {
   chronicle_state?: string | null;
   layer_id?: string | null;
   last_active_at?: string;
-}
-
-/**
- * Physical table of a history scope (fixed map — never built from input).
- * NOTE: `chronicle` is NOT here — `chronicle_history` carries `entry_kind` and
- * has dedicated methods ({@link pushChronicleEntry} etc.).
- */
-const HISTORY_TABLES: Record<HistoryScope, string> = {
-  focus: 'focus_history',
-  structures: 'structures_history',
-};
-
-/** Resolve a scope to its table, rejecting unknown values from IPC input. */
-function historyTable(scope: HistoryScope): string {
-  const table = HISTORY_TABLES[scope];
-  if (table === undefined) {
-    throw new Error(`Unknown history scope: ${String(scope)}`);
-  }
-  return table;
 }
 
 /**
@@ -429,61 +398,57 @@ export class LocalDb {
   }
 
   // -------------------------------------------------------------------------
-  // visit histories (L4, 07-client-electron.md §3.5, 11-settings-and-state.md §2.3)
+  // visit history (L4, 07-client-electron.md §3.5, 11-settings-and-state.md §2.3)
+  //
+  // Unified in 0.5.5 (task «Переделать историю посещения мыслей»): ONE list
+  // of thoughts opened in the thought editor per (profile, network, tab) —
+  // common to every screen. Previously the map (focus_history), the
+  // structures view (structures_history) and the chronicle
+  // (chronicle_history, which also carried links) kept separate histories;
+  // that made it impossible to return via history from one screen to a
+  // thought seen on another.
   // -------------------------------------------------------------------------
 
   /**
-   * (Re)inserts a thought into a visit history at the front (highest `seq`).
-   * `INSERT OR REPLACE` keeps a single row per
+   * (Re)inserts a thought into the visit history at the front (highest
+   * `seq`). `INSERT OR REPLACE` keeps a single row per
    * `(profile_id, network_id, tab_id, thought_id)`, bumping it to the most
    * recent slot. `tabId = null` — legacy записи (до введения табов).
    */
-  public pushFocusHistory(
+  public pushVisitHistory(
     profileId: string,
     networkId: string,
     tabId: string | null,
     thoughtId: string,
-    scope: HistoryScope = 'focus',
   ): void {
-    const table = historyTable(scope);
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO ${table} (profile_id, network_id, tab_id, thought_id, seq, visited_at) ` +
+        'INSERT OR REPLACE INTO visit_history (profile_id, network_id, tab_id, thought_id, seq, visited_at) ' +
           'VALUES (?, ?, ?, ?, ' +
-          `(SELECT COALESCE(MAX(seq), 0) + 1 FROM ${table} WHERE profile_id = ? AND network_id = ? AND tab_id IS ?), ` +
+          '(SELECT COALESCE(MAX(seq), 0) + 1 FROM visit_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ?), ' +
           "strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
       )
       .run(profileId, networkId, tabId, thoughtId, profileId, networkId, tabId);
   }
 
-  /** Removes a single thought from a visit history (no-op if absent). */
-  public removeFocusHistory(
+  /** Removes a single thought from the visit history (no-op if absent). */
+  public removeVisitHistory(
     profileId: string,
     networkId: string,
     tabId: string | null,
     thoughtId: string,
-    scope: HistoryScope = 'focus',
   ): void {
-    const table = historyTable(scope);
     this.db
       .prepare(
-        `DELETE FROM ${table} WHERE profile_id = ? AND network_id = ? AND tab_id IS ? AND thought_id = ?`,
+        'DELETE FROM visit_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ? AND thought_id = ?',
       )
       .run(profileId, networkId, tabId, thoughtId);
   }
 
-  /** Drops the whole visit history of one view (profile × network × tab). */
-  public clearFocusHistory(
-    profileId: string,
-    networkId: string,
-    tabId: string | null,
-    scope: HistoryScope = 'focus',
-  ): void {
-    const table = historyTable(scope);
+  /** Drops the whole visit history of a profile × network × tab. */
+  public clearVisitHistory(profileId: string, networkId: string, tabId: string | null): void {
     this.db
-      .prepare(
-        `DELETE FROM ${table} WHERE profile_id = ? AND network_id = ? AND tab_id IS ?`,
-      )
+      .prepare('DELETE FROM visit_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ?')
       .run(profileId, networkId, tabId);
   }
 
@@ -491,17 +456,15 @@ export class LocalDb {
    * Returns the ordered list of history `thought_id`s, freshest first.
    * Defaults to {@link FOCUS_HISTORY_LIMIT} entries.
    */
-  public listFocusHistory(
+  public listVisitHistory(
     profileId: string,
     networkId: string,
     tabId: string | null,
     limit = FOCUS_HISTORY_LIMIT,
-    scope: HistoryScope = 'focus',
   ): string[] {
-    const table = historyTable(scope);
     const rows = this.db
       .prepare(
-        `SELECT thought_id FROM ${table} WHERE profile_id = ? AND network_id = ? AND tab_id IS ? ` +
+        'SELECT thought_id FROM visit_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ? ' +
           'ORDER BY seq DESC LIMIT ?',
       )
       .all(profileId, networkId, tabId, limit) as { thought_id: string }[];
@@ -509,115 +472,44 @@ export class LocalDb {
   }
 
   /**
-   * Rotates focus history on a focus change `oldId → newId` in one transaction,
-   * per the algorithm in docs/07-client-electron.md §3.5:
-   *  1. `newId` leaves history (it becomes the focus);
+   * Rotates the visit history on an editor-thought change `oldId → newId` in
+   * one transaction, per the algorithm from the task («Переделать историю
+   * посещения мыслей»): the thought being LEFT enters history now — the
+   * thought being entered never does (until something else supersedes it):
+   *  1. `newId` leaves history (it becomes "current");
    *  2. `oldId` enters history at the front (skipped when `oldId` is `null`);
    *  3. history is trimmed to {@link FOCUS_HISTORY_LIMIT}.
    *
    * Passing `oldId === newId` is a no-op. `tabId = null` для legacy-данных.
    */
-  public rotateFocusHistory(
+  public rotateVisitHistory(
     profileId: string,
     networkId: string,
     tabId: string | null,
     oldId: string | null,
     newId: string,
-    scope: HistoryScope = 'focus',
   ): void {
     if (oldId === newId) return;
-    const table = historyTable(scope);
     const tx = this.db.transaction(
       (p: string, n: string, t: string | null, old: string | null, newIdTx: string) => {
         this.db
           .prepare(
-            `DELETE FROM ${table} WHERE profile_id = ? AND network_id = ? AND tab_id IS ? AND thought_id = ?`,
+            'DELETE FROM visit_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ? AND thought_id = ?',
           )
           .run(p, n, t, newIdTx);
         if (old !== null) {
-          this.pushFocusHistory(p, n, t, old, scope);
+          this.pushVisitHistory(p, n, t, old);
         }
         this.db
           .prepare(
-            `DELETE FROM ${table} WHERE profile_id = ? AND network_id = ? AND tab_id IS ? ` +
-              `AND seq NOT IN (SELECT seq FROM ${table} WHERE profile_id = ? AND network_id = ? AND tab_id IS ? ` +
+            'DELETE FROM visit_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ? ' +
+              'AND seq NOT IN (SELECT seq FROM visit_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ? ' +
               'ORDER BY seq DESC LIMIT ?)',
           )
           .run(p, n, t, p, n, t, FOCUS_HISTORY_LIMIT);
       },
     );
     tx(profileId, networkId, tabId, oldId, newId);
-  }
-
-  // -------------------------------------------------------------------------
-  // chronicle history (L4, 07-client-electron.md §3.5, L20)
-  // -------------------------------------------------------------------------
-
-  /**
-   * (Re)inserts a chronicle entry (thought or link) at the front (highest
-   * `seq`). `INSERT OR REPLACE` keeps a single row per
-   * `(profile_id, network_id, tab_id, entry_kind, entry_id)`. `tabId = null` —
-   * legacy-данные.
-   */
-  public pushChronicleEntry(
-    profileId: string,
-    networkId: string,
-    tabId: string | null,
-    entryKind: ChronicleEntryKind,
-    entryId: string,
-  ): void {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO chronicle_history (profile_id, network_id, tab_id, entry_kind, entry_id, seq, visited_at) ` +
-          'VALUES (?, ?, ?, ?, ?, ' +
-          `(SELECT COALESCE(MAX(seq), 0) + 1 FROM chronicle_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ?), ` +
-          "strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
-      )
-      .run(profileId, networkId, tabId, entryKind, entryId, profileId, networkId, tabId);
-  }
-
-  /** Removes a single chronicle entry (no-op if absent). */
-  public removeChronicleEntry(
-    profileId: string,
-    networkId: string,
-    tabId: string | null,
-    entryKind: ChronicleEntryKind,
-    entryId: string,
-  ): void {
-    this.db
-      .prepare(
-        'DELETE FROM chronicle_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ? AND entry_kind = ? AND entry_id = ?',
-      )
-      .run(profileId, networkId, tabId, entryKind, entryId);
-  }
-
-  /** Drops the whole chronicle history of a profile × network × tab. */
-  public clearChronicleHistory(
-    profileId: string,
-    networkId: string,
-    tabId: string | null,
-  ): void {
-    this.db
-      .prepare(
-        'DELETE FROM chronicle_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ?',
-      )
-      .run(profileId, networkId, tabId);
-  }
-
-  /** Returns chronicle history rows, freshest first (up to `limit`). */
-  public listChronicleHistory(
-    profileId: string,
-    networkId: string,
-    tabId: string | null,
-    limit = FOCUS_HISTORY_LIMIT,
-  ): ChronicleHistoryRow[] {
-    return this.db
-      .prepare(
-        'SELECT profile_id, network_id, tab_id, entry_kind, entry_id, seq, visited_at ' +
-          'FROM chronicle_history WHERE profile_id = ? AND network_id = ? AND tab_id IS ? ' +
-          'ORDER BY seq DESC LIMIT ?',
-      )
-      .all(profileId, networkId, tabId, limit) as ChronicleHistoryRow[];
   }
 
   // -------------------------------------------------------------------------

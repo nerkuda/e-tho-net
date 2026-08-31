@@ -33,6 +33,7 @@ import {
   pickMostRecentTab,
 } from './lib/pure.js';
 import { initListClamps } from './editor/list-heights.js';
+import { noteThoughtRemoved, noteThoughtWillOpen } from './history.js';
 import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js';
 import { applyRealtimeToUi } from './realtime-ui.js';
 import { initTheme } from './lib/theme.js';
@@ -352,22 +353,22 @@ async function ensureManualPositionsInitialized(
 export async function setFocus(id: string): Promise<void> {
   const networkId = requireNetworkId();
   const tabId = store.state.activeTabId;
-  const oldId = store.state.focus?.focused.id ?? null;
   const response = await etn.thoughts.focus(networkId, id);
-  // Rotate the local history BEFORE the store update: the history bar re-renders
-  // from store changes, and a fire-and-forget rotate here loses the race — the
-  // bar showed a pre-rotation snapshot (the new focus still listed, the
-  // previous one missing). Awaiting the local SQLite write costs nothing.
-  if (oldId !== null && oldId !== id) {
-    if (tabId !== null) {
-      // Q4: per-tab focus history — main uses `tabId IS ?` semantics.
-      await etn.history.rotate(oldId, id, tabId).catch(() => undefined);
-    } else {
-      await etn.history.rotate(oldId, id).catch(() => undefined);
-    }
-  }
+  // Unified visit history (0.5.5): records whatever thought was current a
+  // moment ago (the previous focus, or a thought/link open in the editor
+  // without moving the focus) — not necessarily the old focus. Must run
+  // before the store update below (same reasoning as before: the history bar
+  // re-renders from store changes, so this needs to land first).
+  await noteThoughtWillOpen(id);
   const zoneState = zoneStateFromFocus(response);
-  store.update({ focus: response, editorTarget: null, selectedLinkId: null, ...zoneState });
+  store.update({
+    focus: response,
+    editorTarget: null,
+    selectedLinkId: null,
+    structuresActiveThoughtId: null,
+    structuresActiveThought: null,
+    ...zoneState,
+  });
   // Q4: persist focus_id on the tab row so it survives restarts and tab
   // switches. Falls back to the legacy ui_state key when no tab is active
   // (shouldn't happen post-Q3, but defensible).
@@ -529,16 +530,12 @@ export async function onThoughtDeleted(deletedId: string): Promise<void> {
   } else {
     scheduleRefresh();
   }
-  // setFocus's rotation pushes the deleted id (as the old focus) back into the
-  // history — prune it afterwards so it never lingers in «последние». Both
-  // per-view histories (focus + structures, L15 §15.9) and the chronicle
-  // history (L20) are pruned.
+  // setFocus's rotation may have just pushed the deleted id (as the old
+  // focus) into the unified history — prune it afterwards so it never
+  // lingers in «последние», and drop it from the in-memory tracker too so it
+  // is never resurrected as "the previous thought" on the next transition.
+  noteThoughtRemoved(deletedId);
   await etn.history.remove(deletedId, store.state.activeTabId).catch(() => undefined);
-  await etn.history.remove(deletedId, store.state.activeTabId, 'structures').catch(() => undefined);
-  const profileId = store.state.profileId;
-  if (profileId !== null) {
-    await etn.history.chronicleRemove(profileId, networkId, store.state.activeTabId, 'thought', deletedId).catch(() => undefined);
-  }
   invalidateIndicators(deletedId);
   invalidateRef(deletedId);
   invalidateHistoryBar();
