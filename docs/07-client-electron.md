@@ -199,9 +199,10 @@ API-key шифруется `safeStorage.encryptString(key)` перед запи�
   (см. [11-settings-and-state.md](11-settings-and-state.md), п. 1.3).
 - `theme`, `zoom`, `active_profile_id` — UI-настройки установки.
 
-### 3.5. focus_history (история фокуса, L4)
+### 3.5. visit_history (история посещения мыслей, L4)
 
-История мыслей, побывавших в фокусе на этом клиенте. Локальное состояние per
+Единая история мыслей, открытых в редакторе на этом клиенте, — общая для
+всех видов (карта, структуры, хроника; 0.5.5). Локальное состояние per
 `(profile_id, network_id, tab_id)`. См.
 [11-settings-and-state.md](11-settings-and-state.md), п. 2.3.
 
@@ -215,7 +216,7 @@ API-key шифруется `safeStorage.encryptString(key)` перед запи�
 | `visited_at` | TEXT NOT NULL | |
 | PRIMARY KEY | `(profile_id, network_id, tab_id, thought_id)` | |
 
-Индекс: `idx_focus_history_seq (profile_id, network_id, tab_id, seq DESC)`.
+Индекс: `idx_visit_history_seq (profile_id, network_id, tab_id, seq DESC)`.
 
 > **Табы (фаза Q).** PK расширен колонкой `tab_id`; в существующих строках
 > `tab_id` остаётся `NULL` — при первом запуске клиента с табами
@@ -223,37 +224,46 @@ API-key шифруется `safeStorage.encryptString(key)` перед запи�
 > привязывается к нему (см. §3.6). Для двух табов с одной сетью истории
 > независимы — это позволяет вести параллельные контексты в одной сети.
 
-**Алгоритм при смене фокуса `oldId → newId`** (в одной транзакции локально;
-`?` — `profile_id, network_id, tab_id`):
+> **Миграция 0.5.5** (`007_unified_visit_history.sql`): таблица
+> `focus_history` переименовывается в `visit_history` (строки сохраняются —
+> это бывшая история фокуса, становящаяся стартом единой истории); таблицы
+> `structures_history` и `chronicle_history` удаляются вместе с индексами —
+> это были локальные UI-кэши, их потеря безвредна.
+
+**Алгоритм при открытии мысли в редакторе `oldId → newId`** (в одной
+транзакции локально; `?` — `profile_id, network_id, tab_id`). `oldId` —
+мысль, открытая в редакторе до перехода; при смене фокуса холста это
+прежний фокус, при открытии из «Структур»/«Хроники» — прежняя открытая
+мысль. Открытие связи не вызывает операцию (связь — не посещённая мысль):
 
 ```sql
--- 1. newId больше не в истории — он становится фокусом
-DELETE FROM focus_history
+-- 1. newId больше не в истории — он открыт в редакторе
+DELETE FROM visit_history
   WHERE profile_id = ? AND network_id = ? AND tab_id IS ? AND thought_id = ?;  -- newId
 
 -- 2. oldId — в начало истории (seq — per-tab)
-INSERT OR REPLACE INTO focus_history (profile_id, network_id, tab_id, thought_id, seq, visited_at)
+INSERT OR REPLACE INTO visit_history (profile_id, network_id, tab_id, thought_id, seq, visited_at)
   VALUES (?, ?, ?, ?,
-          (SELECT COALESCE(MAX(seq), 0) + 1 FROM focus_history
+          (SELECT COALESCE(MAX(seq), 0) + 1 FROM visit_history
             WHERE profile_id = ? AND network_id = ? AND tab_id IS ?), ?);
 
 -- 3. Trim до 50: удалить всё, что не входит в топ-50 свежих
-DELETE FROM focus_history
+DELETE FROM visit_history
   WHERE profile_id = ? AND network_id = ? AND tab_id IS ?
     AND seq NOT IN (
-      SELECT seq FROM focus_history
+      SELECT seq FROM visit_history
         WHERE profile_id = ? AND network_id = ? AND tab_id IS ?
         ORDER BY seq DESC LIMIT 50
     );
 ```
 
-`oldId = null` (первый вход в сеть, фокус с нуля) → шаг 2 пропускается.
-`oldId = newId` (повторный фокус на ту же мысль) → операция в целом no-op.
+`oldId = null` (первое открытие в табе, редактор с нуля) → шаг 2 пропускается.
+`oldId = newId` (повторное открытие той же мысли) → операция в целом no-op.
 
 **Получение истории:**
 
 ```sql
-SELECT thought_id FROM focus_history
+SELECT thought_id FROM visit_history
   WHERE profile_id = ? AND network_id = ? AND tab_id IS ?
   ORDER BY seq DESC LIMIT 50;
 ```
@@ -264,14 +274,9 @@ SELECT thought_id FROM focus_history
 
 **Очистка:** при получении real-time события `thought.deleted` для мысли в
 истории — обязательная локальная чистка
-(`DELETE FROM focus_history WHERE profile_id=? AND network_id=? AND tab_id IS ? AND thought_id=?`).
+(`DELETE FROM visit_history WHERE profile_id=? AND network_id=? AND tab_id IS ? AND thought_id=?`).
 Неактуальные (`active=0`) мысли из истории **не** вычищаются — они скрываются на
 уровне рендера при выключенном `show_inactive`.
-
-> Замечание: аналогично `structures_history` (§3.5.1 в
-> [11-settings-and-state.md](11-settings-and-state.md)) и
-> `chronicle_history` (миграция `004_chronicle_history.sql`) тоже получают
-> колонку `tab_id` с тем же поведением. Их PK расширяется соответственно.
 
 ### 3.6. tabs (открытые табы, L4)
 
@@ -298,7 +303,7 @@ SELECT thought_id FROM focus_history
 
 - Строка создаётся при `etn.tabs.open(networkId)` (см. §6).
 - Удаляется при `etn.tabs.close(tabId)` либо при отсутствии ссылки на
-  `tab_id` из других таблиц (каскад не нужен — `focus_history`/`ui_state`
+  `tab_id` из других таблиц (каскад не нужен — `visit_history`/`ui_state`
   хранят строки с `tab_id`, но потеря orphan-строк допустима: при
   следующем запуске такие табы не появятся, и строки тихо игнорируются).
 - При reorder — обновляются только `slot_idx` в одной транзакции
