@@ -20,7 +20,6 @@ import type {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { isBaseContext } from '../db/layer-write.js';
 import { getLink, checkLinkDeletion, deleteLink } from './link-service.js';
 import { getThought, checkThoughtDeletion, deleteThought } from './thought-service.js';
 
@@ -36,21 +35,19 @@ export interface TrashPurgeOutcome extends TrashPurgeResult {
 }
 
 /**
- * Blocking check of one trash entry. In a working layer the answer is always
- * "not blocked": the deletion there is a tombstone (13-layers.md §5.2), which
- * never needs the physical-delete guards of 02-data-model.md §3.1.2.
+ * Blocking check of one trash entry — the same context-aware check as the
+ * `deletion-check` endpoint (03-server-api.md §6.5a): in a working layer the
+ * session's own shadow row never holds, but a live base row does (a «delete»
+ * there would only be a tombstone, 13-layers.md §5.2), so the trash dialog
+ * shows the same blocked/skip picture the single-delete dialog would.
  */
 function trashCheckThought(ndb: NetworkDb, id: string) {
-  return isBaseContext(ndb)
-    ? checkThoughtDeletion(ndb, id)
-    : { blocked: false as const, blocking: { properties: 0, layers: [] }, orphaned_children: 0 };
+  return checkThoughtDeletion(ndb, id);
 }
 
 /** Link counterpart of {@link trashCheckThought}. */
 function trashCheckLink(ndb: NetworkDb, id: string) {
-  return isBaseContext(ndb)
-    ? checkLinkDeletion(ndb, id)
-    : { blocked: false as const, blocking: { layers: [] } };
+  return checkLinkDeletion(ndb, id);
 }
 
 /**
@@ -91,11 +88,13 @@ export function listTrash(ndb: NetworkDb): TrashListResult {
  * marked thought/link that is not blocked; blocked ones are skipped silently
  * (an expected outcome, not a failure). Returns purged/skipped counts.
  *
- * S4: in a working layer every marked row is deletable (by tombstone,
- * 13-layers.md §5.2), so nothing is skipped there. Runs each deletion in its
- * own transaction (a blocked row must not roll back the ones that could be
- * deleted); the caller may wrap the whole sweep in a single outer transaction
- * for auto-cleanup after layer operations.
+ * In a working layer blocked rows (base-held and other-layer shadows) are
+ * skipped just like in the base: the «Удалить» in a layer means a tombstone
+ * (13-layers.md §5.2), which the user has not consciously agreed to for rows
+ * living elsewhere. Runs each deletion in its own transaction (a blocked row
+ * must not roll back the ones that could be deleted); the caller may wrap the
+ * whole sweep in a single outer transaction for auto-cleanup after layer
+ * operations.
  */
 export function purgeTrash(ndb: NetworkDb): TrashPurgeOutcome {
   let purged = 0;

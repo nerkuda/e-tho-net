@@ -757,10 +757,12 @@ function countOrphanedChildren(ndb: NetworkDb, thoughtId: string): number {
 /**
  * Check whether a thought can be physically deleted (docs/03-server-api.md
  * §6.5a). Blocking arms: "использование в свойствах" (`thought_ref` from other
- * thoughts) and — since the layers schema landed in S2 — live (`deleted = 0`)
- * shadow rows of the thought itself or of links where it is an endpoint in any
- * non-base layer (docs/02-data-model.md §3.1.2 п.2–3). Also reports how many
- * children would become orphans.
+ * thoughts) and live (`deleted = 0`) shadow rows of the thought itself or of
+ * links where it is an endpoint in layers other than the connection's own,
+ * plus — when the check runs in a working layer — a live row of the thought in
+ * the base (docs/02-data-model.md §3.1.2 п.2–3; the base entry arrives as
+ * `{ id: BASE_LAYER_ID, title: 'Основа' }` in `blocking.layers`). Also reports
+ * how many children would become orphans.
  *
  * Throws `NOT_FOUND` (404) when the thought does not exist.
  */

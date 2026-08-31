@@ -328,7 +328,7 @@ describe(
       }
     });
 
-    it('trash interplay: marking in a layer stays in the layer; purge in a layer tombstones', () => {
+    it('trash interplay: marking in a layer stays in the layer; purge in a layer skips base-held rows', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         insertHierarchyLayers(ndb);
@@ -347,13 +347,21 @@ describe(
         assert.equal(listTrash(ndb).thoughts.length, 0);
         assert.notEqual(getThought(ndb, t.id), null);
 
-        // Purging in the layer deletes by tombstone; the base keeps the row.
+        // Purge in the layer is layer-aware (bug 0.5.4): the base-held row is
+        // skipped (a «delete» there would only be a tombstone — marking is the
+        // only allowed step), a layer-only row is tombstoned. The base keeps
+        // both: its own row untouched, the layer-only row never existed there.
         ndb.useLayer(LAYER_A);
+        const only = createThought(ndb, { title: 'Только в слое' }, USER);
+        updateThought(ndb, only.id, { marked_for_deletion: true }, undefined, USER);
         const outcome = purgeTrash(ndb);
         assert.equal(outcome.purged, 1);
-        assert.equal(getThought(ndb, t.id), null);
+        assert.equal(outcome.skipped, 1);
+        assert.equal(getThought(ndb, only.id), null);
+        assert.equal(getThought(ndb, t.id)?.marked_for_deletion, true);
         ndb.useLayer(BASE_LAYER_ID);
         assert.notEqual(getThought(ndb, t.id), null);
+        assert.equal(getThought(ndb, only.id), null);
       } finally {
         ndb.close();
       }
