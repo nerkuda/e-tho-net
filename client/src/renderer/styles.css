@@ -4774,9 +4774,19 @@ body.cloud-dragging * {
 }
 
 .about-logo {
-  width: 56px;
-  height: 56px;
-  margin-bottom: 4px;
+  /* Размер и пропорции логотипа в диалоге «О программе»: фиксированная
+     ширина в пределах доступной ширины тела диалога (≈420 − 28 − 8 ≈ 384 px)
+     и `height: auto`, чтобы логотип пропорционально масштабировался по
+     `viewBox` 1015×536 SVG-файла (`public/logo.svg`). Без `height: auto` и
+     при `width: 56px; height: 56px;` (как было) SVG растягивался по обеим
+     осям `object-fit: fill` по умолчанию, и при смещённом влево дизайне
+     внутри старого `logo.svg` (translate(0, …)) содержимое оказывалось
+     прижатым к левому краю. */
+  display: block;
+  width: 240px;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto 8px;
 }
 
 .about-title {
