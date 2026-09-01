@@ -40,7 +40,7 @@ import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { openStructuresThought } from './structures/structures.js';
 import { openChronicleThought } from './chronicle/chronicle.js';
-import { HISTORY_BAR_MORE_RESERVE, planHistoryChips } from '../lib/pure.js';
+import { HISTORY_BAR_MORE_RESERVE, planHistoryChips, type HistoryChipPlan } from '../lib/pure.js';
 
 /**
  * Max title length inside a history mini-cloud (the chip on the bar). When the
@@ -49,12 +49,6 @@ import { HISTORY_BAR_MORE_RESERVE, planHistoryChips } from '../lib/pure.js';
 const CHIP_TITLE_LIMIT = 24;
 /** How many entries the dropdown source returns at once. */
 const HISTORY_LIMIT = 50;
-/**
- * Width used by the peel loop when the host hasn't been laid out yet
- * (`host.clientWidth === 0`). The plan still peels against this nominal width
- * so the strip does not show `▾ N` alone if the real width comes back tiny.
- */
-const ZERO_WIDTH_PLACEHOLDER = 0;
 
 /** Suffix appended when a title is truncated to {@link CHIP_TITLE_LIMIT}. */
 const ELLIPSIS = '…';
@@ -181,81 +175,57 @@ async function render(): Promise<void> {
     ref: refs.get(id),
     el: buildChip(id, refs.get(id)),
   }));
-  const { shown, rest } = layoutChips(chips);
-  for (const chip of shown) host.append(chip.el);
+  const plan = layoutChips(chips);
 
-  if (rest.length > 0) {
-    let more = buildMoreButton(rest.length, () => openHistoryMenu(rest, more));
+  if (plan.restCount === 0) {
+    // Everything fits on the strip (§11.1: no `▾` button when N = 0).
+    for (const chip of chips) host.append(chip.el);
+  } else if (!plan.moreFits || plan.shownCount === 0) {
+    // The strip cannot fit even one chip beside the button (an extremely
+    // tight strip): show the chips and let them clip at the strip edge —
+    // better than an orphan `▾ N` with nothing beside it (regression
+    // a1c7c8dc-…).
+    for (const chip of chips) host.append(chip.el);
+  } else {
+    const shown = chips.slice(0, plan.shownCount);
+    const rest = chips.slice(plan.shownCount);
+    for (const chip of shown) host.append(chip.el);
+    const more = buildMoreButton(rest.length, () => openHistoryMenu(rest, more));
     host.append(more);
-    // Peel chips until the pure planner is satisfied. Replaces the previous
-    // one-shot peel that left a tight strip with `▾ N` alone — when more
-    // than one chip had to go, or `shown` was already empty, the button
-    // stayed and the user saw no chips beside it (regression a1c7c8dc-…:
-    // «Регресс 3ccacc1c: облачка истории снова уходят в ▾ N после рестарта
-    // клиента»). Re-add the button after every peel so its `rest.length`
-    // label stays in sync with the dropdown count.
-    const chipWidths = chips.map((c) => c.el.getBoundingClientRect().width);
-    let plan = planHistoryChips(
-      chipWidths,
-      host.clientWidth,
-      HISTORY_BAR_MORE_RESERVE,
-      more.getBoundingClientRect().width,
-    );
-    while (plan.shownCount < shown.length) {
-      const moved = shown.pop();
-      if (moved === undefined) break;
-      host.removeChild(moved.el);
-      rest.unshift(moved);
-      host.removeChild(more);
-      more = buildMoreButton(rest.length, () => openHistoryMenu(rest, more));
-      host.append(more);
-      plan = planHistoryChips(
-        chipWidths,
-        host.clientWidth,
-        HISTORY_BAR_MORE_RESERVE,
-        more.getBoundingClientRect().width,
-      );
-    }
-    // Last resort: the dropdown button itself overflows (the strip is
-    // narrower than the button even alone — happens on very tight windows
-    // and at first layout after a restart). Hide the button and let the
-    // chips overflow the strip — better than seeing `▾ N` with nothing
-    // beside it. The chips stay in `rest` so the next render can re-show
-    // them when the strip grows.
-    if (!plan.moreFits) {
-      more.style.visibility = 'hidden';
-    }
   }
 }
 
 /**
- * Splits a chip sequence into the chips that fit on the strip and the chips
- * that must move into the dropdown. Reserving {@link HISTORY_BAR_MORE_RESERVE}
- * of free space keeps the `▾ N` button visible whenever there is something
- * left to hide. When the host has not been laid out yet (clientWidth === 0)
- * we keep all chips on the strip — the next ResizeObserver tick will
- * recompute.
+ * Plans how many chips fit on the strip (08-ui-spec.md §11.1). Every chip is
+ * appended first — chips carry `flex: 0 0 auto` (styles.css), so each one
+ * reports its NATURAL width instead of shrinking into the strip. The plan is
+ * pure arithmetic over those real measured widths (plus the measured `▾ N`
+ * button) via {@link planHistoryChips}; the host is left empty and the caller
+ * re-adds exactly the planned chips.
+ *
+ * `host.scrollWidth` is deliberately NOT used: the host is a flex container
+ * with `overflow: visible`, so its scrollWidth never grows past clientWidth
+ * no matter how much content there is. The old peel loop therefore compared
+ * `clientWidth - 44` against `clientWidth` itself, peeled EVERY chip off the
+ * strip and left an orphan `▾ N` — the regressions 3ccacc1c-… («Мысли
+ * истории не отображаются в нижней панели») and a1c7c8dc-….
  */
-function layoutChips<T extends { el: HTMLElement }>(
-  chips: T[],
-): { shown: T[]; rest: T[] } {
-  if (host === null) return { shown: chips, rest: [] };
-  // Append every chip, then peel from the tail until the strip fits with the
-  // dropdown reserve accounted for. Single measurement per chip keeps this
-  // O(n) and avoids per-iteration reflow thrash.
+function layoutChips<T extends { el: HTMLElement }>(chips: T[]): HistoryChipPlan {
+  if (host === null) return { shownCount: chips.length, restCount: 0, moreFits: true };
   for (const chip of chips) host.append(chip.el);
   const clientWidth = host.clientWidth;
-  if (clientWidth <= 0) return { shown: chips.slice(), rest: [] };
-  let shownCount = chips.length;
-  const targetWithMore = clientWidth - HISTORY_BAR_MORE_RESERVE;
-  while (shownCount > 0 && host.scrollWidth > targetWithMore) {
-    shownCount--;
-    host.removeChild(chips[shownCount]!.el);
-  }
-  return {
-    shown: chips.slice(0, shownCount),
-    rest: chips.slice(shownCount),
-  };
+  // Not laid out yet (host still detached) — keep every chip, the next
+  // render tick (store subscribe / ResizeObserver) recomputes with a real
+  // width.
+  if (clientWidth <= 0) return { shownCount: chips.length, restCount: 0, moreFits: true };
+  const chipWidths = chips.map((chip) => chip.el.getBoundingClientRect().width);
+  // Measure the real button width with a probe so the reserve never
+  // overestimates or underestimates the space the button will take.
+  const probe = buildMoreButton(chips.length, () => undefined);
+  host.append(probe);
+  const moreWidth = probe.getBoundingClientRect().width;
+  host.replaceChildren();
+  return planHistoryChips(chipWidths, clientWidth, HISTORY_BAR_MORE_RESERVE, moreWidth);
 }
 
 /** Opens the dropdown for a list of history chips (thought refs). */

@@ -1226,6 +1226,12 @@ textarea {
   align-items: center;
   gap: 4px;
   max-width: 170px;
+  /* Never shrink on the strip: the bar plans the visible chip set from real
+   * measured widths (history-bar.ts::layoutChips), so a chip must report its
+   * natural width. A shrinking chip would make the strip look "full" while
+   * every chip is actually crushed into it (regressions 3ccacc1c-… and
+   * a1c7c8dc-…). */
+  flex: 0 0 auto;
   padding: 1px 8px;
   border: 1px solid var(--border-strong);
   border-radius: 999px;

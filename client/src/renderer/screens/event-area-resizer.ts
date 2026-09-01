@@ -20,7 +20,6 @@ import { EVENT_AREA_W_MAX_RATIO, EVENT_AREA_W_MIN } from '@etn/shared';
 import { scheduleLayoutPersist } from './editor-resizer.js';
 import { clampEventAreaW } from '../lib/pure.js';
 import { store } from '../state.js';
-import { invalidateHistoryBar } from './history-bar.js';
 
 /** Width of the splitter hit area, px. */
 const HIT_W = 6;
@@ -89,13 +88,8 @@ export function mountEventAreaResizer(resizer: HTMLElement, statusbar: HTMLEleme
       }
       resizer.classList.remove('dragging');
       statusbar.classList.remove('resizing');
-      // After the drag the history strip has a new free width: poke the
-      // history bar so it reflows the visible chips even if the host's
-      // ResizeObserver missed the transition (e.g. observe() started before
-      // the host was in the DOM, or the strip's first width assignment
-      // landed in the same layout frame as the initial setProperty). Bug
-      // 3ccacc1c-… («Мысли истории не отображаются в нижней панели»).
-      invalidateHistoryBar();
+      // The history strip picks up its new free width by itself: the strip's
+      // ResizeObserver fires on the width change and re-plans the chips.
     };
 
     resizer.addEventListener('pointermove', onMove);
