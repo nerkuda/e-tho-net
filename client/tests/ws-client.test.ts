@@ -47,14 +47,18 @@ async function until(cond: () => boolean, ms = 1_500): Promise<void> {
   }
 }
 
-/** Builds a client pointing at `serverUrl`. */
+/** Builds a client pointing at `serverUrl`. Also registers a `disconnect()`
+ * teardown so that a test failure (which skips the explicit `client.disconnect()`)
+ * does not leave the watchdog/reconnect loop running into the next test, where
+ * the cumulative reconnect attempts would surface as an unhandled
+ * `Превышен лимит попыток реконнекта real-time` error. */
 function makeClient(
   serverUrl: string,
   db: LocalDb,
   networkId: string | null = 'net1',
   opts: { random?: () => number; idleTimeoutMs?: number } = {},
 ): RealtimeClient {
-  return new RealtimeClient({
+  const client = new RealtimeClient({
     baseUrl: serverUrl,
     getApiKey: async () => 'etn_testkey',
     getClientId: () => 'cid-aaa',
@@ -63,6 +67,15 @@ function makeClient(
     random: opts.random ?? (() => 0),
     idleTimeoutMs: opts.idleTimeoutMs,
   });
+  teardowns.push(async () => {
+    // Defensive: never throw out of a teardown — would mask the real failure.
+    try {
+      client.disconnect();
+    } catch {
+      // best effort
+    }
+  });
+  return client;
 }
 
 /** Spins up a WebSocket server on an ephemeral port. */
@@ -416,7 +429,10 @@ describe('RealtimeClient — receive-idle watchdog & forceReconnect (defect 7f4c
     const { server, url, close } = await startServer();
     teardowns.push(close);
     const db = makeFakeDb({});
-    const client = makeClient(url, db, 'net1', { idleTimeoutMs: 100 });
+    // `random: () => 0` → zero backoff so the reconnect after the silent phase
+    // is instant; deterministic timing prevents this assertion from racing with
+    // the event-loop under full-suite load.
+    const client = makeClient(url, db, 'net1', { idleTimeoutMs: 100, random: () => 0 });
 
     const connections = trackSockets(server);
     const conn = nextConnection(server);
@@ -430,7 +446,13 @@ describe('RealtimeClient — receive-idle watchdog & forceReconnect (defect 7f4c
       ticks += 1;
       if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
     }, 30);
-    await wait(250); // ~8 frames, each well within the 100 ms window
+    // Wait until enough frames have flowed, but bound the wait so a saturated
+    // event loop (full `node --test` run on a busy host) can still make
+    // progress: setInterval callbacks may lag, and a fixed `wait(250)` would
+    // mis-count as "frames didn't flow" even though liveness is fine. The
+    // watchdog assertion below is the real correctness check — it fires iff a
+    // gap between frames exceeded `idleTimeoutMs`.
+    await until(() => ticks >= 6, 1_000);
     clearInterval(iv);
     assert.ok(ticks >= 6, `expected frames to flow, saw ${ticks}`);
     assert.equal(connections.length, 1); // watchdog never fired
