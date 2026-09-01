@@ -128,6 +128,41 @@ export function suppressNextCanvasClick(): void {
   suppressNextClick = true;
 }
 
+/**
+ * How long a single click on a cloud waits for a sibling double-click before
+ * it fires its own action (open the thought in the editor). The browser fires
+ * two `click` events for every double-click; without this delay the first
+ * click would already start the editor render only for the second click to
+ * refocus the same thought (or for a no-op duplicate `openThoughtInEditor`
+ * to bounce the panel), which the user reads as a "double-click handled as
+ * two single clicks". Mirrors the OS-level double-click threshold.
+ */
+const SINGLE_CLICK_DELAY_MS = 220;
+
+/**
+ * Defers a single-click action until the browser has had a chance to emit a
+ * matching `dblclick`. The first click schedules the action; a second click
+ * inside {@link SINGLE_CLICK_DELAY_MS} cancels it and the element's
+ * `dblclick` handler runs instead.
+ *
+ * The returned `cancel` is exposed for tests and for callers that need to
+ * drop a pending action on tear-down (cloud rebuild on focus change, etc.).
+ */
+export function deferSingleClick(action: () => void): { cancel: () => void } {
+  let timer: number | null = window.setTimeout(() => {
+    timer = null;
+    action();
+  }, SINGLE_CLICK_DELAY_MS);
+  return {
+    cancel(): void {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    },
+  };
+}
+
 /** Selection click hooks (H16): Ctrl+click on clouds and ellipses. */
 export interface SelectionClickHooks {
   onCloudClick(id: string): void;
@@ -570,16 +605,40 @@ function renderFocusRow(focus: FocusResponse): void {
   focusRow.append(cloud);
   focusCloudEl = cloud;
   // A click on the focus cloud returns the editor to the focused thought
-  // (same as a click on empty canvas space); the double click would refocus
-  // the same thought — a no-op, so it is simply ignored.
+  // (same as a click on empty canvas space); a double-click would refocus
+  // the same thought — a no-op, so the single-click action is deferred so a
+  // quick second click cancels it instead of triggering two editor
+  // navigations back-to-back. Without the delay the first click already
+  // pushed the editor target, then the dblclick handler tried to focus
+  // the same thought on top of it, producing the "editor shaking" the bug
+  // reports describe.
+  let pendingClick: { cancel: () => void } | null = null;
   cloud.addEventListener('click', (event) => {
-    if (event.detail >= 2) return;
+    if (suppressNextClick) {
+      suppressNextClick = false;
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
+      pendingClick?.cancel();
+      pendingClick = null;
+      selectionHooks?.onCloudClick(thought.id);
+      return;
+    }
     // Click sets the keyboard cursor on this cloud so subsequent arrows
     // (and Ctrl+Shift+←/→ in manual mode) move from the just-clicked
     // cloud, not from wherever the cursor happened to be. The editor halo
     // and the cursor frame are independent — both follow this click.
-    setCursor(thought.id);
-    openThoughtInEditor(thought.id);
+    pendingClick?.cancel();
+    pendingClick = deferSingleClick(() => {
+      pendingClick = null;
+      setCursor(thought.id);
+      openThoughtInEditor(thought.id);
+    });
+  });
+  cloud.addEventListener('dblclick', (event) => {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    pendingClick?.cancel();
+    pendingClick = null;
   });
   cloud.addEventListener('contextmenu', (event) => {
     event.preventDefault();
@@ -1093,26 +1152,39 @@ function buildCloud(
   // the pointer inside the pointer-transparent grids) — Enter and the arrows
   // are handled by the canvas keyboard navigation (kbd-nav.ts).
   cloud.tabIndex = 0;
+  // The single-click action is deferred so the browser can deliver a
+  // matching `dblclick` first — every double-click fires two `click` events
+  // first, and processing the first one used to push the editor target
+  // twice in a row (once for the click, once for the focus that the
+  // dblclick triggers), producing the "double-click handled as two events"
+  // shake. The deferred click is cancelled by the dblclick handler below.
+  let pendingClick: { cancel: () => void } | null = null;
   cloud.addEventListener('click', (event) => {
     if (suppressNextClick) {
       suppressNextClick = false;
       return;
     }
     if (event.ctrlKey || event.metaKey) {
+      pendingClick?.cancel();
+      pendingClick = null;
       selectionHooks?.onCloudClick(entry.id);
       return;
     }
-    // The second click of a double click is left to the dblclick handler.
-    if (event.detail >= 2) return;
     // Click selects the cloud as the keyboard cursor so subsequent arrows
     // (and Ctrl+Shift+←/→ in manual mode) move from the just-clicked cloud,
     // not from whichever cloud the cursor happened to be on. The editor
     // halo and the cursor frame are independent — both follow this click.
-    setCursor(entry.id);
-    openThoughtInEditor(entry.id);
+    pendingClick?.cancel();
+    pendingClick = deferSingleClick(() => {
+      pendingClick = null;
+      setCursor(entry.id);
+      openThoughtInEditor(entry.id);
+    });
   });
   cloud.addEventListener('dblclick', (event) => {
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    pendingClick?.cancel();
+    pendingClick = null;
     void setFocus(entry.id);
   });
   cloud.addEventListener('contextmenu', (event) => {
@@ -1227,6 +1299,8 @@ export const canvasInternals = {
   indicatorCache,
   canvasRenderKey,
   selectionKey,
+  deferSingleClick,
+  SINGLE_CLICK_DELAY_MS,
 };
 
 // ---------------------------------------------------------------------------
