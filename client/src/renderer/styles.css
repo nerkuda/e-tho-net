@@ -2340,7 +2340,10 @@ body.cloud-dragging * {
 }
 
 /* Default table height: five rows, then it scrolls (§6.6). */
-.chrono-table {
+/* The doubled selector outranks `.admin-table-wrap`'s own `max-height: 380px`
+   (same specificity, later source order) — otherwise the saved clamp is
+   ignored after the editor re-renders (ee745368). */
+.admin-table-wrap.chrono-table {
   /* Saved manual max height (ee745368, list-heights.ts); default — five rows. */
   max-height: var(--clamp-chrono, 190px);
 }
@@ -2408,7 +2411,10 @@ body.cloud-dragging * {
 
 /* --- Properties table: headerless, at most five rows (L7, §6.3.1) ---------- */
 
-.prop-wrap {
+/* The doubled selector outranks `.admin-table-wrap`'s own `max-height: 380px`
+   (same specificity, later source order) — otherwise the saved clamp is
+   ignored after the editor re-renders (ee745368). */
+.admin-table-wrap.prop-wrap {
   /* Saved manual max height (ee745368, list-heights.ts); default — five rows. */
   max-height: var(--clamp-props, 190px);
 }
