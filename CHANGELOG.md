@@ -44,6 +44,22 @@
   для детерминированного бэкоффа; `makeClient` регистрирует
   `client.disconnect()` в teardowns, чтобы клиент всегда глушился.
   Полный прогон `npm -w @etn/client test` — 386/386 pass подряд 8 раз.
+- **Неправильный SVG логотипа в диалоге «О программе» (6920bc7, ошибка
+  7e6774ec).** `about-dialog.ts` грузит `./logo.svg` из
+  `client/src/renderer/public/logo.svg`, который был независимой копией
+  `docs/images/logo_v3.svg` (electron-vite копирует `public/` один-в-один
+  и про `docs/images/` не знает). Внутри старого `public/logo.svg` дизайн
+  был смещён влево (`<g transform="translate(0, 121) scale(0.504)">`) и
+  стояли жёсткие `width="1015" height="536"`; CSS `.about-logo` с
+  `width: 56px; height: 56px` + дефолтный `object-fit: fill` сжимал SVG
+  без сохранения пропорций, и дизайн оказывался прижат к левому краю
+  ≈1/6 поля. `public/logo.svg` заменён содержимым
+  `docs/images/logo_v3.svg` (дизайн центрирован, без жёстких размеров,
+  `preserveAspectRatio="xMidYMid meet"`); `.about-logo` —
+  `width: 240px; max-width: 100%; height: auto` (как у `.networks-logo`).
+  Тот же логотип используется на экране списка сетей — там изменений
+  нет. Зафиксированы грабли «public/logo.svg и docs/images/logo_v3.svg —
+  две независимые копии, рендер берёт public/» (мысль 6992dec8).
 
 ## [0.5.5] — 2026-09-01
 
