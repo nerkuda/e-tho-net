@@ -40,6 +40,7 @@ import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { openStructuresThought } from './structures/structures.js';
 import { openChronicleThought } from './chronicle/chronicle.js';
+import { HISTORY_BAR_MORE_RESERVE, planHistoryChips } from '../lib/pure.js';
 
 /**
  * Max title length inside a history mini-cloud (the chip on the bar). When the
@@ -49,12 +50,11 @@ const CHIP_TITLE_LIMIT = 24;
 /** How many entries the dropdown source returns at once. */
 const HISTORY_LIMIT = 50;
 /**
- * Reserved free width for the `▾ N` button. We leave this much space on the
- * right of the strip before we start moving chips into the dropdown, so the
- * button never gets pushed off-screen when there is anything left to show.
- * Generous enough for a two-digit count.
+ * Width used by the peel loop when the host hasn't been laid out yet
+ * (`host.clientWidth === 0`). The plan still peels against this nominal width
+ * so the strip does not show `▾ N` alone if the real width comes back tiny.
  */
-const MORE_BUTTON_RESERVE = 44;
+const ZERO_WIDTH_PLACEHOLDER = 0;
 
 /** Suffix appended when a title is truncated to {@link CHIP_TITLE_LIMIT}. */
 const ELLIPSIS = '…';
@@ -185,27 +185,56 @@ async function render(): Promise<void> {
   for (const chip of shown) host.append(chip.el);
 
   if (rest.length > 0) {
-    const more = buildMoreButton(rest.length, () => openHistoryMenu(rest, more));
+    let more = buildMoreButton(rest.length, () => openHistoryMenu(rest, more));
     host.append(more);
-    // If the button itself overflows, peel one more chip and re-add it.
-    if (host.scrollWidth > host.clientWidth) {
-      host.removeChild(more);
+    // Peel chips until the pure planner is satisfied. Replaces the previous
+    // one-shot peel that left a tight strip with `▾ N` alone — when more
+    // than one chip had to go, or `shown` was already empty, the button
+    // stayed and the user saw no chips beside it (regression a1c7c8dc-…:
+    // «Регресс 3ccacc1c: облачка истории снова уходят в ▾ N после рестарта
+    // клиента»). Re-add the button after every peel so its `rest.length`
+    // label stays in sync with the dropdown count.
+    const chipWidths = chips.map((c) => c.el.getBoundingClientRect().width);
+    let plan = planHistoryChips(
+      chipWidths,
+      host.clientWidth,
+      HISTORY_BAR_MORE_RESERVE,
+      more.getBoundingClientRect().width,
+    );
+    while (plan.shownCount < shown.length) {
       const moved = shown.pop();
-      if (moved !== undefined) {
-        host.removeChild(moved.el);
-        rest.unshift(moved);
-      }
-      host.append(buildMoreButton(rest.length, () => openHistoryMenu(rest, more)));
+      if (moved === undefined) break;
+      host.removeChild(moved.el);
+      rest.unshift(moved);
+      host.removeChild(more);
+      more = buildMoreButton(rest.length, () => openHistoryMenu(rest, more));
+      host.append(more);
+      plan = planHistoryChips(
+        chipWidths,
+        host.clientWidth,
+        HISTORY_BAR_MORE_RESERVE,
+        more.getBoundingClientRect().width,
+      );
+    }
+    // Last resort: the dropdown button itself overflows (the strip is
+    // narrower than the button even alone — happens on very tight windows
+    // and at first layout after a restart). Hide the button and let the
+    // chips overflow the strip — better than seeing `▾ N` with nothing
+    // beside it. The chips stay in `rest` so the next render can re-show
+    // them when the strip grows.
+    if (!plan.moreFits) {
+      more.style.visibility = 'hidden';
     }
   }
 }
 
 /**
  * Splits a chip sequence into the chips that fit on the strip and the chips
- * that must move into the dropdown. Reserving {@link MORE_BUTTON_RESERVE} of
- * free space keeps the `▾ N` button visible whenever there is something left
- * to hide. When the host has not been laid out yet (clientWidth === 0) we keep
- * all chips on the strip — the next ResizeObserver tick will recompute.
+ * that must move into the dropdown. Reserving {@link HISTORY_BAR_MORE_RESERVE}
+ * of free space keeps the `▾ N` button visible whenever there is something
+ * left to hide. When the host has not been laid out yet (clientWidth === 0)
+ * we keep all chips on the strip — the next ResizeObserver tick will
+ * recompute.
  */
 function layoutChips<T extends { el: HTMLElement }>(
   chips: T[],
@@ -218,7 +247,7 @@ function layoutChips<T extends { el: HTMLElement }>(
   const clientWidth = host.clientWidth;
   if (clientWidth <= 0) return { shown: chips.slice(), rest: [] };
   let shownCount = chips.length;
-  const targetWithMore = clientWidth - MORE_BUTTON_RESERVE;
+  const targetWithMore = clientWidth - HISTORY_BAR_MORE_RESERVE;
   while (shownCount > 0 && host.scrollWidth > targetWithMore) {
     shownCount--;
     host.removeChild(chips[shownCount]!.el);

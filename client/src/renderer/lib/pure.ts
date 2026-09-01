@@ -201,6 +201,92 @@ export function clampEventAreaW(value: number, windowWidth: number): number {
   return clip(Math.round(value), EVENT_AREA_W_MIN, ratioCap);
 }
 
+// ---------------------------------------------------------------------------
+// History-bar chip layout (08-ui-spec.md §11.1, history-bar.ts)
+// ---------------------------------------------------------------------------
+
+/** Inter-chip gap of the history strip in px (CSS `.history-bar { gap }`). */
+export const HISTORY_BAR_CHIP_GAP = 6;
+/**
+ * Reserved free width for the `▾ N` button. Matches `MORE_BUTTON_RESERVE`
+ * in `history-bar.ts`; the strip leaves this much free space before peeling
+ * chips into the dropdown.
+ */
+export const HISTORY_BAR_MORE_RESERVE = 44;
+
+/** Plan returned by {@link planHistoryChips}. */
+export interface HistoryChipPlan {
+  /** Number of chips that fit on the strip (0..total). */
+  shownCount: number;
+  /** Number of chips that move into the dropdown. */
+  restCount: number;
+  /**
+   * Whether the renderer should show the `▾ N` dropdown button. False when
+   * the button would crowd every chip out — keeping the button in that case
+   * leaves the user with `▾ N` and no chips beside it (regression
+   * a1c7c8dc-…). The renderer then hides the button and lets the chips
+   * overflow the strip.
+   */
+  moreFits: boolean;
+}
+
+/** Total width of the first `count` chips with the inter-chip gap. */
+function historyStripWidth(chipWidths: readonly number[], count: number): number {
+  if (count <= 0) return 0;
+  let w = chipWidths[0] ?? 0;
+  for (let i = 1; i < count; i++) w += (chipWidths[i] ?? 0) + HISTORY_BAR_CHIP_GAP;
+  return w;
+}
+
+/**
+ * Computes how many history chips fit on the strip with the `▾ N` button
+ * accounted for. Pure: takes pre-measured chip widths, the strip width,
+ * the button reserve and the actual button width.
+ *
+ * Used by `history-bar.ts` instead of an ad-hoc one-shot peel after adding
+ * the button to the DOM (regression a1c7c8dc-…: «Регресс 3ccacc1c: облачка
+ * истории снова уходят в ▾ N после рестарта клиента» — the previous code
+ * peeled at most one chip; if more were needed or `shown` was already
+ * empty, the button stayed alone and `▾ N` was the only thing visible).
+ */
+export function planHistoryChips(
+  chipWidths: readonly number[],
+  hostWidth: number,
+  moreReserve: number,
+  moreWidth: number,
+): HistoryChipPlan {
+  const n = chipWidths.length;
+  if (n === 0) return { shownCount: 0, restCount: 0, moreFits: true };
+  // A zero / negative host width means the strip has not been laid out yet —
+  // return every chip as "shown" and let the next ResizeObserver tick redo
+  // the math (mirrors the layoutChips() escape hatch in history-bar.ts).
+  if (hostWidth <= 0) return { shownCount: n, restCount: 0, moreFits: false };
+
+  // Step 1: peel from the tail until the strip fits with the button reserve.
+  let shown = n;
+  while (shown > 0 && historyStripWidth(chipWidths, shown) + moreReserve > hostWidth) {
+    shown--;
+  }
+  let moreFits = true;
+  if (shown < n) {
+    // Step 2: there are hidden chips — the button takes its real width.
+    // Re-peel until the button fits, or until no chips are left.
+    while (shown > 0 && historyStripWidth(chipWidths, shown) + moreWidth > hostWidth) {
+      shown--;
+    }
+    // `moreFits` flips to false only when the dropdown would crowd every
+    // chip out: the button does not leave room for even the smallest chip
+    // in the list. Keeping the button in that case would put `▾ N` on
+    // screen with zero chips beside it — exactly the regression we are
+    // fixing. The renderer then hides the button.
+    const smallest = chipWidths.reduce((m, w) => (w < m ? w : m), Number.POSITIVE_INFINITY);
+    if (moreWidth + smallest > hostWidth) {
+      moreFits = false;
+    }
+  }
+  return { shownCount: shown, restCount: n - shown, moreFits };
+}
+
 /**
  * Parses the L4 `window_layout` value (JSON
  * `{"w":<px>,"h":<px>,"s":<px>,"e":<px>}`), clipped to the editor/selection

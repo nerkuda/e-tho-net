@@ -53,6 +53,7 @@ import {
   parseTitleWithSynonyms,
   parseWindowLayout,
   pickMostRecentTab,
+  planHistoryChips,
   shortenCompoundName,
   splitCompoundName,
   zoomStep,
@@ -280,6 +281,108 @@ describe('clampEventAreaW', () => {
         `cap=${cap} at window=${w} → history-bar=${historyW}px (< 40%)`,
       );
     }
+  });
+});
+
+describe('planHistoryChips', () => {
+  // Constants mirror what history-bar.ts uses (the 44 px reserve and the
+  // 6 px inter-chip gap from `.history-bar { gap }`). Pinned here so the
+  // test does not depend on the renderer module.
+  const RESERVE = 44;
+  const BUTTON_W = 40;
+
+  it('returns everything as shown when the strip is wider than every chip', () => {
+    const widths = [60, 60, 60, 60, 60];
+    assert.deepEqual(planHistoryChips(widths, 800, RESERVE, BUTTON_W), {
+      shownCount: 5,
+      restCount: 0,
+      moreFits: true,
+    });
+  });
+
+  it('returns empty results for an empty chip list', () => {
+    assert.deepEqual(planHistoryChips([], 800, RESERVE, BUTTON_W), {
+      shownCount: 0,
+      restCount: 0,
+      moreFits: true,
+    });
+  });
+
+  it('returns every chip and `moreFits: false` on an unlaid-out strip', () => {
+    // history-bar.ts layoutChips escapes with `clientWidth <= 0` — the
+    // planner must do the same so a zero-width first frame never hides the
+    // chips behind a phantom dropdown.
+    const widths = [60, 60, 60];
+    assert.deepEqual(planHistoryChips(widths, 0, RESERVE, BUTTON_W), {
+      shownCount: 3,
+      restCount: 0,
+      moreFits: false,
+    });
+  });
+
+  it('peels chips until the strip fits with the button reserve', () => {
+    // Five 60 px chips = 60 + 60*5 + 4*6 gap = 324 px. A 200 px strip leaves
+    // 200 - 44 = 156 px for chips — 60 + 6 + 60 + 6 + 60 = 192 (too wide),
+    // so two chips fit (60 + 6 + 60 = 126 ≤ 156) and three do not.
+    const widths = [60, 60, 60, 60, 60];
+    assert.deepEqual(planHistoryChips(widths, 200, RESERVE, BUTTON_W), {
+      shownCount: 2,
+      restCount: 3,
+      moreFits: true,
+    });
+  });
+
+  it('peels further when the actual button is wider than the reserve', () => {
+    // A 70 px button on a 110 px strip after the initial peel leaves 1 chip
+    // (60 px). 60 + 70 = 130 > 110 → peel one more. Two chips fit: 60 + 6
+    // + 60 = 126 ≤ 110? No. So no chips fit AND the button doesn't fit
+    // either — `moreFits: false`.
+    const widths = [60, 60, 60, 60, 60];
+    assert.deepEqual(planHistoryChips(widths, 110, RESERVE, 70), {
+      shownCount: 0,
+      restCount: 5,
+      moreFits: false,
+    });
+  });
+
+  it('shows exactly one chip when the button just fits beside it', () => {
+    // 60 px chip + 40 px button = 100 ≤ 110.
+    const widths = [60, 60, 60, 60, 60];
+    assert.deepEqual(planHistoryChips(widths, 110, RESERVE, 40), {
+      shownCount: 1,
+      restCount: 4,
+      moreFits: true,
+    });
+  });
+
+  it('regression a1c7c8dc: a 50 px strip with 14 chips reports all as rest and `moreFits: false`', () => {
+    // The exact bug the user reproduced after a restart: 14 mini-clouds
+    // (each ~60 px) on a strip that the renderer briefly sees as 50 px
+    // wide. The previous one-shot peel peeled at most one chip and then
+    // gave up; if `shown` was already empty, `▾ 14` was the only thing
+    // visible. The planner must drop the button entirely on a strip that
+    // narrow and report every chip as `rest` so the renderer's fallback
+    // (hide the button, let chips overflow) can show at least the first
+    // chip.
+    const widths = Array.from({ length: 14 }, () => 60);
+    assert.deepEqual(planHistoryChips(widths, 50, RESERVE, BUTTON_W), {
+      shownCount: 0,
+      restCount: 14,
+      moreFits: false,
+    });
+  });
+
+  it('handles mixed-width chips in display order', () => {
+    // First chip is wide (150 px), the rest are 40 px. On a 300 px strip
+    // with a 44 px reserve the first chip fits (150 ≤ 256) but the second
+    // would push to 150 + 6 + 40 = 196 ≤ 256, OK; the third 196 + 6 + 40
+    // = 242 ≤ 256, OK; the fourth 242 + 6 + 40 = 288 > 256 — peel.
+    const widths = [150, 40, 40, 40, 40];
+    assert.deepEqual(planHistoryChips(widths, 300, RESERVE, BUTTON_W), {
+      shownCount: 3,
+      restCount: 2,
+      moreFits: true,
+    });
   });
 });
 
