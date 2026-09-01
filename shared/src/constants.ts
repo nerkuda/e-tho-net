@@ -46,6 +46,21 @@ export const EDITOR_H_MAX = 700;
 /** Default editor height for a fresh client installation. */
 export const EDITOR_H_DEFAULT = 300;
 
+/** Minimum event-area width in the status bar (08-ui-spec §11: «последнее
+ *  событие»). The value is stored in the L4 `window_layout.e` slot and is
+ *  clamped at drag time against the upper bound (a fraction of the client
+ *  window width) so the area never steals more than a third of the screen. */
+export const EVENT_AREA_W_MIN = 150;
+/** Upper bound for the event-area width as a fraction of the client window
+ *  width (08-ui-spec §11: 30 %). Used by the drag-resize clamp so the value
+ *  survives window resizes proportionally without re-reading the layout. */
+export const EVENT_AREA_W_MAX_RATIO = 0.3;
+/** Floor of the default event-area width (08-ui-spec §11: `max(200px, 18%)`). */
+export const EVENT_AREA_W_DEFAULT_PX = 200;
+/** Share of the client window width used as the lower bound of the default
+ *  event-area width (08-ui-spec §11: 18 %). */
+export const EVENT_AREA_W_DEFAULT_RATIO = 0.18;
+
 /** Font-size multiplier applied to the focused cloud title. */
 export const FOCUS_FONT_SCALE = 1.3;
 /** Maximum number of lines rendered inside the focused cloud. */

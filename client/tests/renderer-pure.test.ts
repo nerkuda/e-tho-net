@@ -21,16 +21,22 @@ import {
   EDITOR_W_DEFAULT,
   EDITOR_W_MAX,
   EDITOR_W_MIN,
+  EVENT_AREA_W_DEFAULT_PX,
+  EVENT_AREA_W_DEFAULT_RATIO,
+  EVENT_AREA_W_MAX_RATIO,
+  EVENT_AREA_W_MIN,
   SELECTION_W_DEFAULT,
   SELECTION_W_MAX,
   SELECTION_W_MIN,
 } from '@etn/shared';
 
 import {
+  clampEventAreaW,
   clip,
   cloudFontSize,
   cloudGeom,
   cloudHeight,
+  defaultEventAreaW,
   describeEvent,
   isNotFoundError,
   isRealtimeEvent,
@@ -110,30 +116,40 @@ describe('parseWindowLayout', () => {
       w: EDITOR_W_DEFAULT,
       h: EDITOR_H_DEFAULT,
       s: SELECTION_W_DEFAULT,
+      e: null,
     });
     assert.deepEqual(parseWindowLayout(''), {
       w: EDITOR_W_DEFAULT,
       h: EDITOR_H_DEFAULT,
       s: SELECTION_W_DEFAULT,
+      e: null,
     });
     assert.deepEqual(parseWindowLayout('not json'), {
       w: EDITOR_W_DEFAULT,
       h: EDITOR_H_DEFAULT,
       s: SELECTION_W_DEFAULT,
+      e: null,
     });
   });
 
   it('parses a {w,h,s} JSON object and clamps to editor/selection constants', () => {
-    assert.deepEqual(parseWindowLayout('{"w":500,"h":400,"s":250}'), { w: 500, h: 400, s: 250 });
+    assert.deepEqual(parseWindowLayout('{"w":500,"h":400,"s":250}'), {
+      w: 500,
+      h: 400,
+      s: 250,
+      e: null,
+    });
     assert.deepEqual(parseWindowLayout('{"w":10,"h":10,"s":10}'), {
       w: EDITOR_W_MIN,
       h: EDITOR_H_MIN,
       s: SELECTION_W_MIN,
+      e: null,
     });
     assert.deepEqual(parseWindowLayout('{"w":99999,"h":99999,"s":99999}'), {
       w: EDITOR_W_MAX,
       h: EDITOR_H_MAX,
       s: SELECTION_W_MAX,
+      e: null,
     });
   });
 
@@ -142,17 +158,83 @@ describe('parseWindowLayout', () => {
       w: 450,
       h: EDITOR_H_DEFAULT,
       s: SELECTION_W_DEFAULT,
+      e: null,
     });
     assert.deepEqual(parseWindowLayout('{"h":250}'), {
       w: EDITOR_W_DEFAULT,
       h: 250,
       s: SELECTION_W_DEFAULT,
+      e: null,
     });
     assert.deepEqual(parseWindowLayout('{"w":"abc","h":300,"s":200}'), {
       w: EDITOR_W_DEFAULT,
       h: 300,
       s: 200,
+      e: null,
     });
+  });
+
+  it('parses the optional event-area width (e) for newer clients', () => {
+    // In-range values land rounded.
+    assert.deepEqual(parseWindowLayout('{"w":400,"h":300,"s":200,"e":260}'), {
+      w: 400,
+      h: 300,
+      s: 200,
+      e: 260,
+    });
+    // Sub-minimum / NaN / missing => null (the renderer then picks the
+    // window-relative default).
+    assert.deepEqual(parseWindowLayout('{"w":400,"h":300,"s":200,"e":50}'), {
+      w: 400,
+      h: 300,
+      s: 200,
+      e: null,
+    });
+    assert.deepEqual(parseWindowLayout('{"w":400,"h":300,"s":200,"e":"abc"}'), {
+      w: 400,
+      h: 300,
+      s: 200,
+      e: null,
+    });
+    assert.deepEqual(parseWindowLayout('{"w":400,"h":300,"s":200}'), {
+      w: 400,
+      h: 300,
+      s: 200,
+      e: null,
+    });
+  });
+});
+
+describe('defaultEventAreaW', () => {
+  it('returns the px floor on a narrow window', () => {
+    // 800 * 0.18 = 144 → below the 200 px floor, so the floor wins.
+    assert.equal(defaultEventAreaW(800), EVENT_AREA_W_DEFAULT_PX);
+  });
+  it('returns the ratio on a wide window', () => {
+    // 2000 * 0.18 = 360 → above the 200 px floor.
+    assert.equal(defaultEventAreaW(2000), Math.round(2000 * EVENT_AREA_W_DEFAULT_RATIO));
+  });
+  it('rounds the ratio result', () => {
+    // 1024 * 0.18 = 184.32 → 184 (below the floor anyway, but the function
+    // still rounds before applying the max).
+    assert.equal(defaultEventAreaW(1024), EVENT_AREA_W_DEFAULT_PX);
+  });
+});
+
+describe('clampEventAreaW', () => {
+  it('respects the absolute minimum', () => {
+    assert.equal(clampEventAreaW(10, 1200), EVENT_AREA_W_MIN);
+  });
+  it('respects the window-relative upper bound (30 %)', () => {
+    const w = 1200;
+    const cap = Math.floor(w * EVENT_AREA_W_MAX_RATIO); // 360
+    assert.equal(clampEventAreaW(cap + 100, w), cap);
+  });
+  it('returns the value unchanged when inside the range', () => {
+    assert.equal(clampEventAreaW(220, 1200), 220);
+  });
+  it('falls back to the absolute minimum on a zero-width window', () => {
+    assert.equal(clampEventAreaW(400, 0), EVENT_AREA_W_MIN);
   });
 });
 

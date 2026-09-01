@@ -15,6 +15,7 @@ import {
   CLOUD_WIDTH_DEFAULT,
   EDITOR_H_DEFAULT,
   EDITOR_W_DEFAULT,
+  EVENT_AREA_W_DEFAULT_PX,
   SELECTION_W_DEFAULT,
   type CurrentUser,
   type FocusEdge,
@@ -85,6 +86,12 @@ export interface AppState {
   editorH: number;
   /** L4 `window_layout` selection panel width (left of the canvas), px. */
   selectionW: number;
+  /** Status-bar event-area width (08-ui-spec §11), px. The right-most region
+   *  of the status bar holds counts + last realtime event text and is bounded
+   *  by a drag-resize splitter. The window-width-relative upper bound
+   *  (`30 %`) is applied by the renderer on every apply, so the stored
+   *  pixel value is always safe to write into the CSS variable. */
+  eventAreaW: number;
   /** L4 `canvas_layout` share of the top strip width for the parents zone. */
   zoneTopSplit: number;
   /** L4 `canvas_layout` share of the canvas height for the children zone. */
@@ -177,6 +184,10 @@ const initial: AppState = {
   editorW: EDITOR_W_DEFAULT,
   editorH: EDITOR_H_DEFAULT,
   selectionW: SELECTION_W_DEFAULT,
+  // Initialised to the px floor; openNetwork overrides with the persisted
+  // value (clipped against the current window width) or the default for the
+  // window width when the legacy ui_state has no `e` key.
+  eventAreaW: EVENT_AREA_W_DEFAULT_PX,
   zoneTopSplit: CANVAS_TOP_SPLIT_DEFAULT,
   zoneChildrenShare: CANVAS_CHILDREN_SHARE_DEFAULT,
   collapsedGroups: {},

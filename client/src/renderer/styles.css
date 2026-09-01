@@ -1131,13 +1131,72 @@ textarea {
   max-width: 40%;
 }
 
-.sb-spacer {
-  flex: 1;
-}
-
 .sb-event {
   color: var(--accent);
   font-style: italic;
+}
+
+/* Status-bar event area (08-ui-spec §11): right-most fixed-width region of
+ * the status bar. Holds the thought counts and the last realtime event text;
+ * its width is driven by `--event-area-w` (set from `store.eventAreaW` on
+ * every `refresh` tick and clamped against the window-relative upper bound).
+ * Lives OUTSIDE the history strip so a new event text does NOT trigger a
+ * reflow of the history chips (bug de07e690-…: «Дергание нижней строки
+ * клиента»). */
+.event-area {
+  flex: 0 0 var(--event-area-w, 200px);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.event-area .sb-item {
+  max-width: 100%;
+}
+
+.event-area .sb-event {
+  flex: 1 1 auto;
+  text-align: right;
+  font-style: italic;
+}
+
+/* Drag-resize splitter on the seam between the history strip and the event
+ * area. The 6 px hit area is centred on the 1 px hairline; cursor: col-resize
+ * advertises the affordance without JS on every render. */
+.event-area-resizer {
+  flex: 0 0 6px;
+  align-self: stretch;
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+  touch-action: none;
+}
+
+.event-area-resizer::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--border-strong);
+  opacity: 0.6;
+}
+
+.event-area-resizer:hover::before,
+.event-area-resizer.dragging::before {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.statusbar.resizing,
+.statusbar.resizing * {
+  cursor: col-resize !important;
 }
 
 .sb-conflict {

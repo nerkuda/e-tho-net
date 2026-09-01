@@ -44,10 +44,11 @@ function currentPosition(body: HTMLElement): string {
 }
 
 /**
- * Schedules a debounced persist of the current panel sizes (editor w/h and the
- * selection panel width) to the L4 `window_layout` ui_state. Shared by the
- * editor and selection-panel resizers — the full payload is read from the store
- * at fire time, so the last writer never loses the other panel's size.
+ * Schedules a debounced persist of the current panel sizes (editor w/h, the
+ * selection panel width, and the status-bar event-area width) to the L4
+ * `window_layout` ui_state. Shared by the editor, selection-panel, and
+ * event-area resizers — the full payload is read from the store at fire time,
+ * so the last writer never loses the other panel's size.
  */
 export function scheduleLayoutPersist(): void {
   if (persistTimer !== null) window.clearTimeout(persistTimer);
@@ -59,6 +60,7 @@ export function scheduleLayoutPersist(): void {
       w: store.state.editorW,
       h: store.state.editorH,
       s: store.state.selectionW,
+      e: store.state.eventAreaW,
     });
     void etn.ui.setState(networkId, UI_STATE_KEY.WINDOW_LAYOUT, payload).catch(() => undefined);
   }, PERSIST_DEBOUNCE_MS);

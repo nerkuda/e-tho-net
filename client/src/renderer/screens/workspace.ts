@@ -33,7 +33,9 @@ import { mountCanvas } from '../canvas/canvas.js';
 import { mountHistoryBar } from './history-bar.js';
 import { mountEditor } from '../editor/editor.js';
 import { mountEditorResizer } from './editor-resizer.js';
+import { mountEventAreaResizer } from './event-area-resizer.js';
 import { mountSelectionResizer } from './selection-resizer.js';
+import { clampEventAreaW } from '../lib/pure.js';
 import { hidePanel as hideSearchPanel, mountSearch } from '../search/search.js';
 import { mountSelection } from '../selection/selection.js';
 import { mountStructures } from './structures/structures.js';
@@ -265,11 +267,27 @@ export function buildWorkspace(): HTMLElement {
   const statusbar = div('statusbar');
 
   const statusLeft = span('', 'status-light');
-  const historyHost = div('history-bar');
-  const sbSpacer = div('sb-spacer');
-  const countsLabel = span('', 'sb-item sb-counts');
+  // Zoom indicator (08-ui-spec §11): sits to the LEFT of the history strip,
+  // immediately after the connection dot — the old position next to the
+  // event area invited the layout to repaint the history chips every time
+  // the event text appeared (bug de07e690-…: «Дергание нижней строки
+  // клиента»).
   const zoomLabel = span('', 'sb-item sb-zoom');
+  const historyHost = div('history-bar');
+  // Drag-resize splitter on the seam between the history strip and the
+  // right-most status-bar region. Dragging it changes the event-area width
+  // (counts + last realtime event text) by writing `--event-area-w` on the
+  // status bar. Cursor is set by `.event-area-resizer` so the affordance is
+  // visible without JS on every render.
+  const eventAreaResizer = div('event-area-resizer');
+  setTooltip(eventAreaResizer, 'Изменить ширину области событий');
+  // Fixed-width region of the status bar. The history strip and the
+  // status-light live OUTSIDE this container so they no longer repaint when
+  // a realtime event arrives and the event text reflows.
+  const eventArea = div('event-area');
+  const countsLabel = span('', 'sb-item sb-counts');
   const eventLabel = span('', 'sb-item sb-event');
+  eventArea.append(countsLabel, eventLabel);
   const conflictHost = div('sb-conflict hidden');
   const conflictText = span('изменено другим пользователем');
   conflictHost.append(svgIcon('alert', 14), conflictText);
@@ -279,11 +297,10 @@ export function buildWorkspace(): HTMLElement {
 
   statusbar.append(
     statusLeft,
-    historyHost,
-    sbSpacer,
-    countsLabel,
     zoomLabel,
-    eventLabel,
+    historyHost,
+    eventAreaResizer,
+    eventArea,
     conflictHost,
   );
 
@@ -333,6 +350,7 @@ export function buildWorkspace(): HTMLElement {
   mountEditor(editorHost);
   mountEditorResizer(editorResizer, body);
   mountSelectionResizer(selectionResizer, body);
+  mountEventAreaResizer(eventAreaResizer, statusbar);
   mountSearch({ input: searchInput, optionsButton: searchOptionsButton, host: searchHost });
   mountSelection(selectionHost);
   mountStructures(structuresHost);
@@ -360,6 +378,12 @@ export function buildWorkspace(): HTMLElement {
     // non-empty (mountSelection toggles the panel's own hidden class).
     selectionResizer.classList.toggle('hidden', st.selection.length === 0);
     zoomLabel.replaceChildren(svgIcon('search', 12), span(` ${Math.round(st.canvasZoom * 100)}%`));
+    // Event-area width is a CSS variable so the layout does not reflow the
+    // history strip on every text change — only the right-most region grows
+    // or shrinks. `clampEventAreaW` re-applies the window-relative upper
+    // bound so a resize that shrank the window narrows the area too.
+    const clampedEventW = clampEventAreaW(st.eventAreaW, statusbar.clientWidth);
+    statusbar.style.setProperty('--event-area-w', `${clampedEventW}px`);
     eventLabel.textContent = st.lastEvent ?? '';
 
     // View switcher (L15/L18/L20): the structures and chronicle views replace

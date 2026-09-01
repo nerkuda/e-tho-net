@@ -22,6 +22,7 @@ import { UI_STATE_KEY, PREF_KEY } from '@etn/shared';
 import { applyCanvasZoom } from './canvas/canvas-zoom.js';
 import { getCanvasCursor, resetCanvasCursor } from './canvas/kbd-nav.js';
 import {
+  defaultEventAreaW,
   parseCanvasLayout,
   parseCanvasZoom,
   parseCollapsedGroups,
@@ -118,6 +119,11 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   ) as 'left' | 'right' | 'top' | 'bottom' | 'hidden';
 
   const editorSize = parseWindowLayout(layoutRaw);
+  // Status-bar event-area width: older payloads have no `e` key (the field
+  // was introduced to fix the bottom-bar jitter — see bug de07e690-…). In
+  // that case we fall back to the current window's default so the area lands
+  // at `max(200px, 18%)` without waiting for the first drag.
+  const eventAreaW = editorSize.e ?? defaultEventAreaW(window.innerWidth);
   const canvasLayout = parseCanvasLayout(canvasLayoutRaw);
   // Saved list max-heights (ee745368): both L4 blobs merge into one map —
   // the editor applies its keys as --clamp-* variables on the scroll box,
@@ -144,6 +150,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     editorW: editorSize.w,
     editorH: editorSize.h,
     selectionW: editorSize.s,
+    eventAreaW,
     zoneTopSplit: canvasLayout.topSplit,
     zoneChildrenShare: canvasLayout.childrenShare,
     collapsedGroups: parseCollapsedGroups(collapsedRaw),

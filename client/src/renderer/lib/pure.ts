@@ -28,6 +28,10 @@ import {
   EDITOR_W_DEFAULT,
   EDITOR_W_MAX,
   EDITOR_W_MIN,
+  EVENT_AREA_W_DEFAULT_PX,
+  EVENT_AREA_W_DEFAULT_RATIO,
+  EVENT_AREA_W_MAX_RATIO,
+  EVENT_AREA_W_MIN,
   REALTIME_EVENT_TYPES,
   SELECTION_W_DEFAULT,
   SELECTION_W_MAX,
@@ -172,19 +176,47 @@ export interface ParsedEditorSize {
   h: number;
   /** Selection panel width (left of the canvas), px. */
   s: number;
+  /** Status-bar event area width in pixels — the right-most fixed-width
+   *  region of the status bar (08-ui-spec §11). `null` when the stored
+   *  payload has no `e` key yet (older clients), so the renderer can pick the
+   *  default for the current window width instead of a stale value. */
+  e: number | null;
+}
+
+/** Computes the default event-area width for a given client window width
+ *  (08-ui-spec §11: `max(200px, 18%)`). The function lives in the pure module
+ *  so the test harness can pin the formula without a DOM. */
+export function defaultEventAreaW(windowWidth: number): number {
+  const ratioBased = Math.round(windowWidth * EVENT_AREA_W_DEFAULT_RATIO);
+  return Math.max(EVENT_AREA_W_DEFAULT_PX, ratioBased);
+}
+
+/** Clamps `value` to the event-area range `[MIN, floor(windowWidth *
+ *  EVENT_AREA_W_MAX_RATIO)]`. The upper bound is window-relative (08-ui-spec
+ *  §11: 30 % of the client window width) so the area cannot eat the whole
+ *  bottom row on a narrow window. A non-positive window width yields the
+ *  floor so a zero measurement does not produce a zero-width clamp. */
+export function clampEventAreaW(value: number, windowWidth: number): number {
+  const ratioCap = Math.max(EVENT_AREA_W_MIN, Math.floor(windowWidth * EVENT_AREA_W_MAX_RATIO));
+  return clip(Math.round(value), EVENT_AREA_W_MIN, ratioCap);
 }
 
 /**
- * Parses the L4 `window_layout` value (JSON `{"w":<px>,"h":<px>,"s":<px>}`),
- * clipped to the editor/selection size constants. Missing/invalid fields fall
- * back to the defaults, so a partially-stored value or an older single-number
- * format still loads.
+ * Parses the L4 `window_layout` value (JSON
+ * `{"w":<px>,"h":<px>,"s":<px>,"e":<px>}`), clipped to the editor/selection
+ * size constants. Missing/invalid fields fall back to the defaults, so a
+ * partially-stored value or an older single-number format still loads.
+ *
+ * The `e` field is the status-bar event-area width. It is returned as `null`
+ * when absent or invalid — older payloads (pre-event-area) have no key, and
+ * the renderer must compute the default from the current window width.
  */
 export function parseWindowLayout(raw: string | null): ParsedEditorSize {
   const fallback: ParsedEditorSize = {
     w: EDITOR_W_DEFAULT,
     h: EDITOR_H_DEFAULT,
     s: SELECTION_W_DEFAULT,
+    e: null,
   };
   if (raw === null || raw === '') return fallback;
   try {
@@ -194,12 +226,22 @@ export function parseWindowLayout(raw: string | null): ParsedEditorSize {
       const wNum = Number(obj['w']);
       const hNum = Number(obj['h']);
       const sNum = Number(obj['s']);
+      const eRaw = obj['e'];
+      const eNum = typeof eRaw === 'number' ? eRaw : Number(eRaw);
+      // The window-width-relative cap (30 %) cannot be applied here because
+      // the window width is unknown at parse time; `clampEventAreaW` is run
+      // by the renderer right after the value lands in the store.
+      const e =
+        Number.isFinite(eNum) && eNum >= EVENT_AREA_W_MIN
+          ? Math.round(eNum)
+          : null;
       return {
         w: Number.isFinite(wNum) ? clip(Math.round(wNum), EDITOR_W_MIN, EDITOR_W_MAX) : fallback.w,
         h: Number.isFinite(hNum) ? clip(Math.round(hNum), EDITOR_H_MIN, EDITOR_H_MAX) : fallback.h,
         s: Number.isFinite(sNum)
           ? clip(Math.round(sNum), SELECTION_W_MIN, SELECTION_W_MAX)
           : fallback.s,
+        e,
       };
     }
     // Legacy single-number form: treat as width.
@@ -209,6 +251,7 @@ export function parseWindowLayout(raw: string | null): ParsedEditorSize {
         w: clip(Math.round(single), EDITOR_W_MIN, EDITOR_W_MAX),
         h: fallback.h,
         s: fallback.s,
+        e: null,
       };
     }
   } catch {
