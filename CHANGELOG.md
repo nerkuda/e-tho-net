@@ -60,6 +60,21 @@
   Тот же логотип используется на экране списка сетей — там изменений
   нет. Зафиксированы грабли «public/logo.svg и docs/images/logo_v3.svg —
   две независимые копии, рендер берёт public/» (мысль 6992dec8).
+- **Мысли истории не отображаются в нижней панели (8c9bb46, ошибка
+  3ccacc1c).** Регресс фикса 25602ab: `mountHistoryBar` создавал
+  `ResizeObserver` и сразу вызывал `observe(historyHost)` до попадания
+  host в реальный DOM; первая смена `--event-area-w` в `workspace.refresh()`
+  приходилась на тот же layout-фрейм, что и первая реальная ширина
+  history-bar — наблюдатель пропускал переход, `signature` в `render()`
+  запоминал `host.clientWidth = 0`, и `flex-shrink` на пустом
+  `.history-bar { min-width: 0 }` уводил bar в ноль; все облачка уходили
+  в `▾ N`. Добавлен явный `invalidateHistoryBar()` после смены
+  `--event-area-w` в `workspace.refresh()` и после окончания drag-resize
+  в `event-area-resizer.ts::onUp`. Сохранены инварианты 25602ab
+  (нет дёрганья строки, drag-resize в `[150 px … 30 % ширины окна]`,
+  ширина в `window_layout.e`). Добавлены 3 инвариантных теста:
+  `defaultEventAreaW` оставляет history-bar не менее 40 % ширины на
+  окнах ≥ 800 px, `clampEventAreaW` удерживает `≤ EVENT_AREA_W_MAX_RATIO`.
 
 ## [0.5.5] — 2026-09-01
 
