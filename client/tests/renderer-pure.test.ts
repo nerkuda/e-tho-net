@@ -219,6 +219,38 @@ describe('defaultEventAreaW', () => {
     // still rounds before applying the max).
     assert.equal(defaultEventAreaW(1024), EVENT_AREA_W_DEFAULT_PX);
   });
+  it('leaves at least 40% of a typical status bar for the history strip', () => {
+    // Status-bar geometry (client/src/renderer/screens/workspace.ts):
+    //   padding 20 (10+10) + status-light 10 + zoom ~50 + event-area-resizer
+    //   6 + 4 gaps of 12 = 134 px of fixed chrome. The history strip lives
+    //   between the zoom indicator and the event-area resizer (flex: 1 1
+    //   auto; min-width: 0). The strip must keep a meaningful share of the
+    //   bar even when the event area lands at its default — otherwise every
+    //   chip collapses into the `▾ N` dropdown (regression bug 3ccacc1c-…
+    //   «Мысли истории не отображаются в нижней панели»).
+    const fixedChrome = 20 + 10 + 50 + 6 + 4 * 12;
+    for (const w of [800, 1024, 1280, 1600, 1920, 2560]) {
+      const eventAreaW = defaultEventAreaW(w);
+      const historyW = w - fixedChrome - eventAreaW;
+      assert.ok(
+        historyW > w * 0.4,
+        `window=${w} → eventAreaW=${eventAreaW}, history-bar=${historyW}px (< 40%)`,
+      );
+    }
+  });
+  it('stays within the drag-resize window-relative cap', () => {
+    // The value the renderer ACTUALLY applies is `defaultEventAreaW` clamped
+    // by `clampEventAreaW`. The upper bound is `floor(w * MAX_RATIO)`, but
+    // on very narrow windows the clamp substitutes `EVENT_AREA_W_MIN`
+    // (150 px) so the event area keeps enough room for the count + label —
+    // we therefore only assert the cap on windows wide enough that the
+    // ratio is the binding constraint.
+    for (const w of [800, 1280, 1920, 3200]) {
+      const applied = clampEventAreaW(defaultEventAreaW(w), w);
+      const cap = Math.floor(w * EVENT_AREA_W_MAX_RATIO);
+      assert.ok(applied <= cap, `applied=${applied} at w=${w} > cap ${cap}`);
+    }
+  });
 });
 
 describe('clampEventAreaW', () => {
@@ -235,6 +267,19 @@ describe('clampEventAreaW', () => {
   });
   it('falls back to the absolute minimum on a zero-width window', () => {
     assert.equal(clampEventAreaW(400, 0), EVENT_AREA_W_MIN);
+  });
+  it('keeps the history strip a meaningful share on any reasonable window', () => {
+    // Inverse of the default-event-area invariant: even at the upper
+    // bound the strip must keep at least 40 % of the bar (bug 3ccacc1c-…).
+    const fixedChrome = 20 + 10 + 50 + 6 + 4 * 12;
+    for (const w of [800, 1024, 1280, 1600, 1920]) {
+      const cap = Math.floor(w * EVENT_AREA_W_MAX_RATIO);
+      const historyW = w - fixedChrome - cap;
+      assert.ok(
+        historyW > w * 0.4,
+        `cap=${cap} at window=${w} → history-bar=${historyW}px (< 40%)`,
+      );
+    }
   });
 });
 

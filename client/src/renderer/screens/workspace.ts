@@ -30,7 +30,7 @@ import { store, type RtStatus } from '../state.js';
 import { wireNetMenu, wireUserMenu, wireViewMenu } from './workspace-menus.js';
 import { initLayerOverridesTracking, wireLayerMenu } from './layers.js';
 import { mountCanvas } from '../canvas/canvas.js';
-import { mountHistoryBar } from './history-bar.js';
+import { invalidateHistoryBar, mountHistoryBar } from './history-bar.js';
 import { mountEditor } from '../editor/editor.js';
 import { mountEditorResizer } from './editor-resizer.js';
 import { mountEventAreaResizer } from './event-area-resizer.js';
@@ -384,6 +384,15 @@ export function buildWorkspace(): HTMLElement {
     // bound so a resize that shrank the window narrows the area too.
     const clampedEventW = clampEventAreaW(st.eventAreaW, statusbar.clientWidth);
     statusbar.style.setProperty('--event-area-w', `${clampedEventW}px`);
+    // The history strip's free width depends on `--event-area-w`. The bar
+    // already watches itself with a ResizeObserver, but the very first
+    // assignment often lands in the same layout frame the bar's host is
+    // measured for the first time — the observer's first tick can land
+    // before the new width settles and the bar then keeps all chips in the
+    // dropdown. Poking it explicitly here reflows the chips once the new
+    // width is in place (bug 3ccacc1c-… «Мысли истории не отображаются в
+    // нижней панели»).
+    invalidateHistoryBar();
     eventLabel.textContent = st.lastEvent ?? '';
 
     // View switcher (L15/L18/L20): the structures and chronicle views replace
