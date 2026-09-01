@@ -417,6 +417,18 @@ async function render(): Promise<void> {
     scrollBox.append(buildThoughtHeader(ctx.thought));
   } else if (ctx.ownerType === 'link' && ctx.link !== null) {
     scrollBox.append(buildLinkHeader(ctx.link));
+  } else if (ctx.ownerType === 'thought' && ctx.thought === null) {
+    // The thought is the new editor target but its full entity has not
+    // arrived yet (`etn.thoughts.get` in flight from a canvas click, a
+    // structure pick or a deep link). The icon slot in the header shows
+    // a preloader instead of the previous thought's icon, so a long load
+    // (heavy thought with many properties / attachments / comments) is
+    // visibly "in progress" rather than a misleading static icon. The
+    // thought id sits in the title placeholder so the user sees which
+    // card is loading.
+    scrollBox.append(buildThoughtHeaderLoading(ctx.ownerId));
+  } else if (ctx.ownerType === 'link' && ctx.link === null) {
+    scrollBox.append(buildLinkHeaderLoading(ctx.ownerId));
   }
 
   // --- tab bar (L7) ---------------------------------------------------------
@@ -997,6 +1009,60 @@ async function savePickedIcon(thought: Thought, result: IconPickResult): Promise
   });
 }
 
+/**
+ * Placeholder header shown while a freshly-targeted thought is loading
+ * (`etn.thoughts.get` in flight). The icon slot becomes a spinning preloader
+ * so the user gets a visible "still working" cue on heavy thoughts that may
+ * take up to a few seconds to fully resolve. The thought id sits in the
+ * title placeholder — it is the only reliable identifier until the entity
+ * arrives, and it also matches the chrome of the focused-thought placeholder
+ * the editor shows when the canvas has no network open.
+ *
+ * Mirrors `buildThoughtHeader`'s top-row structure so the transition to the
+ * real header is visually seamless (no height jump, no extra row).
+ */
+function buildThoughtHeaderLoading(thoughtId: string): HTMLElement {
+  const box = div('editor-fields');
+  const topRow = div('editor-top-row');
+
+  const iconBox = el('span', 'editor-icon-box editor-icon-loading');
+  iconBox.setAttribute('aria-label', 'Загрузка мысли');
+  iconBox.append(svgIcon('loader', 18));
+  topRow.append(iconBox);
+
+  const titleArea = el('textarea', 'editor-title-input') as HTMLTextAreaElement;
+  titleArea.value = `…загрузка ${thoughtId.slice(0, 8)}`;
+  titleArea.maxLength = 400;
+  titleArea.rows = 1;
+  titleArea.readOnly = true;
+  titleArea.placeholder = 'Заголовок';
+  titleArea.style.height = 'auto';
+  titleArea.style.height = `${titleArea.scrollHeight}px`;
+  topRow.append(titleArea);
+
+  box.append(topRow);
+  // The loading state has no editable metadata yet — render an empty rows
+  // container so the header height matches the loaded one (no jump on swap).
+  box.append(div('editor-header-row'));
+  return box;
+}
+
+/**
+ * Placeholder header for a link whose entity has not been fetched yet.
+ * Currently unused (links always arrive inline from the click handler) but
+ * kept for symmetry — the editor's `currentEditorContext()` already returns
+ * `link: null` for a freshly-targeted link until the first render, and a
+ * future entry point (deep link, paste-id) may need it.
+ */
+function buildLinkHeaderLoading(linkId: string): HTMLElement {
+  const box = div('editor-fields');
+  const row = div('editor-header-row');
+  const placeholder = el('span', 'muted editor-icon-loading', `…загрузка связи ${linkId.slice(0, 8)}`);
+  row.append(placeholder);
+  box.append(row);
+  return box;
+}
+
 /** Builds the link header form (type + active). */
 function buildLinkHeader(link: Link): HTMLElement {
   const box = div('editor-fields');
@@ -1055,4 +1121,8 @@ export const editorInternals = {
   parseSynonymsField,
   /** Order-sensitive synonym list equality (editor-shaking regression). */
   synonymsEqual,
+  /** Loader-only thought header for in-flight entity tests (bug 9d1d27c9 §4). */
+  buildThoughtHeaderLoading,
+  /** Loader-only link header (kept for symmetry with the thought header). */
+  buildLinkHeaderLoading,
 };

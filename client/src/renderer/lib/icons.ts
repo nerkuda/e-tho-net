@@ -29,7 +29,8 @@ export type IconName =
   | 'history'
   | 'plus'
   | 'trash'
-  | 'layers';
+  | 'layers'
+  | 'loader';
 
 /**
  * Trusted static inner-SVG markup per icon (lucide geometry, MIT). Assigned
@@ -80,6 +81,19 @@ const PATHS: Record<IconName, string> = {
   layers:
     '<polygon points="12 2 2 7 12 12 22 7 12 2"/>' +
     '<polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+  // Editor preloader (0.5.6, bug 9d1d27c9): lucide «loader», used in the
+  // header icon slot while a freshly-targeted thought/link is still being
+  // fetched. Spinning is driven by the `editor-icon-loading` CSS class
+  // (animation), the SVG itself stays static.
+  loader:
+    '<line x1="12" x2="12" y1="2" y2="6"/>' +
+    '<line x1="12" x2="12" y1="18" y2="22"/>' +
+    '<line x1="4.93" x2="7.76" y1="4.93" y2="7.76"/>' +
+    '<line x1="16.24" x2="19.07" y1="16.24" y2="19.07"/>' +
+    '<line x1="2" x2="6" y1="12" y2="12"/>' +
+    '<line x1="18" x2="22" y1="12" y2="12"/>' +
+    '<line x1="4.93" x2="7.76" y1="19.07" y2="16.24"/>' +
+    '<line x1="16.24" x2="19.07" y1="7.76" y2="4.93"/>',
 };
 
 /**

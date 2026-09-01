@@ -2586,6 +2586,35 @@ body.cloud-dragging * {
   object-fit: contain;
 }
 
+/* Editor preloader (0.5.6, bug 9d1d27c9). The icon slot of a freshly-targeted
+   thought becomes a small spinning gear while the entity is in flight —
+   long loads on heavy thoughts stay visibly "in progress" instead of showing
+   the previous thought's icon. The same class is reused for the link header
+   placeholder text. The animation runs in CSS only, no JS timer; the @media
+   query honours `prefers-reduced-motion`. */
+.editor-icon-loading {
+  cursor: default;
+  border-style: dashed;
+  border-color: var(--accent);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editor-icon-loading svg {
+  animation: editor-icon-spin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+@keyframes editor-icon-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-icon-loading svg { animation: none; }
+}
+
 .editor-title-input {
   flex: 1 1 auto;
   font-size: 1.5em;
