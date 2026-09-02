@@ -168,9 +168,17 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
     },
   });
 
-  // External links open in the system browser, never inside ETN.
+  // External links open in the system browser, never inside ETN. Only the
+  // genuinely external schemes (http/https/mailto) are handed to the OS —
+  // everything else (etnimg: attachment files, the etn: deep link, file:,
+  // data:, …) is denied without an external handler: a middle-click /
+  // «открыть в новой вкладке» on an etnimg:// comment link must not navigate
+  // anywhere; the renderer's click handler owns opening such files.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase() ?? '';
+    if (scheme === 'http' || scheme === 'https' || scheme === 'mailto') {
+      void shell.openExternal(url);
+    }
     return { action: 'deny' };
   });
 

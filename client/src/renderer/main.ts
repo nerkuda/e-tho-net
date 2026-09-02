@@ -11,6 +11,7 @@ import { initDrafts } from './drafts.js';
 import { initDeepLinkHandler } from './editor/deep-link-handler.js';
 import { initWikiLinkNavigation } from './editor/wiki-link.js';
 import { div, el } from './lib/dom.js';
+import { initEtnimgLinkNavigation } from './lib/etnimg-link.js';
 import { initHoverPreview } from './lib/hover-preview.js';
 import { initImageZoom } from './lib/image-zoom.js';
 import { initScreens } from './screens/screens.js';
@@ -26,6 +27,8 @@ initDrafts();
 initImageZoom();
 initHoverPreview();
 initWikiLinkNavigation();
+// etnimg:// attachment links in comment view mode (карточка ETN 33379769).
+initEtnimgLinkNavigation();
 initDeepLinkHandler();
 
 void boot().catch((err: unknown) => {

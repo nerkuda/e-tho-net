@@ -113,7 +113,7 @@ describe('markdown renderer', () => {
     assert.ok(html.includes('click'));
   });
 
-  it('allows file:// and etnimg:// URLs for images but not for links', () => {
+  it('allows file:// and etnimg:// URLs for images; etnimg:// also in link position', () => {
     // Images pasted from the clipboard reference local attachment files —
     // file:// directly, or via the client's etnimg:// protocol (which also
     // loads from the dev http origin).
@@ -121,11 +121,11 @@ describe('markdown renderer', () => {
     assert.ok(img.includes('<img src="file:///C:/pics/img%201.png" alt="alt"'));
     const etnimg = renderMarkdown('![alt](etnimg://c/pics/img%201.png)');
     assert.ok(etnimg.includes('<img src="etnimg://c/pics/img%201.png" alt="alt"'));
-    // Such URLs stay plain text in link position (allow-list is strict there).
+    // Attachment-file references `[имя](etnimg://…)` render as a real `<a>`
+    // (карточка ETN 33379769); file:// stays plain text in link position.
     const link = renderMarkdown('[x](file:///C:/secrets.txt) [y](etnimg://c/s.txt)');
     assert.ok(!link.includes('href="file'));
-    assert.ok(!link.includes('href="etnimg'));
-    assert.ok(link.includes('x'));
+    assert.ok(link.includes('<a href="etnimg://c/s.txt">y</a>'));
   });
 
   it('renders a GFM table', () => {

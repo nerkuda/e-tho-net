@@ -32,8 +32,11 @@ export {
  * Marker of the rendering pipeline version. The server re-renders the cached
  * `body_html` of every comment once when this value differs from the stored
  * one (see `markdown-sweep.ts`).
+ *
+ * `markdown-it/3`: `etnimg:` joined the link protocol allow-list — cached
+ * `[имя](etnimg://…)` attachment references must re-render as `<a>`.
  */
-export const MD_RENDER_VERSION = 'markdown-it/2';
+export const MD_RENDER_VERSION = 'markdown-it/3';
 
 /** Default input cap (256 KiB) to bound rendering work for a single document. */
 export const DEFAULT_MAX_LENGTH = 256 * 1024;

@@ -198,10 +198,18 @@ test('javascript: в ссылках и картинках отклоняется
   assert.ok(!renderMarkdown('![x](javascript:alert(1))').includes('<img'));
 });
 
-test('data:/etnimg: разрешены только для картинок', () => {
+test('etnimg: разрешён и для ссылок, и для картинок; data: — только картинки', () => {
   assert.ok(renderMarkdown('![x](data:image/png;base64,AAAA)').includes('<img'));
   assert.ok(renderMarkdown('![x](etnimg://c/a.png)').includes('<img src="etnimg://c/a.png"'));
-  assert.ok(!renderMarkdown('[x](etnimg://c/a.png)').includes('href='));
+  // Ссылка на файл-вложение рендерится кликабельной <a> (карточка ETN
+  // 33379769: etnimg добавлен в link allow-list).
+  assert.ok(
+    renderMarkdown('[x](etnimg://c/attachments/a.txt)').includes(
+      '<a href="etnimg://c/attachments/a.txt"',
+    ),
+  );
+  // data: для ССЫЛОК по-прежнему запрещён (только картинки).
+  assert.ok(!renderMarkdown('[x](data:text/plain,hi)').includes('href='));
 });
 
 test('сброшенная ссылка не оставляет паразитный </a> (карточка ETN 6cd0290f)', () => {

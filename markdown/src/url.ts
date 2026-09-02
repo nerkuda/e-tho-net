@@ -1,13 +1,14 @@
 /**
  * URL protocol allow-list for the unified renderer (parity with the previous
  * server-only renderer, docs/03-server-api.md §10): links — `http`/`https`/
- * `mailto`; images additionally allow `data:`, `file:` and the app's `etnimg:`
- * scheme (`etnimg:` is served by the Electron client for local attachment
- * files). Scheme-less (relative) URLs are accepted. Control characters are
- * always rejected.
+ * `mailto` plus the app's `etnimg:` scheme for local attachment files
+ * (`[имя](etnimg://…)` references inserted by the client's clipboard-paste
+ * flow); images additionally allow `data:` and `file:` (`etnimg:` is served
+ * by the Electron client for local attachment files). Scheme-less (relative)
+ * URLs are accepted. Control characters are always rejected.
  */
 
-const LINK_PROTOCOLS: readonly string[] = ['http', 'https', 'mailto'];
+const LINK_PROTOCOLS: readonly string[] = ['http', 'https', 'mailto', 'etnimg'];
 const IMAGE_PROTOCOLS: readonly string[] = [
   'http',
   'https',
