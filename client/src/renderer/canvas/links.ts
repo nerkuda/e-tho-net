@@ -16,8 +16,13 @@
  * beneath it and cloud hover/click always work. The link currently hovered
  * or sticky-selected is re-rendered in a top overlay **above** the clouds,
  * with a popover (type name + 📝/📅/📎 counts) and highlighted ellipses
- * on both endpoints. Click opens the link in the editor (single) or a picker
- * (bundle) and leaves it selected until a click elsewhere.
+ * on both endpoints. The popover is itself a hover island: it can be entered
+ * with the cursor (`pointer-events: auto`), its position is frozen while it
+ * stays open for the same bundle, and it hides 0.3 s after the cursor left
+ * both the line and the popover (unless the link is sticky-selected). Click
+ * opens the link in the editor (single) or a picker (bundle) and leaves it
+ * selected until a click elsewhere — including clicks that land on the
+ * popover itself, which are forwarded to the line's click handler.
  *
  * Redrawn (rAF-debounced) on canvas renders, scrolling, resizes and focus
  * changes; positions come from `getBoundingClientRect` relative to the host.
@@ -313,7 +318,10 @@ function drawActive(): void {
       return;
     }
   }
-  hidePopover();
+  // No active bundle: don't yank the popover away at once — the cursor may be
+  // inside it (or about to enter it). A scheduled hide closes it 0.3 s later
+  // unless the line/popover is re-entered or the bundle becomes selected.
+  schedulePopoverHide();
 }
 
 /** Removes every child of all three overlay SVGs. */
@@ -652,11 +660,17 @@ function drawHitLine(
 
   hit.addEventListener('mouseenter', () => {
     hoveredKey = bundle.key;
+    cancelPopoverHide();
     drawActive();
   });
   hit.addEventListener('mouseleave', () => {
     if (hoveredKey === bundle.key) {
       hoveredKey = null;
+      // Leaving the line no longer hides the popover instantly: the cursor may
+      // be heading into it (it sits on the curve's midpoint). The scheduled
+      // hide is cancelled by the popover's own mouseenter; the sticky
+      // selection keeps its popover regardless (checked in the timer).
+      schedulePopoverHide();
       drawActive();
     }
   });
@@ -783,16 +797,54 @@ function clearEnds(): void {
 // Popover (hover/selection info)
 // ---------------------------------------------------------------------------
 
-/** Shows the popover for `bundle` if not already, then positions it at the midpoint. */
+/** Grace delay before the popover hides once the cursor left BOTH the hit
+ *  line and the popover itself — the same 0.3 s "hover island" pattern as
+ *  `lib/hover-preview.ts`: gives time to move the cursor into the popover. */
+const POPOVER_CLOSE_DELAY_MS = 300;
+/** Pending hide timer; cancelled by re-entering the hit line or the popover. */
+let popoverHideTimer: number | null = null;
+/** True while the cursor is inside the popover (keeps it alive even when a
+ *  canvas redraw runs `drawActive` with no hovered/selected bundle). */
+let popoverInside = false;
+
+function cancelPopoverHide(): void {
+  if (popoverHideTimer !== null) {
+    window.clearTimeout(popoverHideTimer);
+    popoverHideTimer = null;
+  }
+}
+
+/** Schedules the popover hide (no-op when none is open). The timer callback
+ *  re-checks the live state before hiding: the popover survives while its
+ *  bundle is still the hovered/selected one (e.g. the click that
+ *  sticky-selected the link just landed) or while the cursor is inside it. */
+function schedulePopoverHide(): void {
+  if (popover === null || popoverHideTimer !== null) return;
+  popoverHideTimer = window.setTimeout(() => {
+    popoverHideTimer = null;
+    if (popover === null) return;
+    if (popover.dataset['key'] === activeBundle(currentBundles())?.key) return;
+    if (popoverInside) return;
+    hidePopover();
+  }, POPOVER_CLOSE_DELAY_MS);
+}
+
+/**
+ * Shows the popover for `bundle` if not already open for it, positioning it at
+ * the curve's t=0.5 point once. While the popover stays open for the SAME
+ * bundle (`popover.dataset['key']` matches) the position is FROZEN: redraws
+ * and re-hovers must not move the box under the cursor — the user may be
+ * inside it, hovering the 📝/📅/📎 indicators (the popover is interactive,
+ * `pointer-events: auto`, so the Ctrl-hover preview engine works inside it).
+ */
 function ensurePopover(
   bundle: Bundle,
   from: { x: number; y: number },
   to: { x: number; y: number },
   hostRect: DOMRect,
 ): void {
-  if (popover === null || popover.dataset['key'] !== bundle.key) {
-    showPopover(bundle);
-  }
+  if (popover !== null && popover.dataset['key'] === bundle.key) return;
+  showPopover(bundle);
   if (popover !== null) {
     // Anchor at the curve's t=0.5 point, matching the badge (L14).
     const mid = edgeGeometry(from, to).mid;
@@ -822,14 +874,49 @@ function showPopover(bundle: Bundle): void {
   popover.append(el('div', 'link-popover-types', bundleTypeNames(bundle)));
   const counts = div('link-popover-counts');
   popover.append(counts);
+  // The popover is a "hover island" (pointer-events: auto, styles.css): a
+  // leave from the hit line only SCHEDULES the hide — entering the popover
+  // cancels it (and keeps the top-line highlight alive, as the hover would),
+  // leaving the popover schedules it again. Without this the popover vanished
+  // the instant the cursor stepped off the curve and could never be entered.
+  popover.addEventListener('mouseenter', () => {
+    popoverInside = true;
+    cancelPopoverHide();
+    // Entering the popover counts as still hovering its link: the top-line
+    // highlight and the popover itself stay alive (the leave from the hit
+    // line had only scheduled a hide).
+    hoveredKey = bundle.key;
+    drawActive();
+  });
+  popover.addEventListener('mouseleave', () => {
+    popoverInside = false;
+    if (hoveredKey === bundle.key) hoveredKey = null;
+    schedulePopoverHide();
+    drawActive();
+  });
+  // The popover sits ON the curve's midpoint, where the hit line runs beneath
+  // it. Clicks that don't land on a preview indicator (those keep their own
+  // Ctrl-hover meaning) are forwarded to the line's handler, so the
+  // sticky-select / editor-open / bundle-picker behaviour of clicking the
+  // line works exactly as before the popover became interactive.
+  // `stopPropagation` keeps document-level listeners (e.g. a menu's
+  // close-on-outside-click) from eating the very click that opened the picker.
+  popover.addEventListener('click', (event) => {
+    const onIndicator = (event.target as HTMLElement | null)?.closest('[data-hp-kind]') != null;
+    if (onIndicator) return;
+    event.stopPropagation();
+    void onLineClick(bundle, event);
+  });
   document.body.append(popover);
   void loadLinkCounts(bundle, counts);
 }
 
 function hidePopover(): void {
+  cancelPopoverHide();
   popover?.remove();
   popover = null;
   activePopoverBundle = null;
+  popoverInside = false;
 }
 
 /**

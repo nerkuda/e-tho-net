@@ -37,6 +37,7 @@ import { rowSplitter } from '../../editor/splitter.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { button, div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
+import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { addToSelection, toggleSelection } from '../../selection/selection.js';
@@ -364,6 +365,15 @@ function buildRow(row: ChronicleRow): HTMLElement {
   return tr;
 }
 
+/** The «source — тип — target» heading used for link previews (a link has no
+ *  title of its own — the same composite the chip itself displays; the canvas
+ *  link popover uses the analogous `bundleTypeNames`). */
+function linkChipTitle(sourceTitle: string, typeForward: string | null, targetTitle: string): string {
+  return typeForward === null
+    ? `${sourceTitle} — ${targetTitle}`
+    : `${sourceTitle} — ${typeForward} — ${targetTitle}`;
+}
+
 /** Builds the chip list of the «мысли/связи» column. */
 function buildTargetChips(targets: ChronicleTarget[], rowId: string): HTMLElement[] {
   return targets.map((target) => {
@@ -383,6 +393,11 @@ function buildTargetChips(targets: ChronicleTarget[], rowId: string): HTMLElemen
       return chip;
     }
     const chip = el('span', 'chron-chip link');
+    const title = linkChipTitle(
+      target.link.source.title,
+      target.link.type_name_forward,
+      target.link.target.title,
+    );
     chip.append(
       span('🔗', 'chip-icon'),
       span(target.link.source.title, 'chip-title'),
@@ -392,6 +407,9 @@ function buildTargetChips(targets: ChronicleTarget[], rowId: string): HTMLElemen
       ),
       span(target.link.target.title, 'chip-title'),
     );
+    // Ctrl+hover on a link chip previews its permanent comment (preview stage
+    // 3, same marking as the canvas link popover's 📝 indicator).
+    markCommentPreview(chip, 'link', target.link.id, title);
     chip.addEventListener('click', (e) => {
       e.stopPropagation();
       void openChronicleLinkById(target.link.id);
@@ -414,6 +432,8 @@ export function thoughtChip(ref: ThoughtRef): HTMLElement {
   const iconBox = span('', 'chip-icon');
   applyThoughtIcon(iconBox, ref);
   chip.append(iconBox, span(ref.title, 'chip-title'));
+  // Ctrl+hover on a thought chip shows its permanent comment (preview stage 3).
+  markThoughtCommentPreview(chip, ref.id, ref.title);
   return chip;
 }
 
@@ -707,6 +727,9 @@ function thoughtChipForId(id: string): HTMLElement {
       const styled = thoughtChip(ref);
       chip.replaceChildren(...Array.from(styled.children));
       chip.dataset['id'] = ref.id;
+      // The resolve copies only the children — re-mark the Ctrl-hover preview
+      // that `thoughtChip` put on the styled chip's dataset.
+      markThoughtCommentPreview(chip, ref.id, ref.title);
     })
     .catch(() => undefined);
   return chip;
@@ -733,6 +756,9 @@ function linkChipForId(id: string): HTMLElement {
         span(typeName === null ? ' — ' : ` — ${typeName} — `, 'chip-type muted'),
         span(dst.title, 'chip-title'),
       );
+      // Ctrl+hover previews the link's permanent comment (same as the table's
+      // link chips — the raw-id placeholder stays unmarked).
+      markCommentPreview(chip, 'link', id, linkChipTitle(src.title, typeName, dst.title));
     } catch {
       // The chip falls back to the raw id.
     }

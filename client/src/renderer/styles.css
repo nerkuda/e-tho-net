@@ -1555,11 +1555,17 @@ body.resizing-h {
   box-shadow: 0 0 0 2px var(--warn-glow);
 }
 
-/* Popover for the hovered/selected link: type name + comment/attachment counts. */
+/* Popover for the hovered/selected link: type name + comment/attachment counts.
+   Interactive on purpose (the "tooltip running away from the cursor" fix):
+   `pointer-events: auto` lets the cursor enter it, so the Ctrl-hover preview
+   engine works on the 📝/📅/📎 indicators inside; links.ts freezes the
+   position while it stays open for the same bundle and hides it 0.3 s after
+   the cursor left both the hit line and the popover. Kept BELOW the preview
+   windows (z-index 1950) so they open on top of it. */
 .link-popover {
   position: fixed;
   z-index: 1100;
-  pointer-events: none;
+  pointer-events: auto;
   transform: translate(-50%, calc(-100% - 10px));
   background: var(--surface);
   border: 1px solid var(--border);

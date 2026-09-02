@@ -25,6 +25,7 @@ import { applyThoughtIcon } from '../../canvas/canvas.js';
 import { button, div, el, span, setTooltip } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
+import { markThoughtCommentPreview } from '../../lib/hover-preview.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
@@ -182,6 +183,9 @@ function repaintChips(): void {
     const icon = span('', 'chip-icon');
     applyThoughtIcon(icon, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
     chip.append(icon, span(ref?.title ?? id, 'chip-title'), span('×', 'chip-x'));
+    // Ctrl+hover on a filter chip previews the thought's permanent comment
+    // (preview stage 3 — same as the table's thought chips).
+    markThoughtCommentPreview(chip, id, ref?.title ?? id);
     chip.addEventListener('click', (e) => {
       if ((e.target as HTMLElement | null)?.classList.contains('chip-x')) {
         removeThoughtFromFilter(id);

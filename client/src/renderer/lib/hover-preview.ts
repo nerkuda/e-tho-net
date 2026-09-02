@@ -47,7 +47,12 @@
  */
 
 import type { Attachment, Comment } from '@etn/shared';
-import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_NETWORK_ATTR } from '@etn/markdown';
+import {
+  WIKI_LINK_CLASS,
+  WIKI_LINK_ID_ATTR,
+  WIKI_LINK_NETWORK_ATTR,
+  WIKI_LINK_TARGET_ATTR,
+} from '@etn/markdown';
 
 import { div, el, fmtDate, renderHtml, span } from './dom.js';
 import { etn } from './etn.js';
@@ -313,17 +318,30 @@ registerHoverPreviewResolver('attachments', resolveAttachmentsContent);
 // ---------------------------------------------------------------------------
 
 /** Marks every hoverable link inside a rendered comment body with the right
- *  `data-hp-kind` — `.wiki-link[data-wiki-id]` (same/other network) and plain
- *  `<a href>` (file/URL). Legacy name-only wiki-links (no stable id) and any
- *  `<a>` that wraps an `<img>` (its own Ctrl-hover belongs to `image-zoom.ts`,
- *  see the module doc comment) are left unmarked — Ctrl+hover over them does
- *  nothing. Safe to call repeatedly; idempotent (just (re)writes attributes). */
+ *  `data-hp-kind` — `.wiki-link[data-wiki-id]` (same/other network), legacy
+ *  name-only `.wiki-link[data-wiki-target]` (no stable id — the target is
+ *  resolved by name at hover time) and plain `<a href>` (file/URL). Any `<a>`
+ *  that wraps an `<img>` (its own Ctrl-hover belongs to `image-zoom.ts`, see
+ *  the module doc comment) is left unmarked — Ctrl+hover over it does nothing.
+ *  Safe to call repeatedly; idempotent (just (re)writes attributes). */
 export function wireCommentLinksInDom(root: HTMLElement): void {
   const wikiLinks = root.querySelectorAll<HTMLElement>(`span.${WIKI_LINK_CLASS}[${WIKI_LINK_ID_ATTR}]`);
   for (const span of wikiLinks) {
     const id = span.getAttribute(WIKI_LINK_ID_ATTR);
     if (id === null || id === '') continue;
     span.dataset['hpKind'] = span.hasAttribute(WIKI_LINK_NETWORK_ATTR) ? 'wiki-cross-network' : 'wiki-thought';
+  }
+  // Legacy name form (`[[Имя мысли|текст]]` → `data-wiki-target`, no
+  // `data-wiki-id`): marked with its own kind — the resolver re-resolves the
+  // name at hover time (names may change after the HTML is cached, so nothing
+  // is baked in here).
+  const legacyLinks = root.querySelectorAll<HTMLElement>(
+    `span.${WIKI_LINK_CLASS}:not([${WIKI_LINK_ID_ATTR}])`,
+  );
+  for (const span of legacyLinks) {
+    const name = span.getAttribute(WIKI_LINK_TARGET_ATTR);
+    if (name === null || name === '') continue;
+    span.dataset['hpKind'] = 'wiki-legacy-name';
   }
   const anchors = root.querySelectorAll<HTMLAnchorElement>('a[href]');
   for (const a of anchors) {
@@ -358,6 +376,49 @@ async function resolveWikiThoughtContent(trigger: HTMLElement): Promise<HoverPre
   void resolveWikiLinksInDom(body, networkId);
   const label = trigger.textContent?.trim();
   return { title: label !== undefined && label !== '' ? label : '—', body };
+}
+
+/** Legacy name-only wiki-link (`[[Имя мысли|текст]]`, rendered as
+ *  `.wiki-link[data-wiki-target]` without `data-wiki-id`): resolves the target
+ *  by name with the SAME lookup the navigation handler uses
+ *  (`openWikiTarget` in `editor/wiki-link.ts` — exact title match, else the
+ *  first name hit; not imported from there to keep this module's dependency
+ *  direction, see the module doc comment — the one `etn.thoughts.search` call
+ *  is duplicated instead) and previews the found thought's permanent comment,
+ *  so what the preview shows is exactly what a click would open. Not found /
+ *  lookup failed → `null`, no popup (same as a `wiki-link-deleted` id-link).
+ *  The heading names the FOUND thought, uniform with id-links whose visible
+ *  text is the resolved title (the id-form renderer drops aliases); the link's
+ *  own label is only the fallback when the hit carries no title. */
+async function resolveWikiLegacyNameContent(trigger: HTMLElement): Promise<HoverPreviewContent | null> {
+  const name = trigger.getAttribute(WIKI_LINK_TARGET_ATTR);
+  const networkId = store.state.networkId;
+  if (name === null || name === '' || networkId === null) return null;
+  let thoughtId: string;
+  let foundTitle: string;
+  try {
+    const res = await etn.thoughts.search(networkId, { q: name, scope: 'names', limit: 10 });
+    const hit = res.by_names.find((h) => h.title === name) ?? res.by_names[0];
+    if (hit === undefined) return null;
+    thoughtId = hit.thought_id;
+    foundTitle = hit.title;
+  } catch {
+    return null;
+  }
+  let comments: Comment[];
+  try {
+    comments = await etn.comments.list(networkId, 'thought', thoughtId);
+  } catch {
+    return null;
+  }
+  const permanent = comments.find((c) => c.kind === 'permanent');
+  if (permanent === undefined || permanent.body_html.trim() === '') return null;
+  const body = div('comment-view hp-comment-body');
+  renderHtml(body, permanent.body_html);
+  wireCommentLinksInDom(body);
+  void resolveWikiLinksInDom(body, networkId);
+  const label = trigger.textContent?.trim();
+  return { title: foundTitle !== '' ? foundTitle : (label ?? '—'), body };
 }
 
 /** Wiki-link to a thought in ANOTHER network (`[[n:<net>#<id>]]`): shows only
@@ -507,6 +568,7 @@ async function resolveLinkContent(trigger: HTMLElement): Promise<HoverPreviewCon
 }
 
 registerHoverPreviewResolver('wiki-thought', resolveWikiThoughtContent);
+registerHoverPreviewResolver('wiki-legacy-name', resolveWikiLegacyNameContent);
 registerHoverPreviewResolver('wiki-cross-network', resolveWikiCrossNetworkContent);
 registerHoverPreviewResolver('link', resolveLinkContent);
 

@@ -32,6 +32,7 @@
 import { setFocus } from '../app.js';
 import { button, div, clear, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
@@ -242,13 +243,17 @@ function openHistoryMenu(
   const rect = anchor.getBoundingClientRect();
   const root = showMenuAt(rect.left, rect.bottom + 2, items);
   styleDropdownRows(root, rest.map((r) => r.ref));
-  // Dropdown rows drag onto the canvas like the mini-clouds (§11.1).
-  for (const row of root.querySelectorAll<HTMLElement>('.menu-item')) {
-    const rowId = row.dataset['dragId'];
-    if (rowId !== undefined) {
-      wireExternalDragSource(row, rowId, 'history', { fromMenu: true });
-    }
-  }
+  // Dropdown rows mirror the strip chips: they drag onto the canvas (§11.1)
+  // and Ctrl+hover previews the thought's permanent comment (preview stage 3,
+  // same marking as `buildChip` — rows are built by `showMenuAt`, so they are
+  // walked here in the same order as `rest`, like `styleDropdownRows` does).
+  const rows = root.querySelectorAll<HTMLElement>(':scope > .menu-item');
+  rest.forEach(({ id, ref }, index) => {
+    const row = rows[index];
+    if (row === undefined) return;
+    wireExternalDragSource(row, id, 'history', { fromMenu: true });
+    markThoughtCommentPreview(row, id, ref?.title ?? id);
+  });
 }
 
 /**
@@ -321,6 +326,10 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
   const title = el('span', 'hc-title', clip(ref?.title ?? id, CHIP_TITLE_LIMIT));
   setTooltip(chip, ref?.title ?? id);
   chip.append(icon, title);
+  // Stage 3 (same as the pinned bar's `buildChip`): no per-indicator icons on
+  // a history mini-cloud — Ctrl+hover on the whole chip shows the thought's
+  // permanent comment.
+  markThoughtCommentPreview(chip, id, ref?.title ?? id);
   // A thought in the trash (S13, §5a.2): the mini-cloud dims and carries the
   // red trash glyph — the same marked reading as the canvas badge, scaled
   // down to the strip.
