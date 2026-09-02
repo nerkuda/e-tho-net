@@ -26,7 +26,7 @@ import { describe, it } from 'node:test';
 
 import DatabaseConstructor from 'better-sqlite3';
 
-import { BASE_LAYER_ID, EtnError, TRAVERSAL_DEFAULTS } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError, MCP_DEFAULTS } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { checkLayerIntegrity } from '../src/domain/layer-integrity.js';
@@ -97,7 +97,7 @@ describe(
         ndb.useLayer(layer.id);
         // The layer renames X (a shadow) and deletes Y (a tombstone).
         updateThought(ndb, x.id, { title: 'Икс-слой' }, undefined, USER);
-        deleteThought(ndb, y.id, undefined, USER);
+        deleteThought(ndb, y.id, undefined);
         ndb.useLayer(BASE_LAYER_ID);
 
         const layerView = (): void => ndb.useLayer(layer.id);
@@ -179,7 +179,7 @@ describe(
         const c = createThought(ndb, { title: 'В' }, USER);
         createComment(ndb, 'thought', c.id, { kind: 'permanent', title: null, body_md: 'в слое' }, USER);
         createLink(ndb, { source_id: a.id, target_id: c.id }, USER);
-        deleteThought(ndb, b.id, undefined, USER);
+        deleteThought(ndb, b.id, undefined);
         assertIntegrity(ndb);
 
         // Merge into the base.
@@ -217,8 +217,8 @@ describe(
         });
 
         // Full depth: L1→L2→L3→L4 over the base.
-        let parent = BASE_LAYER_ID;
-        let deepest = BASE_LAYER_ID;
+        let parent: string = BASE_LAYER_ID;
+        let deepest: string = BASE_LAYER_ID;
         for (let i = 1; i <= 4; i++) {
           const layer = createLayer(ndb, { parentId: parent, title: `Уровень ${i}`, createdBy: USER });
           parent = layer.id;
@@ -228,7 +228,7 @@ describe(
 
         const t0 = Date.now();
         const thought = getThought(ndb, ids[0] as string);
-        const found = queryThoughts(ndb, { keywords: 'Мысль 1' }, { maxNodes: TRAVERSAL_DEFAULTS.MAX_NODES });
+        const found = queryThoughts(ndb, { keywords: 'Мысль 1' }, { maxNodes: MCP_DEFAULTS.MAX_NODES_PER_SUBGRAPH });
         const sg = subgraph(ndb, [ids[0] as string], 1);
         const elapsed = Date.now() - t0;
 

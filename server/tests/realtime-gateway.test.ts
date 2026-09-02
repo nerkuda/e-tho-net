@@ -560,7 +560,7 @@ describe(
         });
         assert.equal(res2.statusCode, 200);
         const onY2 = await qY.next((m) => m.type === 'network.updated');
-        assert.equal(onY2.seq, onX.seq + 1);
+        assert.equal(onY2.seq, (onX.seq as number) + 1);
         await assert.rejects(qX.next((m) => m.type === 'network.updated', 400));
       } finally {
         await closeSockets(ownerX, ownerY);

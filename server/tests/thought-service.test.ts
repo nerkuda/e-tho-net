@@ -112,7 +112,7 @@ describe(
       it('generates title_norm and persists synonyms', () => {
         const ndb = createInMemoryNetworkDb();
         try {
-          const t = createThought(ndb, { title: '  Café  ', synonyms: 'espresso, java' }, USER);
+          const t = createThought(ndb, { title: '  Café  ', synonyms: ['espresso', 'java'] }, USER);
           assert.equal(t.title, 'Café');
           assert.equal(t.version, 1);
           assert.deepEqual(t.synonyms.sort(), ['espresso', 'java']);
@@ -267,7 +267,7 @@ describe(
         const ndb = createInMemoryNetworkDb();
         try {
           const t = createThought(ndb, { title: 'T', synonyms: ['old'] }, USER);
-          const updated = updateThought(ndb, t.id, { synonyms: 'new1, new2' }, t.version, USER);
+          const updated = updateThought(ndb, t.id, { synonyms: ['new1', 'new2'] }, t.version, USER);
           assert.deepEqual(updated.synonyms.sort(), ['new1', 'new2']);
         } finally {
           ndb.close();

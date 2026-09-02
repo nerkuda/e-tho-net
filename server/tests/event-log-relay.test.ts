@@ -89,7 +89,7 @@ describe('EventLogRelay (unit, fake log)', () => {
     log.write(makeEvent('n1', 2));
     const pubsub = new PubSub();
     const received: AnyRealtimeEvent[] = [];
-    const unsubscribe = pubsub.subscribe('n1', (e) => received.push(e));
+    const unsubscribe = pubsub.subscribe('n1', (e: AnyRealtimeEvent) => received.push(e));
     const relay = new EventLogRelay({ systemDb: log, pubsub, options: { pollIntervalMs: 10 } });
     try {
       relay.start();
@@ -108,7 +108,7 @@ describe('EventLogRelay (unit, fake log)', () => {
     log.addNetwork('n1');
     const pubsub = new PubSub();
     const received: AnyRealtimeEvent[] = [];
-    const unsubscribe = pubsub.subscribe('n1', (e) => received.push(e));
+    const unsubscribe = pubsub.subscribe('n1', (e: AnyRealtimeEvent) => received.push(e));
     const relay = new EventLogRelay({ systemDb: log, pubsub, options: { pollIntervalMs: 10 } });
     try {
       relay.start();
@@ -128,7 +128,7 @@ describe('EventLogRelay (unit, fake log)', () => {
     log.addNetwork('n1');
     const pubsub = new PubSub();
     const received: AnyRealtimeEvent[] = [];
-    const unsubscribe = pubsub.subscribe('n1', (e) => received.push(e));
+    const unsubscribe = pubsub.subscribe('n1', (e: AnyRealtimeEvent) => received.push(e));
     const relay = new EventLogRelay({ systemDb: log, pubsub, options: { pollIntervalMs: 10 } });
     try {
       relay.start();
@@ -148,7 +148,7 @@ describe('EventLogRelay (unit, fake log)', () => {
     log.addNetwork('n1');
     const pubsub = new PubSub();
     const received: AnyRealtimeEvent[] = [];
-    const unsubscribe = pubsub.subscribe('n1', (e) => received.push(e));
+    const unsubscribe = pubsub.subscribe('n1', (e: AnyRealtimeEvent) => received.push(e));
     const relay = new EventLogRelay({ systemDb: log, pubsub, options: { pollIntervalMs: 10 } });
     try {
       relay.start();
@@ -169,12 +169,12 @@ describe('EventLogRelay (unit, fake log)', () => {
     log.addNetwork('n1');
     const pubsub = new PubSub();
     const received: AnyRealtimeEvent[] = [];
-    const unsubscribe = pubsub.subscribe('n1', (e) => received.push(e));
+    const unsubscribe = pubsub.subscribe('n1', (e: AnyRealtimeEvent) => received.push(e));
     const relay = new EventLogRelay({ systemDb: log, pubsub, options: { pollIntervalMs: 10 } });
     try {
       relay.start();
       log.addNetwork('n2');
-      const unsubscribeN2 = pubsub.subscribe('n2', (e) => received.push(e));
+      const unsubscribeN2 = pubsub.subscribe('n2', (e: AnyRealtimeEvent) => received.push(e));
       log.write(makeEvent('n2', 1));
       await waitUntil(() => received.some((e) => e.network_id === 'n2'));
       relay.stop();
@@ -220,7 +220,7 @@ describe(
       const { sys, networkId } = openStore();
       const pubsub = new PubSub();
       const received: AnyRealtimeEvent[] = [];
-      const unsubscribe = pubsub.subscribe(networkId, (e) => received.push(e));
+      const unsubscribe = pubsub.subscribe(networkId, (e: AnyRealtimeEvent) => received.push(e));
       const relay = new EventLogRelay({ systemDb: sys, pubsub, options: { pollIntervalMs: 10 } });
       try {
         relay.start();

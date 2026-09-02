@@ -40,10 +40,14 @@ import {
   type RestTestContext,
 } from './rest-helpers.js';
 
+/** Methods used by this suite; `inject`'s `method` (light-my-request) rejects
+ * fastify's wider `HTTPMethods` union (no `trace`), so keep a local one. */
+type InjectMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+
 /** A REST call helper bound to the context; `clientId` selects the session. */
 async function call(
   ctx: RestTestContext,
-  method: string,
+  method: InjectMethod,
   url: string,
   payload?: Record<string, unknown>,
   opts: { clientId?: string; ifMatch?: number } = {},

@@ -295,7 +295,7 @@ describe(
 
         const all = listLinksByThought(ndb, focus, { showInactive: true });
         assert.equal(all.untyped_children.length, 1);
-        assert.equal(all.untyped_children[0]!.target_thought.id, inactiveChild);
+        assert.equal(all.untyped_children[0]!.target_thought!.id, inactiveChild);
       } finally {
         ndb.close();
       }

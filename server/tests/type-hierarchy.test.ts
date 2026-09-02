@@ -249,7 +249,10 @@ describe(
         // An untyped thought's values resolve against the root's properties.
         const thoughtId = seedThought(ndb, null);
         setPropertyValue(ndb, 'thought', thoughtId, 'заметка', 'из корня');
-        assert.equal(ndb.prepare('SELECT value_text AS v FROM property_values').get().v, 'из корня');
+        assert.equal(
+          (ndb.prepare('SELECT value_text AS v FROM property_values').get() as { v: string }).v,
+          'из корня',
+        );
       } finally {
         ndb.close();
       }

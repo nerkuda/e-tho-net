@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { AnyRealtimeEvent, RealtimeEvent } from '@etn/shared';
+import { BASE_LAYER_ID, type AnyRealtimeEvent, type RealtimeEvent } from '@etn/shared';
 
 import { PubSub } from '../src/realtime/pubsub.js';
 
@@ -22,6 +22,7 @@ function makeEvent(
     actor: { user_id: 'u1', client_id: 'c1' },
     network_id: networkId,
     audience: 'network',
+    layer_id: BASE_LAYER_ID,
     data: { thought: { id: 't1', title: 'x' } } as never,
   } as AnyRealtimeEvent;
 }
@@ -30,7 +31,7 @@ describe('PubSub', () => {
   it('delivers an event to subscribers of that network', () => {
     const bus = new PubSub();
     const received: AnyRealtimeEvent[] = [];
-    bus.subscribe('net-1', (e: RealtimeEvent) => {
+    bus.subscribe('net-1', (e: AnyRealtimeEvent) => {
       received.push(e);
     });
     bus.publish('net-1', makeEvent('net-1', 1));

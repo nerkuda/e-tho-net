@@ -51,7 +51,7 @@ describe(
       const { sys, networkId } = openStore();
       const pubsub = new PubSub();
       const received: AnyRealtimeEvent[] = [];
-      const unsubscribe = pubsub.subscribe(networkId, (event) => received.push(event));
+      const unsubscribe = pubsub.subscribe(networkId, (event: AnyRealtimeEvent) => received.push(event));
       try {
         const event = emitDomainEvent(
           { systemDb: sys, pubsub },
@@ -87,7 +87,7 @@ describe(
       const { sys, networkId } = openStore();
       const pubsub = new PubSub();
       const received: AnyRealtimeEvent[] = [];
-      const unsubscribe = pubsub.subscribe(networkId, (event) => received.push(event));
+      const unsubscribe = pubsub.subscribe(networkId, (event: AnyRealtimeEvent) => received.push(event));
       try {
         emitDomainEvent(
           { systemDb: sys, pubsub },
@@ -109,7 +109,7 @@ describe(
       const { sys, networkId } = openStore();
       const pubsub = new PubSub();
       const received: AnyRealtimeEvent[] = [];
-      const unsubscribe = pubsub.subscribe(networkId, (event) => received.push(event));
+      const unsubscribe = pubsub.subscribe(networkId, (event: AnyRealtimeEvent) => received.push(event));
       try {
         emitDomainEvent(
           { systemDb: sys, pubsub },

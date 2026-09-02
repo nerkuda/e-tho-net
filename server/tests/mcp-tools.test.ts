@@ -1658,7 +1658,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // thought but not a section — it's not in the catalogue). N6-style
         // object keyed by id.
         assert.ok(data.thought_types[sectionType.id]);
-        assert.equal(data.thought_types[sectionType.id].name, 'Раздел');
+        assert.equal(data.thought_types[sectionType.id]?.name, 'Раздел');
         assert.equal(data.thought_types[noteType.id], undefined);
       } finally {
         await handle.close();

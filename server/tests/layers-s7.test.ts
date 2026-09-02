@@ -280,7 +280,7 @@ describe(
     it('depth limit: five levels are impossible (422 on the fifth)', async () => {
       const ctx = await buildRestContext();
       try {
-        let parent = BASE_LAYER_ID;
+        let parent: string = BASE_LAYER_ID;
         for (let depth = 1; depth <= 4; depth += 1) {
           const created = await createLayer(ctx, { parent_id: parent, title: `L${depth}` });
           assert.equal(created.depth, depth);

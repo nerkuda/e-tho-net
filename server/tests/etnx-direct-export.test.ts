@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 import yauzl from 'yauzl';
+import type { Options as YauzlOptions, ZipFile } from 'yauzl';
 
 import {
   authHeaders,
@@ -20,7 +21,11 @@ import {
 } from './rest-helpers.js';
 import { exportToEtnx } from '../src/domain/export-service.js';
 
-const yauzlFromBuffer = promisify(yauzl.fromBuffer);
+/** `promisify` picks the callback-only overload of `fromBuffer`, losing `options` — type it explicitly. */
+const yauzlFromBuffer = promisify(yauzl.fromBuffer) as (
+  buffer: Buffer,
+  options: YauzlOptions,
+) => Promise<ZipFile>;
 
 describe(
   'exportToEtnx direct (P2 debug)',

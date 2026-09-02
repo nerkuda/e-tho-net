@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { EtnError } from '@etn/shared';
+import { EtnError, type FocusOrderInput } from '@etn/shared';
 import DatabaseConstructor from 'better-sqlite3';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
@@ -149,7 +149,13 @@ describe(
         [c2, c1],
       );
       assert.throws(
-        () => setFocusOrder(ndb, 'user-1', focusId, { dir: 'siblings', ordered_ids: [c1] }),
+        // `siblings` is intentionally invalid — the service must reject it with
+        // VALIDATION_ERROR; the cast admits the bad value the type forbids.
+        () =>
+          setFocusOrder(ndb, 'user-1', focusId, {
+            dir: 'siblings',
+            ordered_ids: [c1],
+          } as unknown as FocusOrderInput),
         EtnError,
       );
       ndb.close();

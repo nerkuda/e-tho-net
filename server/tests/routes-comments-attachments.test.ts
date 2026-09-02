@@ -242,7 +242,7 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal(raw.statusCode, 200);
-        assert.match(raw.headers['content-type'] ?? '', /image\/png/);
+        assert.match(String(raw.headers['content-type'] ?? ''), /image\/png/);
         assert.equal(raw.rawPayload.toString(), 'fakepng');
 
         // A client-local path (existing row or not) is never served.

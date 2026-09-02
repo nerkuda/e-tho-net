@@ -289,7 +289,12 @@ describe(
           )
           .run(randomUUID(), orphan, ref?.property_id, 'no-such-thought');
         const dangling = getPropertyValuesResolved(ndb, 'thought', orphan).find(
-          (v) => typeof v.value === 'object' && v.value !== null && v.value.title === null,
+          (v) =>
+            !Array.isArray(v.value) &&
+            typeof v.value === 'object' &&
+            v.value !== null &&
+            'title' in v.value &&
+            v.value.title === null,
         );
         assert.deepEqual(dangling?.value, { id: 'no-such-thought', title: null });
       } finally {

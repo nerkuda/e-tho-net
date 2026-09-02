@@ -15,6 +15,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 
 import { createLogger } from '../src/logger.js';
+import type { AuthContext } from '../src/http/context.js';
 import { SystemDb } from '../src/db/system-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { systemMigrationsDir } from '../src/paths.js';
@@ -42,7 +43,17 @@ interface FakeReply {
   send(b: unknown): FakeReply;
 }
 
-function makeReq(opts: { authHeader?: string; clientId?: string; ip?: string }) {
+function makeReq(opts: {
+  authHeader?: string;
+  clientId?: string;
+  ip?: string;
+}): {
+  headers: Record<string, string>;
+  id: string;
+  ip: string;
+  /** Stamped by the preHandler on success; `null` before/after failure. */
+  auth: AuthContext | null;
+} {
   const headers: Record<string, string> = {};
   if (opts.authHeader !== undefined) headers.authorization = opts.authHeader;
   if (opts.clientId !== undefined) headers['client-id'] = opts.clientId;

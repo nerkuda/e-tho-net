@@ -139,8 +139,8 @@ describe(
         assert.equal(res.statusCode, 200);
         const data = res.json().data as Array<{ id: string; role: string; members_count: number }>;
         assert.equal(data.length, 1);
-        assert.equal(data[0].role, 'owner');
-        assert.equal(data[0].members_count, 1);
+        assert.equal(data[0]?.role, 'owner');
+        assert.equal(data[0]?.members_count, 1);
       } finally {
         await app.close();
         sys.close();

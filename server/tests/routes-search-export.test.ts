@@ -191,7 +191,7 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal(download.statusCode, 200);
-        assert.match(download.headers['content-type'] ?? '', /text\/markdown/);
+        assert.match(String(download.headers['content-type'] ?? ''), /text\/markdown/);
         assert.ok(download.body.includes('# Экспорт мыслесети ETN'));
         assert.ok(download.body.includes('## Экспортируемая'));
 
@@ -210,7 +210,7 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal(htmlDownload.statusCode, 200);
-        assert.match(htmlDownload.headers['content-type'] ?? '', /text\/html/);
+        assert.match(String(htmlDownload.headers['content-type'] ?? ''), /text\/html/);
 
         // PDF is not implemented on MVP → 422.
         const pdf = await ctx.app.inject({
@@ -280,8 +280,8 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal(download.statusCode, 200);
-        assert.match(download.headers['content-type'] ?? '', /application\/zip/);
-        assert.match(download.headers['content-disposition'] ?? '', /\.etnx/);
+        assert.match(String(download.headers['content-type'] ?? ''), /application\/zip/);
+        assert.match(String(download.headers['content-disposition'] ?? ''), /\.etnx/);
 
         const raw = download.rawPayload;
         const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as string, 'binary');

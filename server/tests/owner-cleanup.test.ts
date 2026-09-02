@@ -55,8 +55,11 @@ function seedThought(ndb: NetworkDb, typeId: string | null = null, title = 'T'):
 /** Count polymorphic rows still pointing at the given owner. */
 function dependantCount(ndb: NetworkDb, ownerType: 'thought' | 'link', ownerId: string): number {
   const count = (table: string): number =>
-    ndb.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE owner_type = ? AND owner_id = ?`).get(ownerType, ownerId)
-      ?.n as number;
+    (
+      ndb
+        .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE owner_type = ? AND owner_id = ?`)
+        .get(ownerType, ownerId) as { n: number } | undefined
+    )?.n as number;
   return count('comments') + count('comment_targets') + count('attachments') + count('property_values');
 }
 
@@ -88,7 +91,12 @@ describe(
         deleteLink(ndb, link.id, undefined);
 
         assert.equal(dependantCount(ndb, 'link', link.id), 0);
-        assert.equal(ndb.prepare('SELECT COUNT(*) AS n FROM links WHERE id = ?').get(link.id)?.n, 0);
+        assert.equal(
+          (ndb.prepare('SELECT COUNT(*) AS n FROM links WHERE id = ?').get(link.id) as
+            | { n: number }
+            | undefined)?.n,
+          0,
+        );
       } finally {
         ndb.close();
       }
@@ -123,15 +131,19 @@ describe(
 
         deleteLink(ndb, link.id, undefined);
 
-        const gone = ndb.prepare('SELECT COUNT(*) AS n FROM comments WHERE id = ?').get(ownedByLink.id)?.n;
+        const gone = (ndb.prepare('SELECT COUNT(*) AS n FROM comments WHERE id = ?').get(
+          ownedByLink.id,
+        ) as { n: number } | undefined)?.n;
         assert.equal(gone, 0);
         assert.equal(
-          ndb.prepare('SELECT COUNT(*) AS n FROM comment_targets WHERE comment_id = ?').get(ownedByLink.id)?.n,
+          (ndb.prepare('SELECT COUNT(*) AS n FROM comment_targets WHERE comment_id = ?').get(
+            ownedByLink.id,
+          ) as { n: number } | undefined)?.n,
           0,
         );
-        const kept = ndb
+        const kept = (ndb
           .prepare('SELECT COUNT(*) AS n FROM comments WHERE id = ?')
-          .get(ownedByThought.id)?.n;
+          .get(ownedByThought.id) as { n: number } | undefined)?.n;
         assert.equal(kept, 1);
         const keptTargets = ndb
           .prepare('SELECT owner_type, owner_id FROM comment_targets WHERE comment_id = ?')
@@ -174,9 +186,17 @@ describe(
         assert.equal(dependantCount(ndb, 'link', linkIn.id), 0);
         assert.equal(dependantCount(ndb, 'link', linkOut.id), 0);
         // The link rows themselves are gone (FK cascade), the other thoughts stay.
-        assert.equal(ndb.prepare('SELECT COUNT(*) AS n FROM links').get()?.n, 0);
+        assert.equal(
+          (ndb.prepare('SELECT COUNT(*) AS n FROM links').get() as { n: number } | undefined)?.n,
+          0,
+        );
         for (const survivor of [b, c]) {
-          assert.equal(ndb.prepare('SELECT COUNT(*) AS n FROM thoughts WHERE id = ?').get(survivor)?.n, 1);
+          assert.equal(
+            (ndb.prepare('SELECT COUNT(*) AS n FROM thoughts WHERE id = ?').get(survivor) as
+              | { n: number }
+              | undefined)?.n,
+            1,
+          );
         }
       } finally {
         ndb.close();
@@ -244,12 +264,17 @@ describe(
         deleteThought(ndb, hub, undefined);
 
         assert.equal(
-          ndb.prepare('SELECT COUNT(*) AS n FROM attachments WHERE owner_type = ?').get('link')?.n,
+          (ndb.prepare('SELECT COUNT(*) AS n FROM attachments WHERE owner_type = ?').get('link') as
+            | { n: number }
+            | undefined)?.n,
           0,
         );
-        assert.equal(ndb.prepare('SELECT COUNT(*) AS n FROM links').get()?.n, 0);
         assert.equal(
-          ndb.prepare('SELECT COUNT(*) AS n FROM thoughts').get()?.n,
+          (ndb.prepare('SELECT COUNT(*) AS n FROM links').get() as { n: number } | undefined)?.n,
+          0,
+        );
+        assert.equal(
+          (ndb.prepare('SELECT COUNT(*) AS n FROM thoughts').get() as { n: number } | undefined)?.n,
           spokeIds.length,
         );
       } finally {

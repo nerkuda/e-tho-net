@@ -321,7 +321,10 @@ describe(
         db.prepare(
           'INSERT INTO thought_synonyms (thought_id,synonym,synonym_norm) VALUES (?,?,?)',
         ).run('t1', 'Hi', 'hi');
-        rows = db.prepare('SELECT text FROM fts_thought_names WHERE thought_id = ?').all('t1') as {
+        rows = db
+          .prepare('SELECT thought_id, text FROM fts_thought_names WHERE thought_id = ?')
+          .all('t1') as {
+          thought_id: string;
           text: string;
         }[];
         assert.equal(rows[0]!.text, 'Hello World Hi');

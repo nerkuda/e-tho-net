@@ -104,8 +104,11 @@ describe(
         const body = res.json();
         assert.equal(body.meta.total, 3);
         assert.equal((body.data as unknown[]).length, 3);
+        const auditRows = body.data as Array<{ ts: string }>;
         assert.ok(
-          (body.data as Array<{ ts: string }>)[0].ts >= (body.data as Array<{ ts: string }>)[2].ts,
+          auditRows[0] !== undefined &&
+            auditRows[2] !== undefined &&
+            auditRows[0].ts >= auditRows[2].ts,
           'newest first',
         );
       } finally {
@@ -125,7 +128,7 @@ describe(
         assert.equal(res.statusCode, 200);
         const body = res.json();
         assert.equal(body.meta.total, 1);
-        assert.equal((body.data as Array<{ category: string }>)[0].category, 'user');
+        assert.equal((body.data as Array<{ category: string }>)[0]?.category, 'user');
       } finally {
         await app.close();
         sys.close();
