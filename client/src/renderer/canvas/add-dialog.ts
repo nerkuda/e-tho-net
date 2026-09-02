@@ -264,6 +264,13 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     modeRow.append(singleLabel, multiLabel);
     singleRadio.addEventListener('change', () => {
       multi = false;
+      // Switching «несколько» → «одна» drops the accumulated list (карточка ETN
+      // 24ad9b0e): a later single-mode apply (the button/Ctrl+Enter path) must
+      // never resurrect lines queued before the switch. `renderLines` repaints
+      // the (now hidden) list empty, so switching back to «несколько» starts
+      // from a clean slate instead of showing ghosts.
+      lines.length = 0;
+      renderLines();
       applyMode();
     });
     multiRadio.addEventListener('change', () => {
