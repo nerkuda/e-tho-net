@@ -79,13 +79,13 @@ export interface ThoughtPickerOptions {
   /** Prefill the list with these thoughts; multi mode switches on. */
   selectedIds?: string[];
   /**
-   * Prefill the list with drafts of NEW thoughts (the create-from-legacy-link
-   * flow, карточка ETN 34ffbd75): each draft becomes a queued new-thought line
-   * (title + synonyms from the link's alias); multi mode switches on. The user
-   * can edit/remove the lines, queue more thoughts or pick existing ones —
-   * everything the dialog normally allows.
+   * Prefill the NAME INPUT as if the text were typed (the
+   * create-from-legacy-link flow, карточка ETN 34ffbd75): `имя|алиас` parses
+   * into title + synonym on add (08-ui-spec.md §4.3), the live duplicate
+   * search runs right away, and the dialog STAYS in single mode — the user
+   * may still switch to multi, edit the name or pick a type.
    */
-  draftLines?: Array<{ title: string; synonyms: string[] }>;
+  prefillText?: string;
   /**
    * Anchor display title override: by default the dialog shows the FOCUSED
    * thought's title for the «вверх/вниз к …» suffix, which is wrong whenever
@@ -245,21 +245,8 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
   const searchFilter = (opts.searchTypeIds ?? []).filter((id) => id !== '');
 
   return new Promise((resolve) => {
-    let multi = (opts.selectedIds ?? []).length > 0 || (opts.draftLines ?? []).length > 0;
+    let multi = (opts.selectedIds ?? []).length > 0;
     const lines: AddLine[] = [];
-    // Draft prefill (create-from-legacy-link flow): queued NEW thoughts, no
-    // duplicate check yet — `lastCandidates` belongs to the (empty) input.
-    // Rendered by the `renderLines()` call in `onMount`.
-    for (const draft of opts.draftLines ?? []) {
-      if (draft.title.trim() === '') continue;
-      lines.push({
-        raw: draft.title,
-        title: draft.title,
-        synonyms: draft.synonyms,
-        existingId: null,
-        matchKind: null,
-      });
-    }
 
     const modeRow = div('add-mode-row');
     const singleRadio = el('input');
@@ -804,7 +791,14 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       },
       onMount: () => {
         renderLines();
+        // Prefill lands in the input as if typed (карточка ETN 34ffbd75): the
+        // duplicate search runs right away, the mode radios stay untouched.
+        if (opts.prefillText !== undefined && opts.prefillText !== '') {
+          input.value = opts.prefillText;
+          scheduleSearch();
+        }
         input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
       },
     });
   });

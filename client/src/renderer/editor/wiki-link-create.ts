@@ -78,7 +78,10 @@ export async function tryCreateThoughtFromLegacyLink(
     anchorTitle: parentTitle,
     allowCreate: true,
     allowLinkType: true,
-    draftLines: [{ title: name, synonyms: alias !== null ? [alias] : [] }],
+    // Single mode with the name in the input: `имя|алиас` — the existing
+    // input parsing turns the alias into a synonym on add (карточка: текст
+    // после `|` автоматически добавляется в синонимы).
+    prefillText: alias !== null ? `${name}|${alias}` : name,
   });
   if (result === null) return true; // cancelled — nothing changes
 
