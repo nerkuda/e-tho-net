@@ -24,6 +24,12 @@
  * Values are written with `properties.set`, cleared with `properties.remove`;
  * realtime `property-value.*` events reload the table when the open entity is
  * the owner (a single module-level listener keeps closures bounded).
+ *
+ * Single text and thought_ref values also keep a client-local history of the
+ * 10 last saved values per property (localStorage, `recent-values.ts`):
+ * focusing the empty field — or clearing it back to empty — offers the
+ * history as a dropdown; typing closes it so the field's regular behaviour
+ * takes over. Multiple-value properties (`config.multiple`) keep no history.
  */
 
 import type { EffectiveTypeProperty, PropertyValue, ThoughtRef } from '@etn/shared';
@@ -39,6 +45,12 @@ import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/
 import { setActiveView } from '../screens/active-view.js';
 import { store } from '../state.js';
 import { registerMainSection, type EditorContext } from './editor.js';
+import {
+  loadRecentRefEntries,
+  loadRecentValues,
+  recordRecentValue,
+  wireRecentValues,
+} from './recent-values.js';
 import { wireThoughtRefSearch } from './thought-picker.js';
 import {
   firstPickedThoughtId,
@@ -225,6 +237,11 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           await etn.properties.remove(networkId, 'thought', thoughtId, definition.key);
         } else {
           await etn.properties.set(networkId, 'thought', thoughtId, definition.key, value);
+          // A successful save feeds the client-local recent-values history of
+          // single text/thought_ref properties (recent-values.ts).
+          if (typeof value === 'string' && tracksRecentValues(definition)) {
+            recordRecentValue(networkId, definition.id, value);
+          }
         }
         return true;
       } catch (err) {
@@ -253,6 +270,24 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           void save(next);
         };
         input.addEventListener('blur', () => commitValue(input.value));
+        // Recent-values suggestions (recent-values.ts): focusing the empty
+        // field — or clearing it back to empty — offers the 10 last saved
+        // values of this property; typing closes the list so the regular
+        // behaviour (the options dropdown, blur commit) takes over.
+        const recent = tracksRecentValues(definition);
+        if (recent) {
+          wireRecentValues(input, {
+            load: () =>
+              loadRecentValues(networkId, definition.id).map((value) => ({
+                value,
+                label: value,
+              })),
+            onPick: (entry) => {
+              input.value = entry.value;
+              commitValue(entry.value);
+            },
+          });
+        }
         // A text property with predefined options (02-data-model.md §3.4)
         // gets a picker — an input aid, never a restriction: the value stays
         // freely editable (08-ui-spec.md §6.3).
@@ -274,6 +309,9 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
               definition.config?.multiple === true,
               commitValue,
               revertValue,
+              // With the recent wiring an emptied field shows the recent
+              // list, not the full catalogue (the caret still shows all).
+              recent,
             ),
           );
           cell.append(row);
@@ -425,6 +463,18 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
             if (await save(id)) void reload();
           },
         });
+        // Recent-values suggestions (recent-values.ts): focusing the empty
+        // field — or clearing it back to empty — offers the 10 last saved
+        // values as resolved titles; typing closes the list so the live
+        // candidate search takes over.
+        wireRecentValues(input, {
+          load: () => loadRecentRefEntries(networkId, definition.id, refCache),
+          onPick: (entry) => {
+            void save(entry.value).then((ok) => {
+              if (ok) void reload();
+            });
+          },
+        });
         const row = div('form-row');
         row.style.marginBottom = '0';
         row.append(input, button('выбрать', openSinglePicker, 'btn small'));
@@ -460,6 +510,17 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
 
 /** Test seam for unit tests. */
 export const propertiesInternals = { buildPropertiesBody };
+
+/**
+ * Whether a property definition keeps the client-local recent-values history
+ * (recent-values.ts): single `text` and `thought_ref` properties only —
+ * multiple-value properties (`config.multiple`) and the other value types
+ * (number/date/bool/url) are out of scope.
+ */
+function tracksRecentValues(definition: EffectiveTypeProperty): boolean {
+  if (definition.config?.multiple === true) return false;
+  return definition.value_type === 'text' || definition.value_type === 'thought_ref';
+}
 
 // ---------------------------------------------------------------------------
 // thought_ref mini clouds (08-ui-spec.md §6.3.1)
@@ -692,6 +753,12 @@ export function filterOptionsByFragment(options: string[], fragment: string): st
  *
  * Also reused by the selection panel's property-values dialog: there `commit`
  * writes the value into the dialog state instead of saving it immediately.
+ *
+ * {@link suppressOnEmpty} (the editor's single text properties only, wired
+ * together with the recent-values suggestions): when the input is cleared
+ * back to empty, the dropdown hides itself instead of reopening with the full
+ * catalogue — the recent-values list owns the emptied field there. The caret
+ * click still shows the whole catalogue.
  */
 export function buildValueOptionsCaret(
   input: HTMLInputElement,
@@ -699,14 +766,20 @@ export function buildValueOptionsCaret(
   multiple: boolean,
   commit: (value: string) => void,
   revert: () => void,
+  suppressOnEmpty = false,
 ): HTMLElement {
   let list: HTMLDivElement | null = null;
 
-  const close = (mode: 'commit' | 'revert'): void => {
+  const detach = (): void => {
     if (list === null) return;
     list.remove();
     list = null;
     window.removeEventListener('mousedown', onOutside, true);
+  };
+
+  const close = (mode: 'commit' | 'revert'): void => {
+    if (list === null) return;
+    detach();
     if (mode === 'revert') revert();
     else commit(input.value);
   };
@@ -778,7 +851,16 @@ export function buildValueOptionsCaret(
 
   // Typing (re)opens the list with rows narrowed to the typed fragment; the
   // caret shows the full catalogue regardless of the current input value.
-  input.addEventListener('input', () => openList(false));
+  // Clearing the field with `suppressOnEmpty` just hides the list (the
+  // recent-values dropdown owns the emptied field); the pending empty value
+  // still commits on blur as usual.
+  input.addEventListener('input', () => {
+    if (suppressOnEmpty && input.value === '') {
+      detach();
+      return;
+    }
+    openList(false);
+  });
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && list !== null) {
       event.stopPropagation();
