@@ -78,6 +78,20 @@ export interface ThoughtPickerOptions {
   searchTypeIds?: string[];
   /** Prefill the list with these thoughts; multi mode switches on. */
   selectedIds?: string[];
+  /**
+   * Prefill the list with drafts of NEW thoughts (the create-from-legacy-link
+   * flow, карточка ETN 34ffbd75): each draft becomes a queued new-thought line
+   * (title + synonyms from the link's alias); multi mode switches on. The user
+   * can edit/remove the lines, queue more thoughts or pick existing ones —
+   * everything the dialog normally allows.
+   */
+  draftLines?: Array<{ title: string; synonyms: string[] }>;
+  /**
+   * Anchor display title override: by default the dialog shows the FOCUSED
+   * thought's title for the «вверх/вниз к …» suffix, which is wrong whenever
+   * the anchor is not the focus (e.g. a comment owner). Pass the real title.
+   */
+  anchorTitle?: string;
   /** Dialog title override (defaults by `allowCreate`/anchor). */
   title?: string;
   /** Primary button label override (defaults «Добавить»/«Выбрать»). */
@@ -231,8 +245,21 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
   const searchFilter = (opts.searchTypeIds ?? []).filter((id) => id !== '');
 
   return new Promise((resolve) => {
-    let multi = (opts.selectedIds ?? []).length > 0;
+    let multi = (opts.selectedIds ?? []).length > 0 || (opts.draftLines ?? []).length > 0;
     const lines: AddLine[] = [];
+    // Draft prefill (create-from-legacy-link flow): queued NEW thoughts, no
+    // duplicate check yet — `lastCandidates` belongs to the (empty) input.
+    // Rendered by the `renderLines()` call in `onMount`.
+    for (const draft of opts.draftLines ?? []) {
+      if (draft.title.trim() === '') continue;
+      lines.push({
+        raw: draft.title,
+        title: draft.title,
+        synonyms: draft.synonyms,
+        existingId: null,
+        matchKind: null,
+      });
+    }
 
     const modeRow = div('add-mode-row');
     const singleRadio = el('input');
@@ -737,7 +764,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
 
     const anchorTitle =
       opts.anchor !== undefined && opts.anchor !== null
-        ? (store.state.focus?.focused.title ?? '…')
+        ? (opts.anchorTitle ?? store.state.focus?.focused.title ?? '…')
         : '';
     const directionText =
       opts.anchor === undefined || opts.anchor === null

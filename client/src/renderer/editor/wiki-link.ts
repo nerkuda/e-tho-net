@@ -27,6 +27,8 @@ import { isThoughtInResults, openStructuresThought } from '../screens/structures
 import { setActiveView } from '../screens/active-view.js';
 import { openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { store } from '../state.js';
+import { searchLegacyWikiTarget } from './wiki-link-resolver.js';
+import { tryCreateThoughtFromLegacyLink } from './wiki-link-create.js';
 
 /** Chars allowed inside an in-progress wiki prefix (no closing/alias/newline). */
 const WIKI_PREFIX_RE = /^[^[\]\n|]*$/;
@@ -184,20 +186,26 @@ export async function openThoughtByRef(thought: Thought): Promise<void> {
 
 /**
  * Разрешает wiki-цель в мысль и открывает её по правилам режима (M11) через
- * {@link openThoughtByRef}.
+ * {@link openThoughtByRef}. Когда цель не находится и `linkEl` (кликнутый
+ * span) лежит в поле комментария с контекстом (карточка ETN 34ffbd75),
+ * запускается флоу создания отсутствующей мысли — диалог добавления с
+ * предзаполненным именем и последующей заменой ссылок; иначе — прежний
+ * notice «не найдена».
  */
-export async function openWikiTarget(name: string): Promise<void> {
+export async function openWikiTarget(name: string, linkEl?: HTMLElement): Promise<void> {
   const networkId = requireNetworkId();
   let thoughtId: string | null = null;
   try {
-    const res = await etn.thoughts.search(networkId, { q: name, scope: 'names', limit: 10 });
-    const hit = res.by_names.find((h) => h.title === name) ?? res.by_names[0];
-    thoughtId = hit?.thought_id ?? null;
+    const hit = await searchLegacyWikiTarget(networkId, name);
+    thoughtId = hit?.thoughtId ?? null;
   } catch (err) {
     notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
     return;
   }
   if (thoughtId === null) {
+    // Мысли нет: в комментарии (md-field с контекстом) — предложить создать
+    // её прямо отсюда; вне такого контекста — прежнее поведение.
+    if (linkEl !== undefined && (await tryCreateThoughtFromLegacyLink(linkEl, name))) return;
     notice(`Мысль «${name}» не найдена.`, 'error');
     return;
   }
@@ -286,9 +294,10 @@ export function initWikiLinkNavigation(): void {
       return;
     }
 
-    // Legacy name-based form (M3): резолюция через FTS-поиск по имени.
+    // Legacy name-based form (M3): резолюция через FTS-поиск по имени; не
+    // найдено в комментарии — флоу создания мысли (карточка ETN 34ffbd75).
     const name = link.getAttribute(WIKI_LINK_TARGET_ATTR);
     if (name === null || name === '') return;
-    void openWikiTarget(name);
+    void openWikiTarget(name, link);
   });
 }

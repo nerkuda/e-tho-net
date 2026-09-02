@@ -117,6 +117,14 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       md: permanent?.body_md ?? '',
       html: permanent?.body_html ?? '',
       attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
+      // Контекст комментария для флоу «создать мысль по legacy-ссылке»
+      // (карточка ETN 34ffbd75): владелец — родитель создаваемой мысли.
+      commentContext: {
+        ownerType: ctx.ownerType,
+        ownerId: ctx.ownerId,
+        commentKind: 'permanent',
+        getCommentId: () => permanent?.id ?? null,
+      },
       // Шаблон комментария типа мысли (08-ui-spec.md §6.4): когда у
       // редактируемой мысли есть тип с непустым `comment_template_md`,
       // контекстное меню редактора предлагает «Вставить текст шаблона из

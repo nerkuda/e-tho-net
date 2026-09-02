@@ -19,6 +19,7 @@ import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import { bindWikiCreateContext } from '../lib/wiki-create-context.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
@@ -85,6 +86,22 @@ export function createMarkdownField(opts: {
    * to the `attachmentsOwner` thought when omitted.
    */
   getMentionsExcludeThoughtId?: () => string | undefined;
+  /**
+   * Контекст комментария для флоу «создать отсутствующую мысль по
+   * legacy-ссылке» (карточка ETN 34ffbd75): клик по неразолвленной ссылке
+   * `[[имя|текст]]` в view-режиме открывает диалог добавления мысли с
+   * родителем-владельцем комментария. Передаётся вкладками комментариев
+   * (постоянный `comments.ts`, хроно `chrono-tab.ts`); без опции клик по
+   * отсутствующей цели остаётся прежним поведением (notice «не найдена»).
+   */
+  commentContext?: {
+    ownerType: 'thought' | 'link';
+    ownerId: string;
+    commentKind: 'permanent' | 'chronological';
+    getCommentId: () => string | null;
+    /** Вызывается после успешной замены ссылок (обновить таблицу хроно и т.п.). */
+    onLinksReplaced?: () => void;
+  };
   minRows?: number;
 }): HTMLElement {
   const root = div('md-field');
@@ -310,6 +327,21 @@ export function createMarkdownField(opts: {
       }
     },
   });
+
+  // Комментарийный контекст (карточка ETN 34ffbd75): после замены legacy-ссылок
+  // на [[#<id>]] поле перерисовывается через тот же handle, что и внешние
+  // обновления (setMarkdownField).
+  if (opts.commentContext !== undefined) {
+    const cc = opts.commentContext;
+    bindWikiCreateContext(root, {
+      ownerType: cc.ownerType,
+      ownerId: cc.ownerId,
+      commentKind: cc.commentKind,
+      getCommentId: cc.getCommentId,
+      refresh: (md, html) => setMarkdownField(root, md, html),
+      afterLinksReplaced: cc.onLinksReplaced,
+    });
+  }
 
   root.append(view, area);
   showView();

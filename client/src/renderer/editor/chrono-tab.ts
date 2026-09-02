@@ -220,6 +220,16 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       md: existing?.body_md ?? '',
       html: existing?.body_html ?? '',
       attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
+      // Контекст комментария для флоу «создать мысль по legacy-ссылке»
+      // (карточка ETN 34ffbd75): после замены ссылок поле перерисовывается,
+      // а таблица хроно — обновляет колонку «Кратко».
+      commentContext: {
+        ownerType: ctx.ownerType,
+        ownerId: ctx.ownerId,
+        commentKind: 'chronological',
+        getCommentId: () => commentId,
+        onLinksReplaced: () => void reload(),
+      },
       onSave: async (md) => {
         if (md.trim() === '' && commentId === null) return '';
         let html: string;

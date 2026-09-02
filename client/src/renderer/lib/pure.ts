@@ -464,6 +464,86 @@ export function parseAddLines(text: string): AddLine[] {
 }
 
 // ---------------------------------------------------------------------------
+// Legacy wiki-link replacement (task «Создание отсутствующих мыслей по
+// legacy-ссылкам», карточка ETN 34ffbd75)
+// ---------------------------------------------------------------------------
+
+/** Result of {@link replaceLegacyWikiLinks}. */
+export interface ReplacedWikiLinks {
+  /** The rewritten markdown (the input unchanged when `count` is 0). */
+  md: string;
+  /** How many links were replaced. */
+  count: number;
+}
+
+/**
+ * Replaces every legacy name-based wiki-link `[[имя|текст]]` / `[[имя]]` whose
+ * target name matches `targetName` EXACTLY (after the renderer's trimming:
+ * `[[  имя  | текст ]]` targets `имя`) with the ID form `[[#<thoughtId>|текст]]`
+ * / `[[#<thoughtId>]]`. Works on the markdown source (body_md), never on HTML.
+ *
+ * Matching mirrors `@etn/markdown`'s wiki-link parser: the content runs from
+ * `[[` to the FIRST `]]`, no newlines inside, the target is the part before
+ * the first `|` (trimmed). The alias part is preserved verbatim («текст после
+ * `|` остаётся прежним»); a whitespace-only alias is dropped (the renderer
+ * treats it as absent, so the plain `[[#<id>]]` form is used). Links whose
+ * trimmed target differs in even one character — `[[имя с продолжением]]`,
+ * `[[#<uuid>]]`, `[[n:<net>#<id>]]` — are left untouched.
+ *
+ * Pure string scan (no regex over the user text): names with regex
+ * metacharacters (`(`, `+`, `*`, `?`, `|`…) need no escaping and cannot
+ * produce false prefix matches — equality of the trimmed target is the only
+ * predicate.
+ */
+export function replaceLegacyWikiLinks(
+  md: string,
+  targetName: string,
+  thoughtId: string,
+): ReplacedWikiLinks {
+  const name = targetName.trim();
+  if (name === '') return { md, count: 0 };
+
+  let out = '';
+  /** How much of `md` is already copied into `out`. */
+  let copied = 0;
+  /** Scan cursor (may run ahead of `copied` past skipped blocks). */
+  let pos = 0;
+  let count = 0;
+  for (;;) {
+    const open = md.indexOf('[[', pos);
+    if (open === -1) break;
+    const close = md.indexOf(']]', open + 2);
+    if (close === -1) break;
+    const content = md.slice(open + 2, close);
+    const pipe = content.indexOf('|');
+    const target = (pipe === -1 ? content : content.slice(0, pipe)).trim();
+    // An empty/multiline target is not a link for the renderer — it resumes
+    // the inline scan one char further (mirrors markdown-it), so a valid
+    // `[[имя]]` may still start inside such a fragment.
+    if (target === '' || content.includes('\n') || content.includes('\r')) {
+      pos = open + 1;
+      continue;
+    }
+    // A valid link with another target: skip PAST it — the renderer consumes
+    // the whole `[[…]]` as one link, no nested links inside.
+    if (target !== name) {
+      pos = close + 2;
+      continue;
+    }
+    const aliasRaw = pipe === -1 ? '' : content.slice(pipe + 1);
+    const replacement =
+      aliasRaw.trim() === '' ? `[[#${thoughtId}]]` : `[[#${thoughtId}|${aliasRaw}]]`;
+    out += md.slice(copied, open) + replacement;
+    copied = close + 2;
+    pos = close + 2;
+    count++;
+  }
+  if (count === 0) return { md, count: 0 };
+  out += md.slice(copied);
+  return { md: out, count };
+}
+
+// ---------------------------------------------------------------------------
 // Search query helpers (08-ui-spec.md §3.1, §4.1)
 // ---------------------------------------------------------------------------
 

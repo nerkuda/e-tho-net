@@ -249,5 +249,36 @@ export function refreshWikiLinkCache(thoughtId: string, title: string, active: b
   }
 }
 
+// ---------------------------------------------------------------------------
+// Legacy name-target lookup (shared by navigation and hover preview)
+// ---------------------------------------------------------------------------
+
+/** A legacy `[[имя|текст]]` link resolved by name to a thought. */
+export interface LegacyWikiTargetHit {
+  thoughtId: string;
+  title: string;
+}
+
+/**
+ * Resolves a legacy name-only wiki-link target with the ONE lookup both the
+ * click navigation (`openWikiTarget` in `editor/wiki-link.ts`) and the
+ * Ctrl-hover preview (`resolveWikiLegacyNameContent` in
+ * `lib/hover-preview.ts`) use: FTS `scope=names`, exact title match first,
+ * else the first hit — so what the preview shows is exactly what a click
+ * would open. Lives here (not in either consumer) because hover-preview must
+ * not import `editor/wiki-link.ts` (module cycle, see its doc comment), while
+ * both already import this module. Returns `null` when nothing matches;
+ * API errors propagate to the caller (each consumer has its own error UX).
+ */
+export async function searchLegacyWikiTarget(
+  networkId: string,
+  name: string,
+): Promise<LegacyWikiTargetHit | null> {
+  const res = await etn.thoughts.search(networkId, { q: name, scope: 'names', limit: 10 });
+  const hit = res.by_names.find((h) => h.title === name) ?? res.by_names[0];
+  if (hit === undefined) return null;
+  return { thoughtId: hit.thought_id, title: hit.title };
+}
+
 /** Test-only hook. */
 export const __testing = { cache, RESOLVE_BATCH, substituteWikiIdsInSnippet, collectSnippetIds };

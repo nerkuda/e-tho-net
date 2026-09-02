@@ -56,7 +56,7 @@ import {
 
 import { div, el, fmtDate, renderHtml, span } from './dom.js';
 import { etn } from './etn.js';
-import { resolveWikiLinksInDom } from '../editor/wiki-link-resolver.js';
+import { resolveWikiLinksInDom, searchLegacyWikiTarget } from '../editor/wiki-link-resolver.js';
 import { store } from '../state.js';
 
 /** Pause before an open Ctrl+hover actually opens a popup, ms. Kept short but
@@ -381,10 +381,10 @@ async function resolveWikiThoughtContent(trigger: HTMLElement): Promise<HoverPre
 /** Legacy name-only wiki-link (`[[Имя мысли|текст]]`, rendered as
  *  `.wiki-link[data-wiki-target]` without `data-wiki-id`): resolves the target
  *  by name with the SAME lookup the navigation handler uses
- *  (`openWikiTarget` in `editor/wiki-link.ts` — exact title match, else the
- *  first name hit; not imported from there to keep this module's dependency
- *  direction, see the module doc comment — the one `etn.thoughts.search` call
- *  is duplicated instead) and previews the found thought's permanent comment,
+ *  (`searchLegacyWikiTarget` in `editor/wiki-link-resolver.ts` — exact title
+ *  match, else the first name hit; the lookup itself lives in that module
+ *  precisely so this one does not have to import `editor/wiki-link.ts`, see
+ *  the module doc comment) and previews the found thought's permanent comment,
  *  so what the preview shows is exactly what a click would open. Not found /
  *  lookup failed → `null`, no popup (same as a `wiki-link-deleted` id-link).
  *  The heading names the FOUND thought, uniform with id-links whose visible
@@ -397,10 +397,9 @@ async function resolveWikiLegacyNameContent(trigger: HTMLElement): Promise<Hover
   let thoughtId: string;
   let foundTitle: string;
   try {
-    const res = await etn.thoughts.search(networkId, { q: name, scope: 'names', limit: 10 });
-    const hit = res.by_names.find((h) => h.title === name) ?? res.by_names[0];
-    if (hit === undefined) return null;
-    thoughtId = hit.thought_id;
+    const hit = await searchLegacyWikiTarget(networkId, name);
+    if (hit === null) return null;
+    thoughtId = hit.thoughtId;
     foundTitle = hit.title;
   } catch {
     return null;
