@@ -1170,8 +1170,9 @@ DELETE /api/v1/networks/{nid}/comments/{id}   If-Match
 # @etn/markdown (markdown-it): GFM-таблицы, wiki-ссылки [[имя|алиас]],
 # размеры картинок ![alt|600px](url) / ![alt|50%](url), подсветка
 # fenced-кода (highlight.js). XSS-безопасность: html:false (raw HTML
-# экранируется), allow-list протоколов (http/https/mailto; для картинок
-# дополнительно data:/file:/etnimg:), лимит длины 256 КиБ. При смене версии
+# экранируется), allow-list протоколов (ссылки: http/https/mailto и etnimg
+# для локальных файлов вложений вида [имя](etnimg://…); картинки: те же
+# протоколы плюс data:/file:), лимит длины 256 КиБ. При смене версии
 # рендера сервер один раз при старте перерендеривает кеш body_html всех
 # комментариев (маркер в L1-настройке md.render_version).
 # Аналогично для /links/{id}/comments
