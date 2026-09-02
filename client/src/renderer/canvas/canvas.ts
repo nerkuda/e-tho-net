@@ -1270,11 +1270,22 @@ function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
   if (!ref.active) row.classList.add('dim');
   row.append(icon, title);
   markThoughtCommentPreview(row, ref.id, ref.title);
+  // Same single/double-click interplay as the clouds themselves: the first
+  // click defers the "open in editor" action so a quick second click cancels
+  // it and the dblclick focus action runs instead — an immediate single-click
+  // handler would close the popup on the first click and kill the dblclick.
+  let pendingClick: { cancel: () => void } | null = null;
   row.addEventListener('click', () => {
-    closeHoverPreview();
-    openThoughtInEditor(ref.id);
+    pendingClick?.cancel();
+    pendingClick = deferSingleClick(() => {
+      pendingClick = null;
+      closeHoverPreview();
+      openThoughtInEditor(ref.id);
+    });
   });
   row.addEventListener('dblclick', () => {
+    pendingClick?.cancel();
+    pendingClick = null;
     closeHoverPreview();
     void setFocus(ref.id);
   });
