@@ -3405,6 +3405,49 @@ body.cloud-dragging * {
   cursor: default;
 }
 
+/* Ctrl-hover preview of links inside comment text (stage 2/3, lib/hover-
+   preview.ts's wireCommentLinksInDom): cross-network wiki-link badge, plain
+   URL text and file previews (image / text / name-only fallback). */
+.hp-network-badge {
+  padding: 2px 0;
+}
+.hp-network-name {
+  font-size: 13px;
+}
+.hp-url-body {
+  padding: 2px 0;
+}
+.hp-url-text {
+  font-size: 12px;
+  word-break: break-all;
+  color: var(--text-faint);
+}
+.hp-file-preview {
+  display: flex;
+}
+.hp-file-image {
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  display: block;
+}
+.hp-file-text {
+  max-height: 360px;
+  overflow-y: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  width: 100%;
+}
+.hp-file-fallback {
+  padding: 2px 0;
+}
+.hp-file-name {
+  font-size: 13px;
+  word-break: break-all;
+}
+
 /* Built-in attachment viewer (images / text, 08-ui-spec §6.5). */
 .attachment-viewer {
   max-height: 60vh;

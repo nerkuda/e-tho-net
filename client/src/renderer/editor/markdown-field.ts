@@ -16,6 +16,7 @@ import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
 import { div, errText, renderHtml } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { wireCommentLinksInDom } from '../lib/hover-preview.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
@@ -160,6 +161,13 @@ export function createMarkdownField(opts: {
       // ID-based wiki-links are emitted as empty <span data-wiki-id> by
       // @etn/markdown; resolve them to titles asynchronously (R7).
       void resolveWikiLinksInDom(view, networkId);
+      // Ctrl+hover preview on wiki-links/file-links/URLs inside the comment
+      // text (task «Предпросмотр содержимого с зажатым Ctrl», stage 2/3).
+      // Marking does not need to wait for the wiki-link resolution above —
+      // the wiki resolvers re-check the live DOM (title text, the
+      // `wiki-link-deleted` class) lazily at hover time, well after that
+      // promise settles.
+      wireCommentLinksInDom(view);
     }
   };
 

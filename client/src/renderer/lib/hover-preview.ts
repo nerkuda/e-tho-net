@@ -1,21 +1,22 @@
 /**
  * Ctrl-hover content preview engine (task «Предпросмотр содержимого с
- * зажатым Ctrl», stage 1/3).
+ * зажатым Ctrl», stages 1-2/3).
  *
  * A generic, reusable popup engine modelled after `lib/image-zoom.ts`: one
  * delegated set of `document`-level listeners, a `pointer-events: auto`
  * popup (unlike the image magnifier — this one must be scrollable and host
  * clickable links), content resolved lazily per "kind" via a small resolver
- * registry so new content types (wiki-links, files, URLs — stage 2; search/
- * pinned/selection rows — stage 3) can register themselves without touching
- * this file's core.
+ * registry so new content types (search/pinned/selection rows — stage 3) can
+ * register themselves without touching this file's core.
  *
  * Trigger elements declare what to show via `data-hp-*` attributes (set by
  * {@link markCommentPreview}/{@link markChronoPreview}/
- * {@link markAttachmentsPreview}/{@link markThoughtCommentPreview}, or by a
- * future caller calling {@link registerHoverPreviewResolver} + setting
- * `data-hp-kind` itself). This mirrors `image-zoom.ts`'s
- * `data-zoom-thought`/`data-zoom-attachment` convention.
+ * {@link markAttachmentsPreview}/{@link markThoughtCommentPreview} for
+ * indicators, and by {@link wireCommentLinksInDom} for links inside rendered
+ * comment text — stage 2 — or by a future caller calling
+ * {@link registerHoverPreviewResolver} + setting `data-hp-kind` itself). This
+ * mirrors `image-zoom.ts`'s `data-zoom-thought`/`data-zoom-attachment`
+ * convention.
  *
  * Open/close model (differs from `image-zoom.ts` on purpose, see the task's
  * acceptance criteria):
@@ -32,17 +33,21 @@
  *  - nesting is capped at {@link MAX_DEPTH} levels.
  *
  * NOTE on dependency direction: this module intentionally imports only from
- * `lib/*`, `state.ts`, shared types and `editor/wiki-link-resolver.ts` (which
- * itself has no further renderer dependencies). It must NOT import from
- * `editor/markdown-field.ts`, `editor/chrono-tab.ts` or
- * `editor/attachments.ts` — those already import `canvas/canvas.ts`, and
- * `canvas.ts` imports this module to wire its indicators; importing back
- * from here would close a module cycle. A couple of small pure helpers
- * (`etnimgUrl`, attachment-thumb resolution, chrono `shortText`) are
- * therefore duplicated locally instead of imported.
+ * `lib/*`, `state.ts`, shared types, `@etn/markdown` (constants only) and
+ * `editor/wiki-link-resolver.ts` (which itself has no further renderer
+ * dependencies). It must NOT import from `editor/markdown-field.ts`,
+ * `editor/chrono-tab.ts` or `editor/attachments.ts` — those already import
+ * `canvas/canvas.ts`, and `canvas.ts` imports this module to wire its
+ * indicators; importing back from here would close a module cycle. A couple
+ * of small pure helpers (`etnimgUrl`, attachment-thumb resolution, chrono
+ * `shortText`) are therefore duplicated locally instead of imported. The
+ * reverse edge is fine and used by stage 2: `editor/markdown-field.ts`
+ * imports {@link wireCommentLinksInDom} from here to mark the links inside a
+ * freshly rendered comment view.
  */
 
 import type { Attachment, Comment } from '@etn/shared';
+import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_NETWORK_ATTR } from '@etn/markdown';
 
 import { div, el, fmtDate, renderHtml, span } from './dom.js';
 import { etn } from './etn.js';
@@ -294,6 +299,218 @@ registerHoverPreviewResolver('chrono', resolveChronoContent);
 registerHoverPreviewResolver('attachments', resolveAttachmentsContent);
 
 // ---------------------------------------------------------------------------
+// Stage 2/3: links inside rendered comment text (view mode).
+//
+// `wireCommentLinksInDom` is the single marking pass reused everywhere a
+// server-rendered comment body lands in the DOM — the top-level comment view
+// (`editor/markdown-field.ts`'s `renderView`) and every nested popup built by
+// this module itself (the permanent-comment preview; file-text preview
+// content has no links so it needs no wiring). It must run on the SAME
+// element `resolveWikiLinksInDom` was called on, in either order — the wiki
+// resolvers below re-check the live `wiki-link-deleted` class at hover time
+// (after the ~200ms open debounce, well past the resolver's async paint),
+// not at marking time, so marking never needs to wait for that promise.
+// ---------------------------------------------------------------------------
+
+/** Marks every hoverable link inside a rendered comment body with the right
+ *  `data-hp-kind` — `.wiki-link[data-wiki-id]` (same/other network) and plain
+ *  `<a href>` (file/URL). Legacy name-only wiki-links (no stable id) and any
+ *  `<a>` that wraps an `<img>` (its own Ctrl-hover belongs to `image-zoom.ts`,
+ *  see the module doc comment) are left unmarked — Ctrl+hover over them does
+ *  nothing. Safe to call repeatedly; idempotent (just (re)writes attributes). */
+export function wireCommentLinksInDom(root: HTMLElement): void {
+  const wikiLinks = root.querySelectorAll<HTMLElement>(`span.${WIKI_LINK_CLASS}[${WIKI_LINK_ID_ATTR}]`);
+  for (const span of wikiLinks) {
+    const id = span.getAttribute(WIKI_LINK_ID_ATTR);
+    if (id === null || id === '') continue;
+    span.dataset['hpKind'] = span.hasAttribute(WIKI_LINK_NETWORK_ATTR) ? 'wiki-cross-network' : 'wiki-thought';
+  }
+  const anchors = root.querySelectorAll<HTMLAnchorElement>('a[href]');
+  for (const a of anchors) {
+    if (a.classList.contains(WIKI_LINK_CLASS)) continue; // handled above
+    if (a.querySelector('img') !== null) continue; // let image-zoom own it
+    a.dataset['hpKind'] = 'link';
+  }
+}
+
+/** Wiki-link to a thought of the SAME network (`.wiki-link[data-wiki-id]`
+ *  without `data-wiki-network`): shows the target's permanent comment. The
+ *  target is re-checked live (not from a value baked in at marking time) —
+ *  missing/deleted/inaccessible (the `wiki-link-deleted` class painted by
+ *  `resolveWikiLinksInDom`, or a failed lookup for any other reason) → `null`
+ *  per spec ("мысль отсутствует — ничего не показывать"). */
+async function resolveWikiThoughtContent(trigger: HTMLElement): Promise<HoverPreviewContent | null> {
+  if (trigger.classList.contains('wiki-link-deleted')) return null;
+  const thoughtId = trigger.getAttribute(WIKI_LINK_ID_ATTR);
+  const networkId = store.state.networkId;
+  if (thoughtId === null || thoughtId === '' || networkId === null) return null;
+  let comments: Comment[];
+  try {
+    comments = await etn.comments.list(networkId, 'thought', thoughtId);
+  } catch {
+    return null;
+  }
+  const permanent = comments.find((c) => c.kind === 'permanent');
+  if (permanent === undefined || permanent.body_html.trim() === '') return null;
+  const body = div('comment-view hp-comment-body');
+  renderHtml(body, permanent.body_html);
+  wireCommentLinksInDom(body);
+  void resolveWikiLinksInDom(body, networkId);
+  const label = trigger.textContent?.trim();
+  return { title: label !== undefined && label !== '' ? label : '—', body };
+}
+
+/** Wiki-link to a thought in ANOTHER network (`[[n:<net>#<id>]]`): shows only
+ *  a badge with that network's name — no content is fetched, and (per spec)
+ *  the target network's own accessibility is not checked here (the user's
+ *  problem when they click through). Falls back to the raw network id when
+ *  the name cannot be resolved (no access / offline — the documented edge
+ *  case). */
+async function resolveWikiCrossNetworkContent(trigger: HTMLElement): Promise<HoverPreviewContent | null> {
+  const netId = trigger.getAttribute(WIKI_LINK_NETWORK_ATTR);
+  if (netId === null || netId === '') return null;
+  let displayName = store.state.networkList.find((n) => n.id === netId)?.display_name;
+  if (displayName === undefined) {
+    try {
+      const list = await etn.networks.list();
+      store.update({ networkList: list });
+      displayName = list.find((n) => n.id === netId)?.display_name;
+    } catch {
+      displayName = undefined;
+    }
+  }
+  const name = displayName ?? netId;
+  const body = div('hp-network-badge');
+  body.append(el('div', 'hp-network-name', `🌐 ${name}`));
+  const label = trigger.textContent?.trim();
+  return { title: label !== undefined && label !== '' ? label : name, body };
+}
+
+/** Content-types treated as text for a file preview, on top of the byte sniff
+ *  in {@link looksLikeText} below (case-insensitive substring match against
+ *  the response's `Content-Type`). */
+const TEXT_CONTENT_TYPE_RE = /^text\/|json|xml|javascript|csv|yaml/i;
+
+/** Cap on how much of a previewed file's text is shown (chars). */
+const FILE_TEXT_PREVIEW_LIMIT = 20_000;
+
+/** Basename of an `etnimg://` (or any) URL's path, decoded — the "full file
+ *  name" the spec asks for in the fallback popup. Falls back to the raw href
+ *  when the URL cannot be parsed. */
+function fileNameFromUrl(href: string): string {
+  try {
+    const segments = decodeURIComponent(new URL(href).pathname)
+      .split('/')
+      .filter((s) => s !== '');
+    return segments.length > 0 ? segments[segments.length - 1]! : href;
+  } catch {
+    return href;
+  }
+}
+
+/** Cheap text/binary sniff over the first bytes of a fetched file: a NUL byte
+ *  anywhere marks it binary; otherwise it's text when almost every byte is
+ *  printable ASCII, a common control char, or part of a UTF-8 multibyte
+ *  sequence (`>= 0x80`). Used only when the `Content-Type` header itself is
+ *  missing/generic (`application/octet-stream`) — the etnimg protocol only
+ *  special-cases a handful of extensions (main/index.ts's `ETNIMG_TYPES`),
+ *  so this is what actually covers "код, markdown, json, csv... по эвристике
+ *  текстовый/бинарный, не жёсткий список расширений" for everything else. */
+function looksLikeText(buf: ArrayBuffer): boolean {
+  const bytes = new Uint8Array(buf.slice(0, 4096));
+  if (bytes.length === 0) return true;
+  let printable = 0;
+  for (const b of bytes) {
+    if (b === 0) return false;
+    if ((b >= 0x20 && b < 0x7f) || b === 9 || b === 10 || b === 13 || b >= 0x80) printable++;
+  }
+  return printable / bytes.length > 0.95;
+}
+
+/** Full-size `<img>` for a file preview (unlike the small `imgThumb` glyph-
+ *  fallback used for attachment rows — a broken image here just shows the
+ *  browser's default broken-image icon, acceptable for a best-effort preview). */
+function fileImagePreview(src: string): HTMLElement {
+  const img = el('img', 'hp-file-image');
+  img.src = src;
+  img.alt = '';
+  return img;
+}
+
+/** Popup showing only the file's name — the "иначе" branch for a file link
+ *  whose content is not an image/text (binary, unreadable, or the fetch
+ *  itself failed). */
+function fileNameFallback(filename: string): HoverPreviewContent {
+  const body = div('hp-file-fallback');
+  body.append(el('div', 'hp-file-name', filename));
+  return { title: filename, body };
+}
+
+/** Local attachment file link (`href` starting with `etnimg:`): images show
+ *  inline, text-ish content shows as a scrollable `<pre>` (truncated), any
+ *  other content falls back to the filename-only popup. The `etnimg` protocol
+ *  is local-only (served by the Electron main process straight off disk / the
+ *  active connection's own REST API for remote-server attachments, see
+ *  `client/src/main/index.ts`'s `registerEtnimgProtocol`) — unlike a remote
+ *  URL this fetch never leaves the app's own trust boundary. */
+async function resolveFileLinkContent(href: string): Promise<HoverPreviewContent> {
+  const filename = fileNameFromUrl(href);
+  if (IMAGE_URL_RE.test(href)) {
+    const body = div('hp-file-preview');
+    body.append(fileImagePreview(href));
+    return { title: filename, body };
+  }
+  let resp: Response;
+  try {
+    resp = await fetch(href);
+    if (!resp.ok) throw new Error(String(resp.status));
+  } catch {
+    return fileNameFallback(filename);
+  }
+  const contentType = resp.headers.get('content-type') ?? '';
+  if (contentType.startsWith('image/')) {
+    const body = div('hp-file-preview');
+    body.append(fileImagePreview(href));
+    return { title: filename, body };
+  }
+  let buf: ArrayBuffer;
+  try {
+    buf = await resp.arrayBuffer();
+  } catch {
+    return fileNameFallback(filename);
+  }
+  const generic = contentType === '' || contentType === 'application/octet-stream';
+  const isText = TEXT_CONTENT_TYPE_RE.test(contentType) || (generic && looksLikeText(buf));
+  if (!isText) return fileNameFallback(filename);
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+  const truncated = text.length > FILE_TEXT_PREVIEW_LIMIT;
+  const body = div('hp-file-preview');
+  body.append(
+    el('pre', 'hp-file-text', truncated ? `${text.slice(0, FILE_TEXT_PREVIEW_LIMIT)}\n…` : text),
+  );
+  return { title: filename, body };
+}
+
+/** Any plain `<a href>` in comment text that is not a wiki-link: a local
+ *  attachment file (`etnimg:` — case "ссылка на файл") gets its content
+ *  previewed via {@link resolveFileLinkContent}; every other URL (http(s),
+ *  mailto, …) is the "прочий URL" case — its content is never fetched, the
+ *  popup just shows the full URL text per spec. */
+async function resolveLinkContent(trigger: HTMLElement): Promise<HoverPreviewContent | null> {
+  const href = trigger.getAttribute('href');
+  if (href === null || href === '') return null;
+  if (/^etnimg:/i.test(href)) return resolveFileLinkContent(href);
+  const body = div('hp-url-body');
+  body.append(el('div', 'hp-url-text', href));
+  const label = trigger.textContent?.trim();
+  return { title: label !== undefined && label !== '' ? label : href, body };
+}
+
+registerHoverPreviewResolver('wiki-thought', resolveWikiThoughtContent);
+registerHoverPreviewResolver('wiki-cross-network', resolveWikiCrossNetworkContent);
+registerHoverPreviewResolver('link', resolveLinkContent);
+
+// ---------------------------------------------------------------------------
 // Engine: open chain, positioning, event delegation
 // ---------------------------------------------------------------------------
 
@@ -540,4 +757,6 @@ export const hoverPreviewInternals = {
   MAX_DEPTH,
   OPEN_DEBOUNCE_MS,
   CLOSE_DELAY_MS,
+  fileNameFromUrl,
+  looksLikeText,
 };
