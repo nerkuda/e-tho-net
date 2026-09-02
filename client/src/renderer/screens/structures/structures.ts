@@ -41,6 +41,11 @@ import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
 import { setActiveView } from '../active-view.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
+import {
+  markAttachmentsPreview,
+  markChronoPreview,
+  markCommentPreview,
+} from '../../lib/hover-preview.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
@@ -903,6 +908,9 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   const perm = span('📝', 'ind dim');
   const chrono = span('📅', 'ind dim');
   const att = span('📎', 'ind dim');
+  markCommentPreview(perm, 'thought', row.thoughtId, ref?.title ?? '—');
+  markChronoPreview(chrono, 'thought', row.thoughtId, ref?.title ?? '—');
+  markAttachmentsPreview(att, 'thought', row.thoughtId, ref?.title ?? '—');
   ind.append(perm, chrono, att);
 
   const main = div('cloud-main');

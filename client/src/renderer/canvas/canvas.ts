@@ -27,6 +27,7 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { markAttachmentsPreview, markChronoPreview, markCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { notice } from '../lib/notice.js';
 import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
@@ -593,7 +594,13 @@ function renderFocusRow(focus: FocusResponse): void {
   const title = el('div', 'cloud-title', thought.title);
   setTooltip(title, thought.title.slice(0, 400));
   const ind = div('cloud-ind');
-  ind.append(span('📝', 'ind dim'), span('📅', 'ind dim'), span('📎', 'ind dim'));
+  const focusPerm = span('📝', 'ind dim');
+  const focusChrono = span('📅', 'ind dim');
+  const focusAtt = span('📎', 'ind dim');
+  markCommentPreview(focusPerm, 'thought', thought.id, thought.title);
+  markChronoPreview(focusChrono, 'thought', thought.id, thought.title);
+  markAttachmentsPreview(focusAtt, 'thought', thought.id, thought.title);
+  ind.append(focusPerm, focusChrono, focusAtt);
   const main = div('cloud-main');
   main.append(title, ind);
 
@@ -1121,6 +1128,9 @@ function buildCloud(
   const perm = span('📝', 'ind dim');
   const chrono = span('📅', 'ind dim');
   const att = span('📎', 'ind dim');
+  markCommentPreview(perm, 'thought', entry.id, cloudTitleFull);
+  markChronoPreview(chrono, 'thought', entry.id, cloudTitleFull);
+  markAttachmentsPreview(att, 'thought', entry.id, cloudTitleFull);
   ind.append(perm, chrono, att);
 
   const main = div('cloud-main');

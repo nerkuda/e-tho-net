@@ -28,6 +28,11 @@ import type { FocusEdge, FocusResponse, LinkType } from '@etn/shared';
 import { closeMenu, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { div, el } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import {
+  markAttachmentsPreview,
+  markChronoPreview,
+  markCommentPreview,
+} from '../lib/hover-preview.js';
 import { ELLIPSE_INSIDE } from '../lib/pure.js';
 import { resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import { store } from '../state.js';
@@ -796,20 +801,25 @@ function ensurePopover(
   }
 }
 
-/** Builds the popover content for a bundle (type names + comment/attachment counts). */
-function showPopover(bundle: Bundle): void {
-  hidePopover();
-  popover = div('link-popover');
-  popover.dataset['key'] = bundle.key;
-  activePopoverBundle = bundle;
-  const names = bundle.edges
+/** Type names of a bundle's links (also used as the Ctrl-hover preview title
+ *  for a single-link bundle — a link has no title of its own). */
+function bundleTypeNames(bundle: Bundle): string {
+  return bundle.edges
     .map((edge) => {
       const type =
         edge.type_id !== null ? store.state.linkTypes.find((t) => t.id === edge.type_id) : undefined;
       return type === undefined ? 'без типа' : `${type.name_forward} / ${type.name_reverse}`;
     })
     .join(' · ');
-  popover.append(el('div', 'link-popover-types', names));
+}
+
+/** Builds the popover content for a bundle (type names + comment/attachment counts). */
+function showPopover(bundle: Bundle): void {
+  hidePopover();
+  popover = div('link-popover');
+  popover.dataset['key'] = bundle.key;
+  activePopoverBundle = bundle;
+  popover.append(el('div', 'link-popover-types', bundleTypeNames(bundle)));
   const counts = div('link-popover-counts');
   popover.append(counts);
   document.body.append(popover);
@@ -843,7 +853,10 @@ export function invalidateLinkCounts(linkId: string | null): void {
   if (counts instanceof HTMLElement) void loadLinkCounts(bundle, counts);
 }
 
-/** Lazily fetches comment/chronology/attachment counts for a bundle. */
+/** Lazily fetches comment/chronology/attachment counts for a bundle. Each
+ *  count renders as its own Ctrl-hoverable indicator, same as the canvas
+ *  cloud (§15.4) — a bundle of several links has no single owner to preview,
+ *  so it stays a plain count. */
 async function loadLinkCounts(bundle: Bundle, target: HTMLElement): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
@@ -867,7 +880,14 @@ async function loadLinkCounts(bundle: Bundle, target: HTMLElement): Promise<void
     }
   }
   if (popover === null || popover.dataset['key'] !== bundle.key) return;
-  target.textContent = `📝 ${cached.comments} · 📅 ${cached.chrono} · 📎 ${cached.attachments}`;
+  const title = bundleTypeNames(bundle);
+  const perm = el('span', 'link-popover-ind', `📝 ${cached.comments}`);
+  const chrono = el('span', 'link-popover-ind', `📅 ${cached.chrono}`);
+  const att = el('span', 'link-popover-ind', `📎 ${cached.attachments}`);
+  markCommentPreview(perm, 'link', linkId, title);
+  markChronoPreview(chrono, 'link', linkId, title);
+  markAttachmentsPreview(att, 'link', linkId, title);
+  target.replaceChildren(perm, ' · ', chrono, ' · ', att);
 }
 
 // ---------------------------------------------------------------------------
