@@ -75,6 +75,17 @@ const POPUP_OFFSET = 10;
 export interface HoverPreviewContent {
   title: string;
   body: HTMLElement;
+  /**
+   * Overrides the popup's default `max-width` (420px, see `styles.css`),
+   * in px. Used by content whose size must scale with a specific viewport
+   * rather than the app window — e.g. the canvas ellipse neighbours list,
+   * capped at 25% of the canvas viewport's width, which can exceed the
+   * generic default on a wide window.
+   */
+  maxWidthPx?: number;
+  /** Overrides `.hp-body`'s default `max-height` (min(420px, 60vh)), in px —
+   *  same reasoning as {@link maxWidthPx} (70% of the canvas viewport). */
+  maxHeightPx?: number;
 }
 
 /** Builds the preview content for one trigger element, or `null` to show nothing
@@ -152,6 +163,27 @@ export function markAttachmentsPreview(
  */
 export function markThoughtCommentPreview(trigger: HTMLElement, thoughtId: string, title: string): void {
   markCommentPreview(trigger, 'thought', thoughtId, title);
+}
+
+/**
+ * Marks a canvas cloud's top/bottom ellipse as a Ctrl-hover trigger for its
+ * incoming (`dir: 'parents'`, top ellipse) / outgoing (`dir: 'children'`,
+ * bottom ellipse) neighbour list (task «Распространить предпросмотр с
+ * зажатым Ctrl на эллипсы облачков мыслей»). The `neighbors` resolver itself
+ * is registered by `canvas/canvas.ts` (via {@link registerHoverPreviewResolver})
+ * rather than living here — it needs `applyCloudStyle`/`resolveCloudStyle`/
+ * `applyThoughtIcon`, which live in `canvas.ts`, and `canvas.ts` already
+ * imports this module (see the module doc comment on the dependency
+ * direction) — importing back would close a module cycle.
+ */
+export function markNeighborsPreview(
+  trigger: HTMLElement,
+  thoughtId: string,
+  dir: 'parents' | 'children',
+  title: string,
+): void {
+  markTrigger(trigger, 'neighbors', 'thought', thoughtId, title);
+  trigger.dataset['hpDir'] = dir;
 }
 
 // ---------------------------------------------------------------------------
@@ -635,6 +667,17 @@ function closeChain(): void {
   cancelCloseTimer();
 }
 
+/**
+ * Closes the whole open popup chain on demand. Used by a row rendered inside
+ * a popup that navigates away on click (e.g. the neighbours-preview list —
+ * "open in editor" / "focus") — the popup must not linger once its content is
+ * no longer what the cursor is over.
+ */
+export function closeHoverPreview(): void {
+  cancelPendingOpen();
+  closeChain();
+}
+
 /** Drops every open popup deeper than `maxDepth` (a new nested open replaces
  *  whatever nested chain was open before it, like re-hovering a sibling link). */
 function truncateChainTo(maxDepth: number): void {
@@ -660,11 +703,11 @@ function isAlreadyOpenAt(candidate: HTMLElement, depth: number): boolean {
 function buildPopupEl(content: HoverPreviewContent, depth: number): HTMLElement {
   const popup = div('hover-preview-popup');
   popup.dataset['depth'] = String(depth);
-  popup.append(el('div', 'hp-head', content.title), (() => {
-    const bodyWrap = div('hp-body');
-    bodyWrap.append(content.body);
-    return bodyWrap;
-  })());
+  if (content.maxWidthPx !== undefined) popup.style.maxWidth = `${content.maxWidthPx}px`;
+  const bodyWrap = div('hp-body');
+  if (content.maxHeightPx !== undefined) bodyWrap.style.maxHeight = `${content.maxHeightPx}px`;
+  bodyWrap.append(content.body);
+  popup.append(el('div', 'hp-head', content.title), bodyWrap);
   return popup;
 }
 

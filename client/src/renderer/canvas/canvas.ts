@@ -21,13 +21,23 @@
  *   comment/attachment events invalidate the cache.
  */
 
+import { THOUGHT_RESOLVE_MAX_IDS } from '@etn/shared';
 import type { FocusEdge, FocusNeighbor, FocusResponse, IconKind, ThoughtRef } from '@etn/shared';
 
 import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import { markAttachmentsPreview, markChronoPreview, markCommentPreview } from '../lib/hover-preview.js';
+import {
+  closeHoverPreview,
+  markAttachmentsPreview,
+  markChronoPreview,
+  markCommentPreview,
+  markNeighborsPreview,
+  markThoughtCommentPreview,
+  registerHoverPreviewResolver,
+  type HoverPreviewContent,
+} from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { notice } from '../lib/notice.js';
 import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
@@ -36,7 +46,11 @@ import {
   cloudGeom,
   cloudHeight,
   contrastText,
+  neighborsDirForEllipse,
+  neighborsPreviewBounds,
+  neighborsPreviewHeading,
   shortenCompoundName,
+  sortRefsByTitle,
 } from '../lib/pure.js';
 import { store } from '../state.js';
 import {
@@ -88,6 +102,10 @@ const OVERSCAN_ROWS = 2;
 const INDICATOR_CONCURRENCY = 3;
 /** Minimum mouse travel before a press becomes a drag, px. */
 export const DRAG_THRESHOLD_PX = 4;
+/** `etn.thoughts.neighbors` limit for the Ctrl-hover ellipse preview list —
+ *  same figure `selection.ts`'s `collectNeighbors` uses for the equivalent
+ *  gesture (Ctrl+click an ellipse to select all neighbours). */
+const NEIGHBORS_PREVIEW_LIMIT = 200;
 
 /** Add-thought dialog context produced by an ellipse drag (H14 registers). */
 export interface AddDialogContext {
@@ -586,6 +604,8 @@ function renderFocusRow(focus: FocusResponse): void {
   setTooltip(bottomEllipse, `Исходящие связи: ${children}`);
   wireEllipseDrag(topEllipse, thought.id, 'parent');
   wireEllipseDrag(bottomEllipse, thought.id, 'child');
+  markNeighborsPreview(topEllipse, thought.id, neighborsDirForEllipse('top'), thought.title);
+  markNeighborsPreview(bottomEllipse, thought.id, neighborsDirForEllipse('bottom'), thought.title);
 
   const iconBox = div('cloud-icon');
   // Same resolution as zone clouds: the thought's own icon wins, else the
@@ -1123,6 +1143,8 @@ function buildCloud(
   const cloudTitle = shortenCompoundName(cloudTitleFull, relatedTitles.get(entry.id) ?? []);
   const title = el('div', 'cloud-title', cloudTitle);
   setTooltip(title, cloudTitleFull);
+  markNeighborsPreview(topEllipse, entry.id, neighborsDirForEllipse('top'), cloudTitleFull);
+  markNeighborsPreview(bottomEllipse, entry.id, neighborsDirForEllipse('bottom'), cloudTitleFull);
 
   const ind = div('cloud-ind');
   const perm = span('📝', 'ind dim');
@@ -1209,6 +1231,99 @@ function buildCloud(
 
   return cloud;
 }
+
+// ---------------------------------------------------------------------------
+// Ctrl-hover ellipse neighbours preview (task «Распространить предпросмотр с
+// зажатым Ctrl на эллипсы облачков мыслей») — registers a `neighbors` content
+// resolver with the shared `lib/hover-preview.ts` engine. Lives here (not in
+// hover-preview.ts itself) because it needs `applyCloudStyle`/
+// `resolveCloudStyle`/`applyThoughtIcon`, and hover-preview.ts must not import
+// canvas.ts (module doc comment there) — canvas.ts already imports
+// hover-preview.ts for the mark* trigger helpers, so importing back would
+// close a cycle.
+// ---------------------------------------------------------------------------
+
+/** Resolves a batch of thought ids into full `ThoughtRef`s, chunked at the
+ *  server's `thoughts.resolve` cap (same pattern as `selection.ts`). */
+async function resolveNeighborRefs(networkId: string, ids: string[]): Promise<ThoughtRef[]> {
+  const refs: ThoughtRef[] = [];
+  for (let i = 0; i < ids.length; i += THOUGHT_RESOLVE_MAX_IDS) {
+    const chunk = await etn.thoughts.resolve(networkId, ids.slice(i, i + THOUGHT_RESOLVE_MAX_IDS));
+    refs.push(...chunk);
+  }
+  return refs;
+}
+
+/** One row of the neighbours-preview list — same visual pattern as
+ *  `editor/links-tab.ts`'s `endpointRow`/`linkRow`: icon + own/type style,
+ *  dimmed when inactive, no indicators of its own, nested Ctrl-hover shows
+ *  the row's own permanent comment. A click/double-click navigates AND closes
+ *  this popup (a lingering popup over content that just changed reads as a
+ *  bug — no existing precedent does this navigate-from-inside-a-popup
+ *  gesture, so the close is explicit here). */
+function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
+  const row = div('link-group-item');
+  applyCloudStyle(row, resolveCloudStyle(ref));
+  const icon = span('', 'mini-icon');
+  applyThoughtIcon(icon, ref);
+  const title = el('span', 'link-item-title', ref.title);
+  if (!ref.active) row.classList.add('dim');
+  row.append(icon, title);
+  markThoughtCommentPreview(row, ref.id, ref.title);
+  row.addEventListener('click', () => {
+    closeHoverPreview();
+    openThoughtInEditor(ref.id);
+  });
+  row.addEventListener('dblclick', () => {
+    closeHoverPreview();
+    void setFocus(ref.id);
+  });
+  return row;
+}
+
+/** Builds the `neighbors` popup content: incoming/outgoing links of the
+ *  triggering ellipse's thought, alphabetical, scrollable, capped at 70%
+ *  height / 25% width of the canvas viewport. Empty list → `null` (no popup),
+ *  per spec — mirrors the built-in resolvers' "nothing to show" convention. */
+async function resolveNeighborsPreview(trigger: HTMLElement): Promise<HoverPreviewContent | null> {
+  const thoughtId = trigger.dataset['hpOwnerId'];
+  const dir = trigger.dataset['hpDir'];
+  const networkId = store.state.networkId;
+  if (
+    thoughtId === undefined ||
+    thoughtId === '' ||
+    (dir !== 'parents' && dir !== 'children') ||
+    networkId === null
+  ) {
+    return null;
+  }
+  let neighbors: FocusNeighbor[];
+  try {
+    neighbors = await etn.thoughts.neighbors(networkId, thoughtId, dir, NEIGHBORS_PREVIEW_LIMIT);
+  } catch {
+    return null;
+  }
+  const ids = [...new Set(neighbors.map((n) => n.id))];
+  if (ids.length === 0) return null;
+  let refs: ThoughtRef[];
+  try {
+    refs = await resolveNeighborRefs(networkId, ids);
+  } catch {
+    return null;
+  }
+  if (refs.length === 0) return null;
+  const body = div('link-group-rows');
+  for (const ref of sortRefsByTitle(refs)) body.append(neighborPreviewRow(ref));
+  const bounds = host !== null ? neighborsPreviewBounds(host.getBoundingClientRect()) : null;
+  return {
+    title: neighborsPreviewHeading(dir, trigger.dataset['hpTitle'] ?? '—'),
+    body,
+    maxWidthPx: bounds?.maxWidthPx,
+    maxHeightPx: bounds?.maxHeightPx,
+  };
+}
+
+registerHoverPreviewResolver('neighbors', resolveNeighborsPreview);
 
 // ---------------------------------------------------------------------------
 // Indicators (lazy, cached)

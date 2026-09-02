@@ -758,3 +758,41 @@ export function describeEvent(evt: AnyRealtimeEvent, title?: string): string {
   }
   return action;
 }
+
+// ---------------------------------------------------------------------------
+// Cloud ellipse Ctrl-hover neighbours preview (task «Распространить
+// предпросмотр с зажатым Ctrl на эллипсы облачков мыслей»,
+// canvas/canvas.ts's `resolveNeighborsPreview`).
+// ---------------------------------------------------------------------------
+
+/** Top ellipse → incoming links (parents); bottom ellipse → outgoing (children). */
+export function neighborsDirForEllipse(kind: 'top' | 'bottom'): 'parents' | 'children' {
+  return kind === 'top' ? 'parents' : 'children';
+}
+
+/** Popup head text for the neighbours preview, direction-prefixed so the
+ *  same thought's two ellipses read as two distinct lists. */
+export function neighborsPreviewHeading(dir: 'parents' | 'children', thoughtTitle: string): string {
+  return `${dir === 'parents' ? 'Входящие связи' : 'Исходящие связи'}: ${thoughtTitle}`;
+}
+
+/**
+ * Size cap of the neighbours preview popup (task requirement): at most 70% of
+ * the canvas viewport's height and 25% of its width, rounded to whole pixels.
+ * `canvasRect` is the canvas host's own bounding rect — not the app window.
+ */
+export function neighborsPreviewBounds(canvasRect: { width: number; height: number }): {
+  maxWidthPx: number;
+  maxHeightPx: number;
+} {
+  return {
+    maxWidthPx: Math.round(canvasRect.width * 0.25),
+    maxHeightPx: Math.round(canvasRect.height * 0.7),
+  };
+}
+
+/** Sorts thought refs alphabetically by title (ascending, locale-aware) —
+ *  the neighbours-preview list order (task requirement). */
+export function sortRefsByTitle<T extends { title: string }>(refs: readonly T[]): T[] {
+  return [...refs].sort((a, b) => a.title.localeCompare(b.title));
+}
