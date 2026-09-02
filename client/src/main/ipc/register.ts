@@ -20,6 +20,7 @@ import { RestClient } from '../net/rest-client.js';
 import { RealtimeState } from '../realtime/applier.js';
 import { TabRealtimePool } from '../realtime/tab-rt-pool.js';
 import { createHandlers, selfMutationNetwork } from './handlers.js';
+import { connectAndActivate } from './connect-active-profile.js';
 import type { IpcInvokePayload } from './contract.js';
 
 /** Options for {@link registerIpc}. */
@@ -79,7 +80,13 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
       getApiKey: keyResolver(p),
       getClientId: () => opts.clientId,
     });
-    const me = await restClient.getMe(); // key check before anything else
+    // key check before anything else; only a successful check persists the
+    // profile as active (defect «клиент не запоминает сервер»: previously
+    // only `addProfile` called `setActiveProfile`, so re-selecting an
+    // already-saved profile via `server.connect` left the DB flag on
+    // whichever profile was added last, and the next launch reconnected to
+    // the wrong server).
+    const me = await connectAndActivate(opts.localDb, profileId, () => restClient.getMe());
 
     const rtPool = new TabRealtimePool({
       profile: p,
