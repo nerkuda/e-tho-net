@@ -160,6 +160,9 @@ function openOverflowMenu(restIds: string[], refs: Map<string, ThoughtRef>): voi
     const rowId = row.dataset['dragId'];
     if (rowId !== undefined) {
       wireExternalDragSource(row, rowId, 'pinned', { fromMenu: true });
+      // Same Ctrl-hover preview as the chips themselves — the overflow menu
+      // rows are the same thoughts, just hidden from the bar.
+      markThoughtCommentPreview(row, rowId, refs.get(rowId)?.title ?? rowId);
     }
   }
 }
