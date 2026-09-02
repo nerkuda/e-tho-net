@@ -204,6 +204,42 @@ test('data:/etnimg: разрешены только для картинок', ()
   assert.ok(!renderMarkdown('[x](etnimg://c/a.png)').includes('href='));
 });
 
+test('сброшенная ссылка не оставляет паразитный </a> (карточка ETN 6cd0290f)', () => {
+  // data: проходит общий validateLink (набор картинок), но сбрасывается
+  // link-плагином — именно такие ссылки и дают паразитный </a>.
+  const html = renderMarkdown('[плохо](data:text/plain,hi)');
+  assert.ok(!html.includes('<a'), html);
+  assert.ok(!html.includes('</a>'), html);
+  assert.ok(html.includes('плохо'), 'текст сброшенной ссылки сохраняется');
+});
+
+test('картинка внутри сброшенной ссылки: <img> остаётся, </a> не эмитится', () => {
+  const html = renderMarkdown('[![alt](https://e.com/i.png)](data:text/plain,hi)');
+  assert.ok(html.includes('<img src="https://e.com/i.png"'), html);
+  assert.ok(!html.includes('</a>'), html);
+});
+
+test('валидная ссылка с картинкой внутри — ровно одна пара <a>/</a>', () => {
+  const html = renderMarkdown('[![alt](https://e.com/i.png)](https://e.com/)');
+  assert.ok(html.includes('<a href="https://e.com/">'), html);
+  assert.ok(html.includes('<img src="https://e.com/i.png"'), html);
+  assert.equal(html.split('</a>').length - 1, 1, html);
+});
+
+test('сброшенная ссылка рядом с валидной не съедает чужой </a>', () => {
+  const html = renderMarkdown('[плохо](data:text/plain,hi) и [хорошо](https://e.com)');
+  assert.ok(!html.includes('href="data:'), html);
+  assert.ok(html.includes('<a href="https://e.com">'), html);
+  assert.equal(html.split('</a>').length - 1, 1, html);
+});
+
+test('ссылка в ссылке: внутренняя разбирается, внешняя остаётся текстом (CommonMark)', () => {
+  const html = renderMarkdown('[a [b](https://e.com/1)](https://e.com/2)');
+  assert.ok(html.includes('<a href="https://e.com/1">b</a>'), html);
+  assert.ok(!html.includes('<a href="https://e.com/2"'), html);
+  assert.equal(html.split('</a>').length - 1, 1, html);
+});
+
 // ---------------------------------------------------------------------------
 // Размеры картинок
 // ---------------------------------------------------------------------------

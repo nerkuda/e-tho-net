@@ -30,10 +30,18 @@ export function linkSafetyPlugin(md: MarkdownIt): void {
   };
 }
 
-/** Finds the matching link_open of `closeIdx` and reports its drop flag. */
+/**
+ * Finds the matching link_open of `closeIdx` and reports its drop flag.
+ *
+ * Nesting is counted over the tokens STRICTLY between the two (scanning
+ * starts at `closeIdx - 1`, with level 0): counting the `link_close` itself
+ * would treat the link's own close as a nested one, skip the real open and
+ * answer for an OUTER link (or `false`) — the dropped link then emitted a
+ * parasitic `</a>` without an opening `<a>`.
+ */
 function isDroppedLink(tokens: Token[], closeIdx: number): boolean {
   let level = 0;
-  for (let i = closeIdx; i >= 0; i--) {
+  for (let i = closeIdx - 1; i >= 0; i--) {
     const token = tokens[i]!;
     if (token.type === 'link_close') {
       level++;
