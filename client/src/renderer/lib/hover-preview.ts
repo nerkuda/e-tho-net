@@ -387,9 +387,10 @@ async function resolveWikiThoughtContent(trigger: HTMLElement): Promise<HoverPre
  *  the module doc comment) and previews the found thought's permanent comment,
  *  so what the preview shows is exactly what a click would open. Not found /
  *  lookup failed → `null`, no popup (same as a `wiki-link-deleted` id-link).
- *  The heading names the FOUND thought, uniform with id-links whose visible
- *  text is the resolved title (the id-form renderer drops aliases); the link's
- *  own label is only the fallback when the hit carries no title. */
+ *  The heading names the FOUND thought, uniform with alias-less id-links
+ *  whose visible text is the resolved title (an aliased `[[#<id>|алиас]]`
+ *  shows the alias); the link's own label is only the fallback when the hit
+ *  carries no title. */
 async function resolveWikiLegacyNameContent(trigger: HTMLElement): Promise<HoverPreviewContent | null> {
   const name = trigger.getAttribute(WIKI_LINK_TARGET_ATTR);
   const networkId = store.state.networkId;

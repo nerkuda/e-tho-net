@@ -4,8 +4,10 @@
  * visible label. From task R2 also ID-based forms are supported:
  *
  * - `[[#<uuid>]]` / `[[#<uuid>|<alias>]]` — link by thought id in the current
- *   network; rendered as `<span data-wiki-id="<uuid>"></span>` (empty body —
- *   the client fills the title via `etn.thoughts.resolve`).
+ *   network; rendered as `<span data-wiki-id="<uuid>"></span>`. The body is
+ *   empty without an alias — the client fills the title via
+ *   `etn.thoughts.resolve`; with an explicit alias the alias IS the body, and
+ *   the client keeps it instead of overwriting it with the resolved title.
  * - `[[n:<uuid>#<uuid>]]` / `[[n:<uuid>#<uuid>|<alias>]]` — cross-network
  *   link; additionally carries `data-wiki-network="<uuid>"`.
  *
@@ -110,15 +112,18 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
     const attrs: string[] = [`class="${WIKI_LINK_CLASS}"`];
 
     if (meta.kind === 'id' || meta.kind === 'cross') {
-      // ID-based form: target is the id, body is empty — the client fills
-      // the resolved title via `etn.thoughts.resolve`. For cross-network
-      // links also expose the network id so the client can switch tabs.
+      // ID-based form: the span carries the id in its data-attributes; the
+      // body is the author's alias (`[[#<id>|алиас]]`) or empty. The client
+      // fills the resolved title via `etn.thoughts.resolve` into EMPTY spans
+      // only, so an explicit alias stays visible (карточка feccffcc). For
+      // cross-network links also expose the network id so the client can
+      // switch tabs.
       attrs.push(`${WIKI_LINK_ID_ATTR}="${esc(meta.targetId ?? '')}"`);
       attrs.push(`${WIKI_LINK_TARGET_ATTR}="${esc(meta.targetId ?? '')}"`);
       if (meta.kind === 'cross' && meta.networkId !== null) {
         attrs.push(`${WIKI_LINK_NETWORK_ATTR}="${esc(meta.networkId)}"`);
       }
-      return `<span ${attrs.join(' ')}></span>`;
+      return `<span ${attrs.join(' ')}>${meta.alias !== null ? esc(meta.alias) : ''}</span>`;
     }
 
     // Legacy name form: target is the human-readable name, body is alias

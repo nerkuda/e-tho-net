@@ -115,12 +115,19 @@ test('[[#<uuid>]] — ID-форма, пустой body, data-wiki-id без data
   assert.ok(!html.includes('>8e0d670e'), 'тело спана должно быть пустым, клиент заполнит');
 });
 
-test('[[#<uuid>|алиас]] — ID-форма с алиасом — клиент всё равно перезапишет body', () => {
+test('[[#<uuid>|алиас]] — ID-форма: алиас эмитится в body span', () => {
   const id = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
   const html = renderMarkdown(`[[#${id}|мой алиас]]`);
   assert.match(html, new RegExp(`${WIKI_LINK_ID_ATTR}="${id}"`));
-  // Тело пустое — клиент подтянет имя, alias не рендерим в HTML для ID-форм
-  assert.ok(!html.includes('мой алиас'));
+  // Алиас — видимое тело span: view-резолвер заполняет именем только пустые
+  // span'ы, непустое тело (алиас) не перезаписывается (карточка feccffcc).
+  assert.ok(html.includes('>мой алиас</span>'), html);
+});
+
+test('ID-форма: алиас экранируется', () => {
+  const id = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
+  const html = renderMarkdown(`[[#${id}|a"b]]`);
+  assert.ok(html.includes('>a&quot;b</span>'), html);
 });
 
 test('[[n:<net>#<id>]] — кросс-сеть: data-wiki-id + data-wiki-network', () => {
@@ -132,13 +139,13 @@ test('[[n:<net>#<id>]] — кросс-сеть: data-wiki-id + data-wiki-network
   assert.ok(!html.includes('>8e0d670e'));
 });
 
-test('[[n:<net>#<id>|alias]] — кросс-сеть с алиасом', () => {
+test('[[n:<net>#<id>|alias]] — кросс-сеть с алиасом: алиас в body', () => {
   const net = 'c4f9a3b2-1111-2222-3333-444455556666';
   const id = '8e0d670e-de61-4da7-b13e-9232cd1c6ca5';
   const html = renderMarkdown(`[[n:${net}#${id}|заметка]]`);
   assert.match(html, new RegExp(`${WIKI_LINK_ID_ATTR}="${id}"`));
   assert.match(html, new RegExp(`${WIKI_LINK_NETWORK_ATTR}="${net}"`));
-  assert.ok(!html.includes('заметка'));
+  assert.ok(html.includes('>заметка</span>'), html);
 });
 
 test('UUID в [[#…]] нормализуется в нижний регистр', () => {

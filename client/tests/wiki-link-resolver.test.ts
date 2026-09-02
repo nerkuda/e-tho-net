@@ -57,6 +57,44 @@ test('cache помечает удалённые мысли как exists=false',
   assert.equal(__testing.cache.get(`net-a:${ID_A}`)?.exists, false);
 });
 
+// ---------------------------------------------------------------------------
+// wikiSpanPaint: решение покраски одного ID-form span (карточка feccffcc —
+// алиас `[[#<id>|алиас]]` пропадал в режиме просмотра)
+// ---------------------------------------------------------------------------
+
+test('wikiSpanPaint: непустой span (алиас) не затирается именем', () => {
+  const p = __testing.wikiSpanPaint('мой алиас', { title: 'Цель A', exists: true }, false);
+  assert.equal(p.text, null, 'текст алиаса должен остаться');
+  assert.equal(p.deleted, false);
+  assert.equal(p.markResolved, true);
+});
+
+test('wikiSpanPaint: пустой span заполняется именем', () => {
+  const p = __testing.wikiSpanPaint('', { title: 'Цель A', exists: true }, false);
+  assert.equal(p.text, 'Цель A');
+  assert.equal(p.deleted, false);
+  assert.equal(p.markResolved, true);
+});
+
+test('wikiSpanPaint: удалённая мысль — алиас остаётся (muted), без алиаса — пусто', () => {
+  const alias = __testing.wikiSpanPaint('алиас', { title: '', exists: false }, false);
+  assert.equal(alias.text, null);
+  assert.equal(alias.deleted, true);
+  assert.equal(alias.markResolved, false);
+  const plain = __testing.wikiSpanPaint('', { title: '', exists: false }, false);
+  assert.equal(plain.text, '');
+  assert.equal(plain.deleted, true);
+});
+
+test('wikiSpanPaint: неактуальная при showInactive — алиас остаётся, пустой span получает имя', () => {
+  const alias = __testing.wikiSpanPaint('алиас', { title: 'Старое имя', exists: false }, true);
+  assert.equal(alias.text, null);
+  assert.equal(alias.deleted, false);
+  const plain = __testing.wikiSpanPaint('', { title: 'Старое имя', exists: false }, true);
+  assert.equal(plain.text, 'Старое имя');
+  assert.equal(plain.deleted, false);
+});
+
 test('substituteWikiIdsInSnippet: [[#<id>]] → имя из lookup', () => {
   const { substituteWikiIdsInSnippet } = __testing;
   const out = substituteWikiIdsInSnippet(`см. [[#${ID_A}]] далее`, 'net-a', (net, id) =>

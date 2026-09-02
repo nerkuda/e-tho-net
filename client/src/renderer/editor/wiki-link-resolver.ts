@@ -1,11 +1,14 @@
 /**
  * View-mode wiki-link resolver (task R7, docs/12-wiki-id-refs.md §4).
  *
- * The shared renderer (@etn/markdown) emits empty `<span class="wiki-link"
- * data-wiki-id="<uuid>"></span>` for ID-based forms (R2). This module walks
- * the rendered DOM, collects the ids and resolves them to titles via batched
- * `etn.thoughts.resolve` calls, then writes the resolved title back into the
- * span. A small per-session cache avoids re-resolving on every view re-render.
+ * The shared renderer (@etn/markdown) emits `<span class="wiki-link"
+ * data-wiki-id="<uuid>"></span>` for ID-based forms (R2): empty-bodied without
+ * an alias, or with the author's alias (`[[#<id>|алиас]]`) as the body. This
+ * module walks the rendered DOM, collects the ids and resolves them to titles
+ * via batched `etn.thoughts.resolve` calls, then writes the resolved title
+ * back into the span — into EMPTY spans only, so an explicit alias stays
+ * visible instead of being overwritten by the title (карточка feccffcc). A
+ * small per-session cache avoids re-resolving on every view re-render.
  *
  * For cross-network links (`data-wiki-network` present) the resolver looks up
  * the network's display name lazily; if the user has no access to that
@@ -88,6 +91,42 @@ function collectUnresolved(
   return out;
 }
 
+/** What {@link paintCachedSpans} must do to one span. */
+interface SpanPaint {
+  /** New span text; `null` = keep the current body (an explicit alias). */
+  text: string | null;
+  /** Set the `wiki-link-deleted` (muted) class. */
+  deleted: boolean;
+  /** Additionally mark the span resolved (`CSS_WIKI_LINK_RESOLVED`). */
+  markResolved: boolean;
+}
+
+/**
+ * Paint decision for one ID-form span with a resolved cache entry. A non-empty
+ * body is the author's alias emitted by the renderer — it WINS over the
+ * resolved title (карточка feccffcc: алиас пропадал в режиме просмотра), so
+ * the title (or the empty «deleted» text) is only written into spans the
+ * renderer left empty. Pure — exported via {@link __testing} for unit tests.
+ */
+function wikiSpanPaint(
+  currentText: string,
+  entry: { title: string; exists: boolean },
+  showInactive: boolean,
+): SpanPaint {
+  const hasAlias = currentText !== '';
+  if (entry.exists) {
+    return { text: hasAlias ? null : entry.title, deleted: false, markResolved: true };
+  }
+  if (showInactive) {
+    // Inactive thought — title (or the kept alias) in muted style, not the
+    // deleted indicator.
+    return { text: hasAlias ? null : entry.title, deleted: false, markResolved: false };
+  }
+  // Missing thought: the alias stays visible in the muted deleted style; an
+  // alias-less span is emptied (the click handler will report the reason).
+  return { text: hasAlias ? null : '', deleted: true, markResolved: false };
+}
+
 /** Render cached entries into the spans they belong to. */
 function paintCachedSpans(root: HTMLElement, defaultNetworkId: string): void {
   const spans = root.querySelectorAll<HTMLElement>(`span.${WIKI_LINK_CLASS}[${WIKI_LINK_ID_ATTR}]`);
@@ -97,19 +136,10 @@ function paintCachedSpans(root: HTMLElement, defaultNetworkId: string): void {
     const networkId = span.getAttribute('data-wiki-network') ?? defaultNetworkId;
     const entry = getCached(networkId, id);
     if (entry === undefined) continue;
-    if (entry.exists) {
-      span.textContent = entry.title;
-      span.classList.remove('wiki-link-deleted');
-      span.classList.add(CSS_WIKI_LINK_RESOLVED);
-    } else if (store.state.showInactive) {
-      // Inactive thought — show title in muted style, not deleted indicator.
-      span.textContent = entry.title;
-      span.classList.remove('wiki-link-deleted');
-    } else {
-      // Missing thought — leave empty (the click handler will report).
-      span.textContent = '';
-      span.classList.add('wiki-link-deleted');
-    }
+    const paint = wikiSpanPaint(span.textContent ?? '', entry, store.state.showInactive);
+    if (paint.text !== null) span.textContent = paint.text;
+    span.classList.toggle('wiki-link-deleted', paint.deleted);
+    if (paint.markResolved) span.classList.add(CSS_WIKI_LINK_RESOLVED);
   }
 }
 
@@ -281,4 +311,4 @@ export async function searchLegacyWikiTarget(
 }
 
 /** Test-only hook. */
-export const __testing = { cache, RESOLVE_BATCH, substituteWikiIdsInSnippet, collectSnippetIds };
+export const __testing = { cache, RESOLVE_BATCH, substituteWikiIdsInSnippet, collectSnippetIds, wikiSpanPaint };

@@ -33,10 +33,11 @@ export {
  * `body_html` of every comment once when this value differs from the stored
  * one (see `markdown-sweep.ts`).
  *
- * `markdown-it/3`: `etnimg:` joined the link protocol allow-list — cached
- * `[имя](etnimg://…)` attachment references must re-render as `<a>`.
+ * `markdown-it/4`: ID-form wiki-links with an alias (`[[#<id>|алиас]]`) render
+ * the alias as the span body — cached `body_html` (rendered by v3 with empty
+ * bodies) must re-render so the alias becomes visible in view mode.
  */
-export const MD_RENDER_VERSION = 'markdown-it/3';
+export const MD_RENDER_VERSION = 'markdown-it/4';
 
 /** Default input cap (256 KiB) to bound rendering work for a single document. */
 export const DEFAULT_MAX_LENGTH = 256 * 1024;
