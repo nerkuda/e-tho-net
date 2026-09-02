@@ -718,6 +718,16 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
   if (ctx === null || ctx.ownerType !== 'thought' || ctx.thought === null) return false;
   try {
     const updated = await etn.thoughts.update(networkId, ctx.ownerId, patch, ctx.thought.version);
+    // Шаблон комментария типа (08-ui-spec.md §8.1): применяется к пустому
+    // постоянному комментарию ДО отражения обновления в UI. Следующий ниже
+    // `reflectThoughtUpdate` меняет версию мысли в store — редактор
+    // перестраивается, и группа «Комментарий» фетчит список комментариев;
+    // без упорядочивания этот фетч обгонял `comments.create` и поле
+    // оставалось пустым до переоткрытия карточки (гонка, e477173f).
+    // Хелпер никогда не бросает — отражение не блокируется ошибкой шаблона.
+    if (patch.type_id !== undefined) {
+      await applyCommentTemplateIfEmpty(networkId, ctx.ownerId, patch.type_id);
+    }
     // Reflect the change wherever the entity is shown (see the helper) — the
     // actor gets no realtime echo, so the stores are patched from the save
     // response.
@@ -726,9 +736,6 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
     // the whole focus from the server so nothing lags behind the patch.
     if (patch.type_id !== undefined) {
       scheduleRefresh();
-      // Шаблон комментария типа (08-ui-spec.md §8.1): применяется к
-      // пустому постоянному комментарию сразу после назначения/смены типа.
-      await applyCommentTemplateIfEmpty(networkId, ctx.ownerId, patch.type_id);
     }
     return true;
   } catch (err) {
@@ -1208,4 +1215,10 @@ export const editorInternals = {
   buildThoughtHeaderLoading,
   /** Loader-only link header (kept for symmetry with the thought header). */
   buildLinkHeaderLoading,
+  /**
+   * `saveThought` (template-vs-render ordering regression, карточка
+   * e477173f): тест мокает `window.etn` и подписывается на store, проверяя,
+   * что шаблонный комментарий создаётся ДО отражения апдейта в store.
+   */
+  saveThought,
 };

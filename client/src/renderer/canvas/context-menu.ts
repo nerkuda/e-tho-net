@@ -542,13 +542,16 @@ async function changeType(networkId: string, id: string, typeId: string | null):
   try {
     const thought = await etn.thoughts.get(networkId, id);
     await etn.thoughts.update(networkId, id, { type_id: typeId }, thought.version);
+    // Шаблон комментария типа (08-ui-spec.md §8.1): применяется к пустому
+    // постоянному комментарию ДО reconcile фокуса — scheduleRefresh ниже
+    // обновляет версию мысли в store, редактор (если открыт на этой мысли)
+    // перестраивается и фетчит список комментариев; без упорядочивания фетч
+    // обгонял создание шаблона и поле оставалось пустым (гонка, e477173f).
+    await applyCommentTemplateIfEmpty(networkId, id, typeId);
     // The type drives the cloud icon/colours — drop the stale cached ref so
     // the next refresh resolves the new style instead of the old one.
     invalidateRef(id);
     scheduleRefresh();
-    // Шаблон комментария типа (08-ui-spec.md §8.1): применяется к пустому
-    // постоянному комментарию сразу после назначения/смены типа.
-    await applyCommentTemplateIfEmpty(networkId, id, typeId);
   } catch (err) {
     errorDialog('Изменить тип', err);
   }

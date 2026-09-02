@@ -12,6 +12,7 @@
  * позже вручную).
  */
 
+import { invalidateIndicators } from '../canvas/canvas.js';
 import { store } from '../state.js';
 import { etn } from './etn.js';
 
@@ -41,6 +42,11 @@ export async function applyCommentTemplateIfEmpty(
       kind: 'permanent',
       body_md: template,
     });
+    // Созданный комментарий должен отразиться в 📝-индикаторе канваса: актор
+    // не получает realtime-эхо своих операций (04-realtime.md §5), поэтому
+    // кэш индикаторов сбрасываем явно — как это делает ручное сохранение
+    // комментария в редакторе (comments.ts).
+    invalidateIndicators(thoughtId);
   } catch {
     // Побочный эффект: ошибки не должны блокировать основной поток
     // (создание/обновление мысли). Шаблон можно применить вручную.
