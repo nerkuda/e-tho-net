@@ -26,6 +26,7 @@ import { showThoughtContextMenu } from '../canvas/context-menu.js';
 import { registerDropActions, wireExternalDragSource } from '../canvas/drag-cloud.js';
 import { button, clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { pinAt } from '../pinned/pins.js';
@@ -287,6 +288,9 @@ function buildChip(id: string, ref: ThoughtRef | undefined): HTMLElement {
   const title = el('span', 'pc-title', (ref?.title ?? id).slice(0, TITLE_LIMIT));
   setTooltip(chip, ref?.title ?? id);
   chip.append(icon, title);
+  // Stage 3: no per-indicator icons on a pinned chip — Ctrl+hover on the whole
+  // chip shows the thought's permanent comment.
+  markThoughtCommentPreview(chip, id, ref?.title ?? id);
   // A thought in the trash (S13, §5a.2): the chip dims and carries the red
   // trash glyph — the same marked reading as the canvas badge, chip-sized.
   if (ref?.marked_for_deletion === true) {

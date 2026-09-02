@@ -35,6 +35,7 @@ import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.j
 import { openLinkInEditor } from '../editor/editor.js';
 import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { isNotFoundError, parseThoughtIdQuery } from '../lib/pure.js';
 import { orderedTypeRows } from '../lib/type-tree.js';
 import {
@@ -507,6 +508,9 @@ function renderIdResult(thought: Thought | null): void {
       type_id: thought.type_id,
       active: thought.active,
     });
+    // Stage 3: no per-indicator comment/chrono/attachment icons on this row —
+    // Ctrl+hover over the row itself shows the thought's permanent comment.
+    markThoughtCommentPreview(row, thought.id, thought.title);
     row.addEventListener('click', () => {
       lastSelectedKey = key;
       applySelection(key, true);
@@ -603,6 +607,9 @@ function renderResults(response: SearchResponse | null): void {
       /** Original hit — used by `applyThoughtHitStyle` to colour the row. */
       hit?: SearchNameHit | SearchTextHit;
       open: () => void;
+      /** Stage 3: Ctrl+hover on the row shows the owner's permanent comment
+       *  (no per-indicator icons in this list). */
+      markPreview: (row: HTMLElement) => void;
     }>;
   }> = [
     {
@@ -615,6 +622,7 @@ function renderResults(response: SearchResponse | null): void {
         key: `thought:${hit.thought_id}`,
         hit,
         open: () => void setFocus(hit.thought_id),
+        markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
       })),
     },
     {
@@ -627,6 +635,7 @@ function renderResults(response: SearchResponse | null): void {
         key: `thought:${hit.thought_id}`,
         hit,
         open: () => void setFocus(hit.thought_id),
+        markPreview: (row) => markThoughtCommentPreview(row, hit.thought_id, hit.title),
       })),
     },
     {
@@ -638,6 +647,7 @@ function renderResults(response: SearchResponse | null): void {
         snippet: hit.snippet,
         key: `link:${hit.link_id}`,
         open: () => void openLinkHit(hit.link_id),
+        markPreview: (row) => markCommentPreview(row, 'link', hit.link_id, hit.type_name),
       })),
     },
     {
@@ -649,6 +659,7 @@ function renderResults(response: SearchResponse | null): void {
         snippet: hit.snippet,
         key: `chrono:${hit.owner}:${hit.owner_id}`,
         open: () => void openChronoHit(hit.owner, hit.owner_id),
+        markPreview: (row) => markCommentPreview(row, hit.owner, hit.owner_id, hit.valid_from.slice(0, 10)),
       })),
     },
   ];
@@ -688,6 +699,7 @@ function renderResults(response: SearchResponse | null): void {
         // canvas. Link/chrono rows have no thought to inherit from and stay
         // on the default theme.
         if (hit.hit !== undefined) applyThoughtHitStyle(row, hit.hit);
+        hit.markPreview(row);
         row.addEventListener('click', () => {
           lastSelectedKey = hit.key;
           applySelection(hit.key, true);

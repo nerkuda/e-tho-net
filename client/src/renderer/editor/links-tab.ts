@@ -38,6 +38,7 @@ import { onRealtimeEvent } from '../realtime.js';
 import { errorDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
@@ -424,6 +425,10 @@ function buildBacklinksBody(ctx: EditorContext): HTMLElement {
         if (snippet.isConnected) renderHtml(snippet, resolved);
       });
       item.append(icon, title, snippet);
+      // Stage 3: the row has no per-indicator icons — Ctrl+hover shows the
+      // owner's (thought or link) permanent comment.
+      if (hit.owner_type === 'thought') markThoughtCommentPreview(item, hit.owner_id, hit.title);
+      else markCommentPreview(item, 'link', hit.owner_id, hit.title);
       item.addEventListener('click', () => void open(hit));
       box.append(item);
     }
@@ -511,6 +516,10 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
       // like the search panel, render it as (escaped, trusted) HTML.
       renderHtml(snippet, hit.snippet);
       item.append(icon, title, snippet);
+      // Stage 3: the row has no per-indicator icons — Ctrl+hover shows the
+      // owner's (thought or link) permanent comment.
+      if (hit.owner_type === 'thought') markThoughtCommentPreview(item, hit.owner_id, hit.title);
+      else markCommentPreview(item, 'link', hit.owner_id, hit.title);
       item.addEventListener('click', () => void open(hit));
       box.append(item);
     }
@@ -603,6 +612,9 @@ function buildUsageBody(ctx: EditorContext): HTMLElement {
                 applyThoughtIcon(icon, thought);
                 const title = el('span', 'link-item-title', thought.title);
                 row.append(icon, title);
+                // Stage 3: no per-indicator icons on a usage row — Ctrl+hover
+                // shows the referencing thought's permanent comment.
+                markThoughtCommentPreview(row, thought.id, thought.title);
                 row.addEventListener('click', () => setFocus(thought.id));
                 body.append(row);
               }
@@ -632,6 +644,9 @@ function linkRow(
   // Same semantics as the canvas clouds: dim on an inactive thought OR link.
   if (!other.active || !link.active) row.classList.add('dim');
   row.append(arrow, icon, title);
+  // Stage 3: no per-indicator icons on a direct-link row — Ctrl+hover shows
+  // the other thought's permanent comment.
+  markThoughtCommentPreview(row, other.id, other.title);
   row.addEventListener('click', () => setFocus(other.id));
   row.addEventListener('contextmenu', (event) => {
     event.preventDefault();
@@ -794,6 +809,9 @@ function endpointRow(label: string, other: ThoughtRef, onOpen: () => void): HTML
   const title = el('span', 'link-item-title', other.title);
   if (!other.active) row.classList.add('dim');
   row.append(icon, title);
+  // Stage 3: no per-indicator icons on an endpoint row — Ctrl+hover shows the
+  // endpoint thought's permanent comment.
+  markThoughtCommentPreview(row, other.id, other.title);
   row.addEventListener('click', () => onOpen());
   return row;
 }

@@ -30,6 +30,7 @@ import { showImportEtnxDialog } from '../import-export/import-dialog.js';
 import { confirmDialog, errorDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
@@ -149,6 +150,9 @@ async function renderList(ids: string[]): Promise<void> {
     }
     const title = el('span', 'sel-title', refs.get(id)?.title ?? id);
     item.append(title);
+    // Stage 3: no per-indicator icons in the selection list — Ctrl+hover on
+    // the row shows the thought's permanent comment.
+    markThoughtCommentPreview(item, id, refs.get(id)?.title ?? id);
     const removeBtn = button('✕', () => toggleSelection([id]), 'btn small', 'Убрать из выделения');
     // Keep the row click (focus) from firing alongside the removal.
     removeBtn.addEventListener('click', (event) => event.stopPropagation());

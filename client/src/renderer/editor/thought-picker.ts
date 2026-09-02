@@ -13,6 +13,7 @@
 
 import { div, el, positionBodyDropdown, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { store } from '../state.js';
 
 /** Match-kind labels shown next to candidates. */
@@ -98,6 +99,9 @@ export function wireThoughtRefSearch(
       title.title = hit.title;
       title.style.flex = '1';
       row.append(title, span(KIND_LABELS[hit.matched_on] ?? hit.matched_on, 'dup-kind'));
+      // Stage 3: no per-indicator icons in the candidate dropdown —
+      // Ctrl+hover on a row shows the candidate's permanent comment.
+      markThoughtCommentPreview(row, hit.id, hit.title);
       // Keep the focus in the input — no blur-restore while picking.
       row.addEventListener('mousedown', (event) => event.preventDefault());
       row.addEventListener('click', () => {

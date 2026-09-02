@@ -52,6 +52,7 @@ class ShimElement {
   type = '';
   isConnected = true;
   classList = new ShimClassList();
+  dataset: Record<string, string> = {};
   private listeners = new Map<string, Array<(event: any) => void>>();
 
   constructor(tag: string, className?: string, text?: string) {
