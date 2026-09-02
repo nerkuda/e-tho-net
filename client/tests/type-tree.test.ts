@@ -40,6 +40,7 @@ function tt(id: string, name: string, parentId: string | null, extra: Partial<Th
     font_underline: null,
     font_strike: null,
     description: null,
+    comment_template_md: null,
     version: 1,
     created_at: '',
     updated_at: '',

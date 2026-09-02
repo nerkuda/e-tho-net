@@ -246,7 +246,7 @@ describe('wireThoughtRefSearch keyboard picking', () => {
     assert.deepEqual(env.queries, ['0.5.'], 'typing runs the duplicate search');
 
     env.input.emit('keydown', key('ArrowDown'));
-    assert.ok(rows[0].classList.contains('active'), '↓ highlights the first row');
+    assert.ok(rows[0]?.classList.contains('active'), '↓ highlights the first row');
 
     const enter = key('Enter');
     env.input.emit('keydown', enter);

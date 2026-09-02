@@ -7,13 +7,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { EditorState } from '@codemirror/state';
+import { EditorSelection, EditorState } from '@codemirror/state';
 
 import { isIdWikiLinkTarget, isInRangeInclusive, isNearInline, livePreview, wikiLabel } from '../src/renderer/editor/md-live.js';
 import { wikiLinkLanguage } from '../src/renderer/editor/wiki-link.js';
 
 /** Каретка в одной позиции. */
-const caret = (pos: number) => [{ from: pos, to: pos, empty: true }];
+const caret = (pos: number) => [EditorSelection.range(pos, pos)];
 
 // ---------------------------------------------------------------------------
 // Декорации buildDecorations: состояния собираются с тем же набором

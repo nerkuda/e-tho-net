@@ -42,6 +42,7 @@ describe('buildUserMenuItems — «О программе»', () => {
     const labels = items.map((i) => i.label);
     const about = items[labels.indexOf('О программе')];
     const logout = items[labels.indexOf('Отключиться')];
+    assert.ok(about !== undefined && logout !== undefined, 'menu items must exist');
     assert.equal(about.danger, undefined, '«О программе» is not a danger entry');
     assert.equal(logout.danger, true, '«Отключиться» stays danger');
     assert.ok(labels.indexOf('Администрирование') !== -1, 'admin layout expected');

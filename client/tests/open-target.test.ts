@@ -11,6 +11,14 @@ import { describe, it } from 'node:test';
 
 import { classifyOpenTarget } from '../src/main/ipc/open-target.js';
 
+/** Narrows the union to the `refused` variant and returns its reason. */
+function refuseReason(raw: string): string {
+  const res = classifyOpenTarget(raw);
+  assert.equal(res.kind, 'refused');
+  if (res.kind !== 'refused') throw new Error('expected the refused variant');
+  return res.reason;
+}
+
 describe('classifyOpenTarget', () => {
   it('classifies web and custom-protocol URLs as external', () => {
     assert.deepEqual(classifyOpenTarget('https://example.com/page?x=1'), {
@@ -70,14 +78,14 @@ describe('classifyOpenTarget', () => {
   });
 
   it('refuses dangerous schemes and empty input with a reason', () => {
-    assert.match(classifyOpenTarget('javascript:alert(1)').reason, /не поддерживается/);
-    assert.match(classifyOpenTarget('data:text/html,hi').reason, /не поддерживается/);
-    assert.match(classifyOpenTarget('vbscript:msgbox').reason, /не поддерживается/);
-    assert.match(classifyOpenTarget('blob:https://x').reason, /не поддерживается/);
-    assert.match(classifyOpenTarget('   ').reason, /Пустой адрес/);
+    assert.match(refuseReason('javascript:alert(1)'), /не поддерживается/);
+    assert.match(refuseReason('data:text/html,hi'), /не поддерживается/);
+    assert.match(refuseReason('vbscript:msgbox'), /не поддерживается/);
+    assert.match(refuseReason('blob:https://x'), /не поддерживается/);
+    assert.match(refuseReason('   '), /Пустой адрес/);
     // A file URL that cannot decode to a path is refused, not opened.
     if (process.platform === 'win32') {
-      assert.match(classifyOpenTarget('file:').reason, /file/);
+      assert.match(refuseReason('file:'), /file/);
     }
   });
 });

@@ -28,9 +28,12 @@ function makeFetch(
 ): { fetch: typeof fetch; calls: FetchCall[] } {
   const calls: FetchCall[] = [];
   let cursor = 0;
-  const fetch = mock.fn((url: string, init?: RequestInit): Promise<Response> => {
+  // Named `fetchStub` so the `typeof fetch` annotation below cannot resolve to
+  // this very constant (TS7022: self-referencing initializer).
+  const fetchStub = mock.fn((url: string, init?: RequestInit): Promise<Response> => {
     calls.push({ url, init: init ?? {} });
     const canned = responses[Math.min(cursor, responses.length - 1)];
+    if (canned === undefined) throw new Error('makeFetch: responses must not be empty');
     cursor++;
     const bodyStr =
       canned.body === undefined
@@ -53,7 +56,7 @@ function makeFetch(
     }
     return Promise.resolve(response);
   }) as unknown as typeof fetch;
-  return { fetch, calls };
+  return { fetch: fetchStub, calls };
 }
 
 /** Builds a RestClient wired to the stubbed fetch. */
@@ -447,13 +450,15 @@ describe('RestClient — attachment raw download', () => {
     calls: FetchCall[];
   } {
     const calls: FetchCall[] = [];
-    const fetch = mock.fn((url: string, init?: RequestInit): Promise<Response> => {
+    // `Uint8Array.from` re-creates the view over a plain ArrayBuffer, which
+    // satisfies BodyInit under TS 5.9 (Uint8Array<ArrayBufferLike> would not).
+    const fetchStub = mock.fn((url: string, init?: RequestInit): Promise<Response> => {
       calls.push({ url, init: init ?? {} });
       return Promise.resolve(
-        new Response(bytes, { status, headers: { 'content-type': contentType } }),
+        new Response(Uint8Array.from(bytes), { status, headers: { 'content-type': contentType } }),
       );
     }) as unknown as typeof fetch;
-    return { fetch, calls };
+    return { fetch: fetchStub, calls };
   }
 
   it('getAttachmentRaw GETs the encoded path and returns the raw bytes', async () => {

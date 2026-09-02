@@ -42,6 +42,7 @@ function thought(id: string, marked = false): Thought {
     type_id: null,
     icon: null,
     icon_kind: 'emoji',
+    icon_attachment_id: null,
     active: true,
     is_protected: false,
     is_root: false,

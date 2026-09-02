@@ -62,8 +62,9 @@ class ShimElement {
   isConnected = true;
   parent: ShimElement | null = null;
   private listenerCount = 0;
-  /** Parsed class set — kept in sync with `_className` through the setter. */
-  private readonly classes = new Set<string>();
+  /** Parsed class set — kept in sync with `_className` through the setter.
+   *  Public: the free helpers `matches`/`closest` below match class selectors. */
+  readonly classes = new Set<string>();
   classList = {
     add: (c: string): void => {
       this.classes.add(c);
@@ -268,7 +269,8 @@ describe('deferSingleClick (double-click guard)', () => {
 describe('editor header — preloader for in-flight thought (bug 9d1d27c9 §4)', () => {
   it('renders a loading-only header while the entity is in flight', () => {
     shimDom();
-    const loaderHeader = editorInternals.buildThoughtHeaderLoading('aabbccdd-1111');
+    // The builder runs against the DOM shim, so the node is really a ShimElement.
+    const loaderHeader = editorInternals.buildThoughtHeaderLoading('aabbccdd-1111') as unknown as ShimElement;
     const iconLoading = loaderHeader.querySelector('.editor-icon-loading');
     assert.ok(iconLoading !== null, 'preloader span must be present in the header');
     // The preloader span is a span, not a button — it has no click listener.

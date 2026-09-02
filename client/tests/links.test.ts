@@ -16,7 +16,7 @@ import { linksInternals } from '../src/renderer/canvas/links.js';
 const { groupBundles, rectFitsInside, edgeGeometry } = linksInternals;
 
 function edge(id: string, sourceId: string, targetId: string, typeId: string | null = null): FocusEdge {
-  return { id, source_id: sourceId, target_id: targetId, type_id: typeId };
+  return { id, source_id: sourceId, target_id: targetId, type_id: typeId, color: null, style: null, width: null };
 }
 
 describe('groupBundles (link overlay)', () => {

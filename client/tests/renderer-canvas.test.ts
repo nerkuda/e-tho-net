@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { FocusEdge, FocusNeighbor, Thought, ThoughtRef, ThoughtType } from '@etn/shared';
+import type { FocusEdge, FocusNeighbor, FocusResponse, Thought, ThoughtRef, ThoughtType } from '@etn/shared';
 
 import { canvasInternals, visibleRelatedTitles } from '../src/renderer/canvas/canvas.js';
 import { store } from '../src/renderer/state.js';
@@ -20,9 +20,13 @@ function thought(id: string, title = id): Thought {
     type_id: null,
     icon: null,
     icon_kind: 'emoji',
+    icon_attachment_id: null,
     active: true,
     is_protected: false,
     is_root: false,
+    marked_for_deletion: false,
+    marked_for_deletion_at: null,
+    marked_for_deletion_by: null,
     fg_color: null,
     bg_color: null,
     font_bold: null,
@@ -43,7 +47,11 @@ function focusResponse(): FocusResponse {
     siblings: [],
     children: [],
     edges: [],
-    sorts: { parents: 'created', children: 'created' },
+    sorts: {
+      parents: { sort: 'created', order: 'asc' },
+      children: { sort: 'created', order: 'asc' },
+      siblings: { sort: 'created', order: 'asc' },
+    },
   };
 }
 
@@ -59,6 +67,7 @@ function neighbor(id: string, linkId: string, title = id): FocusNeighbor {
     link_active: true,
     has_incoming: false,
     has_outgoing: false,
+    manual_position: null,
   };
 }
 
@@ -73,7 +82,9 @@ function ref(overrides: Partial<ThoughtRef> = {}): ThoughtRef {
     type_id: null,
     icon: null,
     icon_kind: 'emoji',
+    icon_attachment_id: null,
     active: true,
+    marked_for_deletion: false,
     fg_color: null,
     bg_color: null,
     // null = "inherit from the type" (02-data-model.md §3.1.1).
@@ -89,6 +100,9 @@ function type(overrides: Partial<ThoughtType>): ThoughtType {
   return {
     id: 'type1',
     name: 'Тип',
+    parent_id: null,
+    is_root: true,
+    comment_template_md: null,
     icon: null,
     icon_kind: 'emoji',
     fg_color: null,

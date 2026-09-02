@@ -20,19 +20,23 @@ function thought(id: string, title: string, version = 1): Thought {
   return {
     id,
     title,
-    title_norm: title.toLowerCase(),
     type_id: null,
     icon: null,
     icon_kind: 'emoji',
+    icon_attachment_id: null,
     active: true,
     is_protected: false,
     is_root: false,
+    marked_for_deletion: false,
+    marked_for_deletion_at: null,
+    marked_for_deletion_by: null,
     fg_color: null,
     bg_color: null,
     font_bold: false,
     font_italic: false,
     font_underline: false,
     font_strike: false,
+    synonyms: [],
     version,
     created_at: '2026-08-13T00:00:00.000Z',
     created_by: 'u1',
@@ -51,6 +55,9 @@ function link(id: string, source: string, target: string): Link {
     style: null,
     width: null,
     active: true,
+    marked_for_deletion: false,
+    marked_for_deletion_at: null,
+    marked_for_deletion_by: null,
     version: 1,
     created_at: '2026-08-13T00:00:00.000Z',
     created_by: 'u1',
@@ -222,7 +229,9 @@ describe('IPC handler factory (G7)', () => {
   it('throws a clear error when called before connect', async () => {
     const deps = { getRest: () => null } as unknown as HandlerDeps;
     const handlers = createHandlers(deps);
-    await assert.rejects(() => handlers.get('thoughts.get')!(['net-1', 't1']), /Not connected/);
+    await assert.rejects(async () => {
+      await handlers.get('thoughts.get')!(['net-1', 't1']);
+    }, /Not connected/);
   });
 
   it('unknown method is rejected by the registry (handler map miss)', () => {

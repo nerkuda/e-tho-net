@@ -117,7 +117,9 @@ test('buildDecorations: normal-mode (selection вне ссылки) — replace 
   const cache = new Map([[cacheKey(CUR, ID_A), { title: 'Цель', exists: true, networkId: CUR }]]);
   const decos = buildDecorations(source, { from: 100, to: 100 }, cache, CUR); // selection далеко
   const ranges: Array<{ from: number; to: number }> = [];
-  decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
+  decos.between(0, source.length, (from, to) => {
+    ranges.push({ from, to });
+  });
   // В normal-mode одна замена на всю длину ссылки.
   assert.equal(ranges.length, 1);
   assert.equal(ranges[0]!.from, 0);
@@ -130,10 +132,14 @@ test('computeWikiIdDecos: edit-mode (selection внутри) — replace на #i
   const cache = new Map([[cacheKey(CUR, ID_A), { title: 'Цель', exists: true, networkId: CUR }]]);
   const { decorations, atomic } = computeWikiIdDecos(source, { from: 5, to: 10 }, cache, CUR);
   const ranges: Array<{ from: number; to: number }> = [];
-  decorations.between(0, source.length, (from, to) => ranges.push({ from, to }));
+  decorations.between(0, source.length, (from, to) => {
+    ranges.push({ from, to });
+  });
   assert.deepEqual(ranges, [{ from: idStart, to: idEnd }], 'одна replace-декорация на #id-токене');
   const atoms: Array<{ from: number; to: number }> = [];
-  atomic.between(0, source.length, (from, to) => atoms.push({ from, to }));
+  atomic.between(0, source.length, (from, to) => {
+    atoms.push({ from, to });
+  });
   assert.deepEqual(atoms, [{ from: idStart, to: idEnd }], 'atomic range покрывает #id-токен');
 });
 
@@ -142,7 +148,9 @@ test('computeWikiIdDecos: normal-mode — atomic set пуст (курсор мо
   const cache = new Map([[cacheKey(CUR, ID_A), { title: 'Цель', exists: true, networkId: CUR }]]);
   const { atomic } = computeWikiIdDecos(source, { from: 100, to: 100 }, cache, CUR);
   const atoms: unknown[] = [];
-  atomic.between(0, source.length, (from, to) => atoms.push({ from, to }));
+  atomic.between(0, source.length, (from, to) => {
+    atoms.push({ from, to });
+  });
   assert.equal(atoms.length, 0);
 });
 
@@ -202,7 +210,9 @@ test('buildDecorations: networkId=null — ссылка всё равно скр
   const source = `[[#${ID_A}]]`;
   const decos = buildDecorations(source, { from: 100, to: 100 }, new Map(), null);
   const ranges: Array<{ from: number; to: number }> = [];
-  decos.between(0, source.length, (from, to) => ranges.push({ from, to }));
+  decos.between(0, source.length, (from, to) => {
+    ranges.push({ from, to });
+  });
   assert.deepEqual(ranges, [{ from: 0, to: source.length }], 'вся ссылка под виджетом даже без сети');
 });
 
@@ -211,7 +221,9 @@ test('wikiIdState: смена выделения переключает normal�
   const state = EditorState.create({ doc: source, extensions: [wikiIdState] });
   const ranges = (s: EditorState): Array<{ from: number; to: number }> => {
     const out: Array<{ from: number; to: number }> = [];
-    s.field(wikiIdState).decorations.between(0, source.length, (from, to) => out.push({ from, to }));
+    s.field(wikiIdState).decorations.between(0, source.length, (from, to) => {
+      out.push({ from, to });
+    });
     return out;
   };
 
@@ -223,7 +235,9 @@ test('wikiIdState: смена выделения переключает normal�
   assert.deepEqual(ranges(inside), [{ from: idStart, to: idEnd }]);
   // Atomic set появляется только в edit-mode.
   const atoms: Array<{ from: number; to: number }> = [];
-  inside.field(wikiIdState).atomic.between(0, source.length, (from, to) => atoms.push({ from, to }));
+  inside.field(wikiIdState).atomic.between(0, source.length, (from, to) => {
+    atoms.push({ from, to });
+  });
   assert.deepEqual(atoms, [{ from: idStart, to: idEnd }]);
   // Обратно наружу — снова normal-mode.
   const outside = inside.update({ selection: { anchor: 0 } }).state;
@@ -257,17 +271,20 @@ test('moveAcrossWikiIdBlock: ← при выделенном блоке — ку
 test('moveAcrossWikiIdBlock: → слева от блока — выделяет имя, ещё раз → курсор справа', () => {
   const source = `[[#${ID_A}]]`;
   const idEnd = idStart + 1 + ID_A.length;
-  const dispatched: TransactionSpec[] = [];
+  // `let` + re-assignment: `assert.deepEqual` narrows the array to the expected
+  // literal type (asserts actual is T), so a fresh array restores the declared
+  // TransactionSpec[] between the two dispatch rounds.
+  let dispatched: TransactionSpec[] = [];
   const atLeft = EditorState.create({ doc: source, selection: { anchor: idStart } });
-  const first = moveAcrossWikiIdBlock(fakeView(atLeft, (s) => dispatched.push(s)), 1);
+  const first = moveAcrossWikiIdBlock(fakeView(atLeft, (s) => { dispatched.push(s); }), 1);
   assert.equal(first, true);
   assert.deepEqual(dispatched, [
     { selection: { anchor: idStart, head: idEnd }, scrollIntoView: true, userEvent: 'select' },
   ]);
 
-  dispatched.length = 0;
+  dispatched = [];
   const selected = EditorState.create({ doc: source, selection: { anchor: idStart, head: idEnd } });
-  const second = moveAcrossWikiIdBlock(fakeView(selected, (s) => dispatched.push(s)), 1);
+  const second = moveAcrossWikiIdBlock(fakeView(selected, (s) => { dispatched.push(s); }), 1);
   assert.equal(second, true);
   assert.deepEqual(dispatched, [
     { selection: { anchor: idEnd }, scrollIntoView: true, userEvent: 'select' },

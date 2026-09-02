@@ -26,6 +26,7 @@ class ShimElement {
   checked = false;
   title = '';
   placeholder = '';
+  readOnly = false;
   isConnected = false;
   classList = {
     add: () => undefined,
@@ -409,6 +410,7 @@ describe('property value autocomplete helpers (pure)', () => {
     caret.dispatch('click');
     const body = (globalThis as any).document.body as ShimElement;
     const list = body.children[body.children.length - 1];
+    assert.ok(list !== undefined, 'options list must be mounted');
     assert.deepEqual(visibleRowLabels(list), options);
 
     // Typing narrows the already-open list down to the typed fragment.

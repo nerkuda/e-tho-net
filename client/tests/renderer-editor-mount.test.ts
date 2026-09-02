@@ -23,7 +23,7 @@ class ShimElement {
   children: ShimElement[] = [];
   /** The real style is a CSSStyleDeclaration; the mount path only writes
    *  custom properties (`--clamp-*`, list-heights.ts) — stub those two. */
-  style: Record<string, string> & {
+  style: {
     setProperty: (name: string, value: string) => void;
     removeProperty: (name: string) => void;
   } = {

@@ -30,7 +30,7 @@ class ShimElement {
   tagName: string;
   className = '';
   children: ShimElement[] = [];
-  style: Record<string, string> & {
+  style: {
     setProperty: (name: string, value: string) => void;
     removeProperty: (name: string) => void;
   } = { setProperty: () => undefined, removeProperty: () => undefined };

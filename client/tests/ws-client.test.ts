@@ -181,11 +181,13 @@ describe('RealtimeClient — handshake & resume', () => {
       auth: string | undefined;
       cid: string | undefined;
     }>((resolve) => {
+      const header = (v: string | string[] | undefined): string | undefined =>
+        Array.isArray(v) ? v[0] : v;
       server.once('connection', (_ws, req) => {
         resolve({
           url: req.url ?? '',
-          auth: req.headers['authorization'],
-          cid: req.headers['client-id'],
+          auth: header(req.headers['authorization']),
+          cid: header(req.headers['client-id']),
         });
       });
     });
