@@ -16,6 +16,10 @@
  * (wheel, scrollbar, active-row scrollIntoView) and closes on blur, an
  * outside click, a scroll elsewhere, or Escape.
  *
+ * Quick type creation: with the `onCreateNew` option a non-empty query
+ * without matches shows a «Создать новый „<query>“» row that opens the host's
+ * type-creation dialog; see the option for the exact contract.
+ *
  * The dropdown is mounted in `document.body` with fixed positioning — it must
  * not be clipped by the host dialog's bounds (08-ui-spec.md §4.2).
  */
@@ -63,6 +67,21 @@ export interface TypeCombobox {
   value(): string | null;
 }
 
+/** Sentinel id of the «Создать новый» row — never a real type id (UUIDs). */
+const CREATE_ROW_ID = '\u0000create';
+
+/**
+ * The name shown on the «Создать новый» row, or `null` when the row must not
+ * appear: only for a non-empty query that matches nothing (an empty query
+ * lists the whole tree; any match makes creation pointless) and only when the
+ * host supplied `onCreateNew`. Pure — unit-tested.
+ */
+export function createRowName(query: string, matchCount: number, enabled: boolean): string | null {
+  if (!enabled || matchCount > 0) return null;
+  const name = query.trim();
+  return name === '' ? null : name;
+}
+
 /** Builds a searchable type picker. `options` is re-read on every open. */
 export function createTypeCombobox(opts: {
   options: () => TypeOption[];
@@ -75,6 +94,16 @@ export function createTypeCombobox(opts: {
    * full list visible at once). Default: the root only, rest collapsed.
    */
   expandAll?: boolean;
+  /**
+   * «Создать новый» (quick type creation): when set, a non-empty query with
+   * no matches shows a `Создать новый „<query>“` row instead of «Ничего не
+   * найдено». Picking the row (click or Enter) calls the hook — the host
+   * opens its type-creation dialog (modal) and resolves with the new type's
+   * id, applied exactly like a regular pick through `onChange`, or with
+   * `null` when the user declined (the caret returns to the input; the typed
+   * text and the open list with the create row survive the dialog).
+   */
+  onCreateNew?: (query: string) => Promise<string | null>;
   onChange: (typeId: string | null) => void;
 }): TypeCombobox {
   const { options, emptyLabel, onChange } = opts;
@@ -107,6 +136,13 @@ export function createTypeCombobox(opts: {
   // the user types, and that label must never leak into the filtering (a row
   // toggle click used to filter the tree down to the "no type" entry).
   let search = '';
+  // While the onCreateNew dialog is open: its query. Every close path
+  // (blur, outside click, Escape, outside scroll) stands down for the
+  // duration — the modal dialog owns both the focus and Escape — and the
+  // list is parked (unmounted from the body) because it floats ABOVE the
+  // dialog stack (z-index 950 vs the backdrop's 900) and would overlap the
+  // dialog box. A declined creation restores the parked list untouched.
+  let createFlow: string | null = null;
   // Tree expansion state (L21): the root type is always expanded, everything
   // else starts collapsed (docs/08-ui-spec.md §8.1).
   const expanded = new Set<string>();
@@ -225,7 +261,16 @@ export function createTypeCombobox(opts: {
       visible = all.filter((o) => keep.has(o));
     }
     rows = visible;
+    const createName = createRowName(query, visible.length, opts.onCreateNew !== undefined);
     list.replaceChildren();
+    if (createName !== null) {
+      // The create row rides the regular `rows` machinery so the keyboard
+      // (arrows/Enter) treats it exactly like a normal selectable row.
+      rows = [{ id: CREATE_ROW_ID, label: `Создать новый „${createName}“`, depth: 1 }];
+      activeIndex = 0;
+      list.append(buildCreateRow(createName));
+      return;
+    }
     if (rows.length === 0) {
       activeIndex = -1;
       list.append(el('p', 'muted type-combo-empty', 'Ничего не найдено.'));
@@ -335,9 +380,62 @@ export function createTypeCombobox(opts: {
 
   /** Picks an option: notify the host, show it, close the list. */
   function select(opt: TypeOption): void {
+    if (opt.id === CREATE_ROW_ID) {
+      void pickCreateRow();
+      return;
+    }
     current = opt.id;
     onChange(current);
     closeList();
+  }
+
+  /** Builds the «Создать новый „<name>“» row (quick type creation). */
+  function buildCreateRow(name: string): HTMLElement {
+    const row = div('type-combo-item type-combo-create');
+    row.append(span('', 'type-combo-toggle type-combo-toggle-leaf'));
+    const icon = span('', 'type-combo-icon');
+    icon.append(svgIcon('plus', 12));
+    row.append(icon);
+    const label = span('', 'type-combo-label');
+    label.append('Создать новый ', span(`„${name}“`, 'type-combo-create-name'));
+    row.append(label);
+    row.addEventListener('mousedown', (event) => event.preventDefault()); // keep input focus
+    row.addEventListener('click', () => void pickCreateRow());
+    return row;
+  }
+
+  /**
+   * Runs the «Создать новый» flow: parks the list for the modal dialog, lets
+   * the host create the type, then either applies the new id like a regular
+   * pick or — when the user declined — restores the caret, the typed text and
+   * the open list with the same create row.
+   */
+  async function pickCreateRow(): Promise<void> {
+    const create = opts.onCreateNew;
+    const name = search.trim();
+    if (create === undefined || createFlow !== null || name === '' || !open) return;
+    createFlow = name;
+    list.classList.add('hidden');
+    list.remove();
+    let id: string | null = null;
+    try {
+      id = await create(name);
+    } catch {
+      id = null; // a failed creation behaves like a declined one
+    }
+    createFlow = null;
+    if (id !== null) {
+      current = id;
+      onChange(id);
+      closeList();
+      return;
+    }
+    // Declined: focus is still nowhere near the input after the modal dialog
+    // closed — return the caret, keep the text, re-show the parked list.
+    if (open && root.isConnected) {
+      input.focus(); // `openList` is a no-op while open: search survives
+      positionList();
+    }
   }
 
   input.addEventListener('focus', openList);
@@ -346,8 +444,9 @@ export function createTypeCombobox(opts: {
     // The caret left the field by any means (Tab onwards, click elsewhere,
     // window switch) — the dropdown follows and closes by itself. Clicking a
     // row keeps the focus in the input (mousedown preventDefault), so a pick
-    // never fires this.
-    if (open) closeList();
+    // never fires this. Opening the «Создать новый» dialog blurs the input
+    // too — that close is suppressed (see `createFlow`).
+    if (open && createFlow === null) closeList();
   });
   input.addEventListener('input', () => {
     // Typing replaces the selected-value label with a real search query.
@@ -407,7 +506,7 @@ export function createTypeCombobox(opts: {
       detach();
       return;
     }
-    if (open && event.target instanceof Node && !root.contains(event.target) && !list.contains(event.target)) {
+    if (open && createFlow === null && event.target instanceof Node && !root.contains(event.target) && !list.contains(event.target)) {
       closeList();
     }
   };
@@ -418,6 +517,9 @@ export function createTypeCombobox(opts: {
       return;
     }
     if (event.key === 'Escape') {
+      // While the «Создать новый» dialog is open it owns Escape (its own
+      // handler closes the topmost stacked dialog); swallow nothing.
+      if (createFlow !== null) return;
       // Swallow every Escape while the list is open so the host dialog stays
       // mounted — and swallow key auto-repeats as well: a held Escape must
       // not close the list once and the dialog right after (L21 fix).
@@ -437,8 +539,9 @@ export function createTypeCombobox(opts: {
     // The list scrolling itself (wheel over it, its own scrollbar, the active
     // row's scrollIntoView) is normal list behaviour — only scrolling
     // elsewhere (the editor/dialog body under the fixed list) closes it.
+    // Scrolling inside the «Создать новый» dialog must not close it either.
     if (event.target instanceof Node && list.contains(event.target)) return;
-    if (open) closeList();
+    if (open && createFlow === null) closeList();
   };
   window.addEventListener('mousedown', onWinDown, true);
   window.addEventListener('keydown', onWinKey, true);

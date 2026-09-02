@@ -64,7 +64,9 @@ import { registerAttachmentsTab } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
 import { registerLinksTab } from './links-tab.js';
 import { showIconDialog, type IconPickResult } from './icon-dialog.js';
+import { editMarkdownField } from './markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
+import { showLinkTypeEditor, showThoughtTypeEditor } from '../screens/type-manager.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 
 /** What the editor currently edits. */
@@ -549,6 +551,45 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
   next.focus();
 }
 
+/**
+ * Moves the caret into the permanent-comment field of the «Основное» tab —
+ * the continuation after a type created from the header type picker was
+ * applied (карточка ETN «Быстрое создание типа из поля ввода»): the user
+ * goes on writing the comment. Activates the tab and expands the collapsed
+ * comment group if needed, waits for the field to mount (the editor
+ * re-render rebuilds the comment section, whose fetch is asynchronous) and
+ * switches it into edit mode — CodeMirror mounts focused with the caret at
+ * the end.
+ */
+function focusEditorComment(): void {
+  if (scrollBox === null) return;
+  if (activeTab !== 'main') {
+    // The first tab button is «Основное» — click reuses the regular lazy
+    // pane activation instead of duplicating it here (synchronous: by the
+    // next line the main pane is the active one).
+    const tab = scrollBox.querySelector<HTMLButtonElement>('.editor-tab');
+    if (tab === null) return;
+    tab.click();
+  }
+  // The comment group is the bottom section of the tab; when the user has it
+  // collapsed, expand it (a click on the header toggles — only click when
+  // the persisted state says it is collapsed).
+  if (store.state.collapsedGroups['permanent'] === true) {
+    scrollBox.querySelector<HTMLElement>('.main-bottom .group > .group-header')?.click();
+  }
+  const deadline = Date.now() + 5000;
+  const tick = (): void => {
+    const field = scrollBox?.querySelector<HTMLElement>('.comment-permanent .md-field') ?? null;
+    if (field === null || field.isConnected === false) {
+      // Still loading (or a rebuild raced us) — keep waiting a bit.
+      if (Date.now() < deadline) window.setTimeout(tick, 50);
+      return;
+    }
+    editMarkdownField(field);
+  };
+  window.setTimeout(tick, 0);
+}
+
 // ---------------------------------------------------------------------------
 // Position switcher
 // ---------------------------------------------------------------------------
@@ -701,8 +742,12 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
   }
 }
 
-/** Saves link header fields (type/style/colour/width/active). */
-async function saveLink(link: Link, patch: LinkUpdateInput): Promise<void> {
+/**
+ * Saves link header fields (type/style/colour/width/active). Resolves `true`
+ * on success — the quick type creation flow uses it to move the caret into
+ * the comment field only after the new type really stuck.
+ */
+async function saveLink(link: Link, patch: LinkUpdateInput): Promise<boolean> {
   const networkId = requireNetworkId();
   try {
     const updated = await etn.links.update(networkId, link.id, patch, link.version);
@@ -720,12 +765,14 @@ async function saveLink(link: Link, patch: LinkUpdateInput): Promise<void> {
     // The structures results list is server-rendered; reload it so the saved
     // link type/style show up right away (the actor gets no realtime echo).
     scheduleStructuresRefresh();
+    return true;
   } catch (err) {
     if (isVersionConflict(err)) {
       notice('⚠ Связь изменена другим пользователем.', 'error');
     } else {
       notice(`Не удалось сохранить: ${errText(err)}`, 'error');
     }
+    return false;
   }
 }
 
@@ -902,12 +949,30 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   // Searchable type picker (L6/L21): the type tree without the hierarchy
   // root (the root is only managed in «Типы мыслей»); rows carry the type's
   // icon and style.
+  // Quick type creation (карточка «Быстрое создание типа из поля ввода»):
+  // a query without matches grows a «Создать новый» row opening the
+  // thought-type editor with the name prefilled; the created type is applied
+  // when the dialog closes — the same save path as a regular pick — and the
+  // caret then moves into the comment field.
+  let focusCommentAfterTypeSave = false;
   const typeCombo = createTypeCombobox({
     options: () => thoughtTypeOptions(store.state.thoughtTypes),
     value: thought.type_id,
     placeholder: 'без типа',
     emptyLabel: 'без типа',
-    onChange: (typeId) => void saveThought({ type_id: typeId }),
+    onChange: (typeId) => {
+      void saveThought({ type_id: typeId }).then((ok) => {
+        const focusComment = focusCommentAfterTypeSave;
+        focusCommentAfterTypeSave = false;
+        if (ok && focusComment) focusEditorComment();
+      });
+    },
+    onCreateNew: async (query) => {
+      const id = await showThoughtTypeEditor(null, () => undefined, { initialName: query });
+      if (id === null) return null;
+      focusCommentAfterTypeSave = true;
+      return id;
+    },
   });
 
   const settingsBtn = button('', () => openThoughtSettings(thought), 'icon-btn', 'Цвет и стиль');
@@ -1072,12 +1137,30 @@ function buildLinkHeader(link: Link): HTMLElement {
 
   // Searchable type picker (L6/L21): the link-type tree without the root;
   // rows show forward/reverse names and the resolved line look.
+  // Quick type creation (карточка «Быстрое создание типа из поля ввода»):
+  // a query without matches grows a «Создать новый» row opening the
+  // link-type editor with the forward name prefilled; the created type is
+  // applied when the dialog closes and the caret moves into the comment
+  // field — same flow as in the thought header.
+  let focusCommentAfterTypeSave = false;
   const typeCombo = createTypeCombobox({
     options: () => linkTypeOptions(store.state.linkTypes),
     value: link.type_id,
     placeholder: 'без типа',
     emptyLabel: 'без типа',
-    onChange: (typeId) => void saveLink(link, { type_id: typeId }),
+    onChange: (typeId) => {
+      void saveLink(link, { type_id: typeId }).then((ok) => {
+        const focusComment = focusCommentAfterTypeSave;
+        focusCommentAfterTypeSave = false;
+        if (ok && focusComment) focusEditorComment();
+      });
+    },
+    onCreateNew: async (query) => {
+      const id = await showLinkTypeEditor(null, () => undefined, { initialName: query });
+      if (id === null) return null;
+      focusCommentAfterTypeSave = true;
+      return id;
+    },
   });
 
   const settingsBtn = button('', () => openLinkSettings(link), 'icon-btn', 'Цвет и стиль линии');
@@ -1109,7 +1192,7 @@ function openLinkSettings(link: Link): void {
       style: link.style ?? type.style,
       width: link.width ?? type.width,
     },
-    onApply: (patch) => saveLink(link, patch),
+    onApply: (patch) => saveLink(link, patch).then(() => undefined),
   });
 }
 

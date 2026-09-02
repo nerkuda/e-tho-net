@@ -75,6 +75,13 @@ export interface DialogOptions {
   boxClass?: string;
   /** Called after the dialog is mounted (focus management, etc.). */
   onMount?: (close: () => void) => void;
+  /**
+   * Called once when the dialog closes by ANY path — Esc, the × button, a
+   * footer button, or `closeDialog()` popping the stack: it fires from the
+   * backdrop's `remove` event, so removing the backdrop from the DOM by any
+   * means triggers it exactly once.
+   */
+  onClose?: () => void;
 }
 
 /** Open dialogs, bottom first. */
@@ -239,6 +246,7 @@ export function showDialog(opts: DialogOptions): () => void {
     window.removeEventListener('keydown', onConfirm);
     window.removeEventListener('keydown', onShiftEnter);
     window.removeEventListener('keydown', onCtrlShiftEnter);
+    opts.onClose?.();
   });
   opts.onMount?.(close);
   return close;

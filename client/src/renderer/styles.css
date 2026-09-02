@@ -5583,6 +5583,19 @@ body.cloud-dragging * {
   margin: 4px 8px;
 }
 
+/* «Создать новый „<имя>“» row — quick type creation from the type picker. */
+.type-combo-create {
+  color: var(--accent);
+}
+
+.type-combo-create .type-combo-icon {
+  color: var(--accent);
+}
+
+.type-combo-create-name {
+  font-weight: 600;
+}
+
 /* Scrollable thought-type checklist — thought_ref property type filter (L6). */
 .type-filter-box {
   max-height: 140px;

@@ -345,11 +345,36 @@ function buildParentPicker(opts: {
   return { root: combo.root };
 }
 
-/** Opens the thought-type editor; `type === null` creates a new type (L6/L21). */
-export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () => void): void {
+/**
+ * Extra options of the type editors ({@link showThoughtTypeEditor},
+ * {@link showLinkTypeEditor}) for the quick type creation flow: the type
+ * combobox passes the typed query so the new type's name starts prefilled.
+ */
+export interface TypeEditorExtras {
+  /** Prefills the name of a NEW type (its forward name for link types). */
+  initialName?: string;
+}
+
+/**
+ * Opens the thought-type editor; `type === null` creates a new type (L6/L21).
+ *
+ * `extras.initialName` prefills the name of a new type (the type-combobox
+ * «Создать новый» row). The returned promise resolves when the dialog closes:
+ * with the id of the type created in this session («Создать и продолжить»),
+ * or `null` when the dialog closed without creating one (also for an existing
+ * type — ids are reported for new types only).
+ */
+export function showThoughtTypeEditor(
+  type: ThoughtType | null,
+  onChanged: () => void,
+  extras?: TypeEditorExtras,
+): Promise<string | null> {
   const networkId = requireNetworkId();
   // Kept fresh after every immediate patch (icon/style) for If-Match versions.
   let current = type;
+  // The id of the type created in this session (null until «Создать и
+  // продолжить» succeeds) — handed to the caller when the dialog closes.
+  let createdId: string | null = null;
   const errorLine = span('', 'error-text');
   const body = div('form-stack');
 
@@ -382,7 +407,7 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
   });
   const nameInput = el('input', 'text-input');
   nameInput.type = 'text';
-  nameInput.value = type?.name ?? '';
+  nameInput.value = type?.name ?? extras?.initialName ?? '';
   nameInput.maxLength = 200;
   nameInput.placeholder = 'Название типа (обязательно)';
   const settingsBtn = button('', openStyle, 'icon-btn', 'Настройки типа');
@@ -576,6 +601,7 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
         parent_id: pickedParentId,
         description: description === '' ? null : description,
       });
+      createdId = current.id;
       await refreshThoughtTypes();
       onChanged();
       errorLine.textContent = '';
@@ -677,12 +703,17 @@ export function showThoughtTypeEditor(type: ThoughtType | null, onChanged: () =>
     return renderMarkdown(md);
   }
 
-  showDialog({
-    title: type === null ? 'Новый тип мысли' : 'Тип мысли',
-    body,
-    width: 560,
-    buttons: [{ label: 'Закрыть', primary: true }],
-    onMount: () => nameInput.focus(),
+  // The promise resolves on dialog close (`onClose` fires from the
+  // backdrop's remove event — Esc, × and the «Закрыть» button all land there).
+  return new Promise<string | null>((resolve) => {
+    showDialog({
+      title: type === null ? 'Новый тип мысли' : 'Тип мысли',
+      body,
+      width: 560,
+      buttons: [{ label: 'Закрыть', primary: true }],
+      onMount: () => nameInput.focus(),
+      onClose: () => resolve(createdId),
+    });
   });
 }
 
@@ -1478,10 +1509,25 @@ export function showLinkTypesDialog(): void {
   void reload();
 }
 
-/** Opens the link-type editor; `type === null` creates a new type (L6/L21). */
-export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void): void {
+/**
+ * Opens the link-type editor; `type === null` creates a new type (L6/L21).
+ *
+ * `extras.initialName` prefills the forward name of a new type (the
+ * type-combobox «Создать новый» row); the reverse name stays empty for the
+ * user to fill. The returned promise resolves when the dialog closes: with
+ * the id of the type created in this session, or `null` when the dialog
+ * closed without creating one (also for an existing type).
+ */
+export function showLinkTypeEditor(
+  type: LinkType | null,
+  onChanged: () => void,
+  extras?: TypeEditorExtras,
+): Promise<string | null> {
   const networkId = requireNetworkId();
   let current = type;
+  // The id of the type created in this session (null until «Создать и
+  // продолжить» succeeds) — handed to the caller when the dialog closes.
+  let createdId: string | null = null;
   const errorLine = span('', 'error-text');
   const body = div('form-stack');
 
@@ -1497,7 +1543,7 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
   const namesRow = div('form-row type-editor-row');
   const forwardInput = el('input', 'text-input');
   forwardInput.type = 'text';
-  forwardInput.value = type?.name_forward ?? '';
+  forwardInput.value = type?.name_forward ?? extras?.initialName ?? '';
   forwardInput.maxLength = 200;
   forwardInput.placeholder = 'От источника к назначению (обязательно)';
   const reverseInput = el('input', 'text-input');
@@ -1670,6 +1716,7 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
         parent_id: pickedParentId,
         description: description === '' ? null : description,
       });
+      createdId = current.id;
       await refreshLinkTypes();
       onChanged();
       errorLine.textContent = '';
@@ -1727,11 +1774,16 @@ export function showLinkTypeEditor(type: LinkType | null, onChanged: () => void)
 
   settingsBtn.disabled = type === null;
 
-  showDialog({
-    title: type === null ? 'Новый тип связи' : 'Тип связи',
-    body,
-    width: 560,
-    buttons: [{ label: 'Закрыть', primary: true }],
-    onMount: () => forwardInput.focus(),
+  // The promise resolves on dialog close (`onClose` fires from the
+  // backdrop's remove event — Esc, × and the «Закрыть» button all land there).
+  return new Promise<string | null>((resolve) => {
+    showDialog({
+      title: type === null ? 'Новый тип связи' : 'Тип связи',
+      body,
+      width: 560,
+      buttons: [{ label: 'Закрыть', primary: true }],
+      onMount: () => forwardInput.focus(),
+      onClose: () => resolve(createdId),
+    });
   });
 }
