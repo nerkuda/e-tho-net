@@ -842,7 +842,7 @@ describe(
     it('findMentions searches each part of a compound title separately (§2.2.3)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
-        const target = seedThought(ndb, 'Проект А,Закрытые ошибки');
+        const target = seedThought(ndb, 'Проект А.Закрытые ошибки');
         // One owning thought per case (mentions collapse per owner).
         const firstOwner = seedThought(ndb, 'Заметки');
         const first = seedThoughtComment(ndb, firstOwner, 'работаем над Проект А давно');
@@ -859,6 +859,24 @@ describe(
         assert.ok(ids.includes(second), 'the second part matches on its own');
         assert.ok(!ids.includes(spread), 'parts are phrases, not word bags («ошибки, закрытые в проекте»)');
         assert.ok(!ids.includes(mixed), 'words of a part must stay adjacent («закрытые в проекте а ошибки»)');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions keeps a quoted part atomic — a dot inside it does not split (§2.2.3)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Аптеки."Столичка.net"');
+        const wholeOwner = seedThought(ndb, 'Заметки');
+        const whole = seedThoughtComment(ndb, wholeOwner, 'заказали в Столичка.net вчера');
+        const splitOwner = seedThought(ndb, 'Дневник');
+        const split = seedThoughtComment(ndb, splitOwner, 'зашли в Столичка сегодня, потом на net');
+
+        const mentions = findMentions(ndb, target);
+        const ids = mentions.map((m) => m.comment_id);
+        assert.ok(ids.includes(whole), 'the quoted part matches as one phrase «Столичка.net»');
+        assert.ok(!ids.includes(split), 'the dot inside quotes must not act as a separate delimiter');
       } finally {
         ndb.close();
       }
@@ -960,7 +978,7 @@ describe(
     it('findMentionsInTexts matches each part of a compound title separately (§2.2.3)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
-        const t = seedThought(ndb, 'ETN, План разработки');
+        const t = seedThought(ndb, 'ETN.План разработки');
         const [matches] = findMentionsInTexts(
           ndb,
           ['Обсудили ETN и План разработки сегодня'],

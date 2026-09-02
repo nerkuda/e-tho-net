@@ -40,21 +40,52 @@ export function synonymPatternToRegex(synonym: string): RegExp {
 
 /**
  * Splits a (possibly compound) thought title into its matchable parts
- * (docs/08-ui-spec.md §2.2.3): parts are comma-separated, only the first 3
- * commas are significant — everything after the 3rd comma is one trailing
- * part (max 4 parts total). Each part is trimmed; empty parts are dropped.
- * A single-part (non-compound) title returns a one-element array with the
- * trimmed title.
+ * (docs/08-ui-spec.md §2.2.3): parts are dot-separated, only the first
+ * `maxParts - 1` dots are significant — everything after that stays one
+ * trailing part (`maxParts` parts total, default 4).
+ *
+ * Text inside a matching pair of single or double quotes is an atomic part
+ * regardless of dots inside it — the quote characters themselves are
+ * dropped from the result (`Аптеки."Столичка.net"` → `Аптеки`,
+ * `Столичка.net`). A quote that never closes is unpaired: everything from
+ * it to the end of the title becomes the final part verbatim — no further
+ * dots or quotes are processed there, and the unpaired quote character
+ * itself is dropped (`Выводы."Все.Никаких выводов` → `Выводы`,
+ * `Все.Никаких выводов`).
+ *
+ * Each part is trimmed of surrounding whitespace (so spaces around a dot
+ * are insignificant); empty parts are dropped. A title with no significant
+ * dots returns a one-element array with the trimmed title.
  */
-export function splitCompoundTitle(title: string): string[] {
+export function splitCompoundTitle(title: string, maxParts = 4): string[] {
   const parts: string[] = [];
-  let rest = title;
-  for (let i = 0; i < 3; i += 1) {
-    const comma = rest.indexOf(',');
-    if (comma === -1) break;
-    parts.push(rest.slice(0, comma));
-    rest = rest.slice(comma + 1);
+  let buffer = '';
+  let delimitersUsed = 0;
+  let i = 0;
+  const n = title.length;
+  while (i < n) {
+    const c = title.charAt(i);
+    if (c === '"' || c === "'") {
+      const close = title.indexOf(c, i + 1);
+      if (close === -1) {
+        // Unpaired quote: the rest of the title is the final part, verbatim.
+        buffer += title.slice(i + 1);
+        break;
+      }
+      buffer += title.slice(i + 1, close);
+      i = close + 1;
+      continue;
+    }
+    if (c === '.' && delimitersUsed < maxParts - 1) {
+      parts.push(buffer.trim());
+      buffer = '';
+      delimitersUsed += 1;
+      i += 1;
+      continue;
+    }
+    buffer += c;
+    i += 1;
   }
-  parts.push(rest);
-  return parts.map((p) => p.trim()).filter((p) => p !== '');
+  parts.push(buffer.trim());
+  return parts.filter((p) => p !== '');
 }

@@ -616,10 +616,10 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         row.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' && event.shiftKey) {
             // Shift+Enter composes a compound name: the candidate's full name
-            // replaces the input text, a comma is appended and the caret lands
+            // replaces the input text, a dot is appended and the caret lands
             // right after it (08-ui-spec.md §4.3).
             event.preventDefault();
-            input.value = `${candidate.title},`;
+            input.value = `${candidate.title}.`;
             input.focus();
             input.setSelectionRange(input.value.length, input.value.length);
             scheduleSearch();

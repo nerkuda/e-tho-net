@@ -36,6 +36,7 @@ import {
   SELECTION_W_DEFAULT,
   SELECTION_W_MAX,
   SELECTION_W_MIN,
+  splitCompoundTitle,
   type AnyRealtimeEvent,
   type RealtimeEventType,
 } from '@etn/shared';
@@ -516,32 +517,17 @@ export function pickMostRecentTab<T extends { last_active_at: string }>(
 // Compound thought names (08-ui-spec.md §2.2.3)
 // ---------------------------------------------------------------------------
 
-/** Maximum number of parts of a compound thought name (the rest after the 3rd
- *  comma counts as a single part). */
-const COMPOUND_NAME_MAX_PARTS = 4;
-
 /**
- * Splits a compound thought name into parts (08-ui-spec.md §2.2.3): the name is
- * split at the first three commas, everything after the 3rd comma stays one
- * part, each part is trimmed. A name without commas yields a single part.
+ * Splits a compound thought name into parts (08-ui-spec.md §2.2.3). Thin
+ * re-export of the shared parser (`@etn/shared`'s `splitCompoundTitle`) so
+ * server and client stay on a single implementation.
  */
-export function splitCompoundName(title: string): string[] {
-  const parts: string[] = [];
-  let rest = title;
-  for (let i = 0; i < COMPOUND_NAME_MAX_PARTS - 1; i++) {
-    const comma = rest.indexOf(',');
-    if (comma === -1) break;
-    parts.push(rest.slice(0, comma).trim());
-    rest = rest.slice(comma + 1);
-  }
-  parts.push(rest.trim());
-  return parts;
-}
+export const splitCompoundName = splitCompoundTitle;
 
 /**
  * Display name of a compound-named thought outside the focus (08-ui-spec.md
  * §2.2.3): parts equal to the title of a visible related thought — or to any
- * part of that title — are hidden, the kept parts are re-joined with ", ".
+ * part of that title — are hidden, the kept parts are re-joined with ". ".
  * Comparison is case-insensitive on trimmed strings. When nothing matches or
  * every part is hidden, the full name is returned unchanged.
  */
@@ -555,7 +541,8 @@ export function shortenCompoundName(title: string, relatedTitles: readonly strin
     for (const part of splitCompoundName(relatedTitle)) related.add(part.trim().toLowerCase());
   }
   const kept = parts.filter((p) => !related.has(p.trim().toLowerCase()));
-  return kept.length === 0 ? title : kept.join(', ');
+  if (kept.length === parts.length) return title; // nothing hidden — keep the original formatting
+  return kept.length === 0 ? title : kept.join('. ');
 }
 
 // ---------------------------------------------------------------------------

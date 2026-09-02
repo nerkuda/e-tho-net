@@ -970,41 +970,58 @@ describe('flipTransform (focus transition, 08-ui-spec §2.8)', () => {
 });
 
 describe('splitCompoundName (08-ui-spec §2.2.3)', () => {
-  it('a name without commas is a single part', () => {
+  it('a name without dots is a single part', () => {
     assert.deepEqual(splitCompoundName('Проект А'), ['Проект А']);
   });
 
-  it('splits at commas and trims the parts', () => {
-    assert.deepEqual(splitCompoundName('Проект А, Задачи разработки'), [
+  it('a comma no longer splits — it is just punctuation now', () => {
+    assert.deepEqual(splitCompoundName('Процесс, запущенный из-вне'), [
+      'Процесс, запущенный из-вне',
+    ]);
+  });
+
+  it('splits at dots and trims the parts', () => {
+    assert.deepEqual(splitCompoundName('Проект А.Задачи разработки'), [
       'Проект А',
       'Задачи разработки',
     ]);
   });
 
-  it('everything after the 3rd comma is one part', () => {
-    assert.deepEqual(splitCompoundName('a, b, c, d'), ['a', 'b', 'c', 'd']);
-    assert.deepEqual(splitCompoundName('a, b, c, d, e'), ['a', 'b', 'c', 'd, e']);
+  it('everything after the 3rd dot is one part', () => {
+    assert.deepEqual(splitCompoundName('a.b.c.d'), ['a', 'b', 'c', 'd']);
+    assert.deepEqual(splitCompoundName('a.b.c.d.e'), ['a', 'b', 'c', 'd.e']);
+  });
+
+  it('a quoted part is atomic — dots inside it do not split, quotes are dropped', () => {
+    assert.deepEqual(splitCompoundName('Аптеки."Столичка.net"'), ['Аптеки', 'Столичка.net']);
+  });
+
+  it('an unpaired quote makes everything from it to the end one final part', () => {
+    assert.deepEqual(splitCompoundName(`Выводы."Все.Никаких выводов.'(С)'`), [
+      'Выводы',
+      `Все.Никаких выводов.'(С)'`,
+    ]);
   });
 });
 
 describe('shortenCompoundName (08-ui-spec §2.2.3)', () => {
   it('returns the full name when there are no related titles', () => {
     assert.equal(
-      shortenCompoundName('Проект А, Задачи разработки', []),
-      'Проект А, Задачи разработки',
+      shortenCompoundName('Проект А.Задачи разработки', []),
+      'Проект А.Задачи разработки',
     );
   });
 
   it('hides the part matching a visible related thought', () => {
     assert.equal(
-      shortenCompoundName('Проект А, Задачи разработки', ['Проект А']),
+      shortenCompoundName('Проект А.Задачи разработки', ['Проект А']),
       'Задачи разработки',
     );
   });
 
   it('hides several parts — visible parent and child', () => {
     assert.equal(
-      shortenCompoundName('Проект А, Обсудить с Петровым проблемы тестирования, Задачи для офиса', [
+      shortenCompoundName('Проект А.Обсудить с Петровым проблемы тестирования.Задачи для офиса', [
         'Проект А',
         'Задачи для офиса',
       ]),
@@ -1013,36 +1030,36 @@ describe('shortenCompoundName (08-ui-spec §2.2.3)', () => {
   });
 
   it('hides the parts of a compound related thought', () => {
-    // The visible parent is itself compound: `ETN, Ошибки` — both matching
+    // The visible parent is itself compound: `ETN.Ошибки` — both matching
     // parts of the child name hide, the new part stays.
     assert.equal(
-      shortenCompoundName('ETN, Ошибки, Отложено на будущее', ['ETN, Ошибки']),
+      shortenCompoundName('ETN.Ошибки.Отложено на будущее', ['ETN.Ошибки']),
       'Отложено на будущее',
     );
     assert.equal(
-      shortenCompoundName('ETN, Ошибки, Отложено на будущее', ['Ошибки']),
-      'ETN, Отложено на будущее',
+      shortenCompoundName('ETN.Ошибки.Отложено на будущее', ['Ошибки']),
+      'ETN. Отложено на будущее',
     );
   });
 
   it('matching ignores case and surrounding spaces', () => {
     assert.equal(
-      shortenCompoundName('Проект А, Задачи разработки', ['  проект а ']),
+      shortenCompoundName('Проект А.Задачи разработки', ['  проект а ']),
       'Задачи разработки',
     );
   });
 
   it('unmatched related titles change nothing', () => {
     assert.equal(
-      shortenCompoundName('Проект А, Задачи разработки', ['Другой проект']),
-      'Проект А, Задачи разработки',
+      shortenCompoundName('Проект А.Задачи разработки', ['Другой проект']),
+      'Проект А.Задачи разработки',
     );
   });
 
   it('falls back to the full name when every part is hidden', () => {
     assert.equal(
-      shortenCompoundName('Проект А, Задачи разработки', ['Проект А', 'Задачи разработки']),
-      'Проект А, Задачи разработки',
+      shortenCompoundName('Проект А.Задачи разработки', ['Проект А', 'Задачи разработки']),
+      'Проект А.Задачи разработки',
     );
   });
 
