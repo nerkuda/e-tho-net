@@ -244,6 +244,30 @@ describe(
         assert.ok(
           hits.some((hit) => hit.thought_id === (thoughtOkRes.json().data as { id: string }).id),
         );
+
+        // --- record counts (task «Улучшить диалог редактирования типов
+        // мыслей и связей»): own counts per type id, group summing is a
+        // client-side concern (aggregateTypeCounts, type-tree.ts) ----------
+        const ttCountsRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/thought-types/counts`,
+          headers: h,
+        });
+        assert.equal(ttCountsRes.statusCode, 200);
+        const ttCounts = ttCountsRes.json().data as Record<string, number>;
+        // «Иванов» carries type Коллега; «X»/«Без типа» stayed untyped or
+        // were rejected — Коллега is the only type with an own count here.
+        assert.equal(ttCounts[colleague.id], 1);
+        assert.equal(ttCounts[person.id] ?? 0, 0);
+
+        const ltCountsRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/link-types/counts`,
+          headers: h,
+        });
+        assert.equal(ltCountsRes.statusCode, 200);
+        // No link was ever created with a type in this scenario.
+        assert.deepEqual(ltCountsRes.json().data, {});
       } finally {
         await closeRestContext(ctx);
       }

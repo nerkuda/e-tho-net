@@ -46,12 +46,14 @@ import {
 import {
   createLinkType,
   deleteLinkType,
+  listLinkTypeCounts,
   listLinkTypes,
   updateLinkType,
 } from '../domain/link-type-service.js';
 import {
   createThoughtType,
   deleteThoughtType,
+  listThoughtTypeCounts,
   listThoughtTypes,
   updateThoughtType,
 } from '../domain/thought-type-service.js';
@@ -332,6 +334,19 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
     );
 
+    // Own record count per thought type id (task «Улучшить диалог редактирования
+    // типов мыслей и связей»): the type-manager list's «Количество» column;
+    // the client sums a group type's total over its subtree itself.
+    app.get(
+      '/networks/:networkId/thought-types/counts',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as TypeIdParams;
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        sendSuccess(reply, listThoughtTypeCounts(ndb));
+      },
+    );
+
     app.post(
       '/networks/:networkId/thought-types',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
@@ -411,6 +426,18 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const types = listLinkTypes(ndb);
         sendList(reply, types, types.length, 0, types.length);
+      },
+    );
+
+    // Own record count per link type id — the link-type analogue of the
+    // `/thought-types/counts` route above.
+    app.get(
+      '/networks/:networkId/link-types/counts',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId } = req.params as TypeIdParams;
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        sendSuccess(reply, listLinkTypeCounts(ndb));
       },
     );
 

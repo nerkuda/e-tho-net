@@ -130,6 +130,23 @@ export function listLinkTypes(ndb: NetworkDb): LinkType[] {
 }
 
 /**
+ * Own record counts per link type id (task «Улучшить диалог редактирования
+ * типов мыслей и связей») — the link-type analogue of
+ * {@link listThoughtTypeCounts} in `thought-type-service.ts` (same
+ * client-side subtree aggregation applies).
+ */
+export function listLinkTypeCounts(ndb: NetworkDb): Record<string, number> {
+  const rows = ndb
+    .prepare(
+      'SELECT type_id AS id, COUNT(*) AS c FROM links_v WHERE type_id IS NOT NULL GROUP BY type_id',
+    )
+    .all() as { id: string; c: number }[];
+  const out: Record<string, number> = {};
+  for (const row of rows) out[row.id] = row.c;
+  return out;
+}
+
+/**
  * Resolve a link type id by either its `name_forward` or `name_reverse`,
  * case-insensitively (task O4, same normalization as {@link createLinkType}'s
  * duplicate check). Throws `NOT_FOUND` when neither label matches any type,

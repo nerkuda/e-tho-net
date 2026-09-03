@@ -130,6 +130,26 @@ export function listThoughtTypes(ndb: NetworkDb): ThoughtType[] {
 }
 
 /**
+ * Own record counts per thought type id (task «Улучшить диалог редактирования
+ * типов мыслей и связей»): how many thoughts currently carry each `type_id`,
+ * ignoring untyped thoughts. A group (parent) type's displayed total — itself
+ * plus every descendant — is a client-side sum over this flat map
+ * ({@link aggregateTypeCounts} in `client/src/renderer/lib/type-tree.ts`); the
+ * server only reports the per-type own counts, which is enough and keeps the
+ * query a single `GROUP BY`.
+ */
+export function listThoughtTypeCounts(ndb: NetworkDb): Record<string, number> {
+  const rows = ndb
+    .prepare(
+      'SELECT type_id AS id, COUNT(*) AS c FROM thoughts_v WHERE type_id IS NOT NULL GROUP BY type_id',
+    )
+    .all() as { id: string; c: number }[];
+  const out: Record<string, number> = {};
+  for (const row of rows) out[row.id] = row.c;
+  return out;
+}
+
+/**
  * Resolve a thought type id by its display name, case-insensitively (task O4,
  * `name_key`, same normalization as the {@link createThoughtType} duplicate
  * check). Throws `NOT_FOUND` when no type matches, `VALIDATION_ERROR` with

@@ -22,6 +22,7 @@ import {
   createLinkType,
   deleteLinkType,
   getLinkType,
+  listLinkTypeCounts,
   listLinkTypes,
   updateLinkType,
 } from '../src/domain/link-type-service.js';
@@ -38,6 +39,7 @@ import {
   createThoughtType,
   deleteThoughtType,
   getThoughtType,
+  listThoughtTypeCounts,
   listThoughtTypes,
   updateThoughtType,
 } from '../src/domain/thought-type-service.js';
@@ -62,6 +64,18 @@ function seedThought(ndb: NetworkDb, typeId: string | null = null): string {
        VALUES (?, ?, ?, ?, 1, 1, '2024-01-01', 'u', '2024-01-01', 'u')`,
     )
     .run(id, 'T' + id.slice(0, 4), 't', typeId);
+  return id;
+}
+
+/** Seed a link row directly, optionally typed. */
+function seedLink(ndb: NetworkDb, sourceId: string, targetId: string, typeId: string | null = null): string {
+  const id = randomUUID();
+  ndb
+    .prepare(
+      `INSERT INTO links (id, source_id, target_id, type_id, active, version, created_at, updated_at, created_by, updated_by)
+       VALUES (?, ?, ?, ?, 1, 1, '2024', '2024', 'u', 'u')`,
+    )
+    .run(id, sourceId, targetId, typeId);
   return id;
 }
 
@@ -353,6 +367,52 @@ describe(
           deleteTypeProperty(ndb, p1.id);
           assert.equal(getTypeProperty(ndb, p1.id), null);
           assert.equal(listTypeProperties(ndb, 'thought_type', tt.id).length, 1);
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
+    describe('type record counts (task «Улучшить диалог редактирования типов мыслей и связей»)', () => {
+      it('listThoughtTypeCounts: own counts per type id, untyped/unused types absent', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const a = createThoughtType(ndb, { name: 'A' }, USER);
+          const b = createThoughtType(ndb, { name: 'B' }, USER);
+          const c = createThoughtType(ndb, { name: 'C (unused)' }, USER);
+          seedThought(ndb, a.id);
+          seedThought(ndb, a.id);
+          seedThought(ndb, b.id);
+          seedThought(ndb, null); // untyped — must not show up under any key
+
+          const counts = listThoughtTypeCounts(ndb);
+          assert.equal(counts[a.id], 2);
+          assert.equal(counts[b.id], 1);
+          // The unused type is keyed by its id (never by its name).
+          assert.equal(Object.prototype.hasOwnProperty.call(counts, c.id), false);
+          const total = Object.values(counts).reduce((sum, c) => sum + c, 0);
+          assert.equal(total, 3); // the untyped thought never contributes
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('listLinkTypeCounts: own counts per type id, untyped/unused types absent', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const f = createLinkType(ndb, { name_forward: 'f', name_reverse: 'r' }, USER);
+          createLinkType(ndb, { name_forward: 'g', name_reverse: 's' }, USER); // unused
+          const t1 = seedThought(ndb);
+          const t2 = seedThought(ndb);
+          const t3 = seedThought(ndb);
+          seedLink(ndb, t1, t2, f.id);
+          seedLink(ndb, t2, t3, f.id);
+          seedLink(ndb, t1, t3, null); // untyped — must not show up under any key
+
+          const counts = listLinkTypeCounts(ndb);
+          assert.equal(counts[f.id], 2);
+          const total = Object.values(counts).reduce((sum, c) => sum + c, 0);
+          assert.equal(total, 2);
         } finally {
           ndb.close();
         }
