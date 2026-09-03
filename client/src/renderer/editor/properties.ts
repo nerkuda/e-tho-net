@@ -261,6 +261,27 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     switch (definition.value_type) {
       case 'text':
       case 'url': {
+        // Multiple form (task 0.6.2) for `url` — a list of URL fields, each
+        // with its own «Открыть» button, plus an «+» adding a new row and a
+        // «×» removing one (08-ui-spec.md §6.3.1). The stored shape is a JSON
+        // array in `value_text` (02-data-model.md §3.5) — never comma-joined,
+        // because URLs may contain commas.
+        if (definition.value_type === 'url' && definition.config?.multiple === true) {
+          const storedUrls = Array.isArray(stored)
+            ? stored
+            : typeof stored === 'string'
+              ? [stored]
+              : [];
+          cell.append(
+            buildMultiUrlEditor({
+              urls: storedUrls,
+              save: async (next) => {
+                await save(next.length > 0 ? next : null);
+              },
+            }),
+          );
+          break;
+        }
         const input = el('input', 'text-input prop-editor');
         input.type = 'text';
         input.value = typeof stored === 'string' ? stored : '';
@@ -726,6 +747,111 @@ export function buildMultiThoughtRefEditor(opts: {
     button('выбрать', openPicker, 'btn small', 'Выбрать мысли (несколько)'),
   );
   return row;
+}
+
+// ---------------------------------------------------------------------------
+// Multiple URL editor (08-ui-spec.md §6.3.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds the multi-value `url` editor for definitions with
+ * `config.multiple = true` (task 0.6.2): one row per URL string, each row a
+ * text input + «Открыть» button + «×» removing that single value. The bottom
+ * of the editor carries an «+» button that appends a new empty row and
+ * immediately focuses it. Every edit is debounced and committed through
+ * {@link opts.save}; an empty value list clears the property (the same
+ * semantics as `thought_ref`'s multi editor). URL/file-path strings are
+ * stored verbatim — no parsing, no comma-join (02-data-model.md §3.5).
+ */
+export function buildMultiUrlEditor(opts: {
+  /** Currently stored URLs (already normalized server-side: `string[]`). */
+  urls: string[];
+  /** Writes the full replacement list; an empty list clears the value. */
+  save: (urls: string[]) => Promise<unknown> | unknown;
+}): HTMLElement {
+  const root = div('multi-url-editor');
+  // Local working copy: edits never touch the input arg directly so the
+  // baseline diff stays meaningful (the host calls `save` with the latest
+  // trimmed non-empty list and reloads once the write succeeds).
+  let current: string[] = [...opts.urls];
+
+  const renderRows = (): void => {
+    root.replaceChildren();
+    let lastInput: HTMLInputElement | null = null;
+    current.forEach((url, index) => {
+      const row = div('form-row multi-url-row');
+      row.style.marginBottom = '0';
+      const input = el('input', 'text-input prop-editor multi-url-input');
+      input.type = 'text';
+      input.value = url;
+      input.placeholder = 'https://… или путь к файлу';
+      input.title = 'URL или путь к файлу';
+      const openBtn = button(
+        'Открыть',
+        () => void openOne(input.value),
+        'btn small multi-url-open',
+      );
+      openBtn.disabled = input.value.trim() === '';
+      input.addEventListener('input', () => {
+        openBtn.disabled = input.value.trim() === '';
+      });
+      // Commit on blur: write the trimmed value at the same index, then
+      // collapse trailing empty rows so a stray «+» row never lingers after
+      // the user emptied it.
+      input.addEventListener('blur', () => {
+        const trimmed = input.value.trim();
+        current[index] = trimmed;
+        collapseTrailingEmpty();
+        renderRows();
+        void opts.save(current.filter((u) => u !== ''));
+      });
+      const removeBtn = el('button', 'st-f-clear-inline multi-url-remove', '×');
+      removeBtn.type = 'button';
+      removeBtn.title = 'Убрать значение';
+      removeBtn.addEventListener('click', (event) => {
+        event?.stopPropagation?.();
+        current.splice(index, 1);
+        collapseTrailingEmpty();
+        renderRows();
+        void opts.save(current.filter((u) => u !== ''));
+      });
+      row.append(input, openBtn, removeBtn);
+      root.append(row);
+      lastInput = input as unknown as HTMLInputElement;
+    });
+    const addBtn = el('button', 'btn small multi-url-add', '+');
+    addBtn.type = 'button';
+    addBtn.title = 'Добавить ещё одно значение';
+    addBtn.addEventListener('click', (event) => {
+      event?.stopPropagation?.();
+      current.push('');
+      renderRows();
+      if (lastInput !== null && typeof lastInput.focus === 'function') {
+        lastInput.focus();
+      }
+    });
+    addBtn.title = 'Добавить ещё одно значение';
+    addBtn.type = 'button';
+    root.append(addBtn);
+  };
+
+  /** Drop trailing empty rows so a freshly-added «+» row collapses on blur. */
+  function collapseTrailingEmpty(): void {
+    while (current.length > 0 && current[current.length - 1] === '') {
+      current.pop();
+    }
+  }
+
+  /** Hand a single URL to the OS default handler; failure → toast. */
+  async function openOne(value: string): Promise<void> {
+    const trimmed = value.trim();
+    if (trimmed === '') return;
+    const err = await etn.system.openExternal(trimmed);
+    if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
+  }
+
+  renderRows();
+  return root;
 }
 
 // ---------------------------------------------------------------------------
