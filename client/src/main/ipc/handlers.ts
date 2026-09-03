@@ -646,6 +646,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string) => requireRest(deps).listThoughtTypes(networkId)),
   );
   handlers.set(
+    'types.getThoughtTypeCounts',
+    bind((networkId: string) => requireRest(deps).getThoughtTypeCounts(networkId)),
+  );
+  handlers.set(
     'types.createThoughtType',
     bind((networkId: string, input: Parameters<RestClient['createThoughtType']>[1]) =>
       requireRest(deps).createThoughtType(networkId, input),
@@ -676,6 +680,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'types.listLinkTypes',
     bind((networkId: string) => requireRest(deps).listLinkTypes(networkId)),
+  );
+  handlers.set(
+    'types.getLinkTypeCounts',
+    bind((networkId: string) => requireRest(deps).getLinkTypeCounts(networkId)),
   );
   handlers.set(
     'types.createLinkType',

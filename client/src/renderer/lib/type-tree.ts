@@ -306,3 +306,59 @@ export function linkTypeOptions(types: readonly LinkType[]): TypeOption[] {
       };
     });
 }
+
+// ---------------------------------------------------------------------------
+// Type-manager list helpers (search filter + record-count aggregation).
+// ---------------------------------------------------------------------------
+
+/** The searchable label(s) of a catalogue entry: a thought type's own name,
+ *  or a link type's forward AND reverse names (either may match). */
+function searchLabels(t: { name?: string; name_forward?: string; name_reverse?: string }): string[] {
+  if (t.name !== undefined) return [t.name];
+  return [t.name_forward ?? '', t.name_reverse ?? ''];
+}
+
+/**
+ * Ids to keep visible when filtering a type tree list by name (docs task
+ * «Улучшить диалог редактирования типов…»): every type whose name matches
+ * the query, plus its whole ancestor chain — so a match never falls out of
+ * its branch and loses context. A blank query keeps everything (no filter).
+ */
+export function typeSearchVisibleIds<T extends TypeNode & { name?: string; name_forward?: string; name_reverse?: string }>(
+  types: readonly T[],
+  query: string,
+): Set<string> {
+  const q = query.trim().toLowerCase();
+  if (q === '') return new Set(types.map((t) => t.id));
+  const byId = new Map(types.map((t) => [t.id, t]));
+  const keep = new Set<string>();
+  for (const t of types) {
+    if (!searchLabels(t).some((label) => label.toLowerCase().includes(q))) continue;
+    let cur: T | undefined = t;
+    while (cur !== undefined) {
+      keep.add(cur.id);
+      cur = cur.parent_id !== null ? byId.get(cur.parent_id) : undefined;
+    }
+  }
+  return keep;
+}
+
+/**
+ * Sums per-type record counts (own + every descendant) over a type tree —
+ * the type-manager list's «Количество» column (docs task «Улучшить диалог…»:
+ * a group/parent type shows itself plus its whole subtree). `counts` holds
+ * OWN counts per type id (server-computed, task's aggregated endpoint); a
+ * type absent from it counts as 0.
+ */
+export function aggregateTypeCounts(
+  types: readonly TypeNode[],
+  counts: Readonly<Record<string, number>>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const t of types) {
+    let sum = 0;
+    for (const id of subtreeTypeIds(types, t.id)) sum += counts[id] ?? 0;
+    out[t.id] = sum;
+  }
+  return out;
+}

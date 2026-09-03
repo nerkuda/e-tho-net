@@ -10,6 +10,7 @@ import { describe, it } from 'node:test';
 import type { LinkType, ThoughtType } from '@etn/shared';
 
 import {
+  aggregateTypeCounts,
   buildTypeTree,
   expandTypeIdsToSubtree,
   findRootType,
@@ -22,6 +23,7 @@ import {
   thoughtTypeOptions,
   typeDepth,
   typeChainOf,
+  typeSearchVisibleIds,
 } from '../src/renderer/lib/type-tree.js';
 
 /** Builds a minimal thought type for the tests. */
@@ -194,5 +196,73 @@ describe('pick-list options without the hierarchy root (L22 review)', () => {
     assert.equal(options[0]!.label, 'fa / ra');
     // The child's swatch resolves through the chain (own overrides).
     assert.deepEqual(options[1]!.line, { color: '#123456', style: 'dashed', width: 3 });
+  });
+});
+
+describe('typeSearchVisibleIds (type-manager list search)', () => {
+  const types = [
+    tt('root', 'основной тип', null),
+    tt('a', 'Персона', 'root'),
+    tt('b', 'Коллега', 'a'),
+    tt('c', 'Автор', 'a'),
+    tt('d', 'Документ', 'root'),
+  ];
+
+  it('blank query keeps every id (no filtering)', () => {
+    assert.deepEqual(
+      [...typeSearchVisibleIds(types, '')].sort(),
+      types.map((t) => t.id).sort(),
+    );
+    assert.deepEqual(
+      [...typeSearchVisibleIds(types, '   ')].sort(),
+      types.map((t) => t.id).sort(),
+    );
+  });
+
+  it('a deep match keeps itself and its whole ancestor chain, nothing else', () => {
+    // «Коллега» is depth 3 under root→Персона; the unrelated «Документ» branch drops out.
+    assert.deepEqual([...typeSearchVisibleIds(types, 'колле')].sort(), ['b', 'a', 'root'].sort());
+  });
+
+  it('is case-insensitive and substring-based', () => {
+    assert.deepEqual([...typeSearchVisibleIds(types, 'ПЕРСОН')].sort(), ['a', 'root'].sort());
+  });
+
+  it('a match with children keeps the chain but not unrelated siblings', () => {
+    // «Персона» itself matches — «Автор»/«Коллега» (its children) are not pulled in.
+    assert.deepEqual([...typeSearchVisibleIds(types, 'персона')].sort(), ['a', 'root'].sort());
+  });
+
+  it('no match anywhere — empty set', () => {
+    assert.deepEqual([...typeSearchVisibleIds(types, 'zzz')], []);
+  });
+
+  it('link types match on either the forward or the reverse name', () => {
+    const linkTypes = [lt('root', null), lt('a', 'root', { name_forward: 'связан с', name_reverse: 'связана с' })];
+    assert.deepEqual([...typeSearchVisibleIds(linkTypes, 'связан с')].sort(), ['a', 'root'].sort());
+    assert.deepEqual([...typeSearchVisibleIds(linkTypes, 'связана с')].sort(), ['a', 'root'].sort());
+  });
+});
+
+describe('aggregateTypeCounts (type-manager «Количество» column)', () => {
+  it('sums own + every descendant count per type; missing entries count as 0', () => {
+    const types = [
+      tt('root', 'основной тип', null),
+      tt('a', 'Персона', 'root'),
+      tt('b', 'Коллега', 'a'),
+      tt('c', 'Автор', 'a'),
+      tt('d', 'Документ', 'root'),
+    ];
+    const counts = { a: 2, b: 5, c: 1 }; // 'd' and 'root' absent — treated as 0
+    const agg = aggregateTypeCounts(types, counts);
+    assert.equal(agg['b'], 5); // leaf — own count only
+    assert.equal(agg['c'], 1);
+    assert.equal(agg['a'], 2 + 5 + 1); // group type — itself + both children
+    assert.equal(agg['d'], 0);
+    assert.equal(agg['root'], 2 + 5 + 1 + 0); // whole tree
+  });
+
+  it('an empty tree yields an empty aggregate', () => {
+    assert.deepEqual(aggregateTypeCounts([], {}), {});
   });
 });

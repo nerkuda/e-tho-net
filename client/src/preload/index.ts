@@ -120,12 +120,14 @@ function buildApi(): EtnApi {
     },
     types: {
       listThoughtTypes: (networkId) => invoke('types.listThoughtTypes', networkId),
+      getThoughtTypeCounts: (networkId) => invoke('types.getThoughtTypeCounts', networkId),
       createThoughtType: (networkId, input) => invoke('types.createThoughtType', networkId, input),
       updateThoughtType: (networkId, id, input, expectedVersion) =>
         invoke('types.updateThoughtType', networkId, id, input, expectedVersion),
       removeThoughtType: (networkId, id, expectedVersion, force) =>
         invoke('types.removeThoughtType', networkId, id, expectedVersion, force),
       listLinkTypes: (networkId) => invoke('types.listLinkTypes', networkId),
+      getLinkTypeCounts: (networkId) => invoke('types.getLinkTypeCounts', networkId),
       createLinkType: (networkId, input) => invoke('types.createLinkType', networkId, input),
       updateLinkType: (networkId, id, input, expectedVersion) =>
         invoke('types.updateLinkType', networkId, id, input, expectedVersion),

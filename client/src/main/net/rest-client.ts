@@ -780,6 +780,13 @@ export class RestClient {
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thought-types`);
   }
 
+  /** `GET /networks/{nid}/thought-types/counts` — own record count per type
+   *  id (task «Улучшить диалог редактирования типов мыслей и связей»); the
+   *  type-manager list sums a group type's total over its subtree itself. */
+  public async getThoughtTypeCounts(networkId: string): Promise<Record<string, number>> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thought-types/counts`);
+  }
+
   /** `POST /networks/{nid}/thought-types`. */
   public async createThoughtType(
     networkId: string,
@@ -824,6 +831,12 @@ export class RestClient {
   /** `GET /networks/{nid}/link-types`. */
   public async listLinkTypes(networkId: string): Promise<import('@etn/shared').LinkType[]> {
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/link-types`);
+  }
+
+  /** `GET /networks/{nid}/link-types/counts` — the link-type analogue of
+   *  {@link getThoughtTypeCounts}. */
+  public async getLinkTypeCounts(networkId: string): Promise<Record<string, number>> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/link-types/counts`);
   }
 
   /** `POST /networks/{nid}/link-types`. */
