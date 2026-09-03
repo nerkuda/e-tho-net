@@ -888,6 +888,32 @@ function buildStagedPropertySection(opts: {
     });
   }
 
+  /** Opens the description-override dialog of an inherited property — the
+   *  description analogue of {@link showOverrideDialog}. */
+  function showDescriptionOverrideDialog(def: EffectiveTypeProperty): void {
+    openDescriptionOverrideDialog({
+      networkId,
+      ownerType,
+      typeId: typeId as string,
+      def,
+      onDone: () => {
+        onOverrideApplied?.();
+        void reload();
+      },
+    });
+  }
+
+  /** Drops the type's description override (back to the ancestor's own). */
+  async function clearDescriptionOverride(def: EffectiveTypeProperty): Promise<void> {
+    try {
+      await etn.types.setPropertyDescriptionOverride(networkId, ownerType, typeId as string, def.id, null);
+      onOverrideApplied?.();
+      await reload();
+    } catch (err) {
+      errorDialog('Сбросить переопределение описания', err);
+    }
+  }
+
   /** Moves a draft row one slot up/down (the order is applied on save). */
   function move(rowId: string, delta: -1 | 1): void {
     const from = ownDraft.findIndex((d) => d.id === rowId);
@@ -922,7 +948,7 @@ function buildStagedPropertySection(opts: {
         'muted',
         typeId === null
           ? 'Унаследованные свойства (передадутся от выбранного родителя)'
-          : 'Унаследованные свойства (тип значения не меняется; переопределяется только значение по умолчанию)',
+          : 'Унаследованные свойства (тип значения не меняется; переопределяются значение по умолчанию и описание)',
       );
       inhLabel.style.margin = '0 0 2px';
       tableWrap.append(inhLabel);
@@ -941,11 +967,22 @@ function buildStagedPropertySection(opts: {
       const inhBody = el('tbody');
       for (const def of inherited) {
         const row = el('tr');
-        row.append(el('td', undefined, def.key));
+        const nameCell = el('td', undefined, def.key);
+        if (def.description !== null) {
+          setTooltip(nameCell, def.description);
+          nameCell.append(span(' ⓘ', 'muted'));
+        }
+        row.append(nameCell);
         row.append(el('td', 'muted', VALUE_TYPE_LABELS[def.value_type]));
         row.append(el('td', 'muted', def.defined_on_name));
         row.append(
-          el('td', 'muted', formatDefault(def.default_value) + (def.overridden_here ? ' ●' : '')),
+          el(
+            'td',
+            'muted',
+            formatDefault(def.default_value) +
+              (def.overridden_here ? ' ●' : '') +
+              (def.description_overridden ? ' ◆' : ''),
+          ),
         );
         const actions = el('td');
         actions.style.whiteSpace = 'nowrap';
@@ -956,9 +993,19 @@ function buildStagedPropertySection(opts: {
             button('по умолчанию…', () => showOverrideDialog(def), 'btn small', 'Переопределить значение по умолчанию'),
           );
         }
+        if (typeId !== null) {
+          actions.append(
+            button('описание…', () => showDescriptionOverrideDialog(def), 'btn small', 'Переопределить описание свойства'),
+          );
+        }
         if (typeId !== null && def.overridden_here) {
           actions.append(
             button('сбросить', () => void clearOverride(def), 'btn small', 'Сбросить переопределение'),
+          );
+        }
+        if (typeId !== null && def.description_overridden) {
+          actions.append(
+            button('сбросить ◆', () => void clearDescriptionOverride(def), 'btn small', 'Сбросить переопределение описания'),
           );
         }
         row.append(actions);
@@ -985,7 +1032,12 @@ function buildStagedPropertySection(opts: {
     const tbody = el('tbody');
     for (const row of ownDraft) {
       const tr = el('tr');
-      tr.append(el('td', undefined, row.key));
+      const nameCell = el('td', undefined, row.key);
+      if (row.description !== null) {
+        setTooltip(nameCell, row.description);
+        nameCell.append(span(' ⓘ', 'muted'));
+      }
+      tr.append(nameCell);
       tr.append(el('td', 'muted', VALUE_TYPE_LABELS[row.value_type]));
       tr.append(el('td', 'muted', formatDefault(row.config?.default_value ?? null)));
       const actions = el('td');
@@ -1298,6 +1350,91 @@ function openDefaultOverrideDialog(opts: {
 }
 
 /**
+ * The description-override dialog (task «Добавить описание (description) к
+ * определениям свойств типов»): the description analogue of {@link
+ * openDefaultOverrideDialog} — sets the effective description of an inherited
+ * property for this type, or resets the override. Empty field = no override.
+ */
+function openDescriptionOverrideDialog(opts: {
+  networkId: string;
+  ownerType: TypeOwnerType;
+  typeId: string;
+  def: EffectiveTypeProperty;
+  onDone: () => void;
+}): void {
+  const { networkId, ownerType, typeId, def, onDone } = opts;
+  const errorLine = span('', 'error-text');
+
+  const area = el('textarea', 'textarea-input');
+  area.value = def.description ?? '';
+  area.rows = 5;
+  area.placeholder = 'Описание свойства для этого типа (пусто — наследуется от родителя)';
+
+  const body = div('form-stack');
+  const hint = el(
+    'p',
+    'muted',
+    `Свойство «${def.key}» наследуется от типа «${def.defined_on_name}». ` +
+      'Здесь задаётся описание свойства только для этого типа (и его подчинённых, пока те не переопределят сами).',
+  );
+  hint.style.margin = '0';
+  body.append(hint, area, errorLine);
+
+  /** Applies the override (or clears it when the field is empty). */
+  async function apply(close: () => void): Promise<void> {
+    const description = area.value.trim();
+    try {
+      await etn.types.setPropertyDescriptionOverride(
+        networkId,
+        ownerType,
+        typeId,
+        def.id,
+        description === '' ? null : description,
+      );
+      onDone();
+      close();
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
+  }
+
+  showDialog({
+    title: `Описание свойства — «${def.key}»`,
+    body,
+    width: 460,
+    buttons: [
+      { label: 'Отменить' },
+      ...(def.description_overridden
+        ? [
+            {
+              label: 'Сбросить переопределение',
+              keepOpen: true,
+              onClick: (close: () => void): void => {
+                void (async () => {
+                  try {
+                    await etn.types.setPropertyDescriptionOverride(
+                      networkId,
+                      ownerType,
+                      typeId,
+                      def.id,
+                      null,
+                    );
+                    onDone();
+                    close();
+                  } catch (err) {
+                    errorLine.textContent = errText(err);
+                  }
+                })();
+              },
+            } satisfies DialogButton,
+          ]
+        : []),
+      { label: 'Применить', primary: true, keepOpen: true, onClick: (close) => void apply(close) },
+    ],
+  });
+}
+
+/**
  * The staged property editor dialog (L6, task «Улучшить диалог редактирования
  * типов мыслей и связей»): edits ONE {@link DraftProperty} row of the type
  * editor's local draft — nothing touches the server from here; the row
@@ -1327,6 +1464,14 @@ function openPropertyDialog(opts: {
   keyInput.value = row?.key ?? '';
   keyInput.maxLength = 200;
   keyInput.placeholder = 'Заголовок свойства (обязательно)';
+
+  // Property description (task «Добавить описание (description) к определениям
+  // свойств типов»): the hint shown next to the property in the thought editor
+  // and given to AI agents through `etn.types.list`. Blank — no description.
+  const descArea = el('textarea', 'textarea-input');
+  descArea.value = row?.description ?? '';
+  descArea.rows = 3;
+  descArea.placeholder = 'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)';
 
   const typeSelect = el('select', 'select-input');
   for (const [value, label] of Object.entries(VALUE_TYPE_LABELS)) {
@@ -1465,6 +1610,7 @@ function openPropertyDialog(opts: {
     keyInput,
     typeSelect,
     defaultHost,
+    descArea,
     textExtrasHost,
     refFilterHost,
     errorLine,
@@ -1521,13 +1667,15 @@ function openPropertyDialog(opts: {
       errorLine.textContent = 'Заголовок свойства обязателен.';
       return;
     }
+    const description = descArea.value.trim();
     const next: DraftProperty =
       row !== null
         ? row
-        : { id: nextDraftPropertyId(), isNew: true, key, value_type: 'text', config: null };
+        : { id: nextDraftPropertyId(), isNew: true, key, value_type: 'text', config: null, description: null };
     next.key = key;
     next.value_type = typeSelect.value as PropertyValueType;
     next.config = configPatch();
+    next.description = description === '' ? null : description;
     if (row === null) {
       // A brand-new row joins the draft at the end; the order is applied on
       // save (the trailing reorder covers rows dragged into the middle).

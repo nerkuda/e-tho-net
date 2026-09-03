@@ -29,6 +29,7 @@ function def(id: string, key: string, extra: Partial<PropertyDefinition> = {}): 
     config: null,
     required: false,
     position: 0,
+    description: null,
     ...extra,
   };
 }
@@ -38,9 +39,15 @@ describe('draftPropertiesFrom', () => {
     const own = [def('p1', 'A'), def('p2', 'B', { value_type: 'number', config: { default_value: 3 } })];
     const draft = draftPropertiesFrom(own);
     assert.deepEqual(draft, [
-      { id: 'p1', isNew: false, key: 'A', value_type: 'text', config: null },
-      { id: 'p2', isNew: false, key: 'B', value_type: 'number', config: { default_value: 3 } },
+      { id: 'p1', isNew: false, key: 'A', value_type: 'text', config: null, description: null },
+      { id: 'p2', isNew: false, key: 'B', value_type: 'number', config: { default_value: 3 }, description: null },
     ]);
+  });
+
+  it('mirrors the stored description into the draft row', () => {
+    const own = [def('p1', 'A', { description: 'что значит это свойство' })];
+    const draft = draftPropertiesFrom(own);
+    assert.equal(draft[0]!.description, 'что значит это свойство');
   });
 });
 
@@ -73,18 +80,46 @@ describe('planPropertyDiff', () => {
     const original = [def('p1', 'A')];
     const draft: DraftProperty[] = [
       ...draftPropertiesFrom(original),
-      { id: 'draft:1', isNew: true, key: 'B', value_type: 'number', config: null },
+      { id: 'draft:1', isNew: true, key: 'B', value_type: 'number', config: null, description: null },
     ];
     const plan = planPropertyDiff(original, draft, []);
     assert.deepEqual(plan.ops, [
-      { kind: 'create', draftId: 'draft:1', input: { key: 'B', value_type: 'number', config: null } },
+      { kind: 'create', draftId: 'draft:1', input: { key: 'B', value_type: 'number', config: null, description: null } },
     ]);
     assert.equal(plan.needsReorder, true);
   });
 
+  it('a staged description change becomes an update op with only description', () => {
+    const original = [def('p1', 'A', { description: 'старое описание' })];
+    const draft: DraftProperty[] = [
+      { id: 'p1', isNew: false, key: 'A', value_type: 'text', config: null, description: 'новое описание' },
+    ];
+    const plan = planPropertyDiff(original, draft, []);
+    assert.deepEqual(plan.ops, [{ kind: 'update', id: 'p1', changes: { description: 'новое описание' } }]);
+  });
+
+  it('clearing the description is detected (null vs undefined matters not)', () => {
+    const original = [def('p1', 'A', { description: 'было' })];
+    const draft: DraftProperty[] = [
+      { id: 'p1', isNew: false, key: 'A', value_type: 'text', config: null, description: null },
+    ];
+    const plan = planPropertyDiff(original, draft, []);
+    assert.deepEqual(plan.ops, [{ kind: 'update', id: 'p1', changes: { description: null } }]);
+  });
+
+  it('a new property staged WITH a description sends it in the create input', () => {
+    const draft: DraftProperty[] = [
+      { id: 'draft:2', isNew: true, key: 'N', value_type: 'date', config: null, description: 'дата поставки' },
+    ];
+    const plan = planPropertyDiff([], draft, []);
+    assert.deepEqual(plan.ops, [
+      { kind: 'create', draftId: 'draft:2', input: { key: 'N', value_type: 'date', config: null, description: 'дата поставки' } },
+    ]);
+  });
+
   it('a renamed/retyped existing property becomes an update op with only the changed fields', () => {
     const original = [def('p1', 'A', { value_type: 'text', config: { default_value: 'x' } })];
-    const draft: DraftProperty[] = [{ id: 'p1', isNew: false, key: 'A2', value_type: 'text', config: { default_value: 'x' } }];
+    const draft: DraftProperty[] = [{ id: 'p1', isNew: false, key: 'A2', value_type: 'text', config: { default_value: 'x' }, description: null }];
     const plan = planPropertyDiff(original, draft, []);
     assert.deepEqual(plan.ops, [{ kind: 'update', id: 'p1', changes: { key: 'A2' } }]);
     assert.equal(plan.needsReorder, false);
@@ -92,7 +127,7 @@ describe('planPropertyDiff', () => {
 
   it('a config-only change (e.g. options list) is still detected', () => {
     const original = [def('p1', 'A', { config: { options: ['a', 'b'] } })];
-    const draft: DraftProperty[] = [{ id: 'p1', isNew: false, key: 'A', value_type: 'text', config: { options: ['a', 'b', 'c'] } }];
+    const draft: DraftProperty[] = [{ id: 'p1', isNew: false, key: 'A', value_type: 'text', config: { options: ['a', 'b', 'c'] }, description: null }];
     const plan = planPropertyDiff(original, draft, []);
     assert.deepEqual(plan.ops, [{ kind: 'update', id: 'p1', changes: { config: { options: ['a', 'b', 'c'] } } }]);
   });
@@ -116,16 +151,16 @@ describe('planPropertyDiff', () => {
   it('a full mixed batch: delete + create + update + reorder', () => {
     const original = [def('p1', 'A'), def('p2', 'B'), def('p3', 'C')];
     const draft: DraftProperty[] = [
-      { id: 'p3', isNew: false, key: 'C', value_type: 'text', config: null }, // moved first
-      { id: 'p1', isNew: false, key: 'A renamed', value_type: 'text', config: null }, // renamed
-      { id: 'draft:9', isNew: true, key: 'D', value_type: 'bool', config: null }, // new
+      { id: 'p3', isNew: false, key: 'C', value_type: 'text', config: null, description: null }, // moved first
+      { id: 'p1', isNew: false, key: 'A renamed', value_type: 'text', config: null, description: null }, // renamed
+      { id: 'draft:9', isNew: true, key: 'D', value_type: 'bool', config: null, description: null }, // new
       // p2 dropped
     ];
     const plan = planPropertyDiff(original, draft, ['p2']);
     assert.deepEqual(plan.ops, [
       { kind: 'delete', id: 'p2' },
       { kind: 'update', id: 'p1', changes: { key: 'A renamed' } },
-      { kind: 'create', draftId: 'draft:9', input: { key: 'D', value_type: 'bool', config: null } },
+      { kind: 'create', draftId: 'draft:9', input: { key: 'D', value_type: 'bool', config: null, description: null } },
     ]);
     assert.equal(plan.needsReorder, true);
   });

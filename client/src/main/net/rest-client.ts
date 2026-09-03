@@ -977,6 +977,23 @@ export class RestClient {
     );
   }
 
+  /** `PUT …/types/{id}/properties/{propId}/description` — set (`description`)
+   *  or clear (`null`) a type's description override of an inherited property. */
+  public async setTypePropertyDescriptionOverride(
+    networkId: string,
+    ownerType: TypeOwnerType,
+    typeId: string,
+    propertyId: string,
+    description: string | null,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'PUT',
+      `${RestClient.typeCollectionPath(networkId, ownerType)}/${encodeURIComponent(typeId)}/properties/${encodeURIComponent(propertyId)}/description`,
+      { body: { description }, requestOptions: opts },
+    );
+  }
+
   // -------------------------------------------------------------------------
   // §9 Properties (values)
   // -------------------------------------------------------------------------

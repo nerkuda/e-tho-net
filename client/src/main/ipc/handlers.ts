@@ -775,6 +775,25 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         ),
     ),
   );
+  handlers.set(
+    'types.setPropertyDescriptionOverride',
+    bind(
+      (
+        networkId: string,
+        ownerType: TypeOwnerType,
+        typeId: string,
+        propertyId: string,
+        description: string | null,
+      ) =>
+        requireRest(deps).setTypePropertyDescriptionOverride(
+          networkId,
+          ownerType,
+          typeId,
+          propertyId,
+          description,
+        ),
+    ),
+  );
 
   // --- properties -----------------------------------------------------------
   handlers.set(

@@ -104,6 +104,8 @@ async function buildWithFixtures(): Promise<ShimElement> {
             config: { options: ['Москва', 'СПб'], multiple: true },
             required: false,
             position: 0,
+            inherited: false,
+            description: 'город, к которому относится запись',
           },
           {
             id: 'p2',
@@ -261,6 +263,17 @@ describe('editor properties group body (DOM-shimmed)', () => {
     const tbody = table.children[0];
     assert.ok(tbody !== undefined, 'tbody present');
     assert.equal(tbody.children.length, 5, 'one row per property definition');
+    // A definition WITH a description renders the ⓘ marker next to the
+    // property name and carries the hint as the cell's tooltip (task
+    // «Добавить описание (description) к определениям свойств типов»).
+    const hintedNameCell = tbody.children[0]?.children[0];
+    const marker = hintedNameCell?.children.find((c) => c.textContent === ' ⓘ');
+    assert.ok(marker !== undefined, 'ⓘ marker rendered next to the property name');
+    assert.equal(hintedNameCell?.title, 'город, к которому относится запись');
+    // A definition WITHOUT a description has neither the marker nor a tooltip.
+    const plainNameCell = tbody.children[1]?.children[0];
+    assert.equal(plainNameCell?.children.length, 0, 'no ⓘ marker without a description');
+    assert.equal(plainNameCell?.title, '', 'no tooltip without a description');
     // The text property with options carries the picker caret button.
     const textCell = tbody.children[0]?.children[1];
     const buttons = textCell?.children[0]?.children.filter((c) => c.tagName === 'button') ?? [];
@@ -375,6 +388,16 @@ describe('property value autocomplete helpers (pure)', () => {
     const { splitMultiValue } = await loadPropsModule();
     assert.deepEqual(splitMultiValue('a, b ,, в '), ['a', 'b', 'в']);
     assert.deepEqual(splitMultiValue(''), []);
+  });
+
+  it('propertyHint: the trimmed description or null (no hint rendered without one)', async () => {
+    const { propertyHint } = await loadPropsModule();
+    assert.equal(propertyHint({ description: '  город записи  ' }), 'город записи');
+    assert.equal(propertyHint({ description: 'город записи' }), 'город записи');
+    assert.equal(propertyHint({ description: null }), null);
+    assert.equal(propertyHint({ description: undefined }), null);
+    assert.equal(propertyHint({ description: '   ' }), null);
+    assert.equal(propertyHint({}), null);
   });
 
   /** Extracts the option labels currently rendered in the dropdown list. */

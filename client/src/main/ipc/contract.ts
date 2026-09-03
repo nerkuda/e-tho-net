@@ -512,6 +512,15 @@ export interface EtnApi {
       propertyId: string,
       value: string | number | boolean | null,
     ): Promise<void>;
+    /** Set (`description`) or clear (`null`) a type's description override of
+     *  a property inherited from an ancestor type. */
+    setPropertyDescriptionOverride(
+      networkId: string,
+      ownerType: TypeOwnerType,
+      typeId: string,
+      propertyId: string,
+      description: string | null,
+    ): Promise<void>;
   };
   properties: {
     get(

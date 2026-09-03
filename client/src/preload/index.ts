@@ -145,6 +145,8 @@ function buildApi(): EtnApi {
         invoke('types.reorderTypeProperties', networkId, ownerType, typeId, orderedIds),
       setPropertyDefaultOverride: (networkId, ownerType, typeId, propertyId, value) =>
         invoke('types.setPropertyDefaultOverride', networkId, ownerType, typeId, propertyId, value),
+      setPropertyDescriptionOverride: (networkId, ownerType, typeId, propertyId, description) =>
+        invoke('types.setPropertyDescriptionOverride', networkId, ownerType, typeId, propertyId, description),
     },
     properties: {
       get: (networkId, ownerType, ownerId) =>

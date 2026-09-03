@@ -32,6 +32,9 @@ export interface DraftProperty {
   key: string;
   value_type: PropertyValueType;
   config: PropertyConfig | null;
+  /** Free-form description — the hint shown next to the property in the
+   *  thought editor and given to AI agents through `etn.types.list`. */
+  description: string | null;
 }
 
 let draftCounter = 0;
@@ -45,7 +48,14 @@ export function nextDraftPropertyId(): string {
 /** Builds the initial staged list from a type's own (non-inherited)
  *  definitions, ordered as the server returns them (`position`, then `key`). */
 export function draftPropertiesFrom(own: readonly PropertyDefinition[]): DraftProperty[] {
-  return own.map((d) => ({ id: d.id, isNew: false, key: d.key, value_type: d.value_type, config: d.config }));
+  return own.map((d) => ({
+    id: d.id,
+    isNew: false,
+    key: d.key,
+    value_type: d.value_type,
+    config: d.config,
+    description: d.description,
+  }));
 }
 
 /** Deep-ish equality of two property configs (both may be `null`). */
@@ -89,7 +99,7 @@ export function planPropertyDiff(
       ops.push({
         kind: 'create',
         draftId: d.id,
-        input: { key: d.key, value_type: d.value_type, config: d.config },
+        input: { key: d.key, value_type: d.value_type, config: d.config, description: d.description },
       });
       continue;
     }
@@ -99,6 +109,9 @@ export function planPropertyDiff(
     if (d.key !== before.key) changes.key = d.key;
     if (d.value_type !== before.value_type) changes.value_type = d.value_type;
     if (!configEqual(d.config, before.config)) changes.config = d.config;
+    if ((d.description ?? null) !== (before.description ?? null)) {
+      changes.description = d.description ?? null;
+    }
     if (Object.keys(changes).length > 0) ops.push({ kind: 'update', id: d.id, changes });
   }
   const survivorIds = draft.filter((d) => !d.isNew).map((d) => d.id);

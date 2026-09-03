@@ -190,13 +190,21 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
       const source = definition.inherited
         ? ` · из «${definition.defined_on_name}»`
         : '';
-      row.append(
-        el(
-          'td',
-          undefined,
-          `${definition.key}${definition.required ? ' *' : ''} (${typeName(definition.value_type)})${source}`,
-        ),
+      const nameCell = el(
+        'td',
+        undefined,
+        `${definition.key}${definition.required ? ' *' : ''} (${typeName(definition.value_type)})${source}`,
       );
+      // Property description (task «Добавить описание (description) к
+      // определениям свойств типов»): a hint next to the property name —
+      // the ⓘ marker shows one is there, the tooltip carries the text
+      // (override-aware: the effective description of the L21 chain).
+      const hint = propertyHint(definition);
+      if (hint !== null) {
+        setTooltip(nameCell, hint);
+        nameCell.append(span(' ⓘ', 'muted'));
+      }
+      row.append(nameCell);
       row.append(buildEditorCell(definition, value));
       tbody.append(row);
     }
@@ -510,6 +518,18 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
 
 /** Test seam for unit tests. */
 export const propertiesInternals = { buildPropertiesBody };
+
+/**
+ * The hint shown next to a property name in the thought editor (task
+ * «Добавить описание (description) к определениям свойств типов»): the
+ * property's effective description (override-aware, L21) — `null` when the
+ * property has none, in which case no ⓘ marker / tooltip is rendered.
+ * Trimmed so a whitespace-only description behaves like an absent one.
+ */
+export function propertyHint(definition: EffectiveTypeProperty): string | null {
+  const text = definition.description?.trim();
+  return text === undefined || text === '' ? null : text;
+}
 
 /**
  * Whether a property definition keeps the client-local recent-values history
