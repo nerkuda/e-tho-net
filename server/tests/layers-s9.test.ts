@@ -162,6 +162,13 @@ function connect(running: RunningApp, key: string, clientId: string): WebSocket 
 }
 
 function waitForOpen(ws: WebSocket, timeoutMs = 10_000): Promise<void> {
+  // Localhost WebSocket upgrades often complete before this helper attaches
+  // its `once('open')` listener — `ws` schedules the connect via microtasks,
+  // while the Fastify handleConnection finishes in tens of ms and the 101 is
+  // already on the wire by the time `await waitForOpen` runs. Check
+  // `readyState` first so we don't miss the event and fall through to the
+  // timeout — task 2be2c348 (shared helper with realtime-gateway.test.ts).
+  if (ws.readyState === WebSocket.OPEN) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('ws: open timeout')), timeoutMs);
     ws.once('open', () => {

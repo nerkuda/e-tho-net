@@ -155,6 +155,13 @@ function connect(
 }
 
 function waitForOpen(ws: WebSocket, timeoutMs = 10_000): Promise<void> {
+  // The localhost WebSocket upgrade often completes synchronously fast enough
+  // that `ws` has already fired `open` by the time the listeners below are
+  // attached (`new WebSocket` schedules the TCP/upgrade via microtasks, but the
+  // server's handleConnection finishes in tens of ms under load and the 101 is
+  // already on the wire). Without this guard the open event is missed and the
+  // helper falls through to the 10 s timeout — task 2be2c348.
+  if (ws.readyState === WebSocket.OPEN) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('ws: open timeout')), timeoutMs);
     ws.once('open', () => {
