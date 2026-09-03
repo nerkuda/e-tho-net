@@ -88,133 +88,163 @@ function shimDocument(): void {
   };
 }
 
+/** Holds a reference to the first window installed by buildWithFixtures. */
+let sharedWindow: Record<string, unknown> = {};
+
 /** Installs the DOM/window shims and imports the module against fixtures. */
 async function buildWithFixtures(): Promise<ShimElement> {
   shimDocument();
-  (globalThis as any).window = {
-    etn: {
-      types: {
-        listTypeProperties: async () => [
-          {
-            id: 'p1',
-            owner_type: 'thought_type',
-            owner_id: 'ty1',
-            key: 'Город',
-            value_type: 'text',
-            config: { options: ['Москва', 'СПб'], multiple: true },
-            required: false,
-            position: 0,
-            inherited: false,
-            description: 'город, к которому относится запись',
-          },
-          {
-            id: 'p2',
-            owner_type: 'thought_type',
-            owner_id: 'ty1',
-            key: 'Автор',
-            value_type: 'thought_ref',
-            config: { allowed_type_ids: ['ty2'] },
-            required: false,
-            position: 1,
-          },
-          {
-            id: 'p3',
-            owner_type: 'thought_type',
-            owner_id: 'ty1',
-            key: 'Сайт',
-            value_type: 'url',
-            config: null,
-            required: false,
-            position: 2,
-          },
-          {
-            id: 'p4',
-            owner_type: 'thought_type',
-            owner_id: 'ty1',
-            key: 'Соавторы',
-            value_type: 'thought_ref',
-            config: { multiple: true },
-            required: false,
-            position: 3,
-          },
-          {
-            id: 'p5',
-            owner_type: 'thought_type',
-            owner_id: 'ty1',
-            key: 'Источник',
-            value_type: 'thought_ref',
-            config: {},
-            required: false,
-            position: 4,
-          },
-        ],
+  // Mutate (not replace) `window` so the etn Proxy in `lib/etn.ts` keeps
+  // reading the SAME object — `window` is cached on first import. Subsequent
+  // tests can rebind `etn.system.openExternal` through `sharedWindow`.
+  sharedWindow = (globalThis as any).window ?? {};
+  (globalThis as any).window = sharedWindow;
+  if (sharedWindow['etn'] === undefined) {
+    sharedWindow['etn'] = {};
+  }
+  const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+  etnApi['types'] = {
+    listTypeProperties: async () => [
+      {
+        id: 'p1',
+        owner_type: 'thought_type',
+        owner_id: 'ty1',
+        key: 'Город',
+        value_type: 'text',
+        config: { options: ['Москва', 'СПб'], multiple: true },
+        required: false,
+        position: 0,
+        inherited: false,
+        description: 'город, к которому относится запись',
       },
-      properties: {
-        get: async () => [
-          {
-            id: 'v3',
-            owner_type: 'thought',
-            owner_id: 't1',
-            property_id: 'p3',
-            value: 'https://example.com',
-            updated_at: '2026',
-          },
-          {
-            id: 'v4',
-            owner_type: 'thought',
-            owner_id: 't1',
-            property_id: 'p4',
-            value: ['ta1', 'ta2'],
-            updated_at: '2026',
-          },
-          {
-            id: 'v5',
-            owner_type: 'thought',
-            owner_id: 't1',
-            property_id: 'p5',
-            value: 'ta1',
-            updated_at: '2026',
-          },
-        ],
+      {
+        id: 'p2',
+        owner_type: 'thought_type',
+        owner_id: 'ty1',
+        key: 'Автор',
+        value_type: 'thought_ref',
+        config: { allowed_type_ids: ['ty2'] },
+        required: false,
+        position: 1,
       },
-      thoughts: {
-        resolve: async () => [
-          {
-            id: 'ta1',
-            title: 'Автор 1',
-            type_id: null,
-            icon: '📚',
-            icon_kind: 'emoji',
-            icon_attachment_id: null,
-            active: true,
-            marked_for_deletion: false,
-            fg_color: null,
-            bg_color: null,
-            font_bold: null,
-            font_italic: null,
-            font_underline: null,
-            font_strike: null,
-          },
-          {
-            id: 'ta2',
-            title: 'Автор 2',
-            type_id: null,
-            icon: null,
-            icon_kind: 'emoji',
-            icon_attachment_id: null,
-            active: true,
-            marked_for_deletion: false,
-            fg_color: null,
-            bg_color: null,
-            font_bold: null,
-            font_italic: null,
-            font_underline: null,
-            font_strike: null,
-          },
-        ],
+      {
+        id: 'p3',
+        owner_type: 'thought_type',
+        owner_id: 'ty1',
+        key: 'Сайт',
+        value_type: 'url',
+        config: null,
+        required: false,
+        position: 2,
       },
-    },
+      {
+        id: 'p4',
+        owner_type: 'thought_type',
+        owner_id: 'ty1',
+        key: 'Соавторы',
+        value_type: 'thought_ref',
+        config: { multiple: true },
+        required: false,
+        position: 3,
+      },
+      {
+        id: 'p5',
+        owner_type: 'thought_type',
+        owner_id: 'ty1',
+        key: 'Источник',
+        value_type: 'thought_ref',
+        config: {},
+        required: false,
+        position: 4,
+      },
+      {
+        id: 'p6',
+        owner_type: 'thought_type',
+        owner_id: 'ty1',
+        key: 'Закладки',
+        value_type: 'url',
+        config: { multiple: true },
+        required: false,
+        position: 5,
+      },
+    ],
   };
+  etnApi['properties'] = {
+    get: async () => [
+      {
+        id: 'v3',
+        owner_type: 'thought',
+        owner_id: 't1',
+        property_id: 'p3',
+        value: 'https://example.com',
+        updated_at: '2026',
+      },
+      {
+        id: 'v4',
+        owner_type: 'thought',
+        owner_id: 't1',
+        property_id: 'p4',
+        value: ['ta1', 'ta2'],
+        updated_at: '2026',
+      },
+      {
+        id: 'v5',
+        owner_type: 'thought',
+        owner_id: 't1',
+        property_id: 'p5',
+        value: 'ta1',
+        updated_at: '2026',
+      },
+      {
+        id: 'v6',
+        owner_type: 'thought',
+        owner_id: 't1',
+        property_id: 'p6',
+        value: ['https://a.test', 'https://b.test'],
+        updated_at: '2026',
+      },
+    ],
+  };
+  etnApi['thoughts'] = {
+    resolve: async () => [
+      {
+        id: 'ta1',
+        title: 'Автор 1',
+        type_id: null,
+        icon: '📚',
+        icon_kind: 'emoji',
+        icon_attachment_id: null,
+        active: true,
+        marked_for_deletion: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+      },
+      {
+        id: 'ta2',
+        title: 'Автор 2',
+        type_id: null,
+        icon: null,
+        icon_kind: 'emoji',
+        icon_attachment_id: null,
+        active: true,
+        marked_for_deletion: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+      },
+    ],
+  };
+  if (etnApi['system'] === undefined) {
+    etnApi['system'] = {};
+  }
+  (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
 
   const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
   const { store } = await import('../src/renderer/state.js');
@@ -262,7 +292,7 @@ describe('editor properties group body (DOM-shimmed)', () => {
     // Headerless table (L7, 08-ui-spec.md §6.3.1): the tbody is the first child.
     const tbody = table.children[0];
     assert.ok(tbody !== undefined, 'tbody present');
-    assert.equal(tbody.children.length, 5, 'one row per property definition');
+    assert.equal(tbody.children.length, 6, 'one row per property definition');
     // A definition WITH a description renders the ⓘ marker next to the
     // property name and carries the hint as the cell's tooltip (task
     // «Добавить описание (description) к определениям свойств типов»).
@@ -352,6 +382,22 @@ describe('editor properties group body (DOM-shimmed)', () => {
       (c) => c.tagName === 'button' && c.textContent === 'выбрать',
     );
     assert.ok(pickBtn !== undefined, 'multi picker button rendered');
+    // A multiple url property (config.multiple) renders the multi-url editor:
+    // one input row per stored URL, each with its own «Открыть» and «×», plus
+    // an «+» button appending a new row (08-ui-spec.md §6.3.1, task 0.6.2).
+    const multiUrlCell = tbody.children[5]?.children[1];
+    const multiUrlEditor = multiUrlCell?.children[0];
+    assert.ok(multiUrlEditor !== undefined, 'multi-url editor rendered for multiple url');
+    assert.equal(
+      multiUrlEditor?.className,
+      'multi-url-editor',
+      'cell renders the multi-url-editor wrapper, not the single-url input',
+    );
+    const urlRows =
+      multiUrlEditor?.children.filter((c) =>
+        (c as ShimElement).className.split(' ').includes('multi-url-row'),
+      ) ?? [];
+    assert.equal(urlRows.length, 2, 'one row per stored URL');
   });
 });
 
@@ -440,5 +486,144 @@ describe('property value autocomplete helpers (pure)', () => {
     (input as unknown as ShimElement).value = 'моск';
     (input as unknown as ShimElement).dispatch('input');
     assert.deepEqual(visibleRowLabels(list), ['Москва']);
+  });
+});
+
+/**
+ * Tests for the multi-value `url` editor (task 0.6.2). The DOM shim is the
+ * same `ShimElement` used elsewhere in this file; `etn.system.openExternal` is
+ * stubbed so the «Открыть» button does not hit a real OS handler.
+ */
+describe('buildMultiUrlEditor (DOM-shimmed)', () => {
+  /** Loads the module under test with a stubbed `etn.system.openExternal`. */
+  async function loadModule(): Promise<any> {
+    shimDocument();
+    // Mutate (not replace) `window`/`etn`/`etn.system` so the etn Proxy
+    // (which caches `window` on first import via `lib/etn.ts`) keeps reading
+    // the SAME object across tests — otherwise a later `loadModule()` would
+    // install a fresh object the cached Proxy never sees.
+    if ((globalThis as any).window === undefined) {
+      (globalThis as any).window = {};
+    }
+    if ((globalThis as any).window.etn === undefined) {
+      (globalThis as any).window.etn = {};
+    }
+    if ((globalThis as any).window.etn.system === undefined) {
+      (globalThis as any).window.etn.system = {};
+    }
+    if ((globalThis as any).window.etn.system.openExternal === undefined) {
+      (globalThis as any).window.etn.system.openExternal = async () => '';
+    }
+    return import('../src/renderer/editor/properties.js');
+  }
+
+  /** Returns true if `node` carries the given CSS class. */
+  function hasClass(node: ShimElement, cls: string): boolean {
+    return node.className.split(' ').includes(cls);
+  }
+
+  it('renders one input row per stored URL, each with its own «Открыть» and «×»', async () => {
+    const { buildMultiUrlEditor } = await loadModule();
+    const editor = buildMultiUrlEditor({
+      urls: ['https://a.test', 'https://b.test'],
+      save: () => undefined,
+    }) as unknown as ShimElement;
+
+    const rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
+    assert.equal(rows.length, 2, 'one row per stored URL');
+    const firstRow = rows[0]!;
+    const input = firstRow.children.find((c) => hasClass(c, 'multi-url-input'));
+    assert.ok(input !== undefined, 'first row has an input');
+    assert.equal(input?.value, 'https://a.test', 'input is pre-filled with the stored URL');
+    const openBtn = firstRow.children.find(
+      (c) => c.tagName === 'button' && c.textContent === 'Открыть',
+    );
+    assert.ok(openBtn !== undefined, 'first row has an «Открыть» button');
+    assert.notEqual((openBtn as ShimElement & { disabled?: boolean }).disabled, true);
+    const removeBtn = firstRow.children.find((c) => hasClass(c, 'multi-url-remove'));
+    assert.ok(removeBtn !== undefined, 'first row has a «×» remove button');
+  });
+
+  it('«+» button appends a new empty row and focuses it', async () => {
+    const { buildMultiUrlEditor } = await loadModule();
+    const editor = buildMultiUrlEditor({
+      urls: ['https://a.test'],
+      save: () => undefined,
+    }) as unknown as ShimElement;
+
+    const addBtn = editor.children.find(
+      (c) => c.tagName === 'button' && hasClass(c, 'multi-url-add'),
+    );
+    assert.ok(addBtn !== undefined, '«+» button is present');
+    addBtn!.dispatch('click');
+
+    const rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
+    assert.equal(rows.length, 2, '«+» adds a new row');
+    const inputs = rows.map((r) => r.children.find((c) => hasClass(c, 'multi-url-input')));
+    assert.equal(inputs[1]?.value, '', 'new row starts empty');
+  });
+
+  it('«Открыть» invokes `etn.system.openExternal` with the trimmed URL', async () => {
+    const { buildMultiUrlEditor } = await loadModule();
+    // Replace the spy on the SAME window object the etn Proxy cached during
+    // its first import — `sharedWindow` is that object (see buildWithFixtures).
+    const seen: string[] = [];
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const system = (etnApi['system'] ?? {}) as Record<string, unknown>;
+    system['openExternal'] = async (url: string) => {
+      seen.push(url);
+      return '';
+    };
+    etnApi['system'] = system;
+    const editor = buildMultiUrlEditor({
+      urls: ['  https://trim.test  '],
+      save: () => undefined,
+    }) as unknown as ShimElement;
+
+    const row = editor.children.find((c) => hasClass(c, 'multi-url-row'))!;
+    const openBtn = row.children.find(
+      (c) => c.tagName === 'button' && c.textContent === 'Открыть',
+    );
+    openBtn!.dispatch('click');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(seen, ['https://trim.test'], 'openExternal called with the trimmed URL');
+  });
+
+  it('removing a row writes the array without that URL', async () => {
+    const { buildMultiUrlEditor } = await loadModule();
+    const saved: (string[] | null)[] = [];
+    const editor = buildMultiUrlEditor({
+      urls: ['https://a.test', 'https://b.test'],
+      save: (urls: string[]) => {
+        saved.push(urls);
+      },
+    }) as unknown as ShimElement;
+
+    const rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
+    const removeBtn = rows[0]!.children.find((c) => hasClass(c, 'multi-url-remove'))!;
+    removeBtn.dispatch('click');
+    assert.deepEqual(saved, [['https://b.test']], 'save called with the remaining URL');
+  });
+
+  it('commit on blur collapses trailing empty rows', async () => {
+    const { buildMultiUrlEditor } = await loadModule();
+    const saved: (string[] | null)[] = [];
+    const editor = buildMultiUrlEditor({
+      urls: ['https://a.test'],
+      save: (urls: string[]) => {
+        saved.push(urls);
+      },
+    }) as unknown as ShimElement;
+
+    // Append an empty row via «+» then blur it without typing.
+    const addBtn = editor.children.find((c) => hasClass(c, 'multi-url-add'))!;
+    addBtn.dispatch('click');
+    let rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
+    assert.equal(rows.length, 2, 'two rows before blur');
+    const newInput = rows[1]!.children.find((c) => hasClass(c, 'multi-url-input'))!;
+    newInput.dispatch('blur');
+    rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
+    assert.equal(rows.length, 1, 'empty trailing row collapsed');
+    assert.deepEqual(saved, [['https://a.test']], 'save called without the empty row');
   });
 });
