@@ -1590,8 +1590,28 @@ function openPropertyDialog(opts: {
     }
     refFilterHost.append(boxEl);
   };
+
+  // `value_type = 'url'` extras (task 0.6.2): the only flag is «несколько
+  // значений» — an array of URL/file-path strings stored as a JSON array in
+  // `value_text` (02-data-model.md §3.4–3.5). The «Открыть» button per row is
+  // drawn by the value editor, not here.
+  const urlExtrasHost = div('form-stack');
+  const renderUrlExtras = (): void => {
+    urlExtrasHost.replaceChildren();
+    if (typeSelect.value !== 'url') return;
+    const multiRow = el('label', 'checkbox-row');
+    const multiCheck = el('input');
+    multiCheck.type = 'checkbox';
+    multiCheck.checked = multipleOn;
+    multiCheck.addEventListener('change', () => {
+      multipleOn = multiCheck.checked;
+    });
+    multiRow.append(multiCheck, span('несколько значений'));
+    urlExtrasHost.append(multiRow);
+  };
   renderTextExtras();
   renderRefFilter();
+  renderUrlExtras();
 
   typeSelect.addEventListener('change', () => {
     defaultValue = null;
@@ -1603,6 +1623,7 @@ function openPropertyDialog(opts: {
     renderDefault();
     renderTextExtras();
     renderRefFilter();
+    renderUrlExtras();
   });
 
   const body = div('form-stack');
@@ -1613,6 +1634,7 @@ function openPropertyDialog(opts: {
     descArea,
     textExtrasHost,
     refFilterHost,
+    urlExtrasHost,
     errorLine,
   );
 
@@ -1651,10 +1673,18 @@ function openPropertyDialog(opts: {
       else delete config['multiple'];
       if (typeFilter.size > 0) config['allowed_type_ids'] = [...typeFilter];
       else delete config['allowed_type_ids'];
+    } else if (typeSelect.value === 'url') {
+      // task 0.6.2: `url` accepts `multiple` independently of any predefined
+      // list — there is no options picker for `url`. Stored as a JSON array in
+      // `value_text`, never comma-joined.
+      if (multipleOn) config['multiple'] = true;
+      else delete config['multiple'];
+      delete config['allowed_type_id'];
+      delete config['allowed_type_ids'];
     } else {
       delete config['allowed_type_id'];
       delete config['allowed_type_ids'];
-      // `multiple` survives only on text (with options) and thought_ref.
+      // `multiple` survives only on text (with options), thought_ref and url.
       if (typeSelect.value !== 'text') delete config['multiple'];
     }
     return Object.keys(config).length === 0 ? null : (config as PropertyConfig);
