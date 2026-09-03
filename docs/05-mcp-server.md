@@ -343,7 +343,10 @@ N6-каталога (`id`, `name`/`name_forward`+`name_reverse`, `parent_id`,
 `key`, `value_type`, `required`, `config` (в т.ч. `options`/
 `allowed_type_ids`/`default_value`), `inherited`, `defined_on`,
 `defined_on_name`, эффективный `default_value` (переопределение типа или
-собственный дефолт свойства), `overridden_here`.
+собственный дефолт свойства), `overridden_here`, эффективное `description`
+свойства (что оно значит и в каком формате значение — переопределение типа
+или описание определения) и `description_overridden`, отмечающий описание,
+переопределённое самим этим типом.
 
 Параметры:
 

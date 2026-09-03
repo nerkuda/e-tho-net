@@ -1089,10 +1089,12 @@ GET    /api/v1/networks/{nid}/link-types/counts       → { <type_id>: <count>, 
 GET    …/types/{id}/properties                       — ЭФФЕКТИВНЫЙ список (L21):
        #   определения самого типа + унаследованные от предков, от корня вниз;
        #   у каждого: inherited, defined_on, defined_on_name, default_value
-       #   (эффективный: override типа или config.default_value), overridden_here
-POST   …/types/{id}/properties                       { key, value_type, config?, required?, position? }
+       #   (эффективный: override типа или config.default_value), overridden_here,
+       #   description (эффективное: override типа или description определения),
+       #   description_overridden
+POST   …/types/{id}/properties                       { key, value_type, config?, required?, position?, description? }
        # 409 DUPLICATE, если key уже есть в цепочке предков ИЛИ поддереве (L21)
-PATCH  …/types/{id}/properties/{propertyId}          { key?, value_type?, config?, required?, position? }
+PATCH  …/types/{id}/properties/{propertyId}          { key?, value_type?, config?, required?, position?, description? }
 DELETE …/types/{id}/properties/{propertyId}          # значения свойства удаляются каскадом
 PUT    …/types/{id}/properties/reorder               { ordered_ids: [...] } → position = index
 PUT    …/types/{id}/properties/{propertyId}/default  { value: ... | null }  (L21)
@@ -1100,8 +1102,17 @@ PUT    …/types/{id}/properties/{propertyId}/default  { value: ... | null }  (L
        # этого типа; null — сброс переопределения. Для собственного свойства
        # и для свойства вне цепочки предков — 422. value валидируется по
        # value_type свойства.
+PUT    …/types/{id}/properties/{propertyId}/description  { description: string | null }
+       # переопределение ОПИСАНИЯ унаследованного свойства для этого типа;
+       # null (или пустая строка) — сброс. Для собственного свойства и для
+       # свойства вне цепочки предков — 422. Сброс одного аспекта не трогает
+       # другой: строка override, где переопределён только второй аспект,
+       # сохраняется.
 # config — JSON; config.default_value хранит значение по умолчанию (L6).
 # value_type: text | date | number | bool | thought_ref | url (url → value_text).
+# description — свободное описание свойства (что значит, формат значения):
+#   подсказка ⓘ рядом со свойством в редакторе мысли и поле для AI-агентов
+#   в etn.types.list. Пустая строка/пробелы нормализуются в null.
 # config.multiple: для text — несколько значений через запятую (с options);
 #   для thought_ref — несколько ссылок: значение/чтение — массив id
 #   (02-data-model.md §3.5, хранится JSON-массивом в value_thought_ref).
@@ -1109,7 +1120,8 @@ PUT    …/types/{id}/properties/{propertyId}/default  { value: ... | null }  (L
 #   значения свойства к новому типу, несовместимые — удаляет (L6).
 # PATCH key — переименование; хранимые значения остаются привязаны (property_id).
 # L21: унаследованные свойства нельзя менять (value_type/config/required) и
-#   удалять через редактор подчинённого типа — можно только override дефолта.
+#   удалять через редактор подчинённого типа — можно только override дефолта
+#   и описание.
 # Свойства подчинённых типов в редакторе родителя не видны и не учитываются.
 ```
 
