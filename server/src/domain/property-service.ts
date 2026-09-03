@@ -842,6 +842,12 @@ interface PropertyValueRow {
  * `string[]` (never leaked as raw JSON text); with the flag on, a legacy
  * single id is wrapped into a one-element array. Turning `multiple` off never
  * reprocesses already stored values (same rule as `options`/`allowed_type_ids`).
+ *
+ * `url` (multiple form, task 0.6.2): the same shape wins — a JSON array in
+ * `value_text` is always parsed into `string[]`; with the flag on, a legacy
+ * single string is wrapped into a one-element array. A JSON-array payload is
+ * used (not comma-join as for `text`) because URLs may contain commas — a
+ * comma-joined text would be ambiguous to parse back.
  */
 function readValue(
   row: PropertyValueRow,
@@ -850,8 +856,13 @@ function readValue(
 ): PropertyValueValue {
   switch (valueType) {
     case 'text':
-    case 'url':
       return row.value_text;
+    case 'url': {
+      const raw = row.value_text;
+      if (raw === null) return null;
+      if (raw.startsWith('[')) return parseRefIds(raw);
+      return multiple ? [raw] : raw;
+    }
     case 'date':
       return row.value_date;
     case 'number':
@@ -867,9 +878,17 @@ function readValue(
   }
 }
 
-/** `true` when the definition allows several `thought_ref` values. */
-function isMultipleRef(def: PropertyDefinition): boolean {
-  return def.value_type === 'thought_ref' && def.config?.multiple === true;
+/**
+ * `true` when the definition allows several values of its `value_type`.
+ *
+ * Today two `value_type`s accept `config.multiple`: `thought_ref` (array of
+ * thought ids in `value_thought_ref`) and `url` (array of URL strings in
+ * `value_text`). `text` keeps its own comma-join format and is not handled
+ * here.
+ */
+function isMultipleProperty(def: PropertyDefinition): boolean {
+  if (def.config?.multiple !== true) return false;
+  return def.value_type === 'thought_ref' || def.value_type === 'url';
 }
 
 /**
@@ -969,7 +988,7 @@ export function getPropertyValues(
       owner_type: ownerType,
       owner_id: ownerId,
       property_id: row.property_id,
-      value: readValue(row, def.value_type, isMultipleRef(def)),
+      value: readValue(row, def.value_type, isMultipleProperty(def)),
       updated_at: row.updated_at,
     });
   }
@@ -1008,7 +1027,7 @@ export function getPropertyValuesResolved(
     // Skip orphaned values whose definition was deleted — should not happen
     // (the FK cascades), but stay defensive.
     if (!def) continue;
-    prepared.push({ row, def, value: readValue(row, def.value_type, isMultipleRef(def)) });
+    prepared.push({ row, def, value: readValue(row, def.value_type, isMultipleProperty(def)) });
   }
   // Titles of every id stored inside multiple-ref arrays (single refs come
   // from the LEFT JOIN above): one batched lookup.
@@ -1200,14 +1219,48 @@ function validateAndCoerce(
   }
   switch (def.value_type) {
     case 'text':
-    case 'url':
       if (typeof value !== 'string') {
         throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects text`, {
           key: def.key,
-          expected: def.value_type,
+          expected: 'text',
         });
       }
       return { column, raw: value };
+    case 'url': {
+      // Multiple form (task 0.6.2): an array of URL strings, each validated as
+      // a string, duplicates collapse, an empty array clears the value (same
+      // as `null`). A JSON-array payload (not comma-join) is used because URLs
+      // may contain commas — a comma-joined text would be ambiguous to parse
+      // back. A single string on a multiple definition is normalized to a
+      // one-element array, mirroring how `thought_ref` handles it.
+      if (Array.isArray(value)) {
+        if (!isMultipleProperty(def)) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `property "${def.key}" does not allow multiple values`,
+            { key: def.key, expected: 'url', multiple: false },
+          );
+        }
+        const urls = [...new Set(value)];
+        if (urls.length === 0) return { column, raw: null };
+        if (urls.some((url) => typeof url !== 'string')) {
+          throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects URL strings`, {
+            key: def.key,
+            expected: 'url',
+          });
+        }
+        return { column, raw: JSON.stringify(urls) };
+      }
+      if (typeof value !== 'string') {
+        throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects a URL string`, {
+          key: def.key,
+          expected: 'url',
+        });
+      }
+      // On a multiple definition a single value is stored as a one-element
+      // JSON array so the stored shape matches the definition.
+      return { column, raw: isMultipleProperty(def) ? JSON.stringify([value]) : value };
+    }
     case 'date':
       if (typeof value !== 'string') {
         throw new EtnError(
@@ -1239,7 +1292,7 @@ function validateAndCoerce(
     case 'thought_ref': {
       // Multiple form first: an array of ids, each validated like a single one.
       if (Array.isArray(value)) {
-        if (!isMultipleRef(def)) {
+        if (!isMultipleProperty(def)) {
           throw new EtnError(
             'VALIDATION_ERROR',
             `property "${def.key}" does not allow multiple values`,
@@ -1271,7 +1324,7 @@ function validateAndCoerce(
       validateThoughtRefTarget(ndb, def, value);
       // On a multiple definition a single id is normalized to a one-element
       // array, so the stored shape matches the definition.
-      return { column, raw: isMultipleRef(def) ? JSON.stringify([value]) : value };
+      return { column, raw: isMultipleProperty(def) ? JSON.stringify([value]) : value };
     }
   }
 }
@@ -1408,7 +1461,7 @@ export function setPropertyValue(
       owner_type: ownerType,
       owner_id: ownerId,
       property_id: def.id,
-      value: readValue(stored, def.value_type, isMultipleRef(def)),
+      value: readValue(stored, def.value_type, isMultipleProperty(def)),
       updated_at: stored.updated_at,
     };
   });
