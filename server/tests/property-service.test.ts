@@ -663,6 +663,159 @@ describe(
 );
 
 describe(
+  'property-service (multiple url)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    const USER = 'user-1';
+
+    /** Seed a `multiple` url property and return the definition + owner. */
+    function seedMultiUrl(ndb: NetworkDb): {
+      def: { id: string; key: string };
+      owner: string;
+    } {
+      const tt = createThoughtType(ndb, { name: 'Bookmark' }, USER);
+      const def = createTypeProperty(ndb, 'thought_type', tt.id, {
+        key: 'sites',
+        value_type: 'url',
+        config: { multiple: true },
+      });
+      return { def, owner: seedTypedThought(ndb, tt.id) };
+    }
+
+    /** Raw value_text of a property value row. */
+    function rawText(ndb: NetworkDb, ownerId: string, propertyId: string): string | null {
+      const row = ndb
+        .prepare('SELECT value_text FROM property_values WHERE owner_id = ? AND property_id = ?')
+        .get(ownerId, propertyId) as { value_text: string | null };
+      return row.value_text;
+    }
+
+    it('stores an array of URLs as JSON and reads it back as string[]', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, owner } = seedMultiUrl(ndb);
+        setPropertyValue(ndb, 'thought', owner, 'sites', [
+          'https://example.com',
+          'https://docs.example.org',
+        ]);
+        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.id)!), [
+          'https://example.com',
+          'https://docs.example.org',
+        ]);
+        assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [
+          'https://example.com',
+          'https://docs.example.org',
+        ]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('dedupes elements of the array', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, owner } = seedMultiUrl(ndb);
+        setPropertyValue(ndb, 'thought', owner, 'sites', [
+          'https://a.test',
+          'https://a.test',
+          'https://b.test',
+        ]);
+        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.id)!), [
+          'https://a.test',
+          'https://b.test',
+        ]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('rejects arrays on definitions without config.multiple', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'SingleUrl' }, USER);
+        createTypeProperty(ndb, 'thought_type', tt.id, {
+          key: 'site',
+          value_type: 'url',
+        });
+        const owner = seedTypedThought(ndb, tt.id);
+        assert.throws(
+          () => setPropertyValue(ndb, 'thought', owner, 'site', ['https://a.test']),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('normalizes a single string to a one-element array on multiple definitions', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, owner } = seedMultiUrl(ndb);
+        setPropertyValue(ndb, 'thought', owner, 'sites', 'https://only.test');
+        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.id)!), ['https://only.test']);
+        assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [
+          'https://only.test',
+        ]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('treats an empty array as a clear', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, owner } = seedMultiUrl(ndb);
+        setPropertyValue(ndb, 'thought', owner, 'sites', ['https://a.test']);
+        setPropertyValue(ndb, 'thought', owner, 'sites', []);
+        assert.equal(rawText(ndb, owner, def.id), null);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('reads a legacy bare string as an array when multiple is on', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, owner } = seedMultiUrl(ndb);
+        // A pre-multiple row: a bare URL string in value_text.
+        ndb
+          .prepare(
+            `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_text, updated_at)
+             VALUES (?, 'thought', ?, ?, ?, '2024')`,
+          )
+          .run(randomUUID(), owner, def.id, 'https://legacy.test');
+        assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [
+          'https://legacy.test',
+        ]);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('preserves a URL containing a comma end-to-end', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const { def, owner } = seedMultiUrl(ndb);
+        // A URL with an embedded comma — the JSON-array payload must keep it
+        // intact, whereas a comma-joined `text` value would be ambiguous.
+        const tricky = 'https://example.com/?a=1,b=2';
+        setPropertyValue(ndb, 'thought', owner, 'sites', [tricky, 'https://plain.test']);
+        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.id)!), [
+          tricky,
+          'https://plain.test',
+        ]);
+        assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [
+          tricky,
+          'https://plain.test',
+        ]);
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
+
+describe(
   'computeThoughtCardWarnings (O6)',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
