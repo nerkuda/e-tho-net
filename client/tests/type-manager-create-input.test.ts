@@ -140,3 +140,71 @@ describe('buildCreateTypeInput — new thought type (regression for 0ab4749b)', 
     });
   });
 });
+
+/**
+ * Regression for card `aa32ab49-…` («Создание типа мысли: 422 «name
+ * обязателен» даже при заполненном имени»). After `f178f8f` the new-type
+ * dialog staged every editable field in a `draft` object whose `name` was
+ * initialised once from `type?.name ?? extras?.initialName ?? ''`; the
+ * subsequent `e59c258` switched `apply()` to build the create payload via
+ * `buildCreateTypeInput(draft, …)`, which reads `draft.name` — but no
+ * `input` listener was keeping `draft.name` in sync with `nameInput.value`.
+ * The user-typed name therefore never reached the wire (payload `name` =
+ * `''`) and the server rejected the create with
+ * `VALIDATION_ERROR «name обязателен»`.
+ *
+ * These cases pin the pure-logic side of the contract: if `draft.name` is
+ * empty, the payload IS empty (the bug); if `draft.name` holds the typed
+ * value, the payload IS that value (the fix, conditional on the staged-form
+ * listener that mirrors `nameInput.value` into `draft.name` on every
+ * keystroke). The matching DOM-side test lives in
+ * `type-manager-name-sync.test.ts`.
+ */
+describe('buildCreateTypeInput — name sync regression (aa32ab49-…)', () => {
+  it('payload has `name = ""` when draft.name was never updated (the bug shape)', () => {
+    // Mirrors the regressed dialog: `draft.name` initialised from
+    // `type?.name ?? extras?.initialName ?? ''`, no listener keeps it in
+    // sync. With a new type this is `''`.
+    const draft = { ...defaults(), name: '' };
+    const input = buildCreateTypeInput(draft, '', null);
+    assert.equal(input.name, '');
+  });
+
+  it('payload carries the typed name once draft.name is updated (the fix shape)', () => {
+    // Mirrors the staged-form fix: every keystroke writes `nameInput.value`
+    // into `draft.name`, so by the time `apply()` runs the staged draft
+    // reflects the live field.
+    const draft = { ...defaults(), name: '' };
+    const typed = 'Мой новый тип';
+    draft.name = typed;
+    const input = buildCreateTypeInput(draft, '', null);
+    assert.equal(input.name, typed);
+  });
+
+  it('recovered name is sent alongside every other staged field', () => {
+    // Sanity check: after `draft.name` recovers from the user typing, every
+    // other field the dialog stages continues to flow into the payload
+    // exactly as before — the listener fix must not regress the existing
+    // minimal-payload logic from card `0ab4749b`.
+    const draft: ThoughtTypeDraft = {
+      ...defaults(),
+      name: '',
+      parent_id: 'parent-uuid',
+      icon: '🎯',
+      icon_kind: 'emoji' as const,
+      fg_color: '#fe3939',
+      font_bold: true,
+    };
+    draft.name = 'Восстановленный тип';
+    const input = buildCreateTypeInput(draft, 'описание', null);
+    assert.deepEqual(input, {
+      name: 'Восстановленный тип',
+      parent_id: 'parent-uuid',
+      description: 'описание',
+      icon: '🎯',
+      icon_kind: 'emoji',
+      fg_color: '#fe3939',
+      font_bold: true,
+    });
+  });
+});

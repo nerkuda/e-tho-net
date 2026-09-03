@@ -694,7 +694,25 @@ export function showThoughtTypeEditor(
       revalidateName();
     })
     .catch(() => {});
-  nameInput.addEventListener('input', revalidateName);
+  // Keep the staged draft in sync with the inputs on every keystroke.
+  // Without these listeners `draft.name` and `draft.description` are
+  // initialised once and never updated, so any payload builder that reads
+  // `draft.*` (e.g. `buildCreateTypeInput` for the create path) would push a
+  // stale value to the server — the regression tracked in card
+  // `aa32ab49-…` («Создание типа мысли: 422 «name обязателен»…»): after
+  // `f178f8f` + `e59c258` the create payload took `name` from `draft.name`
+  // (= `''`) instead of the live `nameInput.value`.
+  // The PATCH path of `apply()` reads `nameInput.value.trim()` directly, so
+  // it does not strictly need the listener — adding it anyway keeps the
+  // staged-form pattern uniform and prevents the same class of bug if a
+  // future field is wired through `draft.*` only.
+  nameInput.addEventListener('input', () => {
+    draft.name = nameInput.value;
+    revalidateName();
+  });
+  descArea.addEventListener('input', () => {
+    draft.description = descArea.value;
+  });
 
   /** Applies the whole draft to the server, then closes the dialog. */
   async function apply(close: () => void): Promise<void> {
