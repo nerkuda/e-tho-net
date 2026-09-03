@@ -35,6 +35,7 @@ import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import {
   assertImageIcon,
   fieldBoolean,
+  fieldNullableBoolean,
   fieldNullableString,
   fieldString,
   fieldStringArray,
@@ -119,10 +120,10 @@ function parseThoughtTypeBody(body: Record<string, unknown>, requestId: string):
     icon_kind: iconKind,
     fg_color: fieldNullableString(body, 'fg_color', requestId),
     bg_color: fieldNullableString(body, 'bg_color', requestId),
-    font_bold: fieldBoolean(body, 'font_bold', requestId),
-    font_italic: fieldBoolean(body, 'font_italic', requestId),
-    font_underline: fieldBoolean(body, 'font_underline', requestId),
-    font_strike: fieldBoolean(body, 'font_strike', requestId),
+    font_bold: fieldNullableBoolean(body, 'font_bold', requestId),
+    font_italic: fieldNullableBoolean(body, 'font_italic', requestId),
+    font_underline: fieldNullableBoolean(body, 'font_underline', requestId),
+    font_strike: fieldNullableBoolean(body, 'font_strike', requestId),
     description: fieldNullableString(body, 'description', requestId),
     comment_template_md: fieldNullableString(body, 'comment_template_md', requestId),
   };
@@ -157,16 +158,16 @@ function parseThoughtTypeUpdateBody(
     changes.bg_color = fieldNullableString(body, 'bg_color', requestId);
   }
   if (body.font_bold !== undefined) {
-    changes.font_bold = fieldBoolean(body, 'font_bold', requestId);
+    changes.font_bold = fieldNullableBoolean(body, 'font_bold', requestId);
   }
   if (body.font_italic !== undefined) {
-    changes.font_italic = fieldBoolean(body, 'font_italic', requestId);
+    changes.font_italic = fieldNullableBoolean(body, 'font_italic', requestId);
   }
   if (body.font_underline !== undefined) {
-    changes.font_underline = fieldBoolean(body, 'font_underline', requestId);
+    changes.font_underline = fieldNullableBoolean(body, 'font_underline', requestId);
   }
   if (body.font_strike !== undefined) {
-    changes.font_strike = fieldBoolean(body, 'font_strike', requestId);
+    changes.font_strike = fieldNullableBoolean(body, 'font_strike', requestId);
   }
   if (body.description !== undefined) {
     changes.description = fieldNullableString(body, 'description', requestId);

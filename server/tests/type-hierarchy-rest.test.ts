@@ -53,6 +53,76 @@ describe(
         assert.ok(linkRoot);
 
         // --- hierarchy: Персона → Коллега; properties on root and Персона --
+        // Regression for 0ab4749b (font_bold должен быть логическим значением):
+        // POST /thought-types must accept `null` for font_* — the client's
+        // minimal-payload path sends `null` when the user did not override the
+        // style. The server stores `null` and a follow-up PATCH with the same
+        // null must succeed too (the inherited-from-parent semantics).
+        const fontNullRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types`,
+          headers: h,
+          payload: {
+            name: 'Стиль-нулевой',
+            font_bold: null,
+            font_italic: null,
+            font_underline: null,
+            font_strike: null,
+            fg_color: null,
+            bg_color: null,
+          },
+        });
+        assert.equal(fontNullRes.statusCode, 201);
+        const fontNull = fontNullRes.json().data as {
+          id: string;
+          version: number;
+          font_bold: boolean | null;
+          font_italic: boolean | null;
+          font_underline: boolean | null;
+          font_strike: boolean | null;
+          fg_color: string | null;
+          bg_color: string | null;
+        };
+        assert.equal(fontNull.font_bold, null);
+        assert.equal(fontNull.font_italic, null);
+        assert.equal(fontNull.font_underline, null);
+        assert.equal(fontNull.font_strike, null);
+        assert.equal(fontNull.fg_color, null);
+        assert.equal(fontNull.bg_color, null);
+
+        // PATCH on the same nulls stays legal.
+        const fontNullPatchRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/thought-types/${fontNull.id}`,
+          headers: { ...h, 'If-Match': String(fontNull.version) },
+          payload: {
+            font_bold: null,
+            font_italic: null,
+            font_underline: null,
+            font_strike: null,
+          },
+        });
+        assert.equal(fontNullPatchRes.statusCode, 200);
+        const fontNullPatched = fontNullPatchRes.json().data as {
+          font_bold: boolean | null;
+          font_italic: boolean | null;
+          font_underline: boolean | null;
+          font_strike: boolean | null;
+        };
+        assert.equal(fontNullPatched.font_bold, null);
+        assert.equal(fontNullPatched.font_italic, null);
+        assert.equal(fontNullPatched.font_underline, null);
+        assert.equal(fontNullPatched.font_strike, null);
+
+        // The wrong-type 422 still fires — `font_bold: "yes"` is rejected.
+        const badFontRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types`,
+          headers: h,
+          payload: { name: 'Стиль-плохой', font_bold: 'yes' },
+        });
+        assert.equal(badFontRes.statusCode, 422);
+
         const personRes = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${nid}/thought-types`,
