@@ -47,11 +47,13 @@
 
 import type {
   EffectiveTypeProperty,
+  IconKind,
   LinkType,
   PropertyConfig,
   PropertyDefinition,
   PropertyValueType,
   ThoughtType,
+  ThoughtTypeInput,
   ThoughtTypeUpdateInput,
   LinkTypeUpdateInput,
   TypeOwnerType,
@@ -129,6 +131,58 @@ function applyTypeStyle(
     underline: t.font_underline ?? false,
     strike: t.font_strike ?? false,
   });
+}
+
+/** Shape of the staged thought-type draft — the editable fields the new-type
+ *  dialog applies on «Применить и закрыть». */
+export interface ThoughtTypeDraft {
+  name: string;
+  parent_id: string | null;
+  description: string;
+  icon: string | null;
+  icon_kind: IconKind;
+  fg_color: string | null;
+  bg_color: string | null;
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
+}
+
+/**
+ * Builds the minimal `POST /thought-types` payload from the staged draft
+ * (regression for 0ab4749b — `font_bold должен быть логическим значением`).
+ *
+ * The server treats `font_*` / `fg_color` / `bg_color` / `icon` as
+ * `null`-or-value (`null` — inherit from parent), and `font_*` are
+ * `boolean | null` on the wire. Sending `null` for an untouched field IS
+ * legal, but the minimal payload keeps the create free of obvious
+ * `null on first sight` noise and avoids the historical regression of
+ * accidentally pushing the dialog's initial `null` defaults through the
+ * route layer. Each field is included only when it differs from the
+ * create-time default.
+ */
+export function buildCreateTypeInput(
+  draft: ThoughtTypeDraft,
+  descriptionRaw: string,
+  nextTemplate: string | null,
+): ThoughtTypeInput {
+  const input: ThoughtTypeInput = { name: draft.name };
+  if (draft.parent_id !== null) input.parent_id = draft.parent_id;
+  const descriptionValue = descriptionRaw.trim() === '' ? null : descriptionRaw.trim();
+  if (descriptionValue !== null) input.description = descriptionValue;
+  if (draft.icon !== null) {
+    input.icon = draft.icon;
+    input.icon_kind = draft.icon_kind;
+  }
+  if (draft.fg_color !== null) input.fg_color = draft.fg_color;
+  if (draft.bg_color !== null) input.bg_color = draft.bg_color;
+  if (draft.font_bold !== null) input.font_bold = draft.font_bold;
+  if (draft.font_italic !== null) input.font_italic = draft.font_italic;
+  if (draft.font_underline !== null) input.font_underline = draft.font_underline;
+  if (draft.font_strike !== null) input.font_strike = draft.font_strike;
+  if (nextTemplate !== null) input.comment_template_md = nextTemplate;
+  return input;
 }
 
 // ---------------------------------------------------------------------------
@@ -660,21 +714,16 @@ export function showThoughtTypeEditor(
       // no-op — ask BEFORE the type itself is created/patched.
       if (!(await props.confirmPendingRetypes())) return;
       if (current === null) {
-        // New type: one create carries every staged field at once.
-        current = await etn.types.createThoughtType(networkId, {
-          name,
-          parent_id: draft.parent_id,
-          description: description === '' ? null : description,
-          icon: draft.icon,
-          icon_kind: draft.icon_kind,
-          fg_color: draft.fg_color,
-          bg_color: draft.bg_color,
-          font_bold: draft.font_bold,
-          font_italic: draft.font_italic,
-          font_underline: draft.font_underline,
-          font_strike: draft.font_strike,
-          comment_template_md: nextTemplate,
-        });
+        // New type: one create carries every staged field at once. The
+        // server treats `font_*` / `fg_color` / `bg_color` / `icon` as
+        // `null`-or-value (inherit from parent when null), and `font_*` are
+        // strictly `boolean | null` — sending `null` is legal, but the
+        // minimal payload (only the fields the user actually set) keeps the
+        // create free of obvious "null on first sight" noise. Each field is
+        // added only when it differs from the create-time default (null for
+        // strings/colours/font flags, empty description, no template).
+        const input = buildCreateTypeInput(draft, description, nextTemplate);
+        current = await etn.types.createThoughtType(networkId, input);
         createdId = current.id;
       } else {
         // Existing type: patch only the changed fields (If-Match version).
