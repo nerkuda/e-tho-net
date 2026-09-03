@@ -97,6 +97,7 @@ import {
 import {
   createThoughtWithWarnings,
   checkThoughtDeletion,
+  countNeighbors,
   deleteThought,
   getNeighbors,
   getThoughtOrThrow,
@@ -646,6 +647,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`). ' +
         'With `depth > 1` performs a bounded breadth-first walk returning resolved thoughts. ' +
+        'At `depth: 1` (default) the page is capped at 50 rows; `total`/`truncated` in the ' +
+        'response say whether more exist (bug fix 0.6.3) — page through the rest with ' +
+        '`etn.thoughts.query { in_subtree_of: <this id>, max_depth: 1 }` instead. ' +
         'Responses carry `link_types`/`thought_types` reference tables (name + AI-facing ' +
         'description) for the types actually used. `view: "compact"` (default, task O12) drops ' +
         'colours and line-style fields from the link-type catalogue and, for `depth > 1`, the ' +
@@ -660,9 +664,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const view: McpViewMode = args.view ?? 'compact';
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
-          const rawNeighbors = getNeighbors(ndb, args.thought_id, args.dir, {
-            userId: rt.deps.auth.userId,
-          });
+          const neighborOpts = { userId: rt.deps.auth.userId };
+          const rawNeighbors = getNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
           // `FocusNeighbor` carries no visual fields of its own (only `icon`,
           // which is semantic), so the only O12 effect at depth=1 is on the
           // link-type catalogue. Bug fix (§5.1e): sanitize the `icon` itself —
@@ -672,11 +675,21 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             view === 'full'
               ? linkTypeCatalog(ndb, neighbors.map((n) => n.link_type_id))
               : linkTypeCatalogCompact(ndb, neighbors.map((n) => n.link_type_id));
+          // Bug fix (0.6.3, thought f2c7c7d3): this tool has no limit/offset
+          // of its own and silently applied the domain default page size
+          // (50) — a thought with more neighbours than that looked complete,
+          // with nothing telling the agent otherwise. `total`/`truncated`
+          // give the same honesty `etn.thoughts.query` already has; use
+          // `etn.thoughts.query { in_subtree_of, max_depth: 1 }` to page
+          // through the rest when `truncated` is true.
+          const total = countNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
           return {
             thought: { id: thought.id, title: thought.title },
             dir: args.dir,
             depth: 1,
             neighbors,
+            total,
+            truncated: total > neighbors.length,
             link_types: linkTypes,
             thought_types: thoughtTypeCatalog(ndb, neighbors.map((n) => n.type_id)),
           };

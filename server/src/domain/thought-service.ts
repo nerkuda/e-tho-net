@@ -1117,6 +1117,35 @@ export function getNeighbors(
   return rows.map(rowToNeighbor);
 }
 
+/**
+ * Count a thought's parents/children/siblings matching the same filters as
+ * {@link getNeighbors}, ignoring `limit`/`offset` (docs/03-server-api.md §6.7,
+ * bug fix 0.6.3). {@link getNeighbors} pages its result with a default
+ * `limit` of 50; without this companion count, callers had no way to tell a
+ * fully-returned neighbour list from one silently cut off at the page size —
+ * `GET /thoughts/{id}/neighbors` and `etn.thoughts.neighbors` both reported
+ * `total = returned.length`, so a thought with more neighbours than the page
+ * size looked complete when it was not (an agent walking the graph via
+ * neighbours could wrongly conclude the extra thoughts were orphaned).
+ *
+ * Reuses {@link buildNeighborsQuery} verbatim (wrapped in `COUNT(*)`) so the
+ * count and the page can never disagree on which rows match.
+ */
+export function countNeighbors(
+  ndb: NetworkDb,
+  thoughtId: string,
+  dir: FocusDir,
+  opts: NeighborOptions = {},
+): number {
+  if (!FOCUS_DIRS.includes(dir)) {
+    throw new EtnError('VALIDATION_ERROR', `invalid dir: ${String(dir)}`, { field: 'dir' });
+  }
+  const { sort, order } = resolveSortOrder(opts);
+  const { sql, params } = buildNeighborsQuery(dir, sort, order, opts, thoughtId);
+  const row = ndb.prepare(`SELECT COUNT(*) AS c FROM (${sql})`).get(...params) as { c: number };
+  return row.c;
+}
+
 /** Options for {@link focus}. */
 export interface FocusOptions {
   /** Include inactive thoughts/links when true (preferences.show_inactive). */

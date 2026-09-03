@@ -225,6 +225,34 @@ describe(
       }
     });
 
+    // Bug fix 0.6.3 (thought f2c7c7d3-f19d-4c98-a80e-db373848da94): `meta.total`
+    // used to echo the returned page's length, so a section with more
+    // children than the default page size (50) looked complete even though
+    // most were silently cut off — the caller had no signal to page further.
+    it('neighbors: meta.total reflects the real count, not the truncated page (bug f2c7c7d3)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        for (let i = 0; i < 55; i += 1) {
+          await createThought(ctx, {
+            title: `Person ${i}`,
+            create_link: { direction: 'child', target_thought_id: ctx.homeId },
+          });
+        }
+
+        const res = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/neighbors?dir=children`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(res.statusCode, 200);
+        const body = res.json() as { data: unknown[]; meta: { total: number; limit: number } };
+        assert.equal(body.data.length, 50, 'page must still be capped at the default limit');
+        assert.equal(body.meta.total, 55, 'total must count every match, not just the returned page');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('batch: set_active/inactive, protected HOME failure, link/unlink to focus', async () => {
       const ctx = await buildRestContext();
       try {
