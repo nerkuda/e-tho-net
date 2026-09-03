@@ -121,10 +121,20 @@ export interface PropertyConfig {
   /** For `value_type = 'text'`: predefined values to pick from — an input aid,
    *  not a restriction: arbitrary typed values stay allowed. */
   options?: string[];
-  /** For `value_type = 'text'` with `options`: allow several comma-separated
-   *  values to be picked. For `value_type = 'thought_ref'`: allow several
-   *  referenced thoughts — the value is an array of ids (stored as a JSON
-   *  array in `value_thought_ref`, 02-data-model.md §3.4–3.5). */
+  /** Allow several values.
+   *
+   *   * `value_type = 'text'` with `options` — a comma-separated list of
+   *     predefined values may be picked; the stored shape is a single string,
+   *     not an array.
+   *   * `value_type = 'thought_ref'` — an array of referenced thoughts; each
+   *     element is a thought id, the value is stored as a JSON array in
+   *     `value_thought_ref` (02-data-model.md §3.4–3.5).
+   *   * `value_type = 'url'` — an array of URL/file-path strings; the value is
+   *     stored as a JSON array in `value_text` (02-data-model.md §3.4–3.5). A
+   *     JSON-array payload is used (not comma-join as for `text`) because URLs
+   *     may contain commas — a comma-joined text would be ambiguous to parse
+   *     back. (task 0.6.2)
+   */
   multiple?: boolean;
   /** Arbitrary extra configuration keys. */
   [key: string]: unknown;
@@ -188,9 +198,13 @@ export interface PropertyDefaultOverrideInput {
  * `value_bool`/`value_thought_ref`) is populated; the API exposes a single
  * `value` field whose runtime type matches {@link PropertyValueType}.
  *
- * `string[]` is the multiple form of a `thought_ref` property (definitions
- * with `config.multiple = true`): an array of thought ids, stored as a JSON
- * array inside `value_thought_ref` (02-data-model.md §3.5).
+ * `string[]` is the multiple form of two property kinds (definitions with
+ * `config.multiple = true`, 02-data-model.md §3.4–3.5):
+ *   * `thought_ref` — an array of thought ids, stored as a JSON array inside
+ *     `value_thought_ref`;
+ *   * `url` — an array of URL/file-path strings, stored as a JSON array inside
+ *     `value_text` (task 0.6.2). A JSON-array payload is used (not comma-join
+ *     as for `text`) because URLs may contain commas.
  */
 export type PropertyValueValue = string | number | boolean | string[] | null;
 
