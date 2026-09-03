@@ -2575,17 +2575,19 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       (v) => (v.key !== undefined && v.value !== undefined) !== (v.values !== undefined),
       { message: 'provide exactly one of { key + value } or { values }' },
     );
-  mcp.registerTool(
+    mcp.registerTool(
     'etn.properties.set',
     {
       title: 'Установить свойство',
       description:
         'Set (or clear with `value: null`) a property value on a thought/link, addressed by key; ' +
-        "the value must match the property definition's value_type. A `thought_ref` property with " +
-        '`config.multiple = true` also accepts an array of thought ids (multiple values); an empty ' +
-        'array clears the value. Hosts that stringify scalar parameters are tolerated in the single ' +
-        'form: for `bool` the exact strings "true"/"false" (case-insensitive) and for `number` finite ' +
-        'numeric strings are coerced back to their JSON types before validation. Either provide one ' +
+        "the value must match the property definition's value_type. Properties with " +
+        '`config.multiple = true` also accept an array of values: `thought_ref` — an array of ' +
+        'thought ids; `url` — an array of URL/file-path strings (task 0.6.2, JSON-array payload in ' +
+        '`value_text`, not comma-join — URLs may contain commas). An empty array clears the value. ' +
+        'Hosts that stringify scalar parameters are tolerated in the single form: for `bool` the ' +
+        'exact strings "true"/"false" (case-insensitive) and for `number` finite numeric strings ' +
+        'are coerced back to their JSON types before validation. Either provide one ' +
         '`key`+`value`, or a map `values: {key: value|null}` to write several properties in a ' +
         'single transaction (any invalid key rolls back the whole set). Single form returns ' +
         '{ id, version: 0 }; bulk form returns { values: {key: {id}}, version: 0 }.',
