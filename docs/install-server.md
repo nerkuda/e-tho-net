@@ -280,8 +280,8 @@ _data_dir/
 ├── _system.db
 └── networks/
     └── <uuid>/
-        ├── data.db
-        ├── attachments/   (зарезервировано)
+        ├── data.db         # данные сети (включая теневые строки слоёв)
+        ├── attachments/    # загруженные файлы-вложений (картинки и пр.)
         └── snapshots/
 ```
 
