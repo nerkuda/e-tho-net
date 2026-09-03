@@ -48,6 +48,7 @@ const EXPECTED_FILES = [
   '027_session_layers.sql',
   '028_session_layers_switch_seq.sql',
   '029_links_triple_live.sql',
+  '030_type_property_description.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -178,6 +179,26 @@ describe(
         // 024 mark-for-deletion columns (02-data-model.md §3.1.2, task S13).
         assert.ok(thoughtCols.includes('marked_for_deletion'), 'missing thoughts.marked_for_deletion');
         assert.ok(linkCols.includes('marked_for_deletion'), 'missing links.marked_for_deletion');
+
+        // 030 property definition descriptions (02-data-model.md §3.4/§3.7.1,
+        // task «Добавить описание к определениям свойств типов»): the nullable
+        // description column on type_properties and the description-override
+        // column on type_property_overrides.
+        const propDefCols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('type_properties') as {
+            name: string;
+          }[]
+        ).map((r) => r.name);
+        assert.ok(propDefCols.includes('description'), 'missing type_properties.description');
+        const propOverrideCols = (
+          db.prepare('SELECT name FROM pragma_table_info(?)').all('type_property_overrides') as {
+            name: string;
+          }[]
+        ).map((r) => r.name);
+        assert.ok(
+          propOverrideCols.includes('description'),
+          'missing type_property_overrides.description',
+        );
 
         // 019 comment_targets: m2m attachments with the primary owner as index.
         const targetCols = (

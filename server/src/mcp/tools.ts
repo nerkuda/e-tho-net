@@ -1197,7 +1197,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'and link types with their hierarchy (`parent_id`/`is_root`), `description` (AI-facing ' +
         'context) and effective property definitions — own plus everything inherited along the ' +
         'L21 type chain (`key`, `value_type`, `required`, `config` incl. `options`/' +
-        '`allowed_type_ids`, effective `default_value`, `inherited`, `defined_on`). Call before ' +
+        '`allowed_type_ids`, effective `default_value`, `inherited`, `defined_on`, the effective ' +
+        '`description` of the property and `description_overridden` marking a description this ' +
+        'type overrides itself). Call before ' +
         'creating a typed thought/link to see what to fill; also lets `type_id` be replaced by a ' +
         'type name in `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`. ' +
         'Task O16: pass `in_subtree_of: <thought_id>` (optionally with `max_depth`) to scope ' +

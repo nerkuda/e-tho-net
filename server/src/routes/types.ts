@@ -11,6 +11,8 @@
  *   PATCH  …/types/:id/properties/:propertyId        — update a definition
  *   DELETE …/types/:id/properties/:propertyId        — delete a definition
  *   PUT    …/types/:id/properties/reorder            — assign positions
+ *   PUT    …/types/:id/properties/:propertyId/default      — override the default
+ *   PUT    …/types/:id/properties/:propertyId/description  — override the description
  *
  * DELETE of a type still in use requires `?force=1` (nulls `type_id` on the
  * referencing thoughts/links). All routes require network membership.
@@ -64,6 +66,7 @@ import {
   listEffectiveTypeProperties,
   reorderTypeProperties,
   setTypePropertyDefaultOverride,
+  setTypePropertyDescriptionOverride,
   updateTypeProperty,
 } from '../domain/property-service.js';
 
@@ -272,6 +275,7 @@ function parseTypePropertyBody(
     config: config as PropertyDefinitionInput['config'],
     required: fieldBoolean(body, 'required', requestId),
     position: typeof body.position === 'number' ? Math.trunc(body.position) : undefined,
+    description: fieldNullableString(body, 'description', requestId),
   };
 }
 
@@ -310,6 +314,9 @@ function parseTypePropertyUpdateBody(
       );
     }
     changes.position = Math.trunc(body.position);
+  }
+  if (body.description !== undefined) {
+    changes.description = fieldNullableString(body, 'description', requestId);
   }
   return changes;
 }
@@ -617,6 +624,43 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
               value === null ? {} : { config: { ...def?.config, default_value: value } },
           });
           sendSuccess(reply, { property_id: propertyId, default_value: value }, {
+            request_id: req.id,
+          });
+        },
+      );
+
+      // Set/clear a type's DESCRIPTION override of an inherited property
+      // (`description: null` resets to the definition's own description).
+      app.put(
+        `${pathBase}/:id/properties/:propertyId/description`,
+        { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
+        async (req: FastifyRequest, reply) => {
+          const { networkId, id, propertyId } = req.params as TypePropertyParams;
+          const body = requestBody(req);
+          if (!('description' in body)) {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'description обязателен (текст или null).',
+              { field: 'description' },
+              req.id,
+            );
+          }
+          const description = body.description;
+          if (description !== null && typeof description !== 'string') {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'description должен быть строкой или null.',
+              { field: 'description' },
+              req.id,
+            );
+          }
+          const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+          setTypePropertyDescriptionOverride(ndb, ownerType, id, propertyId, description);
+          deps.emit(req, networkId, 'property-definition.updated', {
+            id: propertyId,
+            changes: { description },
+          });
+          sendSuccess(reply, { property_id: propertyId, description }, {
             request_id: req.id,
           });
         },

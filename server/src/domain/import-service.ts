@@ -349,8 +349,8 @@ function insertPropertyDefinition(
   ndb
     .prepare(
       `INSERT OR IGNORE INTO type_properties (
-         id, owner_type, owner_id, key, value_type, config, required, position
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         id, owner_type, owner_id, key, value_type, config, required, position, description
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       row.id,
@@ -361,6 +361,7 @@ function insertPropertyDefinition(
       JSON.stringify(row.config ?? {}),
       row.required ? 1 : 0,
       row.position,
+      row.description ?? null,
     );
   return { created: true };
 }

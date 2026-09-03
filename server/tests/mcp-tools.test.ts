@@ -18,7 +18,7 @@ import { createApiKeyAuthProvider } from '../src/mcp/auth.js';
 import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
-import { createTypeProperty } from '../src/domain/property-service.js';
+import { createTypeProperty, setTypePropertyDescriptionOverride } from '../src/domain/property-service.js';
 import { ICON_DATA_URL_PLACEHOLDER } from '../src/mcp/catalogs.js';
 import {
   buildMcpContext,
@@ -1303,15 +1303,25 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     try {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const parentType = createThoughtType(ndb, { name: 'Проект' }, ctx.adminId);
-      createTypeProperty(ndb, 'thought_type', parentType.id, {
+      const deadlineProp = createTypeProperty(ndb, 'thought_type', parentType.id, {
         key: 'дедлайн',
         value_type: 'date',
         required: true,
+        description: 'крайний срок реализации, ISO-дата',
       });
       const childType = createThoughtType(
         ndb,
         { name: 'Подпроект', parent_id: parentType.id },
         ctx.adminId,
+      );
+      // The child overrides the inherited description (task «Добавить
+      // описание (description) к определениям свойств типов»).
+      setTypePropertyDescriptionOverride(
+        ndb,
+        'thought_type',
+        childType.id,
+        deadlineProp.id,
+        'срок передачи подпроекта в тестирование',
       );
 
       const parentLinkType = createLinkType(
@@ -1334,7 +1344,13 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             name: string;
             parent_id: string | null;
             is_root: boolean;
-            properties: Array<{ key: string; inherited: boolean; defined_on: string }>;
+            properties: Array<{
+              key: string;
+              inherited: boolean;
+              defined_on: string;
+              description: string | null;
+              description_overridden: boolean;
+            }>;
           }>;
           link_types: Array<{ id: string; name_forward: string; name_reverse: string }>;
         }>(listed);
@@ -1349,10 +1365,16 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.ok(inherited, 'child must see the inherited property');
         assert.equal(inherited.inherited, true);
         assert.equal(inherited.defined_on, parentType.id);
-        // The parent's own definition is not marked inherited.
+        // The effective description of the child is ITS override, flagged as such.
+        assert.equal(inherited.description, 'срок передачи подпроекта в тестирование');
+        assert.equal(inherited.description_overridden, true);
+        // The parent's own definition is not marked inherited; its description
+        // is the definition's own text, not an override.
         const ownDef = parentEntry.properties.find((p) => p.key === 'дедлайн');
         assert.ok(ownDef);
         assert.equal(ownDef.inherited, false);
+        assert.equal(ownDef.description, 'крайний срок реализации, ISO-дата');
+        assert.equal(ownDef.description_overridden, false);
 
         const linkEntry = result.link_types.find((t) => t.id === parentLinkType.id);
         assert.ok(linkEntry, 'link type must be listed');

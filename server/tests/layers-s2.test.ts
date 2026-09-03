@@ -263,7 +263,8 @@ describe(
         assert.ok(beforeFts.names >= 3 && beforeFts.texts >= 1 && beforeFts.links >= 1);
 
         // The upgrade: runMigrations applies only the pending layer files
-        // (025 + the S6 trigger fix that follows it).
+        // (025 + the follow-ups: the S6 trigger fix, session layers, the
+        // switch seq, the live-triple index, property descriptions).
         const res = runMigrations(db, networkMigrationsDir());
         assert.deepEqual(res.applied, [
           '025_layers.sql',
@@ -271,6 +272,7 @@ describe(
           '027_session_layers.sql',
           '028_session_layers_switch_seq.sql',
           '029_links_triple_live.sql',
+          '030_type_property_description.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else kept).

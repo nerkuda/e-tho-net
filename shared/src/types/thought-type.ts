@@ -99,6 +99,12 @@ export interface PropertyDefinition {
   required: boolean;
   /** Display order. */
   position: number;
+  /**
+   * Free-form description of the property — what it means and which format
+   * its values take. Shown as a hint next to the property in the thought
+   * editor and given to AI agents through `etn.types.list`.
+   */
+  description: string | null;
 }
 
 /** Recognised keys inside a {@link PropertyDefinition.config} JSON blob. */
@@ -131,6 +137,7 @@ export interface PropertyDefinitionInput {
   config?: PropertyConfig | null;
   required?: boolean;
   position?: number;
+  description?: string | null;
 }
 
 /** Input accepted by `PATCH …/types/{id}/properties/{prop_id}` (03-server-api.md §8). */
@@ -141,6 +148,7 @@ export interface PropertyDefinitionUpdateInput {
   config?: PropertyConfig | null;
   required?: boolean;
   position?: number;
+  description?: string | null;
 }
 
 /**
@@ -160,6 +168,12 @@ export interface EffectiveTypeProperty extends PropertyDefinition {
   default_value: PropertyValueValue;
   /** This type overrides the inherited default (`type_property_overrides`). */
   overridden_here: boolean;
+  /**
+   * The inherited `description` (from {@link PropertyDefinition}) is
+   * override-aware: the description override stored on this type, else the
+   * definition's own. This flag tells the two apart.
+   */
+  description_overridden: boolean;
 }
 
 /** Body of `PUT …/types/{id}/properties/{prop_id}/default` (03-server-api.md §8). */

@@ -206,6 +206,80 @@ describe(
         });
         assert.equal(clearRes.statusCode, 200);
 
+        // --- description of a definition: accepted on create, patched, -------
+        // --- inherited, overridable per type, resettable (task               |
+        // «Добавить описание (description) к определениям свойств типов») -----
+        const descPatchRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/thought-types/${person.id}/properties/${personProp.id}`,
+          headers: h,
+          payload: { description: 'биологический пол человека' },
+        });
+        assert.equal(descPatchRes.statusCode, 200);
+        assert.equal((descPatchRes.json().data as { description: string | null }).description, 'биологический пол человека');
+
+        // The child inherits the description with the property.
+        const inheritedDesc = (
+          (
+            await ctx.app.inject({
+              method: 'GET',
+              url: `/api/v1/networks/${nid}/thought-types/${colleague.id}/properties`,
+              headers: h,
+            })
+          ).json().data as Array<{ key: string; description: string | null; description_overridden: boolean }>
+        ).find((d) => d.key === 'пол')!;
+        assert.equal(inheritedDesc.description, 'биологический пол человека');
+        assert.equal(inheritedDesc.description_overridden, false);
+
+        // The child overrides the description for itself, then resets it.
+        const descOverrideRes = await ctx.app.inject({
+          method: 'PUT',
+          url: `/api/v1/networks/${nid}/thought-types/${colleague.id}/properties/${personProp.id}/description`,
+          headers: h,
+          payload: { description: 'пол, указанный в личном деле' },
+        });
+        assert.equal(descOverrideRes.statusCode, 200);
+        const afterDescOverride = (
+          (
+            await ctx.app.inject({
+              method: 'GET',
+              url: `/api/v1/networks/${nid}/thought-types/${colleague.id}/properties`,
+              headers: h,
+            })
+          ).json().data as Array<{ key: string; description: string | null; description_overridden: boolean }>
+        ).find((d) => d.key === 'пол')!;
+        assert.equal(afterDescOverride.description, 'пол, указанный в личном деле');
+        assert.equal(afterDescOverride.description_overridden, true);
+
+        const descClearRes = await ctx.app.inject({
+          method: 'PUT',
+          url: `/api/v1/networks/${nid}/thought-types/${colleague.id}/properties/${personProp.id}/description`,
+          headers: h,
+          payload: { description: null },
+        });
+        assert.equal(descClearRes.statusCode, 200);
+        const afterDescClear = (
+          (
+            await ctx.app.inject({
+              method: 'GET',
+              url: `/api/v1/networks/${nid}/thought-types/${colleague.id}/properties`,
+              headers: h,
+            })
+          ).json().data as Array<{ key: string; description: string | null; description_overridden: boolean }>
+        ).find((d) => d.key === 'пол')!;
+        assert.equal(afterDescClear.description, 'биологический пол человека');
+        assert.equal(afterDescClear.description_overridden, false);
+
+        // An own property's description is edited on the definition itself —
+        // the override endpoint refuses it (422).
+        const ownDescOverrideRes = await ctx.app.inject({
+          method: 'PUT',
+          url: `/api/v1/networks/${nid}/thought-types/${person.id}/properties/${personProp.id}/description`,
+          headers: h,
+          payload: { description: 'nope' },
+        });
+        assert.equal(ownDescOverrideRes.statusCode, 422);
+
         // An untyped thought resolves the root type's properties.
         const untypedRes = await ctx.app.inject({
           method: 'POST',

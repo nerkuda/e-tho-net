@@ -59,6 +59,7 @@ interface TypePropertyRow {
   config: string | null;
   required: number;
   position: number;
+  description: string | null;
 }
 
 /** Convert a raw row into a {@link PropertyDefinition}. */
@@ -72,7 +73,23 @@ function rowToPropertyDefinition(row: TypePropertyRow): PropertyDefinition {
     config: row.config ? (JSON.parse(row.config) as PropertyDefinition['config']) : null,
     required: row.required === 1,
     position: row.position,
+    description: row.description,
   };
+}
+
+/**
+ * Normalize an incoming property description: `null`/blank → `null` (no
+ * description), otherwise the trimmed string.
+ */
+function normalizeDescription(description: unknown): string | null {
+  if (description === undefined || description === null) return null;
+  if (typeof description !== 'string') {
+    throw new EtnError('VALIDATION_ERROR', 'description must be a string or null', {
+      field: 'description',
+    });
+  }
+  const trimmed = description.trim();
+  return trimmed === '' ? null : trimmed;
 }
 
 /** Validate a property key: non-empty string. */
@@ -209,12 +226,29 @@ function visibleTypeChain(
   return row ? (JSON.parse(row.default_value) as PropertyValueValue) : null;
 }
 
+/** The description override a type holds for a property, or `null`. */
+function getDescriptionOverride(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  typeId: string,
+  propertyId: string,
+): string | null {
+  const row = ndb
+    .prepare(
+      'SELECT description FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
+    )
+    .get(ownerType, typeId, propertyId) as { description: string | null } | undefined;
+  return row?.description ?? null;
+}
+
 /**
  * Effective property definitions of a type (L21, docs/02-data-model.md §3.4.1):
  * the type's own definitions plus everything inherited from its ancestors,
  * ordered from the root down to the type. `default_value` on each entry is the
  * effective default — the override stored on this type (inherited properties
- * only), else the definition's own `config.default_value`.
+ * only), else the definition's own `config.default_value`. `description` is
+ * effective the same way: the description override stored on this type, else
+ * the definition's own `description`.
  */
 export function listEffectiveTypeProperties(
   ndb: NetworkDb,
@@ -227,6 +261,9 @@ export function listEffectiveTypeProperties(
     for (const def of listTypeProperties(ndb, ownerType, typeId)) {
       const inherited = typeId !== ownerId;
       const override = inherited ? getOverride(ndb, ownerType, ownerId, def.id) : null;
+      const descOverride = inherited
+        ? getDescriptionOverride(ndb, ownerType, ownerId, def.id)
+        : null;
       const ownDefault = def.config?.default_value ?? null;
       out.push({
         ...def,
@@ -235,6 +272,8 @@ export function listEffectiveTypeProperties(
         defined_on_name: ownerTypeName(ndb, ownerType, typeId),
         default_value: inherited ? (override ?? ownDefault) : ownDefault,
         overridden_here: inherited && override !== null,
+        description: inherited ? (descOverride ?? def.description) : def.description,
+        description_overridden: inherited && descOverride !== null,
       });
     }
   }
@@ -242,9 +281,79 @@ export function listEffectiveTypeProperties(
 }
 
 /**
+ * Shared guard of both override setters (default value, description): the type
+ * and the property must resolve in the connection's layer context, and only a
+ * property **inherited from an ancestor** may be overridden here — a type's own
+ * property is edited on the definition itself.
+ *
+ * Throws `NOT_FOUND` (404) for a missing type/property and `VALIDATION_ERROR`
+ * (422) for an own or out-of-chain property.
+ */
+function assertOverridableInheritedProperty(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  ownerId: string,
+  propertyId: string,
+): PropertyDefinition {
+  validateTypeOwnerType(ownerType);
+  // S5 (13-layers.md §13): the owner must resolve in the connection's layer
+  // context — the `_v` view hides types tombstoned in this chain and keeps
+  // layer-only types invisible to the base, so an override can never attach
+  // to a type the current layer cannot see.
+  const typeRow = ndb
+    .prepare(`SELECT id FROM ${ownerTypeTable(ownerType)}_v WHERE id = ?`)
+    .get(ownerId);
+  if (!typeRow) {
+    throw new EtnError('NOT_FOUND', `type ${ownerId} not found`, { entity: 'type', id: ownerId });
+  }
+  const def = getTypeProperty(ndb, propertyId);
+  if (!def || def.owner_type !== ownerType) {
+    throw new EtnError('NOT_FOUND', `property ${propertyId} not found`, {
+      entity: 'type_property',
+      id: propertyId,
+    });
+  }
+  if (def.owner_id === ownerId) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'own defaults are edited on the property definition itself',
+      { entity: 'type_property', id: propertyId, owner_id: ownerId },
+    );
+  }
+  const chain = visibleTypeChain(ndb, ownerType, ownerId);
+  if (!chain.includes(def.owner_id)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'only properties inherited from ancestor types can be overridden',
+      { entity: 'type_property', id: propertyId, owner_id: ownerId },
+    );
+  }
+  return def;
+}
+
+/** The visible override rows of (type, property) — ids plus both payloads. */
+function listOverrideRows(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  ownerId: string,
+  propertyId: string,
+): Array<{ id: string; default_value: string; description: string | null }> {
+  return ndb
+    .prepare(
+      'SELECT id, default_value, description FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
+    )
+    .all(ownerType, ownerId, propertyId) as Array<{
+    id: string;
+    default_value: string;
+    description: string | null;
+  }>;
+}
+
+/**
  * Set or clear a type's default-value override of an inherited property
- * (docs/03-server-api.md §8). `value = null` deletes the override — the
- * effective default falls back to the definition's own default.
+ * (docs/03-server-api.md §8). `value = null` resets the default back to the
+ * definition's own — an override row that also carries a description override
+ * survives with `default_value = 'null'` (JSON null: "no default override").
  *
  * Throws `NOT_FOUND` (404) when the property or the type does not exist, and
  * `VALIDATION_ERROR` (422) when the property is defined on the type itself
@@ -258,53 +367,28 @@ export function setTypePropertyDefaultOverride(
   propertyId: string,
   value: PropertyValueValue,
 ): void {
-  validateTypeOwnerType(ownerType);
   ndb.transaction(() => {
-    // S5 (13-layers.md §13): the owner must resolve in the connection's layer
-    // context — the `_v` view hides types tombstoned in this chain and keeps
-    // layer-only types invisible to the base, so an override can never attach
-    // to a type the current layer cannot see.
-    const typeRow = ndb
-      .prepare(`SELECT id FROM ${ownerTypeTable(ownerType)}_v WHERE id = ?`)
-      .get(ownerId);
-    if (!typeRow) {
-      throw new EtnError('NOT_FOUND', `type ${ownerId} not found`, { entity: 'type', id: ownerId });
-    }
-    const def = getTypeProperty(ndb, propertyId);
-    if (!def || def.owner_type !== ownerType) {
-      throw new EtnError('NOT_FOUND', `property ${propertyId} not found`, {
-        entity: 'type_property',
-        id: propertyId,
-      });
-    }
-    if (def.owner_id === ownerId) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'own defaults are edited on the property definition itself',
-        { entity: 'type_property', id: propertyId, owner_id: ownerId },
-      );
-    }
-    const chain = visibleTypeChain(ndb, ownerType, ownerId);
-    if (!chain.includes(def.owner_id)) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'only properties inherited from ancestor types can be overridden',
-        { entity: 'type_property', id: propertyId, owner_id: ownerId },
-      );
-    }
+    const def = assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
     if (value !== null) {
       validateAndCoerce(ndb, def, value);
     }
     const now = new Date().toISOString();
     if (value === null) {
-      // S4: физически в основе, надгробием в слое (13-layers.md §5.2).
-      const rows = ndb
-        .prepare(
-          'SELECT id FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
-        )
-        .all(ownerType, ownerId, propertyId) as { id: string }[];
-      for (const row of rows) {
-        deleteRowLayered(ndb, 'type_property_overrides', row.id);
+      // Reset the default only: a row that still carries a description
+      // override survives with default_value = 'null' (JSON null reads back
+      // as "no override"); a row overriding nothing is removed.
+      for (const row of listOverrideRows(ndb, ownerType, ownerId, propertyId)) {
+        if (row.description === null) {
+          // S4: физически в основе, надгробием в слое (13-layers.md §5.2).
+          deleteRowLayered(ndb, 'type_property_overrides', row.id);
+          continue;
+        }
+        materializeShadow(ndb, 'type_property_overrides', row.id);
+        ndb
+          .prepare(
+            'UPDATE type_property_overrides SET default_value = ?, updated_at = ? WHERE id = ? AND layer_id = ?',
+          )
+          .run('null', now, row.id, ndb.layerId);
       }
       return;
     }
@@ -313,11 +397,9 @@ export function setTypePropertyDefaultOverride(
     // layer's view (resolution goes per logical id, §4.1), and the effective
     // default would depend on row order. The shadow keeps the copy-on-write
     // chain: one visible override per (type, property) in every context.
-    const existingOverride = ndb
-      .prepare(
-        'SELECT id FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ? LIMIT 1',
-      )
-      .get(ownerType, ownerId, propertyId) as { id: string } | undefined;
+    // The conflict arm updates ONLY default_value, so a description override
+    // held by the same row survives.
+    const existingOverride = listOverrideRows(ndb, ownerType, ownerId, propertyId)[0];
     if (existingOverride) {
       materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
     }
@@ -331,6 +413,69 @@ export function setTypePropertyDefaultOverride(
            deleted = 0`,
       )
       .run(randomUUID(), ndb.layerId, ownerType, ownerId, propertyId, JSON.stringify(value), now, now);
+  });
+}
+
+/**
+ * Set or clear a type's description override of an inherited property
+ * (docs/03-server-api.md §8.2). `description = null` (or a blank string)
+ * resets the effective description back to the definition's own — an override
+ * row that also carries a default-value override survives with
+ * `description = NULL`; a row overriding nothing is removed.
+ *
+ * Semantics mirror {@link setTypePropertyDefaultOverride}: the override is
+ * inherited by the type's own subtree until they override it themselves
+ * (`description_overridden` in the effective list).
+ */
+export function setTypePropertyDescriptionOverride(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  ownerId: string,
+  propertyId: string,
+  description: string | null,
+): void {
+  const normalized = normalizeDescription(description);
+  ndb.transaction(() => {
+    assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
+    const now = new Date().toISOString();
+    if (normalized === null) {
+      // Reset the description only: a row that still carries a default-value
+      // override survives with description = NULL; a row overriding nothing
+      // is removed.
+      for (const row of listOverrideRows(ndb, ownerType, ownerId, propertyId)) {
+        if (JSON.parse(row.default_value) === null) {
+          // S4: физически в основе, надгробием в слое (13-layers.md §5.2).
+          deleteRowLayered(ndb, 'type_property_overrides', row.id);
+          continue;
+        }
+        materializeShadow(ndb, 'type_property_overrides', row.id);
+        ndb
+          .prepare(
+            'UPDATE type_property_overrides SET description = NULL, updated_at = ? WHERE id = ? AND layer_id = ?',
+          )
+          .run(now, row.id, ndb.layerId);
+      }
+      return;
+    }
+    // Same copy-on-write discipline as the default override above: shadow the
+    // visible row first, then upsert by the natural key. The conflict arm
+    // updates ONLY description, so a default-value override held by the same
+    // row survives; a brand-new row stores default_value = 'null' (JSON null:
+    // "no default override").
+    const existingOverride = listOverrideRows(ndb, ownerType, ownerId, propertyId)[0];
+    if (existingOverride) {
+      materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
+    }
+    ndb
+      .prepare(
+        `INSERT INTO type_property_overrides (id, layer_id, owner_type, type_id, property_id, default_value, description, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'null', ?, ?, ?)
+         ON CONFLICT (owner_type, type_id, property_id, layer_id) DO UPDATE SET
+           description = excluded.description,
+           updated_at = excluded.updated_at,
+           deleted = 0`,
+      )
+      .run(randomUUID(), ndb.layerId, ownerType, ownerId, propertyId, normalized, now, now);
   });
 }
 
@@ -411,18 +556,20 @@ export function createTypeProperty(
       ).p;
     const configJson =
       input.config === undefined || input.config === null ? null : JSON.stringify(input.config);
+    const description = normalizeDescription(input.description);
     ndb
       .prepare(
-        `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, key, value_type, config, required, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, key, value_type, config, required, position, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (owner_type, owner_id, key, layer_id) DO UPDATE SET
            deleted = 0,
            value_type = excluded.value_type,
            config = excluded.config,
            required = excluded.required,
-           position = excluded.position`,
+           position = excluded.position,
+           description = excluded.description`,
       )
-      .run(id, ndb.layerId, ownerType, ownerId, key, valueType, configJson, input.required ? 1 : 0, position);
+      .run(id, ndb.layerId, ownerType, ownerId, key, valueType, configJson, input.required ? 1 : 0, position, description);
     // S5: the upsert's conflict arm wakes a same-key tombstone of this layer
     // (`deleted = 0`) — the woken row keeps its ORIGINAL id, so re-read by
     // (owner, key), never by the fresh uuid (it resolves only on a clean INSERT).
@@ -579,6 +726,10 @@ export function updateTypeProperty(
     if (changes.position !== undefined) {
       sets.push('position = ?');
       args.push(changes.position);
+    }
+    if (changes.description !== undefined) {
+      sets.push('description = ?');
+      args.push(normalizeDescription(changes.description));
     }
     if (sets.length === 0) {
       return current;

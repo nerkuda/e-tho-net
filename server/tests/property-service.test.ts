@@ -25,8 +25,11 @@ import {
   findThoughtUsage,
   getPropertyValues,
   getPropertyValuesResolved,
+  listEffectiveTypeProperties,
   setPropertyValue,
   setPropertyValues,
+  setTypePropertyDefaultOverride,
+  setTypePropertyDescriptionOverride,
   updateTypeProperty,
 } from '../src/domain/property-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
@@ -828,6 +831,161 @@ describe(
         const thought = seedTypedThought(ndb, tt.id);
         setPropertyValue(ndb, 'thought', thought, 'note', '');
         assert.deepEqual(computeThoughtCardWarnings(ndb, thought), []);
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
+
+describe(
+  'property definitions: description (own + inherited + override)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    const USER = 'user-1';
+
+    it('stores and returns the description of a definition (create + update)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'DescOwn' }, USER);
+        const prop = createTypeProperty(ndb, 'thought_type', tt.id, {
+          key: 'path',
+          value_type: 'text',
+          description: '  путь от корня репозитория  ',
+        });
+        assert.equal(prop.description, 'путь от корня репозитория');
+
+        const updated = updateTypeProperty(ndb, prop.id, { description: 'абсолютный путь' });
+        assert.equal(updated.description, 'абсолютный путь');
+
+        // A blank description normalizes back to null.
+        const cleared = updateTypeProperty(ndb, prop.id, { description: '   ' });
+        assert.equal(cleared.description, null);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('a child type inherits the description and can override it (description_overridden)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const parent = createThoughtType(ndb, { name: 'DescParent' }, USER);
+        const prop = createTypeProperty(ndb, 'thought_type', parent.id, {
+          key: 'owner',
+          value_type: 'text',
+          description: 'кто отвечает за элемент',
+        });
+        const child = createThoughtType(ndb, { name: 'DescChild', parent_id: parent.id }, USER);
+
+        // Inherited as-is: the effective description equals the definition's.
+        let effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        assert.equal(effective.length, 1);
+        assert.equal(effective[0]!.description, 'кто отвечает за элемент');
+        assert.equal(effective[0]!.description_overridden, false);
+        assert.equal(effective[0]!.inherited, true);
+        assert.equal(effective[0]!.defined_on, parent.id);
+
+        // The child overrides the description for itself.
+        setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, 'исполнитель задачи');
+        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        assert.equal(effective[0]!.description, 'исполнитель задачи');
+        assert.equal(effective[0]!.description_overridden, true);
+
+        // The parent's own list is untouched by the child's override.
+        const parentEffective = listEffectiveTypeProperties(ndb, 'thought_type', parent.id);
+        assert.equal(parentEffective[0]!.description, 'кто отвечает за элемент');
+        assert.equal(parentEffective[0]!.description_overridden, false);
+
+        // Clearing the override falls back to the definition's description.
+        setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, null);
+        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        assert.equal(effective[0]!.description, 'кто отвечает за элемент');
+        assert.equal(effective[0]!.description_overridden, false);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('the override row survives partial clears: description reset keeps the default override and vice versa', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const parent = createThoughtType(ndb, { name: 'BothParent' }, USER);
+        const prop = createTypeProperty(ndb, 'thought_type', parent.id, {
+          key: 'size',
+          value_type: 'number',
+          config: { default_value: 1 },
+          description: 'размер в штуках',
+        });
+        const child = createThoughtType(ndb, { name: 'BothChild', parent_id: parent.id }, USER);
+
+        // Override BOTH the default and the description.
+        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, 5);
+        setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, 'размер в паллетах');
+        let effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        assert.equal(effective[0]!.default_value, 5);
+        assert.equal(effective[0]!.overridden_here, true);
+        assert.equal(effective[0]!.description, 'размер в паллетах');
+        assert.equal(effective[0]!.description_overridden, true);
+
+        // Resetting the DEFAULT keeps the description override.
+        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, null);
+        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        assert.equal(effective[0]!.default_value, 1);
+        assert.equal(effective[0]!.overridden_here, false);
+        assert.equal(effective[0]!.description, 'размер в паллетах');
+        assert.equal(effective[0]!.description_overridden, true);
+
+        // Resetting the DESCRIPTION removes the row entirely (nothing left).
+        setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, null);
+        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        assert.equal(effective[0]!.description, 'размер в штуках');
+        assert.equal(effective[0]!.description_overridden, false);
+        const rows = ndb
+          .prepare('SELECT COUNT(*) AS c FROM type_property_overrides')
+          .get() as { c: number };
+        assert.equal(rows.c, 0);
+
+        // The mirrored order: description first, default reset keeps it.
+        setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, 'размер в ящиках');
+        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, 9);
+        setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, null);
+        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        assert.equal(effective[0]!.default_value, 9);
+        assert.equal(effective[0]!.overridden_here, true);
+        assert.equal(effective[0]!.description, 'размер в штуках');
+        assert.equal(effective[0]!.description_overridden, false);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('description overrides of own or out-of-chain properties are rejected', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const parent = createThoughtType(ndb, { name: 'GuardParent' }, USER);
+        const own = createTypeProperty(ndb, 'thought_type', parent.id, {
+          key: 'own',
+          value_type: 'text',
+        });
+        // Own property of the parent: edited on the definition itself.
+        assert.throws(
+          () =>
+            setTypePropertyDescriptionOverride(ndb, 'thought_type', parent.id, own.id, 'nope'),
+          /own defaults are edited on the property definition itself/,
+        );
+
+        // A sibling type's property is not in the child's ancestor chain.
+        const sibling = createThoughtType(ndb, { name: 'GuardSibling', parent_id: parent.id }, USER);
+        const child = createThoughtType(ndb, { name: 'GuardChild', parent_id: parent.id }, USER);
+        const sibProp = createTypeProperty(ndb, 'thought_type', sibling.id, {
+          key: 'sib',
+          value_type: 'text',
+        });
+        assert.throws(
+          () =>
+            setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, sibProp.id, 'nope'),
+          /only properties inherited from ancestor types can be overridden/,
+        );
       } finally {
         ndb.close();
       }
