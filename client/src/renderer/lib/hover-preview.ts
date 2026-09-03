@@ -24,12 +24,20 @@
  *    (not instant — Ctrl+hover is also used for other gestures, e.g. the
  *    selection panel's Ctrl+click/hover, and an instant trigger would
  *    conflict with them);
- *  - once open, a popup no longer depends on Ctrl. The whole open chain
- *    (root trigger + every nested popup opened from links/images inside it)
- *    behaves as one "hover island": leaving it schedules a close after
- *    300 ms (cancelled by re-entering any part of it before the timer
- *    fires); Ctrl inside an already-open popup only matters for opening the
- *    NEXT, nested level;
+ *  - once open, a popup no longer depends on Ctrl. Each open popup in the
+ *    chain closes INDEPENDENTLY: a popup at depth `d` counts as "still
+ *    hovered" while the cursor sits over its own element OR over any deeper
+ *    popup opened from inside it (depth `d+1`, `d+2`, …) — so browsing a
+ *    nested popup keeps every ancestor in the chain alive, but moving the
+ *    cursor back onto an ancestor (or away entirely) schedules a close after
+ *    300 ms for that popup and every popup deeper than it, cancelled by
+ *    re-entering its own subtree before the timer fires. The depth-1 popup
+ *    additionally stays alive while the cursor rests on the original root
+ *    trigger element (the indicator/link that opened it). `Escape` closes
+ *    only the topmost (deepest, last opened) popup, one press at a time —
+ *    not the whole chain (карточка ошибки «Некорректное закрытие
+ *    предпросмотров», ETN 420a1f7e). Ctrl inside an already-open popup only
+ *    matters for opening the NEXT, nested level;
  *  - nesting is capped at {@link MAX_DEPTH} levels.
  *
  * NOTE on dependency direction: this module intentionally imports only from
@@ -612,6 +620,15 @@ interface ChainEntry {
   depth: number;
   el: HTMLElement;
   triggerEl: HTMLElement;
+  /** Per-entry close timer (task fix, ETN 420a1f7e) — each popup closes on its
+   *  own schedule instead of sharing one timer for the whole chain. */
+  closeTimer: number | null;
+}
+
+/** Structural subset of `HTMLElement`/`Node` used by {@link isChainEntryAlive}
+ *  so the aliveness decision stays pure and testable without a real DOM. */
+interface ContainerLike {
+  contains(node: Node | null): boolean;
 }
 
 /** Trigger element of depth-1 popup (lives outside any popup, on the host
@@ -619,7 +636,6 @@ interface ChainEntry {
 let rootTrigger: HTMLElement | null = null;
 /** Open popups, depth 1..N, in order. */
 let chain: ChainEntry[] = [];
-let closeTimer: number | null = null;
 let pendingOpen: { candidate: HTMLElement; timer: number } | null = null;
 /** Bumped on every settled `doOpen` — cancels a stale in-flight fetch whose
  *  result would otherwise apply after the user moved on. */
@@ -634,23 +650,55 @@ function cancelPendingOpen(): void {
   }
 }
 
-function cancelCloseTimer(): void {
-  if (closeTimer !== null) {
-    window.clearTimeout(closeTimer);
-    closeTimer = null;
+function cancelEntryCloseTimer(entry: ChainEntry): void {
+  if (entry.closeTimer !== null) {
+    window.clearTimeout(entry.closeTimer);
+    entry.closeTimer = null;
   }
 }
 
-function scheduleClose(): void {
-  if (closeTimer !== null) return;
-  closeTimer = window.setTimeout(() => {
-    closeTimer = null;
-    closeChain();
+/** Schedules `entry`'s own close after {@link CLOSE_DELAY_MS} (a no-op while
+ *  one is already pending for it). Fires `closeEntryAndDeeper` for the
+ *  entry's CURRENT index at fire time (re-read via `indexOf`, since entries
+ *  shallower than it may have already closed and shifted nothing — indices
+ *  are stable as long as the entry itself is still in `chain`). */
+function scheduleEntryClose(entry: ChainEntry): void {
+  if (entry.closeTimer !== null) return;
+  entry.closeTimer = window.setTimeout(() => {
+    entry.closeTimer = null;
+    const idx = chain.indexOf(entry);
+    if (idx === -1) return; // already removed by a full close / truncate / Esc
+    closeEntryAndDeeper(idx);
   }, CLOSE_DELAY_MS);
 }
 
+/**
+ * True when `node` should keep the chain entry at `index` alive: the cursor
+ * sits over that entry's own element, or over any DEEPER entry (`index + 1`,
+ * `index + 2`, …) — browsing a nested popup keeps every ancestor popup in the
+ * chain from closing. `index === 0` additionally counts the root trigger
+ * itself (the page element that opened the first popup). Pure and DOM-free
+ * beyond the structural `contains` check, so it can be unit-tested with
+ * plain mock containers (see `hoverPreviewInternals.isChainEntryAlive`).
+ */
+function isChainEntryAlive(
+  entries: readonly { el: ContainerLike }[],
+  index: number,
+  root: ContainerLike | null,
+  node: Node | null,
+): boolean {
+  if (index === 0 && root !== null && root.contains(node)) return true;
+  for (let j = index; j < entries.length; j++) {
+    if (entries[j]!.el.contains(node)) return true;
+  }
+  return false;
+}
+
 /** True when `node` lies inside the root trigger or any currently open popup
- *  of the chain — the "hover island" that keeps the chain alive. */
+ *  of the chain — used only to tell "a scroll happened somewhere inside our
+ *  own UI" (see the `scroll` listener) from "a scroll happened elsewhere on
+ *  the page", which still closes everything. NOT used for the per-entry
+ *  independent-close decision any more — see {@link isChainEntryAlive}. */
 function withinIsland(node: Node | null): boolean {
   if (node === null) return false;
   if (rootTrigger !== null && rootTrigger.contains(node)) return true;
@@ -661,10 +709,12 @@ function withinIsland(node: Node | null): boolean {
 }
 
 function closeChain(): void {
-  for (const entry of chain) entry.el.remove();
+  for (const entry of chain) {
+    cancelEntryCloseTimer(entry);
+    entry.el.remove();
+  }
   chain = [];
   rootTrigger = null;
-  cancelCloseTimer();
 }
 
 /**
@@ -678,11 +728,27 @@ export function closeHoverPreview(): void {
   closeChain();
 }
 
+/** Closes the chain entry at `index` together with every entry deeper than it
+ *  (a deeper popup can never legitimately outlive the popup it was opened
+ *  from — see {@link isChainEntryAlive}). Resets `rootTrigger` once the whole
+ *  chain has emptied out. Used both by a fired per-entry close timer and by
+ *  `Escape` (closing just the topmost entry, i.e. `index = chain.length - 1`). */
+function closeEntryAndDeeper(index: number): void {
+  while (chain.length > index) {
+    const entry = chain.pop()!;
+    cancelEntryCloseTimer(entry);
+    entry.el.remove();
+  }
+  if (chain.length === 0) rootTrigger = null;
+}
+
 /** Drops every open popup deeper than `maxDepth` (a new nested open replaces
  *  whatever nested chain was open before it, like re-hovering a sibling link). */
 function truncateChainTo(maxDepth: number): void {
   while (chain.length > 0 && chain[chain.length - 1]!.depth > maxDepth) {
-    chain.pop()!.el.remove();
+    const entry = chain.pop()!;
+    cancelEntryCloseTimer(entry);
+    entry.el.remove();
   }
 }
 
@@ -769,7 +835,7 @@ async function doOpen(candidate: HTMLElement, depth: number): Promise<void> {
   const popupEl = buildPopupEl(content, depth);
   document.body.append(popupEl);
   positionPopup(popupEl, candidate);
-  chain.push({ depth, el: popupEl, triggerEl: candidate });
+  chain.push({ depth, el: popupEl, triggerEl: candidate, closeTimer: null });
 }
 
 function tryScheduleOpen(candidate: HTMLElement): void {
@@ -798,9 +864,15 @@ export function initHoverPreview(): void {
     mouseY = event.clientY;
     const target = event.target instanceof Element ? event.target : null;
 
-    if (chain.length > 0) {
-      if (withinIsland(target)) cancelCloseTimer();
-      else scheduleClose();
+    // Each open popup decides independently whether it is still "hovered"
+    // (task fix, ETN 420a1f7e): a shallower popup stays alive while the
+    // cursor sits over ANY deeper popup opened from inside it, but moving the
+    // cursor back onto it (or away entirely) starts ITS OWN close timer —
+    // it no longer waits for every popup in the chain to be left at once.
+    for (let i = 0; i < chain.length; i++) {
+      const entry = chain[i]!;
+      if (isChainEntryAlive(chain, i, rootTrigger, target)) cancelEntryCloseTimer(entry);
+      else scheduleEntryClose(entry);
     }
 
     if (!event.ctrlKey) {
@@ -819,8 +891,10 @@ export function initHoverPreview(): void {
   // `image-zoom.ts`'s keydown handling — no mousemove fires in that case).
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
-      closeChain();
+      // Closes only the topmost (deepest, last opened) popup, one Esc press
+      // at a time — not the whole chain (task fix, ETN 420a1f7e).
       cancelPendingOpen();
+      if (chain.length > 0) closeEntryAndDeeper(chain.length - 1);
       return;
     }
     if (event.key !== 'Control') return;
@@ -859,6 +933,7 @@ export function initHoverPreview(): void {
 export const hoverPreviewInternals = {
   depthFor,
   isAlreadyOpenAt,
+  isChainEntryAlive,
   MAX_DEPTH,
   OPEN_DEBOUNCE_MS,
   CLOSE_DELAY_MS,
