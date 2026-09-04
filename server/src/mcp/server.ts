@@ -31,6 +31,40 @@ const MCP_INSTRUCTIONS =
   'Mutating tools emit real-time events to all network participants.';
 
 /**
+ * Wrap every registered tool callback so each call's name + duration lands in
+ * the file journal (task 1dd33e23 §3): agent tool calls compete with REST for
+ * the same synchronous event loop, so their timing belongs in the freeze
+ * diagnostics. No-op when the caller passed no journal.
+ *
+ * The override is an untyped-through wrapper around the SDK's generic
+ * `registerTool` — hence the single cast; arguments pass through untouched.
+ */
+function instrumentToolCalls(mcp: McpServer, rt: McpRuntime): void {
+  const fileLog = rt.deps.fileLog;
+  if (fileLog === undefined) {
+    return;
+  }
+  type RegisterToolFn = McpServer['registerTool'];
+  const original = mcp.registerTool.bind(mcp) as RegisterToolFn;
+  const wrapped = ((name: string, config: Parameters<RegisterToolFn>[1], cb: never) => {
+    const timedCb = async (...args: unknown[]) => {
+      const startedAt = performance.now();
+      try {
+        return await (cb as unknown as (...a: unknown[]) => unknown)(...args);
+      } finally {
+        fileLog.mcpToolCall(name, performance.now() - startedAt);
+      }
+    };
+    return (original as unknown as (n: string, c: unknown, f: unknown) => unknown)(
+      name,
+      config,
+      timedCb,
+    ) as ReturnType<RegisterToolFn>;
+  }) as unknown as RegisterToolFn;
+  mcp.registerTool = wrapped;
+}
+
+/**
  * Assemble an SDK {@link McpServer} over the given runtime (deps + auth +
  * limits). Registration order is fixed: resources, tools, prompts.
  */
@@ -46,6 +80,7 @@ export function buildEtnMcpServer(rt: McpRuntime): McpServer {
       instructions: MCP_INSTRUCTIONS,
     },
   );
+  instrumentToolCalls(mcp, rt);
   registerResources(mcp, rt);
   registerTools(mcp, rt);
   registerPrompts(mcp, rt);

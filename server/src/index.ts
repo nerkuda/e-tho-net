@@ -16,6 +16,7 @@ import { sweepCommentHtml } from './domain/markdown-sweep.js';
 import { createServer } from './http/server.js';
 import { logger } from './logger.js';
 import { handleMcpNodeRequest } from './mcp/http.js';
+import { SERVER_VERSION } from './version.js';
 
 /** Run the server against `env`/`argv`. Exported for tests. */
 export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -49,11 +50,26 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
   sweepCommentHtml(config.dataDir, systemDb, logger);
 
   const app = await createServer({ config, systemDb, logger });
+  const fileLog = app.fileLog;
 
   await app.listen({ host: config.host, port: config.port });
   logger.info(
     `ETN server listening on ${config.tls !== null ? 'https' : 'http'}://${config.host}:${config.port}`,
   );
+  // File journal: startup entry (INFO — only lands while logging is enabled,
+  // task 1dd33e23 §3). Config fields are secret-free by design (TLS paths,
+  // not contents; no keys are ever logged).
+  fileLog.info('server', 'ETN server started', {
+    version: SERVER_VERSION,
+    platform: `${process.platform}/${process.arch}`,
+    node: process.version,
+    host: config.host,
+    port: config.port,
+    tls: config.tls !== null,
+    mcp_enabled: config.mcp.enabled,
+    log_level: config.logLevel,
+    data_dir: config.dataDir,
+  });
 
   // Dedicated MCP listener (05-mcp-server.md §2): when ETN_MCP_ENABLED=1 and
   // ETN_MCP_PORT is set, /mcp is additionally served on its own port so agent
@@ -80,12 +96,14 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Shutting down ETN server');
+    fileLog.info('server', 'ETN server shutting down', { signal });
     if (mcpListener !== null) {
       await new Promise<void>((resolve) => mcpListener.close(() => resolve()));
     }
     await app.close();
     systemDb.close();
     logger.info('ETN server stopped');
+    fileLog.info('server', 'ETN server stopped');
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));

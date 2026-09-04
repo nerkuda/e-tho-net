@@ -40,6 +40,7 @@ import {
 import { hashApiKey, isValidApiKeyFormat } from '../auth/api-key.js';
 import { extractBearerToken, readClientId } from '../http/context.js';
 import type { SystemDb } from '../db/system-db.js';
+import type { FileLog } from '../log/file-log.js';
 import type { Logger } from '../logger.js';
 import { openNetworkDb } from '../db/network-db.js';
 import { resolveSessionLayer, resolveSessionSwitchSeq } from '../domain/layer-service.js';
@@ -120,6 +121,11 @@ export interface RealtimeGatewayDeps {
   dataDir: string;
   /** Optional application logger. */
   logger?: Logger;
+  /**
+   * File journal (task 1dd33e23 §3): connects/disconnects and pong timeouts
+   * are journaled for freeze diagnostics. Optional (tests omit it).
+   */
+  fileLog?: FileLog;
   /** Partial option overrides (tests). */
   options?: Partial<RealtimeGatewayOptions>;
 }
@@ -174,6 +180,7 @@ export class RealtimeGateway {
   private readonly pubsub: PubSub;
   private readonly dataDir: string;
   private readonly logger?: Logger;
+  private readonly fileLog?: FileLog;
   private readonly options: RealtimeGatewayOptions;
 
   /** Every live connection. */
@@ -188,6 +195,7 @@ export class RealtimeGateway {
     this.pubsub = deps.pubsub;
     this.dataDir = deps.dataDir;
     this.logger = deps.logger;
+    this.fileLog = deps.fileLog;
     this.options = { ...DEFAULT_REALTIME_GATEWAY_OPTIONS, ...deps.options };
   }
 
@@ -257,6 +265,11 @@ export class RealtimeGateway {
     this.connections.add(conn);
     this.indexByNetwork(conn);
     this.indexByClient(conn);
+    this.fileLog?.info('ws', 'client connected', {
+      network_id: networkId,
+      user_id: auth.userId,
+      client_id: clientId,
+    });
 
     socket.on('message', (raw: RawData) => this.onMessage(conn, raw));
     socket.on('close', () => this.removeConnection(conn));
@@ -446,6 +459,11 @@ export class RealtimeGateway {
         { userId: conn.userId, clientId: conn.clientId, networkId: conn.networkId },
         'realtime: pong timeout, closing connection',
       );
+      this.fileLog?.warn('ws', 'pong timeout, closing connection', {
+        network_id: conn.networkId,
+        user_id: conn.userId,
+        client_id: conn.clientId,
+      });
       this.closeSocket(conn.socket, PONG_TIMEOUT_CLOSE_CODE, 'pong timeout');
       return;
     }
@@ -557,6 +575,11 @@ export class RealtimeGateway {
     }
     clearInterval(conn.pingTimer);
     conn.unsubscribe();
+    this.fileLog?.info('ws', 'client disconnected', {
+      network_id: conn.networkId,
+      user_id: conn.userId,
+      client_id: conn.clientId,
+    });
   }
 
   /** Close every connection (server shutdown). */

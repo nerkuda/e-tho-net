@@ -50,6 +50,9 @@ import { createSearchRoutes } from '../routes/search.js';
 import { createTrashRoutes } from '../routes/trash.js';
 import { createLayersRoutes } from '../routes/layers.js';
 import { createAdminNetworksRoutes } from '../routes/admin-networks.js';
+import { systemLoggingRoutes } from '../routes/system-logging.js';
+import { FileLog, type FileLogLevel } from '../log/file-log.js';
+import { startEventLoopMonitor } from '../log/event-loop-monitor.js';
 import { resolveRequestLayer, type RouteDeps } from '../routes/helpers.js';
 import { emitDomainEvent } from '../realtime/emit.js';
 import { NetworkServiceImpl } from '../domain/network-service.js';
@@ -112,11 +115,23 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
         }
       : {};
 
+  // --- File journal (task 1dd33e23, spec: подсистема «Логирование») --------
+  // Plain-text daily journal under <dataDir>/logs/: ERROR entries are always
+  // written, other levels only while the in-memory flag is on (off at every
+  // start). Deliberately separate from the stdout pino logger.
+  const fileLog = new FileLog(config.dataDir);
+
   const app = Fastify({
     logger: false, // we use the injected pino logger explicitly
     trustProxy: true,
     ...httpsOptions,
   });
+
+  app.decorate('fileLog', fileLog);
+  // better-sqlite3 is synchronous — a blocked loop is the prime suspect for
+  // the intermittent client freezes; sample it and WARN past 100 ms.
+  const stopLagMonitor = startEventLoopMonitor(fileLog);
+  app.addHook('onClose', () => stopLagMonitor());
 
   // --- Error handler (03-server-api.md §2) ---------------------------------
   // Registered before any plugin/route so encapsulated child contexts inherit
@@ -132,8 +147,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   });
 
   // Correlation id on every request: surface it back via X-Request-Id so
-  // clients/logs can tie a response to its origin.
+  // clients/logs can tie a response to its origin. The same hook stamps the
+  // file-journal start time used by the onResponse access entry below.
+  app.decorateRequest('fileLogStart', 0);
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
+    req.fileLogStart = performance.now();
     const requestId = resolveRequestId(req);
     req.id = requestId;
     reply.header(REQUEST_ID_HEADER, requestId);
@@ -150,6 +168,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       },
       'request completed',
     );
+    logRequestToJournal(fileLog, req, reply);
   });
 
   // --- Layer echo (task S7, 13-layers.md §7.1) ------------------------------
@@ -194,6 +213,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
     dataDir: config.dataDir,
     logger,
     options: deps.realtimeOptions,
+    fileLog,
   });
   gateway.register(app);
   // Task S9 (13-layers.md §12): routes/layers.ts pushes forced-resync control
@@ -310,6 +330,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   app.get('/api/v1/version', async () => VERSION_PAYLOAD);
 
+  // File-journal management (task 1dd33e23 §4): admin-only status/toggle and
+  // per-file download/delete endpoints.
+  await app.register(systemLoggingRoutes, { prefix: '/api/v1' });
+
   // --- MCP StreamableHTTP endpoint (phase F, 05-mcp-server.md §2) -----------
   // Mounted when ETN_MCP_ENABLED=1; agents authenticate with the same
   // API-keys as REST (Bearer). With ETN_MCP_PORT set, the entry point
@@ -321,6 +345,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       pubsub,
       authProvider: createApiKeyAuthProvider(systemDb),
       logger,
+      fileLog,
     });
     await mcpHttp.register(app);
     app.decorate('mcpHttp', mcpHttp);
@@ -336,6 +361,51 @@ export { HEALTH_STARTED_AT };
 
 /** Health response skeleton (uptime filled in per-request). */
 export { HEALTH_RESPONSE };
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /**
+     * `performance.now()` stamped by the onRequest hook — the basis of the
+     * file-journal request duration (task 1dd33e23 §3). `0` until stamped.
+     */
+    fileLogStart: number;
+  }
+}
+
+/** REST request duration past which the journal entry becomes a slow WARN. */
+const SLOW_REQUEST_MS = 1_000;
+
+/**
+ * One file-journal entry per completed request (task 1dd33e23 §3):
+ * method, path, status, duration, request_id, client_id. Levels — 5xx ERROR
+ * (always, even with the flag off), slow (>1 s) WARN, 4xx WARN, else INFO;
+ * non-ERROR levels only land while logging is enabled (`FileLog.log` filters).
+ */
+function logRequestToJournal(
+  fileLog: FileLog,
+  req: FastifyRequest,
+  reply: FastifyReply,
+): void {
+  const status = reply.statusCode;
+  const startedAt = req.fileLogStart > 0 ? req.fileLogStart : performance.now();
+  const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+  const slow = durationMs >= SLOW_REQUEST_MS;
+  const level: FileLogLevel = status >= 500 ? 'ERROR' : slow || status >= 400 ? 'WARN' : 'INFO';
+  fileLog.log(
+    level,
+    'http',
+    slow ? 'slow request completed' : 'request completed',
+    {
+      method: req.method,
+      path: (req.url ?? '').split('?')[0] ?? '',
+      status,
+      duration_ms: durationMs,
+      request_id: req.id,
+      client_id: req.auth?.clientId ?? null,
+      ...(slow ? { slow: true } : {}),
+    },
+  );
+}
 
 /** Response header carrying the echoed layer id (13-layers.md §7.1, task S7). */
 export const LAYER_ECHO_HEADER = 'x-etn-layer';

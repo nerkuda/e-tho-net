@@ -9,6 +9,7 @@
  */
 
 import type { SystemDb } from '../db/system-db.js';
+import type { FileLog } from '../log/file-log.js';
 import type { Logger } from '../logger.js';
 import type { PubSub } from '../realtime/pubsub.js';
 
@@ -54,6 +55,12 @@ export interface McpBaseDeps {
   authProvider: McpAuthProvider;
   /** Application logger. */
   logger: Logger;
+  /**
+   * File journal for diagnostics (task 1dd33e23 §3): when present, every tool
+   * call's name + duration is journaled (INFO while logging is enabled).
+   * Optional so tests and foreign embeddings keep working unchanged.
+   */
+  fileLog?: FileLog;
 }
 
 /** Dependencies of one concrete {@link createMcpServer} instance. */
