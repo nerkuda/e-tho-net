@@ -424,9 +424,12 @@ function createLinkForNewThought(
       id: targetId,
     });
   }
-  // parent: new thought sources a link to target. child: target sources to new.
+  // parent: target sources a link to the new thought (new thought hangs
+  // under target). child: the new thought sources a link to target (new
+  // thought becomes target's parent). Unified with the MCP `link.direction`
+  // semantics (docs/03-server-api.md §6.3, docs/05-mcp-server.md §5.2).
   const [sourceId, linkTargetId] =
-    createLink.direction === 'parent' ? [newThoughtId, targetId] : [targetId, newThoughtId];
+    createLink.direction === 'parent' ? [targetId, newThoughtId] : [newThoughtId, targetId];
   const typeId = createLink.type_id ?? null;
   // Duplicate guard, NULL-safe on both sides (UNIQUE treats NULL as distinct).
   const dup = ndb

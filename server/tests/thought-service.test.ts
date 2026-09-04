@@ -147,9 +147,11 @@ describe(
         const ndb = createInMemoryNetworkDb();
         try {
           const parent = createThought(ndb, { title: 'Parent' }, USER);
+          // direction: 'parent' — target (parent) becomes the source of a
+          // link to the new thought (new thought hangs under target).
           const child = createThought(
             ndb,
-            { title: 'Child', create_link: { direction: 'child', target_thought_id: parent.id } },
+            { title: 'Child', create_link: { direction: 'parent', target_thought_id: parent.id } },
             USER,
           );
           const link = ndb.prepare('SELECT source_id, target_id FROM links').get() as {

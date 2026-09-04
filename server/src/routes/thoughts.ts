@@ -457,14 +457,17 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const thought = createThought(ndb, input, req.auth!.user.id);
         deps.emit(req, networkId, 'thought.created', { thought });
         if (input.create_link) {
+          // Mirrors createLinkForNewThought's source/target calc (thought-service.ts):
+          // parent: target sources a link to the new thought; child: the new
+          // thought sources a link to target.
           const link = findLinksBetween(
             ndb,
             input.create_link.direction === 'parent'
-              ? thought.id
-              : input.create_link.target_thought_id,
-            input.create_link.direction === 'parent'
               ? input.create_link.target_thought_id
               : thought.id,
+            input.create_link.direction === 'parent'
+              ? thought.id
+              : input.create_link.target_thought_id,
             input.create_link.type_id,
           )[0];
           if (link) {

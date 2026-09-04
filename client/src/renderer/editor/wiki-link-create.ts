@@ -105,10 +105,11 @@ export async function tryCreateThoughtFromLegacyLink(
           title: item.title,
           synonyms: item.synonyms,
           type_id: result.thoughtTypeId,
-          // REST semantics (03-server-api.md §6.3): 'child' — the new thought
-          // becomes the TARGET of a link from the parent, i.e. its child.
+          // REST semantics (03-server-api.md §6.3): 'parent' — parentId (the
+          // target) becomes the parent of the new thought, i.e. the new
+          // thought is attached UNDER parentId as its child.
           create_link: {
-            direction: 'child',
+            direction: 'parent',
             target_thought_id: parentId,
             type_id: result.linkTypeId,
           },

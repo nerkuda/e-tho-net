@@ -64,7 +64,7 @@ describe(
             thought: { title: 'Дюна', type_id: tt.id },
             comment: { body_md: 'Роман Фрэнка Герберта.' },
             properties: { year: 1965 },
-            links: [{ direction: 'child', target_thought_id: home }],
+            links: [{ direction: 'parent', target_thought_id: home }],
             attachments: [{ kind: 'url', url: 'https://example.com/dune' }],
           },
           USER,
@@ -77,7 +77,7 @@ describe(
         assert.equal(result.comment_action, 'created');
         assert.equal(result.properties?.year?.value, 1965);
         assert.equal(result.links?.length, 1);
-        // direction: 'child' — HOME sources a link to the bundle thought.
+        // direction: 'parent' — HOME (target) sources a link to the bundle thought.
         assert.equal(result.links?.[0]?.source_id, home);
         assert.equal(result.links?.[0]?.target_id, result.thought.id);
         assert.equal(result.attachments?.length, 1);

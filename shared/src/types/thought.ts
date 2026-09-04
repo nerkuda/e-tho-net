@@ -60,11 +60,12 @@ export interface Thought {
 /** Direction for an inline link created together with a thought (03-server-api.md §6.3). */
 export interface ThoughtCreateLink {
   /**
-   * `parent` — new thought is the source of a link to `target_thought_id`;
-   * `child` — new thought is the target of a link from `target_thought_id`.
-   * NOTE: the MCP tool `etn.thoughts.create` uses the opposite, agent-facing
-   * semantics for its `link.direction` (bug fix 045) and inverts the value at
-   * its boundary before calling the domain service.
+   * Role of `target_thought_id` for the NEW thought: `parent` — the new
+   * thought is attached UNDER `target_thought_id` (target becomes the link
+   * source/its parent); `child` — the new thought becomes the parent
+   * (the link source) of `target_thought_id`. Unified with the MCP tool
+   * `etn.thoughts.create`'s `link.direction` — both use the same semantics,
+   * no translation at any boundary.
    */
   direction: 'parent' | 'child';
   target_thought_id: string;

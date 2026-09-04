@@ -284,7 +284,10 @@ export async function pasteTextToCloud(text: string, targetId: string): Promise<
       await etn.thoughts.create(networkId, {
         title: line.title,
         ...(line.synonyms.length > 0 ? { synonyms: line.synonyms } : {}),
-        create_link: { direction: 'child', target_thought_id: targetId, type_id: null },
+        // New thought hangs under targetId (mirrors the id-guess branch
+        // above, which links idGuess as targetId's child): target becomes
+        // the new thought's parent — "parent" in the current semantics.
+        create_link: { direction: 'parent', target_thought_id: targetId, type_id: null },
       });
       created += 1;
     } catch (err) {

@@ -218,13 +218,12 @@ const TYPE_ID_TYPE_CONFLICT = 'provide at most one of type_id or type';
 
 /**
  * `direction` of an MCP inline link (`etn.thoughts.create` `link`,
- * `etn.thoughts.upsert_bundle` `links[]`), agent-facing semantics (bug fix
- * 045): the value names the role of `target_thought_id` relative to the NEW
- * thought. `parent` — attach the new thought UNDER the target (target becomes
- * its parent); `child` — the NEW thought becomes the parent of the target.
- * This is intentionally the opposite of the domain/REST `create_link`
- * direction (docs/03-server-api.md §6.3, where `parent` = the new thought is
- * the source); the MCP layer translates via {@link toDomainLinkDirection}.
+ * `etn.thoughts.upsert_bundle` `links[]`): the value names the role of
+ * `target_thought_id` relative to the NEW thought. `parent` — attach the new
+ * thought UNDER the target (target becomes its parent); `child` — the NEW
+ * thought becomes the parent of the target. Unified with the domain/REST
+ * `create_link` direction (docs/03-server-api.md §6.3) — both layers share
+ * the same semantics, no translation at the MCP boundary.
  */
 const LinkDirection = z
   .enum(['parent', 'child'])
@@ -233,17 +232,6 @@ const LinkDirection = z
       'UNDER target_thought_id (target becomes its parent); "child" — the NEW thought ' +
       'becomes the parent of target_thought_id.',
   );
-
-/**
- * Translate the agent-facing MCP direction (see {@link LinkDirection}) to the
- * domain/REST one accepted by `createThought`/`upsertThoughtBundle`, where
- * `parent` means the NEW thought is the link source (parent) and `child`
- * means the target is. Bug fix 045: keeps REST behaviour untouched while the
- * MCP contract becomes intuitive.
- */
-function toDomainLinkDirection(direction: 'parent' | 'child'): 'parent' | 'child' {
-  return direction === 'parent' ? 'child' : 'parent';
-}
 
 /** Optional link attached to a freshly created thought (§4.2). `type` (task
  *  O4) resolves a link type by `name_forward`/`name_reverse`, mutually
@@ -1856,10 +1844,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             ...(args.link === undefined
               ? {}
               : {
-                  // Bug fix 045: translate the agent-facing direction to the
-                  // domain/REST one (parent there = new thought is the source).
+                  // Domain/REST direction now matches the MCP one directly
+                  // (docs/03-server-api.md §6.3, docs/05-mcp-server.md §5.2).
                   create_link: {
-                    direction: toDomainLinkDirection(args.link.direction),
+                    direction: args.link.direction,
                     target_thought_id: args.link.target_thought_id,
                     type_id: linkTypeId ?? null,
                   },
@@ -1869,8 +1857,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         );
         emitAgentEvent(rt, args.network_id, 'thought.created', { thought }, extra.requestId);
         if (args.link !== undefined) {
-          // Bug fix 045: MCP "parent" — the TARGET is the link source (the
-          // new thought hangs under it); MCP "child" — the new thought is.
+          // "parent" — the TARGET is the link source (the new thought hangs
+          // under it); "child" — the new thought is the source.
           const [sourceId, targetId] =
             args.link.direction === 'parent'
               ? [args.link.target_thought_id, thought.id]
@@ -2768,9 +2756,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             : args.links.map((l) => {
                 const linkTypeId = effectiveLinkTypeId(ndb, l.type_id, l.type);
                 return {
-                  // Bug fix 045: translate the agent-facing direction to the
-                  // domain one (parent there = the bundle thought is the source).
-                  direction: toDomainLinkDirection(l.direction),
+                  // Domain/REST direction now matches the MCP one directly
+                  // (docs/03-server-api.md §6.3, docs/05-mcp-server.md §5.2).
+                  direction: l.direction,
                   target_thought_id: l.target_thought_id,
                   ...(linkTypeId === undefined ? {} : { type_id: linkTypeId }),
                 };

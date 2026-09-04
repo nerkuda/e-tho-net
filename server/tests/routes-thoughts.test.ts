@@ -41,10 +41,11 @@ describe(
     it('CRUD: create with link, read, patch with If-Match, delete', async () => {
       const ctx = await buildRestContext();
       try {
-        // Create a child of HOME with an inline link (direction=child).
+        // Create a child of HOME with an inline link (direction=parent: HOME
+        // becomes the new thought's parent).
         const childId = await createThought(ctx, {
           title: 'Ребёнок',
-          create_link: { direction: 'child', target_thought_id: ctx.homeId },
+          create_link: { direction: 'parent', target_thought_id: ctx.homeId },
         });
 
         const get = await ctx.app.inject({
@@ -132,7 +133,7 @@ describe(
       try {
         const childId = await createThought(ctx, {
           title: 'Фокус-ребёнок',
-          create_link: { direction: 'child', target_thought_id: ctx.homeId },
+          create_link: { direction: 'parent', target_thought_id: ctx.homeId },
         });
 
         const focusRes = await ctx.app.inject({
@@ -189,11 +190,11 @@ describe(
         const typedId = await createThought(ctx, {
           title: 'Типизированный',
           type_id: typeId,
-          create_link: { direction: 'child', target_thought_id: ctx.homeId },
+          create_link: { direction: 'parent', target_thought_id: ctx.homeId },
         });
         await createThought(ctx, {
           title: 'Обычный',
-          create_link: { direction: 'child', target_thought_id: ctx.homeId },
+          create_link: { direction: 'parent', target_thought_id: ctx.homeId },
         });
 
         const all = await ctx.app.inject({
@@ -235,7 +236,7 @@ describe(
         for (let i = 0; i < 55; i += 1) {
           await createThought(ctx, {
             title: `Person ${i}`,
-            create_link: { direction: 'child', target_thought_id: ctx.homeId },
+            create_link: { direction: 'parent', target_thought_id: ctx.homeId },
           });
         }
 
