@@ -11,15 +11,17 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
 
-import type { CurrentUser, FocusDir, Network, TypeOwnerType } from '@etn/shared';
+import { CLIENT_META_KEY, type CurrentUser, type FocusDir, type Network, type SystemLoggingStatus, type TypeOwnerType } from '@etn/shared';
 
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
-import type { AppInfo, PickFileResult, PickImageResult } from './contract.js';
+import { getClientLog } from '../log/client-log.js';
+import type { AppInfo, ClientLogState, PickFileResult, PickImageResult } from './contract.js';
 import { classifyOpenTarget } from './open-target.js';
 import { errText } from '../../renderer/lib/dom.js';
 
@@ -1292,6 +1294,99 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((filePath: string) => openAttachmentFile(deps, filePath)),
   );
   handlers.set('system.openExternal', bind((url: string) => openExternalShell(url)));
+
+  // --- file journals: client + server (task f051bf95, 07-client-electron.md §7) ---
+  handlers.set(
+    'system.getClientLogState',
+    bind((): ClientLogState => requireClientLog().getState()),
+  );
+  handlers.set(
+    'system.setClientLogging',
+    bind((enabled: boolean): ClientLogState => {
+      const log = requireClientLog();
+      log.setEnabled(enabled, 'ui');
+      // Persist — the next launch restores the flag when no CLI switch overrides.
+      deps.localDb.setMeta(CLIENT_META_KEY.LOG_ENABLED, String(enabled));
+      return log.getState();
+    }),
+  );
+  handlers.set(
+    'system.openClientLog',
+    bind(async (): Promise<string> => {
+      const file = requireClientLog().ensureCurrentFile();
+      return openPathShell(file);
+    }),
+  );
+  handlers.set(
+    'system.deleteClientLogs',
+    bind(() => requireClientLog().deleteAll('ui')),
+  );
+  handlers.set(
+    'system.getServerLogging',
+    bind((): Promise<SystemLoggingStatus> => requireRest(deps).getServerLogging()),
+  );
+  handlers.set(
+    'system.setServerLogging',
+    bind((enabled: boolean): Promise<SystemLoggingStatus> =>
+      requireRest(deps).setServerLogging(enabled),
+    ),
+  );
+  handlers.set(
+    'system.downloadServerLog',
+    bind(
+      async (
+        filename?: string,
+        savePath?: string,
+      ): Promise<{ saved_path: string | null; cancelled: boolean; error?: string }> => {
+        const rest = requireRest(deps);
+        // Without an explicit name take the newest server journal file.
+        let name = filename !== undefined && filename !== '' ? filename : null;
+        if (name === null) {
+          const status = await rest.getServerLogging();
+          name = newestServerLogName(status);
+          if (name === null) {
+            return { saved_path: null, cancelled: false, error: 'Файлы журнала сервера не найдены.' };
+          }
+        }
+        const { body } = await rest.downloadServerLogFile(name);
+        // With a path already picked (the dialog chose one up-front) — write
+        // directly, skipping the picker (the system.downloadExport pattern).
+        if (savePath !== undefined && savePath !== '') {
+          try {
+            writeFileSync(savePath, body);
+          } catch (err) {
+            return { saved_path: null, cancelled: false, error: errText(err) };
+          }
+          return { saved_path: savePath, cancelled: false };
+        }
+        const { dialog, BrowserWindow } = await import('electron');
+        const win = BrowserWindow.getFocusedWindow();
+        const save = win
+          ? await dialog.showSaveDialog(win, {
+              title: 'Сохранить журнал сервера',
+              defaultPath: name,
+            })
+          : await dialog.showSaveDialog({ title: 'Сохранить журнал сервера', defaultPath: name });
+        if (save.canceled || save.filePath === undefined || save.filePath === '') {
+          return { saved_path: null, cancelled: true };
+        }
+        try {
+          writeFileSync(save.filePath, body);
+        } catch (err) {
+          return { saved_path: null, cancelled: false, error: errText(err) };
+        }
+        return { saved_path: save.filePath, cancelled: false };
+      },
+    ),
+  );
+  handlers.set(
+    'system.openServerLog',
+    bind(() => openServerLogFile(deps)),
+  );
+  handlers.set(
+    'system.deleteServerLogs',
+    bind(() => requireRest(deps).deleteAllServerLogs()),
+  );
   handlers.set(
     'system.downloadExport',
     bind(
@@ -1568,6 +1663,53 @@ async function openPathShell(filePath: string): Promise<string> {
     return 'Пустой путь к файлу.';
   }
   return shell.openPath(filePath);
+}
+
+/** Throws a canonical error when the client journal has not been initialised. */
+function requireClientLog(): import('../log/client-log.js').ClientLog {
+  const log = getClientLog();
+  if (log === null) {
+    throw new Error('Клиентский журнал не инициализирован.');
+  }
+  return log;
+}
+
+/**
+ * Newest server journal file name (`files` come oldest-first, so the last one
+ * is the current daily file), or `null` when the server has written none yet.
+ */
+function newestServerLogName(status: SystemLoggingStatus): string | null {
+  const last = status.files[status.files.length - 1];
+  return last === undefined ? null : last.name;
+}
+
+/**
+ * Opens the current server journal file in the OS default application
+ * (task f051bf95 §4). Same-machine setup — the file lives under the server's
+ * `logDir` on this machine too — opens directly; a remote server's file is
+ * downloaded into a temp file and the copy opened. Returns '' on success or
+ * a human-readable error (mirrors {@link openPathShell}).
+ */
+async function openServerLogFile(deps: HandlerDeps): Promise<string> {
+  const rest = requireRest(deps);
+  const status = await rest.getServerLogging();
+  const name = newestServerLogName(status);
+  if (name === null) {
+    return 'Файлы журнала сервера не найдены.';
+  }
+  const localPath = path.join(status.logDir, name);
+  if (existsSync(localPath)) {
+    return openPathShell(localPath);
+  }
+  // Remote server: fetch today's copy and open the temp file instead.
+  const { body } = await rest.downloadServerLogFile(name);
+  const tmpPath = path.join(os.tmpdir(), `etn-${name}`);
+  try {
+    writeFileSync(tmpPath, body);
+  } catch (err) {
+    return errText(err);
+  }
+  return openPathShell(tmpPath);
 }
 
 /**

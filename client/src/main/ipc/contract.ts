@@ -152,6 +152,27 @@ export interface AppInfo {
   node: string;
 }
 
+/**
+ * State of the client file journal (task f051bf95, 07-client-electron.md §7):
+ * the flag, the current daily file and the journal directory.
+ */
+export interface ClientLogState {
+  /** Whether WARN/INFO/DEBUG entries are currently written (ERROR — always). */
+  enabled: boolean;
+  /** Absolute path of the current daily `client-YYYY-MM-DD.log` file. */
+  logFile: string;
+  /** Absolute journal directory (`<userData>/logs`). */
+  logDir: string;
+}
+
+/** Result of `system.deleteClientLogs` / counts of `system.deleteServerLogs`. */
+export interface DeleteLogsResult {
+  /** Files physically unlinked. */
+  deleted: number;
+  /** The current daily file — truncated in place, not deleted. */
+  truncated: number;
+}
+
 /** Workspace view modes (08-ui-spec.md §15.1). */
 export type TabViewMode = 'map' | 'structures' | 'chronicle';
 
@@ -925,5 +946,59 @@ export interface EtnApi {
      * so the renderer can show feedback.
      */
     openExternal(url: string): Promise<string>;
+    // --- client/server file journals (task f051bf95, 07-client-electron.md §7) ---
+    /**
+     * State of the CLIENT file journal: the `log_enabled` flag, the current
+     * daily file path and the journal directory. Works without a connection.
+     */
+    getClientLogState(): Promise<ClientLogState>;
+    /**
+     * Toggle the client file journal flag and persist it to
+     * `client_meta.log_enabled` — the next start restores it. Returns the new
+     * state.
+     */
+    setClientLogging(enabled: boolean): Promise<ClientLogState>;
+    /**
+     * Open the current client journal file in the OS default application
+     * (creating an empty file first when none exists). Resolves an error
+     * message string (empty on success).
+     */
+    openClientLog(): Promise<string>;
+    /**
+     * Delete every client journal file; the current daily file is truncated in
+     * place (the writer keeps appending to it).
+     */
+    deleteClientLogs(): Promise<DeleteLogsResult>;
+    /** `GET /system/logging` — server journal flag + retention + file list. */
+    getServerLogging(): Promise<import('@etn/shared').SystemLoggingStatus>;
+    /** `PUT /system/logging` — toggle the server in-memory journal flag. */
+    setServerLogging(enabled: boolean): Promise<import('@etn/shared').SystemLoggingStatus>;
+    /**
+     * Download a server journal file through the main process. Without
+     * `filename` the current (latest) server file is fetched; without
+     * `savePath` the OS save dialog is shown (the `system.downloadExport`
+     * pattern). Resolves `{ saved_path }`, `{ cancelled: true }` or an error.
+     */
+    downloadServerLog(
+      filename?: string,
+      savePath?: string,
+    ): Promise<{ saved_path: string | null; cancelled: boolean; error?: string }>;
+    /**
+     * Open the current server journal file: when its `logDir` path exists
+     * locally (client and server on one machine) — directly; otherwise the
+     * file is downloaded to a temp file and that copy is opened. Resolves an
+     * error message string (empty on success).
+     */
+    openServerLog(): Promise<string>;
+    /** `DELETE /system/logs` — remove every server journal file (admin, 204). */
+    deleteServerLogs(): Promise<void>;
   };
+
+  /**
+   * Milestone event bridge from the renderer into the client file journal
+   * (task f051bf95 §3): fire-and-forget, no invoke contract — the main
+   * process writes it as one INFO line `renderer <name> data=<…>` (only while
+   * the journal flag is on; `data` is truncated to ~200 chars).
+   */
+  logEvent(name: string, data?: unknown): void;
 }

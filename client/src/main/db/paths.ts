@@ -50,6 +50,28 @@ export function parseUserDataDirArg(argv: string[]): string | null {
 }
 
 /**
+ * Parses the `--logging` / `--no-logging` CLI switches (docs/07-client-electron.md,
+ * task f051bf95): they override the stored `client_meta.log_enabled` value for
+ * this run and become the new stored value.
+ *
+ * Returns `true`/`false` for the effective override, or `null` when neither
+ * switch is present. Only **exact tokens** match — Electron and Chromium inject
+ * their own arguments (e.g. `--enable-logging`), so a prefix/substring match
+ * would misfire. When both switches appear, the LAST one wins (standard CLI
+ * semantics for repeated flags).
+ */
+export function parseLoggingArg(argv: string[]): boolean | null {
+  const ENABLE = '--logging';
+  const DISABLE = '--no-logging';
+  for (let i = argv.length - 1; i >= 0; i--) {
+    const arg = argv[i];
+    if (arg === ENABLE) return true;
+    if (arg === DISABLE) return false;
+  }
+  return null;
+}
+
+/**
  * Default migrations directory.
  *
  * In development and tests `client/` is the working directory, so `./migrations`

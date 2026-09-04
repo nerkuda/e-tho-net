@@ -181,6 +181,8 @@ export const CLIENT_META_KEY = {
   ZOOM: 'zoom',
   ACTIVE_PROFILE_ID: 'active_profile_id',
   WINDOW_BOUNDS: 'window_bounds',
+  /** File journal flag of the Electron client (task f051bf95): 'true'/'false'. */
+  LOG_ENABLED: 'log_enabled',
 } as const satisfies Record<string, string>;
 export type ClientMetaKey = (typeof CLIENT_META_KEY)[keyof typeof CLIENT_META_KEY];
 

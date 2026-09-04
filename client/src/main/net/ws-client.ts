@@ -37,6 +37,7 @@ import {
   type RealtimeServerControlMessage,
 } from '@etn/shared';
 import type { LocalDb } from '../db/local-db.js';
+import { getClientLog } from '../log/client-log.js';
 import { TypedEmitter, type EventMap } from './typed-emitter.js';
 
 /** Reconnect backoff base, in milliseconds (04-realtime.md §2.2). */
@@ -460,6 +461,9 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
   private scheduleReconnect(): void {
     if (this.reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
       this.setStatus('offline');
+      getClientLog()?.error('ws', 'reconnect budget exhausted', {
+        network: this.getNetworkId() ?? '',
+      });
       this.emitTyped('error', new Error('Превышен лимит попыток реконнекта real-time.'));
       return;
     }
@@ -470,6 +474,12 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
       RECONNECT_BASE_DELAY_MS * 2 ** (this.reconnectAttempts - 1),
     );
     const delay = Math.floor(this.random() * ceiling);
+    // Journal: reconnect with backoff (task f051bf95 §3) — INFO, flag-gated.
+    getClientLog()?.info('ws', 'reconnect scheduled', {
+      network: this.getNetworkId() ?? '',
+      attempt: this.reconnectAttempts,
+      backoff_ms: delay,
+    });
     this.clearReconnectTimer();
     this.reconnectTimer = this.setTimeoutFn(() => {
       this.reconnectTimer = null;
@@ -532,6 +542,11 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
     if (this.manualClose) return;
     const socket = this.socket;
     if (socket === null) return;
+    // Journal: watchdog fired (task f051bf95 §3) — WARN, flag-gated.
+    getClientLog()?.warn('ws', 'receive-idle watchdog fired', {
+      network: this.getNetworkId() ?? '',
+      idle_ms: this.idleTimeoutMs,
+    });
     this.guardedEmitError(
       new Error(
         `Realtime: нет данных от сервера ${Math.round(this.idleTimeoutMs / 1000)} с ` +
@@ -551,6 +566,11 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
   private setStatus(status: RealtimeStatus): void {
     if (this.status === status) return;
     this.status = status;
+    // Journal: every status transition (task f051bf95 §3) — INFO, flag-gated.
+    getClientLog()?.info('ws', 'status changed', {
+      network: this.getNetworkId() ?? '',
+      status,
+    });
     this.emitTyped('status', status);
   }
 

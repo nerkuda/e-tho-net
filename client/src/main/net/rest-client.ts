@@ -30,8 +30,11 @@ import {
   type ApiSuccess,
   type EtnErrorBody,
   type EtnErrorCode,
+  type SystemLoggingStatus,
   type TypeOwnerType,
 } from '@etn/shared';
+
+import { getClientLog } from '../log/client-log.js';
 
 /** Maximum total attempts (initial + retries) for a transient failure. */
 const MAX_ATTEMPTS = 3;
@@ -193,6 +196,9 @@ export class RestClient {
           });
       }
 
+      // Journal instrumentation (task f051bf95 §3): every attempt is written
+      // as INFO (flag-gated), retry scheduling and final failures — always.
+      const attemptStarted = Date.now();
       let res: Response;
       try {
         res = await this.fetchImpl(url, {
@@ -203,33 +209,61 @@ export class RestClient {
         });
       } catch (err: unknown) {
         clearTimeout(timeout);
+        getClientLog()?.info('rest', 'request attempt failed', {
+          method,
+          path,
+          attempt,
+          duration_ms: Date.now() - attemptStarted,
+          error: errTextShort(err),
+        });
         // Network-level failure (DNS, connection refused, timeout abort, etc.).
         // Retryable unless the caller aborted the request themselves.
         if (ro.signal?.aborted) throw err;
         lastError = err instanceof Error ? err : new Error(String(err));
         if (attempt < MAX_ATTEMPTS) {
-          await this.backoff(attempt);
+          await this.backoff(method, path, attempt, classifyRetryReason(lastError));
           continue;
         }
-        throw new EtnError('INTERNAL', `Сетевая ошибка: ${lastError.message}`);
+        const message = `Сетевая ошибка: ${lastError.message}`;
+        getClientLog()?.error('rest', 'request failed', {
+          method,
+          path,
+          attempts: attempt,
+          reason: classifyRetryReason(lastError),
+          error: message,
+        });
+        throw new EtnError('INTERNAL', message);
       }
       clearTimeout(timeout);
 
       // Retry transient server errors (5xx) once more.
       if (res.status >= 500 && res.status < 600 && attempt < MAX_ATTEMPTS) {
         lastError = new Error(`HTTP ${res.status}`);
-        await this.backoff(attempt);
+        await this.backoff(method, path, attempt, `http_${res.status}`);
         continue;
       }
 
+      getClientLog()?.info('rest', 'request completed', {
+        method,
+        path,
+        attempt,
+        duration_ms: Date.now() - attemptStarted,
+        status: res.status,
+      });
       return (await this.parseResponse<T>(res)) as T;
     }
 
     // Loop exited without returning — exhausted retries.
-    throw new EtnError(
-      'INTERNAL',
-      lastError ? `Превышен лимит повторов: ${lastError.message}` : 'Неизвестная ошибка запроса',
-    );
+    const message = lastError
+      ? `Превышен лимит повторов: ${lastError.message}`
+      : 'Неизвестная ошибка запроса';
+    getClientLog()?.error('rest', 'request failed', {
+      method,
+      path,
+      attempts: MAX_ATTEMPTS,
+      ...(lastError === undefined ? {} : { error: lastError.message }),
+    });
+    throw new EtnError('INTERNAL', message);
   }
 
   /**
@@ -300,10 +334,26 @@ export class RestClient {
     return qs.length > 0 ? `${url}?${qs}` : url;
   }
 
-  /** Exponential backoff with full jitter (0 .. base*2^(attempt-1)), capped. */
-  private async backoff(attempt: number): Promise<void> {
+  /**
+   * Exponential backoff with full jitter (0 .. base*2^(attempt-1)), capped.
+   * Journals the pause (INFO, flag-gated) so a trace explains every gap
+   * between attempts (task f051bf95 §3).
+   */
+  private async backoff(
+    method: string,
+    path: string,
+    attempt: number,
+    reason: string,
+  ): Promise<void> {
     const ceiling = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
     const delay = Math.floor(this.random() * ceiling);
+    getClientLog()?.info('rest', 'retry scheduled', {
+      method,
+      path,
+      attempt,
+      reason,
+      backoff_ms: delay,
+    });
     await new Promise<void>((resolve) => setTimeout(resolve, delay));
   }
 
@@ -2000,6 +2050,60 @@ export class RestClient {
     return this.requestRaw('GET', '/version');
   }
 
+  // §16a Server file journal (task f051bf95, 03-server-api.md §16):
+  // admin-only management endpoints of the server diagnostic journal.
+
+  /** `GET /system/logging` — server journal flag + retention + file list. */
+  public async getServerLogging(): Promise<SystemLoggingStatus> {
+    return this.request('GET', '/system/logging');
+  }
+
+  /** `PUT /system/logging` — toggle the server in-memory journal flag. */
+  public async setServerLogging(enabled: boolean): Promise<SystemLoggingStatus> {
+    return this.request('PUT', '/system/logging', { body: { enabled } });
+  }
+
+  /**
+   * `GET /system/logs/:filename` — download one server journal file as text
+   * (served as `text/plain` attachment, so this bypasses the JSON envelope
+   * path like {@link downloadJob}). Returns the raw bytes; the caller decides
+   * where to write them.
+   */
+  public async downloadServerLogFile(filename: string): Promise<{
+    contentType: string;
+    body: Buffer;
+  }> {
+    const url = `${this.baseUrl}/api/v1/system/logs/${encodeURIComponent(filename)}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${await this.getApiKey()}`,
+      'Client-Id': this.getClientId(),
+      Accept: '*/*',
+    };
+    const res = await this.fetchImpl(url, { method: 'GET', headers });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new EtnError(
+        mapHttpStatus(res.status),
+        `log download failed: HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
+      );
+    }
+    const contentType = res.headers.get('content-type') ?? 'text/plain; charset=utf-8';
+    return { contentType, body: Buffer.from(await res.arrayBuffer()) };
+  }
+
+  /**
+   * `DELETE /system/logs/:filename` — remove one server journal file (the
+   * current day is truncated server-side).
+   */
+  public async deleteServerLogFile(filename: string): Promise<void> {
+    await this.request('DELETE', `/system/logs/${encodeURIComponent(filename)}`);
+  }
+
+  /** `DELETE /system/logs` — remove every server journal file (current truncated). */
+  public async deleteAllServerLogs(): Promise<void> {
+    await this.request('DELETE', '/system/logs');
+  }
+
   /**
    * Variant of {@link request} without the auth header — health/version are
    * public (§16). The path still goes under `/api/v1` like every other
@@ -2028,4 +2132,14 @@ function mapHttpStatus(status: number): EtnErrorCode {
   if (status === 422) return 'VALIDATION_ERROR';
   if (status === 429) return 'RATE_LIMITED';
   return 'INTERNAL';
+}
+
+/** Compact one-line error rendering for journal fields. */
+function errTextShort(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Retry reason classification for the journal (timeout / network / 5xx). */
+function classifyRetryReason(err: Error): string {
+  return /timeout/i.test(err.message) ? 'timeout' : 'network';
 }
