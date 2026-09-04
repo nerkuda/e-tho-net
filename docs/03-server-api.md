@@ -471,21 +471,22 @@ POST /api/v1/networks/{nid}/thoughts
   icon?: "...", icon_kind?: "emoji"|"image",
   active?: true,                         # default true
   fg_color?, bg_color?, font_*?,
-  create_link?: {                        # сразу создать связь с родителем
-    direction: "parent"|"child",         # parent: новая мысль — источник к target_id
-    target_thought_id: "...",            # child: новая мысль — назначение для target_id
-    type_id?: "..."
+  create_link?: {                        # сразу создать связь с target_id
+    direction: "parent"|"child",         # роль target_id для НОВОЙ мысли
+    target_thought_id: "...",            # parent: новая мысль ПОД target
+    type_id?: "..."                      # child: новая мысль — родитель target
   }
 }
 → 201 { data: { id, ..., version: 1 }, meta: { request_id } }
 ```
 
-> **NB (баг-фикс 045):** одноимённое поле `direction` в MCP-инструментах
-> `etn.thoughts.create` (`link`) и `etn.thoughts.upsert_bundle` (`links[]`)
-> имеет **противоположную**, агент-ориентированную семантику: `"parent"` там
-> значит, что `target_thought_id` становится родителем НОВОЙ мысли. REST и
-> доменный слой свою семантику не меняли; MCP-слой переводит значение на
-> своей границе. Подробности — 05-mcp-server.md §5.2.
+`direction` называет роль `target_thought_id` для НОВОЙ мысли: `"parent"` —
+новая мысль подвешивается ПОД `target_thought_id` (target становится её
+родителем; типичный кейс — «создать мысль в разделе X»); `"child"` — новая
+мысль становится родителем `target_thought_id` (target подвешивается под
+неё). Та же семантика — в MCP-инструментах `etn.thoughts.create` (`link`) и
+`etn.thoughts.upsert_bundle` (`links[]`, см. 05-mcp-server.md §5.2): поле
+единое для REST и MCP, перевода значения на границе слоёв нет.
 
 Поведение дедупликации описано в [08-ui-spec.md](08-ui-spec.md), диалог добавления.
 На уровне API дедупликация НЕ выполняется — клиент предоставляет точное имя и
