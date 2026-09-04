@@ -28,6 +28,7 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { logUiEvent } from '../lib/ui-log.js';
 import {
   closeHoverPreview,
   markAttachmentsPreview,
@@ -645,6 +646,7 @@ function renderFocusRow(focus: FocusResponse): void {
       suppressNextClick = false;
       return;
     }
+    logUiEvent('ui.cloud.click', { id: thought.id });
     if (event.ctrlKey || event.metaKey) {
       pendingClick?.cancel();
       pendingClick = null;
@@ -1196,6 +1198,7 @@ function buildCloud(
       suppressNextClick = false;
       return;
     }
+    logUiEvent('ui.cloud.click', { id: entry.id });
     if (event.ctrlKey || event.metaKey) {
       pendingClick?.cancel();
       pendingClick = null;
@@ -1276,6 +1279,7 @@ function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
   // handler would close the popup on the first click and kill the dblclick.
   let pendingClick: { cancel: () => void } | null = null;
   row.addEventListener('click', () => {
+    logUiEvent('ui.cloud.click', { id: ref.id });
     pendingClick?.cancel();
     pendingClick = deferSingleClick(() => {
       pendingClick = null;

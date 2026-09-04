@@ -53,6 +53,7 @@ import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import { logUiEvent } from '../lib/ui-log.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import { linkTypeOptions, resolveLinkTypeVisual, thoughtTypeOptions } from '../lib/type-tree.js';
 import { focusEdgesSignature, patchFocusEdge, store } from '../state.js';
@@ -119,6 +120,7 @@ export function registerMainSection(builder: MainSectionBuilder): void {
   mainSectionBuilders.push(builder);
 } /** Opens a link in the editor without changing the focus (H6/H11). */
 export function openLinkInEditor(link: Link): void {
+  logUiEvent('ui.editor.opened', { id: link.id, kind: 'link' });
   store.update({ editorTarget: { kind: 'link', id: link.id, link } });
 }
 
@@ -174,6 +176,7 @@ export function openThoughtInEditor(id: string): void {
   // synchronous, unlike `setFocus`) — the history panel re-renders once the
   // write lands (`setHistoryChangeListener`).
   void noteThoughtWillOpen(id);
+  logUiEvent('ui.editor.opened', { id, kind: 'thought' });
   store.update({
     editorTarget: { kind: 'thought', id },
     selectedLinkId: null,
@@ -205,6 +208,7 @@ export function openThoughtInEditor(id: string): void {
  */
 export async function setThoughtEditorTarget(thought: Thought): Promise<void> {
   await noteThoughtWillOpen(thought.id);
+  logUiEvent('ui.editor.opened', { id: thought.id, kind: 'thought' });
   store.update({
     editorTarget: { kind: 'thought', id: thought.id, thought },
     structuresActiveThought: thought,

@@ -24,6 +24,7 @@ import {
 } from '../drafts.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { registerMainSection, type EditorContext } from './editor.js';
@@ -43,6 +44,7 @@ export function registerCommentSections(): void {
 /** Builds the permanent-comment group body (HTML view ↔ markdown edit). */
 function buildPermanentBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
+  const startedAt = Date.now();
   const box = div('comment-permanent');
   box.append(el('span', 'muted', 'Загрузка…'));
 
@@ -185,6 +187,14 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
       },
     });
     box.replaceChildren(field);
+    // Milestone journal mark (task 92b89e6f): the comment really rendered —
+    // the closing bracket of the «stuck "Загрузка…"» symptom path.
+    logUiEvent('ui.editor.comment.loaded', {
+      id: ctx.ownerId,
+      kind: ctx.ownerType,
+      ms: Date.now() - startedAt,
+      hasComment: permanent !== null,
+    });
     await cleanupStaleDrafts();
   })();
 

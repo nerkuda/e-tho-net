@@ -24,6 +24,9 @@
  *   per-user `show_inactive` L3 preference. Markdown tabs are owner-only.
  * - **Клиент** — UI theme (L5 `client_meta.theme`) and `cloud_width` /
  *   `cloud_gap` (L4 `ui_state`), all clipped to the system constants.
+ * - **Логирование** — client/server diagnostic journals (task 92b89e6f,
+ *   08-ui-spec.md §9.7): immediate-effect toggles and file actions, built in
+ *   `settings-logs.ts`; deliberately outside the draft/«Применить» model.
  */
 
 import { renderMarkdown } from '@etn/markdown';
@@ -46,15 +49,17 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { clip } from '../lib/pure.js';
 import { store, type Theme } from '../state.js';
+import { buildLogsSection } from './settings-logs.js';
 
 /** Sections of the settings dialog (order in the sidebar). */
-type Section = 'user' | 'network' | 'client';
+type Section = 'user' | 'network' | 'client' | 'logs';
 
 /** Title rendered above a section. */
 const SECTION_TITLES: Record<Section, string> = {
   user: 'Пользователь',
   network: 'Мыслесеть',
   client: 'Клиент',
+  logs: 'Логирование',
 };
 
 /** Tabs inside the «Мыслесеть» section (task O5). */
@@ -159,6 +164,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     user: el('button', 'settings-nav-item'),
     network: el('button', 'settings-nav-item'),
     client: el('button', 'settings-nav-item'),
+    logs: el('button', 'settings-nav-item'),
   };
   for (const key of Object.keys(navButtons) as Section[]) {
     const btn = navButtons[key];
@@ -537,6 +543,9 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
         break;
       case 'client':
         section = renderClientSection();
+        break;
+      case 'logs':
+        section = buildLogsSection();
         break;
     }
     content.append(section);
