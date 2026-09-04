@@ -56,7 +56,7 @@ import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import { linkTypeOptions, resolveLinkTypeVisual, thoughtTypeOptions } from '../lib/type-tree.js';
-import { focusEdgesSignature, patchFocusEdge, store } from '../state.js';
+import { patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
 import { setClampRoot } from './list-heights.js';
@@ -279,6 +279,15 @@ let registrationsDone = false;
 
 /** Unsubscribes the store subscription of the previous editor mount. */
 let storeUnsubscribe: (() => void) | null = null;
+/**
+ * Cache of the last (open entity id + version) for the cheap store-subscribe
+ * gate in `mountEditor`. Compared against the live `currentEditorContext()` —
+ * when both match, the store update is for canvas-only state and the editor
+ * is left alone (bug 206e33a1 «Бессмысленное обновление редактора при
+ * получении внешних событий»). The render signature guard is still the
+ * authoritative filter for an actual rebuild.
+ */
+let liveRenderedKey: { ownerId: string; version: string | number } | null = null;
 
 /** Badge spans of the current render, per counted tab (for refreshTabCount). */
 const tabCountSpans = new Map<EditorTabId, HTMLElement>();
@@ -359,8 +368,30 @@ export function mountEditor(editorHost: HTMLElement): void {
   // Re-mounting replaces the host — drop the previous mount's subscription
   // before adding the new one (mountEditor runs again per network open).
   storeUnsubscribe?.();
+  // Cheap store gate (bug 206e33a1): the editor's open entity didn't change,
+  // so the store update is for canvas-only state (focus edges, indicators,
+  // pin list, structures/chronicle tabs etc.) that have their own
+  // subscriptions. Skip the `render()` call entirely — `render()`'s
+  // signature guard would also no-op, but reading `currentEditorContext()`
+  // and computing the key on every store tick is wasted work.
   storeUnsubscribe = store.subscribe(() => {
-    if (host?.isConnected === true) void render();
+    if (host?.isConnected !== true) return;
+    const ctx = currentEditorContext();
+    if (ctx === null) {
+      // No target: nothing to compare against — defer to render()'s own
+      // signature guard (it also handles the null→null fast path).
+      void render();
+      return;
+    }
+    const liveVersion = ctx.ownerType === 'thought' ? ctx.thought?.version : ctx.link?.version;
+    if (
+      liveRenderedKey !== null &&
+      liveRenderedKey.ownerId === ctx.ownerId &&
+      liveRenderedKey.version === (liveVersion ?? '')
+    ) {
+      return;
+    }
+    void render();
   });
   void render();
 }
@@ -370,10 +401,41 @@ async function render(): Promise<void> {
   if (host === null || scrollBox === null || positionButton === null) return;
   const ctx = currentEditorContext();
 
+  // Signature guards a full DOM rebuild. Bug 206e33a1 «Бессмысленное
+  // обновление редактора при получении внешних событий»: a rebuild destroys
+  // the CodeMirror editor instance, so it must only run when the open entity
+  // actually changes (different id / kind, version bump, dock move). The
+  // canvas's focus-edge signature is intentionally NOT part of this key —
+  // link events don't change which thought the editor opens, and the
+  // links-tab has its own subscription (`currentReload`).
+  const signature =
+    ctx === null
+      ? 'null'
+      : `${ctx.ownerType}|${ctx.ownerId}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}` +
+        `|${store.state.editorPosition}`;
+  if (signature === lastSignature) return;
+  lastSignature = signature;
+  // Remember the live open entity so the cheap store-subscribe gate in
+  // `mountEditor` can skip unrelated updates (canvas-only state, indicators,
+  // pin list, etc.). Cleared here on every rebuild so the next store tick
+  // re-reads the live context.
+  liveRenderedKey =
+    ctx === null
+      ? null
+      : {
+          ownerId: ctx.ownerId,
+          version:
+            ctx.ownerType === 'thought'
+              ? (ctx.thought?.version ?? '')
+              : (ctx.link?.version ?? ''),
+        };
+
   // Panel title reflects what is selected (08-ui-spec.md §6.2). A thought in
   // the trash (S13) additionally shows the bright-red trash marker before the
   // word «Мысль» — the editor must state the trashed state explicitly, not
-  // only the canvas badge.
+  // only the canvas badge. Inside the signature guard so unrelated store
+  // updates (the previous code wrote the title on every `render()` call,
+  // i.e. every store change — wasteful when the open entity is unchanged).
   if (titleEl !== null) {
     clear(titleEl);
     if (ctx !== null && ctx.ownerType === 'thought' && ctx.thought?.marked_for_deletion === true) {
@@ -384,15 +446,6 @@ async function render(): Promise<void> {
     }
     titleEl.append(ctx === null ? '' : ctx.ownerType === 'link' ? 'Связь' : 'Мысль');
   }
-
-  const signature =
-    ctx === null
-      ? 'null'
-      : `${ctx.ownerType}|${ctx.ownerId}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}` +
-        `|${focusEdgesSignature(store.state.focus)}|${store.state.editorPosition}` +
-        `|${String(store.state.showInactive)}`;
-  if (signature === lastSignature) return;
-  lastSignature = signature;
 
   // Remember what had the focus: the rebuild destroys the old DOM, and a
   // field focused at that moment (e.g. the type picker reached by Tab from
