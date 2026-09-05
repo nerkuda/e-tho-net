@@ -36,20 +36,15 @@ import type {
  * persisted on the server (`id` is the real binding id, `property_id` is the
  * registry id the binding attaches). `isNew: true` rows were added during
  * this session and have not been created yet (`id` is a local placeholder
- * from {@link nextDraftPropertyId}); `createInRegistry` then says how they
- * will land on the server:
- *   * `false` — `POST /types/{id}/properties` with `{ mode: 'attach',
- *     property_id }` to bind an existing registry row;
- *   * `true`  — `POST /types/{id}/properties` with `{ mode: 'create', key,
- *     value_type, description }` to create the registry row AND the binding
- *     in one server-side transaction.
+ * from {@link nextDraftPropertyId}); they always attach an EXISTING registry
+ * row — brand-new properties are created through the shared property editor
+ * first (0.6.5 приёмка: один диалог редактирования свойства), then attached
+ * from the pick list.
  */
 export interface DraftProperty {
   id: string;
   isNew: boolean;
-  /** Registry property id this binding attaches. For `isNew: true` with
-   *  `createInRegistry: true` this is empty — the server assigns the new
-   *  registry id (returned in the response payload). */
+  /** Registry property id this binding attaches. */
   property_id: string;
   /** Whether the property is required on this type's records (the binding's
    *  only editable aspect through the type editor). */
@@ -59,8 +54,6 @@ export interface DraftProperty {
   value_type: PropertyValueType;
   config: PropertyConfig | null;
   description: string | null;
-  /** See the type doc — only meaningful for `isNew: true`. */
-  createInRegistry: boolean;
 }
 
 let draftCounter = 0;
@@ -83,7 +76,6 @@ export function draftPropertiesFrom(own: readonly PropertyDefinition[]): DraftPr
     value_type: d.value_type,
     config: d.config,
     description: d.description,
-    createInRegistry: false,
   }));
 }
 
@@ -94,14 +86,6 @@ export type PropertyDiffOp =
       kind: 'attach';
       draftId: string;
       property_id: string;
-      required: boolean;
-    }
-  | {
-      kind: 'create-and-attach';
-      draftId: string;
-      name: string;
-      value_type: PropertyValueType;
-      description: string | null;
       required: boolean;
     }
   | { kind: 'set-role'; id: string; required: boolean };
@@ -119,9 +103,9 @@ export interface PropertyDiffPlan {
  * Computes the Apply-time plan for a type's staged own bindings:
  *   1. **unbinds** first (so a freed slot never collides with an attach in
  *      the same batch),
- *   2. then **attaches** / **create-and-attaches** in the drafted order
- *      (new rows always land via the trailing `needsReorder` call rather
- *      than by tracking `position` per op),
+ *   2. then **attaches** in the drafted order (new rows always land via the
+ *      trailing `needsReorder` call rather than by tracking `position` per
+ *      op),
  *   3. then **set-role** ops for the `required` toggles on existing rows.
  * Pure — no network, no DOM.
  */
@@ -140,28 +124,18 @@ export function planPropertyDiff(
     ops.push({ kind: 'unbind', id });
   }
 
-  // 2. New rows (attach or create-and-attach).
+  // 2. New rows — always attach an existing registry property (brand-new
+  //    properties are created through the shared property editor first).
   let anyNew = false;
   for (const d of draft) {
     if (!d.isNew) continue;
     anyNew = true;
-    if (d.createInRegistry) {
-      ops.push({
-        kind: 'create-and-attach',
-        draftId: d.id,
-        name: d.key,
-        value_type: d.value_type,
-        description: d.description,
-        required: d.required,
-      });
-    } else {
-      ops.push({
-        kind: 'attach',
-        draftId: d.id,
-        property_id: d.property_id,
-        required: d.required,
-      });
-    }
+    ops.push({
+      kind: 'attach',
+      draftId: d.id,
+      property_id: d.property_id,
+      required: d.required,
+    });
   }
 
   // 3. Role changes on existing rows. Skip ids the draft is also unbinding
@@ -190,15 +164,6 @@ export function planPropertyDiff(
 }
 
 /** Builds the body of `POST /types/{id}/properties` for one plan op. Pure. */
-export function opToAttachInput(op: Extract<PropertyDiffOp, { kind: 'attach' | 'create-and-attach' }>): AttachPropertyInput {
-  if (op.kind === 'attach') {
-    return { mode: 'attach', property_id: op.property_id, required: op.required };
-  }
-  return {
-    mode: 'create',
-    key: op.name,
-    value_type: op.value_type,
-    description: op.description,
-    required: op.required,
-  };
+export function opToAttachInput(op: Extract<PropertyDiffOp, { kind: 'attach' }>): AttachPropertyInput {
+  return { mode: 'attach', property_id: op.property_id, required: op.required };
 }

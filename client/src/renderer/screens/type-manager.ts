@@ -882,7 +882,8 @@ interface StagedPropertySection {
  * {@link StagedPropertySection.applyChanges} on the editor's
  * «Применить и закрыть»:
  *   1. unbind removed bindings,
- *   2. attach / create-and-attach new ones,
+ *   2. attach new ones (registry rows are created through the shared
+ *      property editor first),
  *   3. set-role patches for `required` toggles,
  *   4. one trailing reorder.
  *
@@ -942,15 +943,17 @@ function buildStagedPropertySection(opts: {
   let registryCache: Map<string, RegistryRow> = new Map();
 
   /**
-   * «Добавить свойство» dialog: pick an existing registry property OR create
-   * a brand-new one and attach it. Returns the staged row the caller appends
-   * to {@link ownDraft} (or `null` when the user cancelled).
+   * «Добавить свойство» dialog: pick an existing registry property (или
+   * создать новое в общем редакторе свойства и затем выбрать его). Returns
+   * the staged row the caller appends to {@link ownDraft} (or `null` when
+   * the user cancelled).
    */
   async function openAttachPropertyDialog(): Promise<void> {
     const picked = await openAttachDialog({
       networkId,
       types: pickTypeList(),
       existingPropertyIds: new Set(ownDraft.map((d) => d.property_id)),
+      inheritedPropertyIds: new Set(inherited.map((d) => d.property_id)),
     });
     if (picked === null) return;
     ownDraft = [...ownDraft, picked];
@@ -1255,7 +1258,7 @@ function buildStagedPropertySection(opts: {
           await etn.types.removeTypeProperty(networkId, ownerType, targetId, op.id);
           originalOwn = originalOwn.filter((d) => d.id !== op.id);
           ownDraft = ownDraft.filter((d) => d.id !== op.id);
-        } else if (op.kind === 'attach' || op.kind === 'create-and-attach') {
+        } else if (op.kind === 'attach') {
           const created = await etn.types.createTypeProperty(
             networkId,
             ownerType,
@@ -1334,26 +1337,25 @@ function buildStagedPropertySection(opts: {
 type AttachDialogResult = DraftProperty;
 
 /**
- * «Добавить свойство» dialog (0.6.5, task
- * «Клиент: редактор типа подключает свойство из справочника»).
+ * «Добавить свойство» dialog (0.6.5, переработан по итогам приёмки — ошибка
+ * «Диалог "Добавить свойство" в редакторе типа: непонятный интерфейс»).
  *
- *   * Search box over the network property registry (`etn.propertyRegistry
- *     .list`) — every row shows the property name, value type and
- *     `types_count` («используется в N типах»);
- *   * Click on a row → attach the existing registry property, after asking
- *     for confirmation when the property is already bound to a descendant of
- *     the edited type (the server drops the redundant binding, the user
- *     must agree);
- *   * Inline create form (name + value type + description) — submits as
- *     `POST /types/{id}/properties { mode: 'create', … }` so the registry
- *     row AND the binding land in one transaction;
- *   * When the typed name collides with an existing registry row, the
- *     existing one is highlighted and the primary button reads
- *     «Подключить существующее» — a `409 DUPLICATE` on the server would be
- *     a worse outcome than offering the safe path up front.
+ * One pick list over the network property registry, one search box, two
+ * bottom buttons:
+ *   * **Выбрать** — attach the highlighted registry property (double-click on
+ *     the row and Ctrl+Enter do the same). Properties the type already
+ *     carries — own or inherited — stay VISIBLE but marked «подключено» /
+ *     «унаследовано» and cannot be picked (the duplicate check up front; the
+ *     server re-checks on attach);
+ *   * **Добавить** — open the SHARED property editor (the exact dialog the
+ *     property manager uses) to create a brand-new registry row; after
+ *     «Записать и закрыть» the list refreshes and the fresh property is the
+ *     highlighted row, ready to be picked. One editor everywhere — nothing
+ *     is created inline any more.
  *
- * The dialog rejects properties already in the editor's own draft (double
- * binding of the same registry id in one session is never useful).
+ * Attaching a property some descendant already carries asks for confirmation
+ * first: the server drops the redundant binding in the same transaction (the
+ * user must agree — it is invisible until the request lands).
  */
 async function openAttachDialog(opts: {
   networkId: string;
@@ -1361,11 +1363,14 @@ async function openAttachDialog(opts: {
    *  suppresses the check (the editor is creating a new type that has no
    *  descendants yet). */
   types: readonly ThoughtType[] | readonly LinkType[] | null;
-  /** Property ids the editor has already attached in this session — must not
-   *  appear as choices. */
+  /** Property ids the type already carries (own bindings + this session's
+   *  staged rows) — shown as «подключено», not pickable. */
   existingPropertyIds: ReadonlySet<string>;
+  /** Property ids inherited from the type's ancestors (or the picked parent's
+   *  whole set for a new type) — shown as «унаследовано», not pickable. */
+  inheritedPropertyIds: ReadonlySet<string>;
 }): Promise<AttachDialogResult | null> {
-  const { networkId, types, existingPropertyIds } = opts;
+  const { networkId, types, existingPropertyIds, inheritedPropertyIds } = opts;
   let registryRows: RegistryRow[];
   try {
     registryRows = await etn.propertyRegistry.list(networkId);
@@ -1374,233 +1379,166 @@ async function openAttachDialog(opts: {
     return null;
   }
 
-  // The dialog stays in the file-scope so the helper closures (search,
-  // create form) can share its state. Resolves with the staged row or `null`.
   return new Promise((resolve) => {
-    const errorLine = span('', 'error-text');
     const searchInput = el('input', 'text-input') as HTMLInputElement;
     searchInput.type = 'text';
     searchInput.placeholder = 'Поиск по имени или описанию…';
 
     const resultsWrap = div('admin-table-wrap');
-    resultsWrap.style.maxHeight = '200px';
-    resultsWrap.append(el('span', 'muted', 'Загрузка…'));
+    resultsWrap.style.maxHeight = '260px';
 
-    const pickState = {
-      /** Index of the highlighted row in the visible list (null = create
-       *  form is highlighted instead). */
-      selectedRowIndex: 0,
-      /** The visible rows after the search filter. */
-      visible: [] as RegistryRow[],
+    /** The highlighted registry row (a PICKABLE one), or null. */
+    let selected: RegistryRow | null = null;
+
+    /** Re-fetches the registry (after the shared editor created a row) and
+     *  re-renders, highlighting `highlightId` when present. */
+    const refreshRegistry = async (highlightId: string | null): Promise<void> => {
+      try {
+        registryRows = await etn.propertyRegistry.list(networkId);
+      } catch {
+        /* keep the stale list — the editor already reported its own error */
+      }
+      rerenderResults(highlightId);
     };
 
     /** Re-renders the result list against the current search query. */
-    function rerenderResults(): void {
+    function rerenderResults(preferId: string | null = null): void {
       const query = searchInput.value.trim().toLowerCase();
       const fragments = query.split(/\s+/).filter((s) => s.length > 0);
       const filtered = registryRows.filter((row) => {
-        if (existingPropertyIds.has(row.id)) return false;
         const haystack = `${row.name.toLowerCase()}\n${(row.description ?? '').toLowerCase()}`;
         return fragments.every((f) => haystack.includes(f));
       });
       filtered.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-      pickState.visible = filtered;
-      pickState.selectedRowIndex = Math.min(
-        pickState.selectedRowIndex,
-        Math.max(0, filtered.length - 1),
-      );
+
+      const pickable = (row: RegistryRow): string | null =>
+        existingPropertyIds.has(row.id)
+          ? 'подключено'
+          : inheritedPropertyIds.has(row.id)
+            ? 'унаследовано'
+            : null;
+
+      // The highlight follows the preferred row (when pickable), else the
+      // first pickable one, else nothing is selectable at all.
+      const preferred = preferId !== null ? filtered.find((r) => r.id === preferId) : undefined;
+      selected =
+        (preferred !== undefined && pickable(preferred) === null
+          ? preferred
+          : filtered.find((r) => pickable(r) === null)) ?? null;
+      const selectedId = selected?.id ?? null;
+
       if (filtered.length === 0) {
         resultsWrap.replaceChildren(el('p', 'muted', 'Ничего не найдено.'));
         return;
       }
       const table = el('table', 'table-list');
       const tbody = el('tbody');
-      filtered.forEach((row, idx) => {
+      for (const row of filtered) {
+        const blocked = pickable(row);
         const tr = el('tr');
-        if (idx === pickState.selectedRowIndex) tr.classList.add('row-selected');
+        if (row.id === selectedId) tr.classList.add('row-selected');
+        if (blocked !== null) tr.classList.add('row-disabled');
         const nameCell = el('td', undefined, row.name);
         nameCell.style.whiteSpace = 'nowrap';
         if (row.description !== null) setTooltip(nameCell, row.description);
         const typeCell = el('td', 'muted', VALUE_TYPE_LABELS[row.value_type]);
         const countCell = el('td', 'muted', `в ${row.types_count} типах`);
         countCell.style.textAlign = 'right';
-        tr.append(nameCell, typeCell, countCell);
-        tr.addEventListener('click', () => {
-          pickState.selectedRowIndex = idx;
-          rerenderResults();
-        });
+        const markCell = el('td', 'muted', blocked ?? '');
+        markCell.style.whiteSpace = 'nowrap';
+        tr.append(nameCell, typeCell, markCell, countCell);
+        if (blocked === null) {
+          tr.addEventListener('click', () => {
+            selected = row;
+            rerenderResults();
+          });
+          tr.addEventListener('dblclick', () => {
+            selected = row;
+            void choose();
+          });
+        } else {
+          setTooltip(tr, blocked === 'подключено'
+            ? 'Свойство уже подключено к этому типу'
+            : 'Свойство уже наследуется этим типом от предка');
+        }
         tbody.append(tr);
-      });
+      }
       table.append(tbody);
       resultsWrap.replaceChildren(table);
     }
-    searchInput.addEventListener('input', () => {
-      pickState.selectedRowIndex = 0;
-      rerenderResults();
-    });
-    // Keyboard navigation: ↑/↓ moves the highlight, Enter picks it.
+
+    searchInput.addEventListener('input', () => rerenderResults());
+    // Keyboard: ↑/↓ moves the highlight over pickable rows. Ctrl+Enter is
+    // the dialog stack's built-in «click the primary button» — «Выбрать».
     searchInput.addEventListener('keydown', (event) => {
+      const query = searchInput.value.trim().toLowerCase();
+      const fragments = query.split(/\s+/).filter((s) => s.length > 0);
+      const pickableRows = registryRows.filter((row) => {
+        if (existingPropertyIds.has(row.id) || inheritedPropertyIds.has(row.id)) return false;
+        const haystack = `${row.name.toLowerCase()}\n${(row.description ?? '').toLowerCase()}`;
+        return fragments.every((f) => haystack.includes(f));
+      });
+      if (pickableRows.length === 0) return;
+      const at = pickableRows.findIndex((r) => r.id === selected?.id);
       if (event.key === 'ArrowDown') {
         event.preventDefault();
-        pickState.selectedRowIndex = Math.min(
-          pickState.visible.length - 1,
-          pickState.selectedRowIndex + 1,
-        );
+        selected = pickableRows[Math.min(pickableRows.length - 1, at + 1)] ?? pickableRows[0]!;
         rerenderResults();
       } else if (event.key === 'ArrowUp') {
         event.preventDefault();
-        pickState.selectedRowIndex = Math.max(0, pickState.selectedRowIndex - 1);
+        selected = pickableRows[Math.max(0, at - 1)] ?? pickableRows[0]!;
         rerenderResults();
       }
     });
 
-    // ---- Inline create form -------------------------------------------
-    const newNameInput = el('input', 'text-input') as HTMLInputElement;
-    newNameInput.type = 'text';
-    newNameInput.maxLength = 200;
-    newNameInput.placeholder = 'Имя нового свойства';
-    const newTypeSelect = el('select', 'select-input') as HTMLSelectElement;
-    for (const [value, label] of Object.entries(VALUE_TYPE_LABELS)) {
-      const option = el('option', undefined, label) as HTMLOptionElement;
-      option.value = value;
-      newTypeSelect.append(option);
-    }
-    newTypeSelect.value = 'text';
-    const newDescArea = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-    newDescArea.rows = 2;
-    newDescArea.placeholder = 'Описание (необязательно)';
-
-    const createForm = div('form-stack');
-    const createLabel = el('p', 'muted', 'Создать новое свойство в справочнике:');
-    createLabel.style.margin = '12px 0 2px';
-    createForm.append(createLabel, newNameInput, newTypeSelect, newDescArea);
-
-    /** The registry row whose name collides with the current new-name input
-     *  (or `null` when the name is free). Surfaced as a hint under the
-     *  input. */
-    let duplicateMatch: RegistryRow | null = null;
-    const dupHint = el('p', 'muted', '');
-    dupHint.style.margin = '2px 0 0';
-    createForm.append(dupHint);
-
-    function refreshDuplicateHint(): void {
-      const typed = newNameInput.value.trim().toLowerCase();
-      if (typed === '') {
-        duplicateMatch = null;
-        dupHint.textContent = '';
-        primaryBtn.textContent = 'Создать и подключить';
-        primaryBtn.dataset['mode'] = 'create';
-        return;
+    /** Resolves the dialog with the highlighted pickable row. */
+    async function choose(): Promise<void> {
+      if (selected === null) return;
+      const warning = await warnDescendantBindings(selected, types);
+      if (warning !== null) {
+        const ok = await confirmDialog('Подключить свойство', warning, true);
+        if (!ok) return;
       }
-      duplicateMatch =
-        registryRows.find((r) => r.name.trim().toLowerCase() === typed) ?? null;
-      if (duplicateMatch !== null) {
-        dupHint.textContent = `Свойство с таким именем уже есть — нажмите «Подключить существующее».`;
-        primaryBtn.textContent = 'Подключить существующее';
-        primaryBtn.dataset['mode'] = 'attach-existing';
-      } else {
-        dupHint.textContent = '';
-        primaryBtn.textContent = 'Создать и подключить';
-        primaryBtn.dataset['mode'] = 'create';
-      }
+      close();
+      resolve(attachDraftFromExisting(selected));
     }
-    newNameInput.addEventListener('input', refreshDuplicateHint);
 
-    // ---- Body assembly ------------------------------------------------
-    const searchLabel = el('p', 'muted', 'Выбрать из справочника:');
-    searchLabel.style.margin = '0 0 2px';
     const body = div('form-stack');
-    body.append(searchLabel, searchInput, resultsWrap, createForm, errorLine);
+    body.append(searchInput, resultsWrap);
     rerenderResults();
 
-    let primaryBtn: HTMLButtonElement;
-    const dialog = showDialog({
+    const close = showDialog({
       title: 'Добавить свойство',
       body,
-      width: 520,
+      width: 560,
       buttons: [
         { label: 'Отмена' },
         {
-          label: 'Создать и подключить',
+          label: 'Добавить…',
+          keepOpen: true,
+          onClick: () => {
+            openPropertyManagerEditor(
+              null,
+              () => void refreshRegistry(null),
+              // Highlight the fresh row so one more Enter/«Выбрать» attaches it.
+              (created) => void refreshRegistry(created.id),
+            );
+          },
+        },
+        {
+          label: 'Выбрать',
           primary: true,
           keepOpen: true,
-          ref: (btn) => {
-            primaryBtn = btn;
-          },
-          onClick: (close) => void commit(close),
+          onClick: () => void choose(),
         },
       ],
       onMount: () => searchInput.focus(),
     });
-
-    async function commit(close: () => void): Promise<void> {
-      // Branch 1: the user typed a colliding name → attach the existing row.
-      // Branch 2: pick the highlighted registry row → attach it.
-      // Branch 3: typed a free name → create+attach.
-      const mode = primaryBtn.dataset['mode'];
-      let target: RegistryRow | null = null;
-      let newRow:
-        | { name: string; value_type: PropertyValueType; description: string | null }
-        | null = null;
-      if (mode === 'attach-existing' && duplicateMatch !== null) {
-        target = duplicateMatch;
-      } else if (pickState.visible.length > 0) {
-        target = pickState.visible[pickState.selectedRowIndex] ?? null;
-      }
-      if (target === null) {
-        const name = newNameInput.value.trim();
-        if (name === '') {
-          errorLine.textContent = 'Имя нового свойства обязательно.';
-          return;
-        }
-        newRow = {
-          name,
-          value_type: newTypeSelect.value as PropertyValueType,
-          description: newDescArea.value.trim() === '' ? null : newDescArea.value.trim(),
-        };
-      } else {
-        // The server drops redundant bindings in the subtree when a parent
-        // attaches a property a descendant already carries (the user has to
-        // OK that — it is invisible until the request lands, so warn up
-        // front).
-        const warning = await warnDescendantBindings(target, types);
-        if (warning !== null) {
-          const ok = await confirmDialog(
-            'Подключить свойство',
-            warning,
-            true,
-          );
-          if (!ok) return;
-        }
-        close();
-        resolve(attachDraftFromExisting(target));
-        return;
-      }
-      close();
-      resolve({
-        id: nextDraftPropertyId(),
-        isNew: true,
-        property_id: '',
-        required: false,
-        key: newRow.name,
-        value_type: newRow.value_type,
-        config: null,
-        description: newRow.description,
-        createInRegistry: true,
-      });
-    }
-
-    // Stash the dialog handle so the helper closure above can read `mode`.
-    // The actual handler is `commit` above; we just need to give
-    // `refreshDuplicateHint` access to `primaryBtn` before the user clicks
-    // it — done by the `ref` callback on the showDialog button.
-    void dialog;
-    refreshDuplicateHint();
   });
 }
 
-/** Builds the draft row for «attach existing» — `property_id` set,
- *  `createInRegistry: false`, nature snapshot copied from the registry row. */
+/** Builds the draft row for «attach existing» — `property_id` set, nature
+ *  snapshot copied from the registry row. */
 function attachDraftFromExisting(row: RegistryRow): DraftProperty {
   return {
     id: nextDraftPropertyId(),
@@ -1611,7 +1549,6 @@ function attachDraftFromExisting(row: RegistryRow): DraftProperty {
     value_type: row.value_type,
     config: row.config,
     description: row.description,
-    createInRegistry: false,
   };
 }
 

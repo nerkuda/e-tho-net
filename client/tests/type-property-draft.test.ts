@@ -6,15 +6,16 @@
  * no DOM (client tests run without jsdom, per the existing convention).
  *
  * Since 0.6.5 a type's own row is a binding to a network-wide property in
- * the registry; the diff planner emits the four op kinds that map straight
+ * the registry; the diff planner emits the three op kinds that map straight
  * onto `POST /types/{id}/properties`, `DELETE …/properties/{pid}`, and
  * `PATCH …/properties/{pid} { required }`:
- *   * `unbind`              — DELETE
- *   * `attach`              — POST { mode: 'attach',   property_id }
- *   * `create-and-attach`   — POST { mode: 'create',   key, value_type, description }
- *   * `set-role`            — PATCH { required }
+ *   * `unbind`   — DELETE
+ *   * `attach`   — POST { mode: 'attach', property_id }
+ *   * `set-role` — PATCH { required }
  * plus the trailing `needsReorder` flag when the order moved or new rows
- * landed in the middle.
+ * landed in the middle. New rows ALWAYS attach an existing registry property
+ * — brand-new properties are created through the shared property editor
+ * first (0.6.5 приёмка), so there is no create-and-attach op any more.
  */
 
 import assert from 'node:assert/strict';
@@ -64,28 +65,6 @@ function attach(
     value_type: snapshot.value_type ?? 'text',
     config: null,
     description: snapshot.description ?? null,
-    createInRegistry: false,
-  };
-}
-
-/** A staged create-and-attach row — creates a new registry property first. */
-function createAndAttach(
-  draftId: string,
-  name: string,
-  valueType: 'text' | 'number' | 'date' | 'bool' | 'thought_ref' | 'url' = 'text',
-  description: string | null = null,
-  required = false,
-): DraftProperty {
-  return {
-    id: draftId,
-    isNew: true,
-    property_id: '',
-    required,
-    key: name,
-    value_type: valueType,
-    config: null,
-    description,
-    createInRegistry: true,
   };
 }
 
@@ -106,7 +85,6 @@ describe('draftPropertiesFrom', () => {
         value_type: 'text',
         config: null,
         description: null,
-        createInRegistry: false,
       },
       {
         id: 'p2',
@@ -117,7 +95,6 @@ describe('draftPropertiesFrom', () => {
         value_type: 'number',
         config: { default_value: 3 },
         description: null,
-        createInRegistry: false,
       },
     ]);
   });
@@ -170,26 +147,6 @@ describe('planPropertyDiff', () => {
     assert.equal(plan.needsReorder, true);
   });
 
-  it('creating a brand-new registry property and attaching it becomes a `create-and-attach` op', () => {
-    const original = [def('p1', 'A')];
-    const draft = [
-      ...draftPropertiesFrom(original),
-      createAndAttach('draft:2', 'N', 'date', 'дата поставки'),
-    ];
-    const plan = planPropertyDiff(original, draft, []);
-    assert.deepEqual(plan.ops, [
-      {
-        kind: 'create-and-attach',
-        draftId: 'draft:2',
-        name: 'N',
-        value_type: 'date',
-        description: 'дата поставки',
-        required: false,
-      },
-    ]);
-    assert.equal(plan.needsReorder, true);
-  });
-
   it('toggling `required` on an existing binding becomes a `set-role` op with only the changed field', () => {
     const original = [def('p1', 'A', { required: false })];
     const draft: DraftProperty[] = [
@@ -238,7 +195,7 @@ describe('planPropertyDiff', () => {
     assert.equal(plan.needsReorder, true);
   });
 
-  it('a full mixed batch: unbind + create-and-attach + set-role + reorder', () => {
+  it('a full mixed batch: unbind + attach + set-role + reorder', () => {
     const original = [def('p1', 'A'), def('p2', 'B'), def('p3', 'C')];
     const draft: DraftProperty[] = [
       // p3 moved first; required unchanged → no op.
@@ -248,28 +205,28 @@ describe('planPropertyDiff', () => {
         ...draftPropertiesFrom(original).find((d) => d.id === 'p1')!,
         required: true,
       },
-      // p2 dropped; new registry property created+attached third.
-      createAndAttach('draft:9', 'D', 'bool'),
+      // p2 dropped; an existing registry property attached third.
+      attach('draft:9', 'reg-d', { key: 'D', value_type: 'bool' }),
     ];
     const plan = planPropertyDiff(original, draft, ['p2']);
     assert.deepEqual(plan.ops, [
       { kind: 'unbind', id: 'p2' },
-      { kind: 'create-and-attach', draftId: 'draft:9', name: 'D', value_type: 'bool', description: null, required: false },
+      { kind: 'attach', draftId: 'draft:9', property_id: 'reg-d', required: false },
       { kind: 'set-role', id: 'p1', required: true },
     ]);
     assert.equal(plan.needsReorder, true);
   });
 
-  it('a brand-new draft is all attaches/creates — nothing is treated as a set-role', () => {
+  it('a brand-new draft is all attaches — nothing is treated as a set-role', () => {
     const original: PropertyDefinition[] = [];
     const draft: DraftProperty[] = [
       attach('draft:1', 'reg-1', { key: 'X' }),
-      createAndAttach('draft:2', 'Y', 'number'),
+      attach('draft:2', 'reg-y', { key: 'Y', value_type: 'number' }),
     ];
     const plan = planPropertyDiff(original, draft, []);
     assert.deepEqual(plan.ops, [
       { kind: 'attach', draftId: 'draft:1', property_id: 'reg-1', required: false },
-      { kind: 'create-and-attach', draftId: 'draft:2', name: 'Y', value_type: 'number', description: null, required: false },
+      { kind: 'attach', draftId: 'draft:2', property_id: 'reg-y', required: false },
     ]);
     assert.equal(plan.needsReorder, true);
   });
@@ -279,23 +236,5 @@ describe('opToAttachInput', () => {
   it('serialises an `attach` op to `{ mode: "attach", property_id, required }`', () => {
     const out = opToAttachInput({ kind: 'attach', draftId: 'd', property_id: 'reg-1', required: true });
     assert.deepEqual(out, { mode: 'attach', property_id: 'reg-1', required: true });
-  });
-
-  it('serialises a `create-and-attach` op to `{ mode: "create", key, value_type, description, required }`', () => {
-    const out = opToAttachInput({
-      kind: 'create-and-attach',
-      draftId: 'd',
-      name: 'N',
-      value_type: 'date',
-      description: 'дата поставки',
-      required: false,
-    });
-    assert.deepEqual(out, {
-      mode: 'create',
-      key: 'N',
-      value_type: 'date',
-      description: 'дата поставки',
-      required: false,
-    });
   });
 });
