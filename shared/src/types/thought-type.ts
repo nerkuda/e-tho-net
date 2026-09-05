@@ -176,7 +176,9 @@ export interface PropertyConfig {
   [key: string]: unknown;
 }
 
-/** Input accepted by `POST …/types/{id}/properties` (03-server-api.md §8). */
+/** Input accepted by `POST …/types/{id}/properties` (03-server-api.md §8):
+ *  create a brand-new registry property in this layer and attach it. The
+ *  server's `property_id` form lives in {@link AttachPropertyInput}. */
 export interface PropertyDefinitionInput {
   key: string;
   value_type: PropertyValueType;
@@ -185,6 +187,31 @@ export interface PropertyDefinitionInput {
   position?: number;
   description?: string | null;
 }
+
+/**
+ * Discriminated union of the two `POST …/types/{id}/properties` shapes
+ * (0.6.5, task 75404197):
+ *  - `attach` — bind an existing registry property by id;
+ *  - `create` — create the registry property in this layer and bind it.
+ *
+ * `required`/`position` are part of the binding and apply to both shapes.
+ */
+export type AttachPropertyInput =
+  | {
+      mode: 'attach';
+      property_id: string;
+      required?: boolean;
+      position?: number;
+    }
+  | {
+      mode: 'create';
+      key: string;
+      value_type: PropertyValueType;
+      config?: PropertyConfig | null;
+      description?: string | null;
+      required?: boolean;
+      position?: number;
+    };
 
 /** Input accepted by `PATCH …/types/{id}/properties/{prop_id}` (03-server-api.md §8). */
 export interface PropertyDefinitionUpdateInput {

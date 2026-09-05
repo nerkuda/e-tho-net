@@ -14,31 +14,39 @@
  *    editor, each row has a delete button (the server rejects deleting the
  *    root or a type that still has subordinate types). Deleting a used type
  *    is forced: thoughts/links keep existing with `type_id = null`, and the
- *    type's property definitions (with all stored values) are dropped
- *    server-side.
+ *    type's property bindings are dropped server-side (stored values become
+ *    values-outside-type).
  *
  * Type editors (task «Улучшить диалог редактирования типов мыслей и связей»)
  * are one and the same staged form for a NEW and an EXISTING type: icon,
  * colours/font (or line style), parent, description, comment template and
- * the own property definitions are editable right away, nothing is inert,
- * and nothing touches the server until «Применить и закрыть» is pressed.
+ * the own property bindings are editable right away, nothing is inert, and
+ * nothing touches the server until «Применить и закрыть» is pressed.
  * «Отмена» (also Esc/×/backdrop) closes the dialog discarding the whole
  * draft. Reparenting is validated as before: the parent picker filters
  * cycles/depth client-side and the server rejects a type in use, cycles and
  * nesting past 4 levels.
  *
- * Property sections (L21):
- *  - «Свойства типа» — the type's own definitions, staged in a local draft
- *    (`type-property-draft.ts`): key, value type, default value, reorder and
- *    delete all happen locally and are reconciled with the server by the
- *    editor's «Применить и закрыть» (delete ops first, then create/update,
- *    one trailing reorder).
- *  - «Унаследованные свойства» — read-only definitions inherited from the
- *    ancestors; only the default value may be overridden per type (and the
- *    override can be reset back to the ancestor's default). The override
- *    dialogs keep their own explicit «Применить» and write immediately. For
- *    a type that is still being created the section previews what the picked
- *    parent will pass down.
+ * Property sections (since 0.6.5):
+ *  - «Свойства типа» — the type's own BINDINGS to the network property
+ *    registry, staged in a local draft (`type-property-draft.ts`): the
+ *    editor attaches existing registry properties or creates new ones, and
+ *    on existing bindings it toggles `required` and reorders ▲/▼. All edits
+ *    are local until the editor's «Применить и закрыть» reconciles them
+ *    with the server (unbinds first, then attaches/creates, then `set-role`
+ *    patches, one trailing reorder). The property's NATURE (name, value
+ *    type, config, description) is NOT editable here — it is shared by every
+ *    type that binds it and lives in the registry; the table's «✎» button
+ *    jumps to the property manager dialog with a banner warning about the
+ *    network-wide impact.
+ *  - «Унаследованные свойства» — read-only bindings inherited from the
+ *    ancestors; only the default value and description may be overridden per
+ *    type (and the override can be reset back to the ancestor's value). The
+ *    override dialogs keep their own explicit «Применить» and write
+ *    immediately. `required` is NOT editable on inherited bindings — it
+ *    belongs to the type that attached the binding, the inherited view is a
+ *    preview of the effective value. For a type that is still being created
+ *    the section previews what the picked parent will pass down.
  *
  * Link-type editor: forward/reverse names, ⚙ (line-style dialog, type mode —
  * a reset inherits the parent's style since L21), description and the same
@@ -49,7 +57,6 @@ import type {
   EffectiveTypeProperty,
   IconKind,
   LinkType,
-  PropertyConfig,
   PropertyDefinition,
   PropertyValueType,
   ThoughtType,
@@ -66,7 +73,6 @@ import { confirmDialog, errorDialog, showDialog, type DialogButton } from '../li
 import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
-import { notice } from '../lib/notice.js';
 import {
   MAX_TYPE_DEPTH,
   aggregateTypeCounts,
@@ -86,10 +92,14 @@ import { createTypeCombobox } from '../lib/type-combobox.js';
 import {
   draftPropertiesFrom,
   nextDraftPropertyId,
+  opToAttachInput,
   planPropertyDiff,
   type DraftProperty,
-  type PropertyDiffOp,
 } from '../lib/type-property-draft.js';
+import {
+  openPropertyManagerEditor,
+  type RegistryRow,
+} from './property-manager.js';
 import { store } from '../state.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
@@ -728,9 +738,6 @@ export function showThoughtTypeEditor(
     const description = descArea.value.trim();
     const nextTemplate = templateMd.trim() === '' ? null : templateMd;
     try {
-      // Declining the value-type conversion must leave the whole apply a
-      // no-op — ask BEFORE the type itself is created/patched.
-      if (!(await props.confirmPendingRetypes())) return;
       if (current === null) {
         // New type: one create carries every staged field at once. The
         // server treats `font_*` / `fg_color` / `bg_color` / `icon` as
@@ -849,14 +856,7 @@ interface StagedPropertySection {
    *  changed (existing types keep their own inherited list). */
   refreshPreview(): void;
   /**
-   * Asks the value-type conversion confirmation when the draft retypes any
-   * existing property (the server rewrites stored values on apply). Resolves
-   * `false` when the user declined — call it BEFORE applying the type itself,
-   * so a declined conversion leaves the whole apply a no-op.
-   */
-  confirmPendingRetypes(): Promise<boolean>;
-  /**
-   * Sends the staged own-property changes of the draft to `typeId`; resolves
+   * Sends the staged own-binding changes of the draft to `typeId`; resolves
    * `false` — with the error already rendered — when the server rejected
    * something. The snapshot is updated after every applied op, so a retry
    * re-diffs only what is still missing.
@@ -865,18 +865,33 @@ interface StagedPropertySection {
 }
 
 /**
- * Builds the staged property sections of a type editor (L6/L21, task
- * «Улучшить диалог редактирования типов мыслей и связей»): the type's own
- * definitions are edited in a LOCAL draft (`DraftProperty[]` — add, edit,
- * reorder, delete all happen without a network round-trip) and reconciled
- * with the server only by {@link StagedPropertySection.applyChanges}, called
- * from the editor's «Применить и закрыть». The inherited section stays
- * read-only with its explicit per-dialog default-override buttons applied
- * immediately (as before — the small dialog owns its own «Применить»).
+ * Builds the staged property sections of a type editor (0.6.5, task
+ * «Клиент: редактор типа подключает свойство из справочника»).
  *
- * For a NEW type (`typeId = null`) the own draft starts empty and the
- * inherited section is a live preview of whatever the picked parent will
- * pass down ({@link opts.previewParentId}, re-read on reparent).
+ * The own-bindings table is a list of {@link DraftProperty} rows. The user
+ * adds bindings via «Добавить свойство» — a dialog over the network
+ * property registry (search, pick an existing one OR create a brand-new one
+ * and attach in the same server-side transaction). The role of an existing
+ * binding is edited locally: `required` toggle and ▲/▼ reorder. The
+ * property's NATURE (name, value type, config, description) is not editable
+ * here — the table's «✎» button opens the property manager dialog with a
+ * banner that flags the network-wide impact. «✕» unbinds with a
+ * confirmation that values stay as values-outside-type.
+ *
+ * Reconciliation with the server happens in
+ * {@link StagedPropertySection.applyChanges} on the editor's
+ * «Применить и закрыть»:
+ *   1. unbind removed bindings,
+ *   2. attach / create-and-attach new ones,
+ *   3. set-role patches for `required` toggles,
+ *   4. one trailing reorder.
+ *
+ * The inherited section is read-only with its explicit per-dialog
+ * default-override buttons applied immediately (unchanged behaviour — the
+ * small dialog owns its own «Применить»). For a NEW type
+ * (`typeId = null`) the own draft starts empty and the inherited section
+ * is a live preview of whatever the picked parent will pass down
+ * ({@link opts.previewParentId}, re-read on reparent).
  */
 function buildStagedPropertySection(opts: {
   networkId: string;
@@ -900,44 +915,56 @@ function buildStagedPropertySection(opts: {
   label.style.margin = '8px 0 2px';
   box.append(label, tableWrap, errorLine);
   box.append(
-    button('Добавить свойство', () => showPropertyDialog(null), 'btn small', 'Новое свойство'),
+    button(
+      'Добавить свойство',
+      () => void openAttachPropertyDialog(),
+      'btn small',
+      'Подключить свойство из справочника сети',
+    ),
   );
 
-  /** Server-side snapshot of the type's OWN definitions (kept in sync after
+  /** Server-side snapshot of the type's OWN bindings (kept in sync after
    *  every applied op — the base the next diff is computed against). */
   let originalOwn: PropertyDefinition[] = [];
   /** The staged draft rows, in the drafted order. */
   let ownDraft: DraftProperty[] = [];
-  /** Own definitions removed from the draft during this session. */
+  /** Own bindings removed from the draft during this session. */
   let deletedIds: string[] = [];
-  /** Inherited definitions shown below the own table (an existing type: its
+  /** Inherited bindings shown below the own table (an existing type: its
    *  own inherited set; a new type: the picked parent's whole set). */
   let inherited: EffectiveTypeProperty[] = [];
   /** Whether the user has staged any own-row change — after that, reloads
    *  must not re-seed the draft from the server snapshot. */
   let draftTouched = false;
+  /** Snapshot of the registry rows (id → RegistryRow) used by the attach
+   *  dialog so the «Создать и подключить» path can prefill from a typed
+   *  query without a second registry round-trip. */
+  let registryCache: Map<string, RegistryRow> = new Map();
 
-  /** Opens the staged property dialog for one own row (null = a new one). */
-  function showPropertyDialog(row: DraftProperty | null): void {
-    openPropertyDialog({
-      row,
-      onAppend: (added) => {
-        ownDraft = [...ownDraft, added];
-      },
-      onDeleteExisting:
-        row !== null && !row.isNew
-          ? () => {
-              deletedIds = [...deletedIds, row.id];
-              ownDraft = ownDraft.filter((d) => d.id !== row.id);
-              draftTouched = true;
-              render();
-            }
-          : null,
-      onDone: () => {
-        draftTouched = true;
-        render();
-      },
+  /**
+   * «Добавить свойство» dialog: pick an existing registry property OR create
+   * a brand-new one and attach it. Returns the staged row the caller appends
+   * to {@link ownDraft} (or `null` when the user cancelled).
+   */
+  async function openAttachPropertyDialog(): Promise<void> {
+    const picked = await openAttachDialog({
+      networkId,
+      types: pickTypeList(),
+      existingPropertyIds: new Set(ownDraft.map((d) => d.property_id)),
     });
+    if (picked === null) return;
+    ownDraft = [...ownDraft, picked];
+    draftTouched = true;
+    render();
+  }
+
+  /** The list of types that the «already bound to a descendant» warning
+   *  walks through when the user picks a property the server will dedupe
+   *  from the subtree. `null` while the type is being created — the editor
+   *  has no id yet, so the warning would be empty anyway. */
+  function pickTypeList(): ThoughtType[] | LinkType[] | null {
+    if (typeId === null) return null;
+    return ownerType === 'thought_type' ? store.state.thoughtTypes : store.state.linkTypes;
   }
 
   /** Opens the default-override dialog of an inherited property (L21) —
@@ -991,11 +1018,31 @@ function buildStagedPropertySection(opts: {
     render();
   }
 
-  /** Stages the removal of one own row (persisted by «Применить и закрыть»). */
-  async function remove(row: DraftProperty): Promise<void> {
+  /** Toggles the `required` flag of a draft row (applied on «Применить и
+   *  закрыть» — the table does not write the server mid-edit). */
+  function setRequired(rowId: string, required: boolean): void {
+    const row = ownDraft.find((d) => d.id === rowId);
+    if (row === undefined || row.required === required) return;
+    row.required = required;
+    draftTouched = true;
+    render();
+  }
+
+  /** Opens the property manager dialog on the registry row that backs this
+   *  binding. The dialog itself warns about the network-wide impact. */
+  function editNature(row: DraftProperty): void {
+    const reg = registryCache.get(row.property_id);
+    if (reg === undefined) return;
+    openPropertyManagerEditor(reg, () => void reload());
+  }
+
+  /** Stages the unbinding of one own row (persisted by «Применить и
+   *  закрыть»). Values are NOT deleted — they become values-outside-type. */
+  async function unbind(row: DraftProperty): Promise<void> {
     const ok = await confirmDialog(
-      'Удалить свойство',
-      `Удалить свойство «${row.key}»? Значения этого свойства у всех элементов будут удалены.`,
+      'Отключить свойство',
+      `Отключить свойство «${row.key}» от типа? Значения останутся у мыслей и связей ` +
+        'и будут показаны в группе «Свойства вне типа».',
       true,
     );
     if (!ok) return;
@@ -1015,7 +1062,7 @@ function buildStagedPropertySection(opts: {
         'muted',
         typeId === null
           ? 'Унаследованные свойства (передадутся от выбранного родителя)'
-          : 'Унаследованные свойства (тип значения не меняется; переопределяются значение по умолчанию и описание)',
+          : 'Унаследованные свойства (тип значения не меняется; переопределяются значение по умолчанию и описание; обязательность задаётся на типе, который подключил свойство)',
       );
       inhLabel.style.margin = '0 0 2px';
       tableWrap.append(inhLabel);
@@ -1091,7 +1138,7 @@ function buildStagedPropertySection(opts: {
     headRow.append(
       el('th', undefined, 'Имя'),
       el('th', undefined, 'Тип'),
-      el('th', undefined, 'По умолчанию'),
+      el('th', undefined, 'Обязательное'),
       el('th'),
     );
     head.append(headRow);
@@ -1106,20 +1153,29 @@ function buildStagedPropertySection(opts: {
       }
       tr.append(nameCell);
       tr.append(el('td', 'muted', VALUE_TYPE_LABELS[row.value_type]));
-      tr.append(el('td', 'muted', formatDefault(row.config?.default_value ?? null)));
+      const requiredCell = el('td');
+      const requiredCheck = el('input') as HTMLInputElement;
+      requiredCheck.type = 'checkbox';
+      requiredCheck.checked = row.required;
+      requiredCheck.addEventListener('change', () => {
+        setRequired(row.id, requiredCheck.checked);
+      });
+      requiredCell.append(requiredCheck);
+      tr.append(requiredCell);
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
       actions.append(
         button('▲', () => move(row.id, -1), 'btn small', 'Выше'),
         button('▼', () => move(row.id, 1), 'btn small', 'Ниже'),
-        button('✕', () => void remove(row), 'btn small', 'Удалить свойство'),
+        button(
+          '✎',
+          () => editNature(row),
+          'btn small',
+          'Править природу свойства (имя, тип значения, описание) — действует во всех типах сразу',
+        ),
+        button('✕', () => void unbind(row), 'btn small', 'Отключить свойство от типа'),
       );
       tr.append(actions);
-      // Clicking a row (outside its action buttons) edits the property.
-      tr.addEventListener('click', (event) => {
-        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
-        showPropertyDialog(row);
-      });
       tbody.append(tr);
     }
     table.append(tbody);
@@ -1140,7 +1196,8 @@ function buildStagedPropertySection(opts: {
     }
   }
 
-  /** Loads (or reloads) the definitions from the server. */
+  /** Loads (or reloads) the bindings from the server, plus the registry
+   *  snapshot the «✎» button uses to jump into the property manager. */
   let everMounted = false;
   async function reload(): Promise<void> {
     // The table is built BEFORE its dialog mounts it, so the first reload runs
@@ -1155,7 +1212,15 @@ function buildStagedPropertySection(opts: {
       return;
     }
     try {
-      const defs = await etn.types.listTypeProperties(networkId, ownerType, sourceId);
+      const [defs, registryRows] = await Promise.all([
+        etn.types.listTypeProperties(networkId, ownerType, sourceId),
+        // The registry powers the «✎» button (jump into the property manager);
+        // it is also the source of truth for the attach dialog's «Создать и
+        // подключить» suggestion when the user types a name the registry
+        // already has. Cheap call (flat list).
+        etn.propertyRegistry.list(networkId),
+      ]);
+      registryCache = new Map(registryRows.map((row) => [row.id, row]));
       if (typeId !== null) {
         // An existing type: own rows seed the draft (once), inherited shown.
         originalOwn = defs.filter((d) => !d.inherited);
@@ -1175,63 +1240,50 @@ function buildStagedPropertySection(opts: {
     render();
   }
 
-  /** Staged update ops that retype an existing property. */
-  function pendingRetypes(): Extract<PropertyDiffOp, { kind: 'update' }>[] {
-    const plan = planPropertyDiff(originalOwn, ownDraft, deletedIds);
-    return plan.ops.filter(
-      (op): op is Extract<PropertyDiffOp, { kind: 'update' }> =>
-        op.kind === 'update' && op.changes.value_type !== undefined,
-    );
-  }
-
-  /** See {@link StagedPropertySection.confirmPendingRetypes}. */
-  async function confirmPendingRetypes(): Promise<boolean> {
-    const retyped = pendingRetypes();
-    if (retyped.length === 0) return true;
-    const keys = retyped
-      .map((op) => originalOwn.find((d) => d.id === op.id)?.key ?? '?')
-      .join(', ');
-    const ok = await confirmDialog(
-      'Сменить тип значения',
-      `Сменить тип значения свойств (${keys})? Значения этих свойств во всех ` +
-        'элементах будут преобразованы к новому типу; несовместимые — очищены.',
-      true,
-    );
-    if (!ok) return false;
-    notice('Ждите: выполняется обработка значений…');
-    return true;
-  }
-
   /**
-   * Applies the staged own-property changes to `typeId` (the created or the
+   * Applies the staged own-binding changes to `targetId` (the created or
    * existing type). See {@link StagedPropertySection.applyChanges}. The
-   * value-type confirmation must already have happened
-   * ({@link confirmPendingRetypes}) — the type itself is applied before this
-   * runs, so asking here would leave a half-applied session on a decline.
+   * order matches the planner: unbinds first (so a freed binding never
+   * collides with an attach of the same property), then
+   * attaches/creates, then `set-role` patches, one trailing reorder.
    */
   async function applyChanges(targetId: string): Promise<boolean> {
     const plan = planPropertyDiff(originalOwn, ownDraft, deletedIds);
-    let retypeApplied = false;
     for (const op of plan.ops) {
       try {
-        if (op.kind === 'delete') {
+        if (op.kind === 'unbind') {
           await etn.types.removeTypeProperty(networkId, ownerType, targetId, op.id);
           originalOwn = originalOwn.filter((d) => d.id !== op.id);
-        } else if (op.kind === 'create') {
-          const created = await etn.types.createTypeProperty(networkId, ownerType, targetId, op.input);
+          ownDraft = ownDraft.filter((d) => d.id !== op.id);
+        } else if (op.kind === 'attach' || op.kind === 'create-and-attach') {
+          const created = await etn.types.createTypeProperty(
+            networkId,
+            ownerType,
+            targetId,
+            opToAttachInput(op),
+          );
           // Bind the placeholder id to the real server id, so a retry after a
           // later failure does not try to create the same row twice.
           const row = ownDraft.find((d) => d.id === op.draftId);
           if (row !== undefined) {
             row.id = created.id;
             row.isNew = false;
+            // The server returns the resolved nature in the binding payload —
+            // refresh the immutable snapshot so the table keeps showing what
+            // the registry now holds.
+            row.property_id = created.property_id;
+            row.key = created.key;
+            row.value_type = created.value_type;
+            row.config = created.config;
+            row.description = created.description;
           }
           originalOwn = [...originalOwn, created];
         } else {
-          await etn.types.updateTypeProperty(networkId, ownerType, targetId, op.id, op.changes);
-          if (op.changes.value_type !== undefined) retypeApplied = true;
+          await etn.types.updateTypeProperty(networkId, ownerType, targetId, op.id, {
+            required: op.required,
+          });
           originalOwn = originalOwn.map((d) =>
-            d.id === op.id ? ({ ...d, ...op.changes } as PropertyDefinition) : d,
+            d.id === op.id ? ({ ...d, required: op.required } as PropertyDefinition) : d,
           );
         }
       } catch (err) {
@@ -1253,7 +1305,6 @@ function buildStagedPropertySection(opts: {
         return false;
       }
     }
-    if (retypeApplied) notice('Обработка выполнена.');
     deletedIds = [];
     errorLine.textContent = '';
     render();
@@ -1269,9 +1320,336 @@ function buildStagedPropertySection(opts: {
     refreshPreview: (): void => {
       if (typeId === null) void reload();
     },
-    confirmPendingRetypes,
     applyChanges,
   };
+}
+
+/**
+ * Result of the «Добавить свойство» dialog: a new draft row the caller
+ * appends to its own-bindings list (or `null` when the user cancelled).
+ * The row is fully resolved — the registry id (`property_id`) and the
+ * immutable nature snapshot are both known — so the table can render it
+ * without a second registry round-trip.
+ */
+type AttachDialogResult = DraftProperty;
+
+/**
+ * «Добавить свойство» dialog (0.6.5, task
+ * «Клиент: редактор типа подключает свойство из справочника»).
+ *
+ *   * Search box over the network property registry (`etn.propertyRegistry
+ *     .list`) — every row shows the property name, value type and
+ *     `types_count` («используется в N типах»);
+ *   * Click on a row → attach the existing registry property, after asking
+ *     for confirmation when the property is already bound to a descendant of
+ *     the edited type (the server drops the redundant binding, the user
+ *     must agree);
+ *   * Inline create form (name + value type + description) — submits as
+ *     `POST /types/{id}/properties { mode: 'create', … }` so the registry
+ *     row AND the binding land in one transaction;
+ *   * When the typed name collides with an existing registry row, the
+ *     existing one is highlighted and the primary button reads
+ *     «Подключить существующее» — a `409 DUPLICATE` on the server would be
+ *     a worse outcome than offering the safe path up front.
+ *
+ * The dialog rejects properties already in the editor's own draft (double
+ * binding of the same registry id in one session is never useful).
+ */
+async function openAttachDialog(opts: {
+  networkId: string;
+  /** Catalogues used by the «already bound to a descendant» warning. `null`
+   *  suppresses the check (the editor is creating a new type that has no
+   *  descendants yet). */
+  types: readonly ThoughtType[] | readonly LinkType[] | null;
+  /** Property ids the editor has already attached in this session — must not
+   *  appear as choices. */
+  existingPropertyIds: ReadonlySet<string>;
+}): Promise<AttachDialogResult | null> {
+  const { networkId, types, existingPropertyIds } = opts;
+  let registryRows: RegistryRow[];
+  try {
+    registryRows = await etn.propertyRegistry.list(networkId);
+  } catch (err) {
+    errorDialog('Добавить свойство', err);
+    return null;
+  }
+
+  // The dialog stays in the file-scope so the helper closures (search,
+  // create form) can share its state. Resolves with the staged row or `null`.
+  return new Promise((resolve) => {
+    const errorLine = span('', 'error-text');
+    const searchInput = el('input', 'text-input') as HTMLInputElement;
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Поиск по имени или описанию…';
+
+    const resultsWrap = div('admin-table-wrap');
+    resultsWrap.style.maxHeight = '200px';
+    resultsWrap.append(el('span', 'muted', 'Загрузка…'));
+
+    const pickState = {
+      /** Index of the highlighted row in the visible list (null = create
+       *  form is highlighted instead). */
+      selectedRowIndex: 0,
+      /** The visible rows after the search filter. */
+      visible: [] as RegistryRow[],
+    };
+
+    /** Re-renders the result list against the current search query. */
+    function rerenderResults(): void {
+      const query = searchInput.value.trim().toLowerCase();
+      const fragments = query.split(/\s+/).filter((s) => s.length > 0);
+      const filtered = registryRows.filter((row) => {
+        if (existingPropertyIds.has(row.id)) return false;
+        const haystack = `${row.name.toLowerCase()}\n${(row.description ?? '').toLowerCase()}`;
+        return fragments.every((f) => haystack.includes(f));
+      });
+      filtered.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+      pickState.visible = filtered;
+      pickState.selectedRowIndex = Math.min(
+        pickState.selectedRowIndex,
+        Math.max(0, filtered.length - 1),
+      );
+      if (filtered.length === 0) {
+        resultsWrap.replaceChildren(el('p', 'muted', 'Ничего не найдено.'));
+        return;
+      }
+      const table = el('table', 'table-list');
+      const tbody = el('tbody');
+      filtered.forEach((row, idx) => {
+        const tr = el('tr');
+        if (idx === pickState.selectedRowIndex) tr.classList.add('row-selected');
+        const nameCell = el('td', undefined, row.name);
+        nameCell.style.whiteSpace = 'nowrap';
+        if (row.description !== null) setTooltip(nameCell, row.description);
+        const typeCell = el('td', 'muted', VALUE_TYPE_LABELS[row.value_type]);
+        const countCell = el('td', 'muted', `в ${row.types_count} типах`);
+        countCell.style.textAlign = 'right';
+        tr.append(nameCell, typeCell, countCell);
+        tr.addEventListener('click', () => {
+          pickState.selectedRowIndex = idx;
+          rerenderResults();
+        });
+        tbody.append(tr);
+      });
+      table.append(tbody);
+      resultsWrap.replaceChildren(table);
+    }
+    searchInput.addEventListener('input', () => {
+      pickState.selectedRowIndex = 0;
+      rerenderResults();
+    });
+    // Keyboard navigation: ↑/↓ moves the highlight, Enter picks it.
+    searchInput.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        pickState.selectedRowIndex = Math.min(
+          pickState.visible.length - 1,
+          pickState.selectedRowIndex + 1,
+        );
+        rerenderResults();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        pickState.selectedRowIndex = Math.max(0, pickState.selectedRowIndex - 1);
+        rerenderResults();
+      }
+    });
+
+    // ---- Inline create form -------------------------------------------
+    const newNameInput = el('input', 'text-input') as HTMLInputElement;
+    newNameInput.type = 'text';
+    newNameInput.maxLength = 200;
+    newNameInput.placeholder = 'Имя нового свойства';
+    const newTypeSelect = el('select', 'select-input') as HTMLSelectElement;
+    for (const [value, label] of Object.entries(VALUE_TYPE_LABELS)) {
+      const option = el('option', undefined, label) as HTMLOptionElement;
+      option.value = value;
+      newTypeSelect.append(option);
+    }
+    newTypeSelect.value = 'text';
+    const newDescArea = el('textarea', 'textarea-input') as HTMLTextAreaElement;
+    newDescArea.rows = 2;
+    newDescArea.placeholder = 'Описание (необязательно)';
+
+    const createForm = div('form-stack');
+    const createLabel = el('p', 'muted', 'Создать новое свойство в справочнике:');
+    createLabel.style.margin = '12px 0 2px';
+    createForm.append(createLabel, newNameInput, newTypeSelect, newDescArea);
+
+    /** The registry row whose name collides with the current new-name input
+     *  (or `null` when the name is free). Surfaced as a hint under the
+     *  input. */
+    let duplicateMatch: RegistryRow | null = null;
+    const dupHint = el('p', 'muted', '');
+    dupHint.style.margin = '2px 0 0';
+    createForm.append(dupHint);
+
+    function refreshDuplicateHint(): void {
+      const typed = newNameInput.value.trim().toLowerCase();
+      if (typed === '') {
+        duplicateMatch = null;
+        dupHint.textContent = '';
+        primaryBtn.textContent = 'Создать и подключить';
+        primaryBtn.dataset['mode'] = 'create';
+        return;
+      }
+      duplicateMatch =
+        registryRows.find((r) => r.name.trim().toLowerCase() === typed) ?? null;
+      if (duplicateMatch !== null) {
+        dupHint.textContent = `Свойство с таким именем уже есть — нажмите «Подключить существующее».`;
+        primaryBtn.textContent = 'Подключить существующее';
+        primaryBtn.dataset['mode'] = 'attach-existing';
+      } else {
+        dupHint.textContent = '';
+        primaryBtn.textContent = 'Создать и подключить';
+        primaryBtn.dataset['mode'] = 'create';
+      }
+    }
+    newNameInput.addEventListener('input', refreshDuplicateHint);
+
+    // ---- Body assembly ------------------------------------------------
+    const searchLabel = el('p', 'muted', 'Выбрать из справочника:');
+    searchLabel.style.margin = '0 0 2px';
+    const body = div('form-stack');
+    body.append(searchLabel, searchInput, resultsWrap, createForm, errorLine);
+    rerenderResults();
+
+    let primaryBtn: HTMLButtonElement;
+    const dialog = showDialog({
+      title: 'Добавить свойство',
+      body,
+      width: 520,
+      buttons: [
+        { label: 'Отмена' },
+        {
+          label: 'Создать и подключить',
+          primary: true,
+          keepOpen: true,
+          ref: (btn) => {
+            primaryBtn = btn;
+          },
+          onClick: (close) => void commit(close),
+        },
+      ],
+      onMount: () => searchInput.focus(),
+    });
+
+    async function commit(close: () => void): Promise<void> {
+      // Branch 1: the user typed a colliding name → attach the existing row.
+      // Branch 2: pick the highlighted registry row → attach it.
+      // Branch 3: typed a free name → create+attach.
+      const mode = primaryBtn.dataset['mode'];
+      let target: RegistryRow | null = null;
+      let newRow:
+        | { name: string; value_type: PropertyValueType; description: string | null }
+        | null = null;
+      if (mode === 'attach-existing' && duplicateMatch !== null) {
+        target = duplicateMatch;
+      } else if (pickState.visible.length > 0) {
+        target = pickState.visible[pickState.selectedRowIndex] ?? null;
+      }
+      if (target === null) {
+        const name = newNameInput.value.trim();
+        if (name === '') {
+          errorLine.textContent = 'Имя нового свойства обязательно.';
+          return;
+        }
+        newRow = {
+          name,
+          value_type: newTypeSelect.value as PropertyValueType,
+          description: newDescArea.value.trim() === '' ? null : newDescArea.value.trim(),
+        };
+      } else {
+        // The server drops redundant bindings in the subtree when a parent
+        // attaches a property a descendant already carries (the user has to
+        // OK that — it is invisible until the request lands, so warn up
+        // front).
+        const warning = await warnDescendantBindings(target, types);
+        if (warning !== null) {
+          const ok = await confirmDialog(
+            'Подключить свойство',
+            warning,
+            true,
+          );
+          if (!ok) return;
+        }
+        close();
+        resolve(attachDraftFromExisting(target));
+        return;
+      }
+      close();
+      resolve({
+        id: nextDraftPropertyId(),
+        isNew: true,
+        property_id: '',
+        required: false,
+        key: newRow.name,
+        value_type: newRow.value_type,
+        config: null,
+        description: newRow.description,
+        createInRegistry: true,
+      });
+    }
+
+    // Stash the dialog handle so the helper closure above can read `mode`.
+    // The actual handler is `commit` above; we just need to give
+    // `refreshDuplicateHint` access to `primaryBtn` before the user clicks
+    // it — done by the `ref` callback on the showDialog button.
+    void dialog;
+    refreshDuplicateHint();
+  });
+}
+
+/** Builds the draft row for «attach existing» — `property_id` set,
+ *  `createInRegistry: false`, nature snapshot copied from the registry row. */
+function attachDraftFromExisting(row: RegistryRow): DraftProperty {
+  return {
+    id: nextDraftPropertyId(),
+    isNew: true,
+    property_id: row.id,
+    required: false,
+    key: row.name,
+    value_type: row.value_type,
+    config: row.config,
+    description: row.description,
+    createInRegistry: false,
+  };
+}
+
+/**
+ * Returns a human-readable warning when attaching `row` could drop a
+ * redundant binding in the edited type's subtree, or `null` when there is
+ * nothing to warn about.
+ *
+ * The server's subtree dedupe is automatic (0.6.5, 03-server-api.md §8):
+ * attaching a property a descendant already carries is allowed, the
+ * descendant's redundant binding is dropped in the same transaction, and
+ * the stored values never change. The user just has to know it happens.
+ *
+ * We surface the warning from the registry's `types_count` counter rather
+ * than a per-attach `usage` lookup: the property manager dialog already
+ * renders the full list, the attach dialog is a hot path, and the warning
+ * is the same shape whether one or ten descendants carry the property.
+ */
+async function warnDescendantBindings(
+  row: RegistryRow,
+  types: readonly ThoughtType[] | readonly LinkType[] | null,
+): Promise<string | null> {
+  // `types === null` ⇒ editing a brand-new type, no descendants to dedupe.
+  if (types === null) return null;
+  if (row.types_count === 0) return null;
+  return (
+    `Это свойство уже подключено к ${row.types_count} ${pluralType(row.types_count)}. ` +
+    'Подключение к типу может снять избыточные привязки у потомков этого типа; ' +
+    'значения при этом не меняются.'
+  );
+}
+
+function pluralType(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'типу';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'типам';
+  return 'типов';
 }
 
 /** Human-readable default value for a table cell. */
@@ -1284,7 +1662,8 @@ function formatDefault(value: unknown): string {
 /**
  * Builds an input for a "default value" field matching a value type, reading
  * its current value into `read()`. Thought-ref defaults are not supported — a
- * default target makes no sense across thoughts.
+ * default target makes no sense across thoughts. Shared with the inherited
+ * default-override dialog (L21).
  */
 function defaultInputFor(
   valueType: PropertyValueType,
@@ -1498,329 +1877,6 @@ function openDescriptionOverrideDialog(opts: {
         : []),
       { label: 'Применить', primary: true, keepOpen: true, onClick: (close) => void apply(close) },
     ],
-  });
-}
-
-/**
- * The staged property editor dialog (L6, task «Улучшить диалог редактирования
- * типов мыслей и связей»): edits ONE {@link DraftProperty} row of the type
- * editor's local draft — nothing touches the server from here; the row
- * (added, changed or staged-deleted) is reconciled by the editor's «Применить
- * и закрыть».
- *
- * Buttons: a new row — «Добавить»/«Отменить»; an existing (persisted) one —
- * «Применить»/«Удалить»/«Отменить», where «Удалить» only STAGES the removal.
- * The value-type conversion confirmation moved to apply time — that is where
- * the server rewrites the stored values.
- */
-function openPropertyDialog(opts: {
-  row: DraftProperty | null;
-  /** Appends a brand-new staged row to the section's draft. */
-  onAppend: (row: DraftProperty) => void;
-  /** For an existing (persisted) row: stages its deletion. */
-  onDeleteExisting: (() => void) | null;
-  /** Fired after the draft row was added/changed/staged-deleted. */
-  onDone: () => void;
-}): void {
-  const { row, onAppend, onDeleteExisting, onDone } = opts;
-  const isNew = row === null;
-  const errorLine = span('', 'error-text');
-
-  const keyInput = el('input', 'text-input');
-  keyInput.type = 'text';
-  keyInput.value = row?.key ?? '';
-  keyInput.maxLength = 200;
-  keyInput.placeholder = 'Заголовок свойства (обязательно)';
-
-  // Property description (task «Добавить описание (description) к определениям
-  // свойств типов»): the hint shown next to the property in the thought editor
-  // and given to AI agents through `etn.types.list`. Blank — no description.
-  const descArea = el('textarea', 'textarea-input');
-  descArea.value = row?.description ?? '';
-  descArea.rows = 3;
-  descArea.placeholder = 'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)';
-
-  const typeSelect = el('select', 'select-input');
-  for (const [value, label] of Object.entries(VALUE_TYPE_LABELS)) {
-    const option = el('option', undefined, label);
-    option.value = value;
-    typeSelect.append(option);
-  }
-  typeSelect.value = row?.value_type ?? 'text';
-
-  // The default-value input is rebuilt when the value type changes (the
-  // in-progress default does not carry over).
-  let defaultValue: unknown = row?.config?.default_value ?? null;
-  const defaultHost = div('form-row');
-  const renderDefault = (): void => {
-    defaultHost.replaceChildren(
-      defaultInputFor(typeSelect.value as PropertyValueType, defaultValue, (v) => {
-        defaultValue = v;
-      }),
-    );
-  };
-  renderDefault();
-
-  // Text options («выбирать из списка» + «несколько значений», 08-ui-spec.md
-  // §8.4): an input aid for filling values, never a restriction — arbitrary
-  // typed values stay allowed, and trimming the list never touches stored
-  // values (02-data-model.md §3.4). The same `multiple` flag also drives the
-  // thought_ref variant (an array of referenced thoughts) rendered inside
-  // renderRefFilter.
-  let choiceOn = row?.value_type === 'text' && (row?.config?.options?.length ?? 0) > 0;
-  let multipleOn = row?.config?.multiple === true;
-  let optionsText = choiceOn ? (row?.config?.options ?? []).join('\n') : '';
-  const textExtrasHost = div('form-stack');
-
-  // thought_ref type filter: pick from thoughts of the selected types only
-  // (L21: the type list is the tree; a selected parent matches its whole
-  // subtree on the server). Changing it later never reprocesses stored values.
-  const typeFilter = new Set<string>(
-    row?.value_type === 'thought_ref'
-      ? (row?.config?.allowed_type_ids ??
-          (row?.config?.allowed_type_id !== undefined ? [row.config.allowed_type_id] : []))
-      : [],
-  );
-  const refFilterHost = div('form-stack');
-
-  const renderTextExtras = (): void => {
-    textExtrasHost.replaceChildren();
-    if (typeSelect.value !== 'text') return;
-    const choiceRow = el('label', 'checkbox-row');
-    const choiceCheck = el('input');
-    choiceCheck.type = 'checkbox';
-    choiceCheck.checked = choiceOn;
-    choiceCheck.addEventListener('change', () => {
-      choiceOn = choiceCheck.checked;
-      renderTextExtras();
-    });
-    choiceRow.append(choiceCheck, span('выбирать из списка'));
-    textExtrasHost.append(choiceRow);
-    if (!choiceOn) return;
-    const area = el('textarea', 'textarea-input');
-    area.value = optionsText;
-    area.rows = 4;
-    area.placeholder = 'Варианты значения — по одному в строке';
-    area.addEventListener('input', () => {
-      optionsText = area.value;
-    });
-    const multiRow = el('label', 'checkbox-row');
-    const multiCheck = el('input');
-    multiCheck.type = 'checkbox';
-    multiCheck.checked = multipleOn;
-    multiCheck.addEventListener('change', () => {
-      multipleOn = multiCheck.checked;
-    });
-    multiRow.append(multiCheck, span('несколько значений (через запятую)'));
-    textExtrasHost.append(area, multiRow);
-  };
-
-  const renderRefFilter = (): void => {
-    refFilterHost.replaceChildren();
-    if (typeSelect.value !== 'thought_ref') return;
-    // «несколько значений» (02-data-model.md §3.4): the property holds an
-    // array of referenced thoughts. Independent of the text variant — no
-    // predefined list involved, values are picked via the thought search.
-    const multiRow = el('label', 'checkbox-row');
-    const multiCheck = el('input');
-    multiCheck.type = 'checkbox';
-    multiCheck.checked = multipleOn;
-    multiCheck.addEventListener('change', () => {
-      multipleOn = multiCheck.checked;
-    });
-    multiRow.append(multiCheck, span('несколько значений'));
-    refFilterHost.append(multiRow);
-    const label = el(
-      'p',
-      'muted',
-      'Отбор по типам (вместе с подчинёнными) — поиск идёт только по ним:',
-    );
-    label.style.margin = '0';
-    refFilterHost.append(label);
-    const boxEl = div('type-filter-box');
-    const rows = orderedTypeRows(store.state.thoughtTypes).filter((row) => !row.type.is_root);
-    if (rows.length === 0) {
-      boxEl.append(el('p', 'muted', 'В сети ещё нет типов мыслей.'));
-    }
-    for (const trow of rows) {
-      const lab = el('label', 'checkbox-row');
-      lab.style.marginLeft = `${Math.max(0, trow.depth - 2) * 16}px`;
-      const check = el('input');
-      check.type = 'checkbox';
-      check.checked = typeFilter.has(trow.type.id);
-      check.addEventListener('change', () => {
-        if (check.checked) typeFilter.add(trow.type.id);
-        else typeFilter.delete(trow.type.id);
-      });
-      lab.append(check, span(trow.type.name));
-      boxEl.append(lab);
-    }
-    refFilterHost.append(boxEl);
-  };
-
-  // `value_type = 'url'` extras (task 0.6.2): the only flag is «несколько
-  // значений» — an array of URL/file-path strings stored as a JSON array in
-  // `value_text` (02-data-model.md §3.4–3.5). The «Открыть» button per row is
-  // drawn by the value editor, not here.
-  const urlExtrasHost = div('form-stack');
-  const renderUrlExtras = (): void => {
-    urlExtrasHost.replaceChildren();
-    if (typeSelect.value !== 'url') return;
-    const multiRow = el('label', 'checkbox-row');
-    const multiCheck = el('input');
-    multiCheck.type = 'checkbox';
-    multiCheck.checked = multipleOn;
-    multiCheck.addEventListener('change', () => {
-      multipleOn = multiCheck.checked;
-    });
-    multiRow.append(multiCheck, span('несколько значений'));
-    urlExtrasHost.append(multiRow);
-  };
-  renderTextExtras();
-  renderRefFilter();
-  renderUrlExtras();
-
-  typeSelect.addEventListener('change', () => {
-    defaultValue = null;
-    // The type-specific extras do not carry over to the new value type.
-    choiceOn = false;
-    multipleOn = false;
-    optionsText = '';
-    typeFilter.clear();
-    renderDefault();
-    renderTextExtras();
-    renderRefFilter();
-    renderUrlExtras();
-  });
-
-  const body = div('form-stack');
-  body.append(
-    keyInput,
-    typeSelect,
-    defaultHost,
-    descArea,
-    textExtrasHost,
-    refFilterHost,
-    urlExtrasHost,
-    errorLine,
-  );
-
-  /**
-   * The resulting config: default value + the type-specific extras. Returns
-   * `null` for an empty config so untouched definitions keep `config = null`.
-   */
-  const configPatch = (): PropertyConfig | null => {
-    const after = defaultValue === undefined || defaultValue === '' ? null : defaultValue;
-    const config: Record<string, unknown> = { ...(row?.config ?? {}) };
-    if (after === null) {
-      delete config['default_value'];
-    } else {
-      config['default_value'] = after;
-    }
-    if (typeSelect.value === 'text') {
-      const opts = optionsText
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line !== '');
-      if (choiceOn && opts.length > 0) {
-        config['options'] = opts;
-        if (multipleOn) config['multiple'] = true;
-        else delete config['multiple'];
-      } else {
-        delete config['options'];
-        delete config['multiple'];
-      }
-    } else {
-      delete config['options'];
-    }
-    if (typeSelect.value === 'thought_ref') {
-      // The list form supersedes the legacy single `allowed_type_id`.
-      delete config['allowed_type_id'];
-      if (multipleOn) config['multiple'] = true;
-      else delete config['multiple'];
-      if (typeFilter.size > 0) config['allowed_type_ids'] = [...typeFilter];
-      else delete config['allowed_type_ids'];
-    } else if (typeSelect.value === 'url') {
-      // task 0.6.2: `url` accepts `multiple` independently of any predefined
-      // list — there is no options picker for `url`. Stored as a JSON array in
-      // `value_text`, never comma-joined.
-      if (multipleOn) config['multiple'] = true;
-      else delete config['multiple'];
-      delete config['allowed_type_id'];
-      delete config['allowed_type_ids'];
-    } else {
-      delete config['allowed_type_id'];
-      delete config['allowed_type_ids'];
-      // `multiple` survives only on text (with options), thought_ref and url.
-      if (typeSelect.value !== 'text') delete config['multiple'];
-    }
-    return Object.keys(config).length === 0 ? null : (config as PropertyConfig);
-  };
-
-  /** Writes the dialog's fields back into the staged draft row. */
-  function commit(close: () => void): void {
-    const key = keyInput.value.trim();
-    if (key === '') {
-      errorLine.textContent = 'Заголовок свойства обязателен.';
-      return;
-    }
-    const description = descArea.value.trim();
-    const next: DraftProperty =
-      row !== null
-        ? row
-        : { id: nextDraftPropertyId(), isNew: true, key, value_type: 'text', config: null, description: null };
-    next.key = key;
-    next.value_type = typeSelect.value as PropertyValueType;
-    next.config = configPatch();
-    next.description = description === '' ? null : description;
-    if (row === null) {
-      // A brand-new row joins the draft at the end; the order is applied on
-      // save (the trailing reorder covers rows dragged into the middle).
-      onAppend(next);
-    }
-    onDone();
-    close();
-  }
-
-  /** Stages the removal (the server sees it on «Применить и закрыть»). */
-  async function stageRemoval(close: () => void): Promise<void> {
-    if (row === null || onDeleteExisting === null) return;
-    const ok = await confirmDialog(
-      'Удалить свойство',
-      `Удалить свойство «${row.key}»? Значения этого свойства у всех элементов будут удалены.`,
-      true,
-    );
-    if (!ok) return;
-    onDeleteExisting();
-    close();
-  }
-
-  const buttons: DialogButton[] = isNew
-    ? [
-        { label: 'Отменить' },
-        { label: 'Добавить', primary: true, keepOpen: true, onClick: (close) => commit(close) },
-      ]
-    : [
-        { label: 'Отменить' },
-        ...(onDeleteExisting !== null
-          ? [
-              {
-                label: 'Удалить',
-                danger: true,
-                keepOpen: true,
-                onClick: (close: () => void): void => void stageRemoval(close),
-              } satisfies DialogButton,
-            ]
-          : []),
-        { label: 'Применить', primary: true, keepOpen: true, onClick: (close) => commit(close) },
-      ];
-
-  showDialog({
-    title: isNew ? 'Новое свойство' : `Свойство «${row?.key ?? ''}»`,
-    body,
-    width: 460,
-    buttons,
-    onMount: () => keyInput.focus(),
   });
 }
 
@@ -2141,9 +2197,6 @@ export function showLinkTypeEditor(
     }
     const description = descArea.value.trim();
     try {
-      // Declining the value-type conversion must leave the whole apply a
-      // no-op — ask BEFORE the type itself is created/patched.
-      if (!(await props.confirmPendingRetypes())) return;
       if (current === null) {
         // New type: one create carries every staged field at once.
         current = await etn.types.createLinkType(networkId, {

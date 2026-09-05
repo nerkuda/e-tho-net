@@ -61,6 +61,7 @@ import type {
   NetworkPropertyUpdateInput,
   UpdateNetworkInput,
   EffectiveTypeProperty,
+  AttachPropertyInput,
   PropertyDefinition,
   PropertyDefinitionInput,
   PropertyDefinitionUpdateInput,
@@ -515,7 +516,9 @@ export interface EtnApi {
       networkId: string,
       ownerType: TypeOwnerType,
       typeId: string,
-      input: PropertyDefinitionInput,
+      /** Discriminated by `mode`: `attach` (existing registry id) or
+       *  `create` (new registry property + binding in one call). */
+      input: AttachPropertyInput,
     ): Promise<PropertyDefinition>;
     updateTypeProperty(
       networkId: string,

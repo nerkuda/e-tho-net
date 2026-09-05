@@ -65,7 +65,7 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
 };
 
 /** A registry row as returned by `GET /networks/{nid}/properties` (with counters). */
-type RegistryRow = NetworkProperty & { types_count: number; values_count: number };
+export type RegistryRow = NetworkProperty & { types_count: number; values_count: number };
 
 /** One row of the registry list after sorting + filtering. */
 interface PropertyRow {
@@ -306,8 +306,13 @@ function isPropertyRegistryEvent(raw: unknown): raw is AnyRealtimeEvent & { netw
  * / Esc / × / backdrop click discard the whole draft (reverts to the cached
  * server snapshot). The registry has no optimistic-lock today — the server
  * serialises the conversion transaction internally.
+ *
+ * Exported so the type-editor's «✎» button (task
+ * «Клиент: редактор типа подключает свойство из справочника») can reuse
+ * this dialog instead of duplicating the form — the registry is the single
+ * source of a property's nature, and a single dialog keeps it that way.
  */
-function openPropertyManagerEditor(
+export function openPropertyManagerEditor(
   property: RegistryRow | null,
   onChanged: () => void,
 ): void {

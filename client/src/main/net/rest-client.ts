@@ -999,7 +999,7 @@ export class RestClient {
     networkId: string,
     ownerType: TypeOwnerType,
     typeId: string,
-    input: import('@etn/shared').PropertyDefinitionInput,
+    input: import('@etn/shared').AttachPropertyInput,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').PropertyDefinition> {
     return this.request(
