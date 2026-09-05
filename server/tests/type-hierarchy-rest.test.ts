@@ -276,17 +276,39 @@ describe(
         });
         assert.equal(clearRes.statusCode, 200);
 
-        // --- description of a definition: accepted on create, patched, -------
-        // --- inherited, overridable per type, resettable (task               |
-        // «Добавить описание (description) к определениям свойств типов») -----
-        const descPatchRes = await ctx.app.inject({
+        // --- description of a definition: registry-edited for own properties ---
+        // (0.6.5): description is a property-level field, not a binding one.
+        // For own bindings the description lives in the registry; inherited
+        // bindings override it via PUT …/properties/{id}/description.
+        const personEff = (
+          (
+            await ctx.app.inject({
+              method: 'GET',
+              url: `/api/v1/networks/${nid}/thought-types/${person.id}/properties`,
+              headers: h,
+            })
+          ).json().data as Array<{ key: string; property_id: string }>
+        ).find((d) => d.key === 'пол')!;
+        const registryDescRes = await ctx.app.inject({
           method: 'PATCH',
-          url: `/api/v1/networks/${nid}/thought-types/${person.id}/properties/${personProp.id}`,
+          url: `/api/v1/networks/${nid}/properties/${personEff.property_id}`,
           headers: h,
           payload: { description: 'биологический пол человека' },
         });
-        assert.equal(descPatchRes.statusCode, 200);
-        assert.equal((descPatchRes.json().data as { description: string | null }).description, 'биологический пол человека');
+        assert.equal(registryDescRes.statusCode, 200);
+        assert.equal(
+          (registryDescRes.json().data as { description: string | null }).description,
+          'биологический пол человека',
+        );
+        // The binding-level PATCH with `description` is now a 422 (binding
+        // changes only carry `required` / `position`).
+        const bindingDescRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/thought-types/${person.id}/properties/${personProp.id}`,
+          headers: h,
+          payload: { description: 'не должно пройти' },
+        });
+        assert.equal(bindingDescRes.statusCode, 422);
 
         // The child inherits the description with the property.
         const inheritedDesc = (

@@ -25,7 +25,6 @@ import {
   type LinkTypeInput,
   type LinkTypeUpdateInput,
   type PropertyDefinitionInput,
-  type PropertyDefinitionUpdateInput,
   type ThoughtTypeInput,
   type ThoughtTypeUpdateInput,
   type TypeOwnerType,
@@ -63,6 +62,8 @@ import {
 import {
   createTypeProperty,
   deleteTypeProperty,
+  getNetworkProperty,
+  getNetworkPropertyByName,
   getTypeProperty,
   listEffectiveTypeProperties,
   reorderTypeProperties,
@@ -251,75 +252,136 @@ function parseLinkTypeUpdateBody(
   return changes;
 }
 
-/** Parse the body of `POST …/types/:id/properties`. */
-function parseTypePropertyBody(
+/**
+ * Two-form input for `POST …/types/:id/properties` (task 75404197):
+ *
+ *   * `{ property_id }` — attach an existing registry property;
+ *   * `{ key, value_type, config?, description? }` — create the registry
+ *     property in this layer and attach it (raises `409 DUPLICATE` with
+ *     `details.property_id` when the name is already taken).
+ *
+ * `required`/`position` belong to the binding, so they are accepted in both
+ * shapes. Returned as a discriminated input that the route consumes directly.
+ */
+type AttachPropertyInput =
+  | {
+      mode: 'attach';
+      property_id: string;
+      required: boolean;
+      position: number | undefined;
+    }
+  | {
+      mode: 'create';
+      key: string;
+      value_type: PropertyDefinitionInput['value_type'];
+      config: PropertyDefinitionInput['config'];
+      description: PropertyDefinitionInput['description'];
+      required: boolean;
+      position: number | undefined;
+    };
+
+function parseAttachBody(
   body: Record<string, unknown>,
   requestId: string,
-): PropertyDefinitionInput {
+): AttachPropertyInput {
+  const required = fieldBoolean(body, 'required', requestId) ?? false;
+  const position =
+    typeof body.position === 'number' && Number.isFinite(body.position)
+      ? Math.trunc(body.position)
+      : undefined;
+
+  if (body.property_id !== undefined) {
+    if (typeof body.property_id !== 'string' || body.property_id.trim() === '') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'property_id должен быть непустой строкой.',
+        { field: 'property_id' },
+        requestId,
+      );
+    }
+    // Nature fields must NOT be passed alongside `property_id`: the registry
+    // is the single source of truth.
+    if (
+      body.key !== undefined ||
+      body.value_type !== undefined ||
+      body.config !== undefined ||
+      body.description !== undefined
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'при property_id поля key/value_type/config/description не допускаются — это поля свойства в справочнике.',
+        { field: 'property_id' },
+        requestId,
+      );
+    }
+    return { mode: 'attach', property_id: body.property_id, required, position };
+  }
+
   const key = fieldString(body, 'key', requestId);
   const valueType = fieldString(body, 'value_type', requestId);
   if (key === undefined || key.trim() === '' || valueType === undefined) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'key и value_type обязательны.',
+      'нужны либо property_id, либо key и value_type.',
       { field: 'key' },
       requestId,
     );
   }
   const config =
-    typeof body.config === 'object' && body.config !== null
-      ? (body.config as Record<string, unknown>)
-      : body.config;
+    body.config === undefined
+      ? null
+      : typeof body.config === 'object' && body.config !== null
+        ? (body.config as Record<string, unknown>)
+        : body.config;
+  const description = fieldNullableString(body, 'description', requestId) ?? null;
   return {
-    key,
+    mode: 'create',
+    key: key.trim(),
     value_type: valueType as PropertyDefinitionInput['value_type'],
     config: config as PropertyDefinitionInput['config'],
-    required: fieldBoolean(body, 'required', requestId),
-    position: typeof body.position === 'number' ? Math.trunc(body.position) : undefined,
-    description: fieldNullableString(body, 'description', requestId),
+    description,
+    required,
+    position,
   };
 }
 
-/** Parse the body of `PATCH …/types/:id/properties/:propertyId`. */
+/**
+ * Read a string id out of an `EtnError.details` blob (typed `unknown`).
+ * Centralised so the routes can fish out `property_id` without per-call casts.
+ */
+function readStringDetail(details: unknown, key: string): string | null {
+  if (typeof details !== 'object' || details === null || Array.isArray(details)) return null;
+  const value = (details as Record<string, unknown>)[key];
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * Body of `PATCH …/types/:id/properties/{propertyId}` (task 75404197): only
+ * the **binding's** role (`required`, `position`). Anything else (name, value
+ * type, config, description) is a property-level field and must be edited in
+ * the registry; passing it here is a 422.
+ */
 function parseTypePropertyUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
-): PropertyDefinitionUpdateInput {
-  const changes: PropertyDefinitionUpdateInput = {};
-  if (body.key !== undefined) {
-    changes.key = fieldString(body, 'key', requestId);
-  }
-  if (body.value_type !== undefined) {
-    changes.value_type = fieldString(
-      body,
-      'value_type',
+): { required: boolean; position: number | undefined } {
+  const allowed = ['required', 'position'];
+  const rejected = Object.keys(body).filter((k) => !allowed.includes(k));
+  if (rejected.length > 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `PATCH …/properties/{id} меняет только роль в типе (required, position); нельзя: ${rejected.join(', ')}.`,
+      { field: rejected[0], allowed },
       requestId,
-    ) as PropertyDefinitionUpdateInput['value_type'];
+    );
   }
-  if (body.config !== undefined) {
-    changes.config =
-      typeof body.config === 'object' && body.config !== null
-        ? (body.config as Record<string, unknown>)
-        : null;
-  }
-  if (body.required !== undefined) {
-    changes.required = fieldBoolean(body, 'required', requestId);
-  }
-  if (body.position !== undefined) {
-    if (typeof body.position !== 'number' || !Number.isFinite(body.position)) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'position должен быть числом.',
-        { field: 'position' },
-        requestId,
-      );
-    }
-    changes.position = Math.trunc(body.position);
-  }
-  if (body.description !== undefined) {
-    changes.description = fieldNullableString(body, 'description', requestId);
-  }
-  return changes;
+  return {
+    required: fieldBoolean(body, 'required', requestId) ?? false,
+    position:
+      typeof body.position === 'number' && Number.isFinite(body.position)
+        ? Math.trunc(body.position)
+        : undefined,
+  };
 }
 
 /** `/api/v1/networks*` type routes plugin factory. */
@@ -527,11 +589,93 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as TypeIdParams;
-          const input = parseTypePropertyBody(requestBody(req), req.id);
+          const input = parseAttachBody(requestBody(req), req.id);
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          const prop = createTypeProperty(ndb, ownerType, id, input);
-          deps.emit(req, networkId, 'property-definition.created', { definition: prop });
-          sendCreated(reply, prop, { request_id: req.id });
+          try {
+            // Resolve `property_id` to a registry property and re-use its
+            // `createTypeProperty` form: the service looks up by name and
+            // skips the registry create when a property of this name already
+            // exists in the layer view.
+            let prop;
+            if (input.mode === 'attach') {
+              const registry = getNetworkProperty(ndb, input.property_id);
+              if (registry === null) {
+                throw new EtnError(
+                  'NOT_FOUND',
+                  `property ${input.property_id} not found`,
+                  { entity: 'property', id: input.property_id },
+                  req.id,
+                );
+              }
+              prop = createTypeProperty(ndb, ownerType, id, {
+                key: registry.name,
+                value_type: registry.value_type,
+                config: registry.config,
+                description: registry.description,
+                required: input.required,
+                position: input.position,
+              });
+            } else {
+              // The `{ key, value_type }` form promises to CREATE a registry
+              // property (task 75404197). Reject the request up front when
+              // the name is already taken so the client gets a precise
+              // `details.property_id` to offer «connect the existing one».
+              const existing = getNetworkPropertyByName(ndb, input.key);
+              if (existing !== null) {
+                throw new EtnError(
+                  'DUPLICATE',
+                  `свойство «${input.key}» уже есть в этой мыслесети`,
+                  { name: input.key, property_id: existing.id },
+                  req.id,
+                );
+              }
+              prop = createTypeProperty(ndb, ownerType, id, {
+                key: input.key,
+                value_type: input.value_type,
+                config: input.config,
+                description: input.description,
+                required: input.required,
+                position: input.position,
+              });
+            }
+            deps.emit(req, networkId, 'property-definition.created', { definition: prop });
+            sendCreated(reply, prop, { request_id: req.id });
+          } catch (err) {
+            if (err instanceof EtnError && err.code === 'DUPLICATE') {
+              // `createTypeProperty` uses the name as the natural key, so a
+              // name clash raises DUPLICATE with no id in details — look the
+              // owner up by name in the registry and attach its id so the
+              // client can offer «connect the existing one».
+              if (readStringDetail(err.details, 'property_id') === null) {
+                const name =
+                  input.mode === 'attach'
+                    ? getNetworkProperty(ndb, input.property_id)?.name
+                    : input.key;
+                if (typeof name === 'string') {
+                  const registry = (() => {
+                    try {
+                      // Round-trip via the service's own name resolver to
+                      // stay consistent with `name_key` collation.
+                      return ndb
+                        .prepare('SELECT id FROM properties_v WHERE name_key = type_name_key(?)')
+                        .get(name) as { id: string } | undefined;
+                    } catch {
+                      return undefined;
+                    }
+                  })();
+                  if (registry !== undefined) {
+                    throw new EtnError(
+                      'DUPLICATE',
+                      err.message,
+                      { ...(err.details as Record<string, unknown> | null ?? {}), property_id: registry.id },
+                      req.id,
+                    );
+                  }
+                }
+              }
+            }
+            throw err;
+          }
         },
       );
 
@@ -541,8 +685,15 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const { networkId, propertyId } = req.params as TypePropertyParams;
           const changes = parseTypePropertyUpdateBody(requestBody(req), req.id);
+          // The binding id from the path is forwarded to the service, which
+          // maps it back to the underlying registry property. PATCH changes
+          // the BINDING only — `key`/`value_type`/`config`/`description` are
+          // rejected up front by `parseTypePropertyUpdateBody`.
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          const prop = updateTypeProperty(ndb, propertyId, changes);
+          const prop = updateTypeProperty(ndb, propertyId, {
+            required: changes.required,
+            position: changes.position,
+          });
           deps.emit(req, networkId, 'property-definition.updated', {
             id: propertyId,
             changes,

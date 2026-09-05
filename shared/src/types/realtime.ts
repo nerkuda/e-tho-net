@@ -194,6 +194,14 @@ export interface PropertyRegistryCreatedData {
 export interface PropertyRegistryUpdatedData {
   id: string;
   changes: NetworkPropertyUpdateInput;
+  /**
+   * Migration footprint when the `value_type` changed: how many stored values
+   * were rewritten to the new column (`converted`) and how many were dropped
+   * because they had no representation in the target type. Both are zero for
+   * any change that does not touch `value_type`.
+   */
+  converted?: number;
+  dropped?: number;
 }
 export interface PropertyRegistryDeletedData {
   id: string;

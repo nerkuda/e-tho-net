@@ -44,6 +44,7 @@ import { createChronicleRoutes } from '../routes/chronicle.js';
 import { createPinsRoutes } from '../routes/pins.js';
 import { createTypesRoutes } from '../routes/types.js';
 import { createPropertiesRoutes } from '../routes/properties.js';
+import { createPropertiesRegistryRoutes } from '../routes/properties-registry.js';
 import { createCommentsRoutes } from '../routes/comments.js';
 import { createAttachmentsRoutes } from '../routes/attachments.js';
 import { createSearchRoutes } from '../routes/search.js';
@@ -305,6 +306,12 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // Property-value routes (task D4): per-thought/per-link values by key (03-server-api.md §9).
   await app.register(createPropertiesRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Property-registry routes (task 75404197): CRUD + usage of the network's
+  // property dictionary (`properties` table). Lives next to property-value
+  // routes; the registry is the single source of a property's nature
+  // (03-server-api.md §8a).
+  await app.register(createPropertiesRegistryRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Comment and attachment routes (task D5, 03-server-api.md §10–11).
   await app.register(createCommentsRoutes(routeDeps), { prefix: '/api/v1' });
