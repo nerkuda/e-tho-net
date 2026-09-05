@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { EtnError } from '@etn/shared';
+import { EtnError, type PropertyDefinition } from '@etn/shared';
 
 import DatabaseConstructor from 'better-sqlite3';
 
@@ -20,18 +20,25 @@ import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import {
   computeThoughtCardWarnings,
+  createNetworkProperty,
   createTypeProperty,
+  deleteNetworkProperty,
   deletePropertyValue,
+  deleteTypeProperty,
   findThoughtUsage,
+  getNetworkPropertyByName,
   getPropertyValues,
   getPropertyValuesResolved,
   listEffectiveTypeProperties,
+  listNetworkProperties,
   setPropertyValue,
   setPropertyValues,
   setTypePropertyDefaultOverride,
   setTypePropertyDescriptionOverride,
+  updateNetworkProperty,
   updateTypeProperty,
 } from '../src/domain/property-service.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
@@ -78,7 +85,7 @@ describe(
 
         const row = ndb
           .prepare(
-            'SELECT value_text, value_number, value_bool, value_date, value_thought_ref FROM property_values WHERE owner_id = ? AND property_id = (SELECT id FROM type_properties WHERE key = ?)',
+            'SELECT value_text, value_number, value_bool, value_date, value_thought_ref FROM property_values WHERE owner_id = ? AND property_id = (SELECT id FROM properties WHERE name = ?)',
           )
           .get(thought, 'year') as {
           value_text: string | null;
@@ -445,7 +452,7 @@ describe(
 
     /** Seed a `multiple` thought_ref property and return def + thoughts. */
     function seedMulti(ndb: NetworkDb, config: Record<string, unknown> = {}): {
-      def: { id: string; key: string };
+      def: PropertyDefinition;
       a: string;
       b: string;
       owner: string;
@@ -480,7 +487,7 @@ describe(
       try {
         const { def, a, b, owner } = seedMulti(ndb);
         setPropertyValue(ndb, 'thought', owner, 'authors', [a, b]);
-        assert.deepEqual(JSON.parse(rawRef(ndb, owner, def.id)!), [a, b]);
+        assert.deepEqual(JSON.parse(rawRef(ndb, owner, def.property_id)!), [a, b]);
         const values = getPropertyValues(ndb, 'thought', owner);
         assert.deepEqual(values[0]!.value, [a, b]);
       } finally {
@@ -504,7 +511,7 @@ describe(
 
         // Duplicate ids collapse.
         setPropertyValue(ndb, 'thought', owner, 'authors', [good, good]);
-        assert.deepEqual(JSON.parse(rawRef(ndb, owner, def.id)!), [good]);
+        assert.deepEqual(JSON.parse(rawRef(ndb, owner, def.property_id)!), [good]);
 
         // A missing id rejects the whole write.
         assert.throws(
@@ -544,7 +551,7 @@ describe(
       try {
         const { def, a, owner } = seedMulti(ndb);
         setPropertyValue(ndb, 'thought', owner, 'authors', a);
-        assert.deepEqual(JSON.parse(rawRef(ndb, owner, def.id)!), [a]);
+        assert.deepEqual(JSON.parse(rawRef(ndb, owner, def.property_id)!), [a]);
         assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [a]);
       } finally {
         ndb.close();
@@ -557,7 +564,7 @@ describe(
         const { def, a, owner } = seedMulti(ndb);
         setPropertyValue(ndb, 'thought', owner, 'authors', [a]);
         setPropertyValue(ndb, 'thought', owner, 'authors', []);
-        assert.equal(rawRef(ndb, owner, def.id), null);
+        assert.equal(rawRef(ndb, owner, def.property_id), null);
       } finally {
         ndb.close();
       }
@@ -573,7 +580,7 @@ describe(
             `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_thought_ref, updated_at)
              VALUES (?, 'thought', ?, ?, ?, '2024')`,
           )
-          .run(randomUUID(), owner, def.id, a);
+          .run(randomUUID(), owner, def.property_id, a);
         assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [a]);
       } finally {
         ndb.close();
@@ -588,7 +595,7 @@ describe(
         // Sneak a dangling id into the stored array (no SQL FK).
         ndb
           .prepare('UPDATE property_values SET value_thought_ref = ? WHERE owner_id = ? AND property_id = ?')
-          .run(JSON.stringify([a, 'gone', b]), owner, def.id);
+          .run(JSON.stringify([a, 'gone', b]), owner, def.property_id);
 
         const resolved = getPropertyValuesResolved(ndb, 'thought', owner);
         assert.deepEqual(resolved[0]!.value, [
@@ -670,7 +677,7 @@ describe(
 
     /** Seed a `multiple` url property and return the definition + owner. */
     function seedMultiUrl(ndb: NetworkDb): {
-      def: { id: string; key: string };
+      def: PropertyDefinition;
       owner: string;
     } {
       const tt = createThoughtType(ndb, { name: 'Bookmark' }, USER);
@@ -698,7 +705,7 @@ describe(
           'https://example.com',
           'https://docs.example.org',
         ]);
-        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.id)!), [
+        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.property_id)!), [
           'https://example.com',
           'https://docs.example.org',
         ]);
@@ -720,7 +727,7 @@ describe(
           'https://a.test',
           'https://b.test',
         ]);
-        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.id)!), [
+        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.property_id)!), [
           'https://a.test',
           'https://b.test',
         ]);
@@ -752,7 +759,7 @@ describe(
       try {
         const { def, owner } = seedMultiUrl(ndb);
         setPropertyValue(ndb, 'thought', owner, 'sites', 'https://only.test');
-        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.id)!), ['https://only.test']);
+        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.property_id)!), ['https://only.test']);
         assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [
           'https://only.test',
         ]);
@@ -767,7 +774,7 @@ describe(
         const { def, owner } = seedMultiUrl(ndb);
         setPropertyValue(ndb, 'thought', owner, 'sites', ['https://a.test']);
         setPropertyValue(ndb, 'thought', owner, 'sites', []);
-        assert.equal(rawText(ndb, owner, def.id), null);
+        assert.equal(rawText(ndb, owner, def.property_id), null);
       } finally {
         ndb.close();
       }
@@ -783,7 +790,7 @@ describe(
             `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_text, updated_at)
              VALUES (?, 'thought', ?, ?, ?, '2024')`,
           )
-          .run(randomUUID(), owner, def.id, 'https://legacy.test');
+          .run(randomUUID(), owner, def.property_id, 'https://legacy.test');
         assert.deepEqual(getPropertyValues(ndb, 'thought', owner)[0]!.value, [
           'https://legacy.test',
         ]);
@@ -800,7 +807,7 @@ describe(
         // intact, whereas a comma-joined `text` value would be ambiguous.
         const tricky = 'https://example.com/?a=1,b=2';
         setPropertyValue(ndb, 'thought', owner, 'sites', [tricky, 'https://plain.test']);
-        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.id)!), [
+        assert.deepEqual(JSON.parse(rawText(ndb, owner, def.property_id)!), [
           tricky,
           'https://plain.test',
         ]);
@@ -879,7 +886,7 @@ describe(
         const w = warnings[0]!;
         assert.equal(w.code, 'REQUIRED_PROPERTY_MISSING');
         assert.equal(w.key, 'priority');
-        assert.equal(w.property_id, priority.id);
+        assert.equal(w.property_id, priority.property_id);
         assert.equal(w.value_type, 'text');
         assert.equal(w.inherited, false);
         assert.equal(w.defined_on, tt.id);
@@ -1120,11 +1127,11 @@ describe(
           key: 'own',
           value_type: 'text',
         });
-        // Own property of the parent: edited on the definition itself.
+        // Own property of the parent: edited in the registry (0.6.5).
         assert.throws(
           () =>
             setTypePropertyDescriptionOverride(ndb, 'thought_type', parent.id, own.id, 'nope'),
-          /own defaults are edited on the property definition itself/,
+          /собственные свойства правятся в справочнике/,
         );
 
         // A sibling type's property is not in the child's ancestor chain.
@@ -1137,7 +1144,7 @@ describe(
         assert.throws(
           () =>
             setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, sibProp.id, 'nope'),
-          /only properties inherited from ancestor types can be overridden/,
+          /переопределять можно только свойства, подключённые предками/,
         );
       } finally {
         ndb.close();
@@ -1145,3 +1152,330 @@ describe(
     });
   },
 );
+
+describe(
+  'property registry and bindings (0.6.5)',
+  nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
+  () => {
+    const USER = 'user-1';
+
+    /** Count live bindings of a property on a type. */
+    function bindingCount(ndb: NetworkDb, ownerId: string, propertyId: string): number {
+      return (
+        ndb
+          .prepare(
+            "SELECT COUNT(*) AS c FROM type_properties_v WHERE owner_type = 'thought_type' AND owner_id = ? AND property_id = ?",
+          )
+          .get(ownerId, propertyId) as { c: number }
+      ).c;
+    }
+
+    it('one property serves two unrelated thought types and a link type', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = createThoughtType(ndb, { name: 'Книга' }, USER);
+        const b = createThoughtType(ndb, { name: 'Статья' }, USER);
+        const lt = createLinkType(ndb, { name_forward: 'про', name_reverse: 'касается' }, USER);
+        // Three attaches of the SAME name: the registry property is created
+        // once and reused.
+        createTypeProperty(ndb, 'thought_type', a.id, { key: 'приоритет', value_type: 'number' });
+        const onB = createTypeProperty(ndb, 'thought_type', b.id, {
+          key: 'приоритет',
+          value_type: 'text', // nature of an existing property is ignored
+        });
+        createTypeProperty(ndb, 'link_type', lt.id, { key: 'приоритет', value_type: 'number' });
+
+        assert.equal(listNetworkProperties(ndb).length, 1, 'one registry property');
+        assert.equal(onB.value_type, 'number', 'registry nature wins');
+        for (const [ownerType, ownerId] of [
+          ['thought_type', a.id],
+          ['thought_type', b.id],
+          ['link_type', lt.id],
+        ] as const) {
+          const eff = listEffectiveTypeProperties(ndb, ownerType, ownerId);
+          assert.equal(eff.length, 1);
+          assert.equal(eff[0]!.key, 'приоритет');
+          assert.equal(eff[0]!.value_type, 'number');
+        }
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('attaching to an ancestor drops redundant descendant bindings, values untouched', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const parent = createThoughtType(ndb, { name: 'Родитель' }, USER);
+        const child = createThoughtType(ndb, { name: 'Наследник', parent_id: parent.id }, USER);
+        const childBinding = createTypeProperty(ndb, 'thought_type', child.id, {
+          key: 'статус',
+          value_type: 'text',
+        });
+        const th = seedTypedThought(ndb, child.id);
+        setPropertyValue(ndb, 'thought', th, 'статус', 'в работе');
+        assert.equal(listEffectiveTypeProperties(ndb, 'thought_type', child.id).length, 1);
+
+        // Attach the SAME property to the parent: the child's binding is
+        // redundant and must be dropped in the same transaction.
+        const parentBinding = createTypeProperty(ndb, 'thought_type', parent.id, {
+          key: 'статус',
+          value_type: 'text',
+        });
+        assert.equal(parentBinding.property_id, childBinding.property_id);
+        assert.equal(bindingCount(ndb, child.id, childBinding.property_id), 0);
+        // The property is still effective for the child — by inheritance now.
+        const eff = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        assert.equal(eff.length, 1);
+        assert.equal(eff[0]!.inherited, true);
+        assert.equal(eff[0]!.defined_on, parent.id);
+        // Values did not change and are not outside-type.
+        assert.deepEqual(
+          getPropertyValues(ndb, 'thought', th).map((v) => [v.value, v.outside_type]),
+          [['в работе', false]],
+        );
+        // Re-attaching on the child directly is now a duplicate (inherited).
+        assert.throws(
+          () =>
+            createTypeProperty(ndb, 'thought_type', child.id, {
+              key: 'статус',
+              value_type: 'text',
+            }),
+          (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('type change keeps the value visible or flags it outside_type; writes follow the attachment', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const withProp = createThoughtType(ndb, { name: 'Свойственный' }, USER);
+        const withoutProp = createThoughtType(ndb, { name: 'Пустой' }, USER);
+        createTypeProperty(ndb, 'thought_type', withProp.id, { key: 'оценка', value_type: 'number' });
+        const th = seedTypedThought(ndb, withProp.id);
+        setPropertyValue(ndb, 'thought', th, 'оценка', 5);
+
+        // Change the type to one that attaches the SAME property: the value
+        // stays visible (one registry property, two bindings).
+        createTypeProperty(ndb, 'thought_type', withoutProp.id, { key: 'оценка', value_type: 'number' });
+        ndb.prepare('UPDATE thoughts SET type_id = ? WHERE id = ?').run(withoutProp.id, th);
+        assert.deepEqual(
+          getPropertyValues(ndb, 'thought', th).map((v) => [v.value, v.outside_type]),
+          [[5, false]],
+        );
+
+        // Change to a type WITHOUT the property: outside-type value.
+        const third = createThoughtType(ndb, { name: 'Третий' }, USER);
+        ndb.prepare('UPDATE thoughts SET type_id = ? WHERE id = ?').run(third.id, th);
+        const values = getPropertyValues(ndb, 'thought', th);
+        assert.deepEqual(
+          values.map((v) => [v.value, v.outside_type, v.property_name, v.value_type]),
+          [[5, true, 'оценка', 'number']],
+        );
+        // Writing it is rejected with 422; deleting it works (the only action
+        // available for an outside-type value).
+        assert.throws(
+          () => setPropertyValue(ndb, 'thought', th, 'оценка', 6),
+          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        deletePropertyValue(ndb, 'thought', th, 'оценка');
+        assert.equal(getPropertyValues(ndb, 'thought', th).length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('detaching a property never deletes stored values', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const tt = createThoughtType(ndb, { name: 'Отключение' }, USER);
+        const binding = createTypeProperty(ndb, 'thought_type', tt.id, { key: 'поле', value_type: 'text' });
+        const th = seedTypedThought(ndb, tt.id);
+        setPropertyValue(ndb, 'thought', th, 'поле', 'значение');
+
+        deleteTypeProperty(ndb, binding.id);
+        // The value survives as outside-type.
+        assert.deepEqual(
+          getPropertyValues(ndb, 'thought', th).map((v) => [v.value, v.outside_type]),
+          [['значение', true]],
+        );
+        // Re-attaching the property returns the value to the normal table
+        // without any data action.
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'поле', value_type: 'text' });
+        assert.deepEqual(
+          getPropertyValues(ndb, 'thought', th).map((v) => [v.value, v.outside_type]),
+          [['значение', false]],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('registry deletion is blocked by bindings and values with both counters (409)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // An unattached, unfilled property deletes cleanly.
+        const prop = createNetworkProperty(ndb, { name: 'счётчик', value_type: 'number' });
+        deleteNetworkProperty(ndb, prop.id);
+        assert.equal(getNetworkPropertyByName(ndb, 'счётчик'), null);
+
+        // A binding blocks the delete with counters.
+        const tt = createThoughtType(ndb, { name: 'Блокировка' }, USER);
+        const held = createTypeProperty(ndb, 'thought_type', tt.id, {
+          key: 'счётчик',
+          value_type: 'number',
+        });
+        assert.throws(
+          () => deleteNetworkProperty(ndb, held.property_id),
+          (e: unknown) => {
+            if (!(e instanceof EtnError) || e.code !== 'DUPLICATE') return false;
+            const d = e.details as { types_count: number; values_count: number };
+            assert.equal(d.types_count, 1);
+            assert.equal(d.values_count, 0);
+            return true;
+          },
+          'a binding must block the delete with counters',
+        );
+
+        // Add a value: both counters report (the value is outside-type for the
+        // untyped owner — still blocking).
+        const th = seedTypedThought(ndb, null as unknown as string);
+        ndb.prepare('UPDATE thoughts SET type_id = NULL WHERE id = ?').run(th);
+        ndb
+          .prepare(
+            `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, value_number, updated_at)
+             VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', 'thought', ?, ?, 3, '2024')`,
+          )
+          .run(randomUUID(), th, held.property_id);
+        assert.throws(
+          () => deleteNetworkProperty(ndb, held.property_id),
+          (e: unknown) => {
+            if (!(e instanceof EtnError) || e.code !== 'DUPLICATE') return false;
+            const d = e.details as { types_count: number; values_count: number };
+            assert.equal(d.types_count, 1);
+            assert.equal(d.values_count, 1);
+            return true;
+          },
+          'a value must appear in the counters',
+        );
+
+        // Detach + clear the value → delete succeeds.
+        deleteTypeProperty(ndb, held.id);
+        deletePropertyValue(ndb, 'thought', th, 'счётчик');
+        deleteNetworkProperty(ndb, held.property_id);
+        assert.equal(listNetworkProperties(ndb).length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('registry names are unique per network (case-insensitive) with conflict id in details', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const first = createNetworkProperty(ndb, { name: 'Приоритет', value_type: 'number' });
+        assert.throws(
+          () => createNetworkProperty(ndb, { name: 'приоритет', value_type: 'number' }),
+          (e: unknown) => {
+            if (!(e instanceof EtnError) || e.code !== 'DUPLICATE') return false;
+            const d = e.details as { conflict_property_id: string };
+            assert.equal(d.conflict_property_id, first.id);
+            return true;
+          },
+        );
+        // Rename into an occupied name is rejected too.
+        const second = createNetworkProperty(ndb, { name: 'Ранг', value_type: 'number' });
+        assert.throws(
+          () => updateNetworkProperty(ndb, second.id, { name: 'ПРИОРИТЕТ' }),
+          (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
+        );
+        // Renaming to a free name works and keeps values addressable.
+        const tt = createThoughtType(ndb, { name: 'Переименование' }, USER);
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'Ранг', value_type: 'number' });
+        const th = seedTypedThought(ndb, tt.id);
+        setPropertyValue(ndb, 'thought', th, 'Ранг', 1);
+        updateNetworkProperty(ndb, second.id, { name: 'Вес' });
+        assert.equal(getPropertyValues(ndb, 'thought', th)[0]!.property_name, 'Вес');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('value_type change converts every stored value of the property', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const ta = createThoughtType(ndb, { name: 'КонвертА' }, USER);
+        const tb = createThoughtType(ndb, { name: 'КонвертБ' }, USER);
+        const onA = createTypeProperty(ndb, 'thought_type', ta.id, { key: 'число', value_type: 'text' });
+        // Same property attached to a second type: both types' values convert.
+        createTypeProperty(ndb, 'thought_type', tb.id, { key: 'число', value_type: 'text' });
+        const a = seedTypedThought(ndb, ta.id);
+        const b = seedTypedThought(ndb, tb.id);
+        setPropertyValue(ndb, 'thought', a, 'число', '42');
+        setPropertyValue(ndb, 'thought', b, 'число', 'не число');
+
+        updateNetworkProperty(ndb, onA.property_id, { value_type: 'number' });
+        assert.deepEqual(
+          getPropertyValues(ndb, 'thought', a).map((v) => v.value),
+          [42],
+        );
+        assert.equal(getPropertyValues(ndb, 'thought', b).length, 0, 'unconvertible cleared');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('default-value overrides are transitive down the chain until re-overridden', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const root = createThoughtType(ndb, { name: 'Верх' }, USER);
+        const mid = createThoughtType(ndb, { name: 'Середина', parent_id: root.id }, USER);
+        const leaf = createThoughtType(ndb, { name: 'Лист', parent_id: mid.id }, USER);
+        const def = createTypeProperty(ndb, 'thought_type', root.id, {
+          key: 'порог',
+          value_type: 'number',
+          config: { default_value: 1 },
+        });
+
+        // The middle type overrides; the leaf inherits the override.
+        setTypePropertyDefaultOverride(ndb, 'thought_type', mid.id, def.id, 5);
+        let eff = listEffectiveTypeProperties(ndb, 'thought_type', leaf.id);
+        assert.equal(eff[0]!.default_value, 5);
+        assert.equal(eff[0]!.overridden_here, false, 'stored on the ancestor, not the leaf');
+
+        // The leaf re-overrides for itself.
+        setTypePropertyDefaultOverride(ndb, 'thought_type', leaf.id, def.id, 9);
+        eff = listEffectiveTypeProperties(ndb, 'thought_type', leaf.id);
+        assert.equal(eff[0]!.default_value, 9);
+        assert.equal(eff[0]!.overridden_here, true);
+
+        // The middle keeps its own view.
+        eff = listEffectiveTypeProperties(ndb, 'thought_type', mid.id);
+        assert.equal(eff[0]!.default_value, 5);
+        assert.equal(eff[0]!.overridden_here, true);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('an untyped owner writes through the root type bindings', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const rootId = (
+          ndb.prepare('SELECT id FROM thought_types_v WHERE is_root = 1').get() as { id: string }
+        ).id;
+        createTypeProperty(ndb, 'thought_type', rootId, { key: 'общее', value_type: 'text' });
+        const untyped = seedTypedThought(ndb, null as unknown as string);
+        ndb.prepare('UPDATE thoughts SET type_id = NULL WHERE id = ?').run(untyped);
+        setPropertyValue(ndb, 'thought', untyped, 'общее', 'значение без типа');
+        assert.deepEqual(
+          getPropertyValues(ndb, 'thought', untyped).map((v) => v.value),
+          ['значение без типа'],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);
+

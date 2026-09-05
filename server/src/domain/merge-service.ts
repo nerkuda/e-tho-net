@@ -286,7 +286,7 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
     case 'type_property_overrides':
       return compact([
         ref(typeOwnerTableOf(r.owner_type), r.type_id),
-        ref('type_properties', r.property_id),
+        ref('properties', r.property_id), // 0.6.5: property_id ссылается на справочник properties
       ]);
     case 'property_values':
       return compact([

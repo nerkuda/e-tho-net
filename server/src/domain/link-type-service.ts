@@ -446,21 +446,11 @@ export function deleteLinkType(
         .prepare('UPDATE links SET type_id = NULL WHERE type_id = ? AND layer_id = ?')
         .run(id, ndb.layerId);
     }
-    // The type's property definitions go with it — together with their stored
-    // values and default overrides, which had no other SQL path anyway and,
-    // since S2, no FK either (docs/13-layers.md §3).
-    ndb
-      .prepare(
-        `DELETE FROM property_values WHERE property_id IN
-           (SELECT id FROM type_properties_v WHERE owner_type = 'link_type' AND owner_id = ?)`,
-      )
-      .run(id);
-    ndb
-      .prepare(
-        `DELETE FROM type_property_overrides WHERE property_id IN
-           (SELECT id FROM type_properties_v WHERE owner_type = 'link_type' AND owner_id = ?)`,
-      )
-      .run(id);
+    // The type's property BINDINGS go with it (0.6.5: a binding is the
+    // property's role in this type). Stored values are deliberately NOT
+    // touched — they address registry properties, not bindings, and become
+    // values outside type (02-data-model.md §3.5a); other types' overrides of
+    // these properties stay valid too. Only THIS type's own rows die with it.
     ndb
       .prepare("DELETE FROM type_properties WHERE owner_type = 'link_type' AND owner_id = ?")
       .run(id);
@@ -473,9 +463,9 @@ export function deleteLinkType(
 
 /**
  * Tombstone cascade of a link type deletion in a working layer (13-layers.md
- * §5.2, §13): visible values/overrides/definitions of the type's subtree, then
- * the visible links' `type_id = NULL` (as shadow edits), then the type row
- * itself.
+ * §5.2, §13): visible bindings and the type's own overrides, then the visible
+ * links' `type_id = NULL` (as shadow edits), then the type row itself.
+ * Values survive as outside-type values (0.6.5).
  */
 function tombstoneLinkTypeSubtree(ndb: NetworkDb, typeId: string): void {
   const defIds = (
@@ -483,23 +473,15 @@ function tombstoneLinkTypeSubtree(ndb: NetworkDb, typeId: string): void {
       .prepare("SELECT id FROM type_properties_v WHERE owner_type = 'link_type' AND owner_id = ?")
       .all(typeId) as { id: string }[]
   ).map((r) => r.id);
-  const defList = defIds.map(() => '?').join(', ');
-  if (defIds.length > 0) {
-    const valueIds = (
-      ndb
-        .prepare(`SELECT id FROM property_values_v WHERE property_id IN (${defList})`)
-        .all(...defIds) as { id: string }[]
-    ).map((r) => r.id);
-    for (const valueId of valueIds) materializeTombstone(ndb, 'property_values', valueId);
-  }
+  // Overrides stored on this type die with it; other types' overrides for the
+  // same registry properties stay valid (0.6.5).
   const overrideIds = (
     ndb
       .prepare(
         `SELECT id FROM type_property_overrides_v
-         WHERE owner_type = 'link_type'
-           AND (type_id = ?${defIds.length > 0 ? ` OR property_id IN (${defList})` : ''})`,
+         WHERE owner_type = 'link_type' AND type_id = ?`,
       )
-      .all(...[typeId, ...defIds]) as { id: string }[]
+      .all(typeId) as { id: string }[]
   ).map((r) => r.id);
   for (const overrideId of overrideIds) {
     materializeTombstone(ndb, 'type_property_overrides', overrideId);

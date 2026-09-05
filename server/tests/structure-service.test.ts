@@ -126,15 +126,18 @@ function seedLinkType(ndb: NetworkDb, forward: string): string {
   return id;
 }
 
-/** Insert a thought-type property definition and return its id. */
-function seedProperty(ndb: NetworkDb, ownerId: string, key: string, valueType: string): string {
+/** Insert a property into the registry and return its id (property_id). */
+function seedProperty(ndb: NetworkDb, _ownerId: string, key: string, valueType: string): string {
+  // 0.6.5: `property_values.property_id` references the registry. The previous
+  // owner-binding is irrelevant to the structure filter (no `listEffectiveTypeProperties`
+  // assertions in this suite), so we skip the binding here.
   const id = randomUUID();
   ndb
     .prepare(
-      `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, position)
-       VALUES (?, 'thought_type', ?, ?, ?, 0)`,
+      `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+       VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', ?, lower(?), ?, NULL, NULL, '2024', '2024')`,
     )
-    .run(id, ownerId, key, valueType);
+    .run(id, key, key, valueType);
   return id;
 }
 

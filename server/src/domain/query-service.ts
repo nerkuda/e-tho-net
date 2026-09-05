@@ -264,8 +264,8 @@ function propertyClause(cond: PropertyQueryCondition): Clause {
     return {
       sql: `EXISTS (
         SELECT 1 FROM property_values_v pv
-        JOIN type_properties_v tp ON tp.id = pv.property_id
-        WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND tp.key = ?
+        JOIN properties_v p ON p.id = pv.property_id /* 0.6.5: значения ссылаются на справочник properties */
+        WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND p.name = ?
           AND (pv.value_text ${cmp} ? OR pv.value_date ${cmp} ? OR pv.value_thought_ref ${cmp} ?${refLike}))`,
       params,
     };
@@ -280,8 +280,8 @@ function propertyClause(cond: PropertyQueryCondition): Clause {
   return {
     sql: `EXISTS (
       SELECT 1 FROM property_values_v pv
-      JOIN type_properties_v tp ON tp.id = pv.property_id
-      WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND tp.key = ?
+      JOIN properties_v p ON p.id = pv.property_id /* 0.6.5: значения ссылаются на справочник properties */
+      WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND p.name = ?
         AND pv.${column} ${compare} ?)`,
     params: [cond.key, param],
   };

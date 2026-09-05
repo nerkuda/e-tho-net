@@ -29,6 +29,7 @@ import {
 import {
   createTypeProperty,
   deleteTypeProperty,
+  getPropertyValues,
   getTypeProperty,
   listTypeProperties,
   reorderTypeProperties,
@@ -178,7 +179,7 @@ describe(
         }
       });
 
-      it('deleting a type cascades its property definitions and stored values', () => {
+      it('deleting a type drops its bindings but keeps values as outside-type', () => {
         const ndb = createInMemoryNetworkDb();
         try {
           const tt = createThoughtType(ndb, { name: 'Cascade' }, USER);
@@ -188,11 +189,14 @@ describe(
 
           deleteThoughtType(ndb, tt.id, 1, { force: true, actorUserId: USER });
 
+          // 0.6.5: bindings of the dropped type are gone; values stay — the
+          // thought lost its type, so the value is now «вне типа» and must be
+          // flagged as such (see требование «Значения вне типа сохраняются»).
           assert.equal(listTypeProperties(ndb, 'thought_type', tt.id).length, 0);
-          const leftover = ndb.prepare('SELECT COUNT(*) AS c FROM property_values').get() as {
-            c: number;
-          };
-          assert.equal(leftover.c, 0);
+          const values = getPropertyValues(ndb, 'thought', thoughtId);
+          assert.equal(values.length, 1);
+          assert.equal(values[0]!.outside_type, true);
+          assert.equal(values[0]!.value, 'Jane');
         } finally {
           ndb.close();
         }
@@ -296,7 +300,7 @@ describe(
         }
       });
 
-      it('deleting a link type cascades its property definitions and values', () => {
+      it('deleting a link type drops its bindings but keeps values as outside-type', () => {
         const ndb = createInMemoryNetworkDb();
         try {
           const lt = createLinkType(ndb, { name_forward: 'f', name_reverse: 'r' }, USER);
@@ -314,11 +318,12 @@ describe(
 
           deleteLinkType(ndb, lt.id, 1, { force: true });
 
+          // 0.6.5: see thought-type test above — same contract for links.
           assert.equal(listTypeProperties(ndb, 'link_type', lt.id).length, 0);
-          const leftover = ndb.prepare('SELECT COUNT(*) AS c FROM property_values').get() as {
-            c: number;
-          };
-          assert.equal(leftover.c, 0);
+          const values = getPropertyValues(ndb, 'link', linkId);
+          assert.equal(values.length, 1);
+          assert.equal(values[0]!.outside_type, true);
+          assert.equal(values[0]!.value, 5);
         } finally {
           ndb.close();
         }

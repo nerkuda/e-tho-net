@@ -172,10 +172,10 @@ describe('thought meta (N2)', { skip: !nativeAvailable() }, () => {
     const prop = randomUUID();
     ndb
       .prepare(
-        `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, required, position)
-         VALUES (?, 'thought_type', ?, 'project', 'thought_ref', 0, 0)`,
+        `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+         VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', 'project', 'project', 'thought_ref', NULL, NULL, '2024', '2024')`,
       )
-      .run(prop, type);
+      .run(prop);
     const target = seedThought(ndb);
     const owner1 = seedThought(ndb);
     const owner2 = seedThought(ndb);

@@ -446,21 +446,12 @@ export function deleteThoughtType(
         )
         .run(now, opts.actorUserId ?? 'system', id, ndb.layerId);
     }
-    // The type's property definitions go with it — together with their stored
-    // values and default overrides, which had no other SQL path anyway and,
-    // since S2, no FK either (docs/13-layers.md §3).
-    ndb
-      .prepare(
-        `DELETE FROM property_values WHERE property_id IN
-           (SELECT id FROM type_properties_v WHERE owner_type = 'thought_type' AND owner_id = ?)`,
-      )
-      .run(id);
-    ndb
-      .prepare(
-        `DELETE FROM type_property_overrides WHERE property_id IN
-           (SELECT id FROM type_properties_v WHERE owner_type = 'thought_type' AND owner_id = ?)`,
-      )
-      .run(id);
+    // The type's property BINDINGS go with it (0.6.5: a binding is the
+    // property's role in this type). Stored values are deliberately NOT
+    // touched — they address registry properties, not bindings, and become
+    // values outside type (02-data-model.md §3.5a); the same goes for other
+    // types' overrides of these properties (they reference the registry too).
+    // Only THIS type's own override rows die with it.
     ndb
       .prepare("DELETE FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?")
       .run(id);
@@ -475,9 +466,9 @@ export function deleteThoughtType(
 
 /**
  * Tombstone cascade of a thought type deletion in a working layer
- * (13-layers.md §5.2, §13): visible values/overrides/definitions of the type's
- * subtree, then the visible thoughts' `type_id = NULL` (as shadow edits), then
- * the type row itself.
+ * (13-layers.md §5.2, §13): visible bindings and the type's own overrides,
+ * then the visible thoughts' `type_id = NULL` (as shadow edits), then the
+ * type row itself. Values survive as outside-type values (0.6.5).
  */
 function tombstoneThoughtTypeSubtree(ndb: NetworkDb, typeId: string, actorUserId: string): void {
   const defIds = (
@@ -487,25 +478,15 @@ function tombstoneThoughtTypeSubtree(ndb: NetworkDb, typeId: string, actorUserId
       )
       .all(typeId) as { id: string }[]
   ).map((r) => r.id);
-  const defList = defIds.map(() => '?').join(', ');
-  // Values of the definitions (visible in this layer's chain).
-  if (defIds.length > 0) {
-    const valueIds = (
-      ndb
-        .prepare(`SELECT id FROM property_values_v WHERE property_id IN (${defList})`)
-        .all(...defIds) as { id: string }[]
-    ).map((r) => r.id);
-    for (const valueId of valueIds) materializeTombstone(ndb, 'property_values', valueId);
-  }
-  // Overrides: set on this type, or on other types for these properties.
+  // Overrides stored on this type die with it; other types' overrides for the
+  // same registry properties stay valid (0.6.5).
   const overrideIds = (
     ndb
       .prepare(
         `SELECT id FROM type_property_overrides_v
-         WHERE owner_type = 'thought_type'
-           AND (type_id = ?${defIds.length > 0 ? ` OR property_id IN (${defList})` : ''})`,
+         WHERE owner_type = 'thought_type' AND type_id = ?`,
       )
-      .all(...[typeId, ...defIds]) as { id: string }[]
+      .all(typeId) as { id: string }[]
   ).map((r) => r.id);
   for (const overrideId of overrideIds) {
     materializeTombstone(ndb, 'type_property_overrides', overrideId);

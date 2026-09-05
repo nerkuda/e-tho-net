@@ -49,7 +49,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { getTypeProperty } from './property-service.js';
+import { getNetworkProperty } from './property-service.js';
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
 import { getThoughtOrThrow, rowToThoughtRef } from './thought-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
@@ -569,8 +569,9 @@ function buildFilterQuerySql(
   }
 
   for (const cond of req.properties ?? []) {
-    const def = getTypeProperty(ndb, cond.property_id);
-    if (def === null) continue; // definition deleted after the filter was saved
+    // 0.6.5: a saved filter's property_id references the `properties` registry.
+    const def = getNetworkProperty(ndb, cond.property_id);
+    if (def === null) continue; // property deleted after the filter was saved
     const allowed = OPS_BY_VALUE_TYPE[def.value_type];
     if (!allowed.includes(cond.op)) {
       throw new EtnError(

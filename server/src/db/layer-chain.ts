@@ -41,6 +41,7 @@ export const BRANCHABLE_TABLES = [
   'links',
   'thought_types',
   'link_types',
+  'properties',
   'type_properties',
   'type_property_overrides',
   'property_values',

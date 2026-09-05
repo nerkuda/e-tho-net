@@ -503,10 +503,10 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const propId = randomUUID();
       ndb
         .prepare(
-          `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, required, position)
-           VALUES (?, 'thought_type', ?, 'author', 'thought_ref', 0, 0)`,
+          `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+           VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', 'author', 'author', 'thought_ref', NULL, NULL, '2024', '2024')`,
         )
-        .run(propId, typeId);
+        .run(propId);
       const seed = (title: string): string => {
         const id = randomUUID();
         ndb
@@ -2267,12 +2267,22 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         { key: 'published', value_type: 'bool' },
       ];
       for (const p of props) {
+        // 0.6.5: each property is a registry row + a binding to the type.
+        // `etn.properties.set` resolves by registry name and writes only on
+        // bound types — both rows are required.
+        const propId = randomUUID();
         ndb
           .prepare(
-            `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, required, position)
-             VALUES (?, 'thought_type', ?, ?, ?, 0, 0)`,
+            `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+             VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', ?, lower(?), ?, NULL, NULL, '2024', '2024')`,
           )
-          .run(randomUUID(), typeId, p.key, p.value_type);
+          .run(propId, p.key, p.key, p.value_type);
+        ndb
+          .prepare(
+            `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, property_id, required, position)
+             VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', 'thought_type', ?, ?, 0, 0)`,
+          )
+          .run(randomUUID(), typeId, propId);
       }
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -2392,31 +2402,31 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // Stringified booleans are coerced back (case-insensitive)…
         let res = await setProp('enabled', 'true');
         assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(boolProp.id).value_bool, 1);
+        assert.equal(readRow(boolProp.property_id).value_bool, 1);
         res = await setProp('enabled', 'FALSE');
         assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(boolProp.id).value_bool, 0);
+        assert.equal(readRow(boolProp.property_id).value_bool, 0);
         // …and real booleans keep working unchanged.
         res = await setProp('enabled', true);
         assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(boolProp.id).value_bool, 1);
+        assert.equal(readRow(boolProp.property_id).value_bool, 1);
 
         // Stringified finite numbers are coerced…
         res = await setProp('rank', '42');
         assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(numProp.id).value_number, 42);
+        assert.equal(readRow(numProp.property_id).value_number, 42);
         res = await setProp('rank', '3.5');
         assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(numProp.id).value_number, 3.5);
+        assert.equal(readRow(numProp.property_id).value_number, 3.5);
         // …and real numbers keep working unchanged.
         res = await setProp('rank', 7);
         assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(numProp.id).value_number, 7);
+        assert.equal(readRow(numProp.property_id).value_number, 7);
 
         // Text properties never coerce: "true" stays a string.
         res = await setProp('label', 'true');
         assert.equal(res.isError, undefined, toolText(res));
-        assert.equal(readRow(textProp.id).value_text, 'true');
+        assert.equal(readRow(textProp.property_id).value_text, 'true');
 
         // Garbage strings fall through the coercion and are rejected by the
         // (untouched) domain validation.
@@ -2481,7 +2491,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(res.isError, undefined, res.isError === true ? toolText(res) : undefined);
         const stored = ndb
           .prepare('SELECT value_thought_ref FROM property_values WHERE owner_id = ? AND property_id = ?')
-          .get(bookId, def.id) as { value_thought_ref: string };
+          .get(bookId, def.property_id) as { value_thought_ref: string };
         assert.deepEqual(JSON.parse(stored.value_thought_ref), [a1, a2]);
 
         // etn.thoughts.get resolves the array into [{id, title}] (N4).
@@ -2491,7 +2501,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(got.isError, undefined);
         const card = toolJson<{ properties: Array<{ property_id: string; value: unknown }> }>(got);
-        const prop = card.properties.find((p) => p.property_id === def.id);
+        const prop = card.properties.find((p) => p.property_id === def.property_id);
         assert.deepEqual(prop?.value, [
           { id: a1, title: 'Автор 1' },
           { id: a2, title: 'Автор 2' },
@@ -2566,7 +2576,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const w = result.warnings![0]!;
         assert.equal(w.code, 'REQUIRED_PROPERTY_MISSING');
         assert.equal(w.key, 'status');
-        assert.equal(w.property_id, required.id);
+        assert.equal(w.property_id, required.property_id);
         assert.equal(w.defined_on, type.id);
         assert.equal(w.value_type, 'text');
         assert.equal(w.inherited, false);
@@ -2741,8 +2751,8 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         });
         const againResult = toolJson<{ warnings: Array<{ property_id: string }> }>(again);
         const propertyIds = new Set(againResult.warnings.map((w) => w.property_id));
-        assert.ok(propertyIds.has(status.id));
-        assert.ok(propertyIds.has(owner.id));
+        assert.ok(propertyIds.has(status.property_id));
+        assert.ok(propertyIds.has(owner.property_id));
       } finally {
         await handle.close();
       }
@@ -3579,10 +3589,10 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const propId = randomUUID();
         ndb
           .prepare(
-            `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, required, position)
-             VALUES (?, 'thought_type', ?, 'author', 'thought_ref', 0, 0)`,
+            `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+             VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', 'author', 'author', 'thought_ref', NULL, NULL, '2024', '2024')`,
           )
-          .run(propId, typeId);
+          .run(propId);
         const targetId = randomUUID();
         ndb
           .prepare(

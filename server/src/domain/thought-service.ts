@@ -50,7 +50,7 @@ import {
   computeThoughtCardWarnings,
   countThoughtRefUsages,
   listEffectiveTypeProperties,
-  setPropertyValue,
+  setPropertyValueById,
 } from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
 
@@ -524,10 +524,12 @@ export function createThought(
     // thoughts are skipped on purpose: the root type's settings apply to them
     // implicitly (L21, docs/08-ui-spec.md §8.1) but intentionally carries no
     // defaults of its own, mirroring `computeThoughtCardWarnings` above.
+    // 0.6.5: the effective entry already carries the registry property_id —
+    // writing by id avoids a second name resolution.
     if (input.type_id !== undefined && input.type_id !== null) {
       for (const def of listEffectiveTypeProperties(ndb, 'thought_type', input.type_id)) {
         if (def.default_value !== null) {
-          setPropertyValue(ndb, 'thought', id, def.key, def.default_value);
+          setPropertyValueById(ndb, 'thought', id, def.property_id, def.default_value);
         }
       }
     }

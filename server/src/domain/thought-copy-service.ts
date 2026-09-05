@@ -43,7 +43,7 @@ import { createAttachment } from './attachment-service.js';
 import { createComment } from './comment-service.js';
 import { createLink } from './link-service.js';
 import { resolveLinkTypeIdByName } from './link-type-service.js';
-import { setPropertyValues } from './property-service.js';
+import { listEffectiveTypeProperties, setPropertyValues } from './property-service.js';
 import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { createThought, getThoughtOrThrow } from './thought-service.js';
 
@@ -174,7 +174,10 @@ function resolveProperties(
 ): void {
   // Look up the thought's effective type once so we know which keys are
   // `thought_ref` (and which of them allow multiple values). Other value
-  // types skip this branch.
+  // types skip this branch. 0.6.5: the property set is resolved through the
+  // EFFECTIVE (chain-inherited) list, not only the type's own bindings — a
+  // copied thought keeps `thought_ref` values of properties its type
+  // inherited from ancestors, too.
   const row = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(thoughtId) as
     | { type_id: string | null }
     | undefined;
@@ -183,23 +186,10 @@ function resolveProperties(
 
   const refKeys = new Map<string, boolean>();
   if (thoughtTypeId !== null) {
-    const propRows = ndb
-      .prepare(
-        `SELECT tp.key, tp.config FROM type_properties_v tp
-         WHERE tp.owner_type = 'thought_type' AND tp.owner_id = ?
-           AND tp.value_type = 'thought_ref'`,
-      )
-      .all(thoughtTypeId) as Array<{ key: string; config: string | null }>;
-    for (const p of propRows) {
-      let multiple = false;
-      if (p.config !== null) {
-        try {
-          multiple = (JSON.parse(p.config) as { multiple?: unknown }).multiple === true;
-        } catch {
-          multiple = false;
-        }
+    for (const def of listEffectiveTypeProperties(ndb, 'thought_type', thoughtTypeId)) {
+      if (def.value_type === 'thought_ref') {
+        refKeys.set(def.key, def.config?.multiple === true);
       }
-      refKeys.set(p.key, multiple);
     }
   }
 

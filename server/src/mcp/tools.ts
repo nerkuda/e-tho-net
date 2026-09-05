@@ -2558,7 +2558,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
    * string there.
    */
   const coerceStringifiedScalar = (
-    def: PropertyDefinition,
+    def: Pick<PropertyDefinition, 'value_type'>,
     value: PropertyValueValue,
   ): PropertyValueValue => {
     if (typeof value !== 'string') {

@@ -97,13 +97,16 @@ function seedThoughtType(ndb: NetworkDb, name: string): string {
 
 /** Insert a property definition (on a fake thought type) and return its id. */
 function seedPropertyDefinition(ndb: NetworkDb, key: string, valueType: string): string {
+  // 0.6.5: properties live in the `properties` registry; `property_values.property_id`
+  // references the registry, so the test id is a registry id. No type binding is
+  // created — the test only needs the registry row to match `p.name` in queries.
   const id = randomUUID();
   ndb
     .prepare(
-      `INSERT INTO type_properties (id, owner_type, owner_id, key, value_type, config, required, position)
-       VALUES (?, 'thought_type', ?, ?, ?, NULL, 0, 0)`,
+      `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+       VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', ?, lower(?), ?, NULL, NULL, '2024', '2024')`,
     )
-    .run(id, randomUUID(), key, valueType);
+    .run(id, key, key, valueType);
   return id;
 }
 

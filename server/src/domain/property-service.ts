@@ -1,16 +1,28 @@
 /**
- * Property service (tasks C5 + C6).
+ * Property service (0.6.5 — «Унификация работы со свойствами»; задачи C5+C6,
+ * затем разделение на справочник и привязки).
  *
- * Two concerns live here, both keyed by `owner_type`:
- *   * **Type-property definitions** (`type_properties`, C5) — which properties a
- *     thought type or link type exposes. Shared by {@link
- *     './thought-type-service.js'} and {@link './link-type-service.js'}.
- *   * **Property values** (`property_values`, C6) — the actual values stored on
- *     individual thoughts/links. See {@link setPropertyValue} and friends below.
+ * Three concerns live here, all keyed by `owner_type`:
+ *   * **Property registry** (`properties`) — the network-wide nature of a
+ *     property (name, value type, config, description). A property exists once
+ *     and is attached to any number of thought/link types. Name is unique per
+ *     network (case-insensitive, `name_key`), checked against the layer view
+ *     `properties_v` (02-data-model.md §3.4a).
+ *   * **Type bindings** (`type_properties`) — the property's role in one type:
+ *     `required`, `position`. Inheritance goes along the type chain (L21); a
+ *     binding on an ancestor makes the property visible to every descendant,
+ *     and attaching it to an ancestor drops the descendants' redundant
+ *     bindings in the same transaction (значения при этом не меняются — они
+ *     адресуются свойством, а не привязкой).
+ *   * **Property values** (`property_values`) — the actual values stored on
+ *     individual thoughts/links. `property_id` references the registry, so a
+ *     value survives type changes and detaches: a value whose property is not
+ *     attached to the owner's type chain is read back flagged `outside_type`
+ *     and can only be deleted, never written (02-data-model.md §3.5a).
  *
- * The two are deliberately in one module: `property_values.property_id`
- * references `type_properties.id`, and validating a value requires reading its
- * definition, so the definitions are the natural entry point for the value API.
+ * Reads go through the `*_v` layer views only (lint layers-s3); writes go
+ * through `materializeShadow`/`deleteRowLayered` like every other branchable
+ * table (13-layers.md §5).
  */
 
 import { randomUUID } from 'node:crypto';
@@ -20,6 +32,10 @@ import {
   PROPERTY_VALUE_TYPES,
   TYPE_OWNER_TYPES,
   type EffectiveTypeProperty,
+  type NetworkProperty,
+  type NetworkPropertyInput,
+  type NetworkPropertyUpdateInput,
+  type PropertyConfig,
   type PropertyDefinition,
   type PropertyDefinitionInput,
   type PropertyDefinitionUpdateInput,
@@ -35,7 +51,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { deleteRowLayered, isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
+import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
 import { rowToThoughtRef } from './thought-service.js';
 import {
   expandTypeIdsToSubtree,
@@ -46,35 +62,15 @@ import {
 } from './type-hierarchy.js';
 
 // ===========================================================================
-// Type-property definitions (C5)
+// Shared helpers
 // ===========================================================================
 
-/** Raw `type_properties` row (INTEGER boolean). */
-interface TypePropertyRow {
+/** The minimal nature of a property needed to validate/write a value. */
+export interface PropertyLike {
   id: string;
-  owner_type: string;
-  owner_id: string;
-  key: string;
-  value_type: string;
-  config: string | null;
-  required: number;
-  position: number;
-  description: string | null;
-}
-
-/** Convert a raw row into a {@link PropertyDefinition}. */
-function rowToPropertyDefinition(row: TypePropertyRow): PropertyDefinition {
-  return {
-    id: row.id,
-    owner_type: row.owner_type as TypeOwnerType,
-    owner_id: row.owner_id,
-    key: row.key,
-    value_type: row.value_type as PropertyValueType,
-    config: row.config ? (JSON.parse(row.config) as PropertyDefinition['config']) : null,
-    required: row.required === 1,
-    position: row.position,
-    description: row.description,
-  };
+  name: string;
+  value_type: PropertyValueType;
+  config: PropertyConfig | null;
 }
 
 /**
@@ -92,7 +88,7 @@ function normalizeDescription(description: unknown): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
-/** Validate a property key: non-empty string. */
+/** Validate a property name: non-empty string. */
 function validateKey(key: unknown): string {
   if (typeof key !== 'string' || key.trim() === '') {
     throw new EtnError('VALIDATION_ERROR', 'property key must be a non-empty string', {
@@ -129,51 +125,7 @@ function validateTypeOwnerType(ownerType: unknown): TypeOwnerType {
   return ownerType as TypeOwnerType;
 }
 
-/**
- * List the property definitions of a type, ordered by `position` then `key`
- * (docs/03-server-api.md §8).
- */
-export function listTypeProperties(
-  ndb: NetworkDb,
-  ownerType: TypeOwnerType,
-  ownerId: string,
-): PropertyDefinition[] {
-  const rows = ndb
-    .prepare(
-      'SELECT * FROM type_properties_v WHERE owner_type = ? AND owner_id = ? ORDER BY position, key',
-    )
-    .all(ownerType, ownerId) as TypePropertyRow[];
-  return rows.map(rowToPropertyDefinition);
-}
-
-/** Return a property definition by id, or `null` when absent. */
-export function getTypeProperty(ndb: NetworkDb, id: string): PropertyDefinition | null {
-  const row = ndb.prepare('SELECT * FROM type_properties_v WHERE id = ?').get(id) as
-    TypePropertyRow | undefined;
-  return row ? rowToPropertyDefinition(row) : null;
-}
-
-/**
- * Look up a property definition by (owner_type, owner_id, key). Used by the
- * value API to resolve the column to write to.
- */
-export function getTypePropertyByKey(
-  ndb: NetworkDb,
-  ownerType: TypeOwnerType,
-  ownerId: string,
-  key: string,
-): PropertyDefinition | null {
-  const row = ndb
-    .prepare('SELECT * FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND key = ?')
-    .get(ownerType, ownerId, key) as TypePropertyRow | undefined;
-  return row ? rowToPropertyDefinition(row) : null;
-}
-
-// ===========================================================================
-// Hierarchy (L21): chain-resolved definitions + default-value overrides
-// ===========================================================================
-
-/** The type table that stores owners of the given type_properties owner. */
+/** The type table that stores owners of the given binding owner type. */
 function ownerTypeTable(ownerType: TypeOwnerType): TypeTable {
   return ownerType === 'thought_type' ? 'thought_types' : 'link_types';
 }
@@ -192,12 +144,293 @@ function ownerTypeName(ndb: NetworkDb, ownerType: TypeOwnerType, ownerId: string
   return row ? `${row.name_forward} / ${row.name_reverse}` : ownerId;
 }
 
+// ===========================================================================
+// Property registry (`properties`) — 0.6.5
+// ===========================================================================
+
+/** Raw `properties` row. */
+interface PropertyRow {
+  id: string;
+  name: string;
+  name_key: string;
+  value_type: string;
+  config: string | null;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Convert a raw registry row into a {@link NetworkProperty}. */
+function rowToNetworkProperty(row: PropertyRow): NetworkProperty {
+  return {
+    id: row.id,
+    name: row.name,
+    value_type: row.value_type as PropertyValueType,
+    config: row.config ? (JSON.parse(row.config) as PropertyConfig) : null,
+    description: row.description,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+/** Every property of the registry visible in the connection's layer context. */
+export function listNetworkProperties(ndb: NetworkDb): NetworkProperty[] {
+  const rows = ndb
+    .prepare('SELECT * FROM properties_v ORDER BY name COLLATE NOCASE')
+    .all() as PropertyRow[];
+  return rows.map(rowToNetworkProperty);
+}
+
+/** A registry property by id, or `null` when absent. */
+export function getNetworkProperty(ndb: NetworkDb, id: string): NetworkProperty | null {
+  const row = ndb.prepare('SELECT * FROM properties_v WHERE id = ?').get(id) as
+    | PropertyRow
+    | undefined;
+  return row ? rowToNetworkProperty(row) : null;
+}
+
+/** A registry property by name (case-insensitive), or `null` when absent. */
+export function getNetworkPropertyByName(ndb: NetworkDb, name: string): NetworkProperty | null {
+  const row = ndb
+    .prepare('SELECT * FROM properties_v WHERE name_key = type_name_key(?)')
+    .get(name) as PropertyRow | undefined;
+  return row ? rowToNetworkProperty(row) : null;
+}
+
 /**
- * The chain of type ids whose property definitions are visible to a thought/
- * link of type `typeId`: the type itself, its ancestors up to the root — and,
- * when `typeId` is `null` (an untyped owner), just the root type, whose
- * settings apply to every element without a type (docs/08-ui-spec.md §8.1).
- * Ordered from the type itself up to the root.
+ * Throw `DUPLICATE` (409) when another visible property already holds the
+ * name. Uniqueness is checked against `properties_v` — the layer's view, not
+ * the physical table: the same name may coexist in different layers and only
+ * clash at merge time (02-data-model.md §3.4a, «Слои»).
+ */
+function assertNameAvailable(ndb: NetworkDb, name: string, exceptId: string | null): void {
+  const row = ndb
+    .prepare('SELECT id FROM properties_v WHERE name_key = type_name_key(?)')
+    .get(name) as { id: string } | undefined;
+  if (row && row.id !== exceptId) {
+    throw new EtnError('DUPLICATE', `свойство «${name}» уже есть в этой мыслесети`, {
+      name,
+      conflict_property_id: row.id,
+    });
+  }
+}
+
+/**
+ * Create a registry property (name must be free, case-insensitively). The row
+ * lands in the connection's layer; a same-`name_key` tombstone of this layer
+ * is woken by the upsert below.
+ */
+export function createNetworkProperty(
+  ndb: NetworkDb,
+  input: NetworkPropertyInput,
+): NetworkProperty {
+  const name = validateKey(input.name);
+  const valueType = validateValueType(input.value_type);
+  const configJson =
+    input.config === undefined || input.config === null ? null : JSON.stringify(input.config);
+  const description = normalizeDescription(input.description);
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  assertNameAvailable(ndb, name, null);
+  ndb
+    .prepare(
+      `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+       VALUES (?, ?, ?, type_name_key(?), ?, ?, ?, ?, ?)
+       ON CONFLICT (name_key, layer_id) DO UPDATE SET
+         deleted = 0,
+         name = excluded.name,
+         value_type = excluded.value_type,
+         config = excluded.config,
+         description = excluded.description,
+         updated_at = excluded.updated_at`,
+    )
+    .run(id, ndb.layerId, name, name, valueType, configJson, description, now, now);
+  // The conflict arm wakes a same-name tombstone of this layer keeping its
+  // ORIGINAL id — re-read by name, never by the fresh uuid.
+  return getNetworkPropertyByName(ndb, name)!;
+}
+
+/**
+ * Patch a registry property (last-write-wins per field). Changing `value_type`
+ * rewrites every stored value of the property in the same transaction:
+ * convertible values move to the new column, the rest are cleared (L6, and
+ * 02-data-model.md §3.4a). Renaming is safe — values address the property by
+ * id, not by name.
+ */
+export function updateNetworkProperty(
+  ndb: NetworkDb,
+  id: string,
+  changes: NetworkPropertyUpdateInput,
+): NetworkProperty {
+  const current = getNetworkProperty(ndb, id);
+  if (!current) {
+    throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'property', id });
+  }
+  const nextName = changes.name !== undefined ? validateKey(changes.name) : undefined;
+  const nextType =
+    changes.value_type !== undefined ? validateValueType(changes.value_type) : undefined;
+
+  return ndb.transaction(() => {
+    if (nextName !== undefined && nextName !== current.name) {
+      assertNameAvailable(ndb, nextName, id);
+    }
+    if (nextType !== undefined && nextType !== current.value_type) {
+      migratePropertyValues(ndb, id, current.value_type, nextType);
+    }
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    if (nextName !== undefined) {
+      sets.push('name = ?', 'name_key = type_name_key(?)');
+      args.push(nextName, nextName);
+    }
+    if (nextType !== undefined) {
+      sets.push('value_type = ?');
+      args.push(nextType);
+    }
+    if (changes.config !== undefined) {
+      sets.push('config = ?');
+      args.push(changes.config === null ? null : JSON.stringify(changes.config));
+    }
+    if (changes.description !== undefined) {
+      sets.push('description = ?');
+      args.push(normalizeDescription(changes.description));
+    }
+    if (sets.length === 0) {
+      return current;
+    }
+    sets.push('updated_at = ?');
+    args.push(new Date().toISOString());
+    materializeShadow(ndb, 'properties', id);
+    args.push(id, ndb.layerId);
+    ndb.prepare(`UPDATE properties SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`).run(
+      ...args,
+    );
+    return getNetworkProperty(ndb, id)!;
+  });
+}
+
+/**
+ * Delete a registry property. Allowed only when the property is attached to
+ * nothing and filled nowhere (even a value outside type blocks): the refusal
+ * returns two counters — how many types attach it and how many values are
+ * stored — so the client can explain what is holding it
+ * (02-data-model.md §3.4a «Удаление свойства блокируется»).
+ */
+export function deleteNetworkProperty(ndb: NetworkDb, id: string): void {
+  const current = getNetworkProperty(ndb, id);
+  if (!current) {
+    throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'property', id });
+  }
+  const typesCount = (
+    ndb
+      .prepare('SELECT COUNT(*) AS c FROM type_properties_v WHERE property_id = ?')
+      .get(id) as { c: number }
+  ).c;
+  const valuesCount = (
+    ndb
+      .prepare('SELECT COUNT(*) AS c FROM property_values_v WHERE property_id = ?')
+      .get(id) as { c: number }
+  ).c;
+  if (typesCount > 0 || valuesCount > 0) {
+    throw new EtnError(
+      'DUPLICATE',
+      'свойство подключено к типам или заполнено — сначала отключите его от всех типов и разберите значения',
+      { property_id: id, types_count: typesCount, values_count: valuesCount },
+    );
+  }
+  deleteRowLayered(ndb, 'properties', id);
+}
+
+// ===========================================================================
+// Type bindings (`type_properties`) — what a type exposes
+// ===========================================================================
+
+/** Raw binding row joined with its registry property. */
+interface BindingRow {
+  id: string;
+  owner_type: string;
+  owner_id: string;
+  property_id: string;
+  required: number;
+  position: number;
+  name: string;
+  value_type: string;
+  config: string | null;
+  description: string | null;
+}
+
+/** Convert a joined binding row into a {@link PropertyDefinition}. */
+function rowToPropertyDefinition(row: BindingRow): PropertyDefinition {
+  return {
+    id: row.id,
+    property_id: row.property_id,
+    owner_type: row.owner_type as TypeOwnerType,
+    owner_id: row.owner_id,
+    key: row.name,
+    value_type: row.value_type as PropertyValueType,
+    config: row.config ? (JSON.parse(row.config) as PropertyConfig) : null,
+    required: row.required === 1,
+    position: row.position,
+    description: row.description,
+  };
+}
+
+const BINDING_SELECT = `SELECT tp.id AS id, tp.owner_type AS owner_type, tp.owner_id AS owner_id,
+       tp.property_id AS property_id, tp.required AS required, tp.position AS position,
+       p.name AS name, p.value_type AS value_type, p.config AS config, p.description AS description
+  FROM type_properties_v tp
+  JOIN properties_v p ON p.id = tp.property_id`;
+
+/**
+ * List the own bindings of a type, ordered by `position` then name
+ * (docs/03-server-api.md §8). The registry nature is merged into each entry.
+ */
+export function listTypeProperties(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  ownerId: string,
+): PropertyDefinition[] {
+  const rows = ndb
+    .prepare(`${BINDING_SELECT} WHERE tp.owner_type = ? AND tp.owner_id = ? ORDER BY tp.position, p.name`)
+    .all(ownerType, ownerId) as BindingRow[];
+  return rows.map(rowToPropertyDefinition);
+}
+
+/** Return a binding (with its merged property nature) by binding id, or `null`. */
+export function getTypeProperty(ndb: NetworkDb, id: string): PropertyDefinition | null {
+  const row = ndb.prepare(`${BINDING_SELECT} WHERE tp.id = ?`).get(id) as
+    | BindingRow
+    | undefined;
+  return row ? rowToPropertyDefinition(row) : null;
+}
+
+/**
+ * Look up the binding of a property by (owner_type, owner_id, key) — the key
+ * resolves against the registry (names are unique per network). Returns `null`
+ * when the type does not attach a property with this name.
+ */
+export function getTypePropertyByKey(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  ownerId: string,
+  key: string,
+): PropertyDefinition | null {
+  const row = ndb
+    .prepare(`${BINDING_SELECT} WHERE tp.owner_type = ? AND tp.owner_id = ? AND p.name_key = type_name_key(?)`)
+    .get(ownerType, ownerId, key) as BindingRow | undefined;
+  return row ? rowToPropertyDefinition(row) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Hierarchy (L21): chain-resolved bindings + default-value/description overrides
+// ---------------------------------------------------------------------------
+
+/**
+ * The chain of type ids whose bindings are visible to a thought/link of type
+ * `typeId`: the type itself, its ancestors up to the root — and, when `typeId`
+ * is `null` (an untyped owner), just the root type, whose settings apply to
+ * every element without a type (docs/08-ui-spec.md §8.1). Ordered from the
+ * type itself up to the root.
  */
 function visibleTypeChain(
   ndb: NetworkDb,
@@ -212,58 +445,70 @@ function visibleTypeChain(
   return typeAncestors(ndb, table, typeId);
 }
 
-/** The default-value override a type holds for a property, or `null`. */function getOverride(
+/** The override rows a type holds for a property: both payloads at once. */
+function getOverrideRow(
   ndb: NetworkDb,
   ownerType: TypeOwnerType,
   typeId: string,
   propertyId: string,
-): PropertyValueValue {
+): { default_value: PropertyValueValue; description: string | null } | null {
   const row = ndb
     .prepare(
-      'SELECT default_value FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
+      'SELECT default_value, description FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
     )
-    .get(ownerType, typeId, propertyId) as { default_value: string } | undefined;
-  return row ? (JSON.parse(row.default_value) as PropertyValueValue) : null;
-}
-
-/** The description override a type holds for a property, or `null`. */
-function getDescriptionOverride(
-  ndb: NetworkDb,
-  ownerType: TypeOwnerType,
-  typeId: string,
-  propertyId: string,
-): string | null {
-  const row = ndb
-    .prepare(
-      'SELECT description FROM type_property_overrides_v WHERE owner_type = ? AND type_id = ? AND property_id = ?',
-    )
-    .get(ownerType, typeId, propertyId) as { description: string | null } | undefined;
-  return row?.description ?? null;
+    .get(ownerType, typeId, propertyId) as
+    | { default_value: string; description: string | null }
+    | undefined;
+  return row
+    ? { default_value: JSON.parse(row.default_value) as PropertyValueValue, description: row.description }
+    : null;
 }
 
 /**
- * Effective property definitions of a type (L21, docs/02-data-model.md §3.4.1):
- * the type's own definitions plus everything inherited from its ancestors,
- * ordered from the root down to the type. `default_value` on each entry is the
- * effective default — the override stored on this type (inherited properties
- * only), else the definition's own `config.default_value`. `description` is
- * effective the same way: the description override stored on this type, else
- * the definition's own `description`.
+ * Effective properties of a type (L21 + 0.6.5, docs/02-data-model.md §3.4.1):
+ * the type's own bindings plus everything inherited from its ancestors,
+ * ordered from the root down to the type. One property appears once in the
+ * chain — ancestors win by position, and the «attach to ancestor drops
+ * descendants' bindings» rule keeps the invariant on write.
+ *
+ * `default_value` and `description` are override-aware and transitive: the
+ * deepest type between the defining type and this one that stored an override
+ * wins, until a deeper type overrides it again.
  */
 export function listEffectiveTypeProperties(
   ndb: NetworkDb,
   ownerType: TypeOwnerType,
   ownerId: string,
 ): EffectiveTypeProperty[] {
-  const chainRootFirst = [...visibleTypeChain(ndb, ownerType, ownerId)].reverse();
+  const chainSelfFirst = visibleTypeChain(ndb, ownerType, ownerId);
+  const chainRootFirst = [...chainSelfFirst].reverse();
   const out: EffectiveTypeProperty[] = [];
   for (const typeId of chainRootFirst) {
     for (const def of listTypeProperties(ndb, ownerType, typeId)) {
       const inherited = typeId !== ownerId;
-      const override = inherited ? getOverride(ndb, ownerType, ownerId, def.id) : null;
-      const descOverride = inherited
-        ? getDescriptionOverride(ndb, ownerType, ownerId, def.id)
-        : null;
+      // Transitive overrides: walk from the type itself up to (excluding) the
+      // defining type; the first override row found wins (02-data-model.md
+      // §3.4.1 «Транзитивность»).
+      let override: PropertyValueValue = null;
+      let descOverride: string | null = null;
+      let overriddenHere = false;
+      let descriptionOverridden = false;
+      if (inherited) {
+        for (const t of chainSelfFirst) {
+          if (t === typeId) break;
+          const row = getOverrideRow(ndb, ownerType, t, def.property_id);
+          if (row === null) continue;
+          if (override === null && row.default_value !== null) {
+            override = row.default_value;
+            overriddenHere = t === ownerId;
+          }
+          if (descOverride === null && row.description !== null) {
+            descOverride = row.description;
+            descriptionOverridden = t === ownerId;
+          }
+          if (override !== null && descOverride !== null) break;
+        }
+      }
       const ownDefault = def.config?.default_value ?? null;
       out.push({
         ...def,
@@ -271,9 +516,9 @@ export function listEffectiveTypeProperties(
         defined_on: typeId,
         defined_on_name: ownerTypeName(ndb, ownerType, typeId),
         default_value: inherited ? (override ?? ownDefault) : ownDefault,
-        overridden_here: inherited && override !== null,
+        overridden_here: overriddenHere,
         description: inherited ? (descOverride ?? def.description) : def.description,
-        description_overridden: inherited && descOverride !== null,
+        description_overridden: descriptionOverridden,
       });
     }
   }
@@ -282,9 +527,11 @@ export function listEffectiveTypeProperties(
 
 /**
  * Shared guard of both override setters (default value, description): the type
- * and the property must resolve in the connection's layer context, and only a
- * property **inherited from an ancestor** may be overridden here — a type's own
- * property is edited on the definition itself.
+ * must resolve in the connection's layer context, and the addressed property
+ * (by binding id OR registry property id — legacy REST clients address the
+ * ancestor's binding, new ones the registry property) must be **inherited from
+ * an ancestor** — a property attached by the type itself is edited in the
+ * registry (its default and description apply to everyone).
  *
  * Throws `NOT_FOUND` (404) for a missing type/property and `VALIDATION_ERROR`
  * (422) for an own or out-of-chain property.
@@ -294,41 +541,63 @@ function assertOverridableInheritedProperty(
   ownerType: TypeOwnerType,
   ownerId: string,
   propertyId: string,
-): PropertyDefinition {
+): PropertyLike {
   validateTypeOwnerType(ownerType);
   // S5 (13-layers.md §13): the owner must resolve in the connection's layer
   // context — the `_v` view hides types tombstoned in this chain and keeps
-  // layer-only types invisible to the base, so an override can never attach
-  // to a type the current layer cannot see.
+  // layer-only types invisible to the base.
   const typeRow = ndb
     .prepare(`SELECT id FROM ${ownerTypeTable(ownerType)}_v WHERE id = ?`)
     .get(ownerId);
   if (!typeRow) {
     throw new EtnError('NOT_FOUND', `type ${ownerId} not found`, { entity: 'type', id: ownerId });
   }
-  const def = getTypeProperty(ndb, propertyId);
-  if (!def || def.owner_type !== ownerType) {
+  // Accept a binding id (legacy form: the ancestor's definition id) or a
+  // registry property id.
+  const binding = ndb
+    .prepare('SELECT property_id FROM type_properties_v WHERE id = ?')
+    .get(propertyId) as { property_id: string } | undefined;
+  const registryId = binding ? binding.property_id : propertyId;
+  const prop = getNetworkProperty(ndb, registryId);
+  if (!prop) {
     throw new EtnError('NOT_FOUND', `property ${propertyId} not found`, {
       entity: 'type_property',
       id: propertyId,
     });
   }
-  if (def.owner_id === ownerId) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'own defaults are edited on the property definition itself',
-      { entity: 'type_property', id: propertyId, owner_id: ownerId },
-    );
-  }
   const chain = visibleTypeChain(ndb, ownerType, ownerId);
-  if (!chain.includes(def.owner_id)) {
+  for (const typeId of chain) {
+    const own = ndb
+      .prepare(
+        'SELECT id FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+      )
+      .get(ownerType, typeId, registryId) as { id: string } | undefined;
+    if (!own) continue;
+    if (typeId === ownerId) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'собственные свойства правятся в справочнике — дефолт и описание сразу для всех типов',
+        { entity: 'type_property', id: registryId, owner_id: ownerId },
+      );
+    }
+    break; // found on the nearest chain member — inheritance confirmed
+  }
+  // Not attached anywhere in the chain at all → cannot be overridden here.
+  const attached = ndb
+    .prepare(
+      `SELECT 1 FROM type_properties_v
+       WHERE owner_type = ? AND property_id = ? AND owner_id IN (${chain.map(() => '?').join(', ')})
+       LIMIT 1`,
+    )
+    .get(ownerType, registryId, ...chain);
+  if (!attached) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'only properties inherited from ancestor types can be overridden',
-      { entity: 'type_property', id: propertyId, owner_id: ownerId },
+      'переопределять можно только свойства, подключённые предками этого типа',
+      { entity: 'type_property', id: registryId, owner_id: ownerId },
     );
   }
-  return def;
+  return { id: prop.id, name: prop.name, value_type: prop.value_type, config: prop.config };
 }
 
 /** The visible override rows of (type, property) — ids plus both payloads. */
@@ -352,13 +621,12 @@ function listOverrideRows(
 /**
  * Set or clear a type's default-value override of an inherited property
  * (docs/03-server-api.md §8). `value = null` resets the default back to the
- * definition's own — an override row that also carries a description override
+ * registry's own — an override row that also carries a description override
  * survives with `default_value = 'null'` (JSON null: "no default override").
  *
  * Throws `NOT_FOUND` (404) when the property or the type does not exist, and
- * `VALIDATION_ERROR` (422) when the property is defined on the type itself
- * (own defaults are edited through the definition's `config`) or when the
- * value does not match the property's value type.
+ * `VALIDATION_ERROR` (422) when the property is attached by the type itself
+ * or does not come from an ancestor.
  */
 export function setTypePropertyDefaultOverride(
   ndb: NetworkDb,
@@ -368,16 +636,16 @@ export function setTypePropertyDefaultOverride(
   value: PropertyValueValue,
 ): void {
   ndb.transaction(() => {
-    const def = assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
+    const prop = assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
     if (value !== null) {
-      validateAndCoerce(ndb, def, value);
+      validateAndCoerce(ndb, prop, value);
     }
     const now = new Date().toISOString();
     if (value === null) {
       // Reset the default only: a row that still carries a description
       // override survives with default_value = 'null' (JSON null reads back
       // as "no override"); a row overriding nothing is removed.
-      for (const row of listOverrideRows(ndb, ownerType, ownerId, propertyId)) {
+      for (const row of listOverrideRows(ndb, ownerType, ownerId, prop.id)) {
         if (row.description === null) {
           // S4: физически в основе, надгробием в слое (13-layers.md §5.2).
           deleteRowLayered(ndb, 'type_property_overrides', row.id);
@@ -394,12 +662,9 @@ export function setTypePropertyDefaultOverride(
     }
     // S5 (13-layers.md §5.1): a visible ancestor row for this natural key is
     // shadowed FIRST — a fresh logical id would leave both rows live in this
-    // layer's view (resolution goes per logical id, §4.1), and the effective
-    // default would depend on row order. The shadow keeps the copy-on-write
-    // chain: one visible override per (type, property) in every context.
-    // The conflict arm updates ONLY default_value, so a description override
-    // held by the same row survives.
-    const existingOverride = listOverrideRows(ndb, ownerType, ownerId, propertyId)[0];
+    // layer's view. The conflict arm updates ONLY default_value, so a
+    // description override held by the same row survives.
+    const existingOverride = listOverrideRows(ndb, ownerType, ownerId, prop.id)[0];
     if (existingOverride) {
       materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
     }
@@ -412,20 +677,17 @@ export function setTypePropertyDefaultOverride(
            updated_at = excluded.updated_at,
            deleted = 0`,
       )
-      .run(randomUUID(), ndb.layerId, ownerType, ownerId, propertyId, JSON.stringify(value), now, now);
+      .run(randomUUID(), ndb.layerId, ownerType, ownerId, prop.id, JSON.stringify(value), now, now);
   });
 }
 
 /**
  * Set or clear a type's description override of an inherited property
  * (docs/03-server-api.md §8.2). `description = null` (or a blank string)
- * resets the effective description back to the definition's own — an override
- * row that also carries a default-value override survives with
- * `description = NULL`; a row overriding nothing is removed.
+ * resets the effective description back to the registry's own.
  *
- * Semantics mirror {@link setTypePropertyDefaultOverride}: the override is
- * inherited by the type's own subtree until they override it themselves
- * (`description_overridden` in the effective list).
+ * Semantics mirror {@link setTypePropertyDefaultOverride}; both overrides are
+ * transitive down the type subtree until a deeper type overrides them.
  */
 export function setTypePropertyDescriptionOverride(
   ndb: NetworkDb,
@@ -436,15 +698,14 @@ export function setTypePropertyDescriptionOverride(
 ): void {
   const normalized = normalizeDescription(description);
   ndb.transaction(() => {
-    assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
+    const prop = assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
     const now = new Date().toISOString();
     if (normalized === null) {
       // Reset the description only: a row that still carries a default-value
       // override survives with description = NULL; a row overriding nothing
       // is removed.
-      for (const row of listOverrideRows(ndb, ownerType, ownerId, propertyId)) {
+      for (const row of listOverrideRows(ndb, ownerType, ownerId, prop.id)) {
         if (JSON.parse(row.default_value) === null) {
-          // S4: физически в основе, надгробием в слое (13-layers.md §5.2).
           deleteRowLayered(ndb, 'type_property_overrides', row.id);
           continue;
         }
@@ -457,12 +718,7 @@ export function setTypePropertyDescriptionOverride(
       }
       return;
     }
-    // Same copy-on-write discipline as the default override above: shadow the
-    // visible row first, then upsert by the natural key. The conflict arm
-    // updates ONLY description, so a default-value override held by the same
-    // row survives; a brand-new row stores default_value = 'null' (JSON null:
-    // "no default override").
-    const existingOverride = listOverrideRows(ndb, ownerType, ownerId, propertyId)[0];
+    const existingOverride = listOverrideRows(ndb, ownerType, ownerId, prop.id)[0];
     if (existingOverride) {
       materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
     }
@@ -475,53 +731,30 @@ export function setTypePropertyDescriptionOverride(
            updated_at = excluded.updated_at,
            deleted = 0`,
       )
-      .run(randomUUID(), ndb.layerId, ownerType, ownerId, propertyId, normalized, now, now);
+      .run(randomUUID(), ndb.layerId, ownerType, ownerId, prop.id, normalized, now, now);
   });
 }
 
 /**
- * A key is available for a definition on `ownerId` when no other definition
- * with the same key exists anywhere in the owner's ancestor chain or subtree —
- * a duplicate would make the effective property list of some type ambiguous.
- */
-function assertKeyAvailableInTree(
-  ndb: NetworkDb,
-  ownerType: TypeOwnerType,
-  ownerId: string,
-  key: string,
-  exceptPropertyId: string | null,
-): void {
-  const table = ownerTypeTable(ownerType);
-  const scope = new Set<string>(typeAncestors(ndb, table, ownerId));
-  for (const id of subtreeIds(ndb, table, ownerId)) scope.add(id);
-  const stmt = ndb.prepare(
-    'SELECT id FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND key = ?',
-  );
-  for (const typeId of scope) {
-    const clash = stmt.get(ownerType, typeId, key) as { id: string } | undefined;
-    if (clash && clash.id !== exceptPropertyId) {
-      throw new EtnError(
-        'DUPLICATE',
-        `свойство «${key}» уже есть у этого типа или связанного с ним типа`,
-        { owner_type: ownerType, owner_id: ownerId, key, clash_owner_id: typeId },
-      );
-    }
-  }
-}
-
-/**
- * Create a property definition on a type (docs/03-server-api.md §8). `position`
- * defaults to one past the current maximum so new properties land last. The
- * row lands in the connection's layer; a definition with the same key deleted
- * earlier **in the same layer** is woken from its tombstone (it keeps the
- * original id and `base_version`, 13-layers.md §5.2).
+ * Create-or-attach: the legacy `POST …/types/{id}/properties` entry point.
  *
- * Throws `NOT_FOUND` (404) when the owner type does not resolve in the
- * connection's layer context (S5, 13-layers.md §13 — a base write cannot
- * attach a definition to a layer-only type), or `DUPLICATE` (409) if a
- * property with the same key already exists on the owner or on any related
- * type in its ancestor chain / subtree — the effective property list must
- * stay unambiguous (L21).
+ * New model (0.6.5): the property lives in the registry.
+ *   * a registry property with this name (case-insensitive) already exists →
+ *     it is attached to the type as-is; the request's nature fields
+ *     (`value_type`/`config`/`description`) are ignored — the registry is the
+ *     single source of the property's nature;
+ *   * otherwise a registry property is created with the given nature first.
+ *
+ * Then the binding is created with the given `required`/`position`. Attaching
+ * to a type whose ANCESTOR already binds the property is rejected with
+ * `DUPLICATE` — the property is already inherited. Attaching to a type drops
+ * the same property's redundant bindings across the type's whole SUBTREE in
+ * the same transaction (02-data-model.md §3.4.1); values are never touched —
+ * they address the property, not the binding.
+ *
+ * `position` defaults to one past the current maximum so new properties land
+ * last. The binding row lands in the connection's layer; a binding tombstone
+ * of this layer is woken by the upsert.
  */
 export function createTypeProperty(
   ndb: NetworkDb,
@@ -531,12 +764,9 @@ export function createTypeProperty(
 ): PropertyDefinition {
   validateTypeOwnerType(ownerType);
   const key = validateKey(input.key);
-  const valueType = validateValueType(input.value_type);
-  const id = randomUUID();
-
   return ndb.transaction(() => {
     // S5 (13-layers.md §13): the owner must resolve in the connection's layer
-    // context — a base write cannot attach a definition to a layer-only type,
+    // context — a base write cannot attach a binding to a layer-only type,
     // and a layer write cannot attach one to a type tombstoned in its chain.
     const owner = ndb
       .prepare(`SELECT id FROM ${ownerTypeTable(ownerType)}_v WHERE id = ?`)
@@ -544,7 +774,60 @@ export function createTypeProperty(
     if (!owner) {
       throw new EtnError('NOT_FOUND', `type ${ownerId} not found`, { entity: 'type', id: ownerId });
     }
-    assertKeyAvailableInTree(ndb, ownerType, ownerId, key, null);
+
+    // Registry first: reuse by name, else create.
+    let prop = getNetworkPropertyByName(ndb, key);
+    if (!prop) {
+      prop = createNetworkProperty(ndb, {
+        name: key,
+        value_type: validateValueType(input.value_type),
+        config: input.config ?? null,
+        description: input.description ?? null,
+      });
+    }
+
+    // A binding on an ancestor means the property is already inherited — the
+    // effective list must keep exactly one entry per property per chain. A
+    // visible binding on the type itself is a duplicate attach.
+    const chain = visibleTypeChain(ndb, ownerType, ownerId);
+    for (const typeId of chain) {
+      const clash = ndb
+        .prepare(
+          'SELECT id FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+        )
+        .get(ownerType, typeId, prop.id) as { id: string } | undefined;
+      if (!clash) continue;
+      if (typeId === ownerId) {
+        throw new EtnError('DUPLICATE', `свойство «${key}» уже подключено к этому типу`, {
+          owner_type: ownerType,
+          owner_id: ownerId,
+          key,
+          clash_owner_id: typeId,
+        });
+      }
+      throw new EtnError(
+        'DUPLICATE',
+        `свойство «${key}» уже подключено родительским типом — оно и так наследуется`,
+        { owner_type: ownerType, owner_id: ownerId, key, clash_owner_id: typeId },
+      );
+    }
+
+    // Attaching here makes the same property's bindings across the subtree
+    // redundant (02-data-model.md §3.4.1): drop them in this transaction.
+    // Values survive — they reference the property, not the binding.
+    const table = ownerTypeTable(ownerType);
+    for (const typeId of subtreeIds(ndb, table, ownerId)) {
+      if (typeId === ownerId) continue;
+      const redundant = ndb
+        .prepare(
+          'SELECT id FROM type_properties_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+        )
+        .get(ownerType, typeId, prop.id) as { id: string } | undefined;
+      if (redundant) {
+        deleteRowLayered(ndb, 'type_properties', redundant.id);
+      }
+    }
+
     const position =
       input.position ??
       (
@@ -554,25 +837,19 @@ export function createTypeProperty(
           )
           .get(ownerType, ownerId) as { p: number }
       ).p;
-    const configJson =
-      input.config === undefined || input.config === null ? null : JSON.stringify(input.config);
-    const description = normalizeDescription(input.description);
+    const bindingId = randomUUID();
     ndb
       .prepare(
-        `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, key, value_type, config, required, position, description)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (owner_type, owner_id, key, layer_id) DO UPDATE SET
+        `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, property_id, required, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (owner_type, owner_id, property_id, layer_id) DO UPDATE SET
            deleted = 0,
-           value_type = excluded.value_type,
-           config = excluded.config,
            required = excluded.required,
-           position = excluded.position,
-           description = excluded.description`,
+           position = excluded.position`,
       )
-      .run(id, ndb.layerId, ownerType, ownerId, key, valueType, configJson, input.required ? 1 : 0, position, description);
-    // S5: the upsert's conflict arm wakes a same-key tombstone of this layer
-    // (`deleted = 0`) — the woken row keeps its ORIGINAL id, so re-read by
-    // (owner, key), never by the fresh uuid (it resolves only on a clean INSERT).
+      .run(bindingId, ndb.layerId, ownerType, ownerId, prop.id, input.required ? 1 : 0, position);
+    // The conflict arm wakes a same-(owner, property) tombstone of this layer
+    // keeping its ORIGINAL id — re-read by (owner, key), never by the fresh uuid.
     return getTypePropertyByKey(ndb, ownerType, ownerId, key)!;
   });
 }
@@ -585,10 +862,6 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}($|T)/;
  * raw SQL value to rewrite, or `null` when the value cannot be represented —
  * the caller then clears it. Deliberately conservative: dates never become
  * numbers, thought refs never convert into anything but text.
- *
- * A multiple `thought_ref` value (`string[]`) degrades to its comma-joined
- * id list when converted to text — mirroring how multiple text values are
- * stored — and is cleared for every other target type.
  */
 function convertStoredValue(
   value: string | number | boolean | string[],
@@ -642,6 +915,8 @@ function convertStoredValue(
  * Rewrite every stored value of a property whose `value_type` changed (L6):
  * convertible values move to the new column, the rest are deleted. Runs in the
  * caller's transaction so a failed migration rolls the type change back.
+ * Scope: the values visible in the connection's layer context (matches the
+ * write path — a layer edits its own view of the row set).
  */
 function migratePropertyValues(
   ndb: NetworkDb,
@@ -677,14 +952,14 @@ function migratePropertyValues(
 }
 
 /**
- * Patch a property definition (docs/03-server-api.md §8). Last-write-wins per
- * field. `type_properties` has no `version` column, so there is no If-Match
- * guard here.
+ * Patch a type property (docs/03-server-api.md §8, legacy surface). The id
+ * addresses the BINDING; `required`/`position` edit the binding itself, while
+ * `key`/`value_type`/`config`/`description` edit the registry property — and
+ * so apply immediately to every type attaching it (0.6.5 semantics).
  *
- * Changing `value_type` rewrites every stored value of the property in the same
- * transaction: values that fit the new type are converted, the rest are
- * cleared. Changing `key` keeps stored values attached (they reference the
- * property id, not the key).
+ * Changing `value_type` rewrites every stored value of the property in the
+ * same transaction (see {@link migratePropertyValues}); renaming keeps stored
+ * values attached (they reference the property id, not the name).
  */
 export function updateTypeProperty(
   ndb: NetworkDb,
@@ -699,26 +974,20 @@ export function updateTypeProperty(
   const nextType = changes.value_type !== undefined ? validateValueType(changes.value_type) : undefined;
 
   return ndb.transaction(() => {
-    if (nextKey !== undefined && nextKey !== current.key) {
-      assertKeyAvailableInTree(ndb, current.owner_type, current.owner_id, nextKey, id);
-    }
+    // Registry-level edits (nature): one property, every attaching type.
+    const registryChanges: NetworkPropertyUpdateInput = {};
+    if (nextKey !== undefined && nextKey !== current.key) registryChanges.name = nextKey;
     if (nextType !== undefined && nextType !== current.value_type) {
-      migratePropertyValues(ndb, id, current.value_type, nextType);
+      registryChanges.value_type = nextType;
     }
+    if (changes.config !== undefined) registryChanges.config = changes.config;
+    if (changes.description !== undefined) registryChanges.description = changes.description;
+    if (Object.keys(registryChanges).length > 0) {
+      updateNetworkProperty(ndb, current.property_id, registryChanges);
+    }
+    // Binding-level edits (role in this type).
     const sets: string[] = [];
     const args: unknown[] = [];
-    if (nextKey !== undefined) {
-      sets.push('key = ?');
-      args.push(nextKey);
-    }
-    if (nextType !== undefined) {
-      sets.push('value_type = ?');
-      args.push(nextType);
-    }
-    if (changes.config !== undefined) {
-      sets.push('config = ?');
-      args.push(changes.config === null ? null : JSON.stringify(changes.config));
-    }
     if (changes.required !== undefined) {
       sets.push('required = ?');
       args.push(changes.required ? 1 : 0);
@@ -727,67 +996,38 @@ export function updateTypeProperty(
       sets.push('position = ?');
       args.push(changes.position);
     }
-    if (changes.description !== undefined) {
-      sets.push('description = ?');
-      args.push(normalizeDescription(changes.description));
+    if (sets.length > 0) {
+      // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer;
+      // the UPDATE targets the connection's layer row only.
+      materializeShadow(ndb, 'type_properties', id);
+      args.push(id, ndb.layerId);
+      ndb.prepare(`UPDATE type_properties SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`).run(
+        ...args,
+      );
     }
-    if (sets.length === 0) {
-      return current;
-    }
-    // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer;
-    // the UPDATE targets the connection's layer row only.
-    materializeShadow(ndb, 'type_properties', id);
-    args.push(id, ndb.layerId);
-    ndb
-      .prepare(`UPDATE type_properties SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
-      .run(...args);
     return getTypeProperty(ndb, id)!;
   });
 }
 
 /**
- * Delete a property definition. Since S2 the definition's stored values and
- * default overrides have no SQL FK to `type_properties` (the logical id is no
- * longer unique), so both are deleted explicitly in the same transaction.
- *
- * S4 (13-layers.md §5.2): in a working layer the deletion materialises
- * tombstones over the definition, its visible values and overrides instead of
- * deleting physically; the base rows stay intact.
+ * Detach a property from a type (legacy `DELETE …/types/{id}/properties/{id}`
+ * surface). Since 0.6.5 the binding carries no values: detaching leaves every
+ * stored value in place — it becomes a value outside type, readable with
+ * `outside_type: true` and deletable manually (02-data-model.md §3.5a). The
+ * pre-0.6.5 cascade (values + overrides deleted with the definition) is gone.
  */
 export function deleteTypeProperty(ndb: NetworkDb, id: string): void {
   const current = getTypeProperty(ndb, id);
   if (!current) {
     throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'type_property', id });
   }
-  ndb.transaction(() => {
-    if (!isBaseContext(ndb)) {
-      const valueIds = (
-        ndb.prepare('SELECT id FROM property_values_v WHERE property_id = ?').all(id) as {
-          id: string;
-        }[]
-      ).map((r) => r.id);
-      for (const valueId of valueIds) materializeTombstone(ndb, 'property_values', valueId);
-      const overrideIds = (
-        ndb.prepare('SELECT id FROM type_property_overrides_v WHERE property_id = ?').all(id) as {
-          id: string;
-        }[]
-      ).map((r) => r.id);
-      for (const overrideId of overrideIds) {
-        materializeTombstone(ndb, 'type_property_overrides', overrideId);
-      }
-      materializeTombstone(ndb, 'type_properties', id);
-      return;
-    }
-    ndb.prepare('DELETE FROM property_values WHERE property_id = ?').run(id);
-    // Overrides set on OTHER types for this inherited property go with it too
-    // (the former FK cascade), not only the owning type's own ones.
-    ndb.prepare('DELETE FROM type_property_overrides WHERE property_id = ?').run(id);
-    ndb.prepare('DELETE FROM type_properties WHERE id = ?').run(id);
-  });
+  // S4 (13-layers.md §5.2): in a working layer the detach materialises a
+  // tombstone over the binding; the base rows stay intact.
+  deleteRowLayered(ndb, 'type_properties', id);
 }
 
 /**
- * Reorder the property definitions of a type by assigning `position = index` to
+ * Reorder the property bindings of a type by assigning `position = index` to
  * each id in `orderedPropertyIds` (docs/03-server-api.md §8). Ids not listed
  * keep their position. All listed ids must belong to the given owner.
  */
@@ -798,7 +1038,7 @@ export function reorderTypeProperties(
   orderedPropertyIds: string[],
 ): PropertyDefinition[] {
   return ndb.transaction(() => {
-    // S4: в слое порядок — правка теневых копий определений (13-layers.md §5.1).
+    // S4: в слое порядок — правка теневых копий привязок (13-layers.md §5.1).
     const stmt = ndb.prepare(
       'UPDATE type_properties SET position = ? WHERE id = ? AND owner_type = ? AND owner_id = ? AND layer_id = ?',
     );
@@ -811,12 +1051,8 @@ export function reorderTypeProperties(
 }
 
 // ===========================================================================
-// Property values (C6)
+// Property values (C6) — polymorphic EAV on thoughts/links
 // ===========================================================================
-//
-// Stored in `property_values` as polymorphic EAV (owner_type = 'thought' |
-// 'link'). Exactly one value_* column is populated per row, chosen by the
-// definition's value_type; the rest stay NULL (docs/02-data-model.md §3.5).
 
 /** Raw `property_values` row. */
 interface PropertyValueRow {
@@ -834,20 +1070,11 @@ interface PropertyValueRow {
 
 /**
  * Map a stored row back into the typed {@link PropertyValue.value} according to
- * the definition's `value_type`, reading only the matching column.
+ * the property's `value_type`, reading only the matching column.
  *
- * `thought_ref` (multiple form, 02-data-model.md §3.5): `value_thought_ref`
- * stores either a single raw id or a JSON array of ids. The stored shape wins
- * over the definition's `multiple` flag — an array is always parsed back into
- * `string[]` (never leaked as raw JSON text); with the flag on, a legacy
- * single id is wrapped into a one-element array. Turning `multiple` off never
- * reprocesses already stored values (same rule as `options`/`allowed_type_ids`).
- *
- * `url` (multiple form, task 0.6.2): the same shape wins — a JSON array in
- * `value_text` is always parsed into `string[]`; with the flag on, a legacy
- * single string is wrapped into a one-element array. A JSON-array payload is
- * used (not comma-join as for `text`) because URLs may contain commas — a
- * comma-joined text would be ambiguous to parse back.
+ * `thought_ref` (multiple form): `value_thought_ref` stores either a single raw
+ * id or a JSON array of ids; the stored shape wins over the `multiple` flag.
+ * `url` behaves the same (JSON array in `value_text`, task 0.6.2).
  */
 function readValue(
   row: PropertyValueRow,
@@ -879,31 +1106,25 @@ function readValue(
 }
 
 /**
- * `true` when the definition allows several values of its `value_type`.
- *
- * Today two `value_type`s accept `config.multiple`: `thought_ref` (array of
- * thought ids in `value_thought_ref`) and `url` (array of URL strings in
- * `value_text`). `text` keeps its own comma-join format and is not handled
- * here.
+ * `true` when the property allows several values of its `value_type`
+ * (`thought_ref` and `url` only; `text` keeps its comma-join form).
  */
-function isMultipleProperty(def: PropertyDefinition): boolean {
-  if (def.config?.multiple !== true) return false;
-  return def.value_type === 'thought_ref' || def.value_type === 'url';
+function isMultipleProperty(prop: PropertyLike): boolean {
+  if (prop.config?.multiple !== true) return false;
+  return prop.value_type === 'thought_ref' || prop.value_type === 'url';
 }
 
 /**
  * LIKE pattern matching an id inside a stored JSON array of ids
- * (`["a","b"]` → `%"a"%`). Quoting makes the match exact — `%"a"%` does not
- * hit `"ab"`. `%`/`_`/`\` are escaped; pair with `LIKE ? ESCAPE '\'`.
+ * (`["a","b"]` → `%"a"%`). Quoting makes the match exact.
  */
 function refLikePattern(id: string): string {
   return `%"${id.replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`;
 }
 
 /**
- * Parse a stored multiple `thought_ref` payload (`["id", …]` JSON) into ids.
- * Defensive against malformed/legacy content: anything that is not a JSON
- * array of strings yields an empty list.
+ * Parse a stored multiple `thought_ref`/`url` payload (`["id", …]` JSON) into
+ * strings. Defensive against malformed/legacy content.
  */
 function parseRefIds(raw: string): string[] {
   try {
@@ -917,14 +1138,13 @@ function parseRefIds(raw: string): string[] {
 
 /**
  * The `value_*` column a value type is stored in. `url` shares `value_text`
- * with `text` (02-data-model.md §3.4). The literal is derived from the
- * validated enum, never from user input.
+ * with `text`. The literal is derived from the validated enum, never from user
+ * input.
  */
 function storageColumn(valueType: PropertyValueType): string {
   return valueType === 'url' ? 'value_text' : `value_${valueType}`;
 }
 
-/** The table that holds the owner row for a given value owner_type. */
 /**
  * The layer-resolving view of an owner's table (13-layers.md §4.2): owner
  * validation must respect the connection's layer context — a tombstoned owner
@@ -935,39 +1155,67 @@ function ownerTable(ownerType: PropertyOwnerType): 'thoughts_v' | 'links_v' {
 }
 
 /**
- * Find the property definition governing `(ownerType, ownerId, key)` by walking
- * from the owner thought/link through its type's ancestor chain (L21): the
- * nearest definition with the key wins. An untyped owner sees the root type's
- * properties — the root's settings apply to every element without a type
- * (docs/08-ui-spec.md §8.1). Returns `null` when nothing matches.
- *
- * Exported for the MCP facade (`etn.properties.set`), which needs the resolved
- * `value_type` to coerce stringified scalars back at the transport boundary
- * (docs/05-mcp-server.md §5.2) before delegating to {@link setPropertyValue}.
+ * Property ids attached to the owner's type chain (own binding or any
+ * ancestor's, L21): the set of properties a value write may target. An
+ * untyped owner sees the root type's bindings (docs/08-ui-spec.md §8.1).
  */
-export function resolveDefinition(
+function attachedPropertyIds(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
-  key: string,
-): PropertyDefinition | null {
+): Set<string> {
   const row = ndb
     .prepare(`SELECT type_id AS tid FROM ${ownerTable(ownerType)} WHERE id = ?`)
     .get(ownerId) as { tid: string | null } | undefined;
   if (!row) {
-    return null;
+    throw new EtnError('NOT_FOUND', `${ownerType} ${ownerId} not found`, {
+      entity: ownerType,
+      id: ownerId,
+    });
   }
   const defOwnerType: TypeOwnerType = ownerType === 'thought' ? 'thought_type' : 'link_type';
-  for (const typeId of visibleTypeChain(ndb, defOwnerType, row.tid)) {
-    const def = getTypePropertyByKey(ndb, defOwnerType, typeId, key);
-    if (def) return def;
+  const chain = visibleTypeChain(ndb, defOwnerType, row.tid);
+  const ids = new Set<string>();
+  if (chain.length === 0) return ids;
+  const stmt = ndb.prepare(
+    `SELECT property_id FROM type_properties_v WHERE owner_type = ? AND owner_id IN (${chain
+      .map(() => '?')
+      .join(', ')})`,
+  );
+  for (const r of stmt.all(defOwnerType, ...chain) as Array<{ property_id: string }>) {
+    ids.add(r.property_id);
   }
-  return null;
+  return ids;
 }
 
 /**
- * List all stored property values of an owner (docs/03-server-api.md §9). Each
- * value is returned with the runtime type matching its definition's value_type.
+ * Resolve a property by NAME against the registry (names are unique per
+ * network since 0.6.5, so the name alone addresses the property).
+ * Connectivity to the owner's type is NOT checked here — callers decide
+ * (writes reject unattached properties with 422, deletes of outside-type
+ * values must succeed). Exported for the MCP facade (`etn.properties.set`),
+ * which needs the resolved `value_type` to coerce stringified scalars at the
+ * transport boundary (docs/05-mcp-server.md §5.2).
+ */
+export function resolveDefinition(
+  ndb: NetworkDb,
+  _ownerType: PropertyOwnerType,
+  _ownerId: string,
+  key: string,
+): PropertyLike | null {
+  const prop = getNetworkPropertyByName(ndb, key);
+  return prop
+    ? { id: prop.id, name: prop.name, value_type: prop.value_type, config: prop.config }
+    : null;
+}
+
+/**
+ * List all stored property values of an owner (docs/03-server-api.md §9),
+ * including **values outside type** — values whose property is not attached to
+ * the owner's type chain (a leftover from a type change or a detached
+ * property). Such values carry `outside_type: true` plus the property's name
+ * and value type, without which the client could not render them
+ * (02-data-model.md §3.5a).
  */
 export function getPropertyValues(
   ndb: NetworkDb,
@@ -975,20 +1223,35 @@ export function getPropertyValues(
   ownerId: string,
 ): PropertyValue[] {
   const rows = ndb
-    .prepare('SELECT * FROM property_values_v WHERE owner_type = ? AND owner_id = ?')
-    .all(ownerType, ownerId) as PropertyValueRow[];
+    .prepare(
+      `SELECT pv.*, p.name AS property_name, p.value_type AS property_value_type, p.config AS property_config
+       FROM property_values_v pv
+       JOIN properties_v p ON p.id = pv.property_id
+       WHERE pv.owner_type = ? AND pv.owner_id = ?`,
+    )
+    .all(ownerType, ownerId) as Array<PropertyValueRow & {
+    property_name: string;
+    property_value_type: string;
+    property_config: string | null;
+  }>;
+  const attached = attachedPropertyIds(ndb, ownerType, ownerId);
   const out: PropertyValue[] = [];
   for (const row of rows) {
-    const def = getTypeProperty(ndb, row.property_id);
-    // Skip orphaned values whose definition was deleted — should not happen
-    // (the FK cascades), but stay defensive.
-    if (!def) continue;
+    const prop: PropertyLike = {
+      id: row.property_id,
+      name: row.property_name,
+      value_type: row.property_value_type as PropertyValueType,
+      config: row.property_config ? (JSON.parse(row.property_config) as PropertyConfig) : null,
+    };
     out.push({
       id: row.id,
       owner_type: ownerType,
       owner_id: ownerId,
       property_id: row.property_id,
-      value: readValue(row, def.value_type, isMultipleProperty(def)),
+      outside_type: !attached.has(row.property_id),
+      property_name: row.property_name,
+      value_type: prop.value_type,
+      value: readValue(row, prop.value_type, isMultipleProperty(prop)),
       updated_at: row.updated_at,
     });
   }
@@ -999,10 +1262,9 @@ export function getPropertyValues(
  * MCP-чтение значений свойств (task N4, docs/05-mcp-server.md §4.1): то же,
  * что {@link getPropertyValues}, но `thought_ref`-значения резолвнуты в
  * `{id, title}` — агенту не нужны отдельные вызовы `etn.thoughts.get` на
- * каждую ссылку. Одиночные значения резолвятся LEFT JOIN'ом; множественные
- * (`config.multiple`, массив id) — одним пакетным запросом по всем id массивов.
- * REST-ответ не меняется. `title: null` означает висячую ссылку на удалённую
- * мысль (`value_thought_ref` без SQL FK).
+ * каждую ссылку. Одиночные значения резолвятся LEFT JOIN'ом; множественные —
+ * одним пакетным запросом по всем id массивов. REST-ответ не меняется.
+ * `title: null` означает висячую ссылку на удалённую мысль.
  */
 export function getPropertyValuesResolved(
   ndb: NetworkDb,
@@ -1011,29 +1273,40 @@ export function getPropertyValuesResolved(
 ): ResolvedPropertyValue[] {
   const rows = ndb
     .prepare(
-      `SELECT pv.*, t.title AS ref_title
+      `SELECT pv.*, p.name AS property_name, p.value_type AS property_value_type, p.config AS property_config,
+              t.title AS ref_title
        FROM property_values_v pv
+       JOIN properties_v p ON p.id = pv.property_id
        LEFT JOIN thoughts_v t ON t.id = pv.value_thought_ref
        WHERE pv.owner_type = ? AND pv.owner_id = ?`,
     )
-    .all(ownerType, ownerId) as Array<PropertyValueRow & { ref_title: string | null }>;
+    .all(ownerType, ownerId) as Array<
+    PropertyValueRow & {
+      property_name: string;
+      property_value_type: string;
+      property_config: string | null;
+      ref_title: string | null;
+    }
+  >;
+  const attached = attachedPropertyIds(ndb, ownerType, ownerId);
   const prepared: Array<{
-    row: PropertyValueRow & { ref_title: string | null };
-    def: PropertyDefinition;
+    row: (typeof rows)[number];
+    prop: PropertyLike;
     value: PropertyValueValue;
   }> = [];
   for (const row of rows) {
-    const def = getTypeProperty(ndb, row.property_id);
-    // Skip orphaned values whose definition was deleted — should not happen
-    // (the FK cascades), but stay defensive.
-    if (!def) continue;
-    prepared.push({ row, def, value: readValue(row, def.value_type, isMultipleProperty(def)) });
+    const prop: PropertyLike = {
+      id: row.property_id,
+      name: row.property_name,
+      value_type: row.property_value_type as PropertyValueType,
+      config: row.property_config ? (JSON.parse(row.property_config) as PropertyConfig) : null,
+    };
+    prepared.push({ row, prop, value: readValue(row, prop.value_type, isMultipleProperty(prop)) });
   }
-  // Titles of every id stored inside multiple-ref arrays (single refs come
-  // from the LEFT JOIN above): one batched lookup.
+  // Titles of every id stored inside multiple-ref arrays: one batched lookup.
   const arrayIds = new Set<string>();
-  for (const { def, value } of prepared) {
-    if (def.value_type === 'thought_ref' && Array.isArray(value)) {
+  for (const { prop, value } of prepared) {
+    if (prop.value_type === 'thought_ref' && Array.isArray(value)) {
       for (const id of value) arrayIds.add(id);
     }
   }
@@ -1046,9 +1319,9 @@ export function getPropertyValuesResolved(
     for (const t of titleRows) titlesById.set(t.id, t.title);
   }
   const out: ResolvedPropertyValue[] = [];
-  for (const { row, def, value } of prepared) {
+  for (const { row, prop, value } of prepared) {
     let resolved: ResolvedPropertyValue['value'] = value;
-    if (def.value_type === 'thought_ref') {
+    if (prop.value_type === 'thought_ref') {
       if (Array.isArray(value)) {
         resolved = value.map((id) => ({ id, title: titlesById.get(id) ?? null }));
       } else if (typeof value === 'string') {
@@ -1060,6 +1333,9 @@ export function getPropertyValuesResolved(
       owner_type: ownerType,
       owner_id: ownerId,
       property_id: row.property_id,
+      outside_type: !attached.has(row.property_id),
+      property_name: row.property_name,
+      value_type: prop.value_type,
       value: resolved,
       updated_at: row.updated_at,
     });
@@ -1069,28 +1345,29 @@ export function getPropertyValuesResolved(
 
 /**
  * Reverse `thought_ref` lookup (docs/03-server-api.md §9.1): every thought
- * whose property values reference `thoughtId`, grouped by property. Only
- * values on thoughts are searched (`owner_type = 'thought'`). Groups are
- * ordered by property name, items by the owner's normalized title.
+ * whose property values reference `thoughtId`, grouped by property. Since
+ * 0.6.5 the grouping is by the registry property — the same field gives one
+ * group regardless of the referencing owners' types. Groups are ordered by
+ * property name, items by the owner's normalized title.
  *
- * Multiple `thought_ref` values are stored as a JSON array of ids
- * (02-data-model.md §3.5), so the match is `= ?` for single ids plus a LIKE
- * on the quoted `%"id"%` fragment for ids inside arrays.
+ * Multiple `thought_ref` values are stored as a JSON array of ids, so the
+ * match is `= ?` for single ids plus a LIKE on the quoted `%"id"%` fragment
+ * for ids inside arrays.
  */
 export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsage {
   const rows = ndb
     .prepare(
-      `SELECT pv.property_id AS property_id, tp.key AS property_key,
+      `SELECT pv.property_id AS property_id, p.name AS property_key,
               t.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,
               t.active,
               t.fg_color, t.bg_color, t.font_bold, t.font_italic,
               t.font_underline, t.font_strike, t.font_manual
        FROM property_values_v pv
-       JOIN type_properties_v tp ON tp.id = pv.property_id
+       JOIN properties_v p ON p.id = pv.property_id
        JOIN thoughts_v t ON t.id = pv.owner_id
        WHERE pv.owner_type = 'thought'
          AND (pv.value_thought_ref = ? OR pv.value_thought_ref LIKE ? ESCAPE '\\')
-       ORDER BY tp.key COLLATE NOCASE, t.title_norm COLLATE NOCASE`,
+       ORDER BY p.name COLLATE NOCASE, t.title_norm COLLATE NOCASE`,
     )
     .all(thoughtId, refLikePattern(thoughtId)) as Array<{
     property_id: string;
@@ -1128,13 +1405,8 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
 /**
  * Number of distinct thoughts referencing `thoughtId` through a `thought_ref`
  * property value (single or inside a multiple-ref JSON array). Backs the
- * "использование в свойствах" blocking arm of the S13 deletion check
- * (02-data-model.md §3.1.2, 03-server-api.md §6.5a).
- *
- * The check must see **live values of every layer** (same as arms 2–3 of
- * §3.1.2): a live shadow row of a value would otherwise turn into a dangling
- * reference after the physical delete. Tombstones (`deleted = 1`) do not
- * block — the layer that placed them has already agreed to the removal.
+ * "использование в свойствах" blocking arm of the S13 deletion check.
+ * The check must see live values of every layer; tombstones do not block.
  */
 export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
   // layers:physical-read — блокирующее плечо удаления: аудит живых значений ВСЕХ слоёв.
@@ -1154,9 +1426,8 @@ export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
  * multiple form) in one sweep — «Очистить использование» (03-server-api.md
  * §9.2). Returns how many property-value rows were cleared.
  *
- * S4: the base-layer sweep clears **live rows of every layer** (matching the
- * blocking arm above — otherwise the physical delete could not proceed); a
- * working layer clears its visible values as shadow edits only.
+ * S4: the base-layer sweep clears live rows of every layer; a working layer
+ * clears its visible values as shadow edits only.
  */
 export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
   const now = new Date().toISOString();
@@ -1190,113 +1461,91 @@ export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
 }
 
 /**
- * Validate `value` against the definition's `value_type` and return the column
+ * Validate `value` against the property's `value_type` and return the column
  * name + raw SQL value to write.
  *
  * The returned `column` is always one of the fixed `value_*` literals derived
- * from `value_type` (never user input), which is what makes it safe to splice
- * into the upsert statement. For `thought_ref`, when the definition's config
- * names an `allowed_type_id`, the referenced thought must be of that type.
- *
- * Multiple `thought_ref` (`config.multiple = true`, 02-data-model.md §3.4):
- * the value may be an array of thought ids — every id is validated exactly
- * like a single one, duplicates collapse, an empty array clears the value
- * (same as `null`). A single id is still accepted and stored as a one-element
- * array. Definitions without the flag reject arrays outright.
- *
- * @returns the column name and the raw SQL value (or `null` to clear).
+ * from `value_type` (never user input). For `thought_ref`, when the config
+ * names allowed types, the referenced thought must be of one of them
+ * (subtree-expanded, L21).
  */
 function validateAndCoerce(
   ndb: NetworkDb,
-  def: PropertyDefinition,
+  prop: PropertyLike,
   value: PropertyValueValue,
 ): { column: string; raw: string | number | null } {
-  // `value_type` is an enum member (validated on definition write), so the
-  // interpolated column is one of the fixed `value_*` literals.
-  const column = storageColumn(def.value_type);
+  const column = storageColumn(prop.value_type);
   if (value === null) {
     return { column, raw: null };
   }
-  switch (def.value_type) {
+  switch (prop.value_type) {
     case 'text':
       if (typeof value !== 'string') {
-        throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects text`, {
-          key: def.key,
+        throw new EtnError('VALIDATION_ERROR', `property "${prop.name}" expects text`, {
+          key: prop.name,
           expected: 'text',
         });
       }
       return { column, raw: value };
     case 'url': {
-      // Multiple form (task 0.6.2): an array of URL strings, each validated as
-      // a string, duplicates collapse, an empty array clears the value (same
-      // as `null`). A JSON-array payload (not comma-join) is used because URLs
-      // may contain commas — a comma-joined text would be ambiguous to parse
-      // back. A single string on a multiple definition is normalized to a
-      // one-element array, mirroring how `thought_ref` handles it.
       if (Array.isArray(value)) {
-        if (!isMultipleProperty(def)) {
+        if (!isMultipleProperty(prop)) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `property "${def.key}" does not allow multiple values`,
-            { key: def.key, expected: 'url', multiple: false },
+            `property "${prop.name}" does not allow multiple values`,
+            { key: prop.name, expected: 'url', multiple: false },
           );
         }
         const urls = [...new Set(value)];
         if (urls.length === 0) return { column, raw: null };
         if (urls.some((url) => typeof url !== 'string')) {
-          throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects URL strings`, {
-            key: def.key,
+          throw new EtnError('VALIDATION_ERROR', `property "${prop.name}" expects URL strings`, {
+            key: prop.name,
             expected: 'url',
           });
         }
         return { column, raw: JSON.stringify(urls) };
       }
       if (typeof value !== 'string') {
-        throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects a URL string`, {
-          key: def.key,
+        throw new EtnError('VALIDATION_ERROR', `property "${prop.name}" expects a URL string`, {
+          key: prop.name,
           expected: 'url',
         });
       }
-      // On a multiple definition a single value is stored as a one-element
-      // JSON array so the stored shape matches the definition.
-      return { column, raw: isMultipleProperty(def) ? JSON.stringify([value]) : value };
+      return { column, raw: isMultipleProperty(prop) ? JSON.stringify([value]) : value };
     }
     case 'date':
       if (typeof value !== 'string') {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `property "${def.key}" expects an ISO-8601 date string`,
-          {
-            key: def.key,
-            expected: 'date',
-          },
+          `property "${prop.name}" expects an ISO-8601 date string`,
+          { key: prop.name, expected: 'date' },
         );
       }
       return { column, raw: value };
     case 'number':
       if (typeof value !== 'number' || !Number.isFinite(value)) {
-        throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects a number`, {
-          key: def.key,
+        throw new EtnError('VALIDATION_ERROR', `property "${prop.name}" expects a number`, {
+          key: prop.name,
           expected: 'number',
         });
       }
       return { column, raw: value };
     case 'bool':
       if (typeof value !== 'boolean') {
-        throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects a boolean`, {
-          key: def.key,
+        throw new EtnError('VALIDATION_ERROR', `property "${prop.name}" expects a boolean`, {
+          key: prop.name,
           expected: 'bool',
         });
       }
       return { column, raw: value ? 1 : 0 };
     case 'thought_ref': {
-      // Multiple form first: an array of ids, each validated like a single one.
       if (Array.isArray(value)) {
-        if (!isMultipleProperty(def)) {
+        if (!isMultipleProperty(prop)) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `property "${def.key}" does not allow multiple values`,
-            { key: def.key, expected: 'thought_ref', multiple: false },
+            `property "${prop.name}" does not allow multiple values`,
+            { key: prop.name, expected: 'thought_ref', multiple: false },
           );
         }
         const ids = [...new Set(value)];
@@ -1305,64 +1554,54 @@ function validateAndCoerce(
           return { column, raw: null };
         }
         if (ids.some((id) => typeof id !== 'string')) {
-          throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects thought ids`, {
-            key: def.key,
+          throw new EtnError('VALIDATION_ERROR', `property "${prop.name}" expects thought ids`, {
+            key: prop.name,
             expected: 'thought_ref',
           });
         }
         for (const id of ids) {
-          validateThoughtRefTarget(ndb, def, id);
+          validateThoughtRefTarget(ndb, prop, id);
         }
         return { column, raw: JSON.stringify(ids) };
       }
       if (typeof value !== 'string') {
-        throw new EtnError('VALIDATION_ERROR', `property "${def.key}" expects a thought id`, {
-          key: def.key,
+        throw new EtnError('VALIDATION_ERROR', `property "${prop.name}" expects a thought id`, {
+          key: prop.name,
           expected: 'thought_ref',
         });
       }
-      validateThoughtRefTarget(ndb, def, value);
-      // On a multiple definition a single id is normalized to a one-element
-      // array, so the stored shape matches the definition.
-      return { column, raw: isMultipleProperty(def) ? JSON.stringify([value]) : value };
+      validateThoughtRefTarget(ndb, prop, value);
+      return { column, raw: isMultipleProperty(prop) ? JSON.stringify([value]) : value };
     }
   }
 }
 
 /**
- * Validate one `thought_ref` id against the definition: the thought must
- * exist, and when the config names allowed types the target's type must be
- * among them (subtree-expanded, L21).
+ * Validate one `thought_ref` id against the property: the thought must exist,
+ * and when the config names allowed types the target's type must be among
+ * them (subtree-expanded, L21). Only writes are checked — stored values are
+ * never reprocessed when the filter changes.
  */
-function validateThoughtRefTarget(
-  ndb: NetworkDb,
-  def: PropertyDefinition,
-  id: string,
-): void {
+function validateThoughtRefTarget(ndb: NetworkDb, prop: PropertyLike, id: string): void {
   const target = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(id) as
     { type_id: string | null } | undefined;
   if (!target) {
     throw new EtnError('VALIDATION_ERROR', `referenced thought ${id} does not exist`, {
-      key: def.key,
+      key: prop.name,
       ref: id,
     });
   }
-  // Type filter: the list form supersedes the legacy single allowed_type_id.
-  // Only writes are checked — already stored values are never reprocessed
-  // when the filter changes (02-data-model.md §3.4). Since L21 the filter
-  // matches whole subtrees: a referenced thought passes when its type is
-  // a descendant of (or equal to) any allowed type (docs/08-ui-spec.md §8.1).
   const allowedIds = expandTypeIdsToSubtree(
     ndb,
     'thought_types',
     (
-      def.config?.allowed_type_ids ??
-      (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
+      prop.config?.allowed_type_ids ??
+      (prop.config?.allowed_type_id !== undefined ? [prop.config.allowed_type_id] : [])
     ).filter((id) => id !== ''),
   );
   if (allowedIds.length > 0 && (target.type_id === null || !allowedIds.includes(target.type_id))) {
     throw new EtnError('VALIDATION_ERROR', `thought ${id} is not of a required type`, {
-      key: def.key,
+      key: prop.name,
       ref: id,
       allowed_type_ids: allowedIds,
       actual_type_id: target.type_id,
@@ -1371,16 +1610,22 @@ function validateThoughtRefTarget(
 }
 
 /**
- * Upsert a property value addressed by key (docs/03-server-api.md §9).
+ * Upsert a property value addressed by property name (docs/03-server-api.md §9).
  *
- * The value is validated against the property definition found on the owner's
- * type and written **only** to the matching `value_*` column; the other value
- * columns are set to NULL. Passing `null` clears the value.
+ * The name resolves against the registry; the value is validated against the
+ * property's nature and written only to the matching `value_*` column; the
+ * other value columns are set to NULL. Passing `null` clears the value.
+ *
+ * A value may only be written for a property **attached to the owner's type
+ * chain** (own binding or an ancestor's) — a registry property the type does
+ * not attach is rejected with `VALIDATION_ERROR` (422), which also covers
+ * re-writing an existing outside-type value: attach the property first
+ * (02-data-model.md §3.5a).
  *
  * Throws:
- *   * `NOT_FOUND` (404) if the owner or its type has no such property;
- *   * `VALIDATION_ERROR` (422) if the value does not match `value_type` (or, for
- *     `thought_ref`, references a missing/wrong-typed thought).
+ *   * `NOT_FOUND` (404) if the owner or the property (by name) is missing;
+ *   * `VALIDATION_ERROR` (422) if the property is not attached to the owner's
+ *     type, or the value does not match `value_type`.
  */
 export function setPropertyValue(
   ndb: NetworkDb,
@@ -1395,7 +1640,8 @@ export function setPropertyValue(
     });
   }
   return ndb.transaction(() => {
-    // Ensure the owner exists.
+    // Ensure the owner exists (attachedPropertyIds re-reads it too, but the
+    // 404 there must not precede property resolution errors in tests).
     const owner = ndb.prepare(`SELECT 1 FROM ${ownerTable(ownerType)} WHERE id = ?`).get(ownerId);
     if (!owner) {
       throw new EtnError('NOT_FOUND', `${ownerType} ${ownerId} not found`, {
@@ -1403,78 +1649,141 @@ export function setPropertyValue(
         id: ownerId,
       });
     }
-    const def = resolveDefinition(ndb, ownerType, ownerId, key);
-    if (!def) {
-      throw new EtnError('NOT_FOUND', `property "${key}" is not defined on this owner's type`, {
+    const prop = resolveDefinition(ndb, ownerType, ownerId, key);
+    if (!prop) {
+      throw new EtnError('NOT_FOUND', `property "${key}" does not exist in this network`, {
         owner_type: ownerType,
         owner_id: ownerId,
         key,
       });
     }
+    return setPropertyValueForProperty(ndb, ownerType, ownerId, prop, value, { key });
+  });
+}
 
-    const { column, raw } = validateAndCoerce(ndb, def, value);
-    const now = new Date().toISOString();
-    const id = randomUUID();
-    // S5 (13-layers.md §5.1): a visible ancestor row for this natural key is
-    // shadowed FIRST — writing with a fresh logical id would leave both rows
-    // live in this layer's view (resolution goes per logical id, §4.1) and
-    // break the «one value per (owner, property)» invariant of §3.5. The
-    // shadow carries the ancestor's identity, so the view resolves to a
-    // single row and `base_version` accumulates for the S8 merge.
-    const existing = ndb
-      .prepare(
-        'SELECT id FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ? LIMIT 1',
-      )
-      .get(ownerType, ownerId, def.id) as { id: string } | undefined;
-    if (existing) {
-      materializeShadow(ndb, 'property_values', existing.id);
+/**
+ * The shared write path of {@link setPropertyValue} and
+ * {@link setPropertyValueById}: connectivity check (422 when the owner's type
+ * chain does not attach the property), validation, layered upsert.
+ */
+function setPropertyValueForProperty(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  prop: PropertyLike,
+  value: PropertyValueValue,
+  errKey: { key: string },
+): PropertyValue {
+  const attached = attachedPropertyIds(ndb, ownerType, ownerId);
+  if (!attached.has(prop.id)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `property "${errKey.key}" is not attached to this owner's type — attach it first`,
+      { owner_type: ownerType, owner_id: ownerId, key: errKey.key, property_id: prop.id },
+    );
+  }
+
+  const { column, raw } = validateAndCoerce(ndb, prop, value);
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  // S5 (13-layers.md §5.1): a visible ancestor row for this natural key is
+  // shadowed FIRST — writing with a fresh logical id would leave both rows
+  // live in this layer's view and break the «one value per (owner, property)»
+  // invariant of §3.5.
+  const existing = ndb
+    .prepare(
+      'SELECT id FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ? LIMIT 1',
+    )
+    .get(ownerType, ownerId, prop.id) as { id: string } | undefined;
+  if (existing) {
+    materializeShadow(ndb, 'property_values', existing.id);
+  }
+  // Upsert: write the raw value into the matching column on INSERT, and on
+  // conflict reset every value_* column before copying the matching one back.
+  // S4: the row lands in the connection's layer; `deleted = 0` wakes a
+  // same-key tombstone of this layer instead of dropping the write silently.
+  ndb
+    .prepare(
+      `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, ${column}, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(owner_type, owner_id, property_id, layer_id) DO UPDATE SET
+         deleted = 0,
+         value_text = NULL,
+         value_date = NULL,
+         value_number = NULL,
+         value_bool = NULL,
+         value_thought_ref = NULL,
+         ${column} = excluded.${column},
+         updated_at = excluded.updated_at`,
+    )
+    .run(id, ndb.layerId, ownerType, ownerId, prop.id, raw, now);
+
+  const stored = ndb
+    .prepare(
+      'SELECT * FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+    )
+    .get(ownerType, ownerId, prop.id) as PropertyValueRow;
+  return {
+    id: stored.id,
+    owner_type: ownerType,
+    owner_id: ownerId,
+    property_id: prop.id,
+    outside_type: false,
+    property_name: prop.name,
+    value_type: prop.value_type,
+    value: readValue(stored, prop.value_type, isMultipleProperty(prop)),
+    updated_at: stored.updated_at,
+  };
+}
+
+/**
+ * Same as {@link setPropertyValue} but addresses the property by registry id —
+ * used by thought creation defaults, where the effective list entry is already
+ * resolved (no second name lookup, no ambiguity).
+ */
+export function setPropertyValueById(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  propertyId: string,
+  value: PropertyValueValue,
+): PropertyValue {
+  if (ownerType !== 'thought' && ownerType !== 'link') {
+    throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
+      field: 'owner_type',
+    });
+  }
+  return ndb.transaction(() => {
+    const owner = ndb.prepare(`SELECT 1 FROM ${ownerTable(ownerType)} WHERE id = ?`).get(ownerId);
+    if (!owner) {
+      throw new EtnError('NOT_FOUND', `${ownerType} ${ownerId} not found`, {
+        entity: ownerType,
+        id: ownerId,
+      });
     }
-    // Upsert: write the raw value into the matching column on INSERT, and on
-    // conflict reset every value_* column before copying the matching one back,
-    // so the single-column rule holds even if value_type changed since the last
-    // write. `column` is a fixed `value_*` literal derived from value_type.
-    // S4: the row lands in the connection's layer; `deleted = 0` wakes a
-    // same-key tombstone of this layer instead of dropping the write silently.
-    ndb
-      .prepare(
-        `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, ${column}, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(owner_type, owner_id, property_id, layer_id) DO UPDATE SET
-           deleted = 0,
-           value_text = NULL,
-           value_date = NULL,
-           value_number = NULL,
-           value_bool = NULL,
-           value_thought_ref = NULL,
-           ${column} = excluded.${column},
-           updated_at = excluded.updated_at`,
-      )
-      .run(id, ndb.layerId, ownerType, ownerId, def.id, raw, now);
-
-    const stored = ndb
-      .prepare(
-        'SELECT * FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
-      )
-      .get(ownerType, ownerId, def.id) as PropertyValueRow;
-    return {
-      id: stored.id,
-      owner_type: ownerType,
-      owner_id: ownerId,
-      property_id: def.id,
-      value: readValue(stored, def.value_type, isMultipleProperty(def)),
-      updated_at: stored.updated_at,
+    const registryProp = getNetworkProperty(ndb, propertyId);
+    if (!registryProp) {
+      throw new EtnError('NOT_FOUND', `property ${propertyId} not found`, {
+        entity: 'property',
+        id: propertyId,
+      });
+    }
+    const prop: PropertyLike = {
+      id: registryProp.id,
+      name: registryProp.name,
+      value_type: registryProp.value_type,
+      config: registryProp.config,
     };
+    return setPropertyValueForProperty(ndb, ownerType, ownerId, prop, value, {
+      key: registryProp.name,
+    });
   });
 }
 
 /**
  * Write a map of property values in one transaction (task O2,
  * docs/05-mcp-server.md §4.2). Each entry is validated and upserted exactly as
- * {@link setPropertyValue} does; the surrounding transaction makes the whole
- * set atomic — a failure on any key (undefined property, value-type mismatch)
- * rolls back every other value already written.
- *
- * Returns the stored values keyed by the property key.
+ * {@link setPropertyValue} does; a failure on any key rolls back the whole set.
  */
 export function setPropertyValues(
   ndb: NetworkDb,
@@ -1494,16 +1803,12 @@ export function setPropertyValues(
 /**
  * Compute "card completeness" warnings for a thought (task O6,
  * docs/05-mcp-server.md §4.2). Returns one entry per `required` property in
- * the thought's effective type chain (L21, own + inherited) for which there
- * is no stored value on this card.
+ * the thought's effective type chain (L21) for which there is no stored value
+ * on this card. Matching is by property id — a stored value outside the type
+ * still counts as filled (it is the same property).
  *
- * The check runs against the live `property_values` table — defaults set via
- * `type_property_overrides` / `config.default_value` are not stored rows and
- * therefore do NOT mask the warning (they apply to *future* values; the
- * existing card still lacks a stored one). Thoughts without a type never
- * report warnings — the root type intentionally carries no required
- * properties (its settings apply implicitly to untyped thoughts,
- * docs/08-ui-spec.md §8.1).
+ * Defaults are not stored rows and therefore do not mask the warning; thoughts
+ * without a type never report warnings.
  */
 export function computeThoughtCardWarnings(
   ndb: NetworkDb,
@@ -1519,19 +1824,19 @@ export function computeThoughtCardWarnings(
   if (effective.length === 0) {
     return [];
   }
-  // Map (key → value) of everything currently stored on the thought.
+  // Map (property_id → value) of everything currently stored on the thought.
   const stored = new Map<string, PropertyValueValue>();
   for (const v of getPropertyValues(ndb, 'thought', thoughtId)) {
-    stored.set(keyOf(ndb, v.property_id), v.value);
+    stored.set(v.property_id, v.value);
   }
   const warnings: ThoughtCardWarning[] = [];
   for (const def of effective) {
     if (!def.required) continue;
-    if (hasValue(stored.get(def.key))) continue;
+    if (hasValue(stored.get(def.property_id))) continue;
     warnings.push({
       code: 'REQUIRED_PROPERTY_MISSING',
       key: def.key,
-      property_id: def.id,
+      property_id: def.property_id,
       defined_on: def.defined_on,
       value_type: def.value_type,
       inherited: def.inherited,
@@ -1540,22 +1845,10 @@ export function computeThoughtCardWarnings(
   return warnings;
 }
 
-/** Resolve a property definition's `key` from its id (small N, in-memory). */
-function keyOf(ndb: NetworkDb, propertyId: string): string {
-  const row = ndb.prepare('SELECT key FROM type_properties_v WHERE id = ?').get(propertyId) as
-    | { key: string }
-    | undefined;
-  return row?.key ?? propertyId;
-}
-
 /**
- * A stored value counts as "filled" for the purpose of required-property
- * warnings when it is not the absence marker (`null`). Empty strings are
- * treated as filled for `text`/`url`/`date` — they are legitimate values
- * (e.g. an empty note is still a note), and conflating them with "unset"
- * would surprise callers who set `""` deliberately. An empty `thought_ref`
- * array, in contrast, is an empty selection (writes normalize it away, so
- * this only guards hand-crafted rows) and counts as unset.
+ * A stored value counts as "filled" when it is not the absence marker
+ * (`null`). Empty strings are legitimate values; an empty `thought_ref` array
+ * is an empty selection and counts as unset.
  */
 function hasValue(value: PropertyValueValue | undefined): boolean {
   if (value === undefined || value === null) return false;
@@ -1563,8 +1856,11 @@ function hasValue(value: PropertyValueValue | undefined): boolean {
 }
 
 /**
- * Delete a stored property value addressed by key. Throws `NOT_FOUND` (404) if
- * the property is undefined or no value is stored for that key.
+ * Delete a stored property value addressed by property name. Outside-type
+ * values are deletable — manual removal is the only action available for them
+ * (02-data-model.md §3.5a) — so the property only has to exist in the
+ * registry, not to be attached to the owner's type. Throws `NOT_FOUND` (404)
+ * if the property is unknown or no value is stored for it.
  */
 export function deletePropertyValue(
   ndb: NetworkDb,
@@ -1578,9 +1874,9 @@ export function deletePropertyValue(
     });
   }
   return ndb.transaction(() => {
-    const def = resolveDefinition(ndb, ownerType, ownerId, key);
-    if (!def) {
-      throw new EtnError('NOT_FOUND', `property "${key}" is not defined on this owner's type`, {
+    const prop = resolveDefinition(ndb, ownerType, ownerId, key);
+    if (!prop) {
+      throw new EtnError('NOT_FOUND', `property "${key}" does not exist in this network`, {
         owner_type: ownerType,
         owner_id: ownerId,
         key,
@@ -1593,7 +1889,7 @@ export function deletePropertyValue(
         .prepare(
           'SELECT id FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
         )
-        .all(ownerType, ownerId, def.id) as { id: string }[];
+        .all(ownerType, ownerId, prop.id) as { id: string }[];
       if (rows.length === 0) {
         throw new EtnError('NOT_FOUND', `no value stored for property "${key}"`, {
           owner_type: ownerType,
@@ -1601,14 +1897,14 @@ export function deletePropertyValue(
           key,
         });
       }
-      for (const row of rows) materializeTombstone(ndb, 'property_values', row.id);
-      return { property_id: def.id };
+      for (const row of rows) deleteRowLayered(ndb, 'property_values', row.id);
+      return { property_id: prop.id };
     }
     const result = ndb
       .prepare(
         'DELETE FROM property_values WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
       )
-      .run(ownerType, ownerId, def.id);
+      .run(ownerType, ownerId, prop.id);
     if (result.changes === 0) {
       throw new EtnError('NOT_FOUND', `no value stored for property "${key}"`, {
         owner_type: ownerType,
@@ -1617,7 +1913,7 @@ export function deletePropertyValue(
       });
     }
     // Return the property_id so routes can emit `property-value.deleted`
-    // (task E3 wiring) without a second lookup.
-    return { property_id: def.id };
+    // without a second lookup.
+    return { property_id: prop.id };
   });
 }

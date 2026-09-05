@@ -80,14 +80,22 @@ export interface ThoughtTypeUpdateInput {
 }
 
 /**
- * Property available on a thought/link type — row of `type_properties`
- * (02-data-model.md §3.4).
+ * A property available on a thought/link type — row of `type_properties`
+ * (02-data-model.md §3.4). Since 0.6.5 `type_properties` is a **binding** of a
+ * network-wide registry property (`properties`) to a type: the binding carries
+ * only the property's role in this type (`required`, `position`), while its
+ * nature (name, value type, config, description) lives in the registry and is
+ * merged into this shape for API compatibility.
  */
 export interface PropertyDefinition {
+  /** Binding id (`type_properties.id`). */
   id: string;
+  /** Registry property id (`properties.id`) — the nature this binding attaches. */
+  property_id: string;
   owner_type: TypeOwnerType;
   /** FK to `thought_types.id` or `link_types.id` (polymorphic, no SQL FK). */
   owner_id: string;
+  /** Property name (registry `properties.name`), unique per network. */
   key: string;
   value_type: PropertyValueType;
   /**
@@ -105,6 +113,34 @@ export interface PropertyDefinition {
    * editor and given to AI agents through `etn.types.list`.
    */
   description: string | null;
+}
+
+/** A network-wide property of the `properties` registry (02-data-model.md §3.4a). */
+export interface NetworkProperty {
+  id: string;
+  /** User-visible name; unique per network (case-insensitive, by `name_key`). */
+  name: string;
+  value_type: PropertyValueType;
+  config: PropertyConfig | null;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Input accepted by the registry create (REST wiring lands after 0.6.5 domain). */
+export interface NetworkPropertyInput {
+  name: string;
+  value_type: PropertyValueType;
+  config?: PropertyConfig | null;
+  description?: string | null;
+}
+
+/** Input accepted by the registry update. `value_type` converts stored values. */
+export interface NetworkPropertyUpdateInput {
+  name?: string;
+  value_type?: PropertyValueType;
+  config?: PropertyConfig | null;
+  description?: string | null;
 }
 
 /** Recognised keys inside a {@link PropertyDefinition.config} JSON blob. */
@@ -214,6 +250,17 @@ export interface PropertyValue {
   owner_type: 'thought' | 'link';
   owner_id: string;
   property_id: string;
+  /**
+   * `true` when the property is not attached to the owner's type (neither by
+   * the type's own binding nor by any ancestor's) — a value left over from a
+   * type change or a detached property. Such values are read-only history:
+   * they can only be deleted, never written (02-data-model.md §3.5a).
+   */
+  outside_type: boolean;
+  /** Property name from the registry — needed to render an outside-type value. */
+  property_name: string;
+  /** Property value type from the registry. */
+  value_type: PropertyValueType;
   /** Value whose runtime type matches the definition's `value_type`. */
   value: PropertyValueValue;
   updated_at: string;

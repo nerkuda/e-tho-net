@@ -304,7 +304,7 @@ describe(
           .prepare(
             "SELECT COUNT(*) AS c FROM type_property_overrides_v WHERE owner_type = 'thought_type' AND type_id = ? AND property_id = ?",
           )
-          .get(child.id, def.id) as { c: number };
+          .get(child.id, def.property_id) as { c: number };
         assert.equal(layerRows.c, 1);
 
         // The base keeps its own override value.
@@ -345,7 +345,7 @@ describe(
   () => {
     const USER = 'user-1';
 
-    it('definition deleted in a layer: values hidden there, alive in the base; rename keeps values attached', () => {
+    it('binding detached in a layer: value stays flagged outside_type there, alive in the base; rename keeps values attached', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         insertLayers(ndb);
@@ -362,8 +362,8 @@ describe(
         setPropertyValue(ndb, 'thought', th.id, 'исчезает', 'основа-значение');
         setPropertyValue(ndb, 'thought', th.id, 'имя', 'основа-имя');
 
-        // Delete the definition in layer A: the S4 cascade tombstones the
-        // visible values too, so nothing dangles in the layer.
+        // Detach the property in layer A (0.6.5: a binding carries no values —
+        // the stored value survives as a value outside type).
         ndb.useLayer(LAYER_A);
         deleteTypeProperty(ndb, goneDef.id);
         assert.equal(getTypeProperty(ndb, goneDef.id), null);
@@ -372,26 +372,40 @@ describe(
             (d) => d.key === 'исчезает',
           ),
         );
-        assert.ok(
-          getPropertyValues(ndb, 'thought', th.id).every((v) => v.property_id !== goneDef.id),
+        // The «исчезает» value is still readable in the layer — flagged
+        // outside_type (02-data-model.md §3.5a), not hidden as in the
+        // pre-0.6.5 cascade; «имя» is still attached and unflagged.
+        const layerValues = getPropertyValues(ndb, 'thought', th.id);
+        assert.deepEqual(
+          layerValues.map((v) => [v.value, v.outside_type]).sort(),
+          [
+            ['основа-значение', true],
+            ['основа-имя', false],
+          ],
         );
+        assert.ok(layerValues.every((v) => v.property_name.length > 0));
+        // Writing it again is rejected with 422: the property exists in the
+        // registry but the layer's chain does not attach it.
         assert.throws(
           () => setPropertyValue(ndb, 'thought', th.id, 'исчезает', 'слой'),
-          failsWith('NOT_FOUND'),
+          failsWith('VALIDATION_ERROR'),
         );
 
-        // Rename in the layer: values address the property id, so the stored
-        // base value follows the definition — new key in the layer.
+        // Rename in the layer: values address the registry property id, so the
+        // stored base value follows — new name in the layer.
         updateTypeProperty(ndb, renamedDef.id, { key: 'имя слоя' });
         assert.equal(getTypePropertyByKey(ndb, 'thought_type', type.id, 'имя слоя')?.id, renamedDef.id);
         assert.equal(getTypePropertyByKey(ndb, 'thought_type', type.id, 'имя'), null);
         setPropertyValue(ndb, 'thought', th.id, 'имя слоя', 'слоя-имя');
         assert.deepEqual(
           getPropertyValues(ndb, 'thought', th.id).map((v) => [v.property_id, v.value]),
-          [[renamedDef.id, 'слоя-имя']],
+          [
+            [goneDef.property_id, 'основа-значение'],
+            [renamedDef.property_id, 'слоя-имя'],
+          ],
         );
 
-        // Base: both definitions and both stored values are intact, old key.
+        // Base: both bindings and both stored values are intact, old name.
         ndb.useLayer(BASE_LAYER_ID);
         assert.notEqual(getTypeProperty(ndb, goneDef.id), null);
         assert.equal(getTypePropertyByKey(ndb, 'thought_type', type.id, 'имя')?.id, renamedDef.id);
@@ -400,8 +414,8 @@ describe(
             .map((v) => [v.property_id, v.value])
             .sort(),
           [
-            [goneDef.id, 'основа-значение'],
-            [renamedDef.id, 'основа-имя'],
+            [goneDef.property_id, 'основа-значение'],
+            [renamedDef.property_id, 'основа-имя'],
           ].sort(),
         );
       } finally {
@@ -409,7 +423,7 @@ describe(
       }
     });
 
-    it('re-creating a deleted key in the layer wakes the tombstone and returns the live row', () => {
+    it('re-attaching a detached property in the layer wakes the tombstone and returns the live binding', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         insertLayers(ndb);
@@ -422,33 +436,37 @@ describe(
         ndb.useLayer(LAYER_A);
         deleteTypeProperty(ndb, def.id);
         assert.equal(getTypeProperty(ndb, def.id), null);
-        // The upsert wakes this layer's tombstone; the woken row keeps its
-        // ORIGINAL id, so the result must be re-read by (owner, key) — a fresh
-        // uuid would not resolve (the S5 fix).
+        // Re-attach: the upsert wakes this layer's tombstone; the woken
+        // binding keeps its ORIGINAL id, so the result must be re-read by
+        // (owner, key) — a fresh uuid would not resolve (the S5 fix). The
+        // nature fields of the request are ignored: the registry property
+        // already exists (its value_type stays `number`).
         const woken = createTypeProperty(ndb, 'thought_type', type.id, {
           key: 'поле',
           value_type: 'text',
         });
         assert.notEqual(woken, null);
         assert.equal(woken.id, def.id);
-        assert.equal(woken.value_type, 'text');
-        // One live layer row (the per-layer UNIQUE owner/key/layer), no stale
-        // tombstone.
+        assert.equal(woken.property_id, def.property_id);
+        assert.equal(woken.value_type, 'number', 'registry nature wins over the request');
+        // One live layer row (the per-layer UNIQUE owner/property/layer), no
+        // stale tombstone.
         const rows = ndb
           .prepare(
             'SELECT id, deleted FROM type_properties WHERE owner_type = ? AND owner_id = ? AND layer_id = ?',
           )
           .all('thought_type', type.id, LAYER_A) as Array<{ id: string; deleted: number }>;
         assert.deepEqual(rows, [{ id: def.id, deleted: 0 }]);
-        // The woken definition is usable: values write and read through it.
+        // The woken binding is usable: values write and read through it.
         const th = createThought(ndb, { title: 'В', type_id: type.id }, USER);
-        setPropertyValue(ndb, 'thought', th.id, 'поле', 'х');
+        setPropertyValue(ndb, 'thought', th.id, 'поле', 5);
         assert.deepEqual(
           getPropertyValues(ndb, 'thought', th.id).map((v) => v.value),
-          ['х'],
+          [5],
         );
 
-        // The base definition was never touched by the layer round-trip.
+        // The base binding and registry property were never touched by the
+        // layer round-trip.
         ndb.useLayer(BASE_LAYER_ID);
         assert.equal(getTypeProperty(ndb, def.id)?.value_type, 'number');
       } finally {

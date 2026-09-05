@@ -341,28 +341,50 @@ function insertLinkType(ndb: NetworkDb, row: LinkType): { created: boolean } {
   return { created: true };
 }
 
-/** Insert a property definition (`type_properties`). */
+/**
+ * Insert a property definition. Since 0.6.5 a manifest definition splits into
+ * a registry `properties` row (nature) + a `type_properties` binding (role in
+ * the type). The registry row reuses the manifest definition id; when a
+ * pre-0.6.5 manifest carries several same-named definitions, the first
+ * registry row wins and every binding attaches to it (merge-by-name, same as
+ * migration 032). `INSERT OR IGNORE` keeps the reuse-by-id semantics.
+ */
 function insertPropertyDefinition(
   ndb: NetworkDb,
   row: PropertyDefinition,
 ): { created: boolean } {
+  const now = new Date().toISOString();
+  // Registry first: the definition's nature under its own id (id collision =
+  // reuse; name collision = the surviving registry row wins).
   ndb
     .prepare(
-      `INSERT OR IGNORE INTO type_properties (
-         id, owner_type, owner_id, key, value_type, config, required, position, description
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO properties (
+         id, name, name_key, value_type, config, description, created_at, updated_at
+       ) VALUES (?, ?, type_name_key(?), ?, ?, ?, ?, ?)`,
     )
     .run(
       row.id,
-      row.owner_type,
-      row.owner_id,
+      row.key,
       row.key,
       row.value_type,
       JSON.stringify(row.config ?? {}),
-      row.required ? 1 : 0,
-      row.position,
       row.description ?? null,
+      now,
+      now,
     );
+  // Resolve the surviving registry id by name (may differ from row.id when a
+  // same-named property was imported just before).
+  const prop = ndb
+    .prepare('SELECT id FROM properties_v WHERE name_key = type_name_key(?)')
+    .get(row.key) as { id: string } | undefined;
+  const propertyId = prop?.id ?? row.id;
+  ndb
+    .prepare(
+      `INSERT OR IGNORE INTO type_properties (
+         id, owner_type, owner_id, property_id, required, position
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(row.id, row.owner_type, row.owner_id, propertyId, row.required ? 1 : 0, row.position);
   return { created: true };
 }
 

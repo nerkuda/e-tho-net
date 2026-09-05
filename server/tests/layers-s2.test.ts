@@ -274,11 +274,13 @@ describe(
           '029_links_triple_live.sql',
           '030_type_property_description.sql',
           '031_layer_colors.sql',
+          '032_properties_registry.sql',
         ]);
 
-        // 1. Row counts unchanged (the layers table is new, everything else kept).
+        // 1. Row counts unchanged (the layers table is new, everything else
+        // kept; 032 turns the seeded definition into one registry property).
         const after = tableCounts(db);
-        assert.deepEqual(after, { ...before, layers: 1, session_layers: 0 });
+        assert.deepEqual(after, { ...before, layers: 1, session_layers: 0, properties: 1 });
 
         // 2. The base layer row.
         const base = db
@@ -310,6 +312,7 @@ describe(
           'thought_synonyms',
           'thought_types',
           'link_types',
+          'properties',
           'type_properties',
           'type_property_overrides',
           'property_values',

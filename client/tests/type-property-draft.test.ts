@@ -18,10 +18,13 @@ import {
   type DraftProperty,
 } from '../src/renderer/lib/type-property-draft.js';
 
-/** Builds a minimal stored property definition for the tests. */
+/** Builds a minimal stored property binding for the tests. */
 function def(id: string, key: string, extra: Partial<PropertyDefinition> = {}): PropertyDefinition {
   return {
     id,
+    // 0.6.5: `property_id` is the registry id the binding attaches; tests use
+    // the same value as the binding id by default.
+    property_id: id,
     owner_type: 'thought_type',
     owner_id: 'type-1',
     key,
