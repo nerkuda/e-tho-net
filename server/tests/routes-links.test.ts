@@ -133,6 +133,11 @@ describe(
           payload: { source_id: ctx.homeId, target_id: child, type_id: linkTypeId },
         });
         assert.equal(typed.statusCode, 201);
+        assert.equal(
+          (typed.json().data as { type_id: string | null }).type_id,
+          linkTypeId,
+          'POST /links must apply type_id from the body',
+        );
 
         // Untyped link child → HOME (child acts as a parent of HOME).
         const untyped = await ctx.app.inject({
@@ -166,6 +171,77 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal(badGroup.statusCode, 422);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('POST /links applies type_id from the body (regression: bug b1f560f3)', async () => {
+      // Regression guard for error b1f560f3: prior to the fix the REST handler
+      // silently dropped `type_id` from the request body, so callers following
+      // the spec got untyped links without any diagnostic. With the fix in
+      // place the type must reach the domain layer: a valid type persists on
+      // the new link, an unknown type fails fast with 404 (NOT_FOUND, the
+      // project convention for a missing referenced entity), and a duplicate
+      // typed pair hits the UNIQUE `(source_id, target_id, type_id)` arm with
+      // 409 (so the same triple cannot be inserted twice).
+      const ctx = await buildRestContext();
+      try {
+        const a = await createThought(ctx, 'A');
+        const b = await createThought(ctx, 'B');
+
+        const lt = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/link-types`,
+          headers: authHeaders(ctx),
+          payload: { name_forward: 'содержит', name_reverse: 'входит в' },
+        });
+        assert.equal(lt.statusCode, 201);
+        const linkTypeId = (lt.json().data as { id: string }).id;
+
+        // 1) Valid type_id must be applied to the new link.
+        const created = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/links`,
+          headers: authHeaders(ctx),
+          payload: { source_id: a, target_id: b, type_id: linkTypeId },
+        });
+        assert.equal(created.statusCode, 201);
+        assert.equal(
+          (created.json().data as { type_id: string | null }).type_id,
+          linkTypeId,
+          'POST /links must persist type_id from the body (bug b1f560f3)',
+        );
+
+        // 2) Unknown type_id must surface as an error, not a silent untyped
+        // insert. The project convention for "referenced entity missing" is
+        // 404 (NOT_FOUND), used for unknown thoughts / link types / thought
+        // types alike — `assertLinkTypeAssignable` throws `NOT_FOUND` for an
+        // unknown id, mirroring `assertThoughtTypeAssignable`.
+        const unknown = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/links`,
+          headers: authHeaders(ctx),
+          payload: {
+            source_id: b,
+            target_id: a,
+            type_id: '00000000-0000-0000-0000-000000000000',
+          },
+        });
+        assert.equal(unknown.statusCode, 404);
+        assert.equal(unknown.json().error.code, 'NOT_FOUND');
+
+        // 3) UNIQUE invariant: the same typed pair cannot be inserted twice.
+        // Without the fix this slipped through, producing silent duplicate
+        // links; with the fix the duplicate guard fires on the typed triple.
+        const dup = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/links`,
+          headers: authHeaders(ctx),
+          payload: { source_id: a, target_id: b, type_id: linkTypeId },
+        });
+        assert.equal(dup.statusCode, 409);
+        assert.equal(dup.json().error.code, 'DUPLICATE');
       } finally {
         await closeRestContext(ctx);
       }
