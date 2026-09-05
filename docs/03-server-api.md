@@ -701,8 +701,9 @@ POST /api/v1/networks/{nid}/thoughts/query
                                   # (L21: поддерево, как type_ids)
                                   # в любом направлении (source или target)
   properties?: [                  # все условия объединяются по AND
-    { property_id: "...", op: "contains"|"eq"|"gt"|"lt"|"in"|"not_in",
-      value: "..." | 42 | true | ["Москва", "Воронеж"] }
+    { property_id: "...", op: "contains"|"eq"|"gt"|"lt"|"in"|"not_in"
+                            |"is_empty"|"not_empty",
+      value: "..." | 42 | true | ["Москва", "Воронеж"] | null }
   ],
   has_properties?: true|false,    # «Дополнительно»: есть/нет хотя бы одно
                                   # значение свойства у мысли; поле отсутствует
@@ -784,11 +785,19 @@ POST /api/v1/networks/{nid}/thoughts/query
   результат пуст (не HOME, фильтр не пуст).
 - **Операции свойств** применяются к колонке типа значения определения
   (`value_text/value_number/value_date/value_bool/value_thought_ref`); допустимые
-  `op` зависят от `value_type`: text/url — `contains|eq|in|not_in`;
-  number/date — `eq|gt|lt`; bool — `eq`; thought_ref — `eq|in|not_in`.
+  `op` зависят от `value_type`: text/url — `contains|eq|in|not_in|is_empty|not_empty`;
+  number/date — `eq|gt|lt|is_empty|not_empty`; bool — `eq`;
+  thought_ref — `eq|in|not_in|is_empty|not_empty`.
   `in`/`not_in` принимают массив значений (OR внутри списка). Для thought_ref
   `eq`/`in`/`not_in` сопоставляют и id внутри JSON-массивов множественных
   значений (`config.multiple`, 02-data-model.md §3.5), не только одиночные id.
+  `is_empty` / `not_empty` (bug fix 0.6.3) проверяют заполненность свойства:
+  `not_empty` — у мысли есть непустое значение (для text/url/number/date —
+  `IS NOT NULL` и `!= ''`; для thought_ref — также не `'[]'` и не `'null'`),
+  `is_empty` — обратное (нет строки в `property_values`, либо все элементы
+  массива `null`/пусты). Допустимы для всех типов, **кроме `bool`**: там
+  «заполнено» = `true`, «не заполнено» = `false` и покрываются `eq`. Для этих
+  операций поле `value` сервер игнорирует.
 - **`has_properties`/`has_comment`/`has_attachments`/`has_chronology`** — три
   состояния: `true` — только мысли с хотя бы одним значением/записью,
   `false` — только без них, поле не передано — критерий не участвует
