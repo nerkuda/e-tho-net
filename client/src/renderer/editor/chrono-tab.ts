@@ -76,6 +76,8 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   );
 
   let selectedId: string | null = null;
+  /** Row elements of the current table, by comment id (highlight updates). */
+  const rowById = new Map<string, HTMLTableRowElement>();
 
   void reload();
   // The tab opens with an empty editor area — a comment is picked by a click
@@ -110,6 +112,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     head.append(headRow);
     table.append(head);
     const tbody = el('tbody');
+    rowById.clear();
     if (chrono.length === 0) {
       const row = el('tr');
       const cell = el('td', 'muted', 'Комментариев нет.');
@@ -120,6 +123,7 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       for (const comment of chrono) {
         const row = el('tr');
         if (comment.id === selectedId) row.classList.add('selected');
+        rowById.set(comment.id, row);
         row.append(
           el('td', undefined, comment.title ?? '—'),
           el('td', undefined, fmtDate(comment.valid_from)),
@@ -140,14 +144,22 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   /** Selects a comment for viewing (or viewing + editing on double-click). */
   function select(comment: Comment, edit = false): void {
     selectedId = comment.id;
+    // A click does not change the data — only move the row highlight instead
+    // of refetching the whole list (bug 2528f51b).
+    setHighlight(comment.id);
     buildEditor(comment, edit);
-    // The table re-renders so the clicked row gets the selection highlight.
-    void reload();
+  }
+
+  /** Moves the `selected` highlight to the row, leaving the table intact. */
+  function setHighlight(commentId: string | null): void {
+    for (const row of rowById.values()) row.classList.remove('selected');
+    if (commentId !== null) rowById.get(commentId)?.classList.add('selected');
   }
 
   /** Resets the editor area for a brand-new comment (edit mode at once). */
   function startNew(): void {
     selectedId = null;
+    setHighlight(null);
     buildEditor(null, true);
   }
 
