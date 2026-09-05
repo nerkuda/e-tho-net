@@ -1,6 +1,6 @@
 {
   "name": "@etn/client",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "private": true,
   "type": "module",
   "description": "ETN — The Endless Thought Network desktop client",
