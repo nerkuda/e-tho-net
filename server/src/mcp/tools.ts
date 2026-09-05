@@ -1567,7 +1567,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetworkBase(rt, args.network_id);
-        const parent = args.parent_id ?? resolveRuntimeLayer(rt, args.network_id).id;
+        // Resolve the session layer once and reuse it both as the implicit
+        // parent (§2.3) and as the `current` reference for the response:
+        // creating a layer is not the same as switching to it (fix for
+        // error 9b159e7a — created.current was always `true`).
+        const sessionLayer = resolveRuntimeLayer(rt, args.network_id);
+        const parent = args.parent_id ?? sessionLayer.id;
         const layer = createLayer(ndb, {
           parentId: parent,
           title: args.title,
@@ -1579,7 +1584,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           title: args.title,
           parent_id: parent,
         });
-        return { ...layer, request_id: String(extra.requestId) };
+        return { ...layer, current: layer.id === sessionLayer.id, request_id: String(extra.requestId) };
       }),
   );
 

@@ -96,10 +96,13 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
 
         const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
         // §2.3: «от указанного родителя (по умолчанию — текущий слой сессии)».
-        const parent =
-          explicitParent !== undefined && explicitParent !== null
-            ? explicitParent
-            : resolveRequestLayer(deps.dataDir, req, networkId, app.appLogger).id;
+        // Resolve the session layer once and reuse it both as the implicit
+        // parent and as the `current` reference for the response: POST /layers
+        // must not switch the session, so `current` is computed against the
+        // real session layer, not against the newly created layer's id
+        // (fix for error 9b159e7a — created.layer.current was always `true`).
+        const sessionLayer = resolveRequestLayer(deps.dataDir, req, networkId, app.appLogger);
+        const parent = explicitParent ?? sessionLayer.id;
         const layer = createLayer(ndb, {
           parentId: parent,
           title,
@@ -107,7 +110,8 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
           gitBranch,
           createdBy: req.auth!.user.id,
         });
-        sendSuccess(reply, layer, { version: layer.version }, 201);
+        const layerWithCurrent = { ...layer, current: layer.id === sessionLayer.id };
+        sendSuccess(reply, layerWithCurrent, { version: layer.version }, 201);
       },
     );
 
