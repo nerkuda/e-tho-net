@@ -5764,6 +5764,68 @@ body.cloud-dragging * {
   font-weight: 600;
 }
 
+/* Inline tree-checkbox type picker (0.6.5: thought_ref `allowed_type_ids`
+ * filter in the property editor) — search on top, tree rows with icons and
+ * inherited styles below, same visual shape as the combobox dropdown. */
+.type-check-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.type-check-search {
+  gap: 6px;
+}
+
+.type-check-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.type-check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.type-check-row:hover {
+  background: var(--accent-soft);
+}
+
+.type-check-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.type-check-empty {
+  margin: 4px 8px;
+}
+
+/* Pick-list rows in dialogs («Добавить свойство»): the highlighted pickable
+ * row and the visibly blocked ones (already attached / inherited). */
+.row-selected > td {
+  background: var(--accent-soft);
+}
+
+.row-disabled {
+  cursor: default;
+}
+
+.row-disabled > td {
+  color: var(--muted, #8a93a5);
+  opacity: 0.7;
+}
+
 /* Scrollable thought-type checklist — thought_ref property type filter (L6). */
 .type-filter-box {
   max-height: 140px;

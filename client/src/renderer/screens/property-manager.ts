@@ -47,7 +47,8 @@ import {
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
+import { createTypeCheckPicker } from '../lib/type-check-picker.js';
+import { thoughtTypeOptions } from '../lib/type-tree.js';
 import { store } from '../state.js';
 import {
   showLinkTypeEditor,
@@ -311,10 +312,15 @@ function isPropertyRegistryEvent(raw: unknown): raw is AnyRealtimeEvent & { netw
  * «Клиент: редактор типа подключает свойство из справочника») can reuse
  * this dialog instead of duplicating the form — the registry is the single
  * source of a property's nature, and a single dialog keeps it that way.
+ *
+ * `onCreated` (optional) fires after a NEW row was applied, with the created
+ * registry row — the attach dialog of the type editor uses it to highlight
+ * the fresh property in its pick list.
  */
 export function openPropertyManagerEditor(
   property: RegistryRow | null,
   onChanged: () => void,
+  onCreated?: (row: NetworkProperty) => void,
 ): void {
   const networkId = requireNetworkId();
   // Server snapshot: starts at the row passed in, refreshed after a successful
@@ -336,18 +342,19 @@ export function openPropertyManagerEditor(
     config: cloneConfig(property?.config ?? null),
   };
 
-  // Text-only options / multiple flag.
+  // Text-only options list (a value hint, not a constraint).
   let choiceOn = draft.value_type === 'text' && (draft.config?.options?.length ?? 0) > 0;
-  let multipleOn = draft.config?.multiple === true;
   let optionsText = choiceOn ? (draft.config?.options ?? []).join('\n') : '';
+
+  // Multiple values flag — shared by text / url / thought_ref (02-data-model
+  // md §3.4–3.5): whichever of the three kinds the property has, the flag
+  // survives a value-type switch and is rendered in every kind's block.
+  let multipleOn = draft.config?.multiple === true;
 
   // thought_ref type filter (multi-select picker over the thought-types tree).
   let allowedTypeIds = new Set<string>(
     draft.value_type === 'thought_ref' ? (draft.config?.allowed_type_ids ?? []) : [],
   );
-
-  // URL multiple flag.
-  let urlMultipleOn = draft.value_type === 'url' && draft.config?.multiple === true;
 
   // The default value (thought_ref has no default — types must bind it
   // themselves).
@@ -428,14 +435,16 @@ export function openPropertyManagerEditor(
     });
     choiceRow.append(choiceCheck, span('выбирать из списка'));
     textExtrasHost.append(choiceRow);
-    if (!choiceOn) return;
-    const area = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-    area.value = optionsText;
-    area.rows = 4;
-    area.placeholder = 'Варианты значения — по одному в строке';
-    area.addEventListener('input', () => {
-      optionsText = area.value;
-    });
+    if (choiceOn) {
+      const area = el('textarea', 'textarea-input') as HTMLTextAreaElement;
+      area.value = optionsText;
+      area.rows = 4;
+      area.placeholder = 'Варианты значения — по одному в строке';
+      area.addEventListener('input', () => {
+        optionsText = area.value;
+      });
+      textExtrasHost.append(area);
+    }
     const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
     const multiCheck = el('input') as HTMLInputElement;
     multiCheck.type = 'checkbox';
@@ -444,36 +453,36 @@ export function openPropertyManagerEditor(
       multipleOn = multiCheck.checked;
     });
     multiRow.append(multiCheck, span('несколько значений (через запятую)'));
-    textExtrasHost.append(area, multiRow);
+    textExtrasHost.append(multiRow);
   }
 
   function renderRefFilter(): void {
     refFilterHost.replaceChildren();
+    const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
+    const multiCheck = el('input') as HTMLInputElement;
+    multiCheck.type = 'checkbox';
+    multiCheck.checked = multipleOn;
+    multiCheck.addEventListener('change', () => {
+      multipleOn = multiCheck.checked;
+    });
+    multiRow.append(multiCheck, span('несколько значений'));
+    refFilterHost.append(multiRow);
     const label = el('p', 'muted', 'Отбор по типам (пусто — любой тип)');
     label.style.margin = '6px 0 2px';
     refFilterHost.append(label);
-    const thoughtTypes = store.state.thoughtTypes;
-    const combo = createTypeCombobox({
-      options: () =>
-        orderedThoughtTypeRows(thoughtTypes).map((row) => ({
-          id: row.id,
-          label: row.name,
-          parent_id: row.parent_id,
-          depth: row.depth,
-          has_children: row.has_children,
-          selectable: true,
-        })),
-      value: null,
-      placeholder: 'любой тип',
-      emptyLabel: 'любой тип',
-      expandAll: true,
-      onChange: () => {
-        // The picker works one-at-a-time here — for a multi-select we'd need
-        // a dedicated component; the registry dialog is rare enough that the
-        // single-pick UX is fine (each pick overrides the previous).
-      },
-    });
-    refFilterHost.append(combo.root);
+    refFilterHost.append(
+      createTypeCheckPicker({
+        // The same visual shape as every other type list: tree order, icons,
+        // colours and font styles (0.6.5 приёмка — «без иконок и иерархии»).
+        options: () => thoughtTypeOptions(store.state.thoughtTypes),
+        selected: allowedTypeIds,
+        onChange: (next) => {
+          allowedTypeIds = new Set(next);
+        },
+        placeholder: 'Поиск типа…',
+        maxHeightPx: 200,
+      }).root,
+    );
   }
 
   function renderUrlExtras(): void {
@@ -481,9 +490,9 @@ export function openPropertyManagerEditor(
     const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
     const multiCheck = el('input') as HTMLInputElement;
     multiCheck.type = 'checkbox';
-    multiCheck.checked = urlMultipleOn;
+    multiCheck.checked = multipleOn;
     multiCheck.addEventListener('change', () => {
-      urlMultipleOn = multiCheck.checked;
+      multipleOn = multiCheck.checked;
     });
     multiRow.append(multiCheck, span('несколько значений'));
     urlExtrasHost.append(multiRow);
@@ -552,10 +561,17 @@ export function openPropertyManagerEditor(
 
   // Value-type change → if a stored row is being edited and the type moves,
   // surface the conversion warning and stash the change for the apply.
+  // Kind-specific extras do NOT carry over: they belong to the old kind.
   typeSelect.addEventListener('change', () => {
+    const prev = draft.value_type;
     draft.value_type = typeSelect.value as PropertyValueType;
-    if (draft.value_type === 'thought_ref') {
-      defaultValue = null;
+    if (draft.value_type !== prev) {
+      if (prev === 'text') {
+        choiceOn = false;
+        optionsText = '';
+      }
+      if (prev === 'thought_ref') allowedTypeIds = new Set();
+      if (draft.value_type === 'thought_ref') defaultValue = null;
     }
     renderValueTypeExtras();
   });
@@ -577,7 +593,6 @@ export function openPropertyManagerEditor(
       optionsText,
       multipleOn,
       allowedTypeIds,
-      urlMultipleOn,
     });
 
     try {
@@ -595,6 +610,7 @@ export function openPropertyManagerEditor(
           types_count: 0,
           values_count: 0,
         };
+        onCreated?.(created);
       } else {
         const changes: NetworkPropertyUpdateInput = {};
         if (name !== current.name) changes.name = name;
@@ -721,6 +737,9 @@ function defaultInputFor(
  * when there is nothing meaningful to store (no default, no options, no
  * multiple flag, no allowed types) so the server stores the column as JSON
  * `null` rather than `{}`.
+ *
+ * Multiple values are valid for text / url / thought_ref alike (02-data-model
+ * md §3.4–3.5) — one flag covers all three kinds.
  */
 function buildConfig(
   valueType: PropertyValueType,
@@ -730,7 +749,6 @@ function buildConfig(
     optionsText: string;
     multipleOn: boolean;
     allowedTypeIds: Set<string>;
-    urlMultipleOn: boolean;
   },
 ): PropertyConfig | null {
   const config: PropertyConfig = {};
@@ -743,47 +761,41 @@ function buildConfig(
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
     if (list.length > 0) config.options = list;
-    if (options.multipleOn) config.multiple = true;
   }
   if (valueType === 'thought_ref' && options.allowedTypeIds.size > 0) {
     config.allowed_type_ids = Array.from(options.allowedTypeIds);
-    if (options.multipleOn) config.multiple = true;
   }
-  if (valueType === 'url' && options.urlMultipleOn) {
+  if (options.multipleOn) {
     config.multiple = true;
   }
   return Object.keys(config).length > 0 ? config : null;
 }
 
-/** True when the new config and the stored one carry the same payload. */
+/**
+ * True when the new config and the stored one carry the same payload. Key
+ * ORDER is irrelevant (the migration and the server write JSON with different
+ * key orders than the local builder) — object keys are sorted recursively.
+ */
 function sameConfig(a: PropertyConfig | null, b: PropertyConfig | null): boolean {
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  return stableJson(a ?? null) === stableJson(b ?? null);
+}
+
+/** JSON.stringify with recursively sorted object keys (arrays keep order). */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
 /** Deep-clone a stored config (the server returns plain JSON). */
 function cloneConfig(c: PropertyConfig | null): PropertyConfig | null {
   if (c === null) return null;
   return JSON.parse(JSON.stringify(c)) as PropertyConfig;
-}
-
-/** Ordered list of thought types for the (single-pick) ref filter. */
-function orderedThoughtTypeRows(types: ReadonlyArray<{
-  id: string;
-  name: string;
-  parent_id: string | null;
-  is_root: boolean;
-  has_children?: boolean;
-  depth?: number;
-}>): Array<{ id: string; name: string; parent_id: string | null; depth: number; has_children: boolean }> {
-  return types
-    .filter((t) => !t.is_root)
-    .map((t) => ({
-      id: t.id,
-      name: t.name,
-      parent_id: t.parent_id,
-      depth: t.depth ?? 1,
-      has_children: t.has_children ?? false,
-    }));
 }
 
 // ---------------------------------------------------------------------------
