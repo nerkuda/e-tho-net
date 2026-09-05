@@ -7,6 +7,15 @@
 
 ### Исправлено
 
+- **`PATCH /networks/{nid}/layers/{id}` и MCP `etn.layers.update` больше не
+  помечают редактируемый слой как `current`.** В ответе всегда приходил
+  `current: true` у отредактированного слоя, хотя PATCH сессию не
+  переключает — `updateLayer` (`server/src/domain/layer-service.ts`)
+  передавал id редактируемого слоя как `currentLayerId` для DTO. `current`
+  теперь вычисляется относительно реального слоя сессии
+  (`resolveRequestLayer` в REST-маршруте, `resolveRuntimeLayer` в
+  MCP-инструменте — тот же образец, что в фиксе `createLayer` из 0.6.3),
+  и у редактируемого слоя он `true` только когда сессия находится на нём.
 - **`POST /networks/{id}/mentions/scan` больше не замораживает сервер
   (префильтр + кэш компиляций регекспов).** В `findMentionsInTexts`
   (`server/src/domain/search-service.ts`, docs/03-server-api.md §21) на
