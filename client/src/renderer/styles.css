@@ -439,6 +439,21 @@ textarea {
   font-size: 12px;
 }
 
+.profile-item .profile-info {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.profile-item .profile-info .profile-label,
+.profile-item .profile-info .profile-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .networks-list {
   display: flex;
   flex-direction: column;

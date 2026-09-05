@@ -281,6 +281,13 @@ export interface EtnApi {
      */
     addProfile(input: { label: string; baseUrl: string; apiKey: string }): Promise<CurrentUser>;
     connect(profileId: string): Promise<CurrentUser>;
+    /**
+     * Removes a saved server profile from the local DB (defect e28df893).
+     * Disconnects first if `profileId` is the active profile so the realtime
+     * pool never references a row that is about to disappear. Silently no-ops
+     * on unknown ids.
+     */
+    removeProfile(profileId: string): Promise<void>;
     disconnect(): Promise<void>;
     getStatus(): Promise<ServerStatus>;
   };

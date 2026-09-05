@@ -41,6 +41,12 @@ export interface HandlerDeps {
    * connects (H2). Implemented in `register.ts`, which owns safeStorage access.
    */
   addProfile: (input: { label: string; baseUrl: string; apiKey: string }) => Promise<CurrentUser>;
+  /**
+   * Deletes a saved profile (defect e28df893). Disconnects first if the
+   * profile is the active one; no-op for unknown ids. Implemented in
+   * `register.ts`, which owns the disconnect flow.
+   */
+  removeProfile: (profileId: string) => Promise<void>;
   /** Drops clients and clears the active network. */
   disconnect: () => void;
   /** Returns the currently open network id (realtime `getNetworkId` source). */
@@ -133,6 +139,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind(() => {
       deps.disconnect();
     }),
+  );
+  handlers.set(
+    'server.removeProfile',
+    bind((profileId: string) => deps.removeProfile(profileId)),
   );
   handlers.set(
     'server.getStatus',

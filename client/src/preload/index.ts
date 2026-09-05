@@ -32,6 +32,7 @@ function buildApi(): EtnApi {
       listProfiles: () => invoke('server.listProfiles'),
       addProfile: (input) => invoke('server.addProfile', input),
       connect: (profileId) => invoke('server.connect', profileId),
+      removeProfile: (profileId) => invoke('server.removeProfile', profileId),
       disconnect: () => invoke('server.disconnect'),
       getStatus: () => invoke('server.getStatus'),
     },
