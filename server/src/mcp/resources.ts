@@ -27,7 +27,10 @@ import { listComments } from '../domain/comment-service.js';
 import { listAttachments } from '../domain/attachment-service.js';
 import { getThoughtType, listThoughtTypes } from '../domain/thought-type-service.js';
 import { getLinkType, listLinkTypes } from '../domain/link-type-service.js';
-import { getPropertyValuesResolved, listTypeProperties } from '../domain/property-service.js';
+import {
+  getPropertyValuesResolved,
+  listEffectiveTypeProperties,
+} from '../domain/property-service.js';
 import { linkTypeCatalog, thoughtTypeCatalog, withSanitizedIcon } from './catalogs.js';
 import { etnErrorText, openMemberNetwork, type McpRuntime } from './context.js';
 
@@ -366,7 +369,12 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Тип мысли (свойства и описание)',
       description:
-        'Один тип мысли: определение, `description` для AI-контекста и определения его свойств.',
+        'Один тип мысли: определение, `description` для AI-контекста и **эффективные** привязки ' +
+        'свойств — собственные плюс унаследованные от предков (L21, 02-data-model.md §3.4.1). ' +
+        'Каждая запись несёт `property_id` реестрового свойства, `defined_on` (на каком типе ' +
+        'привязка объявлена), `inherited`, `default_value` с учётом override-цепочки и ' +
+        '`description_overridden` (description-override этого типа). Это та же форма, ' +
+        'что отдаёт `etn.types.list`, — ресурс оставлен для совместимости.',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -379,9 +387,13 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
           throw new Error(`ETN error [NOT_FOUND]: thought type ${typeId} not found`);
         }
         // Bug fix (§5.1e): drop an inline `data:` icon URL.
+        // 0.6.5 (f14cd5f1): use effective bindings (L21) instead of the type's
+        // own ones — an agent reading «what properties does this type expose?»
+        // expects inherited properties too. Same shape as `etn.types.list`'s
+        // `properties` block, so a tool/resource reader can share code.
         return jsonContents(uri.href, {
           ...withSanitizedIcon(type),
-          properties: listTypeProperties(ndb, 'thought_type', typeId),
+          properties: listEffectiveTypeProperties(ndb, 'thought_type', typeId),
         });
       }),
   );

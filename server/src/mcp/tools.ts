@@ -588,12 +588,16 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Мысль (полная)',
       description:
         'Fetch one thought with synonyms, type (with AI-facing description), styles and ' +
-        'property values (`thought_ref` values resolved to {id, title}). `meta` carries ' +
-        'counters and `meta.permanent` — a preview of the single permanent comment (body ' +
-        'truncated to 2000 chars; `truncated` flag + comment `id`). When `truncated: true` ' +
-        'fetch the full text via `etn.comments.get` (by that `id` or by this thought_id). ' +
-        'Pass `view: "full"` to keep the legacy shape with every visual field (colours, font-style ' +
-        'flags, icon attachment id); the default `view: "compact"` drops them (task O12).',
+        'property values (`thought_ref` values resolved to {id, title}). Each value carries ' +
+        '`property_id`, `property_name` and `value_type` from the registry; values whose ' +
+        'property is not attached to the owner\'s type chain are flagged `outside_type: true` ' +
+        '(task f14cd5f1 — without it the agent would treat the card as empty and overwrite the ' +
+        'orphaned value). `meta` carries counters and `meta.permanent` — a preview of the single ' +
+        'permanent comment (body truncated to 2000 chars; `truncated` flag + comment `id`). When ' +
+        '`truncated: true` fetch the full text via `etn.comments.get` (by that `id` or by this ' +
+        'thought_id). Pass `view: "full"` to keep the legacy shape with every visual field ' +
+        '(colours, font-style flags, icon attachment id); the default `view: "compact"` drops ' +
+        'them (task O12).',
       inputSchema: GetSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -947,9 +951,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Где используется мысль',
       description:
         'Thoughts referencing this thought as a `thought_ref` property value (formal links, ' +
-        '«Использование» in the editor), grouped by property. Returns ' +
-        '{ total, groups: [{property_id, key, thoughts[]}], thought_types } — the latter is ' +
-        'a reference table (name + AI-facing description) for every type used in the result. ' +
+        '«Использование» in the editor), grouped by the registry property. Returns ' +
+        '{ total, groups: [{property_id, key, thoughts[]}], thought_types } — `property_id` ' +
+        'is the registry id (one group per network property regardless of which types attach ' +
+        'it — task f14cd5f1); `key` is the registry name. The `thought_types` reference table ' +
+        '(name + AI-facing description) covers every type used in the result. ' +
         '`view: "compact"` (default, task O12) drops colours, font-style flags and the icon ' +
         'attachment id from each referencing thought; `view: "full"` keeps them.',
       inputSchema: UsageSchema,
@@ -1198,9 +1204,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'and link types with their hierarchy (`parent_id`/`is_root`), `description` (AI-facing ' +
         'context) and effective property definitions — own plus everything inherited along the ' +
         'L21 type chain (`key`, `value_type`, `required`, `config` incl. `options`/' +
-        '`allowed_type_ids`, effective `default_value`, `inherited`, `defined_on`, the effective ' +
-        '`description` of the property and `description_overridden` marking a description this ' +
-        'type overrides itself). Call before ' +
+        '`allowed_type_ids`, effective `default_value`, `inherited`, `defined_on`, ' +
+        '`property_id` (the registry id — task f14cd5f1: properties are network entities, the ' +
+        'effective list is how the agent sees the registry), the effective `description` of ' +
+        'the property and `description_overridden` marking a description this type overrides ' +
+        'itself). Call before ' +
         'creating a typed thought/link to see what to fill; also lets `type_id` be replaced by a ' +
         'type name in `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`. ' +
         'Task O16: pass `in_subtree_of: <thought_id>` (optionally with `max_depth`) to scope ' +
@@ -2600,7 +2608,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'are coerced back to their JSON types before validation. Either provide one ' +
         '`key`+`value`, or a map `values: {key: value|null}` to write several properties in a ' +
         'single transaction (any invalid key rolls back the whole set). Single form returns ' +
-        '{ id, version: 0 }; bulk form returns { values: {key: {id}}, version: 0 }.',
+        '{ id, version: 0 }; bulk form returns { values: {key: {id}}, version: 0 }. ' +
+        'The key is resolved against the network property registry (task f14cd5f1): a missing ' +
+        'property fails with NOT_FOUND; a property not attached to the owner\'s type chain fails ' +
+        'with VALIDATION_ERROR ("property X is not attached to this owner\'s type — attach it ' +
+        'first"), `details.property_id` names the registry id for the agent to call ' +
+        '`etn.types.list` against.',
       inputSchema: SetPropertySchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.set'],
     },

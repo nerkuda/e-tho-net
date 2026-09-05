@@ -13,6 +13,11 @@ import {
   MCP_TOOL_NAMES,
 } from '@etn/shared';
 
+import { openNetworkDb } from '../src/db/network-db.js';
+import {
+  createThoughtType,
+} from '../src/domain/thought-type-service.js';
+import { createTypeProperty } from '../src/domain/property-service.js';
 import {
   closeMcpContext,
   buildMcpContext,
@@ -178,6 +183,58 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(result.isError, true);
         assert.match(toolText(result), /ETN error|Unexpected error|Invalid/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('etn.thought-type resource returns effective (inherited) properties with registry property_id (f14cd5f1)', async () => {
+    // The resource used to expose only the type's own bindings; since 0.6.5
+    // it must mirror `etn.types.list` and include inherited ones — agents
+    // pointed at the resource by the docs need the same shape as the tool.
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const parent = createThoughtType(ndb, { name: 'ResParent' }, ctx.adminId);
+      const child = createThoughtType(
+        ndb,
+        { name: 'ResChild', parent_id: parent.id },
+        ctx.adminId,
+      );
+      const def = createTypeProperty(ndb, 'thought_type', parent.id, {
+        key: 'status',
+        value_type: 'text',
+      });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const read = await handle.client.readResource({
+          uri: `etn://networks/${ctx.networkId}/thought-types/${child.id}`,
+        });
+        const block = read.contents[0];
+        assert.ok(block !== undefined && 'text' in block);
+        const type = JSON.parse(block.text) as {
+          id: string;
+          properties: Array<{
+            key: string;
+            property_id: string;
+            inherited: boolean;
+            defined_on: string;
+            value_type: string;
+          }>;
+        };
+        assert.equal(type.id, child.id);
+        // The child has no own bindings — but the resource must still list the
+        // inherited property because that's what `etn.types.list` does.
+        const inherited = type.properties.find((p) => p.key === 'status');
+        assert.ok(inherited, 'inherited property must be present');
+        assert.equal(inherited.property_id, def.property_id);
+        assert.equal(inherited.inherited, true);
+        assert.equal(inherited.defined_on, parent.id);
+        assert.equal(inherited.value_type, 'text');
       } finally {
         await handle.close();
       }
