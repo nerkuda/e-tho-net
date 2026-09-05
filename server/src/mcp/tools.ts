@@ -526,7 +526,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   );
 
   const QueryPropertySchema = z.object({
-    key: z.string().min(1),
+    property_id: z.string().min(1),
     operator: z.enum(['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 'lte']),
     value: z.union([z.string(), z.number(), z.boolean()]),
   });
@@ -560,8 +560,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         '(`true`/`false`/`any`, default `false` — only unmarked; S13), `keywords` — the §6.10 ' +
         'mini-syntax (whitespace-separated words, all required; `*` infix wildcard; `-слово` ' +
         'exclusion; matched against title and synonyms), ' +
-        '`properties` by property values (key + operator eq/ne/contains/gt/gte/lt/lte + value; ' +
-        'the value type selects the column: number/boolean/string), `created_*`/`updated_*` by ' +
+        '`properties` by property values (registry `property_id` + operator eq/ne/contains/gt/gte/lt/lte + value; ' +
+        'the property `value_type` selects the column — number → value_number, bool → value_bool, ' +
+        'text/url/date/thought_ref on their matching columns; an unknown `property_id` matches nothing), ' +
+        '`created_*`/`updated_*` by ' +
         'ISO-8601 date ranges. The response carries a `thought_types` reference table (name + ' +
         'AI-facing description) for every type used in `hits`. Use instead of search when ' +
         'there is no text to query.',

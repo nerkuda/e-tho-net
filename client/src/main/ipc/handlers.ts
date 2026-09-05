@@ -854,6 +854,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     }),
   );
 
+  // --- property registry (0.6.5) --------------------------------------------
+  handlers.set(
+    'propertyRegistry.list',
+    bind((networkId: string) => requireRest(deps).listNetworkProperties(networkId)),
+  );
+
   // --- comments -------------------------------------------------------------
   handlers.set(
     'comments.list',

@@ -708,6 +708,54 @@ describe(
         }
       });
 
+      it('one condition «Статус = согласовано» matches thoughts of any type attaching the registry property (task 171a438e)', () => {
+        // Same registry property id, three thought types — the filter must
+        // find every thought that carries the value, regardless of the
+        // owner's type. The wire filter no longer scopes by (type, key).
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const typeTask = seedThoughtType(ndb, 'задача');
+          const typeBug = seedThoughtType(ndb, 'ошибка');
+          const typeTech = seedThoughtType(ndb, 'тех.проект');
+          const status = seedProperty(ndb, typeTask, 'Статус', 'text');
+
+          const approvedTask = seedThought(ndb, { title: 'Согласованная задача', type_id: typeTask });
+          const draftTask = seedThought(ndb, { title: 'Черновик задачи', type_id: typeTask });
+          const approvedBug = seedThought(ndb, { title: 'Согласованная ошибка', type_id: typeBug });
+          const approvedTech = seedThought(ndb, { title: 'Согласованный тех.проект', type_id: typeTech });
+
+          seedPropertyValue(ndb, approvedTask, status, 'value_text', 'согласовано');
+          seedPropertyValue(ndb, draftTask, status, 'value_text', 'черновик');
+          seedPropertyValue(ndb, approvedBug, status, 'value_text', 'согласовано');
+          seedPropertyValue(ndb, approvedTech, status, 'value_text', 'согласовано');
+
+          // No type_ids filter — the registry id alone must scope the
+          // condition to every matching thought.
+          const all = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: status, op: 'eq', value: 'согласовано' }],
+          }));
+          assert.equal(all.total, 3);
+          assert.deepEqual(
+            all.items.map((i) => i.title).sort(),
+            ['Согласованная задача', 'Согласованная ошибка', 'Согласованный тех.проект'].sort(),
+          );
+
+          // Adding a type filter narrows but does not change the addressing.
+          const onlyTasksAndBugs = queryThoughts(ndb, USER, query({
+            type_ids: [typeTask, typeBug],
+            properties: [{ property_id: status, op: 'eq', value: 'согласовано' }],
+          }));
+          assert.equal(onlyTasksAndBugs.total, 2);
+          assert.deepEqual(
+            onlyTasksAndBugs.items.map((i) => i.title).sort(),
+            ['Согласованная задача', 'Согласованная ошибка'],
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
       it('is_empty / not_empty: text/date/number presence test (bug fix 0.6.3)', () => {
         const ndb = createInMemoryNetworkDb();
         try {

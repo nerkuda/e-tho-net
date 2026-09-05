@@ -157,6 +157,9 @@ function buildApi(): EtnApi {
       remove: (networkId, ownerType, ownerId, key) =>
         invoke('properties.remove', networkId, ownerType, ownerId, key),
     },
+    propertyRegistry: {
+      list: (networkId) => invoke('propertyRegistry.list', networkId),
+    },
     comments: {
       list: (networkId, ownerType, ownerId) =>
         invoke('comments.list', networkId, ownerType, ownerId),

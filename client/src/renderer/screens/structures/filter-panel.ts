@@ -13,8 +13,8 @@
  */
 
 import {
+  type NetworkProperty,
   type PropertyConfig,
-  type PropertyDefinition,
   type PropertyValueType,
   type SavedFilter,
   type SortOrder,
@@ -178,8 +178,9 @@ let host: HTMLElement | null = null;
 let callbacks: FilterPanelCallbacks | null = null;
 let state: FilterState = defaultState();
 
-/** Property definitions across all thought types (loaded per network). */
-const propertyDefs = new Map<string, { def: PropertyDefinition; typeName: string }>();
+/** Property registry: id → registry row. 0.6.5: one property, one id — the
+ *  picker no longer walks every thought type (task 171a438e). */
+const propertyDefs = new Map<string, NetworkProperty>();
 /** Thought-ref titles for value chips (resolved lazily). */
 const refTitles = new Map<string, string>();
 /** Resolved metadata of the «Родительские мысли» chips (icon/style, lazy). */
@@ -274,11 +275,11 @@ export function buildConditions(): StructurePropertyCondition[] {
     const values: Array<string | number | boolean> = [];
     for (const raw of rawValues) {
       if (raw === '') continue;
-      if (def.def.value_type === 'number') {
+      if (def.value_type === 'number') {
         const num = Number(raw);
         if (!Number.isFinite(num)) continue;
         values.push(num);
-      } else if (def.def.value_type === 'bool') {
+      } else if (def.value_type === 'bool') {
         values.push(raw === 'true');
       } else {
         values.push(raw);
@@ -342,22 +343,22 @@ export function mountFilterPanel(panelHost: HTMLElement, cb: FilterPanelCallback
   void loadPropertyDefs().then(() => renderPanel());
 }
 
-/** Loads the property definitions of every thought type of the network. */
+/**
+ * Loads the property registry of the network (0.6.5 — task 171a438e): one
+ * REST call replaces the per-type walk the panel used to do. A registry
+ * property is one row per network; the picker no longer cares which types
+ * attach it, so the same condition matches thoughts of different types.
+ */
 async function loadPropertyDefs(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   propertyDefs.clear();
-  const types = store.state.thoughtTypes;
-  await Promise.all(
-    types.map(async (type) => {
-      try {
-        const defs = await etn.types.listTypeProperties(networkId, 'thought_type', type.id);
-        for (const def of defs) propertyDefs.set(def.id, { def, typeName: type.name });
-      } catch {
-        // Type vanished or not readable — its properties are skipped.
-      }
-    }),
-  );
+  try {
+    const rows = await etn.propertyRegistry.list(networkId);
+    for (const row of rows) propertyDefs.set(row.id, row);
+  } catch {
+    // Network read failed — the panel falls back to the empty registry.
+  }
 }
 
 /** Loads the user's saved filters and re-renders the list. */
@@ -740,7 +741,7 @@ function renderPanel(): void {
     state.properties = [
       ...state.properties,
       first
-        ? { propertyId: first.def.id, op: OPS_BY_TYPE[first.def.value_type][0]!.op, values: [''] }
+        ? { propertyId: first.id, op: OPS_BY_TYPE[first.value_type][0]!.op, values: [''] }
         : { propertyId: '', op: 'eq', values: [''] },
     ];
     touch();
@@ -1209,10 +1210,11 @@ function renderConditions(): void {
 /** Builds one `[property][op][value(s)]` row with the × remove button. */
 function buildConditionRow(cond: PropertyConditionState, index: number): HTMLElement {
   const row = div('st-f-cond');
-  const meta = propertyDefs.get(cond.propertyId);
-  const def = meta?.def;
+  const def = propertyDefs.get(cond.propertyId);
 
-  // Property picker (grouped labels: «Тип · свойство»).
+  // Property picker: registry rows — labels are the property names. The
+  // picker no longer carries a «Тип · » prefix because one registry id
+  // already addresses the property on every attaching type (0.6.5).
   const propSelect = el('select', 'st-f-input st-f-prop') as HTMLSelectElement;
   if (!propertyDefs.has(cond.propertyId)) {
     const placeholder = el('option', '', cond.propertyId === '' ? '— свойство —' : '?') as HTMLOptionElement;
@@ -1220,14 +1222,14 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
     propSelect.append(placeholder);
   }
   for (const [id, entry] of propertyDefs) {
-    const option = el('option', '', `${entry.typeName} · ${entry.def.key}`) as HTMLOptionElement;
+    const option = el('option', '', entry.name) as HTMLOptionElement;
     option.value = id;
     propSelect.append(option);
   }
   propSelect.value = cond.propertyId;
   propSelect.addEventListener('change', () => {
     const nextId = propSelect.value;
-    const nextType = propertyDefs.get(nextId)?.def.value_type ?? 'text';
+    const nextType = propertyDefs.get(nextId)?.value_type ?? 'text';
     const ops = OPS_BY_TYPE[nextType];
     // A different property starts with one empty value.
     state.properties[index] = {

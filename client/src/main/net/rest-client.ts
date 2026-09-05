@@ -1090,6 +1090,25 @@ export class RestClient {
   }
 
   // -------------------------------------------------------------------------
+  // §8a Property registry (0.6.5)
+  // -------------------------------------------------------------------------
+
+  /**
+   * `GET /networks/{nid}/properties` — registry list (one row per network
+   * property; counter columns `types_count` / `values_count` ride along).
+   * Used by the structures filter panel to populate the property picker
+   * without walking every type (task 171a438e).
+   */
+  public async listNetworkProperties(
+    networkId: string,
+  ): Promise<Array<import('@etn/shared').NetworkProperty & { types_count: number; values_count: number }>> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/properties`,
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // §9 Properties (values)
   // -------------------------------------------------------------------------
 

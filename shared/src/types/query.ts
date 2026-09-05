@@ -18,14 +18,15 @@ export type PropertyQueryOperator = 'eq' | 'ne' | 'contains' | 'gt' | 'gte' | 'l
 
 /** Одно условие по значению свойства мысли (AND-группа). */
 export interface PropertyQueryCondition {
-  /** Ключ определения свойства (type_properties.key). */
-  key: string;
+  /** Registry `property_id` (0.6.5 — справочник `properties`). Один и тот же
+   *  id адресует свойство на любых типах владельца, у которых оно подключено. */
+  property_id: string;
   operator: PropertyQueryOperator;
   /**
-   * Тип значения сам выбирает колонку: число → `value_number`,
-   * булево → `value_bool`; строка с `contains` → `value_text`, с
-   * `gt/gte/lt/lte` → `value_date` (ISO), с `eq/ne` → любая текстовая
-   * колонка (`value_text`/`value_date`/`value_thought_ref`).
+   * Значение для сравнения. Колонка хранения (`value_text` / `value_date` /
+   * `value_number` / `value_bool` / `value_thought_ref`) выбирается по
+   * `value_type` адресуемого свойства, а не по runtime-типу значения —
+   * подробности см. в `query-service.ts`.
    */
   value: string | number | boolean;
 }

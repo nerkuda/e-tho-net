@@ -17,8 +17,7 @@ import {
   queryThoughts,
   type QueryBounds,
 } from '../src/domain/query-service.js';
-import type { ThoughtQueryRequest } from '@etn/shared';
-import { typeNameKey } from '@etn/shared';
+import { EtnError, type ThoughtQueryRequest, typeNameKey } from '@etn/shared';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -299,31 +298,35 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     seedLink(ndb, project, open);
     seedLink(ndb, project, closed);
 
-    const high = run(ndb, { properties: [{ key: 'priority', operator: 'gte', value: 5 }] });
+    const high = run(ndb, { properties: [{ property_id: priorityDef, operator: 'gte', value: 5 }] });
     assert.deepEqual(high.hits.map((h) => h.title), ['Задача 2']);
 
-    const openTasks = run(ndb, { properties: [{ key: 'status', operator: 'eq', value: 'open' }] });
+    const openTasks = run(ndb, { properties: [{ property_id: statusDef, operator: 'eq', value: 'open' }] });
     assert.deepEqual(openTasks.hits.map((h) => h.title), ['Задача 1']);
 
-    const contains = run(ndb, { properties: [{ key: 'status', operator: 'contains', value: 'clos' }] });
+    const contains = run(ndb, { properties: [{ property_id: statusDef, operator: 'contains', value: 'clos' }] });
     assert.deepEqual(contains.hits.map((h) => h.title), ['Задача 2']);
 
-    const undone = run(ndb, { properties: [{ key: 'done', operator: 'eq', value: false }] });
+    const undone = run(ndb, { properties: [{ property_id: doneDef, operator: 'eq', value: false }] });
     assert.deepEqual(undone.hits.map((h) => h.title), ['Задача 1']);
 
     const inProject = run(ndb, {
-      properties: [{ key: 'project', operator: 'eq', value: project }],
+      properties: [{ property_id: projectDef, operator: 'eq', value: project }],
     });
     assert.deepEqual(inProject.hits.map((h) => h.title), ['Задача 1']);
 
-    // A property key that exists on no thought matches nothing.
-    const unknown = run(ndb, { properties: [{ key: 'nope', operator: 'eq', value: 'x' }] });
-    assert.equal(unknown.total, 0);
+    // An unknown property_id drops the condition (the registry row may have
+    // been deleted after the filter was saved): the candidate set stays
+    // unchanged, so the response is every active thought. The structure
+    // filter keeps the same delete-safe semantics (see
+    // `structure-service.test.ts`).
+    const unknown = run(ndb, { properties: [{ property_id: randomUUID(), operator: 'eq', value: 'x' }] });
+    assert.equal(unknown.total, 3);
 
     // Combining a property condition with the subtree filter.
     const combined = run(ndb, {
       in_subtree_of: project,
-      properties: [{ key: 'priority', operator: 'lt', value: 5 }],
+      properties: [{ property_id: priorityDef, operator: 'lt', value: 5 }],
     });
     assert.deepEqual(combined.hits.map((h) => h.title), ['Задача 1']);
   });
@@ -341,11 +344,11 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
 
     // eq by an id inside the array matches; so does a plain single id.
     const viaArray = run(ndb, {
-      properties: [{ key: 'team', operator: 'eq', value: project }],
+      properties: [{ property_id: projectDef, operator: 'eq', value: project }],
     });
     assert.deepEqual(viaArray.hits.map((h) => h.title), ['Задача 1']);
     const viaSingle = run(ndb, {
-      properties: [{ key: 'team', operator: 'eq', value: member2 }],
+      properties: [{ property_id: projectDef, operator: 'eq', value: member2 }],
     });
     assert.deepEqual(
       viaSingle.hits.map((h) => h.title).sort(),
@@ -353,9 +356,89 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     );
     // A look-alike id (prefix of a stored one) must not match.
     const lookAlike = run(ndb, {
-      properties: [{ key: 'team', operator: 'eq', value: `${project}x` }],
+      properties: [{ property_id: projectDef, operator: 'eq', value: `${project}x` }],
     });
     assert.equal(lookAlike.total, 0);
+  });
+
+  it('one condition «Статус = согласовано» matches thoughts of any type that attaches the property (0.6.5 registry, task 171a438e)', () => {
+    // Same property id, several thought types: a single `eq` clause must
+    // find them all (no (type, key) scoping, no `name`-based join).
+    const ndb = createInMemoryNetworkDb();
+    const typeTask = seedThoughtType(ndb, 'задача');
+    const typeBug = seedThoughtType(ndb, 'ошибка');
+    const typeTech = seedThoughtType(ndb, 'тех.проект');
+    const statusDef = seedPropertyDefinition(ndb, 'Статус', 'text');
+
+    const approvedTask = seedThought(ndb, 'Согласованная задача', { type_id: typeTask });
+    const draftTask = seedThought(ndb, 'Черновик задачи', { type_id: typeTask });
+    const approvedBug = seedThought(ndb, 'Согласованная ошибка', { type_id: typeBug });
+    const approvedTech = seedThought(ndb, 'Согласованный тех.проект', { type_id: typeTech });
+    const untyped = seedThought(ndb, 'Мысль без типа');
+
+    seedPropertyValue(ndb, approvedTask, statusDef, 'text', 'согласовано');
+    seedPropertyValue(ndb, draftTask, statusDef, 'text', 'черновик');
+    seedPropertyValue(ndb, approvedBug, statusDef, 'text', 'согласовано');
+    seedPropertyValue(ndb, approvedTech, statusDef, 'text', 'согласовано');
+    seedPropertyValue(ndb, untyped, statusDef, 'text', 'согласовано');
+
+    // No type filter — the registry id alone scopes the condition.
+    const res = run(ndb, {
+      properties: [{ property_id: statusDef, operator: 'eq', value: 'согласовано' }],
+    });
+    assert.equal(res.total, 4);
+    assert.deepEqual(
+      res.hits.map((h) => h.title).sort(),
+      ['Мысль без типа', 'Согласованная задача', 'Согласованная ошибка', 'Согласованный тех.проект'].sort(),
+    );
+
+    // Adding a type filter narrows but does not change the addressing: the
+    // condition keeps finding thoughts on every selected type.
+    const onlyTasks = run(ndb, {
+      type_id: [typeTask, typeBug],
+      properties: [{ property_id: statusDef, operator: 'eq', value: 'согласовано' }],
+    });
+    assert.deepEqual(
+      onlyTasks.hits.map((h) => h.title).sort(),
+      ['Согласованная задача', 'Согласованная ошибка'],
+    );
+  });
+
+  it('property condition selects the column from the property `value_type`, not from the supplied value runtime type', () => {
+    // The same wire value `"5"` against a `number` property hits
+    // `value_number` (5); against a `text` property it hits `value_text`
+    // (the literal "5"). The runtime JS type of `value` no longer steers
+    // the column — the registry row does.
+    const ndb = createInMemoryNetworkDb();
+    const numDef = seedPropertyDefinition(ndb, 'priority', 'number');
+    const textDef = seedPropertyDefinition(ndb, 'tag', 'text');
+    const numHit = seedThought(ndb, 'Числовая 5');
+    const textHit = seedThought(ndb, 'Текст 5');
+    seedPropertyValue(ndb, numHit, numDef, 'number', 5);
+    seedPropertyValue(ndb, textHit, textDef, 'text', '5');
+
+    const byNumber = run(ndb, { properties: [{ property_id: numDef, operator: 'eq', value: 5 }] });
+    assert.deepEqual(byNumber.hits.map((h) => h.title), ['Числовая 5']);
+    const byText = run(ndb, { properties: [{ property_id: textDef, operator: 'eq', value: '5' }] });
+    assert.deepEqual(byText.hits.map((h) => h.title), ['Текст 5']);
+  });
+
+  it('rejects operators that do not match the addressed property `value_type`', () => {
+    const ndb = createInMemoryNetworkDb();
+    const boolDef = seedPropertyDefinition(ndb, 'done', 'bool');
+    const target = seedThought(ndb, 'Выполнено');
+    seedPropertyValue(ndb, target, boolDef, 'bool', true);
+
+    // `bool` does not allow `gt`/`contains` (only `eq`/`ne` per the
+    // value_type operator map).
+    assert.throws(
+      () => run(ndb, { properties: [{ property_id: boolDef, operator: 'gt', value: 0 }] }),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
+    assert.throws(
+      () => run(ndb, { properties: [{ property_id: boolDef, operator: 'contains', value: 'true' }] }),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+    );
   });
 
   it('filters by creation/update date ranges', () => {

@@ -14,15 +14,21 @@
  * `max_nodes_per_subgraph`; anything beyond the bound is simply not in the
  * candidate set (reported as `truncated`).
  *
- * Property conditions address values by the **type of the supplied value**
- * (docs/02-data-model.md §3.5 stores exactly one value_* column per row):
- *   * `number`  → `value_number` (eq/ne/gt/gte/lt/lte);
- *   * `boolean` → `value_bool` (eq/ne);
- *   * `string`  → `contains` on `value_text`; `gt/gte/lt/lte` on
- *     `value_date` (ISO-8601 lexicographic); `eq/ne` on any of
- *     `value_text`/`value_date`/`value_thought_ref` (`eq` also matches ids
- *     inside the JSON arrays of multiple `thought_ref` values).
- * An unknown property key simply matches nothing for that condition.
+ * Property conditions address values by the **registry property** (0.6.5):
+ *   * the condition carries the registry `property_id`, not the
+ *     (type, key) pair — one id addresses the property on every thought
+ *     type that has attached it;
+ *   * the storage column (`value_text` / `value_date` / `value_number` /
+ *     `value_bool` / `value_thought_ref`) is selected from the property's
+ *     `value_type`, never from the runtime type of the supplied value —
+ *     `eq "согласовано"` on a `text` property hits `value_text`, the same
+ *     payload on a `date` property would hit `value_date` and likely match
+ *     nothing;
+ *   * `eq` on `thought_ref` also matches ids inside the JSON arrays of
+ *     `multiple` thought_ref values (02-data-model.md §3.5), same as the
+ *     structures filter.
+ * An unknown `property_id` simply matches nothing for that condition — the
+ * registry row may have been deleted after the filter was saved.
  */
 
 import {
@@ -32,6 +38,7 @@ import {
   parseFilterKeywords,
   type PropertyQueryCondition,
   type PropertyQueryOperator,
+  type PropertyValueType,
   type ThoughtQueryActive,
   type ThoughtQueryHit,
   type ThoughtQueryRequest,
@@ -127,6 +134,11 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
+/** LIKE pattern matching a stored id inside a JSON array of ids. */
+function refLikePattern(id: string): string {
+  return `%"${id.replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`;
+}
+
 /** A WHERE clause fragment plus its bind parameters, in order. */
 interface Clause {
   sql: string;
@@ -168,7 +180,7 @@ function joinClauses(clauses: Array<Clause | null>): { where: string; params: un
 /** Keyword filter — the §6.10 mini-syntax (03-server-api.md), shared with the
  * structures filter: whitespace-separated words, all required (AND), `*`
  * infix wildcard, `-слово` exclusion. Every word matches the title or a
- * synonym, case-insensitively; `title_norm`/`synonym_norm` are stored
+ * synonym, case-insensitive; `title_norm`/`synonym_norm` are stored
  * lowercase, so the word is folded the same way (NFC at write time).
  *
  * Bug 0.5.4: the previous `keywordsClause` searched the whole input as one
@@ -213,7 +225,7 @@ function dateRangeClause(
   return { sql: parts.join(' AND '), params };
 }
 
-/** SQL comparison for each supported operator (non-string columns). */
+/** SQL comparison for each supported operator (no string interpolation of user input). */
 const SQL_OPS: Record<Exclude<PropertyQueryOperator, 'contains'>, string> = {
   eq: '=',
   ne: '<>',
@@ -223,68 +235,177 @@ const SQL_OPS: Record<Exclude<PropertyQueryOperator, 'contains'>, string> = {
   lte: '<=',
 };
 
-/**
- * Build one EXISTS condition over `property_values` for a single
- * {@link PropertyQueryCondition}. The comparison column is chosen by the
- * *type of the supplied value* (see the module docs).
- */
-function propertyClause(cond: PropertyQueryCondition): Clause {
-  const op = cond.operator;
-  const value = cond.value;
+/** Storage column of `property_values` per registry property `value_type` —
+ *  the same mapping as `structure-service.VALUE_COLUMN` (§6.10). */
+const VALUE_COLUMN: Record<PropertyValueType, string> = {
+  text: 'value_text',
+  url: 'value_text',
+  date: 'value_date',
+  number: 'value_number',
+  bool: 'value_bool',
+  thought_ref: 'value_thought_ref',
+};
 
-  let column: string;
-  let compare: string;
-  if (typeof value === 'number') {
-    if (op === 'contains') {
-      throw new EtnError('VALIDATION_ERROR', `operator ${op} is not valid for a numeric property value`);
+/** SQL operator per `value_type` × `PropertyQueryOperator` (the query subset of
+ *  `structure-service.OPS_BY_VALUE_TYPE` — `in`/`not_in`/`is_empty`/`not_empty`
+ *  belong only to the structures filter). `null` means the operator is not
+ *  meaningful for the value type. */
+const SUPPORTED_OPS: Record<PropertyValueType, ReadonlySet<PropertyQueryOperator>> = {
+  text: new Set(['eq', 'ne', 'contains']),
+  url: new Set(['eq', 'ne', 'contains']),
+  date: new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte']),
+  number: new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte']),
+  bool: new Set(['eq', 'ne']),
+  thought_ref: new Set(['eq', 'ne']),
+};
+
+/** Minimal registry row read in one batched lookup of all conditions. */
+interface RegistryPropertyRow {
+  id: string;
+  name: string;
+  value_type: string;
+}
+
+/**
+ * Build one property-condition clause for a batch of conditions.
+ *
+ * All addressed registry properties are read in one `SELECT … IN (…)` call —
+ * a missing property (deleted after the filter was saved) skips the
+ * condition. The storage column is fixed by the property's `value_type`; the
+ * supplied value's runtime type is only used to coerce it to the right SQL
+ * scalar form.
+ */
+function propertyClauses(
+  ndb: NetworkDb,
+  conds: PropertyQueryCondition[],
+  requestId?: string,
+): Clause[] {
+  if (conds.length === 0) return [];
+  // One batched registry read (N conditions → 1 query).
+  const ids = [...new Set(conds.map((c) => c.property_id))];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = ndb
+    .prepare(
+      `SELECT id, name, value_type FROM properties_v WHERE id IN (${placeholders})`,
+    )
+    .all(...ids) as RegistryPropertyRow[];
+  const byId = new Map(rows.map((r) => [r.id, r] as const));
+
+  const out: Clause[] = [];
+  for (const cond of conds) {
+    const def = byId.get(cond.property_id);
+    // Unknown property_id — drop the condition (matches nothing), same
+    // semantics as `structure-service` (the saved filter survives the
+    // registry row deletion).
+    if (def === undefined) continue;
+    const valueType = def.value_type as PropertyValueType;
+    const allowed = SUPPORTED_OPS[valueType];
+    if (!allowed.has(cond.operator)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Операция ${cond.operator} недопустима для свойства типа ${valueType}.`,
+        { field: 'operator', allowed: [...allowed] },
+        requestId,
+      );
     }
-    column = 'value_number';
-    compare = SQL_OPS[op];
-  } else if (typeof value === 'boolean') {
-    if (op !== 'eq' && op !== 'ne') {
-      throw new EtnError('VALIDATION_ERROR', `operator ${op} is not valid for a boolean property value`);
+    const column = VALUE_COLUMN[valueType];
+    const refMultiple = valueType === 'thought_ref';
+
+    if (cond.operator === 'contains') {
+      // Only `text`/`url` allow `contains` per SUPPORTED_OPS — `value_text`
+      // holds them both.
+      const pattern = `%${escapeLike(String(cond.value))}%`;
+      out.push({
+        sql: `EXISTS (
+          SELECT 1 FROM property_values_v pv
+          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+            AND pv.${column} LIKE ? ESCAPE '\\')`,
+        params: [def.id, pattern],
+      });
+      continue;
     }
-    column = 'value_bool';
-    compare = SQL_OPS[op];
-  } else if (op === 'contains') {
-    column = 'value_text';
-    compare = 'LIKE';
-  } else if (op === 'eq' || op === 'ne') {
-    // String equality: any textual column (text / date / thought ref). The
-    // extra LIKE arm on value_thought_ref also matches ids stored inside the
-    // JSON arrays of multiple thought_ref values (02-data-model.md §3.5);
-    // single ids keep matching through the `=` arms.
-    const cmp = SQL_OPS[op];
-    const params: unknown[] = [cond.key, value, value, value];
-    const refLike =
-      op === 'eq' ? ` OR pv.value_thought_ref LIKE ? ESCAPE '\\'` : '';
-    if (refLike !== '') {
-      params.push(`%"${escapeLike(String(value))}"%`);
+
+    const cmp = SQL_OPS[cond.operator];
+    const scalar = coerceScalar(valueType, cond.value, requestId);
+
+    if (refMultiple && cond.operator === 'eq') {
+      // thought_ref single id + ids inside the JSON arrays of multiple
+      // thought_ref values (§3.5).
+      out.push({
+        sql: `EXISTS (
+          SELECT 1 FROM property_values_v pv
+          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+            AND (pv.${column} = ? OR pv.${column} LIKE ? ESCAPE '\\'))`,
+        params: [def.id, scalar, refLikePattern(String(scalar))],
+      });
+      continue;
     }
-    return {
+    if (refMultiple && cond.operator === 'ne') {
+      // `ne` only excludes the exact single id; ids inside JSON arrays are
+      // matched only by `eq`. A «не равно» semantic over multiple-ref values
+      // would require scanning JSON, which we deliberately do not do — the
+      // accepted behaviour mirrors the structures filter's `eq` arm.
+      out.push({
+        sql: `EXISTS (
+          SELECT 1 FROM property_values_v pv
+          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+            AND pv.${column} ${cmp} ?)`,
+        params: [def.id, scalar],
+      });
+      continue;
+    }
+    out.push({
       sql: `EXISTS (
         SELECT 1 FROM property_values_v pv
-        JOIN properties_v p ON p.id = pv.property_id /* 0.6.5: значения ссылаются на справочник properties */
-        WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND p.name = ?
-          AND (pv.value_text ${cmp} ? OR pv.value_date ${cmp} ? OR pv.value_thought_ref ${cmp} ?${refLike}))`,
-      params,
-    };
-  } else {
-    // gt/gte/lt/lte over ISO-8601 date strings (lexicographic order).
-    column = 'value_date';
-    compare = SQL_OPS[op];
+        WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+          AND pv.${column} ${cmp} ?)`,
+      params: [def.id, scalar],
+    });
   }
+  return out;
+}
 
-  const param: unknown =
-    typeof value === 'boolean' ? (value ? 1 : 0) : op === 'contains' ? `%${escapeLike(String(value))}%` : value;
-  return {
-    sql: `EXISTS (
-      SELECT 1 FROM property_values_v pv
-      JOIN properties_v p ON p.id = pv.property_id /* 0.6.5: значения ссылаются на справочник properties */
-      WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND p.name = ?
-        AND pv.${column} ${compare} ?)`,
-    params: [cond.key, param],
-  };
+/** Coerce a wire value to the SQL scalar form its `value_*` column expects. */
+function coerceScalar(
+  valueType: PropertyValueType,
+  value: string | number | boolean,
+  requestId?: string,
+): string | number {
+  switch (valueType) {
+    case 'number':
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Значение свойства number должно быть числом.',
+          { field: 'value' },
+          requestId,
+        );
+      }
+      return value;
+    case 'bool':
+      if (typeof value !== 'boolean') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Значение свойства bool должно быть boolean.',
+          { field: 'value' },
+          requestId,
+        );
+      }
+      return value ? 1 : 0;
+    case 'text':
+    case 'url':
+    case 'date':
+    case 'thought_ref':
+      if (typeof value !== 'string') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `Значение свойства ${valueType} должно быть строкой.`,
+          { field: 'value' },
+          requestId,
+        );
+      }
+      return value;
+  }
 }
 
 /** Whitelisted ORDER BY columns (no string interpolation of user input). */
@@ -338,9 +459,7 @@ export function queryThoughts(
     subtreeClause('t.id', walk.depths),
   ];
   if (request.properties !== undefined) {
-    for (const cond of request.properties) {
-      clauses.push(propertyClause(cond));
-    }
+    for (const c of propertyClauses(ndb, request.properties)) clauses.push(c);
   }
   const { where, params } = joinClauses(clauses);
 

@@ -56,6 +56,7 @@ import type {
   Network,
   NetworkListItem,
   NetworkMember,
+  NetworkProperty,
   UpdateNetworkInput,
   EffectiveTypeProperty,
   PropertyDefinition,
@@ -570,6 +571,19 @@ export interface EtnApi {
       ownerId: string,
       key: string,
     ): Promise<void>;
+  };
+  /**
+   * Property registry (0.6.5). The registry is the single source of a
+   * property's nature; the structures filter panel reads it in one call to
+   * populate the property picker (task 171a438e).
+   */
+  propertyRegistry: {
+    /** `GET /networks/{nid}/properties` — registry list with usage counters. */
+    list(
+      networkId: string,
+    ): Promise<
+      Array<NetworkProperty & { types_count: number; values_count: number }>
+    >;
   };
   comments: {
     list(networkId: string, ownerType: 'thought' | 'link', ownerId: string): Promise<Comment[]>;
