@@ -1619,6 +1619,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           );
         }
         const ndb = openMemberNetworkBase(rt, args.network_id);
+        // Renaming/editing a layer does not switch the session: `current`
+        // reflects the calling key's real session layer, not the edited
+        // layer (same pattern as the createLayer fix 9b159e7a).
+        const sessionLayer = resolveRuntimeLayer(rt, args.network_id);
         const layer = updateLayer(
           ndb,
           args.layer_id,
@@ -1632,7 +1636,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           title: args.title,
           comment: args.comment,
         });
-        return { ...layer, request_id: String(extra.requestId) };
+        return { ...layer, current: layer.id === sessionLayer.id, request_id: String(extra.requestId) };
       }),
   );
 

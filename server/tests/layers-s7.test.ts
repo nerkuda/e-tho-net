@@ -351,6 +351,43 @@ describe(
       }
     });
 
+    it('rename does not switch the session: current mirrors the session layer, not the edited one', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const layer = await createLayer(ctx, { title: 'Слой' });
+
+        // Session is on the base: the renamed layer is NOT current and the
+        // session did not move (PATCH /layers/{id} used to echo current:
+        // true for the edited layer — same bug family as 9b159e7a).
+        const renamed = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/layers/${layer.id}`,
+          headers: authHeaders(ctx),
+          payload: { title: 'Слой 2' },
+        });
+        assert.equal(renamed.statusCode, 200);
+        assert.equal((renamed.json().data as Layer).current, false);
+        assert.deepEqual(renamed.json().meta.layer, { id: BASE_LAYER_ID, title: 'Основа' });
+        const afterRename = await listLayers(ctx);
+        assert.equal(afterRename.find((l) => l.id === BASE_LAYER_ID)?.current, true);
+        assert.equal(afterRename.find((l) => l.id === layer.id)?.current, false);
+
+        // Session ON the edited layer: now `current` is true.
+        assert.equal(await selectLayer(ctx, layer.id), 200);
+        const edited = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/layers/${layer.id}`,
+          headers: { ...authHeaders(ctx), 'if-match': '2' },
+          payload: { comment: 'теперь сессия здесь' },
+        });
+        assert.equal(edited.statusCode, 200);
+        assert.equal((edited.json().data as Layer).current, true);
+        assert.deepEqual(edited.json().meta.layer, { id: layer.id, title: 'Слой 2' });
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('delete: base forbidden; cascade confirmation; sessions re-pointed; trash auto-purged', async () => {
       const ctx = await buildRestContext();
       try {

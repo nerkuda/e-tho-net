@@ -137,13 +137,19 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
           req.id,
         );
         const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
+        // PATCH must not switch the session either: `current` is computed
+        // against the real session layer, not against the edited layer's id
+        // (same pattern as the createLayer fix 9b159e7a — layer.current used
+        // to be always `true` here).
+        const sessionLayer = resolveRequestLayer(deps.dataDir, req, networkId, app.appLogger);
         const layer = updateLayer(
           ndb,
           layerId,
           { ...(title !== undefined ? { title } : {}), ...(comment !== undefined ? { comment } : {}) },
           expectedVersion,
         );
-        sendSuccess(reply, layer, { version: layer.version, updated_at: layer.last_activity_at });
+        const layerWithCurrent = { ...layer, current: layer.id === sessionLayer.id };
+        sendSuccess(reply, layerWithCurrent, { version: layer.version, updated_at: layer.last_activity_at });
       },
     );
 

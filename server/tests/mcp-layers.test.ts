@@ -59,6 +59,18 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
         assert.equal(created.current, false);
         const sandboxId = created.id;
 
+        // --- Rename while still on the base: `current` mirrors the calling
+        // key's session layer, not the edited layer (same contract as
+        // create; etn.layers.update used to echo current: true).
+        const renamedOnBase = toolJson<Layer & { request_id: string }>(
+          await agent.client.callTool({
+            name: 'etn.layers.update',
+            arguments: { network_id: ctx.networkId, layer_id: sandboxId, title: 'Песочница!' },
+          }),
+        );
+        assert.equal(renamedOnBase.title, 'Песочница!');
+        assert.equal(renamedOnBase.current, false);
+
         // --- Select it: every later call of THIS key runs in it. ---------
         const selected = toolJson<{ id: string; title: string }>(
           await agent.client.callTool({
@@ -78,6 +90,16 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
         const sandbox = afterSelect.find((l) => l.id === sandboxId)!;
         assert.equal(base.current, false);
         assert.equal(sandbox.current, true);
+
+        // Editing while sitting ON the layer: `current` is true (the session
+        // really is there; the version was bumped by the rename above).
+        const renamedInLayer = toolJson<Layer>(
+          await agent.client.callTool({
+            name: 'etn.layers.update',
+            arguments: { network_id: ctx.networkId, layer_id: sandboxId, comment: 'sandbox' },
+          }),
+        );
+        assert.equal(renamedInLayer.current, true);
 
         // The observer key never selected anything: still on the base.
         const observerList = toolJson<Layer[]>(
