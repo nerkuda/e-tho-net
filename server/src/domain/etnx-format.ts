@@ -29,6 +29,7 @@ import {
   type EtnxManifestType,
   type ExportEtnxOptions,
   type Link,
+  type NetworkProperty,
   type PropertyValue,
   type Thought,
   type ThoughtSynonym,
@@ -42,7 +43,7 @@ import { listComments } from './comment-service.js';
 import { listAttachments } from './attachment-service.js';
 import { getThoughtType } from './thought-type-service.js';
 import { getLinkType } from './link-type-service.js';
-import { listTypeProperties } from './property-service.js';
+import { listNetworkProperties, listTypeProperties } from './property-service.js';
 import { traverse } from './graph-traversal.js';
 
 /**
@@ -119,8 +120,12 @@ export function buildManifest(
   const thoughtTypes = collectThoughtTypes(ndb, referencedThoughtTypeIds);
   const linkTypes = collectLinkTypes(ndb, referencedLinkTypeIds);
 
-  // 9. Property definitions for the included types
+  // 9. Property registry (0.6.5): every property referenced by an included
+  // binding. Union with the registry itself, then resolve a minimal row set —
+  // a network without any included binding still exports nothing here (an
+  // empty array is the documented shape).
   const typeProperties = collectTypeProperties(ndb, thoughtTypes, linkTypes);
+  const properties = collectProperties(ndb, typeProperties);
 
   const manifest: EtnxManifest = {
     format: 'etnx',
@@ -129,6 +134,7 @@ export function buildManifest(
     source,
     thought_types: thoughtTypes,
     link_types: linkTypes,
+    properties,
     type_properties: typeProperties,
     thoughts,
     thought_synonyms: synonymRows,
@@ -147,6 +153,7 @@ export function buildManifest(
         links: links.length,
         comments: comments.length,
         attachments: attachments.length,
+        properties: properties.length,
       },
       'etnx manifest built',
     );
@@ -165,6 +172,13 @@ export function buildManifest(
  * cross-references (e.g. that every `link.source_id` exists in
  * `thoughts[].id`) — that is the importer's job.
  *
+ * Old-shape manifests (pre-1.1, with the property nature inlined into
+ * `type_properties` instead of a separate `properties` registry) are rejected
+ * with `oldVersionRejection` so the user re-exports from a 0.6.5+ server. We
+ * deliberately do not attempt to materialise a registry on the fly: the
+ * migration would have to invent names for every binding's `key`, and the
+ * resulting archive would not round-trip with a clean import.
+ *
  * @throws EtnError `VALIDATION_ERROR` when the document is not a valid
  *   `.etnx` manifest of the expected shape.
  */
@@ -181,11 +195,20 @@ export function parseManifest(json: unknown): EtnxManifest {
   if (typeof obj.version !== 'string' || obj.version === '') {
     throw new EtnError('VALIDATION_ERROR', 'Поле version обязательно и должно быть строкой.');
   }
+  // 1.0 (pre-registry): reject — see `oldVersionRejection` above.
+  if (obj.version === '1.0') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'Манифест формата 1.0 не поддерживается — справочник свойств появился в 1.1. Пересохраните экспорт из сети 0.6.5+.',
+      { field: 'version', manifest_version: obj.version, supported_version: ETNX_VERSION },
+    );
+  }
   for (const key of [
     'exported_at',
     'source',
     'thought_types',
     'link_types',
+    'properties',
     'type_properties',
     'thoughts',
     'thought_synonyms',
@@ -209,7 +232,19 @@ export function parseManifest(json: unknown): EtnxManifest {
   if (typeof obj.source !== 'object' || obj.source === null) {
     throw new EtnError('VALIDATION_ERROR', 'source должен быть объектом.', { field: 'source' });
   }
-  for (const key of ['thought_types', 'link_types', 'type_properties', 'thoughts', 'thought_synonyms', 'links', 'comments', 'comment_targets', 'property_values', 'attachments']) {
+  for (const key of [
+    'thought_types',
+    'link_types',
+    'properties',
+    'type_properties',
+    'thoughts',
+    'thought_synonyms',
+    'links',
+    'comments',
+    'comment_targets',
+    'property_values',
+    'attachments',
+  ]) {
     if (!Array.isArray(obj[key])) {
       throw new EtnError('VALIDATION_ERROR', `${key} должен быть массивом.`, { field: key });
     }
@@ -416,4 +451,20 @@ function collectTypeProperties(
     out.push(...listTypeProperties(ndb, 'link_type', t.id));
   }
   return out;
+}
+
+/**
+ * Every registry property referenced by an included binding. The registry is
+ * network-wide, so the union of `property_id`s across `typeProperties` already
+ * gives the closed set — no separate traversal of the live graph is needed.
+ * Properties no binding references are excluded: importing them as orphans
+ * would not change the imported graph but would clutter the registry.
+ */
+function collectProperties(
+  ndb: NetworkDb,
+  typeProperties: EtnxManifest['type_properties'],
+): NetworkProperty[] {
+  if (typeProperties.length === 0) return [];
+  const ids = new Set(typeProperties.map((tp) => tp.property_id));
+  return listNetworkProperties(ndb).filter((p) => ids.has(p.id));
 }

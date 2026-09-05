@@ -174,6 +174,9 @@ export interface ImportSummary {
   thought_types_reused: number;
   link_types_created: number;
   link_types_reused: number;
+  /** Registry properties (`properties` table, 0.6.5) newly created. */
+  properties_created: number;
+  /** Type bindings (`type_properties`) newly created. */
   property_definitions_created: number;
   thoughts_created: number;
   thoughts_updated: number;
@@ -200,6 +203,8 @@ export interface ImportPreview {
   counts: {
     thought_types: number;
     link_types: number;
+    /** Registry properties (0.6.5). */
+    properties: number;
     type_properties: number;
     thoughts: number;
     thought_synonyms: number;

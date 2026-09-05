@@ -23,7 +23,13 @@ import type { Comment } from './comment.js';
 import type { Attachment } from './attachment.js';
 import type { ChronicleSavedFilter } from './chronicle.js';
 import type { Thought, ThoughtUpdateInput } from './thought.js';
-import type { PropertyDefinition, PropertyValueValue, ThoughtType } from './thought-type.js';
+import type {
+  NetworkProperty,
+  NetworkPropertyUpdateInput,
+  PropertyDefinition,
+  PropertyValueValue,
+  ThoughtType,
+} from './thought-type.js';
 import type { SavedFilter } from './structure.js';
 import type { LayerMergeReport } from './layer.js';
 
@@ -69,6 +75,10 @@ export const REALTIME_EVENT_TYPES = [
   'property-definition.created',
   'property-definition.updated',
   'property-definition.deleted',
+  // property registry (0.6.5 — §4.3)
+  'property-registry.created',
+  'property-registry.updated',
+  'property-registry.deleted',
   // comments & attachments (§4.4)
   'comment.created',
   'comment.updated',
@@ -173,6 +183,19 @@ export interface PropertyDefinitionUpdatedData {
   changes: Partial<PropertyDefinition>;
 }
 export interface PropertyDefinitionDeletedData {
+  id: string;
+}
+
+// property registry (0.6.5) — events on `properties` (the registry), not on
+// `type_properties` (which has `property-definition.*` above).
+export interface PropertyRegistryCreatedData {
+  property: NetworkProperty;
+}
+export interface PropertyRegistryUpdatedData {
+  id: string;
+  changes: NetworkPropertyUpdateInput;
+}
+export interface PropertyRegistryDeletedData {
   id: string;
 }
 
@@ -315,6 +338,9 @@ export interface RealtimeEventMap {
   'property-definition.created': PropertyDefinitionCreatedData;
   'property-definition.updated': PropertyDefinitionUpdatedData;
   'property-definition.deleted': PropertyDefinitionDeletedData;
+  'property-registry.created': PropertyRegistryCreatedData;
+  'property-registry.updated': PropertyRegistryUpdatedData;
+  'property-registry.deleted': PropertyRegistryDeletedData;
   'comment.created': CommentCreatedData;
   'comment.updated': CommentUpdatedData;
   'comment.deleted': CommentDeletedData;
@@ -399,6 +425,9 @@ export const REALTIME_EVENT_AUDIENCE = {
   'property-definition.created': 'network',
   'property-definition.updated': 'network',
   'property-definition.deleted': 'network',
+  'property-registry.created': 'network',
+  'property-registry.updated': 'network',
+  'property-registry.deleted': 'network',
   'comment.created': 'network',
   'comment.updated': 'network',
   'comment.deleted': 'network',

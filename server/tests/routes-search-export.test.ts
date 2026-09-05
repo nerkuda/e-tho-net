@@ -313,7 +313,7 @@ describe(
         const manifestRaw = await readZipEntry(buf, 'manifest.json');
         const manifest = JSON.parse(manifestRaw.toString('utf8')) as Record<string, unknown>;
         assert.equal(manifest['format'], 'etnx');
-        assert.equal(manifest['version'], '1.0');
+        assert.equal(manifest['version'], '1.1');
         assert.equal(typeof manifest['exported_at'], 'string');
         const thoughts = manifest['thoughts'] as Array<{ id: string; title: string }>;
         assert.ok(thoughts.some((t) => t.id === rootId && t.title === 'Корень экспорта'));

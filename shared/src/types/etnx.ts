@@ -15,7 +15,11 @@
 import type { Comment, CommentTarget } from './comment.js';
 import type { Link } from './link.js';
 import type { LinkType } from './link-type.js';
-import type { PropertyDefinition, PropertyValue } from './thought-type.js';
+import type {
+  NetworkProperty,
+  PropertyDefinition,
+  PropertyValue,
+} from './thought-type.js';
 import type { Thought } from './thought.js';
 import type { ThoughtType } from './thought-type.js';
 
@@ -86,7 +90,12 @@ export interface EtnxManifest {
   source: EtnxManifestSource;
   thought_types: ThoughtType[];
   link_types: LinkType[];
-  /** Property definitions for the included types. */
+  /** Property registry (`properties` table, 0.6.5): the network-wide nature
+   *  of each property referenced by the included bindings. Unique by `name`
+   *  case-insensitively — the importer merges duplicates on import. */
+  properties: NetworkProperty[];
+  /** Property bindings (per-type role: required, position). The
+   *  `property_id` of every entry references one of the rows above. */
   type_properties: PropertyDefinition[];
   /** Exported thoughts; `is_root` and `is_protected` are stripped on export. */
   thoughts: Thought[];

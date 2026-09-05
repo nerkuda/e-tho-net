@@ -39,9 +39,11 @@ import {
   ETNX_MAX_BYTES,
   type Comment,
   type EtnxManifest,
+  type ImportPreview,
   type ImportSummary,
   type Link,
   type LinkType,
+  type NetworkProperty,
   type PropertyDefinition,
   type PropertyValue,
   type PropertyValueValue,
@@ -342,20 +344,26 @@ function insertLinkType(ndb: NetworkDb, row: LinkType): { created: boolean } {
 }
 
 /**
- * Insert a property definition. Since 0.6.5 a manifest definition splits into
- * a registry `properties` row (nature) + a `type_properties` binding (role in
- * the type). The registry row reuses the manifest definition id; when a
- * pre-0.6.5 manifest carries several same-named definitions, the first
- * registry row wins and every binding attaches to it (merge-by-name, same as
- * migration 032). `INSERT OR IGNORE` keeps the reuse-by-id semantics.
+ * Insert one registry property from the manifest. The registry is keyed by
+ * `name_key` (case-insensitive), not by id — two manifest rows of the same
+ * name collapse onto the first-inserted id. Each call records the SURVIVING
+ * registry id in `remap` so the bindings and values that referenced this
+ * property by its manifest id can be rewritten.
+ *
+ * Manifest ids are deliberately NOT used as registry ids: a property exported
+ * from a foreign network may collide with an id already used in the target.
+ * Merge-by-name is the same rule migration 032 applies to the live base, so
+ * the import semantics mirror the in-place migration exactly.
  */
-function insertPropertyDefinition(
+function insertProperty(
   ndb: NetworkDb,
-  row: PropertyDefinition,
-): { created: boolean } {
+  prop: NetworkProperty,
+  remap: Map<string, string>,
+): string {
   const now = new Date().toISOString();
-  // Registry first: the definition's nature under its own id (id collision =
-  // reuse; name collision = the surviving registry row wins).
+  const configJson = prop.config === null ? null : JSON.stringify(prop.config);
+  // First insert with the manifest id; on `name_key` collision, an existing
+  // row wins and the INSERT is a no-op.
   ndb
     .prepare(
       `INSERT OR IGNORE INTO properties (
@@ -363,21 +371,35 @@ function insertPropertyDefinition(
        ) VALUES (?, ?, type_name_key(?), ?, ?, ?, ?, ?)`,
     )
     .run(
-      row.id,
-      row.key,
-      row.key,
-      row.value_type,
-      JSON.stringify(row.config ?? {}),
-      row.description ?? null,
+      prop.id,
+      prop.name,
+      prop.name,
+      prop.value_type,
+      configJson,
+      prop.description,
       now,
       now,
     );
-  // Resolve the surviving registry id by name (may differ from row.id when a
-  // same-named property was imported just before).
-  const prop = ndb
+  // Resolve the surviving registry id by name — the lookup is what makes the
+  // import resilient to id collisions and to pre-merge duplicates.
+  const row = ndb
     .prepare('SELECT id FROM properties_v WHERE name_key = type_name_key(?)')
-    .get(row.key) as { id: string } | undefined;
-  const propertyId = prop?.id ?? row.id;
+    .get(prop.name) as { id: string } | undefined;
+  const propertyId = row?.id ?? prop.id;
+  remap.set(prop.id, propertyId);
+  return propertyId;
+}
+
+/**
+ * Insert a type binding (`type_properties`). The property is assumed to be
+ * already imported via {@link insertProperty}; this writes only the binding
+ * row, looking up the property by name (merge-by-name semantics).
+ */
+function insertPropertyDefinition(
+  ndb: NetworkDb,
+  row: PropertyDefinition,
+  propertyId: string,
+): void {
   ndb
     .prepare(
       `INSERT OR IGNORE INTO type_properties (
@@ -385,7 +407,6 @@ function insertPropertyDefinition(
        ) VALUES (?, ?, ?, ?, ?, ?)`,
     )
     .run(row.id, row.owner_type, row.owner_id, propertyId, row.required ? 1 : 0, row.position);
-  return { created: true };
 }
 
 /**
@@ -803,6 +824,7 @@ export function applyManifest(
       thought_types_reused: 0,
       link_types_created: 0,
       link_types_reused: 0,
+      properties_created: 0,
       property_definitions_created: 0,
       thoughts_created: 0,
       thoughts_updated: 0,
@@ -849,7 +871,17 @@ export function applyManifest(
         linkTypeIdRemap.set(t.id, t.id);
       }
 
-      // 3. Property definitions ----------------------------------------------
+      // 3. Property registry (0.6.5) ----------------------------------------
+      // Insert every registry property by NAME first so subsequent bindings
+      // and values resolve through `propertyIdRemap`. Manifest ids are not
+      // authoritative — a same-named row already in the target wins, and the
+      // remap carries the surviving id.
+      for (const prop of manifest.properties) {
+        const inserted = insertProperty(ndb, prop, propertyIdRemap);
+        if (inserted === prop.id) summary.properties_created += 1;
+      }
+
+      // 4. Property bindings (type_properties) -------------------------------
       const existingPD = readExistingPropertyIds(
         ndb,
         manifest.type_properties.map((p) => p.id),
@@ -868,11 +900,24 @@ export function applyManifest(
           );
           continue;
         }
-        const rewritten: PropertyDefinition = { ...p, owner_id: resolvedOwnerId };
+        // Resolve the binding's property_id through the registry remap (the
+        // manifest's `p.property_id` may not exist in the target network).
+        const resolvedPropertyId = propertyIdRemap.get(p.property_id);
+        if (resolvedPropertyId === undefined) {
+          logger.warn(
+            { bindingId: p.id, propertyId: p.property_id, ownerType: p.owner_type, ownerId: p.owner_id },
+            'property binding references unknown property — skipping',
+          );
+          continue;
+        }
+        const rewritten: PropertyDefinition = {
+          ...p,
+          owner_id: resolvedOwnerId,
+          property_id: resolvedPropertyId,
+        };
         const wasExisting = existingPD.has(p.id);
-        insertPropertyDefinition(ndb, rewritten);
+        insertPropertyDefinition(ndb, rewritten, resolvedPropertyId);
         if (!wasExisting) summary.property_definitions_created += 1;
-        propertyIdRemap.set(p.id, rewritten.id);
       }
     } else {
       // Skip types/properties entirely; imported thoughts will get null type_id
@@ -1110,20 +1155,7 @@ export function applyManifest(
 export async function previewFromEtnx(
   zipBuffer: Buffer,
   logger: Logger,
-): Promise<{
-  manifest_version: string;
-  source_network_name: string | null;
-  counts: {
-    thought_types: number;
-    link_types: number;
-    type_properties: number;
-    thoughts: number;
-    thought_synonyms: number;
-    links: number;
-    comments: number;
-    attachments: number;
-  };
-}> {
+): Promise<ImportPreview> {
   const { manifest } = await readArchive(zipBuffer, logger);
   return {
     manifest_version: manifest.version,
@@ -1131,6 +1163,7 @@ export async function previewFromEtnx(
     counts: {
       thought_types: manifest.thought_types.length,
       link_types: manifest.link_types.length,
+      properties: manifest.properties.length,
       type_properties: manifest.type_properties.length,
       thoughts: manifest.thoughts.length,
       thought_synonyms: manifest.thought_synonyms.length,

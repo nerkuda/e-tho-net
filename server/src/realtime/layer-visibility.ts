@@ -76,6 +76,11 @@ function extractRowRef(event: AnyRealtimeEvent): RowRef | null {
     case 'property-definition.updated':
     case 'property-definition.deleted':
       return byId('type_properties', data.id);
+    case 'property-registry.created':
+      return byId('properties', (data.property as { id?: unknown } | undefined)?.id);
+    case 'property-registry.updated':
+    case 'property-registry.deleted':
+      return byId('properties', data.id);
     case 'comment.created':
       return byId('comments', (data.comment as { id?: unknown } | undefined)?.id);
     case 'comment.updated':

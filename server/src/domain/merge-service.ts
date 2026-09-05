@@ -282,7 +282,10 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
     case 'link_types':
       return compact([ref('link_types', r.parent_id)]);
     case 'type_properties':
-      return compact([ref(typeOwnerTableOf(r.owner_type), r.owner_id)]);
+      return compact([
+        ref(typeOwnerTableOf(r.owner_type), r.owner_id),
+        ref('properties', r.property_id), // 0.6.5: привязка ссылается на справочник properties
+      ]);
     case 'type_property_overrides':
       return compact([
         ref(typeOwnerTableOf(r.owner_type), r.type_id),
@@ -291,7 +294,7 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
     case 'property_values':
       return compact([
         ref(ownerTableOf(r.owner_type), r.owner_id),
-        ref('type_properties', r.property_id),
+        ref('properties', r.property_id), // 0.6.5: значение ссылается на справочник, не на привязку
         ref('thoughts', r.value_thought_ref),
       ]);
     case 'comments':

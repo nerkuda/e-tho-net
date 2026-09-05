@@ -12,7 +12,10 @@
  *     live row in ANY layer;
  *   * a live `comments` / `comment_targets` / `attachments` /
  *     `property_values` row whose owner does not exist as a live row in ANY
- *     layer.
+ *     layer;
+ *   * a live `type_properties` / `type_property_overrides` /
+ *     `property_values` row whose property (registry) is not live in ANY layer
+ *     (0.6.5: every property reference now points at the `properties` registry).
  *
  * «Live» means `deleted = 0` on the row itself. The OWNER may live in a
  * different layer than the referencing row — layers share logical ids
@@ -32,7 +35,7 @@ export interface LayerIntegrityViolation {
   table: string;
   /** The referencing row's id. */
   id: string;
-  /** What the row references: `source`/`target` (links) or `owner`. */
+  /** What the row references: `source`/`target` (links) or `owner` or `property`. */
   ref: string;
   /** The missing entity's type + id. */
   missing: { table: string; id: string };
@@ -54,6 +57,30 @@ function liveLinkIds(ndb: NetworkDb): Set<string> {
   return new Set(rows.map((r) => r.id));
 }
 
+/** Ids of live registry properties across ALL layers (physical read, 0.6.5). */
+function livePropertyIds(ndb: NetworkDb): Set<string> {
+  const rows = ndb
+    .prepare('SELECT id FROM properties WHERE deleted = 0 -- layers:physical-read')
+    .all() as { id: string }[];
+  return new Set(rows.map((r) => r.id));
+}
+
+/** Ids of live thought/link types across ALL layers (physical read). */
+function liveThoughtTypeIds(ndb: NetworkDb): Set<string> {
+  const rows = ndb
+    .prepare('SELECT id FROM thought_types WHERE deleted = 0 -- layers:physical-read')
+    .all() as { id: string }[];
+  return new Set(rows.map((r) => r.id));
+}
+
+/** Ids of live link types across ALL layers (physical read). */
+function liveLinkTypeIds(ndb: NetworkDb): Set<string> {
+  const rows = ndb
+    .prepare('SELECT id FROM link_types WHERE deleted = 0 -- layers:physical-read')
+    .all() as { id: string }[];
+  return new Set(rows.map((r) => r.id));
+}
+
 /**
  * Every dangling live reference in the network — empty array means the
  * invariant holds. Runs in a single read pass over the branchable tables;
@@ -64,6 +91,9 @@ export function checkLayerIntegrity(ndb: NetworkDb): LayerIntegrityViolation[] {
   const violations: LayerIntegrityViolation[] = [];
   const thoughts = liveThoughtIds(ndb);
   const links = liveLinkIds(ndb);
+  const properties = livePropertyIds(ndb);
+  const thoughtTypes = liveThoughtTypeIds(ndb);
+  const linkTypes = liveLinkTypeIds(ndb);
 
   // links: both endpoints must be live somewhere.
   for (const row of ndb
@@ -140,19 +170,96 @@ export function checkLayerIntegrity(ndb: NetworkDb): LayerIntegrityViolation[] {
     }
   }
 
-  // property_values: the owner must be live somewhere.
+  // property_values: the owner must be live somewhere AND the property must
+  // be live in the registry somewhere (0.6.5).
   for (const row of ndb
     .prepare(
-      'SELECT id, owner_type, owner_id FROM property_values WHERE deleted = 0 -- layers:physical-read',
+      'SELECT id, owner_type, owner_id, property_id FROM property_values WHERE deleted = 0 -- layers:physical-read',
     )
-    .all() as { id: string; owner_type: 'thought' | 'link'; owner_id: string }[]) {
-    const alive = row.owner_type === 'thought' ? thoughts.has(row.owner_id) : links.has(row.owner_id);
-    if (!alive) {
+    .all() as { id: string; owner_type: 'thought' | 'link'; owner_id: string; property_id: string }[]) {
+    const ownerAlive =
+      row.owner_type === 'thought' ? thoughts.has(row.owner_id) : links.has(row.owner_id);
+    if (!ownerAlive) {
       violations.push({
         table: 'property_values',
         id: row.id,
         ref: 'owner',
         missing: { table: row.owner_type === 'thought' ? 'thoughts' : 'links', id: row.owner_id },
+      });
+    }
+    if (!properties.has(row.property_id)) {
+      violations.push({
+        table: 'property_values',
+        id: row.id,
+        ref: 'property',
+        missing: { table: 'properties', id: row.property_id },
+      });
+    }
+  }
+
+  // type_properties: the type owner (thought_type|link_type) must be live
+  // somewhere AND the property must be live in the registry somewhere.
+  for (const row of ndb
+    .prepare(
+      'SELECT id, owner_type, owner_id, property_id FROM type_properties WHERE deleted = 0 -- layers:physical-read',
+    )
+    .all() as {
+    id: string;
+    owner_type: 'thought_type' | 'link_type';
+    owner_id: string;
+    property_id: string;
+  }[]) {
+    const typeAlive =
+      row.owner_type === 'thought_type'
+        ? thoughtTypes.has(row.owner_id)
+        : linkTypes.has(row.owner_id);
+    if (!typeAlive) {
+      violations.push({
+        table: 'type_properties',
+        id: row.id,
+        ref: 'owner',
+        missing: { table: row.owner_type === 'thought_type' ? 'thought_types' : 'link_types', id: row.owner_id },
+      });
+    }
+    if (!properties.has(row.property_id)) {
+      violations.push({
+        table: 'type_properties',
+        id: row.id,
+        ref: 'property',
+        missing: { table: 'properties', id: row.property_id },
+      });
+    }
+  }
+
+  // type_property_overrides: same references as type_properties.
+  for (const row of ndb
+    .prepare(
+      'SELECT id, owner_type, type_id, property_id FROM type_property_overrides WHERE deleted = 0 -- layers:physical-read',
+    )
+    .all() as {
+    id: string;
+    owner_type: 'thought_type' | 'link_type';
+    type_id: string;
+    property_id: string;
+  }[]) {
+    const typeAlive =
+      row.owner_type === 'thought_type'
+        ? thoughtTypes.has(row.type_id)
+        : linkTypes.has(row.type_id);
+    if (!typeAlive) {
+      violations.push({
+        table: 'type_property_overrides',
+        id: row.id,
+        ref: 'owner',
+        missing: { table: row.owner_type === 'thought_type' ? 'thought_types' : 'link_types', id: row.type_id },
+      });
+    }
+    if (!properties.has(row.property_id)) {
+      violations.push({
+        table: 'type_property_overrides',
+        id: row.id,
+        ref: 'property',
+        missing: { table: 'properties', id: row.property_id },
       });
     }
   }

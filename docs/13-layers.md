@@ -185,7 +185,9 @@ MCP `etn.layers.update` цвета не принимает (0.6.4): цветов
 `UNIQUE (id, layer_id)`, первичный ключ — суррогатный):
 
 `thoughts`, `thought_synonyms`, `links`, `thought_types`, `link_types`,
-`type_properties`, `type_property_overrides`, `property_values`, `comments`,
+`properties` (0.6.5 — справочник свойств сети; имя уникально по `name_key` в
+пределах слоя, см. 02-data-model.md §3.4a), `type_properties`,
+`type_property_overrides`, `property_values`, `comments`,
 `comment_targets`, `attachments`. Плюс FTS-индексы `fts_thought_names`,
 `fts_thought_texts`, `fts_link_texts` — не в смысле copy-on-write (это
 автономные, не external-content таблицы, см. 02-data-model.md §3.11), а в
@@ -228,20 +230,21 @@ S2) переносится из пер-пользовательской `user_fo
    depth)` — обход `layers.parent_id` от `L` до `base`, `depth = 0` у `L`,
    возрастает к основе.
 2. На каждую ветвимую таблицу заводится представление (`thoughts_v`,
-   `links_v`, `thought_types_v`, `link_types_v`, `type_properties_v`,
-   `type_property_overrides_v`, `property_values_v`, `comments_v`,
-   `comment_targets_v`, `attachments_v`), которое джойнит физическую таблицу с
-   `layer_chain`, выбирает строку с минимальной глубиной, затем отфильтровывает
-   `deleted = 1`. Норма — семантика «минимальная глубина», а не конкретная
-   SQL-конструкция: при `UNIQUE (id, layer_id)` оконная функция
-   `ROW_NUMBER() OVER (PARTITION BY id ORDER BY depth ASC)` и анти-джойн
-   «NOT EXISTS строки того же id из более близкого слоя» эквивалентны;
-   реализация (S3) использует анти-джойн, потому что SQLite не проталкивает
-   предикат вызова (`WHERE id = ?`) сквозь оконную функцию — точечный lookup
-   по представлению деградировал бы до полного прохода с сортировкой.
-   Представление также экспонирует `rowid` физической строки-победителя: FTS
-   джойнится с ним (`comments_v.rowid = fts_thought_texts.rowid`), а rowid
-   теневой строки слоя не равен rowid строки основы того же логического id.
+   `links_v`, `thought_types_v`, `link_types_v`, `properties_v`,
+   `type_properties_v`, `type_property_overrides_v`, `property_values_v`,
+   `comments_v`, `comment_targets_v`, `attachments_v`), которое джойнит
+   физическую таблицу с `layer_chain`, выбирает строку с минимальной глубиной,
+   затем отфильтровывает `deleted = 1`. Норма — семантика «минимальная
+   глубина», а не конкретная SQL-конструкция: при `UNIQUE (id, layer_id)`
+   оконная функция `ROW_NUMBER() OVER (PARTITION BY id ORDER BY depth ASC)` и
+   анти-джойн «NOT EXISTS строки того же id из более близкого слоя»
+   эквивалентны; реализация (S3) использует анти-джойн, потому что SQLite не
+   проталкивает предикат вызова (`WHERE id = ?`) сквозь оконную функцию —
+   точечный lookup по представлению деградировал бы до полного прохода с
+   сортировкой. Представление также экспонирует `rowid` физической
+   строки-победителя: FTS джойнится с ним (`comments_v.rowid =
+   fts_thought_texts.rowid`), а rowid теневой строки слоя не равен rowid
+   строки основы того же логического id.
 3. **Репозитории читают только из представлений** и о слоях не знают.
    Обязательный тест/линт-правило: прямое чтение физических таблиц в доменном
    слое запрещено и должно быть обнаружимым (S3, S12).
@@ -685,6 +688,16 @@ Copy-on-write распространяется на `thought_types`, `link_types
 ссылаться на тип, созданный только в слое, — при слиянии это проверяется
 через замыкание (§8.1, §6.7): `type_id` мысли/связи участвует в замыкании
 так же, как и `type_id` связи.
+
+С 0.6.5 в замыкание частичного слияния входит ещё и **справочник
+`properties`**: `type_properties.property_id`, `type_property_overrides.
+property_id` и `property_values.property_id` теперь ссылаются на запись
+`properties` (а не на саму привязку, как было до 0.6.5). Если в слияние
+включено значение/привязка, но свойство живёт только в слое — набор
+незамкнут и слияние отклоняется с `missing_closure` (§8.1, реализация в
+`merge-service.rowReferences`). Сама же строка `properties` не зависит ни
+от чего — частичное слияние, переносящее только значения без определения,
+должно явно включить и само свойство.
 
 ## 14. Экспорт/импорт `.etnx`
 

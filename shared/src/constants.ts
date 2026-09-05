@@ -334,12 +334,17 @@ export const CHRONICLE_THOUGHT_IDS_MAX = 100;
  * `manifest.json` (`format: 'etnx', version: '<ETNX_VERSION>'`) on export and
  * read back on import.
  *
- * The value is currently treated as informational only — there is no automated
- * compatibility check at v.1.0 because no older versions exist. When the
- * schema changes, the next version MUST bump this constant and the importer
- * SHOULD branch on the value (e.g. upgrade `v.1.x` payloads before applying).
+ * Bumps:
+ *   * `1.1` (0.6.5): added `properties` (the registry) at the top level. Each
+ *     `type_properties` entry now references it by `property_id`; older 1.0
+ *     manifests carry the nature inline and are rejected on import with a
+ *     clear error (`etnx-format.ts` §`oldVersionRejection`).
+ *
+ * When the schema changes, the next version MUST bump this constant and the
+ * importer SHOULD branch on the value (e.g. upgrade `v.1.x` payloads before
+ * applying).
  */
-export const ETNX_VERSION = '1.0' as const;
+export const ETNX_VERSION = '1.1' as const;
 
 /**
  * Hard upper bound (in bytes) on the in-memory .etnx zip produced by the
