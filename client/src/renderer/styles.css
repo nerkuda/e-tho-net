@@ -3539,6 +3539,88 @@ body.cloud-dragging * {
   width: 100%;
 }
 
+/* --- Outside-type values group (0.6.5) -------------------------------------- */
+
+/* A second, read-only table under the main properties table — values whose
+ * property is no longer attached to the owner's type. Hidden entirely when
+ * empty; otherwise renders as a headerless table like the main one, with the
+ * same chip / cloud / text visuals but without any editor widget. The only
+ * action is the row's «×» removing the value (with confirmation). */
+.prop-outside-wrap {
+  margin-top: 6px;
+}
+
+.prop-outside-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 4px;
+  padding: 0 2px;
+}
+
+.prop-outside-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.prop-outside-hint {
+  font-size: 11px;
+}
+
+.prop-outside-table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.prop-outside-table td {
+  vertical-align: top;
+  padding: 4px 6px;
+}
+
+.prop-outside-table td:first-child {
+  width: 40%;
+  color: var(--text-muted, var(--muted, #666));
+  word-break: break-word;
+}
+
+.prop-outside-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.prop-outside-cell .form-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.prop-outside-text {
+  word-break: break-all;
+  color: var(--text);
+}
+
+.prop-outside-multi-url {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+}
+
+.prop-outside-remove {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+/* The chip field has no pointer affordance when readonly — the cursor stays
+ * default; only the chip itself stays clickable (open the thought). */
+.prop-outside-chipfield {
+  cursor: default;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
 /* --- thought_ref values: the thought's mini cloud (§6.3.1) ------------------ */
 
 /* A stored single thought_ref value: a self-contained mini cloud of the

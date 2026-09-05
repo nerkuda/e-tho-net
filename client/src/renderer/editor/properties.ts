@@ -36,6 +36,7 @@ import type { EffectiveTypeProperty, PropertyValue, ThoughtRef } from '@etn/shar
 
 import { onRealtimeEvent } from '../realtime.js';
 import { button, div, el, errText, positionBodyDropdown, setTooltip, span } from '../lib/dom.js';
+import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { notice } from '../lib/notice.js';
@@ -63,10 +64,20 @@ import {
 let currentReload: (() => void) | null = null;
 let wired = false;
 
-/** Registers the properties section of the «Основное» tab (thoughts only). */
+/**
+ * Registers the properties section of the «Основное» tab (thoughts and links):
+ * the main type-driven table of values, and the read-only «Свойства вне типа»
+ * group underneath for values whose property is no longer attached to the
+ * owner's type (0.6.5; спека «Значения вне типа сохраняются»).
+ */
 export function registerPropertiesGroup(): void {
   registerMainSection((ctx) => {
-    if (ctx.ownerType !== 'thought') return null;
+    // Both owners share the same section: the underlying render path
+    // (buildPropertiesBody) is ownerType-driven. An owner without a type
+    // resolves the catalogue root, just like untyped thoughts already do
+    // (L21).
+    const typeId = resolveEditorTypeId(ctx);
+    if (typeId === null) return null;
     return {
       id: 'properties',
       title: 'Свойства',
@@ -87,11 +98,13 @@ export function registerPropertiesGroup(): void {
 /** Counts the type's effective property definitions for the group badge. */
 async function countProperties(ctx: EditorContext): Promise<string | undefined> {
   const networkId = requireNetworkId();
-  // L21: an untyped thought shows the root type's properties.
+  // L21: an owner without an own type falls back to the root type of its
+  // type catalogue. The badge shows only the in-type definition count — the
+  // «Свойства вне типа» group carries its own badge separately.
   const typeId = resolveEditorTypeId(ctx);
   if (typeId === null) return undefined;
   try {
-    const defs = await etn.types.listTypeProperties(networkId, 'thought_type', typeId);
+    const defs = await etn.types.listTypeProperties(networkId, ownerTypeOf(ctx), typeId);
     return `(${defs.length})`;
   } catch {
     return undefined;
@@ -99,20 +112,42 @@ async function countProperties(ctx: EditorContext): Promise<string | undefined> 
 }
 
 /**
- * The type whose properties the editor shows (L21): the thought's own type,
- * or the root type «основной тип» for an untyped thought (its settings apply
- * to every element without a type). `null` when the catalogue has no root
- * (mid-migration edge).
+ * The type whose properties the editor shows (L21): the thought/link's own
+ * type, or the root type «основной тип» for an owner without one (its
+ * settings apply to every element without a type). `null` when the catalogue
+ * has no root (mid-migration edge).
  */
 function resolveEditorTypeId(ctx: EditorContext): string | null {
-  if (ctx.thought?.type_id != null) return ctx.thought.type_id;
-  return store.state.thoughtTypes.find((t) => t.is_root)?.id ?? null;
+  const own = ctx.ownerType === 'thought' ? ctx.thought?.type_id : ctx.link?.type_id;
+  if (own != null) return own;
+  return rootTypeIdFor(ctx.ownerType);
 }
 
-/** Builds the properties table for the current thought. */
+/** `TypeOwnerType` ('thought_type' | 'link_type') matching the editor owner. */
+function ownerTypeOf(ctx: EditorContext): 'thought_type' | 'link_type' {
+  return ctx.ownerType === 'thought' ? 'thought_type' : 'link_type';
+}
+
+/** The root type of the owner's type catalogue (thoughts or links). */
+function rootTypeIdFor(ownerType: 'thought' | 'link'): string | null {
+  if (ownerType === 'thought') {
+    return store.state.thoughtTypes.find((t) => t.is_root)?.id ?? null;
+  }
+  return store.state.linkTypes.find((t) => t.is_root)?.id ?? null;
+}
+
+/**
+ * Builds the properties group body for the current owner — thoughts and
+ * links share the same render path. The main table shows in-type values;
+ * the read-only «Свойства вне типа» group underneath lists values whose
+ * property is no longer attached to the owner's type (0.6.5; спека
+ * «Значения вне типа сохраняются»).
+ */
 function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
-  const thoughtId = ctx.ownerId;
+  const ownerId = ctx.ownerId;
+  const ownerType = ctx.ownerType;
+  const typeOwner = ownerTypeOf(ctx);
   const typeId = resolveEditorTypeId(ctx);
 
   const box = div('properties-body');
@@ -128,6 +163,11 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   // that (08-ui-spec.md §6.3.1).
   tableWrap.append(el('span', 'muted', 'Загрузка…'));
   box.append(tableWrap);
+
+  // The read-only «Свойства вне типа» group: hidden until the reload pass
+  // finds at least one such value. The render happens inside the same
+  // `reload()` so a freshly-deleted value refreshes both views at once.
+  const outsideWrap = div('prop-outside-wrap');
 
   // Full metadata of every referenced thought (single ids and multiple-ref
   // arrays alike) — titles, icon, colours and flags for the mini clouds.
@@ -147,12 +187,13 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     if (everMounted && !box.isConnected) return;
     const startedAt = Date.now();
     tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    outsideWrap.replaceChildren();
     let definitions: EffectiveTypeProperty[];
     let values: PropertyValue[];
     try {
       [definitions, values] = await Promise.all([
-        etn.types.listTypeProperties(networkId, 'thought_type', typedId),
-        etn.properties.get(networkId, 'thought', thoughtId),
+        etn.types.listTypeProperties(networkId, typeOwner, typedId),
+        etn.properties.get(networkId, ownerType, ownerId),
       ]);
       // Full metadata of every referenced thought — single ids and
       // multiple-ref arrays alike (one resolve call, capped at 100 ids) —
@@ -179,6 +220,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     if (box.isConnected) everMounted = true;
     if (definitions.length === 0) {
       tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
+      renderOutsideType(values);
       return;
     }
 
@@ -212,14 +254,195 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     }
     table.append(tbody);
     tableWrap.replaceChildren(table);
+    // The outside-type group lives BELOW the main table (08-ui-spec.md
+    // §6.3.1, спека «Значения вне типа сохраняются»). The two are
+    // re-rendered together so a delete in either place refreshes the other.
+    renderOutsideType(values);
     // Milestone journal mark (task 92b89e6f): the properties table really
     // rendered — the closing bracket of the «stuck "Загрузка…"» symptom path.
     logUiEvent('ui.editor.props.loaded', {
-      id: thoughtId,
+      id: ownerId,
       ms: Date.now() - startedAt,
       definitions: definitions.length,
     });
   }
+
+  /** Confirmed deletion of an outside-type value (custom confirmation dialog). */
+  async function confirmOutsideRemove(name: string): Promise<boolean> {
+    return confirmDialog(
+      'Удалить значение свойства',
+      `Свойство «${name}» больше не подключено к типу. Удалить сохранённое значение? Действие необратимо — таких значений система сама не очищает.`,
+      true,
+    );
+  }
+
+  /**
+   * Renders the «Свойства вне типа» group under the main table. Hidden
+   * entirely when no values carry `outside_type: true` — the group's mere
+   * presence would otherwise hint at non-existent clutter (08-ui-spec.md
+   * §6.3.1, спека «Значения вне типа сохраняются»).
+   */
+  function renderOutsideType(values: PropertyValue[]): void {
+    const outside = values.filter((v) => v.outside_type === true);
+    if (outside.length === 0) {
+      outsideWrap.replaceChildren();
+      return;
+    }
+    outsideWrap.replaceChildren(buildOutsideTypeTable(outside));
+  }
+
+  /**
+   * The body of the «Свойства вне типа» group: a headerless read-only table
+   * mirroring the main one, with one row per orphaned value. The row carries
+   * the property name and value (mini-cloud for thought_ref, chips for
+   * multiple, plain text otherwise) — visually identical to the main table,
+   * but without any editor widget. The only action is «×» removing the value
+   * with a confirmation prompt (the system itself never deletes such values).
+   */
+  function buildOutsideTypeTable(values: PropertyValue[]): HTMLElement {
+    const root = div('prop-outside');
+    const header = div('prop-outside-header');
+    header.append(span('Свойства вне типа', 'prop-outside-title'));
+    header.append(
+      span(
+        'Свойство отключено от типа — значение можно только удалить.',
+        'muted prop-outside-hint',
+      ),
+    );
+    root.append(header);
+    const table = el('table', 'table-list prop-outside-table');
+    const tbody = el('tbody');
+    for (const value of values) {
+      const row = el('tr');
+      const nameCell = el(
+        'td',
+        undefined,
+        `${value.property_name} (${typeName(value.value_type)})`,
+      );
+      setTooltip(
+        nameCell,
+        'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
+      );
+      row.append(nameCell);
+      row.append(buildOutsideValueCell(value));
+      tbody.append(row);
+    }
+    table.append(tbody);
+    root.append(table);
+    return root;
+  }
+
+  /** Read-only value cell for an outside-type value: same visuals, no editor. */
+  function buildOutsideValueCell(value: PropertyValue): HTMLElement {
+    const cell = el('td', 'prop-outside-cell');
+    const remove = (): void => {
+      void (async () => {
+        const ok = await confirmOutsideRemove(value.property_name);
+        if (!ok) return;
+        try {
+          // The only allowed write against an outside-type value (02-data-
+          // model.md §3.5a): removal. The server resolves the property by
+          // `property_name` (a UUID would also work) so a stale name no
+          // longer breaks the call.
+          await etn.properties.remove(networkId, ownerType, ownerId, value.property_name);
+          void reload();
+        } catch (err) {
+          notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
+        }
+      })();
+    };
+
+    const stored = value.value;
+    switch (value.value_type) {
+      case 'thought_ref': {
+        if (Array.isArray(stored)) {
+          cell.append(
+            buildMultiThoughtRefReadonly({
+              ids: stored,
+              refs: refCache,
+              onOpen: openThoughtRefTarget,
+            }),
+          );
+        } else if (typeof stored === 'string') {
+          const row = div('form-row');
+          row.style.marginBottom = '0';
+          row.append(
+            buildThoughtRefCloud(stored, {
+              refs: refCache,
+              onOpen: openThoughtRefTarget,
+              // The cloud's «×» removes the value — the only write path
+              // outside-type values support. The same confirmation covers it.
+              onRemove: remove,
+            }),
+          );
+          cell.append(row);
+        } else {
+          cell.append(span('—', 'muted'));
+        }
+        break;
+      }
+      case 'text':
+      case 'url':
+      case 'number':
+      case 'date':
+      case 'bool': {
+        if (value.value_type === 'url' && Array.isArray(stored)) {
+          cell.append(buildMultiUrlReadonly({ urls: stored, onOpen: openOneUrl }));
+        } else if (value.value_type === 'url' && typeof stored === 'string') {
+          const row = div('form-row');
+          row.style.marginBottom = '0';
+          row.append(span(stored, 'prop-outside-text'), buildUrlOpenBtn(stored));
+          cell.append(row);
+        } else if (typeof stored === 'string' || typeof stored === 'number') {
+          cell.append(span(String(stored), 'prop-outside-text'));
+        } else if (typeof stored === 'boolean') {
+          cell.append(span(stored ? 'да' : 'нет', 'prop-outside-text'));
+        } else {
+          cell.append(span('—', 'muted'));
+        }
+        break;
+      }
+      default:
+        cell.append(span('—', 'muted'));
+    }
+
+    // The «×» on every row — same convention as the main table's mini cloud
+    // «×», so the action reads the same regardless of which group it's in.
+    const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
+    clearBtn.type = 'button';
+    clearBtn.title = 'Удалить значение';
+    clearBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      remove();
+    });
+    cell.append(clearBtn);
+    return cell;
+  }
+
+  /** Hand a single URL to the OS default handler; failure → toast. */
+  async function openOneUrl(value: string): Promise<void> {
+    const trimmed = value.trim();
+    if (trimmed === '') return;
+    const err = await etn.system.openExternal(trimmed);
+    if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
+  }
+
+  /** Read-only «Открыть» button for a single URL value. */
+  function buildUrlOpenBtn(value: string): HTMLButtonElement {
+    const btn = button(
+      'Открыть',
+      () => void openOneUrl(value),
+      'btn small',
+      'Открыть в системном обработчике',
+    );
+    btn.disabled = value.trim() === '';
+    return btn;
+  }
+
+  // The outside-type group is appended AFTER the main table once, so the
+  // layout (main on top, outside below) stays stable across reloads. The
+  // group's content is replaced inside `renderOutsideType`.
+  box.append(outsideWrap);
 
   /**
    * Opens a thought referenced by a property value (08-ui-spec.md §6.3.1):
@@ -251,9 +474,9 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     const save = async (value: unknown | null): Promise<boolean> => {
       try {
         if (value === null) {
-          await etn.properties.remove(networkId, 'thought', thoughtId, definition.key);
+          await etn.properties.remove(networkId, ownerType, ownerId, definition.key);
         } else {
-          await etn.properties.set(networkId, 'thought', thoughtId, definition.key, value);
+          await etn.properties.set(networkId, ownerType, ownerId, definition.key, value);
           // A successful save feeds the client-local recent-values history of
           // single text/thought_ref properties (recent-values.ts).
           if (typeof value === 'string' && tracksRecentValues(definition)) {
@@ -523,27 +746,28 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     return cell;
   }
 
-  /** Human-readable property type name. */
-  function typeName(valueType: string): string {
-    switch (valueType) {
-      case 'text':
-        return 'строка';
-      case 'number':
-        return 'число';
-      case 'date':
-        return 'дата';
-      case 'bool':
-        return 'да/нет';
-      case 'thought_ref':
-        return 'мысль';
-      case 'url':
-        return 'URL';
-      default:
-        return valueType;
-    }
-  }
-
   return box;
+}
+
+/** Human-readable property type name (used by both the main table and the
+ * «Свойства вне типа» group, so it lives at module scope). */
+function typeName(valueType: string): string {
+  switch (valueType) {
+    case 'text':
+      return 'строка';
+    case 'number':
+      return 'число';
+    case 'date':
+      return 'дата';
+    case 'bool':
+      return 'да/нет';
+    case 'thought_ref':
+      return 'мысль';
+    case 'url':
+      return 'URL';
+    default:
+      return valueType;
+  }
 }
 
 /** Test seam for unit tests. */
@@ -861,6 +1085,93 @@ export function buildMultiUrlEditor(opts: {
 
   renderRows();
   return root;
+}
+
+// ---------------------------------------------------------------------------
+// Outside-type read-only renderers (08-ui-spec.md §6.3.1, 0.6.5 «Значения вне
+// типа сохраняются»)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read-only chip list for a multi-value `thought_ref` outside-type value:
+ * same chip styling as the main editor (icon + title in the thought's own
+ * colours/font, dimmed when inactive/marked, trash glyph when marked), but
+ * without the «×» removing the value (the only removal action lives on the
+ * row's clear button). Clicking a chip still navigates to the thought via
+ * {@link opts.onOpen}.
+ */
+export function buildMultiThoughtRefReadonly(opts: {
+  ids: string[];
+  refs: Map<string, ThoughtRef>;
+  onOpen: (id: string) => void;
+}): HTMLElement {
+  const field = div('st-f-chipfield prop-outside-chipfield');
+  if (opts.ids.length === 0) {
+    field.append(span('—', 'st-f-chip-empty'));
+    return field;
+  }
+  for (const id of opts.ids) {
+    const ref = opts.refs.get(id);
+    const chip = div('st-f-chip');
+    const icon = div('st-f-chip-icon');
+    applyThoughtIcon(icon, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
+    chip.append(icon);
+    const label = span(ref?.title ?? id, 'st-f-chip-label');
+    label.title = ref?.title ?? id;
+    if (ref !== undefined) applyCloudStyle(label, resolveCloudStyle(ref));
+    chip.append(label);
+    if (ref?.active === false || ref?.marked_for_deletion === true) {
+      chip.classList.add('dim');
+    }
+    if (ref?.marked_for_deletion === true) {
+      const mark = span('', 'list-trash-mark');
+      mark.append(svgIcon('trash', 10));
+      chip.append(mark);
+    }
+    chip.addEventListener('click', (event) => {
+      event.stopPropagation();
+      opts.onOpen(id);
+    });
+    field.append(chip);
+  }
+  return field;
+}
+
+/**
+ * Read-only list of URL strings for an outside-type multi-`url` value: one
+ * line per URL with an «Открыть» button. The only removal action lives on
+ * the row's clear button — the URL row itself is purely informational.
+ */
+export function buildMultiUrlReadonly(opts: {
+  urls: string[];
+  onOpen: (value: string) => void;
+}): HTMLElement {
+  const root = div('prop-outside-multi-url');
+  if (opts.urls.length === 0) {
+    root.append(span('—', 'muted'));
+    return root;
+  }
+  for (const url of opts.urls) {
+    const row = div('form-row');
+    row.style.marginBottom = '0';
+    const text = span(url, 'prop-outside-text');
+    text.style.flex = '1 1 auto';
+    row.append(text, buildUrlOpenBtnStatic(url, opts.onOpen));
+    root.append(row);
+  }
+  return root;
+}
+
+/** Builds a disabled «Открыть» button bound to {@link onOpen}; used in readonly cells. */
+function buildUrlOpenBtnStatic(value: string, onOpen: (value: string) => void): HTMLButtonElement {
+  const btn = button(
+    'Открыть',
+    () => onOpen(value),
+    'btn small',
+    'Открыть в системном обработчике',
+  );
+  btn.disabled = value.trim() === '';
+  return btn;
 }
 
 // ---------------------------------------------------------------------------

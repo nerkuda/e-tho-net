@@ -401,6 +401,243 @@ describe('editor properties group body (DOM-shimmed)', () => {
   });
 });
 
+/**
+ * Regression test for the «Свойства вне типа» group (task 6a83abe4,
+ * 0.6.5 «Значения вне типа сохраняются»). The group lives BELOW the main
+ * properties table and renders the values whose property is no longer attached
+ * to the owner's type — read-only, one «×» per row.
+ */
+describe('editor properties — «Свойства вне типа» group (0.6.5)', () => {
+  /**
+   * Spins up `buildPropertiesBody` against a thought that has at least one
+   * value flagged `outside_type: true`. The `outsideValues` parameter
+   * controls which `PropertyValue` rows the mock returns with that flag.
+   *
+   * Reuses the SAME `sharedWindow` (set up by `buildWithFixtures` in the
+   * other describe block). The etn Proxy in `lib/etn.ts` caches the very
+   * first `window` it sees — creating a fresh window here would route our
+   * mocks to the wrong target and leave the live Proxy staring at an
+   * empty object. Mutating in place keeps the Proxy pointed at our mock.
+   */
+  async function renderWithOutsideType(
+    outsideValues: Array<{
+      id: string;
+      property_id: string;
+      property_name: string;
+      value_type: string;
+      value: unknown;
+      outside_type: true;
+    }>,
+  ): Promise<ShimElement> {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    // Make sure the system sub-API exists — the existing describe block
+    // installed it; we add a stub only when nothing is there yet.
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
+
+    // Replace only the sub-APIs this test owns. `thoughts.resolve` stays
+    // whatever the earlier describe block installed — the live Proxy
+    // (cached on first import) routes reads through `window.etn.thoughts`,
+    // and the existing mock returns a ThoughtRef-shaped stub for every
+    // requested id, which is exactly what the outside-type cell needs.
+    etnApi['types'] = {
+      // A fresh type with one property that DOES match the in-type value:
+      // the type change carried over a single definition, the rest fell
+      // out into the outside-type group.
+      listTypeProperties: async () => [
+        {
+          id: 'pNew',
+          owner_type: 'thought_type',
+          owner_id: 'ty2',
+          key: 'Новое',
+          value_type: 'text',
+          config: null,
+          required: false,
+          position: 0,
+        },
+      ],
+    };
+    etnApi['properties'] = {
+      get: async () => [
+        // One in-type value, just so the main table renders something.
+        {
+          id: 'v1',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: 'pNew',
+          property_name: 'Новое',
+          value_type: 'text',
+          value: 'текущее',
+          outside_type: false,
+          updated_at: '2026',
+        },
+        ...outsideValues,
+      ],
+    };
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+
+    const ctx = {
+      ownerType: 'thought' as const,
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty2',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+    return propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
+  }
+
+  /** Locates the outside-type group wrapper inside the rendered body. */
+  function findOutsideWrap(box: ShimElement): ShimElement | undefined {
+    return box.children.find((c) => (c as ShimElement).className === 'prop-outside-wrap');
+  }
+
+  it('hides the group entirely when no value carries outside_type: true', async () => {
+    const box = await renderWithOutsideType([]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const outside = findOutsideWrap(box);
+    assert.ok(outside !== undefined, 'wrapper slot exists so it can be shown later');
+    assert.equal(
+      outside?.children.length ?? 0,
+      0,
+      'wrapper carries no children when no outside-type values are present',
+    );
+  });
+
+  it('renders one read-only row per outside-type value with the «×» clear button', async () => {
+    const box = await renderWithOutsideType([
+      {
+        id: 'v9',
+        property_id: 'pOld',
+        property_name: 'Город',
+        value_type: 'text',
+        value: 'Москва',
+        outside_type: true,
+      },
+      {
+        id: 'v10',
+        property_id: 'pOld2',
+        property_name: 'Автор',
+        value_type: 'thought_ref',
+        value: 'ta1',
+        outside_type: true,
+      },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const outside = findOutsideWrap(box);
+    assert.ok(outside !== undefined, 'outside-type wrapper rendered');
+    const group = outside?.children.find((c) => (c as ShimElement).className === 'prop-outside');
+    assert.ok(group !== undefined, 'outside-type group rendered');
+
+    const header = group?.children.find(
+      (c) => (c as ShimElement).className === 'prop-outside-header',
+    );
+    assert.ok(header !== undefined, 'group header rendered');
+    const titleSpan = header?.children.find(
+      (c) => (c as ShimElement).className === 'prop-outside-title',
+    );
+    assert.equal(
+      titleSpan?.textContent,
+      'Свойства вне типа',
+      'group title is the agreed-on label',
+    );
+
+    const table = group?.children.find(
+      (c) => (c as ShimElement).className === 'table-list prop-outside-table',
+    );
+    assert.ok(table !== undefined, 'outside-type table rendered');
+    const tbody = table?.children[0];
+    assert.ok(tbody !== undefined, 'tbody present');
+    assert.equal(tbody?.children.length, 2, 'one row per outside-type value');
+
+    // First row: a text value — its cell shows the raw string, not an editor.
+    const firstName = tbody?.children[0]?.children[0];
+    assert.match(
+      firstName?.textContent ?? '',
+      /Город/,
+      'first row name carries the property name',
+    );
+    assert.match(
+      firstName?.textContent ?? '',
+      /строка/,
+      'first row carries the human-readable value type',
+    );
+    const firstValueCell = tbody?.children[0]?.children[1];
+    assert.ok(firstValueCell !== undefined, 'first row value cell rendered');
+    const firstText = firstValueCell?.children.find(
+      (c) => (c as ShimElement).className === 'prop-outside-text',
+    );
+    assert.equal(
+      firstText?.textContent,
+      'Москва',
+      'text outside-type value renders verbatim',
+    );
+    const firstClearBtn = firstValueCell?.children.find(
+      (c) =>
+        c.tagName === 'button' &&
+        (c as ShimElement).className.split(' ').includes('prop-outside-remove'),
+    );
+    assert.ok(firstClearBtn !== undefined, 'first row carries its «×» clear button');
+    assert.equal(
+      (firstClearBtn as ShimElement).title,
+      'Удалить значение',
+      'clear button titled',
+    );
+
+    // Second row: a thought_ref outside-type value renders as the thought's
+    // mini cloud — same shape as the main table, but the cloud's «×» is the
+    // row's clear button (no separate per-chip remover for orphan values).
+    const secondCell = tbody?.children[1]?.children[1];
+    assert.ok(secondCell !== undefined, 'thought_ref row value cell rendered');
+    const cloud = secondCell?.children[0]?.children.find(
+      (c) => (c as ShimElement).className === 'prop-ref-cloud',
+    );
+    assert.ok(cloud !== undefined, 'thought_ref outside-type value rendered as mini cloud');
+    assert.equal(
+      cloud?.dataset['id'],
+      'ta1',
+      'cloud carries the thought id',
+    );
+    const cloudTitle = cloud?.children.find((c) => (c as ShimElement).className === 'prc-title');
+    assert.equal(
+      cloudTitle?.textContent,
+      'Автор 1',
+      'cloud label resolved from the shared ref cache (the earlier describe block installed the mock)',
+    );
+    const secondClearBtn = secondCell?.children.find(
+      (c) =>
+        c.tagName === 'button' &&
+        (c as ShimElement).className.split(' ').includes('prop-outside-remove'),
+    );
+    assert.ok(secondClearBtn !== undefined, 'thought_ref row also carries its «×» clear button');
+  });
+});
+
 describe('property value autocomplete helpers (pure)', () => {
   /** Imports the module (once) with the DOM shims installed. */
   async function loadPropsModule(): Promise<any> {
