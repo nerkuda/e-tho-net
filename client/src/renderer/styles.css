@@ -1303,10 +1303,12 @@ textarea {
   overflow: hidden;
   /* Dot-grid backdrop (L10, 08-ui-spec.md §13): a faint 24px point lattice
      over the base colour gives the canvas a sense of space and a visual cue
-     for the zoom level. The zones themselves stay transparent. */
+     for the zoom level. The zones themselves stay transparent.
+     --layer-bg (0.6.4, 13-layers.md §2.2a) recolours the canvas while a
+     non-base layer with explicit colours is active; absent — theme default. */
   background:
     radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
-    var(--bg);
+    var(--layer-bg, var(--bg));
 }
 
 /* The host is focusable (§2.9 keyboard navigation, kbd-nav.ts) — the keyboard
@@ -1320,7 +1322,9 @@ textarea {
  * towards the top and bottom edges. The renderer anchors it via
  * --focus-band-top/--focus-band-bottom on the host (updateFocusBand in
  * canvas.ts); the off-screen defaults keep it invisible until then. Painted
- * as ::before it sits under the zones, clouds and all link layers. */
+ * as ::before it sits under the zones, clouds and all link layers.
+ * --layer-focus-stripe (0.6.4, 13-layers.md §2.2a) recolours the band while
+ * a non-base layer with explicit colours is active; absent — theme default. */
 .canvas::before {
   content: '';
   position: absolute;
@@ -1330,10 +1334,38 @@ textarea {
   background: linear-gradient(
     to bottom,
     transparent calc(var(--focus-band-top, 9999px) - var(--focus-band-fade, 180px)),
-    var(--focus-band-color) var(--focus-band-top, 9999px),
-    var(--focus-band-color) var(--focus-band-bottom, 0px),
+    var(--layer-focus-stripe, var(--focus-band-color)) var(--focus-band-top, 9999px),
+    var(--layer-focus-stripe, var(--focus-band-color)) var(--focus-band-bottom, 0px),
     transparent calc(var(--focus-band-bottom, 0px) + var(--focus-band-fade, 180px))
   );
+}
+
+/* Layer-name stripe (0.6.4, 13-layers.md §2.2a): the name of the active
+ * non-base layer as vertical bottom-up text at the LEFT edge of the focus
+ * zone (anchored by updateLayerLabel in canvas.ts via top/height). The text
+ * is auto-contrast black/white against the focus band colour, 60% opacity,
+ * never interactive and never wider than 10% of the canvas width. */
+.layer-label {
+  position: absolute;
+  left: 0;
+  z-index: 3;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  max-width: 10%;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.6;
+  user-select: none;
+}
+
+.layer-label-text {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
 }
 
 .canvas-empty {
@@ -1639,11 +1671,14 @@ body.resizing-h {
 }
 
 /* Halo (§2.2.4): the thought is open in the editor — single click, Enter or a
- * pick from another view. A soft accent ring plus glow around the cloud. */
+ * pick from another view. A soft accent ring plus glow around the cloud.
+ * While a layer with explicit colours is active the ring takes the layer's
+ * focus-stripe colour (0.6.4, 13-layers.md §2.2a) — the border of the edited
+ * thought is part of the layer indication. */
 .cloud.halo {
-  border-color: var(--accent);
+  border-color: var(--layer-focus-stripe, var(--accent));
   box-shadow:
-    0 0 0 1px var(--accent),
+    0 0 0 1px var(--layer-focus-stripe, var(--accent)),
     0 0 0 5px var(--accent-soft),
     var(--shadow-focus);
 }
@@ -2016,7 +2051,10 @@ body.cloud-dragging * {
   width: auto;
   /* Min width scales with the canvas zoom (L9). */
   min-width: calc(200px * var(--cloud-zoom, 1));
-  max-width: calc(100% - 28px);
+  /* The focused thought never eats the whole canvas (0.6.4): the middle zone
+   * keeps 22% of the width for the surrounding context — and the layer-name
+   * stripe at the left edge stays clear of the focus cloud. */
+  max-width: min(78%, calc(100% - 28px));
   border-color: var(--accent);
   border-width: 2px;
   box-shadow: var(--shadow-focus);
@@ -4360,9 +4398,11 @@ body.cloud-dragging * {
   min-width: 0;
   overflow-y: auto;
   padding: 16px 18px 60px;
+  /* --layer-bg (0.6.4, 13-layers.md §2.2a): the structures canvas follows the
+   * active layer's background colour like the map does. */
   background:
     radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
-    var(--bg);
+    var(--layer-bg, var(--bg));
 }
 
 /* The active thought of the view is framed by its cloud halo (.cloud.halo,
@@ -5745,6 +5785,9 @@ body.cloud-dragging * {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* --layer-bg (0.6.4, 13-layers.md §2.2a): the chronicle canvas follows the
+   * active layer's background colour like the map does. */
+  background: var(--layer-bg, var(--bg));
 }
 
 /* Filter panel: four rows of criteria (saved filters/keywords, thoughts/types,
@@ -6111,6 +6154,38 @@ table.chron-table thead th {
 .layer-report-line {
   font-size: 13px;
   padding: 2px 0;
+}
+
+/* Layer colours editor (0.6.4, 13-layers.md §2.2a): two picker rows of the
+ * «Свойства слоя» dialog. Native colour input (the same .color-input the
+ * thought/link style dialogs use) + a hex field for exact values. */
+.layer-colors-block {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.layer-colors-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.layer-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.layer-color-hex {
+  width: 90px;
+  font-family: var(--md-mono);
+  text-transform: lowercase;
+}
+
+.field.disabled {
+  opacity: 0.45;
 }
 
 /* Diff dialog (S11): tab bar + two views. */

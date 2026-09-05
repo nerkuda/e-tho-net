@@ -1667,7 +1667,13 @@ export class RestClient {
   /** `POST /networks/{nid}/layers` — create a layer under a parent. */
   public async createLayer(
     networkId: string,
-    input: { title: string; parent_id?: string; comment?: string | null; git_branch?: string | null },
+    input: {
+      title: string;
+      parent_id?: string;
+      comment?: string | null;
+      git_branch?: string | null;
+      colors?: import('@etn/shared').LayerColors | null;
+    },
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').Layer> {
     return this.request('POST', `/networks/${encodeURIComponent(networkId)}/layers`, {
@@ -1676,11 +1682,16 @@ export class RestClient {
     });
   }
 
-  /** `PATCH /networks/{nid}/layers/{id}` — rename / edit the comment. */
+  /** `PATCH /networks/{nid}/layers/{id}` — rename / edit the comment /
+   *  replace the colour indication (full object or null, 0.6.4 §2.2a). */
   public async updateLayer(
     networkId: string,
     layerId: string,
-    changes: { title?: string; comment?: string | null },
+    changes: {
+      title?: string;
+      comment?: string | null;
+      colors?: import('@etn/shared').LayerColors | null;
+    },
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').Layer> {
     return this.request(

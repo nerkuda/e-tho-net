@@ -22,6 +22,7 @@ function layer(overrides: Partial<Layer> & { id: string; title: string }): Layer
     parent_id: null,
     comment: null,
     git_branch: null,
+    colors: null,
     is_service: false,
     is_base: false,
     depth: 1,

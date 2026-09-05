@@ -597,7 +597,13 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind(
       (
         networkId: string,
-        input: { title: string; parent_id?: string; comment?: string | null; git_branch?: string | null },
+        input: {
+          title: string;
+          parent_id?: string;
+          comment?: string | null;
+          git_branch?: string | null;
+          colors?: import('@etn/shared').LayerColors | null;
+        },
       ) => requireRest(deps).createLayer(networkId, input),
     ),
   );
@@ -607,7 +613,11 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       (
         networkId: string,
         layerId: string,
-        changes: { title?: string; comment?: string | null },
+        changes: {
+          title?: string;
+          comment?: string | null;
+          colors?: import('@etn/shared').LayerColors | null;
+        },
         expectedVersion?: number,
       ) =>
         requireRest(deps).updateLayer(networkId, layerId, changes, {

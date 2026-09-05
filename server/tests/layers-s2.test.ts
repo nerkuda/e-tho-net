@@ -273,6 +273,7 @@ describe(
           '028_session_layers_switch_seq.sql',
           '029_links_triple_live.sql',
           '030_type_property_description.sql',
+          '031_layer_colors.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else kept).

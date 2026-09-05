@@ -53,6 +53,7 @@ import {
   shortenCompoundName,
   sortRefsByTitle,
 } from '../lib/pure.js';
+import { currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
 import { store } from '../state.js';
 import {
   initLinksOverlay,
@@ -137,6 +138,11 @@ let zones: Record<'parents' | 'siblings' | 'children', HTMLElement> | null = nul
 let focusRow: HTMLElement | null = null;
 let emptyEl: HTMLElement | null = null;
 let focusCloudEl: HTMLElement | null = null;
+/** Layer-name stripe at the left edge of the focus zone (0.6.4 §2.2a). */
+let layerLabelEl: HTMLElement | null = null;
+let layerLabelText: HTMLElement | null = null;
+/** Change-detection key of the last painted label (skips no-op writes). */
+let lastLabelKey = '';
 let drag: DragState | null = null;
 let suppressNextClick = false;
 let addDialogOpener: ((ctx: AddDialogContext) => void) | null = null;
@@ -232,7 +238,15 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   const empty = div('canvas-empty');
   empty.textContent = 'Нет открытой сети';
 
-  host.append(top, focusRow, zoneSplitterH, zoneChildren, empty);
+  // Layer-name stripe (0.6.4, §2.2a): vertical text at the left edge of the
+  // focus zone, non-interactive — painted over the focus band, under the
+  // link overlays. Hidden on the base layer (see updateLayerLabel).
+  layerLabelEl = div('layer-label');
+  layerLabelText = el('span', 'layer-label-text');
+  layerLabelEl.append(layerLabelText);
+  layerLabelEl.setAttribute('aria-hidden', 'true');
+
+  host.append(top, focusRow, zoneSplitterH, zoneChildren, empty, layerLabelEl);
   zones = { parents: zoneParents, siblings: zoneSiblings, children: zoneChildren };
   emptyEl = empty;
   redrawLinks = initLinksOverlay(host).redraw;
@@ -277,6 +291,9 @@ export function mountCanvas(canvasHost: HTMLElement): void {
 
   store.subscribe(() => {
     if (host?.isConnected !== true) return;
+    // The label follows layer/theme changes even when the canvas data itself
+    // is unchanged (the fast path below skips the full rebuild).
+    updateLayerLabel();
     const key = canvasRenderKey();
     if (key === lastRenderKey) {
       // The canvas data is unchanged — only the selection may differ
@@ -512,12 +529,58 @@ function updateFocusBand(): void {
   const rowRect = focusRow.getBoundingClientRect();
   host.style.setProperty('--focus-band-top', `${Math.round(rowRect.top - hostRect.top)}px`);
   host.style.setProperty('--focus-band-bottom', `${Math.round(rowRect.bottom - hostRect.top)}px`);
+  updateLayerLabel();
+}
+
+/**
+ * Paints the layer-name stripe (0.6.4, §2.2a): visible only while a non-base
+ * layer is current; vertical bottom-up text at the left edge of the focus
+ * zone, ~⅓ of the zone height (shrunk to fit long names), auto-contrast
+ * black/white against the effective focus-stripe colour, never wider than
+ * 10% of the canvas. Non-interactive (`pointer-events: none` in CSS).
+ */
+function updateLayerLabel(): void {
+  if (host === null || focusRow === null || layerLabelEl === null || layerLabelText === null) {
+    return;
+  }
+  const s = store.state;
+  const view = layerLabelView(
+    s.currentLayer,
+    currentLayerColors(s.layers, s.currentLayer),
+    s.theme,
+    Math.round(focusRow.getBoundingClientRect().height),
+    Math.round(host.getBoundingClientRect().width),
+  );
+  const key = `${view.visible}|${view.title}|${view.color}|${view.fontPx}`;
+  if (key !== lastLabelKey) {
+    lastLabelKey = key;
+    if (!view.visible) {
+      layerLabelEl.style.display = 'none';
+      return;
+    }
+    layerLabelText.textContent = view.title;
+    layerLabelEl.style.color = view.color;
+    layerLabelEl.style.fontSize = `${view.fontPx}px`;
+    layerLabelEl.style.display = 'flex';
+  }
+  // Geometry follows the focus row on every layout change (render, resizes,
+  // splitter drags) — anchor unconditionally, the key only gates the restyle.
+  if (!view.visible) return;
+  const hostRect = host.getBoundingClientRect();
+  const rowRect = focusRow.getBoundingClientRect();
+  const top = Math.round(rowRect.top - hostRect.top);
+  layerLabelEl.style.top = `${top}px`;
+  layerLabelEl.style.height = `${Math.round(rowRect.height)}px`;
 }
 
 /** Clears the focus band (no focus → no band; the CSS defaults render it off-screen). */
 function resetFocusBand(h: HTMLElement): void {
   h.style.removeProperty('--focus-band-top');
   h.style.removeProperty('--focus-band-bottom');
+  if (layerLabelEl !== null) {
+    lastLabelKey = '';
+    layerLabelEl.style.display = 'none';
+  }
 }
 
 /** Set by {@link requestZoneAnimation}; consumed by the next render. */
