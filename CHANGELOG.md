@@ -55,6 +55,36 @@
   «POST /links applies type_id from the body» — 201 с применённым
   типом, 404 `NOT_FOUND` на неизвестный UUID, 409 `DUPLICATE` на
   повтор той же тройки.
+- **`POST /layers` и `etn.layers.create` не помечают созданный слой
+  как `current` (3334e0a).** В `server/src/domain/layer-service.ts`
+  `createLayer` передавал id созданного слоя как `currentLayerId`, и
+  `current: row.id === currentLayerId` становился тождественно `true` —
+  противоречило эху `meta.layer` (реальный слой сессии). Агент,
+  доверивший `current: true` в ответе, считал себя в новом слое и
+  продолжал писать в основу — смысл слоя как изоляции правок тихо
+  терялся. Реальный `currentLayerId` сессии уже вычислялся в
+  вызывающем коде (`resolveRequestLayer` для REST,
+  `resolveRuntimeLayer` для MCP) для дефолта `parent_id` — теперь он
+  переиспользуется и для `current` в ответе. Тесты
+  `assert.equal(created.current, false)` в `server/tests/layers-s7.test.ts`
+  и `server/tests/mcp-layers.test.ts`.
+- **Условия «заполнено» / «не заполнено» в отборах мыслей
+  (b7b9de3, d3be43b, 74c045c).** Серверный `POST /thoughts/query`
+  (`server/src/domain/structure-service.ts`, `shared/src/enums.ts`)
+  теперь принимает операторы `is_empty` и `not_empty` для всех типов
+  значений, кроме `bool` (для bool «заполнено» = `true`, «не заполнено»
+  = `false` покрывается `eq`). Семантика: для скаляров —
+  `IS NOT NULL AND != ''`; для `thought_ref` дополнительно
+  `!= '[]' AND != 'null'`; для множественных значений «заполнено» =
+  хотя бы одно непустое. В UI панели отбора экрана «Структуры мыслей»
+  (`client/src/renderer/screens/structures/filter-panel.ts`) для всех
+  типов кроме `bool` в выпадающем списке «вид сравнения» появились
+  «заполнено» и «не заполнено»; при их выборе поле значения скрывается
+  за подсказкой «значение не требуется». Спека `docs/03-server-api.md`
+  §6.10 дополнена перечислением операций и пояснением семантики.
+  Серверные тесты: `server/tests/structure-service.test.ts` (text,
+  number, date, thought_ref с `'[]'`/`'null'`, запрет для `bool`).
+  Клиентский тест: `client/tests/structures-filter-panel-ops.test.ts`.
 
 ## [0.6.2] — 2026-09-03
 
