@@ -18,6 +18,7 @@ import { hasTextSelection } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { closeMenu } from './lib/menu.js';
 import { notice } from './lib/notice.js';
+import { logUiEvent } from './lib/ui-log.js';
 import { UI_STATE_KEY, PREF_KEY } from '@etn/shared';
 import { applyCanvasZoom } from './canvas/canvas-zoom.js';
 import { getCanvasCursor, resetCanvasCursor } from './canvas/kbd-nav.js';
@@ -358,6 +359,7 @@ async function ensureManualPositionsInitialized(
  * (H7) and persists the L4 current-focus key.
  */
 export async function setFocus(id: string): Promise<void> {
+  const startedAt = Date.now();
   const networkId = requireNetworkId();
   const tabId = store.state.activeTabId;
   const response = await etn.thoughts.focus(networkId, id);
@@ -376,6 +378,10 @@ export async function setFocus(id: string): Promise<void> {
     structuresActiveThought: null,
     ...zoneState,
   });
+  // Milestone journal mark (task 92b89e6f): the focus response has landed and
+  // the canvas/store now render it — the closing bracket of the
+  // `ui.cloud.click` → `ui.focus.applied` pipeline.
+  logUiEvent('ui.focus.applied', { id, ms: Date.now() - startedAt });
   // Q4: persist focus_id on the tab row so it survives restarts and tab
   // switches. Falls back to the legacy ui_state key when no tab is active
   // (shouldn't happen post-Q3, but defensible).

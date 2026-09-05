@@ -40,6 +40,7 @@ import {
 import { hashApiKey, isValidApiKeyFormat } from '../auth/api-key.js';
 import { extractBearerToken, readClientId } from '../http/context.js';
 import type { SystemDb } from '../db/system-db.js';
+import type { FileLog } from '../log/file-log.js';
 import type { Logger } from '../logger.js';
 import { openNetworkDb } from '../db/network-db.js';
 import { resolveSessionLayer, resolveSessionSwitchSeq } from '../domain/layer-service.js';
@@ -120,6 +121,11 @@ export interface RealtimeGatewayDeps {
   dataDir: string;
   /** Optional application logger. */
   logger?: Logger;
+  /**
+   * File journal (task 1dd33e23 §3): connects/disconnects and pong timeouts
+   * are journaled for freeze diagnostics. Optional (tests omit it).
+   */
+  fileLog?: FileLog;
   /** Partial option overrides (tests). */
   options?: Partial<RealtimeGatewayOptions>;
 }
@@ -153,15 +159,38 @@ function parseClientFrame(raw: unknown): ClientFrame | null {
   }
 }
 
-/** Send a JSON frame when the socket is still open. */
-function sendJson(socket: WebSocket, payload: unknown, log?: Logger): void {
+/**
+ * Send a JSON frame on `conn`'s socket when it is still open.
+ *
+ * On a real send failure (broken pipe, half-open connection behind a reverse
+ * proxy, …) the socket is forcibly terminated so the `close` event fires and
+ * {@link RealtimeGateway.removeConnection} tears down the registries and
+ * releases the pub/sub subscription. Without this, a half-open subscriber
+ * would stay in the registries and spam `realtime: send failed` on every
+ * subsequent publish — the symptom tracked in the 0.6.3 bug thought. The
+ * pong-timeout in {@link RealtimeGateway.heartbeat} is a separate safety net
+ * for connections that never see a TCP-level error.
+ */
+function sendJson(conn: Connection, payload: unknown, log?: Logger): void {
+  const socket = conn.socket;
   if (socket.readyState !== WebSocket.OPEN) {
     return;
   }
   socket.send(JSON.stringify(payload), (err) => {
-    if (err !== undefined) {
-      log?.warn({ err }, 'realtime: send failed');
+    // `ws` calls back with `null` on success — both null and undefined mean
+    // "buffered for write", only an Error means the peer is gone.
+    if (err === null || err === undefined) {
+      return;
     }
+    log?.warn(
+      { err, networkId: conn.networkId, userId: conn.userId, clientId: conn.clientId },
+      'realtime: send failed, terminating connection',
+    );
+    // terminate() (vs close()) tears down the underlying TCP socket
+    // unconditionally — by design the close frame is *not* sent and the
+    // resulting `close` event reaches removeConnection() even when the
+    // peer has been gone for a while.
+    socket.terminate();
   });
 }
 
@@ -174,6 +203,7 @@ export class RealtimeGateway {
   private readonly pubsub: PubSub;
   private readonly dataDir: string;
   private readonly logger?: Logger;
+  private readonly fileLog?: FileLog;
   private readonly options: RealtimeGatewayOptions;
 
   /** Every live connection. */
@@ -188,6 +218,7 @@ export class RealtimeGateway {
     this.pubsub = deps.pubsub;
     this.dataDir = deps.dataDir;
     this.logger = deps.logger;
+    this.fileLog = deps.fileLog;
     this.options = { ...DEFAULT_REALTIME_GATEWAY_OPTIONS, ...deps.options };
   }
 
@@ -257,6 +288,11 @@ export class RealtimeGateway {
     this.connections.add(conn);
     this.indexByNetwork(conn);
     this.indexByClient(conn);
+    this.fileLog?.info('ws', 'client connected', {
+      network_id: networkId,
+      user_id: auth.userId,
+      client_id: clientId,
+    });
 
     socket.on('message', (raw: RawData) => this.onMessage(conn, raw));
     socket.on('close', () => this.removeConnection(conn));
@@ -320,7 +356,7 @@ export class RealtimeGateway {
     ) {
       return;
     }
-    sendJson(conn.socket, event, this.logger);
+    sendJson(conn, event, this.logger);
   }
 
   /** {@link isEventVisibleInLayer} bound to `conn`'s own layer connection. */
@@ -378,7 +414,7 @@ export class RealtimeGateway {
         this.replay(conn, frame.last_seq);
         break;
       case 'ping':
-        sendJson(conn.socket, { type: 'pong' } satisfies RealtimeServerControlMessage, this.logger);
+        sendJson(conn, { type: 'pong' } satisfies RealtimeServerControlMessage, this.logger);
         break;
       case 'pong':
         break; // liveness already accounted for above
@@ -401,7 +437,7 @@ export class RealtimeGateway {
     const minSeq = this.systemDb.getMinEventSeq(conn.networkId);
     if (minSeq !== null && lastSeq < minSeq - 1) {
       sendJson(
-        conn.socket,
+        conn,
         { type: 'resume.stale', last_seq: minSeq - 1 } satisfies RealtimeServerControlMessage,
         this.logger,
       );
@@ -410,7 +446,7 @@ export class RealtimeGateway {
     const switchedAtSeq = this.resolveConnSwitchSeq(conn);
     if (switchedAtSeq > 0 && lastSeq < switchedAtSeq) {
       sendJson(
-        conn.socket,
+        conn,
         { type: 'resume.stale', last_seq: switchedAtSeq } satisfies RealtimeServerControlMessage,
         this.logger,
       );
@@ -421,7 +457,7 @@ export class RealtimeGateway {
       .filter((e) => e.audience === 'network' || e.actor.user_id === conn.userId)
       .filter((e) => e.audience === 'user' || this.isVisible(conn, e));
     for (const event of events) {
-      sendJson(conn.socket, event, this.logger);
+      sendJson(conn, event, this.logger);
     }
   }
 
@@ -446,11 +482,16 @@ export class RealtimeGateway {
         { userId: conn.userId, clientId: conn.clientId, networkId: conn.networkId },
         'realtime: pong timeout, closing connection',
       );
+      this.fileLog?.warn('ws', 'pong timeout, closing connection', {
+        network_id: conn.networkId,
+        user_id: conn.userId,
+        client_id: conn.clientId,
+      });
       this.closeSocket(conn.socket, PONG_TIMEOUT_CLOSE_CODE, 'pong timeout');
       return;
     }
     conn.awaitingPong = true;
-    sendJson(conn.socket, { type: 'ping' } satisfies ServerFrame, this.logger);
+    sendJson(conn, { type: 'ping' } satisfies ServerFrame, this.logger);
   }
 
   private updateClientId(conn: Connection, clientId: string): void {
@@ -492,7 +533,7 @@ export class RealtimeGateway {
       if (conn.networkId !== networkId) continue;
       conn.layerId = layer.id;
       sendJson(
-        conn.socket,
+        conn,
         { type: 'layer.switched', layer } satisfies RealtimeServerControlMessage,
         this.logger,
       );
@@ -519,7 +560,7 @@ export class RealtimeGateway {
       if (!affectedLayerIds.has(conn.layerId)) continue;
       conn.layerId = newLayer.id;
       sendJson(
-        conn.socket,
+        conn,
         { type: 'layer.deleted', layer: newLayer } satisfies RealtimeServerControlMessage,
         this.logger,
       );
@@ -557,6 +598,11 @@ export class RealtimeGateway {
     }
     clearInterval(conn.pingTimer);
     conn.unsubscribe();
+    this.fileLog?.info('ws', 'client disconnected', {
+      network_id: conn.networkId,
+      user_id: conn.userId,
+      client_id: conn.clientId,
+    });
   }
 
   /** Close every connection (server shutdown). */

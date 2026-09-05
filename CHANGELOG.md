@@ -3,6 +3,89 @@
 Все заметные изменения проекта фиксируются здесь. Формат основан на
 [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/).
 
+## [0.6.3] — 2026-09-05
+
+### Исправлено
+
+- **⚠️ BREAKING: унифицирована семантика `direction` при создании связи
+  вместе с мыслью (REST и MCP).** Поле `direction` у `POST /thoughts`
+  (`create_link`) и `etn.thoughts.upsert_bundle` (`links[]`) имело
+  **противоположный** смысл на REST/доменном слое и на MCP-слое: один и
+  тот же вызов с одинаковым значением `direction` давал разную топологию
+  графа в зависимости от интерфейса. Унифицировано под действующую
+  MCP-семантику (интуитивную, «`parent`» — новая мысль подвешивается ПОД
+  `target_thought_id`, «`child`» — новая мысль становится родителем
+  `target_thought_id`): REST-контракт `create_link.direction` теперь
+  значит то же самое, что и раньше значил только в MCP. **Для внешних
+  потребителей REST API это breaking change** — тот же вызов с тем же
+  значением `direction`, что раньше создавал связь в одну сторону,
+  теперь создаёт её в противоположную; проверьте интеграции, вызывающие
+  `POST /networks/{nid}/thoughts` с `create_link`. MCP-контракт
+  (`etn.thoughts.create`, `etn.thoughts.upsert_bundle`) не изменился.
+  Затронут клиентский Electron UI (добавление мыслей через холст,
+  drag&drop, вставка из буфера, создание мыслей по wiki-ссылкам) — все
+  места синхронно поправлены, наблюдаемое поведение для пользователя не
+  меняется.
+- **Realtime-шлюз отключает мёртвых WS-подписчиков (7bf7f45).** В
+  `server/src/realtime/gateway.ts` `sendJson()` теперь получает весь
+  объект `Connection`, а не только сокет: при первой реальной ошибке
+  записи (`err != null` в колбэке `socket.send`) соединение
+  терминируется и снимается со всех реестров (`connections`/`byNetwork`/
+  `byClient`) с отпиской от pub/sub, как делает `removeConnection()`.
+  До правки мёртвые подписчики (например, за reverse-proxy при обрыве
+  без close-фрейма) бесконечно оставались в реестрах и засоряли лог
+  записями `realtime: send failed` каждые ~30 секунд. Попутно
+  исправлена старая ошибка в проверке `err !== undefined` — Node `ws`
+  вызывает колбэк с `null` на успехе; без правки баг-фикс ронял бы
+  соединение на первом же успешном кадре.
+- **Батчинг `POST /mentions/scan` на клиенте (e760cde).** В
+  `client/src/renderer/editor/mentions-annotate.ts` `annotateMentions()`
+  теперь режет тексты на партии по лимитам контракта
+  (`texts` ≤ 50 элементов, суммарно ≤ 20 000 символов) и отправляет их
+  параллельно через `Promise.all`, склеивая результаты в исходном
+  порядке; `exclude_thought_id` и `show_inactive` прокидываются в
+  каждый батч. До правки контент с числом markdown-блоков больше 50
+  получал 422 от сервера, ошибка проглатывалась best-effort, и каждая
+  перерисовка повторяла запрос — аннотации не появлялись вовсе.
+- **`POST /links` применяет `type_id` из тела (789cf1a, регрессионный
+  тест).** В рамках исправления других багов `type_id` уже корректно
+  доходит до `createLink()` через `parseLinkCreateBody` →
+  `fieldNullableString` → INSERT и UNIQUE-проверку `(source_id,
+  target_id, type_id)`. Добавлен регрессионный тест
+  «POST /links applies type_id from the body» — 201 с применённым
+  типом, 404 `NOT_FOUND` на неизвестный UUID, 409 `DUPLICATE` на
+  повтор той же тройки.
+- **`POST /layers` и `etn.layers.create` не помечают созданный слой
+  как `current` (3334e0a).** В `server/src/domain/layer-service.ts`
+  `createLayer` передавал id созданного слоя как `currentLayerId`, и
+  `current: row.id === currentLayerId` становился тождественно `true` —
+  противоречило эху `meta.layer` (реальный слой сессии). Агент,
+  доверивший `current: true` в ответе, считал себя в новом слое и
+  продолжал писать в основу — смысл слоя как изоляции правок тихо
+  терялся. Реальный `currentLayerId` сессии уже вычислялся в
+  вызывающем коде (`resolveRequestLayer` для REST,
+  `resolveRuntimeLayer` для MCP) для дефолта `parent_id` — теперь он
+  переиспользуется и для `current` в ответе. Тесты
+  `assert.equal(created.current, false)` в `server/tests/layers-s7.test.ts`
+  и `server/tests/mcp-layers.test.ts`.
+- **Условия «заполнено» / «не заполнено» в отборах мыслей
+  (b7b9de3, d3be43b, 74c045c).** Серверный `POST /thoughts/query`
+  (`server/src/domain/structure-service.ts`, `shared/src/enums.ts`)
+  теперь принимает операторы `is_empty` и `not_empty` для всех типов
+  значений, кроме `bool` (для bool «заполнено» = `true`, «не заполнено»
+  = `false` покрывается `eq`). Семантика: для скаляров —
+  `IS NOT NULL AND != ''`; для `thought_ref` дополнительно
+  `!= '[]' AND != 'null'`; для множественных значений «заполнено» =
+  хотя бы одно непустое. В UI панели отбора экрана «Структуры мыслей»
+  (`client/src/renderer/screens/structures/filter-panel.ts`) для всех
+  типов кроме `bool` в выпадающем списке «вид сравнения» появились
+  «заполнено» и «не заполнено»; при их выборе поле значения скрывается
+  за подсказкой «значение не требуется». Спека `docs/03-server-api.md`
+  §6.10 дополнена перечислением операций и пояснением семантики.
+  Серверные тесты: `server/tests/structure-service.test.ts` (text,
+  number, date, thought_ref с `'[]'`/`'null'`, запрет для `bool`).
+  Клиентский тест: `client/tests/structures-filter-panel-ops.test.ts`.
+
 ## [0.6.2] — 2026-09-03
 
 Улучшения конструктора типов и свойств: единая форма редактирования

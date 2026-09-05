@@ -179,10 +179,14 @@ export function upsertThoughtBundle(
     let links: Link[] | undefined;
     if (input.links !== undefined) {
       links = input.links.map((l) => {
+        // parent: target sources a link to the bundle thought (bundle thought
+        // hangs under target). child: the bundle thought sources a link to
+        // target. Unified with the MCP `links[].direction` semantics
+        // (docs/03-server-api.md §6.3, docs/05-mcp-server.md §5.2).
         const [sourceId, targetId] =
           l.direction === 'parent'
-            ? [thought.id, l.target_thought_id]
-            : [l.target_thought_id, thought.id];
+            ? [l.target_thought_id, thought.id]
+            : [thought.id, l.target_thought_id];
         return createLink(
           ndb,
           { source_id: sourceId, target_id: targetId, type_id: l.type_id ?? null },

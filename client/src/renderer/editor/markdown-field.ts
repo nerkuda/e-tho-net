@@ -66,6 +66,13 @@ export function createMarkdownField(opts: {
    */
   onCancel?: () => void;
   /**
+   * Fired when the field switches between edit and view modes. The boolean is
+   * the NEW mode (`true` = edit, `false` = view). Used by callers that need
+   * to gate external content updates (e.g. realtime `comment.*` events must
+   * not clobber an in-progress edit; bug 206e33a1).
+   */
+  onEditChange?: (editing: boolean) => void;
+  /**
    * When set, pasting an image from the clipboard saves it as an attachment of
    * this entity and inserts the markdown image reference at the caret.
    */
@@ -189,9 +196,11 @@ export function createMarkdownField(opts: {
   };
 
   const showView = (): void => {
+    const wasEditing = editor !== null && !area.classList.contains('hidden');
     area.classList.add('hidden');
     view.classList.remove('hidden');
     renderView();
+    if (wasEditing) opts.onEditChange?.(false);
   };
 
   const commitOrRevert = (): void => {
@@ -309,6 +318,7 @@ export function createMarkdownField(opts: {
     view.classList.add('hidden');
     area.classList.remove('hidden');
     mountEditor();
+    opts.onEditChange?.(true);
   };
 
   // Programmatic focus (e.g. the editor rebuild refocus, editor.ts) lands on

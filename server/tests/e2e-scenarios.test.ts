@@ -53,7 +53,8 @@ describe(
           payload: {
             title: 'Иванов Иван',
             synonyms: ['Ваня', 'Иваныч'],
-            create_link: { direction: 'child', target_thought_id: ctx.homeId },
+            // direction: 'parent' — HOME (target) becomes the new thought's parent.
+            create_link: { direction: 'parent', target_thought_id: ctx.homeId },
           },
         });
         assert.equal(created.statusCode, 201);

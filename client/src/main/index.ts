@@ -22,9 +22,11 @@ import {
   defaultMigrationsDir,
   localDbPath,
   packagedMigrationsDir,
+  parseLoggingArg,
   parseUserDataDirArg,
 } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
+import { getClientLog, initClientLog, resolveLoggingFlag } from './log/client-log.js';
 import { registerIpc, type IpcHandle } from './ipc/register.js';
 import { dispatchDeepLink, extractDeepLink } from './ipc/deep-link.js';
 import { initAutoUpdater } from './updater.js';
@@ -63,6 +65,38 @@ if (userDataDirArg !== null) {
   // share the installed app's local.db / server profiles / settings.
   app.setPath('userData', path.join(app.getPath('appData'), '@etn-dev'));
 }
+
+// File journal (task f051bf95, 07-client-electron.md §7): created as early as
+// possible — right after the `userData` path is final — with the flag OFF; the
+// stored `client_meta.log_enabled` value (or a `--logging`/`--no-logging`
+// override) is applied in `whenReady` once local.db is open. Until then only
+// ERROR-level entries (and the flag audit) can land in the journal.
+initClientLog(app.getPath('userData'));
+
+// Unhandled failures of the main process — ERROR is always journaled, even
+// with diagnostics off (task f051bf95 §3). Logging only: Electron's own
+// crash handling keeps its course.
+process.on('uncaughtException', (err) => {
+  try {
+    getClientLog()?.error('main', 'uncaught exception', {
+      error: err instanceof Error ? `${err.message}` : String(err),
+      stack: err instanceof Error && err.stack !== undefined ? err.stack.split('\n')[1]?.trim() ?? '' : '',
+    });
+  } catch {
+    // the journal itself must never throw out of here
+  }
+  console.error('[ETN] Uncaught exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  try {
+    getClientLog()?.error('main', 'unhandled rejection', {
+      reason: reason instanceof Error ? reason.message : String(reason),
+    });
+  } catch {
+    // best effort
+  }
+  console.error('[ETN] Unhandled rejection:', reason);
+});
 
 // Local-image protocol (`etnimg://c/pics/img.png`): serves attachment files
 // from disk. Registered as privileged/secure so BOTH the dev http origin and
@@ -395,6 +429,30 @@ app
     const clientId = getOrCreateClientId(localDb);
     if (isDev) console.log('[ETN] client_id =', clientId);
 
+    // File-journal flag (task f051bf95 §2): a `--logging`/`--no-logging`
+    // switch overrides the stored value for this run AND replaces it as the
+    // last explicitly set state; without a switch the stored
+    // `client_meta.log_enabled` is restored; with neither the journal stays
+    // disabled. `setEnabled` journals the transition itself (WARN audit).
+    const clientLog = getClientLog();
+    if (clientLog !== null) {
+      const flag = resolveLoggingFlag(
+        parseLoggingArg(process.argv),
+        localDb.getMeta(CLIENT_META_KEY.LOG_ENABLED),
+      );
+      clientLog.setEnabled(flag.enabled, flag.source === 'cli' ? 'cli' : undefined);
+      if (flag.persist) {
+        localDb.setMeta(CLIENT_META_KEY.LOG_ENABLED, String(flag.enabled));
+      }
+      clientLog.info('app', 'client started', {
+        version: app.getVersion(),
+        platform: process.platform,
+        electron: process.versions.electron ?? '',
+        userData: app.getPath('userData'),
+        argv: process.argv.join(' '),
+      });
+    }
+
     // The etnimg protocol downloads server-stored attachment files through the
     // active connection; `ipc` is assigned right after `registerIpc` below, so
     // the resolver closure reads it lazily on every request.
@@ -504,6 +562,13 @@ app.on('window-all-closed', () => {
 
 // Release the DB file handle before the process exits so WAL files flush.
 app.on('before-quit', () => {
+  // Journal the shutdown (INFO — flag-gated, task f051bf95 §3) before the DB
+  // closes: the flag persistence itself needs no DB here.
+  try {
+    getClientLog()?.info('app', 'client quit');
+  } catch {
+    // best effort — quitting must never fail on the journal
+  }
   try {
     localDb?.close();
   } catch (err: unknown) {

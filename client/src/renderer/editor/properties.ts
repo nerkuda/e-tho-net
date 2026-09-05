@@ -39,6 +39,7 @@ import { button, div, el, errText, positionBodyDropdown, setTooltip, span } from
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
 import { notice } from '../lib/notice.js';
+import { logUiEvent } from '../lib/ui-log.js';
 import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
 import { requireNetworkId, setFocus } from '../app.js';
 import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
@@ -144,6 +145,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     // proceed detached. Skip only bodies that were mounted and then replaced
     // by a newer editor render.
     if (everMounted && !box.isConnected) return;
+    const startedAt = Date.now();
     tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let definitions: EffectiveTypeProperty[];
     let values: PropertyValue[];
@@ -210,6 +212,13 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     }
     table.append(tbody);
     tableWrap.replaceChildren(table);
+    // Milestone journal mark (task 92b89e6f): the properties table really
+    // rendered — the closing bracket of the «stuck "Загрузка…"» symptom path.
+    logUiEvent('ui.editor.props.loaded', {
+      id: thoughtId,
+      ms: Date.now() - startedAt,
+      definitions: definitions.length,
+    });
   }
 
   /**

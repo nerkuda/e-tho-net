@@ -691,9 +691,15 @@ async function addDirectLinks(
           synonyms: item.synonyms,
           type_id: result.thoughtTypeId,
           create_link: {
-            // 'parent': the new thought becomes a parent of ownerId
-            // 'child':  the new thought becomes a child of ownerId
-            direction: dir === 'parents' ? 'parent' : 'child',
+            // create_link.direction names the role of ownerId (the target)
+            // relative to the new thought: 'parent' — ownerId becomes the
+            // new thought's parent (new thought under ownerId, i.e. new
+            // thought is ownerId's CHILD); 'child' — the new thought becomes
+            // ownerId's parent. We want the opposite of dir here: dir ===
+            // 'parents' means the new thought must become a PARENT of
+            // ownerId → direction 'child'; dir === 'children' means the new
+            // thought must become ownerId's CHILD → direction 'parent'.
+            direction: dir === 'parents' ? 'child' : 'parent',
             target_thought_id: ctx.ownerId,
             type_id: result.linkTypeId,
           },

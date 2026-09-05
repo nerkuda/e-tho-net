@@ -120,21 +120,34 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       break;
 
     case 'comment.created':
+      // Comments are sub-objects of a thought/link and do NOT change the
+      // focus response (parents/children/siblings/edges). Schedule a focus
+      // refresh here and the editor would re-render on every comment write
+      // anywhere in the neighbourhood — bug 206e33a1 «Бессмысленное
+      // обновление редактора при получении внешних событий»: typing in the
+      // comment field of an open thought would lose its in-progress edit to a
+      // focus-refresh round-trip on every remote comment event. The editor
+      // subscribes to `comment.*` itself and updates the open entity's
+      // comment view in place; the canvas indicator below the cloud was
+      // already invalidated by `invalidateIndicators`.
       invalidateIndicators(evt.data.comment.owner_id);
-      if (inNeighbourhood(evt.data.comment.owner_id)) scheduleRefresh();
       scheduleChronicleRefresh();
       break;
 
     case 'comment.deleted':
+      // Same reasoning as `comment.created`: never refresh focus for
+      // comment events. The canvas indicator cache is invalidated above; the
+      // editor's comment view is patched by its own listener.
       invalidateIndicators(evt.data.owner_id);
-      if (inNeighbourhood(evt.data.owner_id)) scheduleRefresh();
       scheduleChronicleRefresh();
       break;
 
     case 'comment.updated':
-      // The event carries no owner id — the editor listens itself; the canvas
-      // only cares about counts, so refresh lazily.
-      scheduleRefresh();
+      // Same reasoning as `comment.created`/`comment.deleted`: never refresh
+      // focus. The comment body lives on the entity, not in the focus
+      // neighbourhood. The editor owns the comment view for its open entity
+      // and updates it in place via its own `onRealtimeEvent` hook.
+      invalidateIndicators(null);
       scheduleChronicleRefresh();
       break;
 
@@ -145,8 +158,14 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
 
     case 'attachment.updated':
     case 'attachment.deleted':
+      // Same reasoning as `comment.*` (see above): attachments are
+      // sub-objects of a thought/link and never change the focus response.
+      // Calling `scheduleRefresh` here forced an unrelated store update on
+      // every remote attachment write, which in turn fired the editor's
+      // `store.subscribe` callback — bug 206e33a1. The canvas indicator
+      // cache is invalidated; the editor owns its own «Вложения» tab and
+      // updates it via its own realtime hook (attachments.ts).
       invalidateIndicators(null);
-      scheduleRefresh();
       break;
 
     case 'user-preference.updated':

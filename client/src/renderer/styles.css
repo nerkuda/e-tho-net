@@ -5125,6 +5125,36 @@ body.cloud-dragging * {
   cursor: default;
 }
 
+/* Task 92b89e6f: «Логирование» section — client/server journal controls. */
+.settings-logs-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.settings-logs-block-spaced {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-log-path {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.settings-log-files td {
+  font-size: 12px;
+}
+
+.settings-log-file-name {
+  overflow-wrap: anywhere;
+}
+
 .settings-error {
   margin-top: 8px;
 }

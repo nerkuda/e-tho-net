@@ -531,6 +531,58 @@ describe(
       }
     });
 
+    it('removes a half-open connection whose send fails (0.6.3 bugfix)', async () => {
+      running = await buildApp();
+      const ws = connect(running, running.networkId, running.owner.key, 'client-broken');
+      await waitForOpen(ws);
+      // Give the server a tick to register the connection.
+      await delay(50);
+      assert.equal(
+        running.app.realtimeGateway.connectionCount(),
+        1,
+        'precondition: the new connection must be registered',
+      );
+
+      // Forcibly tear down the underlying TCP socket to simulate a half-open
+      // connection (a reverse proxy killed the tunnel and the server has not
+      // yet observed the disconnect). This bypasses the WebSocket close
+      // handshake — the server's `readyState` may still report OPEN until
+      // the next send fails, which is the exact window the bug describes.
+      // @ts-expect-error - internal ws._socket is accessed for test purposes
+      ws._socket.destroy();
+
+      // Tiny delay so the OS propagates the RST to the server's TCP stack.
+      // Without it the publish below may land before the server notices the
+      // dead peer and the send would still appear to succeed (data sits in
+      // the send buffer). The 0.6.3 fix must handle the half-open case
+      // either way: terminate() on the send-error path, or the close
+      // handler if the RST races ahead.
+      await delay(50);
+
+      // Publish an event targeted at the network. The server tries to
+      // deliver it to the dead socket; either the send callback fires
+      // with EPIPE/ECONNRESET (new cleanup path) or the close event has
+      // already arrived (existing cleanup path). Both must end with the
+      // connection gone from every registry.
+      emitDomainEvent(
+        { systemDb: running.sys, pubsub: running.app.pubsub },
+        running.networkId,
+        'network.updated',
+        { display_name: 'After death' },
+        { user_id: running.owner.userId, client_id: 'someone-else' },
+      );
+
+      // Allow the send callback to fire and the close handler / terminate()
+      // chain to remove the connection from every registry.
+      await delay(500);
+
+      assert.equal(
+        running.app.realtimeGateway.connectionCount(),
+        0,
+        'half-open subscriber must not stay registered after a failed send',
+      );
+    });
+
     it('streams to two clients of one user independently, with per-client echo (E6)', async () => {
       running = await buildApp();
       const member = seedUser(running, 'member', running.networkId);

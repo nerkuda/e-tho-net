@@ -343,6 +343,25 @@ function buildApi(): EtnApi {
       openPath: (filePath: string) => invoke('system.openPath', filePath),
       openAttachmentFile: (filePath: string) => invoke('system.openAttachment', filePath),
       openExternal: (url: string) => invoke('system.openExternal', url),
+      // --- file journals (task f051bf95) ---
+      getClientLogState: () => invoke('system.getClientLogState'),
+      setClientLogging: (enabled: boolean) => invoke('system.setClientLogging', enabled),
+      openClientLog: () => invoke('system.openClientLog'),
+      deleteClientLogs: () => invoke('system.deleteClientLogs'),
+      getServerLogging: () => invoke('system.getServerLogging'),
+      setServerLogging: (enabled: boolean) => invoke('system.setServerLogging', enabled),
+      downloadServerLog: (filename?: string, savePath?: string) =>
+        invoke('system.downloadServerLog', filename, savePath),
+      openServerLog: () => invoke('system.openServerLog'),
+      deleteServerLogs: () => invoke('system.deleteServerLogs'),
+    },
+    /**
+     * Milestone-event bridge into the client file journal (task f051bf95):
+     * fire-and-forget, no invoke contract — main writes it as one INFO line
+     * (only while the journal flag is on, `data` truncated to ~200 chars).
+     */
+    logEvent(name: string, data?: unknown): void {
+      ipcRenderer.send('etn:log-event', { name, data });
     },
   };
 }

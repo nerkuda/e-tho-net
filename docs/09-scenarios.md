@@ -98,8 +98,9 @@
    контекстном меню этих зон (L19; владелец вызова — фокус).
 2. Ввод названия → живой поиск существующих → выбор строки найденной мысли
    (клик или Enter) или «Добавить» для создания новой.
-3. `POST /networks/{nid}/thoughts { title, ..., create_link: { direction: "child",
-   target_thought_id: focus_id, type_id } }`.
+3. `POST /networks/{nid}/thoughts { title, ..., create_link: { direction: "parent",
+   target_thought_id: focus_id, type_id } }` (`"parent"` — focus становится
+   родителем новой мысли, т.е. она подвешивается под фокус).
 4. Сервер создаёт мысль + связь в одной транзакции, эмитит `thought.created` +
    `link.created`.
 

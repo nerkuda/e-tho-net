@@ -97,35 +97,52 @@ export interface FilterPanelCallbacks {
   onCommands(anchor: HTMLElement): void;
 }
 
-/** Operators per property value type (03-server-api.md §6.10). */
-const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; label: string }>> = {
+/**
+ * Operators per property value type (03-server-api.md §6.10).
+ *
+ * `is_empty` / `not_empty` test for the presence of a value at all (the
+ * `value` payload is ignored). Available for every type EXCEPT `bool`: for
+ * booleans, `eq true` / `eq false` already cover the same intent, so an
+ * extra toggle would be redundant noise on a small list.
+ */
+export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; label: string }>> = {
   text: [
     { op: 'contains', label: 'содержит' },
     { op: 'eq', label: 'равно' },
     { op: 'in', label: 'в списке' },
     { op: 'not_in', label: 'не в списке' },
+    { op: 'not_empty', label: 'заполнено' },
+    { op: 'is_empty', label: 'не заполнено' },
   ],
   url: [
     { op: 'contains', label: 'содержит' },
     { op: 'eq', label: 'равно' },
     { op: 'in', label: 'в списке' },
     { op: 'not_in', label: 'не в списке' },
+    { op: 'not_empty', label: 'заполнено' },
+    { op: 'is_empty', label: 'не заполнено' },
   ],
   date: [
     { op: 'eq', label: 'равно' },
     { op: 'gt', label: 'больше' },
     { op: 'lt', label: 'меньше' },
+    { op: 'not_empty', label: 'заполнено' },
+    { op: 'is_empty', label: 'не заполнено' },
   ],
   number: [
     { op: 'eq', label: 'равно' },
     { op: 'gt', label: 'больше' },
     { op: 'lt', label: 'меньше' },
+    { op: 'not_empty', label: 'заполнено' },
+    { op: 'is_empty', label: 'не заполнено' },
   ],
   bool: [{ op: 'eq', label: 'равно' }],
   thought_ref: [
     { op: 'eq', label: 'равно' },
     { op: 'in', label: 'в списке' },
     { op: 'not_in', label: 'не в списке' },
+    { op: 'not_empty', label: 'заполнено' },
+    { op: 'is_empty', label: 'не заполнено' },
   ],
 };
 
@@ -246,6 +263,12 @@ export function buildConditions(): StructurePropertyCondition[] {
   for (const cond of state.properties) {
     const def = propertyDefs.get(cond.propertyId);
     if (def === undefined) continue; // property deleted — server skips it too
+    // `is_empty` / `not_empty` carry no value at all — emit the condition as
+    // soon as the row names a property (§6.10 presence test, bug fix 0.6.3).
+    if (cond.op === 'is_empty' || cond.op === 'not_empty') {
+      out.push({ property_id: cond.propertyId, op: cond.op, value: '' });
+      continue;
+    }
     const list = cond.op === 'in' || cond.op === 'not_in';
     const rawValues = list ? cond.values : cond.values.slice(0, 1);
     const values: Array<string | number | boolean> = [];
@@ -1269,6 +1292,10 @@ function buildValueEditor(
   const valueType = def?.value_type ?? 'text';
   const box = div('st-f-values');
   const isList = cond.op === 'in' || cond.op === 'not_in';
+  // `is_empty` / `not_empty` test for the presence of a value at all —
+  // the value editor is replaced with a hint so the row stays balanced
+  // (bug fix 0.6.3).
+  const isPresence = cond.op === 'is_empty' || cond.op === 'not_empty';
   const live = (): PropertyConditionState => state.properties[index] ?? cond;
   const setValue = (i: number, v: string): void => {
     const current = live();
@@ -1334,6 +1361,10 @@ function buildValueEditor(
     return input;
   };
 
+  if (isPresence) {
+    box.append(el('span', 'st-f-value-hint', 'значение не требуется'));
+    return box;
+  }
   if (!isList) {
     box.append(addScalar(0));
     return box;

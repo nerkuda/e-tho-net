@@ -15,6 +15,7 @@ import { ipcMain, type BrowserWindow } from 'electron';
 import { UI_STATE_KEY, type CurrentUser, type Network } from '@etn/shared';
 
 import type { LocalDb, ServerProfileRow } from '../db/local-db.js';
+import { getClientLog, truncateForLog } from '../log/client-log.js';
 import { decryptApiKey, encryptApiKey } from '../safe-storage.js';
 import { RestClient } from '../net/rest-client.js';
 import { RealtimeState } from '../realtime/applier.js';
@@ -22,6 +23,9 @@ import { TabRealtimePool } from '../realtime/tab-rt-pool.js';
 import { createHandlers, selfMutationNetwork } from './handlers.js';
 import { connectAndActivate } from './connect-active-profile.js';
 import type { IpcInvokePayload } from './contract.js';
+
+/** IPC calls slower than this are journaled as WARN instead of INFO (f051bf95 §3). */
+const IPC_SLOW_MS = 500;
 
 /** Options for {@link registerIpc}. */
 export interface RegisterIpcOptions {
@@ -221,9 +225,35 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   ipcMain.handle('etn:invoke', async (_event, payload: IpcInvokePayload) => {
     const handler = handlers.get(payload.method);
     if (!handler) {
+      getClientLog()?.error('ipc', 'unknown method', { method: payload.method });
       throw new Error(`Unknown IPC method: ${payload.method}`);
     }
-    const result = await handler(payload.args ?? []);
+    // Journal instrumentation (task f051bf95 §3): method + duration per call,
+    // slow calls (>IPC_SLOW_MS) as WARN, failures as ERROR (always written).
+    const startedAt = Date.now();
+    let result: unknown;
+    try {
+      result = await handler(payload.args ?? []);
+    } catch (err) {
+      getClientLog()?.error('ipc', 'ipc call failed', {
+        method: payload.method,
+        duration_ms: Date.now() - startedAt,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+    const durationMs = Date.now() - startedAt;
+    if (durationMs > IPC_SLOW_MS) {
+      getClientLog()?.warn('ipc', 'slow ipc call', {
+        method: payload.method,
+        duration_ms: durationMs,
+      });
+    } else {
+      getClientLog()?.info('ipc', 'ipc call', {
+        method: payload.method,
+        duration_ms: durationMs,
+      });
+    }
     // Own network mutation (08-ui-spec.md §2.2): the server suppresses own
     // echoes (04-realtime.md §5), so the renderer never hears about the write
     // over the realtime socket — flag it so the canvas layer-override marking
@@ -241,9 +271,22 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   const onRendererOnline = (): void => forceReconnectRealtime();
   ipcMain.on('etn:realtime:online', onRendererOnline);
 
+  // Milestone-event bridge from the renderer into the client file journal
+  // (task f051bf95 §3): fire-and-forget `{name, data?}` messages written as
+  // one INFO line (flag-gated, `data` truncated — no invoke contract).
+  const onRendererLogEvent = (_event: unknown, payload: unknown): void => {
+    const log = getClientLog();
+    if (log === null || payload === null || typeof payload !== 'object') return;
+    const { name, data } = payload as { name?: unknown; data?: unknown };
+    const eventName = typeof name === 'string' && name.trim() !== '' ? name : 'event';
+    log.info('renderer', eventName, { data: truncateForLog(data) });
+  };
+  ipcMain.on('etn:log-event', onRendererLogEvent);
+
   return {
     shutdown() {
       ipcMain.removeListener('etn:realtime:online', onRendererOnline);
+      ipcMain.removeListener('etn:log-event', onRendererLogEvent);
       disconnect();
     },
     /** Force-reconnect every pooled realtime socket (resume/online, 7f4cef31). */

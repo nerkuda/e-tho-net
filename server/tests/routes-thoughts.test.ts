@@ -41,10 +41,11 @@ describe(
     it('CRUD: create with link, read, patch with If-Match, delete', async () => {
       const ctx = await buildRestContext();
       try {
-        // Create a child of HOME with an inline link (direction=child).
+        // Create a child of HOME with an inline link (direction=parent: HOME
+        // becomes the new thought's parent).
         const childId = await createThought(ctx, {
           title: 'Ребёнок',
-          create_link: { direction: 'child', target_thought_id: ctx.homeId },
+          create_link: { direction: 'parent', target_thought_id: ctx.homeId },
         });
 
         const get = await ctx.app.inject({
@@ -132,7 +133,7 @@ describe(
       try {
         const childId = await createThought(ctx, {
           title: 'Фокус-ребёнок',
-          create_link: { direction: 'child', target_thought_id: ctx.homeId },
+          create_link: { direction: 'parent', target_thought_id: ctx.homeId },
         });
 
         const focusRes = await ctx.app.inject({
@@ -189,11 +190,11 @@ describe(
         const typedId = await createThought(ctx, {
           title: 'Типизированный',
           type_id: typeId,
-          create_link: { direction: 'child', target_thought_id: ctx.homeId },
+          create_link: { direction: 'parent', target_thought_id: ctx.homeId },
         });
         await createThought(ctx, {
           title: 'Обычный',
-          create_link: { direction: 'child', target_thought_id: ctx.homeId },
+          create_link: { direction: 'parent', target_thought_id: ctx.homeId },
         });
 
         const all = await ctx.app.inject({
@@ -220,6 +221,34 @@ describe(
           headers: authHeaders(ctx),
         });
         assert.equal(badDir.statusCode, 422);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    // Bug fix 0.6.3 (thought f2c7c7d3-f19d-4c98-a80e-db373848da94): `meta.total`
+    // used to echo the returned page's length, so a section with more
+    // children than the default page size (50) looked complete even though
+    // most were silently cut off — the caller had no signal to page further.
+    it('neighbors: meta.total reflects the real count, not the truncated page (bug f2c7c7d3)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        for (let i = 0; i < 55; i += 1) {
+          await createThought(ctx, {
+            title: `Person ${i}`,
+            create_link: { direction: 'parent', target_thought_id: ctx.homeId },
+          });
+        }
+
+        const res = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/neighbors?dir=children`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(res.statusCode, 200);
+        const body = res.json() as { data: unknown[]; meta: { total: number; limit: number } };
+        assert.equal(body.data.length, 50, 'page must still be capped at the default limit');
+        assert.equal(body.meta.total, 55, 'total must count every match, not just the returned page');
       } finally {
         await closeRestContext(ctx);
       }

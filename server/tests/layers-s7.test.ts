@@ -109,6 +109,10 @@ describe(
         assert.equal(created.comment, 'слой для задачи');
         assert.equal(created.created_by, ctx.adminId);
         assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(created.created_at));
+        // POST /layers must not switch the session: the freshly created layer
+        // is never `current` (fix for error 9b159e7a — it used to be `true`,
+        // contradicting the echoed `meta.layer`).
+        assert.equal(created.current, false);
 
         const after = await listLayers(ctx);
         assert.equal(after.length, 2);
@@ -195,6 +199,11 @@ describe(
         assert.equal(createdRes.statusCode, 201);
         assert.deepEqual(createdRes.json().meta.layer, { id: BASE_LAYER_ID, title: 'Основа' });
         const layer = createdRes.json().data as Layer;
+        // The created layer is NOT current — `meta.layer` (the session layer)
+        // is the base, so `current` must be false here (fix 9b159e7a).
+        assert.equal(layer.current, false);
+        assert.notEqual(layer.id, BASE_LAYER_ID);
+        assert.deepEqual(createdRes.json().meta.layer, { id: BASE_LAYER_ID, title: 'Основа' });
 
         // select — the echo becomes the newly selected layer.
         const selectRes = await ctx.app.inject({

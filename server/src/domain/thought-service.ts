@@ -424,9 +424,12 @@ function createLinkForNewThought(
       id: targetId,
     });
   }
-  // parent: new thought sources a link to target. child: target sources to new.
+  // parent: target sources a link to the new thought (new thought hangs
+  // under target). child: the new thought sources a link to target (new
+  // thought becomes target's parent). Unified with the MCP `link.direction`
+  // semantics (docs/03-server-api.md §6.3, docs/05-mcp-server.md §5.2).
   const [sourceId, linkTargetId] =
-    createLink.direction === 'parent' ? [newThoughtId, targetId] : [targetId, newThoughtId];
+    createLink.direction === 'parent' ? [targetId, newThoughtId] : [newThoughtId, targetId];
   const typeId = createLink.type_id ?? null;
   // Duplicate guard, NULL-safe on both sides (UNIQUE treats NULL as distinct).
   const dup = ndb
@@ -1115,6 +1118,35 @@ export function getNeighbors(
     .prepare(`${sql} LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as NeighborRow[];
   return rows.map(rowToNeighbor);
+}
+
+/**
+ * Count a thought's parents/children/siblings matching the same filters as
+ * {@link getNeighbors}, ignoring `limit`/`offset` (docs/03-server-api.md §6.7,
+ * bug fix 0.6.3). {@link getNeighbors} pages its result with a default
+ * `limit` of 50; without this companion count, callers had no way to tell a
+ * fully-returned neighbour list from one silently cut off at the page size —
+ * `GET /thoughts/{id}/neighbors` and `etn.thoughts.neighbors` both reported
+ * `total = returned.length`, so a thought with more neighbours than the page
+ * size looked complete when it was not (an agent walking the graph via
+ * neighbours could wrongly conclude the extra thoughts were orphaned).
+ *
+ * Reuses {@link buildNeighborsQuery} verbatim (wrapped in `COUNT(*)`) so the
+ * count and the page can never disagree on which rows match.
+ */
+export function countNeighbors(
+  ndb: NetworkDb,
+  thoughtId: string,
+  dir: FocusDir,
+  opts: NeighborOptions = {},
+): number {
+  if (!FOCUS_DIRS.includes(dir)) {
+    throw new EtnError('VALIDATION_ERROR', `invalid dir: ${String(dir)}`, { field: 'dir' });
+  }
+  const { sort, order } = resolveSortOrder(opts);
+  const { sql, params } = buildNeighborsQuery(dir, sort, order, opts, thoughtId);
+  const row = ndb.prepare(`SELECT COUNT(*) AS c FROM (${sql})`).get(...params) as { c: number };
+  return row.c;
 }
 
 /** Options for {@link focus}. */

@@ -471,21 +471,22 @@ POST /api/v1/networks/{nid}/thoughts
   icon?: "...", icon_kind?: "emoji"|"image",
   active?: true,                         # default true
   fg_color?, bg_color?, font_*?,
-  create_link?: {                        # сразу создать связь с родителем
-    direction: "parent"|"child",         # parent: новая мысль — источник к target_id
-    target_thought_id: "...",            # child: новая мысль — назначение для target_id
-    type_id?: "..."
+  create_link?: {                        # сразу создать связь с target_id
+    direction: "parent"|"child",         # роль target_id для НОВОЙ мысли
+    target_thought_id: "...",            # parent: новая мысль ПОД target
+    type_id?: "..."                      # child: новая мысль — родитель target
   }
 }
 → 201 { data: { id, ..., version: 1 }, meta: { request_id } }
 ```
 
-> **NB (баг-фикс 045):** одноимённое поле `direction` в MCP-инструментах
-> `etn.thoughts.create` (`link`) и `etn.thoughts.upsert_bundle` (`links[]`)
-> имеет **противоположную**, агент-ориентированную семантику: `"parent"` там
-> значит, что `target_thought_id` становится родителем НОВОЙ мысли. REST и
-> доменный слой свою семантику не меняли; MCP-слой переводит значение на
-> своей границе. Подробности — 05-mcp-server.md §5.2.
+`direction` называет роль `target_thought_id` для НОВОЙ мысли: `"parent"` —
+новая мысль подвешивается ПОД `target_thought_id` (target становится её
+родителем; типичный кейс — «создать мысль в разделе X»); `"child"` — новая
+мысль становится родителем `target_thought_id` (target подвешивается под
+неё). Та же семантика — в MCP-инструментах `etn.thoughts.create` (`link`) и
+`etn.thoughts.upsert_bundle` (`links[]`, см. 05-mcp-server.md §5.2): поле
+единое для REST и MCP, перевода значения на границе слоёв нет.
 
 Поведение дедупликации описано в [08-ui-spec.md](08-ui-spec.md), диалог добавления.
 На уровне API дедупликация НЕ выполняется — клиент предоставляет точное имя и
@@ -700,8 +701,9 @@ POST /api/v1/networks/{nid}/thoughts/query
                                   # (L21: поддерево, как type_ids)
                                   # в любом направлении (source или target)
   properties?: [                  # все условия объединяются по AND
-    { property_id: "...", op: "contains"|"eq"|"gt"|"lt"|"in"|"not_in",
-      value: "..." | 42 | true | ["Москва", "Воронеж"] }
+    { property_id: "...", op: "contains"|"eq"|"gt"|"lt"|"in"|"not_in"
+                            |"is_empty"|"not_empty",
+      value: "..." | 42 | true | ["Москва", "Воронеж"] | null }
   ],
   has_properties?: true|false,    # «Дополнительно»: есть/нет хотя бы одно
                                   # значение свойства у мысли; поле отсутствует
@@ -783,11 +785,19 @@ POST /api/v1/networks/{nid}/thoughts/query
   результат пуст (не HOME, фильтр не пуст).
 - **Операции свойств** применяются к колонке типа значения определения
   (`value_text/value_number/value_date/value_bool/value_thought_ref`); допустимые
-  `op` зависят от `value_type`: text/url — `contains|eq|in|not_in`;
-  number/date — `eq|gt|lt`; bool — `eq`; thought_ref — `eq|in|not_in`.
+  `op` зависят от `value_type`: text/url — `contains|eq|in|not_in|is_empty|not_empty`;
+  number/date — `eq|gt|lt|is_empty|not_empty`; bool — `eq`;
+  thought_ref — `eq|in|not_in|is_empty|not_empty`.
   `in`/`not_in` принимают массив значений (OR внутри списка). Для thought_ref
   `eq`/`in`/`not_in` сопоставляют и id внутри JSON-массивов множественных
   значений (`config.multiple`, 02-data-model.md §3.5), не только одиночные id.
+  `is_empty` / `not_empty` (bug fix 0.6.3) проверяют заполненность свойства:
+  `not_empty` — у мысли есть непустое значение (для text/url/number/date —
+  `IS NOT NULL` и `!= ''`; для thought_ref — также не `'[]'` и не `'null'`),
+  `is_empty` — обратное (нет строки в `property_values`, либо все элементы
+  массива `null`/пусты). Допустимы для всех типов, **кроме `bool`**: там
+  «заполнено» = `true`, «не заполнено» = `false` и покрываются `eq`. Для этих
+  операций поле `value` сервер игнорирует.
 - **`has_properties`/`has_comment`/`has_attachments`/`has_chronology`** — три
   состояния: `true` — только мысли с хотя бы одним значением/записью,
   `false` — только без них, поле не передано — критерий не участвует

@@ -88,8 +88,26 @@ export type SortOrder = (typeof SORT_ORDERS)[number];
 export const STRUCTURE_SORTS = ['alpha', 'created', 'viewed'] as const;
 export type StructureSort = (typeof STRUCTURE_SORTS)[number];
 
-/** Comparison ops of a structures property condition (03-server-api.md §6.10). */
-export const STRUCTURE_PROPERTY_OPS = ['eq', 'contains', 'gt', 'lt', 'in', 'not_in'] as const;
+/**
+ * Comparison ops of a structures property condition (03-server-api.md §6.10).
+ *
+ * `is_empty` / `not_empty` test for the presence of a property value at all:
+ * `is_empty` — the thought has no row in `property_values` for this property
+ * (or the row's value column is NULL/empty array — see spec); `not_empty` —
+ * the inverse. Available for every value type EXCEPT `bool`, because for
+ * `bool` the same intent is covered by `eq true` / `eq false`. The
+ * `value` payload is ignored for these operators.
+ */
+export const STRUCTURE_PROPERTY_OPS = [
+  'eq',
+  'contains',
+  'gt',
+  'lt',
+  'in',
+  'not_in',
+  'is_empty',
+  'not_empty',
+] as const;
 export type StructurePropertyOp = (typeof STRUCTURE_PROPERTY_OPS)[number];
 
 /**

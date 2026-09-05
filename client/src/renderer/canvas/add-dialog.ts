@@ -210,7 +210,11 @@ async function insertIntoCanvas(
             ctx.anchorId === null
               ? undefined
               : {
-                  direction: ctx.direction,
+                  // ctx.direction names the role of the NEW item relative to
+                  // the anchor ('parent' — new item becomes the anchor's
+                  // parent); create_link.direction names the role of the
+                  // TARGET (anchor) relative to the new thought — invert.
+                  direction: ctx.direction === 'parent' ? 'child' : 'parent',
                   target_thought_id: ctx.anchorId,
                   type_id: result.linkTypeId,
                 },
@@ -837,6 +841,11 @@ async function handleExternalDrop(direction: 'parent' | 'child', event: DragEven
   const networkId = store.state.networkId;
   const focusId = store.state.focus?.focused.id;
   if (networkId === null || focusId === undefined) return;
+  // `direction` names the role of the DROPPED (new) thought relative to
+  // focus ('parent' — dropped into the parents zone, becomes focus's
+  // parent); create_link.direction names the role of the TARGET (focus)
+  // relative to the new thought — invert.
+  const createLinkDirection = direction === 'parent' ? 'child' : 'parent';
 
   const urls = (event.dataTransfer?.getData('text/uri-list') ?? '')
     .split(/[\r\n]+/)
@@ -848,7 +857,7 @@ async function handleExternalDrop(direction: 'parent' | 'child', event: DragEven
     try {
       const thought = await etn.thoughts.create(networkId, {
         title: url,
-        create_link: { direction, target_thought_id: focusId },
+        create_link: { direction: createLinkDirection, target_thought_id: focusId },
       });
       // A null title lets the server's URL enrichment (L1) fill the site title;
       // the response then carries the title and the favicon (data: URL).
@@ -879,7 +888,7 @@ async function handleExternalDrop(direction: 'parent' | 'child', event: DragEven
       const path = (file as File & { path?: string }).path ?? file.name;
       const thought = await etn.thoughts.create(networkId, {
         title: file.name,
-        create_link: { direction, target_thought_id: focusId },
+        create_link: { direction: createLinkDirection, target_thought_id: focusId },
       });
       await etn.attachments.add(networkId, 'thought', thought.id, {
         kind: 'file',

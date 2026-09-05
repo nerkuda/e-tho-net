@@ -64,6 +64,7 @@ import { findBacklinks } from '../domain/backlinks-service.js';
 import { findDuplicates, findMentions } from '../domain/search-service.js';
 import {
   checkThoughtDeletion,
+  countNeighbors,
   createThought,
   deleteThought,
   focus,
@@ -456,14 +457,17 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const thought = createThought(ndb, input, req.auth!.user.id);
         deps.emit(req, networkId, 'thought.created', { thought });
         if (input.create_link) {
+          // Mirrors createLinkForNewThought's source/target calc (thought-service.ts):
+          // parent: target sources a link to the new thought; child: the new
+          // thought sources a link to target.
           const link = findLinksBetween(
             ndb,
             input.create_link.direction === 'parent'
-              ? thought.id
-              : input.create_link.target_thought_id,
-            input.create_link.direction === 'parent'
               ? input.create_link.target_thought_id
               : thought.id,
+            input.create_link.direction === 'parent'
+              ? thought.id
+              : input.create_link.target_thought_id,
             input.create_link.type_id,
           )[0];
           if (link) {
@@ -593,7 +597,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const offset = queryInt(query.offset, 0, { field: 'offset', min: 0, requestId: req.id });
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const neighbors = getNeighbors(ndb, id, dirRaw as FocusDir, {
+        const neighborOpts = {
           userId: req.auth!.user.id,
           showInactive: resolveShowInactive(
             app,
@@ -603,11 +607,15 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           ),
           sort: sortRaw as SortKind | undefined,
           order: orderRaw as SortOrder | undefined,
-          limit,
-          offset,
           typeId,
-        });
-        sendList(reply, neighbors, neighbors.length, offset, limit);
+        };
+        const neighbors = getNeighbors(ndb, id, dirRaw as FocusDir, { ...neighborOpts, limit, offset });
+        // Bug fix (0.6.3, thought f2c7c7d3): `total` used to echo the
+        // returned page's length, so a neighbour list longer than `limit`
+        // looked complete — no signal ever told the caller more rows exist.
+        // `countNeighbors` runs the identical WHERE without LIMIT/OFFSET.
+        const total = countNeighbors(ndb, id, dirRaw as FocusDir, neighborOpts);
+        sendList(reply, neighbors, total, offset, limit);
       },
     );
 

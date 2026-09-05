@@ -97,6 +97,7 @@ import {
 import {
   createThoughtWithWarnings,
   checkThoughtDeletion,
+  countNeighbors,
   deleteThought,
   getNeighbors,
   getThoughtOrThrow,
@@ -217,13 +218,12 @@ const TYPE_ID_TYPE_CONFLICT = 'provide at most one of type_id or type';
 
 /**
  * `direction` of an MCP inline link (`etn.thoughts.create` `link`,
- * `etn.thoughts.upsert_bundle` `links[]`), agent-facing semantics (bug fix
- * 045): the value names the role of `target_thought_id` relative to the NEW
- * thought. `parent` — attach the new thought UNDER the target (target becomes
- * its parent); `child` — the NEW thought becomes the parent of the target.
- * This is intentionally the opposite of the domain/REST `create_link`
- * direction (docs/03-server-api.md §6.3, where `parent` = the new thought is
- * the source); the MCP layer translates via {@link toDomainLinkDirection}.
+ * `etn.thoughts.upsert_bundle` `links[]`): the value names the role of
+ * `target_thought_id` relative to the NEW thought. `parent` — attach the new
+ * thought UNDER the target (target becomes its parent); `child` — the NEW
+ * thought becomes the parent of the target. Unified with the domain/REST
+ * `create_link` direction (docs/03-server-api.md §6.3) — both layers share
+ * the same semantics, no translation at the MCP boundary.
  */
 const LinkDirection = z
   .enum(['parent', 'child'])
@@ -232,17 +232,6 @@ const LinkDirection = z
       'UNDER target_thought_id (target becomes its parent); "child" — the NEW thought ' +
       'becomes the parent of target_thought_id.',
   );
-
-/**
- * Translate the agent-facing MCP direction (see {@link LinkDirection}) to the
- * domain/REST one accepted by `createThought`/`upsertThoughtBundle`, where
- * `parent` means the NEW thought is the link source (parent) and `child`
- * means the target is. Bug fix 045: keeps REST behaviour untouched while the
- * MCP contract becomes intuitive.
- */
-function toDomainLinkDirection(direction: 'parent' | 'child'): 'parent' | 'child' {
-  return direction === 'parent' ? 'child' : 'parent';
-}
 
 /** Optional link attached to a freshly created thought (§4.2). `type` (task
  *  O4) resolves a link type by `name_forward`/`name_reverse`, mutually
@@ -646,6 +635,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`). ' +
         'With `depth > 1` performs a bounded breadth-first walk returning resolved thoughts. ' +
+        'At `depth: 1` (default) the page is capped at 50 rows; `total`/`truncated` in the ' +
+        'response say whether more exist (bug fix 0.6.3) — page through the rest with ' +
+        '`etn.thoughts.query { in_subtree_of: <this id>, max_depth: 1 }` instead. ' +
         'Responses carry `link_types`/`thought_types` reference tables (name + AI-facing ' +
         'description) for the types actually used. `view: "compact"` (default, task O12) drops ' +
         'colours and line-style fields from the link-type catalogue and, for `depth > 1`, the ' +
@@ -660,9 +652,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const view: McpViewMode = args.view ?? 'compact';
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
-          const rawNeighbors = getNeighbors(ndb, args.thought_id, args.dir, {
-            userId: rt.deps.auth.userId,
-          });
+          const neighborOpts = { userId: rt.deps.auth.userId };
+          const rawNeighbors = getNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
           // `FocusNeighbor` carries no visual fields of its own (only `icon`,
           // which is semantic), so the only O12 effect at depth=1 is on the
           // link-type catalogue. Bug fix (§5.1e): sanitize the `icon` itself —
@@ -672,11 +663,21 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             view === 'full'
               ? linkTypeCatalog(ndb, neighbors.map((n) => n.link_type_id))
               : linkTypeCatalogCompact(ndb, neighbors.map((n) => n.link_type_id));
+          // Bug fix (0.6.3, thought f2c7c7d3): this tool has no limit/offset
+          // of its own and silently applied the domain default page size
+          // (50) — a thought with more neighbours than that looked complete,
+          // with nothing telling the agent otherwise. `total`/`truncated`
+          // give the same honesty `etn.thoughts.query` already has; use
+          // `etn.thoughts.query { in_subtree_of, max_depth: 1 }` to page
+          // through the rest when `truncated` is true.
+          const total = countNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
           return {
             thought: { id: thought.id, title: thought.title },
             dir: args.dir,
             depth: 1,
             neighbors,
+            total,
+            truncated: total > neighbors.length,
             link_types: linkTypes,
             thought_types: thoughtTypeCatalog(ndb, neighbors.map((n) => n.type_id)),
           };
@@ -1566,7 +1567,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetworkBase(rt, args.network_id);
-        const parent = args.parent_id ?? resolveRuntimeLayer(rt, args.network_id).id;
+        // Resolve the session layer once and reuse it both as the implicit
+        // parent (§2.3) and as the `current` reference for the response:
+        // creating a layer is not the same as switching to it (fix for
+        // error 9b159e7a — created.current was always `true`).
+        const sessionLayer = resolveRuntimeLayer(rt, args.network_id);
+        const parent = args.parent_id ?? sessionLayer.id;
         const layer = createLayer(ndb, {
           parentId: parent,
           title: args.title,
@@ -1578,7 +1584,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           title: args.title,
           parent_id: parent,
         });
-        return { ...layer, request_id: String(extra.requestId) };
+        return { ...layer, current: layer.id === sessionLayer.id, request_id: String(extra.requestId) };
       }),
   );
 
@@ -1843,10 +1849,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             ...(args.link === undefined
               ? {}
               : {
-                  // Bug fix 045: translate the agent-facing direction to the
-                  // domain/REST one (parent there = new thought is the source).
+                  // Domain/REST direction now matches the MCP one directly
+                  // (docs/03-server-api.md §6.3, docs/05-mcp-server.md §5.2).
                   create_link: {
-                    direction: toDomainLinkDirection(args.link.direction),
+                    direction: args.link.direction,
                     target_thought_id: args.link.target_thought_id,
                     type_id: linkTypeId ?? null,
                   },
@@ -1856,8 +1862,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         );
         emitAgentEvent(rt, args.network_id, 'thought.created', { thought }, extra.requestId);
         if (args.link !== undefined) {
-          // Bug fix 045: MCP "parent" — the TARGET is the link source (the
-          // new thought hangs under it); MCP "child" — the new thought is.
+          // "parent" — the TARGET is the link source (the new thought hangs
+          // under it); "child" — the new thought is the source.
           const [sourceId, targetId] =
             args.link.direction === 'parent'
               ? [args.link.target_thought_id, thought.id]
@@ -2755,9 +2761,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             : args.links.map((l) => {
                 const linkTypeId = effectiveLinkTypeId(ndb, l.type_id, l.type);
                 return {
-                  // Bug fix 045: translate the agent-facing direction to the
-                  // domain one (parent there = the bundle thought is the source).
-                  direction: toDomainLinkDirection(l.direction),
+                  // Domain/REST direction now matches the MCP one directly
+                  // (docs/03-server-api.md §6.3, docs/05-mcp-server.md §5.2).
+                  direction: l.direction,
                   target_thought_id: l.target_thought_id,
                   ...(linkTypeId === undefined ? {} : { type_id: linkTypeId }),
                 };

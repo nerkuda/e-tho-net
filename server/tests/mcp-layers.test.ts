@@ -53,6 +53,10 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
         // The echoed session layer (§7.1) is also still the base — creating
         // a layer is not the same as switching to it.
         assert.equal(created.layer.id, initialList[0]?.id);
+        // The freshly created layer is never `current` — `current` reflects
+        // the session's selected layer, and `etn.layers.create` does not
+        // switch the session (fix 9b159e7a: `current` used to be `true`).
+        assert.equal(created.current, false);
         const sandboxId = created.id;
 
         // --- Select it: every later call of THIS key runs in it. ---------

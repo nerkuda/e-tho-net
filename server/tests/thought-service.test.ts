@@ -20,6 +20,7 @@ import type { NetworkDb } from '../src/db/network-db.js';
 import { createAttachment } from '../src/domain/attachment-service.js';
 import {
   addSynonyms,
+  countNeighbors,
   createThought,
   deleteThought,
   focus,
@@ -146,9 +147,11 @@ describe(
         const ndb = createInMemoryNetworkDb();
         try {
           const parent = createThought(ndb, { title: 'Parent' }, USER);
+          // direction: 'parent' — target (parent) becomes the source of a
+          // link to the new thought (new thought hangs under target).
           const child = createThought(
             ndb,
-            { title: 'Child', create_link: { direction: 'child', target_thought_id: parent.id } },
+            { title: 'Child', create_link: { direction: 'parent', target_thought_id: parent.id } },
             USER,
           );
           const link = ndb.prepare('SELECT source_id, target_id FROM links').get() as {
@@ -623,6 +626,40 @@ describe(
             getNeighbors(ndb, a, 'children').map((n) => n.id),
             [b],
           );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      // Bug fix 0.6.3 (thought f2c7c7d3-f19d-4c98-a80e-db373848da94):
+      // `GET /thoughts/{id}/neighbors` reported `meta.total` as the returned
+      // page's length instead of the real match count, so a thought with
+      // more children than the default page size (50) looked complete even
+      // though most of them were silently cut off — the exact "agent thinks
+      // the rest were orphaned" failure the ticket describes. Re-run the
+      // same call several times in a row (as the reporting agent did) to
+      // pin down that the undercount is stable, not a one-off cache glitch.
+      it('countNeighbors reports the true match count beyond the default page size (bug f2c7c7d3)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const parent = seedThought(ndb, { title: 'Справочник персон' });
+          const childIds: string[] = [];
+          for (let i = 0; i < 65; i += 1) {
+            const child = seedThought(ndb, { title: `Person ${i}` });
+            seedLink(ndb, parent, child);
+            childIds.push(child);
+          }
+
+          for (let call = 0; call < 3; call += 1) {
+            const page = getNeighbors(ndb, parent, 'children');
+            const total = countNeighbors(ndb, parent, 'children');
+            // The page is capped at the domain default (50)…
+            assert.equal(page.length, 50, `call ${call}: unexpected page length`);
+            // …but the true count must still report all 65 every time, not
+            // silently collapse to the page length or to 0.
+            assert.equal(total, 65, `call ${call}: unexpected total`);
+            assert.ok(page.every((n) => childIds.includes(n.id)));
+          }
         } finally {
           ndb.close();
         }

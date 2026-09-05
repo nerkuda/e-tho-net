@@ -79,7 +79,7 @@ packaged-сборка использует общий `%APPDATA%\@etn\client`, d
 `%APPDATA%\@etn-dev`; явный `--user-data-dir` всегда имеет приоритет. Разные
 профили полностью изолированы (своя локальная БД, свои серверные профили,
 свои настройки окна) и могут работать одновременно: single-instance-блокировка
-(см. §7) привязана к `userData`, поэтому два профиля не вытесняют друг друга.
+(см. §8) привязана к `userData`, поэтому два профиля не вытесняют друг друга.
 Удаление каталога профиля «сбрасывает» клиент (все локальные настройки и
 ключи серверов).
 
@@ -197,6 +197,7 @@ API-key шифруется `safeStorage.encryptString(key)` перед запи�
 - `last_seq` — JSON-объект `{ [network_id]: <seq> }`, позиция в `event_log`
   сети. Обновляется по мере применения пришедших событий. per-client, не per-user
   (см. [11-settings-and-state.md](11-settings-and-state.md), п. 1.3).
+- `log_enabled` — `'true'`/`'false'`, флаг файлового журнала клиента (§7).
 - `theme`, `zoom`, `active_profile_id` — UI-настройки установки.
 
 ### 3.5. visit_history (история посещения мыслей, L4)
@@ -439,6 +440,23 @@ window.etn = {
     merge(networkId, layerId, tables?),
     diff(networkId, layerId), diffDoc(networkId, layerId),
   },
+  system: {                       // прочее: о программе, экспорт, файлы, журналы (§7)
+    appInfo(), health(), version(),
+    export(networkId, request), getJob(jobId), downloadExport(jobId, filename, targetPath?),
+    pickImage(), pickFile(), openPath(path), openAttachmentFile(path), openExternal(url),
+    getClientLogState(): Promise<ClientLogState>,   // §7: журнал клиента
+    setClientLogging(enabled: boolean): Promise<ClientLogState>,
+    openClientLog(): Promise<string>,               // '' или текст ошибки
+    deleteClientLogs(): Promise<DeleteLogsResult>,
+    getServerLogging(): Promise<SystemLoggingStatus>,   // §7: журнал сервера (REST)
+    setServerLogging(enabled: boolean): Promise<SystemLoggingStatus>,
+    downloadServerLog(filename?: string, savePath?: string),
+    openServerLog(): Promise<string>,
+    deleteServerLogs(): Promise<void>,
+  },
+  logEvent(name: string, data?: unknown): void,
+  // §7: milestone-события renderer → файловый журнал, fire-and-forget
+  // (отдельный лёгкий канал `etn:log-event`, без invoke-контракта)
   ui: {
     getState(networkId, key, tabId?): Promise<string | null>,
     setState(networkId, key, value, tabId?): Promise<void>,
@@ -456,7 +474,72 @@ window.etn = {
 > `tabs:dirty {tabId}` (realtime-событие для неактивного таба) и
 > `tabs:clean {tabId}` (активация) — для маркера «*».
 
-## 7. Жизненный цикл приложения
+## 7. Файловый журнал диагностики (главный процесс)
+
+Клиентская половина сквозной трассировки «запрос висел в сети vs сервер
+отвечал долго»: plain-text журнал main-процесса с теми же правилами, что у
+серверного (`server/src/log/file-log.ts`, подсистема «Логирование»), но
+собственным кодом — модуль `client/src/main/log/client-log.ts`.
+
+**Файлы.** Каталог `<userData>/logs/` (фактический путь — `--user-data-dir`
+и dev-профиль учитываются, т.к. журнал создаётся после резолва `userData`).
+Суточные файлы `client-YYYY-MM-DD.log` по **локальной** дате (сервер свои
+ведёт по UTC), ротация при смене суток, файлы старше 30 дней удаляются при
+старте и при каждой ротации. Формат строки идентичен серверному:
+
+```
+2026-09-04T12:34:56.789Z ERROR [rest] request failed method=GET path=/me status=500
+```
+
+**Флаг.** ERROR пишется **всегда** (журнал обязан фиксировать сбой, даже когда
+диагностика выключена); WARN/INFO/DEBUG — только при включённом флаге.
+Переключение само журналируется (WARN, минуя флаг — аудит включения/выключения
+не должен теряться самим фактом выключения). Значение флага — `client_meta.log_enabled`
+(§3.4): сохраняется при каждом изменении (из UI или параметром запуска) и без
+параметра запуска восстанавливается при старте.
+
+**Параметры запуска.** `--logging` (включить) и `--no-logging` (выключить)
+переопределяют сохранённое значение на этот запуск и фиксируются как последнее
+установленное. Матчатся только точные токены — Electron/Chromium добавляют
+свои аргументы (например, `--enable-logging`), префиксный матч дал бы ложные
+срабатывания; при обоих переключателях побеждает последний. Разбор —
+`parseLoggingArg` в `client/src/main/db/paths.ts` (по образцу
+`parseUserDataDirArg`).
+
+**Инструментирование** (INFO — при включённом флаге, ERROR — всегда):
+
+- старт приложения (версия, платформа, Electron, argv, каталог `userData`) и
+  завершение; необработанные ошибки main-процесса
+  (`uncaughtException`/`unhandledRejection`) — ERROR;
+- `RestClient`: каждая попытка запроса (метод, путь, attempt, длительность мс,
+  статус), причина ретрая (таймаут/сетевая/5xx) и пауза backoff, итоговая
+  ошибка после исчерпания попыток — ERROR;
+- IPC-вызовы (`etn:invoke`): имя метода + длительность; медленные (>500 мс) —
+  WARN, сбой обработчика — ERROR;
+- WebSocket: каждая смена статуса (`idle/connecting/connected/reconnecting/offline`),
+  планирование реконнекта (attempt, backoff мс), срабатывание receive-idle
+  watchdog, исчерпание бюджета реконнектов — ERROR;
+- мост из renderer: milestone-события UI — `window.etn.logEvent(name, data?)`
+  (канал `etn:log-event`, fire-and-forget) пишутся одной строкой INFO,
+  `data` сжимается в строку и обрезается до ~200 символов.
+
+Сбой записи журнала никогда не роняет процесс (ошибка уходит в stderr).
+
+**IPC-методы управления** (контракт — `EtnApi.system`, §6):
+
+| Метод | Что делает |
+|-------|-----------|
+| `system.getClientLogState()` | `{enabled, logFile, logDir}` клиента — без соединения с сервером |
+| `system.setClientLogging(enabled)` | переключает флаг, persist в `client_meta.log_enabled`, возвращает новое состояние |
+| `system.openClientLog()` | создаёт текущий суточный файл при отсутствии и открывает его (`shell.openPath`); `''` или текст ошибки |
+| `system.deleteClientLogs()` | удаляет все клиентские файлы журнала; текущий суточный — усекается |
+| `system.getServerLogging()` | `GET /system/logging` — состояние журнала сервера (admin) |
+| `system.setServerLogging(enabled)` | `PUT /system/logging` — переключить флаг журнала сервера (admin) |
+| `system.downloadServerLog(filename?, savePath?)` | скачать файл журнала сервера (`text/plain`); без имени — текущий файл, без пути — `showSaveDialog` |
+| `system.openServerLog()` | открыть текущий журнал сервера: локально существующий путь — напрямую, иначе скачивание в `os.tmpdir()` и открытие копии |
+| `system.deleteServerLogs()` | `DELETE /system/logs` — удалить все файлы журнала сервера (admin) |
+
+## 8. Жизненный цикл приложения
 
 1. Запуск → выбор активного профиля (или первоначальная настройка — ввод URL
    сервера + ключ).
@@ -481,14 +564,14 @@ window.etn = {
    → `etn.tabs.open(networkId)` + `etn.tabs.activate`. Закрытие последнего
    «настоящего» таба → возврат на экран списка сетей.
 
-## 8. Обновление приложения
+## 9. Обновление приложения
 
 - Electron + `electron-updater` для автообновления из GitHub Releases или
   собственного static-хоста. Подпись обновлений обязательна.
 - Обновление клиента независимо от сервера (но с проверкой совместимости через
   `GET /api/v1/version`).
 
-## 9. Платформы MVP
+## 10. Платформы MVP
 
 - Windows 10/11 x64.
 - macOS (Intel + Apple Silicon).
@@ -496,7 +579,7 @@ window.etn = {
 
 Сборка — `electron-builder`. Платформы и автоматизация CI — вне MVP-спецификации.
 
-## 10. Открытые вопросы
+## 11. Открытые вопросы
 
 - **Тёмная/светлая тема** — входит ли в MVP? Предлагаю: одна тема (светлая),
   тёмная — следующим шагом. Зафиксировать CSS-переменными с самого начала, чтобы

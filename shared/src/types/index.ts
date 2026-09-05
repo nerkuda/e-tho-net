@@ -22,6 +22,7 @@ export * from './pin.js';
 export * from './realtime.js';
 export * from './trash.js';
 export * from './layer.js';
+export * from './logging.js';
 export * from './api.js';
 export * from './mcp.js';
 export * from './etnx.js';

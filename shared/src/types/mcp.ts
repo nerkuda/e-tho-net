@@ -275,11 +275,11 @@ export interface McpCreateThoughtParams {
   active?: boolean;
   link?: {
     /**
-     * Role of `target_thought_id` for the NEW thought (bug fix 045):
+     * Role of `target_thought_id` for the NEW thought:
      * `parent` — attach the new thought UNDER the target (target becomes its
      * parent); `child` — the NEW thought becomes the parent of the target.
-     * NOTE: opposite of the REST `create_link.direction` (03-server-api.md
-     * §6.3) — the MCP layer translates at its boundary.
+     * Unified with the REST `create_link.direction` (03-server-api.md §6.3) —
+     * both layers share the same semantics, no translation at any boundary.
      */
     direction: 'parent' | 'child';
     target_thought_id: string;
@@ -445,11 +445,11 @@ export interface McpUpsertBundleParams {
   properties?: Record<string, PropertyValueValue>;
   links?: Array<{
     /**
-     * Role of `target_thought_id` for the bundle thought (bug fix 045):
+     * Role of `target_thought_id` for the bundle thought:
      * `parent` — attach the bundle thought UNDER the target (target becomes
      * its parent); `child` — the bundle thought becomes the parent of the
-     * target. NOTE: opposite of the domain/REST direction — the MCP layer
-     * translates at its boundary.
+     * target. Unified with the domain/REST direction — no translation at any
+     * boundary.
      */
     direction: 'parent' | 'child';
     target_thought_id: string;
