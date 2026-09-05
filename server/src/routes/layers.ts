@@ -4,7 +4,7 @@
  *
  *   GET    /networks/:networkId/layers                  — list (+hierarchy meta)
  *   POST   /networks/:networkId/layers                  — create under a parent
- *   PATCH  /networks/:networkId/layers/:layerId         — rename / edit comment
+ *   PATCH  /networks/:networkId/layers/:layerId         — rename / comment / colors
  *   DELETE /networks/:networkId/layers/:layerId?cascade=N — subtree delete
  *   POST   /networks/:networkId/layers/:layerId/select  — switch session layer
  *   POST   /networks/:networkId/layers/:layerId/merge   — merge into the parent (S8)
@@ -41,6 +41,7 @@ import {
   listLayers,
   setSessionLayer,
   updateLayer,
+  validateLayerColors,
 } from '../domain/layer-service.js';
 import { mergeLayer, type MergeSelection } from '../domain/merge-service.js';
 import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../domain/layer-diff-service.js';
@@ -93,6 +94,9 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         const explicitParent = fieldNullableString(body, 'parent_id', req.id);
         const comment = fieldNullableString(body, 'comment', req.id);
         const gitBranch = fieldNullableString(body, 'git_branch', req.id);
+        // Colour indication (0.6.4, §2.2a): the client passes creation
+        // defaults so a fresh layer is immediately visually distinct.
+        const colors = validateLayerColors(body.colors ?? null);
 
         const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
         // §2.3: «от указанного родителя (по умолчанию — текущий слой сессии)».
@@ -108,6 +112,7 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
           title,
           comment,
           gitBranch,
+          colors,
           createdBy: req.auth!.user.id,
         });
         const layerWithCurrent = { ...layer, current: layer.id === sessionLayer.id };
@@ -115,7 +120,8 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
     );
 
-    // --- Rename / edit comment (§2.2): base title is fixed (422).
+    // --- Rename / edit comment / replace colours (§2.2, §2.2a): base title is
+    // fixed (422), base never carries colours (422).
     app.patch(
       '/networks/:networkId/layers/:layerId',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
@@ -124,11 +130,15 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         const body = bodyObject(req.body, req.id);
         const title = fieldString(body, 'title', req.id);
         const comment = fieldNullableString(body, 'comment', req.id);
-        if (title === undefined && comment === undefined) {
+        // Full replacement of the whole colours object (or null → theme
+        // defaults); partial objects are rejected by the validator.
+        const hasColors = Object.prototype.hasOwnProperty.call(body, 'colors');
+        const colors = hasColors ? validateLayerColors(body.colors) : undefined;
+        if (title === undefined && comment === undefined && colors === undefined) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'нечего менять: передайте title и/или comment.',
-            { fields: ['title', 'comment'] },
+            'нечего менять: передайте title и/или comment и/или colors.',
+            { fields: ['title', 'comment', 'colors'] },
             req.id,
           );
         }
@@ -137,13 +147,23 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
           req.id,
         );
         const ndb = openRouteNetworkDbBase(deps, networkId, app.appLogger);
+        // PATCH must not switch the session either: `current` is computed
+        // against the real session layer, not against the edited layer's id
+        // (same pattern as the createLayer fix 9b159e7a — layer.current used
+        // to be always `true` here).
+        const sessionLayer = resolveRequestLayer(deps.dataDir, req, networkId, app.appLogger);
         const layer = updateLayer(
           ndb,
           layerId,
-          { ...(title !== undefined ? { title } : {}), ...(comment !== undefined ? { comment } : {}) },
+          {
+            ...(title !== undefined ? { title } : {}),
+            ...(comment !== undefined ? { comment } : {}),
+            ...(colors !== undefined ? { colors } : {}),
+          },
           expectedVersion,
         );
-        sendSuccess(reply, layer, { version: layer.version, updated_at: layer.last_activity_at });
+        const layerWithCurrent = { ...layer, current: layer.id === sessionLayer.id };
+        sendSuccess(reply, layerWithCurrent, { version: layer.version, updated_at: layer.last_activity_at });
       },
     );
 

@@ -9,7 +9,12 @@ import { describe, it } from 'node:test';
 
 import DatabaseConstructor from 'better-sqlite3';
 
-import { typeNameKey } from '@etn/shared';
+import {
+  splitCompoundTitle,
+  synonymPatternToRegex,
+  typeNameKey,
+  type MentionsScanMatch,
+} from '@etn/shared';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
@@ -1099,6 +1104,83 @@ describe(
         ndb.close();
       }
     });
+
+    it('findMentionsInTexts is case-insensitive, including the folding quirks ς/ſ/µ', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // Plain ASCII/Russian case first.
+        const alpha = seedThought(ndb, 'ProjectX');
+        // Then the characters where the `iu` regex (simple case folding) and
+        // toLowerCase() diverge: the prefilter must fold both sides with the
+        // same rules or these matches would be lost.
+        const greek = seedThought(ndb, 'σοφος'); // title ends with final sigma ς
+        const longS = seedThought(ndb, 'Wasser'); // text contains long s ſ
+        const micro = seedThought(ndb, 'μs'); // text contains micro sign µ
+        // 'σοφος' in the text ends with REGULAR σ while the title ends with
+        // final ς — the regex equates them via simple folding, so the
+        // prefilter must too.
+        const text = 'SEE PROJECTX: сказал σοφοσ, выпил Waſſer, заняло 5 µs';
+        const matches = findMentionsInTexts(ndb, [text], { showInactive: false })[0]!;
+        const matched = new Set(matches.flatMap((m) => m.thoughts.map((th) => th.id)));
+        assert.deepEqual(
+          [...matched].sort(),
+          [alpha, greek, longS, micro].sort(),
+          'all four thoughts match regardless of case and folding quirks',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentionsInTexts requires adjacency for multi-word literal synonyms', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Пётр Иванов');
+        seedSynonym(ndb, t, 'Петр Иванов');
+        const adjacent = findMentionsInTexts(ndb, ['встретил Петр Иванов вчера'], {
+          showInactive: false,
+        })[0]!;
+        assert.equal(adjacent.length, 1);
+        assert.equal(adjacent[0]!.thoughts[0]!.id, t);
+        const apart = findMentionsInTexts(ndb, ['встретил Петр и Иванов вчера'], {
+          showInactive: false,
+        })[0]!;
+        assert.equal(apart.length, 0, 'words present separately must not match');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentionsInTexts matches a wildcard-only synonym to every word', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Звёздочка');
+        seedSynonym(ndb, t, '*'); // no literal markers at all — always passes to the regex
+        const matches = findMentionsInTexts(ndb, ['abc def'], { showInactive: false })[0]!;
+        assert.equal(matches.length, 2, 'each word of the text matches');
+        assert.ok(matches.every((m) => m.thoughts.some((th) => th.id === t)));
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentionsInTexts matches a trailing compound-title part that still contains dots', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'a.b.c.d.e'); // 5 parts: the tail part is 'd.e'
+        const [dotted] = findMentionsInTexts(ndb, ['значение d.e указано'], {
+          showInactive: false,
+        });
+        assert.equal(dotted!.length, 1, 'the dotted tail part matches as a whole');
+        assert.equal(dotted![0]!.thoughts[0]!.id, t);
+        const [glued] = findMentionsInTexts(ndb, ['значение xd.ey указано'], {
+          showInactive: false,
+        });
+        assert.equal(glued!.length, 0, 'd and e glued inside bigger words do not match');
+      } finally {
+        ndb.close();
+      }
+    });
   },
 );
 
@@ -1132,5 +1214,195 @@ describe('makeSnippet — окно не разрезает wiki-ссылки (pu
     assert.ok(snippet.startsWith('…'), snippet);
     assert.ok(snippet.endsWith('…'), snippet);
     assert.ok(!snippet.includes('[['), snippet);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Behavioural parity of the optimised §21 scan (prefilter + lazy regex
+// compilation) against the pre-optimisation algorithm: a verbatim reference
+// copy of the old findMentionsInTexts (per pattern×text RegExp
+// recompilation, no prefilter). The optimisation must not change a single
+// match.
+// ---------------------------------------------------------------------------
+
+interface ReferenceCandidate {
+  id: string;
+  title: string;
+  active: boolean;
+  patterns: Array<{ re: RegExp; priority: number }>;
+}
+
+interface ReferenceSpan {
+  start: number;
+  end: number;
+  candidate: ReferenceCandidate;
+  priority: number;
+}
+
+function referenceResolveMentionSpans(raw: ReferenceSpan[]): MentionsScanMatch[] {
+  const sorted = [...raw].sort(
+    (a, b) => b.end - b.start - (a.end - a.start) || a.start - b.start,
+  );
+  interface Group {
+    start: number;
+    end: number;
+    thoughts: Map<string, { id: string; title: string; active: boolean; priority: number }>;
+  }
+  const groups: Group[] = [];
+  for (const span of sorted) {
+    const exact = groups.find((g) => g.start === span.start && g.end === span.end);
+    if (exact) {
+      const existing = exact.thoughts.get(span.candidate.id);
+      if (existing === undefined || span.priority < existing.priority) {
+        exact.thoughts.set(span.candidate.id, {
+          id: span.candidate.id,
+          title: span.candidate.title,
+          active: span.candidate.active,
+          priority: span.priority,
+        });
+      }
+      continue;
+    }
+    const overlapsExisting = groups.some((g) => span.start < g.end && g.start < span.end);
+    if (overlapsExisting) continue;
+    groups.push({
+      start: span.start,
+      end: span.end,
+      thoughts: new Map([
+        [
+          span.candidate.id,
+          {
+            id: span.candidate.id,
+            title: span.candidate.title,
+            active: span.candidate.active,
+            priority: span.priority,
+          },
+        ],
+      ]),
+    });
+  }
+  groups.sort((a, b) => a.start - b.start);
+  return groups.map((g) => ({
+    start: g.start,
+    end: g.end,
+    thoughts: [...g.thoughts.values()]
+      .sort((a, b) => a.priority - b.priority || a.title.localeCompare(b.title))
+      .slice(0, 5)
+      .map((t) => ({ id: t.id, title: t.title, active: t.active })),
+  }));
+}
+
+/** The old §21 scan, kept verbatim (minus types) as the parity oracle. */
+function referenceFindMentionsInTexts(
+  ndb: NetworkDb,
+  texts: string[],
+  opts: { showInactive: boolean; excludeThoughtId?: string },
+): MentionsScanMatch[][] {
+  const thoughtRows = ndb
+    .prepare('SELECT id, title, active FROM thoughts_v WHERE :show_inactive OR active = 1')
+    .all({ show_inactive: opts.showInactive ? 1 : 0 }) as Array<{
+    id: string;
+    title: string;
+    active: number;
+  }>;
+  const thoughts = thoughtRows.filter((t) => t.id !== opts.excludeThoughtId);
+  if (thoughts.length === 0) return texts.map(() => []);
+
+  const synRows = ndb.prepare('SELECT thought_id, synonym FROM thought_synonyms_v').all() as Array<{
+    thought_id: string;
+    synonym: string;
+  }>;
+  const synonymsByThought = new Map<string, string[]>();
+  for (const r of synRows) {
+    const list = synonymsByThought.get(r.thought_id);
+    if (list) list.push(r.synonym);
+    else synonymsByThought.set(r.thought_id, [r.synonym]);
+  }
+
+  const candidates: ReferenceCandidate[] = [];
+  for (const t of thoughts) {
+    const patterns: Array<{ re: RegExp; priority: number }> = [];
+    for (const part of splitCompoundTitle(t.title)) {
+      patterns.push({ re: synonymPatternToRegex(part), priority: 0 });
+    }
+    for (const syn of synonymsByThought.get(t.id) ?? []) {
+      patterns.push({ re: synonymPatternToRegex(syn), priority: syn.includes('*') ? 2 : 1 });
+    }
+    if (patterns.length === 0) continue;
+    candidates.push({ id: t.id, title: t.title, active: t.active === 1, patterns });
+  }
+
+  return texts.map((text) => {
+    const raw: ReferenceSpan[] = [];
+    for (const candidate of candidates) {
+      for (const pattern of candidate.patterns) {
+        const re = new RegExp(pattern.re.source, `${pattern.re.flags}g`);
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(text)) !== null) {
+          if (m[0].length === 0) {
+            re.lastIndex += 1;
+            continue;
+          }
+          const start = m.index + (m.index > 0 ? 1 : 0);
+          const end = m.index + m[0].length;
+          if (end > start) raw.push({ start, end, candidate, priority: pattern.priority });
+        }
+      }
+    }
+    return referenceResolveMentionSpans(raw);
+  });
+}
+
+describe('findMentionsInTexts — паритет оптимизированного скана со старым алгоритмом', () => {
+  it('префильтр и кэш регекспов не меняют ни одного матча', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const excluded = seedThought(ndb, 'Проект Ноль');
+      seedThought(ndb, 'Alpha Beta');
+      seedThought(ndb, 'Проект.Гамма.Дельта.Эпсилон.Дзета'); // 5 частей — хвост с точкой
+      seedThought(ndb, 'C++');
+      seedThought(ndb, 'σοφος'); // ends with final sigma ς
+      seedThought(ndb, 'Wasser');
+      seedThought(ndb, 'μs');
+      seedThought(ndb, 'Призрак', { active: 0 });
+
+      const petrov = seedThought(ndb, 'Петров Игорь');
+      seedSynonym(ndb, petrov, 'Игорь Петров'); // литеральный многословный
+      seedSynonym(ndb, petrov, 'Петров* Игор*'); // wildcard-фраза
+      seedSynonym(ndb, petrov, 'И*гор*'); // wildcard внутри слова
+      const star = seedThought(ndb, 'Звёздочка');
+      seedSynonym(ndb, star, '*'); // совсем без литеральных маркеров
+      seedSynonym(ndb, seedThought(ndb, 'Заметка 42'), 'сноска d.e'); // слово с точкой
+      seedSynonym(ndb, seedThought(ndb, 'Стройка'), 'ſoft*'); // chunk с длинной s
+
+      const texts = [
+        'см. Alpha Beta и (Alpha, Beta) но не AlphaBeta',
+        'Проект Гамма и Дельта; хвост Эпсилон.Дзета уместен',
+        'написано на C++ быстро, σοφος сказал Waſſer и 5 µs',
+        'СОФОС, WASSER и про Призрака',
+        'встретил Игорь Петров, потом Петровым Игорем, затем Игоряна',
+        'любые слова: сноска d.e, ſoftserve, звёзд',
+        'значение d-e и soft skills',
+        '',
+        '… — !!!',
+      ];
+      const withExclude = { showInactive: false, excludeThoughtId: excluded };
+      assert.deepEqual(
+        findMentionsInTexts(ndb, texts, withExclude),
+        referenceFindMentionsInTexts(ndb, texts, withExclude),
+      );
+      const showInactive = { showInactive: true };
+      assert.deepEqual(
+        findMentionsInTexts(ndb, texts, showInactive),
+        referenceFindMentionsInTexts(ndb, texts, showInactive),
+      );
+      const expected = referenceFindMentionsInTexts(ndb, texts, showInactive);
+      assert.ok(
+        expected.some((r) => r.length > 0),
+        'синтетика реально что-то матчит (иначе паритет тривиален)',
+      );
+    } finally {
+      ndb.close();
+    }
   });
 });

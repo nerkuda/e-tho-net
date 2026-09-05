@@ -43,14 +43,20 @@
 import {
   buildLikePattern,
   EtnError,
+  foldCase,
+  mentionPrefilterMarkers,
+  mentionPrefilterPass,
   parseFilterKeywords,
   regexEscape,
   SEARCH_SCOPES,
   splitCompoundTitle,
+  splitMentionWords,
+  synonymPatternSource,
   synonymPatternToRegex,
   TRAVERSAL_DEFAULTS,
   type IconKind,
   type MentionHit,
+  type MentionPrefilterMarkers,
   type MentionsScanMatch,
   type SearchChronoHit,
   type SearchLinkHit,
@@ -1380,13 +1386,57 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
 // Public: findMentionsInTexts (auto-annotation of comment view text, §21)
 // ---------------------------------------------------------------------------
 
-/** A candidate thought with its compiled matcher patterns. */
+/** A candidate thought with its matcher patterns. */
 interface MentionCandidate {
   id: string;
   title: string;
   active: boolean;
-  /** `priority`: 0 — a compound-title part (§2.2.3), 1 — literal synonym, 2 — wildcard synonym. */
-  patterns: Array<{ re: RegExp; priority: number }>;
+  patterns: MentionScanPattern[];
+}
+
+/**
+ * One matcher pattern of a scan candidate: the raw term (a compound-title
+ * part or a synonym) and its literal prefilter markers. The matcher regex
+ * itself is not stored here — see {@link scanRegexFor}: compiling a fresh
+ * Unicode regex for every pattern×text pair is what used to freeze the whole
+ * event loop for tens of seconds on a 700-thought network (the §21 scan is
+ * fully synchronous), so regex work is bounded by the shared compile cache,
+ * and most patterns never run a regex at all — the markers reject them first.
+ */
+interface MentionScanPattern {
+  term: string;
+  /** 0 — compound-title part (§2.2.3), 1 — literal synonym, 2 — wildcard synonym. */
+  priority: number;
+  markers: MentionPrefilterMarkers;
+}
+
+/**
+ * Cross-scan cache of global matcher regexes, keyed by the raw pattern term.
+ * A scan is repeated on every comment view redraw, and the terms are stable
+ * between edits, so a compile is paid at most once per process per term
+ * (instead of once per pattern×text pair, or even once per scan). The cache
+ * is capped; when full it is cleared wholesale — terms are cheap to recompile
+ * and a per-entry LRU would cost more than it saves. Shared `RegExp` objects
+ * are safe here: the scan is synchronous, and `lastIndex` is reset before
+ * every use.
+ */
+const scanRegexCache = new Map<string, RegExp>();
+const SCAN_REGEX_CACHE_MAX = 8192;
+
+/** Returns the global matcher for `term`, compiling it at most once per process. */
+function scanRegexFor(term: string): RegExp {
+  let re = scanRegexCache.get(term);
+  if (re === undefined) {
+    if (scanRegexCache.size >= SCAN_REGEX_CACHE_MAX) scanRegexCache.clear();
+    re = new RegExp(synonymPatternSource(term), 'iug');
+    scanRegexCache.set(term, re);
+  }
+  return re;
+}
+
+/** Builds one scan pattern: term + prefilter markers, regex comes from the cache. */
+function makeScanPattern(term: string, priority: number): MentionScanPattern {
+  return { term, priority, markers: mentionPrefilterMarkers(term) };
 }
 
 /** Builds matcher candidates for every eligible thought of the network. */
@@ -1417,12 +1467,12 @@ function buildMentionCandidates(
 
   const candidates: MentionCandidate[] = [];
   for (const t of thoughts) {
-    const patterns: Array<{ re: RegExp; priority: number }> = [];
+    const patterns: MentionScanPattern[] = [];
     for (const part of splitCompoundTitle(t.title)) {
-      patterns.push({ re: synonymPatternToRegex(part), priority: 0 });
+      patterns.push(makeScanPattern(part, 0));
     }
     for (const syn of synonymsByThought.get(t.id) ?? []) {
-      patterns.push({ re: synonymPatternToRegex(syn), priority: syn.includes('*') ? 2 : 1 });
+      patterns.push(makeScanPattern(syn, syn.includes('*') ? 2 : 1));
     }
     if (patterns.length === 0) continue;
     candidates.push({ id: t.id, title: t.title, active: t.active === 1, patterns });
@@ -1506,9 +1556,15 @@ function resolveMentionSpans(raw: RawSpan[]): MentionsScanMatch[] {
  * block-level element of a comment being viewed). Matchable terms per thought
  * are its compound-title parts (docs/08-ui-spec.md §2.2.3 — a title without
  * commas is a single part) and its synonyms (wildcard `*` per
- * docs/02-data-model.md §3.2); both go through the same
- * {@link synonymPatternToRegex}, since it already implements the exact
- * word-boundary/adjacency semantics for literal terms too.
+ * docs/02-data-model.md §3.2); both go through the same pattern semantics
+ * ({@link synonymPatternSource}), since it already implements the exact
+ * word-boundary/adjacency rules for literal terms too.
+ *
+ * Performance: per text, every pattern first passes a cheap conservative
+ * prefilter ({@link mentionPrefilterPass} — folded word-token set + folded
+ * substring markers), and only surviving patterns run the regex. Matcher
+ * regexes come from a shared compile cache ({@link scanRegexFor}) and their
+ * `lastIndex` is reset before every pass — see {@link MentionScanPattern}.
  */
 export function findMentionsInTexts(
   ndb: NetworkDb,
@@ -1519,9 +1575,15 @@ export function findMentionsInTexts(
   if (candidates.length === 0) return texts.map(() => []);
   return texts.map((text) => {
     const raw: RawSpan[] = [];
+    // Per-text prefilter inputs, computed once: the folded text for
+    // substring markers and the folded word-token set for word markers.
+    const foldedText = foldCase(text);
+    const foldedWords = new Set(splitMentionWords(text).map(foldCase));
     for (const candidate of candidates) {
       for (const pattern of candidate.patterns) {
-        const re = new RegExp(pattern.re.source, `${pattern.re.flags}g`);
+        if (!mentionPrefilterPass(pattern.markers, foldedText, foldedWords)) continue;
+        const re = scanRegexFor(pattern.term);
+        re.lastIndex = 0;
         let m: RegExpExecArray | null;
         while ((m = re.exec(text)) !== null) {
           if (m[0].length === 0) {

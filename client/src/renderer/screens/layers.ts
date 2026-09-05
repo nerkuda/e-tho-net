@@ -16,16 +16,20 @@
  * the textual diff of two deterministically assembled documents.
  */
 
-import { BASE_LAYER_ID, type Layer, type LayerDiffResult, type LayerMergeReport } from '@etn/shared';
+import { BASE_LAYER_ID, type Layer, type LayerColors, type LayerDiffResult, type LayerMergeReport } from '@etn/shared';
 
 import { etn } from '../lib/etn.js';
 import { closeMenu, MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { errorDialog, field, showDialog } from '../lib/dialog.js';
 import { button, div, el, span } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';
+import {
+  defaultLayerColors,
+  invertThemeColor,
+} from '../lib/layer-colors.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { resyncAfterLayerSwitch } from '../app.js';
-import { store, requireNetworkId } from '../state.js';
+import { store, requireNetworkId, type Theme } from '../state.js';
 import { upsertTab } from './tabs/tab-state.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { lineDiff } from '../lib/diff.js';
@@ -264,14 +268,49 @@ export function initLayerOverridesTracking(): void {
   });
 }
 
+/** One «picker + hex field» row of the layer-colours editor (0.6.4 §2.2a).
+ *  The native colour input carries the visual picking; the hex field accepts
+ *  exact values; both stay in sync. */
+function colorPickerRow(label: string, initial: string): {
+  root: HTMLElement;
+  get: () => string;
+} {
+  const picker = el('input', 'color-input') as HTMLInputElement;
+  picker.type = 'color';
+  picker.value = initial;
+  const hex = el('input', 'text-input layer-color-hex') as HTMLInputElement;
+  hex.value = initial;
+  picker.addEventListener('input', () => {
+    hex.value = picker.value;
+  });
+  hex.addEventListener('change', () => {
+    const trimmed = hex.value.trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) picker.value = trimmed.toLowerCase();
+    else hex.value = picker.value;
+  });
+  const row = div('layer-color-row');
+  row.append(picker, hex);
+  const wrap = field(label, row);
+  return {
+    root: wrap,
+    get: () => picker.value.toLowerCase(),
+  };
+}
+
 /**
  * Layer properties dialog (§10.1, matrix §15 «Править комментарий слоя»):
  * rename and/or edit the comment. The base title is fixed (input disabled) —
- * only its comment is editable.
+ * only its comment is editable. Non-base layers also edit their colour
+ * indication (0.6.4 §2.2a): two colours for the CURRENT theme, always active
+ * — no on/off switch (colours exist to tell the layer apart, picking them
+ * applies them); the opposite theme's pair is computed on save by flipping
+ * HSL lightness. The base layer hides the colour fields — it always uses the
+ * theme defaults.
  */
 function openLayerPropsDialog(networkId: string, layerId: string): void {
   const layer = store.state.layers.find((l) => l.id === layerId);
   if (layer === undefined) return;
+  const theme: Theme = store.state.theme;
 
   const titleInput = el('input', 'text-input') as HTMLInputElement;
   titleInput.value = layer.title;
@@ -281,6 +320,23 @@ function openLayerPropsDialog(networkId: string, layerId: string): void {
 
   const body = div('form-stack');
   body.append(field('Название', titleInput), field('Комментарий', commentInput));
+
+  // Colour indication (0.6.4): only for non-base layers.
+  const themeLabel = theme === 'dark' ? 'тёмной' : 'светлой';
+  let stripeRow: ReturnType<typeof colorPickerRow> | null = null;
+  let bgRow: ReturnType<typeof colorPickerRow> | null = null;
+  if (!layer.is_base) {
+    const defaults = defaultLayerColors();
+    const initialStripe = layer.colors?.focus_stripe[theme] ?? defaults.focus_stripe[theme];
+    const initialBg = layer.colors?.background[theme] ?? defaults.background[theme];
+    stripeRow = colorPickerRow('Полоса фокуса', initialStripe);
+    bgRow = colorPickerRow('Фон холста', initialBg);
+    const hint = div('layer-hint');
+    hint.textContent = `Цвета для ${themeLabel} темы; второй вариант вычисляется инверсией светлоты.`;
+    const colorsBlock = div('form-stack layer-colors-block');
+    colorsBlock.append(hint, stripeRow.root, bgRow.root);
+    body.append(colorsBlock);
+  }
 
   showDialog({
     title: layer.is_base ? 'Свойства основы' : `Свойства слоя «${layer.title}»`,
@@ -295,6 +351,21 @@ function openLayerPropsDialog(networkId: string, layerId: string): void {
           const title = titleInput.value.trim();
           const comment = commentInput.value.trim();
           if (!layer.is_base && title.length === 0) return;
+          // Colours: `undefined` — untouched, an object — the picked pair
+          // plus the inverted opposite theme (§2.2a). There is no «off»
+          // switch anymore: the shown pair is always what gets saved, so a
+          // layer without stored colours picks up the shown defaults.
+          let colors: LayerColors | undefined;
+          if (stripeRow !== null && bgRow !== null) {
+            const next: LayerColors = {
+              focus_stripe: invertThemeColor(
+                { dark: stripeRow.get(), light: stripeRow.get() },
+                theme,
+              ),
+              background: invertThemeColor({ dark: bgRow.get(), light: bgRow.get() }, theme),
+            };
+            if (JSON.stringify(next) !== JSON.stringify(layer.colors)) colors = next;
+          }
           try {
             const updated = await etn.layers.update(
               networkId,
@@ -302,6 +373,7 @@ function openLayerPropsDialog(networkId: string, layerId: string): void {
               {
                 ...(layer.is_base || title === layer.title ? {} : { title }),
                 ...(comment === (layer.comment ?? '') ? {} : { comment: comment.length > 0 ? comment : null }),
+                ...(colors !== undefined ? { colors } : {}),
               },
               layer.version,
             );
@@ -329,11 +401,15 @@ function openLayerPropsDialog(networkId: string, layerId: string): void {
   const body = div('form-stack');
   const hint = div('layer-hint');
   hint.append('Правки останутся в слое. Основа не изменится, пока вы не сольёте слой.');
+  const colorsHint = div('layer-hint');
+  colorsHint.textContent =
+    'Новый слой получит собственные цвета карты (полоса фокуса и фон), чтобы его было видно; их можно поменять в «Свойствах слоя».';
   body.append(
     hint,
     field('Название', titleInput),
     field('Комментарий', commentInput),
     field('Ветка git', branchInput),
+    colorsHint,
   );
 
   showDialog({
@@ -351,10 +427,14 @@ function openLayerPropsDialog(networkId: string, layerId: string): void {
           const comment = commentInput.value.trim();
           const gitBranch = branchInput.value.trim();
           try {
+            // Creation defaults (0.6.4 §2.2a): the layer is immediately
+            // visually distinct from the base; the opposite theme's pair is
+            // the lightness inversion of these.
             const layer = await etn.layers.create(networkId, {
               title,
               ...(comment.length > 0 ? { comment } : {}),
               ...(gitBranch.length > 0 ? { git_branch: gitBranch } : {}),
+              colors: defaultLayerColors(),
             });
             close();
             await selectLayerForTab(networkId, layer.id);

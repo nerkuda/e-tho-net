@@ -14,7 +14,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { BASE_LAYER_ID, EtnError, type Layer, type LayerDeleteResult } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError, type Layer, type LayerColors, type LayerDeleteResult } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { purgeTrash } from './trash-service.js';
@@ -25,6 +25,9 @@ export const MAX_LAYER_DEPTH = 4;
 /** Title/comment/git-branch length limit, mirrors `display_name` of networks. */
 const TITLE_LIMIT = 200;
 
+/** `#rrggbb` hex colour of the layer indication (0.6.4, §2.2a). */
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
 /** Row shape of the physical `layers` table. */
 interface LayerRow {
   id: string;
@@ -32,6 +35,7 @@ interface LayerRow {
   title: string;
   comment: string | null;
   git_branch: string | null;
+  colors: string | null;
   is_service: number;
   is_base: number;
   depth: number;
@@ -50,7 +54,7 @@ function nowSeconds(): string {
 function layerRow(ndb: NetworkDb, id: string): LayerRow | undefined {
   return ndb
     .prepare(
-      `SELECT id, parent_id, title, comment, git_branch, is_service, is_base,
+      `SELECT id, parent_id, title, comment, git_branch, colors, is_service, is_base,
               depth, created_by, created_at, last_activity_at, version
        FROM layers WHERE id = ? LIMIT 1`,
     )
@@ -72,6 +76,95 @@ function childrenCounts(ndb: NetworkDb): Map<string, number> {
   return new Map(rows.map((r) => [r.root, r.children_count]));
 }
 
+/**
+ * Parses the stored `layers.colors` JSON into the wire {@link LayerColors}.
+ * Written by this service only, so a malformed value means external tampering
+ * — degrade to `null` (theme defaults) instead of failing every read.
+ */
+function parseLayerColors(raw: string | null): LayerColors | null {
+  if (raw === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (isLayerColors(parsed)) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Runtime shape check of a {@link LayerColors} object (all fields present). */
+function isLayerColors(value: unknown): value is LayerColors {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    isThemeColor(v['focus_stripe']) &&
+    isThemeColor(v['background'])
+  );
+}
+
+/** Runtime shape check of one `{"dark": "#rrggbb", "light": "#rrggbb"}` pair. */
+function isThemeColor(value: unknown): value is LayerColors['focus_stripe'] {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v['dark'] === 'string' &&
+    typeof v['light'] === 'string' &&
+    HEX_COLOR_RE.test(v['dark']) &&
+    HEX_COLOR_RE.test(v['light'])
+  );
+}
+
+/**
+ * Validates the client-supplied `colors` payload (0.6.4, §2.2a): `null` clears
+ * (theme defaults); an object must carry BOTH keys (`focus_stripe`,
+ * `background`) and, inside each, BOTH themes (`dark`, `light`) as `#rrggbb`
+ * hex strings — anything partial or malformed is a 422 `VALIDATION_ERROR`
+ * (an incomplete object would silently leave half the indication themed).
+ */
+export function validateLayerColors(value: unknown): LayerColors | null {
+  if (value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'colors должен быть объектом { focus_stripe, background } с темами dark/light или null.',
+      { field: 'colors' },
+    );
+  }
+  const v = value as Record<string, unknown>;
+  const pair = (key: 'focus_stripe' | 'background'): LayerColors['focus_stripe'] => {
+    const rec = v[key] as { dark?: unknown; light?: unknown } | null | undefined;
+    if (
+      typeof rec !== 'object' ||
+      rec === null ||
+      typeof rec.dark !== 'string' ||
+      typeof rec.light !== 'string'
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `colors.${key} должен содержать оба ключа dark и light.`,
+        { field: 'colors', key },
+      );
+    }
+    const result: LayerColors['focus_stripe'] = { dark: rec.dark, light: rec.light };
+    for (const theme of ['dark', 'light'] as const) {
+      const hex = result[theme];
+      if (!HEX_COLOR_RE.test(hex)) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `colors.${key}.${theme} должен быть hex-строкой #rrggbb.`,
+          { field: 'colors', key, theme, value: hex },
+        );
+      }
+    }
+    return result;
+  };
+  // Extra keys are ignored (forward compatibility), the known ones validated.
+  return {
+    focus_stripe: pair('focus_stripe'),
+    background: pair('background'),
+  };
+}
+
 /** Map a physical row + counters to the wire {@link Layer} DTO. */
 function toLayer(row: LayerRow, childrenCount: number, currentLayerId: string): Layer {
   return {
@@ -80,6 +173,7 @@ function toLayer(row: LayerRow, childrenCount: number, currentLayerId: string): 
     title: row.title,
     comment: row.comment,
     git_branch: row.git_branch,
+    colors: parseLayerColors(row.colors),
     is_service: row.is_service === 1,
     is_base: row.is_base === 1,
     depth: row.depth,
@@ -117,7 +211,7 @@ export function listLayers(
   const rows = (
     ndb
       .prepare(
-        `SELECT id, parent_id, title, comment, git_branch, is_service, is_base,
+        `SELECT id, parent_id, title, comment, git_branch, colors, is_service, is_base,
                 depth, created_by, created_at, last_activity_at, version
          FROM layers ${opts.includeService === true ? '' : 'WHERE is_service = 0'}
          ORDER BY depth, created_at, id`,
@@ -134,6 +228,9 @@ export interface CreateLayerInput {
   title: string;
   comment?: string | null;
   gitBranch?: string | null;
+  /** Colour indication (0.6.4, §2.2a); the client passes creation defaults so
+   *  a fresh layer is immediately visually distinct. */
+  colors?: LayerColors | null;
   /** Creator user id (§2.2 `created_by`); required. */
   createdBy: string;
 }
@@ -168,6 +265,7 @@ export function createLayer(ndb: NetworkDb, input: CreateLayerInput): Layer {
   }
   const comment = fieldText(input.comment ?? null, 'comment');
   const gitBranch = fieldText(input.gitBranch ?? null, 'git_branch');
+  const colors = input.colors ?? null;
 
   return ndb.transaction(() => {
     const parent = requireLayer(ndb, input.parentId);
@@ -181,24 +279,37 @@ export function createLayer(ndb: NetworkDb, input: CreateLayerInput): Layer {
     const id = randomUUID();
     const now = nowSeconds();
     ndb.prepare(
-      `INSERT INTO layers (id, parent_id, title, comment, git_branch, is_service, is_base,
+      `INSERT INTO layers (id, parent_id, title, comment, git_branch, colors, is_service, is_base,
                            depth, created_by, created_at, last_activity_at, version)
-       VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, 1)`,
-    ).run(id, parent.id, title, comment, gitBranch, parent.depth + 1, input.createdBy, now, now);
+       VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, 1)`,
+    ).run(
+      id,
+      parent.id,
+      title,
+      comment,
+      gitBranch,
+      colors === null ? null : JSON.stringify(colors),
+      parent.depth + 1,
+      input.createdBy,
+      now,
+      now,
+    );
     return toLayer(layerRow(ndb, id) as LayerRow, 0, id);
   });
 }
 
 /**
- * Rename a layer / edit its comment (§2.2, §10.1). The base layer's title is
- * fixed («Основа») — a rename attempt is 422 regardless of rights (§2.1);
- * editing the base's `comment` is allowed. `expectedVersion` is the usual
- * `If-Match` optimistic lock (409 `VERSION_CONFLICT` on mismatch).
+ * Rename a layer / edit its comment / replace its colours (§2.2, §10.1,
+ * §2.2a). The base layer's title is fixed («Основа») — a rename attempt is
+ * 422 regardless of rights (§2.1); editing the base's `comment` is allowed.
+ * The base layer never carries colours — a `colors` assignment on it is 422
+ * (the base IS the theme default). `expectedVersion` is the usual `If-Match`
+ * optimistic lock (409 `VERSION_CONFLICT` on mismatch).
  */
 export function updateLayer(
   ndb: NetworkDb,
   id: string,
-  changes: { title?: string; comment?: string | null },
+  changes: { title?: string; comment?: string | null; colors?: LayerColors | null },
   expectedVersion?: number,
 ): Layer {
   const title = changes.title === undefined ? undefined : changes.title.trim();
@@ -219,6 +330,13 @@ export function updateLayer(
         layer_id: id,
       });
     }
+    if (row.is_base === 1 && changes.colors !== undefined) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'у основы не бывает цветов: основа и есть тема по умолчанию.',
+        { field: 'colors', layer_id: id },
+      );
+    }
     if (expectedVersion !== undefined && expectedVersion !== row.version) {
       throw new EtnError('VERSION_CONFLICT', 'layer version mismatch', {
         entity: 'layer',
@@ -227,14 +345,22 @@ export function updateLayer(
         current_version: row.version,
       });
     }
-    if (title !== undefined || comment !== undefined) {
+    if (title !== undefined || comment !== undefined || changes.colors !== undefined) {
       ndb.prepare(
         `UPDATE layers SET
            title = COALESCE(?, title),
            comment = CASE WHEN ? THEN ? ELSE comment END,
+           colors = CASE WHEN ? THEN ? ELSE colors END,
            version = version + 1
          WHERE id = ?`,
-      ).run(title ?? null, comment !== undefined ? 1 : 0, comment ?? null, id);
+      ).run(
+        title ?? null,
+        comment !== undefined ? 1 : 0,
+        comment ?? null,
+        changes.colors !== undefined ? 1 : 0,
+        changes.colors === undefined || changes.colors === null ? null : JSON.stringify(changes.colors),
+        id,
+      );
     }
     const counts = childrenCounts(ndb);
     return toLayer(requireLayer(ndb, id), counts.get(id) ?? 0, id);

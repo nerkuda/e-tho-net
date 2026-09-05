@@ -8,11 +8,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import type { MentionsScanRequest, MentionsScanResponse } from '@etn/shared';
+
 import {
   chunkTextsForScan,
   findRangeAtOffset,
+  MentionsScanCache,
   MENTIONS_SCAN_MAX_CHARS,
   MENTIONS_SCAN_MAX_ITEMS,
+  scanMentionsTexts,
 } from '../src/renderer/editor/mentions-annotate.js';
 
 test('находит диапазон, содержащий смещение', () => {
@@ -131,4 +135,130 @@ test('chunkTextsForScan: каждый батч укладывается в об�
 test('chunkTextsForScan: ровно 50 текстов влезают в один батч', () => {
   const texts = Array.from({ length: 50 }, () => 'a');
   assert.deepEqual(chunkTextsForScan(texts), [texts]);
+});
+
+// -----------------------------------------------------------------------------
+// scanMentionsTexts + MentionsScanCache — повторные рендеры комментария не
+// должны повторно сканировать те же тексты на сервере, а батчи — лететь
+// параллельно. Чистые функции (без DOM), scan-зависимость инжектится.
+// -----------------------------------------------------------------------------
+
+/** Scan-stub: помечает каждый ответ длиной текста (для проверки выравнивания). */
+function makeScanSpy(): {
+  scan: (req: MentionsScanRequest) => Promise<MentionsScanResponse>;
+  requests: MentionsScanRequest[];
+} {
+  const requests: MentionsScanRequest[] = [];
+  const scan = (req: MentionsScanRequest): Promise<MentionsScanResponse> => {
+    requests.push(req);
+    return Promise.resolve({
+      results: req.texts.map((t) => [{ start: 0, end: t.length, thoughts: [] }]),
+    });
+  };
+  return { scan, requests };
+}
+
+const BASE_SCOPE = { networkId: 'n1', showInactive: false, excludeThoughtId: undefined };
+
+test('scanMentionsTexts: повторный вызов с теми же текстами не шлёт новых запросов', async () => {
+  const { scan, requests } = makeScanSpy();
+  const cache = new MentionsScanCache();
+  const first = await scanMentionsTexts(scan, cache, BASE_SCOPE, ['alpha', 'beta']);
+  const second = await scanMentionsTexts(scan, cache, BASE_SCOPE, ['alpha', 'beta']);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(second, first);
+});
+
+test('scanMentionsTexts: смена show_inactive/exclude/сети — новые запросы', async () => {
+  const { scan, requests } = makeScanSpy();
+  const cache = new MentionsScanCache();
+  await scanMentionsTexts(scan, cache, BASE_SCOPE, ['alpha']);
+  await scanMentionsTexts(scan, cache, { ...BASE_SCOPE, showInactive: true }, ['alpha']);
+  await scanMentionsTexts(scan, cache, { ...BASE_SCOPE, excludeThoughtId: 't1' }, ['alpha']);
+  await scanMentionsTexts(scan, cache, { ...BASE_SCOPE, networkId: 'n2' }, ['alpha']);
+  assert.equal(requests.length, 4);
+  // Все ключи запроса передаются как в скан.
+  assert.equal(requests[1]!['show_inactive'], true);
+  assert.equal(requests[2]!['exclude_thought_id'], 't1');
+});
+
+test('scanMentionsTexts: кэш-хиты смешиваются с новыми текстами, порядок сохранён', async () => {
+  const { scan, requests } = makeScanSpy();
+  const cache = new MentionsScanCache();
+  await scanMentionsTexts(scan, cache, BASE_SCOPE, ['alpha', 'beta']);
+  const results = await scanMentionsTexts(scan, cache, BASE_SCOPE, ['alpha', 'gamma', 'beta']);
+  // Новый только «gamma» — один запрос ровно с ним.
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1]!['texts'], ['gamma']);
+  // Результаты выровнены по входным текстам (end = длина текста).
+  assert.deepEqual(
+    results.map((r) => r[0]!.end),
+    [5, 5, 4],
+  );
+});
+
+test('scanMentionsTexts: батчи идут строго последовательно, порядок сохранён', async () => {
+  let active = 0;
+  let maxActive = 0;
+  const requests: MentionsScanRequest[] = [];
+  const scan = (req: MentionsScanRequest): Promise<MentionsScanResponse> => {
+    requests.push(req);
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        active -= 1;
+        resolve({ results: req.texts.map((t) => [{ start: 0, end: t.length, thoughts: [] }]) });
+      }, 5);
+    });
+  };
+  const cache = new MentionsScanCache();
+  // 120 текстов → 3 батча (лимит 50 на запрос).
+  const texts = Array.from({ length: 120 }, (_, i) => `t${i}`);
+  const results = await scanMentionsTexts(scan, cache, BASE_SCOPE, texts);
+  assert.equal(requests.length, 3);
+  assert.equal(maxActive, 1, 'батчи не должны выполняться параллельно');
+  assert.deepEqual(
+    results.map((r) => r[0]!.end),
+    texts.map((t) => t.length),
+  );
+  // Батчи сохраняют порядок исходных текстов.
+  assert.deepEqual(
+    requests.flatMap((r) => r.texts),
+    texts,
+  );
+});
+
+test('MentionsScanCache: переполнение лимита очищает кэш целиком', () => {
+  const cache = new MentionsScanCache(2);
+  cache.set(BASE_SCOPE, 'a', []);
+  cache.set(BASE_SCOPE, 'b', []);
+  assert.notEqual(cache.get(BASE_SCOPE, 'a'), undefined);
+  cache.set(BASE_SCOPE, 'c', []);
+  assert.equal(cache.get(BASE_SCOPE, 'a'), undefined);
+  assert.equal(cache.get(BASE_SCOPE, 'b'), undefined);
+  assert.notEqual(cache.get(BASE_SCOPE, 'c'), undefined);
+});
+
+test('MentionsScanCache: запись протухает по TTL', () => {
+  let now = 1_000;
+  const cache = new MentionsScanCache(500, 60_000, () => now);
+  cache.set(BASE_SCOPE, 'a', []);
+  assert.notEqual(cache.get(BASE_SCOPE, 'a'), undefined);
+  now += 60_001;
+  assert.equal(cache.get(BASE_SCOPE, 'a'), undefined);
+});
+
+test('MentionsScanCache: смена сети сбрасывает записи, clear() тоже', () => {
+  const cache = new MentionsScanCache();
+  // Как в scanMentionsTexts: сеть фиксируется до первых обращений.
+  cache.noteNetwork('n1');
+  cache.set(BASE_SCOPE, 'a', []);
+  cache.noteNetwork('n1'); // та же сеть — записи живут
+  assert.notEqual(cache.get(BASE_SCOPE, 'a'), undefined);
+  cache.noteNetwork('n2'); // другая сеть — сброс
+  assert.equal(cache.get(BASE_SCOPE, 'a'), undefined);
+  cache.set(BASE_SCOPE, 'b', []);
+  cache.clear();
+  assert.equal(cache.get(BASE_SCOPE, 'b'), undefined);
 });

@@ -259,9 +259,25 @@ export class LocalDb {
     return row ?? null;
   }
 
-  /** Deletes a profile by id. */
+  /**
+   * Deletes a profile by id, plus every per-profile row it owns (defect
+   * e28df893: the schema has no FK from `ui_state`, `drafts`, `tabs`,
+   * `focus_history`, `visit_history` and `structures_history` back to
+   * `server_profiles`, so a plain DELETE would leave orphan rows). All
+   * writes run inside one transaction so a partial failure cannot strand
+   * a half-deleted profile.
+   */
   public deleteProfile(id: string): void {
-    this.db.prepare('DELETE FROM server_profiles WHERE id = ?').run(id);
+    const tx = this.db.transaction((pid: string) => {
+      this.db.prepare('DELETE FROM ui_state WHERE profile_id = ?').run(pid);
+      this.db.prepare('DELETE FROM drafts WHERE profile_id = ?').run(pid);
+      this.db.prepare('DELETE FROM visit_history WHERE profile_id = ?').run(pid);
+      this.db.prepare('DELETE FROM focus_history WHERE profile_id = ?').run(pid);
+      this.db.prepare('DELETE FROM structures_history WHERE profile_id = ?').run(pid);
+      this.db.prepare('DELETE FROM tabs WHERE profile_id = ?').run(pid);
+      this.db.prepare('DELETE FROM server_profiles WHERE id = ?').run(pid);
+    });
+    tx(id);
   }
 
   // -------------------------------------------------------------------------

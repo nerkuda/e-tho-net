@@ -180,6 +180,19 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
   };
 
   /**
+   * Deletes a saved server profile (defect e28df893). If the profile is the
+   * currently active one, disconnects first so the realtime pool and REST
+   * client stop using a soon-to-be-deleted row; otherwise the next request
+   * would race against the DB sweep.
+   */
+  const removeProfile = async (profileId: string): Promise<void> => {
+    if (profile !== null && profile.id === profileId) {
+      disconnect();
+    }
+    opts.localDb.deleteProfile(profileId);
+  };
+
+  /**
    * Force-reconnect every pooled realtime socket (defect 7f4cef31). Called on
    * system resume (powerMonitor, index.ts) and on the renderer `online` event
    * (forwarded here as `etn:realtime:online` from the preload bridge): a socket
@@ -215,6 +228,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
     getProfile: () => profile,
     connectProfile,
     addProfile,
+    removeProfile,
     disconnect,
     getCurrentNetworkId: () => currentNetworkId,
     openNetwork,

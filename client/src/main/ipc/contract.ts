@@ -93,6 +93,7 @@ import type {
   UsageClearResult,
   VersionResponse,
   Layer,
+  LayerColors,
   LayerDeleteResult,
   LayerDiffDoc,
   LayerDiffResult,
@@ -280,6 +281,13 @@ export interface EtnApi {
      */
     addProfile(input: { label: string; baseUrl: string; apiKey: string }): Promise<CurrentUser>;
     connect(profileId: string): Promise<CurrentUser>;
+    /**
+     * Removes a saved server profile from the local DB (defect e28df893).
+     * Disconnects first if `profileId` is the active profile so the realtime
+     * pool never references a row that is about to disappear. Silently no-ops
+     * on unknown ids.
+     */
+    removeProfile(profileId: string): Promise<void>;
     disconnect(): Promise<void>;
     getStatus(): Promise<ServerStatus>;
   };
@@ -810,7 +818,9 @@ export interface EtnApi {
   layers: {
     /** All layers with hierarchy metadata; `current` marks the session's one. */
     list(networkId: string): Promise<Layer[]>;
-    /** Create a layer (default parent — the session's current layer). */
+    /** Create a layer (default parent — the session's current layer). The
+     *  client passes creation-default colours so a fresh layer is visually
+     *  distinct from the base right away (0.6.4 §2.2a). */
     create(
       networkId: string,
       input: {
@@ -818,13 +828,15 @@ export interface EtnApi {
         parent_id?: string;
         comment?: string | null;
         git_branch?: string | null;
+        colors?: LayerColors | null;
       },
     ): Promise<Layer>;
-    /** Rename a layer / edit its comment. */
+    /** Rename a layer / edit its comment / replace its colours (full object
+     *  or null; the base layer rejects colours — server-side 422). */
     update(
       networkId: string,
       layerId: string,
-      changes: { title?: string; comment?: string | null },
+      changes: { title?: string; comment?: string | null; colors?: LayerColors | null },
       expectedVersion?: number,
     ): Promise<Layer>;
     /** Delete a layer + its subtree (cascade confirmation, §2.4). */

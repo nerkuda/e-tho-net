@@ -9,6 +9,33 @@
  * metadata with ordinary optimistic locking (`version`).
  */
 
+/** One colour of the layer indication, per UI theme (0.6.4, 13-layers.md
+ * §2.2a): `#rrggbb` hex strings. The client computes the opposite theme's
+ * variant by flipping HSL lightness, so both are stored once and switching
+ * the theme is a pure lookup. */
+export interface LayerThemeColor {
+  dark: string;
+  light: string;
+}
+
+/**
+ * Colour indication of a layer (0.6.4, docs/13-layers.md §2.2a): makes a
+ * non-base layer visibly distinct from the base so the user understands why
+ * others do not see the layer's edits.
+ *
+ *   * `focus_stripe` — the focus band across the middle zone of the thought
+ *     map AND the halo border of the thought opened in the editor;
+ *   * `background` — the canvas background of every view (map, structures,
+ *     chronicle).
+ *
+ * `null` (absent) — the theme defaults; the base layer always has `colors =
+ * null` and rejects colour assignment.
+ */
+export interface LayerColors {
+  focus_stripe: LayerThemeColor;
+  background: LayerThemeColor;
+}
+
 /** Full layer metadata as returned by `GET /networks/{nid}/layers` (§2.2). */
 export interface Layer {
   id: string;
@@ -19,6 +46,8 @@ export interface Layer {
   comment: string | null;
   /** Reserved for future git-reconciliation tooling; never validated on MVP. */
   git_branch: string | null;
+  /** Colour indication (0.6.4, §2.2a); always `null` on the base layer. */
+  colors: LayerColors | null;
   /** 1 — service (reserve) layer, hidden from the selection list (§8.2). */
   is_service: boolean;
   /** 1 — exactly one row per network; protected like HOME. */

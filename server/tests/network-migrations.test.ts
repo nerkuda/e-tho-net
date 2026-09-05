@@ -49,6 +49,7 @@ const EXPECTED_FILES = [
   '028_session_layers_switch_seq.sql',
   '029_links_triple_live.sql',
   '030_type_property_description.sql',
+  '031_layer_colors.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */

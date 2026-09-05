@@ -15,13 +15,20 @@
  * (≤5, grouped as a submenu when there is more than one).
  */
 
-import type { MentionsScanThought, Thought } from '@etn/shared';
+import type {
+  MentionsScanMatch,
+  MentionsScanRequest,
+  MentionsScanResponse,
+  MentionsScanThought,
+  Thought,
+} from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
 import { type MenuItem, showMenuAt } from '../lib/menu.js';
 import { etn } from '../lib/etn.js';
 import { errText } from '../lib/dom.js';
 import { notice } from '../lib/notice.js';
+import { onRealtimeEvent } from '../realtime.js';
 import { store } from '../state.js';
 import { openThoughtByRef } from './wiki-link.js';
 
@@ -63,6 +70,144 @@ export function chunkTextsForScan(texts: readonly string[]): string[][] {
   }
   if (current.length > 0) out.push(current);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Scan cache + sequential batch orchestration (server-freeze amplifier fix)
+// ---------------------------------------------------------------------------
+
+/** Cache size bound; a full cache is cleared wholesale (see {@link MentionsScanCache}). */
+const SCAN_CACHE_MAX_ENTRIES = 500;
+/** Entry lifetime, ms — bounds staleness from edits this client made itself. */
+const SCAN_CACHE_TTL_MS = 60_000;
+
+/** Everything a `POST /mentions/scan` result depends on besides the text. */
+export interface MentionsScanScope {
+  networkId: string;
+  showInactive: boolean;
+  excludeThoughtId: string | undefined;
+}
+
+/** One cache entry: the per-text matches plus the moment they were produced. */
+interface CacheEntry {
+  at: number;
+  matches: MentionsScanMatch[];
+}
+
+/**
+ * Results cache of `POST /mentions/scan`: text → per-text matches, keyed by
+ * everything the result depends on ({@link MentionsScanScope} plus the text).
+ * Every comment view render fires {@link annotateMentions}, so without a cache
+ * each re-render (view/edit toggle, reopening a thought) re-scanned the same
+ * texts on the server — under a slow scan this piled the whole client request
+ * queue behind repeat scans.
+ *
+ * Invalidation:
+ *  - realtime `thought.created/updated/deleted` clears the cache — the
+ *    candidate set (titles, synonyms, active flags) changed;
+ *  - a network switch clears it ({@link noteNetwork});
+ *  - entries expire after {@link SCAN_CACHE_TTL_MS}: the applier drops
+ *    own-client realtime echoes (04-realtime.md §5), so a title/synonym edit
+ *    made in THIS client produces no event the renderer could hear — the TTL
+ *    bounds how long annotations may lag behind such own edits.
+ *
+ * Bounded: at {@link SCAN_CACHE_MAX_ENTRIES} entries the map is cleared
+ * wholesale — scan results are cheap to rebuild, LRU bookkeeping is not worth
+ * the complexity. Pure (no DOM), exported for unit tests.
+ */
+export class MentionsScanCache {
+  private readonly entries = new Map<string, CacheEntry>();
+  private networkId: string | null = null;
+
+  constructor(
+    private readonly maxEntries: number = SCAN_CACHE_MAX_ENTRIES,
+    private readonly ttlMs: number = SCAN_CACHE_TTL_MS,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** Composite entry key: scope + text. */
+  private key(scope: MentionsScanScope, text: string): string {
+    return `${scope.networkId}\u0000${scope.showInactive ? '1' : '0'}\u0000${scope.excludeThoughtId ?? ''}\u0000${text}`;
+  }
+
+  /**
+   * Clears the cache when the network changed. Entries of other networks are
+   * unreachable through the key anyway; this only stops them from sitting in
+   * memory.
+   */
+  public noteNetwork(networkId: string): void {
+    if (this.networkId === networkId) return;
+    this.networkId = networkId;
+    this.entries.clear();
+  }
+
+  /** Cached matches for the text, or `undefined` on a miss/expired entry. */
+  public get(scope: MentionsScanScope, text: string): MentionsScanMatch[] | undefined {
+    const key = this.key(scope, text);
+    const hit = this.entries.get(key);
+    if (hit === undefined) return undefined;
+    if (this.now() - hit.at > this.ttlMs) {
+      this.entries.delete(key);
+      return undefined;
+    }
+    return hit.matches;
+  }
+
+  /** Stores the matches; a full cache is cleared wholesale (bounded memory). */
+  public set(scope: MentionsScanScope, text: string, matches: MentionsScanMatch[]): void {
+    if (this.entries.size >= this.maxEntries) this.entries.clear();
+    this.entries.set(this.key(scope, text), { at: this.now(), matches });
+  }
+
+  /** Drops everything (realtime candidate-set change). */
+  public clear(): void {
+    this.entries.clear();
+  }
+}
+
+/** The `etn.thoughts.mentionsScan` call shape, injectable for unit tests. */
+export type MentionsScanFn = (request: MentionsScanRequest) => Promise<MentionsScanResponse>;
+
+/**
+ * Resolves the matches of `texts` through {@link cache} and the server: cache
+ * misses are batched by {@link chunkTextsForScan} and sent SEQUENTIALLY (one
+ * `await` per batch) — the previous `Promise.all` fan-out turned every server
+ * hiccup into a full client-queue stall. Results are returned aligned with
+ * `texts` by index. A failed scan rejects; the caller keeps the best-effort
+ * contract (plain text). Pure (no DOM), exported for unit tests.
+ */
+export async function scanMentionsTexts(
+  scan: MentionsScanFn,
+  cache: MentionsScanCache,
+  scope: MentionsScanScope,
+  texts: readonly string[],
+): Promise<MentionsScanMatch[][]> {
+  cache.noteNetwork(scope.networkId);
+  const results: (MentionsScanMatch[] | undefined)[] = texts.map((t) => cache.get(scope, t));
+  const missingIdx: number[] = [];
+  const missingTexts: string[] = [];
+  texts.forEach((text, i) => {
+    if (results[i] === undefined) {
+      missingIdx.push(i);
+      missingTexts.push(text);
+    }
+  });
+
+  let offset = 0;
+  for (const batch of chunkTextsForScan(missingTexts)) {
+    const response = await scan({
+      show_inactive: scope.showInactive,
+      exclude_thought_id: scope.excludeThoughtId,
+      texts: batch,
+    });
+    batch.forEach((text, j) => {
+      const matches = response.results[j] ?? [];
+      cache.set(scope, text, matches);
+      results[missingIdx[offset + j]!] = matches;
+    });
+    offset += batch.length;
+  }
+  return results.map((r) => r ?? []);
 }
 
 /** Ancestors whose text must never be scanned/wrapped. */
@@ -211,6 +356,37 @@ function wrapMatch(
   });
 }
 
+/** Scan results cache shared by every annotated view. */
+const scanCache = new MentionsScanCache();
+
+/**
+ * Serializes scan sequences: concurrent comment renders (e.g. the permanent
+ * comment plus several chronological ones mounting together) queue behind each
+ * other instead of fanning out parallel `/mentions/scan` request waves. The
+ * chained job never rejects (best-effort), so the chain stays healthy.
+ */
+let scanChain: Promise<void> = Promise.resolve();
+
+let invalidationWired = false;
+
+/** Wires the realtime invalidation of {@link scanCache} once (first use). */
+function wireCacheInvalidation(): void {
+  if (invalidationWired) return;
+  invalidationWired = true;
+  onRealtimeEvent((evt) => {
+    if (
+      evt.type === 'thought.created' ||
+      evt.type === 'thought.updated' ||
+      evt.type === 'thought.deleted'
+    ) {
+      // The mention candidate set (titles/synonyms/active flags) changed.
+      // Own-client echoes never arrive here (dropped by the applier,
+      // 04-realtime.md §5) — that half is covered by the cache TTL.
+      scanCache.clear();
+    }
+  });
+}
+
 /**
  * Scans every leaf block of `container` for thought mentions and wraps the
  * matches in place. `excludeThoughtId` — typically the comment's own owner
@@ -218,10 +394,12 @@ function wrapMatch(
  * when the user picks «Вставить ссылку…» for a match.
  *
  * The `POST /mentions/scan` contract (docs/03-server-api.md §21) caps the
- * payload at ≤50 texts and ≤20 000 chars per request, so we slice the leaf
- * blocks into compliant batches via {@link chunkTextsForScan} and fan out
- * the requests in parallel; the per-batch results are then concatenated back
- * in the original order. Best-effort: a failed scan (validation error,
+ * payload at ≤50 texts and ≤20 000 chars per request, so the leaf blocks are
+ * sliced into compliant batches via {@link chunkTextsForScan}. Repeat scans
+ * of already-seen texts are served from the {@link scanCache}; misses are
+ * fetched in sequential batches (see {@link scanMentionsTexts}), and the scan
+ * sequences of concurrent renders queue on {@link scanChain} instead of
+ * piling up parallel requests. Best-effort: a failed scan (validation error,
  * network glitch) leaves the text plain.
  */
 export function annotateMentions(
@@ -237,20 +415,21 @@ export function annotateMentions(
   if (units.length === 0) return;
 
   const networkId = requireNetworkId();
-  const texts = units.map((u) => u.text);
-  const batches = chunkTextsForScan(texts);
-  const baseReq = {
-    show_inactive: store.state.showInactive,
-    exclude_thought_id: opts.excludeThoughtId,
+  wireCacheInvalidation();
+  const scope: MentionsScanScope = {
+    networkId,
+    showInactive: store.state.showInactive,
+    excludeThoughtId: opts.excludeThoughtId,
   };
-  void (async (): Promise<void> => {
+  const texts = units.map((u) => u.text);
+  const run = async (): Promise<void> => {
     try {
-      const responses = await Promise.all(
-        batches.map((batch) =>
-          etn.thoughts.mentionsScan(networkId, { ...baseReq, texts: batch }),
-        ),
+      const allResults = await scanMentionsTexts(
+        (request) => etn.thoughts.mentionsScan(networkId, request),
+        scanCache,
+        scope,
+        texts,
       );
-      const allResults = responses.flatMap((r) => r.results);
       if (!container.isConnected) return;
       units.forEach((unit, i) => {
         if (!unit.el.isConnected) return;
@@ -267,5 +446,6 @@ export function annotateMentions(
     } catch {
       // Best-effort annotation — a failed scan just leaves the text plain.
     }
-  })();
+  };
+  scanChain = scanChain.then(run);
 }
