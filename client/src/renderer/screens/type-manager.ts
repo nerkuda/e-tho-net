@@ -949,9 +949,25 @@ function buildStagedPropertySection(opts: {
    * the user cancelled).
    */
   async function openAttachPropertyDialog(): Promise<void> {
+    // The warning's «descendants» check needs the edited type's id and name;
+    // both exist only for an already-created type.
+    const editedType =
+      typeId === null
+        ? null
+        : ownerType === 'thought_type'
+          ? store.state.thoughtTypes.find((t) => t.id === typeId) ?? null
+          : store.state.linkTypes.find((t) => t.id === typeId) ?? null;
     const picked = await openAttachDialog({
       networkId,
+      ownerType,
       types: pickTypeList(),
+      typeId,
+      editedTypeName:
+        editedType === null
+          ? null
+          : 'name' in editedType
+            ? editedType.name
+            : editedType.name_forward,
       existingPropertyIds: new Set(ownDraft.map((d) => d.property_id)),
       inheritedPropertyIds: new Set(inherited.map((d) => d.property_id)),
     });
@@ -1353,16 +1369,23 @@ type AttachDialogResult = DraftProperty;
  *     highlighted row, ready to be picked. One editor everywhere — nothing
  *     is created inline any more.
  *
- * Attaching a property some descendant already carries asks for confirmation
- * first: the server drops the redundant binding in the same transaction (the
- * user must agree — it is invisible until the request lands).
+ * Attaching a property some DESCENDANT of the edited type already carries
+ * asks first — naming the concrete types and what exactly happens (their own
+ * bindings are taken over by inheritance; values never change).
  */
 async function openAttachDialog(opts: {
   networkId: string;
+  /** The edited type's kind — scopes the usage lookup of the warning. */
+  ownerType: TypeOwnerType;
   /** Catalogues used by the «already bound to a descendant» warning. `null`
    *  suppresses the check (the editor is creating a new type that has no
    *  descendants yet). */
   types: readonly ThoughtType[] | readonly LinkType[] | null;
+  /** The edited type's id — roots the «descendants already carry it» check.
+   *  `null` while a NEW type is being created (no descendants yet). */
+  typeId: string | null;
+  /** The edited type's display name for warning texts (null for a new type). */
+  editedTypeName: string | null;
   /** Property ids the type already carries (own bindings + this session's
    *  staged rows) — shown as «подключено», not pickable. */
   existingPropertyIds: ReadonlySet<string>;
@@ -1370,7 +1393,7 @@ async function openAttachDialog(opts: {
    *  whole set for a new type) — shown as «унаследовано», not pickable. */
   inheritedPropertyIds: ReadonlySet<string>;
 }): Promise<AttachDialogResult | null> {
-  const { networkId, types, existingPropertyIds, inheritedPropertyIds } = opts;
+  const { networkId, ownerType, types, typeId, editedTypeName, existingPropertyIds, inheritedPropertyIds } = opts;
   let registryRows: RegistryRow[];
   try {
     registryRows = await etn.propertyRegistry.list(networkId);
@@ -1390,42 +1413,61 @@ async function openAttachDialog(opts: {
     /** The highlighted registry row (a PICKABLE one), or null. */
     let selected: RegistryRow | null = null;
 
-    /** Re-fetches the registry (after the shared editor created a row) and
-     *  re-renders, highlighting `highlightId` when present. */
-    const refreshRegistry = async (highlightId: string | null): Promise<void> => {
-      try {
-        registryRows = await etn.propertyRegistry.list(networkId);
-      } catch {
-        /* keep the stale list — the editor already reported its own error */
-      }
-      rerenderResults(highlightId);
+    /** Why a row cannot be picked, or null when it can. */
+    const blockReason = (row: RegistryRow): string | null =>
+      existingPropertyIds.has(row.id)
+        ? 'подключено'
+        : inheritedPropertyIds.has(row.id)
+          ? 'унаследовано'
+          : null;
+
+    /** The registry rows matching the current search query, alphabetical. */
+    const visibleRows = (): RegistryRow[] => {
+      const fragments = searchInput.value
+        .trim()
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((s) => s.length > 0);
+      return registryRows
+        .filter((row) => {
+          const haystack = `${row.name.toLowerCase()}\n${(row.description ?? '').toLowerCase()}`;
+          return fragments.every((f) => haystack.includes(f));
+        })
+        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     };
 
-    /** Re-renders the result list against the current search query. */
-    function rerenderResults(preferId: string | null = null): void {
-      const query = searchInput.value.trim().toLowerCase();
-      const fragments = query.split(/\s+/).filter((s) => s.length > 0);
-      const filtered = registryRows.filter((row) => {
-        const haystack = `${row.name.toLowerCase()}\n${(row.description ?? '').toLowerCase()}`;
-        return fragments.every((f) => haystack.includes(f));
-      });
-      filtered.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    const pickableRows = (): RegistryRow[] =>
+      visibleRows().filter((row) => blockReason(row) === null);
 
-      const pickable = (row: RegistryRow): string | null =>
-        existingPropertyIds.has(row.id)
-          ? 'подключено'
-          : inheritedPropertyIds.has(row.id)
-            ? 'унаследовано'
-            : null;
-
-      // The highlight follows the preferred row (when pickable), else the
-      // first pickable one, else nothing is selectable at all.
-      const preferred = preferId !== null ? filtered.find((r) => r.id === preferId) : undefined;
-      selected =
-        (preferred !== undefined && pickable(preferred) === null
-          ? preferred
-          : filtered.find((r) => pickable(r) === null)) ?? null;
+    /** Moves the `.selected` row class to the current `selected` row (no list
+     *  rebuild — a click or an arrow key must not flicker the whole table)
+     *  and scrolls it into view. */
+    function applySelection(): void {
       const selectedId = selected?.id ?? null;
+      for (const tr of resultsWrap.querySelectorAll<HTMLTableRowElement>('tbody tr')) {
+        tr.classList.toggle('selected', tr.dataset['propId'] === selectedId);
+      }
+      resultsWrap
+        .querySelector<HTMLTableRowElement>('tr.selected')
+        ?.scrollIntoView({ block: 'nearest' });
+    }
+
+    /** Re-renders the result list. `preferId` forces the highlight onto that
+     *  row (after the shared editor created it); otherwise the CURRENT
+     *  selection survives when still visible and pickable, and falls back to
+     *  the first pickable row (never null when one exists — «Выбрать» and
+     *  Ctrl+Enter always have a target). */
+    function rerenderResults(preferId?: string): void {
+      const filtered = visibleRows();
+      const isSelectable = (row: RegistryRow): boolean =>
+        blockReason(row) === null && filtered.some((r) => r.id === row.id);
+      if (preferId !== undefined) {
+        const preferred = filtered.find((r) => r.id === preferId);
+        selected = preferred !== undefined && blockReason(preferred) === null ? preferred : null;
+      }
+      if (selected === null || !isSelectable(selected)) {
+        selected = filtered.find((r) => blockReason(r) === null) ?? null;
+      }
 
       if (filtered.length === 0) {
         resultsWrap.replaceChildren(el('p', 'muted', 'Ничего не найдено.'));
@@ -1434,9 +1476,9 @@ async function openAttachDialog(opts: {
       const table = el('table', 'table-list');
       const tbody = el('tbody');
       for (const row of filtered) {
-        const blocked = pickable(row);
+        const blocked = blockReason(row);
         const tr = el('tr');
-        if (row.id === selectedId) tr.classList.add('row-selected');
+        tr.dataset['propId'] = row.id;
         if (blocked !== null) tr.classList.add('row-disabled');
         const nameCell = el('td', undefined, row.name);
         nameCell.style.whiteSpace = 'nowrap';
@@ -1450,7 +1492,7 @@ async function openAttachDialog(opts: {
         if (blocked === null) {
           tr.addEventListener('click', () => {
             selected = row;
-            rerenderResults();
+            applySelection();
           });
           tr.addEventListener('dblclick', () => {
             selected = row;
@@ -1465,36 +1507,36 @@ async function openAttachDialog(opts: {
       }
       table.append(tbody);
       resultsWrap.replaceChildren(table);
+      applySelection();
     }
 
     searchInput.addEventListener('input', () => rerenderResults());
     // Keyboard: ↑/↓ moves the highlight over pickable rows. Ctrl+Enter is
     // the dialog stack's built-in «click the primary button» — «Выбрать».
     searchInput.addEventListener('keydown', (event) => {
-      const query = searchInput.value.trim().toLowerCase();
-      const fragments = query.split(/\s+/).filter((s) => s.length > 0);
-      const pickableRows = registryRows.filter((row) => {
-        if (existingPropertyIds.has(row.id) || inheritedPropertyIds.has(row.id)) return false;
-        const haystack = `${row.name.toLowerCase()}\n${(row.description ?? '').toLowerCase()}`;
-        return fragments.every((f) => haystack.includes(f));
-      });
-      if (pickableRows.length === 0) return;
-      const at = pickableRows.findIndex((r) => r.id === selected?.id);
+      const rows = pickableRows();
+      if (rows.length === 0) return;
+      const at = rows.findIndex((r) => r.id === selected?.id);
       if (event.key === 'ArrowDown') {
         event.preventDefault();
-        selected = pickableRows[Math.min(pickableRows.length - 1, at + 1)] ?? pickableRows[0]!;
-        rerenderResults();
+        selected = rows[Math.min(rows.length - 1, at + 1)] ?? rows[0]!;
+        applySelection();
       } else if (event.key === 'ArrowUp') {
         event.preventDefault();
-        selected = pickableRows[Math.max(0, at - 1)] ?? pickableRows[0]!;
-        rerenderResults();
+        selected = rows[Math.max(0, at - 1)] ?? rows[0]!;
+        applySelection();
       }
     });
 
     /** Resolves the dialog with the highlighted pickable row. */
     async function choose(): Promise<void> {
       if (selected === null) return;
-      const warning = await warnDescendantBindings(selected, types);
+      const warning = await warnDescendantBindings(networkId, selected, {
+        ownerType,
+        types,
+        typeId,
+        editedTypeName,
+      });
       if (warning !== null) {
         const ok = await confirmDialog('Подключить свойство', warning, true);
         if (!ok) return;
@@ -1506,6 +1548,18 @@ async function openAttachDialog(opts: {
     const body = div('form-stack');
     body.append(searchInput, resultsWrap);
     rerenderResults();
+
+    /** Re-fetches the registry (after the shared editor created a row) and
+     *  re-renders, highlighting `highlightId` when present. */
+    const refreshRegistry = async (highlightId: string | null): Promise<void> => {
+      try {
+        registryRows = await etn.propertyRegistry.list(networkId);
+      } catch {
+        /* keep the stale list — the editor already reported its own error */
+      }
+      if (highlightId !== null) rerenderResults(highlightId);
+      else rerenderResults();
+    };
 
     const close = showDialog({
       title: 'Добавить свойство',
@@ -1553,40 +1607,61 @@ function attachDraftFromExisting(row: RegistryRow): DraftProperty {
 }
 
 /**
- * Returns a human-readable warning when attaching `row` could drop a
- * redundant binding in the edited type's subtree, or `null` when there is
- * nothing to warn about.
+ * Returns a human-readable warning when attaching `row` will take over the
+ * bindings of the edited type's DESCENDANTS, or `null` when nothing like
+ * that happens (the common case — most picks are warning-free).
  *
  * The server's subtree dedupe is automatic (0.6.5, 03-server-api.md §8):
  * attaching a property a descendant already carries is allowed, the
- * descendant's redundant binding is dropped in the same transaction, and
- * the stored values never change. The user just has to know it happens.
+ * descendant's own binding is dropped in the same transaction, and the
+ * stored values never change — from that point the descendant inherits the
+ * property from the edited type. The warning names the concrete types and
+ * spells out both what disappears (their own «Свойства типа» row) and what
+ * never changes (the values), so the user can decide knowingly.
  *
- * We surface the warning from the registry's `types_count` counter rather
- * than a per-attach `usage` lookup: the property manager dialog already
- * renders the full list, the attach dialog is a hot path, and the warning
- * is the same shape whether one or ten descendants carry the property.
+ * Exact check (0.6.5 приёмка): the property's usage is fetched and crossed
+ * with the edited type's subtree — the previous types_count-based heuristic
+ * warned on EVERY property bound anywhere, even when no descendant carried
+ * it.
  */
 async function warnDescendantBindings(
+  networkId: string,
   row: RegistryRow,
-  types: readonly ThoughtType[] | readonly LinkType[] | null,
+  ctx: {
+    ownerType: TypeOwnerType;
+    types: readonly ThoughtType[] | readonly LinkType[] | null;
+    /** The edited type's id — `null` while a NEW type is being created. */
+    typeId: string | null;
+    /** The edited type's display name (null for a new type). */
+    editedTypeName: string | null;
+  },
 ): Promise<string | null> {
-  // `types === null` ⇒ editing a brand-new type, no descendants to dedupe.
-  if (types === null) return null;
+  const { ownerType, types, typeId, editedTypeName } = ctx;
+  // A brand-new type has no descendants to take over.
+  if (types === null || typeId === null || editedTypeName === null) return null;
+  // Fast pre-filter: nobody bound the property at all — no request needed.
   if (row.types_count === 0) return null;
+  const descendants = subtreeTypeIds(types, typeId);
+  descendants.delete(typeId);
+  if (descendants.size === 0) return null;
+  let usage: Awaited<ReturnType<typeof etn.propertyRegistry.usage>>;
+  try {
+    usage = await etn.propertyRegistry.usage(networkId, row.id);
+  } catch {
+    // No usage data — do not scare the user; the server re-checks on attach.
+    return null;
+  }
+  const names = usage.bindings
+    .filter((b) => b.owner_type === ownerType && descendants.has(b.owner_id))
+    .map((b) => b.owner_name);
+  if (names.length === 0) return null;
+  const nameList = names.map((n) => `«${n}»`).join(', ');
   return (
-    `Это свойство уже подключено к ${row.types_count} ${pluralType(row.types_count)}. ` +
-    'Подключение к типу может снять избыточные привязки у потомков этого типа; ' +
-    'значения при этом не меняются.'
+    `Свойство «${row.name}» подключено к типам-потомкам ${nameList}. ` +
+    `Если подключить его к типу «${editedTypeName}», у потомков снимутся их собственные ` +
+    'подключения этого свойства (они станут наследовать его от вашего типа). ' +
+    'Значения свойств в мыслях и связях при этом не изменятся.'
   );
-}
-
-function pluralType(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'типу';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'типам';
-  return 'типов';
 }
 
 /** Human-readable default value for a table cell. */
