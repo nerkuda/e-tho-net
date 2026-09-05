@@ -53,7 +53,7 @@ import {
   shortenCompoundName,
   sortRefsByTitle,
 } from '../lib/pure.js';
-import { currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
+import { LABEL_OPACITY, currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
 import { store } from '../state.js';
 import {
   initLinksOverlay,
@@ -534,10 +534,12 @@ function updateFocusBand(): void {
 
 /**
  * Paints the layer-name stripe (0.6.4, §2.2a): visible only while a non-base
- * layer is current; vertical bottom-up text at the left edge of the focus
- * zone, ~⅓ of the zone height (shrunk to fit long names), auto-contrast
- * black/white against the effective focus-stripe colour, never wider than
- * 10% of the canvas. Non-interactive (`pointer-events: none` in CSS).
+ * layer is current; horizontal text at the left edge of the focus zone, up to
+ * 30% of the zone height (fixed by the zone geometry, never shrunk for the
+ * name), auto-contrast black/white against the effective focus-stripe colour.
+ * The stripe never exceeds 10% of the canvas width and clips what does not
+ * fit (`overflow: hidden` in CSS). Semi-transparent ({@link LABEL_OPACITY})
+ * and non-interactive (`pointer-events: none` in CSS).
  */
 function updateLayerLabel(): void {
   if (host === null || focusRow === null || layerLabelEl === null || layerLabelText === null) {
@@ -561,6 +563,7 @@ function updateLayerLabel(): void {
     layerLabelText.textContent = view.title;
     layerLabelEl.style.color = view.color;
     layerLabelEl.style.fontSize = `${view.fontPx}px`;
+    layerLabelEl.style.opacity = String(LABEL_OPACITY);
     layerLabelEl.style.display = 'flex';
   }
   // Geometry follows the focus row on every layout change (render, resizes,

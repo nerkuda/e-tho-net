@@ -13,10 +13,11 @@
  *     `document`: variables follow the store (layer switch, theme toggle,
  *     back to base) and are removed when the layer has no colours;
  *   * `layerLabelView`/`layerLabelFontSize`/`stripeLabelColor` — the map
- *     label: never on the base layer, font ~⅓ of the zone height shrunk to
- *     fit long names and the 10% width cap, black/white contrast;
+ *     label: never on the base layer, horizontal text with the font fixed at
+ *     30% of the zone height (never shrunk for the name — long names are
+ *     clipped by the CSS `overflow: hidden`), black/white contrast;
  *   * the styles.css rules the runtime relies on: the 78% focus-cloud width
- *     cap and the non-interactive label stripe.
+ *     cap, the non-interactive clipped label stripe and its horizontal text.
  *
  * Pure functions + a faked document — no Electron, no real DOM.
  */
@@ -31,6 +32,9 @@ import { BASE_LAYER_ID, type Layer, type LayerColors } from '@etn/shared';
 
 import {
   DEFAULT_FOCUS_BAND_COLOR,
+  LABEL_FONT_SHARE,
+  LABEL_MIN_FONT_PX,
+  LABEL_OPACITY,
   applyLayerThemeStyle,
   currentLayerColors,
   defaultLayerColors,
@@ -291,6 +295,9 @@ describe('map label (0.6.4 §2.2a)', () => {
     assert.equal(colored.stripe, '#7e57c2');
     // The violet stripe is dark — white text.
     assert.equal(colored.color, '#ffffff');
+    // The font is fixed by the zone geometry — 30% of 300 — no matter how
+    // long the name is (long names clip, they never shrink the font).
+    assert.equal(colored.fontPx, Math.floor(300 * 0.3));
 
     // A layer without explicit colours still shows, contrasted against the
     // theme-default focus band.
@@ -303,14 +310,17 @@ describe('map label (0.6.4 §2.2a)', () => {
     assert.equal(flat.visible, false);
   });
 
-  it('font size: ~⅓ of the zone, shrunk for long names, capped by the 10% width', () => {
-    // Short name: the zone share wins (⅓ of 300 = 100), the width cap is
-    // 1000·10% / 1.7 ≈ 58.
-    assert.equal(layerLabelFontSize(300, 3, 1000), 58);
-    // Long name: 300 / (10 · 0.62) ≈ 48 < 58.
-    assert.equal(layerLabelFontSize(300, 10, 1000), 48);
-    // A very long name never goes below the readability floor.
-    assert.equal(layerLabelFontSize(300, 60, 1000), 8);
+  it('font size: 30% of the zone height, fixed by the zone geometry', () => {
+    // 30% of 300 = 90 — the name length plays no role (long names clip via
+    // the CSS `overflow: hidden`, they never shrink the font).
+    assert.equal(layerLabelFontSize(300), 90);
+    assert.equal(layerLabelFontSize(300), Math.floor(300 * LABEL_FONT_SHARE));
+    // A tiny zone clamps to the readability floor.
+    assert.equal(layerLabelFontSize(20), LABEL_MIN_FONT_PX);
+  });
+
+  it('LABEL_OPACITY stays a sane tuning value', () => {
+    assert.ok(LABEL_OPACITY > 0 && LABEL_OPACITY <= 1, `opacity out of range: ${LABEL_OPACITY}`);
   });
 
   it('stripeLabelColor is black on light stripes, white on dark ones', () => {
@@ -332,11 +342,18 @@ describe('styles.css rules the runtime relies on', () => {
     assert.match(block, /max-width:\s*min\(78%,\s*calc\(100% - 28px\)\)/);
   });
 
-  it('the layer label is a non-interactive stripe capped at 10% width', () => {
+  it('the layer label is a non-interactive clipped stripe capped at 10% width', () => {
     const block = css.match(/\.layer-label\s*\{[^}]*\}/)?.[0] ?? '';
     assert.match(block, /max-width:\s*10%/);
+    assert.match(block, /overflow:\s*hidden/);
     assert.match(block, /pointer-events:\s*none/);
-    assert.match(block, /opacity:\s*0\.6/);
+  });
+
+  it('the label text is horizontal (no writing-mode, no rotation), kept on one line', () => {
+    const block = css.match(/\.layer-label-text\s*\{[^}]*\}/)?.[0] ?? '';
+    assert.match(block, /white-space:\s*nowrap/);
+    assert.doesNotMatch(block, /writing-mode/);
+    assert.doesNotMatch(block, /transform/);
   });
 
   it('the canvas, structures results and chronicle follow --layer-bg', () => {

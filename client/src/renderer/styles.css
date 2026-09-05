@@ -1356,27 +1356,28 @@ textarea {
 }
 
 /* Layer-name stripe (0.6.4, 13-layers.md §2.2a): the name of the active
- * non-base layer as vertical bottom-up text at the LEFT edge of the focus
- * zone (anchored by updateLayerLabel in canvas.ts via top/height). The text
- * is auto-contrast black/white against the focus band colour, 60% opacity,
- * never interactive and never wider than 10% of the canvas width. */
+ * non-base layer as HORIZONTAL text at the LEFT edge of the focus zone
+ * (anchored by updateLayerLabel in canvas.ts via top/height). Big font — up
+ * to 30% of the zone height, set inline, never shrunk for the name: a name
+ * longer than the stripe is simply clipped by `overflow: hidden`. The text
+ * is auto-contrast black/white against the focus band colour; the opacity is
+ * applied inline from LABEL_OPACITY (layer-colors.ts) — a single tuning
+ * knob. Never interactive, never wider than 10% of the canvas width. */
 .layer-label {
   position: absolute;
   left: 0;
   z-index: 3;
   display: none;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   max-width: 10%;
+  padding-left: 6px;
   overflow: hidden;
   pointer-events: none;
-  opacity: 0.6;
   user-select: none;
 }
 
 .layer-label-text {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
   white-space: nowrap;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -6177,14 +6178,6 @@ table.chron-table thead th {
 .layer-colors-block {
   border-top: 1px solid var(--border);
   padding-top: 10px;
-}
-
-.layer-colors-toggle-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  user-select: none;
 }
 
 .layer-color-row {

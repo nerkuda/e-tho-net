@@ -274,7 +274,6 @@ export function initLayerOverridesTracking(): void {
 function colorPickerRow(label: string, initial: string): {
   root: HTMLElement;
   get: () => string;
-  setEnabled: (enabled: boolean) => void;
 } {
   const picker = el('input', 'color-input') as HTMLInputElement;
   picker.type = 'color';
@@ -295,11 +294,6 @@ function colorPickerRow(label: string, initial: string): {
   return {
     root: wrap,
     get: () => picker.value.toLowerCase(),
-    setEnabled: (enabled: boolean): void => {
-      picker.disabled = !enabled;
-      hex.disabled = !enabled;
-      wrap.classList.toggle('disabled', !enabled);
-    },
   };
 }
 
@@ -307,9 +301,11 @@ function colorPickerRow(label: string, initial: string): {
  * Layer properties dialog (§10.1, matrix §15 «Править комментарий слоя»):
  * rename and/or edit the comment. The base title is fixed (input disabled) —
  * only its comment is editable. Non-base layers also edit their colour
- * indication (0.6.4 §2.2a): two colours for the CURRENT theme; the opposite
- * theme's pair is computed on save by flipping HSL lightness. The base layer
- * hides the colour fields — it always uses the theme defaults.
+ * indication (0.6.4 §2.2a): two colours for the CURRENT theme, always active
+ * — no on/off switch (colours exist to tell the layer apart, picking them
+ * applies them); the opposite theme's pair is computed on save by flipping
+ * HSL lightness. The base layer hides the colour fields — it always uses the
+ * theme defaults.
  */
 function openLayerPropsDialog(networkId: string, layerId: string): void {
   const layer = store.state.layers.find((l) => l.id === layerId);
@@ -329,30 +325,17 @@ function openLayerPropsDialog(networkId: string, layerId: string): void {
   const themeLabel = theme === 'dark' ? 'тёмной' : 'светлой';
   let stripeRow: ReturnType<typeof colorPickerRow> | null = null;
   let bgRow: ReturnType<typeof colorPickerRow> | null = null;
-  let useColors: HTMLInputElement | null = null;
   if (!layer.is_base) {
     const defaults = defaultLayerColors();
     const initialStripe = layer.colors?.focus_stripe[theme] ?? defaults.focus_stripe[theme];
     const initialBg = layer.colors?.background[theme] ?? defaults.background[theme];
     stripeRow = colorPickerRow('Полоса фокуса', initialStripe);
     bgRow = colorPickerRow('Фон холста', initialBg);
-    const both = [stripeRow, bgRow];
-
-    useColors = el('input', 'layer-colors-toggle') as HTMLInputElement;
-    useColors.type = 'checkbox';
-    useColors.checked = layer.colors !== null;
-    const toggleLabel = el('label', 'layer-colors-toggle-label') as HTMLLabelElement;
-    toggleLabel.append(useColors, span('Выделять слой цветом', ''));
     const hint = div('layer-hint');
     hint.textContent = `Цвета для ${themeLabel} темы; второй вариант вычисляется инверсией светлоты.`;
     const colorsBlock = div('form-stack layer-colors-block');
-    colorsBlock.append(toggleLabel, hint, stripeRow.root, bgRow.root);
+    colorsBlock.append(hint, stripeRow.root, bgRow.root);
     body.append(colorsBlock);
-    const syncEnabled = (): void => {
-      for (const row of both) row.setEnabled(useColors!.checked);
-    };
-    useColors.addEventListener('change', syncEnabled);
-    syncEnabled();
   }
 
   showDialog({
@@ -368,23 +351,20 @@ function openLayerPropsDialog(networkId: string, layerId: string): void {
           const title = titleInput.value.trim();
           const comment = commentInput.value.trim();
           if (!layer.is_base && title.length === 0) return;
-          // Colours: `undefined` — untouched, `null` — reset to theme
-          // defaults, an object — the picked pair plus the inverted
-          // opposite theme (§2.2a).
-          let colors: LayerColors | null | undefined;
-          if (stripeRow !== null && bgRow !== null && useColors !== null) {
-            if (!useColors.checked) {
-              if (layer.colors !== null) colors = null;
-            } else {
-              const next: LayerColors = {
-                focus_stripe: invertThemeColor(
-                  { dark: stripeRow.get(), light: stripeRow.get() },
-                  theme,
-                ),
-                background: invertThemeColor({ dark: bgRow.get(), light: bgRow.get() }, theme),
-              };
-              if (JSON.stringify(next) !== JSON.stringify(layer.colors)) colors = next;
-            }
+          // Colours: `undefined` — untouched, an object — the picked pair
+          // plus the inverted opposite theme (§2.2a). There is no «off»
+          // switch anymore: the shown pair is always what gets saved, so a
+          // layer without stored colours picks up the shown defaults.
+          let colors: LayerColors | undefined;
+          if (stripeRow !== null && bgRow !== null) {
+            const next: LayerColors = {
+              focus_stripe: invertThemeColor(
+                { dark: stripeRow.get(), light: stripeRow.get() },
+                theme,
+              ),
+              background: invertThemeColor({ dark: bgRow.get(), light: bgRow.get() }, theme),
+            };
+            if (JSON.stringify(next) !== JSON.stringify(layer.colors)) colors = next;
           }
           try {
             const updated = await etn.layers.update(

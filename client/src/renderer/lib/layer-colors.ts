@@ -215,30 +215,26 @@ export function initLayerTheme(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Layer-name label on the map (§2.2a: the vertical stripe at the left edge
+// Layer-name label on the map (§2.2a: the horizontal stripe at the left edge
 // of the focus zone)
 // ---------------------------------------------------------------------------
 
-/** Average advance of one rotated glyph along the text direction, in font
- *  sizes (Cyrillic/Latin mix of the layer titles). */
-export const LABEL_CHAR_FACTOR = 0.62;
-/** Stripe width per font size (line height + breathing room). */
-export const LABEL_WIDTH_FACTOR = 1.7;
-/** The label stripe never exceeds this share of the canvas width. */
-export const LABEL_MAX_WIDTH_SHARE = 0.1;
+/** Font size of the label: up to 30% of the focus-zone height. */
+export const LABEL_FONT_SHARE = 0.3;
+/** Label opacity, 0..1 — a single tuning knob; the value is picked by eye,
+ *  keep it in sync with 13-layers.md §2.2a. */
+export const LABEL_OPACITY = 0.6;
 /** Below this size the text is unreadable — clamp and let `overflow` clip. */
 export const LABEL_MIN_FONT_PX = 8;
 
 /**
- * Font size of the layer label: ~⅓ of the focus-zone height, shrunk when the
- * (rotated) name is longer than the zone, and capped so the whole stripe
- * stays within 10% of the canvas width.
+ * Font size of the layer label: 30% of the focus-zone height, fixed by the
+ * zone geometry — never shrunk to fit the name: a name longer than the label
+ * stripe (max 10% of the canvas width, CSS `max-width` + `overflow: hidden`)
+ * is simply clipped.
  */
-export function layerLabelFontSize(zoneHeight: number, nameLength: number, canvasWidth: number): number {
-  const byZone = zoneHeight / 3;
-  const byFit = nameLength > 0 ? zoneHeight / (nameLength * LABEL_CHAR_FACTOR) : byZone;
-  const byWidth = (canvasWidth * LABEL_MAX_WIDTH_SHARE) / LABEL_WIDTH_FACTOR;
-  return Math.max(LABEL_MIN_FONT_PX, Math.floor(Math.min(byZone, byFit, byWidth)));
+export function layerLabelFontSize(zoneHeight: number): number {
+  return Math.max(LABEL_MIN_FONT_PX, Math.floor(zoneHeight * LABEL_FONT_SHARE));
 }
 
 /**
@@ -291,6 +287,6 @@ export function layerLabelView(
     title: current?.title ?? '',
     stripe,
     color: stripeLabelColor(stripe),
-    fontPx: visible ? layerLabelFontSize(zoneHeight, current!.title.length, canvasWidth) : 0,
+    fontPx: visible ? layerLabelFontSize(zoneHeight) : 0,
   };
 }
