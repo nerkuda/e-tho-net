@@ -122,6 +122,14 @@ export class RestClient {
   private readonly fetchImpl: typeof fetch;
   private readonly random: () => number;
 
+  /**
+   * In-flight plain GETs by final URL (see {@link request}): identical GETs
+   * racing each other share one fetch. Cleared in a `finally` — completed
+   * responses are never cached, so sequential identical GETs fetch again and
+   * realtime freshness is preserved.
+   */
+  private readonly inflightGets = new Map<string, Promise<unknown>>();
+
   /** Metadata of the most recent successful response (version/request_id). */
   public lastMeta: ApiSuccess<unknown>['meta'] | undefined;
 
@@ -138,9 +146,20 @@ export class RestClient {
   // -------------------------------------------------------------------------
 
   /**
-   * Performs an HTTP request with auth, retry and error normalisation. Returns the
-   * parsed `data` of the success envelope. Throws {@link EtnError} on any non-2xx
-   * response or unrecoverable network failure.
+   * Performs an HTTP request with auth, retry and error normalisation, plus
+   * in-flight dedup of identical parallel GETs. Returns the parsed `data` of
+   * the success envelope. Throws {@link EtnError} on any non-2xx response or
+   * unrecoverable network failure.
+   *
+   * Dedup (GET only, no per-call options): two identical GETs issued while
+   * the first still flies share one fetch and its result — e.g. on opening a
+   * thought the editor fires `GET …/thought-types/{id}/properties` twice
+   * concurrently (the group's count badge and the properties table both ask
+   * for the same definitions). GETs carrying `requestOptions` (signal /
+   * Client-Request-Id / If-Match) bypass the dedup — those carry per-caller
+   * state that must not leak between callers. The dedup shares the response
+   * promise only, so `lastMeta` (which no current GET caller reads) reflects
+   * the single underlying call.
    *
    * Generic `T` is the `data` payload type. List endpoints use
    * `T = SomeDto[]` together with {@link lastMeta}.
@@ -150,6 +169,32 @@ export class RestClient {
    * @param opts Body, query, request options.
    */
   private async request<T>(
+    method: string,
+    path: string,
+    opts: {
+      query?: QueryRecord;
+      body?: unknown;
+      requestOptions?: RequestOptions;
+    } = {},
+  ): Promise<T> {
+    if (method === 'GET' && opts.requestOptions === undefined) {
+      const url = this.buildUrl(path, opts.query);
+      const inflight = this.inflightGets.get(url);
+      if (inflight !== undefined) return inflight as Promise<T>;
+      const promise = this.performRequest<T>(method, path, opts).finally(() => {
+        this.inflightGets.delete(url);
+      });
+      this.inflightGets.set(url, promise);
+      return promise;
+    }
+    return this.performRequest<T>(method, path, opts);
+  }
+
+  /**
+   * The request engine behind {@link request}: auth, retry, error
+   * normalisation. Returns the parsed `data` of the success envelope.
+   */
+  private async performRequest<T>(
     method: string,
     path: string,
     opts: {

@@ -490,6 +490,54 @@ describe('RestClient — attachment raw download', () => {
   });
 });
 
+describe('RestClient — in-flight дедуп одинаковых GET', () => {
+  it('два одинаковых параллельных GET делят один fetch и один ответ', async () => {
+    const { fetch, calls } = makeFetch([{ status: 200, body: { data: [{ id: 't1' }] } }], {
+      delayMs: 10,
+    });
+    const client = makeClient(fetch);
+    const [a, b] = await Promise.all([
+      client.listThoughtTypes('net1'),
+      client.listThoughtTypes('net1'),
+    ]);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(a, b);
+  });
+
+  it('после завершения GET слот освобождается — последовательные GET летят отдельно', async () => {
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { data: [] } },
+      { status: 200, body: { data: [] } },
+    ]);
+    const client = makeClient(fetch);
+    await client.listThoughtTypes('net1');
+    await client.listThoughtTypes('net1');
+    assert.equal(calls.length, 2);
+  });
+
+  it('разные GET (другой путь/запрос) не дедупятся', async () => {
+    const { fetch, calls } = makeFetch([{ status: 200, body: { data: [] } }], { delayMs: 10 });
+    const client = makeClient(fetch);
+    await Promise.all([
+      client.listThoughtTypes('net1'),
+      client.listLinkTypes('net1'),
+      client.listThoughtTypes('net2'),
+    ]);
+    assert.equal(calls.length, 3);
+  });
+
+  it('отклонённый GET освобождает слот: повторный одинаковый GET летит заново', async () => {
+    const { fetch, calls } = makeFetch([
+      { status: 404, body: { error: { code: 'NOT_FOUND', message: 'нет' } } },
+      { status: 200, body: { data: [] } },
+    ]);
+    const client = makeClient(fetch);
+    await assert.rejects(() => client.listThoughtTypes('net1'));
+    await client.listThoughtTypes('net1');
+    assert.equal(calls.length, 2);
+  });
+});
+
 describe('RestClient — §16 system endpoints', () => {
   it('getHealth targets /api/v1/health without an Authorization header', async () => {
     const { fetch, calls } = makeFetch([
