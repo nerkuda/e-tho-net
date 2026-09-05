@@ -704,6 +704,126 @@ describe(
           ndb.close();
         }
       });
+
+      it('is_empty / not_empty: text/date/number presence test (bug fix 0.6.3)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const type = seedThoughtType(ndb, 'Лицо');
+          const city = seedProperty(ndb, type, 'город', 'text');
+          const age = seedProperty(ndb, type, 'возраст', 'number');
+          const birthday = seedProperty(ndb, type, 'дата рождения', 'date');
+
+          const filled = seedThought(ndb, { title: 'С-данными', type_id: type });
+          seedPropertyValue(ndb, filled, city, 'value_text', 'Москва');
+          seedPropertyValue(ndb, filled, age, 'value_number', 30);
+          seedPropertyValue(ndb, filled, birthday, 'value_date', '2000-01-01');
+          const bare = seedThought(ndb, { title: 'Без свойств', type_id: type });
+          // Home has no row at all for any of these properties.
+
+          // not_empty «город» = filled only.
+          const filledCity = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: city, op: 'not_empty', value: '' }],
+          }));
+          assert.deepEqual(filledCity.items.map((t) => t.id), [filled]);
+
+          // is_empty «город» = everyone except filled (Home + bare).
+          const emptyCity = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: city, op: 'is_empty', value: '' }],
+          }));
+          assert.deepEqual(
+            emptyCity.items.map((t) => t.id).sort(),
+            [bare, (ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1').get() as { id: string }).id].sort(),
+          );
+
+          // Same for number and date — sanity check across value types.
+          const filledAge = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: age, op: 'not_empty', value: '' }],
+          }));
+          assert.deepEqual(filledAge.items.map((t) => t.id), [filled]);
+
+          const emptyBirthday = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: birthday, op: 'is_empty', value: '' }],
+          }));
+          assert.equal(emptyBirthday.items.length, 2);
+          assert.ok(!emptyBirthday.items.some((t) => t.id === filled));
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('is_empty / not_empty: thought_ref treats single id, JSON array, "[]" and "null" as expected (0.6.3)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const type = seedThoughtType(ndb, 'Проект');
+          const team = seedProperty(ndb, type, 'команда', 'thought_ref');
+
+          const dev1 = seedThought(ndb, { title: 'Разработчик 1' });
+          const withSingle = seedThought(ndb, { title: 'С-одним', type_id: type });
+          seedPropertyValue(ndb, withSingle, team, 'value_thought_ref', dev1);
+          const withArray = seedThought(ndb, { title: 'С-массивом', type_id: type });
+          seedPropertyValue(ndb, withArray, team, 'value_thought_ref', JSON.stringify([dev1]));
+          const withEmptyArray = seedThought(ndb, { title: 'С-пустым', type_id: type });
+          seedPropertyValue(ndb, withEmptyArray, team, 'value_thought_ref', '[]');
+          const withNullArray = seedThought(ndb, { title: 'С-null', type_id: type });
+          seedPropertyValue(ndb, withNullArray, team, 'value_thought_ref', 'null');
+          const bare = seedThought(ndb, { title: 'Без свойства', type_id: type });
+
+          // not_empty: at least one filled id → 2 thoughts (single + array).
+          const notEmpty = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: team, op: 'not_empty', value: '' }],
+          }));
+          assert.deepEqual(
+            notEmpty.items.map((t) => t.id).sort(),
+            [withArray, withSingle].sort(),
+          );
+
+          // is_empty: no row OR empty array / null array. The untyped dev1
+          // has no row either, so it counts as empty too (the panel only
+          // surfaces the property when the thought carries the type, but
+          // the SQL filter is uniform across the table — same rule that
+          // powers `not_in` for thought_ref in the test above).
+          const empty = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: team, op: 'is_empty', value: '' }],
+          }));
+          const home = (
+            ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1').get() as { id: string }
+          ).id;
+          assert.deepEqual(
+            empty.items.map((t) => t.id).sort(),
+            [bare, dev1, home, withEmptyArray, withNullArray].sort(),
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('is_empty / not_empty are forbidden on bool values (0.6.3)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const type = seedThoughtType(ndb, 'Лицо');
+          const active = seedProperty(ndb, type, 'активен', 'bool');
+
+          assert.throws(
+            () =>
+              queryThoughts(ndb, USER, query({
+                properties: [{ property_id: active, op: 'is_empty', value: '' }],
+              })),
+            (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+          );
+          assert.throws(
+            () =>
+              queryThoughts(ndb, USER, query({
+                properties: [{ property_id: active, op: 'not_empty', value: '' }],
+              })),
+            (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+          );
+        } finally {
+          ndb.close();
+        }
+      });
     });
 
     describe('queryThoughts: parent_ids scoping', () => {

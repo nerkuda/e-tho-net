@@ -63,14 +63,20 @@ export const REF_COLUMNS =
 /** Row shape accepted by {@link rowToThoughtRef}. */
 type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
 
-/** Operators allowed per property `value_type` (03-server-api.md §6.10). */
+/**
+ * Operators allowed per property `value_type` (03-server-api.md §6.10).
+ *
+ * `is_empty` / `not_empty` test for the presence of a value at all and are
+ * allowed for every type except `bool` — there the same intent is covered
+ * by `eq true` / `eq false`, so an extra toggle would be redundant noise.
+ */
 const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly StructurePropertyOp[]> = {
-  text: ['contains', 'eq', 'in', 'not_in'],
-  url: ['contains', 'eq', 'in', 'not_in'],
-  date: ['eq', 'gt', 'lt'],
-  number: ['eq', 'gt', 'lt'],
+  text: ['contains', 'eq', 'in', 'not_in', 'is_empty', 'not_empty'],
+  url: ['contains', 'eq', 'in', 'not_in', 'is_empty', 'not_empty'],
+  date: ['eq', 'gt', 'lt', 'is_empty', 'not_empty'],
+  number: ['eq', 'gt', 'lt', 'is_empty', 'not_empty'],
   bool: ['eq'],
-  thought_ref: ['eq', 'in', 'not_in'],
+  thought_ref: ['eq', 'in', 'not_in', 'is_empty', 'not_empty'],
 };
 
 /** Storage column of `property_values` per property `value_type`. */
@@ -259,6 +265,18 @@ function parsePropertyCondition(raw: unknown, requestId?: string): StructureProp
       field: 'op',
       allowed: STRUCTURE_PROPERTY_OPS,
     }, requestId);
+  }
+  // `is_empty` / `not_empty` ignore the value payload — the server decides
+  // presence from the row + value column alone. Accept a missing, empty or
+  // arbitrary `value`; the SQL builder never reads it for these ops
+  // (bug fix 0.6.3).
+  if (op === 'is_empty' || op === 'not_empty') {
+    const rawValue = obj['value'];
+    const placeholder: StructurePropertyValue =
+      typeof rawValue === 'string' || typeof rawValue === 'number' || typeof rawValue === 'boolean'
+        ? rawValue
+        : '';
+    return { property_id: propertyId, op: op as StructurePropertyOp, value: placeholder };
   }
   const value = obj['value'];
   const isScalar =
@@ -598,6 +616,27 @@ function buildFilterQuerySql(
              AND ${column} LIKE ? ESCAPE '\\')`,
       );
       params.push(cond.property_id, pattern);
+      continue;
+    }
+    if (cond.op === 'is_empty' || cond.op === 'not_empty') {
+      // `is_empty` — the thought has no filled value for this property;
+      // `not_empty` — there is at least one filled value. The single-column
+      // invariant (§3.5) guarantees the value column is NULL for other value
+      // types. Empty-string `''` (text/url) and JSON `'[]'`/`'null'`
+      // (thought_ref) are also "empty" — defensive against an editor that
+      // submits a placeholder string. The `value` payload is ignored: presence
+      // is decided by the row + column alone.
+      const filledExpr =
+        def.value_type === 'thought_ref'
+          ? `${column} IS NOT NULL AND ${column} != '' AND ${column} != '[]' AND ${column} != 'null'`
+          : `${column} IS NOT NULL AND ${column} != ''`;
+      const filledSql = `SELECT 1 FROM property_values_v pv
+         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+           AND ${filledExpr}`;
+      where.push(
+        cond.op === 'not_empty' ? `EXISTS (${filledSql})` : `NOT EXISTS (${filledSql})`,
+      );
+      params.push(cond.property_id);
       continue;
     }
     const value = sqlScalar(def, cond.value as StructurePropertyValue, requestId);
