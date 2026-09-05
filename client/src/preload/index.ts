@@ -159,6 +159,11 @@ function buildApi(): EtnApi {
     },
     propertyRegistry: {
       list: (networkId) => invoke('propertyRegistry.list', networkId),
+      get: (networkId, id) => invoke('propertyRegistry.get', networkId, id),
+      create: (networkId, input) => invoke('propertyRegistry.create', networkId, input),
+      update: (networkId, id, input) => invoke('propertyRegistry.update', networkId, id, input),
+      remove: (networkId, id) => invoke('propertyRegistry.remove', networkId, id),
+      usage: (networkId, id) => invoke('propertyRegistry.usage', networkId, id),
     },
     comments: {
       list: (networkId, ownerType, ownerId) =>

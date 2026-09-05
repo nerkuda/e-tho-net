@@ -57,12 +57,15 @@ import type {
   NetworkListItem,
   NetworkMember,
   NetworkProperty,
+  NetworkPropertyInput,
+  NetworkPropertyUpdateInput,
   UpdateNetworkInput,
   EffectiveTypeProperty,
   PropertyDefinition,
   PropertyDefinitionInput,
   PropertyDefinitionUpdateInput,
   PropertyValue,
+  PropertyValueType,
   SavedFilter,
   SavedFilterDefinition,
   PinnedThoughtEntry,
@@ -575,7 +578,8 @@ export interface EtnApi {
   /**
    * Property registry (0.6.5). The registry is the single source of a
    * property's nature; the structures filter panel reads it in one call to
-   * populate the property picker (task 171a438e).
+   * populate the property picker (task 171a438e) and the property manager
+   * dialog (task d4e23670) drives create/update/delete through here.
    */
   propertyRegistry: {
     /** `GET /networks/{nid}/properties` — registry list with usage counters. */
@@ -584,6 +588,47 @@ export interface EtnApi {
     ): Promise<
       Array<NetworkProperty & { types_count: number; values_count: number }>
     >;
+    /** `GET /networks/{nid}/properties/{id}` — one property with counters. */
+    get(
+      networkId: string,
+      id: string,
+    ): Promise<NetworkProperty & { types_count: number; values_count: number }>;
+    /** `POST /networks/{nid}/properties` — create. */
+    create(networkId: string, input: NetworkPropertyInput): Promise<NetworkProperty>;
+    /**
+     * `PATCH /networks/{nid}/properties/{id}` — patch. Returns the new
+     * property alongside the conversion footprint (rewritten / dropped stored
+     * values when `value_type` changed; both zero otherwise).
+     */
+    update(
+      networkId: string,
+      id: string,
+      input: NetworkPropertyUpdateInput,
+    ): Promise<{ property: NetworkProperty; converted: number; dropped: number }>;
+    /** `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound. */
+    remove(networkId: string, id: string): Promise<void>;
+    /**
+     * `GET /networks/{nid}/properties/{id}/usage` — type bindings, in-type
+     * values per binding and out-of-type values count (the two numbers the
+     * delete dialog surfaces).
+     */
+    usage(
+      networkId: string,
+      id: string,
+    ): Promise<{
+      property_id: string;
+      name: string;
+      value_type: PropertyValueType;
+      bindings: Array<{
+        owner_type: 'thought_type' | 'link_type';
+        owner_id: string;
+        owner_name: string;
+        required: boolean;
+        values_in_type_count: number;
+      }>;
+      values_in_type_count: number;
+      values_outside_type_count: number;
+    }>;
   };
   comments: {
     list(networkId: string, ownerType: 'thought' | 'link', ownerId: string): Promise<Comment[]>;

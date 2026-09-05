@@ -859,6 +859,36 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'propertyRegistry.list',
     bind((networkId: string) => requireRest(deps).listNetworkProperties(networkId)),
   );
+  handlers.set(
+    'propertyRegistry.get',
+    bind((networkId: string, id: string) => requireRest(deps).getNetworkProperty(networkId, id)),
+  );
+  handlers.set(
+    'propertyRegistry.create',
+    bind((networkId: string, input: Parameters<RestClient['createNetworkProperty']>[1]) =>
+      requireRest(deps).createNetworkProperty(networkId, input),
+    ),
+  );
+  handlers.set(
+    'propertyRegistry.update',
+    bind(
+      (
+        networkId: string,
+        id: string,
+        input: Parameters<RestClient['updateNetworkProperty']>[2],
+      ) => requireRest(deps).updateNetworkProperty(networkId, id, input),
+    ),
+  );
+  handlers.set(
+    'propertyRegistry.remove',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).deleteNetworkProperty(networkId, id),
+    ),
+  );
+  handlers.set(
+    'propertyRegistry.usage',
+    bind((networkId: string, id: string) => requireRest(deps).getNetworkPropertyUsage(networkId, id)),
+  );
 
   // --- comments -------------------------------------------------------------
   handlers.set(

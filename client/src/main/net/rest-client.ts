@@ -1097,7 +1097,8 @@ export class RestClient {
    * `GET /networks/{nid}/properties` — registry list (one row per network
    * property; counter columns `types_count` / `values_count` ride along).
    * Used by the structures filter panel to populate the property picker
-   * without walking every type (task 171a438e).
+   * without walking every type (task 171a438e) and by the property manager
+   * dialog (task d4e23670) as the main list source.
    */
   public async listNetworkProperties(
     networkId: string,
@@ -1105,6 +1106,85 @@ export class RestClient {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties`,
+    );
+  }
+
+  /** `GET /networks/{nid}/properties/{id}` — one property + counters. */
+  public async getNetworkProperty(
+    networkId: string,
+    id: string,
+  ): Promise<import('@etn/shared').NetworkProperty & { types_count: number; values_count: number }> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /** `POST /networks/{nid}/properties` — create. */
+  public async createNetworkProperty(
+    networkId: string,
+    input: import('@etn/shared').NetworkPropertyInput,
+  ): Promise<import('@etn/shared').NetworkProperty> {
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/properties`, {
+      body: input,
+    });
+  }
+
+  /**
+   * `PATCH /networks/{nid}/properties/{id}` — patch. The server returns
+   * `{ ...property, converted, dropped }` so the manager can show how many
+   * stored values were rewritten/dropped after a value-type conversion. The
+   * registry does not currently participate in optimistic locking — single
+   * client owns the row for the duration of the staged editor.
+   */
+  public async updateNetworkProperty(
+    networkId: string,
+    id: string,
+    input: import('@etn/shared').NetworkPropertyUpdateInput,
+  ): Promise<{
+    property: import('@etn/shared').NetworkProperty;
+    converted: number;
+    dropped: number;
+  }> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
+      { body: input },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound. */
+  public async deleteNetworkProperty(
+    networkId: string,
+    id: string,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /** `GET /networks/{nid}/properties/{id}/usage` — bindings + value counts. */
+  public async getNetworkPropertyUsage(
+    networkId: string,
+    id: string,
+  ): Promise<{
+    property_id: string;
+    name: string;
+    value_type: import('@etn/shared').PropertyValueType;
+    bindings: Array<{
+      owner_type: 'thought_type' | 'link_type';
+      owner_id: string;
+      owner_name: string;
+      required: boolean;
+      values_in_type_count: number;
+    }>;
+    values_in_type_count: number;
+    values_outside_type_count: number;
+  }> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}/usage`,
     );
   }
 
