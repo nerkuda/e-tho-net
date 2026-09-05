@@ -28,6 +28,43 @@ import { openThoughtByRef } from './wiki-link.js';
 /** Block-level elements treated as independent scanning units. */
 const BLOCK_SELECTOR = 'p, li, td, th, blockquote, h1, h2, h3, h4, h5, h6, dd, dt';
 
+/** `POST /mentions/scan` limits (docs/03-server-api.md §21). */
+export const MENTIONS_SCAN_MAX_ITEMS = 50;
+export const MENTIONS_SCAN_MAX_CHARS = 20000;
+
+/**
+ * Splits `texts` into batches that satisfy the `POST /mentions/scan` contract:
+ * each batch holds at most {@link MENTIONS_SCAN_MAX_ITEMS} entries and the sum
+ * of their `length` does not exceed {@link MENTIONS_SCAN_MAX_CHARS}. A single
+ * text longer than the char cap is placed in its own batch — the server will
+ * reject it, but that one rejection is preferable to splitting a single text
+ * across multiple requests (results are indexed per request, and per-text
+ * matches cannot be reconstructed across batches). Order of texts is preserved
+ * across batches. Pure — exported for unit tests.
+ */
+export function chunkTextsForScan(texts: readonly string[]): string[][] {
+  const out: string[][] = [];
+  let current: string[] = [];
+  let currentChars = 0;
+  for (const t of texts) {
+    const len = t.length;
+    // Close the current batch only if it's non-empty AND adding `t` would
+    // violate either limit. A single oversized text lands in its own batch.
+    if (
+      current.length > 0 &&
+      (current.length >= MENTIONS_SCAN_MAX_ITEMS || currentChars + len > MENTIONS_SCAN_MAX_CHARS)
+    ) {
+      out.push(current);
+      current = [];
+      currentChars = 0;
+    }
+    current.push(t);
+    currentChars += len;
+  }
+  if (current.length > 0) out.push(current);
+  return out;
+}
+
 /** Ancestors whose text must never be scanned/wrapped. */
 const EXCLUDED_SELECTOR = 'a, code, pre, .wiki-link, .thought-mention';
 
@@ -179,6 +216,13 @@ function wrapMatch(
  * matches in place. `excludeThoughtId` — typically the comment's own owner
  * thought — is never offered as a match candidate. `onInsertLink` is called
  * when the user picks «Вставить ссылку…» for a match.
+ *
+ * The `POST /mentions/scan` contract (docs/03-server-api.md §21) caps the
+ * payload at ≤50 texts and ≤20 000 chars per request, so we slice the leaf
+ * blocks into compliant batches via {@link chunkTextsForScan} and fan out
+ * the requests in parallel; the per-batch results are then concatenated back
+ * in the original order. Best-effort: a failed scan (validation error,
+ * network glitch) leaves the text plain.
  */
 export function annotateMentions(
   container: HTMLElement,
@@ -193,17 +237,24 @@ export function annotateMentions(
   if (units.length === 0) return;
 
   const networkId = requireNetworkId();
-  void etn.thoughts
-    .mentionsScan(networkId, {
-      texts: units.map((u) => u.text),
-      show_inactive: store.state.showInactive,
-      exclude_thought_id: opts.excludeThoughtId,
-    })
-    .then((res) => {
+  const texts = units.map((u) => u.text);
+  const batches = chunkTextsForScan(texts);
+  const baseReq = {
+    show_inactive: store.state.showInactive,
+    exclude_thought_id: opts.excludeThoughtId,
+  };
+  void (async (): Promise<void> => {
+    try {
+      const responses = await Promise.all(
+        batches.map((batch) =>
+          etn.thoughts.mentionsScan(networkId, { ...baseReq, texts: batch }),
+        ),
+      );
+      const allResults = responses.flatMap((r) => r.results);
       if (!container.isConnected) return;
       units.forEach((unit, i) => {
         if (!unit.el.isConnected) return;
-        const matches = res.results[i] ?? [];
+        const matches = allResults[i] ?? [];
         // Apply back-to-front: extracting/wrapping a later match must not
         // shift the (node, offset) coordinates a not-yet-applied earlier
         // match relies on.
@@ -213,8 +264,8 @@ export function annotateMentions(
           wrapMatch(unit, match.start, match.end, match.thoughts, opts.onInsertLink);
         }
       });
-    })
-    .catch(() => {
+    } catch {
       // Best-effort annotation — a failed scan just leaves the text plain.
-    });
+    }
+  })();
 }
