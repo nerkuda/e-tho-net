@@ -307,9 +307,40 @@ function colorPickerRow(label: string, initial: string): {
  * HSL lightness. The base layer hides the colour fields — it always uses the
  * theme defaults.
  */
-function openLayerPropsDialog(networkId: string, layerId: string): void {
-  const layer = store.state.layers.find((l) => l.id === layerId);
-  if (layer === undefined) return;
+/**
+ * Диалог свойств слоя (название, комментарий, цвета) — экспортирован, чтобы
+ * открываться из ленты событий (задача 59119797: клик по `entity_type='layer'`
+ * → диалог редактирования слоя, а не снимок).
+ *
+ * Если слой отсутствует в `store.state.layers` (например, его только что
+ * создали и кэш ещё не успел обновиться, или он был удалён), подтягиваем
+ * его с сервера отдельным запросом.
+ */
+export function openLayerPropsDialog(networkId: string, layerId: string): void {
+  let layer = store.state.layers.find((l) => l.id === layerId);
+  if (layer === undefined) {
+    void openLayerPropsDialogAsync(networkId, layerId);
+    return;
+  }
+  showLayerPropsDialog(networkId, layer);
+}
+
+async function openLayerPropsDialogAsync(networkId: string, layerId: string): Promise<void> {
+  try {
+    // Слои не имеют GET-by-id — забираем весь список и ищем там.
+    const layers = await etn.layers.list(networkId);
+    const layer = layers.find((l) => l.id === layerId);
+    if (layer === undefined) {
+      errorDialog('Свойства слоя', new Error(`Слой ${layerId} не найден`));
+      return;
+    }
+    showLayerPropsDialog(networkId, layer);
+  } catch (err) {
+    errorDialog('Свойства слоя', err);
+  }
+}
+
+function showLayerPropsDialog(networkId: string, layer: Layer): void {
   const theme: Theme = store.state.theme;
 
   const titleInput = el('input', 'text-input') as HTMLInputElement;
@@ -369,7 +400,7 @@ function openLayerPropsDialog(networkId: string, layerId: string): void {
           try {
             const updated = await etn.layers.update(
               networkId,
-              layerId,
+              layer.id,
               {
                 ...(layer.is_base || title === layer.title ? {} : { title }),
                 ...(comment === (layer.comment ?? '') ? {} : { comment: comment.length > 0 ? comment : null }),

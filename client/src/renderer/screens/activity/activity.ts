@@ -30,6 +30,7 @@ import { button, div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
+import { openLayerPropsDialog } from '../layers.js';
 import { showLinkTypeEditor, showThoughtTypeEditor } from '../type-manager.js';
 import {
   buildUserMultiSelectWidget,
@@ -1086,11 +1087,10 @@ export function layerDisplayName(id: string): string {
  *  it still exists; otherwise shows a read-only dialog with the snapshot. */
 async function openEntity(row: ActivityRow): Promise<void> {
   const networkId = requireNetworkId();
-  // Переключаемся на слой события, чтобы `thoughts_v`/`links_v` отдали
-  // сущность именно того слоя, в котором она жила в момент события.
-  // Без этого клик по событию в слое, отличном от текущего, приводил к
-  // ложному диалогу «Сущность удалена» (баг, описанный пользователем).
-  if (row.layer_id !== null) {
+  // Для событий по слоям переключение на слой события НЕ нужно — пользователь
+  // ожидает увидеть диалог свойств того слоя, который изменился, а не менять
+  // активный слой. Диалог редактирует слой по id независимо от текущего.
+  if (row.entity_type !== 'layer' && row.layer_id !== null) {
     try {
       await etn.layers.select(networkId, row.layer_id);
     } catch {
@@ -1142,9 +1142,15 @@ async function openEntity(row: ActivityRow): Promise<void> {
         void showLinkTypeEditor(type, () => undefined);
         return;
       }
+      // Слой: диалог свойств слоя (название/комментарий/цвета). Работает
+      // по id слоя — даже если он удалён/скрыт, диалог сам покажет снимок
+      // через свой fallback (замечание пользователя: «ожидаю диалог свойств»).
+      case 'layer': {
+        openLayerPropsDialog(networkId, row.entity_id);
+        return;
+      }
       case 'property':
-      case 'layer':
-        // Для свойств/слоёв клиентских редакторов нет — оставляем снимок.
+        // Для свойств клиентского редактора нет — оставляем снимок.
         showSnapshotDialog(row);
         return;
       default:
