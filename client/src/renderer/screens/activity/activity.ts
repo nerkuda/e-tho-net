@@ -32,6 +32,7 @@ import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
 import { openLayerPropsDialog } from '../layers.js';
 import { showLinkTypeEditor, showThoughtTypeEditor } from '../type-manager.js';
+
 import {
   buildUserMultiSelectWidget,
   buildUserSelectWidget,
@@ -39,7 +40,6 @@ import {
   ensureLoaded,
   subscribe as subscribeUsers,
 } from '../../lib/users.js';
-import { applyLayerThemeStyle, currentLayerColors, resolveLayerTheme } from '../../lib/layer-colors.js';
 import { store } from '../../state.js';
 import { UI_STATE_KEY } from '@etn/shared';
 import {
@@ -261,18 +261,6 @@ function wirePanelSplitter(splitter: HTMLElement, panel: HTMLElement): void {
   });
 }
 
-/**
- * Перекрашивает фон списка при смене слоя — как в Хронике/Структурах
- * (08-ui-spec §15/§17). База — обычный фон, остальные слои — оттенок
- * цвета слоя через переменные `--layer-bg`.
- */
-function repaintLayerBackground(): void {
-  if (tableWrap === null) return;
-  const colors = currentLayerColors(store.state.layers, store.state.currentLayer);
-  const vars = resolveLayerTheme(colors, store.state.theme);
-  applyLayerThemeStyle(tableWrap.style, vars);
-}
-
 /** Mounts the view into the host element; called once from workspace.ts. */
 export function mountActivity(hostEl: HTMLElement): void {
   host = hostEl;
@@ -331,8 +319,8 @@ export function mountActivity(hostEl: HTMLElement): void {
     repaintNames();
     // Рамка «открытая в редакторе сущность» реагирует на смену editorTarget.
     repaintCursorAndCurrent();
-    // Смена слоя перекрашивает фон — как в Хронике/Структурах (08-ui-spec).
-    repaintLayerBackground();
+    // Фон списка меняется автоматически через CSS-переменную --layer-bg,
+    // которую выставляет глобальный initLayerTheme() (см. lib/layer-colors.ts).
   });
   // The names may resolve after the first paint — subscribe and re-render
   // author cells when the user cache changes.
@@ -764,7 +752,8 @@ function renderTable(): void {
   tableWrap.replaceChildren(table);
   repaintPager();
   repaintCursorAndCurrent();
-  repaintLayerBackground();
+  // Фон .activity-results задан через var(--layer-bg) на CSS-стороне
+  // (см. .activity-results в styles.css) — нет нужды красить вручную.
 
   // Row click — open the entity when it still exists (08-ui-spec.md §18:
   // «удалённые сущности — read-only с пометкой»). We do a quick check: try

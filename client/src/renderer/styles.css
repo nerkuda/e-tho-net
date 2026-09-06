@@ -6670,7 +6670,11 @@ table.chron-table thead th {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  /* --layer-bg (0.6.4, 13-layers.md §2.2a): фон списка событий следует за
+   * активным слоем, как в Хронике/Структурах. Без этого .activity-results
+   * перекрывал родительский var(--layer-bg) фиксированным var(--surface)
+   * (замечание пользователя: «фон таблицы событий не меняется при смене слоя»). */
+  background: var(--layer-bg, var(--surface));
   overflow: hidden;
 }
 
