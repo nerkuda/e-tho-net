@@ -127,6 +127,7 @@ function buildApi(): EtnApi {
     types: {
       listThoughtTypes: (networkId) => invoke('types.listThoughtTypes', networkId),
       getThoughtTypeCounts: (networkId) => invoke('types.getThoughtTypeCounts', networkId),
+      getThoughtType: (networkId, id) => invoke('types.getThoughtType', networkId, id),
       createThoughtType: (networkId, input) => invoke('types.createThoughtType', networkId, input),
       updateThoughtType: (networkId, id, input, expectedVersion) =>
         invoke('types.updateThoughtType', networkId, id, input, expectedVersion),
@@ -134,6 +135,7 @@ function buildApi(): EtnApi {
         invoke('types.removeThoughtType', networkId, id, expectedVersion, force),
       listLinkTypes: (networkId) => invoke('types.listLinkTypes', networkId),
       getLinkTypeCounts: (networkId) => invoke('types.getLinkTypeCounts', networkId),
+      getLinkType: (networkId, id) => invoke('types.getLinkType', networkId, id),
       createLinkType: (networkId, input) => invoke('types.createLinkType', networkId, input),
       updateLinkType: (networkId, id, input, expectedVersion) =>
         invoke('types.updateLinkType', networkId, id, input, expectedVersion),
@@ -190,6 +192,7 @@ function buildApi(): EtnApi {
     attachments: {
       list: (networkId, ownerType, ownerId) =>
         invoke('attachments.list', networkId, ownerType, ownerId),
+      get: (networkId, id) => invoke('attachments.get', networkId, id),
       add: (networkId, ownerType, ownerId, input) =>
         invoke('attachments.add', networkId, ownerType, ownerId, input),
       uploadFile: (networkId, ownerType, ownerId, input) =>

@@ -883,6 +883,11 @@ export class RestClient {
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thought-types/counts`);
   }
 
+  /** `GET /networks/{nid}/thought-types/{id}` — один тип мысли (задача 59119797). */
+  public async getThoughtType(networkId: string, id: string): Promise<import('@etn/shared').ThoughtType> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(id)}`);
+  }
+
   /** `POST /networks/{nid}/thought-types`. */
   public async createThoughtType(
     networkId: string,
@@ -933,6 +938,11 @@ export class RestClient {
    *  {@link getThoughtTypeCounts}. */
   public async getLinkTypeCounts(networkId: string): Promise<Record<string, number>> {
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/link-types/counts`);
+  }
+
+  /** `GET /networks/{nid}/link-types/{id}` — один тип связи (задача 59119797). */
+  public async getLinkType(networkId: string, id: string): Promise<import('@etn/shared').LinkType> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/link-types/${encodeURIComponent(id)}`);
   }
 
   /** `POST /networks/{nid}/link-types`. */
@@ -1498,6 +1508,14 @@ export class RestClient {
       `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(linkId)}/attachments`,
       { body: input, requestOptions: opts },
     );
+  }
+
+  /** `GET /networks/{nid}/attachments/{id}` — одно вложение с владельцем (задача 59119797). */
+  public async getAttachment(
+    networkId: string,
+    id: string,
+  ): Promise<import('@etn/shared').Attachment> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/attachments/${encodeURIComponent(id)}`);
   }
 
   /** `PATCH /networks/{nid}/attachments/{id}`. */

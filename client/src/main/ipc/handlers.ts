@@ -697,6 +697,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((networkId: string) => requireRest(deps).getThoughtTypeCounts(networkId)),
   );
   handlers.set(
+    'types.getThoughtType',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).getThoughtType(networkId, id),
+    ),
+  );
+  handlers.set(
     'types.createThoughtType',
     bind((networkId: string, input: Parameters<RestClient['createThoughtType']>[1]) =>
       requireRest(deps).createThoughtType(networkId, input),
@@ -731,6 +737,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'types.getLinkTypeCounts',
     bind((networkId: string) => requireRest(deps).getLinkTypeCounts(networkId)),
+  );
+  handlers.set(
+    'types.getLinkType',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).getLinkType(networkId, id),
+    ),
   );
   handlers.set(
     'types.createLinkType',
@@ -1027,6 +1039,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         ? rest.listThoughtAttachments(networkId, ownerId)
         : rest.listLinkAttachments(networkId, ownerId);
     }),
+  );
+  handlers.set(
+    'attachments.get',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).getAttachment(networkId, id),
+    ),
   );
   handlers.set(
     'attachments.add',

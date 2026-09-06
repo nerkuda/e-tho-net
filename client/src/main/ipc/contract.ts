@@ -508,6 +508,8 @@ export interface EtnApi {
     /** `GET /thought-types/counts` — own record count per type id (task
      *  «Улучшить диалог редактирования типов мыслей и связей»). */
     getThoughtTypeCounts(networkId: string): Promise<Record<string, number>>;
+    /** `GET /thought-types/{id}` — один тип мысли (для резолва кликов по activity). */
+    getThoughtType(networkId: string, id: string): Promise<ThoughtType>;
     createThoughtType(networkId: string, input: ThoughtTypeInput): Promise<ThoughtType>;
     updateThoughtType(
       networkId: string,
@@ -525,6 +527,8 @@ export interface EtnApi {
     listLinkTypes(networkId: string): Promise<LinkType[]>;
     /** `GET /link-types/counts` — the link-type analogue of `getThoughtTypeCounts`. */
     getLinkTypeCounts(networkId: string): Promise<Record<string, number>>;
+    /** `GET /link-types/{id}` — один тип связи (для резолва кликов по activity). */
+    getLinkType(networkId: string, id: string): Promise<LinkType>;
     createLinkType(networkId: string, input: LinkTypeInput): Promise<LinkType>;
     updateLinkType(
       networkId: string,
@@ -707,6 +711,8 @@ export interface EtnApi {
   };
   attachments: {
     list(networkId: string, ownerType: 'thought' | 'link', ownerId: string): Promise<Attachment[]>;
+    /** `GET /attachments/{id}` — одна запись с владельцем (для резолва кликов по activity). */
+    get(networkId: string, id: string): Promise<Attachment>;
     add(
       networkId: string,
       ownerType: 'thought' | 'link',

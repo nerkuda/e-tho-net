@@ -30,6 +30,7 @@ import { button, div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
+import { showLinkTypeEditor, showThoughtTypeEditor } from '../type-manager.js';
 import {
   buildUserMultiSelectWidget,
   buildUserSelectWidget,
@@ -1011,14 +1012,38 @@ async function openEntity(row: ActivityRow): Promise<void> {
         });
         return;
       }
-      case 'thought_type':
-      case 'link_type':
+      // Комментарий/вложение: открываем владельца (мысль или связь) — это
+      // то, что просил пользователь («событие по комментарию → мысль/связь,
+      // к которой он привязан»).
+      case 'comment': {
+        const comment = await etn.comments.get(networkId, row.entity_id);
+        await openCommentOrAttachmentOwner(comment.targets[0]);
+        return;
+      }
+      case 'attachment': {
+        const attachment = await etn.attachments.get(networkId, row.entity_id);
+        await openCommentOrAttachmentOwner({
+          owner_type: attachment.owner_type,
+          owner_id: attachment.owner_id,
+        });
+        return;
+      }
+      case 'thought_type': {
+        // Сначала пробуем кэш — избегаем лишнего round-trip.
+        const cached = store.state.thoughtTypes.find((t) => t.id === row.entity_id);
+        const type = cached ?? (await etn.types.getThoughtType(networkId, row.entity_id));
+        void showThoughtTypeEditor(type, () => undefined);
+        return;
+      }
+      case 'link_type': {
+        const cached = store.state.linkTypes.find((t) => t.id === row.entity_id);
+        const type = cached ?? (await etn.types.getLinkType(networkId, row.entity_id));
+        void showLinkTypeEditor(type, () => undefined);
+        return;
+      }
       case 'property':
-      case 'comment':
-      case 'attachment':
       case 'layer':
-        // No client-side editor for these entity kinds — show the snapshot
-        // dialog instead.
+        // Для свойств/слоёв клиентских редакторов нет — оставляем снимок.
         showSnapshotDialog(row);
         return;
       default:
@@ -1028,6 +1053,28 @@ async function openEntity(row: ActivityRow): Promise<void> {
     // The entity is gone (or otherwise unreadable) — fall back to the snapshot.
     showSnapshotDialog(row);
   }
+}
+
+/**
+ * Открывает владельца комментария/вложения (мысль или связь) в редакторе.
+ * Если у комментария нет ни одного target (например, он был удалён вместе
+ * с владельцем), показывается снимок из activity_log.
+ */
+async function openCommentOrAttachmentOwner(
+  target: { owner_type: 'thought' | 'link'; owner_id: string } | undefined,
+): Promise<void> {
+  if (target === undefined) return; // вызывающий обработает снимок
+  const networkId = requireNetworkId();
+  if (target.owner_type === 'thought') {
+    const thought = await etn.thoughts.get(networkId, target.owner_id);
+    await setThoughtEditorTarget(thought);
+    return;
+  }
+  const link = await etn.links.get(networkId, target.owner_id);
+  store.update({
+    editorTarget: { kind: 'link', id: link.id, link },
+    selectedLinkId: link.id,
+  });
 }
 
 /** Read-only dialog for an entity that no longer exists or lacks a client

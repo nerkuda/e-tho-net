@@ -453,6 +453,29 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
     );
 
+    // `GET /thought-types/:id` — fetch one thought type (задача 59119797:
+    // используется кликом по строке активности `entity_type='thought_type'`).
+    app.get(
+      '/networks/:networkId/thought-types/:id',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as TypeIdParams;
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const type = getThoughtType(ndb, id);
+        if (type === null) {
+          throw new EtnError('NOT_FOUND', `thought-type ${id} not found`, {
+            entity: 'thought_type',
+            id,
+          }, req.id);
+        }
+        sendSuccess(reply, type, {
+          version: type.version,
+          updated_at: type.updated_at,
+          request_id: req.id,
+        });
+      },
+    );
+
     app.patch(
       '/networks/:networkId/thought-types/:id',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
@@ -564,6 +587,28 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           layerId: req.layerEcho?.id ?? null,
         });
         sendCreated(reply, type, {
+          version: type.version,
+          updated_at: type.updated_at,
+          request_id: req.id,
+        });
+      },
+    );
+
+    // `GET /link-types/:id` — fetch one link type (задача 59119797).
+    app.get(
+      '/networks/:networkId/link-types/:id',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as TypeIdParams;
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const type = getLinkType(ndb, id);
+        if (type === null) {
+          throw new EtnError('NOT_FOUND', `link-type ${id} not found`, {
+            entity: 'link_type',
+            id,
+          }, req.id);
+        }
+        sendSuccess(reply, type, {
           version: type.version,
           updated_at: type.updated_at,
           request_id: req.id,

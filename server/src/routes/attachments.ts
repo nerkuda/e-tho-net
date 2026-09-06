@@ -423,6 +423,26 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
     );
 
+    // `GET /attachments/:id` — fetch one attachment with its owner info.
+    // Используется для разрешения событий активности (задача 59119797): клик
+    // по строке `entity_type='attachment'` открывает владельца вложения.
+    app.get(
+      '/networks/:networkId/attachments/:id',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const { networkId, id } = req.params as AttachmentIdParams;
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const attachment = getAttachment(ndb, id);
+        if (attachment === null) {
+          throw new EtnError('NOT_FOUND', `attachment ${id} not found`, {
+            entity: 'attachment',
+            id,
+          }, req.id);
+        }
+        sendSuccess(reply, attachment);
+      },
+    );
+
     app.patch(
       '/networks/:networkId/attachments/:id',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
