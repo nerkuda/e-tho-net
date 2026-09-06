@@ -26,6 +26,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { openNetworkDb } from '../db/network-db.js';
+export { openNetworkDb };
 import { resolveSessionLayer } from '../domain/layer-service.js';
 import type { Logger } from '../logger.js';
 

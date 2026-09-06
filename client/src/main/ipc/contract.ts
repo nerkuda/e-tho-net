@@ -315,7 +315,8 @@ export interface EtnApi {
     setPreference(id: string, key: string, value: unknown): Promise<void>;
   };
   thoughts: {
-    get(networkId: string, id: string): Promise<Thought>;
+    /** `atLayerId` (опционально) — открыть мысль в конкретном слое, не переключая сессию. */
+    get(networkId: string, id: string, atLayerId?: string): Promise<Thought>;
     focus(networkId: string, id: string): Promise<FocusResponse>;
     create(networkId: string, input: ThoughtCreateInput): Promise<Thought>;
     update(
@@ -445,7 +446,8 @@ export interface EtnApi {
     set(networkId: string, orderedIds: string[]): Promise<PinnedThoughtEntry[]>;
   };
   links: {
-    get(networkId: string, id: string): Promise<Link>;
+    /** `atLayerId` (опционально) — открыть связь в конкретном слое, не переключая сессию. */
+    get(networkId: string, id: string, atLayerId?: string): Promise<Link>;
     create(networkId: string, input: LinkCreateInput): Promise<Link>;
     update(
       networkId: string,

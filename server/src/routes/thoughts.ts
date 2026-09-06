@@ -57,6 +57,7 @@ import {
   requestBody,
   type RouteDeps,
 } from './helpers.js';
+import { openNetworkDb } from '../db/network-db.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
 import { createLink, deleteLink, findLinksBetween, incomingLinksOf } from '../domain/link-service.js';
 import { clearThoughtRefUsages, findThoughtUsage } from '../domain/property-service.js';
@@ -420,7 +421,14 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as ThoughtIdParams;
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // `at_layer_id` — для ленты событий: открыть мысль по id в
+        // конкретном слое, не переключая сессию (задача 59119797: фон
+        // таблицы событий слетает после клика).
+        const atLayerId = queryStrings((req.query as Record<string, unknown> | undefined)?.['at_layer_id'])[0] ?? null;
+        const ndb =
+          atLayerId !== null
+            ? openNetworkDb(deps.dataDir, networkId, app.appLogger, atLayerId)
+            : openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const thought = getThought(ndb, id);
         if (thought === null) {
           throw new EtnError('NOT_FOUND', 'Мысль не найдена.', undefined, req.id);

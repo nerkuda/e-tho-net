@@ -308,7 +308,9 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   // --- thoughts -------------------------------------------------------------
   handlers.set(
     'thoughts.get',
-    bind((networkId: string, id: string) => requireRest(deps).getThought(networkId, id)),
+    bind((networkId: string, id: string, atLayerId?: string) =>
+      requireRest(deps).getThought(networkId, id, atLayerId),
+    ),
   );
   handlers.set(
     'thoughts.focus',
@@ -551,7 +553,9 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   // --- links ----------------------------------------------------------------
   handlers.set(
     'links.get',
-    bind((networkId: string, id: string) => requireRest(deps).getLink(networkId, id)),
+    bind((networkId: string, id: string, atLayerId?: string) =>
+      requireRest(deps).getLink(networkId, id, atLayerId),
+    ),
   );
   handlers.set(
     'links.create',

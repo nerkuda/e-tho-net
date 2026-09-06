@@ -638,11 +638,16 @@ export class RestClient {
   // §6 Thoughts
   // -------------------------------------------------------------------------
 
-  /** `GET /networks/{nid}/thoughts/{id}`. */
-  public async getThought(networkId: string, id: string): Promise<import('@etn/shared').Thought> {
+  /** `GET /networks/{nid}/thoughts/{id}` — `?at_layer_id=<id>` открывает мысль в конкретном слое. */
+  public async getThought(
+    networkId: string,
+    id: string,
+    atLayerId?: string,
+  ): Promise<import('@etn/shared').Thought> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(id)}`,
+      atLayerId !== undefined ? { query: { at_layer_id: atLayerId } } : undefined,
     );
   }
 
@@ -812,11 +817,16 @@ export class RestClient {
     });
   }
 
-  /** `GET /networks/{nid}/links/{id}`. */
-  public async getLink(networkId: string, id: string): Promise<import('@etn/shared').Link> {
+  /** `GET /networks/{nid}/links/{id}` — `?at_layer_id=<id>` открывает связь в конкретном слое. */
+  public async getLink(
+    networkId: string,
+    id: string,
+    atLayerId?: string,
+  ): Promise<import('@etn/shared').Link> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(id)}`,
+      atLayerId !== undefined ? { query: { at_layer_id: atLayerId } } : undefined,
     );
   }
 

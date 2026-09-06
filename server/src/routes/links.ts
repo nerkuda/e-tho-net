@@ -22,6 +22,7 @@ import {
   fieldNullableString,
   fieldString,
   fieldStringArray,
+  openNetworkDb,
   openRouteNetworkDb,
   parseIfMatch,
   parseLinkStyle,
@@ -148,7 +149,13 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
       { preHandler: [app.authPreHandler, requireNetworkMember()] },
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as LinkIdParams;
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // `at_layer_id` — открыть связь по id в конкретном слое, не
+        // переключая сессию (лента событий, задача 59119797).
+        const atLayerId = queryStrings((req.query as Record<string, unknown> | undefined)?.['at_layer_id'])[0] ?? null;
+        const ndb =
+          atLayerId !== null
+            ? openNetworkDb(deps.dataDir, networkId, app.appLogger, atLayerId)
+            : openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const link = getLink(ndb, id);
         if (link === null) {
           throw new EtnError('NOT_FOUND', 'Связь не найдена.', undefined, req.id);

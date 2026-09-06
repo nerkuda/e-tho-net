@@ -1076,26 +1076,21 @@ export function layerDisplayName(id: string): string {
  *  it still exists; otherwise shows a read-only dialog with the snapshot. */
 async function openEntity(row: ActivityRow): Promise<void> {
   const networkId = requireNetworkId();
-  // Для событий по слоям переключение на слой события НЕ нужно — пользователь
-  // ожидает увидеть диалог свойств того слоя, который изменился, а не менять
-  // активный слой. Диалог редактирует слой по id независимо от текущего.
-  if (row.entity_type !== 'layer' && row.layer_id !== null) {
-    try {
-      await etn.layers.select(networkId, row.layer_id);
-    } catch {
-      // Если переключение не удалось — пробуем открыть в текущем слое,
-      // диалог снимка всё равно сработает при провале.
-    }
-  }
+  // Не переключаем активный слой: событие может относиться к другому слою,
+  // а пользователь ожидает продолжить работу в текущем (фон таблицы
+  // событий не должен слетать на белый/чёрный). Конкретный слой события
+  // передаётся через `at_layer_id` в GET-запросе — сущность открывается
+  // в нужном слое без смены сессии (задача 59119797).
+  const atLayer = row.layer_id ?? undefined;
   try {
     switch (row.entity_type) {
       case 'thought': {
-        const thought = await etn.thoughts.get(networkId, row.entity_id);
+        const thought = await etn.thoughts.get(networkId, row.entity_id, atLayer);
         await setThoughtEditorTarget(thought);
         return;
       }
       case 'link': {
-        const link = await etn.links.get(networkId, row.entity_id);
+        const link = await etn.links.get(networkId, row.entity_id, atLayer);
         store.update({
           editorTarget: { kind: 'link', id: link.id, link },
           selectedLinkId: link.id,
@@ -1107,15 +1102,18 @@ async function openEntity(row: ActivityRow): Promise<void> {
       // к которой он привязан»).
       case 'comment': {
         const comment = await etn.comments.get(networkId, row.entity_id);
-        await openCommentOrAttachmentOwner(comment.targets[0]);
+        await openCommentOrAttachmentOwner(comment.targets[0], atLayer);
         return;
       }
       case 'attachment': {
         const attachment = await etn.attachments.get(networkId, row.entity_id);
-        await openCommentOrAttachmentOwner({
-          owner_type: attachment.owner_type,
-          owner_id: attachment.owner_id,
-        });
+        await openCommentOrAttachmentOwner(
+          {
+            owner_type: attachment.owner_type,
+            owner_id: attachment.owner_id,
+          },
+          atLayer,
+        );
         return;
       }
       case 'thought_type': {
@@ -1155,18 +1153,21 @@ async function openEntity(row: ActivityRow): Promise<void> {
  * Открывает владельца комментария/вложения (мысль или связь) в редакторе.
  * Если у комментария нет ни одного target (например, он был удалён вместе
  * с владельцем), показывается снимок из activity_log.
+ * `atLayer` пробрасывается в GET — иначе для события из чужого слоя
+ * запрос провалится (задача 59119797).
  */
 async function openCommentOrAttachmentOwner(
   target: { owner_type: 'thought' | 'link'; owner_id: string } | undefined,
+  atLayer?: string,
 ): Promise<void> {
   if (target === undefined) return; // вызывающий обработает снимок
   const networkId = requireNetworkId();
   if (target.owner_type === 'thought') {
-    const thought = await etn.thoughts.get(networkId, target.owner_id);
+    const thought = await etn.thoughts.get(networkId, target.owner_id, atLayer);
     await setThoughtEditorTarget(thought);
     return;
   }
-  const link = await etn.links.get(networkId, target.owner_id);
+  const link = await etn.links.get(networkId, target.owner_id, atLayer);
   store.update({
     editorTarget: { kind: 'link', id: link.id, link },
     selectedLinkId: link.id,

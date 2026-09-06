@@ -49,7 +49,7 @@ function buildApi(): EtnApi {
       setPreference: (id, key, value) => invoke('networks.setPreference', id, key, value),
     },
     thoughts: {
-      get: (networkId, id) => invoke('thoughts.get', networkId, id),
+      get: (networkId, id, atLayerId) => invoke('thoughts.get', networkId, id, atLayerId),
       focus: (networkId, id) => invoke('thoughts.focus', networkId, id),
       create: (networkId, input) => invoke('thoughts.create', networkId, input),
       update: (networkId, id, input, expectedVersion) =>
@@ -105,7 +105,7 @@ function buildApi(): EtnApi {
       set: (networkId, orderedIds) => invoke('pins.set', networkId, orderedIds),
     },
     links: {
-      get: (networkId, id) => invoke('links.get', networkId, id),
+      get: (networkId, id, atLayerId) => invoke('links.get', networkId, id, atLayerId),
       create: (networkId, input) => invoke('links.create', networkId, input),
       update: (networkId, id, input, expectedVersion) =>
         invoke('links.update', networkId, id, input, expectedVersion),
