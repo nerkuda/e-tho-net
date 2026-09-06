@@ -32,6 +32,19 @@ export interface Attachment {
   position: number;
   created_at: string;
   created_by: string;
+  /**
+   * Id пользователя, последним изменившего вложение (требование e6d4165e).
+   * Колонка `updated_by` физически добавлена миграцией 033 — у таблицы
+   * `attachments` исторически не было своей ISO-колонки `updated_at`,
+   * миллисекундных достаточно для сортировки и пометки свежести.
+   * Сервер всегда возвращает; помечено `?` чтобы клиентские фикстуры и
+   * устаревший код могли собирать объект без него до этапа 3.
+   */
+  updated_by?: string;
+  /** Unix-миллисекунды `created_at` (для сортировки). */
+  created_at_ms?: number;
+  /** Unix-миллисекунды последнего изменения вложения. */
+  updated_at_ms?: number;
 }
 
 /** Input accepted by `POST …/{id}/attachments` (03-server-api.md §11). */

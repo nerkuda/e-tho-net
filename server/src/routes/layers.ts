@@ -161,6 +161,7 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
             ...(colors !== undefined ? { colors } : {}),
           },
           expectedVersion,
+          req.auth!.user.id,
         );
         const layerWithCurrent = { ...layer, current: layer.id === sessionLayer.id };
         sendSuccess(reply, layerWithCurrent, { version: layer.version, updated_at: layer.last_activity_at });

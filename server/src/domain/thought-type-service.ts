@@ -54,6 +54,9 @@ interface ThoughtTypeRow {
   created_at: string;
   updated_at: string;
   created_by: string;
+  updated_by: string;
+  created_at_ms: number;
+  updated_at_ms: number;
 }
 
 /** Convert a raw row into a {@link ThoughtType}. */
@@ -79,6 +82,9 @@ function rowToThoughtType(row: ThoughtTypeRow): ThoughtType {
     created_at: row.created_at,
     updated_at: row.updated_at,
     created_by: row.created_by,
+    updated_by: row.updated_by,
+    created_at_ms: row.created_at_ms,
+    updated_at_ms: row.updated_at_ms,
   };
 }
 
@@ -192,7 +198,8 @@ export function createThoughtType(
   const name = validateName(input.name);
   const nameKey = typeNameKey(name);
   const id = randomUUID();
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
 
   return ndb.transaction(() => {
     const existing = ndb.prepare('SELECT 1 FROM thought_types_v WHERE name_key = ?').get(nameKey);
@@ -209,8 +216,9 @@ export function createThoughtType(
                                      icon, icon_kind, fg_color, bg_color,
                                      font_bold, font_italic, font_underline, font_strike,
                                      description, comment_template_md,
-                                     version, created_at, updated_at, created_by)
-         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+                                     version, created_at, updated_at, created_by, updated_by,
+                                     created_at_ms, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -243,6 +251,9 @@ export function createThoughtType(
         now,
         now,
         actorUserId,
+        actorUserId,
+        nowMs,
+        nowMs,
       );
     return getThoughtTypeOrThrow(ndb, id);
   });
@@ -262,6 +273,7 @@ export function updateThoughtType(
   id: string,
   changes: ThoughtTypeUpdateInput,
   expectedVersion: number | undefined,
+  actorUserId: string,
 ): ThoughtType {
   return ndb.transaction(() => {
     const current = getThoughtTypeOrThrow(ndb, id);
@@ -345,9 +357,10 @@ export function updateThoughtType(
     optFont(changes.font_underline, 'font_underline');
     optFont(changes.font_strike, 'font_strike');
 
-    const now = new Date().toISOString();
-    sets.push('version = ?', 'updated_at = ?');
-    args.push(current.version + 1, now);
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    sets.push('version = ?', 'updated_at = ?', 'updated_by = ?', 'updated_at_ms = ?');
+    args.push(current.version + 1, now, actorUserId, nowMs);
     // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer;
     // the UPDATE targets the connection's layer row only.
     materializeShadow(ndb, 'thought_types', id);
@@ -437,14 +450,15 @@ export function deleteThoughtType(
       return;
     }
     if (usage.c > 0) {
-      const now = new Date().toISOString();
+      const nowMs = Date.now();
+      const now = new Date(nowMs).toISOString();
       // Scoped to the base layer row: a live shadow of a thought in another
       // layer keeps its `type_id` (the layer has not agreed to the detach).
       ndb
         .prepare(
-          'UPDATE thoughts SET type_id = NULL, updated_at = ?, updated_by = ? WHERE type_id = ? AND layer_id = ?',
+          'UPDATE thoughts SET type_id = NULL, updated_at = ?, updated_by = ?, updated_at_ms = ? WHERE type_id = ? AND layer_id = ?',
         )
-        .run(now, opts.actorUserId ?? 'system', id, ndb.layerId);
+        .run(now, opts.actorUserId ?? 'system', nowMs, id, ndb.layerId);
     }
     // The type's property BINDINGS go with it (0.6.5: a binding is the
     // property's role in this type). Stored values are deliberately NOT
@@ -494,7 +508,8 @@ function tombstoneThoughtTypeSubtree(ndb: NetworkDb, typeId: string, actorUserId
   for (const defId of defIds) materializeTombstone(ndb, 'type_properties', defId);
   // Thoughts still pointing at the type get a shadow with type_id = NULL
   // (same detach semantics as `force` in the base).
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   const thoughtIds = (
     ndb.prepare('SELECT id FROM thoughts_v WHERE type_id = ?').all(typeId) as { id: string }[]
   ).map((r) => r.id);
@@ -502,9 +517,9 @@ function tombstoneThoughtTypeSubtree(ndb: NetworkDb, typeId: string, actorUserId
     materializeShadow(ndb, 'thoughts', thoughtId);
     ndb
       .prepare(
-        'UPDATE thoughts SET type_id = NULL, version = version + 1, updated_at = ?, updated_by = ? WHERE id = ? AND layer_id = ?',
+        'UPDATE thoughts SET type_id = NULL, version = version + 1, updated_at = ?, updated_by = ?, updated_at_ms = ? WHERE id = ? AND layer_id = ?',
       )
-      .run(now, actorUserId, thoughtId, ndb.layerId);
+      .run(now, actorUserId, nowMs, thoughtId, ndb.layerId);
   }
   materializeTombstone(ndb, 'thought_types', typeId);
 }

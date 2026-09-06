@@ -45,6 +45,9 @@ function seedThought(ndb: NetworkDb, title = 'Seed'): string {
   return id;
 }
 
+// Test user for authorship columns (task 5ef8b5bb)
+const USER = 'test-user';
+
 describe(
   'pin-service',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },

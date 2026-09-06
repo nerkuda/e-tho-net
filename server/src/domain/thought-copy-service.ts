@@ -171,6 +171,7 @@ function resolveProperties(
   ndb: NetworkDb,
   thoughtId: string,
   raw: Record<string, PropertyValueValue>,
+  actorUserId: string,
 ): void {
   // Look up the thought's effective type once so we know which keys are
   // `thought_ref` (and which of them allow multiple values). Other value
@@ -217,7 +218,7 @@ function resolveProperties(
   }
 
   if (Object.keys(resolved).length === 0) return;
-  setPropertyValues(ndb, 'thought', thoughtId, resolved);
+  setPropertyValues(ndb, 'thought', thoughtId, resolved, actorUserId);
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +382,7 @@ function createOneThought(
 
   if (item.properties !== undefined && Object.keys(item.properties).length > 0) {
     try {
-      resolveProperties(ndb, thought.id, item.properties);
+      resolveProperties(ndb, thought.id, item.properties, actorUserId);
     } catch (err) {
       if (!(err instanceof EtnError)) throw err;
     }

@@ -29,6 +29,9 @@ import {
   toolText,
 } from './mcp-helpers.js';
 
+// Test user for authorship columns (task 5ef8b5bb)
+const USER = 'test-user';
+
 describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
   it('find_duplicates is empty before create, then create emits realtime + audit', async () => {
     const ctx = await buildMcpContext();
@@ -1308,7 +1311,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         value_type: 'date',
         required: true,
         description: 'крайний срок реализации, ISO-дата',
-      });
+      }, USER);
       const childType = createThoughtType(
         ndb,
         { name: 'Подпроект', parent_id: parentType.id },
@@ -1321,8 +1324,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         'thought_type',
         childType.id,
         deadlineProp.id,
-        'срок передачи подпроекта в тестирование',
-      );
+        'срок передачи подпроекта в тестирование', USER);
 
       const parentLinkType = createLinkType(
         ndb,
@@ -2358,15 +2360,15 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const boolProp = createTypeProperty(ndb, 'thought_type', typeId, {
         key: 'enabled',
         value_type: 'bool',
-      });
+      }, USER);
       const numProp = createTypeProperty(ndb, 'thought_type', typeId, {
         key: 'rank',
         value_type: 'number',
-      });
+      }, USER);
       const textProp = createTypeProperty(ndb, 'thought_type', typeId, {
         key: 'label',
         value_type: 'text',
-      });
+      }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -2457,7 +2459,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         key: 'authors',
         value_type: 'thought_ref',
         config: { multiple: true },
-      });
+      }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -2512,7 +2514,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         createTypeProperty(ndb, 'thought_type', personType.id, {
           key: 'ref',
           value_type: 'thought_ref',
-        });
+        }, USER);
         const owner = await handle.client.callTool({
           name: 'etn.thoughts.create',
           arguments: { network_id: ctx.networkId, title: 'Владелец', type_id: personType.id },
@@ -2555,7 +2557,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         value_type: 'date',
         required: true,
         description: 'крайний срок',
-      });
+      }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -2624,11 +2626,11 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       createTypeProperty(ndb, 'thought_type', issueType.id, {
         key: 'priority',
         value_type: 'text',
-      });
+      }, USER);
       const noteProp = createTypeProperty(ndb, 'thought_type', memoType.id, {
         key: 'note',
         value_type: 'text',
-      });
+      }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -2713,7 +2715,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const propDef = createTypeProperty(ndb, 'thought_type', type.id, {
         key: 'priority',
         value_type: 'text',
-      });
+      }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -2765,7 +2767,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const { deleteTypeProperty } = await import(
           '../src/domain/property-service.js'
         );
-        deleteTypeProperty(ndb, propDef.id);
+        deleteTypeProperty(ndb, propDef.id, USER);
 
         const orphan = await handle.client.callTool({
           name: 'etn.thoughts.get',
@@ -2809,7 +2811,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const defA = createTypeProperty(ndb, 'thought_type', typeA.id, {
         key: 'refersto',
         value_type: 'thought_ref',
-      });
+      }, USER);
       // Attach the SAME registry property to typeB by name — re-attaching an
       // already-bound property to a sibling type shares the registry id and
       // (after 0.6.5) is rejected as DUPLICATE (an ancestor owns it). So we
@@ -2890,9 +2892,9 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         key: 'status',
         value_type: 'text',
         required: true,
-      });
+      }, USER);
       // Optional property — must not appear in warnings.
-      createTypeProperty(ndb, 'thought_type', type.id, { key: 'description', value_type: 'text' });
+      createTypeProperty(ndb, 'thought_type', type.id, { key: 'description', value_type: 'text' }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -2951,7 +2953,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         key: 'priority',
         value_type: 'text',
         required: true,
-      });
+      }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -3028,12 +3030,12 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         key: 'status',
         value_type: 'text',
         required: true,
-      });
+      }, USER);
       const owner = createTypeProperty(ndb, 'thought_type', issue.id, {
         key: 'owner',
         value_type: 'text',
         required: true,
-      });
+      }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {

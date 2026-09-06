@@ -535,13 +535,15 @@ function mergeLayerInner(
   let reserveLayerId: string | null = null;
   if (affected.length > 0) {
     reserveLayerId = randomUUID();
+    const nowMs = Date.now();
     const now = nowSeconds();
     ndb
       .prepare(
         `INSERT INTO layers (id, parent_id, title, comment, git_branch, is_service, is_base,
-                             depth, created_by, created_at, last_activity_at, version)
+                             depth, created_by, updated_by, created_at,
+                             last_activity_at, created_at_ms, updated_at_ms, version)
          VALUES (?, ?, ?, ?, NULL, 1, 0,
-                 (SELECT depth FROM layers WHERE id = ?) + 1, ?, ?, ?, 1)`,
+                 (SELECT depth FROM layers WHERE id = ?) + 1, ?, ?, ?, ?, ?, ?, 1)`,
       )
       .run(
         reserveLayerId,
@@ -550,8 +552,11 @@ function mergeLayerInner(
         `резерв: слияние «${layer.title}» → «${target.title}», ${now}`,
         target.id,
         actorUserId,
+        actorUserId,
         now,
         now,
+        nowMs,
+        nowMs,
       );
     for (const { table, winner } of affected) {
       copyRowToLayer(ndb, table, winner!.rowid, reserveLayerId);

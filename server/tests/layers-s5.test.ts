@@ -118,7 +118,7 @@ describe(
           key: 'статус',
           value_type: 'text',
           required: true,
-        });
+        }, USER);
 
         // Visible in A: `etn.types.list` reads through these very services.
         assert.ok(listThoughtTypes(ndb).some((t) => t.id === type.id));
@@ -161,7 +161,7 @@ describe(
         ndb.useLayer(LAYER_A);
         const withValue = createThought(ndb, { title: 'С проектом', type_id: type.id }, USER);
         assert.equal(getThought(ndb, withValue.id)?.type_id, type.id);
-        setPropertyValue(ndb, 'thought', withValue.id, 'статус', 'в работе');
+        setPropertyValue(ndb, 'thought', withValue.id, 'статус', 'в работе', USER);
         assert.deepEqual(
           getPropertyValues(ndb, 'thought', withValue.id).map((v) => v.value),
           ['в работе'],
@@ -195,10 +195,10 @@ describe(
           USER,
         );
         // A property on the layer link type + a value on the layer link.
-        createTypeProperty(ndb, 'link_type', lt.id, { key: 'вес', value_type: 'number' });
+        createTypeProperty(ndb, 'link_type', lt.id, { key: 'вес', value_type: 'number' }, USER);
         const link = createLink(ndb, { source_id: a.id, target_id: b.id, type_id: lt.id }, USER);
         assert.equal(getLink(ndb, link.id)?.type_id, lt.id);
-        setPropertyValue(ndb, 'link', link.id, 'вес', 3);
+        setPropertyValue(ndb, 'link', link.id, 'вес', 3, USER);
         assert.deepEqual(
           getPropertyValues(ndb, 'link', link.id).map((v) => v.value),
           [3],
@@ -236,12 +236,12 @@ describe(
           key: 'поле',
           value_type: 'text',
           config: { default_value: 'дефолт основы' },
-        });
+        }, USER);
 
         // Layer A: child type under the base parent, own property, override.
         ndb.useLayer(LAYER_A);
         const child = createThoughtType(ndb, { name: 'Акт', parent_id: parent.id }, USER);
-        createTypeProperty(ndb, 'thought_type', child.id, { key: 'номер', value_type: 'number' });
+        createTypeProperty(ndb, 'thought_type', child.id, { key: 'номер', value_type: 'number' }, USER);
         const eff = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
         assert.deepEqual(
           eff.map((d) => [d.key, d.inherited, d.defined_on]),
@@ -250,7 +250,7 @@ describe(
             ['номер', false, child.id],
           ],
         );
-        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, def.id, 'дефолт слоя');
+        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, def.id, 'дефолт слоя', USER);
         assert.equal(
           listEffectiveTypeProperties(ndb, 'thought_type', child.id).find((d) => d.key === 'поле')
             ?.default_value,
@@ -260,8 +260,8 @@ describe(
         // Value writes resolve the inherited definition across the layer
         // boundary (the chain is base parent → layer child).
         const th = createThought(ndb, { title: 'Акт №1', type_id: child.id }, USER);
-        setPropertyValue(ndb, 'thought', th.id, 'поле', 'значение слоя');
-        setPropertyValue(ndb, 'thought', th.id, 'номер', 7);
+        setPropertyValue(ndb, 'thought', th.id, 'поле', 'значение слоя', USER);
+        setPropertyValue(ndb, 'thought', th.id, 'номер', 7, USER);
         assert.equal(getPropertyValues(ndb, 'thought', th.id).length, 2);
 
         // Base: the child does not exist; the parent's default is untouched.
@@ -286,15 +286,15 @@ describe(
         const def = createTypeProperty(ndb, 'thought_type', parent.id, {
           key: 'вес',
           value_type: 'number',
-        });
+        }, USER);
         // Base override for the child.
-        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, def.id, 1);
+        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, def.id, 1, USER);
 
         // The layer re-sets the override: the write must shadow the base row
         // (same logical id), not spawn a second row — the view resolves per
         // logical id, two ids would both be visible.
         ndb.useLayer(LAYER_A);
-        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, def.id, 2);
+        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, def.id, 2, USER);
         assert.equal(
           listEffectiveTypeProperties(ndb, 'thought_type', child.id).find((d) => d.key === 'вес')
             ?.default_value,
@@ -353,19 +353,19 @@ describe(
         const goneDef = createTypeProperty(ndb, 'thought_type', type.id, {
           key: 'исчезает',
           value_type: 'text',
-        });
+        }, USER);
         const renamedDef = createTypeProperty(ndb, 'thought_type', type.id, {
           key: 'имя',
           value_type: 'text',
-        });
+        }, USER);
         const th = createThought(ndb, { title: 'Владелец', type_id: type.id }, USER);
-        setPropertyValue(ndb, 'thought', th.id, 'исчезает', 'основа-значение');
-        setPropertyValue(ndb, 'thought', th.id, 'имя', 'основа-имя');
+        setPropertyValue(ndb, 'thought', th.id, 'исчезает', 'основа-значение', USER);
+        setPropertyValue(ndb, 'thought', th.id, 'имя', 'основа-имя', USER);
 
         // Detach the property in layer A (0.6.5: a binding carries no values —
         // the stored value survives as a value outside type).
         ndb.useLayer(LAYER_A);
-        deleteTypeProperty(ndb, goneDef.id);
+        deleteTypeProperty(ndb, goneDef.id, USER);
         assert.equal(getTypeProperty(ndb, goneDef.id), null);
         assert.ok(
           !listEffectiveTypeProperties(ndb, 'thought_type', type.id).some(
@@ -387,16 +387,16 @@ describe(
         // Writing it again is rejected with 422: the property exists in the
         // registry but the layer's chain does not attach it.
         assert.throws(
-          () => setPropertyValue(ndb, 'thought', th.id, 'исчезает', 'слой'),
+          () => setPropertyValue(ndb, 'thought', th.id, 'исчезает', 'слой', USER),
           failsWith('VALIDATION_ERROR'),
         );
 
         // Rename in the layer: values address the registry property id, so the
         // stored base value follows — new name in the layer.
-        updateTypeProperty(ndb, renamedDef.id, { key: 'имя слоя' });
+        updateTypeProperty(ndb, renamedDef.id, { key: 'имя слоя' }, USER);
         assert.equal(getTypePropertyByKey(ndb, 'thought_type', type.id, 'имя слоя')?.id, renamedDef.id);
         assert.equal(getTypePropertyByKey(ndb, 'thought_type', type.id, 'имя'), null);
-        setPropertyValue(ndb, 'thought', th.id, 'имя слоя', 'слоя-имя');
+        setPropertyValue(ndb, 'thought', th.id, 'имя слоя', 'слоя-имя', USER);
         assert.deepEqual(
           getPropertyValues(ndb, 'thought', th.id).map((v) => [v.property_id, v.value]),
           [
@@ -431,10 +431,10 @@ describe(
         const def = createTypeProperty(ndb, 'thought_type', type.id, {
           key: 'поле',
           value_type: 'number',
-        });
+        }, USER);
 
         ndb.useLayer(LAYER_A);
-        deleteTypeProperty(ndb, def.id);
+        deleteTypeProperty(ndb, def.id, USER);
         assert.equal(getTypeProperty(ndb, def.id), null);
         // Re-attach: the upsert wakes this layer's tombstone; the woken
         // binding keeps its ORIGINAL id, so the result must be re-read by
@@ -444,7 +444,7 @@ describe(
         const woken = createTypeProperty(ndb, 'thought_type', type.id, {
           key: 'поле',
           value_type: 'text',
-        });
+        }, USER);
         assert.notEqual(woken, null);
         assert.equal(woken.id, def.id);
         assert.equal(woken.property_id, def.property_id);
@@ -459,7 +459,7 @@ describe(
         assert.deepEqual(rows, [{ id: def.id, deleted: 0 }]);
         // The woken binding is usable: values write and read through it.
         const th = createThought(ndb, { title: 'В', type_id: type.id }, USER);
-        setPropertyValue(ndb, 'thought', th.id, 'поле', 5);
+        setPropertyValue(ndb, 'thought', th.id, 'поле', 5, USER);
         assert.deepEqual(
           getPropertyValues(ndb, 'thought', th.id).map((v) => v.value),
           [5],
@@ -491,7 +491,7 @@ describe(
         const rootProp = createTypeProperty(ndb, 'thought_type', rootTypeId!, {
           key: 'корень',
           value_type: 'number',
-        });
+        }, USER);
 
         // A layer-only type is invisible from the base: neither a definition
         // nor an override may be attached to it there (13-layers.md §13).
@@ -503,11 +503,11 @@ describe(
             createTypeProperty(ndb, 'thought_type', layerType.id, {
               key: 'к',
               value_type: 'text',
-            }),
+            }, USER),
           failsWith('NOT_FOUND'),
         );
         assert.throws(
-          () => setTypePropertyDefaultOverride(ndb, 'thought_type', layerType.id, rootProp.id, 1),
+          () => setTypePropertyDefaultOverride(ndb, 'thought_type', layerType.id, rootProp.id, 1, USER),
           failsWith('NOT_FOUND'),
         );
 
@@ -518,11 +518,11 @@ describe(
         deleteThoughtType(ndb, hidden.id, undefined);
         assert.throws(
           () =>
-            createTypeProperty(ndb, 'thought_type', hidden.id, { key: 'к', value_type: 'text' }),
+            createTypeProperty(ndb, 'thought_type', hidden.id, { key: 'к', value_type: 'text' }, USER),
           failsWith('NOT_FOUND'),
         );
         assert.throws(
-          () => setTypePropertyDefaultOverride(ndb, 'thought_type', hidden.id, rootProp.id, 1),
+          () => setTypePropertyDefaultOverride(ndb, 'thought_type', hidden.id, rootProp.id, 1, USER),
           failsWith('NOT_FOUND'),
         );
         // Nothing leaked into the layer despite the throws (transactions).
@@ -555,7 +555,7 @@ describe(
         const layerProp = createTypeProperty(ndb, 'thought_type', layerType.id, {
           key: 'к',
           value_type: 'text',
-        });
+        }, USER);
         const layerLinkType = createLinkType(
           ndb,
           { name_forward: 'слой-вперёд', name_reverse: 'слой-назад' },
@@ -578,7 +578,7 @@ describe(
         ndb.useLayer(BASE_LAYER_ID);
         const shadowed = createThoughtType(ndb, { name: 'Правится в слое' }, USER);
         ndb.useLayer(LAYER_A);
-        updateThoughtType(ndb, shadowed.id, { description: 'правка слоя' }, undefined);
+        updateThoughtType(ndb, shadowed.id, { description: 'правка слоя' }, undefined, USER);
         assert.equal(existsInBaseLayer(ndb, 'thought_types', shadowed.id), true);
       } finally {
         ndb.close();

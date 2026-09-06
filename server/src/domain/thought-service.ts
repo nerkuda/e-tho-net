@@ -96,6 +96,10 @@ interface ThoughtRow {
   created_by: string;
   updated_at: string;
   updated_by: string;
+  /** Unix-миллисекунды создания (02-data-model.md §3.1, требование e6d4165e). */
+  created_at_ms: number;
+  /** Unix-миллисекунды последнего изменения. */
+  updated_at_ms: number;
 }
 
 /** A `thoughts` row joined with a link for neighbour listings. */
@@ -144,6 +148,8 @@ function rowToThought(row: ThoughtRow, synonyms: string[]): Thought {
     updated_at: row.updated_at,
     created_by: row.created_by,
     updated_by: row.updated_by,
+    created_at_ms: row.created_at_ms,
+    updated_at_ms: row.updated_at_ms,
   };
 }
 
@@ -410,6 +416,7 @@ function createLinkForNewThought(
   createLink: NonNullable<ThoughtCreateInput['create_link']>,
   actorUserId: string,
   now: string,
+  nowMs: number,
 ): void {
   const targetId = createLink.target_thought_id;
   // The new thought has a fresh UUID, so it can never equal an existing target;
@@ -447,10 +454,23 @@ function createLinkForNewThought(
   ndb
     .prepare(
       `INSERT INTO links (id, layer_id, source_id, target_id, type_id, active, version,
-                          created_at, updated_at, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?)`,
+                          created_at, updated_at, created_by, updated_by,
+                          created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(randomUUID(), ndb.layerId, sourceId, linkTargetId, typeId, now, now, actorUserId, actorUserId);
+    .run(
+      randomUUID(),
+      ndb.layerId,
+      sourceId,
+      linkTargetId,
+      typeId,
+      now,
+      now,
+      actorUserId,
+      actorUserId,
+      nowMs,
+      nowMs,
+    );
 }
 
 /**
@@ -469,7 +489,11 @@ export function createThought(
 ): Thought {
   const title = validateTitle(input.title);
   const id = randomUUID();
-  const now = new Date().toISOString();
+  // ISO-строка и Unix-миллисекунды берутся из одного момента (`Date.now()` —
+  // потом `new Date(nowMs).toISOString()`), чтобы колонки авторства не
+  // расходились между собой (требование e6d4165e).
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   const synonyms = parseSynonyms(input.synonyms);
   const iconKind: IconKind = input.icon_kind ?? 'emoji';
 
@@ -490,8 +514,9 @@ export function createThought(
         `INSERT INTO thoughts (id, layer_id, title, title_norm, type_id, icon, icon_kind, active,
                              is_protected, is_root, fg_color, bg_color,
                              font_bold, font_italic, font_underline, font_strike, font_manual,
-                             version, created_at, created_by, updated_at, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+                             version, created_at, created_by, updated_at, updated_by,
+                             created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -513,10 +538,12 @@ export function createThought(
         actorUserId,
         now,
         actorUserId,
+        nowMs,
+        nowMs,
       );
     setSynonyms(ndb, id, synonyms);
     if (input.create_link) {
-      createLinkForNewThought(ndb, id, input.create_link, actorUserId, now);
+      createLinkForNewThought(ndb, id, input.create_link, actorUserId, now, nowMs);
     }
     // Bug-fix (0.5.4, 2976daa1): a freshly created thought never picked up its
     // type's effective default property values — on the canvas, over REST or
@@ -529,7 +556,7 @@ export function createThought(
     if (input.type_id !== undefined && input.type_id !== null) {
       for (const def of listEffectiveTypeProperties(ndb, 'thought_type', input.type_id)) {
         if (def.default_value !== null) {
-          setPropertyValueById(ndb, 'thought', id, def.property_id, def.default_value);
+          setPropertyValueById(ndb, 'thought', id, def.property_id, def.default_value, actorUserId);
         }
       }
     }
@@ -660,9 +687,11 @@ export function updateThought(
     // records when/by whom; `false` clears the flag and its audit columns. No
     // blocking check here — marking is always allowed and reversible.
     if (changes.marked_for_deletion !== undefined) {
+      const nowMs = Date.now();
+      const now = new Date(nowMs).toISOString();
       if (changes.marked_for_deletion) {
         sets.push('marked_for_deletion = ?', 'marked_for_deletion_at = ?', 'marked_for_deletion_by = ?');
-        args.push(1, new Date().toISOString(), actorUserId);
+        args.push(1, now, actorUserId);
       } else {
         sets.push('marked_for_deletion = ?', 'marked_for_deletion_at = ?', 'marked_for_deletion_by = ?');
         args.push(0, null, null);
@@ -707,9 +736,10 @@ export function updateThought(
       args.push(fontManual);
     }
 
-    const now = new Date().toISOString();
-    sets.push('version = ?', 'updated_at = ?', 'updated_by = ?');
-    args.push(current.version + 1, now, actorUserId);
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    sets.push('version = ?', 'updated_at = ?', 'updated_by = ?', 'updated_at_ms = ?');
+    args.push(current.version + 1, now, actorUserId, nowMs);
 
     // S4 (13-layers.md §5.1): the first edit in a working layer materialises a
     // shadow copy of the resolved row; the UPDATE then targets the row of the

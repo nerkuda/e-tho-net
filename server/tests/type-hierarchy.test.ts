@@ -138,7 +138,7 @@ describe(
         const a = createThoughtType(ndb, { name: 'A' }, USER);
         const b = createThoughtType(ndb, { name: 'B', parent_id: a.id }, USER);
         assert.throws(
-          () => updateThoughtType(ndb, a.id, { parent_id: b.id }, a.version),
+          () => updateThoughtType(ndb, a.id, { parent_id: b.id }, a.version, USER),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
       } finally {
@@ -153,7 +153,7 @@ describe(
         const b = createThoughtType(ndb, { name: 'B' }, USER);
         seedThought(ndb, b.id);
         assert.throws(
-          () => updateThoughtType(ndb, b.id, { parent_id: a.id }, b.version),
+          () => updateThoughtType(ndb, b.id, { parent_id: a.id }, b.version, USER),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
       } finally {
@@ -190,13 +190,13 @@ describe(
         const rootProp = createTypeProperty(ndb, 'thought_type', root.id, {
           key: 'заметка',
           value_type: 'text',
-        });
+        }, USER);
         const personProp = createTypeProperty(ndb, 'thought_type', person.id, {
           key: 'пол',
           value_type: 'text',
           config: { default_value: 'мужской' },
-        });
-        createTypeProperty(ndb, 'thought_type', colleague.id, { key: 'кабинет', value_type: 'text' });
+        }, USER);
+        createTypeProperty(ndb, 'thought_type', colleague.id, { key: 'кабинет', value_type: 'text' }, USER);
 
         // Коллега sees its own + Персона's + root's properties.
         const effective = listEffectiveTypeProperties(ndb, 'thought_type', colleague.id);
@@ -209,7 +209,7 @@ describe(
         assert.equal(inheritedGender.overridden_here, false);
 
         // Override the inherited default on Коллега.
-        setTypePropertyDefaultOverride(ndb, 'thought_type', colleague.id, personProp.id, 'женский');
+        setTypePropertyDefaultOverride(ndb, 'thought_type', colleague.id, personProp.id, 'женский', USER);
         const overridden = listEffectiveTypeProperties(ndb, 'thought_type', colleague.id).find(
           (d) => d.key === 'пол',
         )!;
@@ -217,7 +217,7 @@ describe(
         assert.equal(overridden.overridden_here, true);
 
         // Clearing the override falls back to the definition's own default.
-        setTypePropertyDefaultOverride(ndb, 'thought_type', colleague.id, personProp.id, null);
+        setTypePropertyDefaultOverride(ndb, 'thought_type', colleague.id, personProp.id, null, USER);
         const reset = listEffectiveTypeProperties(ndb, 'thought_type', colleague.id).find(
           (d) => d.key === 'пол',
         )!;
@@ -235,12 +235,11 @@ describe(
               'thought_type',
               colleague.id,
               ownCabinet.id,
-              'x',
-            ),
+              'x', USER),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
         // …while a root-level property (an ancestor) can be overridden.
-        setTypePropertyDefaultOverride(ndb, 'thought_type', colleague.id, rootProp.id, 'из коллеги');
+        setTypePropertyDefaultOverride(ndb, 'thought_type', colleague.id, rootProp.id, 'из коллеги', USER);
         const rootOverridden = listEffectiveTypeProperties(ndb, 'thought_type', colleague.id).find(
           (d) => d.key === 'заметка',
         )!;
@@ -248,7 +247,7 @@ describe(
 
         // An untyped thought's values resolve against the root's properties.
         const thoughtId = seedThought(ndb, null);
-        setPropertyValue(ndb, 'thought', thoughtId, 'заметка', 'из корня');
+        setPropertyValue(ndb, 'thought', thoughtId, 'заметка', 'из корня', USER);
         assert.equal(
           (ndb.prepare('SELECT value_text AS v FROM property_values').get() as { v: string }).v,
           'из корня',
@@ -263,14 +262,14 @@ describe(
       try {
         const parent = createThoughtType(ndb, { name: 'Родитель' }, USER);
         const child = createThoughtType(ndb, { name: 'Ребёнок', parent_id: parent.id }, USER);
-        createTypeProperty(ndb, 'thought_type', parent.id, { key: 'пол', value_type: 'text' });
+        createTypeProperty(ndb, 'thought_type', parent.id, { key: 'пол', value_type: 'text' }, USER);
         assert.throws(
-          () => createTypeProperty(ndb, 'thought_type', child.id, { key: 'пол', value_type: 'text' }),
+          () => createTypeProperty(ndb, 'thought_type', child.id, { key: 'пол', value_type: 'text' }, USER),
           (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
         );
         // …and in the other direction: a child's key cannot appear on an ancestor.
         assert.throws(
-          () => createTypeProperty(ndb, 'thought_type', parent.id, { key: 'пол', value_type: 'text' }),
+          () => createTypeProperty(ndb, 'thought_type', parent.id, { key: 'пол', value_type: 'text' }, USER),
           (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
         );
       } finally {
@@ -321,7 +320,7 @@ describe(
         assert.equal(child.parent_id, parent.id);
 
         // Setting a null style on the parent restores «inherit» (from root).
-        const reset = updateLinkType(ndb, parent.id, { style: null }, parent.version);
+        const reset = updateLinkType(ndb, parent.id, { style: null }, parent.version, USER);
         assert.equal(reset.style, null);
       } finally {
         ndb.close();
@@ -338,7 +337,7 @@ describe(
           USER,
         );
         assert.throws(
-          () => updateLinkType(ndb, a.id, { parent_id: b.id }, a.version),
+          () => updateLinkType(ndb, a.id, { parent_id: b.id }, a.version, USER),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
         // Deleting a type with children is rejected.

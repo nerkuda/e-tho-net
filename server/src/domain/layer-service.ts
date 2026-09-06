@@ -40,8 +40,11 @@ interface LayerRow {
   is_base: number;
   depth: number;
   created_by: string;
+  updated_by: string;
   created_at: string;
   last_activity_at: string;
+  created_at_ms: number;
+  updated_at_ms: number;
   version: number;
 }
 
@@ -55,7 +58,8 @@ function layerRow(ndb: NetworkDb, id: string): LayerRow | undefined {
   return ndb
     .prepare(
       `SELECT id, parent_id, title, comment, git_branch, colors, is_service, is_base,
-              depth, created_by, created_at, last_activity_at, version
+              depth, created_by, updated_by, created_at, last_activity_at,
+              created_at_ms, updated_at_ms, version
        FROM layers WHERE id = ? LIMIT 1`,
     )
     .get(id) as LayerRow | undefined;
@@ -178,8 +182,11 @@ function toLayer(row: LayerRow, childrenCount: number, currentLayerId: string): 
     is_base: row.is_base === 1,
     depth: row.depth,
     created_by: row.created_by,
+    updated_by: row.updated_by,
     created_at: row.created_at,
     last_activity_at: row.last_activity_at,
+    created_at_ms: row.created_at_ms,
+    updated_at_ms: row.updated_at_ms,
     version: row.version,
     children_count: childrenCount,
     current: row.id === currentLayerId,
@@ -212,7 +219,8 @@ export function listLayers(
     ndb
       .prepare(
         `SELECT id, parent_id, title, comment, git_branch, colors, is_service, is_base,
-                depth, created_by, created_at, last_activity_at, version
+                depth, created_by, updated_by, created_at, last_activity_at,
+                created_at_ms, updated_at_ms, version
          FROM layers ${opts.includeService === true ? '' : 'WHERE is_service = 0'}
          ORDER BY depth, created_at, id`,
       )
@@ -277,11 +285,13 @@ export function createLayer(ndb: NetworkDb, input: CreateLayerInput): Layer {
       );
     }
     const id = randomUUID();
+    const nowMs = Date.now();
     const now = nowSeconds();
     ndb.prepare(
       `INSERT INTO layers (id, parent_id, title, comment, git_branch, colors, is_service, is_base,
-                           depth, created_by, created_at, last_activity_at, version)
-       VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, 1)`,
+                           depth, created_by, updated_by, created_at, last_activity_at,
+                           created_at_ms, updated_at_ms, version)
+       VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 1)`,
     ).run(
       id,
       parent.id,
@@ -291,8 +301,11 @@ export function createLayer(ndb: NetworkDb, input: CreateLayerInput): Layer {
       colors === null ? null : JSON.stringify(colors),
       parent.depth + 1,
       input.createdBy,
+      input.createdBy,
       now,
       now,
+      nowMs,
+      nowMs,
     );
     return toLayer(layerRow(ndb, id) as LayerRow, 0, id);
   });
@@ -310,7 +323,8 @@ export function updateLayer(
   ndb: NetworkDb,
   id: string,
   changes: { title?: string; comment?: string | null; colors?: LayerColors | null },
-  expectedVersion?: number,
+  expectedVersion: number | undefined,
+  actorUserId: string,
 ): Layer {
   const title = changes.title === undefined ? undefined : changes.title.trim();
   if (title !== undefined && (title.length === 0 || title.length > TITLE_LIMIT)) {
@@ -346,12 +360,14 @@ export function updateLayer(
       });
     }
     if (title !== undefined || comment !== undefined || changes.colors !== undefined) {
+      const nowMs = Date.now();
       ndb.prepare(
         `UPDATE layers SET
            title = COALESCE(?, title),
            comment = CASE WHEN ? THEN ? ELSE comment END,
            colors = CASE WHEN ? THEN ? ELSE colors END,
-           version = version + 1
+           version = version + 1,
+           updated_by = ?, updated_at_ms = ?
          WHERE id = ?`,
       ).run(
         title ?? null,
@@ -359,6 +375,8 @@ export function updateLayer(
         comment ?? null,
         changes.colors !== undefined ? 1 : 0,
         changes.colors === undefined || changes.colors === null ? null : JSON.stringify(changes.colors),
+        actorUserId,
+        nowMs,
         id,
       );
     }

@@ -64,6 +64,8 @@ interface LinkRow {
   updated_at: string;
   created_by: string;
   updated_by: string;
+  created_at_ms: number;
+  updated_at_ms: number;
 }
 
 /** Convert a raw row into a {@link Link}. */
@@ -85,6 +87,8 @@ function rowToLink(row: LinkRow): Link {
     updated_at: row.updated_at,
     created_by: row.created_by,
     updated_by: row.updated_by,
+    created_at_ms: row.created_at_ms,
+    updated_at_ms: row.updated_at_ms,
   };
 }
 
@@ -106,6 +110,8 @@ interface IncidentLinkRow {
   updated_at: string;
   created_by: string;
   updated_by: string;
+  created_at_ms: number;
+  updated_at_ms: number;
   name_forward: string | null;
   name_reverse: string | null;
   other_id: string;
@@ -324,12 +330,14 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
     }
 
     const id = randomUUID();
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     ndb
       .prepare(
         `INSERT INTO links (id, layer_id, source_id, target_id, type_id, color, style, width, active, version,
-                            created_at, updated_at, created_by, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+                            created_at, updated_at, created_by, updated_by,
+                            created_at_ms, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -345,6 +353,8 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
         now,
         actorUserId,
         actorUserId,
+        nowMs,
+        nowMs,
       );
     return getLinkOrThrow(ndb, id);
   });
@@ -495,18 +505,21 @@ export function updateLink(
     }
     // Mark-for-deletion (S13, 02-data-model.md §3.1.2): reversible flag + audit.
     if (changes.marked_for_deletion !== undefined) {
+      const nowMs = Date.now();
+      const now = new Date(nowMs).toISOString();
       if (changes.marked_for_deletion) {
         sets.push('marked_for_deletion = ?', 'marked_for_deletion_at = ?', 'marked_for_deletion_by = ?');
-        args.push(1, new Date().toISOString(), actorUserId);
+        args.push(1, now, actorUserId);
       } else {
         sets.push('marked_for_deletion = ?', 'marked_for_deletion_at = ?', 'marked_for_deletion_by = ?');
         args.push(0, null, null);
       }
     }
 
-    const now = new Date().toISOString();
-    sets.push('version = ?', 'updated_at = ?', 'updated_by = ?');
-    args.push(current.version + 1, now, actorUserId);
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    sets.push('version = ?', 'updated_at = ?', 'updated_by = ?', 'updated_at_ms = ?');
+    args.push(current.version + 1, now, actorUserId, nowMs);
     // S4 (13-layers.md §5.1): first edit in a working layer materialises a
     // shadow copy; the UPDATE targets the connection's layer row only.
     materializeShadow(ndb, 'links', id);
@@ -553,14 +566,16 @@ function repointLinkInLayer(
     ? changes.marked_for_deletion
     : current.marked_for_deletion;
   const markedChanged = changes.marked_for_deletion !== undefined;
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   const newId = randomUUID();
   ndb
     .prepare(
       `INSERT INTO links (id, layer_id, source_id, target_id, type_id, position, color, style, width,
                           active, marked_for_deletion, marked_for_deletion_at, marked_for_deletion_by,
-                          version, created_at, updated_at, created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+                          version, created_at, updated_at, created_by, updated_by,
+                          created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       newId,
@@ -580,6 +595,8 @@ function repointLinkInLayer(
       now,
       actorUserId,
       actorUserId,
+      nowMs,
+      nowMs,
     );
   return getLinkOrThrow(ndb, newId);
 }
@@ -691,6 +708,7 @@ export function listLinksByThought(
               l.active, l.marked_for_deletion, l.marked_for_deletion_at, l.marked_for_deletion_by,
               l.version,
               l.created_at, l.updated_at, l.created_by, l.updated_by,
+              l.created_at_ms, l.updated_at_ms,
               lt.name_forward, lt.name_reverse,
               CASE WHEN l.target_id = ? THEN l.source_id ELSE l.target_id END AS other_id,
               t.title AS other_title, t.type_id AS other_type_id, t.icon AS other_icon,

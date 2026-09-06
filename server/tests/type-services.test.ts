@@ -102,8 +102,7 @@ describe(
             ndb,
             tt.id,
             { name: 'People', bg_color: '#abc' },
-            tt.version,
-          );
+            tt.version, USER);
           assert.equal(updated.name, 'People');
           assert.equal(updated.bg_color, '#abc');
           assert.equal(updated.version, 2);
@@ -142,12 +141,12 @@ describe(
             (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
           );
           // Renaming a type to a case-variant of its own name is allowed…
-          const updated = updateThoughtType(ndb, tt.id, { name: 'задача' }, tt.version);
+          const updated = updateThoughtType(ndb, tt.id, { name: 'задача' }, tt.version, USER);
           assert.equal(updated.name, 'задача');
           // …but renaming onto another type's name (ignoring case) is not.
           createThoughtType(ndb, { name: 'Отчёт' }, USER);
           assert.throws(
-            () => updateThoughtType(ndb, tt.id, { name: 'ОТЧЁТ' }, updated.version),
+            () => updateThoughtType(ndb, tt.id, { name: 'ОТЧЁТ' }, updated.version, USER),
             (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
           );
         } finally {
@@ -183,11 +182,11 @@ describe(
         const ndb = createInMemoryNetworkDb();
         try {
           const tt = createThoughtType(ndb, { name: 'Cascade' }, USER);
-          createTypeProperty(ndb, 'thought_type', tt.id, { key: 'author', value_type: 'text' });
+          createTypeProperty(ndb, 'thought_type', tt.id, { key: 'author', value_type: 'text' }, USER);
           const thoughtId = seedThought(ndb, tt.id);
-          setPropertyValue(ndb, 'thought', thoughtId, 'author', 'Jane');
+          setPropertyValue(ndb, 'thought', thoughtId, 'author', 'Jane', USER);
 
-          deleteThoughtType(ndb, tt.id, 1, { force: true, actorUserId: USER });
+          deleteThoughtType(ndb, tt.id, 2, { force: true, actorUserId: USER });
 
           // 0.6.5: bindings of the dropped type are gone; values stay — the
           // thought lost its type, so the value is now «вне типа» and must be
@@ -266,7 +265,7 @@ describe(
             { name_forward: 'rel', name_reverse: 'rel-of', width: 1 },
             USER,
           );
-          const updated = updateLinkType(ndb, lt.id, { width: 3, color: '#f00' }, lt.version);
+          const updated = updateLinkType(ndb, lt.id, { width: 3, color: '#f00' }, lt.version, USER);
           assert.equal(updated.width, 3);
           assert.equal(updated.color, '#f00');
           assert.equal(updated.version, 2);
@@ -304,7 +303,7 @@ describe(
         const ndb = createInMemoryNetworkDb();
         try {
           const lt = createLinkType(ndb, { name_forward: 'f', name_reverse: 'r' }, USER);
-          createTypeProperty(ndb, 'link_type', lt.id, { key: 'weight', value_type: 'number' });
+          createTypeProperty(ndb, 'link_type', lt.id, { key: 'weight', value_type: 'number' }, USER);
           const a = seedThought(ndb);
           const b = seedThought(ndb);
           const linkId = randomUUID();
@@ -314,9 +313,9 @@ describe(
                VALUES (?, ?, ?, ?, 1, 1, '2024', '2024', 'u', 'u')`,
             )
             .run(linkId, a, b, lt.id);
-          setPropertyValue(ndb, 'link', linkId, 'weight', 5);
+          setPropertyValue(ndb, 'link', linkId, 'weight', 5, USER);
 
-          deleteLinkType(ndb, lt.id, 1, { force: true });
+          deleteLinkType(ndb, lt.id, 2, { force: true });
 
           // 0.6.5: see thought-type test above — same contract for links.
           assert.equal(listTypeProperties(ndb, 'link_type', lt.id).length, 0);
@@ -338,19 +337,19 @@ describe(
           const p1 = createTypeProperty(ndb, 'thought_type', tt.id, {
             key: 'author',
             value_type: 'text',
-          });
+          }, USER);
           const p2 = createTypeProperty(ndb, 'thought_type', tt.id, {
             key: 'year',
             value_type: 'number',
             required: true,
-          });
+          }, USER);
           assert.equal(p1.position, 0);
           assert.equal(p2.position, 1);
 
           // Duplicate key rejected.
           assert.throws(
             () =>
-              createTypeProperty(ndb, 'thought_type', tt.id, { key: 'author', value_type: 'text' }),
+              createTypeProperty(ndb, 'thought_type', tt.id, { key: 'author', value_type: 'text' }, USER),
             (e: unknown) => e instanceof EtnError && e.code === 'DUPLICATE',
           );
 
@@ -358,18 +357,18 @@ describe(
           const updated = updateTypeProperty(ndb, p1.id, {
             required: true,
             config: { note: 'free-form author name' },
-          });
+          }, USER);
           assert.equal(updated.required, true);
           assert.equal(updated.config?.note, 'free-form author name');
 
           // Reorder: year first.
-          const reordered = reorderTypeProperties(ndb, 'thought_type', tt.id, [p2.id, p1.id]);
+          const reordered = reorderTypeProperties(ndb, 'thought_type', tt.id, [p2.id, p1.id], USER);
           assert.deepEqual(
             reordered.map((p) => p.key),
             ['year', 'author'],
           );
 
-          deleteTypeProperty(ndb, p1.id);
+          deleteTypeProperty(ndb, p1.id, USER);
           assert.equal(getTypeProperty(ndb, p1.id), null);
           assert.equal(listTypeProperties(ndb, 'thought_type', tt.id).length, 1);
         } finally {

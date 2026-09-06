@@ -281,14 +281,21 @@ describe(
         assert.deepEqual(diff.links.added, []);
         assert.deepEqual(diff.links.removed, []);
 
-        // Sanity: no physical `thoughts` shadow rows — the overrides came
-        // from `comments` / `property_values`, not from entity-row edits.
+        // Sanity: до требования e6d4165e (задача 5ef8b5bb) overrides
+        // приходили только от зависимых строк, и `thoughts`-тени не
+        // появлялись. Сейчас правка значения свойства касается автора
+        // владельца (touches `updated_by`/`updated_at_ms`), поэтому в слое
+        // лежит shadow-row мысли — без него UI не показал бы свежесть правки
+        // во вкладке «Метаданные». Комментарий НЕ трогает мысль.
         const layerNdb = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layer.id);
-        for (const id of [a, b]) {
+        for (const [id, expected] of [
+          [a, 0],
+          [b, 1],
+        ] as const) {
           const row = layerNdb
             .prepare('SELECT COUNT(*) AS c FROM thoughts WHERE id = ? AND layer_id = ?')
             .get(id, layer.id) as { c: number };
-          assert.equal(row.c, 0);
+          assert.equal(row.c, expected, `thought ${id} shadow count mismatch`);
         }
       } finally {
         await closeRestContext(ctx);

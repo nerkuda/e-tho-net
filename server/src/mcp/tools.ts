@@ -1641,6 +1641,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             ...(args.comment !== undefined ? { comment: args.comment } : {}),
           },
           args.expected_version,
+          rt.deps.auth.userId,
         );
         auditAgentCall(rt, 'etn.layers.update', args.network_id, 'layer', layer.id, {
           title: args.title,
@@ -2626,7 +2627,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetwork(rt, args.network_id);
 
         if (args.values !== undefined) {
-          const stored = setPropertyValues(ndb, args.owner_type, args.owner_id, args.values);
+          const stored = setPropertyValues(
+            ndb,
+            args.owner_type,
+            args.owner_id,
+            args.values,
+            rt.deps.auth.userId,
+          );
           for (const value of Object.values(stored)) {
             emitAgentEvent(
               rt,
@@ -2664,7 +2671,14 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         // A missing definition is left to setPropertyValue to report (NOT_FOUND).
         const def = resolveDefinition(ndb, args.owner_type, args.owner_id, key);
         const coerced = def === null ? value : coerceStringifiedScalar(def, value);
-        const stored = setPropertyValue(ndb, args.owner_type, args.owner_id, key, coerced);
+        const stored = setPropertyValue(
+          ndb,
+          args.owner_type,
+          args.owner_id,
+          key,
+          coerced,
+          rt.deps.auth.userId,
+        );
         emitAgentEvent(
           rt,
           args.network_id,

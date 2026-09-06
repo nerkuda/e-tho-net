@@ -56,7 +56,7 @@ describe(
       try {
         const home = seedThought(ndb, 'HOME');
         const tt = createThoughtType(ndb, { name: 'Книга' }, USER);
-        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'year', value_type: 'number' });
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'year', value_type: 'number' }, USER);
 
         const result = upsertThoughtBundle(
           ndb,

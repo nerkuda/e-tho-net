@@ -173,9 +173,9 @@ describe(
             key: 'статус',
             value_type: 'text',
             config: { default_value: 'черновик' },
-          });
+          }, USER);
           // A property with no default must stay unset.
-          createTypeProperty(ndb, 'thought_type', tt.id, { key: 'note', value_type: 'text' });
+          createTypeProperty(ndb, 'thought_type', tt.id, { key: 'note', value_type: 'text' }, USER);
 
           const t = createThought(ndb, { title: 'Задача X', type_id: tt.id }, USER);
           const values = getPropertyValues(ndb, 'thought', t.id);

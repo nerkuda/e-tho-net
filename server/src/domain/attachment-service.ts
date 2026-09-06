@@ -58,6 +58,15 @@ interface AttachmentRow {
   icon: string | null;
   created_at: string;
   created_by: string;
+  /**
+   * Id пользователя, последним правившего вложение. Колонка `updated_by`
+   * добавлена миграцией 033; ISO-колонки `updated_at` у этой таблицы
+   * исторически нет — клиенту показываем `created_at`/`updated_at_ms`
+   * как метку свежести.
+   */
+  updated_by: string;
+  created_at_ms: number;
+  updated_at_ms: number;
 }
 
 /** Convert a raw row into an {@link Attachment}. */
@@ -77,6 +86,9 @@ function rowToAttachment(row: AttachmentRow): Attachment {
     position: row.position,
     created_at: row.created_at,
     created_by: row.created_by,
+    updated_by: row.updated_by,
+    created_at_ms: row.created_at_ms,
+    updated_at_ms: row.updated_at_ms,
   };
 }
 
@@ -199,14 +211,16 @@ export function createAttachment(
   return ndb.transaction(() => {
     ensureOwnerExists(ndb, ot, ownerId);
     const id = randomUUID();
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     const position = typeof input.position === 'number' ? Math.trunc(input.position) : 0;
     ndb
       .prepare(
         `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, file_path,
                                   file_size, mime_type, title, description, position,
-                                  created_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                  created_at, created_by, updated_by,
+                                  created_at_ms, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -223,6 +237,9 @@ export function createAttachment(
         position,
         now,
         actorUserId,
+        actorUserId,
+        nowMs,
+        nowMs,
       );
     return getAttachmentOrThrow(ndb, id);
   });
@@ -410,14 +427,16 @@ export function copyAttachment(
       ) as { owner_id: string }[];
     const duplicateIds = new Set(dupRows.map((r) => r.owner_id));
 
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     const created: Attachment[] = [];
     const skipped: string[] = [];
     const insertStmt = ndb.prepare(
       `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, file_path,
                                file_size, mime_type, title, description, icon,
-                               position, created_at, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                               position, created_at, created_by, updated_by,
+                               created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const selectById = ndb.prepare('SELECT * FROM attachments_v WHERE id = ? LIMIT 1');
     for (const targetId of targetIds) {
@@ -442,6 +461,9 @@ export function copyAttachment(
         0,
         now,
         actorUserId,
+        actorUserId,
+        nowMs,
+        nowMs,
       );
       const row = selectById.get(newId) as AttachmentRow | undefined;
       if (row !== undefined) created.push(rowToAttachment(row));
@@ -523,7 +545,7 @@ export function updateAttachment(
   ndb: NetworkDb,
   id: string,
   changes: AttachmentUpdateInput,
-  actorUserId?: string,
+  actorUserId: string,
 ): Attachment {
   return ndb.transaction(() => {
     const current = getAttachmentOrThrow(ndb, id);
@@ -602,9 +624,12 @@ export function updateAttachment(
       sets.push('position = ?');
       args.push(Math.trunc(changes.position));
     }
-    // `created_by`/`updated_by` are not part of the schema (no updated_by column);
-    // actorUserId is accepted for API symmetry but not persisted here.
-    void actorUserId;
+    // Колонки авторства обновления (миграция 033, требование e6d4165e).
+    // У `attachments` нет своей ISO-колонки `updated_at` — обновляем
+    // `updated_by` и `updated_at_ms`, этого достаточно для вкладки «Метаданные».
+    const nowMs = Date.now();
+    sets.push('updated_by = ?', 'updated_at_ms = ?');
+    args.push(actorUserId, nowMs);
 
     if (sets.length === 0) {
       return current;
@@ -891,12 +916,17 @@ export function updateAttachmentContent(
       input.mime_type !== undefined && input.mime_type.trim() !== ''
         ? input.mime_type.trim().toLowerCase()
         : current.mime_type;
+    // Запись контента — это правка вложения: обновляем `updated_by` и
+    // `updated_at_ms` (требование e6d4165e; ISO-колонки `updated_at` у
+    // `attachments` исторически нет). Актор — создатель вложения; смена
+    // владельца файла идёт отдельным PATCH и имеет своего актора через REST/MCP.
+    const nowMs = Date.now();
     materializeShadow(ndb, 'attachments', id);
     ndb
       .prepare(
-        'UPDATE attachments SET file_size = ?, mime_type = ? WHERE id = ? AND layer_id = ?',
+        'UPDATE attachments SET file_size = ?, mime_type = ?, updated_by = ?, updated_at_ms = ? WHERE id = ? AND layer_id = ?',
       )
-      .run(buffer.length, nextMime, id, ndb.layerId);
+      .run(buffer.length, nextMime, current.updated_by || current.created_by, nowMs, id, ndb.layerId);
 
     const text = buffer.toString('utf8');
     const html = isMarkdownFile({ ...current, mime_type: nextMime })
@@ -998,7 +1028,9 @@ export async function enrichUrlAttachment(
   }
   if (changes.title === undefined && changes.icon === undefined) return attachment;
   try {
-    return updateAttachment(ndb, attachment.id, changes);
+    // URL enrichment is triggered by the same user who created the attachment;
+    // attribute the auto-update to them so the timeline shows the moment.
+    return updateAttachment(ndb, attachment.id, changes, attachment.created_by);
   } catch {
     return attachment;
   }

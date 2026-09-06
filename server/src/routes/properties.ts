@@ -78,7 +78,14 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
             );
           }
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          const value = setPropertyValue(ndb, ownerType, id, key, body.value as PropertyValueValue);
+          const value = setPropertyValue(
+            ndb,
+            ownerType,
+            id,
+            key,
+            body.value as PropertyValueValue,
+            req.auth!.user.id,
+          );
           deps.emit(req, networkId, 'property-value.set', {
             owner_type: ownerType,
             owner_id: id,
@@ -95,7 +102,7 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const { networkId, id, key } = req.params as OwnerKeyParams;
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          const removed = deletePropertyValue(ndb, ownerType, id, key);
+          const removed = deletePropertyValue(ndb, ownerType, id, key, req.auth!.user.id);
           deps.emit(req, networkId, 'property-value.deleted', {
             owner_type: ownerType,
             owner_id: id,

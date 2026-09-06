@@ -57,10 +57,22 @@ export interface Layer {
   created_by: string;
   /** ISO-8601, second precision. */
   created_at: string;
+  /**
+   * Id пользователя, последним изменившего слой (переименование/комментарий,
+   * §2.2). Раньше поля не было — спека §3.0 хранила только `created_by`.
+   * Колонка `updated_by` физически добавлена миграцией 033. Сервер всегда
+   * возвращает; помечено `?` чтобы клиентские фикстуры могли собирать
+   * объект без него до этапа 3.
+   */
+  updated_by?: string;
   /** Last write to any branchable row of the layer — not metadata edits. */
   last_activity_at: string;
   /** Row version for `If-Match` on rename/comment edits (§2.2). */
   version: number;
+  /** Unix-миллисекунды `created_at` (для сортировки). */
+  created_at_ms?: number;
+  /** Unix-миллисекунды последнего изменения метаданных слоя. */
+  updated_at_ms?: number;
   /** Size of the whole descendant subtree (all layers, incl. service ones) —
    * the `cascade` confirmation of DELETE (§2.4) echoes this number back. */
   children_count: number;

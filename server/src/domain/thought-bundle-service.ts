@@ -172,7 +172,7 @@ export function upsertThoughtBundle(
     if (input.properties !== undefined) {
       properties = {};
       for (const [key, value] of Object.entries(input.properties)) {
-        properties[key] = setPropertyValue(ndb, 'thought', thought.id, key, value);
+        properties[key] = setPropertyValue(ndb, 'thought', thought.id, key, value, actorUserId);
       }
     }
 

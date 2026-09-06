@@ -91,15 +91,17 @@ export class NetworkServiceImpl implements NetworkService {
 
     // 2. Seed the protected HOME thought in a single transaction.
     const homeId = randomUUID();
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     ndb.transaction(() => {
       ndb
         .prepare(
           `INSERT INTO thoughts (id, title, title_norm, is_protected, is_root, active,
-                                 version, created_at, created_by, updated_at, updated_by)
-           VALUES (?, 'HOME', 'home', 1, 1, 1, 1, ?, ?, ?, ?)`,
+                                 version, created_at, created_by, updated_at, updated_by,
+                                 created_at_ms, updated_at_ms)
+           VALUES (?, 'HOME', 'home', 1, 1, 1, 1, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(homeId, now, ownerId, now, ownerId);
+        .run(homeId, now, ownerId, now, ownerId, nowMs, nowMs);
     });
 
     // 3. Record registry + owner membership in _system.db (atomic). Both rows

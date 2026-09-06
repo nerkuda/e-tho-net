@@ -130,6 +130,58 @@ function ownerTypeTable(ownerType: TypeOwnerType): TypeTable {
   return ownerType === 'thought_type' ? 'thought_types' : 'link_types';
 }
 
+/**
+ * Обновить `updated_at`/`updated_by`/`updated_at_ms` типа (требование e6d4165e,
+ * приравнивание «правка настроек типа → правка самого типа»). Все настройки —
+ * подключение свойств, дефолты, описание, реордеринг — касаются типа как
+ * сущности и должны быть видны в его DTO.
+ *
+ * Вызывается внутри уже открытой транзакции (все остальные правки
+ * type_properties / type_property_overrides) и сам открывает теневую копию
+ * по правилам S4 (13-layers.md §5.1).
+ */
+function touchType(ndb: NetworkDb, ownerType: TypeOwnerType, ownerId: string, actorUserId: string): void {
+  const table = ownerTypeTable(ownerType);
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  materializeShadow(ndb, table, ownerId);
+  ndb
+    .prepare(
+      `UPDATE ${table} SET updated_at = ?, updated_by = ?, updated_at_ms = ?, version = version + 1
+       WHERE id = ? AND layer_id = ?`,
+    )
+    .run(now, actorUserId, nowMs, ownerId, ndb.layerId);
+}
+
+/**
+ * Обновить `updated_at`/`updated_by`/`updated_at_ms` владельца значения
+ * свойства (мысли или связи) — требование e6d4165e, приравнивание
+ * «правка значения свойства → правка владельца». Без этого `updated_by`
+ * карточки мысли застывал бы на времени создания, и вкладка «Метаданные»
+ * врала бы.
+ *
+ * Открывает теневую копию владельца в текущем слое; записи `value_*` и
+ * `property_values.updated_at` остаются независимыми (миллисекундные даты
+ * значения и владельца могут различаться на пару мс).
+ */
+function touchOwner(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  actorUserId: string,
+): void {
+  const table = ownerType === 'thought' ? 'thoughts' : 'links';
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  materializeShadow(ndb, table, ownerId);
+  ndb
+    .prepare(
+      `UPDATE ${table} SET updated_at = ?, updated_by = ?, updated_at_ms = ?, version = version + 1
+       WHERE id = ? AND layer_id = ?`,
+    )
+    .run(now, actorUserId, nowMs, ownerId, ndb.layerId);
+}
+
 /** Display name of a type from its owner table (link types: «fwd / rev»). */
 function ownerTypeName(ndb: NetworkDb, ownerType: TypeOwnerType, ownerId: string): string {
   if (ownerType === 'thought_type') {
@@ -158,6 +210,10 @@ interface PropertyRow {
   description: string | null;
   created_at: string;
   updated_at: string;
+  created_by: string;
+  updated_by: string;
+  created_at_ms: number;
+  updated_at_ms: number;
 }
 
 /** Convert a raw registry row into a {@link NetworkProperty}. */
@@ -170,6 +226,10 @@ function rowToNetworkProperty(row: PropertyRow): NetworkProperty {
     description: row.description,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    created_by: row.created_by,
+    updated_by: row.updated_by,
+    created_at_ms: row.created_at_ms,
+    updated_at_ms: row.updated_at_ms,
   };
 }
 
@@ -223,6 +283,7 @@ function assertNameAvailable(ndb: NetworkDb, name: string, exceptId: string | nu
 export function createNetworkProperty(
   ndb: NetworkDb,
   input: NetworkPropertyInput,
+  actorUserId: string,
 ): NetworkProperty {
   const name = validateKey(input.name);
   const valueType = validateValueType(input.value_type);
@@ -230,21 +291,40 @@ export function createNetworkProperty(
     input.config === undefined || input.config === null ? null : JSON.stringify(input.config);
   const description = normalizeDescription(input.description);
   const id = randomUUID();
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   assertNameAvailable(ndb, name, null);
   ndb
     .prepare(
-      `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
-       VALUES (?, ?, ?, type_name_key(?), ?, ?, ?, ?, ?)
+      `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description,
+                               created_at, updated_at, created_by, updated_by,
+                               created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, type_name_key(?), ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (name_key, layer_id) DO UPDATE SET
          deleted = 0,
          name = excluded.name,
          value_type = excluded.value_type,
          config = excluded.config,
          description = excluded.description,
-         updated_at = excluded.updated_at`,
+         updated_at = excluded.updated_at,
+         updated_by = excluded.updated_by,
+         updated_at_ms = excluded.updated_at_ms`,
     )
-    .run(id, ndb.layerId, name, name, valueType, configJson, description, now, now);
+    .run(
+      id,
+      ndb.layerId,
+      name,
+      name,
+      valueType,
+      configJson,
+      description,
+      now,
+      now,
+      actorUserId,
+      actorUserId,
+      nowMs,
+      nowMs,
+    );
   // The conflict arm wakes a same-name tombstone of this layer keeping its
   // ORIGINAL id — re-read by name, never by the fresh uuid.
   return getNetworkPropertyByName(ndb, name)!;
@@ -261,6 +341,7 @@ export function updateNetworkProperty(
   ndb: NetworkDb,
   id: string,
   changes: NetworkPropertyUpdateInput,
+  actorUserId: string,
 ): NetworkProperty {
   const current = getNetworkProperty(ndb, id);
   if (!current) {
@@ -298,8 +379,9 @@ export function updateNetworkProperty(
     if (sets.length === 0) {
       return current;
     }
-    sets.push('updated_at = ?');
-    args.push(new Date().toISOString());
+    const nowMs = Date.now();
+    sets.push('updated_at = ?', 'updated_by = ?', 'updated_at_ms = ?');
+    args.push(new Date(nowMs).toISOString(), actorUserId, nowMs);
     materializeShadow(ndb, 'properties', id);
     args.push(id, ndb.layerId);
     ndb.prepare(`UPDATE properties SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`).run(
@@ -634,6 +716,7 @@ export function setTypePropertyDefaultOverride(
   ownerId: string,
   propertyId: string,
   value: PropertyValueValue,
+  actorUserId: string,
 ): void {
   ndb.transaction(() => {
     const prop = assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
@@ -658,26 +741,29 @@ export function setTypePropertyDefaultOverride(
           )
           .run('null', now, row.id, ndb.layerId);
       }
-      return;
+    } else {
+      // S5 (13-layers.md §5.1): a visible ancestor row for this natural key is
+      // shadowed FIRST — a fresh logical id would leave both rows live in this
+      // layer's view. The conflict arm updates ONLY default_value, so a
+      // description override held by the same row survives.
+      const existingOverride = listOverrideRows(ndb, ownerType, ownerId, prop.id)[0];
+      if (existingOverride) {
+        materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
+      }
+      ndb
+        .prepare(
+          `INSERT INTO type_property_overrides (id, layer_id, owner_type, type_id, property_id, default_value, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (owner_type, type_id, property_id, layer_id) DO UPDATE SET
+             default_value = excluded.default_value,
+             updated_at = excluded.updated_at,
+             deleted = 0`,
+        )
+        .run(randomUUID(), ndb.layerId, ownerType, ownerId, prop.id, JSON.stringify(value), now, now);
     }
-    // S5 (13-layers.md §5.1): a visible ancestor row for this natural key is
-    // shadowed FIRST — a fresh logical id would leave both rows live in this
-    // layer's view. The conflict arm updates ONLY default_value, so a
-    // description override held by the same row survives.
-    const existingOverride = listOverrideRows(ndb, ownerType, ownerId, prop.id)[0];
-    if (existingOverride) {
-      materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
-    }
-    ndb
-      .prepare(
-        `INSERT INTO type_property_overrides (id, layer_id, owner_type, type_id, property_id, default_value, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (owner_type, type_id, property_id, layer_id) DO UPDATE SET
-           default_value = excluded.default_value,
-           updated_at = excluded.updated_at,
-           deleted = 0`,
-      )
-      .run(randomUUID(), ndb.layerId, ownerType, ownerId, prop.id, JSON.stringify(value), now, now);
+    // Любая правка дефолта (включая сброс) — это правка настроек типа:
+    // обновим авторство самого типа (требование e6d4165e, приравнивание).
+    touchType(ndb, ownerType, ownerId, actorUserId);
   });
 }
 
@@ -695,6 +781,7 @@ export function setTypePropertyDescriptionOverride(
   ownerId: string,
   propertyId: string,
   description: string | null,
+  actorUserId: string,
 ): void {
   const normalized = normalizeDescription(description);
   ndb.transaction(() => {
@@ -716,22 +803,25 @@ export function setTypePropertyDescriptionOverride(
           )
           .run(now, row.id, ndb.layerId);
       }
-      return;
+    } else {
+      const existingOverride = listOverrideRows(ndb, ownerType, ownerId, prop.id)[0];
+      if (existingOverride) {
+        materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
+      }
+      ndb
+        .prepare(
+          `INSERT INTO type_property_overrides (id, layer_id, owner_type, type_id, property_id, default_value, description, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'null', ?, ?, ?)
+           ON CONFLICT (owner_type, type_id, property_id, layer_id) DO UPDATE SET
+             description = excluded.description,
+             updated_at = excluded.updated_at,
+             deleted = 0`,
+        )
+        .run(randomUUID(), ndb.layerId, ownerType, ownerId, prop.id, normalized, now, now);
     }
-    const existingOverride = listOverrideRows(ndb, ownerType, ownerId, prop.id)[0];
-    if (existingOverride) {
-      materializeShadow(ndb, 'type_property_overrides', existingOverride.id);
-    }
-    ndb
-      .prepare(
-        `INSERT INTO type_property_overrides (id, layer_id, owner_type, type_id, property_id, default_value, description, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'null', ?, ?, ?)
-         ON CONFLICT (owner_type, type_id, property_id, layer_id) DO UPDATE SET
-           description = excluded.description,
-           updated_at = excluded.updated_at,
-           deleted = 0`,
-      )
-      .run(randomUUID(), ndb.layerId, ownerType, ownerId, prop.id, normalized, now, now);
+    // Любая правка описания (включая сброс) — это правка настроек типа:
+    // обновим авторство самого типа (требование e6d4165e, приравнивание).
+    touchType(ndb, ownerType, ownerId, actorUserId);
   });
 }
 
@@ -761,6 +851,7 @@ export function createTypeProperty(
   ownerType: TypeOwnerType,
   ownerId: string,
   input: PropertyDefinitionInput,
+  actorUserId: string,
 ): PropertyDefinition {
   validateTypeOwnerType(ownerType);
   const key = validateKey(input.key);
@@ -783,7 +874,7 @@ export function createTypeProperty(
         value_type: validateValueType(input.value_type),
         config: input.config ?? null,
         description: input.description ?? null,
-      });
+      }, actorUserId);
     }
 
     // A binding on an ancestor means the property is already inherited — the
@@ -850,6 +941,9 @@ export function createTypeProperty(
       .run(bindingId, ndb.layerId, ownerType, ownerId, prop.id, input.required ? 1 : 0, position);
     // The conflict arm wakes a same-(owner, property) tombstone of this layer
     // keeping its ORIGINAL id — re-read by (owner, key), never by the fresh uuid.
+    // Подключение свойства — это правка настроек типа: обновим авторство
+    // самого типа (требование e6d4165e, приравнивание).
+    touchType(ndb, ownerType, ownerId, actorUserId);
     return getTypePropertyByKey(ndb, ownerType, ownerId, key)!;
   });
 }
@@ -965,6 +1059,7 @@ export function updateTypeProperty(
   ndb: NetworkDb,
   id: string,
   changes: PropertyDefinitionUpdateInput,
+  actorUserId: string,
 ): PropertyDefinition {
   const current = getTypeProperty(ndb, id);
   if (!current) {
@@ -983,7 +1078,7 @@ export function updateTypeProperty(
     if (changes.config !== undefined) registryChanges.config = changes.config;
     if (changes.description !== undefined) registryChanges.description = changes.description;
     if (Object.keys(registryChanges).length > 0) {
-      updateNetworkProperty(ndb, current.property_id, registryChanges);
+      updateNetworkProperty(ndb, current.property_id, registryChanges, actorUserId);
     }
     // Binding-level edits (role in this type).
     const sets: string[] = [];
@@ -996,6 +1091,7 @@ export function updateTypeProperty(
       sets.push('position = ?');
       args.push(changes.position);
     }
+    let typeTouched = Object.keys(registryChanges).length > 0;
     if (sets.length > 0) {
       // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer;
       // the UPDATE targets the connection's layer row only.
@@ -1004,6 +1100,12 @@ export function updateTypeProperty(
       ndb.prepare(`UPDATE type_properties SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`).run(
         ...args,
       );
+      // Правка роли свойства в типе (required/position) тоже меняет настройки
+      // типа: обновим авторство типа (требование e6d4165e).
+      typeTouched = true;
+    }
+    if (typeTouched) {
+      touchType(ndb, current.owner_type, current.owner_id, actorUserId);
     }
     return getTypeProperty(ndb, id)!;
   });
@@ -1016,7 +1118,7 @@ export function updateTypeProperty(
  * `outside_type: true` and deletable manually (02-data-model.md §3.5a). The
  * pre-0.6.5 cascade (values + overrides deleted with the definition) is gone.
  */
-export function deleteTypeProperty(ndb: NetworkDb, id: string): void {
+export function deleteTypeProperty(ndb: NetworkDb, id: string, actorUserId: string): void {
   const current = getTypeProperty(ndb, id);
   if (!current) {
     throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'type_property', id });
@@ -1024,6 +1126,11 @@ export function deleteTypeProperty(ndb: NetworkDb, id: string): void {
   // S4 (13-layers.md §5.2): in a working layer the detach materialises a
   // tombstone over the binding; the base rows stay intact.
   deleteRowLayered(ndb, 'type_properties', id);
+  // Отключение свойства — это правка настроек типа: обновим авторство
+  // самого типа (требование e6d4165e, приравнивание).
+  ndb.transaction(() => {
+    touchType(ndb, current.owner_type, current.owner_id, actorUserId);
+  });
 }
 
 /**
@@ -1036,6 +1143,7 @@ export function reorderTypeProperties(
   ownerType: TypeOwnerType,
   ownerId: string,
   orderedPropertyIds: string[],
+  actorUserId: string,
 ): PropertyDefinition[] {
   return ndb.transaction(() => {
     // S4: в слое порядок — правка теневых копий привязок (13-layers.md §5.1).
@@ -1046,6 +1154,9 @@ export function reorderTypeProperties(
       materializeShadow(ndb, 'type_properties', propId);
       stmt.run(index, propId, ownerType, ownerId, ndb.layerId);
     });
+    // Реордеринг — правка настроек типа: обновим авторство самого типа
+    // (требование e6d4165e, приравнивание).
+    touchType(ndb, ownerType, ownerId, actorUserId);
     return listTypeProperties(ndb, ownerType, ownerId);
   });
 }
@@ -1066,6 +1177,10 @@ interface PropertyValueRow {
   value_bool: number | null;
   value_thought_ref: string | null;
   updated_at: string;
+  created_by: string;
+  updated_by: string;
+  created_at_ms: number;
+  updated_at_ms: number;
 }
 
 /**
@@ -1253,6 +1368,10 @@ export function getPropertyValues(
       value_type: prop.value_type,
       value: readValue(row, prop.value_type, isMultipleProperty(prop)),
       updated_at: row.updated_at,
+      created_by: row.created_by,
+      updated_by: row.updated_by,
+      created_at_ms: row.created_at_ms,
+      updated_at_ms: row.updated_at_ms,
     });
   }
   return out;
@@ -1338,6 +1457,10 @@ export function getPropertyValuesResolved(
       value_type: prop.value_type,
       value: resolved,
       updated_at: row.updated_at,
+      created_by: row.created_by,
+      updated_by: row.updated_by,
+      created_at_ms: row.created_at_ms,
+      updated_at_ms: row.updated_at_ms,
     });
   }
   return out;
@@ -1633,6 +1756,7 @@ export function setPropertyValue(
   ownerId: string,
   key: string,
   value: PropertyValueValue,
+  actorUserId: string,
 ): PropertyValue {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
@@ -1657,7 +1781,7 @@ export function setPropertyValue(
         key,
       });
     }
-    return setPropertyValueForProperty(ndb, ownerType, ownerId, prop, value, { key });
+    return setPropertyValueForProperty(ndb, ownerType, ownerId, prop, value, { key }, actorUserId);
   });
 }
 
@@ -1673,6 +1797,7 @@ function setPropertyValueForProperty(
   prop: PropertyLike,
   value: PropertyValueValue,
   errKey: { key: string },
+  actorUserId: string,
 ): PropertyValue {
   const attached = attachedPropertyIds(ndb, ownerType, ownerId);
   if (!attached.has(prop.id)) {
@@ -1684,7 +1809,8 @@ function setPropertyValueForProperty(
   }
 
   const { column, raw } = validateAndCoerce(ndb, prop, value);
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   const id = randomUUID();
   // S5 (13-layers.md §5.1): a visible ancestor row for this natural key is
   // shadowed FIRST — writing with a fresh logical id would leave both rows
@@ -1704,8 +1830,9 @@ function setPropertyValueForProperty(
   // same-key tombstone of this layer instead of dropping the write silently.
   ndb
     .prepare(
-      `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, ${column}, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, ${column}, updated_at,
+                                   created_by, updated_by, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(owner_type, owner_id, property_id, layer_id) DO UPDATE SET
          deleted = 0,
          value_text = NULL,
@@ -1714,9 +1841,16 @@ function setPropertyValueForProperty(
          value_bool = NULL,
          value_thought_ref = NULL,
          ${column} = excluded.${column},
-         updated_at = excluded.updated_at`,
+         updated_at = excluded.updated_at,
+         updated_by = excluded.updated_by,
+         updated_at_ms = excluded.updated_at_ms`,
     )
-    .run(id, ndb.layerId, ownerType, ownerId, prop.id, raw, now);
+    .run(id, ndb.layerId, ownerType, ownerId, prop.id, raw, now, actorUserId, actorUserId, nowMs, nowMs);
+
+  // Правка значения — это правка владельца (требование e6d4165e).
+  // Без этого `updated_by` карточки мысли/связи застывал бы на создании,
+  // и вкладка «Метаданные» показывала бы чужое имя.
+  touchOwner(ndb, ownerType, ownerId, actorUserId);
 
   const stored = ndb
     .prepare(
@@ -1733,6 +1867,10 @@ function setPropertyValueForProperty(
     value_type: prop.value_type,
     value: readValue(stored, prop.value_type, isMultipleProperty(prop)),
     updated_at: stored.updated_at,
+    created_by: stored.created_by,
+    updated_by: stored.updated_by,
+    created_at_ms: stored.created_at_ms,
+    updated_at_ms: stored.updated_at_ms,
   };
 }
 
@@ -1747,6 +1885,7 @@ export function setPropertyValueById(
   ownerId: string,
   propertyId: string,
   value: PropertyValueValue,
+  actorUserId: string,
 ): PropertyValue {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
@@ -1774,9 +1913,15 @@ export function setPropertyValueById(
       value_type: registryProp.value_type,
       config: registryProp.config,
     };
-    return setPropertyValueForProperty(ndb, ownerType, ownerId, prop, value, {
-      key: registryProp.name,
-    });
+    return setPropertyValueForProperty(
+      ndb,
+      ownerType,
+      ownerId,
+      prop,
+      value,
+      { key: registryProp.name },
+      actorUserId,
+    );
   });
 }
 
@@ -1790,11 +1935,12 @@ export function setPropertyValues(
   ownerType: PropertyOwnerType,
   ownerId: string,
   values: Record<string, PropertyValueValue>,
+  actorUserId: string,
 ): Record<string, PropertyValue> {
   return ndb.transaction(() => {
     const stored: Record<string, PropertyValue> = {};
     for (const [key, value] of Object.entries(values)) {
-      stored[key] = setPropertyValue(ndb, ownerType, ownerId, key, value);
+      stored[key] = setPropertyValue(ndb, ownerType, ownerId, key, value, actorUserId);
     }
     return stored;
   });
@@ -1867,6 +2013,7 @@ export function deletePropertyValue(
   ownerType: PropertyOwnerType,
   ownerId: string,
   key: string,
+  actorUserId: string,
 ): { property_id: string } {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
@@ -1898,6 +2045,9 @@ export function deletePropertyValue(
         });
       }
       for (const row of rows) deleteRowLayered(ndb, 'property_values', row.id);
+      // Удаление значения — правка владельца: обновим авторство
+      // (требование e6d4165e, приравнивание).
+      touchOwner(ndb, ownerType, ownerId, actorUserId);
       return { property_id: prop.id };
     }
     const result = ndb
@@ -1912,6 +2062,9 @@ export function deletePropertyValue(
         key,
       });
     }
+    // Удаление значения — правка владельца: обновим авторство
+    // (требование e6d4165e, приравнивание).
+    touchOwner(ndb, ownerType, ownerId, actorUserId);
     // Return the property_id so routes can emit `property-value.deleted`
     // without a second lookup.
     return { property_id: prop.id };

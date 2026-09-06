@@ -42,6 +42,9 @@ function nativeAvailable(): boolean {
   }
 }
 
+// Test user for authorship columns (task 5ef8b5bb)
+const USER = 'test-user';
+
 describe(
   'trash-service (S13)',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
@@ -53,10 +56,10 @@ describe(
         createTypeProperty(ndb, 'thought_type', type.id, {
           key: 'см. также',
           value_type: 'thought_ref',
-        });
+        }, USER);
         const a = createThought(ndb, { title: 'A' }, 'u');
         const b = createThought(ndb, { title: 'B', type_id: type.id }, 'u');
-        setPropertyValue(ndb, 'thought', b.id, 'см. также', a.id);
+        setPropertyValue(ndb, 'thought', b.id, 'см. также', a.id, USER);
 
         const check = checkThoughtDeletion(ndb, a.id);
         assert.equal(check.blocked, true);
@@ -100,10 +103,10 @@ describe(
       const ndb: NetworkDb = createInMemoryNetworkDb();
       try {
         const type = createThoughtType(ndb, { name: 'Задача' }, 'u');
-        createTypeProperty(ndb, 'thought_type', type.id, { key: 'исполнитель', value_type: 'thought_ref' });
+        createTypeProperty(ndb, 'thought_type', type.id, { key: 'исполнитель', value_type: 'thought_ref' }, USER);
         const target = createThought(ndb, { title: 'T' }, 'u');
         const ref = createThought(ndb, { title: 'R', type_id: type.id }, 'u');
-        setPropertyValue(ndb, 'thought', ref.id, 'исполнитель', target.id);
+        setPropertyValue(ndb, 'thought', ref.id, 'исполнитель', target.id, USER);
 
         const marked = updateThought(ndb, target.id, { marked_for_deletion: true }, undefined, 'u');
         assert.equal(marked.marked_for_deletion, true);

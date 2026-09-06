@@ -55,6 +55,15 @@ export interface Thought {
   created_by?: string;
   /** User id of the last edit. Omitted on lightweight responses. */
   updated_by?: string;
+  /**
+   * Unix-миллисекунды момента `created_at` (02-data-model.md §3.1,
+   * требование e6d4165e «колонки авторства»). Сортировка по ним дешевле
+   * парсинга ISO; на UI наружу показываются секунды. Omitted on lightweight
+   * responses — выставлен вместе с {@link created_by}.
+   */
+  created_at_ms?: number;
+  /** Unix-миллисекунды `updated_at`; парные правила с {@link created_at_ms}. */
+  updated_at_ms?: number;
 }
 
 /** Direction for an inline link created together with a thought (03-server-api.md §6.3). */

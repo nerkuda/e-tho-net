@@ -41,6 +41,16 @@ export interface ThoughtType {
   created_at: string;
   updated_at: string;
   created_by: string;
+  /**
+   * Id пользователя, последним изменившего тип (требование e6d4165e). Колонка
+   * `updated_by` физически добавлена миграцией 033. Сервер всегда возвращает;
+   * помечено `?` чтобы клиентские фикстуры могли собирать объект без него.
+   */
+  updated_by?: string;
+  /** Unix-миллисекунды `created_at` (для сортировки). */
+  created_at_ms?: number;
+  /** Unix-миллисекунды `updated_at`. */
+  updated_at_ms?: number;
 }
 
 /** Input accepted by `POST /thought-types` (03-server-api.md §8). */
@@ -125,6 +135,16 @@ export interface NetworkProperty {
   description: string | null;
   created_at: string;
   updated_at: string;
+  /** Id пользователя, создавшего свойство (требование e6d4165e). Сервер
+   *  всегда возвращает; помечено `?` чтобы клиентские фикстуры могли
+   *  собирать объект без него. */
+  created_by?: string;
+  /** Id пользователя, последним изменившего свойство. */
+  updated_by?: string;
+  /** Unix-миллисекунды `created_at` (для сортировки). */
+  created_at_ms?: number;
+  /** Unix-миллисекунды `updated_at`. */
+  updated_at_ms?: number;
 }
 
 /** Input accepted by the registry create (REST wiring lands after 0.6.5 domain). */
@@ -291,6 +311,18 @@ export interface PropertyValue {
   /** Value whose runtime type matches the definition's `value_type`. */
   value: PropertyValueValue;
   updated_at: string;
+  /**
+   * Id пользователя, создавшего значение (требование e6d4165e; колонка
+   * `created_by` физически добавлена миграцией 033). Сервер всегда возвращает;
+   * помечено `?` чтобы клиентские фикстуры могли собирать объект без него.
+   */
+  created_by?: string;
+  /** Id пользователя, последним изменившего значение. */
+  updated_by?: string;
+  /** Unix-миллисекунды создания (для сортировки). */
+  created_at_ms?: number;
+  /** Unix-миллисекунды `updated_at`. */
+  updated_at_ms?: number;
 }
 
 /** `thought_ref`-значение в MCP-чтении (task N4): ссылка на мысль,

@@ -338,7 +338,7 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
         const input = parseCreateBody(bodyObject(req.body ?? {}, req.id), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         try {
-          const property = createNetworkProperty(ndb, input);
+          const property = createNetworkProperty(ndb, input, req.auth!.user.id);
           deps.emit(req, networkId, 'property-registry.created', { property });
           sendCreated(reply, property, { request_id: req.id });
         } catch (err) {
@@ -407,7 +407,7 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
           dropped = counts.dropped;
         }
         try {
-          const property = updateNetworkProperty(ndb, id, changes);
+          const property = updateNetworkProperty(ndb, id, changes, req.auth!.user.id);
           deps.emit(req, networkId, 'property-registry.updated', {
             id,
             changes,

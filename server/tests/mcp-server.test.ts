@@ -27,6 +27,9 @@ import {
   toolText,
 } from './mcp-helpers.js';
 
+// Test user for authorship columns (task 5ef8b5bb)
+const USER = 'test-user';
+
 describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
   it('lists all 19 tools from the shared catalogue', async () => {
     const ctx = await buildMcpContext();
@@ -207,7 +210,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
       const def = createTypeProperty(ndb, 'thought_type', parent.id, {
         key: 'status',
         value_type: 'text',
-      });
+      }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {

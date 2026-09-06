@@ -43,6 +43,15 @@ export interface Comment {
   updated_at: string;
   created_by: string;
   updated_by: string;
+  /**
+   * Unix-миллисекунды момента `created_at` (02-data-model.md §3.8,
+   * требование e6d4165e). Сортировка по ним дешевле парсинга ISO.
+   * Сервер всегда возвращает; помечено `?` чтобы клиентские фикстуры и
+   * устаревший код могли собирать объект без него до этапа 3.
+   */
+  created_at_ms?: number;
+  /** Unix-миллисекунды `updated_at`. */
+  updated_at_ms?: number;
 }
 
 /** Input accepted by `POST …/{id}/comments` (03-server-api.md §10).

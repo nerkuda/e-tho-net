@@ -226,7 +226,7 @@ describe(
       try {
         const t = seedThought(ndb);
         const a = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://x' }, USER);
-        const updated = updateAttachment(ndb, a.id, { url: 'https://y', title: 'T' });
+        const updated = updateAttachment(ndb, a.id, { url: 'https://y', title: 'T' }, USER);
         assert.equal(updated.url, 'https://y');
         assert.equal(updated.title, 'T');
       } finally {
@@ -240,7 +240,7 @@ describe(
         const t = seedThought(ndb);
         const a = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://x' }, USER);
         assert.throws(
-          () => updateAttachment(ndb, a.id, { url: '  ' }),
+          () => updateAttachment(ndb, a.id, { url: '  ' }, USER),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
       } finally {
@@ -299,7 +299,7 @@ describe(
         ndb
           .prepare('UPDATE thoughts SET icon_attachment_id = ? WHERE id = ?')
           .run(a.id, t1);
-        updateAttachment(ndb, a.id, { owner_type: 'thought', owner_id: t2 });
+        updateAttachment(ndb, a.id, { owner_type: 'thought', owner_id: t2 }, USER);
         const row = ndb
           .prepare('SELECT icon_attachment_id FROM thoughts WHERE id = ?')
           .get(t1) as { icon_attachment_id: string | null };
@@ -420,13 +420,13 @@ describe(
         const t1 = seedThought(ndb, 'One');
         const t2 = seedThought(ndb, 'Two');
         const a = createAttachment(ndb, 'thought', t1, { kind: 'url', url: 'https://x' }, USER);
-        const moved = updateAttachment(ndb, a.id, { owner_type: 'thought', owner_id: t2 });
+        const moved = updateAttachment(ndb, a.id, { owner_type: 'thought', owner_id: t2 }, USER);
         assert.equal(moved.owner_id, t2);
         assert.equal(listAttachments(ndb, 'thought', t1).length, 0);
         assert.equal(listAttachments(ndb, 'thought', t2).length, 1);
         // Moving to a missing owner → NOT_FOUND, attachment stays put.
         assert.throws(
-          () => updateAttachment(ndb, a.id, { owner_id: randomUUID() }),
+          () => updateAttachment(ndb, a.id, { owner_id: randomUUID() }, USER),
           (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
         );
         assert.equal(listAttachments(ndb, 'thought', t2).length, 1);
@@ -441,10 +441,10 @@ describe(
         const t = seedThought(ndb);
         const a = createAttachment(ndb, 'thought', t, { kind: 'url', url: 'https://x' }, USER);
         assert.throws(
-          () => updateAttachment(ndb, a.id, { icon: 'https://evil/x.png' }),
+          () => updateAttachment(ndb, a.id, { icon: 'https://evil/x.png' }, USER),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
         );
-        const withIcon = updateAttachment(ndb, a.id, { icon: 'data:image/png;base64,AAA' });
+        const withIcon = updateAttachment(ndb, a.id, { icon: 'data:image/png;base64,AAA' }, USER);
         assert.equal(withIcon.icon, 'data:image/png;base64,AAA');
       } finally {
         ndb.close();
@@ -713,7 +713,7 @@ describe(
         );
         // Icon is normally filled by URL enrichment (enrichUrlAttachment);
         // PATCH it in to mimic that state — copyAttachment must preserve it.
-        updateAttachment(ndb, a.id, { icon: 'data:image/png;base64,AAA' });
+        updateAttachment(ndb, a.id, { icon: 'data:image/png;base64,AAA' }, USER);
         const result = copyAttachment(
           ndb,
           a.id,

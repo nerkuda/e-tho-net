@@ -63,6 +63,8 @@ interface CommentRow {
   updated_at: string;
   created_by: string;
   updated_by: string;
+  created_at_ms: number;
+  updated_at_ms: number;
 }
 
 /** Convert a raw row into a {@link Comment} (targets are attached separately). */
@@ -83,6 +85,8 @@ function rowToComment(row: CommentRow, targets: CommentTarget[] = []): Comment {
     updated_at: row.updated_at,
     created_by: row.created_by,
     updated_by: row.updated_by,
+    created_at_ms: row.created_at_ms,
+    updated_at_ms: row.updated_at_ms,
   };
 }
 
@@ -440,7 +444,8 @@ export function createCommentWithTargets(
     }
 
     const id = randomUUID();
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     const title = input.title === undefined ? null : input.title;
     // Permanent comments ignore the validity window (docs/02-data-model.md §3.8).
     const validFrom = kind === 'permanent' ? now : (normaliseDate(input.valid_from) ?? now);
@@ -450,8 +455,9 @@ export function createCommentWithTargets(
       .prepare(
         `INSERT INTO comments (id, layer_id, owner_type, owner_id, kind, title, body_md, body_html,
                                valid_from, valid_to, version,
-                               created_at, updated_at, created_by, updated_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+                               created_at, updated_at, created_by, updated_by,
+                               created_at_ms, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -468,6 +474,8 @@ export function createCommentWithTargets(
         now,
         actorUserId,
         actorUserId,
+        nowMs,
+        nowMs,
       );
     const insertTarget = ndb.prepare(
       'INSERT INTO comment_targets (comment_id, owner_type, owner_id, layer_id) VALUES (?, ?, ?, ?)',
@@ -531,9 +539,10 @@ export function updateComment(
       }
     }
 
-    const now = new Date().toISOString();
-    sets.push('version = ?', 'updated_at = ?', 'updated_by = ?');
-    args.push(current.version + 1, now, actorUserId);
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    sets.push('version = ?', 'updated_at = ?', 'updated_by = ?', 'updated_at_ms = ?');
+    args.push(current.version + 1, now, actorUserId, nowMs);
     // S4 (13-layers.md §5.1): first edit in a working layer materialises a
     // shadow copy; the UPDATE targets the connection's layer row only.
     materializeShadow(ndb, 'comments', id);
@@ -720,14 +729,15 @@ export function removeCommentTarget(
     if (nextPrimary === undefined) {
       throw new EtnError('INTERNAL', 'comment has no remaining targets', {});
     }
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     if (wasPrimary) {
       // S4: the primary move is an edit of the comment row — materialise the
       // shadow copy first, then update the connection's layer row only.
       materializeShadow(ndb, 'comments', commentId);
       ndb
         .prepare(
-          `UPDATE comments SET owner_type = ?, owner_id = ?, version = ?, updated_at = ?, updated_by = ?
+          `UPDATE comments SET owner_type = ?, owner_id = ?, version = ?, updated_at = ?, updated_by = ?, updated_at_ms = ?
            WHERE id = ? AND layer_id = ?`,
         )
         .run(
@@ -736,6 +746,7 @@ export function removeCommentTarget(
           current.version + 1,
           now,
           actorUserId,
+          nowMs,
           commentId,
           ndb.layerId,
         );
@@ -748,13 +759,14 @@ export function removeCommentTarget(
 
 /** Bump `version`/`updated_at`/`updated_by` of a comment (its layer row). */
 function bumpVersion(ndb: NetworkDb, commentId: string, currentVersion: number, actorUserId: string): void {
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   materializeShadow(ndb, 'comments', commentId);
   ndb
     .prepare(
-      'UPDATE comments SET version = ?, updated_at = ?, updated_by = ? WHERE id = ? AND layer_id = ?',
+      'UPDATE comments SET version = ?, updated_at = ?, updated_by = ?, updated_at_ms = ? WHERE id = ? AND layer_id = ?',
     )
-    .run(currentVersion + 1, now, actorUserId, commentId, ndb.layerId);
+    .run(currentVersion + 1, now, actorUserId, nowMs, commentId, ndb.layerId);
 }
 
 /**

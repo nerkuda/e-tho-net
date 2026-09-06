@@ -37,6 +37,14 @@ export interface Link {
   created_by?: string;
   /** User id of the last edit. */
   updated_by?: string;
+  /**
+   * Unix-миллисекунды момента `created_at` (02-data-model.md §3.6,
+   * требование e6d4165e). Сортировка по ним дешевле ISO; на UI наружу
+   * показываются секунды. Выставляется вместе с {@link created_by}.
+   */
+  created_at_ms?: number;
+  /** Unix-миллисекунды `updated_at`; парные правила с {@link created_at_ms}. */
+  updated_at_ms?: number;
 }
 
 /** Input accepted by `POST /links` (03-server-api.md §7.1). */

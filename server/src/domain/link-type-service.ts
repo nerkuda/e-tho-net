@@ -52,6 +52,9 @@ interface LinkTypeRow {
   created_at: string;
   updated_at: string;
   created_by: string;
+  updated_by: string;
+  created_at_ms: number;
+  updated_at_ms: number;
 }
 
 /** Convert a raw row into a {@link LinkType}. */
@@ -70,6 +73,9 @@ function rowToLinkType(row: LinkTypeRow): LinkType {
     created_at: row.created_at,
     updated_at: row.updated_at,
     created_by: row.created_by,
+    updated_by: row.updated_by,
+    created_at_ms: row.created_at_ms,
+    updated_at_ms: row.updated_at_ms,
   };
 }
 
@@ -205,7 +211,8 @@ export function createLinkType(
   const nameReverseKey = typeNameKey(nameReverse);
   const style = validateStyle(input.style) ?? null;
   const id = randomUUID();
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
 
   return ndb.transaction(() => {
     const existing = ndb
@@ -227,8 +234,9 @@ export function createLinkType(
       .prepare(
         `INSERT INTO link_types (id, layer_id, name_forward, name_forward_key, name_reverse, name_reverse_key,
                                   parent_id, is_root, color, style, width, style_set, width_set,
-                                  description, version, created_at, updated_at, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+                                  description, version, created_at, updated_at, created_by, updated_by,
+                                  created_at_ms, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -249,6 +257,9 @@ export function createLinkType(
         now,
         now,
         actorUserId,
+        actorUserId,
+        nowMs,
+        nowMs,
       );
     return getLinkTypeOrThrow(ndb, id);
   });
@@ -269,6 +280,7 @@ export function updateLinkType(
   id: string,
   changes: LinkTypeUpdateInput,
   expectedVersion: number | undefined,
+  actorUserId: string,
 ): LinkType {
   return ndb.transaction(() => {
     const current = getLinkTypeOrThrow(ndb, id);
@@ -359,9 +371,10 @@ export function updateLinkType(
       args.push(changes.description ?? null);
     }
 
-    const now = new Date().toISOString();
-    sets.push('version = ?', 'updated_at = ?');
-    args.push(current.version + 1, now);
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    sets.push('version = ?', 'updated_at = ?', 'updated_by = ?', 'updated_at_ms = ?');
+    args.push(current.version + 1, now, actorUserId, nowMs);
     // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer;
     // the UPDATE targets the connection's layer row only.
     materializeShadow(ndb, 'link_types', id);
@@ -440,11 +453,15 @@ export function deleteLinkType(
       return;
     }
     if (usage.c > 0) {
+      const nowMs = Date.now();
+      const now = new Date(nowMs).toISOString();
       // Scoped to the base layer row: a live shadow of a link in another layer
       // keeps its `type_id` (the layer has not agreed to the detach).
       ndb
-        .prepare('UPDATE links SET type_id = NULL WHERE type_id = ? AND layer_id = ?')
-        .run(id, ndb.layerId);
+        .prepare(
+          'UPDATE links SET type_id = NULL, version = version + 1, updated_at = ?, updated_by = ?, updated_at_ms = ? WHERE type_id = ? AND layer_id = ?',
+        )
+        .run(now, opts.actorUserId ?? 'system', nowMs, id, ndb.layerId);
     }
     // The type's property BINDINGS go with it (0.6.5: a binding is the
     // property's role in this type). Stored values are deliberately NOT
@@ -490,14 +507,15 @@ function tombstoneLinkTypeSubtree(ndb: NetworkDb, typeId: string): void {
   const linkIds = (
     ndb.prepare('SELECT id FROM links_v WHERE type_id = ?').all(typeId) as { id: string }[]
   ).map((r) => r.id);
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   for (const linkId of linkIds) {
     materializeShadow(ndb, 'links', linkId);
     ndb
       .prepare(
-        'UPDATE links SET type_id = NULL, version = version + 1, updated_at = ?, updated_by = ? WHERE id = ? AND layer_id = ?',
+        'UPDATE links SET type_id = NULL, version = version + 1, updated_at = ?, updated_by = ?, updated_at_ms = ? WHERE id = ? AND layer_id = ?',
       )
-      .run(now, 'system', linkId, ndb.layerId);
+      .run(now, 'system', nowMs, linkId, ndb.layerId);
   }
   materializeTombstone(ndb, 'link_types', typeId);
 }

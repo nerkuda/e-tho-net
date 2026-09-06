@@ -493,7 +493,7 @@ describe(
         const t2 = createThought(ndb, { title: 'Вторая', type_id: type.id }, USER);
         const link = createLink(ndb, { source_id: t.id, target_id: t2.id }, USER);
         createComment(ndb, 'thought', t.id, { kind: 'permanent', body_md: 'текст' }, USER);
-        createTypeProperty(ndb, 'thought_type', type.id, { key: 'поле', value_type: 'text' });
+        createTypeProperty(ndb, 'thought_type', type.id, { key: 'поле', value_type: 'text' }, USER);
 
         for (const [table, id] of [
           ['thoughts', t.id],
@@ -531,19 +531,19 @@ describe(
         const prop = createTypeProperty(ndb, 'thought_type', rootTypeId, {
           key: 'поле',
           value_type: 'number',
-        });
+        }, USER);
         const t = createThought(ndb, { title: 'Владелец', type_id: child.id }, USER);
         // Two writes to the same (owner, property) exercise the upsert's
         // ON CONFLICT(owner_type, owner_id, property_id, layer_id) target.
-        setPropertyValue(ndb, 'thought', t.id, 'поле', 1);
-        setPropertyValue(ndb, 'thought', t.id, 'поле', 2);
+        setPropertyValue(ndb, 'thought', t.id, 'поле', 1, USER);
+        setPropertyValue(ndb, 'thought', t.id, 'поле', 2, USER);
         const values = ndb
           .prepare('SELECT value_number FROM property_values WHERE owner_id = ?')
           .all(t.id) as { value_number: number }[];
         assert.deepEqual(values, [{ value_number: 2 }]);
         // Same for the inherited-default override upsert (child overrides root).
-        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, 7);
-        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, 8);
+        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, 7, USER);
+        setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, 8, USER);
         const override = ndb
           .prepare('SELECT default_value FROM type_property_overrides')
           .get() as { default_value: string };
@@ -565,11 +565,11 @@ describe(
         const prop = createTypeProperty(ndb, 'thought_type', rootTypeId, {
           key: 'ф',
           value_type: 'text',
-        });
+        }, USER);
         const link = createLink(ndb, { source_id: a.id, target_id: b.id, type_id: null }, USER);
         createComment(ndb, 'thought', a.id, { kind: 'permanent', body_md: 'x' }, USER);
         createComment(ndb, 'link', link.id, { kind: 'chronological', body_md: 'y' }, USER);
-        setPropertyValue(ndb, 'thought', a.id, 'ф', 'зн');
+        setPropertyValue(ndb, 'thought', a.id, 'ф', 'зн', USER);
         ndb
           .prepare(
             'INSERT OR IGNORE INTO thought_synonyms (thought_id, synonym, synonym_norm) VALUES (?, ?, ?)',

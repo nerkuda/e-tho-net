@@ -75,7 +75,7 @@ describe(
         const a = seedThought(ndb, null, 'A');
         const b = seedThought(ndb, null, 'B');
         const lt = createLinkType(ndb, { name_forward: 'parent', name_reverse: 'child' }, USER);
-        createTypeProperty(ndb, 'link_type', lt.id, { key: 'weight', value_type: 'number' });
+        createTypeProperty(ndb, 'link_type', lt.id, { key: 'weight', value_type: 'number' }, USER);
         const link = createLink(ndb, { source_id: a, target_id: b, type_id: lt.id }, USER);
         createComment(ndb, 'link', link.id, { kind: 'permanent', body_md: 'link note' }, USER);
         createAttachment(
@@ -85,7 +85,7 @@ describe(
           { kind: 'url', url: 'https://example.com' },
           USER,
         );
-        setPropertyValue(ndb, 'link', link.id, 'weight', 5);
+        setPropertyValue(ndb, 'link', link.id, 'weight', 5, USER);
         assert.ok(dependantCount(ndb, 'link', link.id) > 0);
 
         deleteLink(ndb, link.id, undefined);
@@ -158,9 +158,9 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         const tt = createThoughtType(ndb, { name: 'Note' }, USER);
-        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'note', value_type: 'text' });
+        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'note', value_type: 'text' }, USER);
         const lt = createLinkType(ndb, { name_forward: 'parent', name_reverse: 'child' }, USER);
-        createTypeProperty(ndb, 'link_type', lt.id, { key: 'weight', value_type: 'number' });
+        createTypeProperty(ndb, 'link_type', lt.id, { key: 'weight', value_type: 'number' }, USER);
 
         const a = seedThought(ndb, tt.id, 'A');
         const b = seedThought(ndb, null, 'B');
@@ -171,11 +171,11 @@ describe(
         // Thought's own dependants.
         createComment(ndb, 'thought', a, { kind: 'permanent', body_md: 'a note' }, USER);
         createAttachment(ndb, 'thought', a, { kind: 'url', url: 'https://example.com/a' }, USER);
-        setPropertyValue(ndb, 'thought', a, 'note', 'x');
+        setPropertyValue(ndb, 'thought', a, 'note', 'x', USER);
         // Dependants of the links that the FK cascade removes silently.
         createComment(ndb, 'link', linkIn.id, { kind: 'permanent', body_md: 'in' }, USER);
         createAttachment(ndb, 'link', linkOut.id, { kind: 'url', url: 'https://example.com/l' }, USER);
-        setPropertyValue(ndb, 'link', linkIn.id, 'weight', 3);
+        setPropertyValue(ndb, 'link', linkIn.id, 'weight', 3, USER);
         assert.ok(dependantCount(ndb, 'thought', a) > 0);
         assert.ok(dependantCount(ndb, 'link', linkIn.id) > 0);
         assert.ok(dependantCount(ndb, 'link', linkOut.id) > 0);

@@ -35,6 +35,17 @@ export interface LinkType {
   created_at: string;
   updated_at: string;
   created_by: string;
+  /**
+   * Id пользователя, последним изменившего тип связи (требование e6d4165e).
+   * Колонка `updated_by` физически добавлена миграцией 033. Сервер всегда
+   * возвращает; помечено `?` чтобы клиентские фикстуры могли собирать
+   * объект без него.
+   */
+  updated_by?: string;
+  /** Unix-миллисекунды `created_at` (для сортировки). */
+  created_at_ms?: number;
+  /** Unix-миллисекунды `updated_at`. */
+  updated_at_ms?: number;
 }
 
 /** Input accepted by `POST /link-types` (03-server-api.md §8). */

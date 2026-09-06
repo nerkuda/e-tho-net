@@ -408,7 +408,7 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as AttachmentIdParams;
         const changes = parseAttachmentUpdateBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const attachment = updateAttachment(ndb, id, changes);
+        const attachment = updateAttachment(ndb, id, changes, req.auth!.user.id);
         deps.emit(req, networkId, 'attachment.updated', { id, changes });
         sendSuccess(reply, attachment);
       },
