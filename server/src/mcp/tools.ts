@@ -79,6 +79,9 @@ import {
   TYPES_LIST_SCOPES,
   TRAVERSAL_DEFAULTS,
   type CommentTarget,
+  type EditAcquiredData,
+  type EditClearedData,
+  type EditReleasedData,
   type ExportFormat,
   type Layer,
   type LayerMergeReport,
@@ -144,6 +147,13 @@ import {
   resolveThoughts,
   search,
 } from '../domain/search-service.js';
+import {
+  acquireLock,
+  clearLocksForUser,
+  listLocks,
+  releaseLock,
+  type LockRow,
+} from '../domain/lock-service.js';
 import { shrinkSubgraphToBudget } from './subgraph-budget.js';
 import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
 import { queryThoughts } from '../domain/query-service.js';
@@ -2978,6 +2988,191 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           cleared,
         });
         return { cleared, request_id: String(extra.requestId) };
+      }),
+  );
+
+  // =========================================================================
+  // Object-locks (task a88acf20, операция b6b776ff «etn.locks.*»)
+  // -------------------------------------------------------------------------
+  // Паритет с REST `/locks` (задача 2031df5e). Семантика ошибок единая:
+  //   * `LOCKED` (409)        — acquire чужого захвата, `details.holder`
+  //     содержит `{ user_id, client_id, acquired_at_ms }`.
+  //   * `LOCK_NOT_FOUND` (404) — release несуществующего lock_id.
+  //   * `FORBIDDEN` (403)     — release чужого захвата.
+  //   * `VALIDATION_ERROR` (422) — обязательные поля.
+  //
+  // События real-time `edit.acquired` / `edit.released` / `edit.cleared`
+  // эмитятся через `emitAgentEvent` — они доходят до подписчиков через тот же
+  // поток, что и REST-события (`emitDomainEvent` использует
+  // `REALTIME_EVENT_AUDIENCE[type]`, для `edit.*` это `network`).
+  // =========================================================================
+
+  const LocksAcquireSchema = z.object({
+    network_id: NetworkId,
+    entity_type: z.string().min(1),
+    entity_id: z.string().min(1),
+  });
+  mcp.registerTool(
+    'etn.locks.acquire',
+    {
+      title: 'Захватить объект',
+      description:
+        'Acquire (or refresh) the lock on `(entity_type, entity_id)` for the calling user ' +
+        '(task a88acf20, операция b6b776ff, задача 2031df5e). Idempotent for the same user — a ' +
+        'repeated acquire on an already-held object updates `client_id` / `acquired_at_ms` and ' +
+        'returns the existing row (`продление`). A different holder is rejected with `LOCKED` ' +
+        'carrying the holder coordinates in `details.holder`. Returns the canonical `LockRow`: ' +
+        '`{ id, entity_type, entity_id, user_id, client_id, acquired_at_ms }`. Emits the ' +
+        '`edit.acquired` real-time event.',
+      inputSchema: LocksAcquireSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.locks.acquire'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const lock = acquireLock(ndb, {
+          entityType: args.entity_type,
+          entityId: args.entity_id,
+          userId: rt.deps.auth.userId,
+          clientId: null, // MCP-сессия не несёт Client-Id — соответствует REST-вызову без заголовка.
+        });
+        const data: EditAcquiredData = {
+          entity_type: lock.entity_type,
+          entity_id: lock.entity_id,
+          lock_id: lock.id,
+          user_id: lock.user_id,
+          client_id: lock.client_id,
+          acquired_at_ms: lock.acquired_at_ms,
+        };
+        emitAgentEvent(rt, args.network_id, 'edit.acquired', data, extra.requestId);
+        auditAgentCall(rt, 'etn.locks.acquire', args.network_id, lock.entity_type, lock.entity_id, {
+          lock_id: lock.id,
+        });
+        return {
+          ...lock,
+          request_id: String(extra.requestId),
+        } satisfies LockRow & { request_id: string };
+      }),
+  );
+
+  const LocksReleaseSchema = z.object({
+    network_id: NetworkId,
+    lock_id: z.string().min(1),
+  });
+  mcp.registerTool(
+    'etn.locks.release',
+    {
+      title: 'Снять свой захват',
+      description:
+        'Release the lock with id `lock_id` for the calling user. Only the holder may release — ' +
+        'anyone else gets `FORBIDDEN`. Releasing an unknown lock id is `LOCK_NOT_FOUND`. Emits ' +
+        '`edit.released`. Returns `{ released: true }` as the analogue of REST `204 No Content`.',
+      inputSchema: LocksReleaseSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.locks.release'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const released = releaseLock(ndb, args.lock_id, rt.deps.auth.userId);
+        const data: EditReleasedData = {
+          entity_type: released.entity_type,
+          entity_id: released.entity_id,
+          lock_id: released.id,
+          user_id: released.user_id,
+          client_id: released.client_id,
+        };
+        emitAgentEvent(rt, args.network_id, 'edit.released', data, extra.requestId);
+        auditAgentCall(rt, 'etn.locks.release', args.network_id, released.entity_type, released.entity_id, {
+          lock_id: released.id,
+        });
+        return {
+          released: true as const,
+          lock_id: released.id,
+          request_id: String(extra.requestId),
+        };
+      }),
+  );
+
+  const LocksClearSchema = z.object({
+    network_id: NetworkId,
+    user_id: z.string().min(1),
+  });
+  mcp.registerTool(
+    'etn.locks.clear',
+    {
+      title: 'Снять все захваты участника',
+      description:
+        'Remove every lock held by `user_id` in the network — manual reset through the ' +
+        '«Снять все блокировки» affordance (task 2031df5e, requirement 9ac48831). Returns ' +
+        '`{ cleared: number }`. Emits one `edit.cleared` event per removed lock with ' +
+        '`reason: "manual"`. Any network member may invoke this for any other member (равноправие).',
+      inputSchema: LocksClearSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.locks.clear'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const removed = clearLocksForUser(ndb, args.user_id);
+        for (const lock of removed) {
+          const data: EditClearedData = {
+            entity_type: lock.entity_type,
+            entity_id: lock.entity_id,
+            lock_id: lock.id,
+            user_id: lock.user_id,
+            client_id: lock.client_id,
+            reason: 'manual',
+          };
+          emitAgentEvent(rt, args.network_id, 'edit.cleared', data, extra.requestId);
+        }
+        auditAgentCall(rt, 'etn.locks.clear', args.network_id, 'network', args.network_id, {
+          user_id: args.user_id,
+          cleared: removed.length,
+        });
+        return {
+          cleared: removed.length,
+          request_id: String(extra.requestId),
+        };
+      }),
+  );
+
+  const LocksListSchema = z.object({
+    network_id: NetworkId,
+    user_id: z.string().min(1).nullable().optional(),
+    client_id: z.string().min(1).nullable().optional(),
+  });
+  mcp.registerTool(
+    'etn.locks.list',
+    {
+      title: 'Активные захваты сети',
+      description:
+        'List active locks in the network, optionally filtered by `user_id` and/or `client_id`. ' +
+        'Each filter accepts a single value; passing `null` (or omitting) removes the constraint ' +
+        'for that column. Returns the same `{ data: LockRow[], meta: { total, offset, limit } }` ' +
+        'envelope as `GET /locks`. Read-only.',
+      inputSchema: LocksListSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.locks.list'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const locks = listLocks(ndb, {
+          userId: args.user_id === undefined ? undefined : args.user_id,
+          clientId: args.client_id === undefined ? undefined : args.client_id,
+        });
+        return {
+          data: locks,
+          meta: {
+            total: locks.length,
+            offset: 0,
+            limit: locks.length,
+          },
+        };
       }),
   );
 

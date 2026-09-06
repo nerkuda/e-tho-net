@@ -305,10 +305,13 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // S10 added 8 layer tools: 3 read (list, diff, diff_doc — readOnlyHint),
         // 2 destructive (delete, merge) and 2 idempotent (update, select) —
         // `create` has no hint (matches `thoughts.create`/`links.create`).
-        assert.equal(annotated, 38);
-        assert.equal(hintReadOnly, 25);
-        assert.equal(hintDestructive, 6);
-        assert.equal(hintIdempotent, 7);
+        // Task a88acf20 adds 4 object-lock tools: 1 read (`list` — readOnlyHint),
+        // 2 destructive (`release`, `clear`) and 1 idempotent (`acquire`
+        // продлевает свой захват).
+        assert.equal(annotated, 42);
+        assert.equal(hintReadOnly, 26);
+        assert.equal(hintDestructive, 8);
+        assert.equal(hintIdempotent, 8);
       } finally {
         await handle.close();
       }
