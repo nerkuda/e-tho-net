@@ -295,7 +295,7 @@ function rowReferences(entry: MergedRow): Array<{ table: BranchableTable; id: st
       return compact([
         ref(ownerTableOf(r.owner_type), r.owner_id),
         ref('properties', r.property_id), // 0.6.5: значение ссылается на справочник, не на привязку
-        ref('thoughts', r.value_thought_ref),
+        ...thoughtRefReferences(r.value_thought_ref),
       ]);
     case 'comments':
       return compact([ref(ownerTableOf(r.owner_type), r.owner_id)]);
@@ -313,6 +313,26 @@ function compact(
   refs: Array<{ table: BranchableTable; id: string } | null>,
 ): Array<{ table: BranchableTable; id: string }> {
   return refs.filter((x): x is { table: BranchableTable; id: string } => x !== null);
+}
+
+/**
+ * Thought references a property value carries (§8.1 closure). `value_thought_ref`
+ * holds either a single raw id or a JSON array of ids (`config.multiple`,
+ * 02-data-model.md §3.5) — the array must expand into one reference per id:
+ * passing the whole JSON text as an id made every full merge of a layer with
+ * multiple-ref value shadows fail closure («набор слияния не замкнут»).
+ */
+function thoughtRefReferences(raw: unknown): Array<{ table: BranchableTable; id: string } | null> {
+  if (typeof raw !== 'string' || raw.length === 0) return [];
+  if (!raw.startsWith('[')) return [ref('thoughts', raw)];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return []; // not valid JSON — nothing referenceable
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((id) => ref('thoughts', id));
 }
 
 /** Link content fields that must match for a row to count as position-only

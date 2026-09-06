@@ -299,6 +299,72 @@ describe(
       }
     });
 
+    it('full merge passes when a layer-edited value holds a MULTIPLE thought_ref array (0.6.5 fix)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // A multiple thought_ref property, attached to a type the owner wears;
+        // both reference targets live in the BASE only (they were never
+        // touched by the layer) — exactly the production shape that used to
+        // fail closure: value_thought_ref holds a JSON array, and the whole
+        // JSON text was passed as one "thought id".
+        const prop = await call(ctx, 'POST', '/properties', {
+          name: 'связанные задачи',
+          value_type: 'thought_ref',
+          config: { multiple: true },
+        });
+        assert.equal(prop.statusCode, 201, prop.body?.toString());
+        const propertyId = (prop.json().data as { id: string }).id;
+
+        const type = await call(ctx, 'POST', '/thought-types', { name: 'Носитель свойств' });
+        assert.equal(type.statusCode, 201, type.body?.toString());
+        const typeId = (type.json().data as { id: string }).id;
+
+        const attach = await call(ctx, 'POST', `/thought-types/${typeId}/properties`, {
+          mode: 'attach',
+          property_id: propertyId,
+        });
+        assert.equal(attach.statusCode, 201, attach.body?.toString());
+
+        const t1 = await thought(ctx, 'Цель 1');
+        const t2 = await thought(ctx, 'Цель 2');
+        const owner = await call(ctx, 'POST', '/thoughts', {
+          title: 'Владелец значения',
+          type_id: typeId,
+        });
+        assert.equal(owner.statusCode, 201, owner.body?.toString());
+        const ownerId = (owner.json().data as { id: string }).id;
+
+        const layer = await createLayer(ctx, 'Множественная ссылка');
+        await selectLayer(ctx, layer.id, WORKER);
+
+        // Set the multiple value FROM the layer: the shadow row lands in the
+        // layer carrying value_thought_ref = '["t1","t2"]'.
+        const set = await call(
+          ctx,
+          'PUT',
+          `/thoughts/${ownerId}/properties/связанные задачи`,
+          { value: [t1, t2] },
+          { clientId: WORKER },
+        );
+        assert.equal(set.statusCode, 200, set.body?.toString());
+
+        // Full merge: must close (the array expands into live target refs)
+        // and replay the value into the base.
+        const res = await merge(ctx, layer.id);
+        assert.equal(res.statusCode, 200, res.body?.toString());
+        const report = res.json().data as LayerMergeReport;
+        assert.equal(report.applied.property_values, 1);
+
+        const values = await call(ctx, 'GET', `/thoughts/${ownerId}/properties`);
+        assert.equal(values.statusCode, 200);
+        const list = values.json().data as Array<{ value: unknown }>;
+        const stored = list.find((v) => Array.isArray(v.value))?.value;
+        assert.deepEqual(stored, [t1, t2]);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('the reserve layer holds trash rows until it is deleted (documented §8.2 decision)', async () => {
       const ctx = await buildRestContext();
       try {
