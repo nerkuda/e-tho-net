@@ -108,8 +108,8 @@ export interface VisitHistoryRow {
   visited_at: string;
 }
 
-/** Workspace view modes (08-ui-spec.md §15.1). */
-export type TabViewMode = 'map' | 'structures' | 'chronicle';
+/** Workspace view modes (08-ui-spec.md §15.1, задача f27809d0 «События»). */
+export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity';
 
 /** Row of `tabs` (07-client-electron.md §3.6, фаза Q). */
 export interface TabRow {
@@ -121,6 +121,8 @@ export interface TabRow {
   view_mode: TabViewMode | null;
   structures_state: string | null;
   chronicle_state: string | null;
+  /** Per-tab persisted filter for the «События» view (задача f27809d0). */
+  activity_state: string | null;
   /** Change-layer of the tab (S11, 13-layers.md §10.3); NULL — the base. */
   layer_id: string | null;
   last_active_at: string;
@@ -135,6 +137,7 @@ export interface NewTab {
   view_mode?: TabViewMode | null;
   structures_state?: string | null;
   chronicle_state?: string | null;
+  activity_state?: string | null;
   layer_id?: string | null;
   last_active_at?: string;
 }
@@ -147,6 +150,8 @@ export interface TabStatePatch {
   view_mode?: TabViewMode | null;
   structures_state?: string | null;
   chronicle_state?: string | null;
+  /** Per-tab persisted filter for the «События» view (задача f27809d0). */
+  activity_state?: string | null;
   layer_id?: string | null;
   last_active_at?: string;
 }
@@ -557,8 +562,8 @@ export class LocalDb {
     const lastActive = tab.last_active_at ?? nowIso();
     this.db
       .prepare(
-        'INSERT INTO tabs (profile_id, tab_id, slot_idx, network_id, focus_id, view_mode, structures_state, chronicle_state, layer_id, last_active_at) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n' +
+        'INSERT INTO tabs (profile_id, tab_id, slot_idx, network_id, focus_id, view_mode, structures_state, chronicle_state, activity_state, layer_id, last_active_at) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n' +
           'ON CONFLICT(profile_id, tab_id) DO UPDATE SET ' +
           'slot_idx = excluded.slot_idx, ' +
           'network_id = excluded.network_id, ' +
@@ -566,6 +571,7 @@ export class LocalDb {
           'view_mode = excluded.view_mode, ' +
           'structures_state = excluded.structures_state, ' +
           'chronicle_state = excluded.chronicle_state, ' +
+          'activity_state = excluded.activity_state, ' +
           'layer_id = excluded.layer_id, ' +
           'last_active_at = excluded.last_active_at',
       )
@@ -578,6 +584,7 @@ export class LocalDb {
         tab.view_mode ?? null,
         tab.structures_state ?? null,
         tab.chronicle_state ?? null,
+        tab.activity_state ?? null,
         tab.layer_id ?? null,
         lastActive,
       );
@@ -613,6 +620,10 @@ export class LocalDb {
     if (patch.chronicle_state !== undefined) {
       sets.push('chronicle_state = ?');
       values.push(patch.chronicle_state);
+    }
+    if (patch.activity_state !== undefined) {
+      sets.push('activity_state = ?');
+      values.push(patch.activity_state);
     }
     if (patch.layer_id !== undefined) {
       sets.push('layer_id = ?');

@@ -165,6 +165,8 @@ export const UI_STATE_KEY = {
   ACTIVE_VIEW: 'active_view',
   STRUCTURES_STATE: 'structures_state',
   CHRONICLE_STATE: 'chronicle_state',
+  /** Per-tab persisted filter of the «События» view (задача f27809d0). */
+  ACTIVITY_STATE: 'activity_state',
   CHRONICLE_LIST_HEIGHTS: 'chronicle_list_heights',
   MD_ZOOM: 'md_zoom',
 } as const satisfies Record<string, string>;

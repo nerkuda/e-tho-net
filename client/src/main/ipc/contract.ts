@@ -26,6 +26,7 @@ import type {
   AttachmentSearchQuery,
   AttachmentUpdateInput,
   ChronicleFilterDefinition,
+  ActivityRow,
   ChronicleQueryRequest,
   ChronicleQueryResponse,
   ChronicleSavedFilter,
@@ -180,8 +181,8 @@ export interface DeleteLogsResult {
   truncated: number;
 }
 
-/** Workspace view modes (08-ui-spec.md §15.1). */
-export type TabViewMode = 'map' | 'structures' | 'chronicle';
+/** Workspace view modes (08-ui-spec.md §15.1, задача f27809d0 «События»). */
+export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity';
 
 /**
  * Public DTO of an open tab (07-client-electron.md §3.6, workplan Q2).
@@ -195,6 +196,8 @@ export interface TabDto {
   view_mode: TabViewMode | null;
   structures_state: string | null;
   chronicle_state: string | null;
+  /** Per-tab persisted filter for the «События» view (задача f27809d0). */
+  activity_state: string | null;
   /** Change-layer of the tab (S11, 13-layers.md §10.3); `null` — the base. */
   layer_id: string | null;
   last_active_at: string;
@@ -210,6 +213,8 @@ export interface TabStatePatch {
   view_mode?: TabViewMode | null;
   structures_state?: string | null;
   chronicle_state?: string | null;
+  /** Per-tab persisted filter for the «События» view (задача f27809d0). */
+  activity_state?: string | null;
   /** Change-layer of the tab (S11); `null` — back to the base. */
   layer_id?: string | null;
 }
@@ -467,6 +472,36 @@ export interface EtnApi {
     list(networkId: string): Promise<TrashListResult>;
     /** `POST /trash/purge` — delete every unblocked marked row (S13). */
     purge(networkId: string): Promise<TrashPurgeResult>;
+  };
+  /**
+   * Activity-log REST bridge (задачи f2eca5a4, 6bcccd2b;
+   * docs/03-server-api.md §13d). Клиентский мост к `GET /activity` и
+   * обслуживающим `POST /activity/rollup`/`/activity/truncate` —
+   * паритет с MCP `etn.activity.*` (стандарт 9e5cff3f). Деструктивные
+   * операции (`rollup`, `truncate`) в UI обязаны запрашивать подтверждение
+   * (требование 9ac48831 «равноправие»).
+   */
+  activity: {
+    /**
+     * `GET /networks/{nid}/activity` — лента журнала с фильтрами
+     * `from_ms`/`to_ms`/`user_id`/`entity_type`/`entity_id` и пагинацией.
+     */
+    list(
+      networkId: string,
+      filters?: {
+        from_ms?: number;
+        to_ms?: number;
+        user_id?: string;
+        entity_type?: string;
+        entity_id?: string;
+        limit?: number;
+        offset?: number;
+      },
+    ): Promise<{ rows: ActivityRow[]; total: number }>;
+    /** `POST /networks/{nid}/activity/rollup` — свёртка до `untilMs`. */
+    rollup(networkId: string, untilMs: number): Promise<{ removed: number; kept: number }>;
+    /** `POST /networks/{nid}/activity/truncate` — обрезка до `untilMs`. */
+    truncate(networkId: string, untilMs: number): Promise<{ removed: number }>;
   };
   types: {
     listThoughtTypes(networkId: string): Promise<ThoughtType[]>;
