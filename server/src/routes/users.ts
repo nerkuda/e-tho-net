@@ -5,14 +5,17 @@
  *   POST   /api/v1/admin/users                  — create user + one-time key (201)
  *   GET    /api/v1/admin/users/:id              — fetch one
  *   PATCH  /api/v1/admin/users/:id              — update display_name/is_admin/disabled
- *   DELETE /api/v1/admin/users/:id              — delete (422 for first user / network owner)
+ *   DELETE /api/v1/admin/users/:id              — delete (422 for first user / network owner / author)
  *   POST   /api/v1/admin/users/:id/keys         — issue a key for a user (201, full key once)
  *   PATCH  /api/v1/admin/users/:id/keys/:keyId   — edit a key's write rate limit (O8)
  *   DELETE /api/v1/admin/users/:id/keys/:keyId  — revoke a user's key (204)
  *
  * All routes require `requireAdmin`. Mutating routes also use the idempotency
  * preHandler. Protected invariants (06-auth.md §4.3): the first user cannot be
- * deleted or demoted; a user owning networks cannot be deleted.
+ * deleted or demoted; a user owning networks cannot be deleted; a user who
+ * authored or last edited any entity in any network cannot be physically
+ * deleted either (task d37b4f43, requirement 4c67149e) — soft-disabling
+ * (`PATCH { disabled: true }`) is NOT covered by this guard.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -26,6 +29,13 @@ import { EtnError } from '@etn/shared';
 import { generateApiKey } from '../auth/api-key.js';
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import { parseMaxWritesPerMinute } from './me.js';
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** Absolute ETN data directory (decorated in `createServer`). */
+    dataDir: string;
+  }
+}
 
 /** Path params for `:id` routes. */
 interface UserIdParams {
@@ -253,6 +263,24 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           'PROTECTED_ENTITY',
           'Первого пользователя нельзя удалить.',
           undefined,
+          req.id,
+        );
+      }
+      // Task d37b4f43 / requirement 4c67149e: refuse physical deletion of a
+      // user who authored or last edited any entity in any network. The
+      // message names the first matching network + table so the admin can
+      // act on it (e.g. reassign authorship via support tooling) instead of
+      // staring at a generic guard. Soft-disabling the user via
+      // `PATCH { disabled: true }` is NOT blocked by this check.
+      const authorship = app.systemDb.findUserAuthorship(user.id, app.dataDir);
+      if (authorship !== null) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Нельзя удалить пользователя, который является автором или последним редактором сущностей: сначала снимите/переназначьте авторство.',
+          {
+            network_id: authorship.network_id,
+            table: authorship.table,
+          },
           req.id,
         );
       }

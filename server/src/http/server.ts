@@ -241,6 +241,9 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // --- Shared dependencies for routes (tasks B12+) -------------------------
   app.decorate('systemDb', systemDb);
   app.decorate('appLogger', logger);
+  // Absolute ETN data directory — needed by system-level routes that have to
+  // walk per-network databases (e.g. the authorship guard on DELETE /admin/users).
+  app.decorate('dataDir', config.dataDir);
 
   // --- Route plugins (tasks B12+) ------------------------------------------
   await app.register(meRoutes, { prefix: '/api/v1' });
