@@ -36,6 +36,7 @@ import { BASE_LAYER_ID, IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
 import type { Logger } from '../logger.js';
 import { systemDbPath, systemMigrationsDir } from '../paths.js';
 import { runMigrations } from './migrator.js';
+import { openNetworkDb } from './network-db.js';
 
 /** Raw `users` row shape (INTEGER booleans). */
 interface UserRow {
@@ -130,6 +131,30 @@ export interface InsertAuditLogParams {
   targetId?: string | null;
   /** Any JSON-serialisable value; stored as TEXT. */
   details?: unknown;
+}
+
+/**
+ * One authorship-bearing table (per task d37b4f43 / migration 033). Every
+ * table here carries `created_by`/`updated_by` columns; the
+ * {@link SystemDb.findUserAuthorship} guard checks them in one query.
+ */
+export type AuthorshipTable =
+  | 'thoughts'
+  | 'links'
+  | 'thought_types'
+  | 'link_types'
+  | 'properties'
+  | 'comments'
+  | 'attachments'
+  | 'layers'
+  | 'property_values';
+
+/** Result of {@link SystemDb.findUserAuthorship}: first match across all networks. */
+export interface AuthorshipHit {
+  /** Id of the network where authorship was found. */
+  network_id: string;
+  /** Name of the table holding the authored row. */
+  table: AuthorshipTable;
 }
 
 /** Result of {@link SystemDb.findApiKeyByHash} — key plus its owner. */
@@ -537,6 +562,85 @@ export class SystemDb {
   countOwnedNetworks(userId: string): number {
     const row = this.stCountOwnedNetworks.get(userId) as { c: number };
     return row.c;
+  }
+
+  /**
+   * Find the first network + table where `userId` is the author or last
+   * editor of any row, or `null` when no such row exists in any network
+   * (task d37b4f43 «Запрет удаления пользователя-автора»; требование
+   * 4c67149e). Blocks physical deletion of a user when authorship is found;
+   * soft-disabling (PATCH `disabled: true`) is NOT covered by this check.
+   *
+   * Checks every network on the server (user can author in network A while
+   * being deleted from admin context). For each network, runs a single
+   * `UNION ALL` query across all nine authorship-bearing tables — thoughts,
+   * links, thought_types, link_types, properties, comments, attachments,
+   * layers, property_values (per migration 033). Each branch is wrapped in a
+   * parenthesised subquery with `LIMIT 1` so SQLite short-circuits at the
+   * first matching row (SQLite forbids `LIMIT` between `UNION ALL` operators
+   * without the parens — bare `SELECT ... LIMIT 1 UNION ALL ...` is a
+   * syntax error).
+   *
+   * @param userId - id of the user being audited.
+   * @param dataDir - absolute ETN data directory used to open per-network DBs.
+   * @param log - optional logger for migration/IO messages.
+   */
+  findUserAuthorship(
+    userId: string,
+    dataDir: string,
+    log?: Logger,
+  ): AuthorshipHit | null {
+    const sql = `
+      SELECT source FROM (
+        SELECT 'thoughts' AS source FROM (SELECT 1 FROM thoughts
+          WHERE created_by = ? OR updated_by = ? LIMIT 1)
+        UNION ALL
+        SELECT 'links' FROM (SELECT 1 FROM links
+          WHERE created_by = ? OR updated_by = ? LIMIT 1)
+        UNION ALL
+        SELECT 'thought_types' FROM (SELECT 1 FROM thought_types
+          WHERE created_by = ? OR updated_by = ? LIMIT 1)
+        UNION ALL
+        SELECT 'link_types' FROM (SELECT 1 FROM link_types
+          WHERE created_by = ? OR updated_by = ? LIMIT 1)
+        UNION ALL
+        SELECT 'properties' FROM (SELECT 1 FROM properties
+          WHERE created_by = ? OR updated_by = ? LIMIT 1)
+        UNION ALL
+        SELECT 'comments' FROM (SELECT 1 FROM comments
+          WHERE created_by = ? OR updated_by = ? LIMIT 1)
+        UNION ALL
+        SELECT 'attachments' FROM (SELECT 1 FROM attachments
+          WHERE created_by = ? OR updated_by = ? LIMIT 1)
+        UNION ALL
+        SELECT 'layers' FROM (SELECT 1 FROM layers
+          WHERE created_by = ? OR updated_by = ? LIMIT 1)
+        UNION ALL
+        SELECT 'property_values' FROM (SELECT 1 FROM property_values
+          WHERE created_by = ? OR updated_by = ? LIMIT 1)
+      ) LIMIT 1
+    `;
+    const stmtParams = [
+      userId, userId,
+      userId, userId,
+      userId, userId,
+      userId, userId,
+      userId, userId,
+      userId, userId,
+      userId, userId,
+      userId, userId,
+      userId, userId,
+    ];
+    for (const networkId of this.listAllNetworkIds()) {
+      const ndb = openNetworkDb(dataDir, networkId, log);
+      const row = ndb.prepare(sql).get(...stmtParams) as
+        | { source: AuthorshipHit['table'] }
+        | undefined;
+      if (row !== undefined) {
+        return { network_id: networkId, table: row.source };
+      }
+    }
+    return null;
   }
 
   /**
