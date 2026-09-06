@@ -6612,7 +6612,7 @@ table.chron-table thead th {
   min-width: 0;
   min-height: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   overflow: hidden;
   background: var(--layer-bg, var(--bg));
 }
@@ -6636,6 +6636,189 @@ table.chron-table thead th {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
+}
+
+/* Layout: левая панель отборов + правая колонка (замечание пользователя —
+ * «использовать компоновку экрана Структуры мыслей»). */
+.activity-filter {
+  flex: 0 0 var(--act-filter-w, 320px);
+  min-width: 260px;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.activity-results {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.activity-filter-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.act-f-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.act-f-input {
+  width: 100%;
+}
+
+.act-f-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.act-f-label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.act-f-op {
+  width: auto;
+}
+
+.act-f-author-value {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.act-f-footer {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.act-f-apply,
+.act-f-clear {
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.act-f-apply {
+  background: var(--accent);
+  color: var(--accent-text, #fff);
+  border-color: var(--accent);
+}
+
+.act-f-apply:hover,
+.act-f-clear:hover {
+  background: var(--surface);
+}
+
+/* Виджет мульти-выбора пользователей (задача 59119797, эволюция операторов). */
+.user-multi-select {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.user-multi-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 22px;
+}
+
+.user-multi-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.user-multi-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.user-multi-x {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.user-multi-x:hover {
+  color: var(--text);
+}
+
+.user-multi-add {
+  width: 100%;
+}
+
+/* Строка условия авторства в Структурах (задача 59119797). */
+.author-cond-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.author-cond-label {
+  width: 60px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.author-cond-op {
+  width: auto;
+}
+
+.author-cond-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Строка условия авторства в Хронике (задача 59119797). */
+.chron-author-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.chron-author-op {
+  width: auto;
 }
 
 .activity-date {

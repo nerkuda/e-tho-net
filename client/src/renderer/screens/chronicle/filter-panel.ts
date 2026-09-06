@@ -17,7 +17,7 @@
  * and saved-filter apply).
  */
 
-import type { ChronicleSavedFilter, ThoughtRef } from '@etn/shared';
+import { STRUCTURE_AUTHOR_OPS, type ChronicleSavedFilter, type StructureAuthorOp, type ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js';
@@ -30,7 +30,7 @@ import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
 import { orderedTypeRows } from '../../lib/type-tree.js';
-import { buildUserSelectWidget } from '../../lib/users.js';
+import { buildUserMultiSelectWidget, buildUserSelectWidget } from '../../lib/users.js';
 import { store } from '../../state.js';
 import { DEFAULT_FILTER, fromDefinition, toDefinition } from './state.js';
 import type { ChronicleFilterState } from './state.js';
@@ -42,6 +42,62 @@ const LINK_SCOPE_LABELS: Record<ChronicleFilterState['linkScope'], string> = {
   targets: 'только назначения связей',
   both: 'источники и назначения связей',
 };
+
+/** Russian labels for the chronicle author-op dropdown (задача 59119797). */
+const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
+  eq: 'равен',
+  ne: 'не равен',
+  in: 'в списке',
+  not_in: 'не в списке',
+  empty: 'не заполнено',
+  not_empty: 'заполнено',
+};
+
+/** Строит одну строку условия авторства хроники: «подпись / оператор / значение». */
+function buildChronicleAuthorRow(opts: {
+  label: string;
+  op: StructureAuthorOp;
+  singleId: string;
+  listIds: string[];
+  onOpChange: (op: StructureAuthorOp) => void;
+  onSingleChange: (id: string) => void;
+  onListChange: (ids: string[]) => void;
+}): HTMLElement {
+  const row = div('chron-author-row');
+  row.append(span(opts.label, 'chron-label'));
+  const opSelect = el('select', 'select-input chron-author-op') as HTMLSelectElement;
+  for (const op of STRUCTURE_AUTHOR_OPS) {
+    const option = el('option', '', AUTHOR_OP_LABELS[op]) as HTMLOptionElement;
+    option.value = op;
+    opSelect.append(option);
+  }
+  opSelect.value = opts.op;
+  opSelect.addEventListener('change', () => {
+    opts.onOpChange(opSelect.value as StructureAuthorOp);
+  });
+  row.append(opSelect);
+
+  if (opts.op === 'empty' || opts.op === 'not_empty') {
+    row.append(el('span', 'muted', 'значение не требуется'));
+    return row;
+  }
+  if (opts.op === 'in' || opts.op === 'not_in') {
+    const multi = buildUserMultiSelectWidget({
+      label: 'участники',
+      currentIds: opts.listIds,
+      onChange: opts.onListChange,
+    });
+    row.append(multi);
+    return row;
+  }
+  const single = buildUserSelectWidget({
+    label: 'участник',
+    currentId: opts.singleId,
+    onChange: opts.onSingleChange,
+  });
+  row.append(single);
+  return row;
+}
 
 let filter: ChronicleFilterState = { ...DEFAULT_FILTER };
 /** Ref of the selected saved filter (null — not saved yet / custom). */
@@ -459,25 +515,52 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
   linkScopeButton.type = 'button';
   row3.append(typesButton, linkTypesButton, linkScopeButton);
 
-  // Row 3.5: автор/редактор хроно-комментария (задача 59119797
-  // «Фильтры Автор/Редактор»). Раскладка выровнена с row1: два селекта
-  // пользователей с подписями.
-  const row35 = div('chron-filter-row');
-  const authorSelect = buildUserSelectWidget({
-    label: 'Автор:',
-    currentId: filter.authorId,
-    onChange: (id) => {
-      filter = { ...filter, authorId: id };
-    },
-  });
-  const editorSelect = buildUserSelectWidget({
-    label: 'Редактор:',
-    currentId: filter.editorId,
-    onChange: (id) => {
-      filter = { ...filter, editorId: id };
-    },
-  });
-  row35.append(authorSelect, editorSelect);
+  // Row 3.5: автор/редактор хроно-комментария (задача 59119797, эволюция
+  // операторов). Две строки: «подпись / оператор / значение». Для `in` /
+  // `not_in` используется мульти-чип, для `eq`/`ne` — одиночный `<select>`.
+  const row35 = div('chron-filter-row chron-filter-author');
+  row35.append(
+    buildChronicleAuthorRow({
+      label: 'Автор:',
+      op: filter.authorOp,
+      singleId: filter.authorId,
+      listIds: filter.authorIds,
+      onOpChange: (op) => {
+        filter = {
+          ...filter,
+          authorOp: op,
+          ...(op !== 'eq' && op !== 'ne' ? { authorId: '' } : {}),
+          ...(op !== 'in' && op !== 'not_in' ? { authorIds: [] } : {}),
+        };
+      },
+      onSingleChange: (id) => {
+        filter = { ...filter, authorId: id };
+      },
+      onListChange: (ids) => {
+        filter = { ...filter, authorIds: ids };
+      },
+    }),
+    buildChronicleAuthorRow({
+      label: 'Редактор:',
+      op: filter.editorOp,
+      singleId: filter.editorId,
+      listIds: filter.editorIds,
+      onOpChange: (op) => {
+        filter = {
+          ...filter,
+          editorOp: op,
+          ...(op !== 'eq' && op !== 'ne' ? { editorId: '' } : {}),
+          ...(op !== 'in' && op !== 'not_in' ? { editorIds: [] } : {}),
+        };
+      },
+      onSingleChange: (id) => {
+        filter = { ...filter, editorId: id };
+      },
+      onListChange: (ids) => {
+        filter = { ...filter, editorIds: ids };
+      },
+    }),
+  );
 
   // Row 4: order + actions -----------------------------------------------------
   const row4 = div('chron-filter-row');

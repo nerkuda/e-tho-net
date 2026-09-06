@@ -198,3 +198,94 @@ export function buildUserSelectWidget(opts: {
   row.append(label, select);
   return row;
 }
+
+/**
+ * Виджет мульти-выбора пользователей для условий `created_by` / `updated_by`
+ * с операторами `in` / `not_in` (задача 59119797). Чипы показывают имя из
+ * кэша (best-effort), «×» снимает выбор. Под полем — `<select>` для
+ * добавления нового пользователя (повторно выбранные пропускаются).
+ *
+ * @param opts.label - подпись слева сверху.
+ * @param opts.currentIds - текущий список id (пустой = никого не выбрано).
+ * @param opts.onChange - вызывается с новым массивом id при изменениях.
+ */
+export function buildUserMultiSelectWidget(opts: {
+  label: string;
+  currentIds: string[];
+  onChange: (ids: string[]) => void;
+}): HTMLElement {
+  ensureLoaded();
+  const wrap = div('user-multi-select');
+  const labelEl = el('span', 'user-select-label', opts.label);
+  const chipsBox = div('user-multi-chips');
+  const addSelect = el('select', 'select-input user-multi-add') as HTMLSelectElement;
+
+  /** Снимает выбор с указанного id и уведомляет. */
+  const remove = (id: string): void => {
+    opts.onChange(opts.currentIds.filter((x) => x !== id));
+  };
+
+  /** Рендер чипов и опций добавления. */
+  const render = (): void => {
+    chipsBox.replaceChildren();
+    if (opts.currentIds.length === 0) {
+      chipsBox.append(el('span', 'user-multi-empty', 'не выбрано'));
+    } else {
+      for (const id of opts.currentIds) {
+        const user = state.byId.get(id);
+        const name = user?.display_name ?? user?.username ?? id;
+        const chip = div('user-multi-chip');
+        chip.append(el('span', '', name));
+        const x = el('button', 'user-multi-x', '×');
+        x.type = 'button';
+        x.title = 'Убрать';
+        x.addEventListener('click', () => remove(id));
+        chip.append(x);
+        chipsBox.append(chip);
+      }
+    }
+
+    addSelect.replaceChildren();
+    const placeholder = el('option', undefined, '+ добавить пользователя…');
+    placeholder.value = '';
+    addSelect.append(placeholder);
+    const users = [...state.byId.values()].sort((a, b) =>
+      (a.display_name ?? a.username).localeCompare(b.display_name ?? b.username, 'ru'),
+    );
+    for (const u of users) {
+      if (opts.currentIds.includes(u.id)) continue;
+      const opt = el('option', undefined, `${u.display_name ?? u.username} (${u.username})`);
+      opt.value = u.id;
+      addSelect.append(opt);
+    }
+  };
+
+  // Seed unknown ids so chips show something before the roster arrives.
+  for (const id of opts.currentIds) {
+    if (id !== '' && !state.byId.has(id)) {
+      state.byId.set(id, {
+        id,
+        username: id.slice(0, 8),
+        display_name: id.slice(0, 8),
+        is_admin: false,
+        is_first_user: false,
+        disabled: false,
+        created_at: '',
+        updated_at: '',
+      });
+    }
+  }
+  render();
+
+  addSelect.addEventListener('change', () => {
+    const id = addSelect.value;
+    if (id === '') return;
+    if (opts.currentIds.includes(id)) return;
+    opts.onChange([...opts.currentIds, id]);
+    addSelect.value = '';
+  });
+  subscribe(render);
+
+  wrap.append(labelEl, chipsBox, addSelect);
+  return wrap;
+}

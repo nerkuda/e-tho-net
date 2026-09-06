@@ -23,6 +23,7 @@ import {
   CHRONICLE_THOUGHT_IDS_MAX,
   EtnError,
   SORT_ORDERS,
+  STRUCTURE_AUTHOR_OPS,
   TRAVERSAL_DEFAULTS,
   buildLikePattern,
   parseFilterKeywords,
@@ -35,6 +36,7 @@ import {
   type ChronicleTarget,
   type ChronicleTargetLink,
   type SortOrder,
+  type StructureAuthorOp,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
@@ -157,22 +159,107 @@ export function parseChronicleFilter(
   const dateTo = parseDateField(body, 'date_to', requestId);
   if (dateTo !== undefined) filter.date_to = dateTo;
 
-  // Фильтры авторства (задача 59119797 «Фильтры Автор/Редактор»): id
-  // пользователя, применяется к колонкам `comments.created_by` /
+  // Фильтры авторства (задача 59119797, эволюция операторов): id
+  // пользователя и оператор, применяется к колонкам `comments.created_by` /
   // `comments.updated_by` (миграция 033). Пустая строка и отсутствие
   // равнозначны — фильтр не применяется.
   for (const field of ['created_by', 'updated_by'] as const) {
     const raw = body[field];
     if (raw === undefined) continue;
-    if (typeof raw !== 'string') {
-      throw new EtnError('VALIDATION_ERROR', `${field} должен быть строкой (id пользователя).`, {
-        field,
-      }, requestId);
-    }
-    if (raw.trim() !== '') filter[field] = raw;
+    const op = parseChronicleAuthorOp(body[`${field}_op`], requestId);
+    const parsed = parseChronicleAuthorValue(raw, op, requestId);
+    if (parsed === undefined) continue;
+    filter[field] = parsed;
+    if (op !== 'eq') filter[`${field}_op`] = op;
   }
 
   return filter;
+}
+
+/** Parse the `*_op` of a chronicle author filter; defaults to `eq` when absent. */
+function parseChronicleAuthorOp(raw: unknown, requestId?: string): StructureAuthorOp {
+  if (raw === undefined) return 'eq';
+  if (typeof raw !== 'string' || !(STRUCTURE_AUTHOR_OPS as readonly string[]).includes(raw)) {
+    throw new EtnError('VALIDATION_ERROR', 'Недопустимая операция фильтра авторства.', {
+      field: 'op',
+      allowed: STRUCTURE_AUTHOR_OPS,
+    }, requestId);
+  }
+  return raw as StructureAuthorOp;
+}
+
+/**
+ * Same as the structure-service parser but local — chronicle has its own
+ * module-private copy to avoid a cross-module export (задача 59119797).
+ */
+function parseChronicleAuthorValue(
+  raw: unknown,
+  op: StructureAuthorOp,
+  requestId?: string,
+): string | string[] | undefined {
+  if (op === 'empty' || op === 'not_empty') return undefined;
+  if (op === 'in' || op === 'not_in') {
+    if (!Array.isArray(raw) || raw.length === 0) {
+      throw new EtnError('VALIDATION_ERROR', 'Для операции in/not_in нужен непустой массив id.', {
+        field: 'value',
+      }, requestId);
+    }
+    const ids: string[] = [];
+    for (const v of raw) {
+      if (typeof v !== 'string' || v.trim() === '') {
+        throw new EtnError('VALIDATION_ERROR', 'Каждый id должен быть непустой строкой.', {
+          field: 'value',
+        }, requestId);
+      }
+      ids.push(v);
+    }
+    return ids;
+  }
+  if (typeof raw !== 'string') {
+    throw new EtnError('VALIDATION_ERROR', 'Значение должно быть строкой (id пользователя).', {
+      field: 'value',
+    }, requestId);
+  }
+  const trimmed = raw.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/** Appends a chronicle author-condition WHERE clause (задача 59119797). */
+function appendChronicleAuthorCondition(
+  conds: string[],
+  args: unknown[],
+  column: string,
+  value: string | string[] | undefined,
+  op: StructureAuthorOp | undefined,
+): void {
+  const effective = op ?? 'eq';
+  if (effective === 'empty') {
+    conds.push(`${column} IS NULL`);
+    return;
+  }
+  if (effective === 'not_empty') {
+    conds.push(`${column} IS NOT NULL`);
+    return;
+  }
+  if (value === undefined) return;
+  if (effective === 'in' || effective === 'not_in') {
+    const ids = Array.isArray(value) ? value : [value];
+    const placeholders = ids.map(() => '?').join(',');
+    conds.push(
+      effective === 'in'
+        ? `${column} IN (${placeholders})`
+        : `${column} NOT IN (${placeholders})`,
+    );
+    args.push(...ids);
+    return;
+  }
+  if (effective === 'ne') {
+    conds.push(`(${column} IS NULL OR ${column} <> ?)`);
+    args.push(value);
+    return;
+  }
+  conds.push(`${column} = ?`);
+  args.push(value);
 }
 
 /** Read a full chronicle saved-filter definition (filter + order) from an untrusted object. */
@@ -404,17 +491,11 @@ function buildRowsWhere(
     args.push(...more);
   }
 
-  // Фильтры авторства (задача 59119797): колонки `comments.created_by` /
-  // `comments.updated_by`. `parseChronicleFilter` уже отбросил пустые
-  // строки, поэтому достаточно проверить на `!== undefined`.
-  if (request.created_by !== undefined && request.created_by !== '') {
-    conds.push('c.created_by = ?');
-    args.push(request.created_by);
-  }
-  if (request.updated_by !== undefined && request.updated_by !== '') {
-    conds.push('c.updated_by = ?');
-    args.push(request.updated_by);
-  }
+  // Фильтры авторства (задача 59119797, эволюция операторов): колонки
+  // `comments.created_by` / `comments.updated_by`. Парсер отбрасывает
+  // пустые значения, здесь же формируется WHERE по оператору.
+  appendChronicleAuthorCondition(conds, args, 'c.created_by', request.created_by, request.created_by_op);
+  appendChronicleAuthorCondition(conds, args, 'c.updated_by', request.updated_by, request.updated_by_op);
 
   return { cond: conds.join(' AND '), args };
 }

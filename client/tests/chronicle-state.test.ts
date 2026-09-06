@@ -25,8 +25,12 @@ describe('toDefinition / fromDefinition', () => {
       linkScope: 'sources',
       dateFrom: '2024-01-01',
       dateTo: '2024-12-31',
+      authorOp: 'eq',
       authorId: 'u1',
+      authorIds: [],
+      editorOp: 'eq',
       editorId: 'u2',
+      editorIds: [],
       order: 'desc',
     };
     const definition = toDefinition(state);

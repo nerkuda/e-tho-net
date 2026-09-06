@@ -13,11 +13,13 @@
  */
 
 import {
+  STRUCTURE_AUTHOR_OPS,
   type NetworkProperty,
   type PropertyConfig,
   type PropertyValueType,
   type SavedFilter,
   type SortOrder,
+  type StructureAuthorOp,
   type StructureFilter,
   type StructureKeywordScope,
   type StructurePropertyCondition,
@@ -36,7 +38,7 @@ import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { orderedTypeRows, resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../../lib/type-tree.js';
-import { buildUserSelectWidget } from '../../lib/users.js';
+import { buildUserMultiSelectWidget, buildUserSelectWidget } from '../../lib/users.js';
 import { store } from '../../state.js';
 
 /** One property condition row (values kept as strings; typed on the wire). */
@@ -79,12 +81,23 @@ export interface FilterState {
   /** S13: показывать помеченные на удаление (по умолчанию выключено). */
   trashed: boolean;
   /**
-   * Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
-   * создавшего мысль. Пустая строка — фильтр не применяется.
+   * Задача 59119797 «Фильтры Автор/Редактор»: оператор условия по автору.
+   * По умолчанию `eq`. Для `in`/`not_in` используется `authorIds`.
+   */
+  authorOp: StructureAuthorOp;
+  /**
+   * Id пользователя-автора для `eq`/`ne` (пустая строка — фильтр не
+   * применяется). Для `in`/`not_in` — массив id (см. `authorIds`).
    */
   authorId: string;
-  /** Последний редактор мысли. Пустая строка — фильтр не применяется. */
+  /** Список id для операторов `in`/`not_in` авторства. */
+  authorIds: string[];
+  /** Оператор условия по редактору (см. `authorOp`). */
+  editorOp: StructureAuthorOp;
+  /** Id пользователя-редактора для `eq`/`ne`. */
   editorId: string;
+  /** Список id редакторов для `in`/`not_in`. */
+  editorIds: string[];
   sort: StructureSort;
   order: SortOrder;
   savedFilterId: string | null;
@@ -171,8 +184,12 @@ function defaultState(): FilterState {
     hasChronology: null,
     active: null,
     trashed: false,
+    authorOp: 'eq',
     authorId: '',
+    authorIds: [],
+    editorOp: 'eq',
     editorId: '',
+    editorIds: [],
     sort: 'created',
     order: 'asc',
     savedFilterId: null,
@@ -233,7 +250,9 @@ export function setFilterState(next: FilterState): void {
     state.hasAttachments === null &&
     state.hasChronology === null &&
     state.trashed === false &&
-    state.active === null;
+    state.active === null &&
+    !authorFilterActive(state.authorOp, state.authorId, state.authorIds) &&
+    !authorFilterActive(state.editorOp, state.editorId, state.editorIds);
   renderPanel();
 }
 
@@ -312,7 +331,9 @@ export function buildExtraFilter(): Pick<
   | 'active'
   | 'trashed'
   | 'created_by'
+  | 'created_by_op'
   | 'updated_by'
+  | 'updated_by_op'
 > {
   const out: ReturnType<typeof buildExtraFilter> = {};
   if (state.parentIds.length > 0) out.parent_ids = state.parentIds;
@@ -325,11 +346,109 @@ export function buildExtraFilter(): Pick<
   if (state.active !== null && store.state.showInactive) out.active = state.active;
   // S13: a marked-for-deletion filter is an independent checkbox (default off).
   if (state.trashed) out.trashed = true;
-  // Задача 59119797 «Фильтры Автор/Редактор»: пустая строка трактуется
-  // как «не применять» — серверная сторона сама проверяет `!== ''`.
-  if (state.authorId !== '') out.created_by = state.authorId;
-  if (state.editorId !== '') out.updated_by = state.editorId;
+  // Задача 59119797 «Фильтры Автор/Редактор»: оператор + значение (id или
+  // массив id). empty/not_empty — без значения.
+  const authorWire = buildAuthorWireValue(state.authorOp, state.authorId, state.authorIds);
+  if (authorWire !== undefined) {
+    out.created_by = authorWire;
+    if (state.authorOp !== 'eq') out.created_by_op = state.authorOp;
+  }
+  const editorWire = buildAuthorWireValue(state.editorOp, state.editorId, state.editorIds);
+  if (editorWire !== undefined) {
+    out.updated_by = editorWire;
+    if (state.editorOp !== 'eq') out.updated_by_op = state.editorOp;
+  }
   return out;
+}
+
+/** Builds the wire value+op for one author filter (задача 59119797). */
+function buildAuthorWireValue(
+  op: StructureAuthorOp,
+  single: string,
+  list: string[],
+): string | string[] | undefined {
+  if (op === 'empty' || op === 'not_empty') return undefined;
+  if (op === 'in' || op === 'not_in') {
+    if (list.length === 0) return undefined;
+    return list;
+  }
+  if (single === '') return undefined;
+  return single;
+}
+
+/** True when the author condition carries a value worth applying. */
+function authorFilterActive(op: StructureAuthorOp, single: string, list: string[]): boolean {
+  if (op === 'empty' || op === 'not_empty') return true;
+  if (op === 'in' || op === 'not_in') return list.length > 0;
+  return single !== '';
+}
+
+/**
+ * Russian labels for the author-op dropdown (задача 59119797).
+ * Не используем «содержит»/«не содержит» — у id нет смысла частичного
+ * совпадения, поэтому «равен»/«не равен» чище.
+ */
+const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
+  eq: 'равен',
+  ne: 'не равен',
+  in: 'в списке',
+  not_in: 'не в списке',
+  empty: 'не заполнено',
+  not_empty: 'заполнено',
+};
+
+/** Russian labels for the saved-filter tag rendering (задача 59119797). */
+function authorOpLabel(op: StructureAuthorOp): string {
+  return AUTHOR_OP_LABELS[op] ?? op;
+}
+
+/**
+ * Строит одну строку условия авторства: «подпись / оператор / значение».
+ * Значение показывает либо одиночный `<select>`, либо мульти-чипы.
+ */
+function buildAuthorConditionRow(opts: {
+  label: string;
+  op: StructureAuthorOp;
+  singleId: string;
+  listIds: string[];
+  onOpChange: (op: StructureAuthorOp) => void;
+  onSingleChange: (id: string) => void;
+  onListChange: (ids: string[]) => void;
+}): HTMLElement {
+  const row = div('author-cond-row');
+  const label = el('span', 'author-cond-label', opts.label);
+  const opSelect = el('select', 'select-input author-cond-op') as HTMLSelectElement;
+  for (const op of STRUCTURE_AUTHOR_OPS) {
+    const opt = el('option', '', AUTHOR_OP_LABELS[op]) as HTMLOptionElement;
+    opt.value = op;
+    opSelect.append(opt);
+  }
+  opSelect.value = opts.op;
+  opSelect.addEventListener('change', () => {
+    opts.onOpChange(opSelect.value as StructureAuthorOp);
+  });
+  row.append(label, opSelect);
+
+  if (opts.op === 'empty' || opts.op === 'not_empty') {
+    row.append(el('span', 'author-cond-hint', 'значение не требуется'));
+    return row;
+  }
+  if (opts.op === 'in' || opts.op === 'not_in') {
+    const multi = buildUserMultiSelectWidget({
+      label: 'участники',
+      currentIds: opts.listIds,
+      onChange: opts.onListChange,
+    });
+    row.append(multi);
+    return row;
+  }
+  const single = buildUserSelectWidget({
+    label: 'участник',
+    currentId: opts.singleId,
+    onChange: opts.onSingleChange,
+  });
+  row.append(single);
+  return row;
 }
 
 /** Reloads the saved-filter list (called on `saved-filter.*` realtime events). */
@@ -739,36 +858,70 @@ function renderPanel(): void {
   renderLinkTypeField();
 
   // --- property conditions (collapsible, §15.3) ------------------------------
-  // --- authorship (задача 59119797) ------------------------------------------
-  // Автор/Редактор — мульти-селект пользователей сети (отдельный
-  // collapsible-блок; условия AND-комбинируются как и остальные).
+  // --- authorship (задача 59119797, эволюция операторов) -------------------
+  // Автор/Редактор — оператор eq/ne/in/not_in/empty/not_empty + селектор
+  // пользователя (одиночный или мульти в зависимости от оператора). Условия
+  // AND-комбинируются как и остальные.
   const authorship = collapsibleBlock(
     'Автор / Редактор',
     () => extraCollapsed,
     (v) => {
       extraCollapsed = v;
     },
-    () => state.authorId !== '' || state.editorId !== '',
+    () => authorFilterActive(state.authorOp, state.authorId, state.authorIds) ||
+      authorFilterActive(state.editorOp, state.editorId, state.editorIds),
   );
-  const authorSelect = buildUserSelectWidget({
-    label: 'Автор',
-    currentId: state.authorId,
-    onChange: (id) => {
-      state.authorId = id;
-      touch();
-      authorship.refresh();
-    },
-  });
-  const editorSelect = buildUserSelectWidget({
-    label: 'Редактор',
-    currentId: state.editorId,
-    onChange: (id) => {
-      state.editorId = id;
-      touch();
-      authorship.refresh();
-    },
-  });
-  authorship.body.append(authorSelect, editorSelect);
+  authorship.body.append(
+    buildAuthorConditionRow({
+      label: 'Автор',
+      op: state.authorOp,
+      singleId: state.authorId,
+      listIds: state.authorIds,
+      onOpChange: (op) => {
+        state.authorOp = op;
+        // При смене оператора чистим значение, если оно несовместимо.
+        if (op !== 'eq' && op !== 'ne') state.authorId = '';
+        if (op !== 'in' && op !== 'not_in') state.authorIds = [];
+        touch();
+        authorship.refresh();
+        renderPanel();
+      },
+      onSingleChange: (id) => {
+        state.authorId = id;
+        touch();
+        authorship.refresh();
+      },
+      onListChange: (ids) => {
+        state.authorIds = ids;
+        touch();
+        authorship.refresh();
+      },
+    }),
+    buildAuthorConditionRow({
+      label: 'Редактор',
+      op: state.editorOp,
+      singleId: state.editorId,
+      listIds: state.editorIds,
+      onOpChange: (op) => {
+        state.editorOp = op;
+        if (op !== 'eq' && op !== 'ne') state.editorId = '';
+        if (op !== 'in' && op !== 'not_in') state.editorIds = [];
+        touch();
+        authorship.refresh();
+        renderPanel();
+      },
+      onSingleChange: (id) => {
+        state.editorId = id;
+        touch();
+        authorship.refresh();
+      },
+      onListChange: (ids) => {
+        state.editorIds = ids;
+        touch();
+        authorship.refresh();
+      },
+    }),
+  );
   scroll.append(authorship.box);
 
   const props = collapsibleBlock(
@@ -1641,8 +1794,12 @@ function applySavedFilter(filter: SavedFilter): void {
     trashed: def.trashed ?? false,
     // Задача 59119797: фильтры авторства читаются прямо из сохранённого
     // определения. Отсутствующие поля — «не применять».
-    authorId: def.created_by ?? '',
-    editorId: def.updated_by ?? '',
+    authorId: typeof def.created_by === 'string' ? def.created_by : '',
+    authorIds: Array.isArray(def.created_by) ? def.created_by : [],
+    authorOp: (def.created_by_op ?? 'eq') as StructureAuthorOp,
+    editorId: typeof def.updated_by === 'string' ? def.updated_by : '',
+    editorIds: Array.isArray(def.updated_by) ? def.updated_by : [],
+    editorOp: (def.updated_by_op ?? 'eq') as StructureAuthorOp,
     sort: def.sort,
     order: def.order,
     savedFilterId: filter.id,

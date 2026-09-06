@@ -21,7 +21,7 @@
  * удалённые сущности показываются read-only с пометкой «удалена».
  */
 
-import type { ActivityEntityType, ActivityRow } from '@etn/shared';
+import type { ActivityEntityType, ActivityRow, StructureAuthorOp } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
@@ -30,7 +30,14 @@ import { button, div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
-import { resolve, ensureLoaded, subscribe as subscribeUsers } from '../../lib/users.js';
+import {
+  buildUserMultiSelectWidget,
+  buildUserSelectWidget,
+  resolve,
+  ensureLoaded,
+  subscribe,
+  subscribe as subscribeUsers,
+} from '../../lib/users.js';
 import { store } from '../../state.js';
 import { UI_STATE_KEY } from '@etn/shared';
 import {
@@ -90,6 +97,23 @@ let querySeq = 0;
 /** UI refs (populated while mounted). */
 let tableWrap: HTMLElement | null = null;
 let pagerLabel: HTMLElement | null = null;
+
+/**
+ * Кэш имён для подстановки в `entity_title` и колонку «Слой»
+ * (замечание пользователя: «в представлении все id заменялись именами»).
+ *
+ *  - `typeNames` — имена типов мыслей и связей из `store.state` (там уже есть);
+ *  - `layerTitles` — `id → title` (подтягивается из `etn.layers.list`);
+ *  - `thoughtTitles` — `id → title` (резолвится пачкой через
+ *    `etn.thoughts.resolve` при появлении в ленте).
+ *
+ * Кэш живёт между запросами — после первой отрисовки имена известны.
+ */
+const typeNames = new Map<string, string>();
+const layerTitles = new Map<string, string>();
+const thoughtTitles = new Map<string, string>();
+/** Set of thought ids we've already requested — avoid request storms. */
+const thoughtResolvePending = new Set<string>();
 
 // ---------------------------------------------------------------------------
 // Mount / init
@@ -152,22 +176,23 @@ export function mountActivity(hostEl: HTMLElement): void {
   host = hostEl;
   host.replaceChildren();
 
-  // Filter row + maintenance commands (08-ui-spec.md §18).
-  const filterArea = div('activity-filter-area');
-  hostEl.append(filterArea);
-  mountFilterPanel(filterArea);
+  // Layout: filter panel on the left + table on the right (как в
+  // «Структурах мыслей» — замечание пользователя, п. 5).
+  const panel = div('activity-filter');
+  const results = div('activity-results');
+  hostEl.append(panel, results);
 
-  // Toolbar of maintenance commands (above the table, separate from the
-  // filter row so destructive actions stay visibly apart from search).
+  mountFilterPanel(panel);
+
+  // Maintenance commands + pager live inside the results column so destructive
+  // actions stay visibly apart from the table.
   const toolbar = div('activity-toolbar');
   toolbar.append(
     button('Свернуть до даты…', () => void rollupDialog(), 'btn small'),
     button('Обрезать до даты…', () => void truncateDialog(), 'btn small danger'),
   );
-  hostEl.append(toolbar);
+  results.append(toolbar);
 
-  // The table takes the remaining height; same wrap pattern as the chronicle
-  // screen — scroll on overflow, fixed header.
   const tableWrapEl = div('admin-table-wrap activity-table-wrap');
   tableWrap = tableWrapEl;
   const pager = div('activity-pager');
@@ -179,7 +204,7 @@ export function mountActivity(hostEl: HTMLElement): void {
     button('›', () => void gotoPage(offset + PAGE_SIZE), 'btn small'),
     button('≫', () => void gotoPage(Math.floor(Math.max(0, total - 1) / PAGE_SIZE) * PAGE_SIZE), 'btn small'),
   );
-  hostEl.append(tableWrapEl, pager);
+  results.append(tableWrapEl, pager);
 
   // Restore the view when the network opens with `active_view = 'activity'`.
   store.subscribe(() => {
@@ -209,14 +234,34 @@ export function mountActivity(hostEl: HTMLElement): void {
 
 let fromInput: HTMLInputElement | null = null;
 let toInput: HTMLInputElement | null = null;
-let userInput: HTMLInputElement | null = null;
+let keywordsInput: HTMLInputElement | null = null;
 let entityTypesBox: HTMLElement | null = null;
 let actionsBox: HTMLElement | null = null;
 
 function mountFilterPanel(area: HTMLElement): void {
   area.replaceChildren();
-  const row = div('activity-filter-row');
+  const scroll = div('activity-filter-scroll');
+  area.append(scroll);
 
+  // --- keywords (поиск по `entity_title`) -----------------------------
+  const kwTitle = el('div', 'act-f-title', 'Ключевые слова');
+  scroll.append(kwTitle);
+  keywordsInput = el('input', 'text-input act-f-input') as HTMLInputElement;
+  keywordsInput.type = 'text';
+  keywordsInput.placeholder = 'название* -тест';
+  keywordsInput.title = 'Поиск по снимку entity_title (через пробел, * и - как в Структурах)';
+  keywordsInput.addEventListener('input', () => {
+    filter = { ...filter, keywords: keywordsInput!.value };
+  });
+  keywordsInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void applyQuery();
+  });
+  scroll.append(keywordsInput);
+
+  // --- period ---------------------------------------------------------
+  const periodTitle = el('div', 'act-f-title', 'Период');
+  scroll.append(periodTitle);
+  const periodRow = div('act-f-row');
   fromInput = el('input', 'text-input activity-date') as HTMLInputElement;
   fromInput.type = 'date';
   fromInput.title = 'Начало периода (включительно)';
@@ -224,8 +269,6 @@ function mountFilterPanel(area: HTMLElement): void {
     filter = { ...filter, fromMs: fromInput!.value };
     void applyQuery();
   });
-  const fromLabel = span('Период с', 'activity-label');
-
   toInput = el('input', 'text-input activity-date') as HTMLInputElement;
   toInput.type = 'date';
   toInput.title = 'Конец периода (включительно)';
@@ -233,46 +276,117 @@ function mountFilterPanel(area: HTMLElement): void {
     filter = { ...filter, toMs: toInput!.value };
     void applyQuery();
   });
-  const toLabel = span('по', 'activity-label');
+  periodRow.append(span('с', 'act-f-label'), fromInput, span('по', 'act-f-label'), toInput);
+  scroll.append(periodRow);
 
-  userInput = el('input', 'text-input activity-user') as HTMLInputElement;
-  userInput.type = 'text';
-  userInput.placeholder = 'ID участника';
-  userInput.title = 'Фильтр по id исполнителя (UUID)';
-  userInput.addEventListener('change', () => {
-    filter = { ...filter, userId: userInput!.value.trim() };
-    void applyQuery();
-  });
-  const userLabel = span('Участник', 'activity-label');
+  // --- author (задача 59119797, эволюция операторов) ------------------
+  const userTitle = el('div', 'act-f-title', 'Участник');
+  scroll.append(userTitle);
+  const userBlock = buildActivityUserBlock();
+  scroll.append(userBlock);
 
-  // Multi-select checkboxes for entity types and actions (compact pill row).
+  // --- entity types ---------------------------------------------------
+  const entityTitle = el('div', 'act-f-title', 'Тип сущности');
+  scroll.append(entityTitle);
   entityTypesBox = div('activity-pills');
   for (const opt of ENTITY_TYPE_OPTIONS) {
     entityTypesBox.append(buildPill(opt.value, ENTITY_LABELS[opt.value] ?? opt.value, 'entity'));
   }
-  const entityLabel = span('Тип сущности', 'activity-label');
+  scroll.append(entityTypesBox);
 
+  // --- actions --------------------------------------------------------
+  const actionTitle = el('div', 'act-f-title', 'Действие');
+  scroll.append(actionTitle);
   actionsBox = div('activity-pills');
   for (const action of ACTIONS) {
     actionsBox.append(buildPill(action, ACTION_LABELS[action], 'action'));
   }
-  const actionLabel = span('Действие', 'activity-label');
+  scroll.append(actionsBox);
 
-  row.append(
-    fromLabel,
-    fromInput,
-    toLabel,
-    toInput,
-    userLabel,
-    userInput,
-    entityLabel,
-    entityTypesBox,
-    actionLabel,
-    actionsBox,
-  );
-  area.append(row);
+  // --- apply / clear --------------------------------------------------
+  const footer = div('act-f-footer');
+  const apply = el('button', 'act-f-apply', 'Применить');
+  apply.type = 'button';
+  apply.addEventListener('click', () => void applyQuery());
+  const clearBtn = el('button', 'act-f-clear', 'Очистить');
+  clearBtn.type = 'button';
+  clearBtn.addEventListener('click', () => {
+    filter = { ...DEFAULT_FILTER };
+    repaintControls();
+    void applyQuery();
+  });
+  footer.append(apply, clearBtn);
+  area.append(footer);
+
   repaintControls();
 }
+
+/** Builds the «Участник» block: оператор + селектор (single/multi/hint). */
+function buildActivityUserBlock(): HTMLElement {
+  const block = div('act-f-author');
+  const row = div('act-f-row');
+  const opSelect = el('select', 'select-input act-f-op') as HTMLSelectElement;
+  for (const op of ['eq', 'ne', 'in', 'not_in'] as StructureAuthorOp[]) {
+    const o = el('option', '', AUTHOR_OP_LABELS[op]) as HTMLOptionElement;
+    o.value = op;
+    opSelect.append(o);
+  }
+  opSelect.value = filter.userOp;
+  opSelect.addEventListener('change', () => {
+    const op = opSelect.value as StructureAuthorOp;
+    filter = {
+      ...filter,
+      userOp: op,
+      ...(op !== 'eq' && op !== 'ne' ? { userId: '' } : {}),
+      ...(op !== 'in' && op !== 'not_in' ? { userIds: [] } : {}),
+    };
+    repaintControls();
+  });
+  row.append(span('условие', 'act-f-label'), opSelect);
+  block.append(row);
+
+  const valueBox = div('act-f-author-value');
+  block.append(valueBox);
+
+  const renderValue = (): void => {
+    valueBox.replaceChildren();
+    if (filter.userOp === 'in' || filter.userOp === 'not_in') {
+      valueBox.append(
+        buildUserMultiSelectWidget({
+          label: 'участники',
+          currentIds: filter.userIds,
+          onChange: (ids) => {
+            filter = { ...filter, userIds: ids };
+          },
+        }),
+      );
+      return;
+    }
+    valueBox.append(
+      buildUserSelectWidget({
+        label: 'участник',
+        currentId: filter.userId,
+        onChange: (id) => {
+          filter = { ...filter, userId: id };
+        },
+      }),
+    );
+  };
+  renderValue();
+  // Перерисовка виджета при смене оператора/значения.
+  subscribe(renderValue);
+  return block;
+}
+
+/** Russian labels для оператора (тот же словарь, что и в Структурах/Хронике). */
+const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
+  eq: 'равен',
+  ne: 'не равен',
+  in: 'в списке',
+  not_in: 'не в списке',
+  empty: 'не заполнено',
+  not_empty: 'заполнено',
+};
 
 /** A single checkbox-pill («тип сущности» или «действие»). */
 function buildPill(value: string, label: string, group: 'entity' | 'action'): HTMLElement {
@@ -299,9 +413,9 @@ function buildPill(value: string, label: string, group: 'entity' | 'action'): HT
 }
 
 function repaintControls(): void {
+  if (keywordsInput !== null) keywordsInput.value = filter.keywords;
   if (fromInput !== null) fromInput.value = filter.fromMs;
   if (toInput !== null) toInput.value = filter.toMs;
-  if (userInput !== null) userInput.value = filter.userId;
   if (entityTypesBox !== null) {
     const checks = entityTypesBox.querySelectorAll<HTMLInputElement>('input[type=checkbox]');
     checks.forEach((c) => {
@@ -343,35 +457,47 @@ async function applyQuery(): Promise<void> {
     // cheap; for the rare multi-select it stays predictable.
     const types = filter.entityTypes.length === 0 ? ENTITY_TYPES : filter.entityTypes;
     const actions = filter.actions.length === 0 ? null : new Set(filter.actions);
+    // То же самое для пользователей: оператор eq/ne — один запрос на id;
+    // in/not_in — серия запросов (как для типов сущностей) с объединением.
+    // empty/not_empty — фильтр применяется клиентом (нет серверной поддержки).
+    const userQueryIds = userQueryIdsForOperator();
     const buckets: ActivityRow[] = [];
     let bucketTotal = 0;
     for (const et of types) {
-      const params: {
-        from_ms?: number;
-        to_ms?: number;
-        user_id?: string;
-        entity_type?: string;
-        entity_id?: string;
-        limit?: number;
-        offset?: number;
-      } = {
-        entity_type: et,
-        limit: PAGE_SIZE,
-        offset,
-      };
-      if (fromMs !== null) params.from_ms = fromMs;
-      if (toMs !== null) params.to_ms = toMs;
-      if (filter.userId !== '') params.user_id = filter.userId;
-      const result = await etn.activity.list(networkId, params);
-      // Filter by action client-side (the server has no `action` filter on
-      // `/activity`, requirement b0c7a57c); page-level pagination is applied
-      // per-type. The resulting set is small enough for `O(n log n)` to be a
-      // no-op.
-      const filtered = actions === null
-        ? result.rows
-        : result.rows.filter((r) => actions.has(r.action as ActionFilter));
-      for (const r of filtered) buckets.push(r);
-      bucketTotal += result.total;
+      for (const uid of userQueryIds) {
+        const params: {
+          from_ms?: number;
+          to_ms?: number;
+          user_id?: string;
+          entity_type?: string;
+          entity_id?: string;
+          limit?: number;
+          offset?: number;
+        } = {
+          entity_type: et,
+          limit: PAGE_SIZE,
+          offset,
+        };
+        if (fromMs !== null) params.from_ms = fromMs;
+        if (toMs !== null) params.to_ms = toMs;
+        if (uid !== null) params.user_id = uid;
+        const result = await etn.activity.list(networkId, params);
+        // Filter by action client-side (the server has no `action` filter on
+        // `/activity`, requirement b0c7a57c); page-level pagination is applied
+        // per-type. The resulting set is small enough for `O(n log n)` to be a
+        // no-op.
+        let filtered = actions === null
+          ? result.rows
+          : result.rows.filter((r) => actions.has(r.action as ActionFilter));
+        // empty/not_empty по пользователю — клиентский фильтр: `user_id IS NULL`.
+        if (filter.userOp === 'empty') {
+          filtered = filtered.filter((r) => r.user_id === '');
+        } else if (filter.userOp === 'not_empty') {
+          filtered = filtered.filter((r) => r.user_id !== '');
+        }
+        for (const r of filtered) buckets.push(r);
+        bucketTotal += result.total;
+      }
     }
     // Merge by occurred_at_ms DESC and dedupe (rows are unique per `id`).
     const seen = new Set<string>();
@@ -383,15 +509,84 @@ async function applyQuery(): Promise<void> {
         seen.add(r.id);
         merged.push(r);
       });
-    const page = merged.slice(0, PAGE_SIZE);
+    // Клиентский фильтр по keywords — минисинтаксис применяется к
+    // `entity_title` (аналог полнотекстового поиска Структур).
+    const keywords = filter.keywords.trim() === '' ? null : parseKeywords(filter.keywords);
+    const page = keywords === null
+      ? merged.slice(0, PAGE_SIZE)
+      : merged
+          .filter((r) => matchesKeywords(r.entity_title, keywords))
+          .slice(0, PAGE_SIZE);
     if (seq !== querySeq) return;
     rows = page;
     total = bucketTotal;
+    // Подтягиваем имена типов (уже в store), слоёв (однократно) и мыслей
+    // (пачками по мере появления в ленте). После получения имён таблица
+    // перерисовывается — UUIDы в снимках заменяются именами.
+    refreshTypeNames();
+    void refreshLayerTitles(networkId).then(() => {
+      if (seq !== querySeq) return;
+      renderTable();
+    });
+    void resolveMissingThoughtTitles(page, networkId, seq);
     renderTable();
   } catch (err) {
     if (seq !== querySeq) return;
     renderError(err);
   }
+}
+
+/**
+ * Выдаёт список `user_id` для запросов к серверу в зависимости от оператора.
+ * - `eq`/`ne` — массив из одного id (`null`, если id пустой).
+ * - `in` — все выбранные id (или один пустой запрос, если никого).
+ * - `not_in` — сервер не умеет NOT IN; пропускаем фильтр на сервере и
+ *   отфильтруем на клиенте (см. `applyQuery`).
+ * - `empty`/`not_empty` — без id (фильтр по NULL на клиенте).
+ */
+function userQueryIdsForOperator(): Array<string | null> {
+  if (filter.userOp === 'empty' || filter.userOp === 'not_empty') return [null];
+  if (filter.userOp === 'eq' || filter.userOp === 'ne') {
+    return [filter.userId === '' ? null : filter.userId];
+  }
+  // `in` / `not_in` — серия запросов по одному id.
+  return filter.userIds.length === 0 ? [null] : filter.userIds.map((id) => id);
+}
+
+/** Минисинтаксис ключевых слов: те же правила, что и в Структурах. */
+interface ParsedKeywords {
+  include: string[];
+  exclude: string[];
+}
+
+function parseKeywords(raw: string): ParsedKeywords {
+  const tokens = raw.split(/\s+/).filter((t) => t !== '');
+  const include: string[] = [];
+  const exclude: string[] = [];
+  for (const t of tokens) {
+    if (t.startsWith('-') && t.length > 1) exclude.push(t.slice(1).toLowerCase());
+    else include.push(t.toLowerCase());
+  }
+  return { include, exclude };
+}
+
+function matchesKeywords(text: string, kw: ParsedKeywords): boolean {
+  const lower = text.toLowerCase();
+  for (const inc of kw.include) {
+    const pattern = buildKwPattern(inc);
+    if (!pattern.test(lower)) return false;
+  }
+  for (const exc of kw.exclude) {
+    const pattern = buildKwPattern(exc);
+    if (pattern.test(lower)) return false;
+  }
+  return true;
+}
+
+function buildKwPattern(token: string): RegExp {
+  // Звёздочка — подстановочный знак; иначе — точное вхождение.
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*');
+  return new RegExp(escaped, 'i');
 }
 
 async function gotoPage(next: number): Promise<void> {
@@ -482,15 +677,22 @@ function buildRow(row: ActivityRow): HTMLElement {
   );
 
   // Entity: «entity_type: entity_title» snapshot (entity_title survives
-  // deletion — it's the whole point of the journal).
+  // deletion — it's the whole point of the journal). UUIDы в снимке
+  // подменяются именами из кэша (замечание пользователя — замена id на
+  // имена в представлении).
   const entityCell = el('td', 'activity-entity');
   const typeLabel = ENTITY_LABELS[row.entity_type] ?? row.entity_type;
-  entityCell.append(span(`${typeLabel}: `, 'muted'), span(row.entity_title || '—'));
+  const resolvedTitle = resolveEntityTitle(row.entity_type, row.entity_title);
+  entityCell.append(span(`${typeLabel}: `, 'muted'), span(resolvedTitle || '—'));
   if (row.entity_title === '') entityCell.classList.add('muted');
 
-  // Layer: the snapshot id (short form) or «—» if absent.
+  // Layer: заголовок слоя из кэша, иначе короткий id (ещё не подтянулся).
   const layerCell = el('td', 'activity-layer');
-  layerCell.append(span(row.layer_id === null ? '—' : shortId(row.layer_id), 'muted'));
+  if (row.layer_id === null) {
+    layerCell.append(span('—', 'muted'));
+  } else {
+    layerCell.append(span(layerDisplayName(row.layer_id)));
+  }
 
   tr.append(timeCell, authorCell, actionCell, entityCell, layerCell);
   return tr;
@@ -521,6 +723,118 @@ function repaintNames(): void {
 /** Compact id label (first 8 hex chars) for the «слой» column. */
 function shortId(id: string): string {
   return id.length <= 8 ? id : `${id.slice(0, 8)}…`;
+}
+
+/** UUID-префикс для regex-подстановки (8-4-4-4-12 hex, lower-case). */
+const UUID_RE =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * Подставляет имена из кэша вместо UUIDов в `entity_title`. Не найденные в
+ * кэше id остаются как есть — пользователь увидит их короткий вид до тех
+ * пор, пока кэш не наполнится (после чего строка перерисуется).
+ */
+function resolveEntityTitle(entityType: string, title: string): string {
+  if (!title) return title;
+  return title.replace(UUID_RE, (match) => {
+    const lower = match.toLowerCase();
+    const name = resolveIdName(entityType, lower);
+    return name ?? match;
+  });
+}
+
+/**
+ * Контекстно-зависимый поиск имени по id. В снимках разных сущностей
+ * встречаются id типов мыслей, типов связей и самих мыслей — для каждого
+ * контекста нужен свой источник.
+ */
+function resolveIdName(entityType: string, id: string): string | null {
+  // Снимок связи содержит source_id → target_id и (опц.) тип связи.
+  if (entityType === 'link') {
+    return thoughtTitles.get(id) ?? typeNames.get(id) ?? null;
+  }
+  // Снимок мысли: «мысль типа <id>, …».
+  if (entityType === 'thought') {
+    return typeNames.get(id) ?? null;
+  }
+  if (entityType === 'thought_type' || entityType === 'link_type' || entityType === 'property') {
+    return typeNames.get(id) ?? null;
+  }
+  return null;
+}
+
+/**
+ * Собирает все id, которые нужно подтянуть из сети для текущего набора строк.
+ * Возвращает массив thought ids (для типов имён берёмся прямо из store).
+ */
+function collectMissingThoughtIds(rs: ActivityRow[]): string[] {
+  const missing: string[] = [];
+  for (const r of rs) {
+    for (const m of r.entity_title.matchAll(UUID_RE)) {
+      const id = m[0].toLowerCase();
+      if (thoughtTitles.has(id) || thoughtResolvePending.has(id)) continue;
+      // Запрашиваем только для id, которые могут быть id мысли (link,
+      // thought): подтип.typeClause/«→» всегда id мысли либо id типа.
+      if (r.entity_type === 'link' || r.entity_type === 'thought') {
+        missing.push(id);
+        thoughtResolvePending.add(id);
+      }
+    }
+  }
+  return missing;
+}
+
+/** Подтягивает имена типов мыслей/связей/свойств из `store.state`. */
+function refreshTypeNames(): void {
+  typeNames.clear();
+  for (const t of store.state.thoughtTypes) typeNames.set(t.id, t.name);
+  for (const t of store.state.linkTypes) {
+    // В снимках используется прямое имя forward для типа связи.
+    typeNames.set(t.id, t.name_forward);
+  }
+}
+
+/**
+ * Резолвит пачку UUIDов из снимков в имена мыслей (для снимков `link` и
+ * `thought`, где id может быть id источника/назначения/типа). После
+ * получения имён таблица перерисовывается — UUIDы заменяются заголовками.
+ */
+async function resolveMissingThoughtTitles(
+  page: ActivityRow[],
+  networkId: string,
+  seq: number,
+): Promise<void> {
+  const ids = collectMissingThoughtIds(page);
+  if (ids.length === 0) return;
+  try {
+    const refs = await etn.thoughts.resolve(networkId, ids);
+    for (const ref of refs) thoughtTitles.set(ref.id, ref.title);
+    if (seq !== querySeq) return;
+    renderTable();
+  } catch {
+    // Оставляем id в снимках — пользователь увидит короткие обозначения.
+  } finally {
+    for (const id of ids) thoughtResolvePending.delete(id);
+  }
+}
+
+/** Подтягивает имена слоёв сети (однократно). */
+async function refreshLayerTitles(networkId: string): Promise<void> {
+  try {
+    const layers = await etn.layers.list(networkId);
+    layerTitles.clear();
+    for (const l of layers) layerTitles.set(l.id, l.title);
+  } catch {
+    // Не критично — оставляем пустой кэш, ячейки покажут короткие id.
+  }
+}
+
+/**
+ * Возвращает человеко-читаемое имя слоя (если уже в кэше) либо короткий id.
+ * Используется и в ячейке «Слой», и в диалоге снимка.
+ */
+export function layerDisplayName(id: string): string {
+  return layerTitles.get(id) ?? shortId(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -580,10 +894,10 @@ function showSnapshotDialog(row: ActivityRow): void {
   };
   addRow('Тип', typeLabel);
   addRow('Действие', ACTION_LABELS[row.action as ActionFilter] ?? row.action);
-  addRow('Название', row.entity_title === '' ? '—' : row.entity_title);
+  addRow('Название', row.entity_title === '' ? '—' : resolveEntityTitle(row.entity_type, row.entity_title));
   addRow('Автор', row.user_name ?? row.user_id);
   addRow('Когда', formatDateTime(row.occurred_at_ms));
-  addRow('Слой', row.layer_id === null ? '—' : row.layer_id);
+  addRow('Слой', row.layer_id === null ? '—' : layerDisplayName(row.layer_id));
   addRow('id сущности', row.entity_id);
   table.append(tbody);
   body.append(table);

@@ -49,10 +49,10 @@ export function buildMetadataBlock(fields: MetadataFields): HTMLElement {
     root.append(buildIdRow(fields.id));
     const grid = div('metadata-grid');
     grid.append(
-      buildFieldRow('Автор создания', fields.createdBy),
-      buildFieldRow('Дата создания', fields.createdAtMs),
-      buildFieldRow('Последний редактор', fields.updatedBy),
-      buildFieldRow('Дата изменения', fields.updatedAtMs),
+      buildAuthorRow('Автор создания', fields.createdBy),
+      buildDateRow('Дата создания', fields.createdAtMs),
+      buildAuthorRow('Последний редактор', fields.updatedBy),
+      buildDateRow('Дата изменения', fields.updatedAtMs),
     );
     root.append(grid);
   }
@@ -105,7 +105,35 @@ function buildFieldRow(label: string, value: string | number | null): HTMLElemen
   return row;
 }
 
-/** Formats an ISO timestamp / unix-ms as a localised second-precision string. */
+/** «Автор создания» / «Последний редактор» — резолвит id через кэш пользователей. */
+function buildAuthorRow(label: string, userId: string | null): HTMLElement {
+  const row = div('metadata-field');
+  row.append(el('span', 'metadata-field-label', label));
+  const text =
+    userId === null || userId === '' ? '—' : resolve(userId) ?? `(${userId})`;
+  row.append(el('span', 'metadata-field-value', text));
+  return row;
+}
+
+/** «Дата создания» / «Дата изменения» — формат `yyyy-MM-dd hh:mm:ss`. */
+function buildDateRow(label: string, value: number | string | null): HTMLElement {
+  const row = div('metadata-field');
+  row.append(el('span', 'metadata-field-label', label));
+  row.append(el('span', 'metadata-field-value', formatDateTime(value)));
+  return row;
+}
+
+/** Pads a 1- or 2-digit value to 2 digits (manual ISO-style formatting). */
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+/**
+ * Formats an ISO timestamp / unix-ms as `yyyy-MM-dd hh:mm:ss` (local time,
+ * second precision). The fixed shape keeps the metadata block visually
+ * consistent with chronological columns and avoids locale-specific quirks
+ * like Russian dots in dates.
+ */
 export function formatDateTime(value: string | number | null): string {
   if (value === null || value === '') return '—';
   const date =
@@ -113,14 +141,7 @@ export function formatDateTime(value: string | number | null): string {
       ? new Date(value)
       : new Date(typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value);
   if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString('ru-RU', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
 }
 
 /**
@@ -140,10 +161,10 @@ export function buildMetadataRows(fields: MetadataFields): HTMLElement {
     root.replaceChildren();
     root.append(buildIdRow(fields.id));
     root.append(
-      buildFieldRow('Автор создания', fields.createdBy !== null ? resolve(fields.createdBy) ?? `(${fields.createdBy})` : '—'),
-      buildFieldRow('Дата создания', formatDateTime(fields.createdAtMs)),
-      buildFieldRow('Последний редактор', fields.updatedBy !== null ? resolve(fields.updatedBy) ?? `(${fields.updatedBy})` : '—'),
-      buildFieldRow('Дата изменения', formatDateTime(fields.updatedAtMs)),
+      buildAuthorRow('Автор создания', fields.createdBy),
+      buildDateRow('Дата создания', fields.createdAtMs),
+      buildAuthorRow('Последний редактор', fields.updatedBy),
+      buildDateRow('Дата изменения', fields.updatedAtMs),
     );
   }
 }

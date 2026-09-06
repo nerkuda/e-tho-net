@@ -10,6 +10,7 @@
  */
 
 import type { ChronicleLinkScope, SavedFilterView, SortOrder } from '../enums.js';
+import type { StructureAuthorOp } from './structure.js';
 import type { ThoughtRef } from './thought.js';
 
 /** Filter criteria of the chronicle query (03-server-api.md §20). */
@@ -34,14 +35,20 @@ export interface ChronicleFilter {
   /**
    * Автор хроно-комментария — id пользователя (`created_by`); absent —
    * фильтр не применяется. Паритет с REST `created_by` в
-   * `POST /chronicle/query` (задача 59119797).
+   * `POST /chronicle/query` (задача 59119797). Для `created_by_op: 'in' |
+   * 'not_in'` — массив id.
    */
-  created_by?: string;
+  created_by?: string | string[];
+  /** Оператор условия `created_by` (по умолчанию `eq`). */
+  created_by_op?: StructureAuthorOp;
   /**
    * Последний редактор хроно-комментария — id пользователя (`updated_by`);
-   * absent — фильтр не применяется.
+   * absent — фильтр не применяется. Для `updated_by_op: 'in' | 'not_in'` —
+   * массив id.
    */
-  updated_by?: string;
+  updated_by?: string | string[];
+  /** Оператор условия `updated_by` (по умолчанию `eq`). */
+  updated_by_op?: StructureAuthorOp;
 }
 
 /** Filter + paging of `POST /chronicle/query`. */

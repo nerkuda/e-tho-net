@@ -177,6 +177,21 @@ function parseTriState(value: unknown): boolean | null {
   return value === true || value === false ? value : null;
 }
 
+/** Coerces an unknown op value into the author-op union (default `eq`). */
+function parseAuthorOp(value: unknown): 'eq' | 'ne' | 'in' | 'not_in' | 'empty' | 'not_empty' {
+  if (
+    value === 'eq' ||
+    value === 'ne' ||
+    value === 'in' ||
+    value === 'not_in' ||
+    value === 'empty' ||
+    value === 'not_empty'
+  ) {
+    return value;
+  }
+  return 'eq';
+}
+
 /** Parses the persisted L4 `structures_state` JSON (unknown input, safe defaults). */
 function parseFilterState(raw: string): FilterState {
   try {
@@ -203,11 +218,18 @@ function parseFilterState(raw: string): FilterState {
       hasChronology: parseTriState(parsed.hasChronology),
       active: parseTriState(parsed.active),
       trashed: parsed.trashed === true,
-      // Задача 59119797 «Фильтры Автор/Редактор»: строки-id
-      // участников сети. Невалидное значение (не строка) трактуется как
-      // «не применять».
+      // Задача 59119797 «Фильтры Автор/Редактор», эволюция операторов: op +
+      // значение (одиночный id или массив для in/not_in).
+      authorOp: parseAuthorOp(parsed.authorOp),
       authorId: typeof parsed.authorId === 'string' ? parsed.authorId : '',
+      authorIds: Array.isArray(parsed.authorIds)
+        ? parsed.authorIds.filter((v): v is string => typeof v === 'string')
+        : [],
+      editorOp: parseAuthorOp(parsed.editorOp),
       editorId: typeof parsed.editorId === 'string' ? parsed.editorId : '',
+      editorIds: Array.isArray(parsed.editorIds)
+        ? parsed.editorIds.filter((v): v is string => typeof v === 'string')
+        : [],
       sort: parsed.sort === 'alpha' || parsed.sort === 'created' || parsed.sort === 'viewed' ? parsed.sort : 'created',
       order: parsed.order === 'asc' || parsed.order === 'desc' ? parsed.order : 'asc',
       savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,

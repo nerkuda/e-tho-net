@@ -34,6 +34,25 @@ export interface StructurePropertyCondition {
 /** Tri-state has/hasn't criterion: `true`/`false` filters, absent — "not important". */
 export type StructureTriState = boolean | undefined;
 
+/**
+ * Операторы фильтра авторства (`created_by`/`updated_by`) — замена одиночного
+ * id на условие вида «равен/не равен/в списке/не в списке» по аналогии с
+ * условиями свойств (задача 59119797). `empty`/`not_empty` тестируют NULL
+ * без операнда. Отсутствующий op трактуется как `eq` (обратная совместимость
+ * с сохранёнными отборами 0.7.1).
+ */
+export type StructureAuthorOp = 'eq' | 'ne' | 'in' | 'not_in' | 'empty' | 'not_empty';
+
+/** Допустимые операторы для фильтра авторства — для валидации на сервере. */
+export const STRUCTURE_AUTHOR_OPS: readonly StructureAuthorOp[] = [
+  'eq',
+  'ne',
+  'in',
+  'not_in',
+  'empty',
+  'not_empty',
+];
+
 /** Filter criteria of the structures query (03-server-api.md §6.10). */
 export interface StructureFilter {
   /** Keywords mini-syntax: whitespace-separated words, `*` wildcard, `-` exclusion. */
@@ -83,13 +102,23 @@ export interface StructureFilter {
    * — фильтр не применяется. Паритет с REST `created_by` и MCP
    * `etn.thoughts.query.author_id` / `etn.thoughts.search.author_id` (задача
    * 59119797 «Фильтры Автор/Редактор»).
+   *
+   * Для `created_by_op: 'in' | 'not_in'` значение трактуется как массив id.
    */
-  created_by?: string;
+  created_by?: string | string[];
+  /**
+   * Оператор условия `created_by` (задача 59119797). По умолчанию `eq`
+   * (обратная совместимость с 0.7.1).
+   */
+  created_by_op?: StructureAuthorOp;
   /**
    * Последний редактор мысли — id пользователя (`updated_by`); absent —
-   * фильтр не применяется.
+   * фильтр не применяется. Для `updated_by_op: 'in' | 'not_in'` —
+   * массив id.
    */
-  updated_by?: string;
+  updated_by?: string | string[];
+  /** Оператор условия `updated_by`. По умолчанию `eq`. */
+  updated_by_op?: StructureAuthorOp;
 }
 
 /** Filter + paging of `POST /thoughts/query` (the list envelope of §6.10). */

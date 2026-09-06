@@ -6,7 +6,7 @@
  * — unit-testable under plain Node (same shape as `chronicle/state.ts`).
  */
 
-import type { ActivityEntityType } from '@etn/shared';
+import type { ActivityEntityType, StructureAuthorOp } from '@etn/shared';
 
 /** Action values shown in the UI filter — the server log carries the same
  *  vocabulary (`created`/`updated`/`deleted`/`trashed`/`restored`); we keep
@@ -31,12 +31,22 @@ export const ENTITY_TYPE_OPTIONS: ReadonlyArray<{
 
 /** Criteria of the activity filter as held by the panel (persisted to L4). */
 export interface ActivityFilterState {
+  /** Keywords mini-syntax (`*`/`-`); searched in `entity_title`. */
+  keywords: string;
   /** Inclusive lower bound, ms epoch. Empty string = no lower bound. */
   fromMs: string;
   /** Inclusive upper bound, ms epoch. Empty string = no upper bound. */
   toMs: string;
-  /** Filter by `user_id` (empty = any participant). */
+  /**
+   * Задача 59119797, эволюция операторов: фильтр по автору события.
+   * `eq`/`ne` используют `userId` (single id); `in`/`not_in` —
+   * `userIds` (массив). `empty`/`not_empty` — без значения.
+   */
+  userOp: StructureAuthorOp;
+  /** Id пользователя для `eq`/`ne`. */
   userId: string;
+  /** Массив id для `in`/`not_in`. */
+  userIds: string[];
   /** Set of selected entity types (empty = any). */
   entityTypes: ActivityEntityType[];
   /** Set of selected actions (empty = any). */
@@ -45,9 +55,12 @@ export interface ActivityFilterState {
 
 /** Empty filter — show every row of the log. */
 export const DEFAULT_FILTER: ActivityFilterState = {
+  keywords: '',
   fromMs: '',
   toMs: '',
+  userOp: 'eq',
   userId: '',
+  userIds: [],
   entityTypes: [],
   actions: [],
 };
@@ -91,9 +104,14 @@ export function parseActivityState(raw: string): PersistedActivityState {
       : [];
     return {
       filter: {
+        keywords: typeof f.keywords === 'string' ? f.keywords : '',
         fromMs: typeof f.fromMs === 'string' ? f.fromMs : '',
         toMs: typeof f.toMs === 'string' ? f.toMs : '',
+        userOp: parseAuthorOp(f.userOp),
         userId: typeof f.userId === 'string' ? f.userId : '',
+        userIds: Array.isArray(f.userIds)
+          ? f.userIds.filter((v): v is string => typeof v === 'string')
+          : [],
         entityTypes,
         actions,
       },
@@ -105,4 +123,19 @@ export function parseActivityState(raw: string): PersistedActivityState {
   } catch {
     return { filter: { ...DEFAULT_FILTER }, offset: 0 };
   }
+}
+
+/** Coerces an unknown op value into the author-op union (default `eq`). */
+function parseAuthorOp(value: unknown): StructureAuthorOp {
+  if (
+    value === 'eq' ||
+    value === 'ne' ||
+    value === 'in' ||
+    value === 'not_in' ||
+    value === 'empty' ||
+    value === 'not_empty'
+  ) {
+    return value;
+  }
+  return 'eq';
 }

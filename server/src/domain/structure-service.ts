@@ -23,6 +23,7 @@ import {
   STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
   STRUCTURES_QUERY_IDS_MAX_LIMIT,
   STRUCTURES_QUERY_MAX_LIMIT,
+  STRUCTURE_AUTHOR_OPS,
   STRUCTURE_KEYWORD_SCOPES,
   STRUCTURE_PROPERTY_OPS,
   STRUCTURE_SORTS,
@@ -36,6 +37,7 @@ import {
   type SavedFilterDefinition,
   type SavedFilterView,
   type SortOrder,
+  type StructureAuthorOp,
   type StructureFilter,
   type StructureKeywordScope,
   type StructurePropertyCondition,
@@ -229,17 +231,17 @@ export function parseStructureFilter(
   }
 
   // Фильтры авторства (задача 59119797 «Фильтры Автор/Редактор»): id
-  // пользователя. Пустая строка и отсутствие равнозначны — фильтр не
-  // применяется; значение валидируется по формату не-UUID (просто строка).
+  // пользователя и оператор (задача 59119797, эволюция — eq/ne/in/not_in).
+  // Пустая строка и отсутствие равнозначны — фильтр не применяется; значение
+  // валидируется по формату не-UUID (просто строка).
   for (const field of ['created_by', 'updated_by'] as const) {
     const raw = body[field];
     if (raw === undefined) continue;
-    if (typeof raw !== 'string') {
-      throw new EtnError('VALIDATION_ERROR', `${field} должен быть строкой (id пользователя).`, {
-        field,
-      }, requestId);
-    }
-    if (raw.trim() !== '') filter[field] = raw;
+    const op = parseAuthorOp(body[`${field}_op`], requestId);
+    const parsed = parseAuthorValue(raw, op, requestId);
+    if (parsed === undefined) continue; // empty value + not empty/not_empty op → drop
+    filter[field] = parsed;
+    if (op !== 'eq') filter[`${field}_op`] = op;
   }
 
   const properties = body['properties'];
@@ -257,6 +259,58 @@ export function parseStructureFilter(
   }
 
   return filter;
+}
+
+/** Parse the `*_op` field of an author filter; defaults to `eq` when absent. */
+function parseAuthorOp(raw: unknown, requestId?: string): StructureAuthorOp {
+  if (raw === undefined) return 'eq';
+  if (typeof raw !== 'string' || !(STRUCTURE_AUTHOR_OPS as readonly string[]).includes(raw)) {
+    throw new EtnError('VALIDATION_ERROR', 'Недопустимая операция фильтра авторства.', {
+      field: 'op',
+      allowed: STRUCTURE_AUTHOR_OPS,
+    }, requestId);
+  }
+  return raw as StructureAuthorOp;
+}
+
+/**
+ * Validates the value payload against the operator (задача 59119797). Returns
+ * `undefined` when the filter must be dropped (`empty`/`not_empty` with an
+ * explicit empty value, or list ops with no ids).
+ */
+function parseAuthorValue(
+  raw: unknown,
+  op: StructureAuthorOp,
+  requestId?: string,
+): string | string[] | undefined {
+  if (op === 'empty' || op === 'not_empty') {
+    // Значение игнорируется — фильтр проверяет только NULL.
+    return undefined;
+  }
+  if (op === 'in' || op === 'not_in') {
+    if (!Array.isArray(raw) || raw.length === 0) {
+      throw new EtnError('VALIDATION_ERROR', 'Для операции in/not_in нужен непустой массив id.', {
+        field: 'value',
+      }, requestId);
+    }
+    const ids: string[] = [];
+    for (const v of raw) {
+      if (typeof v !== 'string' || v.trim() === '') {
+        throw new EtnError('VALIDATION_ERROR', 'Каждый id должен быть непустой строкой.', {
+          field: 'value',
+        }, requestId);
+      }
+      ids.push(v);
+    }
+    return ids;
+  }
+  if (typeof raw !== 'string') {
+    throw new EtnError('VALIDATION_ERROR', 'Значение должно быть строкой (id пользователя).', {
+      field: 'value',
+    }, requestId);
+  }
+  const trimmed = raw.trim();
+  return trimmed === '' ? undefined : trimmed;
 }
 
 /** Parse one `{ property_id, op, value }` condition from an untrusted object. */
@@ -345,9 +399,20 @@ export function isFilterEmpty(filter: StructureFilter): boolean {
     filter.has_attachments === undefined &&
     filter.has_chronology === undefined &&
     filter.active === undefined &&
-    !filter.created_by &&
-    !filter.updated_by
+    authorFilterIsEmpty(filter.created_by, filter.created_by_op) &&
+    authorFilterIsEmpty(filter.updated_by, filter.updated_by_op)
   );
+}
+
+/** True when the author condition carries no useful clause (задача 59119797). */
+function authorFilterIsEmpty(
+  value: string | string[] | undefined,
+  op: StructureAuthorOp | undefined,
+): boolean {
+  if (op === 'empty' || op === 'not_empty') return false;
+  if (value === undefined) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  return value === '';
 }
 
 /** Validate a saved-filter name (trimmed, 1..SAVED_FILTER_NAME_MAX characters). */
@@ -379,6 +444,50 @@ export interface StructureQueryResult {
   items: ThoughtRef[];
   total: number;
   directions: StructureDirectionFlags;
+}
+
+/**
+ * Appends an author-condition WHERE clause + params for one column
+ * (задача 59119797, эволюция операторов). Skips silently when the filter
+ * field is absent; an explicit `op: 'empty' | 'not_empty'` adds an IS [NOT]
+ * NULL check regardless of the value payload.
+ */
+function appendAuthorCondition(
+  where: string[],
+  params: unknown[],
+  column: string,
+  value: string | string[] | undefined,
+  op: StructureAuthorOp | undefined,
+): void {
+  const effective = op ?? 'eq';
+  if (effective === 'empty') {
+    where.push(`${column} IS NULL`);
+    return;
+  }
+  if (effective === 'not_empty') {
+    where.push(`${column} IS NOT NULL`);
+    return;
+  }
+  if (value === undefined) return;
+  if (effective === 'in' || effective === 'not_in') {
+    const ids = Array.isArray(value) ? value : [value];
+    const placeholders = ids.map(() => '?').join(',');
+    where.push(
+      effective === 'in'
+        ? `${column} IN (${placeholders})`
+        : `${column} NOT IN (${placeholders})`,
+    );
+    params.push(...ids);
+    return;
+  }
+  if (effective === 'ne') {
+    where.push(`${column} IS NULL OR ${column} <> ?`);
+    params.push(value);
+    return;
+  }
+  // `eq` (default) — exact match.
+  where.push(`${column} = ?`);
+  params.push(value);
 }
 
 /** Convert a condition scalar to the SQL parameter of its value column. */
@@ -533,18 +642,11 @@ function buildFilterQuerySql(
     where.push('t.marked_for_deletion = 0');
   }
 
-  // Фильтры авторства (задача 59119797): прямое сравнение по колонкам
-  // `created_by`/`updated_by` (миграция 033). `parseStructureFilter`
-  // игнорирует пустые строки, поэтому здесь условие добавляется только
-  // когда значение задано.
-  if (req.created_by !== undefined && req.created_by !== '') {
-    where.push('t.created_by = ?');
-    params.push(req.created_by);
-  }
-  if (req.updated_by !== undefined && req.updated_by !== '') {
-    where.push('t.updated_by = ?');
-    params.push(req.updated_by);
-  }
+  // Фильтры авторства (задача 59119797, эволюция операторов): прямое
+  // сравнение / отрицание / IN(...) / IS NULL по колонкам
+  // `created_by`/`updated_by` (миграция 033).
+  appendAuthorCondition(where, params, 't.created_by', req.created_by, req.created_by_op);
+  appendAuthorCondition(where, params, 't.updated_by', req.updated_by, req.updated_by_op);
 
   if (req.parent_ids !== undefined && req.parent_ids.length > 0) {
     const scoped = expandParentIdsToSubtree(ndb, req.parent_ids, showInactive === 1);

@@ -94,9 +94,12 @@ describe('parseActivityState', () => {
     const json = JSON.stringify({ filter: { userId: 'u-1' } });
     const parsed = parseActivityState(json);
     const expected: ActivityFilterState = {
+      keywords: '',
       fromMs: '',
       toMs: '',
+      userOp: 'eq',
       userId: 'u-1',
+      userIds: [],
       entityTypes: [],
       actions: [],
     };
