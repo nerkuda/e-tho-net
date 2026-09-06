@@ -93,6 +93,9 @@ export const MCP_TOOL_NAMES = [
   'etn.locks.list',
   // activity log (task f2eca5a4, операция 70dfe81d — паритет с REST /activity)
   'etn.activity.list',
+  // activity log maintenance (задача 6bcccd2b — паритет с REST /activity/rollup, /activity/truncate)
+  'etn.activity.rollup',
+  'etn.activity.truncate',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -169,6 +172,8 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.layers.merge': { destructiveHint: true },
   'etn.locks.release': { destructiveHint: true },
   'etn.locks.clear': { destructiveHint: true },
+  'etn.activity.rollup': { destructiveHint: true },
+  'etn.activity.truncate': { destructiveHint: true },
 
   // ---- mutating tools — idempotentHint ----------------------------
   'etn.thoughts.set_active': { idempotentHint: true },

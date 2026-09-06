@@ -54,6 +54,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
 import type { BranchableTable } from '../db/layer-write.js';
+import { autoRollupLayerActivity } from './activity-service.js';
 import { purgeTrash } from './trash-service.js';
 
 /** Subset selection of a partial merge: logical row ids per branchable table. */
@@ -67,6 +68,10 @@ export interface LayerMergeOutcome extends LayerMergeReport {
   deleted_link_ids: string[];
   merged_layer: { id: string; title: string };
   target_layer: { id: string; title: string };
+  /** Сводка авто-свёртки журнала активности (задача 6bcccd2b, требование
+   * 1f7f789b «авто-свёртка при слиянии слоя»): сколько ключевых сущностей
+   * получили итоговую запись и сколько детальных строк удалено из журнала. */
+  activity_rollup: { groups: number; removed: number };
 }
 
 /** A physical row of a branchable table, keyed by rowid. */
@@ -747,6 +752,13 @@ function mergeLayerInner(
   // --- Phase F: trash auto-purge (§8.4, same call as layer deletion) ------
   const purge = purgeTrash(ndb);
 
+  // --- Phase G: авто-свёртка событий журнала для слоя (задача 6bcccd2b,
+  // требование 1f7f789b «авто-свёртка при слиянии слоя»). Детальные
+  // события слоя уже не нужны — по каждой затронутой сущности в основе
+  // появляется ровно одна итоговая запись (`autoRollupLayerActivity`
+  // выполняется в той же транзакции, что и merge — откатывается вместе). ---
+  const activityRollup = autoRollupLayerActivity(ndb, ndb.networkId, layerId);
+
   return {
     applied,
     skipped,
@@ -757,5 +769,6 @@ function mergeLayerInner(
     deleted_link_ids: purge.deleted_link_ids,
     merged_layer: { id: layer.id, title: layer.title },
     target_layer: { id: target.id, title: target.title },
+    activity_rollup: activityRollup,
   };
 }

@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { BASE_LAYER_ID, EtnError, type Layer, type LayerColors, type LayerDeleteResult } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { deleteLayerActivity } from './activity-service.js';
 import { purgeTrash } from './trash-service.js';
 
 /** Maximum depth of ordinary layers above the base (§2.1: base→L1→…→L4). */
@@ -469,6 +470,16 @@ export function deleteLayer(
       `UPDATE session_layers SET layer_id = ?, updated_at = ?, switched_at_seq = ?
        WHERE layer_id IN (${placeholders})`,
     ).run(row.parent_id, nowSeconds(), switchedAtSeq, ...subtree);
+
+    // Журнал активности (задача 6bcccd2b, требование 1f7f789b): при удалении
+    // слоя без слияния все его события должны исчезнуть без следа. Чистим
+    // по всему поддереву, чтобы и вложенные слои не оставили «висящих»
+    // ссылок на удалённый слой. До физического DELETE FROM layers: слой
+    // должен ещё существовать, чтобы пройти возможные проверки внешних ключей
+    // (на текущий момент FK на `activity_log.layer_id` нет — зачищаем явно).
+    for (const layerId of subtree) {
+      deleteLayerActivity(ndb, ndb.networkId, layerId);
+    }
 
     // Physical delete: FK cascades remove the subtree (parent_id) and every
     // shadow row / tombstone of the branchable tables (layer_id).

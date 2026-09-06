@@ -342,6 +342,7 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
           reorder_collapsed: result.reorder_collapsed,
           reserve_layer_id: result.reserve_layer_id,
           purged: result.purged,
+          activity_rollup: result.activity_rollup,
         };
         deps.emit(req, networkId, 'layer.merged', {
           ...report,

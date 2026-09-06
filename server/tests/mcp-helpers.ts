@@ -57,69 +57,131 @@ export interface McpTestContext {
   homeId: string;
 }
 
-/** Build a fresh MCP test world. */
-export async function buildMcpContext(): Promise<McpTestContext> {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-mcp-'));
-  const db: Database.Database = new DatabaseConstructor(':memory:');
-  db.pragma('foreign_keys = ON');
-  runMigrations(db, systemMigrationsDir());
-  const sys = new SystemDb(db);
+/** Optional overrides for {@link buildMcpContext} — useful when pairing an
+ * MCP server with a fixture built by the REST helpers (задача 6bcccd2b:
+ * паритет `etn.activity.rollup` / `etn.activity.truncate` между REST и MCP).
+ * All fields default to «свежий изолированный мир». */
+export interface McpContextOverrides {
+  /** Existing data directory (e.g. the temp dir of a REST context). */
+  dataDir?: string;
+  /** Existing network id — used together with `dataDir` to skip the fresh
+   * network creation. Admin/API-key must already exist in the existing
+   * `systemDb` (passed alongside). */
+  networkId?: string;
+  /** Existing system DB (must contain the admin user + a primary API-key). */
+  systemDb?: SystemDb;
+}
 
-  const adminId = randomUUID();
-  sys.createUser({
-    id: adminId,
-    username: 'admin',
-    displayName: 'Admin',
-    isAdmin: true,
-    isFirstUser: true,
-  });
-  const gen = generateApiKey();
-  sys.createApiKey({
-    id: randomUUID(),
-    userId: adminId,
-    label: 'mcp-test',
-    keyHash: hashApiKey(gen.key),
-    keyPrefix: gen.keyPrefix,
-  });
-  const ro = generateApiKey();
-  sys.createApiKey({
-    id: randomUUID(),
-    userId: adminId,
-    label: 'mcp-test-ro',
-    keyHash: hashApiKey(ro.key),
-    keyPrefix: ro.keyPrefix,
-    readOnly: true,
-  });
+/** Build a fresh MCP test world, optionally reusing an existing data dir /
+ * system DB / network from a parallel REST context. */
+export async function buildMcpContext(overrides: McpContextOverrides = {}): Promise<McpTestContext> {
+  const dataDir = overrides.dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'etn-mcp-'));
+
+  // Reuse the REST fixture's system DB when provided — both contexts already
+  // agree on the admin/api-key rows and the network membership. We hold a
+  // typed alias for the private `db` field without poking it directly from
+  // the outside (callers go through the helper).
+  let sys: SystemDb;
+  let rawDb: Database.Database;
+  let adminId: string;
+  let adminKey: string;
+  let readOnlyKey: string;
+
+  if (overrides.systemDb !== undefined) {
+    sys = overrides.systemDb;
+    rawDb = (sys as unknown as { db: Database.Database }).db;
+    // The REST fixture's admin is the only user; expose its primary key by
+    // walking the API-key table.
+    const adminRow = rawDb
+      .prepare(`SELECT user_id FROM api_keys WHERE label = 'primary' LIMIT 1`)
+      .get() as { user_id: string } | undefined;
+    adminId = adminRow?.user_id ?? '';
+    adminKey = '';
+    readOnlyKey = '';
+  } else {
+    rawDb = new DatabaseConstructor(':memory:');
+    rawDb.pragma('foreign_keys = ON');
+    runMigrations(rawDb, systemMigrationsDir());
+    sys = new SystemDb(rawDb);
+
+    adminId = randomUUID();
+    sys.createUser({
+      id: adminId,
+      username: 'admin',
+      displayName: 'Admin',
+      isAdmin: true,
+      isFirstUser: true,
+    });
+    const gen = generateApiKey();
+    sys.createApiKey({
+      id: randomUUID(),
+      userId: adminId,
+      label: 'mcp-test',
+      keyHash: hashApiKey(gen.key),
+      keyPrefix: gen.keyPrefix,
+    });
+    const ro = generateApiKey();
+    sys.createApiKey({
+      id: randomUUID(),
+      userId: adminId,
+      label: 'mcp-test-ro',
+      keyHash: hashApiKey(ro.key),
+      keyPrefix: ro.keyPrefix,
+      readOnly: true,
+    });
+    adminKey = gen.key;
+    readOnlyKey = ro.key;
+  }
 
   const pubsub = new PubSub();
 
-  const network = await new NetworkServiceImpl(sys, dataDir, createLogger('silent')).createNetwork(
-    adminId,
-    'Test Net',
-  );
-  const ndb = openNetworkDb(dataDir, network.id);
-  const home = ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1 LIMIT 1').get() as {
-    id: string;
-  };
+  let networkId: string;
+  let homeId: string;
+  if (overrides.networkId !== undefined) {
+    networkId = overrides.networkId;
+    const ndb = openNetworkDb(dataDir, networkId);
+    const home = ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1 LIMIT 1').get() as
+      | { id: string }
+      | undefined;
+    homeId = home?.id ?? '';
+  } else {
+    const network = await new NetworkServiceImpl(sys, dataDir, createLogger('silent')).createNetwork(
+      adminId,
+      'Test Net',
+    );
+    networkId = network.id;
+    const ndb = openNetworkDb(dataDir, network.id);
+    const home = ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1 LIMIT 1').get() as {
+      id: string;
+    };
+    homeId = home.id;
+  }
 
   return {
     sys,
-    rawDb: db,
+    rawDb,
     dataDir,
     pubsub,
     adminId,
-    adminKey: gen.key,
-    readOnlyKey: ro.key,
-    networkId: network.id,
-    homeId: home.id,
+    adminKey,
+    readOnlyKey,
+    networkId,
+    homeId,
   };
 }
 
-/** Tear down: close the network DB first, then the system DB, then the dir. */
-export async function closeMcpContext(ctx: McpTestContext): Promise<void> {
+/** Tear down: close the network DB first, then the system DB, then the dir.
+ *  When the context was built with `systemDb` / `dataDir` overrides (REST
+ *  fixture shared with the MCP layer), the system DB and data directory
+ *  belong to the caller — skip closing them so a parallel `closeRestContext`
+ *  can run cleanly. */
+export async function closeMcpContext(
+  ctx: McpTestContext,
+  overrides: McpContextOverrides = {},
+): Promise<void> {
   closeNetworkDb(ctx.networkId);
-  ctx.sys.close();
-  fs.rmSync(ctx.dataDir, { recursive: true, force: true });
+  if (overrides.systemDb === undefined) ctx.sys.close();
+  if (overrides.dataDir === undefined) fs.rmSync(ctx.dataDir, { recursive: true, force: true });
 }
 
 /** An SDK client connected to a production-built MCP server for `key`. */

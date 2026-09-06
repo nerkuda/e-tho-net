@@ -309,9 +309,11 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // 2 destructive (`release`, `clear`) and 1 idempotent (`acquire`
         // продлевает свой захват).
         // Task f2eca5a4 adds 1 activity-log tool: read (`list` — readOnlyHint).
-        assert.equal(annotated, 43);
+        // Task 6bcccd2b adds 2 activity-maintenance tools: rollup + truncate —
+        // оба `destructiveHint: true` (необратимые операции с журналом).
+        assert.equal(annotated, 45);
         assert.equal(hintReadOnly, 27);
-        assert.equal(hintDestructive, 8);
+        assert.equal(hintDestructive, 10);
         assert.equal(hintIdempotent, 8);
       } finally {
         await handle.close();

@@ -438,6 +438,297 @@ export function recordLayerActivity(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Обслуживание журнала: свёртка (rollup), обрезка (truncate),
+// авто-свёртка при слиянии/удалении слоя — задача 6bcccd2b,
+// docs/13-layers.md §8 «свёртка при merge».
+//
+// Эти операции необратимы: уменьшение числа строк в `activity_log` без
+// возможности отката. Клиентское подтверждение — ответственность UI/клиента
+// (03-server-api.md §13d); сервер сам по себе ничего не блокирует.
+// ---------------------------------------------------------------------------
+
+/** Сводный итог свёртки: сколько строк удалено и сколько оставлено
+ * (с разбивкой по сущностям — каждая «живая» группа оставляет 1 или 2 строки,
+ * удалённая — ровно 1). */
+export interface RollupActivityResult {
+  removed: number;
+  kept: number;
+}
+
+/** Итог обрезки — только счётчик удалённых строк (записи удаляются все). */
+export interface TruncateActivityResult {
+  removed: number;
+}
+
+/** Действия, которые считаются «итогом удаления» сущности для свёртки
+ * (требование операции 70dfe81d, 6bcccd2b). `restored` сюда не входит —
+ * восстановление не финальное состояние, после него могут быть правки. */
+const DELETING_ACTIONS: ReadonlySet<string> = new Set(['deleted', 'trashed']);
+
+/**
+ * Свёрнуть журнал активности сети до указанной границы по времени
+ * (задача 6bcccd2b, требование 76443b7e «свёртка»).
+ *
+ * Семантика по каждой **живой** ключевой сущности
+ * `(network_id, entity_type, entity_id)`:
+ *
+ *   - есть `deleted`/`trashed` до `until_ms` — оставляем **только** эту
+ *     запись удаления (что, кто, когда), все промежуточные правки удаляются;
+ *   - иначе — оставляем самую раннюю запись (`created`/`updated`) и, если
+ *     отличается, самую позднюю `updated`.
+ *
+ * Записи с `occurred_at_ms > until_ms` не трогаются — это «свежее», что
+ * пользователь ещё видит.
+ *
+ * Транзакция одна: `db.transaction(...)` откатывает весь rollup при любом
+ * сбое в середине (требование 6bcccd2b).
+ */
+export function rollupActivity(
+  ndb: NetworkDb,
+  networkId: string,
+  untilMs: number,
+): RollupActivityResult {
+  if (!Number.isInteger(untilMs) || untilMs < 0) {
+    throw new TypeError('untilMs must be a non-negative integer');
+  }
+  return ndb.transaction(() => {
+    // 1. Загружаем все строки до границы — компактно (только нужные поля).
+    const rows = ndb
+      .prepare(
+        `SELECT id, action, entity_type, entity_id, occurred_at_ms
+         FROM activity_log
+         WHERE network_id = ? AND occurred_at_ms <= ?
+         ORDER BY entity_type, entity_id, occurred_at_ms ASC, id ASC`,
+      )
+      .all(networkId, untilMs) as Array<{
+      id: string;
+      action: string;
+      entity_type: string;
+      entity_id: string;
+      occurred_at_ms: number;
+    }>;
+
+    if (rows.length === 0) {
+      return { removed: 0, kept: 0 };
+    }
+
+    // 2. Группируем по ключу сущности и вычисляем, какие id оставить.
+    const groups = new Map<
+      string,
+      { ids: string[]; keep: Set<string> }
+    >();
+    // Сразу строим мапу id -> { occurred_at_ms, action } — она нужна и для
+    // группировки, и для сортировки внутри группы. SQL уже вернул строки
+    // упорядоченными по (entity_type, entity_id, occurred_at_ms ASC, id ASC),
+    // но id всё равно пересортируем явно для стабильности.
+    const byId = new Map<string, { occurred_at_ms: number; action: string }>();
+    for (const r of rows) {
+      byId.set(r.id, { occurred_at_ms: r.occurred_at_ms, action: r.action });
+      const key = `${r.entity_type}\u0000${r.entity_id}`;
+      let g = groups.get(key);
+      if (g === undefined) {
+        g = { ids: [], keep: new Set() };
+        groups.set(key, g);
+      }
+      g.ids.push(r.id);
+    }
+
+    for (const g of groups.values()) {
+      g.ids.sort((a, b) => {
+        const ra = byId.get(a) as { occurred_at_ms: number; action: string };
+        const rb = byId.get(b) as { occurred_at_ms: number; action: string };
+        if (ra.occurred_at_ms !== rb.occurred_at_ms) return ra.occurred_at_ms - rb.occurred_at_ms;
+        return a < b ? -1 : a > b ? 1 : 0;
+      });
+      const lastId = g.ids[g.ids.length - 1] as string;
+      const firstId = g.ids[0] as string;
+      const lastMeta = byId.get(lastId) as { occurred_at_ms: number; action: string };
+      if (DELETING_ACTIONS.has(lastMeta.action)) {
+        // Последнее событие — удаление/пометка: оставляем ровно его.
+        g.keep.add(lastId);
+      } else {
+        // Живая сущность: самая ранняя + самая поздняя (если отличается).
+        g.keep.add(firstId);
+        if (g.ids.length > 1) g.keep.add(lastId);
+      }
+    }
+
+    // 3. Собираем список id на удаление и удаляем одним батчем.
+    const toRemove: string[] = [];
+    for (const g of groups.values()) {
+      for (const id of g.ids) if (!g.keep.has(id)) toRemove.push(id);
+    }
+    let removed = 0;
+    const del = ndb.prepare(`DELETE FROM activity_log WHERE id = ?`);
+    // Бьём на порции, чтобы не упираться в лимит параметров SQLite (999).
+    for (let i = 0; i < toRemove.length; i += 500) {
+      const chunk = toRemove.slice(i, i + 500);
+      removed += chunk.reduce((acc, id) => acc + del.run(id).changes, 0);
+    }
+    const kept = rows.length - removed;
+    return { removed, kept };
+  });
+}
+
+/**
+ * Обрезать журнал активности сети до указанной границы по времени
+ * (задача 6bcccd2b, требование 9921a32b «обрезка»). Все записи с
+ * `occurred_at_ms <= until_ms` удаляются — и создания, и удаления.
+ *
+ * Транзакция одна: при сбое состояние журнала не меняется.
+ */
+export function truncateActivity(
+  ndb: NetworkDb,
+  networkId: string,
+  untilMs: number,
+): TruncateActivityResult {
+  if (!Number.isInteger(untilMs) || untilMs < 0) {
+    throw new TypeError('untilMs must be a non-negative integer');
+  }
+  return ndb.transaction(() => {
+    const result = ndb
+      .prepare(
+        `DELETE FROM activity_log
+         WHERE network_id = ? AND occurred_at_ms <= ?`,
+      )
+      .run(networkId, untilMs);
+    return { removed: result.changes };
+  });
+}
+
+/** Итог авто-свёртки событий слоя: сколько групп слилось в одну запись
+ * и сколько детальных строк удалено из журнала. */
+export interface LayerActivityRollupResult {
+  /** Сколько ключевых сущностей `(entity_type, entity_id)` получили
+   * итоговую запись в журнале (создание/правка/удаление). */
+  groups: number;
+  /** Сколько строк журнала удалено как детальные. */
+  removed: number;
+}
+
+/**
+ * Авто-свёртка событий одного слоя при его слиянии в родителя
+ * (задача 6bcccd2b, требование 1f7f789b «авто-свёртка при слиянии слоя»).
+ *
+ * По каждой ключевой сущности `(entity_type, entity_id)`, у которой есть
+ * хотя бы одна запись в `activity_log` со `snapshot.layer_id = layerId`,
+ * в журнал добавляется **ровно одна итоговая запись** в основе
+ * (`layer_id = null`):
+ *
+ *   - `created` — если в слое было событие создания;
+ *   - иначе — действие самого позднего события слоя (`updated`/`deleted`/
+ *     `trashed`/`restored`).
+ *
+ * Автор и `occurred_at_ms` берутся из **самого позднего** события слоя
+ * (исходного итогового события слоя). `entity_title` — тоже снимок этого
+ * события, чтобы итоговая строка оставалась читаемой после удаления самой
+ * сущности (требование b0c7a57c).
+ *
+ * Все детальные строки слоя (`activity_log.layer_id = layerId`) удаляются.
+ *
+ * Транзакция одна: либо весь набор итоговых записей встаёт + детальные
+ * удаляются, либо ничего не меняется.
+ */
+export function autoRollupLayerActivity(
+  ndb: NetworkDb,
+  networkId: string,
+  layerId: string,
+): LayerActivityRollupResult {
+  return ndb.transaction(() => {
+    const rows = ndb
+      .prepare(
+        `SELECT id, user_id, action, entity_type, entity_id, entity_title, occurred_at_ms
+         FROM activity_log
+         WHERE network_id = ? AND layer_id = ?
+         ORDER BY entity_type, entity_id, occurred_at_ms ASC, id ASC`,
+      )
+      .all(networkId, layerId) as Array<{
+      id: string;
+      user_id: string;
+      action: string;
+      entity_type: string;
+      entity_id: string;
+      entity_title: string;
+      occurred_at_ms: number;
+    }>;
+
+    if (rows.length === 0) {
+      return { groups: 0, removed: 0 };
+    }
+
+    // Группируем по ключу сущности, сохраняя порядок (occurred_at_ms ASC).
+    const groups = new Map<
+      string,
+      { ids: string[]; latest: (typeof rows)[number]; created: boolean }
+    >();
+    for (const row of rows) {
+      const key = `${row.entity_type}\u0000${row.entity_id}`;
+      let g = groups.get(key);
+      if (g === undefined) {
+        g = { ids: [], latest: row, created: false };
+        groups.set(key, g);
+      }
+      g.ids.push(row.id);
+      g.latest = row;
+      if (row.action === 'created') g.created = true;
+    }
+
+    const insert = ndb.prepare(
+      `INSERT INTO activity_log
+         (id, network_id, user_id, action, entity_type, entity_id,
+          entity_title, layer_id, occurred_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+    );
+    let groupsWritten = 0;
+    for (const g of groups.values()) {
+      const finalAction = g.created ? 'created' : g.latest.action;
+      insert.run(
+        randomUUID(),
+        networkId,
+        g.latest.user_id,
+        finalAction,
+        g.latest.entity_type,
+        g.latest.entity_id,
+        g.latest.entity_title,
+        g.latest.occurred_at_ms,
+      );
+      groupsWritten += 1;
+    }
+
+    const del = ndb.prepare(`DELETE FROM activity_log WHERE id = ?`);
+    let removed = 0;
+    const allIds = [...groups.values()].flatMap((g) => g.ids);
+    for (let i = 0; i < allIds.length; i += 500) {
+      const chunk = allIds.slice(i, i + 500);
+      removed += chunk.reduce((acc, id) => acc + del.run(id).changes, 0);
+    }
+    return { groups: groupsWritten, removed };
+  });
+}
+
+/**
+ * Удалить все события журнала, привязанные к слою (задача 6bcccd2b).
+ * Используется при удалении слоя без слияния (`etn.layers.delete`) —
+ * в этом случае детальные события должны исчезнуть без следа.
+ *
+ * Транзакция одна.
+ */
+export function deleteLayerActivity(
+  ndb: NetworkDb,
+  networkId: string,
+  layerId: string,
+): { removed: number } {
+  return ndb.transaction(() => {
+    const result = ndb
+      .prepare(
+        `DELETE FROM activity_log WHERE network_id = ? AND layer_id = ?`,
+      )
+      .run(networkId, layerId);
+    return { removed: result.changes };
+  });
+}
+
 /**
  * Записать обновление сущности-владельца, у которой поменялось значение
  * свойства. Используется в `setPropertyValue`/`setPropertyValues`/

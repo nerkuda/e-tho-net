@@ -150,6 +150,11 @@ export interface LayerMergeReport {
   reserve_layer_id: string | null;
   /** Rows removed by the trash auto-purge right after the merge (§8.4). */
   purged: number;
+  /** Сводка авто-свёртки журнала активности для слоя (задача 6bcccd2b,
+   * требование 1f7f789b «авто-свёртка при слиянии слоя»): сколько
+   * ключевых сущностей `(entity_type, entity_id)` получили итоговую запись
+   * в основе и сколько детальных строк удалено из журнала. */
+  activity_rollup: { groups: number; removed: number };
 }
 
 // ---------------------------------------------------------------------------

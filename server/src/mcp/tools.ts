@@ -157,6 +157,8 @@ import {
 import {
   ACTIVITY_LIMIT_MAX,
   listActivity,
+  rollupActivity,
+  truncateActivity,
 } from '../domain/activity-service.js';
 import { shrinkSubgraphToBudget } from './subgraph-budget.js';
 import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
@@ -1810,6 +1812,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           reorder_collapsed: result.reorder_collapsed,
           reserve_layer_id: result.reserve_layer_id,
           purged: result.purged,
+          activity_rollup: result.activity_rollup,
         };
         emitAgentEvent(
           rt,
@@ -3269,6 +3272,74 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             limit: result.limit,
           },
         };
+      }),
+  );
+
+  // ---- activity.rollup / activity.truncate (задача 6bcccd2b, требование
+  // 76443b7e «свёртка» и 9921a32b «обрезка», стандарт 9e5cff3f — паритет
+  // с REST `POST /activity/rollup` и `POST /activity/truncate`).
+
+  const ActivityRollupSchema = z.object({
+    network_id: NetworkId,
+    until_ms: z.number().int().nonnegative(),
+  });
+  mcp.registerTool(
+    'etn.activity.rollup',
+    {
+      title: 'Свёртка журнала активности',
+      description:
+        'Roll up the activity log of a network up to `until_ms` (задача 6bcccd2b, ' +
+        'требование 76443b7e «свёртка»). For each live `(entity_type, entity_id)` only ' +
+        'the earliest creation/update and the latest update stay; if there is a `deleted`/' +
+        '`trashed` event up to `until_ms` it alone remains. IRREVERSIBLE — the client ' +
+        'UI must request explicit confirmation. The whole operation runs in one SQLite ' +
+        'transaction. Returns `{ removed, kept }` mirroring `POST /activity/rollup`.',
+      inputSchema: ActivityRollupSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.activity.rollup'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const result = rollupActivity(ndb, args.network_id, args.until_ms);
+        auditAgentCall(rt, 'etn.activity.rollup', args.network_id, 'network', args.network_id, {
+          until_ms: args.until_ms,
+          removed: result.removed,
+          kept: result.kept,
+        });
+        return { ...result, request_id: String(extra.requestId) };
+      }),
+  );
+
+  const ActivityTruncateSchema = z.object({
+    network_id: NetworkId,
+    until_ms: z.number().int().nonnegative(),
+  });
+  mcp.registerTool(
+    'etn.activity.truncate',
+    {
+      title: 'Обрезка журнала активности',
+      description:
+        'Hard-truncate the activity log of a network up to `until_ms` (задача 6bcccd2b, ' +
+        'требование 9921a32b «обрезка»): every row with `occurred_at_ms <= until_ms` is ' +
+        'deleted, including creation and deletion records. IRREVERSIBLE — the client UI ' +
+        'must request explicit confirmation. The whole operation runs in one SQLite ' +
+        'transaction. Returns `{ removed }` mirroring `POST /activity/truncate`.',
+      inputSchema: ActivityTruncateSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.activity.truncate'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const result = truncateActivity(ndb, args.network_id, args.until_ms);
+        auditAgentCall(rt, 'etn.activity.truncate', args.network_id, 'network', args.network_id, {
+          until_ms: args.until_ms,
+          removed: result.removed,
+        });
+        return { ...result, request_id: String(extra.requestId) };
       }),
   );
 }
