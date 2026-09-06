@@ -277,11 +277,13 @@ describe(
           '032_properties_registry.sql',
           '033_authorship_columns.sql',
           '034_object_locks.sql',
+          '035_activity_log.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else
         // kept; 032 turns the seeded definition into one registry property;
-        // 034 creates object_locks, пустую при апгрейде чистой базы).
+        // 034 creates object_locks, пустую при апгрейде чистой базы;
+        // 035 — activity_log, тоже пустую).
         const after = tableCounts(db);
         assert.deepEqual(after, {
           ...before,
@@ -289,6 +291,7 @@ describe(
           session_layers: 0,
           properties: 1,
           object_locks: 0,
+          activity_log: 0,
         });
 
         // 2. The base layer row.

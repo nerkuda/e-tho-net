@@ -23,6 +23,9 @@ import {
   getPropertyValues,
   setPropertyValue,
 } from '../domain/property-service.js';
+import { recordOwnerActivity } from '../domain/activity-service.js';
+import { getThought } from '../domain/thought-service.js';
+import { getLink } from '../domain/link-service.js';
 
 /** Route params for a network + owner id. */
 interface OwnerParams {
@@ -92,6 +95,21 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
             property_id: value.property_id,
             value: value.value,
           });
+          // В журнал пишем обновление самой сущности-владельца (требование
+          // b0c7a57c): смена значения свойства — это её операция.
+          const ownerEntity =
+            ownerType === 'thought'
+              ? getThought(ndb, id)
+              : getLink(ndb, id);
+          if (ownerEntity) {
+            recordOwnerActivity(ndb, {
+              networkId,
+              userId: req.auth!.user.id,
+              entityType: ownerType,
+              entity: ownerEntity,
+              layerId: req.layerEcho?.id ?? null,
+            });
+          }
           sendSuccess(reply, value);
         },
       );
@@ -108,6 +126,19 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
             owner_id: id,
             property_id: removed.property_id,
           });
+          const ownerEntity =
+            ownerType === 'thought'
+              ? getThought(ndb, id)
+              : getLink(ndb, id);
+          if (ownerEntity) {
+            recordOwnerActivity(ndb, {
+              networkId,
+              userId: req.auth!.user.id,
+              entityType: ownerType,
+              entity: ownerEntity,
+              layerId: req.layerEcho?.id ?? null,
+            });
+          }
           reply.code(204).send();
         },
       );

@@ -42,6 +42,7 @@ import {
   updateNetworkProperty,
 } from '../domain/property-service.js';
 import type { NetworkDb } from '../db/network-db.js';
+import { recordPropertyActivity } from '../domain/activity-service.js';
 
 // ===========================================================================
 // Body parsers
@@ -340,6 +341,13 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
         try {
           const property = createNetworkProperty(ndb, input, req.auth!.user.id);
           deps.emit(req, networkId, 'property-registry.created', { property });
+          recordPropertyActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'created',
+            property,
+            layerId: req.layerEcho?.id ?? null,
+          });
           sendCreated(reply, property, { request_id: req.id });
         } catch (err) {
           if (err instanceof EtnError && err.code === 'DUPLICATE') {
@@ -414,6 +422,13 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
             converted,
             dropped,
           });
+          recordPropertyActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'updated',
+            property,
+            layerId: req.layerEcho?.id ?? null,
+          });
           sendSuccess(reply, { ...property, converted, dropped }, { request_id: req.id });
         } catch (err) {
           if (err instanceof EtnError && err.code === 'DUPLICATE') {
@@ -438,6 +453,7 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as PropertyIdParams;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const existing = getNetworkProperty(ndb, id);
         try {
           deleteNetworkProperty(ndb, id);
         } catch (err) {
@@ -449,6 +465,15 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
           throw err;
         }
         deps.emit(req, networkId, 'property-registry.deleted', { id });
+        if (existing) {
+          recordPropertyActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'deleted',
+            property: existing,
+            layerId: req.layerEcho?.id ?? null,
+          });
+        }
         reply.code(204).send();
       },
     );

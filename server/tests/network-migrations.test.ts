@@ -55,6 +55,7 @@ const EXPECTED_FILES = [
   '032_properties_registry.sql',
   '033_authorship_columns.sql',
   '034_object_locks.sql',
+  '035_activity_log.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -82,6 +83,7 @@ const EXPECTED_TABLES = [
   'embeddings',
   'thought_read_metrics',
   'object_locks',
+  'activity_log',
 ];
 
 /** True when the `better-sqlite3` native binding loads. */
@@ -586,6 +588,7 @@ describe(
           '032_properties_registry.sql',
           '033_authorship_columns.sql',
           '034_object_locks.sql',
+          '035_activity_log.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged

@@ -47,6 +47,7 @@ import {
   updateAttachment,
   updateAttachmentContent,
 } from '../domain/attachment-service.js';
+import { recordAttachmentActivity } from '../domain/activity-service.js';
 
 /** Route params for a network + owner id. */
 interface OwnerParams {
@@ -305,6 +306,13 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             attachment = await enrichUrlAttachment(ndb, attachment);
           }
           deps.emit(req, networkId, 'attachment.created', { attachment });
+          recordAttachmentActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'created',
+            attachment,
+            layerId: req.layerEcho?.id ?? null,
+          });
           sendCreated(reply, attachment, { request_id: req.id });
         },
       );
@@ -324,6 +332,13 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const attachment = createAttachmentFile(ndb, ownerType, id, input, req.auth!.user.id);
           deps.emit(req, networkId, 'attachment.created', { attachment });
+          recordAttachmentActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'created',
+            attachment,
+            layerId: req.layerEcho?.id ?? null,
+          });
           sendCreated(reply, attachment, { request_id: req.id });
         },
       );
@@ -396,6 +411,13 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         // `attachments_count` indicator, etc.).
         for (const attachment of result.created) {
           deps.emit(req, networkId, 'attachment.created', { attachment });
+          recordAttachmentActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'created',
+            attachment,
+            layerId: req.layerEcho?.id ?? null,
+          });
         }
         sendSuccess(reply, result);
       },
@@ -410,6 +432,13 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const attachment = updateAttachment(ndb, id, changes, req.auth!.user.id);
         deps.emit(req, networkId, 'attachment.updated', { id, changes });
+        recordAttachmentActivity(ndb, {
+          networkId,
+          userId: req.auth!.user.id,
+          action: 'updated',
+          attachment,
+          layerId: req.layerEcho?.id ?? null,
+        });
         sendSuccess(reply, attachment);
       },
     );
@@ -420,8 +449,18 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
       async (req: FastifyRequest, reply) => {
         const { networkId, id } = req.params as AttachmentIdParams;
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        const existing = getAttachment(ndb, id);
         deleteAttachment(ndb, id);
         deps.emit(req, networkId, 'attachment.deleted', { id });
+        if (existing) {
+          recordAttachmentActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'deleted',
+            attachment: existing,
+            layerId: req.layerEcho?.id ?? null,
+          });
+        }
         reply.code(204).send();
       },
     );
@@ -466,6 +505,15 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             mime_type: updated?.mime_type ?? null,
           },
         });
+        if (updated) {
+          recordAttachmentActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'updated',
+            attachment: updated,
+            layerId: req.layerEcho?.id ?? null,
+          });
+        }
         sendSuccess(reply, result, { request_id: req.id });
       },
     );

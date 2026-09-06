@@ -24,6 +24,7 @@ import type {
 } from '../enums.js';
 import type { CommentUpdateInput } from './comment.js';
 import type { EffectiveTypeProperty, PropertyValueValue } from './thought-type.js';
+import type { ActivityRow } from './activity.js';
 import type { RealtimeEventType } from './realtime.js';
 import type {
   ThoughtBundleMatchKind,
@@ -90,6 +91,8 @@ export const MCP_TOOL_NAMES = [
   'etn.locks.release',
   'etn.locks.clear',
   'etn.locks.list',
+  // activity log (task f2eca5a4, операция 70dfe81d — паритет с REST /activity)
+  'etn.activity.list',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -155,6 +158,7 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.layers.diff': { readOnlyHint: true },
   'etn.layers.diff_doc': { readOnlyHint: true },
   'etn.locks.list': { readOnlyHint: true },
+  'etn.activity.list': { readOnlyHint: true },
 
   // ---- mutating tools — destructiveHint ---------------------------
   'etn.thoughts.delete': { destructiveHint: true },
@@ -574,6 +578,41 @@ export interface McpChangesListResult {
   truncated: boolean;
   /** Effective cap actually applied (echoes `limit` or the default). */
   limit: number;
+}
+
+// ---------------------------------------------------------------------------
+// `etn.activity.list` (task f2eca5a4, 05-mcp-server.md §4.1) — read access
+// to the activity log of one network: filters + pagination, sorted by
+// `occurred_at_ms DESC`. Паритет с REST `GET /activity`.
+// ---------------------------------------------------------------------------
+
+/** Parameters of `etn.activity.list` (05-mcp-server.md §4.1). */
+export interface McpActivityListParams {
+  network_id: string;
+  /** Lower bound on `occurred_at_ms` (inclusive). */
+  from_ms?: number;
+  /** Upper bound on `occurred_at_ms` (inclusive). */
+  to_ms?: number;
+  /** Оставить только записи конкретного исполнителя. */
+  user_id?: string;
+  /** Оставить только записи по сущностям указанного вида. */
+  entity_type?: string;
+  /** Оставить только записи по конкретной сущности (требует `entity_type`). */
+  entity_id?: string;
+  /** Размер страницы (default 50, max 200). */
+  limit?: number;
+  /** Смещение для пагинации. */
+  offset?: number;
+}
+
+/** Result of `etn.activity.list` — те же данные, что отдаёт REST `GET /activity`. */
+export interface McpActivityListResult {
+  data: ActivityRow[];
+  meta: {
+    total: number;
+    offset: number;
+    limit: number;
+  };
 }
 
 // ---------------------------------------------------------------------------

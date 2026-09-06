@@ -26,6 +26,11 @@ import { sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
 import { importFromEtnx, previewFromEtnx } from '../domain/import-service.js';
 import { getThoughtOrThrow } from '../domain/thought-service.js';
+import {
+  recordCommentActivity,
+  recordLinkActivity,
+  recordThoughtActivity,
+} from '../domain/activity-service.js';
 
 /** `/api/v1/networks*` import routes plugin factory. */
 export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -72,6 +77,7 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
           app.appLogger,
         );
 
+        const layerId = request.layerEcho?.id ?? null;
         // Fire realtime events so other clients (and the importer's own
         // canvas/panels) refresh — the canvas, focus history, and selection
         // cache all listen to thought.created / link.created / comment.updated.
@@ -83,6 +89,13 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
             .get(id) as unknown as import('@etn/shared').Thought | undefined;
           if (thought === undefined) continue;
           deps.emit(request, networkId, 'thought.created', { thought });
+          recordThoughtActivity(ndb, {
+            networkId,
+            userId: actorUserId,
+            action: 'created',
+            thought,
+            layerId,
+          });
         }
         for (const id of result.createdLinkIds) {
           const link = ndb
@@ -92,6 +105,13 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
             .get(id) as unknown as import('@etn/shared').Link | undefined;
           if (link === undefined) continue;
           deps.emit(request, networkId, 'link.created', { link });
+          recordLinkActivity(ndb, {
+            networkId,
+            userId: actorUserId,
+            action: 'created',
+            link,
+            layerId,
+          });
         }
         for (const id of result.updatedCommentIds) {
           const comment = ndb
@@ -108,6 +128,13 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
               title: comment.title,
             },
             version: comment.version,
+          });
+          recordCommentActivity(ndb, {
+            networkId,
+            userId: actorUserId,
+            action: 'updated',
+            comment,
+            layerId,
           });
         }
 

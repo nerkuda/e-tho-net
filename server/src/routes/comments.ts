@@ -48,6 +48,7 @@ import {
   removeCommentTarget,
   updateComment,
 } from '../domain/comment-service.js';
+import { recordCommentActivity } from '../domain/activity-service.js';
 
 /** Route params for a network + owner id. */
 interface OwnerParams {
@@ -188,6 +189,13 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const comment = createComment(ndb, ownerType, id, input, req.auth!.user.id);
           deps.emit(req, networkId, 'comment.created', { comment });
+          recordCommentActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'created',
+            comment,
+            layerId: req.layerEcho?.id ?? null,
+          });
           sendCreated(reply, comment, {
             version: comment.version,
             updated_at: comment.updated_at,
@@ -212,6 +220,13 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const comment = createCommentWithTargets(ndb, targets, input, req.auth!.user.id);
         deps.emit(req, networkId, 'comment.created', { comment });
+        recordCommentActivity(ndb, {
+          networkId,
+          userId: req.auth!.user.id,
+          action: 'created',
+          comment,
+          layerId: req.layerEcho?.id ?? null,
+        });
         sendCreated(reply, comment, {
           version: comment.version,
           updated_at: comment.updated_at,
@@ -249,6 +264,13 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           changes,
           version: comment.version,
         });
+        recordCommentActivity(ndb, {
+          networkId,
+          userId: req.auth!.user.id,
+          action: 'updated',
+          comment,
+          layerId: req.layerEcho?.id ?? null,
+        });
         sendSuccess(reply, comment, {
           version: comment.version,
           updated_at: comment.updated_at,
@@ -271,6 +293,13 @@ export function createCommentsRoutes(deps: RouteDeps): FastifyPluginAsync {
             owner_type: existing.owner_type,
             owner_id: existing.owner_id,
             id,
+          });
+          recordCommentActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'deleted',
+            comment: existing,
+            layerId: req.layerEcho?.id ?? null,
           });
         }
         reply.code(204).send();

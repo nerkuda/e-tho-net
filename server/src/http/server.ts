@@ -50,6 +50,7 @@ import { createAttachmentsRoutes } from '../routes/attachments.js';
 import { createLocksRoutes } from '../routes/locks.js';
 import { createSearchRoutes } from '../routes/search.js';
 import { createTrashRoutes } from '../routes/trash.js';
+import { createActivityRoutes } from '../routes/activity.js';
 import { createLayersRoutes } from '../routes/layers.js';
 import { createAdminNetworksRoutes } from '../routes/admin-networks.js';
 import { systemLoggingRoutes } from '../routes/system-logging.js';
@@ -324,6 +325,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Object-lock routes (task 2031df5e, 03-server-api.md §13c):
   // acquire/release/clear/list поверх таблицы object_locks.
   await app.register(createLocksRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Activity-log routes (task f2eca5a4, 03-server-api.md §13d):
+  // GET /activity — лента журнала с фильтрами и пагинацией.
+  await app.register(createActivityRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Search, export and job routes (task D6, 03-server-api.md §12, §14).
   await app.register(createSearchRoutes(routeDeps), { prefix: '/api/v1' });

@@ -308,8 +308,9 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // Task a88acf20 adds 4 object-lock tools: 1 read (`list` — readOnlyHint),
         // 2 destructive (`release`, `clear`) and 1 idempotent (`acquire`
         // продлевает свой захват).
-        assert.equal(annotated, 42);
-        assert.equal(hintReadOnly, 26);
+        // Task f2eca5a4 adds 1 activity-log tool: read (`list` — readOnlyHint).
+        assert.equal(annotated, 43);
+        assert.equal(hintReadOnly, 27);
         assert.equal(hintDestructive, 8);
         assert.equal(hintIdempotent, 8);
       } finally {

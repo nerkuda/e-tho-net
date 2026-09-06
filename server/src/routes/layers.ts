@@ -48,6 +48,7 @@ import { layerDiffDoc, resolveDiffTarget, structuralLayerDiff } from '../domain/
 import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
 import type { BranchableTable } from '../db/layer-write.js';
 import { closeNetworkDb, openNetworkDb } from '../db/network-db.js';
+import { recordLayerActivity } from '../domain/activity-service.js';
 
 /** Route params for a network id. */
 interface NetworkIdParams {
@@ -115,6 +116,13 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
           colors,
           createdBy: req.auth!.user.id,
         });
+        recordLayerActivity(ndb, {
+          networkId,
+          userId: req.auth!.user.id,
+          action: 'created',
+          layer,
+          layerId: req.layerEcho?.id ?? null,
+        });
         const layerWithCurrent = { ...layer, current: layer.id === sessionLayer.id };
         sendSuccess(reply, layerWithCurrent, { version: layer.version }, 201);
       },
@@ -163,6 +171,13 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
           expectedVersion,
           req.auth!.user.id,
         );
+        recordLayerActivity(ndb, {
+          networkId,
+          userId: req.auth!.user.id,
+          action: 'updated',
+          layer,
+          layerId: req.layerEcho?.id ?? null,
+        });
         const layerWithCurrent = { ...layer, current: layer.id === sessionLayer.id };
         sendSuccess(reply, layerWithCurrent, { version: layer.version, updated_at: layer.last_activity_at });
       },
@@ -221,6 +236,21 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         for (const id of result.deleted_link_ids) {
           deps.emit(req, networkId, 'link.deleted', { id });
+        }
+        if (parentRow) {
+          // Сохраняем снимок названия до того, как `deleteLayerWithEvents`
+          // физически удалил строку. Слой на момент записи — это текущий
+          // сессионный слой после возможного пере-указания; у нас он
+          // уже сброшен (`req.layerEcho = undefined` выше), поэтому
+          // используем `newLayerId` — именно туда переведены сессии
+          // поддерева.
+          recordLayerActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'deleted',
+            layer: { id: layerId, title: parentRow.title },
+            layerId: newLayerId,
+          });
         }
         sendSuccess(reply, { deleted: result.deleted, purged: result.purged, skipped: result.skipped });
       },

@@ -24,6 +24,18 @@ import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { recordAudit } from '../auth/audit.js';
 import { resolveSessionLayer } from '../domain/layer-service.js';
 import { emitDomainEvent, type DomainEventActor } from '../realtime/emit.js';
+import {
+  recordAttachmentActivity,
+  recordCommentActivity,
+  recordLayerActivity,
+  recordLinkActivity,
+  recordLinkTypeActivity,
+  recordOwnerActivity,
+  recordPropertyActivity,
+  recordThoughtActivity,
+  recordThoughtTypeActivity,
+  recordTypePropertyActivity,
+} from '../domain/activity-service.js';
 import type { ResolvedMcpLimits } from './limits.js';
 import { resolveMcpLimits, WriteRateLimiter } from './limits.js';
 import type { McpDeps } from './types.js';
@@ -179,6 +191,211 @@ export function emitAgentEvent<E extends RealtimeEventType>(
       layerId: layerIdOverride ?? resolveRuntimeLayer(rt, networkId).id,
     },
   );
+}
+
+/**
+ * Emit a real-time event AND append a matching row to `activity_log` (задача
+ * f2eca5a4, требование b0c7a57c). Captures (`edit.*`) и per-user события не
+ * пишутся — вызывающий код просто не дёргает эту обёртку для них. Запись в
+ * `activity_log` идёт в отдельной транзакции (сбой не отменяет бизнес-операцию).
+ */
+export function emitAgentActivityEvent<E extends RealtimeEventType>(
+  rt: McpRuntime,
+  networkId: string,
+  type: E,
+  data: RealtimeEventMap[E],
+  ndb: NetworkDb,
+  requestId?: string | number,
+  layerIdOverride?: string,
+): void {
+  emitAgentEvent(rt, networkId, type, data, requestId, layerIdOverride);
+  recordAgentActivity(rt, networkId, type, data, ndb, layerIdOverride);
+}
+
+/**
+ * Append an `activity_log` row for one MCP-initiated mutation. Dispatches on
+ * the event catalogue type to pick the right `recordXxxActivity` helper.
+ * Захваты (`edit.acquired` / `edit.released` / `edit.cleared`) и per-user
+ * события (`audience: 'user'`) не пишутся — это требование b0c7a57c.
+ */
+function recordAgentActivity<E extends RealtimeEventType>(
+  rt: McpRuntime,
+  networkId: string,
+  type: E,
+  data: RealtimeEventMap[E],
+  ndb: NetworkDb,
+  layerIdOverride?: string,
+): void {
+  const userId = rt.deps.auth.userId;
+  const layerId = layerIdOverride ?? resolveRuntimeLayer(rt, networkId).id;
+  // Cast на string — `E extends RealtimeEventType` не сужается в switch,
+  // а фактические значения — литералы из того же объединения.
+  const evt = type as unknown as string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const payload = data as any;
+  switch (evt) {
+    case 'thought.created':
+      recordThoughtActivity(ndb, {
+        networkId,
+        userId,
+        action: 'created',
+        thought: payload.thought,
+        layerId,
+      });
+      return;
+    case 'thought.updated':
+      // Для update событие несёт только { id, changes, version } — полный
+      // снимок пишется в журнал явно из MCP-обработчика сразу после
+      // возврата из updateThought. Диспетчер здесь no-op.
+      return;
+    case 'thought.deleted':
+      // После удаления строки уже нет; снимок получаем заранее через
+      // getThought() в самом MCP-обработчике (как и в REST-роуте).
+      return;
+    case 'thought.reordered':
+      // Реордеризация ссылок — это правки мысли-владельца, отдельной
+      // записи не требуется (требование b0c7a57c фиксирует лишь CRUD).
+      return;
+    case 'link.created':
+      recordLinkActivity(ndb, {
+        networkId,
+        userId,
+        action: 'created',
+        link: payload.link,
+        layerId,
+      });
+      return;
+    case 'link.updated':
+      return;
+    case 'link.deleted':
+      return;
+    case 'thought-type.created':
+      recordThoughtTypeActivity(ndb, {
+        networkId,
+        userId,
+        action: 'created',
+        type: payload.type,
+        layerId,
+      });
+      return;
+    case 'thought-type.updated':
+      return;
+    case 'thought-type.deleted':
+      return;
+    case 'link-type.created':
+      recordLinkTypeActivity(ndb, {
+        networkId,
+        userId,
+        action: 'created',
+        type: payload.type,
+        layerId,
+      });
+      return;
+    case 'link-type.updated':
+      return;
+    case 'link-type.deleted':
+      return;
+    case 'property-registry.created':
+      recordPropertyActivity(ndb, {
+        networkId,
+        userId,
+        action: 'created',
+        property: payload.property,
+        layerId,
+      });
+      return;
+    case 'property-registry.updated':
+      return;
+    case 'property-registry.deleted':
+      return;
+    case 'property-definition.created':
+    case 'property-definition.updated':
+    case 'property-definition.deleted':
+      // Привязка свойства к типу — это правка типа-владельца; в журнале
+      // фиксируем как обновление самого типа. Имя берём из определения,
+      // id владельца — из payload.definition.owner_id (если есть).
+      {
+        const def = payload.definition as
+          | { owner_id?: string; id: string; key?: string }
+          | undefined;
+        if (def?.owner_id !== undefined) {
+          recordTypePropertyActivity(ndb, {
+            networkId,
+            userId,
+            action: 'updated',
+            typeId: def.owner_id,
+            typeName: def.key ?? def.id,
+            layerId,
+          });
+        }
+      }
+      return;
+    case 'property-value.set':
+    case 'property-value.deleted': {
+      // В журнал идёт обновление самой сущности-владельца (мысли/связи).
+      const ev = payload as {
+        owner_type: 'thought' | 'link';
+        owner_id: string;
+      };
+      recordOwnerActivity(ndb, {
+        networkId,
+        userId,
+        entityType: ev.owner_type,
+        entity: { id: ev.owner_id },
+        layerId,
+      });
+      return;
+    }
+    case 'comment.created':
+      recordCommentActivity(ndb, {
+        networkId,
+        userId,
+        action: 'created',
+        comment: payload.comment,
+        layerId,
+      });
+      return;
+    case 'comment.updated':
+      return;
+    case 'comment.deleted':
+      return;
+    case 'attachment.created':
+      recordAttachmentActivity(ndb, {
+        networkId,
+        userId,
+        action: 'created',
+        attachment: payload.attachment,
+        layerId,
+      });
+      return;
+    case 'attachment.updated':
+      return;
+    case 'attachment.deleted':
+      return;
+    case 'layer.created':
+    case 'layer.updated':
+    case 'layer.deleted':
+    case 'layer.merged':
+    case 'layer.selected':
+      // На текущей итерации записываем в журнал явно из обработчиков
+      // слоёв (нужен полный снимок названия, который отсутствует в
+      // payload-форме этих событий). Эти ветки остаются no-op до того,
+      // как задача 6bcccd2b попросит свёртку/обрезку.
+      return;
+    case 'edit.acquired':
+    case 'edit.released':
+    case 'edit.cleared':
+    case 'thought-view.updated':
+    case 'user-preference.updated':
+    case 'saved-filter.created':
+    case 'saved-filter.updated':
+    case 'saved-filter.deleted':
+      // Захваты и per-user события НЕ пишутся в журнал (требование
+      // b0c7a57c, граница b0c7a57c).
+      return;
+    default:
+      return;
+  }
 }
 
 /**

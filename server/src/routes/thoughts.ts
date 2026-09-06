@@ -74,6 +74,10 @@ import {
   updateThought,
 } from '../domain/thought-service.js';
 import { copyThoughtsBatch } from '../domain/thought-copy-service.js';
+import {
+  recordLinkActivity,
+  recordThoughtActivity,
+} from '../domain/activity-service.js';
 
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
@@ -456,6 +460,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const thought = createThought(ndb, input, req.auth!.user.id);
         deps.emit(req, networkId, 'thought.created', { thought });
+        recordThoughtActivity(ndb, {
+          networkId,
+          userId: req.auth!.user.id,
+          action: 'created',
+          thought,
+          layerId: req.layerEcho?.id ?? null,
+        });
         if (input.create_link) {
           // Mirrors createLinkForNewThought's source/target calc (thought-service.ts):
           // parent: target sources a link to the new thought; child: the new
@@ -472,6 +483,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           )[0];
           if (link) {
             deps.emit(req, networkId, 'link.created', { link });
+            recordLinkActivity(ndb, {
+              networkId,
+              userId: req.auth!.user.id,
+              action: 'created',
+              link,
+              layerId: req.layerEcho?.id ?? null,
+            });
           }
         }
         sendCreated(reply, thought, {
@@ -498,6 +516,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           changes,
           version: thought.version,
         });
+        recordThoughtActivity(ndb, {
+          networkId,
+          userId: req.auth!.user.id,
+          action: 'updated',
+          thought,
+          layerId: req.layerEcho?.id ?? null,
+        });
         sendSuccess(reply, thought, {
           version: thought.version,
           updated_at: thought.updated_at,
@@ -515,9 +540,20 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as ThoughtIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Получаем снимок мысли до удаления — он уйдёт в activity_log.
+        const existing = getThought(ndb, id);
         // actorUserId нужен для object-lock enforcement (задача 2031df5e).
         deleteThought(ndb, id, expectedVersion, req.auth!.user.id);
         deps.emit(req, networkId, 'thought.deleted', { id });
+        if (existing) {
+          recordThoughtActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'deleted',
+            thought: existing,
+            layerId: req.layerEcho?.id ?? null,
+          });
+        }
         reply.code(204).send();
       },
     );
@@ -742,6 +778,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
 
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const userId = req.auth!.user.id;
+        const layerId = req.layerEcho?.id ?? null;
         const failures: ThoughtBatchFailure[] = [];
         let affected = 0;
         for (const id of ids) {
@@ -754,6 +791,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   changes: { type_id: setTypeId },
                   version: updated.version,
                 });
+                recordThoughtActivity(ndb, {
+                  networkId,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
                 break;
               }
               case 'clear_type': {
@@ -762,6 +806,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   id,
                   changes: { type_id: null },
                   version: updated.version,
+                });
+                recordThoughtActivity(ndb, {
+                  networkId,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
                 });
                 break;
               }
@@ -772,6 +823,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   changes: { active: true },
                   version: updated.version,
                 });
+                recordThoughtActivity(ndb, {
+                  networkId,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
                 break;
               }
               case 'set_inactive': {
@@ -781,17 +839,35 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   changes: { active: false },
                   version: updated.version,
                 });
+                recordThoughtActivity(ndb, {
+                  networkId,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
                 break;
               }
               case 'delete':
-              case 'purge':
+              case 'purge': {
                 // S13: `delete` is an alias of `purge` — both physically delete
                 // with the same blocking check (deleteThought refuses when the
                 // thought is referenced by a property). actorUserId — для
                 // object-lock enforcement (задача 2031df5e).
+                const existing = getThought(ndb, id);
                 deleteThought(ndb, id, undefined, userId);
                 deps.emit(req, networkId, 'thought.deleted', { id });
+                if (existing) {
+                  recordThoughtActivity(ndb, {
+                    networkId,
+                    userId,
+                    action: 'deleted',
+                    thought: existing,
+                    layerId,
+                  });
+                }
                 break;
+              }
               case 'trash': {
                 const updated = updateThought(
                   ndb,
@@ -805,6 +881,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   changes: { marked_for_deletion: true },
                   version: updated.version,
                 });
+                recordThoughtActivity(ndb, {
+                  networkId,
+                  userId,
+                  action: 'trashed',
+                  thought: updated,
+                  layerId,
+                });
                 break;
               }
               case 'link_to_focus': {
@@ -816,6 +899,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   userId,
                 );
                 deps.emit(req, networkId, 'link.created', { link });
+                recordLinkActivity(ndb, {
+                  networkId,
+                  userId,
+                  action: 'created',
+                  link,
+                  layerId,
+                });
                 break;
               }
               case 'unlink_from_focus': {
@@ -828,6 +918,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                 for (const link of found) {
                   deleteLink(ndb, link.id, undefined);
                   deps.emit(req, networkId, 'link.deleted', { id: link.id });
+                  recordLinkActivity(ndb, {
+                    networkId,
+                    userId,
+                    action: 'deleted',
+                    link,
+                    layerId,
+                  });
                 }
                 break;
               }
@@ -846,6 +943,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                     userId,
                   );
                   deps.emit(req, networkId, 'link.created', { link });
+                  recordLinkActivity(ndb, {
+                    networkId,
+                    userId,
+                    action: 'created',
+                    link,
+                    layerId,
+                  });
                 }
                 break;
               }
@@ -859,6 +963,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                     userId,
                   );
                   deps.emit(req, networkId, 'link.created', { link });
+                  recordLinkActivity(ndb, {
+                    networkId,
+                    userId,
+                    action: 'created',
+                    link,
+                    layerId,
+                  });
                 }
                 break;
               }
@@ -868,6 +979,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   if (keepers.has(link.source_id)) continue;
                   deleteLink(ndb, link.id, undefined);
                   deps.emit(req, networkId, 'link.deleted', { id: link.id });
+                  recordLinkActivity(ndb, {
+                    networkId,
+                    userId,
+                    action: 'deleted',
+                    link,
+                    layerId,
+                  });
                 }
                 for (const parentId of anchorParentIds!) {
                   if (parentId === id) continue;
@@ -878,6 +996,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                     userId,
                   );
                   deps.emit(req, networkId, 'link.created', { link });
+                  recordLinkActivity(ndb, {
+                    networkId,
+                    userId,
+                    action: 'created',
+                    link,
+                    layerId,
+                  });
                 }
                 break;
               }
@@ -886,6 +1011,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   for (const link of findLinksBetween(ndb, parentId, id)) {
                     deleteLink(ndb, link.id, undefined);
                     deps.emit(req, networkId, 'link.deleted', { id: link.id });
+                    recordLinkActivity(ndb, {
+                      networkId,
+                      userId,
+                      action: 'deleted',
+                      link,
+                      layerId,
+                    });
                   }
                 }
                 break;
@@ -895,6 +1027,13 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
                   for (const link of findLinksBetween(ndb, id, childId)) {
                     deleteLink(ndb, link.id, undefined);
                     deps.emit(req, networkId, 'link.deleted', { id: link.id });
+                    recordLinkActivity(ndb, {
+                      networkId,
+                      userId,
+                      action: 'deleted',
+                      link,
+                      layerId,
+                    });
                   }
                 }
                 break;
@@ -927,15 +1066,31 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseThoughtCopyBody(requestBody(req), req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const result = copyThoughtsBatch(ndb, input, req.auth!.user.id);
+        const layerId = req.layerEcho?.id ?? null;
+        const userId = req.auth!.user.id;
         // Real-time: emit a `thought.created` for every new thought and a
         // `link.created` for every new link so other connected clients
         // refresh without polling. The actor has no echo (04-realtime.md §5);
         // the local refresh below reconciles the canvas / structures view.
         for (const thought of result.created_thoughts) {
           deps.emit(req, networkId, 'thought.created', { thought });
+          recordThoughtActivity(ndb, {
+            networkId,
+            userId,
+            action: 'created',
+            thought,
+            layerId,
+          });
         }
         for (const link of result.created_links) {
           deps.emit(req, networkId, 'link.created', { link });
+          recordLinkActivity(ndb, {
+            networkId,
+            userId,
+            action: 'created',
+            link,
+            layerId,
+          });
         }
         sendSuccess(reply, result);
       },

@@ -154,6 +154,10 @@ import {
   releaseLock,
   type LockRow,
 } from '../domain/lock-service.js';
+import {
+  ACTIVITY_LIMIT_MAX,
+  listActivity,
+} from '../domain/activity-service.js';
 import { shrinkSubgraphToBudget } from './subgraph-budget.js';
 import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
 import { queryThoughts } from '../domain/query-service.js';
@@ -188,6 +192,7 @@ import {
 import {
   assertNetworkAccess,
   auditAgentCall,
+  emitAgentActivityEvent,
   emitAgentEvent,
   mcpLayerClientId,
   openMemberNetwork,
@@ -1885,7 +1890,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           },
           rt.deps.auth.userId,
         );
-        emitAgentEvent(rt, args.network_id, 'thought.created', { thought }, extra.requestId);
+        emitAgentActivityEvent(rt, args.network_id, 'thought.created', { thought }, ndb, extra.requestId);
         if (args.link !== undefined) {
           // "parent" — the TARGET is the link source (the new thought hangs
           // under it); "child" — the new thought is the source.
@@ -1895,7 +1900,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
               : [thought.id, args.link.target_thought_id];
           const link = findLinksBetween(ndb, sourceId, targetId, linkTypeId ?? null)[0];
           if (link !== undefined) {
-            emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId);
+            emitAgentActivityEvent(rt, args.network_id, 'link.created', { link }, ndb, extra.requestId);
           }
         }
         auditAgentCall(rt, 'etn.thoughts.create', args.network_id, 'thought', thought.id, {
@@ -3209,6 +3214,61 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         return findDuplicates(ndb, args.title, args.synonyms ?? []).map((hit) =>
           withSanitizedIcon(hit),
         );
+      }),
+  );
+
+  // =========================================================================
+  // Activity log (§4.1) — паритет с REST GET /activity
+  // (задача f2eca5a4, операция 70dfe81d).
+  // =========================================================================
+
+  const ActivityListSchema = z.object({
+    network_id: NetworkId,
+    from_ms: z.number().int().nonnegative().optional(),
+    to_ms: z.number().int().nonnegative().optional(),
+    user_id: z.string().min(1).optional(),
+    entity_type: z.string().min(1).optional(),
+    entity_id: z.string().min(1).optional(),
+    limit: z.number().int().positive().max(ACTIVITY_LIMIT_MAX).optional(),
+    offset: z.number().int().nonnegative().optional(),
+  });
+  mcp.registerTool(
+    'etn.activity.list',
+    {
+      title: 'Лента журнала активности',
+      description:
+        'Read the activity log of a network (задача f2eca5a4, операция 70dfe81d). ' +
+        'Each row records one mutating operation by a network member: creation, update, ' +
+        'delete, trash or restore of a thought, link, type, property, comment, attachment ' +
+        'or layer. `entity_title` is a short snapshot of the entity at the moment of the ' +
+        'event (≤ 256 chars). Captures (`edit.*`) are NOT recorded. Filters combine with ' +
+        'AND; sorted by `occurred_at_ms DESC`; paginated with `limit` (default 50, max 200) ' +
+        'and `offset`. Returns the same `{ data: ActivityRow[], meta: { total, offset, limit } }' +
+        ' envelope as `GET /activity`.',
+      inputSchema: ActivityListSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.activity.list'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const result = listActivity(ndb, {
+          networkId: args.network_id,
+          from_ms: args.from_ms,
+          to_ms: args.to_ms,
+          user_id: args.user_id,
+          entity_type: args.entity_type,
+          entity_id: args.entity_id,
+          limit: args.limit,
+          offset: args.offset,
+        });
+        return {
+          data: result.data,
+          meta: {
+            total: result.total,
+            offset: result.offset,
+            limit: result.limit,
+          },
+        };
       }),
   );
 }

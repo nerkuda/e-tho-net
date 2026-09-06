@@ -38,6 +38,7 @@ import {
   listLinksByThought,
   updateLink,
 } from '../domain/link-service.js';
+import { recordLinkActivity } from '../domain/activity-service.js';
 
 /** Route params for a network + link id. */
 interface LinkIdParams {
@@ -127,6 +128,13 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const link = createLink(ndb, input, req.auth!.user.id);
         deps.emit(req, networkId, 'link.created', { link });
+        recordLinkActivity(ndb, {
+          networkId,
+          userId: req.auth!.user.id,
+          action: 'created',
+          link,
+          layerId: req.layerEcho?.id ?? null,
+        });
         sendCreated(reply, link, {
           version: link.version,
           updated_at: link.updated_at,
@@ -164,11 +172,31 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
           // delete + create, not an update of a row they may no longer resolve.
           deps.emit(req, networkId, 'link.deleted', { id });
           deps.emit(req, networkId, 'link.created', { link });
+          // В журнале фиксируем новое состояние как «обновление»: старая
+          // запись уже помечена на удаление в текущем слое.
+          recordLinkActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'updated',
+            link,
+            layerId: req.layerEcho?.id ?? null,
+          });
         } else {
           deps.emit(req, networkId, 'link.updated', {
             id,
             changes,
             version: link.version,
+          });
+          recordLinkActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: changes.marked_for_deletion === true
+              ? 'trashed'
+              : changes.marked_for_deletion === false
+                ? 'restored'
+                : 'updated',
+            link,
+            layerId: req.layerEcho?.id ?? null,
           });
         }
         sendSuccess(reply, link, {
@@ -186,8 +214,19 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as LinkIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Сохраняем снимок связи до удаления — он уйдёт в activity_log.
+        const existing = getLink(ndb, id);
         deleteLink(ndb, id, expectedVersion);
         deps.emit(req, networkId, 'link.deleted', { id });
+        if (existing) {
+          recordLinkActivity(ndb, {
+            networkId,
+            userId: req.auth!.user.id,
+            action: 'deleted',
+            link: existing,
+            layerId: req.layerEcho?.id ?? null,
+          });
+        }
         reply.code(204).send();
       },
     );
