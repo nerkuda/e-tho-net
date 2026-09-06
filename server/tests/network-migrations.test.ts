@@ -53,6 +53,7 @@ const EXPECTED_FILES = [
   '030_type_property_description.sql',
   '031_layer_colors.sql',
   '032_properties_registry.sql',
+  '033_authorship_columns.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -579,7 +580,10 @@ describe(
         ).run();
 
         const res = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(res.applied, ['032_properties_registry.sql']);
+        assert.deepEqual(res.applied, [
+          '032_properties_registry.sql',
+          '033_authorship_columns.sql',
+        ]);
 
         // 18 definitions became 15 properties: three groups merged
         // («Плановый срок» d5+d9, «слой» d8+d18, «путь»/«Путь» d12+d15),

@@ -275,6 +275,7 @@ describe(
           '030_type_property_description.sql',
           '031_layer_colors.sql',
           '032_properties_registry.sql',
+          '033_authorship_columns.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else

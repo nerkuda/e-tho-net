@@ -23,7 +23,7 @@
  */
 
 import path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 import type Database from 'better-sqlite3';
@@ -32,7 +32,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { BASE_LAYER_ID } from '@etn/shared';
 
 import type { Logger } from '../logger.js';
-import { networkDbPath, networkDir, networkMigrationsDir } from '../paths.js';
+import { networkDbPath, networkDir, networkMigrationsDir, systemDbPath } from '../paths.js';
 import { runMigrations } from './migrator.js';
 import { setupLayerContext } from './layer-chain.js';
 
@@ -149,6 +149,17 @@ export class NetworkDb {
 }
 
 /**
+ * Optional context for migration-time SQL helpers. Passed by production
+ * callers ({@link openNetworkDb}) so the authorship backfill in migration 033
+ * can read the first-user id; tests may omit it (the helper returns the empty
+ * string and the migration falls back to a sentinel).
+ */
+export interface MigrationHelpersContext {
+  /** Id of the root administrator (`users.is_first_user = 1`). Empty when unknown. */
+  firstUserId?: string;
+}
+
+/**
  * Register SQL helpers used by network migrations.
  *
  * `type_name_key` computes the normalized type-name key (trim + lowercase,
@@ -164,11 +175,20 @@ export class NetworkDb {
  * trip `UNIQUE (id, layer_id)`; `DEFAULT (expr)` does not require determinism
  * (only generated columns and index expressions do), so nothing is lost by
  * leaving the flag off.
+ * `etn_first_user_id` exposes the id of the server's root administrator
+ * (`is_first_user = 1`) for migrations that need to backfill authorship — see
+ * task 38ba3498 / migration 033. Returns the empty string when the helper
+ * context is not provided (tests / in-memory DBs without `_system.db`); the
+ * migration interprets that as "fall back to a sentinel".
  * Both must exist on the connection before `runMigrations` executes. Exported
  * so tests that apply migrations to their own connections can register the
  * helpers the same way production code does.
  */
-export function registerMigrationHelpers(db: Database.Database): void {
+export function registerMigrationHelpers(
+  db: Database.Database,
+  ctx: MigrationHelpersContext = {},
+): void {
+  const firstUserId = ctx.firstUserId ?? '';
   db.function('type_name_key', (value: unknown) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   );
@@ -176,6 +196,31 @@ export function registerMigrationHelpers(db: Database.Database): void {
   db.function('unicode_lower', (value: unknown) =>
     typeof value === 'string' ? value.toLowerCase() : value,
   );
+  db.function('etn_first_user_id', () => firstUserId);
+}
+
+/**
+ * Read the id of the server's root administrator (`users.is_first_user = 1`)
+ * from `_system.db` for use by the authorship backfill in migration 033.
+ *
+ * Opens `_system.db` read-only for a single query and closes the connection;
+ * network migration 033 is the only consumer. Returns the empty string when
+ * the system DB is missing (no `etn init` yet) or has no first user — both
+ * mean "no backfill author is known" and the migration falls back to a
+ * sentinel.
+ */
+function readFirstUserId(dataDir: string): string {
+  const path = systemDbPath(dataDir);
+  if (!existsSync(path)) return '';
+  const sysDb = new DatabaseConstructor(path, { readonly: true });
+  try {
+    const row = sysDb
+      .prepare('SELECT id FROM users WHERE is_first_user = 1 LIMIT 1')
+      .get() as { id: string } | undefined;
+    return row?.id ?? '';
+  } finally {
+    sysDb.close();
+  }
 }
 
 /**
@@ -221,7 +266,7 @@ export function openNetworkDb(
   const db = new DatabaseConstructor(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  registerMigrationHelpers(db);
+  registerMigrationHelpers(db, { firstUserId: readFirstUserId(dataDir) });
 
   runMigrations(db, networkMigrationsDir(), log);
 
