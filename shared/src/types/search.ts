@@ -26,6 +26,19 @@ export interface SearchRequest {
   /** Include thoughts/links marked for deletion (S13, 03-server-api.md §12);
    *  default `false` — marked rows are hidden. */
   trashed?: boolean;
+  /**
+   * Автор мысли — id пользователя, создавшего строку. Паритет с REST
+   * `created_by` и MCP `etn.thoughts.{query,search}.author_id` (задача
+   * 59119797 «Фильтры Автор/Редактор»). Применяется к мыслям (by_names,
+   * by_texts) и к хроно-комментариям (by_chrono) с owner=thought; для
+   * by_links пропускается (автор относится к мысли, не к связи).
+   */
+  author_id?: string;
+  /**
+   * Последний редактор — id пользователя (`updated_by`). Те же правила, что
+   * у `author_id`.
+   */
+  editor_id?: string;
   limit?: number;
   offset?: number;
 }

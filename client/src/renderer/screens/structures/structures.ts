@@ -203,6 +203,11 @@ function parseFilterState(raw: string): FilterState {
       hasChronology: parseTriState(parsed.hasChronology),
       active: parseTriState(parsed.active),
       trashed: parsed.trashed === true,
+      // Задача 59119797 «Фильтры Автор/Редактор»: строки-id
+      // участников сети. Невалидное значение (не строка) трактуется как
+      // «не применять».
+      authorId: typeof parsed.authorId === 'string' ? parsed.authorId : '',
+      editorId: typeof parsed.editorId === 'string' ? parsed.editorId : '',
       sort: parsed.sort === 'alpha' || parsed.sort === 'created' || parsed.sort === 'viewed' ? parsed.sort : 'created',
       order: parsed.order === 'asc' || parsed.order === 'desc' ? parsed.order : 'asc',
       savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,

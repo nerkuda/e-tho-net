@@ -157,6 +157,21 @@ export function parseChronicleFilter(
   const dateTo = parseDateField(body, 'date_to', requestId);
   if (dateTo !== undefined) filter.date_to = dateTo;
 
+  // Фильтры авторства (задача 59119797 «Фильтры Автор/Редактор»): id
+  // пользователя, применяется к колонкам `comments.created_by` /
+  // `comments.updated_by` (миграция 033). Пустая строка и отсутствие
+  // равнозначны — фильтр не применяется.
+  for (const field of ['created_by', 'updated_by'] as const) {
+    const raw = body[field];
+    if (raw === undefined) continue;
+    if (typeof raw !== 'string') {
+      throw new EtnError('VALIDATION_ERROR', `${field} должен быть строкой (id пользователя).`, {
+        field,
+      }, requestId);
+    }
+    if (raw.trim() !== '') filter[field] = raw;
+  }
+
   return filter;
 }
 
@@ -387,6 +402,18 @@ function buildRowsWhere(
     const [cond, more] = validFromUpperCond(request.date_to);
     conds.push(cond);
     args.push(...more);
+  }
+
+  // Фильтры авторства (задача 59119797): колонки `comments.created_by` /
+  // `comments.updated_by`. `parseChronicleFilter` уже отбросил пустые
+  // строки, поэтому достаточно проверить на `!== undefined`.
+  if (request.created_by !== undefined && request.created_by !== '') {
+    conds.push('c.created_by = ?');
+    args.push(request.created_by);
+  }
+  if (request.updated_by !== undefined && request.updated_by !== '') {
+    conds.push('c.updated_by = ?');
+    args.push(request.updated_by);
   }
 
   return { cond: conds.join(' AND '), args };

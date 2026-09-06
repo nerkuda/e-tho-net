@@ -25,6 +25,8 @@ describe('toDefinition / fromDefinition', () => {
       linkScope: 'sources',
       dateFrom: '2024-01-01',
       dateTo: '2024-12-31',
+      authorId: 'u1',
+      editorId: 'u2',
       order: 'desc',
     };
     const definition = toDefinition(state);
@@ -36,6 +38,8 @@ describe('toDefinition / fromDefinition', () => {
     assert.equal(definition.link_scope, 'sources');
     assert.equal(definition.date_from, '2024-01-01');
     assert.equal(definition.date_to, '2024-12-31');
+    assert.equal(definition.created_by, 'u1');
+    assert.equal(definition.updated_by, 'u2');
     assert.equal(definition.order, 'desc');
     assert.deepEqual(fromDefinition(definition), state);
   });
@@ -46,6 +50,8 @@ describe('toDefinition / fromDefinition', () => {
     assert.equal(definition.thought_ids, undefined);
     assert.equal(definition.include_subtree, undefined);
     assert.equal(definition.link_scope, 'both');
+    assert.equal(definition.created_by, undefined);
+    assert.equal(definition.updated_by, undefined);
     assert.equal(definition.order, 'asc');
     const back = fromDefinition(definition);
     assert.deepEqual(back, DEFAULT_FILTER);
@@ -58,6 +64,13 @@ describe('toDefinition / fromDefinition', () => {
       order: 'desc',
       linkScope: 'targets',
     });
+  });
+
+  it('reads created_by/updated_by back into authorId/editorId', () => {
+    assert.deepEqual(
+      fromDefinition({ created_by: 'u1', updated_by: 'u2' }),
+      { ...DEFAULT_FILTER, authorId: 'u1', editorId: 'u2' },
+    );
   });
 });
 

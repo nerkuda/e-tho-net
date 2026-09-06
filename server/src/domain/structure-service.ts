@@ -228,6 +228,20 @@ export function parseStructureFilter(
     }
   }
 
+  // Фильтры авторства (задача 59119797 «Фильтры Автор/Редактор»): id
+  // пользователя. Пустая строка и отсутствие равнозначны — фильтр не
+  // применяется; значение валидируется по формату не-UUID (просто строка).
+  for (const field of ['created_by', 'updated_by'] as const) {
+    const raw = body[field];
+    if (raw === undefined) continue;
+    if (typeof raw !== 'string') {
+      throw new EtnError('VALIDATION_ERROR', `${field} должен быть строкой (id пользователя).`, {
+        field,
+      }, requestId);
+    }
+    if (raw.trim() !== '') filter[field] = raw;
+  }
+
   const properties = body['properties'];
   if (properties !== undefined) {
     if (!Array.isArray(properties)) {
@@ -330,7 +344,9 @@ export function isFilterEmpty(filter: StructureFilter): boolean {
     filter.has_comment === undefined &&
     filter.has_attachments === undefined &&
     filter.has_chronology === undefined &&
-    filter.active === undefined
+    filter.active === undefined &&
+    !filter.created_by &&
+    !filter.updated_by
   );
 }
 
@@ -515,6 +531,19 @@ function buildFilterQuerySql(
   // marked thoughts; `true` includes them on equal footing with ordinary ones.
   if (req.trashed !== true) {
     where.push('t.marked_for_deletion = 0');
+  }
+
+  // Фильтры авторства (задача 59119797): прямое сравнение по колонкам
+  // `created_by`/`updated_by` (миграция 033). `parseStructureFilter`
+  // игнорирует пустые строки, поэтому здесь условие добавляется только
+  // когда значение задано.
+  if (req.created_by !== undefined && req.created_by !== '') {
+    where.push('t.created_by = ?');
+    params.push(req.created_by);
+  }
+  if (req.updated_by !== undefined && req.updated_by !== '') {
+    where.push('t.updated_by = ?');
+    params.push(req.updated_by);
   }
 
   if (req.parent_ids !== undefined && req.parent_ids.length > 0) {

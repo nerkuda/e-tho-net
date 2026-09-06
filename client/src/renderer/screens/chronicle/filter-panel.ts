@@ -30,6 +30,7 @@ import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
 import { orderedTypeRows } from '../../lib/type-tree.js';
+import { buildUserSelectWidget } from '../../lib/users.js';
 import { store } from '../../state.js';
 import { DEFAULT_FILTER, fromDefinition, toDefinition } from './state.js';
 import type { ChronicleFilterState } from './state.js';
@@ -458,6 +459,26 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
   linkScopeButton.type = 'button';
   row3.append(typesButton, linkTypesButton, linkScopeButton);
 
+  // Row 3.5: автор/редактор хроно-комментария (задача 59119797
+  // «Фильтры Автор/Редактор»). Раскладка выровнена с row1: два селекта
+  // пользователей с подписями.
+  const row35 = div('chron-filter-row');
+  const authorSelect = buildUserSelectWidget({
+    label: 'Автор:',
+    currentId: filter.authorId,
+    onChange: (id) => {
+      filter = { ...filter, authorId: id };
+    },
+  });
+  const editorSelect = buildUserSelectWidget({
+    label: 'Редактор:',
+    currentId: filter.editorId,
+    onChange: (id) => {
+      filter = { ...filter, editorId: id };
+    },
+  });
+  row35.append(authorSelect, editorSelect);
+
   // Row 4: order + actions -----------------------------------------------------
   const row4 = div('chron-filter-row');
   orderSelect = el('select', 'select-input');
@@ -492,7 +513,7 @@ export function mountChronicleFilterPanel(host: HTMLElement, panelActions: Panel
     removeButton,
   );
 
-  panel.append(row1, row2, row3, row4);
+  panel.append(row1, row2, row3, row35, row4);
   host.append(panel);
   repaintControls();
   void reloadSavedFilters();

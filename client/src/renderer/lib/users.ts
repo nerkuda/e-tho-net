@@ -20,6 +20,7 @@
 
 import type { User } from '@etn/shared';
 
+import { div, el } from './dom.js';
 import { etn } from './etn.js';
 import { store } from '../state.js';
 
@@ -128,4 +129,72 @@ export function __resetForTests(): void {
   state.byId.clear();
   state.pending = null;
   state.listeners.clear();
+}
+
+// ---------------------------------------------------------------------------
+// User picker widget (задача 59119797 «Фильтры Автор/Редактор»)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a `<select>` widget that lets the user pick «любой» or a specific
+ * network participant id. Calls `ensureLoaded()` to lazily populate the
+ * cache — re-renders itself when it fills. The label «любой» is selected
+ * when `currentId === ''` (the «filter not applied» case).
+ *
+ * @param opts.label - field label rendered before the select.
+ * @param opts.currentId - current value (empty string = «любой»).
+ * @param opts.onChange - invoked with the new id (`''` = «любой»).
+ */
+export function buildUserSelectWidget(opts: {
+  label: string;
+  currentId: string;
+  onChange: (id: string) => void;
+}): HTMLElement {
+  const row = div('user-select-row');
+  const label = el('span', 'user-select-label', opts.label);
+  const select = el('select', 'select-input user-select') as HTMLSelectElement;
+
+  const render = (): void => {
+    select.replaceChildren();
+    const placeholder = el('option', undefined, 'любой');
+    placeholder.value = '';
+    select.append(placeholder);
+    // Сортируем по display_name/username, чтобы список был стабилен.
+    const users = [...state.byId.values()].sort((a, b) =>
+      (a.display_name ?? a.username).localeCompare(b.display_name ?? b.username, 'ru'),
+    );
+    for (const u of users) {
+      const opt = el('option', undefined, `${u.display_name ?? u.username} (${u.username})`);
+      opt.value = u.id;
+      select.append(opt);
+    }
+    select.value = opts.currentId;
+  };
+
+  // Если нужного id ещё нет в кэше (например, восстановлен из сохранённого
+  // отбора до прихода roster), добавляем «голую» запись с id, чтобы
+  // select мог показать выбранное значение.
+  if (opts.currentId !== '' && !state.byId.has(opts.currentId)) {
+    state.byId.set(opts.currentId, {
+      id: opts.currentId,
+      username: opts.currentId.slice(0, 8),
+      display_name: opts.currentId.slice(0, 8),
+      is_admin: false,
+      is_first_user: false,
+      disabled: false,
+      created_at: '',
+      updated_at: '',
+    });
+  }
+
+  render();
+  select.addEventListener('change', () => {
+    opts.onChange(select.value);
+  });
+  // Реактивно перерисовываем при появлении админ-roster'а.
+  subscribe(render);
+  ensureLoaded();
+
+  row.append(label, select);
+  return row;
 }

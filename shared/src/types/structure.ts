@@ -78,6 +78,18 @@ export interface StructureFilter {
    */
   trashed?: boolean;
   show_inactive?: boolean;
+  /**
+   * Автор мысли — id пользователя, создавшего строку (`created_by`); absent
+   * — фильтр не применяется. Паритет с REST `created_by` и MCP
+   * `etn.thoughts.query.author_id` / `etn.thoughts.search.author_id` (задача
+   * 59119797 «Фильтры Автор/Редактор»).
+   */
+  created_by?: string;
+  /**
+   * Последний редактор мысли — id пользователя (`updated_by`); absent —
+   * фильтр не применяется.
+   */
+  updated_by?: string;
 }
 
 /** Filter + paging of `POST /thoughts/query` (the list envelope of §6.10). */

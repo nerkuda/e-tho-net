@@ -31,6 +31,17 @@ export interface ChronicleFilter {
   date_from?: string | null;
   /** Period end; empty = unbounded. */
   date_to?: string | null;
+  /**
+   * Автор хроно-комментария — id пользователя (`created_by`); absent —
+   * фильтр не применяется. Паритет с REST `created_by` в
+   * `POST /chronicle/query` (задача 59119797).
+   */
+  created_by?: string;
+  /**
+   * Последний редактор хроно-комментария — id пользователя (`updated_by`);
+   * absent — фильтр не применяется.
+   */
+  updated_by?: string;
 }
 
 /** Filter + paging of `POST /chronicle/query`. */

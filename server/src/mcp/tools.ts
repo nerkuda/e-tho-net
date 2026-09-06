@@ -491,6 +491,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     scope: z.enum(SEARCH_SCOPES).optional(),
     in_subtree_of: ThoughtId.optional(),
     type_id: ThoughtId.nullable().optional(),
+    // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
+    // создавшего (`author_id`) или последним изменившего (`editor_id`)
+    // мысль. Применяется к by_names, by_texts и by_chrono (для thoughts);
+    // для by_links пропускается. Пустая строка трактуется как отсутствие.
+    author_id: z.string().optional(),
+    editor_id: z.string().optional(),
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional(),
   });
@@ -502,9 +508,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Full-text search across thought names, comment texts, link texts and chronology ' +
         '(docs/05-mcp-server.md §4.1, task O11). `scope` selects result groups ' +
         '(`names`/`texts`/`links`/`chronology`/`all`). `in_subtree_of` restricts to the subtree ' +
-        'of a thought; `type_id` filters by thought type. Pagination: `limit` (1–200, default 50) ' +
-        'and `offset` (≥ 0, default 0) — together they walk the result tail; `meta.total_in_group` ' +
-        'reports the unfiltered totals per group so the agent can detect the end of the list.',
+        'of a thought; `type_id` filters by thought type. `author_id`/`editor_id` (task 59119797 ' +
+        '«Фильтры Автор/Редактор») — id пользователя, создавшего/последним ' +
+        'изменившего мысль: применяется к by_names, by_texts и by_chrono. ' +
+        'Pagination: `limit` (1–200, default 50) and `offset` (≥ 0, default 0) — together ' +
+        'they walk the result tail; `meta.total_in_group` reports the unfiltered totals per ' +
+        'group so the agent can detect the end of the list.',
       inputSchema: SearchSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.search'],
     },
@@ -517,6 +526,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           in: args.in_subtree_of === undefined ? undefined : 'subtree',
           from_thought_id: args.in_subtree_of,
           type_id: args.type_id === undefined || args.type_id === null ? undefined : [args.type_id],
+          author_id: args.author_id,
+          editor_id: args.editor_id,
           limit: args.limit,
           offset: args.offset,
         });
@@ -560,6 +571,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     created_before: z.string().min(1).optional(),
     updated_after: z.string().min(1).optional(),
     updated_before: z.string().min(1).optional(),
+    // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
+    // создавшего мысль (`author_id`) или последним изменившего (`editor_id`).
+    author_id: z.string().optional(),
+    editor_id: z.string().optional(),
     sort: z.enum(['title', 'created_at', 'updated_at']).optional(),
     order: z.enum(['asc', 'desc']).optional(),
     limit: z.number().int().min(1).max(200).optional(),
@@ -581,7 +596,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'the property `value_type` selects the column — number → value_number, bool → value_bool, ' +
         'text/url/date/thought_ref on their matching columns; an unknown `property_id` matches nothing), ' +
         '`created_*`/`updated_*` by ' +
-        'ISO-8601 date ranges. The response carries a `thought_types` reference table (name + ' +
+        'ISO-8601 date ranges, `author_id`/`editor_id` (task 59119797 ' +
+        '«Фильтры Автор/Редактор») — id пользователя, создавшего/последним ' +
+        'изменившего мысль. The response carries a `thought_types` reference table (name + ' +
         'AI-facing description) for every type used in `hits`. Use instead of search when ' +
         'there is no text to query.',
       inputSchema: QuerySchema,

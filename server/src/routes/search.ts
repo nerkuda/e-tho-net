@@ -259,6 +259,12 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
           link_type_id: queryStrings(query.link_type_id),
           show_inactive: queryBoolean(query.show_inactive, 'show_inactive', req.id),
           trashed: queryBoolean(query.trashed, 'trashed', req.id),
+          // Фильтры авторства (задача 59119797): query-параметры
+          // `author_id`/`editor_id`, семантически эквивалентные MCP-тулу
+          // `etn.thoughts.search`. Пустая строка и отсутствие — фильтр не
+          // применяется (domain-слой сам приводит к `null`).
+          author_id: queryStrings(query.author_id)[0],
+          editor_id: queryStrings(query.editor_id)[0],
           limit,
           offset,
         };

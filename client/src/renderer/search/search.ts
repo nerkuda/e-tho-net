@@ -38,6 +38,7 @@ import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { isNotFoundError, parseThoughtIdQuery } from '../lib/pure.js';
 import { orderedTypeRows } from '../lib/type-tree.js';
+import { buildUserSelectWidget } from '../lib/users.js';
 import {
   UI_STATE_KEY,
   type SearchNameHit,
@@ -61,6 +62,12 @@ export interface SearchOptions {
   showInactive: boolean;
   /** S13: include thoughts/links marked for deletion in search results. */
   trashed: boolean;
+  /**
+   * Задача 59119797 «Фильтры Автор/Редактор»: id пользователя-автора
+   * (`author_id`/`editor_id`). Пустая строка — фильтр не применяется.
+   */
+  authorId: string;
+  editorId: string;
 }
 
 /** Minimum trimmed query length for a server search (08-ui-spec.md §3.1). */
@@ -81,6 +88,8 @@ const DEFAULT_OPTIONS: SearchOptions = {
   linkTypeIds: [],
   showInactive: false,
   trashed: false,
+  authorId: '',
+  editorId: '',
 };
 
 /** Search panel chrome (input + gear + results panel). */
@@ -419,6 +428,10 @@ async function run(): Promise<void> {
           link_type_id: options.linkTypeIds.length > 0 ? options.linkTypeIds : undefined,
           show_inactive: options.showInactive,
           trashed: options.trashed,
+          // Задача 59119797 «Фильтры Автор/Редактор»: пустая строка —
+          // «не применять» (REST/MCP принимают оба варианта).
+          author_id: options.authorId.trim() !== '' ? options.authorId : undefined,
+          editor_id: options.editorId.trim() !== '' ? options.editorId : undefined,
         }),
       ),
     );
@@ -866,6 +879,28 @@ function buildOptionsRow(row: HTMLElement): void {
   });
   trashedLabel.append(trashedCheck, span('показывать помеченные на удаление'));
 
+  // Задача 59119797 «Фильтры Автор/Редактор»: два селекта пользователей
+  // сети. Пустая строка в состоянии — «не применять» (REST/MCP это и так
+  // понимают).
+  const authorSelect = buildUserSelectWidget({
+    label: 'Автор',
+    currentId: options.authorId,
+    onChange: (id) => {
+      options = { ...options, authorId: id };
+      persistState();
+      refreshSearchIfVisible();
+    },
+  });
+  const editorSelect = buildUserSelectWidget({
+    label: 'Редактор',
+    currentId: options.editorId,
+    onChange: (id) => {
+      options = { ...options, editorId: id };
+      persistState();
+      refreshSearchIfVisible();
+    },
+  });
+
   row.append(
     subtreeLabel,
     subrootButton,
@@ -874,6 +909,8 @@ function buildOptionsRow(row: HTMLElement): void {
     mkGroupCheck('хронологию', 'onlyChrono'),
     typeSelect,
     linkTypeSelect,
+    authorSelect,
+    editorSelect,
     inactiveLabel,
     trashedLabel,
   );

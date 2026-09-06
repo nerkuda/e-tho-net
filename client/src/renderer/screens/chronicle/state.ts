@@ -19,6 +19,13 @@ export interface ChronicleFilterState {
   linkScope: 'sources' | 'targets' | 'both';
   dateFrom: string;
   dateTo: string;
+  /**
+   * Задача 59119797 «Фильтры Автор/Редактор»: id пользователя, создавшего
+   * хроно-комментарий. Пустая строка — фильтр не применяется.
+   */
+  authorId: string;
+  /** Последний редактор хроно-комментария. Пустая строка — не применять. */
+  editorId: string;
   order: 'asc' | 'desc';
 }
 
@@ -32,6 +39,8 @@ export const DEFAULT_FILTER: ChronicleFilterState = {
   linkScope: 'both',
   dateFrom: '',
   dateTo: '',
+  authorId: '',
+  editorId: '',
   order: 'asc',
 };
 
@@ -46,6 +55,10 @@ export function toDefinition(state: ChronicleFilterState): ChronicleFilterDefini
     link_scope: state.linkScope,
     ...(state.dateFrom !== '' ? { date_from: state.dateFrom } : {}),
     ...(state.dateTo !== '' ? { date_to: state.dateTo } : {}),
+    // Фильтры авторства — задача 59119797. Пустая строка пропускается, и
+    // серверная сторона сама приводит её к «не применять».
+    ...(state.authorId !== '' ? { created_by: state.authorId } : {}),
+    ...(state.editorId !== '' ? { updated_by: state.editorId } : {}),
     order: state.order,
   };
 }
@@ -61,6 +74,8 @@ export function fromDefinition(definition: Partial<ChronicleFilterDefinition>): 
     linkScope: definition.link_scope ?? 'both',
     dateFrom: definition.date_from ?? '',
     dateTo: definition.date_to ?? '',
+    authorId: definition.created_by ?? '',
+    editorId: definition.updated_by ?? '',
     order: definition.order ?? 'asc',
   };
 }

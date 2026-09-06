@@ -36,6 +36,7 @@ import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { orderedTypeRows, resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../../lib/type-tree.js';
+import { buildUserSelectWidget } from '../../lib/users.js';
 import { store } from '../../state.js';
 
 /** One property condition row (values kept as strings; typed on the wire). */
@@ -77,6 +78,13 @@ export interface FilterState {
   active: TriState;
   /** S13: показывать помеченные на удаление (по умолчанию выключено). */
   trashed: boolean;
+  /**
+   * Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
+   * создавшего мысль. Пустая строка — фильтр не применяется.
+   */
+  authorId: string;
+  /** Последний редактор мысли. Пустая строка — фильтр не применяется. */
+  editorId: string;
   sort: StructureSort;
   order: SortOrder;
   savedFilterId: string | null;
@@ -163,6 +171,8 @@ function defaultState(): FilterState {
     hasChronology: null,
     active: null,
     trashed: false,
+    authorId: '',
+    editorId: '',
     sort: 'created',
     order: 'asc',
     savedFilterId: null,
@@ -301,6 +311,8 @@ export function buildExtraFilter(): Pick<
   | 'has_chronology'
   | 'active'
   | 'trashed'
+  | 'created_by'
+  | 'updated_by'
 > {
   const out: ReturnType<typeof buildExtraFilter> = {};
   if (state.parentIds.length > 0) out.parent_ids = state.parentIds;
@@ -313,6 +325,10 @@ export function buildExtraFilter(): Pick<
   if (state.active !== null && store.state.showInactive) out.active = state.active;
   // S13: a marked-for-deletion filter is an independent checkbox (default off).
   if (state.trashed) out.trashed = true;
+  // Задача 59119797 «Фильтры Автор/Редактор»: пустая строка трактуется
+  // как «не применять» — серверная сторона сама проверяет `!== ''`.
+  if (state.authorId !== '') out.created_by = state.authorId;
+  if (state.editorId !== '') out.updated_by = state.editorId;
   return out;
 }
 
@@ -723,6 +739,38 @@ function renderPanel(): void {
   renderLinkTypeField();
 
   // --- property conditions (collapsible, §15.3) ------------------------------
+  // --- authorship (задача 59119797) ------------------------------------------
+  // Автор/Редактор — мульти-селект пользователей сети (отдельный
+  // collapsible-блок; условия AND-комбинируются как и остальные).
+  const authorship = collapsibleBlock(
+    'Автор / Редактор',
+    () => extraCollapsed,
+    (v) => {
+      extraCollapsed = v;
+    },
+    () => state.authorId !== '' || state.editorId !== '',
+  );
+  const authorSelect = buildUserSelectWidget({
+    label: 'Автор',
+    currentId: state.authorId,
+    onChange: (id) => {
+      state.authorId = id;
+      touch();
+      authorship.refresh();
+    },
+  });
+  const editorSelect = buildUserSelectWidget({
+    label: 'Редактор',
+    currentId: state.editorId,
+    onChange: (id) => {
+      state.editorId = id;
+      touch();
+      authorship.refresh();
+    },
+  });
+  authorship.body.append(authorSelect, editorSelect);
+  scroll.append(authorship.box);
+
   const props = collapsibleBlock(
     'Свойства',
     () => propertiesCollapsed,
@@ -1591,6 +1639,10 @@ function applySavedFilter(filter: SavedFilter): void {
     hasChronology: def.has_chronology ?? null,
     active: def.active ?? null,
     trashed: def.trashed ?? false,
+    // Задача 59119797: фильтры авторства читаются прямо из сохранённого
+    // определения. Отсутствующие поля — «не применять».
+    authorId: def.created_by ?? '',
+    editorId: def.updated_by ?? '',
     sort: def.sort,
     order: def.order,
     savedFilterId: filter.id,

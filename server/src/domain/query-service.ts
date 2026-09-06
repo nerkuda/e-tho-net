@@ -457,6 +457,15 @@ export function queryThoughts(
     dateRangeClause('created_at', request.created_after, request.created_before),
     dateRangeClause('updated_at', request.updated_after, request.updated_before),
     subtreeClause('t.id', walk.depths),
+    // Задача 59119797 «Фильтры Автор/Редактор»: прямое сравнение по
+    // колонкам `thoughts.created_by`/`thoughts.updated_by` (миграция 033).
+    // Пустая строка и отсутствие равнозначны — фильтр не применяется.
+    typeof request.author_id === 'string' && request.author_id.trim() !== ''
+      ? { sql: 't.created_by = ?', params: [request.author_id] }
+      : null,
+    typeof request.editor_id === 'string' && request.editor_id.trim() !== ''
+      ? { sql: 't.updated_by = ?', params: [request.editor_id] }
+      : null,
   ];
   if (request.properties !== undefined) {
     for (const c of propertyClauses(ndb, request.properties)) clauses.push(c);

@@ -1645,6 +1645,15 @@ export class RestClient {
     if (request.link_type_id !== undefined) q['link_type_id'] = request.link_type_id;
     if (request.show_inactive !== undefined) q['show_inactive'] = request.show_inactive;
     if (request.trashed !== undefined) q['trashed'] = request.trashed;
+    // Задача 59119797 «Фильтры Автор/Редактор»: query-параметры
+    // `author_id`/`editor_id`. Пустая строка трактуется как «не применять»
+    // (сервер сам проверяет `!== ''`).
+    if (request.author_id !== undefined && request.author_id !== '') {
+      q['author_id'] = request.author_id;
+    }
+    if (request.editor_id !== undefined && request.editor_id !== '') {
+      q['editor_id'] = request.editor_id;
+    }
     if (request.limit !== undefined) q['limit'] = request.limit;
     if (request.offset !== undefined) q['offset'] = request.offset;
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/search`, { query: q });

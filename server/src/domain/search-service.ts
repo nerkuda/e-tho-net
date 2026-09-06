@@ -362,6 +362,15 @@ interface SearchFilters {
   offset: number;
   /** Highlight terms derived from the query (for JS snippet highlighting). */
   terms: string[];
+  /**
+   * Автор — id пользователя, создавшего мысль/комментарий (задача 59119797
+   * «Фильтры Автор/Редактор»). `null` — фильтр не применяется. Применяется
+   * к by_names, by_texts и by_chrono (для thoughts); для by_links пропускается
+   * (автор относится к мысли, не к связи).
+   */
+  authorId: string | null;
+  /** Последний редактор — id пользователя (`updated_by`); `null` — не применять. */
+  editorId: string | null;
 }
 
 /** A WHERE condition fragment plus its bind parameters, in order. */
@@ -428,6 +437,8 @@ function searchNames(
     { sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
     inListClause('t.type_id', f.typeIds),
     subtreeClause('f.thought_id', f.subtreeIds),
+    f.authorId !== null ? { sql: 't.created_by = ?', params: [f.authorId] } : null,
+    f.editorId !== null ? { sql: 't.updated_by = ?', params: [f.editorId] } : null,
   ]);
   // S6 (13-layers.md §9): the names index carries one FTS row per PHYSICAL
   // thought row (rowid = thoughts.pk), so an overridden thought has rows for
@@ -522,6 +533,8 @@ function searchTexts(
     { sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
     inListClause('t.type_id', f.typeIds),
     subtreeClause('f.thought_id', f.subtreeIds),
+    f.authorId !== null ? { sql: 't.created_by = ?', params: [f.authorId] } : null,
+    f.editorId !== null ? { sql: 't.updated_by = ?', params: [f.editorId] } : null,
   ]);
   // One row per (thought, comment). The text FTS is keyed by comment rowid —
   // a thought with N matching comments shows up N times. The result list must
@@ -695,6 +708,11 @@ function buildChronoHalf(
     { sql: `${ftsTable} MATCH ?`, params: [match] },
     { sql: 'c.owner_type = ?', params: [side] },
     { sql: "c.kind = 'chronological'", params: [] },
+    // Фильтры авторства (задача 59119797) применяются к самому
+    // комментарию — колонки `comments.created_by`/`comments.updated_by`
+    // одинаковы для обеих сторон (thought и link).
+    f.authorId !== null ? { sql: 'c.created_by = ?', params: [f.authorId] } : null,
+    f.editorId !== null ? { sql: 'c.updated_by = ?', params: [f.editorId] } : null,
   ];
   // Each side joins only the table that owns the comment, so the referenced
   // FTS payload column always exists (fts_thought_texts.thought_id for thoughts,
@@ -817,6 +835,16 @@ export function search(
     limit: paging.limit,
     offset: paging.offset,
     terms: highlightTerms,
+    // Задача 59119797 «Фильтры Автор/Редактор»: пустая строка и отсутствие
+    // значения равнозначны — фильтр не применяется.
+    authorId:
+      typeof request.author_id === 'string' && request.author_id.trim() !== ''
+        ? request.author_id
+        : null,
+    editorId:
+      typeof request.editor_id === 'string' && request.editor_id.trim() !== ''
+        ? request.editor_id
+        : null,
   };
 
   const empty: SearchResponse = {

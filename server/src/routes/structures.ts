@@ -124,6 +124,11 @@ const QUERY_BODY_KEYS = new Set([
   'active',
   'trashed',
   'properties',
+  // Фильтры авторства (задача 59119797 «Фильтры Автор/Редактор»):
+  // `created_by`/`updated_by` — id пользователя. Паритет с MCP
+  // `author_id`/`editor_id` (имена расходятся по слоям).
+  'created_by',
+  'updated_by',
   'sort',
   'order',
   'ids_only',
