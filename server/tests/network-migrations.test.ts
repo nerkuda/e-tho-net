@@ -54,6 +54,7 @@ const EXPECTED_FILES = [
   '031_layer_colors.sql',
   '032_properties_registry.sql',
   '033_authorship_columns.sql',
+  '034_object_locks.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -80,6 +81,7 @@ const EXPECTED_TABLES = [
   'user_pinned_thoughts',
   'embeddings',
   'thought_read_metrics',
+  'object_locks',
 ];
 
 /** True when the `better-sqlite3` native binding loads. */
@@ -583,6 +585,7 @@ describe(
         assert.deepEqual(res.applied, [
           '032_properties_registry.sql',
           '033_authorship_columns.sql',
+          '034_object_locks.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged

@@ -180,7 +180,7 @@ describe(
         assert.ok(dependantCount(ndb, 'link', linkIn.id) > 0);
         assert.ok(dependantCount(ndb, 'link', linkOut.id) > 0);
 
-        deleteThought(ndb, a, undefined);
+        deleteThought(ndb, a, undefined, USER);
 
         assert.equal(dependantCount(ndb, 'thought', a), 0);
         assert.equal(dependantCount(ndb, 'link', linkIn.id), 0);
@@ -231,7 +231,7 @@ describe(
         assert.ok(ownFile.file_path !== null && existsSync(ownFile.file_path));
         assert.ok(linkFile.file_path !== null && existsSync(linkFile.file_path));
 
-        deleteThought(ndb, a, undefined);
+        deleteThought(ndb, a, undefined, USER);
 
         assert.ok(ownFile.file_path !== null && !existsSync(ownFile.file_path));
         assert.ok(linkFile.file_path !== null && !existsSync(linkFile.file_path));
@@ -261,7 +261,7 @@ describe(
           );
         }
 
-        deleteThought(ndb, hub, undefined);
+        deleteThought(ndb, hub, undefined, USER);
 
         assert.equal(
           (ndb.prepare('SELECT COUNT(*) AS n FROM attachments WHERE owner_type = ?').get('link') as

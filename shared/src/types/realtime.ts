@@ -110,6 +110,10 @@ export const REALTIME_EVENT_TYPES = [
   'pinned-thoughts.updated',
   // change layers (§4.9, task S8)
   'layer.merged',
+  // object locks (task 2031df5e — захват объекта при редактировании)
+  'edit.acquired',
+  'edit.released',
+  'edit.cleared',
 ] as const;
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];
 
@@ -326,6 +330,50 @@ export interface LayerMergedData extends LayerMergeReport {
 }
 
 /**
+ * `edit.acquired` (task 2031df5e — мягкий серверный захват): участник
+ * начал редактирование объекта и теперь держит блокировку записи.
+ * Получатели обновляют индикацию захвата (значок 🔒 на объекте, блокировка
+ * полей редактора). Holder может быть null в WebSocket-less сценариях
+ * (REST/MCP без Client-Id).
+ */
+export interface EditAcquiredData {
+  entity_type: string;
+  entity_id: string;
+  /** Уникальный id захвата (для идемпотентности клиента). */
+  lock_id: string;
+  user_id: string;
+  /** `Client-Id` запроса, поставившего захват, или null если REST/MCP без WS. */
+  client_id: string | null;
+  acquired_at_ms: number;
+}
+
+/**
+ * `edit.released` — нормальное снятие захвата владельцем (закрытие редактора,
+ * сохранение, отмена). Не вызывается при сбросах (см. `edit.cleared`).
+ */
+export interface EditReleasedData {
+  entity_type: string;
+  entity_id: string;
+  lock_id: string;
+  user_id: string;
+  client_id: string | null;
+}
+
+/**
+ * `edit.cleared` — сброс захвата сервером: старт сервера, разрыв WebSocket
+ * подключения или ручная команда. Каждый сброшенный захват — отдельное событие
+ * с тем же `user_id` и соответствующим `reason`.
+ */
+export interface EditClearedData {
+  entity_type: string;
+  entity_id: string;
+  lock_id: string;
+  user_id: string;
+  client_id: string | null;
+  reason: 'server_start' | 'ws_disconnect' | 'manual';
+}
+
+/**
  * Maps each {@link RealtimeEventType} to its `data` payload type.
  * Used by {@link RealtimeEvent} and {@link AnyRealtimeEvent}.
  */
@@ -374,6 +422,9 @@ export interface RealtimeEventMap {
   'saved-filter.deleted': SavedFilterDeletedData;
   'pinned-thoughts.updated': PinnedThoughtsUpdatedData;
   'layer.merged': LayerMergedData;
+  'edit.acquired': EditAcquiredData;
+  'edit.released': EditReleasedData;
+  'edit.cleared': EditClearedData;
 }
 
 /** Strongly-typed event envelope for a specific event name. */
@@ -461,6 +512,9 @@ export const REALTIME_EVENT_AUDIENCE = {
   'saved-filter.deleted': 'user',
   'pinned-thoughts.updated': 'user',
   'layer.merged': 'network',
+  'edit.acquired': 'network',
+  'edit.released': 'network',
+  'edit.cleared': 'network',
 } as const satisfies Record<RealtimeEventType, RealtimeAudience>;
 
 // ---------------------------------------------------------------------------

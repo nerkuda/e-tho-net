@@ -276,12 +276,20 @@ describe(
           '031_layer_colors.sql',
           '032_properties_registry.sql',
           '033_authorship_columns.sql',
+          '034_object_locks.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else
-        // kept; 032 turns the seeded definition into one registry property).
+        // kept; 032 turns the seeded definition into one registry property;
+        // 034 creates object_locks, пустую при апгрейде чистой базы).
         const after = tableCounts(db);
-        assert.deepEqual(after, { ...before, layers: 1, session_layers: 0, properties: 1 });
+        assert.deepEqual(after, {
+          ...before,
+          layers: 1,
+          session_layers: 0,
+          properties: 1,
+          object_locks: 0,
+        });
 
         // 2. The base layer row.
         const base = db
@@ -595,7 +603,7 @@ describe(
            VALUES ('${a.id}', 1, '${now}', '${now}')`,
         );
 
-        deleteThought(ndb, a.id, undefined);
+        deleteThought(ndb, a.id, undefined, USER);
 
         const remaining = (sql: string): number =>
           (ndb.prepare(sql).get() as { c: number }).c;
@@ -654,7 +662,7 @@ describe(
         const thoughtCheck = checkThoughtDeletion(ndb, a.id);
         assert.equal(thoughtCheck.blocked, true);
         assert.deepEqual(thoughtCheck.blocking.layers, [{ id: layer, title: 'Слой с правками' }]);
-        assert.throws(() => deleteThought(ndb, a.id, undefined), /VALIDATION_ERROR|held/);
+        assert.throws(() => deleteThought(ndb, a.id, undefined, USER), /VALIDATION_ERROR|held/);
 
         // Turn the thought's shadow row into a tombstone — the thought is
         // released, but a live shadow LINK row with it as endpoint still holds.
@@ -744,7 +752,7 @@ describe(
         assert.equal(ftsText.text, 'дельта');
 
         // Deleting the thought removes its FTS rows.
-        deleteThought(ndb, t.id, undefined);
+        deleteThought(ndb, t.id, undefined, USER);
         assert.equal(
           (ndb.prepare('SELECT COUNT(*) AS c FROM fts_thought_names').get() as { c: number }).c,
           0,

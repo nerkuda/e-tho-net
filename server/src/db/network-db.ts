@@ -270,6 +270,13 @@ export function openNetworkDb(
 
   runMigrations(db, networkMigrationsDir(), log);
 
+  // Object locks are session-only state — захваты не переживают рестарт
+  // сервера (задача 2031df5e, требование 9ac48831 «сброс захватов — старт»).
+  // Миграция 034 уже создала таблицу; таблица пуста при первом открытии
+  // свежей БД, но после крэша в файле могут остаться строки — удаляем их
+  // один раз при первом открытии сети в текущем процессе.
+  db.prepare('DELETE FROM object_locks WHERE network_id = ?').run(networkId);
+
   let ndb: NetworkDb;
   try {
     ndb = new NetworkDb(db, networkId, dbPath, layerId);

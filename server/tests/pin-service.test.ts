@@ -136,7 +136,7 @@ describe(
       const a = seedThought(ndb);
       const b = seedThought(ndb);
       setPinnedThoughts(ndb, USER_A, [a, b]);
-      deleteThought(ndb, a, undefined);
+      deleteThought(ndb, a, undefined, USER);
       assert.deepEqual(listPinnedThoughts(ndb, USER_A), [
         { thought_id: b, position: 1 },
       ]);

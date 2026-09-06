@@ -23,9 +23,11 @@ export function httpStatusForCode(code: EtnErrorCode): number {
     case 'FORBIDDEN':
       return 403;
     case 'NOT_FOUND':
+    case 'LOCK_NOT_FOUND':
       return 404;
     case 'VERSION_CONFLICT':
     case 'DUPLICATE':
+    case 'LOCKED':
       return 409;
     case 'VALIDATION_ERROR':
     case 'PROTECTED_ENTITY':

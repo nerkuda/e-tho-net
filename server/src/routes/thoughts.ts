@@ -515,7 +515,8 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as ThoughtIdParams;
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        deleteThought(ndb, id, expectedVersion);
+        // actorUserId нужен для object-lock enforcement (задача 2031df5e).
+        deleteThought(ndb, id, expectedVersion, req.auth!.user.id);
         deps.emit(req, networkId, 'thought.deleted', { id });
         reply.code(204).send();
       },
@@ -786,8 +787,9 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
               case 'purge':
                 // S13: `delete` is an alias of `purge` — both physically delete
                 // with the same blocking check (deleteThought refuses when the
-                // thought is referenced by a property).
-                deleteThought(ndb, id, undefined);
+                // thought is referenced by a property). actorUserId — для
+                // object-lock enforcement (задача 2031df5e).
+                deleteThought(ndb, id, undefined, userId);
                 deps.emit(req, networkId, 'thought.deleted', { id });
                 break;
               case 'trash': {

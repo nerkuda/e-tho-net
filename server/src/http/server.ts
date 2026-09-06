@@ -47,6 +47,7 @@ import { createPropertiesRoutes } from '../routes/properties.js';
 import { createPropertiesRegistryRoutes } from '../routes/properties-registry.js';
 import { createCommentsRoutes } from '../routes/comments.js';
 import { createAttachmentsRoutes } from '../routes/attachments.js';
+import { createLocksRoutes } from '../routes/locks.js';
 import { createSearchRoutes } from '../routes/search.js';
 import { createTrashRoutes } from '../routes/trash.js';
 import { createLayersRoutes } from '../routes/layers.js';
@@ -316,6 +317,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Comment and attachment routes (task D5, 03-server-api.md §10–11).
   await app.register(createCommentsRoutes(routeDeps), { prefix: '/api/v1' });
   await app.register(createAttachmentsRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Object-lock routes (task 2031df5e, 03-server-api.md §13c):
+  // acquire/release/clear/list поверх таблицы object_locks.
+  await app.register(createLocksRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Search, export and job routes (task D6, 03-server-api.md §12, §14).
   await app.register(createSearchRoutes(routeDeps), { prefix: '/api/v1' });

@@ -130,7 +130,7 @@ describe(
 
         // Delete the parent in layer A.
         ndb.useLayer(LAYER_A);
-        deleteThought(ndb, parent.id, undefined);
+        deleteThought(ndb, parent.id, undefined, USER);
 
         // In A: the thought, its link, comment and attachment are all hidden;
         // the child survives but loses the parent from its parents zone.
@@ -194,7 +194,7 @@ describe(
         ndb.useLayer(BASE_LAYER_ID);
         const other = createThought(ndb, { title: 'Другая' }, USER);
         ndb.useLayer(LAYER_B);
-        deleteThought(ndb, other.id, undefined);
+        deleteThought(ndb, other.id, undefined, USER);
         assert.equal(getThought(ndb, other.id), null);
         ndb.useLayer(LAYER_A);
         assert.notEqual(getThought(ndb, other.id), null);
@@ -253,7 +253,7 @@ describe(
           )
           .run(BASE_LAYER_ID, x.id, z.id, now, now);
         ndb.useLayer(LAYER_A);
-        deleteThought(ndb, z.id, undefined);
+        deleteThought(ndb, z.id, undefined, USER);
         assert.equal(getLink(ndb, 'l-xz'), null);
 
         // In the base both links are alive (no endpoint is hidden there).
@@ -298,7 +298,7 @@ describe(
         assert.equal(blocked.blocking.layers.length, 1);
         assert.equal(blocked.blocking.layers[0]?.id, LAYER_A);
         assert.throws(
-          () => deleteThought(ndb, m.id, undefined),
+          () => deleteThought(ndb, m.id, undefined, USER),
           /used in properties or held by a layer/,
         );
 
@@ -311,7 +311,7 @@ describe(
         // any layer: base rows AND layer tombstones/shadows are gone.
         ndb.useLayer(BASE_LAYER_ID);
         assert.equal(checkThoughtDeletion(ndb, m.id).blocked, false);
-        deleteThought(ndb, m.id, undefined);
+        deleteThought(ndb, m.id, undefined, USER);
         assert.equal(
           (ndb.prepare('SELECT COUNT(*) AS c FROM thoughts WHERE id = ?').get(m.id) as { c: number }).c,
           0,
@@ -399,13 +399,13 @@ describe(
         // is already invisible in this layer (NOT_FOUND), and the row state
         // has not changed.
         ndb.useLayer(LAYER_B);
-        deleteThought(ndb, t.id, undefined);
+        deleteThought(ndb, t.id, undefined, USER);
         const tomb = thoughtRow(ndb, t.id, LAYER_B);
         assert.deepEqual(
           { deleted: tomb?.deleted, base_version: tomb?.base_version, version: tomb?.version },
           { deleted: 1, base_version: 2, version: 3 },
         );
-        assert.throws(() => deleteThought(ndb, t.id, undefined), /not found/);
+        assert.throws(() => deleteThought(ndb, t.id, undefined, USER), /not found/);
         assert.deepEqual(thoughtRow(ndb, t.id, LAYER_B), tomb);
       } finally {
         ndb.close();

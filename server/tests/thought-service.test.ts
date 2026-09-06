@@ -411,7 +411,7 @@ describe(
         try {
           const homeId = seedThought(ndb, { title: 'HOME', is_root: 1, is_protected: 1 });
           assert.throws(
-            () => deleteThought(ndb, homeId, 1),
+            () => deleteThought(ndb, homeId, 1, USER),
             (e: unknown) => e instanceof EtnError && e.code === 'PROTECTED_ENTITY',
           );
         } finally {
@@ -431,7 +431,7 @@ describe(
               "INSERT INTO comments (id,owner_type,owner_id,kind,body_md,body_html,valid_from,version,created_at,updated_at,created_by,updated_by) VALUES ('c1','thought',?,'chronological','x','x','2024',1,'2024','2024','u','u')",
             )
             .run(a.id);
-          deleteThought(ndb, a.id, 1);
+          deleteThought(ndb, a.id, 1, USER);
           assert.equal(getThought(ndb, a.id), null);
           assert.equal(
             (ndb.prepare('SELECT COUNT(*) AS c FROM thought_synonyms').get() as { c: number }).c,

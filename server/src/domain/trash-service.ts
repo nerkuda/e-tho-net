@@ -114,7 +114,9 @@ export function purgeTrash(ndb: NetworkDb): TrashPurgeOutcome {
       skipped += 1;
       continue;
     }
-    deleteThought(ndb, id, undefined);
+    // `null` actor bypasses object-lock checks (task 2031df5e): the trash
+    // purge is a system-level cleanup, not a user-driven write.
+    deleteThought(ndb, id, undefined, null);
     deletedThoughtIds.push(id);
     purged += 1;
   }

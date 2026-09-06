@@ -192,7 +192,7 @@ describe(
         // tombstones the comments too.
         ndb.useLayer(LAYER_A);
         deleteLink(ndb, link.id, undefined);
-        deleteThought(ndb, x.id, undefined);
+        deleteThought(ndb, x.id, undefined, USER);
 
         assert.equal(search(ndb, { q: 'гамма', scope: 'names' }).by_names.length, 0);
         assert.equal(search(ndb, { q: 'зелёный', scope: 'texts' }).by_texts.length, 0);

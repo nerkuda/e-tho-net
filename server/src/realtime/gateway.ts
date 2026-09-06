@@ -44,6 +44,8 @@ import type { FileLog } from '../log/file-log.js';
 import type { Logger } from '../logger.js';
 import { openNetworkDb } from '../db/network-db.js';
 import { resolveSessionLayer, resolveSessionSwitchSeq } from '../domain/layer-service.js';
+import { clearLocksForClient } from '../domain/lock-service.js';
+import { emitDomainEvent } from './emit.js';
 import { isEventVisibleInLayer } from './layer-visibility.js';
 import type { PubSub } from './pubsub.js';
 
@@ -603,6 +605,66 @@ export class RealtimeGateway {
       user_id: conn.userId,
       client_id: conn.clientId,
     });
+    // Object-lock reset on WS disconnect (task 2031df5e, requirement 9ac48831):
+    // все захваты, поставленные этим подключением, сбрасываются, по каждому
+    // сброшенному захвату рассылается `edit.cleared` с reason='ws_disconnect'.
+    // Подключения без client_id (REST/MCP через тот же путь не ходят — гетвей
+    // только для WS) пропускаются: сбрасывать нечего.
+    if (conn.clientId !== null) {
+      this.clearClientLocks(conn);
+    }
+  }
+
+  /**
+   * Drop every lock owned by the just-closed connection and broadcast
+   * `edit.cleared` for each. Opens the network DB on demand; failure is
+   * logged but never re-thrown — a closed socket must not leave orphaned
+   * listeners around.
+   */
+  private clearClientLocks(conn: Connection): void {
+    let ndb;
+    try {
+      ndb = openNetworkDb(this.dataDir, conn.networkId, this.logger);
+    } catch (err) {
+      this.logger?.warn(
+        { err, networkId: conn.networkId, clientId: conn.clientId },
+        'realtime: cannot open network db for lock reset on disconnect',
+      );
+      return;
+    }
+    let removed;
+    try {
+      removed = clearLocksForClient(ndb, conn.clientId as string);
+    } catch (err) {
+      this.logger?.warn(
+        { err, networkId: conn.networkId, clientId: conn.clientId },
+        'realtime: lock reset on disconnect failed',
+      );
+      return;
+    }
+    for (const lock of removed) {
+      try {
+        emitDomainEvent(
+          { systemDb: this.systemDb, pubsub: this.pubsub },
+          conn.networkId,
+          'edit.cleared',
+          {
+            entity_type: lock.entity_type,
+            entity_id: lock.entity_id,
+            lock_id: lock.id,
+            user_id: lock.user_id,
+            client_id: lock.client_id,
+            reason: 'ws_disconnect',
+          },
+          { user_id: conn.userId, client_id: conn.clientId },
+        );
+      } catch (err) {
+        this.logger?.warn(
+          { err, networkId: conn.networkId, lockId: lock.id },
+          'realtime: failed to emit edit.cleared after lock reset',
+        );
+      }
+    }
   }
 
   /** Close every connection (server shutdown). */

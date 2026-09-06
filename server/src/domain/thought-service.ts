@@ -56,6 +56,7 @@ import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-serv
 
 import { getAttachment } from './attachment-service.js';
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
+import { enforceLock } from './lock-service.js';
 import {
   FONT_BOLD_BIT,
   FONT_ITALIC_BIT,
@@ -605,6 +606,10 @@ export function updateThought(
   actorUserId: string,
 ): Thought {
   return ndb.transaction(() => {
+    // Object-lock enforcement (task 2031df5e, requirement f8d55c19): чужой
+    // захват мысли запрещает её изменение — 409 LOCKED. Чтение не блокируется,
+    // здесь же блокируется именно запись (UPDATE ниже).
+    enforceLock(ndb, 'thought', id, actorUserId);
     const current = getThoughtOrThrow(ndb, id);
     if (expectedVersion !== undefined && current.version !== expectedVersion) {
       throw new EtnError('VERSION_CONFLICT', 'thought version mismatch', {
@@ -844,8 +849,14 @@ export function deleteThought(
   ndb: NetworkDb,
   id: string,
   expectedVersion: number | undefined,
+  actorUserId: string | null,
 ): void {
   ndb.transaction(() => {
+    // Object-lock enforcement (task 2031df5e): чужой захват мысли запрещает
+    // её удаление — 409 LOCKED. Аналогично updateThought. `actorUserId = null`
+    // — для системных операций (trash purge, layer merge cascade): блокировка
+    // чужого держателя не должна мешать системной очистке.
+    enforceLock(ndb, 'thought', id, actorUserId);
     const current = getThoughtOrThrow(ndb, id);
     if (expectedVersion !== undefined && current.version !== expectedVersion) {
       throw new EtnError('VERSION_CONFLICT', 'thought version mismatch', {

@@ -67,7 +67,7 @@ describe(
         assert.deepEqual(check.blocking.layers, []);
 
         assert.throws(
-          () => deleteThought(ndb, a.id, undefined),
+          () => deleteThought(ndb, a.id, undefined, USER),
           (err: unknown) => err instanceof EtnError && err.code === 'VALIDATION_ERROR',
         );
         // The thought survives the refused delete.

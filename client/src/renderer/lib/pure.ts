@@ -748,6 +748,11 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'saved-filter.deleted': 'удалён отбор',
   'pinned-thoughts.updated': 'обновлены закреплённые',
   'layer.merged': 'слит слой',
+  // Object-lock indicators (task 2031df5e). Title is not used; clients show
+  // holder's name in the card overlay, not in the status bar.
+  'edit.acquired': 'захвачен объект',
+  'edit.released': 'снят захват',
+  'edit.cleared': 'сброшен захват',
 };
 
 /**

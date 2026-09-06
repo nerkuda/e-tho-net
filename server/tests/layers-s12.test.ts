@@ -97,7 +97,7 @@ describe(
         ndb.useLayer(layer.id);
         // The layer renames X (a shadow) and deletes Y (a tombstone).
         updateThought(ndb, x.id, { title: 'Икс-слой' }, undefined, USER);
-        deleteThought(ndb, y.id, undefined);
+        deleteThought(ndb, y.id, undefined, USER);
         ndb.useLayer(BASE_LAYER_ID);
 
         const layerView = (): void => ndb.useLayer(layer.id);
@@ -179,7 +179,7 @@ describe(
         const c = createThought(ndb, { title: 'В' }, USER);
         createComment(ndb, 'thought', c.id, { kind: 'permanent', title: null, body_md: 'в слое' }, USER);
         createLink(ndb, { source_id: a.id, target_id: c.id }, USER);
-        deleteThought(ndb, b.id, undefined);
+        deleteThought(ndb, b.id, undefined, USER);
         assertIntegrity(ndb);
 
         // Merge into the base.

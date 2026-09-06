@@ -29,6 +29,13 @@ export const ETN_ERROR_CODES = [
   'INTERNAL',
   'RATE_LIMITED',
   'PROTECTED_ENTITY',
+  // Object locks (task 2031df5e — мягкий серверный захват при редактировании):
+  // `LOCKED` — объект захвачен другим участником (HTTP 409); `LOCK_NOT_FOUND` —
+  // попытка снять/проверить несуществующий захват (HTTP 404). Осмысленные коды
+  // здесь, а не в `VALIDATION_ERROR`/`NOT_FOUND`, потому что клиент по ним
+  // различает «правь позже» от «правки не было».
+  'LOCKED',
+  'LOCK_NOT_FOUND',
 ] as const;
 export type EtnErrorCode = (typeof ETN_ERROR_CODES)[number];
 

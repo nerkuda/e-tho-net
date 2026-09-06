@@ -1974,7 +1974,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
-        deleteThought(ndb, args.thought_id, args.expected_version);
+        // actorUserId — для object-lock enforcement (задача 2031df5e).
+        deleteThought(ndb, args.thought_id, args.expected_version, rt.deps.auth.userId);
         emitAgentEvent(
           rt,
           args.network_id,
