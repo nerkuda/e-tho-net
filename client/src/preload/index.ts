@@ -119,6 +119,11 @@ function buildApi(): EtnApi {
       list: (networkId) => invoke('trash.list', networkId),
       purge: (networkId) => invoke('trash.purge', networkId),
     },
+    activity: {
+      list: (networkId, filters) => invoke('activity.list', networkId, filters),
+      rollup: (networkId, untilMs) => invoke('activity.rollup', networkId, untilMs),
+      truncate: (networkId, untilMs) => invoke('activity.truncate', networkId, untilMs),
+    },
     types: {
       listThoughtTypes: (networkId) => invoke('types.listThoughtTypes', networkId),
       getThoughtTypeCounts: (networkId) => invoke('types.getThoughtTypeCounts', networkId),

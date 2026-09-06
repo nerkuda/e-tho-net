@@ -101,6 +101,7 @@ function rowToTabDto(row: import('../db/local-db.js').TabRow): import('./contrac
     view_mode: row.view_mode,
     structures_state: row.structures_state,
     chronicle_state: row.chronicle_state,
+    activity_state: row.activity_state,
     layer_id: row.layer_id,
     last_active_at: row.last_active_at,
   };
@@ -291,9 +292,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         partial: {
           slot_idx?: number;
           focus_id?: string | null;
-          view_mode?: 'map' | 'structures' | 'chronicle' | null;
+          view_mode?: 'map' | 'structures' | 'chronicle' | 'activity' | null;
           structures_state?: string | null;
           chronicle_state?: string | null;
+          activity_state?: string | null;
         },
       ) => {
         const profile = deps.getProfile();
@@ -595,6 +597,29 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'trash.purge',
     bind((networkId: string) => requireRest(deps).purgeTrash(networkId)),
+  );
+
+  // --- activity log (задачи f2eca5a4, 6bcccd2b; docs/03-server-api.md §13d) -
+  handlers.set(
+    'activity.list',
+    bind(
+      (
+        networkId: string,
+        filters?: Parameters<RestClient['listActivity']>[1],
+      ) => requireRest(deps).listActivity(networkId, filters),
+    ),
+  );
+  handlers.set(
+    'activity.rollup',
+    bind((networkId: string, untilMs: number) =>
+      requireRest(deps).rollupActivity(networkId, untilMs, { clientRequestId: randomUUID() }),
+    ),
+  );
+  handlers.set(
+    'activity.truncate',
+    bind((networkId: string, untilMs: number) =>
+      requireRest(deps).truncateActivity(networkId, untilMs, { clientRequestId: randomUUID() }),
+    ),
   );
 
   // --- layers (S11, 13-layers.md §10.3; 03-server-api.md §5a) --------------

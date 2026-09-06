@@ -26,6 +26,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   EtnError,
+  type ActivityRow,
   type ApiList,
   type ApiSuccess,
   type EtnErrorBody,
@@ -2327,6 +2328,76 @@ export class RestClient {
   /** `DELETE /system/logs` — remove every server journal file (current truncated). */
   public async deleteAllServerLogs(): Promise<void> {
     await this.request('DELETE', '/system/logs');
+  }
+
+  // ---------------------------------------------------------------------------
+  // §13d Activity log (задачи f2eca5a4, 6bcccd2b)
+  //
+  // Клиентский мост к `GET /activity`, `POST /activity/rollup`,
+  // `POST /activity/truncate` (03-server-api.md §13d). Серверная часть и MCP
+  // `etn.activity.list`/`etn.activity.rollup`/`etn.activity.truncate` уже
+  // готовы; клиент потребляет REST и не дублирует логику. Рендеринг ленты —
+  // `client/src/renderer/screens/activity/`.
+  // ---------------------------------------------------------------------------
+
+  /** `GET /networks/{nid}/activity` — лента с фильтрами и пагинацией. */
+  public async listActivity(
+    networkId: string,
+    filters?: {
+      from_ms?: number;
+      to_ms?: number;
+      user_id?: string;
+      entity_type?: string;
+      entity_id?: string;
+      limit?: number;
+      offset?: number;
+    },
+  ): Promise<{ rows: ActivityRow[]; total: number }> {
+    const query: QueryRecord = {};
+    if (filters?.from_ms !== undefined) query['from_ms'] = filters.from_ms;
+    if (filters?.to_ms !== undefined) query['to_ms'] = filters.to_ms;
+    if (filters?.user_id !== undefined) query['user_id'] = filters.user_id;
+    if (filters?.entity_type !== undefined) query['entity_type'] = filters.entity_type;
+    if (filters?.entity_id !== undefined) query['entity_id'] = filters.entity_id;
+    if (filters?.limit !== undefined) query['limit'] = filters.limit;
+    if (filters?.offset !== undefined) query['offset'] = filters.offset;
+    const rows = await this.request<ActivityRow[]>(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/activity`,
+      { query: Object.keys(query).length ? query : undefined },
+    );
+    // The envelope's `meta.total` carries the unfiltered count; fall back to
+    // the page size if the server omitted it (same defensive pattern as
+    // `queryChronicle`).
+    const meta = this.lastMeta as { total?: number } | undefined;
+    const total = typeof meta?.total === 'number' ? meta.total : rows.length;
+    return { rows, total };
+  }
+
+  /** `POST /networks/{nid}/activity/rollup` — свёртка журнала до `untilMs`. */
+  public async rollupActivity(
+    networkId: string,
+    untilMs: number,
+    opts?: RequestOptions,
+  ): Promise<{ removed: number; kept: number }> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/activity/rollup`,
+      { body: { until_ms: untilMs }, requestOptions: opts },
+    );
+  }
+
+  /** `POST /networks/{nid}/activity/truncate` — обрезка журнала до `untilMs`. */
+  public async truncateActivity(
+    networkId: string,
+    untilMs: number,
+    opts?: RequestOptions,
+  ): Promise<{ removed: number }> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/activity/truncate`,
+      { body: { until_ms: untilMs }, requestOptions: opts },
+    );
   }
 
   /**
