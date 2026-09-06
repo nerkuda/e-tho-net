@@ -105,6 +105,7 @@ import { showIconDialog } from '../editor/icon-dialog.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from '../editor/style-dialog.js';
 import { renderMarkdown } from '@etn/markdown';
+import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
 
 /** Human-readable property value-type labels. */
 const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
@@ -676,6 +677,13 @@ export function showThoughtTypeEditor(
     onOverrideApplied: onChanged,
   });
   body.append(props.root);
+
+  // Блок «Метаданные» — автор, даты, id сущности (задача 04cd9794). Показываем
+  // только когда редактируется существующий тип; для нового id ещё не
+  // присвоен и блок ограничится подсказкой.
+  if (type !== null) {
+    body.append(buildMetadataRowsFromType(type));
+  }
 
   /** Existing type with the same normalized name as `name` (self excluded). */
   function nameClash(name: string): ThoughtType | null {
@@ -2159,6 +2167,12 @@ export function showLinkTypeEditor(
   });
   body.append(props.root);
 
+  // Блок «Метаданные» — автор, даты, id сущности (задача 04cd9794). Только
+  // при редактировании существующего типа; для нового id ещё не присвоен.
+  if (type !== null) {
+    body.append(buildMetadataRowsFromLinkType(type));
+  }
+
   /** Existing type with the same normalized name pair (self excluded). */
   function pairClash(forward: string, reverse: string): LinkType | null {
     const fwdKey = typeNameKey(forward);
@@ -2295,4 +2309,32 @@ export function showLinkTypeEditor(
       onClose: () => resolve(createdId),
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Метаданные (задача 04cd9794)
+// ---------------------------------------------------------------------------
+
+/** Преобразует ThoughtType DTO в плоский набор полей для блока «Метаданные». */
+function buildMetadataRowsFromType(type: ThoughtType): HTMLElement {
+  const fields: MetadataFields = {
+    id: type.id,
+    createdAtMs: type.created_at_ms ?? type.created_at,
+    createdBy: type.created_by ?? null,
+    updatedAtMs: type.updated_at_ms ?? type.updated_at,
+    updatedBy: type.updated_by ?? null,
+  };
+  return buildMetadataRows(fields);
+}
+
+/** Преобразует LinkType DTO в плоский набор полей для блока «Метаданные». */
+function buildMetadataRowsFromLinkType(type: LinkType): HTMLElement {
+  const fields: MetadataFields = {
+    id: type.id,
+    createdAtMs: type.created_at_ms ?? type.created_at,
+    createdBy: type.created_by ?? null,
+    updatedAtMs: type.updated_at_ms ?? type.updated_at,
+    updatedBy: type.updated_by ?? null,
+  };
+  return buildMetadataRows(fields);
 }

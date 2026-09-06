@@ -23,6 +23,7 @@ import { invalidateIndicators } from '../canvas/canvas.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { button, div, el, errText, fmtDate, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { formatDateTime, renderAuthorPair } from '../lib/metadata.js';
 import { notice } from '../lib/notice.js';
 import { refreshTabCount, registerTabContent, registerTabCount, type EditorContext } from './editor.js';
 import { createMarkdownField, editMarkdownField } from './markdown-field.js';
@@ -78,6 +79,11 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
   let selectedId: string | null = null;
   /** Row elements of the current table, by comment id (highlight updates). */
   const rowById = new Map<string, HTMLTableRowElement>();
+  /** Active sort column and direction (задача 04cd9794 «колонки автора в Хронике»). */
+  type SortKey = 'created_at_ms' | 'updated_at_ms';
+  type SortDir = 'asc' | 'desc';
+  let sortKey: SortKey = 'created_at_ms';
+  let sortDir: SortDir = 'desc';
 
   void reload();
   // The tab opens with an empty editor area — a comment is picked by a click
@@ -100,6 +106,25 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     }
     refreshTabCount('chrono');
 
+    // Сортировка по миллисекундным меткам (задача 04cd9794). Дефолт — DESC
+    // по `created_at_ms` (новые сверху); фолбэк на ISO-парсинг, когда сервер
+    // ещё не успел проставить `*_ms` для старых строк (миграция 033 их
+    // бэкфилит, но на всякий случай — дешёвый парс).
+    const sortValue = (c: Comment): number => {
+      if (sortKey === 'updated_at_ms') {
+        if (typeof c.updated_at_ms === 'number') return c.updated_at_ms;
+        const t = Date.parse(c.updated_at);
+        return Number.isNaN(t) ? 0 : t;
+      }
+      if (typeof c.created_at_ms === 'number') return c.created_at_ms;
+      const t = Date.parse(c.created_at);
+      return Number.isNaN(t) ? 0 : t;
+    };
+    const sorted = chrono.slice().sort((a, b) => {
+      const diff = sortValue(a) - sortValue(b);
+      return sortDir === 'desc' ? -diff : diff;
+    });
+
     const table = el('table', 'table-list');
     const head = el('thead');
     const headRow = el('tr');
@@ -107,27 +132,42 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
       el('th', undefined, 'Заголовок'),
       el('th', undefined, 'С'),
       el('th', undefined, 'По'),
+      sortableHeader('Автор', undefined, undefined),
+      el('th', undefined, 'Создан'),
+      sortableHeader('Изменён', 'updated_at_ms', 'updated'),
       el('th', undefined, 'Кратко'),
     );
     head.append(headRow);
     table.append(head);
     const tbody = el('tbody');
     rowById.clear();
-    if (chrono.length === 0) {
+    if (sorted.length === 0) {
       const row = el('tr');
       const cell = el('td', 'muted', 'Комментариев нет.');
-      cell.colSpan = 4;
+      cell.colSpan = 7;
       row.append(cell);
       tbody.append(row);
     } else {
-      for (const comment of chrono) {
+      for (const comment of sorted) {
         const row = el('tr');
         if (comment.id === selectedId) row.classList.add('selected');
         rowById.set(comment.id, row);
+        const authorCell = el('td', 'author-cell');
+        authorCell.append(
+          renderAuthorPair(
+            comment.created_by,
+            comment.updated_by,
+            comment.updated_at_ms ?? comment.updated_at,
+            comment.created_at_ms ?? comment.created_at,
+          ),
+        );
         row.append(
           el('td', undefined, comment.title ?? '—'),
           el('td', undefined, fmtDate(comment.valid_from)),
           el('td', undefined, comment.valid_to === null ? '…' : fmtDate(comment.valid_to)),
+          authorCell,
+          el('td', 'date-cell', formatDateTime(comment.created_at_ms ?? comment.created_at)),
+          el('td', 'date-cell', formatDateTime(comment.updated_at_ms ?? comment.updated_at)),
           el('td', undefined, shortText(comment.body_md)),
         );
         row.addEventListener('click', () => select(comment));
@@ -139,6 +179,25 @@ function buildChronoTab(ctx: EditorContext): HTMLElement {
     }
     table.append(tbody);
     tableWrap.replaceChildren(table);
+
+    /** A clickable header that toggles the chrono sort. */
+    function sortableHeader(label: string, key: SortKey | undefined, hint: 'created' | 'updated' | undefined): HTMLTableCellElement {
+      const th = el('th', 'sortable') as HTMLTableCellElement;
+      const isActive = hint === 'updated' ? sortKey === 'updated_at_ms' : hint === undefined && sortKey === 'created_at_ms';
+      th.append(el('span', undefined, label));
+      if (isActive) th.append(el('span', 'sort-marker', sortDir === 'desc' ? ' ▼' : ' ▲'));
+      th.addEventListener('click', () => {
+        if (key === undefined) return; // не сортируемая колонка
+        if (sortKey === key) {
+          sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+        } else {
+          sortKey = key;
+          sortDir = key === 'updated_at_ms' ? 'desc' : 'desc';
+        }
+        void reload();
+      });
+      return th;
+    }
   }
 
   /** Selects a comment for viewing (or viewing + editing on double-click). */

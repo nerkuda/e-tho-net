@@ -45,6 +45,7 @@ import {
   showDialog,
 } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { createTypeCheckPicker } from '../lib/type-check-picker.js';
@@ -501,6 +502,13 @@ export function openPropertyManagerEditor(
   body.append(defaultHost, textExtrasHost, refFilterHost, urlExtrasHost);
   renderValueTypeExtras();
 
+  // Блок «Метаданные» — автор, даты, id сущности (задача 04cd9794). Только
+  // при редактировании существующего свойства; для нового id ещё не присвоен
+  // и блок был бы пустым.
+  if (property !== null) {
+    body.append(buildMetadataRowsFromProperty(property));
+  }
+
   // Usage panel — only meaningful when editing an existing row (a brand-new
   // property has no bindings yet). The panel reloads after the type editor
   // closes so the counts stay honest if the user detaches the property.
@@ -923,4 +931,20 @@ function buildUsagePanel(networkId: string, propertyId: string): HTMLElement {
 
   void reload();
   return host;
+}
+
+// ---------------------------------------------------------------------------
+// Метаданные (задача 04cd9794)
+// ---------------------------------------------------------------------------
+
+/** Преобразует NetworkProperty DTO в плоский набор полей для блока «Метаданные». */
+function buildMetadataRowsFromProperty(property: RegistryRow): HTMLElement {
+  const fields: MetadataFields = {
+    id: property.id,
+    createdAtMs: property.created_at_ms ?? property.created_at,
+    createdBy: property.created_by ?? null,
+    updatedAtMs: property.updated_at_ms ?? property.updated_at,
+    updatedBy: property.updated_by ?? null,
+  };
+  return buildMetadataRows(fields);
 }

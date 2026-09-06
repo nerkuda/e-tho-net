@@ -37,6 +37,7 @@ import { rowSplitter } from '../../editor/splitter.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import { button, div, el, errText, fmtDate, renderHtml, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
+import { formatDateTime, renderAuthorPair } from '../../lib/metadata.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
@@ -287,7 +288,7 @@ function gotoPage(next: number): void {
 // Table rendering
 // ---------------------------------------------------------------------------
 
-const COLUMNS = ['С', 'По', 'Заголовок', 'Мысли/связи', 'Кратко'] as const;
+const COLUMNS = ['С', 'По', 'Заголовок', 'Мысли/связи', 'Автор', 'Создан', 'Изменён', 'Кратко'] as const;
 /** Index of the «мысли/связи» column (chip navigation lives there). */
 const CHIPS_COL = 3;
 
@@ -296,19 +297,34 @@ function renderTable(): void {
   const table = el('table', 'table-list chron-table');
   const head = el('thead', 'chron-table-head');
   const headRow = el('tr');
-  for (const col of COLUMNS) headRow.append(el('th', undefined, col));
+  headRow.append(
+    el('th', undefined, 'С'),
+    el('th', undefined, 'По'),
+    el('th', undefined, 'Заголовок'),
+    el('th', undefined, 'Мысли/связи'),
+    el('th', undefined, 'Автор'),
+    sortableHeader('Создан', 'created_at'),
+    sortableHeader('Изменён', 'updated_at'),
+    el('th', undefined, 'Кратко'),
+  );
   head.append(headRow);
   table.append(head);
 
+  // Дефолтная сортировка — по `created_at_ms` DESC (задача 04cd9794). На
+  // странице сервер уже отсортировал по `valid_from`; клиент применяет
+  // дополнительный порядок только когда задана колонка сортировки через
+  // заголовок (по умолчанию используем «created_at_ms DESC» — самые новые
+  // сверху).
+  const sorted = applyLocalSort(rows);
   tableBody = el('tbody');
-  if (rows.length === 0) {
+  if (sorted.length === 0) {
     const row = el('tr');
     const cell = el('td', 'muted', 'Хронологических комментариев нет.');
     cell.colSpan = COLUMNS.length;
     row.append(cell);
     tableBody.append(row);
   } else {
-    rows.forEach((row) => tableBody!.append(buildRow(row)));
+    sorted.forEach((row) => tableBody!.append(buildRow(row)));
   }
   table.append(tableBody);
   tableWrap.replaceChildren(table);
@@ -317,10 +333,10 @@ function renderTable(): void {
   table.addEventListener('click', (event) => {
     const tr = (event.target as HTMLElement | null)?.closest<HTMLElement>('.chron-row');
     if (tr?.dataset['rowId'] !== undefined) {
-      const index = rows.findIndex((r) => r.id === tr.dataset['rowId']);
+      const index = sorted.findIndex((r) => r.id === tr.dataset['rowId']);
       if (index >= 0) {
         cursor = { row: index, col: 0, chip: 0 };
-        selectRow(rows[index]!);
+        selectRow(sorted[index]!);
         repaintCursor();
       }
     }
@@ -329,10 +345,49 @@ function renderTable(): void {
     const tr = (event.target as HTMLElement | null)?.closest<HTMLElement>('.chron-row');
     if (tr?.dataset['rowId'] === undefined) return;
     event.preventDefault();
-    const row = rows.find((r) => r.id === tr.dataset['rowId']);
+    const row = sorted.find((r) => r.id === tr.dataset['rowId']);
     if (row !== undefined) showRowMenu(event.clientX, event.clientY, row.id);
   });
   table.addEventListener('keydown', onTableKeydown);
+
+  /** Clickable header that toggles sort by the matching timestamp column. */
+  function sortableHeader(label: string, key: 'created_at' | 'updated_at'): HTMLTableCellElement {
+    const th = el('th', 'sortable') as HTMLTableCellElement;
+    th.append(el('span', undefined, label));
+    if (sortKey === key) {
+      th.append(el('span', 'sort-marker', sortDir === 'desc' ? ' ▼' : ' ▲'));
+    }
+    th.addEventListener('click', () => {
+      if (sortKey === key) {
+        sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+      } else {
+        sortKey = key;
+        sortDir = 'desc';
+      }
+      renderTable();
+    });
+    return th;
+  }
+}
+
+/** Active chrono sort column and direction (задача 04cd9794). */
+type SortKey = 'created_at' | 'updated_at';
+type SortDir = 'asc' | 'desc';
+let sortKey: SortKey = 'created_at';
+let sortDir: SortDir = 'desc';
+
+/** Сортирует ленту по выбранной колонке. Дефолт — `created_at` DESC. */
+function applyLocalSort(list: ChronicleRow[]): ChronicleRow[] {
+  const parse = (v: string): number => {
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? 0 : t;
+  };
+  const keyValue = (r: ChronicleRow): number =>
+    sortKey === 'updated_at' ? parse(r.updated_at) : parse(r.created_at);
+  return list.slice().sort((a, b) => {
+    const diff = keyValue(a) - keyValue(b);
+    return sortDir === 'desc' ? -diff : diff;
+  });
 }
 
 function repaintPager(): void {
@@ -359,9 +414,13 @@ function buildRow(row: ChronicleRow): HTMLElement {
   const titleCell = el('td', 'chron-title', row.title ?? '—');
   const targetsCell = el('td', 'chron-targets');
   for (const chip of buildTargetChips(row.targets, row.id)) targetsCell.append(chip);
+  const authorCell = el('td', 'author-cell');
+  authorCell.append(renderAuthorPair(row.created_by, row.updated_by, row.updated_at, row.created_at));
+  const createdAtCell = el('td', 'date-cell', formatDateTime(row.created_at));
+  const updatedAtCell = el('td', 'date-cell', formatDateTime(row.updated_at));
   const snippetCell = el('td', 'chron-snippet');
   renderHtml(snippetCell, row.snippet);
-  tr.append(fromCell, toCell, titleCell, targetsCell, snippetCell);
+  tr.append(fromCell, toCell, titleCell, targetsCell, authorCell, createdAtCell, updatedAtCell, snippetCell);
   return tr;
 }
 

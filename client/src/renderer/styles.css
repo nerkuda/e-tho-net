@@ -6407,3 +6407,141 @@ table.chron-table thead th {
 .diff-same {
   color: var(--text-dim, #777);
 }
+
+/* --- Метаданные (задача 04cd9794) --------------------------------------- */
+
+.metadata-block {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.metadata-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 16px;
+  margin-top: 8px;
+}
+
+.metadata-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.metadata-field-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metadata-field-value {
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.metadata-id-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.metadata-id-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metadata-id-value {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  cursor: text;
+  user-select: all;
+  word-break: break-all;
+  max-width: 100%;
+}
+
+.metadata-id-hint {
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* Inline form inside dialogs (типы мыслей / связей / свойства). */
+.metadata-rows {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metadata-rows .metadata-field {
+  flex-direction: row;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.metadata-rows .metadata-field-label {
+  min-width: 160px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.metadata-rows .metadata-field-value {
+  font-size: 13px;
+}
+
+/* Compact author + last-editor badge used in chrono rows / headers. */
+.author-pair {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.author-primary {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.author-edited {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+/* Author column in the chrono table — narrow enough to fit the chip stack. */
+.chrono-table .author-cell,
+.chron-table .author-cell {
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.chrono-table .date-cell,
+.chron-table .date-cell {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+

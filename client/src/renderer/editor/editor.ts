@@ -64,6 +64,7 @@ import { registerCommentSections } from './comments.js';
 import { registerAttachmentsTab } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
 import { registerLinksTab } from './links-tab.js';
+import { registerMetadataTab } from './metadata-tab.js';
 import { showIconDialog, type IconPickResult } from './icon-dialog.js';
 import { editMarkdownField } from './markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
@@ -79,7 +80,7 @@ export interface EditorContext {
 }
 
 /** Editor tab ids (08-ui-spec.md §6.3). */
-export type EditorTabId = 'main' | 'attachments' | 'links' | 'chrono';
+export type EditorTabId = 'main' | 'attachments' | 'links' | 'chrono' | 'metadata';
 
 /** Builds the content of one tab for the current entity. */
 export type TabContentBuilder = (ctx: EditorContext) => HTMLElement;
@@ -96,6 +97,7 @@ const TABS: Array<{ id: EditorTabId; title: string; counted: boolean }> = [
   { id: 'attachments', title: 'Вложения', counted: true },
   { id: 'links', title: 'Связи', counted: false },
   { id: 'chrono', title: 'Хроника', counted: true },
+  { id: 'metadata', title: 'Метаданные', counted: false },
 ];
 
 const tabContentBuilders = new Map<EditorTabId, TabContentBuilder>();
@@ -351,6 +353,7 @@ export function mountEditor(editorHost: HTMLElement): void {
     registerCommentSections();
     registerAttachmentsTab();
     registerLinksTab();
+    registerMetadataTab();
 
     // Pasted-image uploads from any markdown field re-count the «Вложения» tab
     // badge right away (the tab's own list reloads itself via the same event;
@@ -1052,19 +1055,7 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   });
   activeLabel.append(activeCheck, span('актуально'));
 
-  // The thought id sits next to the active toggle; a click copies it to the
-  // clipboard so the user can hand it to an agent without retyping a search.
-  const idLabel = el('button', 'thought-id-label', thought.id);
-  idLabel.type = 'button';
-  setTooltip(idLabel, 'Копировать ID мысли');
-  idLabel.addEventListener('click', () => {
-    void navigator.clipboard.writeText(thought.id).then(
-      () => notice('ID мысли скопирован.'),
-      () => notice('Не удалось скопировать ID.', 'error'),
-    );
-  });
-
-  row.append(typeCombo.root, settingsBtn, activeLabel, idLabel);
+  row.append(typeCombo.root, settingsBtn, activeLabel);
   box.append(row);
 
   // The title height depends on layout; size it once mounted.
