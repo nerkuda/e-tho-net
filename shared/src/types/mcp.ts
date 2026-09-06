@@ -85,6 +85,11 @@ export const MCP_TOOL_NAMES = [
   'etn.layers.delete',
   'etn.layers.select',
   'etn.layers.merge',
+  // object-locks (task a88acf20, операция b6b776ff — паритет с REST /locks)
+  'etn.locks.acquire',
+  'etn.locks.release',
+  'etn.locks.clear',
+  'etn.locks.list',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -149,6 +154,7 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.layers.list': { readOnlyHint: true },
   'etn.layers.diff': { readOnlyHint: true },
   'etn.layers.diff_doc': { readOnlyHint: true },
+  'etn.locks.list': { readOnlyHint: true },
 
   // ---- mutating tools — destructiveHint ---------------------------
   'etn.thoughts.delete': { destructiveHint: true },
@@ -157,6 +163,8 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.trash.purge': { destructiveHint: true },
   'etn.layers.delete': { destructiveHint: true },
   'etn.layers.merge': { destructiveHint: true },
+  'etn.locks.release': { destructiveHint: true },
+  'etn.locks.clear': { destructiveHint: true },
 
   // ---- mutating tools — idempotentHint ----------------------------
   'etn.thoughts.set_active': { idempotentHint: true },
@@ -166,6 +174,8 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.thoughts.upsert_bundle': { idempotentHint: true },
   'etn.layers.update': { idempotentHint: true },
   'etn.layers.select': { idempotentHint: true },
+  // Object-lock acquire — идемпотентно продлевает свой захват (задача 2031df5e).
+  'etn.locks.acquire': { idempotentHint: true },
 };
 
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5). */
