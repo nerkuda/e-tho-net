@@ -6596,3 +6596,159 @@ table.chron-table thead th {
   color: var(--text-dim);
 }
 
+
+/* ---------------------------------------------------------------------------
+ * «События» view (задача f27809d0 «Вид workspace «События» в клиенте»,
+ * элемент UI 8cd9ad55, 08-ui-spec.md §18, docs/03-server-api.md §13d).
+ *
+ * A fourth workspace view: a filter row (period / participant / entity type /
+ * action) on top, a destructive-commands toolbar, then the activity table.
+ * Follows the same chrome conventions as the chronicle screen
+ * (`.admin-table-wrap` + pager).
+ * ------------------------------------------------------------------------- */
+
+.activity {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--layer-bg, var(--bg));
+}
+
+/* Filter row: one line of compact controls with a label per group. */
+.activity-filter-area {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.activity-label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.activity-date {
+  width: 130px;
+}
+
+.activity-user {
+  width: 180px;
+}
+
+.activity-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.activity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.activity-pill input[type='checkbox'] {
+  margin: 0;
+}
+
+.activity-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.activity-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  max-height: none;
+}
+
+.activity-pager {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+}
+
+table.activity-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.activity-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  text-align: left;
+}
+
+.activity-row {
+  cursor: pointer;
+}
+
+.activity-row td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-row:hover td {
+  background: var(--accent-soft);
+}
+
+.activity-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.activity-author {
+  max-width: 180px;
+}
+
+.activity-action-label {
+  white-space: nowrap;
+}
+
+.activity-entity {
+  max-width: 360px;
+}
+
+.activity-layer {
+  max-width: 90px;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+}
+
+.activity-maintenance-hint {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+}

@@ -56,6 +56,7 @@ function tab(tabId: string, networkId: string, slotIdx = 0): TabDto {
     view_mode: null,
     structures_state: null,
     chronicle_state: null,
+    activity_state: null,
     layer_id: null,
     last_active_at: '2026-08-29T00:00:00.000Z',
   };

@@ -11,6 +11,7 @@ import { UI_STATE_KEY } from '@etn/shared';
 
 import { etn } from '../lib/etn.js';
 import { store, type WorkspaceView } from '../state.js';
+import { ensureActivityInitialised } from './activity/activity.js';
 import { ensureStructuresInitialised } from './structures/structures.js';
 import { ensureChronicleInitialised } from './chronicle/chronicle.js';
 
@@ -29,4 +30,5 @@ export function setActiveView(view: WorkspaceView): void {
   }
   if (view === 'structures') void ensureStructuresInitialised();
   if (view === 'chronicle') void ensureChronicleInitialised();
+  if (view === 'activity') void ensureActivityInitialised();
 }

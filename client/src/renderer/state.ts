@@ -36,8 +36,8 @@ import type { TabDto } from '../main/ipc/contract.js';
 /** Top-level screens of the application. */
 export type Screen = 'onboarding' | 'networks' | 'workspace';
 
-/** Workspace views (L15/L20, 08-ui-spec.md §15.1, §17): map / structures / chronicle. */
-export type WorkspaceView = 'map' | 'structures' | 'chronicle';
+/** Workspace views (L15/L20, 08-ui-spec.md §15.1, §17, задача f27809d0 «События»): map / structures / chronicle / activity. */
+export type WorkspaceView = 'map' | 'structures' | 'chronicle' | 'activity';
 
 /** Editor dock position (L4 `editor_position`, 08-ui-spec.md §6.1). */
 export type EditorPosition = 'left' | 'right' | 'top' | 'bottom' | 'hidden';

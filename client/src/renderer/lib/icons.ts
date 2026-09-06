@@ -27,6 +27,7 @@ export type IconName =
   | 'mindmap'
   | 'tree'
   | 'history'
+  | 'activity'
   | 'plus'
   | 'trash'
   | 'layers'
@@ -71,6 +72,10 @@ const PATHS: Record<IconName, string> = {
   history:
     '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>' +
     '<path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  // View switcher (задача f27809d0 «События»): the activity log feed — lucide
+  // «activity», a heartbeat-style polyline. Distinct from the chronicle clock.
+  activity:
+    '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
   // Mark-for-deletion badge (S13, 08-ui-spec.md §2.2): lucide «trash», drawn
   // bright red over the enlarged badge circle (colour via the host CSS).
   trash:
