@@ -97,6 +97,9 @@ POST   /api/v1/admin/users             { username, display_name, is_admin? }
 GET    /api/v1/admin/users/{id}
 PATCH  /api/v1/admin/users/{id}        { display_name?, is_admin?, disabled? }
 DELETE /api/v1/admin/users/{id}        # запрещено для is_first_user=1 → 422
+                                       # запрещено при наличии авторства
+                                       # (created_by/updated_by) в любой сети → 422
+                                       # (требование 4c67149e; soft-disable не блокируется)
 
 POST   /api/v1/admin/users/{id}/keys   { label, read_only?, max_writes_per_minute? }
                                        → 201 { key, prefix } # для передачи пользователю
