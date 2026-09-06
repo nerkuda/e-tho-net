@@ -38,6 +38,7 @@ import {
   ensureLoaded,
   subscribe as subscribeUsers,
 } from '../../lib/users.js';
+import { applyLayerThemeStyle, currentLayerColors, resolveLayerTheme } from '../../lib/layer-colors.js';
 import { store } from '../../state.js';
 import { UI_STATE_KEY } from '@etn/shared';
 import {
@@ -97,6 +98,11 @@ let querySeq = 0;
 let cursorRow = -1;
 /** Индекс строки, по которой кликнули — отметка «выбрано» (запоминается между отрисовками). */
 let selectedRowIdx = -1;
+/** Ширина панели отборов (px), заданная сплиттером. `null` — дефолт 33%. */
+let panelWidth: number | null = null;
+/** Границы ширины панели (px), как в Структурах мыслей. */
+const PANEL_W_MIN = 260;
+const PANEL_W_MAX = 480;
 
 /** UI refs (populated while mounted). */
 let tableWrap: HTMLElement | null = null;
@@ -136,6 +142,7 @@ export async function ensureActivityInitialised(): Promise<void> {
   total = 0;
   offset = 0;
   filter = { ...DEFAULT_FILTER };
+  panelWidth = null;
 
   try {
     let raw: string | null = null;
@@ -153,6 +160,7 @@ export async function ensureActivityInitialised(): Promise<void> {
       const parsed = parseActivityState(raw);
       filter = parsed.filter;
       offset = parsed.offset;
+      panelWidth = parsed.panelWidth;
       repaintControls();
     }
   } catch {
@@ -161,6 +169,7 @@ export async function ensureActivityInitialised(): Promise<void> {
   // `EnsureLoaded` triggers an async `users` fetch; rows rendered before it
   // resolves fall back to raw ids (`resolve` returns `null` then).
   ensureLoaded();
+  applyPanelWidth();
   await applyQuery();
 }
 
@@ -175,16 +184,109 @@ function persistState(): void {
     .catch(() => undefined);
 }
 
+/** Persists the splitter-dragged panel width (замечание пользователя). */
+function setPanelWidth(width: number): void {
+  panelWidth = width;
+  persistPanelWidth();
+}
+
+/** Mirrors the structures pattern — пишет ширину в L4. */
+function persistPanelWidth(): void {
+  const tabId = store.state.activeTabId;
+  if (tabId === null) return;
+  void etn.tabs
+    .updateState(tabId, {
+      activity_state: JSON.stringify({
+        filter,
+        offset,
+        panelWidth: panelWidth ?? undefined,
+      }),
+    })
+    .catch(() => undefined);
+}
+
+/** Применяет сохранённую/дефолтную ширину панели к DOM. */
+function applyPanelWidth(): void {
+  if (host === null) return;
+  const panel = host.querySelector<HTMLElement>('.activity-filter');
+  if (panel === null) return;
+  if (panelWidth === null) panel.style.removeProperty('--act-filter-w');
+  else panel.style.setProperty('--act-filter-w', `${Math.round(panelWidth)}px`);
+}
+
+/**
+ * Панель-сплиттер: меняет ширину `.activity-filter` через CSS-переменную
+ * `--act-filter-w` (как `wirePanelSplitter` в Структурах мыслей).
+ */
+function wirePanelSplitter(splitter: HTMLElement, panel: HTMLElement): void {
+  let dragging = false;
+  let startX = 0;
+  let startW = 0;
+  const onMove = (event: PointerEvent): void => {
+    if (!dragging) return;
+    const width = Math.min(
+      PANEL_W_MAX,
+      Math.max(PANEL_W_MIN, startW + (event.clientX - startX)),
+    );
+    panel.style.setProperty('--act-filter-w', `${width}px`);
+    panelWidth = width;
+  };
+  const onUp = (event: PointerEvent): void => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove('dragging');
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    persistPanelWidth();
+    try {
+      splitter.releasePointerCapture(event.pointerId);
+    } catch {
+      /* capture already released */
+    }
+  };
+  splitter.addEventListener('pointerdown', (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    dragging = true;
+    startX = event.clientX;
+    startW = panelWidth ?? panel.clientWidth;
+    splitter.classList.add('dragging');
+    try {
+      splitter.setPointerCapture(event.pointerId);
+    } catch {
+      /* capture unavailable — window listeners still track the drag */
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
+}
+
+/**
+ * Перекрашивает фон списка при смене слоя — как в Хронике/Структурах
+ * (08-ui-spec §15/§17). База — обычный фон, остальные слои — оттенок
+ * цвета слоя через переменные `--layer-bg`.
+ */
+function repaintLayerBackground(): void {
+  if (tableWrap === null) return;
+  const colors = currentLayerColors(store.state.layers, store.state.currentLayer);
+  const vars = resolveLayerTheme(colors, store.state.theme);
+  applyLayerThemeStyle(tableWrap.style, vars);
+}
+
 /** Mounts the view into the host element; called once from workspace.ts. */
 export function mountActivity(hostEl: HTMLElement): void {
   host = hostEl;
   host.replaceChildren();
 
   // Layout: filter panel on the left + table on the right (как в
-  // «Структурах мыслей» — замечание пользователя, п. 5).
+  // «Структурах мыслей» — замечание пользователя, п. 5). Между ними —
+  // сплиттер для изменения ширины панели (замечание пользователя:
+  // «невозможно изменить ширину панели»).
   const panel = div('activity-filter');
+  const splitter = div('activity-splitter');
   const results = div('activity-results');
-  hostEl.append(panel, results);
+  hostEl.append(panel, splitter, results);
+  wirePanelSplitter(splitter, panel);
+  applyPanelWidth();
 
   mountFilterPanel(panel);
 
@@ -228,6 +330,8 @@ export function mountActivity(hostEl: HTMLElement): void {
     repaintNames();
     // Рамка «открытая в редакторе сущность» реагирует на смену editorTarget.
     repaintCursorAndCurrent();
+    // Смена слоя перекрашивает фон — как в Хронике/Структурах (08-ui-spec).
+    repaintLayerBackground();
   });
   // The names may resolve after the first paint — subscribe and re-render
   // author cells when the user cache changes.
@@ -263,13 +367,14 @@ function mountFilterPanel(area: HTMLElement): void {
   keywordsInput.title = 'Поиск по снимку entity_title (через пробел, * и - как в Структурах)';
   keywordsInput.addEventListener('input', () => {
     filter = { ...filter, keywords: keywordsInput!.value };
+    // Только Применить запускает запрос (замечание пользователя).
   });
   keywordsInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') void applyQuery();
   });
   scroll.append(keywordsInput);
 
-  // --- period ---------------------------------------------------------
+  // --- period (даты в одну строку, как в Структурах) ------------------
   const periodTitle = el('div', 'act-f-title', 'Период');
   scroll.append(periodTitle);
   const periodRow = div('act-f-row');
@@ -278,20 +383,18 @@ function mountFilterPanel(area: HTMLElement): void {
   fromInput.title = 'Начало периода (включительно)';
   fromInput.addEventListener('change', () => {
     filter = { ...filter, fromMs: fromInput!.value };
-    void applyQuery();
   });
   toInput = el('input', 'text-input activity-date') as HTMLInputElement;
   toInput.type = 'date';
   toInput.title = 'Конец периода (включительно)';
   toInput.addEventListener('change', () => {
     filter = { ...filter, toMs: toInput!.value };
-    void applyQuery();
   });
   periodRow.append(span('с', 'act-f-label'), fromInput, span('по', 'act-f-label'), toInput);
   scroll.append(periodRow);
 
-  // --- author (задача 59119797, эволюция операторов) ------------------
-  const userTitle = el('div', 'act-f-title', 'Участник');
+  // --- пользователь (бывш. «Участник»; оператор + значение в одну строку) ---
+  const userTitle = el('div', 'act-f-title', 'Пользователь');
   scroll.append(userTitle);
   const userBlock = buildActivityUserBlock();
   scroll.append(userBlock);
@@ -318,6 +421,7 @@ function mountFilterPanel(area: HTMLElement): void {
   const footer = div('act-f-footer');
   const apply = el('button', 'act-f-apply', 'Применить');
   apply.type = 'button';
+  setTooltip(apply, 'Запустить запрос с текущими отборами (Ctrl+Enter)');
   apply.addEventListener('click', () => void applyQuery());
   const clearBtn = el('button', 'act-f-clear', 'Очистить');
   clearBtn.type = 'button';
@@ -332,7 +436,7 @@ function mountFilterPanel(area: HTMLElement): void {
   repaintControls();
 }
 
-/** Builds the «Участник» block: оператор + селектор (single/multi/hint). */
+/** Builds the «Пользователь» block: оператор + значение в одну строку. */
 function buildActivityUserBlock(): HTMLElement {
   const block = div('act-f-author');
   const row = div('act-f-row');
@@ -343,11 +447,10 @@ function buildActivityUserBlock(): HTMLElement {
     opSelect.append(o);
   }
   opSelect.value = filter.userOp;
-  row.append(opSelect);
-  block.append(row);
 
   const valueBox = div('act-f-author-value');
-  block.append(valueBox);
+  row.append(opSelect, valueBox);
+  block.append(row);
 
   const renderValue = (): void => {
     valueBox.replaceChildren();
@@ -381,15 +484,11 @@ function buildActivityUserBlock(): HTMLElement {
       ...(op !== 'eq' && op !== 'ne' ? { userId: '' } : {}),
       ...(op !== 'in' && op !== 'not_in' ? { userIds: [] } : {}),
     };
-    // Переключаем виджет «участник» между single/multi на лету.
+    // Переключаем виджет «пользователь» между single/multi на лету.
     renderValue();
     repaintControls();
   });
   renderValue();
-  // Виджеты `buildUserSelectWidget`/`buildUserMultiSelectWidget` сами
-  // подписываются на кэш пользователей. Дополнительная подписка здесь
-  // ломала открытое выпадающее меню: при приходе roster'а valueBox
-  // пересоздавался, и <select> терял фокус (баг, описанный пользователем).
   return block;
 }
 
@@ -421,7 +520,8 @@ function buildPill(value: string, label: string, group: 'entity' | 'action'): HT
       if (check.checked) next.push(value as ActionFilter);
       filter = { ...filter, actions: next };
     }
-    void applyQuery();
+    // Не запускаем запрос сразу — только по «Применить» (замечание
+    // пользователя: «изменения отборов применяются сразу»).
   });
   labelEl.append(check, span(label));
   return labelEl;
@@ -663,6 +763,7 @@ function renderTable(): void {
   tableWrap.replaceChildren(table);
   repaintPager();
   repaintCursorAndCurrent();
+  repaintLayerBackground();
 
   // Row click — open the entity when it still exists (08-ui-spec.md §18:
   // «удалённые сущности — read-only с пометкой»). We do a quick check: try

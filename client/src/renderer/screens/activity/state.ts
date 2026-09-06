@@ -69,6 +69,8 @@ export const DEFAULT_FILTER: ActivityFilterState = {
 export interface PersistedActivityState {
   filter: ActivityFilterState;
   offset: number;
+  /** Ширина панели отборов (px), заданная сплиттером. */
+  panelWidth: number | null;
 }
 
 /** Best-effort parser for the L4 JSON blob (unknown input → defaults). */
@@ -77,6 +79,7 @@ export function parseActivityState(raw: string): PersistedActivityState {
     const parsed = JSON.parse(raw) as Partial<{
       filter: Partial<ActivityFilterState>;
       offset: number;
+      panelWidth: number;
     }>;
     const f = parsed.filter ?? {};
     const entityTypes = Array.isArray(f.entityTypes)
@@ -119,9 +122,13 @@ export function parseActivityState(raw: string): PersistedActivityState {
         typeof parsed.offset === 'number' && Number.isFinite(parsed.offset) && parsed.offset >= 0
           ? Math.floor(parsed.offset)
           : 0,
+      panelWidth:
+        typeof parsed.panelWidth === 'number' && Number.isFinite(parsed.panelWidth) && parsed.panelWidth > 0
+          ? Math.floor(parsed.panelWidth)
+          : null,
     };
   } catch {
-    return { filter: { ...DEFAULT_FILTER }, offset: 0 };
+    return { filter: { ...DEFAULT_FILTER }, offset: 0, panelWidth: null };
   }
 }
 

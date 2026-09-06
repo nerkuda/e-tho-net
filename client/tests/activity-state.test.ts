@@ -104,5 +104,15 @@ describe('parseActivityState', () => {
       actions: [],
     };
     assert.deepEqual(parsed.filter, expected);
+    assert.equal(parsed.panelWidth, null);
+  });
+
+  it('restores panelWidth from L4 (замечание пользователя — сплиттер панели)', () => {
+    const parsed = parseActivityState(JSON.stringify({ filter: {}, panelWidth: 360 }));
+    assert.equal(parsed.panelWidth, 360);
+    const negative = parseActivityState(JSON.stringify({ filter: {}, panelWidth: -10 }));
+    assert.equal(negative.panelWidth, null);
+    const fractional = parseActivityState(JSON.stringify({ filter: {}, panelWidth: 322.9 }));
+    assert.equal(fractional.panelWidth, 322);
   });
 });

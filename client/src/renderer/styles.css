@@ -6651,6 +6651,20 @@ table.chron-table thead th {
   overflow: hidden;
 }
 
+/* Сплиттер изменения ширины панели (как в Структурах мыслей). */
+.activity-splitter {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: var(--border);
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+
+.activity-splitter:hover,
+.activity-splitter.dragging {
+  background: var(--warn);
+}
+
 .activity-results {
   flex: 1 1 auto;
   min-width: 0;
@@ -6703,6 +6717,16 @@ table.chron-table thead th {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.act-f-author .act-f-row {
+  flex-wrap: nowrap;
+}
+
+.act-f-author .act-f-op {
+  flex: 0 0 auto;
 }
 
 .act-f-footer {
