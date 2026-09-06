@@ -151,7 +151,10 @@ export function buildUserSelectWidget(opts: {
   onChange: (id: string) => void;
 }): HTMLElement {
   const row = div('user-select-row');
-  const label = el('span', 'user-select-label', opts.label);
+  // Пустая подпись — не рисуем, чтобы лишний span не съедал ширину.
+  if (opts.label !== '') {
+    row.append(el('span', 'user-select-label', opts.label));
+  }
   const select = el('select', 'select-input user-select') as HTMLSelectElement;
 
   const render = (): void => {
@@ -195,7 +198,7 @@ export function buildUserSelectWidget(opts: {
   subscribe(render);
   ensureLoaded();
 
-  row.append(label, select);
+  row.append(select);
   return row;
 }
 
@@ -216,7 +219,9 @@ export function buildUserMultiSelectWidget(opts: {
 }): HTMLElement {
   ensureLoaded();
   const wrap = div('user-multi-select');
-  const labelEl = el('span', 'user-select-label', opts.label);
+  if (opts.label !== '') {
+    wrap.append(el('span', 'user-select-label', opts.label));
+  }
   const chipsBox = div('user-multi-chips');
   const addSelect = el('select', 'select-input user-multi-add') as HTMLSelectElement;
 
@@ -286,6 +291,6 @@ export function buildUserMultiSelectWidget(opts: {
   });
   subscribe(render);
 
-  wrap.append(labelEl, chipsBox, addSelect);
+  wrap.append(chipsBox, addSelect);
   return wrap;
 }

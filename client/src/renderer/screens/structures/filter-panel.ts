@@ -435,7 +435,7 @@ function buildAuthorConditionRow(opts: {
   }
   if (opts.op === 'in' || opts.op === 'not_in') {
     const multi = buildUserMultiSelectWidget({
-      label: 'участники',
+      label: '',
       currentIds: opts.listIds,
       onChange: opts.onListChange,
     });
@@ -443,7 +443,7 @@ function buildAuthorConditionRow(opts: {
     return row;
   }
   const single = buildUserSelectWidget({
-    label: 'участник',
+    label: '',
     currentId: opts.singleId,
     onChange: opts.onSingleChange,
   });

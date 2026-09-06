@@ -35,7 +35,6 @@ import {
   buildUserSelectWidget,
   resolve,
   ensureLoaded,
-  subscribe,
   subscribe as subscribeUsers,
 } from '../../lib/users.js';
 import { store } from '../../state.js';
@@ -93,6 +92,10 @@ let total = 0;
 let offset = 0;
 /** Loading guard against stale data. */
 let querySeq = 0;
+/** Индекс строки под курсором клавиатуры (`-1` — без курсора). */
+let cursorRow = -1;
+/** Индекс строки, по которой кликнули — отметка «выбрано» (запоминается между отрисовками). */
+let selectedRowIdx = -1;
 
 /** UI refs (populated while mounted). */
 let tableWrap: HTMLElement | null = null;
@@ -222,10 +225,17 @@ export function mountActivity(hostEl: HTMLElement): void {
     if (store.state.activeView !== 'activity') return;
     // Re-render names if the user cache fills in after the first paint.
     repaintNames();
+    // Рамка «открытая в редакторе сущность» реагирует на смену editorTarget.
+    repaintCursorAndCurrent();
   });
   // The names may resolve after the first paint — subscribe and re-render
   // author cells when the user cache changes.
   subscribeUsers(() => repaintNames());
+
+  // Keyboard navigation across rows (08-ui-spec.md §18, замечание
+  // пользователя — «невозможно перемещаться с помощью клавиш»). Хэндлер
+  // вешается на хост, чтобы не зависеть от рендера таблицы.
+  hostEl.addEventListener('keydown', onTableKeydown);
 }
 
 // ---------------------------------------------------------------------------
@@ -332,17 +342,7 @@ function buildActivityUserBlock(): HTMLElement {
     opSelect.append(o);
   }
   opSelect.value = filter.userOp;
-  opSelect.addEventListener('change', () => {
-    const op = opSelect.value as StructureAuthorOp;
-    filter = {
-      ...filter,
-      userOp: op,
-      ...(op !== 'eq' && op !== 'ne' ? { userId: '' } : {}),
-      ...(op !== 'in' && op !== 'not_in' ? { userIds: [] } : {}),
-    };
-    repaintControls();
-  });
-  row.append(span('условие', 'act-f-label'), opSelect);
+  row.append(opSelect);
   block.append(row);
 
   const valueBox = div('act-f-author-value');
@@ -353,7 +353,7 @@ function buildActivityUserBlock(): HTMLElement {
     if (filter.userOp === 'in' || filter.userOp === 'not_in') {
       valueBox.append(
         buildUserMultiSelectWidget({
-          label: 'участники',
+          label: '',
           currentIds: filter.userIds,
           onChange: (ids) => {
             filter = { ...filter, userIds: ids };
@@ -364,7 +364,7 @@ function buildActivityUserBlock(): HTMLElement {
     }
     valueBox.append(
       buildUserSelectWidget({
-        label: 'участник',
+        label: '',
         currentId: filter.userId,
         onChange: (id) => {
           filter = { ...filter, userId: id };
@@ -372,9 +372,23 @@ function buildActivityUserBlock(): HTMLElement {
       }),
     );
   };
+  opSelect.addEventListener('change', () => {
+    const op = opSelect.value as StructureAuthorOp;
+    filter = {
+      ...filter,
+      userOp: op,
+      ...(op !== 'eq' && op !== 'ne' ? { userId: '' } : {}),
+      ...(op !== 'in' && op !== 'not_in' ? { userIds: [] } : {}),
+    };
+    // Переключаем виджет «участник» между single/multi на лету.
+    renderValue();
+    repaintControls();
+  });
   renderValue();
-  // Перерисовка виджета при смене оператора/значения.
-  subscribe(renderValue);
+  // Виджеты `buildUserSelectWidget`/`buildUserMultiSelectWidget` сами
+  // подписываются на кэш пользователей. Дополнительная подписка здесь
+  // ломала открытое выпадающее меню: при приходе roster'а valueBox
+  // пересоздавался, и <select> терял фокус (баг, описанный пользователем).
   return block;
 }
 
@@ -638,11 +652,16 @@ function renderTable(): void {
     row.append(cell);
     tbody.append(row);
   } else {
-    rows.forEach((r) => tbody.append(buildRow(r)));
+    // Курсор не должен вылезать за пределы страницы — после смены
+    // данных откатываем к 0, если прошлый индекс уже неактуален.
+    if (cursorRow >= rows.length) cursorRow = rows.length - 1;
+    if (cursorRow < 0 && rows.length > 0) cursorRow = 0;
+    rows.forEach((r, index) => tbody.append(buildRow(r, index)));
   }
   table.append(tbody);
   tableWrap.replaceChildren(table);
   repaintPager();
+  repaintCursorAndCurrent();
 
   // Row click — open the entity when it still exists (08-ui-spec.md §18:
   // «удалённые сущности — read-only с пометкой»). We do a quick check: try
@@ -650,16 +669,21 @@ function renderTable(): void {
   tbody.addEventListener('click', (event) => {
     const tr = (event.target as HTMLElement | null)?.closest<HTMLElement>('.activity-row');
     if (tr?.dataset['id'] === undefined) return;
+    const idx = Number(tr.dataset['idx'] ?? '-1');
     const row = rows.find((r) => r.id === tr.dataset['id']);
     if (row === undefined) return;
+    cursorRow = idx;
+    selectedRowIdx = idx;
+    repaintCursorAndCurrent();
     void openEntity(row);
   });
 }
 
 /** One table row — click opens the entity when alive. */
-function buildRow(row: ActivityRow): HTMLElement {
+function buildRow(row: ActivityRow, index: number): HTMLElement {
   const tr = el('tr', 'activity-row');
   tr.dataset['id'] = row.id;
+  tr.dataset['idx'] = String(index);
   tr.tabIndex = 0;
 
   // Time: the server returns wall-clock `occurred_at_ms`; render localised.
@@ -698,6 +722,47 @@ function buildRow(row: ActivityRow): HTMLElement {
   return tr;
 }
 
+/**
+ * Перерисовывает классы `activity-row-cursor` (строка под курсором
+ * клавиатуры) и `activity-row-current` (сущность открыта в редакторе).
+ * Вызывается после изменения курсора или смены `editorTarget`.
+ */
+function repaintCursorAndCurrent(): void {
+  if (tableWrap === null) return;
+  const currentEntityId = currentEntityIdForRow();
+  const trs = tableWrap.querySelectorAll<HTMLElement>('.activity-row');
+  trs.forEach((tr) => {
+    const idx = Number(tr.dataset['idx'] ?? '-1');
+    const rowId = tr.dataset['id'];
+    tr.classList.toggle('activity-row-cursor', idx === cursorRow);
+    tr.classList.toggle(
+      'activity-row-current',
+      rowId !== undefined && currentEntityId !== null && rowIdForEntity(currentEntityId) === rowId,
+    );
+  });
+}
+
+/** Id сущности, открытой в редакторе (для подсветки строки). */
+function currentEntityIdForRow(): { kind: 'thought' | 'link'; id: string } | null {
+  const target = store.state.editorTarget;
+  if (target === null) return null;
+  if (target.kind === 'thought' || target.kind === 'link') return target;
+  return null;
+}
+
+/** Сравнивает row.entity_id с текущей открытой сущностью. */
+function rowIdForEntity(entity: { kind: 'thought' | 'link'; id: string }): string | null {
+  // Возвращаем строку для сравнения c `tr.dataset['id']` (id строки, не сущности).
+  // Здесь нужен именно row.id — ассоциация строится по нему, поэтому
+  // ищем row с подходящим entity_id/entity_type и возвращаем его id.
+  const match = rows.find(
+    (r) =>
+      (entity.kind === 'thought' && r.entity_type === 'thought' && r.entity_id === entity.id) ||
+      (entity.kind === 'link' && r.entity_type === 'link' && r.entity_id === entity.id),
+  );
+  return match?.id ?? null;
+}
+
 /** Renders the author cell — cached when the user cache fills in later. */
 function renderAuthor(row: ActivityRow): HTMLElement {
   const name = row.user_name ?? resolve(row.user_id) ?? row.user_id;
@@ -723,6 +788,80 @@ function repaintNames(): void {
 /** Compact id label (first 8 hex chars) for the «слой» column. */
 function shortId(id: string): string {
   return id.length <= 8 ? id : `${id.slice(0, 8)}…`;
+}
+
+/** Arrow-keys / Home / End / Enter — навигация по таблице событий. */
+function onTableKeydown(event: KeyboardEvent): void {
+  // Не перехватываем ввод в полях фильтра — пользователь может
+  // пользоваться стрелками в самом инпуте/селекте.
+  const target = event.target as HTMLElement | null;
+  if (
+    target !== null &&
+    (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA')
+  ) {
+    return;
+  }
+  if (rows.length === 0) return;
+  const last = rows.length - 1;
+  switch (event.key) {
+    case 'ArrowDown':
+      event.preventDefault();
+      cursorRow = cursorRow < last ? cursorRow + 1 : 0;
+      repaintCursorAndCurrent();
+      scrollCursorIntoView();
+      break;
+    case 'ArrowUp':
+      event.preventDefault();
+      cursorRow = cursorRow > 0 ? cursorRow - 1 : last;
+      repaintCursorAndCurrent();
+      scrollCursorIntoView();
+      break;
+    case 'Home':
+      event.preventDefault();
+      cursorRow = 0;
+      repaintCursorAndCurrent();
+      scrollCursorIntoView();
+      break;
+    case 'End':
+      event.preventDefault();
+      cursorRow = last;
+      repaintCursorAndCurrent();
+      scrollCursorIntoView();
+      break;
+    case 'Enter': {
+      event.preventDefault();
+      const row = cursorRow >= 0 ? rows[cursorRow] : undefined;
+      if (row !== undefined) {
+        selectedRowIdx = cursorRow;
+        repaintCursorAndCurrent();
+        void openEntity(row);
+      }
+      break;
+    }
+    case 'PageDown':
+      event.preventDefault();
+      cursorRow = Math.min(last, cursorRow + 10);
+      repaintCursorAndCurrent();
+      scrollCursorIntoView();
+      break;
+    case 'PageUp':
+      event.preventDefault();
+      cursorRow = Math.max(0, cursorRow - 10);
+      repaintCursorAndCurrent();
+      scrollCursorIntoView();
+      break;
+    default:
+      return;
+  }
+}
+
+/** Прокручивает контейнер таблицы так, чтобы курсор был видим. */
+function scrollCursorIntoView(): void {
+  if (tableWrap === null || cursorRow < 0) return;
+  const tr = tableWrap.querySelectorAll<HTMLElement>('.activity-row')[cursorRow];
+  if (tr === undefined) return;
+  tr.focus({ preventScroll: false });
+  tr.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /** UUID-префикс для regex-подстановки (8-4-4-4-12 hex, lower-case). */
@@ -845,6 +984,18 @@ export function layerDisplayName(id: string): string {
  *  it still exists; otherwise shows a read-only dialog with the snapshot. */
 async function openEntity(row: ActivityRow): Promise<void> {
   const networkId = requireNetworkId();
+  // Переключаемся на слой события, чтобы `thoughts_v`/`links_v` отдали
+  // сущность именно того слоя, в котором она жила в момент события.
+  // Без этого клик по событию в слое, отличном от текущего, приводил к
+  // ложному диалогу «Сущность удалена» (баг, описанный пользователем).
+  if (row.layer_id !== null) {
+    try {
+      await etn.layers.select(networkId, row.layer_id);
+    } catch {
+      // Если переключение не удалось — пробуем открыть в текущем слое,
+      // диалог снимка всё равно сработает при провале.
+    }
+  }
   try {
     switch (row.entity_type) {
       case 'thought': {

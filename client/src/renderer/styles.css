@@ -6896,6 +6896,11 @@ table.activity-table thead th {
   cursor: pointer;
 }
 
+.activity-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .activity-row td {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6904,6 +6909,23 @@ table.activity-table thead th {
 
 .activity-row:hover td {
   background: var(--accent-soft);
+}
+
+/* Подсветка строки под курсором клавиатуры / выбранной строки
+ * (замечание пользователя — «нет выделения цветом текущей строки»). */
+.activity-row.activity-row-cursor td {
+  background: var(--accent-soft);
+}
+
+/* Рамка вокруг строки, чья сущность сейчас открыта в редакторе
+ * (замечание пользователя — «нет выделения рамкой открытой сущности»). */
+.activity-row.activity-row-current td {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.activity-row.activity-row-current.activity-row-cursor td {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .activity-time {
