@@ -28,6 +28,7 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import {
   closeHoverPreview,
@@ -221,6 +222,10 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   host = canvasHost;
   host.replaceChildren();
   clear(host);
+  // Wire the lock-badge refresh once — `store.subscribe` is a cheap
+  // pointer per render frame, and the body is gated on `lockCacheTick`
+  // so unrelated store updates are O(1).
+  wireLockBadgeRefresh();
 
   const top = div('canvas-top');
   const zoneParents = buildZone('parents');
@@ -619,6 +624,90 @@ function buildTrashBadge(id: string, title: string): HTMLElement {
     void openThoughtDeleteDialog(networkId, { id, title });
   });
   return badge;
+}
+
+/**
+ * Object-lock badge: a small 🔒 rendered on top of the cloud when another
+ * user (or this user — soft highlight) holds the lock (task 4f141756, UI
+ * element 8e3703ee). Tooltip is «редактирует <имя>» / «вы редактируете».
+ * The badge is read-only: the click-through is suppressed so the cloud keeps
+ * its normal click/dblclick behaviour.
+ *
+ * Returns `null` when nobody holds the lock — callers MUST then remove any
+ * stale `.cloud-lock-badge` from the cloud.
+ */
+function buildLockBadge(row: { user_id: string }, meId: string | null): HTMLElement | null {
+  const isOwn = meId !== null && row.user_id === meId;
+  const name = isOwn
+    ? 'вы редактируете'
+    : resolveLockHolderName(row.user_id) ?? row.user_id;
+  const badge = span('🔒', 'cloud-lock-badge' + (isOwn ? ' own' : ''));
+  setTooltip(badge, isOwn ? 'Вы редактируете эту мысль.' : `Редактирует ${name}`);
+  // Suppress click/dblclick so the cloud keeps its normal navigation.
+  for (const evt of ['click', 'dblclick', 'contextmenu'] as const) {
+    badge.addEventListener(evt, (e) => {
+      e.stopPropagation();
+    });
+  }
+  return badge;
+}
+
+/**
+ * Sync the lock badge on a single cloud (or any element) to the current
+ * cache state. Removes a stale badge if the lock has been released, adds a
+ * fresh one if acquired. Called once on build (above) and again on every
+ * `lockCacheTick` bump via {@link scheduleLockBadgeRefresh}.
+ */
+function refreshCloudLockBadges(
+  host: HTMLElement,
+  entityType: string,
+  entityId: string,
+): void {
+  // Wipe any stale badge first so we don't end up with duplicates when the
+  // holder changes mid-session.
+  for (const old of Array.from(host.querySelectorAll('.cloud-lock-badge'))) {
+    old.remove();
+  }
+  const row = store.state.lockCache[`${entityType}:${entityId}`];
+  if (row === undefined) {
+    host.classList.remove('locked-by-other', 'locked-by-self');
+    return;
+  }
+  const meId = store.state.me?.id ?? null;
+  const isOwn = meId !== null && row.user_id === meId;
+  host.classList.toggle('locked-by-other', !isOwn);
+  host.classList.toggle('locked-by-self', isOwn);
+  const badge = buildLockBadge(row, meId);
+  if (badge !== null) host.append(badge);
+}
+
+/**
+ * Re-paint every cloud's lock badge. Cheap (queries only `.cloud` elements
+ * inside the canvas host) and called from `store.subscribe` on every
+ * `lockCacheTick` bump. The subscribers are wired once from `boot()` via
+ * {@link wireLockBadgeRefresh}.
+ */
+let lockBadgeRefreshWired = false;
+function wireLockBadgeRefresh(): void {
+  if (lockBadgeRefreshWired) return;
+  lockBadgeRefreshWired = true;
+  store.subscribe(() => {
+    // `lockCacheTick` is bumped on every cache transition; use it as the
+    // signal so unrelated store updates do not re-paint badges.
+    void store.state.lockCacheTick;
+    const host = canvasHost();
+    if (host === null) return;
+    for (const cloud of host.querySelectorAll<HTMLElement>('.cloud')) {
+      const id = cloud.dataset['id'];
+      if (id === undefined) continue;
+      refreshCloudLockBadges(cloud, 'thought', id);
+    }
+  });
+}
+
+/** Resolve the canvas host element; returns `null` before the canvas mounts. */
+function canvasHost(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('.canvas-host');
 }
 
 /** Ids physically overridden by the session's current layer (S11, §10.3) —
@@ -1244,6 +1333,10 @@ function buildCloud(
   if (isMarked) {
     cloud.append(buildTrashBadge(entry.id, cloudTitleFull));
   }
+  // Object-lock badge (task 4f141756, UI element 8e3703ee): mounted once on
+  // build, then re-painted by `refreshCloudLockBadges()` on every store
+  // tick — see the `lockCacheTick` bump in `lib/lock-cache.ts`.
+  refreshCloudLockBadges(cloud, 'thought', entry.id);
   markOverriddenCloud(cloud, entry.id);
 
   // Single click → open the thought in the editor + halo (§2.2.4); double

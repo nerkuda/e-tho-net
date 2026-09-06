@@ -64,8 +64,14 @@ export function showThoughtStyleDialog(opts: {
   onApply: (patch: ThoughtStylePatch) => Promise<boolean>;
   /** `'type'` — editing a thought type: title + plain-default reset (L6). */
   mode?: 'thought' | 'type';
+  /**
+   * Fires once when the dialog closes by any path (Save / Reset / Cancel /
+   * × / Esc). Used by the lock-guard helper (task 4f141756) to release the
+   * auto-acquired object lock.
+   */
+  onClose?: () => void;
 }): void {
-  const { resolved, onApply, mode = 'thought' } = opts;
+  const { resolved, onApply, mode = 'thought', onClose } = opts;
   const body = div('form-stack');
 
   const fgInput = el('input', 'color-input');
@@ -138,6 +144,7 @@ export function showThoughtStyleDialog(opts: {
       },
       { label: 'Закрыть', primary: true },
     ],
+    onClose,
   });
 }
 
@@ -147,8 +154,10 @@ export function showLinkStyleDialog(opts: {
   onApply: (patch: LinkStylePatch) => Promise<void>;
   /** `'type'` — editing a link type: title + plain-default reset (L6). */
   mode?: 'link' | 'type';
+  /** Fires on any close (see `showThoughtStyleDialog` for details). */
+  onClose?: () => void;
 }): void {
-  const { resolved, onApply, mode = 'link' } = opts;
+  const { resolved, onApply, mode = 'link', onClose } = opts;
   const body = div('form-stack');
 
   const colorInput = el('input', 'color-input');
@@ -201,5 +210,6 @@ export function showLinkStyleDialog(opts: {
       },
       { label: 'Закрыть', primary: true },
     ],
+    onClose,
   });
 }

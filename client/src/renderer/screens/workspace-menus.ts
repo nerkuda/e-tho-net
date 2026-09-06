@@ -28,6 +28,7 @@ import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
+import { notice } from '../lib/notice.js';
 import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
 import { toggleEditorVisibility } from '../editor/editor.js';
@@ -121,6 +122,7 @@ async function membersDialog(): Promise<void> {
   const userById = new Map(users.map((u) => [u.id, u]));
 
   async function refresh(): Promise<void> {
+    await refreshLockCounts();
     tableWrap.replaceChildren();
     let members: NetworkMember[];
     try {
@@ -148,6 +150,20 @@ async function membersDialog(): Promise<void> {
       );
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
+      // «Снять все блокировки» (task 4f141756, UI element ae74b044) is
+      // available to ANY participant (not only owner) per the network
+      // равноправие rule. Visible always; disabled when the participant
+      // currently holds no locks (the «предохранитель от залипших
+      // захватов» is the main use case, but it's also a clean reset for
+      // the rare legit case of a participant with a lock count > 0).
+      const lockCount = lockCounts.get(member.user_id) ?? 0;
+      const clearBtn = button(
+        lockCount > 0 ? `Снять блокировки (${lockCount})` : 'Снять блокировки',
+        () => void clearMemberLocks(member.user_id, name),
+        'link-btn',
+      );
+      clearBtn.disabled = lockCount === 0;
+      actions.append(clearBtn);
       if (member.role !== 'owner') {
         actions.append(
           button('Сделать владельцем', () => void transfer(member.user_id), 'link-btn'),
@@ -159,6 +175,47 @@ async function membersDialog(): Promise<void> {
     }
     table.append(tbody);
     tableWrap.append(table);
+  }
+
+  /**
+   * Counts active locks per user — fetched in parallel with `listMembers`
+   * so each row can render «Снять блокировки (N)» without a second
+   * round-trip per click. Best-effort: a failure to count locks does not
+   * block the participant roster.
+   */
+  const lockCounts = new Map<string, number>();
+  async function refreshLockCounts(): Promise<void> {
+    try {
+      const locks = await etn.locks.list(networkId);
+      lockCounts.clear();
+      for (const lock of locks) {
+        lockCounts.set(lock.user_id, (lockCounts.get(lock.user_id) ?? 0) + 1);
+      }
+    } catch {
+      // Non-fatal — the buttons stay enabled but the count badge is hidden.
+    }
+  }
+
+  async function clearMemberLocks(userId: string, displayName: string): Promise<void> {
+    if (
+      !(await confirmDialog(
+        'Снять все блокировки',
+        `Снять все блокировки участника «${displayName}»? Действие необратимо.`,
+      ))
+    ) {
+      return;
+    }
+    try {
+      const result = await etn.locks.clear(networkId, userId);
+      notice(`Снято блокировок: ${result.cleared}.`);
+      // The realtime bus will fan-out `edit.cleared` for every row, but the
+      // local badge needs an immediate refresh — pull the fresh count once
+      // and let the realtime subscriber pick up the rest.
+      await refreshLockCounts();
+      await refresh();
+    } catch (err) {
+      errorLine.textContent = errText(err);
+    }
   }
 
   async function transfer(userId: string): Promise<void> {

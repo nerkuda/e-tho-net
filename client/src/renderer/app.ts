@@ -40,6 +40,7 @@ import { initRealtime, onRealtimeEvent, setRealtimeEffects } from './realtime.js
 import { applyRealtimeToUi } from './realtime-ui.js';
 import { initTheme } from './lib/theme.js';
 import { initLayerTheme } from './lib/layer-colors.js';
+import { initLockCache } from './lib/lock-cache.js';
 import { scheduleChronicleRefresh } from './screens/chronicle/chronicle.js';
 import { invalidateAllRefs, invalidateIndicators, invalidateRef } from './canvas/canvas.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
@@ -603,6 +604,7 @@ export async function boot(): Promise<void> {
   // the --layer-* overrides (or clearing them) whenever the current layer,
   // its colours or the theme change.
   initLayerTheme();
+  initLockCache();
   initRealtime();
   setRealtimeEffects({
     onStale: () => scheduleRefresh(),

@@ -70,6 +70,12 @@ import { editMarkdownField } from './markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 import { showLinkTypeEditor, showThoughtTypeEditor } from '../screens/type-manager.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
+import {
+  acquireOrShowBlocked,
+  lockHandleFromOutcome,
+  releaseHeld,
+  type LockHandle,
+} from '../lib/lock-guard.js';
 
 /** What the editor currently edits. */
 export interface EditorContext {
@@ -1065,6 +1071,14 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
 
 /** Opens the thought settings dialog (colours + font style + reset). */
 function openThoughtSettings(thought: Thought): void {
+  // Auto-acquire the thought lock for the lifetime of the dialog (task
+  // 4f141756): every control commits its change immediately, so the lock
+  // outlives the dialog itself. The helper handles LOCKED with a toast;
+  // `onClose` releases on any close path (Save / Reset / Cancel / × / Esc).
+  let handle: LockHandle | null = null;
+  void acquireOrShowBlocked('thought', thought.id).then((outcome) => {
+    handle = lockHandleFromOutcome('thought', thought.id, outcome);
+  });
   const style = resolveCloudStyle(thought);
   void showThoughtStyleDialog({
     resolved: {
@@ -1076,6 +1090,7 @@ function openThoughtSettings(thought: Thought): void {
       strike: style.strike,
     },
     onApply: (patch) => saveThought(patch),
+    onClose: () => void releaseHeld(handle),
   });
 }
 
@@ -1238,6 +1253,11 @@ function buildLinkHeader(link: Link): HTMLElement {
 
 /** Opens the link settings dialog (line colour/style/width + reset). */
 function openLinkSettings(link: Link): void {
+  // Auto-acquire the link lock (task 4f141756) — see `openThoughtSettings`.
+  let handle: LockHandle | null = null;
+  void acquireOrShowBlocked('link', link.id).then((outcome) => {
+    handle = lockHandleFromOutcome('link', link.id, outcome);
+  });
   // L21: the type line style resolves along the ancestor chain; an untyped
   // link resolves the root type.
   const type = resolveLinkTypeVisual(store.state.linkTypes, link.type_id);
@@ -1248,6 +1268,7 @@ function openLinkSettings(link: Link): void {
       width: link.width ?? type.width,
     },
     onApply: (patch) => saveLink(link, patch).then(() => undefined),
+    onClose: () => void releaseHeld(handle),
   });
 }
 

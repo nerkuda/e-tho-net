@@ -47,6 +47,7 @@ import {
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
 import { etn } from '../lib/etn.js';
+import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import { notice } from '../lib/notice.js';
 import { createTypeCheckPicker } from '../lib/type-check-picker.js';
 import { thoughtTypeOptions } from '../lib/type-tree.js';
@@ -329,6 +330,15 @@ export function openPropertyManagerEditor(
   let current: RegistryRow | null = property;
   const errorLine = span('', 'error-text');
   const body = div('form-stack');
+  // Auto-acquire the registry-row lock (task 4f141756). For a new property
+  // there is no id yet, so we skip acquire (the editor stays usable; the
+  // server gates the apply on the duplicate-name check instead).
+  let editLock: LockHandle | null = null;
+  if (property !== null) {
+    void acquireOrShowBlocked('property', property.id).then((outcome) => {
+      editLock = lockHandleFromOutcome('property', property.id, outcome);
+    });
+  }
 
   // Live duplicate-name check (case-insensitive, by `name_key`).
   const DUP_NAME_MSG = 'Свойство с таким именем уже есть.';
@@ -685,6 +695,7 @@ export function openPropertyManagerEditor(
       },
     ],
     onMount: () => nameInput.focus(),
+    onClose: () => void releaseHeld(editLock),
   });
 }
 

@@ -50,6 +50,7 @@ import type {
   LinkTypeInput,
   LinkTypeUpdateInput,
   LinkUpdateInput,
+  LockRow,
   MentionHit,
   MentionsScanRequest,
   MentionsScanResponse,
@@ -751,6 +752,34 @@ export interface EtnApi {
       maxWritesPerMinute?: number | null,
     ): Promise<{ id: string; apiKey: string }>;
     removeKey(id: string): Promise<void>;
+  };
+  /**
+   * Object-locks REST bridge (task 4f141756, операция 8919b057 «/locks»,
+   * docs/03-server-api.md §13c). All endpoints are available to any network
+   * member (`requireNetworkMember`). 409 LOCKED from `acquire` is surfaced
+   * through the canonical error envelope with `details.holder` carrying the
+   * current owner's coordinates.
+   */
+  locks: {
+    /** `POST /networks/{nid}/locks` — acquire (idempotent for self). */
+    acquire(
+      networkId: string,
+      entityType: string,
+      entityId: string,
+    ): Promise<LockRow>;
+    /** `DELETE /networks/{nid}/locks/:lockId` — release (owner only). */
+    release(networkId: string, lockId: string): Promise<void>;
+    /**
+     * `GET /networks/{nid}/locks` — list active locks, filterable by
+     * `userId`/`clientId`. Cold-start resync and the «Участники мыслесети»
+     * panel both consume this.
+     */
+    list(
+      networkId: string,
+      filters?: { userId?: string; clientId?: string },
+    ): Promise<LockRow[]>;
+    /** `POST /networks/{nid}/locks/clear` — manual reset for a participant. */
+    clear(networkId: string, userId: string): Promise<{ cleared: number }>;
   };
   realtime: {
     onEvent(cb: (event: unknown) => void): () => void;

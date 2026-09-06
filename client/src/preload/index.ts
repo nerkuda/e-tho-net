@@ -219,6 +219,13 @@ function buildApi(): EtnApi {
       createKey: (label, maxWritesPerMinute) => invoke('me.createKey', label, maxWritesPerMinute),
       removeKey: (id) => invoke('me.removeKey', id),
     },
+    locks: {
+      acquire: (networkId, entityType, entityId) =>
+        invoke('locks.acquire', networkId, entityType, entityId),
+      release: (networkId, lockId) => invoke('locks.release', networkId, lockId),
+      list: (networkId, filters) => invoke('locks.list', networkId, filters),
+      clear: (networkId, userId) => invoke('locks.clear', networkId, userId),
+    },
     realtime: {
       onEvent(cb) {
         const listener = (_event: unknown, payload: unknown): void => cb(payload);

@@ -39,6 +39,7 @@ import {
   markCommentPreview,
 } from '../lib/hover-preview.js';
 import { ELLIPSE_INSIDE } from '../lib/pure.js';
+import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
 import { resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import { store } from '../state.js';
 import { findCloudAnywhere, getRef } from './canvas.js';
@@ -183,6 +184,14 @@ export function initLinksOverlay(host: HTMLElement): { redraw(): void } {
 
   new ResizeObserver(() => requestDraw()).observe(host);
   host.addEventListener('scroll', () => requestDraw(), true);
+
+  // Lock-cache transitions (task 4f141756) carry `lock-locked-*` classes on
+  // the path; re-draw so a freshly-acquired lock and a freshly-released one
+  // show up on every line without a focus round-trip.
+  store.subscribe(() => {
+    void store.state.lockCacheTick;
+    requestDraw();
+  });
 
   return { redraw: requestDraw };
 }
@@ -587,6 +596,25 @@ function drawVisualLine(
   // layer version without changing its geometry.
   if (bundle.edges.some((e) => store.state.layerOverrides.link_ids.includes(e.id))) {
     line.classList.add('link-overridden');
+  }
+  // Object-lock indicator (task 4f141756, UI element 8e3703ee): when at least
+  // one edge in the bundle is locked, attach an SVG <title> tooltip and a
+  // CSS class. The visual 🔒 glyph is rendered separately below as an SVG
+  // circle+text at the line midpoint, mirroring the type-label position.
+  const lockedEdge = bundle.edges.find((e) => store.state.lockCache[`link:${e.id}`] !== undefined);
+  if (lockedEdge !== undefined) {
+    const lockRow = store.state.lockCache[`link:${lockedEdge.id}`];
+    if (lockRow !== undefined) {
+      const meId = store.state.me?.id ?? null;
+      const isOwn = meId !== null && lockRow.user_id === meId;
+      const holderName = resolveLockHolderName(lockRow.user_id) ?? lockRow.user_id;
+      const title = document.createElementNS(SVG_NS, 'title');
+      title.textContent = isOwn
+        ? 'Вы редактируете эту связь'
+        : `Редактирует ${holderName}`;
+      line.append(title);
+      line.classList.add(isOwn ? 'link-locked-own' : 'link-locked-other');
+    }
   }
   svg.append(line);
 

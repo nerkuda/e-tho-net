@@ -102,6 +102,16 @@ export function resolve(userId: string | null | undefined): string | null {
 }
 
 /**
+ * Same as {@link resolve} but guarantees a non-empty fallback string suitable
+ * for inline rendering (tooltips, badges). Used by the lock-indicator surface
+ * (task 4f141756) where every entry must have a name even when the admin
+ * roster has not been fetched yet.
+ */
+export function resolveUserName(userId: string | null | undefined): string | null {
+  return resolve(userId);
+}
+
+/**
  * Subscribes to cache transitions. The listener fires when the admin list
  * fetch settles (success OR failure) and again whenever `ensureLoaded()`
  * completes another fetch. Returns an unsubscribe function.

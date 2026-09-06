@@ -73,6 +73,7 @@ import { confirmDialog, errorDialog, showDialog, type DialogButton } from '../li
 import { button, div, el, errText, setTooltip, span, applyFontFlags } from '../lib/dom.js';
 import { svgIcon } from '../lib/icons.js';
 import { etn } from '../lib/etn.js';
+import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import {
   MAX_TYPE_DEPTH,
   aggregateTypeCounts,
@@ -535,6 +536,18 @@ export function showThoughtTypeEditor(
   extras?: TypeEditorExtras,
 ): Promise<string | null> {
   const networkId = requireNetworkId();
+  // Auto-acquire the type lock for the lifetime of the dialog (task
+  // 4f141756): the editor commits on «Применить и закрыть», so the lock
+  // must outlive the entire edit session. For a NEW type (id is null) we
+  // pass the empty string as a placeholder entity_id — the server stores
+  // the type-id once create returns, and the helper no-ops on the empty
+  // pair (it just returns a soft «failed» outcome which the editor ignores).
+  let editLock: LockHandle | null = null;
+  if (type !== null) {
+    void acquireOrShowBlocked('thought_type', type.id).then((outcome) => {
+      editLock = lockHandleFromOutcome('thought_type', type.id, outcome);
+    });
+  }
   // The type as last seen by the SERVER: the initial one, the freshly created
   // one, or the patched one after a successful apply (a failed apply keeps it
   // at the last consistent state so a retry re-diffs correctly).
@@ -846,7 +859,11 @@ export function showThoughtTypeEditor(
         },
       ],
       onMount: () => nameInput.focus(),
-      onClose: () => resolve(createdId),
+      onClose: () => {
+        void releaseHeld(editLock);
+        editLock = null;
+        resolve(createdId);
+      },
     });
   });
 }
@@ -2090,6 +2107,15 @@ export function showLinkTypeEditor(
   // The type as last seen by the SERVER (see showThoughtTypeEditor).
   let current: LinkType | null = type;
   let createdId: string | null = null;
+  // Auto-acquire the type lock (task 4f141756). Same rationale as
+  // `showThoughtTypeEditor` — for new types there is no id yet, so we
+  // skip acquire and let create race against anyone editing the same name.
+  let editLock: LockHandle | null = null;
+  if (type !== null) {
+    void acquireOrShowBlocked('link_type', type.id).then((outcome) => {
+      editLock = lockHandleFromOutcome('link_type', type.id, outcome);
+    });
+  }
   const errorLine = span('', 'error-text');
   const body = div('form-stack');
 
@@ -2306,7 +2332,11 @@ export function showLinkTypeEditor(
         },
       ],
       onMount: () => forwardInput.focus(),
-      onClose: () => resolve(createdId),
+      onClose: () => {
+        void releaseHeld(editLock);
+        editLock = null;
+        resolve(createdId);
+      },
     });
   });
 }

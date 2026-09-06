@@ -2254,6 +2254,76 @@ export class RestClient {
     await this.request('DELETE', `/system/logs/${encodeURIComponent(filename)}`);
   }
 
+  // -------------------------------------------------------------------------
+  // §13c Object locks (task 4f141756 — авто-захват в клиенте)
+  //
+  // Серверная основа (миграция 034, REST `/locks`, события `edit.*`) уже
+  // готова (коммит d0f41af, задача 2031df5e); эти методы — клиентский мост.
+  // На 409 LOCKED сервер присылает канонический envelope, который
+  // {@link parseResponse} раскрывает в EtnError с details.holder —
+  // пользовательский код резолвит имя holder'а через `lib/users.ts`.
+  // -------------------------------------------------------------------------
+
+  /** `POST /networks/{nid}/locks` — acquire (идемпотентно для своего). */
+  public async acquireLock(
+    networkId: string,
+    entityType: string,
+    entityId: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').LockRow> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/locks`,
+      { body: { entity_type: entityType, entity_id: entityId }, requestOptions: opts },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/locks/:lockId` — release (только владелец). */
+  public async releaseLock(
+    networkId: string,
+    lockId: string,
+    opts?: RequestOptions,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/locks/${encodeURIComponent(lockId)}`,
+      { requestOptions: opts },
+    );
+  }
+
+  /**
+   * `GET /networks/{nid}/locks` — список активных захватов, опционально
+   * фильтрованных по `userId`/`clientId`. Используется для подтягивания
+   * чужого состояния на cold-start (после переподключения WS) и для диалога
+   * «Участники мыслесети» (показать, у кого сколько блокировок).
+   */
+  public async listLocks(
+    networkId: string,
+    filters?: { userId?: string; clientId?: string },
+  ): Promise<import('@etn/shared').LockRow[]> {
+    const query: QueryRecord = {};
+    if (filters?.userId !== undefined) query['user_id'] = filters.userId;
+    if (filters?.clientId !== undefined) query['client_id'] = filters.clientId;
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/locks`,
+      { query: Object.keys(query).length ? query : undefined },
+    );
+  }
+
+  /** `POST /networks/{nid}/locks/clear` — ручной сброс всех захватов пользователя. */
+  public async clearLocks(
+    networkId: string,
+    userId: string,
+    opts?: RequestOptions,
+  ): Promise<{ cleared: number }> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/locks/clear`,
+      { body: { user_id: userId }, requestOptions: opts },
+    );
+  }
+
   /** `DELETE /system/logs` — remove every server journal file (current truncated). */
   public async deleteAllServerLogs(): Promise<void> {
     await this.request('DELETE', '/system/logs');

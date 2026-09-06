@@ -24,6 +24,7 @@ import {
 } from '../drafts.js';
 import { div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { onRealtimeEvent } from '../realtime.js';
@@ -134,8 +135,24 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
   let permanent: Comment | null = null;
   let field: HTMLElement | null = null;
   let isEditing = false;
+  // Object lock acquired on entering edit mode (task 4f141756 — auto-acquire
+  // for the permanent-comment editor). The owner can carry the lock across
+  // save → edit-again because release only fires when leaving edit mode.
+  let editLock: LockHandle | null = null;
   const setEditing = (next: boolean): void => {
+    if (next === isEditing) return;
     isEditing = next;
+    if (next) {
+      // Fire-and-forget: the helper surfaces its own notice on LOCKED, and
+      // the editor stays editable so the user can still read the comment
+      // (writes would 409 server-side, which is handled in `onSave`).
+      void acquireOrShowBlocked(ctx.ownerType, ctx.ownerId).then((outcome) => {
+        editLock = lockHandleFromOutcome(ctx.ownerType, ctx.ownerId, outcome);
+      });
+    } else {
+      void releaseHeld(editLock);
+      editLock = null;
+    }
   };
   // Publish a handle for the realtime listener: the same identity is replaced
   // on every editor rebuild so the listener always addresses the live field.

@@ -165,6 +165,22 @@ export interface AppState {
   currentLayer: LayerEcho | null;
   /** Ids physically overridden by the current layer — marked on the canvas. */
   layerOverrides: { thought_ids: string[]; link_ids: string[] };
+  /**
+   * Snapshot of active object-locks for the renderer (task 4f141756,
+   * операция 8919b057 «/locks»). Keyed by `${entity_type}:${entity_id}`;
+   * the value is the most recent `LockRow` seen over the realtime bus.
+   *
+   * Kept as a plain object (not a `Map`) so React-free renders can simply
+   * iterate it; the canonical cache lives in `lib/lock-cache.ts` and pushes
+   * updates here via a thin subscriber.
+   */
+  lockCache: Record<string, import('@etn/shared').LockRow>;
+  /**
+   * Monotonic counter that ticks every time the lock cache transitions —
+   * pure-render consumers (canvas, editor overlay) bump it in their
+   * `useTick`/`memo` keys without subscribing to the whole store.
+   */
+  lockCacheTick: number;
 }
 
 /** Initial snapshot. */
@@ -220,6 +236,8 @@ const initial: AppState = {
   layers: [],
   currentLayer: null,
   layerOverrides: { thought_ids: [], link_ids: [] },
+  lockCache: {},
+  lockCacheTick: 0,
 };
 
 /**
@@ -270,6 +288,8 @@ class Store {
       layers: [],
       currentLayer: null,
       layerOverrides: { thought_ids: [], link_ids: [] },
+      lockCache: {},
+      lockCacheTick: 0,
     });
   }
 }

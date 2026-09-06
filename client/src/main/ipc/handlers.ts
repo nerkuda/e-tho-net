@@ -1169,6 +1169,32 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     bind((id: string) => requireRest(deps).deleteMyKey(id)),
   );
 
+  // --- object locks (task 4f141756, docs/03-server-api.md §13c) --------------
+  handlers.set(
+    'locks.acquire',
+    bind((networkId: string, entityType: string, entityId: string) =>
+      requireRest(deps).acquireLock(networkId, entityType, entityId),
+    ),
+  );
+  handlers.set(
+    'locks.release',
+    bind((networkId: string, lockId: string) =>
+      requireRest(deps).releaseLock(networkId, lockId),
+    ),
+  );
+  handlers.set(
+    'locks.list',
+    bind((networkId: string, filters?: { userId?: string; clientId?: string }) =>
+      requireRest(deps).listLocks(networkId, filters),
+    ),
+  );
+  handlers.set(
+    'locks.clear',
+    bind((networkId: string, userId: string) =>
+      requireRest(deps).clearLocks(networkId, userId),
+    ),
+  );
+
   // --- meta (L5 client_meta: installation-scoped state, e.g. the UI theme) ---
   handlers.set(
     'meta.get',

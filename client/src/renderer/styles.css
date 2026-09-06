@@ -2045,6 +2045,57 @@ body.cloud-dragging * {
   color: #e53935;
 }
 
+/* Object-lock badge (task 4f141756, UI element 8e3703ee): small 🔒 chip
+   anchored at the cloud's top-right corner so it never overlaps the
+   indicator row (📝/📅/📎) along the right edge. «own» variant keeps the
+   same shape but is tinted in the active theme colour instead of red so
+   the user sees their own edit at a glance without alarm. */
+.cloud-lock-badge {
+  position: absolute;
+  right: -8px;
+  top: -6px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #ffd54f;
+  user-select: none;
+  pointer-events: auto;
+  z-index: 4;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.cloud-lock-badge.own {
+  background: rgba(33, 150, 243, 0.85);
+  color: #fff;
+}
+
+/* A locked-by-other cloud wears a soft red outline; a locked-by-self cloud
+   wears a soft blue one — visually distinct from the trash dim and the
+   layer-override dashed outline so the three states never collide. */
+.cloud.locked-by-other {
+  outline: 2px solid rgba(229, 57, 53, 0.55);
+  outline-offset: 1px;
+}
+.cloud.locked-by-self {
+  outline: 2px solid rgba(33, 150, 243, 0.45);
+  outline-offset: 1px;
+}
+
+/* SVG link overlay (canvas/links.ts): lock emphasis on the curve. Other
+   people's locks get a violet dashed stroke that does not collide with the
+   S11 layer-override style (which is also violet but solid) — adding a
+   slight dash gap distinguishes the two without giving up readability. */
+.link-line.link-locked-other {
+  stroke-dasharray: 6 4;
+  filter: drop-shadow(0 0 1.5px rgba(229, 57, 53, 0.5));
+}
+.link-line.link-locked-own {
+  stroke-dasharray: 4 2;
+  filter: drop-shadow(0 0 1.5px rgba(33, 150, 243, 0.4));
+}
+
 .cloud.font-bold .cloud-title {
   font-weight: 700;
 }

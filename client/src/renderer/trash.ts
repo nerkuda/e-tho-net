@@ -39,6 +39,7 @@ import { button, div, el, setTooltip, span } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { svgIcon } from './lib/icons.js';
 import { notice } from './lib/notice.js';
+import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from './lib/lock-guard.js';
 
 /**
  * Human-readable reasons of a blocked deletion-check (bug 0.5.4: the dialog
@@ -170,11 +171,20 @@ export async function openThoughtDeleteDialog(
     { label: 'Отмена' },
   ];
 
+  // Auto-acquire the thought lock for the lifetime of the delete dialog (task
+  // 4f141756). Acquired BEFORE showDialog so the helper's BLOCKED toast
+  // surfaces before the dialog paints; released on every close via onClose.
+  let handle: LockHandle | null = null;
+  void acquireOrShowBlocked('thought', target.id).then((outcome) => {
+    handle = lockHandleFromOutcome('thought', target.id, outcome);
+  });
+
   showDialog({
     title: `Удаление мысли «${target.title}»`,
     body,
     buttons,
     onMount: () => deleteBtn?.focus(),
+    onClose: () => void releaseHeld(handle),
   });
 }
 
@@ -212,6 +222,13 @@ export async function openLinkDeleteDialog(
       body.append(el('p', 'dialog-text', `Нельзя удалить совсем — ${reason}.`));
     }
   }
+
+  // Auto-acquire the link lock for the lifetime of the delete dialog (task
+  // 4f141756) — see `openThoughtDeleteDialog` for the rationale.
+  let handle: LockHandle | null = null;
+  void acquireOrShowBlocked('link', linkId).then((outcome) => {
+    handle = lockHandleFromOutcome('link', linkId, outcome);
+  });
 
   showDialog({
     title: 'Удаление связи',
@@ -261,6 +278,7 @@ export async function openLinkDeleteDialog(
       },
       { label: 'Отмена' },
     ],
+    onClose: () => void releaseHeld(handle),
   });
 }
 
