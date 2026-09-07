@@ -16,6 +16,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import pino from 'pino';
 
 import { SystemDb } from '../db/system-db.js';
+import { NetworkServiceImpl } from '../domain/network-service.js';
 import type { Logger } from '../logger.js';
 import { PubSub } from '../realtime/pubsub.js';
 import { createApiKeyAuthProvider } from './auth.js';
@@ -68,6 +69,7 @@ export async function runStdioMcp(opts: StdioMcpOptions): Promise<void> {
       authProvider,
       auth,
       logger: log,
+      networkService: new NetworkServiceImpl(systemDb, opts.dataDir, log),
     };
     const mcp = createMcpServer(deps);
     const transport = new StdioServerTransport();

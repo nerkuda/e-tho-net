@@ -320,10 +320,14 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         //   * members.list (readOnlyHint) — +1 readOnly;
         //   * attachments.update (idempotentHint) — +1 idempotent;
         //   * attachments.delete (destructiveHint) — +1 destructive.
-        assert.equal(annotated, 53);
-        assert.equal(hintReadOnly, 31);
-        assert.equal(hintDestructive, 11);
-        assert.equal(hintIdempotent, 9);
+        // Task ba024a45 / 0.7.2 добавляет 3 инструмента:
+        //   * `etn.instructions` (readOnlyHint) — +1 readOnly;
+        //   * `etn.networks.write` (idempotentHint) — +1 idempotent;
+        //   * `etn.networks.delete` (destructiveHint) — +1 destructive.
+        assert.equal(annotated, 56);
+        assert.equal(hintReadOnly, 32);
+        assert.equal(hintDestructive, 12);
+        assert.equal(hintIdempotent, 10);
       } finally {
         await handle.close();
       }

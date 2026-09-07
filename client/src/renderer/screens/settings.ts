@@ -20,7 +20,7 @@
  *   new self-service `PATCH /me`). Username is read-only.
  * - **Мыслесеть** — network `display_name` plus four markdown self-description
  *   fields (L2, task O5: `description`, `when_to_use`, `conventions`,
- *   `examples`), the per-network `node_section_type_id` dropdown and the
+ *   `examples`), the per-network `type_roles.table_of_contents` dropdown and the
  *   per-user `show_inactive` L3 preference. Markdown tabs are owner-only.
  * - **Клиент** — UI theme (L5 `client_meta.theme`) and `cloud_width` /
  *   `cloud_gap` (L4 `ui_state`), all clipped to the system constants.
@@ -113,7 +113,10 @@ function readInitialDraft(): Draft {
     networkWhenToUse: net?.when_to_use ?? '',
     networkConventions: net?.conventions ?? '',
     networkExamples: net?.examples ?? '',
-    networkNodeSectionTypeId: net?.node_section_type_id ?? null,
+    networkNodeSectionTypeId:
+      typeof net?.type_roles?.table_of_contents === 'string'
+        ? net.type_roles.table_of_contents
+        : null,
     showInactive: store.state.showInactive,
     theme: store.state.theme,
     cloudWidth: store.state.cloudWidth,
@@ -569,7 +572,8 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       );
     }
 
-    // Network: display_name + 4 markdown fields + node_section_type_id (L2 / O5).
+    // Network: display_name + 4 markdown fields + type_roles.table_of_contents
+    // dropdown (L2 / O5 / task ba024a45).
     // One PATCH so the server-side update is a single transaction; partial
     // mismatches between client and server are tolerated because we always
     // send the full current draft for changed fields.
@@ -581,13 +585,21 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       draft.networkExamples !== original.networkExamples ||
       draft.networkNodeSectionTypeId !== original.networkNodeSectionTypeId;
     if (networkFieldsDirty) {
+      // Merge the form's `table_of_contents` selection into the existing
+      // `type_roles` dictionary so we never wipe the `instructions` role
+      // (and any future roles added in the spec). The server's PATCH keeps
+      // absent keys, so only the table_of_contents entry is overwritten.
+      const existingRoles = store.state.network?.type_roles ?? {};
       const fields: Parameters<typeof etn.networks.update>[1] = {
         display_name: draft.networkName.trim() || (store.state.network?.display_name ?? ''),
         description: draft.networkDescription.trim() === '' ? null : draft.networkDescription,
         when_to_use: draft.networkWhenToUse.trim() === '' ? null : draft.networkWhenToUse,
         conventions: draft.networkConventions.trim() === '' ? null : draft.networkConventions,
         examples: draft.networkExamples.trim() === '' ? null : draft.networkExamples,
-        node_section_type_id: draft.networkNodeSectionTypeId,
+        type_roles: {
+          ...existingRoles,
+          table_of_contents: draft.networkNodeSectionTypeId,
+        },
       };
       tasks.push(
         (async () => {

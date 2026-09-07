@@ -40,6 +40,7 @@ export const MCP_TOOL_NAMES = [
   // read (§4.1)
   'etn.networks.list',
   'etn.networks.structure',
+  'etn.instructions',
   'etn.thoughts.search',
   'etn.thoughts.query',
   'etn.thoughts.get',
@@ -67,6 +68,8 @@ export const MCP_TOOL_NAMES = [
   'etn.layers.diff',
   'etn.layers.diff_doc',
   // mutate (§4.2)
+  'etn.networks.write',
+  'etn.networks.delete',
   'etn.thoughts.create',
   'etn.thoughts.update',
   'etn.thoughts.delete',
@@ -145,6 +148,9 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // ---- read tools (§4.1) — readOnlyHint ---------------------------
   'etn.networks.list': { readOnlyHint: true },
   'etn.networks.structure': { readOnlyHint: true },
+  // `etn.instructions` (задача ba024a45 / 0.7.2, ADR 717f04df) — read-only
+  // витрина инструкций сети; возвращает превью + список, без изменений.
+  'etn.instructions': { readOnlyHint: true },
   'etn.thoughts.search': { readOnlyHint: true },
   'etn.thoughts.query': { readOnlyHint: true },
   'etn.thoughts.get': { readOnlyHint: true },
@@ -188,6 +194,12 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.locks.clear': { destructiveHint: true },
   'etn.activity.rollup': { destructiveHint: true },
   'etn.activity.truncate': { destructiveHint: true },
+  // `etn.networks.delete` (задача ba024a45 / 0.7.2) — деструктивный;
+  // дополнительно требует `confirm: true` в аргументах.
+  'etn.networks.delete': { destructiveHint: true },
+  // `etn.networks.write` — upsert (create или patch); повторный вызов с теми
+  // же аргументами даёт тот же результат.
+  'etn.networks.write': { destructiveHint: false, idempotentHint: true },
 
   // ---- mutating tools — idempotentHint ----------------------------
   'etn.thoughts.set_active': { idempotentHint: true },

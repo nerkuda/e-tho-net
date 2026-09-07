@@ -32,7 +32,7 @@ import type {
   UpdateNetworkInput,
 } from '@etn/shared';
 
-import { EtnError, PREF_KEY } from '@etn/shared';
+import { EtnError, PREF_KEY, validateTypeRoles } from '@etn/shared';
 
 import type { NetworkService } from '../domain/network-service.js';
 import { sendEtnError } from '../http/errors.js';
@@ -82,8 +82,8 @@ function networkDto(n: Network) {
     when_to_use: n.when_to_use,
     conventions: n.conventions,
     examples: n.examples,
-    node_section_type_id: n.node_section_type_id,
-    has_structure: n.node_section_type_id !== null,
+    type_roles: n.type_roles,
+    has_structure: typeof n.type_roles.table_of_contents === 'string',
     created_at: n.created_at,
     updated_at: n.updated_at,
   };
@@ -92,9 +92,10 @@ function networkDto(n: Network) {
 /**
  * Resolve a PATCH body field that is `undefined` (keep existing), `null` or
  * empty string (clear), or a non-empty string (set) into the value to persist
- * (task O5, markdown self-description fields).
+ * (task O5, markdown self-description fields). Exported so the MCP
+ * `etn.networks.write` tool can apply the same semantics to its patch branch.
  */
-function normalizeOptionalText(
+export function normalizeOptionalText(
   incoming: string | null | undefined,
   current: string | null,
 ): string | null {
@@ -165,12 +166,18 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
           );
         }
         const description = typeof body.description === 'string' ? body.description || null : null;
+        const typeRoles = body.type_roles !== undefined ? validateTypeRoles(body.type_roles) : {};
 
         // Real creation (directory + data.db + HOME) is delegated to NetworkService.
         // The stub throws "Not implemented: see task C10" until C10 lands.
         let network: Network;
         try {
-          network = await networkService.createNetwork(req.auth!.user.id, displayName, description);
+          network = await networkService.createNetwork(
+            req.auth!.user.id,
+            displayName,
+            description,
+            typeRoles,
+          );
         } catch (err) {
           throw new EtnError('INTERNAL', (err as Error).message, undefined, req.id);
         }
@@ -181,7 +188,7 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
           action: 'network.create',
           targetType: 'network',
           targetId: network.id,
-          details: { display_name: displayName },
+          details: { display_name: displayName, type_roles: typeRoles },
         });
         sendCreated(reply, networkDto(network));
       },
@@ -223,15 +230,21 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
         const whenToUse = normalizeOptionalText(body.when_to_use, network.when_to_use);
         const conventions = normalizeOptionalText(body.conventions, network.conventions);
         const examples = normalizeOptionalText(body.examples, network.examples);
-        // node_section_type_id is special: when present it must point at a
-        // real thought type in this network's data.db (no cross-DB FK), or be
-        // null. A stale id would silently break `etn.networks.structure`, so we
-        // refuse to persist unknown ids up front.
-        const nodeSectionTypeId = networkService.validateNodeSectionType(
+        // type_roles (task ba024a45 / 0.7.2, ADR 46d17a91): a partial update —
+        // absent keys preserve their existing values, present keys (including
+        // explicit `null`) override them. Validation runs in two steps:
+        //   1. `validateTypeRoles` rejects unknown role keys at the boundary;
+        //   2. `validateTypeRoles` on the service checks that every non-null
+        //      id resolves to a real thought type in this network's data.db.
+        // The merge is done before the second step so a stale id is caught
+        // even when the caller only sets one role.
+        const mergedRoles =
+          body.type_roles === undefined
+            ? network.type_roles
+            : { ...network.type_roles, ...validateTypeRoles(body.type_roles) };
+        const validatedRoles = networkService.validateTypeRoles(
           network.id,
-          body.node_section_type_id === undefined
-            ? network.node_section_type_id
-            : body.node_section_type_id,
+          mergedRoles,
         );
         app.systemDb.updateNetwork(network.id, {
           displayName,
@@ -239,7 +252,7 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
           when_to_use: whenToUse,
           conventions,
           examples,
-          node_section_type_id: nodeSectionTypeId,
+          type_roles: validatedRoles,
         });
         app.systemDb.insertAuditLog({
           actorUserId: req.auth!.user.id,
@@ -254,7 +267,7 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
             when_to_use: whenToUse,
             conventions,
             examples,
-            node_section_type_id: nodeSectionTypeId,
+            type_roles: validatedRoles,
           },
         });
         // Real-time (E3, 04-realtime.md §4.6, task O5): broadcast only changed
@@ -265,8 +278,8 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
         if (whenToUse !== network.when_to_use) changes['when_to_use'] = whenToUse;
         if (conventions !== network.conventions) changes['conventions'] = conventions;
         if (examples !== network.examples) changes['examples'] = examples;
-        if (nodeSectionTypeId !== network.node_section_type_id) {
-          changes['node_section_type_id'] = nodeSectionTypeId;
+        if (JSON.stringify(validatedRoles) !== JSON.stringify(network.type_roles)) {
+          changes['type_roles'] = validatedRoles;
         }
         if (Object.keys(changes).length > 0) {
           emitDomainEvent(

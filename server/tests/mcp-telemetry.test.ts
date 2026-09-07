@@ -510,16 +510,16 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // it measured 50 318 B. Task 6d45ab37 (P1-паритет MCP↔REST) re-baselines
         // to 58 000 B for 60 tools: 6 новых описаний (resolve, bulk_update,
         // chronicle.query, members.list, attachments.update, attachments.delete)
-        // добавляют ~7 300 B — удержать старые 52 000 B без удаления других
-        // описаний нельзя. Средняя плотность — 967 B/инструмент, что ниже
-        // pre-trim значения (1 073 B/инструмент для 54 tools). Бюджет должен
-        // расти только через осознанное добавление инструментов, а не через
-        // расползание описаний — иначе ADR b2eebf8b «прогрессивное раскрытие»
-        // не работает.
+        // добавляют ~7 300 B. Task ba024a45 / 0.7.2 re-baselines again to
+        // 62 000 B for 63 tools: 3 новых описания (instructions,
+        // networks.write, networks.delete) добавляют ~1 800 B. ADR b2eebf8b
+        // «прогрессивное раскрытие» остаётся в силе — бюджет растёт только
+        // через осознанное добавление инструментов, а не через расползание
+        // существующих описаний.
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
         assert.ok(
-          bytes <= 60_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 60000`,
+          bytes <= 62_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 62000`,
         );
       } finally {
         await handle.close();

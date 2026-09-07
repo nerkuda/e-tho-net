@@ -27,6 +27,7 @@ const EXPECTED_FILES = [
   '010_api_keys_max_writes_per_minute.sql',
   '011_networks_self_description.sql',
   '012_mcp_tool_call_metrics.sql',
+  '013_networks_type_roles.sql',
 ];
 
 /** All `_system.db` tables that must exist after migration. */

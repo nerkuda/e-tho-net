@@ -1473,7 +1473,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         when_to_use: 'Coding → conventions',
         conventions: null,
         examples: null,
-        node_section_type_id: null,
+        type_roles: {},
       });
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -1491,7 +1491,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           // These two must NOT be present in the compact list (O5).
           conventions?: unknown;
           examples?: unknown;
-          node_section_type_id?: unknown;
+          type_roles?: unknown;
         }>>(listed);
         assert.equal(data.length, 1);
         const item = data[0]!;
@@ -1501,7 +1501,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(item.has_structure, false);
         assert.equal(item.conventions, undefined);
         assert.equal(item.examples, undefined);
-        assert.equal(item.node_section_type_id, undefined);
+        assert.equal(item.type_roles, undefined);
       } finally {
         await handle.close();
       }
@@ -1510,7 +1510,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('etn.networks.structure returns empty sections when no node_section_type_id (O5)', async () => {
+  it('etn.networks.structure returns empty sections when no type_roles.table_of_contents (O5)', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -1523,7 +1523,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const data = toolJson<{
           network_id: string;
           has_structure: boolean;
-          node_section_type_id: string | null;
+          type_roles: Record<string, string | null>;
           conventions: string | null;
           examples?: unknown;
           sections: unknown[];
@@ -1531,10 +1531,13 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         }>(result);
         assert.equal(data.network_id, ctx.networkId);
         assert.equal(data.has_structure, false);
-        assert.equal(data.node_section_type_id, null);
+        // The dictionary is present (defaulted to `{}`) — `table_of_contents`
+        // is absent, so `has_structure` is false. The full dictionary is
+        // echoed back so an agent sees the current role configuration.
+        assert.deepEqual(data.type_roles, {});
         // Bug fix: `conventions` must always come back (null when unset), even
         // when the network has no structure at all — the field is unrelated
-        // to `node_section_type_id`.
+        // to the structure role.
         assert.equal(data.conventions, null);
         // `examples` is intentionally omitted unless `include_examples: true`.
         assert.equal(data.examples, undefined);
@@ -1558,7 +1561,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         when_to_use: current.when_to_use,
         conventions: 'Пиши хронологию с датой в ISO-8601.',
         examples: 'Хорошо: "2026-08-25 — релиз 0.4.2". Плохо: "вчера".',
-        node_section_type_id: null,
+        type_roles: {},
       });
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -1649,7 +1652,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         )
         .run(randomUUID(), sectionA, note, ctx.adminId, ctx.adminId);
 
-      // Set the network node_section_type_id via the system DB.
+      // Set the network type_roles.table_of_contents via the system DB.
       const current = ctx.sys.getNetworkById(ctx.networkId)!;
       ctx.sys.updateNetwork(ctx.networkId, {
         displayName: current.display_name,
@@ -1657,7 +1660,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         when_to_use: current.when_to_use,
         conventions: 'Именуй разделы существительными в единственном числе.',
         examples: current.examples,
-        node_section_type_id: sectionType.id,
+        type_roles: { table_of_contents: sectionType.id },
       });
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -1670,7 +1673,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         const data = toolJson<{
           network_id: string;
           has_structure: boolean;
-          node_section_type_id: string;
+          type_roles: Record<string, string | null>;
           node_section_type: { id: string; name: string };
           conventions: string | null;
           examples?: unknown;
@@ -1688,7 +1691,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         }>(result);
 
         assert.equal(data.has_structure, true);
-        assert.equal(data.node_section_type_id, sectionType.id);
+        assert.equal(data.type_roles.table_of_contents, sectionType.id);
         assert.equal(data.node_section_type.id, sectionType.id);
         // Bug fix: `conventions` rides along with the structure response even
         // when `has_structure: true` (the field it fixes is independent of

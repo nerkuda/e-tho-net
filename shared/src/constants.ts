@@ -7,6 +7,8 @@
  * docs/04-realtime.md, docs/06-auth.md.
  */
 
+import { EtnError } from './errors.js';
+
 // ---------------------------------------------------------------------------
 // Cloud sizing (11-settings-and-state.md §2.4)
 // ---------------------------------------------------------------------------
@@ -336,6 +338,83 @@ export const CHRONICLE_SNIPPET_CHARS = 160;
 
 /** Maximum number of thought ids accepted by the chronicle filter's «мысли» field. */
 export const CHRONICLE_THOUGHT_IDS_MAX = 100;
+
+// ---------------------------------------------------------------------------
+// Network type roles (task ba024a45 / 0.7.2, ADR 46d17a91, ADR 717f04df)
+// ---------------------------------------------------------------------------
+
+/**
+ * Contract names of the `type_roles` dictionary (network-level setting, задача
+ * ba024a45 / 0.7.2, ADR 46d17a91). Each entry maps a role to the id of a
+ * thought type in the network's `data.db`, designating it for a specific
+ * structural purpose.
+ *
+ *  * `table_of_contents` — the type whose active thoughts form the network's
+ *    table of contents (`etn.networks.structure` returns their rows). Replaces
+ *    the legacy `node_section_type_id` column (see migration
+ *    `013_networks_type_roles.sql`).
+ *  * `instructions` — the type whose active thoughts are exposed as
+ *    step-by-step instructions for AI agents via the read tool
+ *    `etn.instructions`. ADR 717f04df: «instructions are data, not prompts».
+ *
+ * New roles must be appended here AND in the description of the
+ * `etn.networks.write` tool. Unknown keys at write time are rejected with
+ * `VALIDATION_ERROR`.
+ */
+export const KNOWN_TYPE_ROLES = ['table_of_contents', 'instructions'] as const;
+
+/** Single role name from {@link KNOWN_TYPE_ROLES}. */
+export type KnownTypeRole = (typeof KNOWN_TYPE_ROLES)[number];
+
+/**
+ * Per-network type-role dictionary: `{ [role]: type_id | null }`. The value
+ * `null` clears the role (the network stops advertising the corresponding
+ * capability). An absent key keeps the existing value at write time
+ * (partial-update semantics). Unknown keys raise `VALIDATION_ERROR`.
+ */
+export type TypeRoles = Partial<Record<KnownTypeRole, string | null>>;
+
+/**
+ * Validate a `type_roles` payload coming from the wire (REST `PATCH
+ * /networks/{id}` or MCP `etn.networks.write`). Unknown role keys are
+ * rejected — the dictionary is closed against typos and forgotten
+ * experiments. The values are sanity-checked for shape (`string | null`),
+ * but the existence of the referenced thought type in the per-network
+ * `data.db` is verified by the network service (`validateTypeRolesByDb`)
+ * before persistence.
+ *
+ * @throws {EtnError} `VALIDATION_ERROR` when the payload is not an object
+ *   or carries an unknown role key.
+ */
+export function validateTypeRoles(input: unknown): TypeRoles {
+  if (input === null || input === undefined) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'type_roles должен быть объектом { [роль]: type_id | null }.',
+      { field: 'type_roles' },
+    );
+  }
+  const out: TypeRoles = {};
+  for (const [key, raw] of Object.entries(input as Record<string, unknown>)) {
+    if (!(KNOWN_TYPE_ROLES as readonly string[]).includes(key)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Неизвестная роль type_roles "${key}" (допустимы: ${KNOWN_TYPE_ROLES.join(', ')}).`,
+        { field: `type_roles.${key}`, allowed: KNOWN_TYPE_ROLES },
+      );
+    }
+    if (raw !== null && typeof raw !== 'string') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `type_roles["${key}"] должен быть строкой или null.`,
+        { field: `type_roles.${key}` },
+      );
+    }
+    (out as Record<string, string | null>)[key] = raw as string | null;
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Export/import format .etnx (phase P, task P1)

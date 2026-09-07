@@ -94,6 +94,9 @@ import {
   SEARCH_SCOPES,
   TYPES_LIST_SCOPES,
   TRAVERSAL_DEFAULTS,
+  buildLikePattern,
+  parseFilterKeywords,
+  validateTypeRoles,
   type CommentTarget,
   type EditAcquiredData,
   type EditClearedData,
@@ -110,6 +113,7 @@ import {
   type McpTypesListResult,
   type McpUpsertBundleResult,
   type McpViewMode,
+  type Network,
   type PropertyDefinition,
   type PropertyValueValue,
 } from '@etn/shared';
@@ -163,6 +167,8 @@ import {
   setPropertyValues,
 } from '../domain/property-service.js';
 import { findBacklinks } from '../domain/backlinks-service.js';
+import { normalizeOptionalText } from '../routes/networks.js';
+import { emitDomainEvent } from '../realtime/emit.js';
 import { listTrash, purgeTrash } from '../domain/trash-service.js';
 import {
   collectSubtreeTypes,
@@ -216,6 +222,7 @@ import {
   listThoughtTypes,
   resolveThoughtTypeIdByName,
 } from '../domain/thought-type-service.js';
+import { expandTypeIdsToSubtree } from '../domain/type-hierarchy.js';
 import {
   getLinkType,
   listLinkTypes,
@@ -369,11 +376,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   );
 
   // etn.networks.structure — O5 read tool. Returns the active thoughts of the
-  // network's `node_section_type_id` (or an empty structure with `has_structure:
-  // false`). Each section is enriched with a permanent-comment preview, property
+  // network's `table_of_contents` role (task ba024a45 / 0.7.2, ADR 46d17a91 —
+  // the legacy `node_section_type_id` column was replaced by `type_roles`).
+  // Each section is enriched with a permanent-comment preview, property
   // values, neighbour counts and a usage_count (N3) — the same shape agents
-  // already know from `etn.thoughts.get` / `etn.thoughts.usage`, so an agent can
-  // dive from a structure node straight into a full read.
+  // already know from `etn.thoughts.get` / `etn.thoughts.usage`, so an agent
+  // can dive from a structure node straight into a full read.
   //
   // Bug fix (self-description reachability): §3/§4 of docs/05-mcp-server.md
   // describe FOUR markdown self-description fields (`description`,
@@ -388,6 +396,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // most orientation flows don't need them): it is returned only when the
   // caller opts in via `include_examples`, mirroring the "explicit request"
   // resolution the bug report itself proposed for that field.
+  //
+  // The response also carries the full `type_roles` dictionary and a
+  // conditional `instructions_ref` hint when the network has set the
+  // `instructions` role (ADR 717f04df «инструкции-витриной» — agents are
+  // told to call `etn.instructions` to read the network's prompt instructions).
   const NetworksStructureSchema = z.object({
     network_id: NetworkId,
     include_examples: z.boolean().optional(),
@@ -397,12 +410,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Структура сети',
       description:
-        'Read the network structure declared via the `node_section_type_id` setting: the active thoughts ' +
-        'of that type with permanent-comment previews (2000 chars, `truncated` + `comment_id` → ' +
-        '`etn.comments.get`), resolved property values, neighbour counters and a `thought_types` reference ' +
-        'table. Also carries the network\'s `conventions` (write rules — read before `create`/`update`/' +
-        '`upsert_bundle`), and with `include_examples: true` its `examples`. `has_structure: false` → ' +
-        '`sections` empty, fall back to search/query.',
+        'Read the structure declared via `type_roles.table_of_contents`: active thoughts of that type ' +
+        'with permanent-comment previews (2000 chars, `truncated`+`comment_id` → `etn.comments.get`), ' +
+        'property values, neighbour counters, `thought_types`. Carries `conventions`, `type_roles` and ' +
+        '`instructions_ref` when the `instructions` role is set. `include_examples: true` adds `examples`. ' +
+        '`has_structure: false` → empty `sections`, fall back to search/query.',
       inputSchema: NetworksStructureSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.networks.structure'],
     },
@@ -418,19 +430,36 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         assertNetworkAccess(rt, args.network_id);
         const examplesField =
           args.include_examples === true ? { examples: network.examples } : {};
-        if (network.node_section_type_id === null) {
+        const sectionTypeId =
+          typeof network.type_roles.table_of_contents === 'string'
+            ? network.type_roles.table_of_contents
+            : null;
+        // Convention tail: tell the agent where to read the network's instructions.
+        // Only present when the network actually set the role — empty `type_roles`
+        // must NOT advertise `etn.instructions` (would just return an empty list).
+        const instructionsField =
+          typeof network.type_roles.instructions === 'string'
+            ? {
+                instructions_ref:
+                  'Эта сеть публикует инструкции для агентов. Прочитайте их через ' +
+                  '`etn.instructions { network_id: ' +
+                  args.network_id +
+                  ' }` перед первым изменением.',
+              }
+            : {};
+        if (sectionTypeId === null) {
           return {
             network_id: args.network_id,
             has_structure: false as const,
-            node_section_type_id: null,
+            type_roles: network.type_roles,
             conventions: network.conventions,
+            ...instructionsField,
             ...examplesField,
             sections: [],
             thought_types: [],
           };
         }
         const ndb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger);
-        const sectionTypeId = network.node_section_type_id;
         const rows = ndb
           .prepare(
             `SELECT id, title, type_id, active, version, created_at, updated_at
@@ -472,7 +501,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         });
 
         // O10: count every section the agent looked at while reading the
-        // network's structure. `nodes_section_type_id` rows are typically a
+        // network's structure. `table_of_contents` rows are typically a
         // handful, so this is a tiny batch — kept here for completeness so
         // the owner can see "the agent loaded these sections N times".
         recordReads(ndb, sections.map((s) => s.id), { now: new Date().toISOString() });
@@ -500,9 +529,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         return {
           network_id: args.network_id,
           has_structure: true as const,
-          node_section_type_id: sectionTypeId,
+          type_roles: network.type_roles,
           node_section_type: sectionType,
           conventions: network.conventions,
+          ...instructionsField,
           ...examplesField,
           sections,
           thought_types: thoughtTypes,
@@ -4454,5 +4484,608 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         });
         return { ...result, request_id: String(extra.requestId) };
       }),
+  );
+
+  // =========================================================================
+  // 0.7.2 — task ba024a45: networks.write / networks.delete / instructions.
+  // =========================================================================
+
+  // ---------------------------------------------------------------------------
+  // этон.networks.write — upsert: создаёт сеть, если `network_id` не передан;
+  // иначе патчит существующую (права владельца/админа).
+  //
+  // Контракт повторяет REST `POST /networks` + `PATCH /networks/{id}` в одном
+  // фасаде — тело частично перекрывается, но `type_roles` принимает явный
+  // `null` для снятия роли. Невалидные ключи `type_roles` →
+  // `VALIDATION_ERROR` на этапе `validateTypeRoles`; несуществующий id типа
+  // → `VALIDATION_ERROR` через `networkService.validateTypeRoles`.
+  // ---------------------------------------------------------------------------
+  const NetworksWriteSchema = z
+    .object({
+      network_id: NetworkId.optional(),
+      display_name: z.string().min(1).optional(),
+      description: z.string().nullable().optional(),
+      when_to_use: z.string().nullable().optional(),
+      conventions: z.string().nullable().optional(),
+      examples: z.string().nullable().optional(),
+      type_roles: z.record(z.string(), z.string().nullable()).optional(),
+    })
+    .strict();
+  mcp.registerTool(
+    'etn.networks.write',
+    {
+      title: 'Создать или обновить сеть',
+      description:
+        'Upsert: omit `network_id` to create (caller → owner); pass `network_id` to patch (owner/admin). ' +
+        'Editable: `display_name`, `description`, `when_to_use`, `conventions`, `examples`, `type_roles`. ' +
+        'Unknown role keys / stale `type_id` → `VALIDATION_ERROR`. Returns the network card.',
+      inputSchema: NetworksWriteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.networks.write'],
+    },
+    (args, extra) => {
+      // `runWriteTool` resolves the session layer through `openNetworkDb`,
+      // which would fail on a brand-new network (the directory exists but
+      // no row in `_system.db`'s `networks` yet — the layer walker would
+      // succeed only after `createNetwork` returns). The clean split is:
+      //  * create path → `runTool` (read wrapper, no layer echo);
+      //  * patch path  → `runWriteTool` (echoes the existing layer).
+      const op = async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+
+        // 1. Validate `type_roles` shape (unknown role keys) before any I/O.
+        const requestedRoles =
+          args.type_roles !== undefined ? validateTypeRoles(args.type_roles) : undefined;
+
+        let network: Network;
+        if (args.network_id === undefined) {
+          // ---- CREATE ---------------------------------------------------
+          // Every authenticated principal may create a network (no admin
+          // gate); the caller becomes the owner of the new network.
+          const displayName = (args.display_name ?? '').trim();
+          if (displayName.length === 0) {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'display_name обязательно при создании сети.',
+              { field: 'display_name' },
+            );
+          }
+          const description =
+            args.description === undefined
+              ? null
+              : typeof args.description === 'string' && args.description === ''
+                ? null
+                : (args.description ?? null);
+          // The service validates that every non-null type id exists in the
+          // freshly created data.db. At create time the new network has no
+          // thought types yet, so any non-null id here is doomed — we
+          // surface that as `VALIDATION_ERROR` instead of letting the
+          // service reject it with a less informative message.
+          for (const [role, value] of Object.entries(requestedRoles ?? {}) as Array<
+            [string, string | null]
+          >) {
+            if (value !== null) {
+              throw new EtnError(
+                'VALIDATION_ERROR',
+                `На создании сети нельзя указывать непустую роль type_roles.${role}: в новой сети ещё нет типов.`,
+                { field: `type_roles.${role}`, value },
+              );
+            }
+          }
+          network = await rt.deps.networkService.createNetwork(
+            rt.deps.auth.userId,
+            displayName,
+            description,
+            requestedRoles ?? {},
+          );
+          rt.deps.systemDb.insertAuditLog({
+            actorUserId: rt.deps.auth.userId,
+            networkId: network.id,
+            category: 'network',
+            action: 'network.create',
+            targetType: 'network',
+            targetId: network.id,
+            details: {
+              display_name: displayName,
+              type_roles: requestedRoles ?? {},
+              via: 'mcp.etn.networks.write',
+            },
+          });
+        } else {
+          // ---- PATCH ----------------------------------------------------
+          const networkId = args.network_id;
+          const existing = rt.deps.systemDb.getNetworkById(networkId);
+          if (existing === null) {
+            throw new EtnError('NOT_FOUND', `Сеть ${networkId} не найдена.`, {
+              network_id: networkId,
+            });
+          }
+          // Authz: network owner OR global admin (06-auth.md §4.1).
+          const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, networkId);
+          if (!rt.deps.auth.isAdmin && role !== 'owner') {
+            throw new EtnError(
+              'FORBIDDEN',
+              'Требуются права владельца сети или администратора.',
+              { network_id: networkId },
+            );
+          }
+          // Merge roles: absent keys preserve the existing value, present
+          // keys (including explicit `null`) override it.
+          const mergedRoles =
+            requestedRoles === undefined
+              ? existing.type_roles
+              : { ...existing.type_roles, ...requestedRoles };
+          const validatedRoles = rt.deps.networkService.validateTypeRoles(
+            networkId,
+            mergedRoles,
+          );
+          const displayName =
+            typeof args.display_name === 'string'
+              ? args.display_name.trim() || existing.display_name
+              : existing.display_name;
+          // Markdown fields: null/empty clears, undefined preserves.
+          const description = normalizeOptionalText(args.description, existing.description);
+          const whenToUse = normalizeOptionalText(args.when_to_use, existing.when_to_use);
+          const conventions = normalizeOptionalText(args.conventions, existing.conventions);
+          const examples = normalizeOptionalText(args.examples, existing.examples);
+          rt.deps.systemDb.updateNetwork(networkId, {
+            displayName,
+            description,
+            when_to_use: whenToUse,
+            conventions,
+            examples,
+            type_roles: validatedRoles,
+          });
+          rt.deps.systemDb.insertAuditLog({
+            actorUserId: rt.deps.auth.userId,
+            networkId,
+            category: 'network',
+            action: 'network.update',
+            targetType: 'network',
+            targetId: networkId,
+            details: {
+              display_name: displayName,
+              description,
+              when_to_use: whenToUse,
+              conventions,
+              examples,
+              type_roles: validatedRoles,
+              via: 'mcp.etn.networks.write',
+            },
+          });
+          // Real-time: broadcast only the changed fields so subscribers
+          // can merge in place (matches REST PATCH /networks/{id}).
+          const changes: Record<string, unknown> = {};
+          if (displayName !== existing.display_name) changes['display_name'] = displayName;
+          if (description !== existing.description) changes['description'] = description;
+          if (whenToUse !== existing.when_to_use) changes['when_to_use'] = whenToUse;
+          if (conventions !== existing.conventions) changes['conventions'] = conventions;
+          if (examples !== existing.examples) changes['examples'] = examples;
+          if (JSON.stringify(validatedRoles) !== JSON.stringify(existing.type_roles)) {
+            changes['type_roles'] = validatedRoles;
+          }
+          if (Object.keys(changes).length > 0) {
+            emitDomainEvent(
+              { systemDb: rt.deps.systemDb, pubsub: rt.deps.pubsub },
+              networkId,
+              'network.updated',
+              changes,
+              {
+                user_id: rt.deps.auth.userId,
+                client_id: rt.deps.auth.keyId,
+              },
+              { meta: { request_id: String(extra.requestId) } },
+            );
+          }
+          network = rt.deps.systemDb.getNetworkById(networkId)!;
+        }
+        auditAgentCall(
+          rt,
+          'etn.networks.write',
+          network.id,
+          'network',
+          network.id,
+          {
+            created: args.network_id === undefined,
+            type_roles_keys: Object.keys(requestedRoles ?? {}),
+          },
+        );
+        return {
+          id: network.id,
+          display_name: network.display_name,
+          owner_id: network.owner_id,
+          description: network.description,
+          when_to_use: network.when_to_use,
+          conventions: network.conventions,
+          examples: network.examples,
+          type_roles: network.type_roles,
+          has_structure: typeof network.type_roles.table_of_contents === 'string',
+          created_at: network.created_at,
+          updated_at: network.updated_at,
+          request_id: String(extra.requestId),
+        };
+      };
+      return args.network_id === undefined
+        ? runTool(op)
+        : runWriteTool(rt, args.network_id, op);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // этон.networks.delete — destructive; admin only; дополнительно требует
+  // `confirm: true` (как для человека).
+  // ---------------------------------------------------------------------------
+  const NetworksDeleteSchema = z
+    .object({
+      network_id: NetworkId,
+      confirm: z.literal(true),
+    })
+    .strict();
+  mcp.registerTool(
+    'etn.networks.delete',
+    {
+      title: 'Удалить сеть',
+      description:
+        'Destructive: remove a network and its `data.db`. Admin only. Requires `confirm: true`. ' +
+        'Returns `{ deleted, network_id, request_id }`.',
+      inputSchema: NetworksDeleteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.networks.delete'],
+    },
+    (args, extra) =>
+      runTool(async () => {
+        // The doomed network's `data.db` is about to vanish, so we bypass
+        // `runWriteTool` (which would re-open the base layer for the layer
+        // echo and resurrect the directory through `mkdirSync`). Mutating
+        // tools still must observe the read-only + write-budget gates —
+        // apply them by hand.
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        if (!rt.deps.auth.isAdmin) {
+          throw new EtnError(
+            'FORBIDDEN',
+            'Удаление сети доступно только администратору сервера.',
+            { network_id: args.network_id },
+          );
+        }
+        const existing = rt.deps.systemDb.getNetworkById(args.network_id);
+        if (existing === null) {
+          throw new EtnError('NOT_FOUND', `Сеть ${args.network_id} не найдена.`, {
+            network_id: args.network_id,
+          });
+        }
+        // Emit before the registry row is gone (network_seq/event_log FK).
+        emitDomainEvent(
+          { systemDb: rt.deps.systemDb, pubsub: rt.deps.pubsub },
+          args.network_id,
+          'network.deleted',
+          { id: args.network_id },
+          { user_id: rt.deps.auth.userId, client_id: rt.deps.auth.keyId },
+          { meta: { request_id: String(extra.requestId) } },
+        );
+        await rt.deps.networkService.deleteNetwork(args.network_id);
+        rt.deps.systemDb.insertAuditLog({
+          actorUserId: rt.deps.auth.userId,
+          networkId: args.network_id,
+          category: 'network',
+          action: 'delete',
+          targetType: 'network',
+          targetId: args.network_id,
+          details: { by_admin: true, via: 'mcp.etn.networks.delete' },
+        });
+        auditAgentCall(rt, 'etn.networks.delete', args.network_id, 'network', args.network_id, {
+          confirm: args.confirm,
+        });
+        return {
+          deleted: true,
+          network_id: args.network_id,
+          request_id: String(extra.requestId),
+        };
+      }),
+  );
+
+  // ---------------------------------------------------------------------------
+  // этон.instructions — витрина инструкций сети (ADR 717f04df, спека 14b0cc4f).
+  //
+  // Три режима через дискриминированное объединение:
+  //   * `{ network_id, instruction_id }` — полный текст одной инструкции
+  //     (постоянный комментарий мысли целиком, без обрезки);
+  //   * `{ network_id, keywords }` — фильтр по title+synonyms мини-синтаксом;
+  //   * `{ network_id }` — все актуальные инструкции сети.
+  //
+  // Если роль `instructions` не задана, ответ — `{ has_instructions: false, instructions: [] }`
+  // (без ошибки). Только актуальные мысли; помеченные на удаление исключаются;
+  // учитываются подтипы роли (L21-иерархия типов); читается текущий слой сессии.
+  // ---------------------------------------------------------------------------
+  const InstructionsByIdSchema = z
+    .object({
+      network_id: NetworkId,
+      instruction_id: z.string().min(1),
+    })
+    .strict();
+  const InstructionsByKeywordsSchema = z
+    .object({
+      network_id: NetworkId,
+      keywords: z.string().min(1),
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .strict();
+  const InstructionsAllSchema = z
+    .object({
+      network_id: NetworkId,
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .strict();
+  function buildInstructionsPreview(ndb: NetworkDb, thoughtId: string) {
+    // The permanent comment is read in full by spec 14b0cc4f ("БЕЗ обрезки").
+    // We still surface a `preview` for list responses — a short substring of
+    // the permanent body (200 chars), to keep the list payload compact while
+    // leaving `etn.comments.get` as the canonical full-text accessor.
+    const preview = getPermanentPreview(ndb, 'thought', thoughtId);
+    return preview;
+  }
+  function fetchInstructionsList(
+    ndb: NetworkDb,
+    instructionsTypeIds: string[],
+    keywords: string | undefined,
+    limit: number,
+    offset: number,
+  ): Array<{
+    id: string;
+    title: string;
+    synonyms: string[];
+    preview: ReturnType<typeof getPermanentPreview>;
+    type_id: string | null;
+  }> {
+    if (instructionsTypeIds.length === 0) return [];
+    const placeholders = instructionsTypeIds.map(() => '?').join(',');
+    const params: unknown[] = [...instructionsTypeIds];
+
+    const keywordClause: string[] = [];
+    const keywordParams: unknown[] = [];
+    if (keywords !== undefined && keywords.trim() !== '') {
+      const parsed = parseFilterKeywords(keywords);
+      // AND of all include words; `-word` exclusions negate.
+      for (const word of parsed.include) {
+        const pattern = buildLikePattern(word.toLowerCase());
+        keywordClause.push(
+          '(t.title_norm LIKE ? ESCAPE \'\\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+            ' WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE \'\\\'))',
+        );
+        keywordParams.push(pattern, pattern);
+      }
+      for (const word of parsed.exclude) {
+        const pattern = buildLikePattern(word.toLowerCase());
+        keywordClause.push(
+          'NOT (t.title_norm LIKE ? ESCAPE \'\\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+            ' WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE \'\\\'))',
+        );
+        keywordParams.push(pattern, pattern);
+      }
+    }
+    const whereKeyword = keywordClause.length > 0 ? ` AND ${keywordClause.join(' AND ')}` : '';
+
+    // First: the candidates that match the type + keyword filter. Apply
+    // title/synonyms inclusion order via a stable secondary sort.
+    const rows = ndb
+      .prepare(
+        `SELECT t.id AS id, t.title AS title, t.type_id AS type_id
+           FROM thoughts_v t
+          WHERE t.type_id IN (${placeholders})
+            AND t.active = 1
+            AND t.marked_for_deletion = 0${whereKeyword}
+          ORDER BY t.title COLLATE NOCASE ASC, t.created_at ASC
+          LIMIT ? OFFSET ?`,
+      )
+      .all(...params, ...keywordParams, limit, offset) as Array<{
+      id: string;
+      title: string;
+      type_id: string | null;
+    }>;
+    if (rows.length === 0) return [];
+
+    // Bulk-fetch synonyms for the page (one extra query).
+    const ids = rows.map((r) => r.id);
+    const idPlaceholders = ids.map(() => '?').join(',');
+    const synRows = ndb
+      .prepare(
+        `SELECT thought_id, synonym FROM thought_synonyms_v
+          WHERE thought_id IN (${idPlaceholders})
+          ORDER BY thought_id, synonym`,
+      )
+      .all(...ids) as Array<{ thought_id: string; synonym: string }>;
+    const synonymsById = new Map<string, string[]>();
+    for (const row of synRows) {
+      const list = synonymsById.get(row.thought_id);
+      if (list === undefined) {
+        synonymsById.set(row.thought_id, [row.synonym]);
+      } else {
+        list.push(row.synonym);
+      }
+    }
+
+    return rows.map((row) => {
+      const preview = buildInstructionsPreview(ndb, row.id);
+      return {
+        id: row.id,
+        title: row.title,
+        synonyms: synonymsById.get(row.id) ?? [],
+        preview,
+        type_id: row.type_id,
+      };
+    });
+  }
+
+  mcp.registerTool(
+    'etn.instructions',
+    {
+      title: 'Витрина инструкций сети',
+      description:
+        'Read the network\'s instructions. Three modes: `{ network_id, instruction_id }` returns the FULL ' +
+        'permanent comment (no truncation); `{ network_id, keywords }` filters by title+synonyms (mini-syntax: ' +
+        'whitespace-AND, `-word` exclusion); `{ network_id }` returns every active instruction. When the network ' +
+        'has not declared the `instructions` role → `{ has_instructions: false, instructions: [] }`.',
+      inputSchema: z.union([
+        InstructionsByIdSchema,
+        InstructionsByKeywordsSchema,
+        InstructionsAllSchema,
+      ]),
+      annotations: MCP_TOOL_ANNOTATIONS['etn.instructions'],
+    },
+    (args) => {
+      // Discriminate by the optional fields the caller provided. The schema is
+      // a union so TS keeps the args type wide; narrow it manually.
+      if ('instruction_id' in args) {
+        const idArgs = args as z.infer<typeof InstructionsByIdSchema>;
+        return runTool(async () => {
+          const network = rt.deps.systemDb.getNetworkById(idArgs.network_id);
+          if (network === null) {
+            throw new EtnError('NOT_FOUND', `Сеть ${idArgs.network_id} не найдена.`, {
+              network_id: idArgs.network_id,
+            });
+          }
+          assertNetworkAccess(rt, idArgs.network_id);
+          const roleTypeId = network.type_roles.instructions;
+          if (typeof roleTypeId !== 'string') {
+            return {
+              network_id: idArgs.network_id,
+              has_instructions: false as const,
+              instructions: [],
+            };
+          }
+          const ndb = openNetworkDb(rt.deps.dataDir, idArgs.network_id, rt.deps.logger);
+          const instructionsTypeIds = expandTypeIdsToSubtree(ndb, 'thought_types', [roleTypeId]);
+          if (instructionsTypeIds.length === 0) {
+            throw new EtnError(
+              'NOT_FOUND',
+              `Инструкция ${idArgs.instruction_id} не найдена — роль «instructions» не покрывает ни одного типа.`,
+              { instruction_id: idArgs.instruction_id, network_id: idArgs.network_id },
+            );
+          }
+          const placeholders = instructionsTypeIds.map(() => '?').join(',');
+          const row = ndb
+            .prepare(
+              `SELECT t.id AS id, t.title AS title, t.type_id AS type_id, t.active AS active,
+                      t.marked_for_deletion AS marked_for_deletion
+                 FROM thoughts_v t
+                WHERE t.id = ? AND t.type_id IN (${placeholders})
+                LIMIT 1`,
+            )
+            .get(idArgs.instruction_id, ...instructionsTypeIds) as
+            | {
+                id: string;
+                title: string;
+                type_id: string | null;
+                active: number;
+                marked_for_deletion: number;
+              }
+            | undefined;
+          if (row === undefined) {
+            throw new EtnError(
+              'NOT_FOUND',
+              `Инструкция ${idArgs.instruction_id} не найдена среди активных мыслей роли «instructions».`,
+              { instruction_id: idArgs.instruction_id, network_id: idArgs.network_id },
+            );
+          }
+          if (row.active !== 1 || row.marked_for_deletion !== 0) {
+            throw new EtnError(
+              'NOT_FOUND',
+              `Инструкция ${idArgs.instruction_id} неактуальна или помечена на удаление.`,
+              { instruction_id: idArgs.instruction_id, network_id: idArgs.network_id },
+            );
+          }
+          // Full body (no truncation) per spec 14b0cc4f.
+          const permanent = getPermanentFull(ndb, 'thought', row.id);
+          return {
+            network_id: idArgs.network_id,
+            has_instructions: true as const,
+            instruction_id: row.id,
+            title: row.title,
+            type_id: row.type_id,
+            body_md: permanent === null ? null : permanent.body_md,
+          };
+        });
+      }
+      const listArgs = args as z.infer<typeof InstructionsByKeywordsSchema | typeof InstructionsAllSchema>;
+      const keywords =
+        'keywords' in listArgs && typeof listArgs.keywords === 'string'
+          ? listArgs.keywords
+          : undefined;
+      return runTool(async () => {
+        const network = rt.deps.systemDb.getNetworkById(listArgs.network_id);
+        if (network === null) {
+          throw new EtnError('NOT_FOUND', `Сеть ${listArgs.network_id} не найдена.`, {
+            network_id: listArgs.network_id,
+          });
+        }
+        assertNetworkAccess(rt, listArgs.network_id);
+        const roleTypeId = network.type_roles.instructions;
+        if (typeof roleTypeId !== 'string') {
+          return {
+            network_id: listArgs.network_id,
+            has_instructions: false as const,
+            instructions: [],
+          };
+        }
+        const ndb = openNetworkDb(rt.deps.dataDir, listArgs.network_id, rt.deps.logger);
+        const instructionsTypeIds = expandTypeIdsToSubtree(ndb, 'thought_types', [roleTypeId]);
+        if (instructionsTypeIds.length === 0) {
+          return {
+            network_id: listArgs.network_id,
+            has_instructions: true as const,
+            instructions: [],
+            meta: { total: 0 },
+          };
+        }
+        const limit = Math.min(Math.max(listArgs.limit ?? 50, 1), 200);
+        const offset = Math.max(listArgs.offset ?? 0, 0);
+        const placeholders = instructionsTypeIds.map(() => '?').join(',');
+        const keywordClause: string[] = [];
+        const keywordParams: unknown[] = [];
+        if (keywords !== undefined && keywords.trim() !== '') {
+          const parsed = parseFilterKeywords(keywords);
+          for (const word of parsed.include) {
+            const pattern = buildLikePattern(word.toLowerCase());
+            keywordClause.push(
+              '(t.title_norm LIKE ? ESCAPE \'\\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+                ' WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE \'\\\'))',
+            );
+            keywordParams.push(pattern, pattern);
+          }
+          for (const word of parsed.exclude) {
+            const pattern = buildLikePattern(word.toLowerCase());
+            keywordClause.push(
+              'NOT (t.title_norm LIKE ? ESCAPE \'\\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+                ' WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE \'\\\'))',
+            );
+            keywordParams.push(pattern, pattern);
+          }
+        }
+        const whereKeyword = keywordClause.length > 0 ? ` AND ${keywordClause.join(' AND ')}` : '';
+        const totalRow = ndb
+          .prepare(
+            `SELECT COUNT(*) AS c
+               FROM thoughts_v t
+              WHERE t.type_id IN (${placeholders})
+                AND t.active = 1
+                AND t.marked_for_deletion = 0${whereKeyword}`,
+          )
+          .get(...instructionsTypeIds, ...keywordParams) as { c: number };
+        const instructions = fetchInstructionsList(
+          ndb,
+          instructionsTypeIds,
+          keywords,
+          limit,
+          offset,
+        );
+        return {
+          network_id: listArgs.network_id,
+          has_instructions: true as const,
+          instructions,
+          meta: { total: totalRow.c, matched: keywords !== undefined ? totalRow.c : undefined },
+        };
+      });
+    },
   );
 }

@@ -513,18 +513,28 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
         const query = req.query as Record<string, unknown>;
         const force = queryBoolean(query.force, 'force', req.id) === true;
-        // Task O5: the type is the network's `node_section_type_id`?
-        // Refuse even with `force` — the network would lose its machine-readable
-        // structure marker. The owner must clear the setting first.
-        const referencing = app.systemDb.listNetworksReferencingNodeSectionType(id);
-        const selfRef = referencing.find((n) => n.id === networkId);
-        if (selfRef !== undefined) {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            'Тип используется как узловой раздел сети; сначала очистите настройку сети.',
-            { entity: 'thought_type', id, network_id: networkId },
-            req.id,
-          );
+        // Task ba024a45 / 0.7.2 (ADR 46d17a91): the type is used by THIS
+        // network in any of its `type_roles` roles? Refuse even with `force` —
+        // the network would lose the structural or instructions marker.
+        // The owner must clear the role in `PATCH /networks/{id}` first.
+        const networkRow = app.systemDb.getNetworkById(networkId);
+        if (networkRow !== null) {
+          const referencedRole = (Object.entries(networkRow.type_roles) as Array<
+            [string, string | null]
+          >).find(([, value]) => value === id)?.[0];
+          if (referencedRole !== undefined) {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              `Тип используется сетью в роли «${referencedRole}»; сначала снимите роль через PATCH /networks/{id}.`,
+              {
+                entity: 'thought_type',
+                id,
+                network_id: networkId,
+                role: referencedRole,
+              },
+              req.id,
+            );
+          }
         }
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const existing = getThoughtType(ndb, id);

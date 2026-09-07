@@ -29,6 +29,7 @@ import type {
   NetworkRole,
   RealtimeActor,
   RealtimeMeta,
+  TypeRoles,
   User,
 } from '@etn/shared';
 import { BASE_LAYER_ID, IDEMPOTENCY_TTL_MINUTES } from '@etn/shared';
@@ -90,6 +91,70 @@ function rowToApiKey(r: ApiKeyRow): ApiKey {
     disabled: r.disabled === 1,
     created_at: r.created_at,
     last_used_at: r.last_used_at,
+  };
+}
+
+/**
+ * Parse the JSON-encoded `type_roles` column back into a {@link TypeRoles}
+ * dictionary (task ba024a45 / 0.7.2, ADR 46d17a91). The column is created
+ * with `NOT NULL DEFAULT '{}'` by migration 013, so `null` should never be
+ * stored, but defensive parsing tolerates legacy rows from before the
+ * migration landed. Malformed JSON yields `{}` rather than throwing — the
+ * column is a metadata field and a single corrupted row must not break
+ * `GET /networks` for the rest of the system.
+ */
+export function parseTypeRolesColumn(raw: string | null | undefined): TypeRoles {
+  if (raw === null || raw === undefined || raw === '') return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: TypeRoles = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === 'string') {
+        (out as Record<string, string | null>)[key] = value;
+      } else if (value === null) {
+        (out as Record<string, string | null>)[key] = null;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Encode a {@link TypeRoles} dictionary for storage in the `type_roles` TEXT column. */
+export function encodeTypeRolesColumn(value: TypeRoles | null | undefined): string {
+  if (value === null || value === undefined) return '{}';
+  return JSON.stringify(value);
+}
+
+/** Raw `networks` row shape (INTEGER booleans; `type_roles` as JSON text). */
+interface NetworkRow {
+  id: string;
+  display_name: string;
+  owner_id: string;
+  description: string | null;
+  when_to_use: string | null;
+  conventions: string | null;
+  examples: string | null;
+  type_roles: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Convert a raw `networks` row into a {@link Network} domain object. */
+export function rowToNetwork(r: NetworkRow): Network {
+  return {
+    id: r.id,
+    display_name: r.display_name,
+    owner_id: r.owner_id,
+    description: r.description,
+    when_to_use: r.when_to_use,
+    conventions: r.conventions,
+    examples: r.examples,
+    type_roles: parseTypeRolesColumn(r.type_roles),
+    created_at: r.created_at,
+    updated_at: r.updated_at,
   };
 }
 
@@ -203,7 +268,6 @@ export class SystemDb {
   private readonly stGetNetworkById: Database.Statement;
   private readonly stUpdateNetwork: Database.Statement;
   private readonly stListNetworksForUser: Database.Statement;
-  private readonly stListNetworksReferencingType: Database.Statement;
   private readonly stInsertMember: Database.Statement;
   private readonly stDeleteMember: Database.Statement;
   private readonly stListMembers: Database.Statement;
@@ -273,21 +337,21 @@ export class SystemDb {
     this.stInsertNetwork = db.prepare(
       `INSERT INTO networks (id, display_name, owner_id, description,
                              when_to_use, conventions, examples,
-                             node_section_type_id,
+                             type_roles,
                              created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stGetNetworkById = db.prepare('SELECT * FROM networks WHERE id = ? LIMIT 1');
     this.stUpdateNetwork = db.prepare(
       `UPDATE networks SET display_name = ?, description = ?, when_to_use = ?,
-              conventions = ?, examples = ?, node_section_type_id = ?,
+              conventions = ?, examples = ?, type_roles = ?,
               updated_at = ?
        WHERE id = ?`,
     );
     this.stListNetworksForUser = db.prepare(
       `SELECT n.id AS id, n.display_name AS display_name, n.owner_id AS owner_id,
               n.description AS description, n.when_to_use AS when_to_use,
-              n.node_section_type_id AS node_section_type_id,
+              n.type_roles AS type_roles,
               n.created_at AS created_at, n.updated_at AS updated_at,
               m.role AS role, ou.display_name AS owner_display_name,
               (SELECT COUNT(*) FROM network_members WHERE network_id = n.id) AS members_count
@@ -296,9 +360,6 @@ export class SystemDb {
        JOIN users ou ON ou.id = n.owner_id
        WHERE m.user_id = ?
        ORDER BY n.created_at`,
-    );
-    this.stListNetworksReferencingType = db.prepare(
-      'SELECT id, display_name FROM networks WHERE node_section_type_id = ? ORDER BY created_at',
     );
     this.stInsertMember = db.prepare(
       'INSERT INTO network_members (network_id, user_id, role, added_at, added_by) VALUES (?, ?, ?, ?, ?)',
@@ -700,6 +761,7 @@ export class SystemDb {
     ownerId: string,
     displayName: string,
     description: string | null,
+    typeRoles: TypeRoles = {},
   ): Network {
     const now = new Date().toISOString();
     this.stInsertNetwork.run(
@@ -710,7 +772,7 @@ export class SystemDb {
       null,
       null,
       null,
-      null,
+      encodeTypeRolesColumn(typeRoles),
       now,
       now,
     );
@@ -722,7 +784,7 @@ export class SystemDb {
       when_to_use: null,
       conventions: null,
       examples: null,
-      node_section_type_id: null,
+      type_roles: typeRoles,
       created_at: now,
       updated_at: now,
     };
@@ -730,41 +792,18 @@ export class SystemDb {
 
   /** Fetch a network registry row by id, or `null`. */
   getNetworkById(id: string): Network | null {
-    const row = this.stGetNetworkById.get(id) as
-      | {
-          id: string;
-          display_name: string;
-          owner_id: string;
-          description: string | null;
-          when_to_use: string | null;
-          conventions: string | null;
-          examples: string | null;
-          node_section_type_id: string | null;
-          created_at: string;
-          updated_at: string;
-        }
-      | undefined;
+    const row = this.stGetNetworkById.get(id) as NetworkRow | undefined;
     if (row === undefined) {
       return null;
     }
-    return {
-      id: row.id,
-      display_name: row.display_name,
-      owner_id: row.owner_id,
-      description: row.description,
-      when_to_use: row.when_to_use,
-      conventions: row.conventions,
-      examples: row.examples,
-      node_section_type_id: row.node_section_type_id,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-    };
+    return rowToNetwork(row);
   }
 
   /**
    * Patch a network's editable fields (task O5). All fields are required by the
    * underlying UPDATE statement, so callers must read-modify-write the full
-   * record via {@link getNetworkById}.
+   * record via {@link getNetworkById}. `type_roles` (task ba024a45 / 0.7.2)
+   * replaces the legacy `node_section_type_id` and is encoded as JSON.
    */
   updateNetwork(
     id: string,
@@ -774,7 +813,7 @@ export class SystemDb {
       when_to_use: string | null;
       conventions: string | null;
       examples: string | null;
-      node_section_type_id: string | null;
+      type_roles: TypeRoles;
     },
   ): void {
     this.stUpdateNetwork.run(
@@ -783,7 +822,7 @@ export class SystemDb {
       fields.when_to_use,
       fields.conventions,
       fields.examples,
-      fields.node_section_type_id,
+      encodeTypeRolesColumn(fields.type_roles),
       new Date().toISOString(),
       id,
     );
@@ -814,24 +853,27 @@ export class SystemDb {
       owner_id: string;
       description: string | null;
       when_to_use: string | null;
-      node_section_type_id: string | null;
+      type_roles: string;
       created_at: string;
       updated_at: string;
       role: NetworkRole;
       owner_display_name: string | null;
       members_count: number;
     }>;
-    return rows.map((r) => ({
-      id: r.id,
-      display_name: r.display_name,
-      owner: { id: r.owner_id, display_name: r.owner_display_name },
-      role: r.role,
-      members_count: r.members_count,
-      my_focus_thought_id: null,
-      description: r.description,
-      when_to_use: r.when_to_use,
-      has_structure: r.node_section_type_id !== null,
-    }));
+    return rows.map((r) => {
+      const typeRoles = parseTypeRolesColumn(r.type_roles);
+      return {
+        id: r.id,
+        display_name: r.display_name,
+        owner: { id: r.owner_id, display_name: r.owner_display_name },
+        role: r.role,
+        members_count: r.members_count,
+        my_focus_thought_id: null,
+        description: r.description,
+        when_to_use: r.when_to_use,
+        has_structure: typeof typeRoles.table_of_contents === 'string',
+      };
+    });
   }
 
   /** List every network on the server (admin view, 03-server-api.md §4.2). */
@@ -839,22 +881,11 @@ export class SystemDb {
     const rows = this.db
       .prepare(
         `SELECT id, display_name, description, when_to_use, conventions, examples,
-                node_section_type_id, owner_id, created_at, updated_at
+                type_roles, owner_id, created_at, updated_at
            FROM networks
           ORDER BY created_at ASC`,
       )
-      .all() as Array<{
-      id: string;
-      display_name: string;
-      description: string | null;
-      when_to_use: string | null;
-      conventions: string | null;
-      examples: string | null;
-      node_section_type_id: string | null;
-      owner_id: string;
-      created_at: string;
-      updated_at: string;
-    }>;
+      .all() as NetworkRow[];
     return rows.map((r) => ({
       id: r.id,
       display_name: r.display_name,
@@ -862,26 +893,11 @@ export class SystemDb {
       when_to_use: r.when_to_use,
       conventions: r.conventions,
       examples: r.examples,
-      node_section_type_id: r.node_section_type_id,
+      type_roles: parseTypeRolesColumn(r.type_roles),
       owner_id: r.owner_id,
       created_at: r.created_at,
       updated_at: r.updated_at,
     }));
-  }
-
-  /**
-   * Ids + display names of every network whose `node_section_type_id` equals
-   * `typeId` (task O5, deletion guard for thought types). Used by the type
-   * service to refuse deletion when a network still references the type as its
-   * structure marker.
-   */
-  listNetworksReferencingNodeSectionType(
-    typeId: string,
-  ): Array<{ id: string; display_name: string }> {
-    return this.stListNetworksReferencingType.all(typeId) as Array<{
-      id: string;
-      display_name: string;
-    }>;
   }
 
   /** Add a member row. Caller validates role/owner invariants. */

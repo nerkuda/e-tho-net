@@ -451,7 +451,7 @@ describe(
           when_to_use: string | null;
           conventions: string | null;
           examples: string | null;
-          node_section_type_id: string | null;
+          type_roles: Record<string, string | null>;
           has_structure: boolean;
         };
         createdId = createdDto.id;
@@ -459,7 +459,7 @@ describe(
         assert.equal(createdDto.when_to_use, null);
         assert.equal(createdDto.conventions, null);
         assert.equal(createdDto.examples, null);
-        assert.equal(createdDto.node_section_type_id, null);
+        assert.deepEqual(createdDto.type_roles, {});
         assert.equal(createdDto.has_structure, false);
 
         const get = await app.inject({
@@ -473,7 +473,7 @@ describe(
         assert.equal(dto.when_to_use, null);
         assert.equal(dto.conventions, null);
         assert.equal(dto.examples, null);
-        assert.equal(dto.node_section_type_id, null);
+        assert.deepEqual(dto.type_roles, {});
         assert.equal(dto.has_structure, false);
       } finally {
         await app.close();
@@ -506,7 +506,7 @@ describe(
           when_to_use: string | null;
           conventions: string | null;
           examples: string | null;
-          node_section_type_id: string | null;
+          type_roles: Record<string, string | null>;
           has_structure: boolean;
         };
         assert.equal(dto.display_name, 'Renamed');
@@ -514,6 +514,7 @@ describe(
         assert.equal(dto.when_to_use, 'Coding tasks → conventions.');
         assert.equal(dto.conventions, 'Always chronicle changes.');
         assert.equal(dto.examples, 'Good: ... ; Bad: ...');
+        assert.deepEqual(dto.type_roles, {});
         assert.equal(dto.has_structure, false);
 
         // GET round-trip.
@@ -531,7 +532,7 @@ describe(
       }
     });
 
-    it('PATCH /networks/{id} rejects an unknown node_section_type_id (O5)', async () => {
+    it('PATCH /networks/{id} rejects an unknown type_roles.table_of_contents (O5 / ba024a45)', async () => {
       // Real data directory so the network has a data.db to query.
       const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-bad-section-'));
       const db: Database.Database = new DatabaseConstructor(':memory:');
@@ -572,7 +573,7 @@ describe(
           method: 'PATCH',
           url: `/api/v1/networks/${nid}`,
           headers: { authorization: `Bearer ${gen.key}` },
-          payload: { node_section_type_id: randomUUID() },
+          payload: { type_roles: { table_of_contents: randomUUID() } },
         });
         assert.equal(patch.statusCode, 422);
         const err = patch.json().error as { code: string };
@@ -585,7 +586,60 @@ describe(
       }
     });
 
-    it('PATCH /networks/{id} accepts a real node_section_type_id and sets has_structure (O5)', async () => {
+    it('PATCH /networks/{id} rejects an unknown type_role key (ba024a45)', async () => {
+      const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-bad-role-'));
+      const db: Database.Database = new DatabaseConstructor(':memory:');
+      db.pragma('foreign_keys = ON');
+      runMigrations(db, systemMigrationsDir());
+      const sys = new SystemDb(db);
+      const adminId = randomUUID();
+      sys.createUser({
+        id: adminId,
+        username: 'admin',
+        displayName: 'Admin',
+        isAdmin: true,
+        isFirstUser: true,
+      });
+      const gen = generateApiKey();
+      sys.createApiKey({
+        id: randomUUID(),
+        userId: adminId,
+        label: 'p',
+        keyHash: hashApiKey(gen.key),
+        keyPrefix: gen.keyPrefix,
+      });
+      const app = await createServer({
+        config: { ...TEST_CONFIG, dataDir },
+        systemDb: sys,
+        logger: createLogger('silent'),
+      });
+      let nid: string | null = null;
+      try {
+        const created = await app.inject({
+          method: 'POST',
+          url: '/api/v1/networks',
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { display_name: 'Bad role key' },
+        });
+        nid = (created.json().data as { id: string }).id;
+        const patch = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}`,
+          headers: { authorization: `Bearer ${gen.key}` },
+          payload: { type_roles: { unknown_role: null } },
+        });
+        assert.equal(patch.statusCode, 422);
+        const err = patch.json().error as { code: string };
+        assert.equal(err.code, 'VALIDATION_ERROR');
+      } finally {
+        await app.close();
+        sys.close();
+        if (nid !== null) closeNetworkDb(nid);
+        fs.rmSync(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    it('PATCH /networks/{id} accepts a real type_roles.table_of_contents and sets has_structure (O5 / ba024a45)', async () => {
       const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-ok-section-'));
       const db: Database.Database = new DatabaseConstructor(':memory:');
       db.pragma('foreign_keys = ON');
@@ -636,14 +690,14 @@ describe(
           method: 'PATCH',
           url: `/api/v1/networks/${nid}`,
           headers: { authorization: `Bearer ${gen.key}` },
-          payload: { node_section_type_id: sectionTypeId },
+          payload: { type_roles: { table_of_contents: sectionTypeId } },
         });
         assert.equal(patch.statusCode, 200);
         const dto = patch.json().data as {
-          node_section_type_id: string | null;
+          type_roles: Record<string, string | null>;
           has_structure: boolean;
         };
-        assert.equal(dto.node_section_type_id, sectionTypeId);
+        assert.equal(dto.type_roles.table_of_contents, sectionTypeId);
         assert.equal(dto.has_structure, true);
 
         // Clearing it back to null flips has_structure back off.
@@ -651,11 +705,11 @@ describe(
           method: 'PATCH',
           url: `/api/v1/networks/${nid}`,
           headers: { authorization: `Bearer ${gen.key}` },
-          payload: { node_section_type_id: null },
+          payload: { type_roles: { table_of_contents: null } },
         });
         assert.equal(clear.statusCode, 200);
         const cleared = clear.json().data as typeof dto;
-        assert.equal(cleared.node_section_type_id, null);
+        assert.equal(cleared.type_roles.table_of_contents, null);
         assert.equal(cleared.has_structure, false);
       } finally {
         await app.close();
@@ -665,7 +719,7 @@ describe(
       }
     });
 
-    it('DELETE /networks/{id}/thought-types/{tid} refuses the network node-section type (O5)', async () => {
+    it('DELETE /networks/{id}/thought-types/{tid} refuses the network table_of_contents type (O5 / ba024a45)', async () => {
       const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-section-guard-'));
       const db: Database.Database = new DatabaseConstructor(':memory:');
       db.pragma('foreign_keys = ON');
@@ -708,12 +762,12 @@ describe(
           payload: { name: 'Раздел' },
         });
         const sectionTypeId = (tt.json().data as { id: string }).id;
-        // Pin the type as the network's node_section_type_id.
+        // Pin the type as the network's table_of_contents role.
         await app.inject({
           method: 'PATCH',
           url: `/api/v1/networks/${nid}`,
           headers: { authorization: `Bearer ${gen.key}` },
-          payload: { node_section_type_id: sectionTypeId },
+          payload: { type_roles: { table_of_contents: sectionTypeId } },
         });
 
         // Try to delete with `force=true` — should still be refused.
@@ -726,12 +780,12 @@ describe(
         const err = del.json().error as { code: string };
         assert.equal(err.code, 'VALIDATION_ERROR');
 
-        // After clearing node_section_type_id, deletion must succeed.
+        // After clearing the role, deletion must succeed.
         await app.inject({
           method: 'PATCH',
           url: `/api/v1/networks/${nid}`,
           headers: { authorization: `Bearer ${gen.key}` },
-          payload: { node_section_type_id: null },
+          payload: { type_roles: { table_of_contents: null } },
         });
         const delOk = await app.inject({
           method: 'DELETE',
