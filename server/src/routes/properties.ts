@@ -121,23 +121,27 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
           const { networkId, id, key } = req.params as OwnerKeyParams;
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
           const removed = deletePropertyValue(ndb, ownerType, id, key, req.auth!.user.id);
-          deps.emit(req, networkId, 'property-value.deleted', {
-            owner_type: ownerType,
-            owner_id: id,
-            property_id: removed.property_id,
-          });
-          const ownerEntity =
-            ownerType === 'thought'
-              ? getThought(ndb, id)
-              : getLink(ndb, id);
-          if (ownerEntity) {
-            recordOwnerActivity(ndb, {
-              networkId,
-              userId: req.auth!.user.id,
-              entityType: ownerType,
-              entity: ownerEntity,
-              layerId: req.layerEcho?.id ?? null,
+          // Idempotent DELETE (error cefb4db0): nothing stored → 204 without
+          // the event or the owner-activity record — the call had no effect.
+          if (removed.deleted) {
+            deps.emit(req, networkId, 'property-value.deleted', {
+              owner_type: ownerType,
+              owner_id: id,
+              property_id: removed.property_id,
             });
+            const ownerEntity =
+              ownerType === 'thought'
+                ? getThought(ndb, id)
+                : getLink(ndb, id);
+            if (ownerEntity) {
+              recordOwnerActivity(ndb, {
+                networkId,
+                userId: req.auth!.user.id,
+                entityType: ownerType,
+                entity: ownerEntity,
+                layerId: req.layerEcho?.id ?? null,
+              });
+            }
           }
           reply.code(204).send();
         },

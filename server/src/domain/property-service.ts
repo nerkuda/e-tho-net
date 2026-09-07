@@ -2059,8 +2059,11 @@ function hasValue(value: PropertyValueValue | undefined): boolean {
  * Delete a stored property value addressed by property name. Outside-type
  * values are deletable — manual removal is the only action available for them
  * (02-data-model.md §3.5a) — so the property only has to exist in the
- * registry, not to be attached to the owner's type. Throws `NOT_FOUND` (404)
- * if the property is unknown or no value is stored for it.
+ * registry, not to be attached to the owner's type. Idempotent
+ * (error cefb4db0): when no value is stored for the property the call
+ * succeeds as a no-op and reports `deleted: false` — DELETE semantics, the
+ * editor's blur path may fire it against an already-empty field. Throws
+ * `NOT_FOUND` (404) only when the property itself is unknown.
  */
 export function deletePropertyValue(
   ndb: NetworkDb,
@@ -2068,7 +2071,7 @@ export function deletePropertyValue(
   ownerId: string,
   key: string,
   actorUserId: string,
-): { property_id: string } {
+): { property_id: string; deleted: boolean } {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
       field: 'owner_type',
@@ -2095,17 +2098,14 @@ export function deletePropertyValue(
       // under a different id. See {@link resolveVisiblePropertyValueId}.
       const existingId = resolveVisiblePropertyValueId(ndb, ownerType, ownerId, prop.id);
       if (existingId === undefined) {
-        throw new EtnError('NOT_FOUND', `no value stored for property "${key}"`, {
-          owner_type: ownerType,
-          owner_id: ownerId,
-          key,
-        });
+        // Nothing stored — idempotent no-op (error cefb4db0).
+        return { property_id: prop.id, deleted: false };
       }
       deleteRowLayered(ndb, 'property_values', existingId);
       // Удаление значения — правка владельца: обновим авторство
       // (требование e6d4165e, приравнивание).
       touchOwner(ndb, ownerType, ownerId, actorUserId);
-      return { property_id: prop.id };
+      return { property_id: prop.id, deleted: true };
     }
     const result = ndb
       .prepare(
@@ -2113,17 +2113,14 @@ export function deletePropertyValue(
       )
       .run(ownerType, ownerId, prop.id);
     if (result.changes === 0) {
-      throw new EtnError('NOT_FOUND', `no value stored for property "${key}"`, {
-        owner_type: ownerType,
-        owner_id: ownerId,
-        key,
-      });
+      // Nothing stored — idempotent no-op (error cefb4db0).
+      return { property_id: prop.id, deleted: false };
     }
     // Удаление значения — правка владельца: обновим авторство
     // (требование e6d4165e, приравнивание).
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     // Return the property_id so routes can emit `property-value.deleted`
     // without a second lookup.
-    return { property_id: prop.id };
+    return { property_id: prop.id, deleted: true };
   });
 }
