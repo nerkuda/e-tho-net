@@ -485,7 +485,16 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         }
         return true;
       } catch (err) {
-        cell.append(span(` Ошибка: ${errText(err)}`, 'error-text'));
+        // The cell is owned by a now-possibly-orphaned DOM: a slow save (the
+        // rest client retries 5xx/network errors up to 3 times with backoff,
+        // ~30s in the worst case) outlives the rebuild that opened the next
+        // thought. Writing the error into `cell` makes it invisible. The
+        // toast (`notice`) is anchored to the document and survives the
+        // rebuild — it is the only reliable surface for a deferred failure.
+        notice(
+          `Не удалось сохранить «${definition.key}»: ${errText(err)}`,
+          'error',
+        );
         return false;
       }
     };
@@ -521,16 +530,26 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           input.placeholder = 'https://… или путь к файлу';
           input.title = 'URL или путь к файлу';
         }
-        // Baseline tracks the last saved value so picker commits and plain
-        // blur commits never fire twice for the same value.
+        // Baseline tracks the last **successfully saved** value so picker
+        // commits and plain blur commits never fire twice for the same value,
+        // and a failed save rolls back instead of leaving the field in a
+        // "looks saved but isn't" state (карточка 7d094c26: when the user
+        // reopens the thought, `properties.get` returns the old value and
+        // the unsaved edit silently disappears).
         let baseline: string | null = typeof stored === 'string' ? stored : null;
-        const commitValue = (value: string): void => {
+        const commitValue = async (value: string): Promise<void> => {
           const next = value === '' ? null : value;
           if (next === baseline) return;
+          const prev = baseline;
           baseline = next;
-          void save(next);
+          const ok = await save(next);
+          if (!ok) {
+            // Restore the baseline so the next blur retries the write
+            // instead of treating the unsaved value as already committed.
+            baseline = prev;
+          }
         };
-        input.addEventListener('blur', () => commitValue(input.value));
+        input.addEventListener('blur', () => void commitValue(input.value));
         // Recent-values suggestions (recent-values.ts): focusing the empty
         // field — or clearing it back to empty — offers the 10 last saved
         // values of this property; typing closes the list so the regular
@@ -607,22 +626,30 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         const input = el('input', 'text-input prop-editor');
         input.type = 'number';
         input.value = typeof stored === 'number' ? String(stored) : '';
-        // Baseline tracks the last saved value (the text field's approach): a
-        // plain blur — in particular on an ALREADY-EMPTY field — must not fire
-        // a remove (error cefb4db0: an empty value is a legitimate state, not
-        // a delete request, and the server's 404 must not flash in the cell).
+        // Baseline tracks the last **successfully saved** value (the text
+        // field's approach, extended for the failure-rollback symmetry of
+        // карточка 7d094c26): a plain blur — in particular on an ALREADY-EMPTY
+        // field — must not fire a remove (error cefb4db0: an empty value is
+        // a legitimate state, not a delete request, and the server's 404
+        // must not flash in the cell).
         let baseline: number | null = typeof stored === 'number' ? stored : null;
         input.addEventListener('blur', () => {
           if (input.value === '') {
             if (baseline === null) return;
+            const prev = baseline;
             baseline = null;
-            void save(null);
+            void save(null).then((ok) => {
+              if (!ok) baseline = prev;
+            });
             return;
           }
           const next = Number(input.value);
           if (!Number.isFinite(next) || next === baseline) return;
+          const prev = baseline;
           baseline = next;
-          void save(next);
+          void save(next).then((ok) => {
+            if (!ok) baseline = prev;
+          });
         });
         cell.append(input);
         break;
@@ -631,16 +658,21 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         const input = el('input', 'text-input prop-editor');
         input.type = 'date';
         input.value = typeof stored === 'string' ? stored.slice(0, 10) : '';
-        // Baseline tracks the last saved value (the text field's approach): a
-        // plain blur — in particular on an ALREADY-EMPTY field — must not fire
-        // a remove (error cefb4db0: an empty date is a legitimate state, and
-        // blur on an unchanged value must not write it again either).
+        // Baseline tracks the last **successfully saved** value (the text
+        // field's approach, with the failure-rollback symmetry of карточка
+        // 7d094c26): a plain blur — in particular on an ALREADY-EMPTY field —
+        // must not fire a remove (error cefb4db0: an empty date is a
+        // legitimate state, and blur on an unchanged value must not write it
+        // again either).
         let baseline: string | null = typeof stored === 'string' ? stored.slice(0, 10) : null;
         input.addEventListener('blur', () => {
           const next = input.value === '' ? null : input.value;
           if (next === baseline) return;
+          const prev = baseline;
           baseline = next;
-          void save(next);
+          void save(next).then((ok) => {
+            if (!ok) baseline = prev;
+          });
         });
         cell.append(input);
         break;
@@ -1049,13 +1081,24 @@ export function buildMultiUrlEditor(opts: {
       });
       // Commit on blur: write the trimmed value at the same index, then
       // collapse trailing empty rows so a stray «+» row never lingers after
-      // the user emptied it.
-      input.addEventListener('blur', () => {
+      // the user emptied it. The save is awaited so a failure surfaces via
+      // the toast (save's wrapper) before the user clicks away — карточка
+      // 7d094c26: a fire-and-forget here let the save outlive the next
+      // thought's rebuild and silently drop the edit on reopen.
+      input.addEventListener('blur', async () => {
         const trimmed = input.value.trim();
         current[index] = trimmed;
         collapseTrailingEmpty();
+        const payload = current.filter((u) => u !== '');
         renderRows();
-        void opts.save(current.filter((u) => u !== ''));
+        try {
+          await opts.save(payload);
+        } catch {
+          // `opts.save` is the editor's save wrapper, which already toasts
+          // on failure and returns false. The catch here is a defensive
+          // guard for custom callers (selection-panel dialog) that might
+          // re-throw — never let an unhandled rejection escape a blur.
+        }
       });
       const removeBtn = el('button', 'st-f-clear-inline multi-url-remove', '×');
       removeBtn.type = 'button';

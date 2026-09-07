@@ -1077,3 +1077,262 @@ describe('buildMultiUrlEditor (DOM-shimmed)', () => {
     assert.deepEqual(saved, [['https://a.test']], 'save called without the empty row');
   });
 });
+
+/**
+ * Regression test for карточка 7d094c26 «Не сохраняются значения свойств типа
+ * "строка"». The baseline-guard for `text`/`url` cells used to be updated
+ * *before* the save promise settled (`baseline = next; void save(next)`):
+ * if save failed — typically a 5xx / network error retried up to 3 times for
+ * ~30s, plenty of time to outlive the rebuild — the baseline already carried
+ * the unsaved value, the error was appended to an orphaned `<td>`, and the
+ * next blur saw `next === baseline` and skipped the write. Reopening the
+ * thought showed the old value, with no visible cue that the edit had been
+ * dropped.
+ *
+ * The fix makes `commitValue` await `save` and roll `baseline` back on a
+ * `false` return; `save` itself now surfaces failures through the document
+ * toast (`notice`) instead of mutating an orphan cell. The tests below
+ * pin the three observable consequences of that contract:
+ *  1. a failed save leaves baseline at the stored value, so a second blur
+ *     with the same edit re-saves (the original symptom: silent drop);
+ *  2. a failed save leaves baseline at the stored value, so a second blur
+ *     with a *different* edit saves the new one and succeeds;
+ *  3. a successful save updates baseline normally, so the baseline guard
+ *     still suppresses redundant writes of the unchanged value.
+ */
+describe('editor properties — text/url save failure rolls back baseline (7d094c26)', () => {
+  /** What the etn.properties stub recorded. */
+  interface PropertyCalls {
+    set: Array<{ key: string; value: unknown }>;
+    removed: string[];
+  }
+
+  /**
+   * Renders buildPropertiesBody for a thought whose type has ONE text
+   * property with predefined options (the dropdown picker path is also
+   * exercised by the render). The mock `etn.properties.set` follows the
+   * `mode` toggle so each test can script success/failure per call.
+   */
+  async function renderTextProperty(
+    mode: { fail: boolean },
+  ): Promise<{ box: ShimElement; calls: PropertyCalls }> {
+    shimDocument();
+    // Realign with the module-shared window — the Proxy in lib/etn.ts cached
+    // the very first window it saw during `buildWithFixtures`.
+    (globalThis as any).window = sharedWindow;
+    // `save` failures go through `notice(...)` which arms `window.setTimeout`
+    // to auto-dismiss the toast. The other describe blocks in this file
+    // never trigger that path; install a synchronous setTimeout so the
+    // rejection from the failed save doesn't escape the test as an
+    // unhandled `window.setTimeout is not a function`.
+    Object.assign(sharedWindow, {
+      setTimeout: (fn: () => void) => {
+        fn();
+        return 1;
+      },
+      clearTimeout: () => undefined,
+    });
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const calls: PropertyCalls = { set: [], removed: [] };
+    etnApi['types'] = {
+      listTypeProperties: async () => [
+        {
+          id: 'pStatus',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Статус',
+          value_type: 'text',
+          config: { options: ['Открыт', 'Закрыт'], multiple: false },
+          required: false,
+          position: 0,
+        },
+      ],
+    };
+    etnApi['properties'] = {
+      get: async () => [
+        {
+          id: 'vStatus',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: 'pStatus',
+          value: 'Открыт',
+          updated_at: '2026',
+        },
+      ],
+      remove: async (_n: string, _o: string, _i: string, key: string) => {
+        calls.removed.push(key);
+      },
+      set: async (
+        _n: string,
+        _o: string,
+        _i: string,
+        key: string,
+        value: unknown,
+      ) => {
+        calls.set.push({ key, value });
+        if (mode.fail) throw new Error('network down');
+      },
+    };
+    etnApi['thoughts'] = { resolve: async () => [] };
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+
+    const ctx = {
+      ownerType: 'thought' as const,
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+    const box = propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { box, calls };
+  }
+
+  /** The text cell's input — wrapped in row > cell (with-options layout). */
+  function rowInput(box: ShimElement): ShimElement | undefined {
+    const tableWrap = box.children[0];
+    const table = tableWrap?.children[0];
+    const tbody = table?.children[0];
+    const cell = tbody?.children[0]?.children[1];
+    return cell?.children[0]?.children[0];
+  }
+
+  /** The value cell of the only row (with-options layout: row > cell). */
+  function rowCell(box: ShimElement): ShimElement | undefined {
+    const tableWrap = box.children[0];
+    const table = tableWrap?.children[0];
+    const tbody = table?.children[0];
+    return tbody?.children[0]?.children[1];
+  }
+
+  it('failed save leaves baseline at the stored value — same-value blur retries', async () => {
+    const mode = { fail: true };
+    const { box, calls } = await renderTextProperty(mode);
+    const input = rowInput(box);
+    assert.ok(input !== undefined, 'text input rendered');
+    assert.equal(input?.value, 'Открыт', 'input pre-filled with the stored value');
+
+    input!.value = 'Закрыт';
+    input!.dispatch('blur');
+    // commitValue is async (awaits save); yield enough cycles for the
+    // rejection to land and the baseline to roll back.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(
+      calls.set,
+      [{ key: 'Статус', value: 'Закрыт' }],
+      'save was attempted once with the new value',
+    );
+
+    // The same input is blurred again WITHOUT a change — the buggy code
+    // would treat baseline='Закрыт' as the new ground truth and skip the
+    // write. With the rollback, baseline='Открыт' is restored and the
+    // input's value ('Закрыт') differs from it again, so the retry fires.
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(
+      calls.set.length,
+      2,
+      'second blur re-saves because the first failure rolled baseline back',
+    );
+    assert.deepEqual(
+      calls.set[1],
+      { key: 'Статус', value: 'Закрыт' },
+      'retry carries the same new value the first attempt lost',
+    );
+  });
+
+  it('failed save leaves baseline at the stored value — different-value blur saves the new one', async () => {
+    const mode = { fail: true };
+    const { box, calls } = await renderTextProperty(mode);
+    const input = rowInput(box);
+
+    input!.value = 'Закрыт';
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(calls.set.length, 1, 'first save attempted');
+
+    // Switch to a different value while still in failure mode — the
+    // rollback ensures baseline='Открыт' so 'Новый' is treated as a fresh
+    // edit and saves (fails again, rolls back again).
+    input!.value = 'Новый';
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(calls.set.length, 2, 'second save attempted');
+    assert.deepEqual(
+      calls.set[1],
+      { key: 'Статус', value: 'Новый' },
+      'second blur saved the new value (not skipped as a no-op)',
+    );
+  });
+
+  it('after a failed save followed by a successful one, the baseline guard skips re-saves of the same value', async () => {
+    const mode = { fail: true };
+    const { box, calls } = await renderTextProperty(mode);
+    const input = rowInput(box);
+
+    input!.value = 'Закрыт';
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(calls.set.length, 1, 'failed first attempt');
+
+    // Flip to success and blur again — this time save resolves, baseline
+    // advances to 'Закрыт', and any further blur with 'Закрыт' is a no-op.
+    mode.fail = false;
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(calls.set.length, 2, 'retry succeeded');
+
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(
+      calls.set.length,
+      2,
+      'unchanged value after a successful save does not re-save (baseline guard intact)',
+    );
+  });
+
+  it('a failure does not leave an inline error-text span in the cell', async () => {
+    const mode = { fail: true };
+    const { box } = await renderTextProperty(mode);
+    const input = rowInput(box);
+    const cell = rowCell(box);
+    assert.ok(cell !== undefined, 'cell located');
+
+    input!.value = 'Закрыт';
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // The bug used to write ` Ошибка: …` into the cell — a fragment that
+    // was orphaned on the very next rebuild and so invisible. The fix
+    // surfaces errors through `notice` (document.body) instead. The cell
+    // must keep its original children — only the form-row with the input
+    // and the picker caret.
+    const errorText = cell?.children.find((c) =>
+      (c as ShimElement).className.split(' ').includes('error-text'),
+    );
+    assert.equal(errorText, undefined, 'no inline error-text span left in the cell');
+  });
+});
