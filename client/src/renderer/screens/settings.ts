@@ -87,7 +87,12 @@ const NETWORK_TAB_PLACEHOLDERS: Record<NetworkTab, string> = {
 /** Maximum length of one network markdown field (task O5). */
 const NETWORK_FIELDS_TEXT_MAX = 20_000;
 
-/** Draft snapshot of every editable value in the dialog. */
+/**
+ * Both `type_roles` entries live as separate keys in the same dictionary
+ * (ADR `46d17a91`). The form keeps them as two flat draft fields so the
+ * dirty check stays a simple per-field comparison; persistence merges them
+ * back into the existing `type_roles` so other roles stay intact.
+ */
 interface Draft {
   displayName: string;
   networkName: string;
@@ -96,6 +101,7 @@ interface Draft {
   networkConventions: string;
   networkExamples: string;
   networkNodeSectionTypeId: string | null;
+  networkInstructionsTypeId: string | null;
   showInactive: boolean;
   theme: Theme;
   cloudWidth: number;
@@ -117,6 +123,10 @@ function readInitialDraft(): Draft {
       typeof net?.type_roles?.table_of_contents === 'string'
         ? net.type_roles.table_of_contents
         : null,
+    networkInstructionsTypeId:
+      typeof net?.type_roles?.instructions === 'string'
+        ? net.type_roles.instructions
+        : null,
     showInactive: store.state.showInactive,
     theme: store.state.theme,
     cloudWidth: store.state.cloudWidth,
@@ -134,6 +144,7 @@ function isDirtyDraft(a: Draft, b: Draft): boolean {
     a.networkConventions !== b.networkConventions ||
     a.networkExamples !== b.networkExamples ||
     a.networkNodeSectionTypeId !== b.networkNodeSectionTypeId ||
+    a.networkInstructionsTypeId !== b.networkInstructionsTypeId ||
     a.showInactive !== b.showInactive ||
     a.theme !== b.theme ||
     a.cloudWidth !== b.cloudWidth ||
@@ -429,6 +440,28 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       markDirty();
     });
 
+    // Instructions-type dropdown (0.7.2, ADR `46d17a91` + ADR `717f04df`).
+    // Same shape as `table_of_contents` but writes into `type_roles.instructions`
+    // — required for the `etn.instructions` showcase-tool to return anything.
+    const instructionsTypeSelect = el('select', 'text-input');
+    instructionsTypeSelect.disabled = !isOwner;
+    const instructionsNoneOption = el('option');
+    instructionsNoneOption.value = '';
+    instructionsNoneOption.textContent = '— не задано —';
+    instructionsTypeSelect.append(instructionsNoneOption);
+    for (const t of thoughtTypes) {
+      const opt = el('option');
+      opt.value = t.id;
+      opt.textContent = t.name;
+      instructionsTypeSelect.append(opt);
+    }
+    instructionsTypeSelect.value = draft.networkInstructionsTypeId ?? '';
+    instructionsTypeSelect.addEventListener('change', () => {
+      draft.networkInstructionsTypeId =
+        instructionsTypeSelect.value === '' ? null : instructionsTypeSelect.value;
+      markDirty();
+    });
+
     const showInactiveCheckbox = el('input');
     showInactiveCheckbox.type = 'checkbox';
     showInactiveCheckbox.checked = draft.showInactive;
@@ -462,6 +495,12 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
         'Узловой тип раздела определяет структуру сети (читается через `etn.networks.structure`). Все активные мысли выбранного типа становятся разделами. Тип, выбранный здесь, нельзя удалить, пока ссылка не снята.',
       ),
       field('Узловой тип раздела', typeSelect),
+      el(
+        'p',
+        'muted',
+        'Тип инструкций агентам задаёт, какие мысли отдаются витриной `etn.instructions` (ADR 717f04df). Без выбора витрина отвечает пустым списком. Тип, выбранный здесь, защищён от удаления так же, как узловой.',
+      ),
+      field('Тип инструкций агентам', instructionsTypeSelect),
       el('p', 'muted', ownerHint),
       el('h3', 'settings-section-title settings-section-title-spaced', 'Видимость'),
       showInactiveLabel,
@@ -572,8 +611,8 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       );
     }
 
-    // Network: display_name + 4 markdown fields + type_roles.table_of_contents
-    // dropdown (L2 / O5 / task ba024a45).
+    // Network: display_name + 4 markdown fields + both type_roles entries
+    // (L2 / O5 / task ba024a45 / 0.7.2 `instructions` role).
     // One PATCH so the server-side update is a single transaction; partial
     // mismatches between client and server are tolerated because we always
     // send the full current draft for changed fields.
@@ -583,12 +622,12 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       draft.networkWhenToUse !== original.networkWhenToUse ||
       draft.networkConventions !== original.networkConventions ||
       draft.networkExamples !== original.networkExamples ||
-      draft.networkNodeSectionTypeId !== original.networkNodeSectionTypeId;
+      draft.networkNodeSectionTypeId !== original.networkNodeSectionTypeId ||
+      draft.networkInstructionsTypeId !== original.networkInstructionsTypeId;
     if (networkFieldsDirty) {
-      // Merge the form's `table_of_contents` selection into the existing
-      // `type_roles` dictionary so we never wipe the `instructions` role
-      // (and any future roles added in the spec). The server's PATCH keeps
-      // absent keys, so only the table_of_contents entry is overwritten.
+      // Merge the form's `type_roles` selections into the existing dictionary
+      // so we never wipe roles the dialog doesn't expose. The server's PATCH
+      // keeps absent keys, so only the entries we set are overwritten.
       const existingRoles = store.state.network?.type_roles ?? {};
       const fields: Parameters<typeof etn.networks.update>[1] = {
         display_name: draft.networkName.trim() || (store.state.network?.display_name ?? ''),
@@ -599,6 +638,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
         type_roles: {
           ...existingRoles,
           table_of_contents: draft.networkNodeSectionTypeId,
+          instructions: draft.networkInstructionsTypeId,
         },
       };
       tasks.push(
@@ -673,6 +713,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       original.networkConventions = draft.networkConventions;
       original.networkExamples = draft.networkExamples;
       original.networkNodeSectionTypeId = draft.networkNodeSectionTypeId;
+      original.networkInstructionsTypeId = draft.networkInstructionsTypeId;
       original.showInactive = draft.showInactive;
       original.theme = draft.theme;
       original.cloudWidth = draft.cloudWidth;
