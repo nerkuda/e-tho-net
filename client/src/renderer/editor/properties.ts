@@ -224,12 +224,17 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
       return;
     }
 
+    // Значение адресуется реестровым id свойства (`PropertyValue.property_id`
+    // = `properties.id`), а НЕ id строки привязки (`type_properties.id`).
+    // У легаси-привязок (созданных до реестра свойств 0.6.5) эти id разошлись,
+    // поэтому сопоставление по `definition.id` теряло значения и поля на
+    // клиенте выглядели пустыми, хотя на сервере хранились (баг 7d094c26).
     const valueByProp = new Map(values.map((v) => [v.property_id, v]));
     const table = el('table', 'table-list prop-table');
     // Headerless table (08-ui-spec.md §6.3.1): rows only.
     const tbody = el('tbody');
     for (const definition of definitions) {
-      const value = valueByProp.get(definition.id);
+      const value = valueByProp.get(definition.property_id);
       const row = el('tr');
       const source = definition.inherited
         ? ` · из «${definition.defined_on_name}»`
@@ -480,7 +485,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           // A successful save feeds the client-local recent-values history of
           // single text/thought_ref properties (recent-values.ts).
           if (typeof value === 'string' && tracksRecentValues(definition)) {
-            recordRecentValue(networkId, definition.id, value);
+            recordRecentValue(networkId, definition.property_id, value);
           }
         }
         return true;
@@ -558,7 +563,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         if (recent) {
           wireRecentValues(input, {
             load: () =>
-              loadRecentValues(networkId, definition.id).map((value) => ({
+              loadRecentValues(networkId, definition.property_id).map((value) => ({
                 value,
                 label: value,
               })),
@@ -780,7 +785,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         // values as resolved titles; typing closes the list so the live
         // candidate search takes over.
         wireRecentValues(input, {
-          load: () => loadRecentRefEntries(networkId, definition.id, refCache),
+          load: () => loadRecentRefEntries(networkId, definition.property_id, refCache),
           onPick: (entry) => {
             void save(entry.value).then((ok) => {
               if (ok) void reload();

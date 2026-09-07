@@ -107,6 +107,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
     listTypeProperties: async () => [
       {
         id: 'p1',
+        property_id: 'rp1',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Город',
@@ -119,6 +120,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
       },
       {
         id: 'p2',
+        property_id: 'rp2',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Автор',
@@ -129,6 +131,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
       },
       {
         id: 'p3',
+        property_id: 'rp3',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Сайт',
@@ -139,6 +142,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
       },
       {
         id: 'p4',
+        property_id: 'rp4',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Соавторы',
@@ -149,6 +153,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
       },
       {
         id: 'p5',
+        property_id: 'rp5',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Источник',
@@ -159,6 +164,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
       },
       {
         id: 'p6',
+        property_id: 'rp6',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Закладки',
@@ -175,7 +181,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
         id: 'v3',
         owner_type: 'thought',
         owner_id: 't1',
-        property_id: 'p3',
+        property_id: 'rp3',
         value: 'https://example.com',
         updated_at: '2026',
       },
@@ -183,7 +189,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
         id: 'v4',
         owner_type: 'thought',
         owner_id: 't1',
-        property_id: 'p4',
+        property_id: 'rp4',
         value: ['ta1', 'ta2'],
         updated_at: '2026',
       },
@@ -191,7 +197,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
         id: 'v5',
         owner_type: 'thought',
         owner_id: 't1',
-        property_id: 'p5',
+        property_id: 'rp5',
         value: 'ta1',
         updated_at: '2026',
       },
@@ -199,7 +205,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
         id: 'v6',
         owner_type: 'thought',
         owner_id: 't1',
-        property_id: 'p6',
+        property_id: 'rp6',
         value: ['https://a.test', 'https://b.test'],
         updated_at: '2026',
       },
@@ -399,6 +405,33 @@ describe('editor properties group body (DOM-shimmed)', () => {
       ) ?? [];
     assert.equal(urlRows.length, 2, 'one row per stored URL');
   });
+
+  it('matches stored values by registry property_id, not binding id (7d094c26)', async () => {
+    // The fixture declares bindings whose binding `id` differs from the registry
+    // `property_id` (legacy bindings created before the 0.6.5 registry split):
+    // «Сайт» has id `p3` / property_id `rp3`, and the stored value is keyed by
+    // `rp3`. A lookup by `definition.id` would miss it and render an empty field
+    // even though the server stores the value (7d094c26).
+    const box = await buildWithFixtures();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const tableWrap = box.children[0];
+    assert.ok(tableWrap !== undefined, 'table wrapper rendered');
+    const table = tableWrap.children[0];
+    assert.ok(table !== undefined, 'table rendered');
+    const tbody = table.children[0];
+    assert.ok(tbody !== undefined, 'tbody rendered');
+
+    // Single url property («Сайт», row index 2): the input must carry the value.
+    const urlCell = tbody.children[2]?.children[1];
+    const urlInput = urlCell?.children[0]?.children.find(
+      (c) => c.tagName === 'input' && c.type === 'text',
+    ) as ShimElement | undefined;
+    assert.equal(
+      urlInput?.value,
+      'https://example.com',
+      'single url value populated via registry property_id',
+    );
+  });
 });
 
 /**
@@ -451,6 +484,7 @@ describe('editor properties — «Свойства вне типа» group (0.6.
       listTypeProperties: async () => [
         {
           id: 'pNew',
+          property_id: 'pNew',
           owner_type: 'thought_type',
           owner_id: 'ty2',
           key: 'Новое',
@@ -763,6 +797,7 @@ describe('editor properties — date/number blur commits (error cefb4db0)', () =
       listTypeProperties: async () => [
         {
           id: 'pDate',
+          property_id: 'pDate',
           owner_type: 'thought_type',
           owner_id: 'ty1',
           key: 'Плановый срок',
@@ -773,6 +808,7 @@ describe('editor properties — date/number blur commits (error cefb4db0)', () =
         },
         {
           id: 'pNumber',
+          property_id: 'pNumber',
           owner_type: 'thought_type',
           owner_id: 'ty1',
           key: 'Оценка',
@@ -1138,6 +1174,7 @@ describe('editor properties — text/url save failure rolls back baseline (7d094
       listTypeProperties: async () => [
         {
           id: 'pStatus',
+          property_id: 'pStatus',
           owner_type: 'thought_type',
           owner_id: 'ty1',
           key: 'Статус',
