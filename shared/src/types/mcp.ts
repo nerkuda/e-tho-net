@@ -118,6 +118,11 @@ export const MCP_TOOL_NAMES = [
   // (типы мыслей/связей, свойства, привязки свойств к типам) и её удаление.
   'etn.ontology.write',
   'etn.ontology.delete',
+  // P3 (задача e488f4c1 / 0.7.2): copy_subtree, mentions_scan, импорт/экспорт .etnx
+  'etn.thoughts.copy_subtree',
+  'etn.thoughts.mentions_scan',
+  'etn.import.dry_run',
+  'etn.import.subgraph',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -262,6 +267,20 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // требует `force` для используемых сущностей.
   'etn.ontology.write': { destructiveHint: false, idempotentHint: true },
   'etn.ontology.delete': { destructiveHint: true },
+
+  // ---- P3 (задача e488f4c1 / 0.7.2) -------------------------------------
+  // `etn.thoughts.copy_subtree` — копирование подграфа между сетями. Семантика
+  // зависит от `duplicate_policy`; в общем случае не идемпотентно (новые
+  // id при повторе).
+  'etn.thoughts.copy_subtree': { destructiveHint: false, idempotentHint: false },
+  // `etn.thoughts.mentions_scan` — без `create_links` чисто read-only.
+  // С `create_links: true` создаёт связи — мутация.
+  'etn.thoughts.mentions_scan': { readOnlyHint: true },
+  // `etn.import.dry_run` — read-only превью без побочных эффектов.
+  'etn.import.dry_run': { readOnlyHint: true },
+  // `etn.import.subgraph` — destructive: одна транзакция вносит мысли, связи,
+  // комментарии и вложения в целевую сеть. `confirm: true` обязателен.
+  'etn.import.subgraph': { destructiveHint: true },
 };
 
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5).
@@ -1090,5 +1109,199 @@ export interface McpReadViewParam {
    * shape unchanged.
    */
   view?: McpViewMode;
+}
+
+// ---------------------------------------------------------------------------
+// `etn.thoughts.copy_subtree` (задача e488f4c1, версия 0.7.2) — копирование
+// подграфа между сетями. Сервер сам собирает снапшот (root_thought_ids +
+// max_depth) и материализует его в `target_network_id` одной транзакцией.
+// ---------------------------------------------------------------------------
+
+/** Политика разрешения коллизий имён при копировании. */
+export type McpCopySubtreePolicy = 'fail' | 'reuse' | 'skip' | 'create_always';
+
+/** Подмножество включаемых в снапшот частей мысли. По умолчанию — все. */
+export type McpCopySubtreeInclude =
+  | 'thought'
+  | 'links'
+  | 'properties'
+  | 'comments'
+  | 'attachments';
+
+/** Parameters of `etn.thoughts.copy_subtree`. */
+export interface McpCopySubtreeParams {
+  /** Исходная сеть (откуда читается подграф). */
+  source_network_id: string;
+  /** Целевая сеть (куда записывается). Может совпадать с `source_network_id`. */
+  target_network_id: string;
+  /** Корни подграфа — мысли, от которых начинается BFS по связям. */
+  root_thought_ids: string[];
+  /** Глубина обхода вниз по активным связям. По умолчанию 5, потолок 20. */
+  max_depth?: number;
+  /** Подмножество переносимых частей. Пусто / не задано — все. */
+  include?: McpCopySubtreeInclude[];
+  /** Политика коллизий по title+synonyms (см. {@link McpCopySubtreePolicy}). */
+  duplicate_policy?: McpCopySubtreePolicy;
+  /**
+   * Если `true` (по умолчанию) — вернуть `thought_id_map`/`link_id_map`
+   * для переписывания wiki-ссылок `[[#oldId]]` → `[[#newId]]` в комментариях.
+   */
+  id_remap?: boolean;
+  /**
+   * Куда подвесить вновь созданные корневые мысли (если хоть одна). Если не
+   * задано — мысли без входящей копируемой связи остаются «висячими» в
+   * целевой сети (подцепятся к HOME).
+   */
+  target_parent_thought_id?: string;
+}
+
+/** Сводка по результатам копирования. */
+export interface McpCopySubtreeResult {
+  /** Кол-во новых мыслей в целевой сети. */
+  thoughts_created: number;
+  /** Кол-во переиспользованных (по duplicate_policy=reuse). */
+  thoughts_reused: number;
+  /** Кол-во пропущенных (по duplicate_policy=skip). */
+  thoughts_skipped: number;
+  /** Кол-во созданных связей в целевой сети. */
+  links_created: number;
+  /** Карта `source_thought_id → target_thought_id` для переписывания ссылок. */
+  thought_id_map?: Record<string, string>;
+  /** Карта `source_link_id → target_link_id` (составной ключ source:target:type). */
+  link_id_map?: Record<string, string>;
+  /** Список конфликтов при `duplicate_policy=fail`. */
+  conflicts?: Array<{ source_thought_id: string; target_thought_id: string; title: string }>;
+  /** Идентификатор слоя (для эха). */
+  layer: { id: string; title: string };
+  /** Сквозной request_id (для трассировки). */
+  request_id?: string;
+}
+
+// ---------------------------------------------------------------------------
+// `etn.thoughts.mentions_scan` (задача e488f4c1, версия 0.7.2) — поиск
+// упоминаний мыслей в тексте: FTS по названиям и синонимам + опциональное
+// создание связей по результату.
+// ---------------------------------------------------------------------------
+
+/** Parameters of `etn.thoughts.mentions_scan`. */
+export interface McpMentionsScanParams {
+  network_id: string;
+  /** Прямой текст для сканирования. Ровно одно из `text` / `source`. */
+  text?: string;
+  /** Адрес существующего комментария сети. Ровно одно из `text` / `source`. */
+  source?: { comment_id?: string; thought_id?: string };
+  /** Учитывать регистр. По умолчанию `false`. */
+  case_sensitive?: boolean;
+  /** Учитывать синонимы. По умолчанию `true`. */
+  use_synonyms?: boolean;
+  /** Разрешать `*`-инфикс в шаблонах названий/синонимов. По умолчанию `true`. */
+  use_wildcards?: boolean;
+  /** Порог уверенности 0.0–1.0; совпадения ниже отбрасываются. */
+  min_confidence?: number;
+  /** Если `true` — создать связи по результату. По умолчанию `false`. */
+  create_links?: boolean;
+  /** Тип создаваемой связи (по имени или id). */
+  link_type?: string;
+  /** Направление создаваемой связи: `out` = source = комментарий. */
+  link_direction?: 'out' | 'in';
+  /**
+   * Мысль-источник для создаваемых связей (обязательна при
+   * `create_links: true` и `source` отсутствует). Концы связей — от неё к
+   * найденным. Если `source.comment_id`/`source.thought_id` заданы — id
+   * владельца комментария используется автоматически.
+   */
+  source_thought_id?: string;
+}
+
+/** Один матч из отчёта `etn.thoughts.mentions_scan`. */
+export interface McpMentionsScanMatch {
+  thought_id: string;
+  title: string;
+  /** 0.0–1.0. */
+  confidence: number;
+  /** На чём сматчилось: `title` / `synonym` / `wildcard`. */
+  matched_on: 'title' | 'synonym' | 'wildcard';
+  /** Создана ли связь (`create_links=true` + дубли не было). */
+  link_created?: boolean;
+}
+
+/** Result of `etn.thoughts.mentions_scan`. */
+export interface McpMentionsScanResult {
+  matches: McpMentionsScanMatch[];
+  /** Число созданных связей. */
+  links_created?: number;
+  request_id?: string;
+}
+
+// ---------------------------------------------------------------------------
+// `etn.import.dry_run` / `etn.import.subgraph` (задача e488f4c1, версия
+// 0.7.2) — импорт `.etnx` через MCP. Источник — файл на диске либо base64.
+// ---------------------------------------------------------------------------
+
+/** Источник `.etnx`-архива для импорта. */
+export type McpImportSource =
+  | { kind: 'etnx_file'; path: string }
+  | { kind: 'etnx_base64'; content_base64: string };
+
+/** Политика коллизий импорта. */
+export type McpImportPolicy = 'fail' | 'rename' | 'skip' | 'overwrite';
+
+/** Parameters of `etn.import.dry_run` (read-only preview). */
+export interface McpImportDryRunParams {
+  network_id: string;
+  source: McpImportSource;
+  /** Политика разрешения коллизий для плана. */
+  collision_policy?: McpImportPolicy;
+}
+
+/** Parameters of `etn.import.subgraph` (destructive). */
+export interface McpImportSubgraphParams extends McpImportDryRunParams {
+  /** Подтверждение деструктивной операции — обязательно `true`. */
+  confirm: true;
+  /** Куда подвесить корневые мысли (обязательно при наличии). */
+  parent_thought_id?: string;
+}
+
+/** Превью импорта — содержимое `.etnx` без изменений целевой сети. */
+export interface McpImportDryRunResult {
+  ok: true;
+  manifest_version: string;
+  source_network_name?: string;
+  /** Какие мысли создадутся / переиспользуются / пропустятся. */
+  plan: {
+    thoughts_to_create: number;
+    thoughts_to_reuse: number;
+    thoughts_to_skip: number;
+    links_to_create: number;
+    attachments_to_import: number;
+    thought_types_to_create: number;
+    thought_types_to_reuse: number;
+    link_types_to_create: number;
+    link_types_to_reuse: number;
+  };
+  /** Конфликты title/synonym при `collision_policy: fail`. */
+  conflicts?: Array<{ kind: string; title?: string; id?: string; reason: string }>;
+}
+
+/** Result of `etn.import.subgraph`. */
+export interface McpImportSubgraphResult {
+  imported: {
+    thoughts_created: number;
+    thoughts_updated: number;
+    thoughts_reused: number;
+    links_created: number;
+    permanent_comments_updated: number;
+    chronological_comments_added: number;
+    property_values_set: number;
+    attachments_imported: number;
+    thought_types_created: number;
+    thought_types_reused: number;
+    link_types_created: number;
+    link_types_reused: number;
+  };
+  conflicts?: Array<{ kind: string; title?: string; id?: string; reason: string }>;
+  manifest_version: string;
+  layer: { id: string; title: string };
+  request_id?: string;
 }
 

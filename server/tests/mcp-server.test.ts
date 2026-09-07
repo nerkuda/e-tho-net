@@ -362,9 +362,11 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // в `MCP_TOOL_ANNOTATIONS` — теперь у всех семёрки есть пометка
         // `deprecated_since: '0.7.2'`, поэтому canonical registry учитывает
         // их наравне с остальными.
-        assert.equal(annotated, 63);
-        assert.equal(hintReadOnly, 32);
-        assert.equal(hintDestructive, 13);
+        // P3 (задача e488f4c1): +4 (`copy_subtree`, `mentions_scan`,
+        // `import.dry_run`, `import.subgraph`) → 67.
+        assert.equal(annotated, 67);
+        assert.equal(hintReadOnly, 34);
+        assert.equal(hintDestructive, 14);
         assert.equal(hintIdempotent, 12);
       } finally {
         await handle.close();

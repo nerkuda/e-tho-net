@@ -236,10 +236,14 @@ export function copyThoughtsBatch(
   input: ThoughtCopyInput,
   actorUserId: string,
 ): ThoughtCopyResult {
-  // The parent must exist up-front — every new thought gets a parent-link
-  // to it and we want a precise 404 if the destination cloud was deleted
-  // between the menu click and this request landing.
-  getThoughtOrThrow(ndb, input.parent_thought_id);
+  // Если parent_thought_id задан, проверяем его существование up-front —
+  // каждая новая мысль получает parent-link к нему и мы хотим точный 404,
+  // если целевая "облако" была удалена между кликом меню и прилётом запроса.
+  // Пустая строка — корневые мысли остаются без входящей связи (round-trip
+  // copy_subtree не должен автоматически подвешивать к HOME).
+  if (input.parent_thought_id !== '') {
+    getThoughtOrThrow(ndb, input.parent_thought_id);
+  }
 
   return ndb.transaction(() => {
     const thoughtIdMap: Record<string, string> = {};
@@ -276,7 +280,7 @@ export function copyThoughtsBatch(
       // target is one of the copied thoughts.
       const isInternal = sourceId !== '' && hasIncomingCopiedLink.has(sourceId);
       if (isInternal) continue;
-      if (input.parent_thought_id === thought.id) continue;
+      if (input.parent_thought_id === '' || input.parent_thought_id === thought.id) continue;
       const parentLink = createLink(
         ndb,
         { source_id: input.parent_thought_id, target_id: thought.id, type_id: null },
@@ -419,8 +423,7 @@ function createOneThought(
 
 /** Read the original thought id the client tagged this snapshot with. */
 function snapshotSourceId(item: ThoughtCopyItem): string {
-  const ext = item as unknown as { source_id?: unknown };
-  return typeof ext.source_id === 'string' ? ext.source_id : '';
+  return typeof item.source_id === 'string' ? item.source_id : '';
 }
 
 /**
