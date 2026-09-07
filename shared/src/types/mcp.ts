@@ -717,6 +717,12 @@ export interface McpThoughtWriteItem {
 /** Parameters of `etn.thoughts.write`. */
 export interface McpThoughtWriteParams {
   network_id: string;
+  /** Additional locally-declared refs that may be used as `links[].target_ref`
+   *  in this batch but are not attached to any `thoughts[]` item — typically
+   *  an alias for an existing thought (e.g. `{ home_ref: "<HOME uuid>" }`).
+   *  Keys must not collide with `thoughts[].ref`. Values must be valid UUIDs
+   *  of existing thoughts in the network. */
+  local_refs?: Record<string, string>;
   /** The batch — 1..{@link MCP_MAX_THOUGHTS_PER_WRITE} items. */
   thoughts: McpThoughtWriteItem[];
 }

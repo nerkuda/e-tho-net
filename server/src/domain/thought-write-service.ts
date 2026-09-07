@@ -88,7 +88,28 @@ function validateEnvelope(input: ThoughtWriteInput): void {
   }
   // Phase 1: uniqueness of `ref` + XOR thought_id/thought. Also collect
   // the set of declared refs so phase 2 can validate `target_ref` early.
+  // `local_refs` keys participate in the same namespace — duplicates with
+  // `thoughts[].ref` are rejected here so phase 2 can trust the set.
   const seenRefs = new Set<string>();
+  if (input.local_refs !== undefined) {
+    for (const name of Object.keys(input.local_refs)) {
+      if (name === '') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'local_refs keys must be non-empty strings',
+          { field: 'local_refs' },
+        );
+      }
+      if (seenRefs.has(name)) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `duplicate ref in batch: "${name}" is both a local_ref and a thought.ref`,
+          { field: 'local_refs', ref: name },
+        );
+      }
+      seenRefs.add(name);
+    }
+  }
   for (const [index, item] of input.thoughts.entries()) {
     const hasThoughtId = item.thought_id !== undefined;
     const hasThought = item.thought !== undefined;
@@ -131,6 +152,7 @@ function validateEnvelope(input: ThoughtWriteInput): void {
 function resolveTypes(ndb: NetworkDb, input: ThoughtWriteInput): ThoughtWriteInput {
   return {
     network_id: input.network_id,
+    ...(input.local_refs === undefined ? {} : { local_refs: input.local_refs }),
     thoughts: input.thoughts.map((item) => {
       const thought =
         item.thought === undefined
@@ -164,9 +186,16 @@ function resolveTypes(ndb: NetworkDb, input: ThoughtWriteInput): ThoughtWriteInp
 }
 
 /** Pre-resolve `thought_id`-addressed items so `target_ref` can resolve to
- *  an existing thought across the batch even when it's addressed by id. */
+ *  an existing thought across the batch even when it's addressed by id.
+ *  `local_refs` aliases are also seeded here — they name existing thoughts by
+ *  uuid so phase 3 can resolve `target_ref` to the right id. */
 function resolveExistingThoughtIds(input: ThoughtWriteInput): Map<string, string> {
   const map = new Map<string, string>();
+  if (input.local_refs !== undefined) {
+    for (const [name, thoughtId] of Object.entries(input.local_refs)) {
+      map.set(name, thoughtId);
+    }
+  }
   for (const item of input.thoughts) {
     if (item.ref !== undefined && item.thought_id !== undefined) {
       map.set(item.ref, item.thought_id);
@@ -186,7 +215,12 @@ function resolveExistingThoughtIds(input: ThoughtWriteInput): Map<string, string
 function validateLinkTargets(input: ThoughtWriteInput, refToId: Map<string, string>): void {
   // All declared refs in this batch — used to validate `target_ref` before
   // any item has been written. Empty refs (items with no `ref`) are ignored.
+  // `local_refs` keys are also "declared" — the user named them on purpose
+  // and the corresponding uuid sits in `refToId`.
   const declaredRefs = new Set<string>();
+  if (input.local_refs !== undefined) {
+    for (const name of Object.keys(input.local_refs)) declaredRefs.add(name);
+  }
   for (const item of input.thoughts) {
     if (item.ref !== undefined) declaredRefs.add(item.ref);
   }

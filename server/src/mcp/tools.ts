@@ -4233,8 +4233,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           'a batch item with `thought` (new thought) must also declare a local `ref`',
       },
     );
+  const LocalRefsSchema = z.record(z.string().min(1), z.string().uuid()).optional();
   const WriteSchema = z.object({
     network_id: NetworkId,
+    local_refs: LocalRefsSchema,
     thoughts: z.array(WriteItemSchema).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
   });
   mcp.registerTool(
@@ -4260,6 +4262,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetwork(rt, args.network_id);
         const writeInput: McpThoughtWriteParams = {
           network_id: args.network_id,
+          ...(args.local_refs === undefined ? {} : { local_refs: args.local_refs }),
           thoughts: args.thoughts.map((item) => ({
             ...(item.ref === undefined ? {} : { ref: item.ref }),
             ...(item.thought_id === undefined ? {} : { thought_id: item.thought_id }),

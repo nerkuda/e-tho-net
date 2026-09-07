@@ -115,6 +115,77 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('resolves links[].target_ref against `local_refs` (HOME alias)', async () => {
+    // Regression for error 3058c264: `local_refs` lets the caller name an
+    // existing thought (e.g. HOME) once and reference it from `links[].target_ref`
+    // instead of pasting its uuid everywhere.
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            local_refs: { home_ref: ctx.homeId },
+            thoughts: [
+              {
+                ref: 'child_a',
+                thought: { title: 'local_refs — ребёнок A' },
+                links: [{ direction: 'parent', target_ref: 'home_ref' }],
+              },
+              {
+                ref: 'child_b',
+                thought: { title: 'local_refs — ребёнок B' },
+                links: [{ direction: 'parent', target_ref: 'home_ref' }],
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, undefined, toolText(result));
+        const data = toolJson<WriteResult>(result);
+        assert.equal(data.items.length, 2);
+        for (const item of data.items) {
+          assert.equal(item.thought_action, 'created');
+          assert.equal(item.links?.length, 1, 'each child must have one outgoing link to HOME');
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('rejects a local_refs key that collides with a thoughts[].ref', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const result = await handle.client.callTool({
+          name: 'etn.thoughts.write',
+          arguments: {
+            network_id: ctx.networkId,
+            local_refs: { shared: ctx.homeId },
+            thoughts: [
+              {
+                ref: 'shared',
+                thought: { title: 'конфликт local_refs vs thoughts[].ref' },
+              },
+            ],
+          },
+        });
+        assert.equal(result.isError, true);
+        const text = toolText(result);
+        assert.match(text, /duplicate ref in batch/i);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('handles a cycle A→B→A via target_ref without infinite recursion', async () => {
     const ctx = await buildMcpContext();
     try {
