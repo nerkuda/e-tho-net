@@ -43,6 +43,8 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.search',
   'etn.thoughts.query',
   'etn.thoughts.get',
+  'etn.thoughts.resolve',
+  'etn.thoughts.bulk_update',
   'etn.thoughts.neighbors',
   'etn.thoughts.subgraph',
   'etn.thoughts.path',
@@ -57,6 +59,8 @@ export const MCP_TOOL_NAMES = [
   'etn.export.subgraph',
   'etn.types.list',
   'etn.changes.list',
+  'etn.chronicle.query',
+  'etn.members.list',
   'etn.metrics.reads',
   'etn.metrics.tools',
   'etn.layers.list',
@@ -77,6 +81,8 @@ export const MCP_TOOL_NAMES = [
   'etn.attachments.add',
   'etn.attachments.copy',
   'etn.attachments.search',
+  'etn.attachments.update',
+  'etn.attachments.delete',
   'etn.properties.set',
   'etn.thoughts.upsert_bundle',
   'etn.trash.purge',
@@ -141,6 +147,7 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.thoughts.search': { readOnlyHint: true },
   'etn.thoughts.query': { readOnlyHint: true },
   'etn.thoughts.get': { readOnlyHint: true },
+  'etn.thoughts.resolve': { readOnlyHint: true },
   'etn.thoughts.neighbors': { readOnlyHint: true },
   'etn.thoughts.subgraph': { readOnlyHint: true },
   'etn.thoughts.path': { readOnlyHint: true },
@@ -155,6 +162,7 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.export.subgraph': { readOnlyHint: true },
   'etn.types.list': { readOnlyHint: true },
   'etn.changes.list': { readOnlyHint: true },
+  'etn.chronicle.query': { readOnlyHint: true },
   'etn.metrics.reads': { readOnlyHint: true },
   'etn.metrics.tools': { readOnlyHint: true },
   'etn.attachments.search': { readOnlyHint: true },
@@ -164,11 +172,14 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.layers.diff_doc': { readOnlyHint: true },
   'etn.locks.list': { readOnlyHint: true },
   'etn.activity.list': { readOnlyHint: true },
+  'etn.members.list': { readOnlyHint: true },
 
   // ---- mutating tools — destructiveHint ---------------------------
   'etn.thoughts.delete': { destructiveHint: true },
+  'etn.thoughts.bulk_update': { destructiveHint: false, idempotentHint: false },
   'etn.links.delete': { destructiveHint: true },
   'etn.comments.delete': { destructiveHint: true },
+  'etn.attachments.delete': { destructiveHint: true },
   'etn.trash.purge': { destructiveHint: true },
   'etn.layers.delete': { destructiveHint: true },
   'etn.layers.merge': { destructiveHint: true },
@@ -187,6 +198,8 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.layers.select': { idempotentHint: true },
   // Object-lock acquire — идемпотентно продлевает свой захват (задача 2031df5e).
   'etn.locks.acquire': { idempotentHint: true },
+  // `attachments.update` — last-write-wins по метаданным, повторный вызов с теми же аргументами даёт тот же результат.
+  'etn.attachments.update': { idempotentHint: true },
 };
 
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5).

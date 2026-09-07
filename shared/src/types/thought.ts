@@ -514,3 +514,96 @@ export interface ThoughtMetaFull {
    */
   link_stats: LinkStats;
 }
+
+/**
+ * Полнотекстовый постоянный комментарий мысли — форма, которую возвращает
+ * `etn.thoughts.resolve` в `comment_preview` (задача 6d45ab37, P1-паритет MCP↔REST):
+ * единственный случай пакетного чтения, когда постоянный комментарий мысли
+ * отдаётся целиком без метаданных `chars_*`/`truncated`. В отличие от
+ * `etn.thoughts.get.meta.permanent` (задача 3ea09a54), здесь форма одна —
+ * `resolve` не выбирает между preview/full: единственный заход агента по
+ * списку id должен вернуть полный текст, чтобы агенту не приходилось
+ * отдельно ходить в `etn.comments.get` для каждой карточки.
+ */
+export interface PermanentCommentFullText {
+  /** Id комментария. */
+  id: string;
+  /** Полный markdown-текст без обрезки. */
+  body_md: string;
+  /** Для permanent совпадает с `created_at` (02-data-model.md §3.8). */
+  valid_from: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Превью постоянного комментария в форме `etn.thoughts.resolve` — то же, что
+ * {@link PermanentCommentPreview}, но без `chars_*`/`truncated`: либо
+ * полный текст (см. {@link PermanentCommentFullText}), либо `null`.
+ *
+ * Формальное наличие двух близких типов — следствие задачи 3ea09a54
+ * «Условная обрезка текстов в ответах MCP»: preview-форма для выборок
+ * сущностей, full-форма для одиночных точек входа. `resolve` ближе ко
+ * второму — поэтому здесь `body_md` либо полный, либо отсутствует.
+ */
+export type ResolveCommentPreview = PermanentCommentFullText | null;
+
+/**
+ * «Карточка мысли» — единица ответа `etn.thoughts.resolve` (задача 6d45ab37,
+ * P1-паритет MCP↔REST, спека 85b94925). Пакетное чтение по списку id
+ * возвращает массив таких карточек с теми же полями, что и `etn.thoughts.get`,
+ * плюс полнотекстовый постоянный комментарий в `comment_preview`.
+ *
+ * Семантически совпадает с плоской формой `etn.thoughts.get`: id/title/
+ * synonyms/type/properties/meta/comment_preview, без обёрток. Тип, свойства
+ * и meta берутся в той же форме, что и у `get` (`view` влияет только на
+ * поля самой мысли — id/title/synonyms/... — и `type`, но не на `properties`
+ * и `meta`).
+ */
+export interface ThoughtCard {
+  /** Все поля {@link Thought} в выбранной проекции (`compact`/`full`). */
+  id: string;
+  title: string;
+  type_id: string | null;
+  icon: string | null;
+  icon_kind: IconKind;
+  icon_attachment_id: string | null;
+  active: boolean;
+  marked_for_deletion: boolean;
+  fg_color: string | null;
+  bg_color: string | null;
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
+  synonyms: string[];
+  version: number;
+  /** ISO-8601 UTC. */
+  created_at: string;
+  updated_at: string;
+  /**
+   * Тип мысли в каталожной форме (см. {@link ThoughtTypeRef} в `./mcp.ts`):
+   * id, name, AI-facing description. `null`, когда тип не назначен.
+   */
+  type: import('./mcp.js').ThoughtTypeRef | null;
+  /** Свойства мысли в форме `etn.thoughts.get` (резолвнутые `thought_ref`,
+   *  пометка `outside_type` для значений вне L21-цепочки). */
+  properties: import('./thought-type.js').ResolvedPropertyValue[];
+  /** «Сигналы полноты» (см. {@link ThoughtMeta}). */
+  meta: ThoughtMeta;
+  /** Полнотекстовый постоянный комментарий либо `null`. */
+  comment_preview: ResolveCommentPreview;
+}
+
+/**
+ * Результат `etn.thoughts.resolve` (задача 6d45ab37, спека 85b94925):
+ * карточки найденных мыслей в порядке первого появления в запросе
+ * (дубли в `thought_ids` схлопываются) плюс список id, которых в сети
+ * нет. `missing[]` сохраняет порядок первого появления в запросе.
+ */
+export interface ResolveResult {
+  /** Найденные мысли; порядок — по первому появлению id в `thought_ids`. */
+  items: ThoughtCard[];
+  /** Не найденные в сети id (порядок — по первому появлению в запросе). */
+  missing: string[];
+}

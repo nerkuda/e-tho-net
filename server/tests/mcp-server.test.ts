@@ -313,10 +313,17 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // оба `destructiveHint: true` (необратимые операции с журналом).
         // Task 940a499d adds 1 read tool (`etn.metrics.tools` — readOnlyHint)
         // over the previous 45/27/10/8 counts.
-        assert.equal(annotated, 46);
-        assert.equal(hintReadOnly, 28);
-        assert.equal(hintDestructive, 10);
-        assert.equal(hintIdempotent, 8);
+        // Task 6d45ab37 (P1-паритет MCP↔REST) добавляет 6 инструментов:
+        //   * resolve (readOnlyHint) — +1 readOnly;
+        //   * bulk_update (явные destructiveHint: false + idempotentHint: false) — не считается ни в readOnly, ни в destructive/idempotent;
+        //   * chronicle.query (readOnlyHint) — +1 readOnly;
+        //   * members.list (readOnlyHint) — +1 readOnly;
+        //   * attachments.update (idempotentHint) — +1 idempotent;
+        //   * attachments.delete (destructiveHint) — +1 destructive.
+        assert.equal(annotated, 52);
+        assert.equal(hintReadOnly, 31);
+        assert.equal(hintDestructive, 11);
+        assert.equal(hintIdempotent, 9);
       } finally {
         await handle.close();
       }

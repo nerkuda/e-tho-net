@@ -120,6 +120,7 @@ import {
   countNeighbors,
   deleteThought,
   getNeighbors,
+  getThoughtsByIdsResolved,
   getThoughtOrThrow,
   updateThought,
   updateThoughtWithWarnings,
@@ -143,10 +144,12 @@ import {
   listComments,
   updateComment,
 } from '../domain/comment-service.js';
-import { createAttachment, listAttachments } from '../domain/attachment-service.js';
+import { createAttachment, getAttachment, listAttachments } from '../domain/attachment-service.js';
 import {
   copyAttachment,
+  deleteAttachment,
   searchAttachments,
+  updateAttachment,
 } from '../domain/attachment-service.js';
 import {
   clearThoughtRefUsages,
@@ -177,6 +180,7 @@ import {
 import {
   ACTIVITY_LIMIT_MAX,
   listActivity,
+  recordAttachmentActivity,
   recordCommentActivity,
   recordLayerActivity,
   recordLinkActivity,
@@ -187,6 +191,7 @@ import {
 import { shrinkSubgraphToBudget } from './subgraph-budget.js';
 import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
 import { queryThoughts } from '../domain/query-service.js';
+import { queryChronicle, parseChronicleQueryBody } from '../domain/chronicle-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
 import {
   clampReadMetricsParams,
@@ -764,6 +769,74 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         // never affected by the O12 projection change.
         const projected = view === 'full' ? thought : toCompactThought(thought);
         return { ...projected, type, properties, meta };
+      }),
+  );
+
+  // etn.thoughts.resolve — пакетное чтение по списку id (задача 6d45ab37,
+  // спека 85b94925, P1-паритет MCP↔REST `POST /thoughts/resolve`).
+  // Возвращает карточки в порядке первого появления id в запросе плюс
+  // `missing[]` для отсутствующих. Лимит по размеру пачки —
+  // `rt.limits.maxNodesPerSubgraph` (тот же, что у `etn.thoughts.subgraph`).
+  const ResolveSchema = z.object({
+    network_id: NetworkId,
+    thought_ids: z.array(ThoughtId).min(1).max(rt.limits.maxNodesPerSubgraph),
+    view: View,
+  });
+  mcp.registerTool(
+    'etn.thoughts.resolve',
+    {
+      title: 'Пакетное чтение мыслей',
+      description:
+        'Батч-чтение по списку id: `items[]` (карточки в порядке первого появления, дубли ' +
+        'схлопываются) + `missing[]`. Карточка несёт мысль, тип, свойства, `meta.link_stats` и ' +
+        'полнотекстовый `comment_preview`. Лимит — `maxNodesPerSubgraph`.',
+      inputSchema: ResolveSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const view: McpViewMode = args.view ?? 'compact';
+        const result = getThoughtsByIdsResolved(ndb, args.thought_ids);
+        // O10: count reads for `etn.metrics.reads` analytics.
+        recordReads(
+          ndb,
+          result.items.map((c) => c.id),
+          { now: new Date().toISOString() },
+        );
+        const items =
+          view === 'full'
+            ? result.items
+            : result.items.map((card) => ({
+                ...card,
+                // Проекция касается только полей самой мысли (id/title/...);
+                // `type`, `properties`, `meta` и `comment_preview` остаются в
+                // полной форме — тот же контракт, что и у `etn.thoughts.get`.
+                id: card.id,
+                title: card.title,
+                type_id: card.type_id,
+                icon: card.icon,
+                icon_kind: card.icon_kind,
+                icon_attachment_id: card.icon_attachment_id,
+                active: card.active,
+                marked_for_deletion: card.marked_for_deletion,
+                fg_color: null,
+                bg_color: null,
+                font_bold: null,
+                font_italic: null,
+                font_underline: null,
+                font_strike: null,
+                synonyms: card.synonyms,
+                version: card.version,
+                created_at: card.created_at,
+                updated_at: card.updated_at,
+              }));
+        // Reference table: только типы, реально использованные в items.
+        const thoughtTypes = thoughtTypeCatalog(
+          ndb,
+          result.items.map((c) => c.type_id),
+        );
+        return { items, missing: result.missing, thought_types: thoughtTypes };
       }),
   );
 
@@ -1802,6 +1875,113 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   );
 
   // =========================================================================
+  // `etn.chronicle.query` (задача 6d45ab37, спека 52767bdf, P1-паритет
+  // MCP↔REST `POST /chronicle/query`). Прокси над domain
+  // `parseChronicleQueryBody` + `queryChronicle` с резолвом имён типов.
+  // =========================================================================
+
+  // Объединённая схема — повторяет ключи REST `POST /chronicle/query`
+  // (docs/03-server-api.md §20). Имена типов и имён свойств резолвятся
+  // хелперами ниже, как в `etn.thoughts.query`/`search` (задача d5ab1630).
+  const ChronicleQuerySchema = z.object({
+    network_id: NetworkId,
+    keywords: z.string().optional(),
+    thought_ids: z.array(ThoughtId).optional(),
+    include_subtree: z.boolean().optional(),
+    // `type`/`type_id` XOR (задача 77351f03).
+    type: z.string().min(1).optional(),
+    type_id: z.array(ThoughtId).optional(),
+    // `link_type`/`link_type_id` XOR.
+    link_type: z.string().min(1).optional(),
+    link_type_id: z.array(ThoughtId).optional(),
+    link_scope: z.enum(['sources', 'targets', 'both']).optional(),
+    date_from: z.string().min(1).optional(),
+    date_to: z.string().min(1).optional(),
+    order: z.enum(['asc', 'desc']).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    offset: z.number().int().min(0).optional(),
+  });
+  mcp.registerTool(
+    'etn.chronicle.query',
+    {
+      title: 'Запрос хроники',
+      description:
+        'Двухфазный запрос хроники (паритет `POST /chronicle/query`): фаза 1 — мысли по ' +
+        '`keywords`/`thought_ids`/`include_subtree`/`type[]`; фаза 2 — хроно-комментарии к ним ' +
+        'или их связям с фильтрами `link_type[]`/`link_scope`/`date_from/to`. `{ rows[], meta }`.',
+      inputSchema: ChronicleQuerySchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.chronicle.query'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        // Резолв имён типов в id (задача d5ab1630 + 77351f03).
+        const typeIds = args.type === undefined
+          ? args.type_id
+          : (Array.isArray(args.type_id) ? args.type_id : []).concat([
+              resolveThoughtTypeIdByName(ndb, args.type),
+            ]);
+        const linkTypeIds = args.link_type === undefined
+          ? args.link_type_id
+          : (Array.isArray(args.link_type_id) ? args.link_type_id : []).concat([
+              resolveLinkTypeIdByName(ndb, args.link_type),
+            ]);
+        // Сборка тела запроса под domain `parseChronicleQueryBody` —
+        // повторяет ключи REST с минимальной правкой имён.
+        const body: Record<string, unknown> = {};
+        if (args.keywords !== undefined) body.keywords = args.keywords;
+        if (args.thought_ids !== undefined) body.thought_ids = args.thought_ids;
+        if (args.include_subtree !== undefined) body.include_subtree = args.include_subtree;
+        if (typeIds !== undefined) body.type_ids = typeIds;
+        if (linkTypeIds !== undefined) body.link_type_ids = linkTypeIds;
+        if (args.link_scope !== undefined) body.link_scope = args.link_scope;
+        if (args.date_from !== undefined) body.date_from = args.date_from;
+        if (args.date_to !== undefined) body.date_to = args.date_to;
+        if (args.order !== undefined) body.order = args.order;
+        if (args.limit !== undefined) body.limit = args.limit;
+        if (args.offset !== undefined) body.offset = args.offset;
+        const request = parseChronicleQueryBody(body, '');
+        const result = queryChronicle(ndb, request);
+        return {
+          rows: result.rows,
+          meta: { total: result.total, offset: request.offset, limit: request.limit },
+        };
+      }),
+  );
+
+  // =========================================================================
+  // `etn.members.list` (задача 6d45ab37, спека 6cccac39, P1-паритет MCP↔REST
+  // `GET /networks/{id}/members`). Доступ — участники сети или глобальный
+  // админ (проверка уже в `openMemberNetwork`).
+  // =========================================================================
+  const MembersListSchema = z.object({ network_id: NetworkId });
+  mcp.registerTool(
+    'etn.members.list',
+    {
+      title: 'Участники сети',
+      description:
+        'Список участников сети (user_id, display_name, role, joined_at). Паритет ' +
+        'с `GET /networks/{id}/members`. Доступ — участники или глобальный админ.',
+      inputSchema: MembersListSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.members.list'],
+    },
+    (args) =>
+      runTool(async () => {
+        // openMemberNetwork сам бросает FORBIDDEN, если ключ не привязан к сети.
+        openMemberNetwork(rt, args.network_id);
+        const rows = rt.deps.systemDb.listNetworkMembers(args.network_id);
+        return {
+          members: rows.map((r) => ({
+            user_id: r.user_id,
+            display_name: r.display_name,
+            role: r.role,
+            joined_at: r.added_at,
+          })),
+        };
+      }),
+  );
+
+  // =========================================================================
   // Mutating tools (§4.2) — domain services + real-time events + audit log
   // =========================================================================
 
@@ -2113,6 +2293,395 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           applied: report.applied,
         });
         return { ...report, request_id: String(extra.requestId) };
+      }),
+  );
+
+  // =========================================================================
+  // `etn.thoughts.bulk_update` (задача 6d45ab37, спека 77502d93, P1-паритет
+  // MCP↔REST `POST /thoughts/batch`). Групповые операции над мыслями —
+  // одна запись бюджета на ВЕСЬ вызов; `failures[]` для отдельных id.
+  // Не включает `purge`/`delete` — это отдельный цикл работ (S13).
+  // =========================================================================
+
+  // Типы операций — в точности подмножество REST `ThoughtBatchOp`
+  // (shared/src/types/thought.ts), без `delete`/`purge`/`link_to_focus`/
+  // `unlink_from_focus` (последние два не нужны MCP-агенту: для единичной
+  // связи есть `etn.links.create`/`etn.links.delete`).
+  const BULK_UPDATE_OPS = [
+    'set_type',
+    'clear_type',
+    'set_active',
+    'set_inactive',
+    'trash',
+    'link_parents',
+    'link_children',
+    'set_only_parents',
+    'unlink_parents',
+    'unlink_children',
+  ] as const;
+
+  /**
+   * Разбор `args` для `etn.thoughts.bulk_update`. Возвращает нормализованный
+   * объект подмножества `ThoughtBatchArgs`, пригодный для вызова
+   * доменного/роутного кода. Используется в фасаде и тестах.
+   *
+   * XOR-пары (`type`/`type_id`, `link_type`/`link_type_id`) уже отсечены
+   * схемой Zod — здесь только нормализация резолва имён в id.
+   */
+  function normalizeBulkUpdateArgs(
+    ndb: NetworkDb,
+    op: (typeof BULK_UPDATE_OPS)[number],
+    args: {
+      type?: string;
+      type_id?: string | null;
+      parent_ids?: string[];
+      child_ids?: string[];
+      link_type?: string;
+      link_type_id?: string | null;
+    },
+  ): {
+    type_id: string | null | undefined;
+    parent_ids: string[] | undefined;
+    child_ids: string[] | undefined;
+    link_type_id: string | null | undefined;
+  } {
+    const out: {
+      type_id: string | null | undefined;
+      parent_ids: string[] | undefined;
+      child_ids: string[] | undefined;
+      link_type_id: string | null | undefined;
+    } = {
+      type_id: undefined,
+      parent_ids: undefined,
+      child_ids: undefined,
+      link_type_id: undefined,
+    };
+    if (op === 'set_type') {
+      out.type_id = args.type === undefined ? args.type_id : resolveThoughtTypeIdByName(ndb, args.type);
+    }
+    if (op === 'link_parents' || op === 'set_only_parents' || op === 'unlink_parents') {
+      out.parent_ids = args.parent_ids;
+    }
+    if (op === 'link_children' || op === 'unlink_children') {
+      out.child_ids = args.child_ids;
+    }
+    if (op === 'link_parents' || op === 'link_children' || op === 'set_only_parents') {
+      out.link_type_id = args.link_type === undefined ? args.link_type_id : resolveLinkTypeIdByName(ndb, args.link_type);
+    }
+    return out;
+  }
+
+  // Аргументы массовых операций: минимальный, жёсткий контракт.
+  // Запрещаем смешение `type`/`type_id`, `link_type`/`link_type_id` —
+  // схемой `.refine()` (задача 77351f03).
+  const BulkUpdateArgs = z
+    .object({
+      // set_type
+      type: z.string().min(1).optional(),
+      type_id: z.string().min(1).nullable().optional(),
+      // link_parents / set_only_parents / unlink_parents
+      parent_ids: z.array(ThoughtId).min(1).optional(),
+      // link_children / unlink_children
+      child_ids: z.array(ThoughtId).min(1).optional(),
+      // link_parents / link_children / set_only_parents
+      link_type: z.string().min(1).optional(),
+      link_type_id: z.string().min(1).nullable().optional(),
+    })
+    .refine((v) => v.type === undefined || v.type_id === undefined, {
+      message: TYPE_ID_TYPE_CONFLICT,
+    })
+    .refine((v) => v.link_type === undefined || v.link_type_id === undefined, {
+      message: 'provide at most one of link_type_id or link_type',
+    })
+    .refine((v) => Object.keys(v).length > 0, { message: 'args must not be empty when provided' })
+    .optional();
+
+  const BulkUpdateSchema = z.object({
+    network_id: NetworkId,
+    ids: z.array(ThoughtId).min(1),
+    op: z.enum(BULK_UPDATE_OPS),
+    args: BulkUpdateArgs,
+  });
+  mcp.registerTool(
+    'etn.thoughts.bulk_update',
+    {
+      title: 'Групповые операции над мыслями',
+      description:
+        'Групповые операции (одна запись бюджета на ВЕСЬ вызов): `op` ∈ {`set_type`,`clear_type`,' +
+        '`set_active`,`set_inactive`,`trash`,`link_parents`,`link_children`,`set_only_parents`,' +
+        '`unlink_parents`,`unlink_children`}. Возвращает `{ affected, failures[] }`. Без `purge`/`delete`.',
+      inputSchema: BulkUpdateSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.bulk_update'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const userId = rt.deps.auth.userId;
+        const layerId = resolveRuntimeLayer(rt, args.network_id).id;
+        const normalized = normalizeBulkUpdateArgs(
+          ndb,
+          args.op,
+          args.args ?? {},
+        );
+        const ids = [...new Set(args.ids)];
+        const failures: Array<{ id: string; code: string; message: string }> = [];
+        let affected = 0;
+        for (const id of ids) {
+          try {
+            switch (args.op) {
+              case 'set_type': {
+                const updated = updateThought(
+                  ndb,
+                  id,
+                  { type_id: normalized.type_id ?? null },
+                  undefined,
+                  userId,
+                );
+                emitAgentEvent(rt, args.network_id, 'thought.updated', {
+                  id,
+                  changes: { type_id: normalized.type_id ?? null },
+                  version: updated.version,
+                }, extra.requestId, layerId);
+                recordThoughtActivity(ndb, {
+                  networkId: args.network_id,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
+                break;
+              }
+              case 'clear_type': {
+                const updated = updateThought(ndb, id, { type_id: null }, undefined, userId);
+                emitAgentEvent(rt, args.network_id, 'thought.updated', {
+                  id,
+                  changes: { type_id: null },
+                  version: updated.version,
+                }, extra.requestId, layerId);
+                recordThoughtActivity(ndb, {
+                  networkId: args.network_id,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
+                break;
+              }
+              case 'set_active': {
+                const updated = updateThought(ndb, id, { active: true }, undefined, userId);
+                emitAgentEvent(rt, args.network_id, 'thought.updated', {
+                  id,
+                  changes: { active: true },
+                  version: updated.version,
+                }, extra.requestId, layerId);
+                recordThoughtActivity(ndb, {
+                  networkId: args.network_id,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
+                break;
+              }
+              case 'set_inactive': {
+                const updated = updateThought(ndb, id, { active: false }, undefined, userId);
+                emitAgentEvent(rt, args.network_id, 'thought.updated', {
+                  id,
+                  changes: { active: false },
+                  version: updated.version,
+                }, extra.requestId, layerId);
+                recordThoughtActivity(ndb, {
+                  networkId: args.network_id,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
+                break;
+              }
+              case 'trash': {
+                const updated = updateThought(
+                  ndb,
+                  id,
+                  { marked_for_deletion: true },
+                  undefined,
+                  userId,
+                );
+                emitAgentEvent(rt, args.network_id, 'thought.updated', {
+                  id,
+                  changes: { marked_for_deletion: true },
+                  version: updated.version,
+                }, extra.requestId, layerId);
+                recordThoughtActivity(ndb, {
+                  networkId: args.network_id,
+                  userId,
+                  action: 'trashed',
+                  thought: updated,
+                  layerId,
+                });
+                break;
+              }
+              case 'link_parents': {
+                for (const parentId of normalized.parent_ids ?? []) {
+                  if (parentId === id) continue;
+                  if (findLinksBetween(ndb, parentId, id).length > 0) continue;
+                  const link = createLink(
+                    ndb,
+                    {
+                      source_id: parentId,
+                      target_id: id,
+                      type_id: normalized.link_type_id ?? null,
+                    },
+                    userId,
+                  );
+                  emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId, layerId);
+                  recordLinkActivity(ndb, {
+                    networkId: args.network_id,
+                    userId,
+                    action: 'created',
+                    link,
+                    layerId,
+                  });
+                }
+                break;
+              }
+              case 'link_children': {
+                for (const childId of normalized.child_ids ?? []) {
+                  if (childId === id) continue;
+                  if (findLinksBetween(ndb, id, childId).length > 0) continue;
+                  const link = createLink(
+                    ndb,
+                    {
+                      source_id: id,
+                      target_id: childId,
+                      type_id: normalized.link_type_id ?? null,
+                    },
+                    userId,
+                  );
+                  emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId, layerId);
+                  recordLinkActivity(ndb, {
+                    networkId: args.network_id,
+                    userId,
+                    action: 'created',
+                    link,
+                    layerId,
+                  });
+                }
+                break;
+              }
+              case 'set_only_parents': {
+                const wanted = new Set(normalized.parent_ids ?? []);
+                const existing = ndb
+                  .prepare(
+                    'SELECT id, type_id FROM links_v WHERE target_id = ? AND active = 1',
+                  )
+                  .all(id) as Array<{ id: string; type_id: string | null }>;
+                for (const link of existing) {
+                  if (!wanted.has(link.id)) continue;
+                  // Тут сравнение id'ов линков, а не пары (source,target) —
+                  // оставляем существующую линку на месте.
+                  void link;
+                }
+                // Drop parents not in the wanted set.
+                for (const link of existing) {
+                  const sourceRow = ndb
+                    .prepare('SELECT source_id FROM links_v WHERE id = ?')
+                    .get(link.id) as { source_id: string } | undefined;
+                  if (sourceRow === undefined) continue;
+                  if (!wanted.has(sourceRow.source_id)) {
+                    deleteLink(ndb, link.id, undefined);
+                    emitAgentEvent(rt, args.network_id, 'link.deleted', { id: link.id }, extra.requestId, layerId);
+                  }
+                }
+                // Add missing parents.
+                for (const parentId of normalized.parent_ids ?? []) {
+                  if (parentId === id) continue;
+                  if (findLinksBetween(ndb, parentId, id).length > 0) continue;
+                  const link = createLink(
+                    ndb,
+                    {
+                      source_id: parentId,
+                      target_id: id,
+                      type_id: normalized.link_type_id ?? null,
+                    },
+                    userId,
+                  );
+                  emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId, layerId);
+                  recordLinkActivity(ndb, {
+                    networkId: args.network_id,
+                    userId,
+                    action: 'created',
+                    link,
+                    layerId,
+                  });
+                }
+                break;
+              }
+              case 'unlink_parents': {
+                const wanted = new Set(normalized.parent_ids ?? []);
+                const existing = ndb
+                  .prepare(
+                    'SELECT l.id, l.source_id FROM links_v l WHERE l.target_id = ? AND l.active = 1',
+                  )
+                  .all(id) as Array<{ id: string; source_id: string }>;
+                for (const link of existing) {
+                  if (!wanted.has(link.source_id)) continue;
+                  deleteLink(ndb, link.id, undefined);
+                  emitAgentEvent(rt, args.network_id, 'link.deleted', { id: link.id }, extra.requestId, layerId);
+                  recordLinkActivity(ndb, {
+                    networkId: args.network_id,
+                    userId,
+                    action: 'deleted',
+                    link: { id: link.id, source_id: link.source_id, target_id: id, type_id: null },
+                    layerId,
+                  });
+                }
+                break;
+              }
+              case 'unlink_children': {
+                const wanted = new Set(normalized.child_ids ?? []);
+                const existing = ndb
+                  .prepare(
+                    'SELECT l.id, l.target_id FROM links_v l WHERE l.source_id = ? AND l.active = 1',
+                  )
+                  .all(id) as Array<{ id: string; target_id: string }>;
+                for (const link of existing) {
+                  if (!wanted.has(link.target_id)) continue;
+                  deleteLink(ndb, link.id, undefined);
+                  emitAgentEvent(rt, args.network_id, 'link.deleted', { id: link.id }, extra.requestId, layerId);
+                  recordLinkActivity(ndb, {
+                    networkId: args.network_id,
+                    userId,
+                    action: 'deleted',
+                    link: { id: link.id, source_id: id, target_id: link.target_id, type_id: null },
+                    layerId,
+                  });
+                }
+                break;
+              }
+            }
+            affected += 1;
+          } catch (err) {
+            const code = err instanceof EtnError ? err.code : 'INTERNAL';
+            const message =
+              err instanceof Error ? err.message : 'bulk update failed';
+            failures.push({ id, code, message });
+          }
+        }
+        // Per-id real-time event + activity row уже отправлены внутри цикла;
+        // здесь оставляем только аудит вызова (одна запись на КАЖДЫЙ вызов,
+        // независимо от числа id — контракт бюджета 0ff98632).
+        auditAgentCall(
+          rt,
+          'etn.thoughts.bulk_update',
+          args.network_id,
+          'thought',
+          ids[0] ?? '',
+          { op: args.op, ids: ids.length, affected, failures: failures.length },
+        );
+        return { affected, failures };
       }),
   );
 
@@ -2869,6 +3438,132 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           offset: args.offset,
         });
         return items;
+      }),
+  );
+
+  // =========================================================================
+  // `etn.attachments.update` (задача 6d45ab37, спека 0b23a32a, P1-паритет
+  // MCP↔REST `PATCH /attachments/{id}`). Last-write-wins по метаданным
+  // (title/description/url/file_path); kind неизменяем после создания.
+  // =========================================================================
+  const UpdateAttachmentSchema = z.object({
+    network_id: NetworkId,
+    attachment_id: z.string().min(1),
+    title: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    url: z.string().nullable().optional(),
+    file_path: z.string().nullable().optional(),
+  });
+  mcp.registerTool(
+    'etn.attachments.update',
+    {
+      title: 'Изменить вложение',
+      description:
+        'Правка метаданных (title/description/url/file_path). Last-write-wins (у `attachments` нет ' +
+        '`version`). `kind` неизменяем. Возвращает `{ id, version }`.',
+      inputSchema: UpdateAttachmentSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.update'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const changes: {
+          title?: string | null;
+          description?: string | null;
+          url?: string | null;
+          file_path?: string | null;
+        } = {};
+        if (args.title !== undefined) changes.title = args.title;
+        if (args.description !== undefined) changes.description = args.description;
+        if (args.url !== undefined) changes.url = args.url;
+        if (args.file_path !== undefined) changes.file_path = args.file_path;
+        const attachment = updateAttachment(
+          ndb,
+          args.attachment_id,
+          changes,
+          rt.deps.auth.userId,
+        );
+        emitAgentActivityEvent(
+          rt,
+          args.network_id,
+          'attachment.updated',
+          { id: attachment.id, changes },
+          ndb,
+          extra.requestId,
+        );
+        auditAgentCall(
+          rt,
+          'etn.attachments.update',
+          args.network_id,
+          'attachment',
+          attachment.id,
+          args,
+        );
+        return {
+          id: attachment.id,
+          version: 0,
+          request_id: String(extra.requestId),
+        } satisfies McpMutationResult;
+      }),
+  );
+
+  // =========================================================================
+  // `etn.attachments.delete` (задача 6d45ab37, спека 0b23a32a, P1-паритет
+  // MCP↔REST `DELETE /attachments/{id}`). Отвязывает вложение от владельца;
+  // физический файл НЕ удаляется — server-side cleanup в domain
+  // `deleteAttachment` (S4, 13-layers.md §5.3) решает судьбу файла по
+  // оставшимся ссылкам.
+  // =========================================================================
+  const DeleteAttachmentSchema = z.object({
+    network_id: NetworkId,
+    attachment_id: z.string().min(1),
+  });
+  mcp.registerTool(
+    'etn.attachments.delete',
+    {
+      title: 'Удалить вложение',
+      description:
+        'Отвязка вложения от владельца. Физический файл НЕ удаляется — судьбу решает domain ' +
+        'по оставшимся ссылкам. Возвращает `{ deleted: true }`.',
+      inputSchema: DeleteAttachmentSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.delete'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        // Берём снимок ДО удаления — это требование `recordAttachmentActivity`
+        // (deleted-ветка emitAgentActivityEvent не пишет журнал, как и REST-роут).
+        const existing = getAttachment(ndb, args.attachment_id);
+        deleteAttachment(ndb, args.attachment_id);
+        emitAgentEvent(
+          rt,
+          args.network_id,
+          'attachment.deleted',
+          { id: args.attachment_id },
+          extra.requestId,
+        );
+        if (existing !== null) {
+          recordAttachmentActivity(ndb, {
+            networkId: args.network_id,
+            userId: rt.deps.auth.userId,
+            action: 'deleted',
+            attachment: existing,
+            layerId: resolveRuntimeLayer(rt, args.network_id).id,
+          });
+        }
+        auditAgentCall(
+          rt,
+          'etn.attachments.delete',
+          args.network_id,
+          'attachment',
+          args.attachment_id,
+          args,
+        );
+        return { deleted: true, request_id: String(extra.requestId) };
       }),
   );
 

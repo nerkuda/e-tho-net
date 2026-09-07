@@ -507,13 +507,19 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         assert.equal(tools.length, MCP_TOOL_NAMES.length);
         // Guard of the progressive-disclosure ADR: before the 0.7.2 trim the
         // payload was 57 960 B for 54 tools; after the trim + etn.metrics.tools
-        // it measured 50 318 B. The budget leaves a small headroom and must be
-        // re-baselined deliberately (a new tool = a new conscious decision),
-        // not silently grown back by description creep.
+        // it measured 50 318 B. Task 6d45ab37 (P1-паритет MCP↔REST) re-baselines
+        // to 58 000 B for 60 tools: 6 новых описаний (resolve, bulk_update,
+        // chronicle.query, members.list, attachments.update, attachments.delete)
+        // добавляют ~7 300 B — удержать старые 52 000 B без удаления других
+        // описаний нельзя. Средняя плотность — 967 B/инструмент, что ниже
+        // pre-trim значения (1 073 B/инструмент для 54 tools). Бюджет должен
+        // расти только через осознанное добавление инструментов, а не через
+        // расползание описаний — иначе ADR b2eebf8b «прогрессивное раскрытие»
+        // не работает.
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
         assert.ok(
-          bytes <= 52_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 52000`,
+          bytes <= 58_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 58000`,
         );
       } finally {
         await handle.close();
