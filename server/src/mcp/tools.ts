@@ -27,7 +27,10 @@
  * Mutating tools are facades over the **same domain services as REST**
  * (05 §7): membership is re-checked per call, the read-only flag and the
  * per-minute write budget are enforced, each successful write emits its
- * catalogue real-time event via {@link emitAgentEvent} and appends an
+ * catalogue real-time event via {@link emitAgentEvent} /
+ * {@link emitAgentActivityEvent}, appends an `activity_log` row (требование
+ * b0c7a57c — same `record*Activity` helpers and snapshots as the REST routes;
+ * `edit.*` captures and per-user events are never journaled) and adds an
  * `audit_log` row (category `data`) via {@link auditAgentCall} — so agent-made
  * changes fan out to network participants exactly like human ones.
  *
@@ -157,6 +160,10 @@ import {
 import {
   ACTIVITY_LIMIT_MAX,
   listActivity,
+  recordCommentActivity,
+  recordLayerActivity,
+  recordLinkActivity,
+  recordThoughtActivity,
   rollupActivity,
   truncateActivity,
 } from '../domain/activity-service.js';
@@ -1624,6 +1631,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           gitBranch: args.git_branch ?? null,
           createdBy: rt.deps.auth.userId,
         });
+        // Journal row, mirroring the REST POST /layers route: the snapshot
+        // layer is the calling key's session layer (creating does not switch).
+        recordLayerActivity(ndb, {
+          networkId: args.network_id,
+          userId: rt.deps.auth.userId,
+          action: 'created',
+          layer,
+          layerId: sessionLayer.id,
+        });
         auditAgentCall(rt, 'etn.layers.create', args.network_id, 'layer', layer.id, {
           title: args.title,
           parent_id: parent,
@@ -1677,6 +1693,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.expected_version,
           rt.deps.auth.userId,
         );
+        // Journal row, mirroring the REST PATCH /layers/:id route: the
+        // snapshot layer is the session layer (renaming does not switch).
+        recordLayerActivity(ndb, {
+          networkId: args.network_id,
+          userId: rt.deps.auth.userId,
+          action: 'updated',
+          layer,
+          layerId: sessionLayer.id,
+        });
         auditAgentCall(rt, 'etn.layers.update', args.network_id, 'layer', layer.id, {
           title: args.title,
           comment: args.comment,
@@ -1715,6 +1740,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         // route): their temp `layer_chain` would otherwise keep referencing
         // deleted layers.
         const ndb = openMemberNetworkBase(rt, args.network_id);
+        // Snapshot of the doomed layer BEFORE the cascade deletes its row —
+        // it goes to the journal (mirrors the REST DELETE /layers/:id route),
+        // and the parent id says where the subtree sessions were re-pointed.
+        const parentRow = ndb
+          .prepare('SELECT parent_id, title FROM layers WHERE id = ?')
+          .get(args.layer_id) as { parent_id: string | null; title: string } | undefined;
         const subtreeIds = layerSubtreeIds(ndb, args.layer_id);
         for (const id of subtreeIds) {
           if (id !== BASE_LAYER_ID) {
@@ -1723,11 +1754,25 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         }
         const switchedAtSeq = rt.deps.systemDb.getMaxEventSeq(args.network_id) ?? 0;
         const result = deleteLayerWithEvents(ndb, args.layer_id, args.cascade, switchedAtSeq);
+        // Per-row realtime events of the trash auto-purge — journaled rows
+        // are intentionally absent for them: the REST DELETE /layers/:id
+        // route records only the layer's own row (parity).
         for (const id of result.deleted_thought_ids) {
           emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
         }
         for (const id of result.deleted_link_ids) {
           emitAgentEvent(rt, args.network_id, 'link.deleted', { id }, extra.requestId);
+        }
+        if (parentRow) {
+          // Journal snapshot layer — where the deleted subtree's sessions were
+          // re-pointed (same choice as the REST route, 13-layers.md §2.4).
+          recordLayerActivity(ndb, {
+            networkId: args.network_id,
+            userId: rt.deps.auth.userId,
+            action: 'deleted',
+            layer: { id: args.layer_id, title: parentRow.title },
+            layerId: parentRow.parent_id ?? BASE_LAYER_ID,
+          });
         }
         auditAgentCall(rt, 'etn.layers.delete', args.network_id, 'layer', args.layer_id, {
           cascade: args.cascade,
@@ -1773,6 +1818,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.layer_id,
           switchedAtSeq,
         );
+        // No activity_log row: switching the session does not change the
+        // layer entity itself — the REST `/select` route does not journal it
+        // either (требование b0c7a57c covers entity mutations only).
         auditAgentCall(rt, 'etn.layers.select', args.network_id, 'layer', layer.id, {});
         return { ...layer, request_id: String(extra.requestId) };
       }),
@@ -1821,6 +1869,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetworkBase(rt, args.network_id);
         const result = mergeLayer(ndb, args.layer_id, selection, rt.deps.auth.userId);
 
+        // No own activity_log row for the merge — parity with the REST merge
+        // route: mergeLayer already rolled the layer's journal rows up into
+        // the base (autoRollupLayerActivity, задача 6bcccd2b), and REST does
+        // not record a separate `layer` row for the merge operation itself.
+
         // Exactly one `layer.merged` event per merge (04-realtime.md §11.4),
         // attributed to the merge target — not the agent's session layer.
         const report: LayerMergeReport = {
@@ -1839,6 +1892,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           extra.requestId,
           result.target_layer.id,
         );
+        // The trash auto-purge victims are ordinary deletions outside the
+        // merge row set — realtime only, no journal rows (as the REST merge
+        // route; the journal side of the merge is the auto-rollup above).
         for (const id of result.deleted_thought_ids) {
           emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
         }
@@ -1969,11 +2025,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.expected_version,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'thought.updated',
           { id: thought.id, changes: args.changes, version: thought.version },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.thoughts.update', args.network_id, 'thought', thought.id, args);
@@ -2009,6 +2066,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        // Снимок мысли до удаления — он уйдёт в журнал (как `getThought`
+        // в REST DELETE /thoughts/:id); getThoughtOrThrow даёт тот же
+        // NOT_FOUND, что и сам deleteThought.
+        const existing = getThoughtOrThrow(ndb, args.thought_id);
         // actorUserId — для object-lock enforcement (задача 2031df5e).
         deleteThought(ndb, args.thought_id, args.expected_version, rt.deps.auth.userId);
         emitAgentEvent(
@@ -2018,6 +2079,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           { id: args.thought_id },
           extra.requestId,
         );
+        recordThoughtActivity(ndb, {
+          networkId: args.network_id,
+          userId: rt.deps.auth.userId,
+          action: 'deleted',
+          thought: existing,
+          layerId: ndb.layerId,
+        });
         auditAgentCall(rt, 'etn.thoughts.delete', args.network_id, 'thought', args.thought_id, {
           expected_version: args.expected_version,
         });
@@ -2057,11 +2125,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           undefined,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'thought.updated',
           { id: thought.id, changes: { marked_for_deletion: args.trashed }, version: thought.version },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.thoughts.trash', args.network_id, 'thought', thought.id, {
@@ -2100,11 +2169,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           undefined,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'thought.updated',
           { id: thought.id, changes: { active: args.active }, version: thought.version },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.thoughts.set_active', args.network_id, 'thought', thought.id, {
@@ -2149,7 +2219,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           { source_id: args.source_id, target_id: args.target_id, type_id: typeId ?? null },
           rt.deps.auth.userId,
         );
-        emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId);
+        emitAgentActivityEvent(rt, args.network_id, 'link.created', { link }, ndb, extra.requestId);
         auditAgentCall(rt, 'etn.links.create', args.network_id, 'link', link.id, {
           source_id: args.source_id,
           target_id: args.target_id,
@@ -2183,8 +2253,20 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        // Снимок связи до удаления — он уйдёт в журнал (как `getLink`
+        // в REST DELETE /links/:id).
+        const existing = getLink(ndb, args.link_id);
         deleteLink(ndb, args.link_id, args.expected_version);
         emitAgentEvent(rt, args.network_id, 'link.deleted', { id: args.link_id }, extra.requestId);
+        if (existing !== null) {
+          recordLinkActivity(ndb, {
+            networkId: args.network_id,
+            userId: rt.deps.auth.userId,
+            action: 'deleted',
+            link: existing,
+            layerId: ndb.layerId,
+          });
+        }
         auditAgentCall(rt, 'etn.links.delete', args.network_id, 'link', args.link_id, {
           expected_version: args.expected_version,
         });
@@ -2223,11 +2305,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           undefined,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'link.updated',
           { id: link.id, changes: { marked_for_deletion: args.trashed }, version: link.version },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.links.trash', args.network_id, 'link', link.id, {
@@ -2300,11 +2383,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
               undefined,
               rt.deps.auth.userId,
             );
-            emitAgentEvent(
+            emitAgentActivityEvent(
               rt,
               args.network_id,
               'comment.updated',
               { id: comment.id, changes, version: comment.version },
+              ndb,
               extra.requestId,
             );
             auditAgentCall(rt, 'etn.comments.upsert', args.network_id, 'comment', comment.id, args);
@@ -2327,7 +2411,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           },
           rt.deps.auth.userId,
         );
-        emitAgentEvent(rt, args.network_id, 'comment.created', { comment }, extra.requestId);
+        emitAgentActivityEvent(rt, args.network_id, 'comment.created', { comment }, ndb, extra.requestId);
         auditAgentCall(rt, 'etn.comments.upsert', args.network_id, 'comment', comment.id, args);
         return {
           id: comment.id,
@@ -2374,11 +2458,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.expected_version,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'comment.updated',
           { id: comment.id, changes: args.changes, version: comment.version },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.comments.update', args.network_id, 'comment', comment.id, args);
@@ -2426,6 +2511,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           },
           extra.requestId,
         );
+        recordCommentActivity(ndb, {
+          networkId: args.network_id,
+          userId: rt.deps.auth.userId,
+          action: 'deleted',
+          comment: existing,
+          layerId: ndb.layerId,
+        });
         auditAgentCall(rt, 'etn.comments.delete', args.network_id, 'comment', args.comment_id, {
           expected_version: args.expected_version,
         });
@@ -2474,7 +2566,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           },
           rt.deps.auth.userId,
         );
-        emitAgentEvent(rt, args.network_id, 'attachment.created', { attachment }, extra.requestId);
+        emitAgentActivityEvent(rt, args.network_id, 'attachment.created', { attachment }, ndb, extra.requestId);
         auditAgentCall(
           rt,
           'etn.attachments.add',
@@ -2521,11 +2613,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           rt.deps.auth.userId,
         );
         for (const attachment of result.created) {
-          emitAgentEvent(
+          emitAgentActivityEvent(
             rt,
             args.network_id,
             'attachment.created',
             { attachment },
+            ndb,
             extra.requestId,
           );
         }
@@ -2671,7 +2764,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             rt.deps.auth.userId,
           );
           for (const value of Object.values(stored)) {
-            emitAgentEvent(
+            emitAgentActivityEvent(
               rt,
               args.network_id,
               'property-value.set',
@@ -2681,6 +2774,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
                 property_id: value.property_id,
                 value: value.value,
               },
+              ndb,
               extra.requestId,
             );
           }
@@ -2715,7 +2809,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           coerced,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'property-value.set',
@@ -2725,6 +2819,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             property_id: stored.property_id,
             value: stored.value,
           },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.properties.set', args.network_id, args.owner_type, args.owner_id, {
@@ -2862,21 +2957,22 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         );
 
         if (result.thought_action === 'created') {
-          emitAgentEvent(rt, args.network_id, 'thought.created', { thought: result.thought }, extra.requestId);
+          emitAgentActivityEvent(rt, args.network_id, 'thought.created', { thought: result.thought }, ndb, extra.requestId);
         } else if (result.thought_action === 'updated') {
-          emitAgentEvent(
+          emitAgentActivityEvent(
             rt,
             args.network_id,
             'thought.updated',
             { id: result.thought.id, changes: resolvedThought ?? {}, version: result.thought.version },
+            ndb,
             extra.requestId,
           );
         }
         if (result.comment !== undefined) {
           if (result.comment_action === 'created') {
-            emitAgentEvent(rt, args.network_id, 'comment.created', { comment: result.comment }, extra.requestId);
+            emitAgentActivityEvent(rt, args.network_id, 'comment.created', { comment: result.comment }, ndb, extra.requestId);
           } else {
-            emitAgentEvent(
+            emitAgentActivityEvent(
               rt,
               args.network_id,
               'comment.updated',
@@ -2888,13 +2984,14 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
                 },
                 version: result.comment.version,
               },
+              ndb,
               extra.requestId,
             );
           }
         }
         if (result.properties !== undefined) {
           for (const stored of Object.values(result.properties)) {
-            emitAgentEvent(
+            emitAgentActivityEvent(
               rt,
               args.network_id,
               'property-value.set',
@@ -2904,18 +3001,19 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
                 property_id: stored.property_id,
                 value: stored.value,
               },
+              ndb,
               extra.requestId,
             );
           }
         }
         if (result.links !== undefined) {
           for (const link of result.links) {
-            emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId);
+            emitAgentActivityEvent(rt, args.network_id, 'link.created', { link }, ndb, extra.requestId);
           }
         }
         if (result.attachments !== undefined) {
           for (const attachment of result.attachments) {
-            emitAgentEvent(rt, args.network_id, 'attachment.created', { attachment }, extra.requestId);
+            emitAgentActivityEvent(rt, args.network_id, 'attachment.created', { attachment }, ndb, extra.requestId);
           }
         }
 
@@ -2973,12 +3071,38 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        // Снимки помеченных на удаление строк ДО физического удаления —
+        // после purgeTrash их уже нет, а журналу нужен снимок на момент
+        // операции (тот же ход, что в REST POST /trash/purge).
+        const trash = listTrash(ndb);
+        const thoughtSnapshots = new Map(trash.thoughts.map((t) => [t.id, t]));
+        const linkSnapshots = new Map(trash.links.map((l) => [l.id, l]));
         const { purged, skipped, deleted_thought_ids, deleted_link_ids } = purgeTrash(ndb);
         for (const id of deleted_thought_ids) {
+          const snapshot = thoughtSnapshots.get(id);
           emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
+          if (snapshot !== undefined) {
+            recordThoughtActivity(ndb, {
+              networkId: args.network_id,
+              userId: rt.deps.auth.userId,
+              action: 'deleted',
+              thought: snapshot,
+              layerId: ndb.layerId,
+            });
+          }
         }
         for (const id of deleted_link_ids) {
+          const snapshot = linkSnapshots.get(id);
           emitAgentEvent(rt, args.network_id, 'link.deleted', { id }, extra.requestId);
+          if (snapshot !== undefined) {
+            recordLinkActivity(ndb, {
+              networkId: args.network_id,
+              userId: rt.deps.auth.userId,
+              action: 'deleted',
+              link: snapshot,
+              layerId: ndb.layerId,
+            });
+          }
         }
         auditAgentCall(rt, 'etn.trash.purge', args.network_id, 'network', args.network_id, {
           purged,
@@ -3030,6 +3154,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // эмитятся через `emitAgentEvent` — они доходят до подписчиков через тот же
   // поток, что и REST-события (`emitDomainEvent` использует
   // `REALTIME_EVENT_AUDIENCE[type]`, для `edit.*` это `network`).
+  // В журнал активности захваты НЕ пишутся — требование b0c7a57c — поэтому
+  // здесь именно `emitAgentEvent`, а не `emitAgentActivityEvent`.
   // =========================================================================
 
   const LocksAcquireSchema = z.object({

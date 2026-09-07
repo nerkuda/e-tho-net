@@ -23,6 +23,9 @@ import {
 import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { recordAudit } from '../auth/audit.js';
 import { resolveSessionLayer } from '../domain/layer-service.js';
+import { getComment } from '../domain/comment-service.js';
+import { getLink } from '../domain/link-service.js';
+import { getThought } from '../domain/thought-service.js';
 import { emitDomainEvent, type DomainEventActor } from '../realtime/emit.js';
 import {
   recordAttachmentActivity,
@@ -213,10 +216,32 @@ export function emitAgentActivityEvent<E extends RealtimeEventType>(
 }
 
 /**
+ * Действие журнала для update-события: только пометка на удаление имеет
+ * выделенные действия `trashed`/`restored` (так же записывают REST-роуты —
+ * `PATCH /links` и batch-операция `trash` в `routes/thoughts.ts`,
+ * требование b0c7a57c), прочие правки — `updated`.
+ */
+function actionOfChanges(
+  changes: { marked_for_deletion?: boolean } | undefined,
+): 'trashed' | 'restored' | 'updated' {
+  if (changes?.marked_for_deletion === true) return 'trashed';
+  if (changes?.marked_for_deletion === false) return 'restored';
+  return 'updated';
+}
+
+/**
  * Append an `activity_log` row for one MCP-initiated mutation. Dispatches on
  * the event catalogue type to pick the right `recordXxxActivity` helper.
  * Захваты (`edit.acquired` / `edit.released` / `edit.cleared`) и per-user
  * события (`audience: 'user'`) не пишутся — это требование b0c7a57c.
+ *
+ * Update-события несут только `{ id, changes, version }`, поэтому полный
+ * снимок диспетчер дочитывает из строки после обновления — это тот же
+ * пост-обновлённый DTO, который REST-роут получает из `updateThought`/
+ * `updateLink`/`updateComment` и передаёт в `record*Activity`. Удаления
+ * (`*.deleted`) и операции слоёв диспетчер разобрать не может (строки уже
+ * нет / события не эмитятся вовсе) — их записывают сами MCP-обработчики
+ * снимком, взятым ДО мутации, ровно как REST-роуты.
  */
 function recordAgentActivity<E extends RealtimeEventType>(
   rt: McpRuntime,
@@ -243,14 +268,24 @@ function recordAgentActivity<E extends RealtimeEventType>(
         layerId,
       });
       return;
-    case 'thought.updated':
-      // Для update событие несёт только { id, changes, version } — полный
-      // снимок пишется в журнал явно из MCP-обработчика сразу после
-      // возврата из updateThought. Диспетчер здесь no-op.
+    case 'thought.updated': {
+      const ev = payload as { id: string; changes?: { marked_for_deletion?: boolean } };
+      const thought = getThought(ndb, ev.id);
+      if (thought !== null) {
+        recordThoughtActivity(ndb, {
+          networkId,
+          userId,
+          action: actionOfChanges(ev.changes),
+          thought,
+          layerId,
+        });
+      }
       return;
+    }
     case 'thought.deleted':
-      // После удаления строки уже нет; снимок получаем заранее через
-      // getThought() в самом MCP-обработчике (как и в REST-роуте).
+      // Строки после удаления уже нет: снимок берётся в MCP-обработчике
+      // ДО deleteThought (как `getThought` в REST-роуте) и записывается
+      // там же явно через recordThoughtActivity.
       return;
     case 'thought.reordered':
       // Реордеризация ссылок — это правки мысли-владельца, отдельной
@@ -265,9 +300,23 @@ function recordAgentActivity<E extends RealtimeEventType>(
         layerId,
       });
       return;
-    case 'link.updated':
+    case 'link.updated': {
+      const ev = payload as { id: string; changes?: { marked_for_deletion?: boolean } };
+      const link = getLink(ndb, ev.id);
+      if (link !== null) {
+        recordLinkActivity(ndb, {
+          networkId,
+          userId,
+          action: actionOfChanges(ev.changes),
+          link,
+          layerId,
+        });
+      }
       return;
+    }
     case 'link.deleted':
+      // Снимок берётся в MCP-обработчике ДО deleteLink и записывается
+      // явно (как `getLink` в REST-роуте DELETE /links/:id).
       return;
     case 'thought-type.created':
       recordThoughtTypeActivity(ndb, {
@@ -332,16 +381,20 @@ function recordAgentActivity<E extends RealtimeEventType>(
       return;
     case 'property-value.set':
     case 'property-value.deleted': {
-      // В журнал идёт обновление самой сущности-владельца (мысли/связи).
+      // В журнал идёт обновление самой сущности-владельца (мысли/связи) —
+      // как в REST PUT/DELETE properties: снимок полного владельца, а не
+      // голый id (требование b0c7a57c).
       const ev = payload as {
         owner_type: 'thought' | 'link';
         owner_id: string;
       };
+      const entity =
+        ev.owner_type === 'thought' ? getThought(ndb, ev.owner_id) : getLink(ndb, ev.owner_id);
       recordOwnerActivity(ndb, {
         networkId,
         userId,
         entityType: ev.owner_type,
-        entity: { id: ev.owner_id },
+        entity: entity ?? { id: ev.owner_id },
         layerId,
       });
       return;
@@ -355,9 +408,23 @@ function recordAgentActivity<E extends RealtimeEventType>(
         layerId,
       });
       return;
-    case 'comment.updated':
+    case 'comment.updated': {
+      const ev = payload as { id: string };
+      const comment = getComment(ndb, ev.id);
+      if (comment !== null) {
+        recordCommentActivity(ndb, {
+          networkId,
+          userId,
+          action: 'updated',
+          comment,
+          layerId,
+        });
+      }
       return;
+    }
     case 'comment.deleted':
+      // Снимок берётся в MCP-обработчике ДО deleteComment и записывается
+      // явно (как `getComment` в REST-роуте DELETE /comments/:id).
       return;
     case 'attachment.created':
       recordAttachmentActivity(ndb, {
@@ -377,10 +444,12 @@ function recordAgentActivity<E extends RealtimeEventType>(
     case 'layer.deleted':
     case 'layer.merged':
     case 'layer.selected':
-      // На текущей итерации записываем в журнал явно из обработчиков
-      // слоёв (нужен полный снимок названия, который отсутствует в
-      // payload-форме этих событий). Эти ветки остаются no-op до того,
-      // как задача 6bcccd2b попросит свёртку/обрезку.
+      // Инструменты слоёв не эмитят этих real-time событий (кроме
+      // `layer.merged`), а полезной нагрузки события для снимка не хватает:
+      // create/update/delete записывают журнал явно в самих MCP-обработчиках
+      // (как REST-роуты слоёв). `select` журнал не пишет вовсе — переключение
+      // сессии не меняет сам слой (REST `/select` тоже не пишет); `merge`
+      // опирается на авто-свёртку журнала внутри mergeLayer (6bcccd2b).
       return;
     case 'edit.acquired':
     case 'edit.released':
