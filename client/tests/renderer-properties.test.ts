@@ -727,6 +727,219 @@ describe('property value autocomplete helpers (pure)', () => {
 });
 
 /**
+ * Regression test for the date/number editor cells (error cefb4db0): focusing
+ * a property field and leaving it (Tab / click away) WITHOUT entering a value
+ * must not fire `properties.remove` when nothing was stored — an empty value
+ * is a legitimate state, and the server's former 404 flashed as
+ * «Ошибка: no value stored…» in the cell. Mirrors the text field's baseline
+ * approach: blur commits the value only when it actually changed.
+ */
+describe('editor properties — date/number blur commits (error cefb4db0)', () => {
+  /** What the etn.properties stub recorded: remove/set calls with keys. */
+  interface PropertyCalls {
+    removed: string[];
+    set: Array<{ key: string; value: unknown }>;
+  }
+
+  /**
+   * Renders buildPropertiesBody against one date and one number definition
+   * (`withValues` toggles whether each has a stored value) and returns the
+   * body plus the recorded etn.properties write calls.
+   */
+  async function renderDateNumber(withValues: boolean): Promise<{
+    box: ShimElement;
+    calls: PropertyCalls;
+  }> {
+    shimDocument();
+    // The autocomplete describe block above REPLACES globalThis.window with a
+    // bare object, but the etn Proxy in lib/etn.ts captured the ORIGINAL
+    // window (first import) and still reads it. The module-level sharedWindow
+    // variable keeps that original object — realign the global and install
+    // the mocks on the object the Proxy actually sees.
+    (globalThis as any).window = sharedWindow;
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const calls: PropertyCalls = { removed: [], set: [] };
+    etnApi['types'] = {
+      listTypeProperties: async () => [
+        {
+          id: 'pDate',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Плановый срок',
+          value_type: 'date',
+          config: null,
+          required: false,
+          position: 0,
+        },
+        {
+          id: 'pNumber',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Оценка',
+          value_type: 'number',
+          config: null,
+          required: false,
+          position: 1,
+        },
+      ],
+    };
+    etnApi['properties'] = {
+      get: async () =>
+        withValues
+          ? [
+              {
+                id: 'vDate',
+                owner_type: 'thought',
+                owner_id: 't1',
+                property_id: 'pDate',
+                value: '2026-09-01',
+                updated_at: '2026',
+              },
+              {
+                id: 'vNumber',
+                owner_type: 'thought',
+                owner_id: 't1',
+                property_id: 'pNumber',
+                value: 5,
+                updated_at: '2026',
+              },
+            ]
+          : [],
+      remove: async (_networkId: string, _ownerType: string, _ownerId: string, key: string) => {
+        calls.removed.push(key);
+      },
+      set: async (
+        _networkId: string,
+        _ownerType: string,
+        _ownerId: string,
+        key: string,
+        value: unknown,
+      ) => {
+        calls.set.push({ key, value });
+      },
+    };
+    etnApi['thoughts'] = { resolve: async () => [] };
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+
+    const ctx = {
+      ownerType: 'thought' as const,
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+    const box = propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { box, calls };
+  }
+
+  /** Returns the value CELL of row `index` (0 = date, 1 = number). */
+  function rowCell(box: ShimElement, index: number): ShimElement | undefined {
+    const tableWrap = box.children[0];
+    const table = tableWrap?.children[0];
+    const tbody = table?.children[0];
+    return tbody?.children[index]?.children[1];
+  }
+
+  /** Returns the input element of row `index` (0 = date, 1 = number). */
+  function rowInput(box: ShimElement, index: number): ShimElement | undefined {
+    return rowCell(box, index)?.children[0];
+  }
+
+  it('blur on an already-empty date/number field fires no remove and shows no error', async () => {
+    const { box, calls } = await renderDateNumber(false);
+    const dateInput = rowInput(box, 0);
+    const numberInput = rowInput(box, 1);
+    assert.ok(dateInput !== undefined, 'date input rendered');
+    assert.ok(numberInput !== undefined, 'number input rendered');
+
+    dateInput!.dispatch('blur');
+    numberInput!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.deepEqual(calls.removed, [], 'no remove for a never-stored value');
+    assert.deepEqual(calls.set, [], 'no set either');
+    // No error text appeared next to the fields (the former 404 flash).
+    assert.equal(
+      rowCell(box, 0)?.children.length,
+      1,
+      'date cell still holds only the input',
+    );
+    assert.equal(
+      rowCell(box, 1)?.children.length,
+      1,
+      'number cell still holds only the input',
+    );
+  });
+
+  it('blur on an unchanged stored date/number value writes nothing', async () => {
+    const { box, calls } = await renderDateNumber(true);
+    const dateInput = rowInput(box, 0);
+    const numberInput = rowInput(box, 1);
+    assert.equal(dateInput?.value, '2026-09-01', 'date input pre-filled');
+    assert.equal(numberInput?.value, '5', 'number input pre-filled');
+
+    dateInput!.dispatch('blur');
+    numberInput!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.deepEqual(calls.removed, [], 'unchanged value — no remove');
+    assert.deepEqual(calls.set, [], 'unchanged value — no set');
+  });
+
+  it('clearing a stored value blurs into remove; entering a new one blurs into set', async () => {
+    const { box, calls } = await renderDateNumber(true);
+    const dateInput = rowInput(box, 0);
+    const numberInput = rowInput(box, 1);
+
+    // Clear the date → blur commits remove once; a SECOND blur of the now
+    // empty field must not repeat the remove.
+    dateInput!.value = '';
+    dateInput!.dispatch('blur');
+    dateInput!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(calls.removed, ['Плановый срок'], 'remove fired exactly once');
+
+    // Change the number → blur commits the new value.
+    numberInput!.value = '7';
+    numberInput!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(calls.set, [{ key: 'Оценка', value: 7 }], 'set fired with the new number');
+
+    // Clearing the number now also removes it.
+    numberInput!.value = '';
+    numberInput!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(
+      calls.removed,
+      ['Плановый срок', 'Оценка'],
+      'clearing a stored number removes the value',
+    );
+  });
+});
+
+/**
  * Tests for the multi-value `url` editor (task 0.6.2). The DOM shim is the
  * same `ShimElement` used elsewhere in this file; `etn.system.openExternal` is
  * stubbed so the «Открыть» button does not hit a real OS handler.

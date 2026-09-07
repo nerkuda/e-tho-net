@@ -607,10 +607,22 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         const input = el('input', 'text-input prop-editor');
         input.type = 'number';
         input.value = typeof stored === 'number' ? String(stored) : '';
+        // Baseline tracks the last saved value (the text field's approach): a
+        // plain blur — in particular on an ALREADY-EMPTY field — must not fire
+        // a remove (error cefb4db0: an empty value is a legitimate state, not
+        // a delete request, and the server's 404 must not flash in the cell).
+        let baseline: number | null = typeof stored === 'number' ? stored : null;
         input.addEventListener('blur', () => {
-          const next = input.value === '' ? null : Number(input.value);
-          if (next === null) void save(null);
-          else if (next !== stored && Number.isFinite(next)) void save(next);
+          if (input.value === '') {
+            if (baseline === null) return;
+            baseline = null;
+            void save(null);
+            return;
+          }
+          const next = Number(input.value);
+          if (!Number.isFinite(next) || next === baseline) return;
+          baseline = next;
+          void save(next);
         });
         cell.append(input);
         break;
@@ -619,9 +631,16 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         const input = el('input', 'text-input prop-editor');
         input.type = 'date';
         input.value = typeof stored === 'string' ? stored.slice(0, 10) : '';
+        // Baseline tracks the last saved value (the text field's approach): a
+        // plain blur — in particular on an ALREADY-EMPTY field — must not fire
+        // a remove (error cefb4db0: an empty date is a legitimate state, and
+        // blur on an unchanged value must not write it again either).
+        let baseline: string | null = typeof stored === 'string' ? stored.slice(0, 10) : null;
         input.addEventListener('blur', () => {
-          if (input.value === '') void save(null);
-          else void save(input.value);
+          const next = input.value === '' ? null : input.value;
+          if (next === baseline) return;
+          baseline = next;
+          void save(next);
         });
         cell.append(input);
         break;
