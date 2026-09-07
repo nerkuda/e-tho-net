@@ -515,12 +515,15 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // networks.write, networks.delete) добавляют ~1 800 B. Задача 053751b5
         // (0.7.2) re-baselines ещё раз до 66 000 B для 64 инструментов:
         // `etn.thoughts.write` добавляет ~3 200 B (подробное описание сценария
-        // батча). Детальная механика перенесена в `etn.how_to_write_batch`,
-        // бюджет ADR b2eebf8b не нарушен — рост осознанный.
+        // батча). Задача cc9ca65e (0.7.2) re-baselines до 72 000 B для 65
+        // инструментов: `etn.ontology.write` / `etn.ontology.delete` добавляют
+        // ~5 000 B (подробное описание батча и каскада). Детальная механика
+        // онтологии остаётся в `etn.how_to_ontology`, бюджет ADR b2eebf8b не
+        // нарушен — рост осознанный.
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
         assert.ok(
-          bytes <= 66_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 66000`,
+          bytes <= 72_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 72000`,
         );
       } finally {
         await handle.close();

@@ -114,6 +114,10 @@ export const MCP_TOOL_NAMES = [
   // activity log maintenance (задача 6bcccd2b — паритет с REST /activity/rollup, /activity/truncate)
   'etn.activity.rollup',
   'etn.activity.truncate',
+  // ontology batch ops (задача cc9ca65e / 0.7.2) — батч-запись онтологии сети
+  // (типы мыслей/связей, свойства, привязки свойств к типам) и её удаление.
+  'etn.ontology.write',
+  'etn.ontology.delete',
   // dedupe (§4.3)
   'etn.thoughts.find_duplicates',
 ] as const;
@@ -249,6 +253,15 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // (`on_duplicate: reuse`/`update`/`fail`) — повторный вызов с теми же
   // аргументами даёт тот же результат.
   'etn.thoughts.write': { destructiveHint: false, idempotentHint: true },
+
+  // ---- `etn.ontology.write` / `etn.ontology.delete` (задача cc9ca65e / 0.7.2) -
+  // Управление онтологией сети (типы мыслей/связей, реестр свойств, привязки
+  // свойств к типам) одной транзакцией. Upsert по `id` XOR имени внутри
+  // батча; локальные `ref`/`parent_ref`/`type_ref`/`property_ref`. Повторный
+  // вызов с теми же аргументами не меняет состояние. Удаление деструктивно,
+  // требует `force` для используемых сущностей.
+  'etn.ontology.write': { destructiveHint: false, idempotentHint: true },
+  'etn.ontology.delete': { destructiveHint: true },
 };
 
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5).

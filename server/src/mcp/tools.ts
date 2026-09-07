@@ -91,8 +91,10 @@ import {
   MCP_TOOL_ANNOTATIONS,
   MCP_VIEW_MODES,
   PROPERTY_OWNER_TYPES,
+  PROPERTY_VALUE_TYPES,
   REALTIME_DEFAULTS,
   SEARCH_SCOPES,
+  TYPE_OWNER_TYPES,
   TYPES_LIST_SCOPES,
   TRAVERSAL_DEFAULTS,
   buildLikePattern,
@@ -111,6 +113,10 @@ import {
   type McpMetricsToolsResult,
   type McpMutationResult,
   type McpPropertiesSetResult,
+  type OntologyDeleteParams,
+  type OntologyDeleteResult,
+  type OntologyWriteParams,
+  type OntologyWriteResult,
   type McpThoughtWriteItemResult,
   type McpThoughtWriteParams,
   type McpThoughtWriteResult,
@@ -164,6 +170,7 @@ import {
 import {
   clearThoughtRefUsages,
   findThoughtUsage,
+  getNetworkProperty,
   getPropertyValuesResolved,
   listEffectiveTypeProperties,
   resolveDefinition,
@@ -234,6 +241,8 @@ import {
   listLinkTypes,
   resolveLinkTypeIdByName,
 } from '../domain/link-type-service.js';
+import { writeOntology } from '../domain/ontology-write-service.js';
+import { deleteOntologyEntity } from '../domain/ontology-delete-service.js';
 import {
   assertNetworkAccess,
   auditAgentCall,
@@ -5336,5 +5345,375 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         };
       });
     },
+  );
+
+  // =========================================================================
+  // `etn.ontology.write` / `etn.ontology.delete` — задача cc9ca65e, 0.7.2.
+  //
+  // Управление онтологией сети (типы мыслей/связей, реестр свойств,
+  // привязки свойств к типам) одной транзакцией.
+  //
+  // * `etn.ontology.write` — идемпотентный upsert пакетами `thought_types[]` /
+  //   `link_types[]` / `properties[]` / `type_properties[]`. Локальные `ref`/
+  //   `parent_ref`/`type_ref`/`property_ref` действуют только внутри батча.
+  //   Повторный вызов с теми же аргументами не меняет состояние (action =
+  //   `unchanged` на каждом элементе).
+  // * `etn.ontology.delete` — деструктивное удаление одной сущности; без
+  //   `force` отвергается на используемых элементах со счётчиками в
+  //   `details`. Элемент, занятый в `type_roles` сети, отвергается даже
+  //   с `force`.
+  //
+  // На каждый вызов — одна запись бюджета и одна строка `audit_log`. Real-time
+  // события — по одному на изменённую сущность (`thought-type.*`,
+  // `link-type.*`, `property-registry.*`, `property-definition.*`).
+  // =========================================================================
+
+  const OntologyWriteThoughtTypeSchema = z
+    .object({
+      ref: z.string().min(1).optional(),
+      id: z.string().min(1).nullable().optional(),
+      name: z.string().min(1).optional(),
+      parent: z.string().min(1).nullable().optional(),
+      parent_ref: z.string().min(1).nullable().optional(),
+      description: z.string().nullable().optional(),
+      icon: z.string().nullable().optional(),
+      icon_kind: z.enum(ICON_KINDS).optional(),
+      fg_color: z.string().nullable().optional(),
+      bg_color: z.string().nullable().optional(),
+      font_bold: z.boolean().nullable().optional(),
+      font_italic: z.boolean().nullable().optional(),
+      font_underline: z.boolean().nullable().optional(),
+      font_strike: z.boolean().nullable().optional(),
+      comment_template_md: z.string().nullable().optional(),
+    })
+    .strict();
+  const OntologyWriteLinkTypeSchema = z
+    .object({
+      ref: z.string().min(1).optional(),
+      id: z.string().min(1).nullable().optional(),
+      name_forward: z.string().min(1).optional(),
+      name_reverse: z.string().min(1).optional(),
+      parent: z.string().min(1).nullable().optional(),
+      parent_ref: z.string().min(1).nullable().optional(),
+      color: z.string().nullable().optional(),
+      style: z.enum(['solid', 'dashed', 'dotted']).nullable().optional(),
+      width: z.number().int().min(1).max(20).nullable().optional(),
+      description: z.string().nullable().optional(),
+    })
+    .strict();
+  const OntologyWritePropertySchema = z
+    .object({
+      ref: z.string().min(1).optional(),
+      id: z.string().min(1).nullable().optional(),
+      name: z.string().min(1).optional(),
+      value_type: z.enum(PROPERTY_VALUE_TYPES).optional(),
+      config: z.record(z.string(), z.unknown()).nullable().optional(),
+      description: z.string().nullable().optional(),
+    })
+    .strict();
+  const OntologyWriteTypePropertySchema = z
+    .object({
+      owner: z.enum(TYPE_OWNER_TYPES),
+      type: z.string().min(1).optional(),
+      type_ref: z.string().min(1).optional(),
+      property: z.string().min(1).optional(),
+      property_ref: z.string().min(1).optional(),
+      required: z.boolean().optional(),
+      position: z.number().int().min(0).optional(),
+    })
+    .strict();
+  const OntologyWriteSchema = z.object({
+    network_id: NetworkId,
+    thought_types: z.array(OntologyWriteThoughtTypeSchema).optional(),
+    link_types: z.array(OntologyWriteLinkTypeSchema).optional(),
+    properties: z.array(OntologyWritePropertySchema).optional(),
+    type_properties: z.array(OntologyWriteTypePropertySchema).optional(),
+  });
+  mcp.registerTool(
+    'etn.ontology.write',
+    {
+      title: 'Батч-запись онтологии',
+      description:
+        'Идемпотентный upsert онтологии сети одной транзакцией: `thought_types[]` / `link_types[]` / ' +
+        '`properties[]` / `type_properties[]`. Upsert по `id` XOR имени — повторный вызов с теми же ' +
+        'аргументами не меняет состояние (`action: unchanged` для каждого элемента). Локальные `ref` ' +
+        '(`parent_ref` для типов, `type_ref`/`property_ref` для привязок) действуют только внутри батча. ' +
+        'Цикл `parent_ref` → VALIDATION_ERROR. Смена `value_type` свойства использует ту же доменную ' +
+        'функцию конверсии, что `PATCH /properties/{id}`; ответ несёт `converted_values`/`dropped_values`. ' +
+        'Один write-бюджет + одна строка `audit_log` на ВЕСЬ вызов; real-time события — по одному на ' +
+        'изменённую сущность (`thought-type.*`, `link-type.*`, `property-registry.*`, ' +
+        '`property-definition.*`).',
+      inputSchema: OntologyWriteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.write'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const writeInput: OntologyWriteParams = {
+          network_id: args.network_id,
+          ...(args.thought_types !== undefined ? { thought_types: args.thought_types } : {}),
+          ...(args.link_types !== undefined ? { link_types: args.link_types } : {}),
+          ...(args.properties !== undefined ? { properties: args.properties } : {}),
+          ...(args.type_properties !== undefined ? { type_properties: args.type_properties } : {}),
+        };
+        const result = writeOntology(ndb, writeInput, rt.deps.auth.userId);
+
+        // Real-time + activity log: по одной записи на изменённую сущность.
+        // Снимок для удалённого берётся ДО мутации (тут мутация уже
+        // произошла — но мы используем `unchanged` как маркер для пропуска).
+        for (const item of result.thought_types) {
+          if (item.action === 'unchanged') continue;
+          // After create/update — read back the type for the snapshot.
+          const thoughtType = getThoughtType(ndb, item.id);
+          if (thoughtType === null) continue;
+          if (item.action === 'created') {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'thought-type.created',
+              { type: thoughtType },
+              ndb,
+              extra.requestId,
+            );
+          } else {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'thought-type.updated',
+              { id: item.id, version: item.version, changes: {} },
+              ndb,
+              extra.requestId,
+            );
+          }
+        }
+        for (const item of result.link_types) {
+          if (item.action === 'unchanged') continue;
+          const linkType = getLinkType(ndb, item.id);
+          if (linkType === null) continue;
+          if (item.action === 'created') {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'link-type.created',
+              { type: linkType },
+              ndb,
+              extra.requestId,
+            );
+          } else {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'link-type.updated',
+              { id: item.id, version: item.version, changes: {} },
+              ndb,
+              extra.requestId,
+            );
+          }
+        }
+        for (const item of result.properties) {
+          if (item.action === 'unchanged') continue;
+          const prop = getNetworkProperty(ndb, item.id);
+          if (prop === null) continue;
+          if (item.action === 'created') {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'property-registry.created',
+              { property: prop },
+              ndb,
+              extra.requestId,
+            );
+          } else {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'property-registry.updated',
+              {
+                id: item.id,
+                converted: item.converted_values,
+                dropped: item.dropped_values,
+                changes: {},
+              },
+              ndb,
+              extra.requestId,
+            );
+          }
+        }
+        for (const item of result.type_properties) {
+          if (item.action === 'unchanged') continue;
+          // Подключение свойства — это правка типа-владельца; в журнале
+          // фиксируем как обновление самого типа (требование b0c7a57c).
+          // Перечитываем привязку после её создания/обновления, чтобы
+          // передать полный snapshot в payload `property-definition.*`.
+          const defRow = ndb
+            .prepare(
+              `SELECT id, owner_type, owner_id, property_id, required, position
+                 FROM type_properties_v WHERE id = ?`,
+            )
+            .get(item.id) as
+            | {
+                id: string;
+                owner_type: 'thought_type' | 'link_type';
+                owner_id: string;
+                property_id: string;
+                required: number;
+                position: number;
+              }
+            | undefined;
+          if (defRow === undefined) continue;
+          const propertyRow = getNetworkProperty(ndb, defRow.property_id);
+          if (propertyRow === null) continue;
+          const definitionPayload = {
+            id: defRow.id,
+            property_id: defRow.property_id,
+            owner_type: defRow.owner_type,
+            owner_id: defRow.owner_id,
+            key: propertyRow.name,
+            value_type: propertyRow.value_type,
+            config: propertyRow.config,
+            required: defRow.required === 1,
+            position: defRow.position,
+            description: propertyRow.description,
+          };
+          emitAgentActivityEvent(
+            rt,
+              args.network_id,
+              'property-definition.created',
+              {
+                definition: definitionPayload,
+              },
+              ndb,
+              extra.requestId,
+            );
+          }
+
+        // ONE audit row for the whole batch.
+        auditAgentCall(
+          rt,
+          'etn.ontology.write',
+          args.network_id,
+          'network',
+          args.network_id,
+          {
+            thought_types_count: result.thought_types.length,
+            link_types_count: result.link_types.length,
+            properties_count: result.properties.length,
+            type_properties_count: result.type_properties.length,
+          },
+        );
+
+        const layer = resolveRuntimeLayer(rt, args.network_id);
+        return {
+          ...result,
+          layer: { id: layer.id, title: layer.title },
+          request_id: String(extra.requestId),
+        } satisfies OntologyWriteResult & { layer: { id: string; title: string }; request_id: string };
+      }),
+  );
+
+  const OntologyDeleteSchema = z.object({
+    network_id: NetworkId,
+    kind: z.enum(['thought_type', 'link_type', 'property', 'type_property']),
+    id: z.string().min(1),
+    force: z.boolean().optional(),
+  });
+  mcp.registerTool(
+    'etn.ontology.delete',
+    {
+      title: 'Удалить элемент онтологии',
+      description:
+        'Удалить одну сущность онтологии (`thought_type` / `link_type` / `property` / `type_property`). ' +
+        'Без `force` отвергается на используемых элементах со счётчиками в `details` ' +
+        '(`thoughts_count` / `links_count` / `property_values_count` / `type_properties_count`). ' +
+        'С `force` — каскад по правилам: `thought_type` обнуляет `type_id` связанных мыслей + ' +
+        '`type_properties`; `link_type` удаляет связи этого типа (со свойствами и комментариями) + ' +
+        '`type_properties`; `property` удаляет `property_values` + `type_properties`; `type_property` ' +
+        'удаляет строку привязки. Элемент, занятый в `type_roles` сети, отвергается даже с `force`. ' +
+        'HOME-мысль не имеет типа и не задевается. Один write-бюджет + одна строка `audit_log`.',
+      inputSchema: OntologyDeleteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.delete'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const network = rt.deps.systemDb.getNetworkById(args.network_id);
+        const networkRoles = network?.type_roles ?? {};
+        // Pre-fetch snapshots BEFORE the mutation, to record accurate activity rows.
+        let snapshot: unknown = null;
+        try {
+          if (args.kind === 'thought_type') {
+            snapshot = getThoughtType(ndb, args.id);
+          } else if (args.kind === 'link_type') {
+            snapshot = getLinkType(ndb, args.id);
+          } else if (args.kind === 'property') {
+            snapshot = getNetworkProperty(ndb, args.id);
+          }
+        } catch {
+          snapshot = null;
+        }
+        const deleteInput: OntologyDeleteParams = {
+          network_id: args.network_id,
+          kind: args.kind,
+          id: args.id,
+          ...(args.force !== undefined ? { force: args.force } : {}),
+        };
+        const result: OntologyDeleteResult = deleteOntologyEntity(
+          ndb,
+          deleteInput,
+          rt.deps.auth.userId,
+          networkRoles,
+        );
+
+        // Real-time + activity log (mirror REST).
+        if (snapshot !== null && snapshot !== undefined) {
+          if (args.kind === 'thought_type') {
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'thought-type.deleted',
+              { id: args.id },
+              extra.requestId,
+            );
+          } else if (args.kind === 'link_type') {
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'link-type.deleted',
+              { id: args.id },
+              extra.requestId,
+            );
+          } else if (args.kind === 'property') {
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'property-registry.deleted',
+              { id: args.id },
+              extra.requestId,
+            );
+          }
+        }
+
+        // ONE audit row for the whole call.
+        auditAgentCall(
+          rt,
+          'etn.ontology.delete',
+          args.network_id,
+          args.kind,
+          args.id,
+          {
+            force: args.force === true,
+            affected_counts: result.affected_counts,
+          },
+        );
+
+        return {
+          ...result,
+          request_id: String(extra.requestId),
+        } satisfies OntologyDeleteResult & { request_id: string };
+      }),
   );
 }
