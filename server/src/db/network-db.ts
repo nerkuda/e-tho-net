@@ -50,6 +50,24 @@ import { propertyValueId } from './property-value-id.js';
  */
 const registry = new Map<string, NetworkDb>();
 
+/**
+ * Networks whose `object_locks` table has already been wiped on the first open
+ * of the current process (задача 2031df5e, требование 9ac48831 «сброс захватов
+ * — старт»).
+ *
+ * `object_locks` — это физическая (не ветвимая) таблица сети; чистка должна
+ * случаться ровно один раз за процесс на сеть, а не на пару
+ * `(networkId, layerId)`. Иначе открытие новой (сетевой, послойной) пары
+ * стирает захваты, поставленные через базовый слой — ломает идемпотентность
+ * `etn.locks.acquire` (баг мысли `06764ca2-…`): пользователь ставит захват на
+ * базе, переключается на новый слой через `etn.layers.select`, следующий
+ * `acquire` открывает `(network, newLayer)` впервые и уничтожает свой же
+ * захват из базы, после чего `INSERT` новой строки возвращает уже новый
+ * `lock_id`. Ловит и реальный сценарий: тот же эффект даёт WS-гейтвей,
+ * открывающий соединение на `conn.layerId` напрямую для visibility-check.
+ */
+const firstOpenedNetworks = new Set<string>();
+
 /** Registry key of a (network, layer) pair. */
 function registryKey(networkId: string, layerId: string): string {
   return `${networkId}\u0000${layerId}`;
@@ -290,8 +308,12 @@ export function openNetworkDb(
   // сервера (задача 2031df5e, требование 9ac48831 «сброс захватов — старт»).
   // Миграция 034 уже создала таблицу; таблица пуста при первом открытии
   // свежей БД, но после крэша в файле могут остаться строки — удаляем их
-  // один раз при первом открытии сети в текущем процессе.
-  db.prepare('DELETE FROM object_locks WHERE network_id = ?').run(networkId);
+  // один раз за процесс на сеть (`firstOpenedNetworks` фиксирует факт
+  // чистки; см. пояснение у самого Set).
+  if (!firstOpenedNetworks.has(networkId)) {
+    firstOpenedNetworks.add(networkId);
+    db.prepare('DELETE FROM object_locks WHERE network_id = ?').run(networkId);
+  }
 
   let ndb: NetworkDb;
   try {
