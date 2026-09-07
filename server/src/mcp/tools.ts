@@ -5,7 +5,8 @@
  * roster — counts drift with every phase, this is a map, not a tally):
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
  *     path, links get, mentions, usage, comments get, export, types list,
- *     changes list (O9), metrics.reads (O10), layers.list (S10);
+ *     changes list (O9), metrics.reads (O10), metrics.tools (940a499d),
+ *     layers.list (S10);
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert/update/delete,
  *     attachments.add, properties.set, set_active, thoughts.upsert_bundle,
  *     attachments.search, layers.create/update/delete/select/merge (S10);
@@ -91,6 +92,7 @@ import {
   type McpChangeEntry,
   type McpChangesListResult,
   type McpMetricsReadsResult,
+  type McpMetricsToolsResult,
   type McpMutationResult,
   type McpPropertiesSetResult,
   type McpTypesListResult,
@@ -331,11 +333,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Список сетей',
       description:
-        "List every network the API key's user belongs to, with role and member counts, plus " +
-        "the network's `description` and `when_to_use` fields (task O5, docs/05-mcp-server.md §3). " +
-        'Each item carries `has_structure: true|false` — when true, the network declares a node ' +
-        'section type and exposes its machine-readable structure via `etn.networks.structure`. ' +
-        'The agent may only operate on networks returned here.',
+        "List every network the API key's user belongs to, with role and member counts, plus the network's " +
+        '`description` and `when_to_use` fields. `has_structure: true` — the network exposes its machine-readable ' +
+        'structure via `etn.networks.structure`. The agent may only operate on networks returned here.',
       annotations: MCP_TOOL_ANNOTATIONS['etn.networks.list'],
     },
     () =>
@@ -373,18 +373,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Структура сети',
       description:
-        'Read the network structure declared via the `node_section_type_id` setting ' +
-        '(task O5, docs/05-mcp-server.md §4.1). Returns the active thoughts of that type ' +
-        'with permanent-comment previews (2000 chars, `truncated` + `comment_id` to fetch ' +
-        'full text via `etn.comments.get`), resolved property values, neighbour counters ' +
-        '(`parents_count`, `children_count`, `attachments_count`, `usage_count`) and the ' +
-        'reference table of thought types actually used. Also carries the network\'s ' +
-        '`conventions` field (write rules: chronicle format, active-flag usage, naming, ' +
-        'links to types/templates) — read this before `create`/`update`/`upsert_bundle`. ' +
-        'Pass `include_examples: true` to additionally receive the network\'s `examples` ' +
-        'field (worked good/bad records); omitted by default because it tends to be long. ' +
-        'When `has_structure: false`, the `sections` list is empty and the agent should ' +
-        'fall back to search/query, but `conventions`/`examples` are still returned.',
+        'Read the network structure declared via the `node_section_type_id` setting: the active thoughts ' +
+        'of that type with permanent-comment previews (2000 chars, `truncated` + `comment_id` → ' +
+        '`etn.comments.get`), resolved property values, neighbour counters and a `thought_types` reference ' +
+        'table. Also carries the network\'s `conventions` (write rules — read before `create`/`update`/' +
+        '`upsert_bundle`), and with `include_examples: true` its `examples`. `has_structure: false` → ' +
+        '`sections` empty, fall back to search/query.',
       inputSchema: NetworksStructureSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.networks.structure'],
     },
@@ -512,15 +506,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Полнотекстовый поиск',
       description:
-        'Full-text search across thought names, comment texts, link texts and chronology ' +
-        '(docs/05-mcp-server.md §4.1, task O11). `scope` selects result groups ' +
-        '(`names`/`texts`/`links`/`chronology`/`all`). `in_subtree_of` restricts to the subtree ' +
-        'of a thought; `type_id` filters by thought type. `author_id`/`editor_id` (task 59119797 ' +
-        '«Фильтры Автор/Редактор») — id пользователя, создавшего/последним ' +
-        'изменившего мысль: применяется к by_names, by_texts и by_chrono. ' +
-        'Pagination: `limit` (1–200, default 50) and `offset` (≥ 0, default 0) — together ' +
-        'they walk the result tail; `meta.total_in_group` reports the unfiltered totals per ' +
-        'group so the agent can detect the end of the list.',
+        'Full-text search across thought names, comment texts, link texts and chronology. `scope` selects ' +
+        'result groups (`names`/`texts`/`links`/`chronology`/`all`); `in_subtree_of`, `type_id`, ' +
+        '`author_id`/`editor_id` narrow it. `limit` (1–200, default 50) + `offset` walk the tail; ' +
+        '`meta.total_in_group` gives unfiltered totals per group.',
       inputSchema: SearchSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.search'],
     },
@@ -592,22 +581,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Структурная выборка мыслей',
       description:
-        'List thoughts by criteria (docs/05-mcp-server.md §4.1) — no text query required. ' +
-        'Filters combine with AND: `in_subtree_of` (+`max_depth`) restricts to the directed ' +
-        'descendants of a thought (each hit carries its `depth`), `type_id[]` filters by type, ' +
-        '`active` by актуальность (`true`/`false`/`any`), `trashed` by пометка на удаление ' +
-        '(`true`/`false`/`any`, default `false` — only unmarked; S13), `keywords` — the §6.10 ' +
-        'mini-syntax (whitespace-separated words, all required; `*` infix wildcard; `-слово` ' +
-        'exclusion; matched against title and synonyms), ' +
-        '`properties` by property values (registry `property_id` + operator eq/ne/contains/gt/gte/lt/lte + value; ' +
-        'the property `value_type` selects the column — number → value_number, bool → value_bool, ' +
-        'text/url/date/thought_ref on their matching columns; an unknown `property_id` matches nothing), ' +
-        '`created_*`/`updated_*` by ' +
-        'ISO-8601 date ranges, `author_id`/`editor_id` (task 59119797 ' +
-        '«Фильтры Автор/Редактор») — id пользователя, создавшего/последним ' +
-        'изменившего мысль. The response carries a `thought_types` reference table (name + ' +
-        'AI-facing description) for every type used in `hits`. Use instead of search when ' +
-        'there is no text to query.',
+        'List thoughts by criteria — no text query required; filters combine with AND. `in_subtree_of` ' +
+        '(+`max_depth`) — directed descendants (hits carry `depth`); `type_id[]`; `active` and `trashed` ' +
+        '(`true`/`false`/`any`; `trashed` defaults to `false`); `keywords` — mini-syntax over title and ' +
+        'synonyms (words all required, `*` infix wildcard, `-word` exclusion); `properties` — registry ' +
+        '`property_id` + operator eq/ne/contains/gt/gte/lt/lte + value (unknown `property_id` matches ' +
+        'nothing; the `value_type` picks the column: number → value_number, bool → value_bool, others on ' +
+        'their text columns); `created_*`/`updated_*` — ISO-8601 ranges; `author_id`/`editor_id` — id ' +
+        'пользователя, создавшего/последним изменившего мысль. Response carries a `thought_types` ' +
+        'reference table.',
       inputSchema: QuerySchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
     },
@@ -630,17 +612,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Мысль (полная)',
       description:
-        'Fetch one thought with synonyms, type (with AI-facing description), styles and ' +
-        'property values (`thought_ref` values resolved to {id, title}). Each value carries ' +
-        '`property_id`, `property_name` and `value_type` from the registry; values whose ' +
-        'property is not attached to the owner\'s type chain are flagged `outside_type: true` ' +
-        '(task f14cd5f1 — without it the agent would treat the card as empty and overwrite the ' +
-        'orphaned value). `meta` carries counters and `meta.permanent` — a preview of the single ' +
-        'permanent comment (body truncated to 2000 chars; `truncated` flag + comment `id`). When ' +
-        '`truncated: true` fetch the full text via `etn.comments.get` (by that `id` or by this ' +
-        'thought_id). Pass `view: "full"` to keep the legacy shape with every visual field ' +
-        '(colours, font-style flags, icon attachment id); the default `view: "compact"` drops ' +
-        'them (task O12).',
+        'Fetch one thought with synonyms, type (AI-facing description included) and property values ' +
+        '(`thought_ref` resolved to {id, title}; values whose property is not on the owner\'s type chain ' +
+        'are flagged `outside_type: true` — do not treat such a card as empty). `meta.permanent` — a ' +
+        'preview of the permanent comment (2000 chars; fetch the full text via `etn.comments.get` when ' +
+        '`truncated: true`). `view: "compact"` (default) drops visual fields.',
       inputSchema: GetSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -680,15 +656,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Соседи мысли',
       description:
-        'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`). ' +
-        'With `depth > 1` performs a bounded breadth-first walk returning resolved thoughts. ' +
-        'At `depth: 1` (default) the page is capped at 50 rows; `total`/`truncated` in the ' +
-        'response say whether more exist (bug fix 0.6.3) — page through the rest with ' +
-        '`etn.thoughts.query { in_subtree_of: <this id>, max_depth: 1 }` instead. ' +
-        'Responses carry `link_types`/`thought_types` reference tables (name + AI-facing ' +
-        'description) for the types actually used. `view: "compact"` (default, task O12) drops ' +
-        'colours and line-style fields from the link-type catalogue and, for `depth > 1`, the ' +
-        'visual fields from each resolved thought.',
+        'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`); `depth > 1` does a ' +
+        'bounded BFS walk. At `depth: 1` (default) the page is capped at 50 rows — `total`/`truncated` say ' +
+        'whether more exist; page through the rest with `etn.thoughts.query { in_subtree_of: <this id>, ' +
+        'max_depth: 1 }`. Responses carry `link_types`/`thought_types` reference tables.',
       inputSchema: NeighborsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.neighbors'],
     },
@@ -777,22 +748,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Подграф в радиусе N рёбер',
       description:
-        'Extract the radius-bounded subgraph around seed thoughts: nodes (full thoughts), ' +
-        'active edges, and optionally comments per node (`include_comments` — previews: ' +
-        'permanent truncated to 2000 chars, last 10 chronological entries with per-entry ' +
-        'truncation; every preview entry carries the comment `id` — fetch the full text via ' +
-        '`etn.comments.get` when `truncated`). Every response carries ' +
-        '`thought_types`/`link_types` reference tables (id, name, description, icon/color) ' +
-        'for the types actually used — the agent reads the AI-facing type descriptions once ' +
-        'instead of re-fetching. The key RAG tool — returns ready-to-use context. ' +
-        '`max_nodes` is capped by the server setting max_nodes_per_subgraph. ' +
-        '`max_chars` (task O13) caps the JSON-encoded response size: the server first ' +
-        'shrinks every comment preview body and then drops the farthest nodes (BFS level ' +
-        'from the seeds) until the payload fits, reporting the truncation via `truncated: ' +
-        'true` and `reason` in `{"max_chars_preview", "max_chars_nodes"}`. ' +
-        '`view: "compact"` (default, task O12) drops colours and font-style flags from every ' +
-        'node and the line-style fields from the link-type catalogue — the dominant token ' +
-        'saving on large subgraphs. `view: "full"` keeps the legacy shape.',
+        'The key RAG tool: the radius-bounded subgraph around seeds — nodes, active edges, `thought_types`/' +
+        '`link_types` reference tables, and with `include_comments` per-node comment previews (permanent ' +
+        'truncated to 2000 chars, last 10 chronological; fetch full texts via `etn.comments.get` when ' +
+        '`truncated`). `max_nodes` is capped by the server setting max_nodes_per_subgraph; `max_chars` ' +
+        'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
+        '(BFS level), reporting `truncated: true` + `reason`. `view: "compact"` (default) drops visual ' +
+        'fields — the dominant token saving on large subgraphs.',
       inputSchema: SubgraphSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.subgraph'],
     },
@@ -969,14 +931,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Ссылки на мысль',
       description:
-        'Comments whose `body_md` carries an explicit ID-based wiki reference ' +
-        '`[[#<id>]]` or `[[n:<net>#<id>]]` to this thought (task R3, ' +
-        'docs/03-server-api.md §13a). Distinct from `etn.thoughts.mentions` — ' +
-        'that one finds implicit text matches by title/synonyms via FTS5; ' +
-        'this one finds explicit UUID-based references by runtime regex. ' +
-        'Returns the same `MentionHit[]` shape as `etn.thoughts.mentions` ' +
-        '(one hit per (owner_type, owner_id) owner; the target thought own ' +
-        'comments are excluded; snippet is centred on the matched id).',
+        'Comments whose `body_md` carries an explicit ID-based wiki reference `[[#<id>]]` or ' +
+        '`[[n:<net>#<id>]]` to this thought. Distinct from `etn.thoughts.mentions` — that one finds implicit ' +
+        'text matches by title/synonym via FTS5, this one explicit UUID references. Returns the same ' +
+        '`MentionHit[]` shape; the thought\'s own comments are excluded.',
       inputSchema: BacklinksSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.backlinks'],
     },
@@ -993,14 +951,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Где используется мысль',
       description:
-        'Thoughts referencing this thought as a `thought_ref` property value (formal links, ' +
-        '«Использование» in the editor), grouped by the registry property. Returns ' +
-        '{ total, groups: [{property_id, key, thoughts[]}], thought_types } — `property_id` ' +
-        'is the registry id (one group per network property regardless of which types attach ' +
-        'it — task f14cd5f1); `key` is the registry name. The `thought_types` reference table ' +
-        '(name + AI-facing description) covers every type used in the result. ' +
-        '`view: "compact"` (default, task O12) drops colours, font-style flags and the icon ' +
-        'attachment id from each referencing thought; `view: "full"` keeps them.',
+        'Thoughts referencing this thought as a `thought_ref` property value (formal links), grouped by the ' +
+        'registry property: { total, groups: [{property_id, key, thoughts[]}], thought_types } — one group ' +
+        'per network property. `view: "compact"` (default) drops visual fields from each referencing thought.',
       inputSchema: UsageSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.usage'],
     },
@@ -1050,10 +1003,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Проверка блокировки удаления мысли',
       description:
-        'Check what blocks a thought from being physically deleted (S13, 03-server-api.md ' +
-        '§6.5a): use in thought_ref properties, holding layers, and future orphans among its ' +
-        'children. Accepts an array — one call covers both single and group checks. Returns a map ' +
-        'id → { blocked, blocking, orphaned_children }.',
+        'Check what blocks a thought from being physically deleted: use in thought_ref properties, holding ' +
+        'layers, and future orphans among its children. Accepts an array; returns a map id → ' +
+        '{ blocked, blocking, orphaned_children }. See prompt etn.how_to_purge for the two-phase deletion flow.',
       inputSchema: DeletionCheckThoughtsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.deletion_check'],
     },
@@ -1077,9 +1029,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Проверка блокировки удаления связи',
       description:
-        'Check what blocks a link from being physically deleted (S13, 03-server-api.md §6.5a): ' +
-        'only holding layers (no thought_ref usage and no children for links). Accepts an array; ' +
-        'returns a map id → { blocked, blocking }.',
+        'Check what blocks a link from being physically deleted: only holding layers (no thought_ref usage ' +
+        'and no children for links). Accepts an array; returns a map id → { blocked, blocking }. ' +
+        'See prompt etn.how_to_purge.',
       inputSchema: DeletionCheckLinksSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.deletion_check'],
     },
@@ -1100,9 +1052,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Корзина сети',
       description:
-        'The trash of the network (S13, 03-server-api.md §14b): every thought and link with ' +
-        '`marked_for_deletion=true`, each with its precomputed blocking check — so the agent ' +
-        'sees at once what is purgeable without a per-row `deletion_check` call.',
+        'The trash of the network: every thought and link with `marked_for_deletion=true`, each with its ' +
+        'precomputed blocking check — what is purgeable is visible at once. See prompt etn.how_to_purge.',
       inputSchema: TrashListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.trash.list'],
     },
@@ -1127,11 +1078,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Комментарий (полный текст)',
       description:
-        'Fetch one comment in full: by `comment_id` — any comment (permanent or ' +
-        'chronological) with its complete `body_md`; by `thought_id` — the thought\'s ' +
-        'permanent comment, or `{thought_id, permanent: null}` when absent. Use when a ' +
-        'preview (`meta.permanent`, `subgraph` comments) reports `truncated: true` — every ' +
-        'preview entry carries the comment `id`.',
+        'Fetch one comment in full: by `comment_id` — any comment (permanent or chronological) with its ' +
+        'complete `body_md`; by `thought_id` — the thought\'s permanent comment, or `{thought_id, permanent: ' +
+        'null}` when absent. Use when a preview (`meta.permanent`, `subgraph` comments) reports `truncated: ' +
+        'true`.',
       inputSchema: GetCommentSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.comments.get'],
     },
@@ -1168,10 +1118,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Экспорт подграфа',
       description:
-        'Render the radius-bounded subgraph around seeds as a Markdown (`markdown`, default) or ' +
-        'HTML document. PDF is not supported on the MVP. `.etnx` export (full graph slice, phase P) ' +
-        'is wired up in O17 — this tool accepts `format: "etnx"` but will surface it as unsupported ' +
-        'until O17 lands.',
+        'Render the radius-bounded subgraph around seeds as a Markdown (`markdown`, default) or HTML ' +
+        'document. `format: "etnx"` is rejected until phase O17.',
       inputSchema: ExportSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.export.subgraph'],
     },
@@ -1242,25 +1190,14 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Каталог типов',
       description:
-        'Both type catalogues in full (not just the types used elsewhere in a response, unlike ' +
-        'the `thought_types`/`link_types` reference tables of other read tools): thought types ' +
-        'and link types with their hierarchy (`parent_id`/`is_root`), `description` (AI-facing ' +
-        'context) and effective property definitions — own plus everything inherited along the ' +
-        'L21 type chain (`key`, `value_type`, `required`, `config` incl. `options`/' +
-        '`allowed_type_ids`, effective `default_value`, `inherited`, `defined_on`, ' +
-        '`property_id` (the registry id — task f14cd5f1: properties are network entities, the ' +
-        'effective list is how the agent sees the registry), the effective `description` of ' +
-        'the property and `description_overridden` marking a description this type overrides ' +
-        'itself). Call before ' +
-        'creating a typed thought/link to see what to fill; also lets `type_id` be replaced by a ' +
-        'type name in `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`. ' +
-        'Task O16: pass `in_subtree_of: <thought_id>` (optionally with `max_depth`) to scope ' +
-        'the response to the distinct thought/link types actually used inside that subtree, ' +
-        'each with a `usage_count` for ranking. Useful as the second step after ' +
-        '`etn.networks.structure` — pick a section, then pick a type relevant to that section. ' +
-        'On large networks the full response may exceed client response limits and the ' +
-        '`link_types` tail can be cut off — pass `scope: "links"` to fetch the link catalogue ' +
-        'alone (or `scope: "thoughts"` for the thought catalogue only).',
+        'Both type catalogues in full — thought and link types with hierarchy (`parent_id`/`is_root`), ' +
+        'AI-facing `description` and effective property definitions (own + inherited along the type ' +
+        'chain): `key`, `value_type`, `required`, `config` (incl. `options`/`allowed_type_ids`), ' +
+        '`default_value`, `inherited`, `defined_on`, `property_id` (the registry id). Call before creating ' +
+        'a typed thought/link; also lets `type_id` be replaced by a type name in `etn.thoughts.create`, ' +
+        '`etn.links.create` and `etn.thoughts.upsert_bundle`. `in_subtree_of` (+`max_depth`) scopes to the ' +
+        'types actually used inside that subtree, each with a `usage_count`. When the response risks being ' +
+        'cut off, fetch a single catalogue via `scope: "links"` / `"thoughts"`.',
       inputSchema: TypesListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.types.list'],
     },
@@ -1365,17 +1302,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Дельта событий',
       description:
-        'Delta feed over the real-time `event_log` for long-lived agents with their own cache ' +
-        '(task O9, docs/05-mcp-server.md §5.1c). Returns events with `seq > since_seq` in ' +
-        'ascending order, capped at `limit` (default 1000). The `cursor` echoes the current ' +
-        'retained window (`min_seq`/`max_seq`, `null` when the log is empty). Events with ' +
-        '`audience: "user"` are filtered: only events authored by the calling user are returned ' +
-        '(mirrors WebSocket audience routing, 04-realtime.md §5). Since task S9 the delta also ' +
-        'respects the caller\'s session layer (13-layers.md §12): network-audience events ' +
-        'invisible in that layer are dropped, and `truncated: true` is returned when `since_seq` ' +
-        'predates the session\'s last layer switch (migration 028) — in both cases the agent ' +
-        'must do a full resync (`etn.thoughts.search` + `etn.thoughts.get`) before resuming. ' +
-        'Each entry carries `layer_id` — the change-layer the write materialised in.',
+        'Delta feed over the real-time `event_log` for long-lived agents with their own cache: events ' +
+        'with `seq > since_seq`, ascending, capped at `limit` (default 1000); `cursor` echoes the retained ' +
+        'window. `audience: "user"` events are filtered to the caller\'s own; the delta respects the ' +
+        'caller\'s session layer. `truncated: true` — `since_seq` predates the retained window or the ' +
+        'session\'s last layer switch: do a full resync (`etn.thoughts.search` + `etn.thoughts.get`) ' +
+        'before resuming. Each entry carries `layer_id`.',
       inputSchema: ChangesListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.changes.list'],
     },
@@ -1462,15 +1394,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Метрики чтений мыслей',
       description:
-        'Per-thought read counters collected by the MCP read tools (task O10, ' +
-        'docs/05-mcp-server.md §5.1). `kind: "top"` (default) returns the most-read ' +
-        'thoughts ordered by `reads_count DESC, last_read_at DESC`. `kind: "cold"` ' +
-        'returns thoughts that have never been read, or — when `since` is given — ' +
-        'whose `last_read_at` is older than the cutoff, ordered by `updated_at DESC` ' +
-        'so the freshest un-touched nodes come first. Use this to spot hot spots ' +
-        'and dead zones; the counter is incremented by `etn.thoughts.get`, ' +
-        '`etn.thoughts.subgraph`, `etn.thoughts.query`, `etn.thoughts.search` and ' +
-        '`etn.networks.structure` after each successful read.',
+        'Per-thought read counters collected by the MCP read tools. `kind: "top"` (default) — most-read ' +
+        'thoughts (`reads_count DESC, last_read_at DESC`); `kind: "cold"` — never read, or (with `since`) ' +
+        'not read since the cutoff, ordered `updated_at DESC` so the freshest un-touched nodes come first. ' +
+        'Counted by `etn.thoughts.get`, `subgraph`, `query`, `search` and `etn.networks.structure`.',
       inputSchema: MetricsReadsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.metrics.reads'],
     },
@@ -1503,6 +1430,57 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
+  // etn.metrics.tools — 940a499d read tool (операция 254ba4db). Aggregate over
+  // the `_system.db` table `mcp_tool_call_metrics` written by the shared
+  // registration wrapper (`mcp/server.ts`): how often each tool is called and
+  // how often it errors. The evidence base for roster decisions — a tool with
+  // `calls_count = 0` over a period is a removal candidate, one with
+  // `errors_count / calls_count > 0.5` has an unclear contract/description.
+  // Admin sees every row; a regular member sees only the rows of their own
+  // networks plus their own network-less calls.
+  const MetricsToolsSchema = z.object({
+    network_id: NetworkId.optional(),
+    from_ms: z.number().int().nonnegative().optional(),
+    to_ms: z.number().int().nonnegative().optional(),
+    group_by: z.enum(['tool', 'tool+network', 'tool+key']).optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+  });
+  mcp.registerTool(
+    'etn.metrics.tools',
+    {
+      title: 'Телеметрия вызовов инструментов',
+      description:
+        'Aggregate call counters per MCP tool (successes and errors) from `mcp_tool_call_metrics`. ' +
+        '`group_by`: "tool" (default) | "tool+network" | "tool+key"; `from_ms`/`to_ms` bound `last_call_at` ' +
+        '(the table is an aggregate — the window bounds the observed interval). Ordered by `calls_count ' +
+        'DESC`; `limit` default 50, max 200. The owner (admin) sees everything; a regular member sees ' +
+        'only the rows of their own networks plus their own network-less calls. Verdicts: `calls_count = 0` ' +
+        'over a period — removal candidate; `errors_count / calls_count > 0.5` — unclear tool, revise its ' +
+        'contract/description.',
+      inputSchema: MetricsToolsSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.metrics.tools'],
+    },
+    (args) =>
+      runTool(async () => {
+        if (args.network_id !== undefined) {
+          assertNetworkAccess(rt, args.network_id);
+        }
+        const groupBy = args.group_by ?? 'tool';
+        const limit = Math.min(Math.max(args.limit ?? 50, 1), 200);
+        const isAdmin = rt.deps.auth.isAdmin;
+        const items = rt.deps.systemDb.aggregateToolCallMetrics({
+          groupBy,
+          networkId: args.network_id,
+          fromMs: args.from_ms,
+          toMs: args.to_ms,
+          limit,
+          visibleNetworks: isAdmin ? null : rt.deps.systemDb.listMemberNetworkIds(rt.deps.auth.userId),
+          visibleKeyIds: isAdmin ? [] : rt.deps.systemDb.listApiKeyIdsByUser(rt.deps.auth.userId),
+        });
+        return { group_by: groupBy, limit, items } satisfies McpMetricsToolsResult;
+      }),
+  );
+
   // etn.layers.list — S10 read tool, paritet with REST `GET .../layers`
   // (03-server-api.md §5a, 13-layers.md §10.1). Runs on the base-layer
   // connection: `layers`/`session_layers` are not branchable (§3), and the
@@ -1517,10 +1495,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Список слоёв',
       description:
-        'All layers of the network with hierarchy metadata (task S10, 13-layers.md §2.2, §10.1): ' +
-        'id, parent_id, title, comment, git_branch, depth, children_count (the DELETE cascade ' +
-        'confirmation, §2.4) and `current` — true on the calling key\'s own session layer. ' +
-        'Service (reserve) layers are hidden unless `include_service: true` (§8.2).',
+        'All layers of the network with hierarchy metadata: id, parent_id, title, comment, git_branch, ' +
+        'depth, children_count (the DELETE cascade confirmation) and `current` — true on the calling key\'s ' +
+        'own session layer. Service (reserve) layers are hidden unless `include_service: true`.',
       inputSchema: LayersListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.list'],
     },
@@ -1545,9 +1522,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Структурное отличие слоя',
       description:
-        'Structural diff of a layer against its parent (task S11, 13-layers.md §10.3; ' +
-        '03-server-api.md §5a.7): `links` — added/removed/type_changed/reparented (1:1 swaps of ' +
-        'the parent link)/reorder_collapsed (position-only batches, §6.5); `overridden` — the ids ' +
+        'Structural diff of a layer against its parent: `links` — added/removed/type_changed/reparented ' +
+        '(1:1 swaps of the parent link)/reorder_collapsed (position-only batches); `overridden` — the ids ' +
         'physically present in the layer (shadow rows, inserts and tombstones). The textual diff ' +
         '(`etn.layers.diff_doc`) is blind to all of these — use both.',
       inputSchema: LayersDiffSchema,
@@ -1567,10 +1543,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Содержательное отличие слоя (документы)',
       description:
-        'Textual diff payload of a layer against its parent (task S11, 13-layers.md §10.3; ' +
-        '03-server-api.md §5a.7): two deterministically assembled markdown documents ' +
-        '(`layer_doc`/`target_doc`) for a plain line-by-line comparison. Deterministic flat ' +
-        'assembly (all visible thoughts ordered by id); the hierarchical document is task T2.',
+        'Textual diff payload of a layer against its parent: two deterministically assembled markdown ' +
+        'documents (`layer_doc`/`target_doc`) for a plain line-by-line comparison (all visible thoughts ' +
+        'ordered by id).',
       inputSchema: LayersDiffSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.diff_doc'],
     },
@@ -1605,12 +1580,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Создать слой',
       description:
-        'Create a layer under the given parent (task S10, 13-layers.md §2.3) — defaults to the ' +
-        'calling key\'s current session layer when `parent_id` is omitted. `comment` is optional ' +
-        'but strongly encouraged (§2.2): it is how the next agent understands the layer\'s purpose ' +
-        'without asking. Depth is capped at 4 ordinary layers above the base (§2.1) — a parent ' +
-        'already at that depth rejects with VALIDATION_ERROR. Does not switch the session to the ' +
-        'new layer — call `etn.layers.select` for that.',
+        'Create a layer under the given parent — defaults to the calling key\'s current session layer. ' +
+        '`comment` is strongly encouraged: it is how the next agent understands the layer\'s purpose. ' +
+        'Depth is capped at 4 ordinary layers above the base. Does not switch the session — call ' +
+        '`etn.layers.select` for that.',
       inputSchema: LayersCreateSchema,
     },
     (args, extra) =>
@@ -1660,10 +1633,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Переименовать слой / изменить комментарий',
       description:
-        'Rename a layer and/or edit its comment (task S10, 13-layers.md §2.2, §10.1). The base ' +
-        'layer\'s title is fixed («Основа») — renaming it is a VALIDATION_ERROR; editing its ' +
-        'comment is allowed. `expected_version` is the usual optimistic-lock check (409 ' +
-        'VERSION_CONFLICT on mismatch).',
+        'Rename a layer and/or edit its comment. The base layer\'s title is fixed («Основа») — renaming it ' +
+        'is a VALIDATION_ERROR; editing its comment is allowed. `expected_version` — the usual optimistic ' +
+        'lock (409 VERSION_CONFLICT on mismatch).',
       inputSchema: LayersUpdateSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.update'],
     },
@@ -1722,13 +1694,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Удалить слой',
       description:
-        'Delete a layer together with its whole descendant subtree (task S10, 13-layers.md §2.4). ' +
-        'A layer with descendants requires `cascade` to echo `children_count` from `etn.layers.list` ' +
-        '— a mismatch is 409, a missing value with living descendants is 422 carrying the actual ' +
-        'count. Physically removes every shadow row and tombstone of the subtree (not a merge — ' +
-        'nothing is transferred to the parent) and auto-purges the trash right after (rows the ' +
-        'deleted shadows were holding back). The base layer cannot be deleted. Returns ' +
-        '{ deleted, purged, skipped }.',
+        'Delete a layer together with its whole descendant subtree. A layer with descendants requires ' +
+        '`cascade` to echo `children_count` from `etn.layers.list` (mismatch → 409, missing with living ' +
+        'descendants → 422 with the actual count). Physically removes every shadow row and tombstone of ' +
+        'the subtree (nothing is transferred to the parent) and auto-purges the trash. The base layer ' +
+        'cannot be deleted.',
       inputSchema: LayersDeleteSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.delete'],
     },
@@ -1796,12 +1766,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Переключить текущий слой',
       description:
-        'Switch the calling API key\'s current session layer (task S10, 13-layers.md §7.1): every ' +
-        'later call of this key — reads and writes alike — runs in the new layer\'s context, ' +
-        'exactly like every other read/write tool that funnels through `etn.layers.list`\'s ' +
-        '`current` flag. A service (reserve) layer cannot be selected. Selecting the current layer ' +
-        'again is a no-op. `etn.changes.list` forces a full resync once `since_seq` predates this ' +
-        'switch (§12).',
+        'Switch the calling API key\'s current session layer: every later call of this key — reads and ' +
+        'writes alike — runs in the new layer\'s context. A service (reserve) layer cannot be selected; ' +
+        'selecting the current layer again is a no-op. `etn.changes.list` forces a full resync once ' +
+        '`since_seq` predates this switch.',
       inputSchema: LayersSelectSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.select'],
     },
@@ -1837,14 +1805,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Слить слой в родителя',
       description:
-        'Merge a layer into its parent — full (default) or a closed partial subset `tables: ' +
-        '{ <branchable table>: [row ids…] }` (task S10, 13-layers.md §8). A replay conflict (the ' +
-        'parent row changed since the layer was born) or an unclosed partial selection rejects the ' +
-        'WHOLE operation with VALIDATION_ERROR carrying `conflicts`/`missing_closure` — no partial ' +
-        'application. On success returns { applied, skipped, reorder_collapsed, reserve_layer_id, ' +
-        'purged }: `skipped` lists §6.4 residual link-endpoint-gone cases (merge still succeeds), ' +
-        '`reserve_layer_id` is the auto-created service layer holding the pre-merge state for a ' +
-        'manual rollback (§8.2). Emits one `layer.merged` event attributed to the merge target.',
+        'Merge a layer into its parent — full (default) or a closed partial subset `tables: { <branchable ' +
+        'table>: [row ids…] }`. A replay conflict or an unclosed partial selection rejects the WHOLE ' +
+        'operation with VALIDATION_ERROR (`conflicts`/`missing_closure`) — no partial application. Returns ' +
+        '{ applied, skipped, reorder_collapsed, reserve_layer_id (auto-created pre-merge state for manual ' +
+        'rollback), purged }. See prompt etn.how_to_merge_partial.',
       inputSchema: LayersMergeSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.merge'],
     },
@@ -1925,16 +1890,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Создать мысль',
       description:
-        'Create a thought, optionally attaching a link in the same transaction. `link.direction` ' +
-        'names the role of `link.target_thought_id` for the NEW thought: "parent" — attach the ' +
-        'new thought UNDER the target (target becomes its parent; use this to create a thought ' +
-        'inside a section), "child" — the NEW thought becomes the parent of the target. ' +
-        'Call `etn.thoughts.find_duplicates` first to avoid duplicates. `type`/`link.type` ' +
-        '(task O4) resolve a type by name instead of `type_id` (see `etn.types.list`). ' +
-        'Returns { id, version }; when the assigned type declares `required` properties and ' +
-        'the card leaves some of them unset, also returns `warnings: [{code: ' +
-        '"REQUIRED_PROPERTY_MISSING", key, …}]` so the agent can follow up with ' +
-        '`etn.properties.set` / another bundle (task O6).',
+        'Create a thought, optionally attaching a link in the same transaction. `link.direction` names ' +
+        'the role of `link.target_thought_id` for the NEW thought: "parent" — attach the new thought ' +
+        'UNDER the target (use this to create inside a section), "child" — the NEW thought becomes the ' +
+        'parent of the target. Call `etn.thoughts.find_duplicates` first. `type`/`link.type` resolve a ' +
+        'type by name (see `etn.types.list`). `warnings` lists the type\'s `required` properties left ' +
+        'unset — follow up with `etn.properties.set`.',
       inputSchema: CreateThoughtSchema,
     },
     (args, extra) =>
@@ -2006,11 +1967,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Изменить мысль',
       description:
-        'Patch a thought (last-write-wins per field). `expected_version` enables optimistic ' +
-        'concurrency — on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }; ' +
-        'when `changes.type_id` is present and the new type declares `required` properties that ' +
-        'the card leaves unset, also returns `warnings: [{code: ' +
-        '"REQUIRED_PROPERTY_MISSING", key, …}]` (task O6).',
+        'Patch a thought (last-write-wins per field). `expected_version` enables optimistic concurrency — ' +
+        'on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }; `warnings` lists the ' +
+        'new type\'s `required` properties left unset when `changes.type_id` is present.',
       inputSchema: UpdateThoughtSchema,
     },
     (args, extra) =>
@@ -2053,11 +2012,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Удалить мысль',
       description:
-        'Delete a thought (cascades to links, comments, attachments, property values). ' +
-        'With S13 the same blocking check as `etn.thoughts.deletion_check` runs first: when ' +
-        'another thought references this one through a thought_ref property the call fails with ' +
-        'a `blocking` error instead of deleting — `marked_for_deletion` need not be set first. ' +
-        'Protected thoughts (HOME) are rejected. Returns { id, version: 0 }.',
+        'Delete a thought (cascades to links, comments, attachments, property values). The same blocking ' +
+        'check as `etn.thoughts.deletion_check` runs first: a `blocking` error means the thought is used in ' +
+        'a thought_ref property or held by a layer — it is not deleted. Protected thoughts (HOME) are ' +
+        'rejected. Returns { id, version: 0 }. See prompt etn.how_to_purge.',
       inputSchema: DeleteThoughtSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.delete'],
     },
@@ -2107,9 +2065,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Поместить мысль в корзину / вернуть',
       description:
-        'Mark a thought for deletion (`trashed: true`) or restore it from the trash ' +
-        '(`trashed: false`) — S13. Does NOT run the blocking check: that only applies to the ' +
-        'physical `etn.thoughts.delete`. Returns { id, version }.',
+        'Mark a thought for deletion (`trashed: true`) or restore it from the trash (`trashed: false`). ' +
+        'Does NOT run the blocking check — that only applies to the physical `etn.thoughts.delete`. ' +
+        'Returns { id, version }. See prompt etn.how_to_purge.',
       inputSchema: TrashThoughtSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.trash'],
     },
@@ -2202,10 +2160,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Создать связь',
       description:
-        'Create a directed link source → target, optionally typed: source_id is the PARENT, ' +
-        'target_id is the CHILD. Duplicate pairs and ' +
-        'self-loops are rejected. `type` (task O4) resolves a link type by `name_forward`/' +
-        '`name_reverse` instead of `type_id` (see `etn.types.list`). Returns { id, version }.',
+        'Create a directed link source → target, optionally typed: source_id is the PARENT, target_id is ' +
+        'the CHILD. Duplicate pairs and self-loops are rejected. `type` resolves a link type by ' +
+        '`name_forward`/`name_reverse` instead of `type_id` (see `etn.types.list`). Returns { id, version }.',
       inputSchema: CreateLinkSchema,
     },
     (args, extra) =>
@@ -2243,8 +2200,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Удалить связь',
       description:
-        'Delete a link. With S13 the same blocking check as `etn.links.deletion_check` runs first ' +
-        '(empty until 0.5.2). Returns { id, version: 0 }.',
+        'Delete a link. The same blocking check as `etn.links.deletion_check` runs first. ' +
+        'Returns { id, version: 0 }. See prompt etn.how_to_purge.',
       inputSchema: DeleteLinkSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.delete'],
     },
@@ -2288,8 +2245,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Поместить связь в корзину / вернуть',
       description:
-        'Mark a link for deletion (`trashed: true`) or restore it from the trash ' +
-        '(`trashed: false`) — S13. Does NOT run the blocking check. Returns { id, version }.',
+        'Mark a link for deletion (`trashed: true`) or restore it from the trash (`trashed: false`). ' +
+        'Does NOT run the blocking check. Returns { id, version }. See prompt etn.how_to_purge.',
       inputSchema: TrashLinkSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.trash'],
     },
@@ -2352,11 +2309,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Создать/обновить комментарий',
       description:
-        'For `permanent`: creates the single permanent comment of the owner, or updates it when ' +
-        'it already exists. For `chronological`: always appends a new dated entry ' +
-        '(`valid_from`/`valid_to`); pass `targets: [{owner_type, owner_id}]` (1..100, first is the ' +
-        'primary owner) instead of `owner_type`+`owner_id` to attach the same entry to several ' +
-        'thoughts/links at once. Returns { id, version }.',
+        'For `permanent`: creates the single permanent comment of the owner, or updates it when it already ' +
+        'exists. For `chronological`: always appends a new dated entry (`valid_from`/`valid_to`); pass ' +
+        '`targets: [{owner_type, owner_id}]` (1..100, first is the primary owner) instead of ' +
+        '`owner_type`+`owner_id` to attach the same entry to several thoughts/links at once. ' +
+        'Returns { id, version }.',
       inputSchema: UpsertCommentSchema,
     },
     (args, extra) =>
@@ -2440,10 +2397,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Изменить комментарий',
       description:
-        'Patch an existing comment (chronological or permanent) addressed by `comment_id` — ' +
-        'last-write-wins per field. `valid_from`/`valid_to` apply to chronological entries ' +
-        'only and are ignored for permanent ones. `expected_version` enables optimistic ' +
-        'concurrency — on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }.',
+        'Patch an existing comment (chronological or permanent) by `comment_id` — last-write-wins per ' +
+        'field. `valid_from`/`valid_to` apply to chronological entries only and are ignored for permanent ' +
+        'ones. `expected_version` enables optimistic concurrency — on mismatch the call fails with ' +
+        'VERSION_CONFLICT. Returns { id, version }.',
       inputSchema: UpdateCommentSchema,
     },
     (args, extra) =>
@@ -2594,10 +2551,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Скопировать вложение',
       description:
-        'Copy an existing attachment to one or more target thoughts (workplan L25). ' +
-        'Each target receives a new row carrying the same visible fields as the source; ' +
-        'the underlying file is not duplicated. Targets that already own the same ' +
-        'attachment (same kind + same url/file_path) are skipped silently. ' +
+        'Copy an existing attachment to one or more target thoughts: each target receives a new row ' +
+        'carrying the same visible fields as the source; the underlying file is not duplicated. Targets ' +
+        'that already own the same attachment (same kind + same url/file_path) are skipped silently. ' +
         'Returns one `{id, version: 0, request_id}` per created row.',
       inputSchema: CopyAttachmentSchema,
     },
@@ -2652,12 +2608,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Поиск вложений',
       description:
-        'Search attachments across the network by keywords (workplan L25). ' +
-        '`q` uses the same mini-syntax as `etn.thoughts.search`: AND of include-words, ' +
-        '`-word` exclusion, `*` infix wildcard. Searches title, description, url and ' +
-        'file_path (case-insensitive LIKE). Pass `exclude_owner_type`/`exclude_owner_id` ' +
-        'to hide rows that already belong to a specific owner (used by the editor\'s ' +
-        '"Найти существующее" dialog tab). No FTS index — LIKE under the hood.',
+        'Search attachments across the network by keywords over title, description, url and file_path ' +
+        '(case-insensitive LIKE, no FTS index). `q` uses the `etn.thoughts.search` mini-syntax: AND of ' +
+        'include-words, `-word` exclusion, `*` infix wildcard. Pass `exclude_owner_type`/' +
+        '`exclude_owner_id` to hide rows already attached to a specific owner.',
       inputSchema: SearchAttachmentsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.search'],
     },
@@ -2730,22 +2684,14 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Установить свойство',
       description:
-        'Set (or clear with `value: null`) a property value on a thought/link, addressed by key; ' +
-        "the value must match the property definition's value_type. Properties with " +
-        '`config.multiple = true` also accept an array of values: `thought_ref` — an array of ' +
-        'thought ids; `url` — an array of URL/file-path strings (task 0.6.2, JSON-array payload in ' +
-        '`value_text`, not comma-join — URLs may contain commas). An empty array clears the value. ' +
-        'Hosts that stringify scalar parameters are tolerated in the single form: for `bool` the ' +
-        'exact strings "true"/"false" (case-insensitive) and for `number` finite numeric strings ' +
-        'are coerced back to their JSON types before validation. Either provide one ' +
-        '`key`+`value`, or a map `values: {key: value|null}` to write several properties in a ' +
-        'single transaction (any invalid key rolls back the whole set). Single form returns ' +
-        '{ id, version: 0 }; bulk form returns { values: {key: {id}}, version: 0 }. ' +
-        'The key is resolved against the network property registry (task f14cd5f1): a missing ' +
-        'property fails with NOT_FOUND; a property not attached to the owner\'s type chain fails ' +
-        'with VALIDATION_ERROR ("property X is not attached to this owner\'s type — attach it ' +
-        'first"), `details.property_id` names the registry id for the agent to call ' +
-        '`etn.types.list` against.',
+        'Set (or clear with `value: null`) a property value on a thought/link by key; the value must ' +
+        "match the definition's value_type. `config.multiple = true` properties accept an array: " +
+        '`thought_ref` — thought ids; `url` — URL/file-path strings (JSON array, not comma-join); an empty ' +
+        'array clears. Stringified scalars are tolerated in the single form: "true"/"false" for `bool`, ' +
+        'finite numeric strings for `number` — coerced back to JSON types. Either one `key`+`value`, or ' +
+        '`values: {key: value|null}` for several properties in one transaction (an invalid key rolls back ' +
+        'the whole set). Missing key → NOT_FOUND; a property not attached to the owner\'s type chain → ' +
+        'VALIDATION_ERROR with `details.property_id` (call `etn.types.list` against it).',
       inputSchema: SetPropertySchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.set'],
     },
@@ -2883,21 +2829,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Составная запись «единицы знания»',
       description:
-        'Create (or, via `thought_id`/`on_duplicate`, augment) a thought together with its ' +
-        'permanent comment, a map of property values, links and attachments — one atomic ' +
-        'transaction, one write-budget slot. `thought_id` addresses an existing thought to ' +
-        'augment in place; otherwise `thought.title`/`synonyms` are matched with the same ' +
-        'logic as `etn.thoughts.find_duplicates`, and `on_duplicate` decides what happens on a ' +
-        "match: `fail` (default) errors with `candidates`, `reuse` attaches the bundle's other " +
-        "parts to the existing thought unchanged, `update` also patches the thought's fields. " +
-        '`thought.type`/`links[].type` (task O4) resolve a type by name instead of `type_id` ' +
-        '(see `etn.types.list`). `links[].direction` names the role of `target_thought_id` for ' +
-        'the bundle thought: "parent" — attach the bundle thought UNDER the target (target ' +
-        'becomes its parent), "child" — the bundle thought becomes the parent of the target. ' +
-        'Returns { id, version, thought_action, matched_on, comment?, properties?, links?, attachments?, ' +
-        'warnings? }. `warnings` (task O6) lists the type\'s `required` properties that remain ' +
-        'unset on the resulting card so the agent can follow up with `etn.properties.set` ' +
-        '(empty array when the card is complete).',
+        'Create (or, via `thought_id`/`on_duplicate`, augment) a thought together with its permanent ' +
+        'comment, property values, links and attachments — one atomic transaction, one write-budget ' +
+        'slot. `thought_id` addresses an existing thought to augment in place; otherwise `thought.title`/' +
+        '`synonyms` are matched as in `etn.thoughts.find_duplicates` and `on_duplicate` decides the match ' +
+        'outcome: `fail` (default, errors with `candidates`), `reuse` (attach the other parts to the ' +
+        'match unchanged), `update` (also patch its fields). `thought.type`/`links[].type` resolve a type ' +
+        'by name (see `etn.types.list`). `links[].direction`: "parent" — attach the bundle thought UNDER ' +
+        'the target; "child" — the bundle thought becomes the parent of the target. `warnings` lists the ' +
+        'type\'s `required` properties left unset (empty when complete).',
       inputSchema: UpsertBundleSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.upsert_bundle'],
     },
@@ -3060,9 +3000,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Очистить корзину',
       description:
-        '«Удалить всё, что возможно» (S13, 03-server-api.md §14b): physically delete every marked ' +
-        'thought/link for which `deletion_check` reports no blocking; blocked ones are skipped ' +
-        'silently. Returns { purged, skipped }.',
+        '«Удалить всё, что возможно»: physically delete every marked thought/link for which the blocking ' +
+        'check reports nothing; blocked ones are skipped silently. Returns { purged, skipped } — a ' +
+        'non-empty `skipped` also carries `how_to`. See prompt etn.how_to_purge.',
       inputSchema: TrashPurgeSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.trash.purge'],
     },
@@ -3108,7 +3048,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           purged,
           skipped,
         });
-        return { purged, skipped };
+        return {
+          purged,
+          skipped,
+          // Hint-навигатор уровня 2 (ADR b2eebf8b): непустой skipped значит,
+          // что часть корзины заблокирована — промпт объясняет, что делать.
+          ...(skipped > 0 ? { how_to: 'etn.how_to_purge' } : {}),
+        };
       }),
   );
 
@@ -3121,9 +3067,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Очистить использование мысли',
       description:
-        'Null out every thought_ref property value of other thoughts that references this one ' +
-        '(S13, 03-server-api.md §9.2) — clears the «использование в свойствах» blocking arm in ' +
-        'one call instead of editing each property. Returns { cleared }.',
+        'Null out every thought_ref property value of other thoughts that references this one — clears ' +
+        'the «использование в свойствах» blocking arm in one call instead of editing each property. ' +
+        'Returns { cleared }.',
       inputSchema: UsageClearSchema,
     },
     (args, extra) =>
@@ -3168,13 +3114,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Захватить объект',
       description:
-        'Acquire (or refresh) the lock on `(entity_type, entity_id)` for the calling user ' +
-        '(task a88acf20, операция b6b776ff, задача 2031df5e). Idempotent for the same user — a ' +
-        'repeated acquire on an already-held object updates `client_id` / `acquired_at_ms` and ' +
-        'returns the existing row (`продление`). A different holder is rejected with `LOCKED` ' +
-        'carrying the holder coordinates in `details.holder`. Returns the canonical `LockRow`: ' +
-        '`{ id, entity_type, entity_id, user_id, client_id, acquired_at_ms }`. Emits the ' +
-        '`edit.acquired` real-time event.',
+        'Acquire (or refresh) the lock on `(entity_type, entity_id)` for the calling user. Idempotent for ' +
+        'the same user — a repeated acquire updates `client_id` / `acquired_at_ms` and returns the existing ' +
+        'row. A different holder is rejected with `LOCKED` carrying the holder coordinates in ' +
+        '`details.holder`. Returns the canonical `LockRow`.',
       inputSchema: LocksAcquireSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.acquire'],
     },
@@ -3217,9 +3160,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Снять свой захват',
       description:
-        'Release the lock with id `lock_id` for the calling user. Only the holder may release — ' +
-        'anyone else gets `FORBIDDEN`. Releasing an unknown lock id is `LOCK_NOT_FOUND`. Emits ' +
-        '`edit.released`. Returns `{ released: true }` as the analogue of REST `204 No Content`.',
+        'Release the lock with id `lock_id` for the calling user. Only the holder may release — anyone ' +
+        'else gets `FORBIDDEN`; an unknown lock id is `LOCK_NOT_FOUND`. Returns `{ released: true }`.',
       inputSchema: LocksReleaseSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.release'],
     },
@@ -3257,10 +3199,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Снять все захваты участника',
       description:
-        'Remove every lock held by `user_id` in the network — manual reset through the ' +
-        '«Снять все блокировки» affordance (task 2031df5e, requirement 9ac48831). Returns ' +
-        '`{ cleared: number }`. Emits one `edit.cleared` event per removed lock with ' +
-        '`reason: "manual"`. Any network member may invoke this for any other member (равноправие).',
+        'Remove every lock held by `user_id` in the network — any network member may invoke this for any ' +
+        'other member (равноправие). Returns `{ cleared: number }`.',
       inputSchema: LocksClearSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.clear'],
     },
@@ -3302,10 +3242,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Активные захваты сети',
       description:
-        'List active locks in the network, optionally filtered by `user_id` and/or `client_id`. ' +
-        'Each filter accepts a single value; passing `null` (or omitting) removes the constraint ' +
-        'for that column. Returns the same `{ data: LockRow[], meta: { total, offset, limit } }` ' +
-        'envelope as `GET /locks`. Read-only.',
+        'List active locks in the network, optionally filtered by `user_id` and/or `client_id` (a single ' +
+        'value each; `null` or omitted removes the constraint). Returns the same ' +
+        '`{ data: LockRow[], meta: { total, offset, limit } }` envelope as `GET /locks`.',
       inputSchema: LocksListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.list'],
     },
@@ -3341,13 +3280,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Поиск дубликатов',
       description:
-        'Find existing thoughts matching a proposed title/synonyms (exact title, exact synonym, ' +
-        'partial). A partial match follows the synonym-pattern principle with an implicit `*` ' +
-        'around every typed word: the fragments must occur inside CONSECUTIVE words of the ' +
-        'title or of one synonym, in the typed order («дор» finds «Доработать!», «исправ ошиб» ' +
-        'finds «Исправленные ошибки», but not «исправить старую ошибку»); `-word` excludes ' +
-        'infix occurrences. Each candidate carries its icon/style and one `parent_title` for ' +
-        'disambiguation. Always call before `etn.thoughts.create` to avoid duplicates.',
+        'Find existing thoughts matching a proposed title/synonyms (exact title, exact synonym, partial). ' +
+        'A partial match requires the typed fragments to occur inside CONSECUTIVE words of the title or of ' +
+        'one synonym, in the typed order («исправ ошиб» finds «Исправленные ошибки», but not «исправить ' +
+        'старую ошибку»); `-word` excludes. Always call before `etn.thoughts.create`.',
       inputSchema: FindDuplicatesSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.find_duplicates'],
     },
@@ -3383,14 +3319,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Лента журнала активности',
       description:
-        'Read the activity log of a network (задача f2eca5a4, операция 70dfe81d). ' +
-        'Each row records one mutating operation by a network member: creation, update, ' +
-        'delete, trash or restore of a thought, link, type, property, comment, attachment ' +
-        'or layer. `entity_title` is a short snapshot of the entity at the moment of the ' +
-        'event (≤ 256 chars). Captures (`edit.*`) are NOT recorded. Filters combine with ' +
-        'AND; sorted by `occurred_at_ms DESC`; paginated with `limit` (default 50, max 200) ' +
-        'and `offset`. Returns the same `{ data: ActivityRow[], meta: { total, offset, limit } }' +
-        ' envelope as `GET /activity`.',
+        'Read the activity log of a network: one row per mutating operation by a network member — ' +
+        'creation, update, delete, trash/restore of a thought, link, type, property, comment, attachment ' +
+        'or layer; `entity_title` is a snapshot at the moment of the event. Captures (`edit.*`) are not ' +
+        'recorded. Filters combine with AND; sorted by `occurred_at_ms DESC`; paginated (`limit` default ' +
+        '50, max 200, + `offset`).',
       inputSchema: ActivityListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.list'],
     },
@@ -3431,12 +3364,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Свёртка журнала активности',
       description:
-        'Roll up the activity log of a network up to `until_ms` (задача 6bcccd2b, ' +
-        'требование 76443b7e «свёртка»). For each live `(entity_type, entity_id)` only ' +
-        'the earliest creation/update and the latest update stay; if there is a `deleted`/' +
-        '`trashed` event up to `until_ms` it alone remains. IRREVERSIBLE — the client ' +
-        'UI must request explicit confirmation. The whole operation runs in one SQLite ' +
-        'transaction. Returns `{ removed, kept }` mirroring `POST /activity/rollup`.',
+        'Roll up the activity log of a network up to `until_ms`: for each live `(entity_type, entity_id)` ' +
+        'only the earliest creation/update and the latest update stay; a `deleted`/`trashed` event up to ' +
+        '`until_ms` alone remains. IRREVERSIBLE; runs in one SQLite transaction. Returns `{ removed, kept }`.',
       inputSchema: ActivityRollupSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.rollup'],
     },
@@ -3464,11 +3394,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Обрезка журнала активности',
       description:
-        'Hard-truncate the activity log of a network up to `until_ms` (задача 6bcccd2b, ' +
-        'требование 9921a32b «обрезка»): every row with `occurred_at_ms <= until_ms` is ' +
-        'deleted, including creation and deletion records. IRREVERSIBLE — the client UI ' +
-        'must request explicit confirmation. The whole operation runs in one SQLite ' +
-        'transaction. Returns `{ removed }` mirroring `POST /activity/truncate`.',
+        'Hard-truncate the activity log of a network up to `until_ms`: every row with ' +
+        '`occurred_at_ms <= until_ms` is deleted, including creation and deletion records. ' +
+        'IRREVERSIBLE; runs in one SQLite transaction. Returns `{ removed }`.',
       inputSchema: ActivityTruncateSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.truncate'],
     },

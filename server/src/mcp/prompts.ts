@@ -1,7 +1,8 @@
 /**
- * MCP prompts (task F5, docs/05-mcp-server.md §5).
+ * MCP prompts (task F5, docs/05-mcp-server.md §5; `etn.how_to_*` — task
+ * 940a499d, ADR b2eebf8b level 1).
  *
- * Four parameterised templates for typical agent jobs. Each returns a plain
+ * Parameterised templates for typical agent jobs. Each returns a plain
  * text prompt describing the workflow in terms of the server's own tools and
  * `etn://` resources, so the host LLM can execute it end-to-end. Prompts are
  * pure text — they perform no data access and need no membership checks.
@@ -19,7 +20,11 @@ function promptResult(text: string): GetPromptResult {
 }
 
 /**
- * Register the four `etn.*` prompt templates (05 §5) on a fresh {@link McpServer}.
+ * Register the `etn.*` prompt templates on a fresh {@link McpServer}:
+ * the four workflow templates of task F5 plus the procedural `etn.how_to_*`
+ * explainers of the progressive-disclosure ADR (task 940a499d, ADR b2eebf8b
+ * level 1) — detailed how-to knowledge for the rare complex operations that
+ * must not bloat `tools/list` descriptions.
  */
 export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
@@ -138,6 +143,82 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
           `3. Составь структурированный документ: цель, ключевые мысли, связи, хронология, выводы и открытые вопросы.`,
           ``,
           `Вывод — готовый Markdown на русском языке. Если хочешь сохранить отчёт — создай хронологический комментарий у корневой мысли через \`etn.comments.upsert\` (kind=chronological).`,
+        ].join('\n'),
+      );
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // `etn.how_to_*` — процедурные промпты уровня 1 (ADR b2eebf8b, задача
+  // 940a499d): подробное «как делать» для редких сложных операций. Описание
+  // инструмента ссылается на промпт одной строкой; при ошибке сервер
+  // возвращает имя промпта в `details.how_to` (уровень 2).
+  // -------------------------------------------------------------------------
+
+  mcp.registerPrompt(
+    'etn.how_to_merge_partial',
+    {
+      title: 'Как делать частичное слияние слоя (etn.layers.merge с tables)',
+      description:
+        'Пошаговая инструкция: замкнутость выборки tables, конфликты base_version, reserve-слой для отката.',
+      argsSchema: {
+        network_id: z.string().min(1),
+        layer_id: z.string().min(1).optional(),
+      },
+    },
+    (args) => {
+      const layerRef = args.layer_id ?? '<layer_id>';
+      return promptResult(
+        [
+          `Как слить слой в родителя целиком или частично (etn.layers.merge, сеть ${args.network_id}).`,
+          ``,
+          `1. Осмотрись: \`etn.layers.list\` — возьми layer_id и убедись, что у слоя есть родитель (основу и служебные слои слить нельзя).`,
+          `2. Посмотри, что в слое: \`etn.layers.diff { network_id: ${JSON.stringify(args.network_id)}, layer_id: ${JSON.stringify(layerRef)} }\` — структурная разница (links: added/removed/type_changed/reparented/reorder_collapsed; overridden — физические строки слоя). Текстовую разницу даст \`etn.layers.diff_doc\` — используй обе.`,
+          `3. Полное слияние: \`etn.layers.merge { network_id, layer_id }\` — без tables переносятся все изменения слоя.`,
+          `4. Частичное слияние: добавь \`tables: { "<таблица>": ["<id строк>"] }\`. Таблицы ветвимы: thoughts, thought_synonyms, links, thought_types, link_types, properties, type_properties, type_property_overrides, property_values, comments, comment_targets, attachments. Ключи — ЛОГИЧЕСКИЕ id строк (те же, что в diff.override и в обычных инструментах).`,
+          ``,
+          `Замкнутость (missing_closure): если выбранная строка ссылается на другую строку (связь — на мысль, комментарий — на владельца и т.п.), ссылка должна быть либо тоже выбрана, либо уже существовать в родителе. Ошибка перечисляет недостающие ссылки в details.missing_closure — добавь их в tables и повтори.`,
+          ``,
+          `Конфликты (conflicts): если родитель изменил строку после создания слоя (base_version ≠ текущая версия родителя), ВСЯ операция отклоняется — частичного применения не бывает. details.conflicts перечисляет расхождения (таблица, id, expected_base_version, current_version). Разреши конфликт вручную (приведи слой к новой версии родителя) и повтори слияние.`,
+          ``,
+          `Reserve-слой: если слияние что-то перезаписывает или удаляет, сервер автоматически создаёт служебный резервный слой с состоянием до слияния (reserve_layer_id в ответе). Откат ручной: скопируй нужное из резерва, затем удали резерв. Вставки-only слияние резерва не создаёт.`,
+          `Успешный ответ: { applied, skipped, reorder_collapsed, reserve_layer_id, purged }. skipped — связи, чей конец исчез физически (§6.4): слияние всё равно успешно.`,
+          `После слияния проверь остаток: повторный \`etn.layers.diff\` покажет, что ещё не слито; пустой слой можно удалить \`etn.layers.delete\`.`,
+        ].join('\n'),
+      );
+    },
+  );
+
+  mcp.registerPrompt(
+    'etn.how_to_purge',
+    {
+      title: 'Как удалять двухфазно (trash → deletion_check → purge)',
+      description:
+        'Пошаговая инструкция двухфазного удаления: пометка в корзину, проверка блокировок, физическая чистка.',
+      argsSchema: {
+        network_id: z.string().min(1),
+      },
+    },
+    (args) => {
+      return promptResult(
+        [
+          `Как физически удалять мысли и связи в сети ${args.network_id} (двухфазное удаление, S13).`,
+          ``,
+          `Фаза 1 — пометка (обратима):`,
+          `1. \`etn.thoughts.trash { network_id, thought_id, trashed: true }\` (или \`etn.links.trash\`) — строка уходит в корзину, исчезая из обычных выборок, но физически остаётся. Вернуть: \`trashed: false\`.`,
+          `2. Посмотри корзину целиком: \`etn.trash.list\` — каждая строка уже с готовой проверкой блокировки (blocked/blocking), без отдельных вызовов deletion_check.`,
+          ``,
+          `Что блокирует физическое удаление:`,
+          `- использование мысли как значения thought_ref-свойства другой мысли (снять: \`etn.thoughts.usage_clear\` или убрать свойство у владельца);`,
+          `- удержание живой теневой строкой рабочего слоя (holding_layers в blocking; сначала разбери/слей слой через etn.layers.merge);`,
+          `- будущие сироты: физическое удаление мысли с детьми не удаляет детей, но о них сообщит проверка (orphaned_children).`,
+          `Точечная проверка без корзины: \`etn.thoughts.deletion_check { network_id, thought_ids: [...] }\` / \`etn.links.deletion_check\`.`,
+          ``,
+          `Фаза 2 — физическая чистка:`,
+          `3. \`etn.trash.purge { network_id }\` — «удалить всё, что возможно»: физически стирает каждую помеченную строку без блокировок, заблокированные молча пропускает. Ответ { purged, skipped }.`,
+          `4. Если что-то осталось в skipped — разбери блокировки по списку above и повтори purge.`,
+          ``,
+          `Прямое \`etn.thoughts.delete\` / \`etn.links.delete\` — физическое удаление сразу; оно само прогоняет ту же проверку блокировок и падает с details.blocking (плюс details.how_to с именем этого промпта), если удаление заблокировано. Защищённые мысли (HOME) не удаляются вовсе.`,
         ].join('\n'),
       );
     },

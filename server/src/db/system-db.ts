@@ -222,6 +222,9 @@ export class SystemDb {
   private readonly stMaxEventSeq: Database.Statement;
   private readonly stPruneEvents: Database.Statement;
   private readonly stListEventLogNetworks: Database.Statement;
+  private readonly stInsertToolCallMetric: Database.Statement;
+  private readonly stListApiKeyIdsByUser: Database.Statement;
+  private readonly stListMemberNetworkIds: Database.Statement;
 
   /**
    * Wrap an already-open connection and prepare all statements. Does not run
@@ -347,6 +350,24 @@ export class SystemDb {
          AND seq NOT IN (SELECT seq FROM event_log WHERE network_id = ? ORDER BY seq DESC LIMIT ?)`,
     );
     this.stListEventLogNetworks = db.prepare('SELECT DISTINCT network_id FROM event_log');
+    // Task 940a499d (entity b05c48df): aggregate tool-call telemetry. The
+    // conflict target is the NULL-safe expression index
+    // `idx_mcp_tool_call_metrics_key` — a plain UNIQUE treats NULL network_id
+    // as distinct, so the fold-through-IFNULL index is what makes the upsert
+    // fire for network-less calls (`etn.networks.list` & co) too.
+    this.stInsertToolCallMetric = db.prepare(
+      `INSERT INTO mcp_tool_call_metrics
+         (tool_name, network_id, api_key_id, calls_count, errors_count, first_call_at, last_call_at)
+       VALUES (?, ?, ?, 1, ?, ?, ?)
+       ON CONFLICT (tool_name, IFNULL(network_id, ''), api_key_id) DO UPDATE SET
+         calls_count  = calls_count + 1,
+         errors_count = errors_count + excluded.errors_count,
+         last_call_at = excluded.last_call_at`,
+    );
+    this.stListApiKeyIdsByUser = db.prepare('SELECT id FROM api_keys WHERE user_id = ?');
+    this.stListMemberNetworkIds = db.prepare(
+      'SELECT network_id FROM network_members WHERE user_id = ?',
+    );
   }
 
   /** TTL window for cached idempotent responses, in milliseconds. */
@@ -1064,6 +1085,133 @@ export class SystemDb {
   /** Ids of every network that currently has retained events (cleanup job). */
   listEventLogNetworkIds(): string[] {
     const rows = this.stListEventLogNetworks.all() as Array<{ network_id: string }>;
+    return rows.map((r) => r.network_id);
+  }
+
+  /**
+   * Increment the aggregate tool-call counter (task 940a499d, entity b05c48df).
+   * `networkId` is `null` for calls outside any network; `isError` bumps the
+   * error share of the same row. Call arguments are never stored.
+   */
+  recordToolCallMetric(params: {
+    toolName: string;
+    networkId: string | null;
+    apiKeyId: string;
+    isError: boolean;
+    now: string;
+  }): void {
+    this.stInsertToolCallMetric.run(
+      params.toolName,
+      params.networkId,
+      params.apiKeyId,
+      params.isError ? 1 : 0,
+      params.now,
+      params.now,
+    );
+  }
+
+  /**
+   * Aggregate read over `mcp_tool_call_metrics` for `etn.metrics.tools`
+   * (task 940a499d, операция 254ba4db). `groupBy` picks the grouping grain
+   * (`tool` / `tool+network` / `tool+key`); `networkId`, `fromMs`/`toMs`
+   * (bounds on `last_call_at`, ms epoch) and `limit` narrow the result.
+   * `visibleNetworks`/`visibleKeyIds` encode the permission cut: when
+   * `visibleNetworks` is `null` no network restriction applies (global admin);
+   * otherwise rows are limited to the member networks, plus network-less rows
+   * of the caller's own keys. Ordered by `calls_count DESC, last_call_at DESC`.
+   */
+  aggregateToolCallMetrics(filter: {
+    groupBy: 'tool' | 'tool+network' | 'tool+key';
+    networkId?: string;
+    fromMs?: number;
+    toMs?: number;
+    limit: number;
+    visibleNetworks: string[] | null;
+    visibleKeyIds: string[];
+  }): Array<{
+    tool_name: string;
+    network_id: string | null;
+    api_key_id?: string;
+    calls_count: number;
+    errors_count: number;
+    first_call_at: string | null;
+    last_call_at: string | null;
+  }> {
+    const dims =
+      filter.groupBy === 'tool'
+        ? 'tool_name'
+        : filter.groupBy === 'tool+network'
+          ? 'tool_name, network_id'
+          : 'tool_name, network_id, api_key_id';
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filter.networkId !== undefined) {
+      where.push('network_id = ?');
+      params.push(filter.networkId);
+    }
+    if (filter.fromMs !== undefined) {
+      where.push('last_call_at >= ?');
+      params.push(new Date(filter.fromMs).toISOString());
+    }
+    if (filter.toMs !== undefined) {
+      where.push('last_call_at <= ?');
+      params.push(new Date(filter.toMs).toISOString());
+    }
+    if (filter.visibleNetworks !== null) {
+      const networkPlaceholders = filter.visibleNetworks.map(() => '?').join(', ');
+      const keyPlaceholders = filter.visibleKeyIds.map(() => '?').join(', ');
+      where.push(
+        keyPlaceholders === ''
+          ? `network_id IN (${networkPlaceholders})`
+          : `(network_id IN (${networkPlaceholders}) OR (network_id IS NULL AND api_key_id IN (${keyPlaceholders})))`,
+      );
+      params.push(...filter.visibleNetworks, ...filter.visibleKeyIds);
+    }
+    const whereSql = where.length === 0 ? '' : `WHERE ${where.join(' AND ')}`;
+    const rows = this.db
+      .prepare(
+        `SELECT tool_name AS dim_tool_name,
+                ${filter.groupBy === 'tool' ? 'NULL' : 'network_id'} AS dim_network_id,
+                ${filter.groupBy === 'tool+key' ? 'api_key_id' : 'NULL'} AS dim_api_key_id,
+                SUM(calls_count) AS calls_count,
+                SUM(errors_count) AS errors_count,
+                MIN(first_call_at) AS first_call_at,
+                MAX(last_call_at) AS last_call_at
+           FROM mcp_tool_call_metrics
+           ${whereSql}
+          GROUP BY ${dims}
+          ORDER BY calls_count DESC, last_call_at DESC
+          LIMIT ?`,
+      )
+      .all(...params, filter.limit) as Array<{
+      dim_tool_name: string;
+      dim_network_id: string | null;
+      dim_api_key_id: string | null;
+      calls_count: number;
+      errors_count: number;
+      first_call_at: string | null;
+      last_call_at: string | null;
+    }>;
+    return rows.map((r) => ({
+      tool_name: r.dim_tool_name,
+      network_id: r.dim_network_id,
+      ...(filter.groupBy === 'tool+key' ? { api_key_id: r.dim_api_key_id ?? '' } : {}),
+      calls_count: r.calls_count,
+      errors_count: r.errors_count,
+      first_call_at: r.first_call_at,
+      last_call_at: r.last_call_at,
+    }));
+  }
+
+  /** Ids of the API keys owned by `userId` (telemetry permission cut). */
+  listApiKeyIdsByUser(userId: string): string[] {
+    const rows = this.stListApiKeyIdsByUser.all(userId) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
+  /** Ids of the networks `userId` is a member of (telemetry permission cut). */
+  listMemberNetworkIds(userId: string): string[] {
+    const rows = this.stListMemberNetworkIds.all(userId) as Array<{ network_id: string }>;
     return rows.map((r) => r.network_id);
   }
 

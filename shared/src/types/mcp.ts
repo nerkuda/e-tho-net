@@ -58,6 +58,7 @@ export const MCP_TOOL_NAMES = [
   'etn.types.list',
   'etn.changes.list',
   'etn.metrics.reads',
+  'etn.metrics.tools',
   'etn.layers.list',
   'etn.layers.diff',
   'etn.layers.diff_doc',
@@ -155,6 +156,7 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.types.list': { readOnlyHint: true },
   'etn.changes.list': { readOnlyHint: true },
   'etn.metrics.reads': { readOnlyHint: true },
+  'etn.metrics.tools': { readOnlyHint: true },
   'etn.attachments.search': { readOnlyHint: true },
   'etn.thoughts.find_duplicates': { readOnlyHint: true },
   'etn.layers.list': { readOnlyHint: true },
@@ -187,12 +189,19 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.locks.acquire': { idempotentHint: true },
 };
 
-/** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5). */
+/** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5).
+ *
+ *  Two groups: workflow templates (`etn.summarize_thought` & co) and the
+ *  procedural `etn.how_to_*` explainers of the progressive-disclosure ADR
+ *  (task 940a499d, ADR b2eebf8b level 1) — detailed how-to knowledge for the
+ *  rare complex operations, kept out of `tools/list` descriptions. */
 export const MCP_PROMPT_NAMES = [
   'etn.summarize_thought',
   'etn.suggest_links',
   'etn.detect_duplicates',
   'etn.generate_report',
+  'etn.how_to_merge_partial',
+  'etn.how_to_purge',
 ] as const;
 export type McpPromptName = (typeof MCP_PROMPT_NAMES)[number];
 
@@ -692,6 +701,56 @@ export interface McpMetricsReadsResult {
    *  (task N6). Same `Record<type_id, ThoughtTypeRef>` shape as the other
    *  read tools (`etn.thoughts.query`, `subgraph`, `neighbors`). */
   thought_types: Record<string, ThoughtTypeRef>;
+}
+
+// ---------------------------------------------------------------------------
+// `etn.metrics.tools` (task 940a499d, операция 254ba4db, 05-mcp-server.md
+// §5.1) — aggregate over `mcp_tool_call_metrics`: how often each MCP tool is
+// actually called (successes and errors). The evidence base for decisions
+// about the tool roster ("remove / shorten / consolidate").
+// ---------------------------------------------------------------------------
+
+/** Grouping grain of `etn.metrics.tools`. */
+export type McpMetricsToolsGroupBy = 'tool' | 'tool+network' | 'tool+key';
+
+/** Parameters of `etn.metrics.tools` (05-mcp-server.md §5.1). */
+export interface McpMetricsToolsParams {
+  /** Restrict the aggregate to one network; omit for all networks. */
+  network_id?: string;
+  /** Lower bound on `last_call_at` (ms epoch, inclusive). The table is an
+   *  aggregate, so the window can only bound the observed interval. */
+  from_ms?: number;
+  /** Upper bound on `last_call_at` (ms epoch, inclusive). */
+  to_ms?: number;
+  /** Grouping grain; default `'tool'`. */
+  group_by?: McpMetricsToolsGroupBy;
+  /** Maximum number of rows; default 50, hard cap 200. */
+  limit?: number;
+}
+
+/** One row of `etn.metrics.tools`. `network_id` is `null` for network-less
+ *  calls (`etn.networks.list` & co) and always `null` under `group_by: 'tool'`;
+ *  `api_key_id` is only present under `group_by: 'tool+key'`. */
+export interface McpMetricsToolsItem {
+  tool_name: string;
+  network_id: string | null;
+  api_key_id?: string;
+  calls_count: number;
+  errors_count: number;
+  /** `null` until the first call. */
+  first_call_at: string | null;
+  /** `null` until the first call. */
+  last_call_at: string | null;
+}
+
+/** Result of `etn.metrics.tools`. */
+export interface McpMetricsToolsResult {
+  /** Echo of the effective `group_by`. */
+  group_by: McpMetricsToolsGroupBy;
+  /** Echo of the effective `limit`. */
+  limit: number;
+  /** Up to `limit` aggregated rows, `calls_count DESC, last_call_at DESC`. */
+  items: McpMetricsToolsItem[];
 }
 
 // ---------------------------------------------------------------------------

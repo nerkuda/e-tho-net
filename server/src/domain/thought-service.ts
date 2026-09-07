@@ -891,6 +891,9 @@ export function deleteThought(
           entity: 'thought',
           id,
           blocking: check.blocking,
+          // Hint-навигатор уровня 2 (ADR b2eebf8b, задача 940a499d): промпт
+          // объясняет двухфазное удаление и то, что именно блокирует.
+          how_to: 'etn.how_to_purge',
         },
       );
     }

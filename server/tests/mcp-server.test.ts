@@ -31,7 +31,7 @@ import {
 const USER = 'test-user';
 
 describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
-  it('lists all 19 tools from the shared catalogue', async () => {
+  it('lists all tools from the shared catalogue', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -74,7 +74,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('lists the 4 prompt templates', async () => {
+  it('lists the prompt templates', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -311,8 +311,10 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // Task f2eca5a4 adds 1 activity-log tool: read (`list` — readOnlyHint).
         // Task 6bcccd2b adds 2 activity-maintenance tools: rollup + truncate —
         // оба `destructiveHint: true` (необратимые операции с журналом).
-        assert.equal(annotated, 45);
-        assert.equal(hintReadOnly, 27);
+        // Task 940a499d adds 1 read tool (`etn.metrics.tools` — readOnlyHint)
+        // over the previous 45/27/10/8 counts.
+        assert.equal(annotated, 46);
+        assert.equal(hintReadOnly, 28);
         assert.equal(hintDestructive, 10);
         assert.equal(hintIdempotent, 8);
       } finally {

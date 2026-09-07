@@ -476,7 +476,10 @@ function mergeLayerInner(
     throw new EtnError(
       'VALIDATION_ERROR',
       `предок изменён после создания слоя: ${conflicts.length} расхождений. Слияние отклонено целиком.`,
-      { conflicts },
+      // `how_to` — hint-навигатор уровня 2 (ADR b2eebf8b, задача 940a499d):
+      // имя процедурного промпта, объясняющего ошибку. Агент узнаёт об
+      // инструкции в момент, когда она нужна.
+      { conflicts, how_to: 'etn.how_to_merge_partial' },
     );
   }
 
@@ -525,7 +528,8 @@ function mergeLayerInner(
     throw new EtnError(
       'VALIDATION_ERROR',
       `набор слияния не замкнут: ${missingClosure.length} ссылок не разрешаются. Дополните выбор и повторите.`,
-      { missing_closure: missingClosure },
+      // Hint-навигатор уровня 2 (ADR b2eebf8b) — см. конфликтную ветку выше.
+      { missing_closure: missingClosure, how_to: 'etn.how_to_merge_partial' },
     );
   }
   const skippedLinkIds = new Set(skipped.map((s) => s.id));

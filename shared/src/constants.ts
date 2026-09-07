@@ -211,6 +211,16 @@ export const MCP_DEFAULTS = {
   MAX_WRITES_PER_MINUTE: 60,
 } as const satisfies Record<string, number>;
 
+/**
+ * Hard cap (in characters) on the serialised property-values block the server
+ * includes in MCP selection responses (`etn.thoughts.get`, `subgraph`, network
+ * structure sections…). Requirement 045d5e8c (task 940a499d): a card whose
+ * resolved properties exceed the ceiling must be truncated by the server —
+ * agents cannot be trusted to cap their own context, and a runaway property
+ * blob can otherwise dominate an entire subgraph response.
+ */
+export const MCP_INCLUDE_PROPERTIES_MAX_CHARS = 32_768;
+
 /** Порция `body_md` комментария в MCP-превью (tasks N2/N5,
  * docs/05-mcp-server.md §3/§4.1) — символы, возвращаемые вместе с
  * метаданными `chars_returned`/`chars_total`/`truncated`. */
