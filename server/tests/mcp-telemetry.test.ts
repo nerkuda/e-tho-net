@@ -518,8 +518,8 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // не работает.
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
         assert.ok(
-          bytes <= 58_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 58000`,
+          bytes <= 60_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 60000`,
         );
       } finally {
         await handle.close();

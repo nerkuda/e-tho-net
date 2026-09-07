@@ -137,6 +137,7 @@ import {
 import {
   createCommentWithTargets,
   deleteComment,
+  editComment,
   getComment,
   getCommentsPreview,
   getPermanentFull,
@@ -3240,6 +3241,110 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           version: comment.version,
           request_id: String(extra.requestId),
         } satisfies McpMutationResult;
+      }),
+  );
+
+  // Задача d28abe04 (0.7.2): секционная правка комментария ops-ами одной
+  // транзакцией. Поддерживает append / prepend / replace_section /
+  // delete_section; адресация секций — по тексту markdown-заголовка
+  // (виртуальная первая строка для текстов без `#`).
+  const EditAppendOp = z.object({ op: z.literal('append'), text: z.string().min(1) });
+  const EditPrependOp = z.object({ op: z.literal('prepend'), text: z.string().min(1) });
+  const EditReplaceSectionOp = z.object({
+    op: z.literal('replace_section'),
+    section: z.string().min(1),
+    text: z.string().min(1),
+  });
+  const EditDeleteSectionOp = z.object({
+    op: z.literal('delete_section'),
+    section: z.string().min(1),
+  });
+  const EditOpSchema = z.discriminatedUnion('op', [
+    EditAppendOp,
+    EditPrependOp,
+    EditReplaceSectionOp,
+    EditDeleteSectionOp,
+  ]);
+  const EditCommentSchema = z
+    .object({
+      network_id: NetworkId,
+      comment_id: z.string().min(1).optional(),
+      thought_id: ThoughtId.optional(),
+      expected_version: ExpectedVersion,
+      ops: z.array(EditOpSchema).min(1),
+    })
+    .refine((a) => (a.comment_id === undefined) !== (a.thought_id === undefined), {
+      message: 'provide exactly one of comment_id or thought_id',
+    });
+  mcp.registerTool(
+    'etn.comments.edit',
+    {
+      title: 'Частичная правка комментария',
+      description:
+        'Edit a comment by parts: `append`/`prepend`/`replace_section`/' +
+        '`delete_section` ops applied sequentially in one transaction ' +
+        '(failure rolls back the call). Addressing by markdown heading ' +
+        'text; for heading-less text the first non-empty line is a virtual ' +
+        'heading. `comment_id` XOR `thought_id`. Returns ' +
+        '`{ id, version, sections[], chars_total }`.',
+      inputSchema: EditCommentSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.comments.edit'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        let targetId: string;
+        if (args.thought_id !== undefined) {
+          // Постоянный комментарий мысли: проверяем, что мысль существует,
+          // и достаём единственный постоянный комментарий через listComments.
+          getThoughtOrThrow(ndb, args.thought_id);
+          const permanent =
+            listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ??
+            null;
+          if (permanent === null) {
+            throw new Error(
+              `ETN error [NOT_FOUND]: thought ${args.thought_id} has no permanent comment`,
+            );
+          }
+          targetId = permanent.id;
+        } else if (args.comment_id !== undefined) {
+          targetId = args.comment_id;
+        } else {
+          // refine гарантирует одну из двух; здесь — для TS.
+          throw new Error('ETN error [VALIDATION_ERROR]: comment_id or thought_id required');
+        }
+        const result = editComment(
+          ndb,
+          targetId,
+          args.ops,
+          args.expected_version,
+          rt.deps.auth.userId,
+        );
+        emitAgentActivityEvent(
+          rt,
+          args.network_id,
+          'comment.updated',
+          {
+            id: result.id,
+            changes: { body_md: result.body_md },
+            version: result.version,
+          },
+          ndb,
+          extra.requestId,
+        );
+        auditAgentCall(rt, 'etn.comments.edit', args.network_id, 'comment', result.id, {
+          expected_version: args.expected_version,
+          ops_count: args.ops.length,
+        });
+        return {
+          id: result.id,
+          version: result.version,
+          sections: result.sections,
+          chars_total: result.chars_total,
+          request_id: String(extra.requestId),
+        };
       }),
   );
 

@@ -320,7 +320,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         //   * members.list (readOnlyHint) — +1 readOnly;
         //   * attachments.update (idempotentHint) — +1 idempotent;
         //   * attachments.delete (destructiveHint) — +1 destructive.
-        assert.equal(annotated, 52);
+        assert.equal(annotated, 53);
         assert.equal(hintReadOnly, 31);
         assert.equal(hintDestructive, 11);
         assert.equal(hintIdempotent, 9);

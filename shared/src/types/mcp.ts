@@ -77,6 +77,7 @@ export const MCP_TOOL_NAMES = [
   'etn.links.trash',
   'etn.comments.upsert',
   'etn.comments.update',
+  'etn.comments.edit',
   'etn.comments.delete',
   'etn.attachments.add',
   'etn.attachments.copy',
@@ -200,6 +201,9 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.locks.acquire': { idempotentHint: true },
   // `attachments.update` — last-write-wins по метаданным, повторный вызов с теми же аргументами даёт тот же результат.
   'etn.attachments.update': { idempotentHint: true },
+  // `etn.comments.edit` (задача d28abe04) — секционная правка ops-ами;
+  // повторный вызов с теми же ops поверх нового состояния меняет результат.
+  'etn.comments.edit': { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
 };
 
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5).
@@ -395,6 +399,28 @@ export interface McpCommentsUpdateParams {
   comment_id: string;
   changes: CommentUpdateInput;
   expected_version?: number;
+}
+
+/** Одна операция секционной правки в {@link McpCommentsEditParams.ops}. */
+export type McpCommentsEditOp =
+  | { op: 'append'; text: string }
+  | { op: 'prepend'; text: string }
+  | { op: 'replace_section'; section: string; text: string }
+  | { op: 'delete_section'; section: string };
+
+/**
+ * Parameters of `etn.comments.edit` (05-mcp-server.md §4.2, задача d28abe04,
+ * версия 0.7.2). Частичная правка комментария ops-ами одной транзакцией.
+ * `comment_id` XOR `thought_id`: первый адресует любой комментарий, второй —
+ * постоянный комментарий мысли. Ops применяются последовательно; ошибка
+ * откатывает весь вызов.
+ */
+export interface McpCommentsEditParams {
+  network_id: string;
+  comment_id?: string;
+  thought_id?: string;
+  expected_version?: number;
+  ops: McpCommentsEditOp[];
 }
 
 /** Parameters of `etn.comments.delete` (05-mcp-server.md §4.2). */
