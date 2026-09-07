@@ -904,14 +904,24 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           result.items.map((c) => c.id),
           { now: new Date().toISOString() },
         );
+        // Bug fix (§5.1e): `getThoughtsByIdsResolved` returns the raw `data:`
+        // icon URL — sanitize in both views so the agent never sees an inline
+        // image payload. The compact projection below also reads `card.icon`,
+        // so sanitising the source once is enough. `card.type` carries the
+        // type's icon through `withSanitizedIconLite` which leaves it raw;
+        // apply the same fix here.
+        const sanitizedItems = result.items.map((card) => ({
+          ...withSanitizedIcon(card),
+          type: card.type === null ? null : withSanitizedIcon(card.type),
+        }));
         const items =
           view === 'full'
-            ? result.items
-            : result.items.map((card) => ({
-                ...card,
+            ? sanitizedItems
+            : sanitizedItems.map((card) => ({
                 // Проекция касается только полей самой мысли (id/title/...);
                 // `type`, `properties`, `meta` и `comment_preview` остаются в
                 // полной форме — тот же контракт, что и у `etn.thoughts.get`.
+                ...card,
                 id: card.id,
                 title: card.title,
                 type_id: card.type_id,
@@ -934,7 +944,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         // Reference table: только типы, реально использованные в items.
         const thoughtTypes = thoughtTypeCatalog(
           ndb,
-          result.items.map((c) => c.type_id),
+          sanitizedItems.map((c) => c.type_id),
         );
         return { items, missing: result.missing, thought_types: thoughtTypes };
       }),
@@ -1256,7 +1266,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.to_id,
           args.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH,
         );
-        const thoughts = path === null ? undefined : resolveThoughts(ndb, path);
+        // Bug fix (§5.1e): sanitize before returning — `resolveThoughts` gives
+        // raw `data:` icon URLs, but the agent can never resolve an image; the
+        // place must mirror `subgraph`/`get`/`neighbors`.
+        const thoughts =
+          path === null ? undefined : resolveThoughts(ndb, path).map((t) => withSanitizedIcon(t));
         return {
           from_id: args.from_id,
           to_id: args.to_id,

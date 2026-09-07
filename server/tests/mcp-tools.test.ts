@@ -4225,6 +4225,31 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
               args: { network_id: ctx.networkId, seed_ids: [parentId], radius: 1, view: 'full' },
             },
             {
+              name: 'etn.thoughts.path',
+              args: { network_id: ctx.networkId, from_id: parentId, to_id: childId },
+            },
+            {
+              name: 'etn.thoughts.path',
+              args: {
+                network_id: ctx.networkId,
+                from_id: parentId,
+                to_id: childId,
+                view: 'full',
+              },
+            },
+            {
+              name: 'etn.thoughts.resolve',
+              args: { network_id: ctx.networkId, thought_ids: [parentId, childId] },
+            },
+            {
+              name: 'etn.thoughts.resolve',
+              args: {
+                network_id: ctx.networkId,
+                thought_ids: [parentId, childId],
+                view: 'full',
+              },
+            },
+            {
               name: 'etn.thoughts.usage',
               args: { network_id: ctx.networkId, thought_id: parentId, view: 'full' },
             },
@@ -4270,6 +4295,35 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
             }),
           );
           assert.equal(dup[0]?.icon, ICON_DATA_URL_PLACEHOLDER);
+
+          // The bug reported in thought fac0b769-…: `etn.thoughts.path` and
+          // `etn.thoughts.resolve` previously returned the raw inline base64
+          // image, contradicting every other read tool. The bulk check above
+          // already guards both — this spot check pins the exact replacement
+          // value so the regression is captured by name.
+          const pathResp = toolJson<{
+            thoughts: Array<{ id: string; icon: string | null }>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.path',
+              arguments: { network_id: ctx.networkId, from_id: parentId, to_id: childId },
+            }),
+          );
+          const pathParent = pathResp.thoughts.find((t) => t.id === parentId);
+          assert.ok(pathParent, 'etn.thoughts.path must include the seeded parent');
+          assert.equal(pathParent!.icon, ICON_DATA_URL_PLACEHOLDER);
+
+          const resolveResp = toolJson<{
+            items: Array<{ id: string; icon: string | null }>;
+          }>(
+            await handle.client.callTool({
+              name: 'etn.thoughts.resolve',
+              arguments: { network_id: ctx.networkId, thought_ids: [parentId, childId] },
+            }),
+          );
+          const resolveParent = resolveResp.items.find((c) => c.id === parentId);
+          assert.ok(resolveParent, 'etn.thoughts.resolve must include the seeded parent');
+          assert.equal(resolveParent!.icon, ICON_DATA_URL_PLACEHOLDER);
         } finally {
           await handle.close();
         }
