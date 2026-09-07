@@ -17,6 +17,7 @@ import { describe, it } from 'node:test';
 import Database from 'better-sqlite3';
 import { registerMigrationHelpers } from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
+import { propertyValueId } from '../src/db/property-value-id.js';
 import { networkMigrationsDir } from '../src/paths.js';
 
 const EXPECTED_FILES = [
@@ -56,6 +57,7 @@ const EXPECTED_FILES = [
   '033_authorship_columns.sql',
   '034_object_locks.sql',
   '035_activity_log.sql',
+  '036_property_values_deterministic_id.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -589,6 +591,7 @@ describe(
           '033_authorship_columns.sql',
           '034_object_locks.sql',
           '035_activity_log.sql',
+          '036_property_values_deterministic_id.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged
@@ -650,15 +653,18 @@ describe(
           assert.equal(byId.get(untouched), untouched);
         }
 
-        // Values stayed and were redirected to the survivors.
+        // Values stayed and were redirected to the survivors. (032 itself
+        // preserves the seeded row ids, but the run continues into 036,
+        // which rewrites the arbitrary legacy ids 'v1'/'v2' to the
+        // deterministic UUIDv5 of each natural key.)
         const values = db
           .prepare('SELECT id, property_id, value_date, value_text FROM property_values ORDER BY id')
           .all() as Array<{ id: string; property_id: string; value_date: string | null; value_text: string | null }>;
         assert.deepEqual(
           values.map((v) => ({ id: v.id, property_id: v.property_id })),
           [
-            { id: 'v1', property_id: 'd5' },
-            { id: 'v2', property_id: 'd12' },
+            { id: propertyValueId('thought', 'th1', 'd5'), property_id: 'd5' },
+            { id: propertyValueId('thought', 'th2', 'd12'), property_id: 'd12' },
           ],
         );
         assert.equal(values[0]!.value_date, '2026-10-01');
@@ -770,6 +776,134 @@ describe(
         assert.equal(parsed.properties[0]!.property_id, 'x1', 'loser x2 → survivor x1');
         assert.equal(parsed.keywords, 'x', 'unrelated JSON parts untouched');
         assert.equal(parsed.sort, 'title');
+      } finally {
+        db.close();
+      }
+    });
+
+    // ------------------------------------------------------------------
+    // 036: property_values — deterministic ids from the natural key
+    // (bug dc119240). Historical databases can hold TWO different random ids
+    // for one natural key (independent first-writes in layers that could not
+    // see each other); the migration collapses every row onto the
+    // deterministic UUIDv5 of its natural key.
+    // ------------------------------------------------------------------
+
+    /** Apply migrations up to (excluding) 036 and return the prepared db. */
+    function pre036Db(): Database.Database {
+      const dir = mkdtempSync(path.join(tmpdir(), 'etn-mig-'));
+      for (const f of readdirSync(networkMigrationsDir()).filter(
+        (f) => f.endsWith('.sql') && f < '036',
+      )) {
+        cpSync(path.join(networkMigrationsDir(), f), path.join(dir, f));
+      }
+      const db = new Database(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, dir);
+      rmSync(dir, { recursive: true, force: true });
+      return db;
+    }
+
+    /** Seed a legacy property_values row with an arbitrary (pre-fix) id. */
+    function seedPv(
+      db: Database.Database,
+      id: string,
+      layerId: string,
+      ownerId: string,
+      propertyId: string,
+      valueText: string,
+      deleted = 0,
+    ): void {
+      db
+        .prepare(
+          `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id,
+                                        value_text, updated_at, deleted)
+           VALUES (?, ?, 'thought', ?, ?, ?, '2026-09-01T00:00:00Z', ?)`,
+        )
+        .run(id, layerId, ownerId, propertyId, valueText, deleted);
+    }
+
+    it('036 collapses historical duplicate ids of one natural key onto the deterministic id', () => {
+      const db = pre036Db();
+      try {
+        // A child layer and a grandchild layer (as in the bug's repro).
+        db.prepare(
+          `INSERT INTO layers (id, parent_id, title, is_base, depth, created_by, created_at, last_activity_at)
+           VALUES ('11111111-1111-4111-8111-111111111111', ?, 'A', 0, 1, 'u', '2026-01-01', '2026-01-01')`,
+        ).run(BASE);
+        db.prepare(
+          `INSERT INTO layers (id, parent_id, title, is_base, depth, created_by, created_at, last_activity_at)
+           VALUES ('22222222-2222-4222-8222-222222222222', '11111111-1111-4111-8111-111111111111', 'B', 0, 2, 'u', '2026-01-01', '2026-01-01')`,
+        ).run();
+        const owner = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+        const prop = '01234567-89ab-4cde-8f01-234567890abc';
+
+        // Pre-fix shape: two independent live rows for the same natural key
+        // with DIFFERENT random ids (layer A's own write + base's
+        // independent write — UNIQUE (…, layer_id) keeps them in separate
+        // layers), plus a tombstone shadow copy of A's winner in child
+        // layer B (materializeTombstone copies the nearest row's id).
+        seedPv(db, '11111111-2222-4333-8444-555555555555', '11111111-1111-4111-8111-111111111111', owner, prop, 'в работе (А)');
+        seedPv(db, '66666666-7777-4888-8999-aaaaaaaaaaaa', BASE, owner, prop, 'открыто (основа)');
+        seedPv(db, '11111111-2222-4333-8444-555555555555', '22222222-2222-4222-8222-222222222222', owner, prop, 'в работе (А)', 1);
+
+        const applied = runMigrations(db, networkMigrationsDir());
+        assert.deepEqual(applied.applied, ['036_property_values_deterministic_id.sql']);
+
+        const expectedId = propertyValueId('thought', owner, prop);
+        const rows = db
+          .prepare('SELECT id, layer_id, value_text, deleted FROM property_values ORDER BY layer_id, deleted')
+          .all() as Array<{ id: string; layer_id: string; value_text: string; deleted: number }>;
+        // Every row of the natural key — live, shadow and tombstone alike —
+        // converged on ONE deterministic id; values/columns are untouched.
+        assert.equal(rows.length, 3);
+        assert.deepEqual(
+          rows.map((r) => r.id),
+          [expectedId, expectedId, expectedId],
+        );
+        assert.deepEqual(
+          rows.map((r) => [r.layer_id, r.value_text, r.deleted]),
+          [
+            [BASE, 'открыто (основа)', 0],
+            ['11111111-1111-4111-8111-111111111111', 'в работе (А)', 0],
+            ['22222222-2222-4222-8222-222222222222', 'в работе (А)', 1],
+          ],
+        );
+        // The id stays a well-formed UUIDv5 (clients parse it as a UUID).
+        assert.match(expectedId, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('036 leaves already-deterministic rows and other natural keys alone', () => {
+      const db = pre036Db();
+      try {
+        const owner = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+        const prop = '01234567-89ab-4cde-8f01-234567890abc';
+        const detId = propertyValueId('thought', owner, prop);
+        // A row that already carries the deterministic id (e.g. re-applying
+        // the UPDATE manually) and an unrelated row that must keep its own
+        // deterministic id, not inherit the first one's.
+        seedPv(db, detId, BASE, owner, prop, 'v1');
+        const owner2 = '99999999-9999-4999-8999-999999999999';
+        seedPv(db, 'deadbeef-dead-4dea-8dea-deaddeadbeef', BASE, owner2, prop, 'v2');
+
+        runMigrations(db, networkMigrationsDir());
+
+        const byOwner = new Map(
+          (db.prepare('SELECT id, owner_id FROM property_values').all() as Array<{
+            id: string;
+            owner_id: string;
+          }>).map((r) => [r.owner_id, r.id]),
+        );
+        assert.equal(byOwner.get(owner), detId, 'already-deterministic row untouched');
+        assert.equal(
+          byOwner.get(owner2),
+          propertyValueId('thought', owner2, prop),
+          'other natural key gets its OWN deterministic id',
+        );
       } finally {
         db.close();
       }

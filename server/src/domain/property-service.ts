@@ -52,6 +52,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
+import { propertyValueId } from '../db/property-value-id.js';
 import { rowToThoughtRef } from './thought-service.js';
 import {
   expandTypeIdsToSubtree,
@@ -1858,14 +1859,21 @@ function setPropertyValueForProperty(
   const { column, raw } = validateAndCoerce(ndb, prop, value);
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
-  const id = randomUUID();
+  // Детерминированный id от natural key (ошибка dc119240): независимые
+  // «первые записи» одного свойства в не видящих друг друга слоях сходятся в
+  // ОДИН id, поэтому представления `*_v`, дедуплицирующие по id, видят одну
+  // строку на natural key, а не «призрака» с чужим значением.
+  const id = propertyValueId(ownerType, ownerId, prop.id);
   // S5 (13-layers.md §5.1): the visible row for this natural key is shadowed
-  // FIRST — writing with a fresh logical id would leave both rows live in
-  // this layer's view and break the «one value per (owner, property)»
-  // invariant of §3.5. Resolved by natural key across the layer chain (bug
-  // 49d1f5e8) — see {@link resolveVisiblePropertyValueId}.
+  // FIRST — writing into this layer while an ancestor row stays live would
+  // break the «one value per (owner, property)» invariant of §3.5. Resolved
+  // by natural key across the layer chain (bug 49d1f5e8) — see
+  // {@link resolveVisiblePropertyValueId}. With deterministic ids the resolved
+  // id equals the freshly computed one whenever any row for the natural key
+  // exists anywhere in the chain (post-migration 036 data); the inequality
+  // guard below only covers un-migrated legacy rows with random ids.
   const existingId = resolveVisiblePropertyValueId(ndb, ownerType, ownerId, prop.id);
-  if (existingId !== undefined) {
+  if (existingId !== undefined && existingId !== id) {
     materializeShadow(ndb, 'property_values', existingId);
   }
   // Upsert: write the raw value into the matching column on INSERT, and on
@@ -1896,10 +1904,10 @@ function setPropertyValueForProperty(
   // и вкладка «Метаданные» показывала бы чужое имя.
   touchOwner(ndb, ownerType, ownerId, actorUserId);
 
-  // Re-read by the surrogate id we just wrote/updated (either the resolved
-  // ancestor's id or the freshly minted one) — `property_values_v` dedups per
-  // id, so this is unambiguous even when a stale duplicate id for the same
-  // natural key still lurks in a farther layer (bug 49d1f5e8).
+  // Re-read by the id we just wrote/updated — the deterministic id of this
+  // natural key (both branches of `existingId ?? id` carry it post-migration).
+  // `property_values_v` dedups per id, and with deterministic ids there is
+  // exactly one visible row per natural key (bug dc119240).
   const stored = ndb
     .prepare('SELECT * FROM property_values_v WHERE id = ?')
     .get(existingId ?? id) as PropertyValueRow;

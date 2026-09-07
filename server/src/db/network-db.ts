@@ -35,6 +35,7 @@ import type { Logger } from '../logger.js';
 import { networkDbPath, networkDir, networkMigrationsDir, systemDbPath } from '../paths.js';
 import { runMigrations } from './migrator.js';
 import { setupLayerContext } from './layer-chain.js';
+import { propertyValueId } from './property-value-id.js';
 
 /**
  * Process-wide registry of opened network databases, keyed by
@@ -180,6 +181,13 @@ export interface MigrationHelpersContext {
  * task 38ba3498 / migration 033. Returns the empty string when the helper
  * context is not provided (tests / in-memory DBs without `_system.db`); the
  * migration interprets that as "fall back to a sentinel".
+ * `etn_pv_id(owner_type, owner_id, property_id)` computes the deterministic
+ * `property_values` id from the natural key (bug dc119240, migration 036) —
+ * the SAME TypeScript code the domain write path uses
+ * (db/property-value-id.ts), so the migration and runtime can never disagree
+ * on an id. Registered WITH the `deterministic` flag: the function is pure,
+ * and unlike `gen_uuid` folding it into a constant per statement is exactly
+ * the desired semantics.
  * Both must exist on the connection before `runMigrations` executes. Exported
  * so tests that apply migrations to their own connections can register the
  * helpers the same way production code does.
@@ -197,6 +205,14 @@ export function registerMigrationHelpers(
     typeof value === 'string' ? value.toLowerCase() : value,
   );
   db.function('etn_first_user_id', () => firstUserId);
+  db.function(
+    'etn_pv_id',
+    { deterministic: true },
+    (ownerType: unknown, ownerId: unknown, propertyId: unknown) =>
+      typeof ownerType === 'string' && typeof ownerId === 'string' && typeof propertyId === 'string'
+        ? propertyValueId(ownerType, ownerId, propertyId)
+        : null,
+  );
 }
 
 /**
