@@ -25,6 +25,18 @@
  * to `type_id` — resolved case-insensitively against `etn.types.list`'s
  * catalogues before the domain call.
  *
+ * Задача d5ab1630 — то же именование распространяется на фильтры
+ * `etn.thoughts.query` (`type[]` для типов мыслей, `property` для
+ * свойств) и `etn.thoughts.search` (`type` для типов мыслей). Каждая
+ * именованная форма XOR-исключает id-формой (`type_id`/`property_id`),
+ * резолвится тем же хелпером, что и пишущие инструменты, и возвращается в
+ * ответе полем `resolved_types`/`resolved_type`/`resolved_properties` для
+ * подтверждения разрезолва.
+ *
+ * Задача 3ea09a54 — `etn.thoughts.get` возвращает `meta.permanent` полным
+ * текстом (без `chars_*`/`truncated`); все остальные выборки сущностей
+ * (subgraph, structure, списки) продолжают получать preview-форму.
+ *
  * Mutating tools are facades over the **same domain services as REST**
  * (05 §7): membership is re-checked per call, the read-only flag and the
  * per-minute write budget are enforced, each successful write emits its
@@ -140,6 +152,7 @@ import {
   getPropertyValuesResolved,
   listEffectiveTypeProperties,
   resolveDefinition,
+  resolvePropertyIdByName,
   setPropertyValue,
   setPropertyValues,
 } from '../domain/property-service.js';
@@ -241,6 +254,9 @@ const View = z
 
 /** Error text shared by every `type_id`/`type` pair (task O4). */
 const TYPE_ID_TYPE_CONFLICT = 'provide at most one of type_id or type';
+
+/** Error text shared by every `property_id`/`property` pair (задача d5ab1630). */
+const PROPERTY_ID_PROPERTY_CONFLICT = 'provide at most one of property_id or property';
 
 /**
  * `direction` of an MCP inline link (`etn.thoughts.create` `link`,
@@ -486,42 +502,65 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const SearchSchema = z.object({
-    network_id: NetworkId,
-    query: z.string().min(1),
-    scope: z.enum(SEARCH_SCOPES).optional(),
-    in_subtree_of: ThoughtId.optional(),
-    type_id: ThoughtId.nullable().optional(),
-    // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
-    // создавшего (`author_id`) или последним изменившего (`editor_id`)
-    // мысль. Применяется к by_names, by_texts и by_chrono (для thoughts);
-    // для by_links пропускается. Пустая строка трактуется как отсутствие.
-    author_id: z.string().optional(),
-    editor_id: z.string().optional(),
-    limit: z.number().int().min(1).max(200).optional(),
-    offset: z.number().int().min(0).optional(),
-  });
+  const SearchSchema = z
+    .object({
+      network_id: NetworkId,
+      query: z.string().min(1),
+      scope: z.enum(SEARCH_SCOPES).optional(),
+      in_subtree_of: ThoughtId.optional(),
+      type_id: ThoughtId.nullable().optional(),
+      // Задача d5ab1630 — фильтр по типу через имя (case-insensitive, `name_key`).
+      // Резолвится в `type_id` через `resolveThoughtTypeIdByName`; NOT_FOUND
+      // если такого имени нет, VALIDATION_ERROR + candidates при неоднозначности.
+      // Взаимоисключающе с `type_id`.
+      type: z.string().min(1).optional(),
+      // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
+      // создавшего (`author_id`) или последним изменившего (`editor_id`)
+      // мысль. Применяется к by_names, by_texts и by_chrono (для thoughts);
+      // для by_links пропускается. Пустая строка трактуется как отсутствие.
+      author_id: z.string().optional(),
+      editor_id: z.string().optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
   mcp.registerTool(
     'etn.thoughts.search',
     {
       title: 'Полнотекстовый поиск',
       description:
         'Full-text search across thought names, comment texts, link texts and chronology. `scope` selects ' +
-        'result groups (`names`/`texts`/`links`/`chronology`/`all`); `in_subtree_of`, `type_id`, ' +
-        '`author_id`/`editor_id` narrow it. `limit` (1–200, default 50) + `offset` walk the tail; ' +
-        '`meta.total_in_group` gives unfiltered totals per group.',
+        'result groups (`names`/`texts`/`links`/`chronology`/`all`); `in_subtree_of`, `type_id` (or its ' +
+        'name-form `type`, resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, ' +
+        '`VALIDATION_ERROR` with `details.candidates` on ambiguity), `author_id`/`editor_id` narrow it. ' +
+        '`limit` (1–200, default 50) + `offset` walk the tail; `meta.total_in_group` gives unfiltered totals ' +
+        'per group.',
       inputSchema: SearchSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.search'],
     },
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
+        // Резолв имени типа в id (задача d5ab1630). Сбор эха для ответа —
+        // `resolved_type` приходит, только если агент передал `type`.
+        let resolvedType: { input: string; id: string; name: string } | undefined;
+        let typeIdForDomain: string[] | undefined;
+        if (args.type !== undefined) {
+          const id = resolveThoughtTypeIdByName(ndb, args.type);
+          const name = ndb
+            .prepare('SELECT name FROM thought_types_v WHERE id = ?')
+            .get(id) as { name: string } | undefined;
+          resolvedType = { input: args.type, id, name: name?.name ?? args.type };
+          typeIdForDomain = [id];
+        } else if (args.type_id !== undefined && args.type_id !== null) {
+          typeIdForDomain = [args.type_id];
+        }
         const result = search(ndb, {
           q: args.query,
           scope: args.scope,
           in: args.in_subtree_of === undefined ? undefined : 'subtree',
           from_thought_id: args.in_subtree_of,
-          type_id: args.type_id === undefined || args.type_id === null ? undefined : [args.type_id],
+          type_id: typeIdForDomain,
           author_id: args.author_id,
           editor_id: args.editor_id,
           limit: args.limit,
@@ -545,63 +584,139 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           ...result,
           by_names: result.by_names.map((h) => withSanitizedIcon(h)),
           by_texts: result.by_texts.map((h) => withSanitizedIcon(h)),
+          ...(resolvedType !== undefined ? { resolved_type: resolvedType } : {}),
         };
       }),
   );
 
-  const QueryPropertySchema = z.object({
-    property_id: z.string().min(1),
-    operator: z.enum(['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 'lte']),
-    value: z.union([z.string(), z.number(), z.boolean()]),
-  });
-  const QuerySchema = z.object({
-    network_id: NetworkId,
-    in_subtree_of: ThoughtId.optional(),
-    max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
-    type_id: z.array(z.string().min(1)).optional(),
-    active: z.enum(['true', 'false', 'any']).optional(),
-    trashed: z.enum(['true', 'false', 'any']).optional(),
-    keywords: z.string().min(1).optional(),
-    properties: z.array(QueryPropertySchema).optional(),
-    created_after: z.string().min(1).optional(),
-    created_before: z.string().min(1).optional(),
-    updated_after: z.string().min(1).optional(),
-    updated_before: z.string().min(1).optional(),
-    // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
-    // создавшего мысль (`author_id`) или последним изменившего (`editor_id`).
-    author_id: z.string().optional(),
-    editor_id: z.string().optional(),
-    sort: z.enum(['title', 'created_at', 'updated_at']).optional(),
-    order: z.enum(['asc', 'desc']).optional(),
-    limit: z.number().int().min(1).max(200).optional(),
-    offset: z.number().int().min(0).optional(),
-  });
+  const QueryPropertySchema = z
+    .object({
+      // Задача d5ab1630: `property_id` (registry id) или `property` (имя из
+      // реестра). Взаимоисключающе — XOR, иначе 422.
+      property_id: z.string().min(1).optional(),
+      property: z.string().min(1).optional(),
+      operator: z.enum(['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 'lte']),
+      value: z.union([z.string(), z.number(), z.boolean()]),
+    })
+    .refine(
+      (v) => v.property_id === undefined || v.property === undefined,
+      { message: PROPERTY_ID_PROPERTY_CONFLICT },
+    );
+  const QuerySchema = z
+    .object({
+      network_id: NetworkId,
+      in_subtree_of: ThoughtId.optional(),
+      max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
+      type_id: z.array(z.string().min(1)).optional(),
+      // Задача d5ab1630: фильтр по типам через имена (case-insensitive,
+      // `name_key`); резолвится в `type_id[]` через `etn.types.list`.
+      // NOT_FOUND если имени нет, VALIDATION_ERROR + candidates при
+      // неоднозначности. Взаимоисключающе с `type_id`.
+      type: z.array(z.string().min(1)).optional(),
+      active: z.enum(['true', 'false', 'any']).optional(),
+      trashed: z.enum(['true', 'false', 'any']).optional(),
+      keywords: z.string().min(1).optional(),
+      properties: z.array(QueryPropertySchema).optional(),
+      created_after: z.string().min(1).optional(),
+      created_before: z.string().min(1).optional(),
+      updated_after: z.string().min(1).optional(),
+      updated_before: z.string().min(1).optional(),
+      // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
+      // создавшего мысль (`author_id`) или последним изменившего (`editor_id`).
+      author_id: z.string().optional(),
+      editor_id: z.string().optional(),
+      sort: z.enum(['title', 'created_at', 'updated_at']).optional(),
+      order: z.enum(['asc', 'desc']).optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .refine(
+      (v) => v.type_id === undefined || v.type === undefined,
+      { message: TYPE_ID_TYPE_CONFLICT },
+    );
   mcp.registerTool(
     'etn.thoughts.query',
     {
       title: 'Структурная выборка мыслей',
       description:
         'List thoughts by criteria — no text query required; filters combine with AND. `in_subtree_of` ' +
-        '(+`max_depth`) — directed descendants (hits carry `depth`); `type_id[]`; `active` and `trashed` ' +
-        '(`true`/`false`/`any`; `trashed` defaults to `false`); `keywords` — mini-syntax over title and ' +
-        'synonyms (words all required, `*` infix wildcard, `-word` exclusion); `properties` — registry ' +
-        '`property_id` + operator eq/ne/contains/gt/gte/lt/lte + value (unknown `property_id` matches ' +
-        'nothing; the `value_type` picks the column: number → value_number, bool → value_bool, others on ' +
-        'their text columns); `created_*`/`updated_*` — ISO-8601 ranges; `author_id`/`editor_id` — id ' +
-        'пользователя, создавшего/последним изменившего мысль. Response carries a `thought_types` ' +
-        'reference table.',
+        '(+`max_depth`) — directed descendants (hits carry `depth`); `type_id[]` (or its name-form `type[]`, ' +
+        'resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, `VALIDATION_ERROR` ' +
+        'with `details.candidates` on ambiguity); `active` and `trashed` (`true`/`false`/`any`; `trashed` ' +
+        'defaults to `false`); `keywords` — mini-syntax over title and synonyms (words all required, ' +
+        '`*` infix wildcard, `-word` exclusion); `properties` — registry `property_id` (or its name-form ' +
+        '`property`, same resolve semantics) + operator eq/ne/contains/gt/gte/lt/lte + value (unknown ' +
+        '`property_id` matches nothing; the `value_type` picks the column: number → value_number, bool → ' +
+        'value_bool, others on their text columns); `created_*`/`updated_*` — ISO-8601 ranges; ' +
+        '`author_id`/`editor_id` — id пользователя, создавшего/последним изменившего мысль. Response carries ' +
+        'a `thought_types` reference table plus the optional `resolved_types` / `resolved_properties` echoes ' +
+        'for inputs that came in by name.',
       inputSchema: QuerySchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
     },
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        const result = queryThoughts(ndb, args, { maxNodes: rt.limits.maxNodesPerSubgraph });
+        // Резолв имён типов в id (задача d5ab1630). Сбор эха для ответа —
+        // `resolved_types` приходит, только если агент передал `type`.
+        let resolvedTypes: Array<{ input: string; id: string; name: string }> | undefined;
+        if (args.type !== undefined) {
+          resolvedTypes = [];
+          for (const name of args.type) {
+            const id = resolveThoughtTypeIdByName(ndb, name);
+            const row = ndb
+              .prepare('SELECT name FROM thought_types_v WHERE id = ?')
+              .get(id) as { name: string } | undefined;
+            resolvedTypes.push({ input: name, id, name: row?.name ?? name });
+          }
+        }
+        // Резолв имён свойств в id. Сбор эха `resolved_properties` —
+        // аналогично, только при наличии условий с `property`.
+        let resolvedProperties:
+          | Array<{ input: string; id: string; name: string }>
+          | undefined;
+        let domainProperties = args.properties;
+        if (args.properties !== undefined) {
+          const out: NonNullable<typeof args.properties> = [];
+          let resolved: Array<{ input: string; id: string; name: string }> | null = null;
+          for (const cond of args.properties) {
+            if (cond.property !== undefined) {
+              const id = resolvePropertyIdByName(ndb, cond.property);
+              const row = ndb
+                .prepare('SELECT name FROM properties_v WHERE id = ?')
+                .get(id) as { name: string } | undefined;
+              out.push({ ...cond, property_id: id });
+              if (resolved === null) resolved = [];
+              resolved.push({ input: cond.property, id, name: row?.name ?? cond.property });
+              continue;
+            }
+            out.push(cond);
+          }
+          domainProperties = out;
+          if (resolved !== null) resolvedProperties = resolved;
+        }
+        const result = queryThoughts(
+          ndb,
+          {
+            ...args,
+            // Передаём уже резолвнутые id (MCP-фасад гарантирует, что
+            // XOR-схема соблюдена и обе формы не приходят одновременно);
+            // domain-сервис делает второй проход для REST-вызовов.
+            type_id:
+              args.type_id ??
+              (resolvedTypes !== undefined ? resolvedTypes.map((r) => r.id) : undefined),
+            type: undefined,
+            properties: domainProperties,
+          },
+          { maxNodes: rt.limits.maxNodesPerSubgraph },
+        );
         // O10: count every hit in the structured query.
         recordReads(ndb, result.hits.map((h) => h.id), { now: new Date().toISOString() });
         return {
           ...result,
           thought_types: thoughtTypeCatalog(ndb, result.hits.map((h) => h.type_id)),
+          ...(resolvedTypes !== undefined ? { resolved_types: resolvedTypes } : {}),
+          ...(resolvedProperties !== undefined ? { resolved_properties: resolvedProperties } : {}),
         };
       }),
   );
@@ -614,9 +729,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Fetch one thought with synonyms, type (AI-facing description included) and property values ' +
         '(`thought_ref` resolved to {id, title}; values whose property is not on the owner\'s type chain ' +
-        'are flagged `outside_type: true` — do not treat such a card as empty). `meta.permanent` — a ' +
-        'preview of the permanent comment (2000 chars; fetch the full text via `etn.comments.get` when ' +
-        '`truncated: true`). `view: "compact"` (default) drops visual fields.',
+        'are flagged `outside_type: true` — do not treat such a card as empty). `meta.permanent` — the ' +
+        'full text of the permanent comment of this single thought (задача 3ea09a54 «Условная обрезка ' +
+        'текстов в ответах MCP»: в `etn.thoughts.get` обрезка отключена, форма `{ id, body_md, ' +
+        'valid_from, created_at, updated_at }`; в остальных выборках — preview ' +
+        '2000 chars, `etn.comments.get` для полного текста). `view: "compact"` (default) drops visual fields.',
       inputSchema: GetSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -628,7 +745,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const properties = getPropertyValuesResolved(ndb, 'thought', args.thought_id);
         // O10: count this single read for `etn.metrics.reads` analytics.
         recordReads(ndb, [rawThought.id], { now: new Date().toISOString() });
-        const meta = getThoughtMeta(ndb, args.thought_id);
+        // Задача 3ea09a54: для `etn.thoughts.get` `meta.permanent` отдаётся
+        // полным текстом (без `chars_*`/`truncated`). Все остальные выборки
+        // сущностей (subgraph, structure, списки) продолжают получать
+        // preview-форму — требование «выборка сущностей → превью».
+        const meta = getThoughtMeta(ndb, args.thought_id, { fullPermanent: true });
         const view: McpViewMode = args.view ?? 'compact';
         // Bug fix (docs/05-mcp-server.md §5.1e): a `data:` icon URL is dropped
         // in every view — see `sanitizeIcon`/`withSanitizedIcon` in

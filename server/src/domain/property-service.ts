@@ -31,6 +31,7 @@ import {
   EtnError,
   PROPERTY_VALUE_TYPES,
   TYPE_OWNER_TYPES,
+  typeNameKey,
   type EffectiveTypeProperty,
   type NetworkProperty,
   type NetworkPropertyInput,
@@ -256,6 +257,36 @@ export function getNetworkPropertyByName(ndb: NetworkDb, name: string): NetworkP
     .prepare('SELECT * FROM properties_v WHERE name_key = type_name_key(?)')
     .get(name) as PropertyRow | undefined;
   return row ? rowToNetworkProperty(row) : null;
+}
+
+/**
+ * Resolve a registry property id by its display name, case-insensitively
+ * (задача d5ab1630 «Типы и свойства адресуются именами во всех фильтрах
+ * MCP»). Throws `NOT_FOUND` when no property matches. The `VALIDATION_ERROR`
+ * `candidates` arm is reserved for theoretical name ambiguity; uniqueness of
+ * `name_key` per the `idx_properties_name_key` index keeps it unreachable in
+ * practice — but the helper still walks the result so a future migration
+ * that loosens uniqueness won't silently fall back to the first row.
+ */
+export function resolvePropertyIdByName(ndb: NetworkDb, name: string): string {
+  const key = typeNameKey(name);
+  const rows = ndb
+    .prepare('SELECT id, name FROM properties_v WHERE name_key = ?')
+    .all(key) as Array<{ id: string; name: string }>;
+  if (rows.length === 0) {
+    throw new EtnError('NOT_FOUND', `property "${name}" not found`, {
+      field: 'property',
+      name,
+    });
+  }
+  if (rows.length > 1) {
+    throw new EtnError('VALIDATION_ERROR', `property name "${name}" is ambiguous`, {
+      field: 'property',
+      name,
+      candidates: rows.map((r) => ({ id: r.id, name: r.name })),
+    });
+  }
+  return rows[0]!.id;
 }
 
 /**

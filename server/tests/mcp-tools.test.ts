@@ -1006,15 +1006,45 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(tp.permanent?.body_md, longBody);
 
         // meta.permanent now carries the comment id, so the agent can follow up.
+        // Задача 3ea09a54 «Условная обрезка текстов в ответах MCP»: для
+        // `etn.thoughts.get` обрезка отключена, форма full
+        // (`PermanentCommentFull`) — без `chars_*`/`truncated`/`chars_total`.
         const got = await handle.client.callTool({
           name: 'etn.thoughts.get',
           arguments: { network_id: ctx.networkId, thought_id: id },
         });
         const thought = toolJson<{
-          meta: { permanent: { id: string; truncated: boolean } | null };
+          meta: {
+            permanent:
+              | {
+                  id: string;
+                  body_md: string;
+                  valid_from: string;
+                  created_at: string;
+                  updated_at: string;
+                }
+              | null;
+          };
         }>(got);
-        assert.equal(thought.meta.permanent?.id, permId);
-        assert.equal(thought.meta.permanent?.truncated, true);
+        assert.ok(thought.meta.permanent !== null, 'permanent должен быть');
+        assert.equal(thought.meta.permanent.id, permId);
+        // Полный текст — без обрезки (3000 символов > COMMENT_PREVIEW_CHARS).
+        assert.equal(thought.meta.permanent.body_md, longBody);
+        assert.equal(
+          (thought.meta.permanent as unknown as { truncated?: boolean }).truncated,
+          undefined,
+          'поле truncated отсутствует в full-форме',
+        );
+        assert.equal(
+          (thought.meta.permanent as unknown as { chars_returned?: number }).chars_returned,
+          undefined,
+          'поле chars_returned отсутствует',
+        );
+        assert.equal(
+          (thought.meta.permanent as unknown as { chars_total?: number }).chars_total,
+          undefined,
+          'поле chars_total отсутствует',
+        );
 
         // Exactly one of comment_id / thought_id is required.
         const bad = await handle.client.callTool({

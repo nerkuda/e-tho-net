@@ -34,6 +34,7 @@ import {
   type CommentTarget,
   type CommentUpdateInput,
   type CommentsPreview,
+  type PermanentCommentFull,
   type PermanentCommentPreview,
 } from '@etn/shared';
 
@@ -253,6 +254,47 @@ export function getPermanentPreview(
     chars_returned,
     chars_total,
     truncated: chars_total > chars_returned,
+    valid_from: row.valid_from,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+/**
+ * Полный (без обрезки) постоянный комментарий — задача 3ea09a54
+ * «Условная обрезка текстов в ответах MCP». Возвращается из
+ * `etn.thoughts.get` в `meta.permanent` — единственный случай, когда
+ * постоянный комментарий отдаётся целиком без метаданных `chars_*`/
+ * `truncated`. Тот же SELECT, что в {@link getPermanentPreview}, без
+ * усечения тела.
+ */
+export function getPermanentFull(
+  ndb: NetworkDb,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+): PermanentCommentFull | null {
+  validateOwnerType(ownerType);
+  const row = ndb
+    .prepare(
+      `SELECT id, body_md, valid_from, created_at, updated_at FROM comments_v
+       WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent'
+       LIMIT 1`,
+    )
+    .get(ownerType, ownerId) as
+    | {
+        id: string;
+        body_md: string;
+        valid_from: string;
+        created_at: string;
+        updated_at: string;
+      }
+    | undefined;
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    id: row.id,
+    body_md: row.body_md,
     valid_from: row.valid_from,
     created_at: row.created_at,
     updated_at: row.updated_at,

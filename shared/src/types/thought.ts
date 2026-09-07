@@ -377,3 +377,44 @@ export interface PermanentCommentPreview {
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * Полный (без обрезки) постоянный комментарий — форма, которую MCP-фасад
+ * `etn.thoughts.get` возвращает в `meta.permanent` (задача 3ea09a54
+ * «Условная обрезка текстов в ответах MCP»): единственный случай, когда
+ * постоянный комментарий мысли отдаётся целиком без метаданных `chars_*`/
+ * `truncated`. В остальных местах (subgraph, structure, списки) —
+ * {@link PermanentCommentPreview} по требованию «выборка сущностей →
+ * превью».
+ */
+export interface PermanentCommentFull {
+  /** Id комментария. */
+  id: string;
+  /** Полный markdown-текст без обрезки. */
+  body_md: string;
+  /** Для permanent совпадает с `created_at` (02-data-model.md §3.8). */
+  valid_from: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Сигналы полноты мысли с полнотекстовым постоянным комментарием
+ * (задача 3ea09a54) — форма `meta` для MCP-фасада `etn.thoughts.get`,
+ * запрошенного через `fullPermanent: true`. В остальных местах
+ * {@link ThoughtMeta.permanent} остаётся в preview-форме.
+ */
+export interface ThoughtMetaFull {
+  parents_count: number;
+  children_count: number;
+  attachments_count: number;
+  chrono_count: number;
+  /**
+   * Сколько раз мысль используется как `thought_ref`-значение свойств
+   * других мыслей (формальные связи, «Использование» в редакторе —
+   * 03-server-api.md §9.1).
+   */
+  usage_count: number;
+  /** Полный текст постоянного комментария; `null`, когда его нет. */
+  permanent: PermanentCommentFull | null;
+}
