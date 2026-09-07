@@ -223,4 +223,67 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
       );
     },
   );
+
+  // `etn.how_to_write_batch` (задача 053751b5, 0.7.2) — пошаговая инструкция
+  // для батчевой записи `etn.thoughts.write`. Локальные `ref`/`target_ref`,
+  // циклы, лимиты, миграция с поглощённых инструментов.
+  mcp.registerPrompt(
+    'etn.how_to_write_batch',
+    {
+      title: 'Как делать батч-запись мыслей через etn.thoughts.write',
+      description:
+        'Пошаговая инструкция для `etn.thoughts.write`: локальные `ref`, `target_ref`, циклы, лимиты, миграция с поглощённых инструментов.',
+      argsSchema: {
+        network_id: z.string().min(1),
+      },
+    },
+    (args) => {
+      return promptResult(
+        [
+          `Как записывать связный фрагмент графа одной транзакцией через \`etn.thoughts.write\` в сети ${args.network_id} (задача 053751b5, 0.7.2).`,
+          ``,
+          `1. Зачем: один вызов покрывает сценарии \`etn.thoughts.create\`/\`update\`/\`set_active\`/\`upsert_bundle\`, \`etn.links.create\`, \`etn.properties.set\`, \`etn.comments.upsert\` — те инструменты помечены \`deprecated_since: '0.7.2'\`, \`registerTools\` их в \`tools/list\` больше не выдаёт (но код остался на случай отката и для старых клиентов в период миграции).`,
+          ``,
+          `2. Параметр верхнего уровня: \`thoughts[]\` — массив от 1 до \`MCP_MAX_THOUGHTS_PER_WRITE\` (= 50, живёт в \`@etn/shared\`). Превышение → \`VALIDATION_ERROR\` до транзакции. Один слот write-бюджета на ВЕСЬ вызов, одна строка \`audit_log\` (\`thought_count\`/\`link_count\`/\`item_count\` в details), одна транзакция.`,
+          ``,
+          `3. Локальные \`ref\`: каждая позиция \`thoughts[]\` либо адресует существующую мысль (\`thought_id\`), либо описывает новую (\`thought\` с \`title\`/\`synonyms\`/\`type\`/\`active\`). Ровно одно из двух (XOR) — иначе \`VALIDATION_ERROR\`. Если задано \`thought\` — обязательно объяви \`ref\`; имя действует ТОЛЬКО внутри батча и должно быть уникальным (повтор → \`VALIDATION_ERROR\`). На этапе \`thought\` сервис сначала ищет дубликаты (\`find_duplicates\`), и \`on_duplicate\` решает исход: \`fail\` (по умолчанию, \`details.candidates\`), \`reuse\` (привязывает остальное к существующей), \`update\` (правит title/synonyms/type/active).`,
+          ``,
+          `4. \`comment\` — постоянный (create-or-update), \`chronicle[]\` — добавляемые хронологические записи (append-only, никогда не перезаписываются). \`properties\` — карта \`ключ → значение\`; ключ — имя из реестра сети (NOT_FOUND если не зарегистрирован). \`attachments[]\` — обычные url/file вложения.`,
+          ``,
+          `5. Связи — \`links[]\`: каждая ссылка адресует цель либо \`target_id\` (существующая мысль), либо \`target_ref\` (ref внутри этого же батча). Ровно одно из двух; неизвестный \`target_ref\` → \`VALIDATION_ERROR\` ДО записи (видно в \`details.known_refs\`). Циклы \`A → B → A\` корректны: на фазе 2 все мысли уже созданы, на фазе 3 связи разрешаются в реальные id. \`direction\`: \`parent\` — подвешиваем текущую мысль ПОД цель; \`child\` — текущая мысль становится родителем цели. \`type\` (имя) XOR \`type_id\`.`,
+          ``,
+          `6. На связи тоже можно писать знание в той же транзакции: \`links[].properties\` (карта свойств связи) и \`links[].comment\` (постоянный комментарий связи). Неудача внутри свойств откатывает всю транзакцию — никаких полузаписанных графов.`,
+          ``,
+          `7. Активность: на каждой реально изменённой сущности сервер эмитит свой \`thought.created\`/\`thought.updated\`/\`comment.created\`/\`comment.updated\`/\`link.created\`/\`attachment.created\` через тот же \`emitAgentActivityEvent\`, что и раньше — другие участники сети видят их в реальном времени. \`warnings\` агрегированы по всему батчу; каждый элемент несёт \`ref\` или \`thought_id\`.`,
+          ``,
+          `8. Шаблон вызова:`,
+          `   \`\`\``,
+          `   {`,
+          `     "network_id": "${args.network_id}",`,
+          `     "thoughts": [`,
+          `       { "ref": "adr", "thought": { "title": "ADR-001", "type": "ADR", "active": true },`,
+          `         "comment": { "body_md": "## Context\\n..." },`,
+          `         "chronicle": [ { "body_md": "согласовано", "valid_from": "2026-09-06" } ],`,
+          `         "properties": { "статус": "согласовано" },`,
+          `         "links": [ { "direction": "child", "target_ref": "context",`,
+          `                     "type": "применяется к", "comment": { "body_md": "..." } } ] },`,
+          `       { "ref": "context", "thought": { "title": "Контекст" },`,
+          `         "links": [ { "direction": "child", "target_ref": "adr" } ] }`,
+          `     ]`,
+          `   }`,
+          `   \`\`\``,
+          `   Цикл \`adr → context → adr\` через \`target_ref\` корректен: обе мысли создаются на фазе 2, обе связи — на фазе 3.`,
+          ``,
+          `9. Миграция со старых инструментов:`,
+          `- \`etn.thoughts.create\` → один элемент \`thought\` в \`thoughts[]\`.`,
+          `- \`etn.thoughts.update\` → \`thought_id\` + при необходимости \`thought\` с новыми полями. \`active: false\` на HOME → \`VALIDATION_ERROR\`.`,
+          `- \`etn.thoughts.set_active\` → \`thought_id\` + \`thought: { ..., active: false }\`.`,
+          `- \`etn.thoughts.upsert_bundle\` → один элемент со всеми подполями; \`on_duplicate\` поведёт себя так же.`,
+          `- \`etn.links.create\` → один элемент с \`links[0]\`. Свойства/комментарий на связи теперь идут инлайн, а не отдельными вызовами.`,
+          `- \`etn.properties.set\` → \`properties\` картой в нужном \`thoughts[]\`-элементе (или \`links[].properties\` для свойств на связи).`,
+          `- \`etn.comments.upsert\` (постоянный) → \`comment\`; (хронологический) → \`chronicle[]\`.`,
+        ].join('\n'),
+      );
+    },
+  );
 }

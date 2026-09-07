@@ -33,6 +33,8 @@ import { isBaseContext, materializeShadow, materializeTombstone } from '../db/la
 import { listLinkHoldingLayers } from './holding-layers.js';
 import { purgeOwnerDependants, tombstoneOwnerDependants } from './owner-cleanup.js';
 import { assertLinkTypeAssignable } from './link-type-service.js';
+import { createComment, listComments, updateComment } from './comment-service.js';
+import { setPropertyValues } from './property-service.js';
 
 import {
   FONT_BOLD_BIT,
@@ -356,6 +358,42 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
         nowMs,
         nowMs,
       );
+    // Task 053751b5 (0.7.2) — extend createLink to take `properties`/`comment`
+    // so the batch `etn.thoughts.write` tool and other callers can write
+    // knowledge onto the link in the same transaction. Both are optional;
+    // setPropertyValues already runs all property writes in one SQL
+    // transaction with the usual NOT_FOUND/VALIDATION_ERROR semantics, so a
+    // failure there rolls back the link INSERT above.
+    if (input.properties !== undefined && Object.keys(input.properties).length > 0) {
+      setPropertyValues(ndb, 'link', id, input.properties, actorUserId);
+    }
+    if (input.comment !== undefined) {
+      const existing = listComments(ndb, 'link', id).find((c) => c.kind === 'permanent');
+      if (existing !== undefined) {
+        updateComment(
+          ndb,
+          existing.id,
+          {
+            ...(input.comment.title === undefined ? {} : { title: input.comment.title }),
+            body_md: input.comment.body_md,
+          },
+          undefined,
+          actorUserId,
+        );
+      } else {
+        createComment(
+          ndb,
+          'link',
+          id,
+          {
+            kind: 'permanent',
+            title: input.comment.title ?? null,
+            body_md: input.comment.body_md,
+          },
+          actorUserId,
+        );
+      }
+    }
     return getLinkOrThrow(ndb, id);
   });
 }

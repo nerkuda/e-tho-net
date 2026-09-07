@@ -87,6 +87,7 @@ import {
   EXPORT_FORMATS,
   FOCUS_DIRS,
   ICON_KINDS,
+  MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_TOOL_ANNOTATIONS,
   MCP_VIEW_MODES,
   PROPERTY_OWNER_TYPES,
@@ -110,6 +111,10 @@ import {
   type McpMetricsToolsResult,
   type McpMutationResult,
   type McpPropertiesSetResult,
+  type McpThoughtWriteItemResult,
+  type McpThoughtWriteParams,
+  type McpThoughtWriteResult,
+  type McpToolAnnotations,
   type McpTypesListResult,
   type McpUpsertBundleResult,
   type McpViewMode,
@@ -197,6 +202,7 @@ import {
 } from '../domain/activity-service.js';
 import { shrinkSubgraphToBudget } from './subgraph-budget.js';
 import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
+import { writeThoughts } from '../domain/thought-write-service.js';
 import { queryThoughts } from '../domain/query-service.js';
 import { queryChronicle, parseChronicleQueryBody } from '../domain/chronicle-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
@@ -4019,8 +4025,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           }
         }
         if (result.links !== undefined) {
-          for (const link of result.links) {
-            emitAgentActivityEvent(rt, args.network_id, 'link.created', { link }, ndb, extra.requestId);
+          for (const lr of result.links) {
+            emitAgentActivityEvent(rt, args.network_id, 'link.created', { link: lr.link }, ndb, extra.requestId);
           }
         }
         if (result.attachments !== undefined) {
@@ -4048,7 +4054,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
               }),
           ...(result.links === undefined
             ? {}
-            : { links: result.links.map((l) => ({ id: l.id, version: l.version })) }),
+            : { links: result.links.map((lr) => ({ id: lr.link.id, version: lr.link.version })) }),
           ...(result.attachments === undefined
             ? {}
             : { attachments: result.attachments.map((a) => ({ id: a.id })) }),
@@ -4059,6 +4065,249 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           warnings: result.warnings ?? [],
           request_id: String(extra.requestId),
         } satisfies McpUpsertBundleResult;
+      }),
+  );
+
+  // =========================================================================
+  // `etn.thoughts.write` — задача 053751b5, 0.7.2: батч-запись связанных
+  // единиц знания одной транзакцией. Поглощает `etn.thoughts.create`/`update`/
+  // `set_active`/`upsert_bundle`, `etn.links.create`, `etn.properties.set`,
+  // `etn.comments.upsert` (помечены `deprecated_since: '0.7.2'` — см.
+  // `MCP_TOOL_ANNOTATIONS` и механизм пропуска в начале `registerTools`).
+  // =========================================================================
+
+  const WriteChronicleItemSchema = z.object({
+    title: z.string().nullable().optional(),
+    body_md: z.string().min(1),
+    valid_from: z.string().min(1).optional(),
+    valid_to: z.string().nullable().optional(),
+  });
+  const WriteLinkSpecSchema = z
+    .object({
+      direction: LinkDirection,
+      target_id: z.string().min(1).optional(),
+      target_ref: z.string().min(1).optional(),
+      type_id: z.string().min(1).nullable().optional(),
+      type: z.string().min(1).optional(),
+      properties: z.record(z.string(), PropertyValueSchema).optional(),
+      comment: z
+        .object({
+          title: z.string().nullable().optional(),
+          body_md: z.string().min(1),
+        })
+        .optional(),
+    })
+    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+    .refine(
+      (v) => (v.target_id !== undefined) !== (v.target_ref !== undefined),
+      { message: 'each links[] entry must set exactly one of target_id or target_ref' },
+    );
+  const WriteAttachmentSpecSchema = z.object({
+    kind: z.enum(ATTACHMENT_KINDS),
+    url: z.string().min(1).nullable().optional(),
+    file_path: z.string().min(1).nullable().optional(),
+    title: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+  });
+  const WriteItemSchema = z
+    .object({
+      ref: z.string().min(1).optional(),
+      thought_id: z.string().min(1).optional(),
+      thought: BundleThoughtSchema.optional(),
+      on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
+      comment: BundleCommentSchema.optional(),
+      chronicle: z.array(WriteChronicleItemSchema).optional(),
+      properties: z.record(z.string(), PropertyValueSchema).optional(),
+      links: z.array(WriteLinkSpecSchema).optional(),
+      attachments: z.array(WriteAttachmentSpecSchema).optional(),
+    })
+    // Каждый элемент должен иметь ХОТЯ БЫ ОДНО из `thought_id` (адресация
+    // существующей мысли) или `thought` (новая/совпадающая мысль). Оба
+    // вместе — норм: `thought_id` адресует мысль, `thought` патчит её поля.
+    .refine(
+      (v) => v.thought_id !== undefined || v.thought !== undefined,
+      { message: 'each batch item must set thought_id or thought (at least one)' },
+    )
+    // Если задано `thought` И это новая мысль (нет `thought_id`), нужен
+    // `ref` для возможных `target_ref` в других элементах батча. Случай
+    // `thought + thought_id` (патч существующей) ref не требует.
+    .refine(
+      (v) => v.thought_id !== undefined || v.thought === undefined || v.ref !== undefined,
+      {
+        message:
+          'a batch item with `thought` (new thought) must also declare a local `ref`',
+      },
+    );
+  const WriteSchema = z.object({
+    network_id: NetworkId,
+    thoughts: z.array(WriteItemSchema).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
+  });
+  mcp.registerTool(
+    'etn.thoughts.write',
+    {
+      title: 'Батч-запись мыслей',
+      description:
+        'Пишет от 1 до ' + MCP_MAX_THOUGHTS_PER_WRITE + ' связанных единиц знания одной транзакцией: ' +
+        'мысли + постоянные/хронологические комментарии + свойства + связи + вложения. ' +
+        '`thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR `target_ref`; `on_duplicate`: ' +
+        '`fail`/`reuse`/`update`. Циклы `ref`/`target_ref` разрешены (фаза 2 — мысли, фаза 3 — связи). ' +
+        'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
+        '`properties.set`, `comments.upsert` (`deprecated_since: \'0.7.2\'`). Один write-бюджет + одна ' +
+        'строка `audit_log` на вызов. `warnings` агрегированы по батчу. Подробности — ' +
+        '`etn.how_to_write_batch`.',
+      inputSchema: WriteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const writeInput: McpThoughtWriteParams = {
+          network_id: args.network_id,
+          thoughts: args.thoughts.map((item) => ({
+            ...(item.ref === undefined ? {} : { ref: item.ref }),
+            ...(item.thought_id === undefined ? {} : { thought_id: item.thought_id }),
+            ...(item.thought === undefined ? {} : { thought: item.thought }),
+            ...(item.on_duplicate === undefined ? {} : { on_duplicate: item.on_duplicate }),
+            ...(item.comment === undefined ? {} : { comment: item.comment }),
+            ...(item.chronicle === undefined ? {} : { chronicle: item.chronicle }),
+            ...(item.properties === undefined ? {} : { properties: item.properties }),
+            ...(item.links === undefined ? {} : { links: item.links }),
+            ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
+          })),
+        };
+        const result = writeThoughts(ndb, writeInput, rt.deps.auth.userId);
+
+        // Real-time events — one per actually-affected entity (per task spec).
+        // Done via the existing helpers so the WS gateway / activity log see
+        // the same shape they do for `etn.thoughts.upsert_bundle` etc.
+        for (const item of result.items) {
+          if (item.thought_action === 'reused') continue;
+          if (item.thought_action === 'created') {
+            const thought = getThoughtOrThrow(ndb, item.id);
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'thought.created',
+              { thought },
+              ndb,
+              extra.requestId,
+            );
+          } else {
+            // 'updated' — also covers the 'set_active' scenario: a batch item
+            // that only sets `active: false` (HOME is rejected, see domain
+            // service) lands here as a normal `thought.updated`. Empty
+            // `changes` is the contract for batched updates: the granular
+            // changes live across `comment`/`chronicle`/`properties`/`links`/
+            // `attachments` blocks of the same item, and the audit_log row
+            // carries the full story.
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'thought.updated',
+              { id: item.id, version: item.version, changes: {} },
+              ndb,
+              extra.requestId,
+            );
+          }
+          if (item.comment !== undefined) {
+            if (item.comment.action === 'created') {
+              const c = getComment(ndb, item.comment.id);
+              if (c !== null) {
+                emitAgentActivityEvent(
+                  rt,
+                  args.network_id,
+                  'comment.created',
+                  { comment: c },
+                  ndb,
+                  extra.requestId,
+                );
+              }
+            } else {
+              emitAgentActivityEvent(
+                rt,
+                args.network_id,
+                'comment.updated',
+                {
+                  id: item.comment.id,
+                  version: item.comment.version,
+                  changes: { body_md: '' },
+                },
+                ndb,
+                extra.requestId,
+              );
+            }
+          }
+          if (item.chronicle !== undefined) {
+            for (const entry of item.chronicle) {
+              const c = getComment(ndb, entry.id);
+              if (c !== null) {
+                emitAgentActivityEvent(
+                  rt,
+                  args.network_id,
+                  'comment.created',
+                  { comment: c },
+                  ndb,
+                  extra.requestId,
+                );
+              }
+            }
+          }
+          if (item.links !== undefined) {
+            for (const link of item.links) {
+              const l = getLink(ndb, link.id);
+              if (l !== null) {
+                emitAgentActivityEvent(
+                  rt,
+                  args.network_id,
+                  'link.created',
+                  { link: l },
+                  ndb,
+                  extra.requestId,
+                );
+              }
+            }
+          }
+          if (item.attachments !== undefined) {
+            for (const att of item.attachments) {
+              const a = getAttachment(ndb, att.id);
+              if (a !== null) {
+                emitAgentActivityEvent(
+                  rt,
+                  args.network_id,
+                  'attachment.created',
+                  { attachment: a },
+                  ndb,
+                  extra.requestId,
+                );
+              }
+            }
+          }
+        }
+
+        // ONE audit row for the whole batch (per task spec).
+        auditAgentCall(
+          rt,
+          'etn.thoughts.write',
+          args.network_id,
+          'network',
+          args.network_id,
+          {
+            thought_count: result.thought_count,
+            link_count: result.link_count,
+            item_count: result.items.length,
+          },
+        );
+
+        const layer = resolveRuntimeLayer(rt, args.network_id);
+        const items: McpThoughtWriteItemResult[] = result.items;
+        return {
+          items,
+          warnings: result.warnings,
+          layer: { id: layer.id, title: layer.title },
+          request_id: String(extra.requestId),
+        } satisfies McpThoughtWriteResult;
       }),
   );
 

@@ -89,6 +89,13 @@ export const MCP_TOOL_NAMES = [
   'etn.attachments.delete',
   'etn.properties.set',
   'etn.thoughts.upsert_bundle',
+  // `etn.thoughts.write` (task 053751b5, 0.7.2) — батч-запись: одна транзакция
+  // для многих связанных единиц знания (мысли + постоянные/хронологические
+  // комментарии + свойства + связи с их свойствами и комментариями + вложения).
+  // Поглощает `thoughts.create`/`update`/`set_active`/`upsert_bundle`,
+  // `links.create`, `properties.set`, `comments.upsert` — они помечены
+  // `deprecated_since: '0.7.2'` ниже, `registerTools` их пропускает.
+  'etn.thoughts.write',
   'etn.trash.purge',
   'etn.thoughts.usage_clear',
   // layers (S10, §4.2)
@@ -126,6 +133,12 @@ export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
  * - `idempotentHint` — `true` for tools whose repeated call with the same
  *   arguments produces the same final state: `thoughts.set_active`,
  *   `properties.set`, and `thoughts.upsert_bundle` (upsert semantics, O1).
+ * - `deprecated_since` — задача 053751b5, 0.7.2: версия, на которой
+ *   инструмент был поглощён `etn.thoughts.write` и снят с `tools/list`.
+ *   При наличии поля `registerTools` (`server/src/mcp/tools.ts`) ПРОПУСКАЕТ
+ *   регистрацию, поэтому инструмент не виден агентам; обработчик в коде
+ *   остаётся на случай, если потребуется быстрый rollback (или пока старый
+ *   клиент — например, эта сессия ZCode — не перешёл на `etn.thoughts.write`).
  *
  * All fields are optional on the wire; tools that carry no hints (the
  * remaining mutating tools — `create`/`update`/`links.create`/comments
@@ -135,6 +148,10 @@ export interface McpToolAnnotations {
   readOnlyHint?: boolean;
   destructiveHint?: boolean;
   idempotentHint?: boolean;
+  /** Задача 053751b5 (0.7.2): версия, на которой инструмент поглощён
+   *  `etn.thoughts.write`; `registerTools` пропускает регистрацию при
+   *  наличии. */
+  deprecated_since?: string;
 }
 
 /**
@@ -202,11 +219,11 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.networks.write': { destructiveHint: false, idempotentHint: true },
 
   // ---- mutating tools — idempotentHint ----------------------------
-  'etn.thoughts.set_active': { idempotentHint: true },
+  'etn.thoughts.set_active': { idempotentHint: true, deprecated_since: '0.7.2' },
   'etn.thoughts.trash': { idempotentHint: true },
   'etn.links.trash': { idempotentHint: true },
-  'etn.properties.set': { idempotentHint: true },
-  'etn.thoughts.upsert_bundle': { idempotentHint: true },
+  'etn.properties.set': { idempotentHint: true, deprecated_since: '0.7.2' },
+  'etn.thoughts.upsert_bundle': { idempotentHint: true, deprecated_since: '0.7.2' },
   'etn.layers.update': { idempotentHint: true },
   'etn.layers.select': { idempotentHint: true },
   // Object-lock acquire — идемпотентно продлевает свой захват (задача 2031df5e).
@@ -216,6 +233,22 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // `etn.comments.edit` (задача d28abe04) — секционная правка ops-ами;
   // повторный вызов с теми же ops поверх нового состояния меняет результат.
   'etn.comments.edit': { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+
+  // ---- задача 053751b5 / 0.7.2 — поглощённые `etn.thoughts.write` --------
+  // Эти 7 инструментов остаются в `MCP_TOOL_NAMES` и в коде `registerTools`,
+  // но `deprecated_since` заставляет `registerTools` пропустить их регистрацию.
+  // Обработчики сохранены для отката и для старых клиентов в период миграции.
+  'etn.thoughts.create': { deprecated_since: '0.7.2' },
+  'etn.thoughts.update': { deprecated_since: '0.7.2' },
+  'etn.links.create': { deprecated_since: '0.7.2' },
+  'etn.comments.upsert': { deprecated_since: '0.7.2' },
+
+  // ---- `etn.thoughts.write` (задача 053751b5 / 0.7.2) — главный пишущий ----
+  // Батч 1..50 связанных единиц знания одной транзакцией: одна запись бюджета,
+  // одна строка audit_log с `thought_count`/`link_count`. Upsert-семантика
+  // (`on_duplicate: reuse`/`update`/`fail`) — повторный вызов с теми же
+  // аргументами даёт тот же результат.
+  'etn.thoughts.write': { destructiveHint: false, idempotentHint: true },
 };
 
 /** All prompt names exposed by the ETN MCP server (05-mcp-server.md §5).
@@ -231,6 +264,10 @@ export const MCP_PROMPT_NAMES = [
   'etn.generate_report',
   'etn.how_to_merge_partial',
   'etn.how_to_purge',
+  // `etn.how_to_write_batch` (задача 053751b5 / 0.7.2) — пошаговая инструкция
+  // для `etn.thoughts.write`: локальные `ref`/`target_ref`, циклы, лимиты,
+  // миграция с поглощённых инструментов.
+  'etn.how_to_write_batch',
 ] as const;
 export type McpPromptName = (typeof MCP_PROMPT_NAMES)[number];
 
@@ -557,6 +594,142 @@ export interface McpUpsertBundleResult extends McpMutationResult {
    * callers can rely on the field being present.
    */
   warnings: ThoughtCardWarning[];
+}
+
+// ---------------------------------------------------------------------------
+// `etn.thoughts.write` (task 053751b5, версия 0.7.2) — батч-запись связанных
+// единиц знания одной транзакцией. Поглощает `etn.thoughts.create`/`update`/
+// `set_active`/`upsert_bundle`, `etn.links.create`, `etn.properties.set`,
+// `etn.comments.upsert` (помечены `deprecated_since: '0.7.2'`, регистрация
+// в `tools/list` пропускается).
+// ---------------------------------------------------------------------------
+
+/** Один элемент хронологической записи в `etn.thoughts.write` (см. также
+ *  `McpCommentsUpsertParams` с `kind: 'chronological'`). */
+export interface McpThoughtWriteChronicleItem {
+  title?: string | null;
+  body_md: string;
+  valid_from?: string;
+  valid_to?: string | null;
+}
+
+/** Одна вложенная единица знания на связи внутри батча:
+ *  свойства и (опционально) постоянный комментарий. */
+export interface McpThoughtWriteLinkSpec {
+  /**
+   * Role of `target_*` for the NEW thought: "parent" — attach the batch
+   * thought UNDER the target (target becomes its parent); "child" — the
+   * batch thought becomes the parent of the target. Unified with the MCP
+   * `etn.thoughts.create` link and `etn.thoughts.upsert_bundle` semantics.
+   */
+  direction: 'parent' | 'child';
+  /** Exactly one of `target_id` (existing thought) or `target_ref` (a ref
+   *  declared elsewhere in the same batch). */
+  target_id?: string;
+  /** Local name of a thought created earlier in this same batch. */
+  target_ref?: string;
+  type_id?: string | null;
+  /** Type resolution by name (see `etn.types.list`); XOR with `type_id`. */
+  type?: string;
+  /** Map of property key → value applied to the new link. Keys are resolved
+   *  against the network property registry by name. */
+  properties?: Record<string, PropertyValueValue>;
+  /** Permanent comment (create-or-update) attached to the new link. */
+  comment?: { title?: string | null; body_md: string };
+}
+
+/** Один элемент вложения (mirror `etn.attachments.add`). */
+export interface McpThoughtWriteAttachmentSpec {
+  kind: AttachmentKind;
+  url?: string | null;
+  file_path?: string | null;
+  title?: string | null;
+  description?: string | null;
+}
+
+/** Один элемент `thoughts[]` батча `etn.thoughts.write`. */
+export interface McpThoughtWriteItem {
+  /** Local name within the batch — must be unique across `thoughts[]`.
+   *  Used by `links[].target_ref` to address this thought from another
+   *  batch item. Required iff `thought` is provided. */
+  ref?: string;
+  /** Exactly one of `thought_id` (existing thought to patch in-place) or
+   *  `thought` (new-or-matched thought resolved via `find_duplicates` +
+   *  `on_duplicate`) — same shape as `etn.thoughts.upsert_bundle`. */
+  thought_id?: string;
+  thought?: {
+    title: string;
+    synonyms?: string[];
+    type_id?: string | null;
+    /** Type resolution by name (XOR with `type_id`). */
+    type?: string;
+    active?: boolean;
+  };
+  /** How to handle a `find_duplicates` match against `thought.title`/`synonyms`
+   *  when `thought_id` is absent. Mirrors `etn.thoughts.upsert_bundle`. */
+  on_duplicate?: ThoughtBundleOnDuplicate;
+  /** Owner's permanent comment (create-or-update). */
+  comment?: { title?: string | null; body_md: string; valid_from?: string; valid_to?: string | null };
+  /** Chronicle entries appended (never overwritten) to the owner's comment. */
+  chronicle?: McpThoughtWriteChronicleItem[];
+  /** Map of property key → value applied to the thought. */
+  properties?: Record<string, PropertyValueValue>;
+  /** Links attached to this thought, addressed by `target_id` (existing) or
+   *  `target_ref` (a ref inside this batch). Cycles via `target_ref` are
+   *  allowed: the batch creates all thoughts first, then attaches links. */
+  links?: McpThoughtWriteLinkSpec[];
+  /** Attachments added to the thought. */
+  attachments?: McpThoughtWriteAttachmentSpec[];
+}
+
+/** Parameters of `etn.thoughts.write`. */
+export interface McpThoughtWriteParams {
+  network_id: string;
+  /** The batch — 1..{@link MCP_MAX_THOUGHTS_PER_WRITE} items. */
+  thoughts: McpThoughtWriteItem[];
+}
+
+/** Один результат per-item: id свежезаписанной/переиспользованной мысли
+ *  и сводка по её частям. */
+export interface McpThoughtWriteItemResult {
+  /** Local `ref` of the batch item; `null` for items addressed by `thought_id`. */
+  ref: string | null;
+  /** Existing `thought_id` echoed back when the item addressed one. */
+  thought_id: string | null;
+  /** Resolved thought id — newly created or existing. */
+  id: string;
+  version: number;
+  thought_action: ThoughtBundleThoughtAction;
+  matched_on: ThoughtBundleMatchKind | null;
+  /** Permanent comment (create-or-update), when the batch item included one. */
+  comment?: { id: string; version: number; action: 'created' | 'updated' };
+  /** Chronicle entries appended in this batch. */
+  chronicle?: Array<{ id: string; version: number }>;
+  /** Per-key property value ids set in this batch. */
+  properties?: Record<string, { id: string }>;
+  /** Link results: id + (if any) attached properties/comments. */
+  links?: Array<{
+    id: string;
+    version: number;
+    properties?: Record<string, { id: string }>;
+    comment?: { id: string; version: number };
+  }>;
+  /** Attachment ids added in this batch. */
+  attachments?: Array<{ id: string }>;
+  /** Card-completeness warnings (task O6) for this item. */
+  warnings: ThoughtCardWarning[];
+}
+
+/** Result of `etn.thoughts.write`. */
+export interface McpThoughtWriteResult {
+  /** Per-item results in the same order as `thoughts[]` in the request. */
+  items: McpThoughtWriteItemResult[];
+  /** Aggregated "card completeness" warnings across the batch — each entry
+   *  carries `ref` or `thought_id` so the caller can locate the offender. */
+  warnings: ThoughtCardWarning[];
+  /** Echo of the network's session layer the batch materialised in. */
+  layer: { id: string; title: string };
+  request_id?: string;
 }
 
 /** `dir` parameter shared by read tools that accept a direction. */

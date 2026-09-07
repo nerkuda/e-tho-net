@@ -512,14 +512,15 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // chronicle.query, members.list, attachments.update, attachments.delete)
         // добавляют ~7 300 B. Task ba024a45 / 0.7.2 re-baselines again to
         // 62 000 B for 63 tools: 3 новых описания (instructions,
-        // networks.write, networks.delete) добавляют ~1 800 B. ADR b2eebf8b
-        // «прогрессивное раскрытие» остаётся в силе — бюджет растёт только
-        // через осознанное добавление инструментов, а не через расползание
-        // существующих описаний.
+        // networks.write, networks.delete) добавляют ~1 800 B. Задача 053751b5
+        // (0.7.2) re-baselines ещё раз до 66 000 B для 64 инструментов:
+        // `etn.thoughts.write` добавляет ~3 200 B (подробное описание сценария
+        // батча). Детальная механика перенесена в `etn.how_to_write_batch`,
+        // бюджет ADR b2eebf8b не нарушен — рост осознанный.
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
         assert.ok(
-          bytes <= 62_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 62000`,
+          bytes <= 66_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 66000`,
         );
       } finally {
         await handle.close();

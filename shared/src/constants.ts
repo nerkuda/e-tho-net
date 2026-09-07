@@ -214,6 +214,15 @@ export const MCP_DEFAULTS = {
 } as const satisfies Record<string, number>;
 
 /**
+ * Hard ceiling on the number of thoughts a single `etn.thoughts.write` batch
+ * may contain (task 053751b5, 0.7.2). The check runs BEFORE the transaction;
+ * overshoot → `VALIDATION_ERROR` with `details.limit` and `details.actual`.
+ * Cap is small on purpose: a batch is one write-budget slot, one activity_log
+ * row, one real-time batch — call it once per coherent piece of knowledge.
+ */
+export const MCP_MAX_THOUGHTS_PER_WRITE = 50;
+
+/**
  * Hard cap (in characters) on the serialised property-values block the server
  * includes in MCP selection responses (`etn.thoughts.get`, `subgraph`, network
  * structure sections…). Requirement 045d5e8c (task 940a499d): a card whose

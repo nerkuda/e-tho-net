@@ -28,6 +28,30 @@ import {
 } from './mcp-helpers.js';
 
 // Test user for authorship columns (task 5ef8b5bb)
+
+/**
+ * Strip annotation fields the MCP SDK's `ToolAnnotationsSchema` does NOT
+ * round-trip through the wire. Used by the canonical-registry test
+ * (задача 053751b5, 0.7.2) so server-only fields like `deprecated_since`
+ * don't trip the deepEqual — they live in the canonical registry for the
+ * server's own tracking but don't make it back to the client.
+ */
+function filterToSdkAnnotations(
+  ann: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (ann === undefined) return {};
+  const out: Record<string, unknown> = {};
+  for (const key of [
+    'title',
+    'readOnlyHint',
+    'destructiveHint',
+    'idempotentHint',
+    'openWorldHint',
+  ]) {
+    if (key in ann) out[key] = ann[key];
+  }
+  return out;
+}
 const USER = 'test-user';
 
 describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
@@ -261,9 +285,17 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         for (const name of MCP_TOOL_NAMES) {
           const tool = byName.get(name);
           assert.ok(tool, `tools/list must contain ${name}`);
+          // The MCP SDK's `ToolAnnotationsSchema` strips unknown fields, so
+          // `deprecated_since` (задача 053751b5) does NOT round-trip through
+          // the wire — it lives only in the server-side canonical registry.
+          // Filter both sides to the SDK-known keys before deepEqual.
+          const wire = filterToSdkAnnotations(tool.annotations);
+          const canon = filterToSdkAnnotations(
+            MCP_TOOL_ANNOTATIONS[name] as Record<string, unknown> | undefined,
+          );
           assert.deepEqual(
-            tool.annotations ?? {},
-            MCP_TOOL_ANNOTATIONS[name] ?? {},
+            wire,
+            canon,
             `annotations for ${name} must match the canonical registry`,
           );
         }
@@ -324,10 +356,16 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         //   * `etn.instructions` (readOnlyHint) — +1 readOnly;
         //   * `etn.networks.write` (idempotentHint) — +1 idempotent;
         //   * `etn.networks.delete` (destructiveHint) — +1 destructive.
-        assert.equal(annotated, 56);
+        // Task 053751b5 / 0.7.2 добавляет `etn.thoughts.write` (idempotentHint)
+        // — +1 annotated, +1 idempotent. 4 из 7 поглощённых (`etn.thoughts.create`,
+        // `update`, `links.create`, `comments.upsert`) ранее были без записи
+        // в `MCP_TOOL_ANNOTATIONS` — теперь у всех семёрки есть пометка
+        // `deprecated_since: '0.7.2'`, поэтому canonical registry учитывает
+        // их наравне с остальными.
+        assert.equal(annotated, 61);
         assert.equal(hintReadOnly, 32);
         assert.equal(hintDestructive, 12);
-        assert.equal(hintIdempotent, 10);
+        assert.equal(hintIdempotent, 11);
       } finally {
         await handle.close();
       }

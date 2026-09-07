@@ -29,6 +29,57 @@
   в ответе `etn.trash.purge` при непустом `skipped`.
 - **Константа `MCP_INCLUDE_PROPERTIES_MAX_CHARS = 32768`** в `@etn/shared`
   (потолок блока свойств в MCP-выборках, требование 045d5e8c).
+- **`etn.thoughts.write` — батч-запись мыслей и связей.** Один вызов
+  создаёт/обновляет до 50 мыслей с постоянными и хронологическими
+  комментариями, свойствами (включая имена по реестру сети), связями
+  (включая свойства и комментарии на связи) и вложениями — одной
+  транзакцией, одной записью бюджета и одной строкой `audit_log`.
+  Локальные `ref` и `target_ref` позволяют собрать связный фрагмент
+  графа за один вызов без round-trip'ов за id. Семантика `on_duplicate`:
+  `fail` (дефолт), `reuse`, `update`. Тип принимается по имени или по id
+  (XOR). Снят ряд поглощённых инструментов (см. таблицу ниже).
+- **Prompt `etn.how_to_write_batch`** (прогрессивное раскрытие, уровень 1)
+  — подробный сценарий батча с `ref`/`target_ref`, примерами циклов и
+  отката.
+- **`etn.thoughts.bulk_update` (задача P1-паритета 6d45ab37).** Групповые
+  операции `set_type`/`clear_type`/`set_active`/`set_inactive`/`trash`/
+  `link_parents`/`link_children`/`set_only_parents`/`unlink_parents`/
+  `unlink_children` — одна транзакция, `failures[]` для частичных
+  отказов. Без `purge`/`delete` — они остаются за
+  `etn.trash.purge` отдельным шагом.
+- **`etn.thoughts.resolve` (задача P1-паритета 6d45ab37).** Пакетное
+  чтение карточек мыслей по списку id; `missing[]` для ненайденных;
+  превью постоянного комментария, лимит `maxNodesPerSubgraph`.
+- **`etn.chronicle.query`, `etn.members.list`, `etn.attachments.update`,
+  `etn.attachments.delete` (задача P1-паритета 6d45ab37).** Паритет MCP
+  с REST по `POST /chronicle/query`, `GET /networks/{id}/members`,
+  `PATCH/DELETE /attachments`.
+- **`etn.instructions` (задача ba024a45).** Витрина инструкций агентам:
+  три режима (`{ network_id }`, `{ keywords }`, `{ instruction_id }`);
+  роль `type_roles.instructions` обязательна для непустого ответа.
+- **`etn.networks.write` / `etn.networks.delete` (задача ba024a45).**
+  Upsert-семантика для создания и настройки сетей; удаление требует
+  `confirm: true`. Права — owner/admin (как в REST).
+- **Адресация типа и свойства по имени в фильтрах MCP (задача
+  77351f03).** `etn.thoughts.query` принимает `type[]` и `property`
+  наряду с id; `etn.thoughts.search` — `type`. Резолв по реестру сети;
+  `NOT_FOUND` на неизвестное имя; `VALIDATION_ERROR` с
+  `details.candidates` при неоднозначности; XOR с id-формой.
+- **Полный текст `meta.permanent` в `etn.thoughts.get` (задача
+  77351f03).** Обрезка превентивная убрана: одна сущность — целиком,
+  без `truncated`/`chars_*`. Превью остались в выборках.
+- **`meta.link_stats` и флаги `has_properties`/`has_comment` на
+  рёбрах (задача 327be956).** Карточка мысли показывает профиль
+  связей по типам в обоих направлениях + справочник `link_types`;
+  `subgraph`/`neighbors` несут признаки наполнения рёбер. В
+  `etn.thoughts.neighbors` появилось `dir: 'both'` (записи с
+  `direction: 'in'|'out'`). В `etn.links.get` — `view: 'full'` со
+  свойствами, постоянным комментарием и превью хронологии связи.
+- **`etn.comments.edit` (задача d28abe04).** Частичная правка
+  комментария ops-ами `append`/`prepend`/`replace_section`/
+  `delete_section` одной транзакцией. Адресация по markdown-заголовкам;
+  для текста без `#` — первая непустая строка как виртуальный
+  заголовок.
 
 ### Изменено
 
@@ -38,6 +89,25 @@
   Замер `tools/list`: 54 инструмента / 57 960 байт / описания 26 611 байт →
   55 инструментов (+`etn.metrics.tools`) / 50 318 байт / описания 18 390 байт.
   Zod-схемы не урезались. Добавлен тест-гвард размера `tools/list` (52 000 байт).
+- **Миграция системной БД `networks.type_roles`** (задача ba024a45):
+  колонка `node_section_type_id` переезжает в JSON-словарь `type_roles`;
+  роль `table_of_contents` соответствует прежнему полю, новая роль
+  `instructions` используется витриной `etn.instructions`. Защита от
+  удаления типа распространяется на все роли. Миграция идемпотентна.
+- **Снятие поглощённых инструментов (задача 053751b5).** Семь пишущих
+  инструментов помечены `deprecated_since: '0.7.2'` и пропускаются при
+  регистрации; код в репозитории сохранён, чтобы вернуть их было легко
+  и чтобы клиенты могли пользоваться старыми инструментами до перехода:
+
+  | Было | Стало |
+  |---|---|
+  | `etn.thoughts.create` | `etn.thoughts.write` с одной мыслью |
+  | `etn.thoughts.update` | `etn.thoughts.write` с `thought_id` |
+  | `etn.thoughts.set_active` | `etn.thoughts.write` с `active: false` |
+  | `etn.thoughts.upsert_bundle` | `etn.thoughts.write` |
+  | `etn.links.create` | `etn.thoughts.write` через `links[]` (с `direction` и `target_id`/`target_ref`) |
+  | `etn.properties.set` | `etn.thoughts.write` через `properties` |
+  | `etn.comments.upsert` | `etn.thoughts.write` через `comment` (постоянный) / `chronicle[]` (хроника) |
 
 ## [0.7.1] — 2026-09-06
 

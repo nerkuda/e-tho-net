@@ -38,10 +38,29 @@ export interface ThoughtBundleLinkInput {
   direction: 'parent' | 'child';
   target_thought_id: string;
   type_id?: string | null;
+  /**
+   * Knowledge on the link (task 053751b5, 0.7.2): map of property key →
+   * value, applied to the freshly created link in the same transaction.
+   */
+  properties?: Record<string, PropertyValueValue>;
+  /** Permanent comment attached to the new link (create-or-update). */
+  comment?: {
+    title?: string | null;
+    body_md: string;
+  };
 }
 
 /** The bundle's permanent comment (create-or-update, like `etn.comments.upsert`). */
 export interface ThoughtBundleCommentInput {
+  title?: string | null;
+  body_md: string;
+  valid_from?: string;
+  valid_to?: string | null;
+}
+
+/** Chronicle entry appended to the bundle owner's comment log (task 053751b5,
+ *  0.7.2). Append-only — never overwrites existing entries. */
+export interface ThoughtBundleChronicleItem {
   title?: string | null;
   body_md: string;
   valid_from?: string;
@@ -59,6 +78,8 @@ export interface ThoughtBundleInput {
   thought?: ThoughtBundleThoughtInput;
   on_duplicate?: ThoughtBundleOnDuplicate;
   comment?: ThoughtBundleCommentInput;
+  /** Chronicle entries appended to the owner's comment log (task 053751b5). */
+  chronicle?: ThoughtBundleChronicleItem[];
   properties?: Record<string, PropertyValueValue>;
   links?: ThoughtBundleLinkInput[];
   attachments?: AttachmentInput[];
@@ -76,8 +97,17 @@ export interface ThoughtBundleResult {
   matched_on: ThoughtBundleMatchKind | null;
   comment?: Comment;
   comment_action?: 'created' | 'updated';
+  /** Chronicle entries appended in this bundle (task 053751b5). */
+  chronicle?: Comment[];
   properties?: Record<string, PropertyValue>;
-  links?: Link[];
+  /** Each link entry carries the knowledge attached to it inline (task
+   *  053751b5). The domain service returns the freshly created link + the
+   *  property values and/or permanent comment that were also written. */
+  links?: Array<{
+    link: Link;
+    properties?: Record<string, PropertyValue>;
+    comment?: Comment;
+  }>;
   attachments?: Attachment[];
   /**
    * "Card completeness" warnings about the resulting card (task O6). Always
