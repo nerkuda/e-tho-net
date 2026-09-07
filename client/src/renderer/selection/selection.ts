@@ -469,7 +469,10 @@ export function makeSelectionSnapshotDeps(networkId: string): SnapshotDeps {
     try {
       const defs = await etn.types.listTypeProperties(networkId, 'thought_type', thought.type_id);
       const map = new Map<string, string>();
-      for (const def of defs) map.set(def.id, def.key);
+      // Ключ — реестровый id свойства (`property_id`), а не id строки привязки:
+      // у легаси-привязок они разошлись (баг 7d094c26), и сопоставление по
+      // `def.id` теряло значения при переносе/показе свойств.
+      for (const def of defs) map.set(def.property_id, def.key);
       propertyKeyCache.set(thought.type_id, JSON.stringify(Object.fromEntries(map)));
       return map;
     } catch {

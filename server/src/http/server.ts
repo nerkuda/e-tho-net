@@ -249,17 +249,15 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // --- Route plugins (tasks B12+) ------------------------------------------
   await app.register(meRoutes, { prefix: '/api/v1' });
   await app.register(usersRoutes, { prefix: '/api/v1' });
-  // NetworkService: directory + data.db + HOME seeding (task C10).
-  await app.register(
-    createNetworksRoutes(new NetworkServiceImpl(systemDb, config.dataDir, logger)),
-    { prefix: '/api/v1' },
-  );
+  // NetworkService: directory + data.db + HOME seeding (task C10). One
+  // instance is shared between the regular routes, the admin routes and the
+  // MCP facade (task ba024a45 / 0.7.2) so an agent and a human act through
+  // the same code path.
+  const networkService = new NetworkServiceImpl(systemDb, config.dataDir, logger);
+  await app.register(createNetworksRoutes(networkService), { prefix: '/api/v1' });
   await app.register(auditRoutes, { prefix: '/api/v1' });
   // Admin network routes (task D7, 03-server-api.md §4.2).
-  await app.register(
-    createAdminNetworksRoutes(new NetworkServiceImpl(systemDb, config.dataDir, logger)),
-    { prefix: '/api/v1' },
-  );
+  await app.register(createAdminNetworksRoutes(networkService), { prefix: '/api/v1' });
 
   // Real-time event emission for phase-D routes (task E3): derive the actor
   // from the request auth context and publish catalogue-typed events.
@@ -365,6 +363,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
       pubsub,
       authProvider: createApiKeyAuthProvider(systemDb),
       logger,
+      networkService,
       fileLog,
     });
     await mcpHttp.register(app);

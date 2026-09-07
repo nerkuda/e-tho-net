@@ -205,6 +205,7 @@ export async function connectMcpClient(ctx: McpTestContext, key: string): Promis
     authProvider,
     auth: auth!,
     logger: createLogger('silent'),
+    networkService: new NetworkServiceImpl(ctx.sys, ctx.dataDir, createLogger('silent')),
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'etn-test-client', version: '0.0.1' });

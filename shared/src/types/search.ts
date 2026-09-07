@@ -17,8 +17,13 @@ export interface SearchRequest {
   from_thought_id?: string;
   /** Defaults to `'all'`. */
   scope?: SearchScope;
-  /** Repeatable filter by thought type. */
+  /** Repeatable filter by thought type — registry `type_id`. Взаимоисключающе
+   *  с `type` (задача d5ab1630 — именованная адресация в фильтрах MCP). */
   type_id?: string[];
+  /** Фильтр по типу мысли — имя типа. MCP-фасад резолвит в `type_id` через
+   *  реестр (case-insensitive, `name_key`); `NOT_FOUND`, `VALIDATION_ERROR` с
+   *  `details.candidates` при неоднозначности. Взаимоисключающе с `type_id`. */
+  type?: string;
   /** Filter by link type (repeatable). */
   link_type_id?: string[];
   /** Override the user's `show_inactive` preference for this request. */

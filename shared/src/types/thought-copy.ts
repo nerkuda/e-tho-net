@@ -82,6 +82,13 @@ export interface ThoughtCopyAttachment {
  */
 export interface ThoughtCopyItem {
   thought: ThoughtCopySnapshot;
+  /**
+   * Исходный id мысли в сети-источнике (server-side metadata, не
+   * сериализуется UI-клиппбордом). Используется сервером для построения
+   * `thought_id_map` и переписывания id'ов в скопированных связях. Если
+   * не задан — связи внутри одного батча не смогут разрешить ссылки.
+   */
+  source_id?: string;
   /** Permanent comment to recreate verbatim (rewritten client-side for
    *  cross-network wiki-links). `undefined` — the thought has none. */
   permanent_comment?: {
@@ -133,10 +140,17 @@ export interface ThoughtCopyLink {
  * `source_network_id` records the network the snapshot was captured on —
  * the client uses it to rewrite cross-network wiki-links before sending.
  * `parent_thought_id` is the destination cloud; the server attaches the
- * new thoughts to it with plain untyped links.
+ * new thoughts to it with plain untyped links. Pass an empty string to
+ * skip the auto-attach (the snapshot becomes a "floating" subgraph).
  */
 export interface ThoughtCopyInput {
   source_network_id: string;
+  /**
+   * Куда подвесить корневые мысли подграфа (мысли без входящей скопированной
+   * связи). Пустая строка — корневые мысли остаются без входящей связи в
+   * целевой сети; полезно для round-trip `copy_subtree`, где HOME не должен
+   * зацеплять подграф автоматически.
+   */
   parent_thought_id: string;
   thoughts: ThoughtCopyItem[];
   links: ThoughtCopyLink[];

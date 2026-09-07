@@ -76,6 +76,7 @@ import {
   FONT_UNDERLINE_BIT,
   readFont,
 } from './font-style.js';
+import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 
 // Re-export so route/MCP callers have a single import surface for read helpers
@@ -823,11 +824,19 @@ export function search(
     tokenize(w.replace(/\*/g, ' ')),
   );
 
+  // Резолв имени типа в id (задача d5ab1630 «Типы и свойства адресуются
+  // именами во всех фильтрах MCP»). MCP-фасад тоже резолвит; здесь — для
+  // прямых вызовов из REST. Идемпотентно: если `type` не задан — никакой
+  // работы, и `type_id` используется как есть.
+  const resolvedTypeId: string | undefined =
+    request.type !== undefined ? resolveThoughtTypeIdByName(ndb, request.type) : undefined;
+  const typeIds = resolvedTypeId !== undefined ? [resolvedTypeId] : request.type_id;
+
   const filters: SearchFilters = {
     showInactive: request.show_inactive ?? showInactiveDefault,
     trashed: request.trashed === true,
     // L21: a selected parent type matches its whole subtree (OR semantics).
-    typeIds: request.type_id ? expandTypeIdsToSubtree(ndb, 'thought_types', request.type_id) : null,
+    typeIds: typeIds ? expandTypeIdsToSubtree(ndb, 'thought_types', typeIds) : null,
     linkTypeIds: request.link_type_id
       ? expandTypeIdsToSubtree(ndb, 'link_types', request.link_type_id)
       : null,

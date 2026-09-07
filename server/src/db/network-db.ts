@@ -35,6 +35,7 @@ import type { Logger } from '../logger.js';
 import { networkDbPath, networkDir, networkMigrationsDir, systemDbPath } from '../paths.js';
 import { runMigrations } from './migrator.js';
 import { setupLayerContext } from './layer-chain.js';
+import { propertyValueId } from './property-value-id.js';
 
 /**
  * Process-wide registry of opened network databases, keyed by
@@ -48,6 +49,24 @@ import { setupLayerContext } from './layer-chain.js';
  * for a file-based network directly outside of that helper.
  */
 const registry = new Map<string, NetworkDb>();
+
+/**
+ * Networks whose `object_locks` table has already been wiped on the first open
+ * of the current process (задача 2031df5e, требование 9ac48831 «сброс захватов
+ * — старт»).
+ *
+ * `object_locks` — это физическая (не ветвимая) таблица сети; чистка должна
+ * случаться ровно один раз за процесс на сеть, а не на пару
+ * `(networkId, layerId)`. Иначе открытие новой (сетевой, послойной) пары
+ * стирает захваты, поставленные через базовый слой — ломает идемпотентность
+ * `etn.locks.acquire` (баг мысли `06764ca2-…`): пользователь ставит захват на
+ * базе, переключается на новый слой через `etn.layers.select`, следующий
+ * `acquire` открывает `(network, newLayer)` впервые и уничтожает свой же
+ * захват из базы, после чего `INSERT` новой строки возвращает уже новый
+ * `lock_id`. Ловит и реальный сценарий: тот же эффект даёт WS-гейтвей,
+ * открывающий соединение на `conn.layerId` напрямую для visibility-check.
+ */
+const firstOpenedNetworks = new Set<string>();
 
 /** Registry key of a (network, layer) pair. */
 function registryKey(networkId: string, layerId: string): string {
@@ -180,6 +199,13 @@ export interface MigrationHelpersContext {
  * task 38ba3498 / migration 033. Returns the empty string when the helper
  * context is not provided (tests / in-memory DBs without `_system.db`); the
  * migration interprets that as "fall back to a sentinel".
+ * `etn_pv_id(owner_type, owner_id, property_id)` computes the deterministic
+ * `property_values` id from the natural key (bug dc119240, migration 036) —
+ * the SAME TypeScript code the domain write path uses
+ * (db/property-value-id.ts), so the migration and runtime can never disagree
+ * on an id. Registered WITH the `deterministic` flag: the function is pure,
+ * and unlike `gen_uuid` folding it into a constant per statement is exactly
+ * the desired semantics.
  * Both must exist on the connection before `runMigrations` executes. Exported
  * so tests that apply migrations to their own connections can register the
  * helpers the same way production code does.
@@ -197,6 +223,14 @@ export function registerMigrationHelpers(
     typeof value === 'string' ? value.toLowerCase() : value,
   );
   db.function('etn_first_user_id', () => firstUserId);
+  db.function(
+    'etn_pv_id',
+    { deterministic: true },
+    (ownerType: unknown, ownerId: unknown, propertyId: unknown) =>
+      typeof ownerType === 'string' && typeof ownerId === 'string' && typeof propertyId === 'string'
+        ? propertyValueId(ownerType, ownerId, propertyId)
+        : null,
+  );
 }
 
 /**
@@ -274,8 +308,12 @@ export function openNetworkDb(
   // сервера (задача 2031df5e, требование 9ac48831 «сброс захватов — старт»).
   // Миграция 034 уже создала таблицу; таблица пуста при первом открытии
   // свежей БД, но после крэша в файле могут остаться строки — удаляем их
-  // один раз при первом открытии сети в текущем процессе.
-  db.prepare('DELETE FROM object_locks WHERE network_id = ?').run(networkId);
+  // один раз за процесс на сеть (`firstOpenedNetworks` фиксирует факт
+  // чистки; см. пояснение у самого Set).
+  if (!firstOpenedNetworks.has(networkId)) {
+    firstOpenedNetworks.add(networkId);
+    db.prepare('DELETE FROM object_locks WHERE network_id = ?').run(networkId);
+  }
 
   let ndb: NetworkDb;
   try {

@@ -78,8 +78,8 @@ describe(
         assert.equal(result.properties?.year?.value, 1965);
         assert.equal(result.links?.length, 1);
         // direction: 'parent' — HOME (target) sources a link to the bundle thought.
-        assert.equal(result.links?.[0]?.source_id, home);
-        assert.equal(result.links?.[0]?.target_id, result.thought.id);
+        assert.equal(result.links?.[0]?.link.source_id, home);
+        assert.equal(result.links?.[0]?.link.target_id, result.thought.id);
         assert.equal(result.attachments?.length, 1);
 
         const counts = ndb

@@ -290,6 +290,46 @@ export interface FocusNeighbor {
    * of the row-major list, §11-settings-and-state.md §3.2).
    */
   manual_position: number | null;
+  /**
+   * 0.7.2 (requirement 8ab42ea8) — `true`, когда у связи `link_id` есть
+   * хотя бы одно заполненное значение свойства. `false`, если нет ни
+   * одного. REST не выставляет эти флаги; MCP `etn.thoughts.neighbors`
+   * выставляет всегда (по умолчанию `false`).
+   */
+  has_properties?: boolean;
+  /**
+   * 0.7.2 (requirement 8ab42ea8) — `true`, когда у связи `link_id` есть
+   * постоянный или хотя бы один хронологический комментарий. REST не
+   * выставляет; MCP `etn.thoughts.neighbors` выставляет всегда.
+   */
+  has_comment?: boolean;
+  /**
+   * 0.7.2 — направление ребра от точки зрения фокуса. `"in"` — ребро
+   * входит в фокус (сосед является `source`); `"out"` — ребро выходит из
+   * фокуса (сосед является `target`). Присутствует только когда MCP-фасад
+   * отдаёт оба направления одним вызовом (`etn.thoughts.neighbors` с
+   * `dir: "both"`). Для `parents` всегда `"in"`, для `children` всегда
+   * `"out"`, для `siblings` поле опускается (нет «направления»).
+   */
+  direction?: 'in' | 'out';
+}
+
+/**
+ * 0.7.2 — ребро подграфа в ответе `etn.thoughts.subgraph`. Совпадает с
+ * минимальной формой, которую возвращает domain `subgraph()` (task N6),
+ * плюс два булевых признака наполнения связи (requirement 8ab42ea8).
+ * REST-чтение подграфа (когда появится) и старые клиенты эти поля не
+ * получают — они опциональные и приходят только из MCP-фасада.
+ */
+export interface SubgraphEdge {
+  id: string;
+  source_id: string;
+  target_id: string;
+  type_id: string | null;
+  /** 0.7.2 — у связи есть хотя бы одно заполненное значение свойства. */
+  has_properties?: boolean;
+  /** 0.7.2 — у связи есть постоянный или хронологический комментарий. */
+  has_comment?: boolean;
 }
 
 /**
@@ -334,6 +374,49 @@ export interface FocusResponse {
   };
 }
 
+/**
+ * One row of `etn.thoughts.get.meta.link_stats` (0.7.2) — link counts for a
+ * single link type in one direction. `direction: "in"` — the link points AT
+ * this thought (`target_id = thoughtId`); `direction: "out"` — the link
+ * originates FROM this thought (`source_id = thoughtId`). Counted over active
+ * links only. `link_type_id` is `null` for the untyped-edges group.
+ */
+export interface LinkStatEntry {
+  /** Registry link type id, or `null` for the untyped-edges group. */
+  link_type_id: string | null;
+  /** `"in"` — link points at the thought; `"out"` — link originates from it. */
+  direction: 'in' | 'out';
+  /** Active-link count for `(link_type_id, direction)`. */
+  count: number;
+}
+
+/**
+ * The `link_stats` block of `etn.thoughts.get.meta` (0.7.2): the per-direction
+ * counters keyed by link type, paired with the catalogue of every link type
+ * actually referenced. Lets an agent read the influence profile of a thought
+ * in one MCP call without iterating `etn.thoughts.neighbors`.
+ */
+export interface LinkStats {
+  /** Counters grouped by link type and direction. */
+  stats: LinkStatEntry[];
+  /** Reference table of link types referenced by `stats` — name_forward,
+   *  name_reverse and the AI-facing description so the agent knows what each
+   *  counter means. Entries with `link_type_id: null` are absent (untyped). */
+  link_types: Record<string, LinkStatsLinkTypeRef>;
+}
+
+/** Compact reference of a link type, used as the value shape of
+ *  {@link LinkStats.link_types}. Re-declared here (instead of importing from
+ *  `./mcp.js`) to avoid a runtime circular import — `mcp.ts` already pulls
+ *  thought types from `./thought.js`, so a back-reference would touch the
+ *  cycle on the runtime side. The shape matches `LinkTypeRef` exactly. */
+export interface LinkStatsLinkTypeRef {
+  id: string;
+  name_forward: string;
+  name_reverse: string;
+  description: string | null;
+}
+
 /** «Сигналы полноты» мысли для MCP-чтения (task N2, docs/05-mcp-server.md
  * §3): счётчики соседних сущностей и превью постоянного комментария. */
 export interface ThoughtMeta {
@@ -358,6 +441,12 @@ export interface ThoughtMeta {
    * `null`, когда постоянного комментария нет.
    */
   permanent: PermanentCommentPreview | null;
+  /**
+   * Профиль влияния мысли (0.7.2): счётчики активных связей по
+   * `(link_type_id, direction)` + справочник `link_types`. Отвечает на
+   * «от чего зависит / на что влияет» одним вызовом, без обхода соседей.
+   */
+  link_stats: LinkStats;
 }
 
 /** Превью постоянного комментария (task N2). */
@@ -376,4 +465,145 @@ export interface PermanentCommentPreview {
   valid_from: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Полный (без обрезки) постоянный комментарий — форма, которую MCP-фасад
+ * `etn.thoughts.get` возвращает в `meta.permanent` (задача 3ea09a54
+ * «Условная обрезка текстов в ответах MCP»): единственный случай, когда
+ * постоянный комментарий мысли отдаётся целиком без метаданных `chars_*`/
+ * `truncated`. В остальных местах (subgraph, structure, списки) —
+ * {@link PermanentCommentPreview} по требованию «выборка сущностей →
+ * превью».
+ */
+export interface PermanentCommentFull {
+  /** Id комментария. */
+  id: string;
+  /** Полный markdown-текст без обрезки. */
+  body_md: string;
+  /** Для permanent совпадает с `created_at` (02-data-model.md §3.8). */
+  valid_from: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Сигналы полноты мысли с полнотекстовым постоянным комментарием
+ * (задача 3ea09a54) — форма `meta` для MCP-фасада `etn.thoughts.get`,
+ * запрошенного через `fullPermanent: true`. В остальных местах
+ * {@link ThoughtMeta.permanent} остаётся в preview-форме.
+ */
+export interface ThoughtMetaFull {
+  parents_count: number;
+  children_count: number;
+  attachments_count: number;
+  chrono_count: number;
+  /**
+   * Сколько раз мысль используется как `thought_ref`-значение свойств
+   * других мыслей (формальные связи, «Использование» в редакторе —
+   * 03-server-api.md §9.1).
+   */
+  usage_count: number;
+  /** Полный текст постоянного комментария; `null`, когда его нет. */
+  permanent: PermanentCommentFull | null;
+  /**
+   * Профиль влияния мысли (0.7.2) — то же, что и {@link ThoughtMeta.link_stats}:
+   * счётчики активных связей по `(link_type_id, direction)` + справочник
+   * `link_types`. Поле общее у обеих проекций meta — это семантика, а не
+   * оформление.
+   */
+  link_stats: LinkStats;
+}
+
+/**
+ * Полнотекстовый постоянный комментарий мысли — форма, которую возвращает
+ * `etn.thoughts.resolve` в `comment_preview` (задача 6d45ab37, P1-паритет MCP↔REST):
+ * единственный случай пакетного чтения, когда постоянный комментарий мысли
+ * отдаётся целиком без метаданных `chars_*`/`truncated`. В отличие от
+ * `etn.thoughts.get.meta.permanent` (задача 3ea09a54), здесь форма одна —
+ * `resolve` не выбирает между preview/full: единственный заход агента по
+ * списку id должен вернуть полный текст, чтобы агенту не приходилось
+ * отдельно ходить в `etn.comments.get` для каждой карточки.
+ */
+export interface PermanentCommentFullText {
+  /** Id комментария. */
+  id: string;
+  /** Полный markdown-текст без обрезки. */
+  body_md: string;
+  /** Для permanent совпадает с `created_at` (02-data-model.md §3.8). */
+  valid_from: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Превью постоянного комментария в форме `etn.thoughts.resolve` — то же, что
+ * {@link PermanentCommentPreview}, но без `chars_*`/`truncated`: либо
+ * полный текст (см. {@link PermanentCommentFullText}), либо `null`.
+ *
+ * Формальное наличие двух близких типов — следствие задачи 3ea09a54
+ * «Условная обрезка текстов в ответах MCP»: preview-форма для выборок
+ * сущностей, full-форма для одиночных точек входа. `resolve` ближе ко
+ * второму — поэтому здесь `body_md` либо полный, либо отсутствует.
+ */
+export type ResolveCommentPreview = PermanentCommentFullText | null;
+
+/**
+ * «Карточка мысли» — единица ответа `etn.thoughts.resolve` (задача 6d45ab37,
+ * P1-паритет MCP↔REST, спека 85b94925). Пакетное чтение по списку id
+ * возвращает массив таких карточек с теми же полями, что и `etn.thoughts.get`,
+ * плюс полнотекстовый постоянный комментарий в `comment_preview`.
+ *
+ * Семантически совпадает с плоской формой `etn.thoughts.get`: id/title/
+ * synonyms/type/properties/meta/comment_preview, без обёрток. Тип, свойства
+ * и meta берутся в той же форме, что и у `get` (`view` влияет только на
+ * поля самой мысли — id/title/synonyms/... — и `type`, но не на `properties`
+ * и `meta`).
+ */
+export interface ThoughtCard {
+  /** Все поля {@link Thought} в выбранной проекции (`compact`/`full`). */
+  id: string;
+  title: string;
+  type_id: string | null;
+  icon: string | null;
+  icon_kind: IconKind;
+  icon_attachment_id: string | null;
+  active: boolean;
+  marked_for_deletion: boolean;
+  fg_color: string | null;
+  bg_color: string | null;
+  font_bold: boolean | null;
+  font_italic: boolean | null;
+  font_underline: boolean | null;
+  font_strike: boolean | null;
+  synonyms: string[];
+  version: number;
+  /** ISO-8601 UTC. */
+  created_at: string;
+  updated_at: string;
+  /**
+   * Тип мысли в каталожной форме (см. {@link ThoughtTypeRef} в `./mcp.ts`):
+   * id, name, AI-facing description. `null`, когда тип не назначен.
+   */
+  type: import('./mcp.js').ThoughtTypeRef | null;
+  /** Свойства мысли в форме `etn.thoughts.get` (резолвнутые `thought_ref`,
+   *  пометка `outside_type` для значений вне L21-цепочки). */
+  properties: import('./thought-type.js').ResolvedPropertyValue[];
+  /** «Сигналы полноты» (см. {@link ThoughtMeta}). */
+  meta: ThoughtMeta;
+  /** Полнотекстовый постоянный комментарий либо `null`. */
+  comment_preview: ResolveCommentPreview;
+}
+
+/**
+ * Результат `etn.thoughts.resolve` (задача 6d45ab37, спека 85b94925):
+ * карточки найденных мыслей в порядке первого появления в запросе
+ * (дубли в `thought_ids` схлопываются) плюс список id, которых в сети
+ * нет. `missing[]` сохраняет порядок первого появления в запросе.
+ */
+export interface ResolveResult {
+  /** Найденные мысли; порядок — по первому появлению id в `thought_ids`. */
+  items: ThoughtCard[];
+  /** Не найденные в сети id (порядок — по первому появлению в запросе). */
+  missing: string[];
 }

@@ -56,6 +56,25 @@ export interface LinkCreateInput {
   style?: LinkStyle | null;
   width?: number | null;
   active?: boolean;
+  /**
+   * Map of property key → value to apply to the freshly created link
+   * (task 053751b5, 0.7.2). Each key is resolved against the network property
+   * registry by name; missing key → NOT_FOUND; property not attached to the
+   * link-type chain → VALIDATION_ERROR. Ignored when the link has no link
+   * type — the property still has to be attached to the link-type chain
+   * (typed or untyped alike). Applied inside the same transaction as the
+   * link creation so a property write that fails rolls back the link.
+   */
+  properties?: Record<string, import('./thought-type.js').PropertyValueValue>;
+  /**
+   * Permanent comment (create-or-update) attached to the new link. Mirrors
+   * the permanent comment side of `etn.thoughts.upsert_bundle`. Applied
+   * inside the same transaction as the link creation.
+   */
+  comment?: {
+    title?: string | null;
+    body_md: string;
+  };
 }
 
 /** Input accepted by `PATCH /links/{id}` (03-server-api.md §7.1). Also the

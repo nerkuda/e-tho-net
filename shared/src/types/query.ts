@@ -19,8 +19,15 @@ export type PropertyQueryOperator = 'eq' | 'ne' | 'contains' | 'gt' | 'gte' | 'l
 /** Одно условие по значению свойства мысли (AND-группа). */
 export interface PropertyQueryCondition {
   /** Registry `property_id` (0.6.5 — справочник `properties`). Один и тот же
-   *  id адресует свойство на любых типах владельца, у которых оно подключено. */
-  property_id: string;
+   *  id адресует свойство на любых типах владельца, у которых оно подключено.
+   *  Взаимоисключающе с `property` (задача d5ab1630 — именованная адресация
+   *  в фильтрах MCP). */
+  property_id?: string;
+  /** Имя свойства из реестра (0.6.5). MCP-фасад резолвит в `property_id` —
+   *  `NOT_FOUND` если такого имени нет, `VALIDATION_ERROR` с
+   *  `details.candidates` при неоднозначности (теоретически невозможно — ключ
+   *  уникален в пределах сети). Взаимоисключающе с `property_id`. */
+  property?: string;
   operator: PropertyQueryOperator;
   /**
    * Значение для сравнения. Колонка хранения (`value_text` / `value_date` /
@@ -43,8 +50,15 @@ export interface ThoughtQueryRequest {
   in_subtree_of?: string;
   /** Максимальная глубина обхода (по умолчанию TRAVERSAL_DEFAULTS.MAX_DEPTH). */
   max_depth?: number;
-  /** Фильтр по типам мыслей. */
+  /** Фильтр по типам мыслей — registry `type_id`. Взаимоисключающе с `type`
+   *  (задача d5ab1630 — именованная адресация в фильтрах MCP). */
   type_id?: string[];
+  /** Фильтр по типам мыслей — имена типов. MCP-фасад резолвит каждый элемент
+   *  в `type_id` через реестр (case-insensitive, `name_key`); `NOT_FOUND`,
+   *  `VALIDATION_ERROR` с `details.candidates` при неоднозначности. Семанически
+   *  эквивалентно `type_id` (запрос по-прежнему захватывает поддерево
+   *  адресованного типа через L21). Взаимоисключающе с `type_id`. */
+  type?: string[];
   /** Актуальность (по умолчанию `'true'` — только активные). */
   active?: ThoughtQueryActive;
   /**

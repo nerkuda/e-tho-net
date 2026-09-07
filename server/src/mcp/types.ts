@@ -12,6 +12,7 @@ import type { SystemDb } from '../db/system-db.js';
 import type { FileLog } from '../log/file-log.js';
 import type { Logger } from '../logger.js';
 import type { PubSub } from '../realtime/pubsub.js';
+import type { NetworkService } from '../domain/network-service.js';
 
 /**
  * Authenticated principal of one MCP session: the API-key owner and the key's
@@ -55,6 +56,13 @@ export interface McpBaseDeps {
   authProvider: McpAuthProvider;
   /** Application logger. */
   logger: Logger;
+  /**
+   * Network lifecycle service (task ba024a45 / 0.7.2): backing
+   * `etn.networks.write` (create / patch) and `etn.networks.delete`. Same
+   * instance the REST routes use, so the agent acts through the same code
+   * path as a human client.
+   */
+  networkService: NetworkService;
   /**
    * File journal for diagnostics (task 1dd33e23 §3): when present, every tool
    * call's name + duration is journaled (INFO while logging is enabled).

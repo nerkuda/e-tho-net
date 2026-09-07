@@ -183,6 +183,81 @@ describe(
       }
     });
 
+    /**
+     * Регресс на мысль `06764ca2-416d-488a-a0dc-305fe94b34b0`: открытие
+     * соединения с новой (networkId, layerId) парой в реестре раньше запускало
+     * `DELETE FROM object_locks WHERE network_id = ?` безусловно, что стирало
+     * захват, поставленный через базовый слой. Сценарий:
+     *
+     *   1. acquire на базе — захват A;
+     *   2. layers.create + layers.select — следующий acquire открывает
+     *      (network, newLayer) впервые;
+     *   3. acquire той же сущности — должен вернуть тот же `lock_id` (A),
+     *      потому что `object_locks` не ветвится и захват один на сеть.
+     *
+     * До фикса пункт 3 возвращал другой `lock_id` (B), а `release(A)`
+     * давал `LOCK_NOT_FOUND`. Эффект тот же, что у WS-гейта, открывающего
+     * соединение на `conn.layerId` напрямую для visibility-check — поэтому
+     * регресс лежит именно в MCP-тестах на блокировки.
+     */
+    it('acquire остаётся идемпотентным после layers.select (новый слой не стирает чужие захваты)', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const tId = await createThought(handle, ctx.networkId, 'X');
+
+          // 1. Захват на базовом слое.
+          const first = toolJson(
+            await handle.client.callTool({
+              name: 'etn.locks.acquire',
+              arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
+            }),
+          ) as LockRow;
+
+          // 2. Создаём новый слой и переключаем сессию на него.
+          const layer = toolJson(
+            await handle.client.callTool({
+              name: 'etn.layers.create',
+              arguments: { network_id: ctx.networkId, title: 'Branch' },
+            }),
+          ) as { id: string };
+          const select = await handle.client.callTool({
+            name: 'etn.layers.select',
+            arguments: { network_id: ctx.networkId, layer_id: layer.id },
+          });
+          assert.equal(select.isError, undefined, toolText(select));
+
+          // 3. Повторный acquire на той же сущности — должен продлить A,
+          //    а не стереть A и вставить B.
+          const second = toolJson(
+            await handle.client.callTool({
+              name: 'etn.locks.acquire',
+              arguments: { network_id: ctx.networkId, entity_type: 'thought', entity_id: tId },
+            }),
+          ) as LockRow;
+          assert.equal(
+            second.id,
+            first.id,
+            `после layers.select тот же (user, entity) должен продлить lock_id, ` +
+              `а не получить новый (был ${first.id}, стал ${second.id})`,
+          );
+
+          // release первого id теперь освобождает тот же ряд — а до фикса
+          // отдавал LOCK_NOT_FOUND.
+          const rel = await handle.client.callTool({
+            name: 'etn.locks.release',
+            arguments: { network_id: ctx.networkId, lock_id: first.id },
+          });
+          assert.equal(rel.isError, undefined, toolText(rel));
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
     it('acquire чужого объекта → LOCKED с holder; update второго агента тоже → LOCKED', async () => {
       const ctx = await buildMcpContext();
       const alice = await connectMcpClient(ctx, ctx.adminKey);

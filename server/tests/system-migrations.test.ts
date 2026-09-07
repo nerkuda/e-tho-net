@@ -26,6 +26,8 @@ const EXPECTED_FILES = [
   '009_event_log.sql',
   '010_api_keys_max_writes_per_minute.sql',
   '011_networks_self_description.sql',
+  '012_mcp_tool_call_metrics.sql',
+  '013_networks_type_roles.sql',
 ];
 
 /** All `_system.db` tables that must exist after migration. */
@@ -41,6 +43,7 @@ const EXPECTED_TABLES = [
   'settings',
   'event_log',
   'network_seq',
+  'mcp_tool_call_metrics',
 ];
 
 /** True when the `better-sqlite3` native binding loads. */

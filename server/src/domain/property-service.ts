@@ -31,6 +31,7 @@ import {
   EtnError,
   PROPERTY_VALUE_TYPES,
   TYPE_OWNER_TYPES,
+  typeNameKey,
   type EffectiveTypeProperty,
   type NetworkProperty,
   type NetworkPropertyInput,
@@ -52,6 +53,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
+import { propertyValueId } from '../db/property-value-id.js';
 import { rowToThoughtRef } from './thought-service.js';
 import {
   expandTypeIdsToSubtree,
@@ -255,6 +257,36 @@ export function getNetworkPropertyByName(ndb: NetworkDb, name: string): NetworkP
     .prepare('SELECT * FROM properties_v WHERE name_key = type_name_key(?)')
     .get(name) as PropertyRow | undefined;
   return row ? rowToNetworkProperty(row) : null;
+}
+
+/**
+ * Resolve a registry property id by its display name, case-insensitively
+ * (задача d5ab1630 «Типы и свойства адресуются именами во всех фильтрах
+ * MCP»). Throws `NOT_FOUND` when no property matches. The `VALIDATION_ERROR`
+ * `candidates` arm is reserved for theoretical name ambiguity; uniqueness of
+ * `name_key` per the `idx_properties_name_key` index keeps it unreachable in
+ * practice — but the helper still walks the result so a future migration
+ * that loosens uniqueness won't silently fall back to the first row.
+ */
+export function resolvePropertyIdByName(ndb: NetworkDb, name: string): string {
+  const key = typeNameKey(name);
+  const rows = ndb
+    .prepare('SELECT id, name FROM properties_v WHERE name_key = ?')
+    .all(key) as Array<{ id: string; name: string }>;
+  if (rows.length === 0) {
+    throw new EtnError('NOT_FOUND', `property "${name}" not found`, {
+      field: 'property',
+      name,
+    });
+  }
+  if (rows.length > 1) {
+    throw new EtnError('VALIDATION_ERROR', `property name "${name}" is ambiguous`, {
+      field: 'property',
+      name,
+      candidates: rows.map((r) => ({ id: r.id, name: r.name })),
+    });
+  }
+  return rows[0]!.id;
 }
 
 /**
@@ -1786,6 +1818,53 @@ export function setPropertyValue(
 }
 
 /**
+ * Resolve the winning physical row of a `property_values` natural-key slot
+ * `(owner_type, owner_id, property_id)` across the connection's layer chain
+ * (13-layers.md §4.1), nearest layer first.
+ *
+ * Unlike `thoughts`/`links`, this table's logical identity is the natural
+ * key, not the surrogate `id` — the generic `*_v` views (layer-chain.ts
+ * `ensureLayerViews`) dedup PER `id`. Two independent first-writes for the
+ * same natural key made from layer contexts that cannot see each other (e.g.
+ * a child layer, then the base — the base never sees a descendant's rows)
+ * legitimately mint two different ids for it. Once a later context's chain
+ * includes BOTH origins (e.g. back in the child layer, whose chain is
+ * `[child, base]`), `property_values_v` reports both ids as separate
+ * "winners" for the same natural key, and a bare `LIMIT 1` over it picks one
+ * arbitrarily — silently updating the wrong row, or crashing with a UNIQUE
+ * violation when the write path shadow-copies the wrong id into a layer that
+ * already holds the other one under a different id (bug 49d1f5e8). This
+ * picks the row from the nearest layer in the chain — the only value that
+ * should ever be "the" visible one from this context — generalising the same
+ * precedence rule the `*_v` views apply per id to the natural key instead.
+ */
+function resolveVisiblePropertyValueId(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  propertyId: string,
+): string | undefined {
+  // layers:physical-read — deliberately bypasses `property_values_v`: that
+  // view dedups per `id`, which is exactly the ambiguity this function
+  // resolves instead (per natural key, nearest layer in the chain wins). The
+  // `layer_chain` join still scopes the read to the connection's own chain —
+  // this is not an all-layers audit, just a physical table access the S3
+  // lint cannot otherwise tell apart from one (mirrors the identical
+  // technique in realtime/layer-visibility.ts, outside the linted dirs).
+  const row = ndb
+    .prepare(
+      `SELECT pv.id AS id
+       FROM property_values pv -- layers:physical-read
+       JOIN layer_chain lc ON lc.layer_id = pv.layer_id
+       WHERE pv.owner_type = ? AND pv.owner_id = ? AND pv.property_id = ? AND pv.deleted = 0
+       ORDER BY lc.depth ASC
+       LIMIT 1`,
+    )
+    .get(ownerType, ownerId, propertyId) as { id: string } | undefined;
+  return row?.id;
+}
+
+/**
  * The shared write path of {@link setPropertyValue} and
  * {@link setPropertyValueById}: connectivity check (422 when the owner's type
  * chain does not attach the property), validation, layered upsert.
@@ -1811,18 +1890,22 @@ function setPropertyValueForProperty(
   const { column, raw } = validateAndCoerce(ndb, prop, value);
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
-  const id = randomUUID();
-  // S5 (13-layers.md §5.1): a visible ancestor row for this natural key is
-  // shadowed FIRST — writing with a fresh logical id would leave both rows
-  // live in this layer's view and break the «one value per (owner, property)»
-  // invariant of §3.5.
-  const existing = ndb
-    .prepare(
-      'SELECT id FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ? LIMIT 1',
-    )
-    .get(ownerType, ownerId, prop.id) as { id: string } | undefined;
-  if (existing) {
-    materializeShadow(ndb, 'property_values', existing.id);
+  // Детерминированный id от natural key (ошибка dc119240): независимые
+  // «первые записи» одного свойства в не видящих друг друга слоях сходятся в
+  // ОДИН id, поэтому представления `*_v`, дедуплицирующие по id, видят одну
+  // строку на natural key, а не «призрака» с чужим значением.
+  const id = propertyValueId(ownerType, ownerId, prop.id);
+  // S5 (13-layers.md §5.1): the visible row for this natural key is shadowed
+  // FIRST — writing into this layer while an ancestor row stays live would
+  // break the «one value per (owner, property)» invariant of §3.5. Resolved
+  // by natural key across the layer chain (bug 49d1f5e8) — see
+  // {@link resolveVisiblePropertyValueId}. With deterministic ids the resolved
+  // id equals the freshly computed one whenever any row for the natural key
+  // exists anywhere in the chain (post-migration 036 data); the inequality
+  // guard below only covers un-migrated legacy rows with random ids.
+  const existingId = resolveVisiblePropertyValueId(ndb, ownerType, ownerId, prop.id);
+  if (existingId !== undefined && existingId !== id) {
+    materializeShadow(ndb, 'property_values', existingId);
   }
   // Upsert: write the raw value into the matching column on INSERT, and on
   // conflict reset every value_* column before copying the matching one back.
@@ -1852,11 +1935,13 @@ function setPropertyValueForProperty(
   // и вкладка «Метаданные» показывала бы чужое имя.
   touchOwner(ndb, ownerType, ownerId, actorUserId);
 
+  // Re-read by the id we just wrote/updated — the deterministic id of this
+  // natural key (both branches of `existingId ?? id` carry it post-migration).
+  // `property_values_v` dedups per id, and with deterministic ids there is
+  // exactly one visible row per natural key (bug dc119240).
   const stored = ndb
-    .prepare(
-      'SELECT * FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
-    )
-    .get(ownerType, ownerId, prop.id) as PropertyValueRow;
+    .prepare('SELECT * FROM property_values_v WHERE id = ?')
+    .get(existingId ?? id) as PropertyValueRow;
   return {
     id: stored.id,
     owner_type: ownerType,
@@ -2005,8 +2090,11 @@ function hasValue(value: PropertyValueValue | undefined): boolean {
  * Delete a stored property value addressed by property name. Outside-type
  * values are deletable — manual removal is the only action available for them
  * (02-data-model.md §3.5a) — so the property only has to exist in the
- * registry, not to be attached to the owner's type. Throws `NOT_FOUND` (404)
- * if the property is unknown or no value is stored for it.
+ * registry, not to be attached to the owner's type. Idempotent
+ * (error cefb4db0): when no value is stored for the property the call
+ * succeeds as a no-op and reports `deleted: false` — DELETE semantics, the
+ * editor's blur path may fire it against an already-empty field. Throws
+ * `NOT_FOUND` (404) only when the property itself is unknown.
  */
 export function deletePropertyValue(
   ndb: NetworkDb,
@@ -2014,7 +2102,7 @@ export function deletePropertyValue(
   ownerId: string,
   key: string,
   actorUserId: string,
-): { property_id: string } {
+): { property_id: string; deleted: boolean } {
   if (ownerType !== 'thought' && ownerType !== 'link') {
     throw new EtnError('VALIDATION_ERROR', `invalid owner_type: ${ownerType}`, {
       field: 'owner_type',
@@ -2032,23 +2120,23 @@ export function deletePropertyValue(
     // S4: в слое значение скрывается надгробием (13-layers.md §5.2), в основе —
     // прежний физический DELETE.
     if (!isBaseContext(ndb)) {
-      const rows = ndb
-        .prepare(
-          'SELECT id FROM property_values_v WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
-        )
-        .all(ownerType, ownerId, prop.id) as { id: string }[];
-      if (rows.length === 0) {
-        throw new EtnError('NOT_FOUND', `no value stored for property "${key}"`, {
-          owner_type: ownerType,
-          owner_id: ownerId,
-          key,
-        });
+      // Same natural-key ambiguity as the write path (bug 49d1f5e8): resolve
+      // ONE row — the nearest layer's own value for this natural key —
+      // instead of looping every `property_values_v` per-id "winner", which
+      // can hand back two different ids for the same natural key and crash
+      // `deleteRowLayered` with a UNIQUE violation when the farther one is
+      // shadow-tombstoned into a layer that already holds the nearer one
+      // under a different id. See {@link resolveVisiblePropertyValueId}.
+      const existingId = resolveVisiblePropertyValueId(ndb, ownerType, ownerId, prop.id);
+      if (existingId === undefined) {
+        // Nothing stored — idempotent no-op (error cefb4db0).
+        return { property_id: prop.id, deleted: false };
       }
-      for (const row of rows) deleteRowLayered(ndb, 'property_values', row.id);
+      deleteRowLayered(ndb, 'property_values', existingId);
       // Удаление значения — правка владельца: обновим авторство
       // (требование e6d4165e, приравнивание).
       touchOwner(ndb, ownerType, ownerId, actorUserId);
-      return { property_id: prop.id };
+      return { property_id: prop.id, deleted: true };
     }
     const result = ndb
       .prepare(
@@ -2056,17 +2144,14 @@ export function deletePropertyValue(
       )
       .run(ownerType, ownerId, prop.id);
     if (result.changes === 0) {
-      throw new EtnError('NOT_FOUND', `no value stored for property "${key}"`, {
-        owner_type: ownerType,
-        owner_id: ownerId,
-        key,
-      });
+      // Nothing stored — idempotent no-op (error cefb4db0).
+      return { property_id: prop.id, deleted: false };
     }
     // Удаление значения — правка владельца: обновим авторство
     // (требование e6d4165e, приравнивание).
     touchOwner(ndb, ownerType, ownerId, actorUserId);
     // Return the property_id so routes can emit `property-value.deleted`
     // without a second lookup.
-    return { property_id: prop.id };
+    return { property_id: prop.id, deleted: true };
   });
 }

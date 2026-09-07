@@ -47,6 +47,8 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { resolvePropertyIdByName } from './property-service.js';
+import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 
 /**
@@ -274,6 +276,11 @@ interface RegistryPropertyRow {
  * condition. The storage column is fixed by the property's `value_type`; the
  * supplied value's runtime type is only used to coerce it to the right SQL
  * scalar form.
+ *
+ * Conditions without a resolved `property_id` (e.g. when a caller passed
+ * `property` instead of `property_id` but the resolver has not yet run)
+ * are skipped — this matches the "no match" semantics of an unknown id and
+ * keeps {@link queryThoughts} safe under mixed-style requests.
  */
 function propertyClauses(
   ndb: NetworkDb,
@@ -282,7 +289,11 @@ function propertyClauses(
 ): Clause[] {
   if (conds.length === 0) return [];
   // One batched registry read (N conditions → 1 query).
-  const ids = [...new Set(conds.map((c) => c.property_id))];
+  const ids = [...new Set(
+    conds
+      .map((c) => c.property_id)
+      .filter((id): id is string => typeof id === 'string'),
+  )];
   const placeholders = ids.map(() => '?').join(',');
   const rows = ndb
     .prepare(
@@ -293,6 +304,7 @@ function propertyClauses(
 
   const out: Clause[] = [];
   for (const cond of conds) {
+    if (cond.property_id === undefined) continue;
     const def = byId.get(cond.property_id);
     // Unknown property_id — drop the condition (matches nothing), same
     // semantics as `structure-service` (the saved filter survives the
@@ -433,6 +445,42 @@ export function queryThoughts(
     TRAVERSAL_DEFAULTS.MAX_DEPTH,
   );
 
+  // Резолв имён в id (задача d5ab1630 «Типы и свойства адресуются именами
+  // во всех фильтрах MCP»). Вызывающий код MCP-фасада тоже резолвит — здесь
+  // мы оставляем второй проход для прямых вызовов из REST (где `type` и
+  // `property` могут прийти из сохранённых фильтров). Идемпотентно: если
+  // `type` не задан (MCP уже отрезолвил) — никакой работы.
+  const resolvedTypeIds: string[] = [];
+  if (request.type !== undefined) {
+    for (const name of request.type) {
+      resolvedTypeIds.push(resolveThoughtTypeIdByName(ndb, name));
+    }
+  }
+  const allTypeIds = [...(request.type_id ?? []), ...resolvedTypeIds];
+
+  const resolvedProperties: PropertyQueryCondition[] = [];
+  if (request.properties !== undefined) {
+    for (const cond of request.properties) {
+      if (cond.property !== undefined) {
+        if (cond.property_id !== undefined) {
+          // Взаимоисключающая пара — MCP-валидация уже отклонила бы такой
+          // запрос, но защищаемся и здесь. Если всё же пришло — игнорируем
+          // именованную форму и оставляем id (MCP-уровень выдаст 422 раньше).
+          resolvedProperties.push(cond);
+          continue;
+        }
+        const id = resolvePropertyIdByName(ndb, cond.property);
+        resolvedProperties.push({ ...cond, property_id: id });
+        continue;
+      }
+      if (cond.property_id !== undefined) {
+        resolvedProperties.push(cond);
+        continue;
+      }
+      // Без идентификации свойства — пропускаем условие (no-match).
+    }
+  }
+
   const walk = walkSubtree(ndb, request.in_subtree_of, {
     maxDepth,
     maxNodes: bounds.maxNodes,
@@ -442,7 +490,7 @@ export function queryThoughts(
   const trashed = request.trashed ?? 'false';
   const clauses: Array<Clause | null> = [
     // L21: a selected parent type matches its whole subtree (OR semantics).
-    inListClause('t.type_id', expandTypeIdsToSubtree(ndb, 'thought_types', request.type_id ?? [])),
+    inListClause('t.type_id', expandTypeIdsToSubtree(ndb, 'thought_types', allTypeIds)),
     active === 'true' ? { sql: 't.active = 1', params: [] }
       : active === 'false'
         ? { sql: 't.active = 0', params: [] }
@@ -467,8 +515,8 @@ export function queryThoughts(
       ? { sql: 't.updated_by = ?', params: [request.editor_id] }
       : null,
   ];
-  if (request.properties !== undefined) {
-    for (const c of propertyClauses(ndb, request.properties)) clauses.push(c);
+  if (resolvedProperties.length > 0) {
+    for (const c of propertyClauses(ndb, resolvedProperties)) clauses.push(c);
   }
   const { where, params } = joinClauses(clauses);
 

@@ -51,6 +51,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { propertyValueId } from '../db/property-value-id.js';
 import type { Logger } from '../logger.js';
 import { parseManifest } from './etnx-format.js';
 import { normalizeTitle } from './thought-service.js';
@@ -650,9 +651,15 @@ function insertComment(
 
 /**
  * Spread `value` across the `property_values.value_*` columns based on the
- * definition's `value_type`. Falls back to `value_text` when the runtime
+ * definition's value_type. Falls back to `value_text` when the runtime
  * value does not match the declared type — preserves data round-tripping
  * across versions even when the source type was renamed.
+ *
+ * The row id is recomputed deterministically from the RESOLVED natural key
+ * (bug dc119240): the archive's own `pv.id` was minted against the SOURCE
+ * network's owner/property ids and can differ after remapping, which would
+ * reintroduce the random-id divergence this id scheme exists to prevent.
+ * Nothing ever references a `property_values` id, so replacing it is safe.
  */
 function insertPropertyValue(
   ndb: NetworkDb,
@@ -662,6 +669,7 @@ function insertPropertyValue(
   const value: PropertyValueValue = pv.value;
   const column = columnFor(value);
   const raw = coerce(value);
+  const id = propertyValueId(pv.owner_type, resolvedOwnerId, pv.property_id);
   ndb
     .prepare(
       `INSERT INTO property_values (
@@ -679,7 +687,7 @@ function insertPropertyValue(
          updated_at = excluded.updated_at`,
     )
     .run(
-      pv.id,
+      id,
       pv.owner_type,
       resolvedOwnerId,
       pv.property_id,

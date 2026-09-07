@@ -6,6 +6,7 @@
  */
 
 import type { NetworkRole } from '../enums.js';
+import type { TypeRoles } from '../constants.js';
 
 /**
  * Free-form markdown fields curated by the owner to make a network
@@ -35,14 +36,23 @@ export interface Network extends NetworkSelfDescription {
   display_name: string;
   owner_id: string;
   /**
-   * Type id (UUID) from `thought_types` in `networks/<id>/data.db` that
-   * marks every active thought of that type as a "node section" of the
-   * network structure (task O5 §"Структура сети"). `null` means the owner
-   * has not declared a structure. The value is opaque at the system level
-   * — there is no cross-DB FK — so a stale id is tolerated but the
-   * referenced type becomes un-deletable while any network points at it.
+   * Per-network type-role dictionary (task ba024a45 / 0.7.2, ADR 46d17a91).
+   * Each entry maps a {@link KnownTypeRole} role to the id of a thought type
+   * in `networks/<id>/data.db` that fills that role. `null` means the role
+   * is unset; an absent key is treated the same as `null` at read time.
+   *
+   * The 0.7.2 contract recognises two roles:
+   *  * `table_of_contents` — the type whose active thoughts form the network's
+   *    table of contents (`etn.networks.structure` returns their rows).
+   *    Replaces the legacy `node_section_type_id` column.
+   *  * `instructions` — the type whose active thoughts are exposed as
+   *    step-by-step instructions for AI agents (`etn.instructions`).
+   *
+   * Cross-DB references — no SQL FK is possible. A stale id is tolerated but
+   * the referenced type becomes un-deletable while any network points at it
+   * (the deletion guard checks both roles).
    */
-  node_section_type_id: string | null;
+  type_roles: TypeRoles;
   created_at: string;
   updated_at: string;
 }
@@ -51,14 +61,27 @@ export interface Network extends NetworkSelfDescription {
 export interface CreateNetworkInput {
   display_name: string;
   description?: string | null;
+  /**
+   * Initial type-role dictionary. On creation `type_roles` is usually empty
+   * — the network has no thought types yet; the owner fills it later via
+   * `PATCH /networks/{id}`. Optional: omitting the field (or passing `{}`)
+   * is equivalent.
+   */
+  type_roles?: TypeRoles;
 }
 
 /**
  * Input for `PATCH /networks/{id}` (03-server-api.md §5.3, task O5).
  *
- * Markdown fields are null-clearable: pass `null` (or `''`) to wipe. The
- * `node_section_type_id` is null-clearable too; when omitted, the existing
- * value is preserved.
+ * Markdown fields are null-clearable: pass `null` (or `''`) to wipe.
+ *
+ * `type_roles` semantics (task ba024a45):
+ *  * `undefined` — the field is absent; existing roles are preserved.
+ *  * `{}` — every role is cleared (the network stops advertising structure
+ *    and instructions).
+ *  * `{ 'table_of_contents': '<id>' | null, 'instructions': '<id>' | null, … }`
+ *    — partial merge: only the listed keys change, the rest stay as-is.
+ *  * An unknown key — `VALIDATION_ERROR` (rejected at the route layer).
  */
 export interface UpdateNetworkInput {
   display_name?: string;
@@ -66,7 +89,7 @@ export interface UpdateNetworkInput {
   when_to_use?: string | null;
   conventions?: string | null;
   examples?: string | null;
-  node_section_type_id?: string | null;
+  type_roles?: TypeRoles;
 }
 
 /** Membership row (02-data-model.md §2.4). */
@@ -106,8 +129,9 @@ export interface NetworkListItem {
   /** Routing hints: when to reach for this network. Always returned. */
   when_to_use: string | null;
   /**
-   * True when the network declares a node-section type — i.e. it has a
-   * machine-readable structure (use `etn.networks.structure` to read it).
+   * True when the network declares a `table_of_contents` role — i.e. it has
+   * a machine-readable structure (use `etn.networks.structure` to read it).
+   * Derived: `Boolean(type_roles.table_of_contents)`.
    */
   has_structure: boolean;
 }

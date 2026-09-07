@@ -693,5 +693,79 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('DELETE a property value with nothing stored is an idempotent 204 (error cefb4db0)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const type = (
+          await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types`,
+            headers: h,
+            payload: { name: 'Событие' },
+          })
+        ).json().data as { id: string };
+        const prop = await createRegistryProperty(ctx, {
+          name: 'плановый срок',
+          value_type: 'date',
+        });
+        await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
+          headers: h,
+          payload: { property_id: prop.id, required: false },
+        });
+        const thought = await createChild(ctx, 'Пустая дата');
+        await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thought}`,
+          headers: h,
+          payload: { type_id: type.id },
+        });
+
+        // Nothing was ever stored for the property — the editor's blur path
+        // fires this when the user tabs through an empty field. DELETE is
+        // idempotent: success without effect, not 404.
+        const noValueRes = await ctx.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thought}/properties/${prop.name}`,
+          headers: h,
+        });
+        assert.equal(noValueRes.statusCode, 204);
+
+        // Store a value, delete it, then delete again — still 204 both times.
+        const putRes = await ctx.app.inject({
+          method: 'PUT',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thought}/properties/${prop.name}`,
+          headers: h,
+          payload: { value: '2026-09-06' },
+        });
+        assert.equal(putRes.statusCode, 200);
+        const delRes = await ctx.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thought}/properties/${prop.name}`,
+          headers: h,
+        });
+        assert.equal(delRes.statusCode, 204);
+        const againRes = await ctx.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thought}/properties/${prop.name}`,
+          headers: h,
+        });
+        assert.equal(againRes.statusCode, 204);
+
+        // An UNKNOWN property key still 404s — that is an addressing error,
+        // not the idempotent no-op.
+        const unknownRes = await ctx.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thought}/properties/нет-такого-свойства`,
+          headers: h,
+        });
+        assert.equal(unknownRes.statusCode, 404);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );

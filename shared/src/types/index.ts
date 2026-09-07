@@ -28,3 +28,4 @@ export * from './logging.js';
 export * from './api.js';
 export * from './mcp.js';
 export * from './etnx.js';
+export * from './ontology.js';

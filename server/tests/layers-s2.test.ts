@@ -278,6 +278,7 @@ describe(
           '033_authorship_columns.sql',
           '034_object_locks.sql',
           '035_activity_log.sql',
+          '036_property_values_deterministic_id.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else

@@ -34,11 +34,13 @@ import {
   type CommentTarget,
   type CommentUpdateInput,
   type CommentsPreview,
+  type PermanentCommentFull,
   type PermanentCommentPreview,
 } from '@etn/shared';
 
 import { renderMarkdown } from '@etn/markdown';
 
+import { applySectionOps, type EditOp } from './markdown-sections.js';
 import type { NetworkDb } from '../db/network-db.js';
 import {
   deleteRowLayered,
@@ -253,6 +255,47 @@ export function getPermanentPreview(
     chars_returned,
     chars_total,
     truncated: chars_total > chars_returned,
+    valid_from: row.valid_from,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+/**
+ * Полный (без обрезки) постоянный комментарий — задача 3ea09a54
+ * «Условная обрезка текстов в ответах MCP». Возвращается из
+ * `etn.thoughts.get` в `meta.permanent` — единственный случай, когда
+ * постоянный комментарий отдаётся целиком без метаданных `chars_*`/
+ * `truncated`. Тот же SELECT, что в {@link getPermanentPreview}, без
+ * усечения тела.
+ */
+export function getPermanentFull(
+  ndb: NetworkDb,
+  ownerType: CommentOwnerType,
+  ownerId: string,
+): PermanentCommentFull | null {
+  validateOwnerType(ownerType);
+  const row = ndb
+    .prepare(
+      `SELECT id, body_md, valid_from, created_at, updated_at FROM comments_v
+       WHERE owner_type = ? AND owner_id = ? AND kind = 'permanent'
+       LIMIT 1`,
+    )
+    .get(ownerType, ownerId) as
+    | {
+        id: string;
+        body_md: string;
+        valid_from: string;
+        created_at: string;
+        updated_at: string;
+      }
+    | undefined;
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    id: row.id,
+    body_md: row.body_md,
     valid_from: row.valid_from,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -492,8 +535,14 @@ export function createCommentWithTargets(
  * `body_html` is re-rendered whenever `body_md` changes. `version` is bumped
  * on every successful update.
  *
+ * `allowEmptyBody` — отключает защиту «`body_md` не пустое» для вызовов из
+ * {@link editComment}: удаление единственной секции текста без `#` оставляет
+ * пустое тело, но запись в БД сохраняется (граница 154df95d). По умолчанию
+ * `false` — REST `PATCH /comments/{id}` и `etn.comments.update` продолжают
+ * отвергать пустое тело.
+ *
  * Throws `NOT_FOUND` (404), `VERSION_CONFLICT` (409), or `VALIDATION_ERROR`
- * (422) when setting an empty `body_md`.
+ * (422) when setting an empty `body_md` and `allowEmptyBody` is not set.
  */
 export function updateComment(
   ndb: NetworkDb,
@@ -501,6 +550,7 @@ export function updateComment(
   changes: CommentUpdateInput,
   expectedVersion: number | undefined,
   actorUserId: string,
+  options: { allowEmptyBody?: boolean } = {},
 ): Comment {
   return ndb.transaction(() => {
     const current = getCommentOrThrow(ndb, id);
@@ -520,7 +570,7 @@ export function updateComment(
       args.push(changes.title);
     }
     if (changes.body_md !== undefined) {
-      if (changes.body_md === '') {
+      if (changes.body_md === '' && options.allowEmptyBody !== true) {
         throw new EtnError('VALIDATION_ERROR', 'body_md must not be empty', {
           field: 'body_md',
         });
@@ -551,6 +601,75 @@ export function updateComment(
       .prepare(`UPDATE comments SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
       .run(...args);
     return getCommentOrThrow(ndb, id);
+  });
+}
+
+/** Результат {@link editComment}: новые секции, длина и свежая версия. */
+export interface EditCommentResult {
+  id: string;
+  version: number;
+  /** Список заголовков секций после правки (виртуальная первая строка — для текста без `#`). */
+  sections: string[];
+  /** Полная длина нового тела в символах. */
+  chars_total: number;
+  /** Итоговое тело после применения всех ops — для передачи в события и журналы. */
+  body_md: string;
+}
+
+/**
+ * Частичная правка комментария ops-ами одной транзакцией (задача d28abe04,
+ * версия 0.7.2, спека 154df95d). Поддерживает `append`, `prepend`,
+ * `replace_section`, `delete_section`. Применяется к **любому** комментарию
+ * — постоянному и хронологическому, на мысли и на связи. Не создаёт и не
+ * удаляет сам комментарий: отсутствующий — `NOT_FOUND`, удаление единственной
+ * секции оставляет пустое тело.
+ *
+ * Контракт:
+ *   * `ops` применяются последовательно в порядке массива; ошибка любой op
+ *     откатывает весь вызов (предыдущие op не применяются — общая транзакция);
+ *   * `expected_version` проверяется ДО применения любой op, а не после каждой;
+ *   * итоговое тело нормализуется по `\n` (не более двух подряд);
+ *   * повторяющиеся заголовки одного уровня дают `VALIDATION_ERROR`;
+ *   * неизвестный заголовок даёт `NOT_FOUND` со списком доступных в `details.sections`.
+ */
+export function editComment(
+  ndb: NetworkDb,
+  id: string,
+  ops: EditOp[],
+  expectedVersion: number | undefined,
+  actorUserId: string,
+): EditCommentResult {
+  if (!Array.isArray(ops) || ops.length === 0) {
+    throw new EtnError('VALIDATION_ERROR', 'ops must be a non-empty array', {
+      field: 'ops',
+    });
+  }
+  return ndb.transaction(() => {
+    const current = getCommentOrThrow(ndb, id);
+    if (expectedVersion !== undefined && current.version !== expectedVersion) {
+      throw new EtnError('VERSION_CONFLICT', 'comment version mismatch', {
+        entity: 'comment',
+        id,
+        expected: expectedVersion,
+        current: current.version,
+      });
+    }
+    const result = applySectionOps(current.body_md, ops);
+    const updated = updateComment(
+      ndb,
+      id,
+      { body_md: result.body },
+      undefined,
+      actorUserId,
+      { allowEmptyBody: result.body === '' },
+    );
+    return {
+      id: updated.id,
+      version: updated.version,
+      sections: result.sections,
+      chars_total: result.body.length,
+      body_md: result.body,
+    };
   });
 }
 

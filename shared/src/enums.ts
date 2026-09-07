@@ -68,8 +68,14 @@ export type SearchScope = (typeof SEARCH_SCOPES)[number];
 export const SEARCH_GROUPS = ['names', 'texts', 'links', 'chronology'] as const;
 export type SearchGroup = (typeof SEARCH_GROUPS)[number];
 
-/** Direction of a focus zone on the canvas (02-data-model.md §3.10.3). */
-export const FOCUS_DIRS = ['parents', 'children', 'siblings'] as const;
+/** Direction of a focus zone on the canvas (02-data-model.md §3.10.3). The
+ *  MCP-only `both` value (0.7.2) reads both incoming and outgoing neighbours
+ *  in a single call (each entry carries its own `direction: "in"|"out"`); REST
+ *  keeps the original parents/children/siblings trio. Domain services still
+ *  reject `both` where they were built for the trio (`getNeighbors` /
+ *  `buildNeighborsQuery` fall into the siblings branch for `both`, so callers
+ *  MUST handle `both` in the facade and route parents/children internally). */
+export const FOCUS_DIRS = ['parents', 'children', 'siblings', 'both'] as const;
 export type FocusDir = (typeof FOCUS_DIRS)[number];
 
 /** Sort strategies for a focus zone (02-data-model.md §3.10.3). */

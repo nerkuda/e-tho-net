@@ -28,6 +28,7 @@ import {
   type FocusNeighbor,
   type FocusResponse,
   type IconKind,
+  type ResolveResult,
   type SortKind,
   type SortOrder,
   type Thought,
@@ -40,7 +41,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
-import { createComment } from './comment-service.js';
+import { createComment, getPermanentFull } from './comment-service.js';
 import { listThoughtHoldingLayers } from './holding-layers.js';
 import {
   purgeThoughtDeletionDependants,
@@ -49,6 +50,7 @@ import {
 import {
   computeThoughtCardWarnings,
   countThoughtRefUsages,
+  getPropertyValuesResolved,
   listEffectiveTypeProperties,
   setPropertyValueById,
 } from './property-service.js';
@@ -57,6 +59,7 @@ import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-serv
 import { getAttachment } from './attachment-service.js';
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
 import { enforceLock } from './lock-service.js';
+import { getThoughtMeta } from './thought-meta.js';
 import {
   FONT_BOLD_BIT,
   FONT_ITALIC_BIT,
@@ -396,6 +399,225 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
     font_manual: number;
   }>;
   return rows.map(rowToThoughtRef);
+}
+
+/**
+ * Пакетное чтение мыслей по списку id в форме «карточки» (задача 6d45ab37,
+ * спека операции 85b94925 — `etn.thoughts.resolve` MCP-фасада):
+ * возвращает полные мысли в порядке первого появления id в запросе плюс
+ * список id, которых в сети нет. Дубли в `ids` схлопываются до первого
+ * вхождения.
+ *
+ * На одну мысль:
+ *  * `synonyms` — из `thought_synonyms_v`;
+ *  * `properties` — резолвнутые `thought_ref`, помеченные `outside_type`,
+ *    в форме `etn.thoughts.get` (используется общий с `etn.thoughts.get`
+ *    сервис `getPropertyValuesResolved`);
+ *  * `meta` — счётчики + превью постоянного комментария (используется общий
+ *    `getThoughtMeta`; `fullPermanent` НЕ выставляется — пакетное чтение
+ *    остаётся в preview-форме, чтобы не раздувать выборки; полный текст для
+ *    одной мысли — через `etn.thoughts.get`).
+ *
+ * В отличие от `etn.thoughts.get`, эта функция НЕ применяет проекцию `view`:
+ * MCP-фасад сам сериализует мысль через `toCompactThought`/`toCompactThoughtRef`,
+ * сохраняя единый формат ответа. Поэтому возвращаются «сырые» поля мысли в
+ * полной форме, а view-проекция остаётся на стороне фасада (как в
+ * `subgraph`/`neighbors`).
+ *
+ * Лимит на размер пачки: `THOUGHT_RESOLVE_MAX_IDS` — совпадает с лёгкой
+ * `resolveThoughts` и с лимитом `maxNodesPerSubgraph` в MCP-фасаде.
+ */
+export function getThoughtsByIdsResolved(
+  ndb: NetworkDb,
+  ids: string[],
+): ResolveResult {
+  // Дедуп в порядке первого появления.
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (typeof id !== 'string' || id === '') continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(id);
+  }
+  if (unique.length === 0) {
+    return { items: [], missing: [] };
+  }
+  const capped = unique.slice(0, THOUGHT_RESOLVE_MAX_IDS);
+  const placeholders = capped.map(() => '?').join(',');
+  const rows = ndb
+    .prepare(
+      `SELECT id, title, type_id, icon, icon_kind, icon_attachment_id, active,
+              marked_for_deletion, marked_for_deletion_at, marked_for_deletion_by,
+              fg_color, bg_color,
+              font_bold, font_italic, font_underline, font_strike, font_manual,
+              version, created_at, updated_at, created_by, updated_by,
+              created_at_ms, updated_at_ms
+       FROM thoughts_v WHERE id IN (${placeholders})`,
+    )
+    .all(...capped) as Array<{
+    id: string;
+    title: string;
+    type_id: string | null;
+    icon: string | null;
+    icon_kind: string;
+    icon_attachment_id: string | null;
+    active: number;
+    marked_for_deletion: number;
+    marked_for_deletion_at: string | null;
+    marked_for_deletion_by: string | null;
+    fg_color: string | null;
+    bg_color: string | null;
+    font_bold: number;
+    font_italic: number;
+    font_underline: number;
+    font_strike: number;
+    font_manual: number;
+    version: number;
+    created_at: string;
+    updated_at: string;
+    created_by: string;
+    updated_by: string;
+    created_at_ms: number;
+    updated_at_ms: number;
+  }>;
+  const foundIds = new Set(rows.map((r) => r.id));
+  // missing — в порядке первого появления в запросе.
+  const missing = capped.filter((id) => !foundIds.has(id));
+  // items — в порядке первого появления в запросе: идём по `capped`,
+  // отбираем строки, которые попали в выборку, и собираем в правильном порядке.
+  const rowById = new Map(rows.map((r) => [r.id, r]));
+  const items = capped
+    .map((id) => rowById.get(id))
+    .filter((r): r is (typeof rows)[number] => r !== undefined)
+    .map((row) => rowToCard(ndb, row));
+  return { items, missing };
+}
+
+/** Convert one `thoughts_v` row from `getThoughtsByIdsResolved` into a {@link ResolveResult}'s item. */
+function rowToCard(
+  ndb: NetworkDb,
+  row: Parameters<typeof getThoughtsByIdsResolved>[1] extends never[] ? never : {
+    id: string;
+    title: string;
+    type_id: string | null;
+    icon: string | null;
+    icon_kind: string;
+    icon_attachment_id: string | null;
+    active: number;
+    marked_for_deletion: number;
+    marked_for_deletion_at: string | null;
+    marked_for_deletion_by: string | null;
+    fg_color: string | null;
+    bg_color: string | null;
+    font_bold: number;
+    font_italic: number;
+    font_underline: number;
+    font_strike: number;
+    font_manual: number;
+    version: number;
+    created_at: string;
+    updated_at: string;
+    created_by: string;
+    updated_by: string;
+    created_at_ms: number;
+    updated_at_ms: number;
+  },
+): import('@etn/shared').ThoughtCard {
+  const fm = row.font_manual;
+  const synonyms = readSynonyms(ndb, row.id);
+  const thought: import('@etn/shared').Thought = {
+    id: row.id,
+    title: row.title,
+    type_id: row.type_id,
+    icon: row.icon,
+    icon_kind: row.icon_kind as IconKind,
+    icon_attachment_id: row.icon_attachment_id,
+    active: row.active === 1,
+    is_protected: false,
+    is_root: false,
+    marked_for_deletion: row.marked_for_deletion === 1,
+    marked_for_deletion_at: row.marked_for_deletion_at,
+    marked_for_deletion_by: row.marked_for_deletion_by,
+    fg_color: row.fg_color,
+    bg_color: row.bg_color,
+    font_bold: readFont(fm, FONT_BOLD_BIT, row.font_bold),
+    font_italic: readFont(fm, FONT_ITALIC_BIT, row.font_italic),
+    font_underline: readFont(fm, FONT_UNDERLINE_BIT, row.font_underline),
+    font_strike: readFont(fm, FONT_STRIKE_BIT, row.font_strike),
+    synonyms,
+    version: row.version,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    created_by: row.created_by,
+    updated_by: row.updated_by,
+    created_at_ms: row.created_at_ms,
+    updated_at_ms: row.updated_at_ms,
+  };
+  // Type catalogue form (N6): only the type actually assigned.
+  // Lazy import to avoid a circular: mcp.ts pulls thought types, but this
+  // domain file must not depend on the MCP facade.
+  const type = row.type_id === null
+    ? null
+    : withSanitizedIconLite(ndb, row.type_id);
+  return {
+    id: thought.id,
+    title: thought.title,
+    type_id: thought.type_id,
+    icon: thought.icon,
+    icon_kind: thought.icon_kind,
+    icon_attachment_id: thought.icon_attachment_id,
+    active: thought.active,
+    marked_for_deletion: thought.marked_for_deletion,
+    fg_color: thought.fg_color,
+    bg_color: thought.bg_color,
+    font_bold: thought.font_bold,
+    font_italic: thought.font_italic,
+    font_underline: thought.font_underline,
+    font_strike: thought.font_strike,
+    synonyms: thought.synonyms,
+    version: thought.version,
+    created_at: thought.created_at,
+    updated_at: thought.updated_at,
+    type,
+    properties: getPropertyValuesResolved(ndb, 'thought', thought.id),
+    meta: getThoughtMeta(ndb, thought.id),
+    comment_preview: getPermanentFull(ndb, 'thought', thought.id),
+  };
+}
+
+/**
+ * Локальная обёртка над `getThoughtType` для безопасного резолва одной записи
+ * каталога типов мыслей (`ThoughtTypeRef`-форма). Не вытаскиваем весь
+ * `thoughtTypeCatalog` ради одной строки — идём через `getThoughtType` и
+ * перекладываем в каталожную форму вручную (icon санитайзим на границе MCP,
+ * здесь же возвращаем сырой emoji).
+ */
+function withSanitizedIconLite(
+  ndb: NetworkDb,
+  typeId: string,
+): import('@etn/shared').ThoughtTypeRef {
+  const t = getThoughtType(ndb, typeId);
+  if (t === null) {
+    // Тип удалили между чтением мысли и резолвом — отдаём минимальную форму
+    // со ссылкой на отсутствующий id, чтобы агент увидел несоответствие.
+    return {
+      id: typeId,
+      name: '',
+      parent_id: null,
+      is_root: false,
+      description: null,
+      icon: null,
+    };
+  }
+  return {
+    id: t.id,
+    name: t.name,
+    parent_id: t.parent_id,
+    is_root: t.is_root,
+    description: t.description,
+    icon: t.icon,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -891,6 +1113,9 @@ export function deleteThought(
           entity: 'thought',
           id,
           blocking: check.blocking,
+          // Hint-навигатор уровня 2 (ADR b2eebf8b, задача 940a499d): промпт
+          // объясняет двухфазное удаление и то, что именно блокирует.
+          how_to: 'etn.how_to_purge',
         },
       );
     }
@@ -1234,6 +1459,10 @@ export function focus(
     parents: [],
     children: [],
     siblings: [],
+    // `both` (0.7.2) lives only in the MCP `etn.thoughts.neighbors` facade —
+    // the REST focus response keeps the original trio, so the key is present
+    // for the type but the array stays empty here.
+    both: [],
   };
   // Read the stored sort preferences per zone; siblings is not manually
   // orderable but does store a sort/order selection (03-server-api.md §6.8).
@@ -1244,6 +1473,7 @@ export function focus(
     parents: parentPref,
     children: childPref,
     siblings: siblingPref,
+    both: null,
   };
   for (const dir of dirs) {
     grouped[dir] = getNeighbors(ndb, thoughtId, dir, {

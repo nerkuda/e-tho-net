@@ -90,6 +90,9 @@ describe('thought meta (N2)', { skip: !nativeAvailable() }, () => {
       chrono_count: 0,
       usage_count: 0,
       permanent: null,
+      // 0.7.2 (задача 327be956) — профиль влияния мысли. Для свежей мысли
+      // без связей: пустой `stats` и пустой справочник `link_types`.
+      link_stats: { stats: [], link_types: {} },
     });
   });
 

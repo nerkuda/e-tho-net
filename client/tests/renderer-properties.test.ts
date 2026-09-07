@@ -107,6 +107,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
     listTypeProperties: async () => [
       {
         id: 'p1',
+        property_id: 'rp1',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Город',
@@ -119,6 +120,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
       },
       {
         id: 'p2',
+        property_id: 'rp2',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Автор',
@@ -129,6 +131,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
       },
       {
         id: 'p3',
+        property_id: 'rp3',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Сайт',
@@ -139,6 +142,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
       },
       {
         id: 'p4',
+        property_id: 'rp4',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Соавторы',
@@ -149,6 +153,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
       },
       {
         id: 'p5',
+        property_id: 'rp5',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Источник',
@@ -159,6 +164,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
       },
       {
         id: 'p6',
+        property_id: 'rp6',
         owner_type: 'thought_type',
         owner_id: 'ty1',
         key: 'Закладки',
@@ -175,7 +181,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
         id: 'v3',
         owner_type: 'thought',
         owner_id: 't1',
-        property_id: 'p3',
+        property_id: 'rp3',
         value: 'https://example.com',
         updated_at: '2026',
       },
@@ -183,7 +189,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
         id: 'v4',
         owner_type: 'thought',
         owner_id: 't1',
-        property_id: 'p4',
+        property_id: 'rp4',
         value: ['ta1', 'ta2'],
         updated_at: '2026',
       },
@@ -191,7 +197,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
         id: 'v5',
         owner_type: 'thought',
         owner_id: 't1',
-        property_id: 'p5',
+        property_id: 'rp5',
         value: 'ta1',
         updated_at: '2026',
       },
@@ -199,7 +205,7 @@ async function buildWithFixtures(): Promise<ShimElement> {
         id: 'v6',
         owner_type: 'thought',
         owner_id: 't1',
-        property_id: 'p6',
+        property_id: 'rp6',
         value: ['https://a.test', 'https://b.test'],
         updated_at: '2026',
       },
@@ -399,6 +405,33 @@ describe('editor properties group body (DOM-shimmed)', () => {
       ) ?? [];
     assert.equal(urlRows.length, 2, 'one row per stored URL');
   });
+
+  it('matches stored values by registry property_id, not binding id (7d094c26)', async () => {
+    // The fixture declares bindings whose binding `id` differs from the registry
+    // `property_id` (legacy bindings created before the 0.6.5 registry split):
+    // «Сайт» has id `p3` / property_id `rp3`, and the stored value is keyed by
+    // `rp3`. A lookup by `definition.id` would miss it and render an empty field
+    // even though the server stores the value (7d094c26).
+    const box = await buildWithFixtures();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const tableWrap = box.children[0];
+    assert.ok(tableWrap !== undefined, 'table wrapper rendered');
+    const table = tableWrap.children[0];
+    assert.ok(table !== undefined, 'table rendered');
+    const tbody = table.children[0];
+    assert.ok(tbody !== undefined, 'tbody rendered');
+
+    // Single url property («Сайт», row index 2): the input must carry the value.
+    const urlCell = tbody.children[2]?.children[1];
+    const urlInput = urlCell?.children[0]?.children.find(
+      (c) => c.tagName === 'input' && c.type === 'text',
+    ) as ShimElement | undefined;
+    assert.equal(
+      urlInput?.value,
+      'https://example.com',
+      'single url value populated via registry property_id',
+    );
+  });
 });
 
 /**
@@ -451,6 +484,7 @@ describe('editor properties — «Свойства вне типа» group (0.6.
       listTypeProperties: async () => [
         {
           id: 'pNew',
+          property_id: 'pNew',
           owner_type: 'thought_type',
           owner_id: 'ty2',
           key: 'Новое',
@@ -727,6 +761,221 @@ describe('property value autocomplete helpers (pure)', () => {
 });
 
 /**
+ * Regression test for the date/number editor cells (error cefb4db0): focusing
+ * a property field and leaving it (Tab / click away) WITHOUT entering a value
+ * must not fire `properties.remove` when nothing was stored — an empty value
+ * is a legitimate state, and the server's former 404 flashed as
+ * «Ошибка: no value stored…» in the cell. Mirrors the text field's baseline
+ * approach: blur commits the value only when it actually changed.
+ */
+describe('editor properties — date/number blur commits (error cefb4db0)', () => {
+  /** What the etn.properties stub recorded: remove/set calls with keys. */
+  interface PropertyCalls {
+    removed: string[];
+    set: Array<{ key: string; value: unknown }>;
+  }
+
+  /**
+   * Renders buildPropertiesBody against one date and one number definition
+   * (`withValues` toggles whether each has a stored value) and returns the
+   * body plus the recorded etn.properties write calls.
+   */
+  async function renderDateNumber(withValues: boolean): Promise<{
+    box: ShimElement;
+    calls: PropertyCalls;
+  }> {
+    shimDocument();
+    // The autocomplete describe block above REPLACES globalThis.window with a
+    // bare object, but the etn Proxy in lib/etn.ts captured the ORIGINAL
+    // window (first import) and still reads it. The module-level sharedWindow
+    // variable keeps that original object — realign the global and install
+    // the mocks on the object the Proxy actually sees.
+    (globalThis as any).window = sharedWindow;
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const calls: PropertyCalls = { removed: [], set: [] };
+    etnApi['types'] = {
+      listTypeProperties: async () => [
+        {
+          id: 'pDate',
+          property_id: 'pDate',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Плановый срок',
+          value_type: 'date',
+          config: null,
+          required: false,
+          position: 0,
+        },
+        {
+          id: 'pNumber',
+          property_id: 'pNumber',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Оценка',
+          value_type: 'number',
+          config: null,
+          required: false,
+          position: 1,
+        },
+      ],
+    };
+    etnApi['properties'] = {
+      get: async () =>
+        withValues
+          ? [
+              {
+                id: 'vDate',
+                owner_type: 'thought',
+                owner_id: 't1',
+                property_id: 'pDate',
+                value: '2026-09-01',
+                updated_at: '2026',
+              },
+              {
+                id: 'vNumber',
+                owner_type: 'thought',
+                owner_id: 't1',
+                property_id: 'pNumber',
+                value: 5,
+                updated_at: '2026',
+              },
+            ]
+          : [],
+      remove: async (_networkId: string, _ownerType: string, _ownerId: string, key: string) => {
+        calls.removed.push(key);
+      },
+      set: async (
+        _networkId: string,
+        _ownerType: string,
+        _ownerId: string,
+        key: string,
+        value: unknown,
+      ) => {
+        calls.set.push({ key, value });
+      },
+    };
+    etnApi['thoughts'] = { resolve: async () => [] };
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+
+    const ctx = {
+      ownerType: 'thought' as const,
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+    const box = propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { box, calls };
+  }
+
+  /** Returns the value CELL of row `index` (0 = date, 1 = number). */
+  function rowCell(box: ShimElement, index: number): ShimElement | undefined {
+    const tableWrap = box.children[0];
+    const table = tableWrap?.children[0];
+    const tbody = table?.children[0];
+    return tbody?.children[index]?.children[1];
+  }
+
+  /** Returns the input element of row `index` (0 = date, 1 = number). */
+  function rowInput(box: ShimElement, index: number): ShimElement | undefined {
+    return rowCell(box, index)?.children[0];
+  }
+
+  it('blur on an already-empty date/number field fires no remove and shows no error', async () => {
+    const { box, calls } = await renderDateNumber(false);
+    const dateInput = rowInput(box, 0);
+    const numberInput = rowInput(box, 1);
+    assert.ok(dateInput !== undefined, 'date input rendered');
+    assert.ok(numberInput !== undefined, 'number input rendered');
+
+    dateInput!.dispatch('blur');
+    numberInput!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.deepEqual(calls.removed, [], 'no remove for a never-stored value');
+    assert.deepEqual(calls.set, [], 'no set either');
+    // No error text appeared next to the fields (the former 404 flash).
+    assert.equal(
+      rowCell(box, 0)?.children.length,
+      1,
+      'date cell still holds only the input',
+    );
+    assert.equal(
+      rowCell(box, 1)?.children.length,
+      1,
+      'number cell still holds only the input',
+    );
+  });
+
+  it('blur on an unchanged stored date/number value writes nothing', async () => {
+    const { box, calls } = await renderDateNumber(true);
+    const dateInput = rowInput(box, 0);
+    const numberInput = rowInput(box, 1);
+    assert.equal(dateInput?.value, '2026-09-01', 'date input pre-filled');
+    assert.equal(numberInput?.value, '5', 'number input pre-filled');
+
+    dateInput!.dispatch('blur');
+    numberInput!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.deepEqual(calls.removed, [], 'unchanged value — no remove');
+    assert.deepEqual(calls.set, [], 'unchanged value — no set');
+  });
+
+  it('clearing a stored value blurs into remove; entering a new one blurs into set', async () => {
+    const { box, calls } = await renderDateNumber(true);
+    const dateInput = rowInput(box, 0);
+    const numberInput = rowInput(box, 1);
+
+    // Clear the date → blur commits remove once; a SECOND blur of the now
+    // empty field must not repeat the remove.
+    dateInput!.value = '';
+    dateInput!.dispatch('blur');
+    dateInput!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(calls.removed, ['Плановый срок'], 'remove fired exactly once');
+
+    // Change the number → blur commits the new value.
+    numberInput!.value = '7';
+    numberInput!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(calls.set, [{ key: 'Оценка', value: 7 }], 'set fired with the new number');
+
+    // Clearing the number now also removes it.
+    numberInput!.value = '';
+    numberInput!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(
+      calls.removed,
+      ['Плановый срок', 'Оценка'],
+      'clearing a stored number removes the value',
+    );
+  });
+});
+
+/**
  * Tests for the multi-value `url` editor (task 0.6.2). The DOM shim is the
  * same `ShimElement` used elsewhere in this file; `etn.system.openExternal` is
  * stubbed so the «Открыть» button does not hit a real OS handler.
@@ -862,5 +1111,265 @@ describe('buildMultiUrlEditor (DOM-shimmed)', () => {
     rows = editor.children.filter((c) => hasClass(c, 'multi-url-row'));
     assert.equal(rows.length, 1, 'empty trailing row collapsed');
     assert.deepEqual(saved, [['https://a.test']], 'save called without the empty row');
+  });
+});
+
+/**
+ * Regression test for карточка 7d094c26 «Не сохраняются значения свойств типа
+ * "строка"». The baseline-guard for `text`/`url` cells used to be updated
+ * *before* the save promise settled (`baseline = next; void save(next)`):
+ * if save failed — typically a 5xx / network error retried up to 3 times for
+ * ~30s, plenty of time to outlive the rebuild — the baseline already carried
+ * the unsaved value, the error was appended to an orphaned `<td>`, and the
+ * next blur saw `next === baseline` and skipped the write. Reopening the
+ * thought showed the old value, with no visible cue that the edit had been
+ * dropped.
+ *
+ * The fix makes `commitValue` await `save` and roll `baseline` back on a
+ * `false` return; `save` itself now surfaces failures through the document
+ * toast (`notice`) instead of mutating an orphan cell. The tests below
+ * pin the three observable consequences of that contract:
+ *  1. a failed save leaves baseline at the stored value, so a second blur
+ *     with the same edit re-saves (the original symptom: silent drop);
+ *  2. a failed save leaves baseline at the stored value, so a second blur
+ *     with a *different* edit saves the new one and succeeds;
+ *  3. a successful save updates baseline normally, so the baseline guard
+ *     still suppresses redundant writes of the unchanged value.
+ */
+describe('editor properties — text/url save failure rolls back baseline (7d094c26)', () => {
+  /** What the etn.properties stub recorded. */
+  interface PropertyCalls {
+    set: Array<{ key: string; value: unknown }>;
+    removed: string[];
+  }
+
+  /**
+   * Renders buildPropertiesBody for a thought whose type has ONE text
+   * property with predefined options (the dropdown picker path is also
+   * exercised by the render). The mock `etn.properties.set` follows the
+   * `mode` toggle so each test can script success/failure per call.
+   */
+  async function renderTextProperty(
+    mode: { fail: boolean },
+  ): Promise<{ box: ShimElement; calls: PropertyCalls }> {
+    shimDocument();
+    // Realign with the module-shared window — the Proxy in lib/etn.ts cached
+    // the very first window it saw during `buildWithFixtures`.
+    (globalThis as any).window = sharedWindow;
+    // `save` failures go through `notice(...)` which arms `window.setTimeout`
+    // to auto-dismiss the toast. The other describe blocks in this file
+    // never trigger that path; install a synchronous setTimeout so the
+    // rejection from the failed save doesn't escape the test as an
+    // unhandled `window.setTimeout is not a function`.
+    Object.assign(sharedWindow, {
+      setTimeout: (fn: () => void) => {
+        fn();
+        return 1;
+      },
+      clearTimeout: () => undefined,
+    });
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const calls: PropertyCalls = { set: [], removed: [] };
+    etnApi['types'] = {
+      listTypeProperties: async () => [
+        {
+          id: 'pStatus',
+          property_id: 'pStatus',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Статус',
+          value_type: 'text',
+          config: { options: ['Открыт', 'Закрыт'], multiple: false },
+          required: false,
+          position: 0,
+        },
+      ],
+    };
+    etnApi['properties'] = {
+      get: async () => [
+        {
+          id: 'vStatus',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: 'pStatus',
+          value: 'Открыт',
+          updated_at: '2026',
+        },
+      ],
+      remove: async (_n: string, _o: string, _i: string, key: string) => {
+        calls.removed.push(key);
+      },
+      set: async (
+        _n: string,
+        _o: string,
+        _i: string,
+        key: string,
+        value: unknown,
+      ) => {
+        calls.set.push({ key, value });
+        if (mode.fail) throw new Error('network down');
+      },
+    };
+    etnApi['thoughts'] = { resolve: async () => [] };
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+
+    const ctx = {
+      ownerType: 'thought' as const,
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+    const box = propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { box, calls };
+  }
+
+  /** The text cell's input — wrapped in row > cell (with-options layout). */
+  function rowInput(box: ShimElement): ShimElement | undefined {
+    const tableWrap = box.children[0];
+    const table = tableWrap?.children[0];
+    const tbody = table?.children[0];
+    const cell = tbody?.children[0]?.children[1];
+    return cell?.children[0]?.children[0];
+  }
+
+  /** The value cell of the only row (with-options layout: row > cell). */
+  function rowCell(box: ShimElement): ShimElement | undefined {
+    const tableWrap = box.children[0];
+    const table = tableWrap?.children[0];
+    const tbody = table?.children[0];
+    return tbody?.children[0]?.children[1];
+  }
+
+  it('failed save leaves baseline at the stored value — same-value blur retries', async () => {
+    const mode = { fail: true };
+    const { box, calls } = await renderTextProperty(mode);
+    const input = rowInput(box);
+    assert.ok(input !== undefined, 'text input rendered');
+    assert.equal(input?.value, 'Открыт', 'input pre-filled with the stored value');
+
+    input!.value = 'Закрыт';
+    input!.dispatch('blur');
+    // commitValue is async (awaits save); yield enough cycles for the
+    // rejection to land and the baseline to roll back.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(
+      calls.set,
+      [{ key: 'Статус', value: 'Закрыт' }],
+      'save was attempted once with the new value',
+    );
+
+    // The same input is blurred again WITHOUT a change — the buggy code
+    // would treat baseline='Закрыт' as the new ground truth and skip the
+    // write. With the rollback, baseline='Открыт' is restored and the
+    // input's value ('Закрыт') differs from it again, so the retry fires.
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(
+      calls.set.length,
+      2,
+      'second blur re-saves because the first failure rolled baseline back',
+    );
+    assert.deepEqual(
+      calls.set[1],
+      { key: 'Статус', value: 'Закрыт' },
+      'retry carries the same new value the first attempt lost',
+    );
+  });
+
+  it('failed save leaves baseline at the stored value — different-value blur saves the new one', async () => {
+    const mode = { fail: true };
+    const { box, calls } = await renderTextProperty(mode);
+    const input = rowInput(box);
+
+    input!.value = 'Закрыт';
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(calls.set.length, 1, 'first save attempted');
+
+    // Switch to a different value while still in failure mode — the
+    // rollback ensures baseline='Открыт' so 'Новый' is treated as a fresh
+    // edit and saves (fails again, rolls back again).
+    input!.value = 'Новый';
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(calls.set.length, 2, 'second save attempted');
+    assert.deepEqual(
+      calls.set[1],
+      { key: 'Статус', value: 'Новый' },
+      'second blur saved the new value (not skipped as a no-op)',
+    );
+  });
+
+  it('after a failed save followed by a successful one, the baseline guard skips re-saves of the same value', async () => {
+    const mode = { fail: true };
+    const { box, calls } = await renderTextProperty(mode);
+    const input = rowInput(box);
+
+    input!.value = 'Закрыт';
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(calls.set.length, 1, 'failed first attempt');
+
+    // Flip to success and blur again — this time save resolves, baseline
+    // advances to 'Закрыт', and any further blur with 'Закрыт' is a no-op.
+    mode.fail = false;
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(calls.set.length, 2, 'retry succeeded');
+
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(
+      calls.set.length,
+      2,
+      'unchanged value after a successful save does not re-save (baseline guard intact)',
+    );
+  });
+
+  it('a failure does not leave an inline error-text span in the cell', async () => {
+    const mode = { fail: true };
+    const { box } = await renderTextProperty(mode);
+    const input = rowInput(box);
+    const cell = rowCell(box);
+    assert.ok(cell !== undefined, 'cell located');
+
+    input!.value = 'Закрыт';
+    input!.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // The bug used to write ` Ошибка: …` into the cell — a fragment that
+    // was orphaned on the very next rebuild and so invisible. The fix
+    // surfaces errors through `notice` (document.body) instead. The cell
+    // must keep its original children — only the form-row with the input
+    // and the picker caret.
+    const errorText = cell?.children.find((c) =>
+      (c as ShimElement).className.split(' ').includes('error-text'),
+    );
+    assert.equal(errorText, undefined, 'no inline error-text span left in the cell');
   });
 });

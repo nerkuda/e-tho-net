@@ -24,6 +24,7 @@ import { describe, it } from 'node:test';
 import type { PropertyDefinition } from '@etn/shared';
 
 import {
+  cacheAttachedRegistryRow,
   draftPropertiesFrom,
   nextDraftPropertyId,
   opToAttachInput,
@@ -236,5 +237,70 @@ describe('opToAttachInput', () => {
   it('serialises an `attach` op to `{ mode: "attach", property_id, required }`', () => {
     const out = opToAttachInput({ kind: 'attach', draftId: 'd', property_id: 'reg-1', required: true });
     assert.deepEqual(out, { mode: 'attach', property_id: 'reg-1', required: true });
+  });
+});
+
+/**
+ * Regression tests for bug `da2d16c4-…` («В редакторе типа не работает
+ * кнопка "Править природу свойства"»). `type-manager.ts`'s `editNature`
+ * looks a draft row's registry nature up by `row.property_id` in a
+ * `registryCache: Map<string, RegistryRow>` keyed by registry id — the SAME
+ * id space `property_id` lives in ({@link attach}'s `propertyId` param
+ * above mirrors `RegistryRow.id`). The cache used to be populated only once
+ * by the section's `reload()`, so a property attached mid-session (picked
+ * from the registry, or freshly created via the attach dialog's
+ * «Добавить…») was invisible to it until the next full reload — the ✎
+ * button's lookup missed and the click silently did nothing.
+ * {@link cacheAttachedRegistryRow} is the fix: `openAttachPropertyDialog`
+ * now calls it the instant a property is picked.
+ */
+describe('cacheAttachedRegistryRow (fix for da2d16c4-…)', () => {
+  /** Minimal `RegistryRow` shape — only `id` matters to the cache/lookup. */
+  interface MiniRegistryRow {
+    id: string;
+    name: string;
+  }
+
+  it('makes a freshly attached row resolvable by its property_id — the id-matching contract editNature relies on', () => {
+    const cache = new Map<string, MiniRegistryRow>();
+    const draft = attach('draft:1', 'reg-brand-new', { key: 'Новое свойство' });
+    const registryRow: MiniRegistryRow = { id: 'reg-brand-new', name: 'Новое свойство' };
+
+    cacheAttachedRegistryRow(cache, registryRow);
+
+    assert.equal(cache.get(draft.property_id), registryRow);
+  });
+
+  it('does not disturb unrelated cached rows (plain Map.set, keyed by id)', () => {
+    const existing: MiniRegistryRow = { id: 'reg-1', name: 'Существующее' };
+    const cache = new Map<string, MiniRegistryRow>([[existing.id, existing]]);
+    const added: MiniRegistryRow = { id: 'reg-2', name: 'Добавленное' };
+
+    cacheAttachedRegistryRow(cache, added);
+
+    assert.equal(cache.size, 2);
+    assert.equal(cache.get('reg-1'), existing);
+    assert.equal(cache.get('reg-2'), added);
+  });
+
+  it('re-attaching the same property_id refreshes the cached snapshot (last write wins)', () => {
+    const stale: MiniRegistryRow = { id: 'reg-1', name: 'Старое имя' };
+    const cache = new Map<string, MiniRegistryRow>([[stale.id, stale]]);
+    const fresh: MiniRegistryRow = { id: 'reg-1', name: 'Новое имя' };
+
+    cacheAttachedRegistryRow(cache, fresh);
+
+    assert.equal(cache.get('reg-1'), fresh);
+  });
+
+  it('documents the regression shape: without caching on attach, the lookup misses (reg === undefined)', () => {
+    // Mirrors the pre-fix `openAttachPropertyDialog`: the row is appended to
+    // the draft table, but the registry snapshot cache is never told about
+    // it — exactly the state that made `editNature`'s `registryCache.get(...)`
+    // return `undefined` and the ✎ button do nothing.
+    const cache = new Map<string, MiniRegistryRow>();
+    const draft = attach('draft:1', 'reg-brand-new', { key: 'Новое свойство' });
+    // Intentionally NOT calling cacheAttachedRegistryRow here.
+    assert.equal(cache.get(draft.property_id), undefined, 'bug shape: cache misses the freshly attached property');
   });
 });

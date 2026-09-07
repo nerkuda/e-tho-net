@@ -5,7 +5,8 @@
  * roster — counts drift with every phase, this is a map, not a tally):
  *   * read (§4.1) — networks list, search, query, get, neighbours, subgraph,
  *     path, links get, mentions, usage, comments get, export, types list,
- *     changes list (O9), metrics.reads (O10), layers.list (S10);
+ *     changes list (O9), metrics.reads (O10), metrics.tools (940a499d),
+ *     layers.list (S10);
  *   * mutate (§4.2) — thought/link CRUD, comments.upsert/update/delete,
  *     attachments.add, properties.set, set_active, thoughts.upsert_bundle,
  *     attachments.search, layers.create/update/delete/select/merge (S10);
@@ -24,10 +25,25 @@
  * to `type_id` — resolved case-insensitively against `etn.types.list`'s
  * catalogues before the domain call.
  *
+ * Задача d5ab1630 — то же именование распространяется на фильтры
+ * `etn.thoughts.query` (`type[]` для типов мыслей, `property` для
+ * свойств) и `etn.thoughts.search` (`type` для типов мыслей). Каждая
+ * именованная форма XOR-исключает id-формой (`type_id`/`property_id`),
+ * резолвится тем же хелпером, что и пишущие инструменты, и возвращается в
+ * ответе полем `resolved_types`/`resolved_type`/`resolved_properties` для
+ * подтверждения разрезолва.
+ *
+ * Задача 3ea09a54 — `etn.thoughts.get` возвращает `meta.permanent` полным
+ * текстом (без `chars_*`/`truncated`); все остальные выборки сущностей
+ * (subgraph, structure, списки) продолжают получать preview-форму.
+ *
  * Mutating tools are facades over the **same domain services as REST**
  * (05 §7): membership is re-checked per call, the read-only flag and the
  * per-minute write budget are enforced, each successful write emits its
- * catalogue real-time event via {@link emitAgentEvent} and appends an
+ * catalogue real-time event via {@link emitAgentEvent} /
+ * {@link emitAgentActivityEvent}, appends an `activity_log` row (требование
+ * b0c7a57c — same `record*Activity` helpers and snapshots as the REST routes;
+ * `edit.*` captures and per-user events are never journaled) and adds an
  * `audit_log` row (category `data`) via {@link auditAgentCall} — so agent-made
  * changes fan out to network participants exactly like human ones.
  *
@@ -71,13 +87,19 @@ import {
   EXPORT_FORMATS,
   FOCUS_DIRS,
   ICON_KINDS,
+  MCP_MAX_THOUGHTS_PER_WRITE,
   MCP_TOOL_ANNOTATIONS,
   MCP_VIEW_MODES,
   PROPERTY_OWNER_TYPES,
+  PROPERTY_VALUE_TYPES,
   REALTIME_DEFAULTS,
   SEARCH_SCOPES,
+  TYPE_OWNER_TYPES,
   TYPES_LIST_SCOPES,
   TRAVERSAL_DEFAULTS,
+  buildLikePattern,
+  parseFilterKeywords,
+  validateTypeRoles,
   type CommentTarget,
   type EditAcquiredData,
   type EditClearedData,
@@ -88,14 +110,25 @@ import {
   type McpChangeEntry,
   type McpChangesListResult,
   type McpMetricsReadsResult,
+  type McpMetricsToolsResult,
   type McpMutationResult,
   type McpPropertiesSetResult,
+  type OntologyDeleteParams,
+  type OntologyDeleteResult,
+  type OntologyWriteParams,
+  type OntologyWriteResult,
+  type McpThoughtWriteItemResult,
+  type McpThoughtWriteParams,
+  type McpThoughtWriteResult,
+  type McpToolAnnotations,
   type McpTypesListResult,
   type McpUpsertBundleResult,
   type McpViewMode,
+  type Network,
   type PropertyDefinition,
   type PropertyValueValue,
 } from '@etn/shared';
+import type { McpMentionsScanParams } from '@etn/shared';
 
 import {
   createThoughtWithWarnings,
@@ -103,6 +136,7 @@ import {
   countNeighbors,
   deleteThought,
   getNeighbors,
+  getThoughtsByIdsResolved,
   getThoughtOrThrow,
   updateThought,
   updateThoughtWithWarnings,
@@ -113,32 +147,41 @@ import {
   deleteLink,
   findLinksBetween,
   getLink,
+  getLinkFillingFlags,
   updateLink,
 } from '../domain/link-service.js';
 import {
   createCommentWithTargets,
   deleteComment,
+  editComment,
   getComment,
   getCommentsPreview,
+  getPermanentFull,
   getPermanentPreview,
   listComments,
   updateComment,
 } from '../domain/comment-service.js';
-import { createAttachment } from '../domain/attachment-service.js';
+import { createAttachment, getAttachment, listAttachments } from '../domain/attachment-service.js';
 import {
   copyAttachment,
+  deleteAttachment,
   searchAttachments,
+  updateAttachment,
 } from '../domain/attachment-service.js';
 import {
   clearThoughtRefUsages,
   findThoughtUsage,
+  getNetworkProperty,
   getPropertyValuesResolved,
   listEffectiveTypeProperties,
   resolveDefinition,
+  resolvePropertyIdByName,
   setPropertyValue,
   setPropertyValues,
 } from '../domain/property-service.js';
 import { findBacklinks } from '../domain/backlinks-service.js';
+import { normalizeOptionalText } from '../routes/networks.js';
+import { emitDomainEvent } from '../realtime/emit.js';
 import { listTrash, purgeTrash } from '../domain/trash-service.js';
 import {
   collectSubtreeTypes,
@@ -157,12 +200,19 @@ import {
 import {
   ACTIVITY_LIMIT_MAX,
   listActivity,
+  recordAttachmentActivity,
+  recordCommentActivity,
+  recordLayerActivity,
+  recordLinkActivity,
+  recordThoughtActivity,
   rollupActivity,
   truncateActivity,
 } from '../domain/activity-service.js';
 import { shrinkSubgraphToBudget } from './subgraph-budget.js';
 import { upsertThoughtBundle } from '../domain/thought-bundle-service.js';
+import { writeThoughts } from '../domain/thought-write-service.js';
 import { queryThoughts } from '../domain/query-service.js';
+import { queryChronicle, parseChronicleQueryBody } from '../domain/chronicle-service.js';
 import { getThoughtMeta } from '../domain/thought-meta.js';
 import {
   clampReadMetricsParams,
@@ -186,11 +236,23 @@ import {
   listThoughtTypes,
   resolveThoughtTypeIdByName,
 } from '../domain/thought-type-service.js';
+import { expandTypeIdsToSubtree } from '../domain/type-hierarchy.js';
 import {
   getLinkType,
   listLinkTypes,
   resolveLinkTypeIdByName,
 } from '../domain/link-type-service.js';
+import { writeOntology } from '../domain/ontology-write-service.js';
+import { deleteOntologyEntity } from '../domain/ontology-delete-service.js';
+import {
+  copySubtree as copySubtreeFn,
+} from '../domain/thought-subtree-copy-service.js';
+import { scanMentions } from '../domain/mentions-scan-service.js';
+import {
+  importFromBuffer,
+  planImportFromBuffer,
+  readImportSource,
+} from '../domain/import-service-mcp.js';
 import {
   assertNetworkAccess,
   auditAgentCall,
@@ -232,6 +294,9 @@ const View = z
 
 /** Error text shared by every `type_id`/`type` pair (task O4). */
 const TYPE_ID_TYPE_CONFLICT = 'provide at most one of type_id or type';
+
+/** Error text shared by every `property_id`/`property` pair (задача d5ab1630). */
+const PROPERTY_ID_PROPERTY_CONFLICT = 'provide at most one of property_id or property';
 
 /**
  * `direction` of an MCP inline link (`etn.thoughts.create` `link`,
@@ -312,6 +377,50 @@ function effectiveLinkTypeId(
 // ---------------------------------------------------------------------------
 
 /**
+ * Helper для `etn.thoughts.mentions_scan` — резолвит текст из `source`
+ * (если задан), затем делегирует в {@link scanMentions}. Объединяет две
+ * ветви регистрации (read-only и write) в один общий путь, чтобы не
+ * дублировать логику разворачивания `source`.
+ */
+function executeMentionsScan(
+  ndb: NetworkDb,
+  args: McpMentionsScanParams,
+  actorUserId: string,
+): { matches: { thought_id: string; title: string; confidence: number; matched_on: 'title' | 'synonym' | 'wildcard' }[]; links_created: number } {
+  let text = args.text ?? '';
+  let sourceThoughtId = args.source_thought_id;
+  if (args.source !== undefined) {
+    if (args.source.comment_id !== undefined) {
+      const c = getComment(ndb, args.source.comment_id);
+      if (c === null) {
+        throw new EtnError('NOT_FOUND', `Comment ${args.source.comment_id} not found.`);
+      }
+      text = c.body_md;
+      if (c.owner_type === 'thought') sourceThoughtId = c.owner_id;
+    } else if (args.source.thought_id !== undefined) {
+      const perm = getPermanentFull(ndb, 'thought', args.source.thought_id);
+      text = perm?.body_md ?? '';
+      sourceThoughtId = args.source.thought_id;
+    }
+  }
+  if (text === '') {
+    return { matches: [], links_created: 0 };
+  }
+  return scanMentions(ndb, {
+    network_id: args.network_id,
+    text,
+    ...(args.case_sensitive !== undefined ? { case_sensitive: args.case_sensitive } : {}),
+    ...(args.use_synonyms !== undefined ? { use_synonyms: args.use_synonyms } : {}),
+    ...(args.use_wildcards !== undefined ? { use_wildcards: args.use_wildcards } : {}),
+    ...(args.min_confidence !== undefined ? { min_confidence: args.min_confidence } : {}),
+    ...(sourceThoughtId !== undefined ? { source_thought_id: sourceThoughtId } : {}),
+    ...(args.create_links !== undefined ? { create_links: args.create_links } : {}),
+    ...(args.link_type !== undefined ? { link_type: args.link_type } : {}),
+    actor_user_id: actorUserId,
+  });
+}
+
+/**
  * Register all thirty `etn.*` tools on a freshly built {@link McpServer}.
  */
 export function registerTools(mcp: McpServer, rt: McpRuntime): void {
@@ -324,11 +433,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Список сетей',
       description:
-        "List every network the API key's user belongs to, with role and member counts, plus " +
-        "the network's `description` and `when_to_use` fields (task O5, docs/05-mcp-server.md §3). " +
-        'Each item carries `has_structure: true|false` — when true, the network declares a node ' +
-        'section type and exposes its machine-readable structure via `etn.networks.structure`. ' +
-        'The agent may only operate on networks returned here.',
+        "List every network the API key's user belongs to, with role and member counts, plus the network's " +
+        '`description` and `when_to_use` fields. `has_structure: true` — the network exposes its machine-readable ' +
+        'structure via `etn.networks.structure`. The agent may only operate on networks returned here.',
       annotations: MCP_TOOL_ANNOTATIONS['etn.networks.list'],
     },
     () =>
@@ -338,11 +445,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   );
 
   // etn.networks.structure — O5 read tool. Returns the active thoughts of the
-  // network's `node_section_type_id` (or an empty structure with `has_structure:
-  // false`). Each section is enriched with a permanent-comment preview, property
+  // network's `table_of_contents` role (task ba024a45 / 0.7.2, ADR 46d17a91 —
+  // the legacy `node_section_type_id` column was replaced by `type_roles`).
+  // Each section is enriched with a permanent-comment preview, property
   // values, neighbour counts and a usage_count (N3) — the same shape agents
-  // already know from `etn.thoughts.get` / `etn.thoughts.usage`, so an agent can
-  // dive from a structure node straight into a full read.
+  // already know from `etn.thoughts.get` / `etn.thoughts.usage`, so an agent
+  // can dive from a structure node straight into a full read.
   //
   // Bug fix (self-description reachability): §3/§4 of docs/05-mcp-server.md
   // describe FOUR markdown self-description fields (`description`,
@@ -357,6 +465,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // most orientation flows don't need them): it is returned only when the
   // caller opts in via `include_examples`, mirroring the "explicit request"
   // resolution the bug report itself proposed for that field.
+  //
+  // The response also carries the full `type_roles` dictionary and a
+  // conditional `instructions_ref` hint when the network has set the
+  // `instructions` role (ADR 717f04df «инструкции-витриной» — agents are
+  // told to call `etn.instructions` to read the network's prompt instructions).
   const NetworksStructureSchema = z.object({
     network_id: NetworkId,
     include_examples: z.boolean().optional(),
@@ -366,18 +479,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Структура сети',
       description:
-        'Read the network structure declared via the `node_section_type_id` setting ' +
-        '(task O5, docs/05-mcp-server.md §4.1). Returns the active thoughts of that type ' +
-        'with permanent-comment previews (2000 chars, `truncated` + `comment_id` to fetch ' +
-        'full text via `etn.comments.get`), resolved property values, neighbour counters ' +
-        '(`parents_count`, `children_count`, `attachments_count`, `usage_count`) and the ' +
-        'reference table of thought types actually used. Also carries the network\'s ' +
-        '`conventions` field (write rules: chronicle format, active-flag usage, naming, ' +
-        'links to types/templates) — read this before `create`/`update`/`upsert_bundle`. ' +
-        'Pass `include_examples: true` to additionally receive the network\'s `examples` ' +
-        'field (worked good/bad records); omitted by default because it tends to be long. ' +
-        'When `has_structure: false`, the `sections` list is empty and the agent should ' +
-        'fall back to search/query, but `conventions`/`examples` are still returned.',
+        'Read the structure declared via `type_roles.table_of_contents`: active thoughts of that type ' +
+        'with permanent-comment previews (2000 chars, `truncated`+`comment_id` → `etn.comments.get`), ' +
+        'property values, neighbour counters, `thought_types`. Carries `conventions`, `type_roles` and ' +
+        '`instructions_ref` when the `instructions` role is set. `include_examples: true` adds `examples`. ' +
+        '`has_structure: false` → empty `sections`, fall back to search/query.',
       inputSchema: NetworksStructureSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.networks.structure'],
     },
@@ -393,19 +499,36 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         assertNetworkAccess(rt, args.network_id);
         const examplesField =
           args.include_examples === true ? { examples: network.examples } : {};
-        if (network.node_section_type_id === null) {
+        const sectionTypeId =
+          typeof network.type_roles.table_of_contents === 'string'
+            ? network.type_roles.table_of_contents
+            : null;
+        // Convention tail: tell the agent where to read the network's instructions.
+        // Only present when the network actually set the role — empty `type_roles`
+        // must NOT advertise `etn.instructions` (would just return an empty list).
+        const instructionsField =
+          typeof network.type_roles.instructions === 'string'
+            ? {
+                instructions_ref:
+                  'Эта сеть публикует инструкции для агентов. Прочитайте их через ' +
+                  '`etn.instructions { network_id: ' +
+                  args.network_id +
+                  ' }` перед первым изменением.',
+              }
+            : {};
+        if (sectionTypeId === null) {
           return {
             network_id: args.network_id,
             has_structure: false as const,
-            node_section_type_id: null,
+            type_roles: network.type_roles,
             conventions: network.conventions,
+            ...instructionsField,
             ...examplesField,
             sections: [],
             thought_types: [],
           };
         }
         const ndb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger);
-        const sectionTypeId = network.node_section_type_id;
         const rows = ndb
           .prepare(
             `SELECT id, title, type_id, active, version, created_at, updated_at
@@ -447,7 +570,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         });
 
         // O10: count every section the agent looked at while reading the
-        // network's structure. `nodes_section_type_id` rows are typically a
+        // network's structure. `table_of_contents` rows are typically a
         // handful, so this is a tiny batch — kept here for completeness so
         // the owner can see "the agent loaded these sections N times".
         recordReads(ndb, sections.map((s) => s.id), { now: new Date().toISOString() });
@@ -475,9 +598,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         return {
           network_id: args.network_id,
           has_structure: true as const,
-          node_section_type_id: sectionTypeId,
+          type_roles: network.type_roles,
           node_section_type: sectionType,
           conventions: network.conventions,
+          ...instructionsField,
           ...examplesField,
           sections,
           thought_types: thoughtTypes,
@@ -485,47 +609,65 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const SearchSchema = z.object({
-    network_id: NetworkId,
-    query: z.string().min(1),
-    scope: z.enum(SEARCH_SCOPES).optional(),
-    in_subtree_of: ThoughtId.optional(),
-    type_id: ThoughtId.nullable().optional(),
-    // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
-    // создавшего (`author_id`) или последним изменившего (`editor_id`)
-    // мысль. Применяется к by_names, by_texts и by_chrono (для thoughts);
-    // для by_links пропускается. Пустая строка трактуется как отсутствие.
-    author_id: z.string().optional(),
-    editor_id: z.string().optional(),
-    limit: z.number().int().min(1).max(200).optional(),
-    offset: z.number().int().min(0).optional(),
-  });
+  const SearchSchema = z
+    .object({
+      network_id: NetworkId,
+      query: z.string().min(1),
+      scope: z.enum(SEARCH_SCOPES).optional(),
+      in_subtree_of: ThoughtId.optional(),
+      type_id: ThoughtId.nullable().optional(),
+      // Задача d5ab1630 — фильтр по типу через имя (case-insensitive, `name_key`).
+      // Резолвится в `type_id` через `resolveThoughtTypeIdByName`; NOT_FOUND
+      // если такого имени нет, VALIDATION_ERROR + candidates при неоднозначности.
+      // Взаимоисключающе с `type_id`.
+      type: z.string().min(1).optional(),
+      // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
+      // создавшего (`author_id`) или последним изменившего (`editor_id`)
+      // мысль. Применяется к by_names, by_texts и by_chrono (для thoughts);
+      // для by_links пропускается. Пустая строка трактуется как отсутствие.
+      author_id: z.string().optional(),
+      editor_id: z.string().optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
   mcp.registerTool(
     'etn.thoughts.search',
     {
       title: 'Полнотекстовый поиск',
       description:
-        'Full-text search across thought names, comment texts, link texts and chronology ' +
-        '(docs/05-mcp-server.md §4.1, task O11). `scope` selects result groups ' +
-        '(`names`/`texts`/`links`/`chronology`/`all`). `in_subtree_of` restricts to the subtree ' +
-        'of a thought; `type_id` filters by thought type. `author_id`/`editor_id` (task 59119797 ' +
-        '«Фильтры Автор/Редактор») — id пользователя, создавшего/последним ' +
-        'изменившего мысль: применяется к by_names, by_texts и by_chrono. ' +
-        'Pagination: `limit` (1–200, default 50) and `offset` (≥ 0, default 0) — together ' +
-        'they walk the result tail; `meta.total_in_group` reports the unfiltered totals per ' +
-        'group so the agent can detect the end of the list.',
+        'Full-text search across thought names, comment texts, link texts and chronology. `scope` selects ' +
+        'result groups (`names`/`texts`/`links`/`chronology`/`all`); `in_subtree_of`, `type_id` (or its ' +
+        'name-form `type`, resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, ' +
+        '`VALIDATION_ERROR` with `details.candidates` on ambiguity), `author_id`/`editor_id` narrow it. ' +
+        '`limit` (1–200, default 50) + `offset` walk the tail; `meta.total_in_group` gives unfiltered totals ' +
+        'per group.',
       inputSchema: SearchSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.search'],
     },
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
+        // Резолв имени типа в id (задача d5ab1630). Сбор эха для ответа —
+        // `resolved_type` приходит, только если агент передал `type`.
+        let resolvedType: { input: string; id: string; name: string } | undefined;
+        let typeIdForDomain: string[] | undefined;
+        if (args.type !== undefined) {
+          const id = resolveThoughtTypeIdByName(ndb, args.type);
+          const name = ndb
+            .prepare('SELECT name FROM thought_types_v WHERE id = ?')
+            .get(id) as { name: string } | undefined;
+          resolvedType = { input: args.type, id, name: name?.name ?? args.type };
+          typeIdForDomain = [id];
+        } else if (args.type_id !== undefined && args.type_id !== null) {
+          typeIdForDomain = [args.type_id];
+        }
         const result = search(ndb, {
           q: args.query,
           scope: args.scope,
           in: args.in_subtree_of === undefined ? undefined : 'subtree',
           from_thought_id: args.in_subtree_of,
-          type_id: args.type_id === undefined || args.type_id === null ? undefined : [args.type_id],
+          type_id: typeIdForDomain,
           author_id: args.author_id,
           editor_id: args.editor_id,
           limit: args.limit,
@@ -549,70 +691,139 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           ...result,
           by_names: result.by_names.map((h) => withSanitizedIcon(h)),
           by_texts: result.by_texts.map((h) => withSanitizedIcon(h)),
+          ...(resolvedType !== undefined ? { resolved_type: resolvedType } : {}),
         };
       }),
   );
 
-  const QueryPropertySchema = z.object({
-    property_id: z.string().min(1),
-    operator: z.enum(['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 'lte']),
-    value: z.union([z.string(), z.number(), z.boolean()]),
-  });
-  const QuerySchema = z.object({
-    network_id: NetworkId,
-    in_subtree_of: ThoughtId.optional(),
-    max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
-    type_id: z.array(z.string().min(1)).optional(),
-    active: z.enum(['true', 'false', 'any']).optional(),
-    trashed: z.enum(['true', 'false', 'any']).optional(),
-    keywords: z.string().min(1).optional(),
-    properties: z.array(QueryPropertySchema).optional(),
-    created_after: z.string().min(1).optional(),
-    created_before: z.string().min(1).optional(),
-    updated_after: z.string().min(1).optional(),
-    updated_before: z.string().min(1).optional(),
-    // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
-    // создавшего мысль (`author_id`) или последним изменившего (`editor_id`).
-    author_id: z.string().optional(),
-    editor_id: z.string().optional(),
-    sort: z.enum(['title', 'created_at', 'updated_at']).optional(),
-    order: z.enum(['asc', 'desc']).optional(),
-    limit: z.number().int().min(1).max(200).optional(),
-    offset: z.number().int().min(0).optional(),
-  });
+  const QueryPropertySchema = z
+    .object({
+      // Задача d5ab1630: `property_id` (registry id) или `property` (имя из
+      // реестра). Взаимоисключающе — XOR, иначе 422.
+      property_id: z.string().min(1).optional(),
+      property: z.string().min(1).optional(),
+      operator: z.enum(['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 'lte']),
+      value: z.union([z.string(), z.number(), z.boolean()]),
+    })
+    .refine(
+      (v) => v.property_id === undefined || v.property === undefined,
+      { message: PROPERTY_ID_PROPERTY_CONFLICT },
+    );
+  const QuerySchema = z
+    .object({
+      network_id: NetworkId,
+      in_subtree_of: ThoughtId.optional(),
+      max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
+      type_id: z.array(z.string().min(1)).optional(),
+      // Задача d5ab1630: фильтр по типам через имена (case-insensitive,
+      // `name_key`); резолвится в `type_id[]` через `etn.types.list`.
+      // NOT_FOUND если имени нет, VALIDATION_ERROR + candidates при
+      // неоднозначности. Взаимоисключающе с `type_id`.
+      type: z.array(z.string().min(1)).optional(),
+      active: z.enum(['true', 'false', 'any']).optional(),
+      trashed: z.enum(['true', 'false', 'any']).optional(),
+      keywords: z.string().min(1).optional(),
+      properties: z.array(QueryPropertySchema).optional(),
+      created_after: z.string().min(1).optional(),
+      created_before: z.string().min(1).optional(),
+      updated_after: z.string().min(1).optional(),
+      updated_before: z.string().min(1).optional(),
+      // Задача 59119797 «Фильтры Автор/Редактор»: id пользователя,
+      // создавшего мысль (`author_id`) или последним изменившего (`editor_id`).
+      author_id: z.string().optional(),
+      editor_id: z.string().optional(),
+      sort: z.enum(['title', 'created_at', 'updated_at']).optional(),
+      order: z.enum(['asc', 'desc']).optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .refine(
+      (v) => v.type_id === undefined || v.type === undefined,
+      { message: TYPE_ID_TYPE_CONFLICT },
+    );
   mcp.registerTool(
     'etn.thoughts.query',
     {
       title: 'Структурная выборка мыслей',
       description:
-        'List thoughts by criteria (docs/05-mcp-server.md §4.1) — no text query required. ' +
-        'Filters combine with AND: `in_subtree_of` (+`max_depth`) restricts to the directed ' +
-        'descendants of a thought (each hit carries its `depth`), `type_id[]` filters by type, ' +
-        '`active` by актуальность (`true`/`false`/`any`), `trashed` by пометка на удаление ' +
-        '(`true`/`false`/`any`, default `false` — only unmarked; S13), `keywords` — the §6.10 ' +
-        'mini-syntax (whitespace-separated words, all required; `*` infix wildcard; `-слово` ' +
-        'exclusion; matched against title and synonyms), ' +
-        '`properties` by property values (registry `property_id` + operator eq/ne/contains/gt/gte/lt/lte + value; ' +
-        'the property `value_type` selects the column — number → value_number, bool → value_bool, ' +
-        'text/url/date/thought_ref on their matching columns; an unknown `property_id` matches nothing), ' +
-        '`created_*`/`updated_*` by ' +
-        'ISO-8601 date ranges, `author_id`/`editor_id` (task 59119797 ' +
-        '«Фильтры Автор/Редактор») — id пользователя, создавшего/последним ' +
-        'изменившего мысль. The response carries a `thought_types` reference table (name + ' +
-        'AI-facing description) for every type used in `hits`. Use instead of search when ' +
-        'there is no text to query.',
+        'List thoughts by criteria — no text query required; filters combine with AND. `in_subtree_of` ' +
+        '(+`max_depth`) — directed descendants (hits carry `depth`); `type_id[]` (or its name-form `type[]`, ' +
+        'resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, `VALIDATION_ERROR` ' +
+        'with `details.candidates` on ambiguity); `active` and `trashed` (`true`/`false`/`any`; `trashed` ' +
+        'defaults to `false`); `keywords` — mini-syntax over title and synonyms (words all required, ' +
+        '`*` infix wildcard, `-word` exclusion); `properties` — registry `property_id` (or its name-form ' +
+        '`property`, same resolve semantics) + operator eq/ne/contains/gt/gte/lt/lte + value (unknown ' +
+        '`property_id` matches nothing; the `value_type` picks the column: number → value_number, bool → ' +
+        'value_bool, others on their text columns); `created_*`/`updated_*` — ISO-8601 ranges; ' +
+        '`author_id`/`editor_id` — id пользователя, создавшего/последним изменившего мысль. Response carries ' +
+        'a `thought_types` reference table plus the optional `resolved_types` / `resolved_properties` echoes ' +
+        'for inputs that came in by name.',
       inputSchema: QuerySchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
     },
     (args) =>
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
-        const result = queryThoughts(ndb, args, { maxNodes: rt.limits.maxNodesPerSubgraph });
+        // Резолв имён типов в id (задача d5ab1630). Сбор эха для ответа —
+        // `resolved_types` приходит, только если агент передал `type`.
+        let resolvedTypes: Array<{ input: string; id: string; name: string }> | undefined;
+        if (args.type !== undefined) {
+          resolvedTypes = [];
+          for (const name of args.type) {
+            const id = resolveThoughtTypeIdByName(ndb, name);
+            const row = ndb
+              .prepare('SELECT name FROM thought_types_v WHERE id = ?')
+              .get(id) as { name: string } | undefined;
+            resolvedTypes.push({ input: name, id, name: row?.name ?? name });
+          }
+        }
+        // Резолв имён свойств в id. Сбор эха `resolved_properties` —
+        // аналогично, только при наличии условий с `property`.
+        let resolvedProperties:
+          | Array<{ input: string; id: string; name: string }>
+          | undefined;
+        let domainProperties = args.properties;
+        if (args.properties !== undefined) {
+          const out: NonNullable<typeof args.properties> = [];
+          let resolved: Array<{ input: string; id: string; name: string }> | null = null;
+          for (const cond of args.properties) {
+            if (cond.property !== undefined) {
+              const id = resolvePropertyIdByName(ndb, cond.property);
+              const row = ndb
+                .prepare('SELECT name FROM properties_v WHERE id = ?')
+                .get(id) as { name: string } | undefined;
+              out.push({ ...cond, property_id: id });
+              if (resolved === null) resolved = [];
+              resolved.push({ input: cond.property, id, name: row?.name ?? cond.property });
+              continue;
+            }
+            out.push(cond);
+          }
+          domainProperties = out;
+          if (resolved !== null) resolvedProperties = resolved;
+        }
+        const result = queryThoughts(
+          ndb,
+          {
+            ...args,
+            // Передаём уже резолвнутые id (MCP-фасад гарантирует, что
+            // XOR-схема соблюдена и обе формы не приходят одновременно);
+            // domain-сервис делает второй проход для REST-вызовов.
+            type_id:
+              args.type_id ??
+              (resolvedTypes !== undefined ? resolvedTypes.map((r) => r.id) : undefined),
+            type: undefined,
+            properties: domainProperties,
+          },
+          { maxNodes: rt.limits.maxNodesPerSubgraph },
+        );
         // O10: count every hit in the structured query.
         recordReads(ndb, result.hits.map((h) => h.id), { now: new Date().toISOString() });
         return {
           ...result,
           thought_types: thoughtTypeCatalog(ndb, result.hits.map((h) => h.type_id)),
+          ...(resolvedTypes !== undefined ? { resolved_types: resolvedTypes } : {}),
+          ...(resolvedProperties !== undefined ? { resolved_properties: resolvedProperties } : {}),
         };
       }),
   );
@@ -623,17 +834,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Мысль (полная)',
       description:
-        'Fetch one thought with synonyms, type (with AI-facing description), styles and ' +
-        'property values (`thought_ref` values resolved to {id, title}). Each value carries ' +
-        '`property_id`, `property_name` and `value_type` from the registry; values whose ' +
-        'property is not attached to the owner\'s type chain are flagged `outside_type: true` ' +
-        '(task f14cd5f1 — without it the agent would treat the card as empty and overwrite the ' +
-        'orphaned value). `meta` carries counters and `meta.permanent` — a preview of the single ' +
-        'permanent comment (body truncated to 2000 chars; `truncated` flag + comment `id`). When ' +
-        '`truncated: true` fetch the full text via `etn.comments.get` (by that `id` or by this ' +
-        'thought_id). Pass `view: "full"` to keep the legacy shape with every visual field ' +
-        '(colours, font-style flags, icon attachment id); the default `view: "compact"` drops ' +
-        'them (task O12).',
+        'Fetch one thought with synonyms, type (AI-facing description included) and property values ' +
+        '(`thought_ref` resolved to {id, title}; values whose property is not on the owner\'s type chain ' +
+        'are flagged `outside_type: true` — do not treat such a card as empty). `meta.permanent` — the ' +
+        'full text of the permanent comment (задача 3ea09a54: в `etn.thoughts.get` обрезка отключена; в ' +
+        'остальных выборках — preview 2000 chars, `etn.comments.get` для полного). `meta.link_stats` ' +
+        '(0.7.2) — счётчики активных связей по `(link_type_id, direction)` + `link_types`. ' +
+        '`view: "compact"` (default) drops visual fields.',
       inputSchema: GetSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -645,7 +852,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const properties = getPropertyValuesResolved(ndb, 'thought', args.thought_id);
         // O10: count this single read for `etn.metrics.reads` analytics.
         recordReads(ndb, [rawThought.id], { now: new Date().toISOString() });
-        const meta = getThoughtMeta(ndb, args.thought_id);
+        // Задача 3ea09a54: для `etn.thoughts.get` `meta.permanent` отдаётся
+        // полным текстом (без `chars_*`/`truncated`). Все остальные выборки
+        // сущностей (subgraph, structure, списки) продолжают получать
+        // preview-форму — требование «выборка сущностей → превью».
+        const meta = getThoughtMeta(ndb, args.thought_id, { fullPermanent: true });
         const view: McpViewMode = args.view ?? 'compact';
         // Bug fix (docs/05-mcp-server.md §5.1e): a `data:` icon URL is dropped
         // in every view — see `sanitizeIcon`/`withSanitizedIcon` in
@@ -661,6 +872,84 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
+  // etn.thoughts.resolve — пакетное чтение по списку id (задача 6d45ab37,
+  // спека 85b94925, P1-паритет MCP↔REST `POST /thoughts/resolve`).
+  // Возвращает карточки в порядке первого появления id в запросе плюс
+  // `missing[]` для отсутствующих. Лимит по размеру пачки —
+  // `rt.limits.maxNodesPerSubgraph` (тот же, что у `etn.thoughts.subgraph`).
+  const ResolveSchema = z.object({
+    network_id: NetworkId,
+    thought_ids: z.array(ThoughtId).min(1).max(rt.limits.maxNodesPerSubgraph),
+    view: View,
+  });
+  mcp.registerTool(
+    'etn.thoughts.resolve',
+    {
+      title: 'Пакетное чтение мыслей',
+      description:
+        'Батч-чтение по списку id: `items[]` (карточки в порядке первого появления, дубли ' +
+        'схлопываются) + `missing[]`. Карточка несёт мысль, тип, свойства, `meta.link_stats` и ' +
+        'полнотекстовый `comment_preview`. Лимит — `maxNodesPerSubgraph`.',
+      inputSchema: ResolveSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const view: McpViewMode = args.view ?? 'compact';
+        const result = getThoughtsByIdsResolved(ndb, args.thought_ids);
+        // O10: count reads for `etn.metrics.reads` analytics.
+        recordReads(
+          ndb,
+          result.items.map((c) => c.id),
+          { now: new Date().toISOString() },
+        );
+        // Bug fix (§5.1e): `getThoughtsByIdsResolved` returns the raw `data:`
+        // icon URL — sanitize in both views so the agent never sees an inline
+        // image payload. The compact projection below also reads `card.icon`,
+        // so sanitising the source once is enough. `card.type` carries the
+        // type's icon through `withSanitizedIconLite` which leaves it raw;
+        // apply the same fix here.
+        const sanitizedItems = result.items.map((card) => ({
+          ...withSanitizedIcon(card),
+          type: card.type === null ? null : withSanitizedIcon(card.type),
+        }));
+        const items =
+          view === 'full'
+            ? sanitizedItems
+            : sanitizedItems.map((card) => ({
+                // Проекция касается только полей самой мысли (id/title/...);
+                // `type`, `properties`, `meta` и `comment_preview` остаются в
+                // полной форме — тот же контракт, что и у `etn.thoughts.get`.
+                ...card,
+                id: card.id,
+                title: card.title,
+                type_id: card.type_id,
+                icon: card.icon,
+                icon_kind: card.icon_kind,
+                icon_attachment_id: card.icon_attachment_id,
+                active: card.active,
+                marked_for_deletion: card.marked_for_deletion,
+                fg_color: null,
+                bg_color: null,
+                font_bold: null,
+                font_italic: null,
+                font_underline: null,
+                font_strike: null,
+                synonyms: card.synonyms,
+                version: card.version,
+                created_at: card.created_at,
+                updated_at: card.updated_at,
+              }));
+        // Reference table: только типы, реально использованные в items.
+        const thoughtTypes = thoughtTypeCatalog(
+          ndb,
+          sanitizedItems.map((c) => c.type_id),
+        );
+        return { items, missing: result.missing, thought_types: thoughtTypes };
+      }),
+  );
+
   const NeighborsSchema = z.object({
     network_id: NetworkId,
     thought_id: ThoughtId,
@@ -673,15 +962,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Соседи мысли',
       description:
-        'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`). ' +
-        'With `depth > 1` performs a bounded breadth-first walk returning resolved thoughts. ' +
-        'At `depth: 1` (default) the page is capped at 50 rows; `total`/`truncated` in the ' +
-        'response say whether more exist (bug fix 0.6.3) — page through the rest with ' +
-        '`etn.thoughts.query { in_subtree_of: <this id>, max_depth: 1 }` instead. ' +
-        'Responses carry `link_types`/`thought_types` reference tables (name + AI-facing ' +
-        'description) for the types actually used. `view: "compact"` (default, task O12) drops ' +
-        'colours and line-style fields from the link-type catalogue and, for `depth > 1`, the ' +
-        'visual fields from each resolved thought.',
+        'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`) or `both` (0.7.2); ' +
+        '`depth > 1` does a bounded BFS walk. `dir: "both"` (0.7.2) — оба направления одним вызовом, ' +
+        'записи несут `direction: "in"|"out"`. Рёбра (0.7.2) несут `has_properties`/`has_comment` — ' +
+        'два агрегирующих запроса на весь набор рёбер, не на ребро. На `depth: 1` страница 50 — ' +
+        '`total`/`truncated` показывают остаток; дальше — `etn.thoughts.query { in_subtree_of, max_depth: 1 }`. ' +
+        'Справочники `link_types`/`thought_types`.',
       inputSchema: NeighborsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.neighbors'],
     },
@@ -693,16 +979,82 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
           const neighborOpts = { userId: rt.deps.auth.userId };
+          // `dir: "both"` (0.7.2) — both directions in one call. The domain
+          // `getNeighbors` is built for parents/children/siblings (REST trio)
+          // and would map `both` to siblings; we call it twice and glue the
+          // results here. Each entry carries its own `direction: "in"|"out"`.
+          if (args.dir === 'both') {
+            const parents = getNeighbors(ndb, args.thought_id, 'parents', neighborOpts).map((n) => ({
+              ...n,
+              direction: 'in' as const,
+            }));
+            const children = getNeighbors(ndb, args.thought_id, 'children', neighborOpts).map((n) => ({
+              ...n,
+              direction: 'out' as const,
+            }));
+            // Concatenate in arrival order (parents first, then children) — a
+            // single thought can appear in both lists when it has both an
+            // incoming and an outgoing edge to the focus, in which case BOTH
+            // entries surface (separate `link_id`s).
+            const rawNeighbors = [...parents, ...children];
+            const neighbors = rawNeighbors.map((n) => withSanitizedIcon(n));
+            // Edge flags: aggregating on the whole returned set.
+            const fillingFlags = getLinkFillingFlags(
+              ndb,
+              neighbors.map((n) => n.link_id),
+            );
+            const annotated = neighbors.map((n) => {
+              const flags = fillingFlags.get(n.link_id);
+              return {
+                ...n,
+                has_properties: flags?.has_properties ?? false,
+                has_comment: flags?.has_comment ?? false,
+              };
+            });
+            const linkTypes =
+              view === 'full'
+                ? linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id))
+                : linkTypeCatalogCompact(ndb, annotated.map((n) => n.link_type_id));
+            // Bug fix (0.6.3): honest counts come from the domain `countNeighbors`
+            // (one SQL per direction — same shape, no LIMIT). Sum them and
+            // compare to the trimmed page; `truncated` is per the page size.
+            const parentsTotal = countNeighbors(ndb, args.thought_id, 'parents', neighborOpts);
+            const childrenTotal = countNeighbors(ndb, args.thought_id, 'children', neighborOpts);
+            const total = parentsTotal + childrenTotal;
+            return {
+              thought: { id: thought.id, title: thought.title },
+              dir: args.dir,
+              depth: 1,
+              neighbors: annotated,
+              total,
+              truncated: total > annotated.length,
+              link_types: linkTypes,
+              thought_types: thoughtTypeCatalog(ndb, annotated.map((n) => n.type_id)),
+            };
+          }
           const rawNeighbors = getNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
           // `FocusNeighbor` carries no visual fields of its own (only `icon`,
           // which is semantic), so the only O12 effect at depth=1 is on the
           // link-type catalogue. Bug fix (§5.1e): sanitize the `icon` itself —
           // it is not gated by `view`, a `data:` URL leaks at depth=1 either way.
           const neighbors = rawNeighbors.map((n) => withSanitizedIcon(n));
+          // Edge flags: aggregating on the whole returned set.
+          const fillingFlags = getLinkFillingFlags(
+            ndb,
+            neighbors.map((n) => n.link_id),
+          );
+          const annotated = neighbors.map((n) => {
+            const flags = fillingFlags.get(n.link_id);
+            return {
+              ...n,
+              has_properties: flags?.has_properties ?? false,
+              has_comment: flags?.has_comment ?? false,
+            };
+          });
           const linkTypes =
             view === 'full'
-              ? linkTypeCatalog(ndb, neighbors.map((n) => n.link_type_id))
-              : linkTypeCatalogCompact(ndb, neighbors.map((n) => n.link_type_id));
+              ? linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id))
+              : linkTypeCatalogCompact(ndb, annotated.map((n) => n.link_type_id));
           // Bug fix (0.6.3, thought f2c7c7d3): this tool has no limit/offset
           // of its own and silently applied the domain default page size
           // (50) — a thought with more neighbours than that looked complete,
@@ -715,13 +1067,17 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             thought: { id: thought.id, title: thought.title },
             dir: args.dir,
             depth: 1,
-            neighbors,
+            neighbors: annotated,
             total,
-            truncated: total > neighbors.length,
+            truncated: total > annotated.length,
             link_types: linkTypes,
-            thought_types: thoughtTypeCatalog(ndb, neighbors.map((n) => n.type_id)),
+            thought_types: thoughtTypeCatalog(ndb, annotated.map((n) => n.type_id)),
           };
         }
+        // `traverse` already supports `direction: "both"` (graph-traversal.ts)
+        // — same BFS in both directions, used here for both `dir: "both"`
+        // (explicit) and `dir: "siblings"` (legacy remap). For `parents`/
+        // `children` we pass the dir as-is.
         const direction = args.dir === 'siblings' ? 'both' : args.dir;
         const walk = traverse(ndb, [args.thought_id], direction, {
           maxDepth: depth,
@@ -770,22 +1126,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Подграф в радиусе N рёбер',
       description:
-        'Extract the radius-bounded subgraph around seed thoughts: nodes (full thoughts), ' +
-        'active edges, and optionally comments per node (`include_comments` — previews: ' +
-        'permanent truncated to 2000 chars, last 10 chronological entries with per-entry ' +
-        'truncation; every preview entry carries the comment `id` — fetch the full text via ' +
-        '`etn.comments.get` when `truncated`). Every response carries ' +
-        '`thought_types`/`link_types` reference tables (id, name, description, icon/color) ' +
-        'for the types actually used — the agent reads the AI-facing type descriptions once ' +
-        'instead of re-fetching. The key RAG tool — returns ready-to-use context. ' +
-        '`max_nodes` is capped by the server setting max_nodes_per_subgraph. ' +
-        '`max_chars` (task O13) caps the JSON-encoded response size: the server first ' +
-        'shrinks every comment preview body and then drops the farthest nodes (BFS level ' +
-        'from the seeds) until the payload fits, reporting the truncation via `truncated: ' +
-        'true` and `reason` in `{"max_chars_preview", "max_chars_nodes"}`. ' +
-        '`view: "compact"` (default, task O12) drops colours and font-style flags from every ' +
-        'node and the line-style fields from the link-type catalogue — the dominant token ' +
-        'saving on large subgraphs. `view: "full"` keeps the legacy shape.',
+        'The key RAG tool: the radius-bounded subgraph around seeds — nodes, active edges, `thought_types`/' +
+        '`link_types` reference tables, and with `include_comments` per-node comment previews (permanent ' +
+        'truncated to 2000 chars, last 10 chronological; fetch full texts via `etn.comments.get` when ' +
+        '`truncated`). `max_nodes` is capped by the server setting max_nodes_per_subgraph; `max_chars` ' +
+        'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
+        '(BFS level), reporting `truncated: true` + `reason`. Edges (0.7.2) несут `has_properties`/`has_comment`. ' +
+        '`view: "compact"` (default) drops visual fields.',
       inputSchema: SubgraphSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.subgraph'],
     },
@@ -819,6 +1166,22 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           view === 'full'
             ? linkTypeCatalog(ndb, result.edges.map((e) => e.type_id))
             : linkTypeCatalogCompact(ndb, result.edges.map((e) => e.type_id));
+        // 0.7.2 (requirement 8ab42ea8) — annotate every edge with two presence
+        // flags (`has_properties`, `has_comment`) so the agent sees, in one
+        // read, which links hold knowledge worth following up. Two aggregating
+        // queries on the whole edge set, not one per edge.
+        const fillingFlags = getLinkFillingFlags(
+          ndb,
+          result.edges.map((e) => e.id),
+        );
+        const edges = result.edges.map((edge) => {
+          const flags = fillingFlags.get(edge.id);
+          return {
+            ...edge,
+            has_properties: flags?.has_properties ?? false,
+            has_comment: flags?.has_comment ?? false,
+          };
+        });
         // When the hard `max_nodes` bound fires during traversal, the response is
         // already structurally incomplete — running the budget shrinker on top
         // would only hide that fact behind a softer reason. Surface the
@@ -826,13 +1189,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const thoughtTypes = thoughtTypeCatalog(ndb, nodes.map((n) => n.type_id));
         const payload: {
           nodes: typeof projectedNodes;
-          edges: typeof result.edges;
+          edges: typeof edges;
           thought_types: typeof thoughtTypes;
           link_types: typeof linkTypes;
           comments?: typeof comments;
         } = {
           nodes: projectedNodes,
-          edges: result.edges,
+          edges,
           thought_types: thoughtTypes,
           link_types: linkTypes,
           ...(comments === undefined ? {} : { comments }),
@@ -903,7 +1266,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.to_id,
           args.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH,
         );
-        const thoughts = path === null ? undefined : resolveThoughts(ndb, path);
+        // Bug fix (§5.1e): sanitize before returning — `resolveThoughts` gives
+        // raw `data:` icon URLs, but the agent can never resolve an image; the
+        // place must mirror `subgraph`/`get`/`neighbors`.
+        const thoughts =
+          path === null ? undefined : resolveThoughts(ndb, path).map((t) => withSanitizedIcon(t));
         return {
           from_id: args.from_id,
           to_id: args.to_id,
@@ -918,12 +1285,29 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const LinkGetSchema = z.object({ network_id: NetworkId, link_id: LinkId });
+  const LinkGetSchema = z.object({
+    network_id: NetworkId,
+    link_id: LinkId,
+    /**
+     * Response projection (task O12, docs/05-mcp-server.md §4.1) — `compact`
+     * (default) returns the base link DTO plus its type; `full` (0.7.2) adds
+     * the link's property values, the permanent comment (full text, no
+     * truncation), a chronological-comment preview (last 10 entries with
+     * 2000-char bodies, mirroring `etn.thoughts.subgraph`) and the link's
+     * attachments. Use `compact` when only the relationship itself matters;
+     * use `full` once an edge's `has_properties`/`has_comment` flag in a
+     * `subgraph`/`neighbors` response has flagged it as worth reading.
+     */
+    view: z.enum(MCP_VIEW_MODES).default('compact'),
+  });
   mcp.registerTool(
     'etn.links.get',
     {
       title: 'Связь (с метаданными)',
-      description: 'Fetch one link with its link type (including the AI-facing description).',
+      description:
+        'Fetch one link with its link type (AI-facing description included). `view: "full"` (0.7.2) — ' +
+        'дополнительно возвращает `properties`, `permanent` (полный текст), `chrono` (превью, 10 записей), ' +
+        '`attachments`. Использовать после `subgraph`/`neighbors` по флагам `has_properties`/`has_comment`.',
       inputSchema: LinkGetSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.get'],
     },
@@ -935,7 +1319,21 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           throw new Error(`ETN error [NOT_FOUND]: link ${args.link_id} not found`);
         }
         const type = link.type_id === null ? null : getLinkType(ndb, link.type_id);
-        return { ...link, type };
+        const compact = { ...link, type };
+        if (args.view === 'compact') {
+          return compact;
+        }
+        // `view: "full"` (0.7.2) — дополняем базовый DTO четырьмя блоками:
+        // свойства (резолвнутые `thought_ref`, как в `etn.thoughts.get`),
+        // полный постоянный комментарий, превью хронологии по образцу
+        // `etn.thoughts.subgraph` (последние 10, обрезка 2000 символов) и
+        // вложения. Все четыре функции уже полиморфны по `owner_type` и
+        // работают для `'link'` без обёрток.
+        const properties = getPropertyValuesResolved(ndb, 'link', link.id);
+        const permanent = getPermanentFull(ndb, 'link', link.id);
+        const chrono = getCommentsPreview(ndb, 'link', link.id);
+        const attachments = listAttachments(ndb, 'link', link.id);
+        return { ...compact, properties, permanent, chrono, attachments };
       }),
   );
 
@@ -962,14 +1360,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Ссылки на мысль',
       description:
-        'Comments whose `body_md` carries an explicit ID-based wiki reference ' +
-        '`[[#<id>]]` or `[[n:<net>#<id>]]` to this thought (task R3, ' +
-        'docs/03-server-api.md §13a). Distinct from `etn.thoughts.mentions` — ' +
-        'that one finds implicit text matches by title/synonyms via FTS5; ' +
-        'this one finds explicit UUID-based references by runtime regex. ' +
-        'Returns the same `MentionHit[]` shape as `etn.thoughts.mentions` ' +
-        '(one hit per (owner_type, owner_id) owner; the target thought own ' +
-        'comments are excluded; snippet is centred on the matched id).',
+        'Comments whose `body_md` carries an explicit ID-based wiki reference `[[#<id>]]` or ' +
+        '`[[n:<net>#<id>]]` to this thought. Distinct from `etn.thoughts.mentions` — that one finds implicit ' +
+        'text matches by title/synonym via FTS5, this one explicit UUID references. Returns the same ' +
+        '`MentionHit[]` shape; the thought\'s own comments are excluded.',
       inputSchema: BacklinksSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.backlinks'],
     },
@@ -986,14 +1380,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Где используется мысль',
       description:
-        'Thoughts referencing this thought as a `thought_ref` property value (formal links, ' +
-        '«Использование» in the editor), grouped by the registry property. Returns ' +
-        '{ total, groups: [{property_id, key, thoughts[]}], thought_types } — `property_id` ' +
-        'is the registry id (one group per network property regardless of which types attach ' +
-        'it — task f14cd5f1); `key` is the registry name. The `thought_types` reference table ' +
-        '(name + AI-facing description) covers every type used in the result. ' +
-        '`view: "compact"` (default, task O12) drops colours, font-style flags and the icon ' +
-        'attachment id from each referencing thought; `view: "full"` keeps them.',
+        'Thoughts referencing this thought as a `thought_ref` property value (formal links), grouped by the ' +
+        'registry property: { total, groups: [{property_id, key, thoughts[]}], thought_types } — one group ' +
+        'per network property. `view: "compact"` (default) drops visual fields from each referencing thought.',
       inputSchema: UsageSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.usage'],
     },
@@ -1043,10 +1432,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Проверка блокировки удаления мысли',
       description:
-        'Check what blocks a thought from being physically deleted (S13, 03-server-api.md ' +
-        '§6.5a): use in thought_ref properties, holding layers, and future orphans among its ' +
-        'children. Accepts an array — one call covers both single and group checks. Returns a map ' +
-        'id → { blocked, blocking, orphaned_children }.',
+        'Check what blocks a thought from being physically deleted: use in thought_ref properties, holding ' +
+        'layers, and future orphans among its children. Accepts an array; returns a map id → ' +
+        '{ blocked, blocking, orphaned_children }. See prompt etn.how_to_purge for the two-phase deletion flow.',
       inputSchema: DeletionCheckThoughtsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.deletion_check'],
     },
@@ -1070,9 +1458,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Проверка блокировки удаления связи',
       description:
-        'Check what blocks a link from being physically deleted (S13, 03-server-api.md §6.5a): ' +
-        'only holding layers (no thought_ref usage and no children for links). Accepts an array; ' +
-        'returns a map id → { blocked, blocking }.',
+        'Check what blocks a link from being physically deleted: only holding layers (no thought_ref usage ' +
+        'and no children for links). Accepts an array; returns a map id → { blocked, blocking }. ' +
+        'See prompt etn.how_to_purge.',
       inputSchema: DeletionCheckLinksSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.deletion_check'],
     },
@@ -1093,9 +1481,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Корзина сети',
       description:
-        'The trash of the network (S13, 03-server-api.md §14b): every thought and link with ' +
-        '`marked_for_deletion=true`, each with its precomputed blocking check — so the agent ' +
-        'sees at once what is purgeable without a per-row `deletion_check` call.',
+        'The trash of the network: every thought and link with `marked_for_deletion=true`, each with its ' +
+        'precomputed blocking check — what is purgeable is visible at once. See prompt etn.how_to_purge.',
       inputSchema: TrashListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.trash.list'],
     },
@@ -1120,11 +1507,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Комментарий (полный текст)',
       description:
-        'Fetch one comment in full: by `comment_id` — any comment (permanent or ' +
-        'chronological) with its complete `body_md`; by `thought_id` — the thought\'s ' +
-        'permanent comment, or `{thought_id, permanent: null}` when absent. Use when a ' +
-        'preview (`meta.permanent`, `subgraph` comments) reports `truncated: true` — every ' +
-        'preview entry carries the comment `id`.',
+        'Fetch one comment in full: by `comment_id` — any comment (permanent or chronological) with its ' +
+        'complete `body_md`; by `thought_id` — the thought\'s permanent comment, or `{thought_id, permanent: ' +
+        'null}` when absent. Use when a preview (`meta.permanent`, `subgraph` comments) reports `truncated: ' +
+        'true`.',
       inputSchema: GetCommentSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.comments.get'],
     },
@@ -1155,16 +1541,29 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     seed_ids: z.array(ThoughtId).min(1).max(50),
     radius: z.number().int().min(0).max(TRAVERSAL_DEFAULTS.MAX_DEPTH),
     format: z.enum(EXPORT_FORMATS).optional(),
+    /**
+     * Options for `format: "etnx"` (задача e488f4c1, 0.7.2). For markdown/html
+     * the field is ignored.
+     */
+    etnx_options: z
+      .object({
+        include_types: z.boolean().optional(),
+        include_attachments: z.boolean().optional(),
+        include_chronology: z.boolean().optional(),
+        include_subtree: z.boolean().optional(),
+        subtree_depth: z.number().int().min(1).max(20).optional(),
+      })
+      .optional(),
   });
   mcp.registerTool(
     'etn.export.subgraph',
     {
       title: 'Экспорт подграфа',
       description:
-        'Render the radius-bounded subgraph around seeds as a Markdown (`markdown`, default) or ' +
-        'HTML document. PDF is not supported on the MVP. `.etnx` export (full graph slice, phase P) ' +
-        'is wired up in O17 — this tool accepts `format: "etnx"` but will surface it as unsupported ' +
-        'until O17 lands.',
+        'Render the radius-bounded subgraph around seeds as a Markdown (`markdown`, default), HTML or ' +
+        '`.etnx` (zip-архив с мыслями, связями, типами, комментариями, вложениями — задача e488f4c1, ' +
+        '0.7.2). Для `etnx` опции `include_types`/`include_attachments`/`include_chronology`/`include_subtree` ' +
+        'передаются через `etnx_options`. `format: "etnx"` возвращает base64-строку архива в `content_b64`.',
       inputSchema: ExportSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.export.subgraph'],
     },
@@ -1172,21 +1571,16 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const ndb = openMemberNetwork(rt, args.network_id);
         const format: ExportFormat = args.format ?? 'markdown';
-        if (format === 'etnx') {
-          throw new EtnError(
-            'VALIDATION_ERROR',
-            '`.etnx` export через MCP будет доступен в O17 (после P9).',
-            { tool: 'etn.export.subgraph', field: 'format' },
-          );
-        }
         const result = subgraph(ndb, args.seed_ids, args.radius, {
           maxNodes: rt.limits.maxNodesPerSubgraph,
         });
-        let content: string;
         if (format === 'markdown') {
-          content = exportToMarkdown(ndb, result.nodes);
-        } else {
+          const content = exportToMarkdown(ndb, result.nodes);
+          return { format, truncated: result.truncated, content };
+        }
+        if (format === 'etnx') {
           const job = await startExportJob(ndb, result.nodes, format, {
+            etnx: args.etnx_options ?? {},
             source: {
               network_id: args.network_id,
               network_name: args.network_id,
@@ -1197,14 +1591,36 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           if (downloaded === null) {
             throw new Error('ETN error [INTERNAL]: export content unavailable');
           }
-          if (typeof downloaded.body !== 'string') {
+          if (typeof downloaded.body === 'string') {
             throw new Error(
-              'ETN error [INTERNAL]: expected textual export content, got binary',
+              'ETN error [INTERNAL]: expected binary export content, got string',
             );
           }
-          content = downloaded.body;
+          return {
+            format,
+            truncated: result.truncated,
+            content_b64: downloaded.body.toString('base64'),
+            size: downloaded.body.length,
+          };
         }
-        return { format, truncated: result.truncated, content };
+        // html
+        const job = await startExportJob(ndb, result.nodes, format, {
+          source: {
+            network_id: args.network_id,
+            network_name: args.network_id,
+            user_id: rt.deps.auth.userId,
+          },
+        });
+        const downloaded = getExportJobContent(job.job_id, format);
+        if (downloaded === null) {
+          throw new Error('ETN error [INTERNAL]: export content unavailable');
+        }
+        if (typeof downloaded.body !== 'string') {
+          throw new Error(
+            'ETN error [INTERNAL]: expected textual export content, got binary',
+          );
+        }
+        return { format, truncated: result.truncated, content: downloaded.body };
       }),
   );
 
@@ -1235,25 +1651,14 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Каталог типов',
       description:
-        'Both type catalogues in full (not just the types used elsewhere in a response, unlike ' +
-        'the `thought_types`/`link_types` reference tables of other read tools): thought types ' +
-        'and link types with their hierarchy (`parent_id`/`is_root`), `description` (AI-facing ' +
-        'context) and effective property definitions — own plus everything inherited along the ' +
-        'L21 type chain (`key`, `value_type`, `required`, `config` incl. `options`/' +
-        '`allowed_type_ids`, effective `default_value`, `inherited`, `defined_on`, ' +
-        '`property_id` (the registry id — task f14cd5f1: properties are network entities, the ' +
-        'effective list is how the agent sees the registry), the effective `description` of ' +
-        'the property and `description_overridden` marking a description this type overrides ' +
-        'itself). Call before ' +
-        'creating a typed thought/link to see what to fill; also lets `type_id` be replaced by a ' +
-        'type name in `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`. ' +
-        'Task O16: pass `in_subtree_of: <thought_id>` (optionally with `max_depth`) to scope ' +
-        'the response to the distinct thought/link types actually used inside that subtree, ' +
-        'each with a `usage_count` for ranking. Useful as the second step after ' +
-        '`etn.networks.structure` — pick a section, then pick a type relevant to that section. ' +
-        'On large networks the full response may exceed client response limits and the ' +
-        '`link_types` tail can be cut off — pass `scope: "links"` to fetch the link catalogue ' +
-        'alone (or `scope: "thoughts"` for the thought catalogue only).',
+        'Both type catalogues in full — thought and link types with hierarchy (`parent_id`/`is_root`), ' +
+        'AI-facing `description` and effective property definitions (own + inherited along the type ' +
+        'chain): `key`, `value_type`, `required`, `config` (incl. `options`/`allowed_type_ids`), ' +
+        '`default_value`, `inherited`, `defined_on`, `property_id` (the registry id). Call before creating ' +
+        'a typed thought/link; also lets `type_id` be replaced by a type name in `etn.thoughts.create`, ' +
+        '`etn.links.create` and `etn.thoughts.upsert_bundle`. `in_subtree_of` (+`max_depth`) scopes to the ' +
+        'types actually used inside that subtree, each with a `usage_count`. When the response risks being ' +
+        'cut off, fetch a single catalogue via `scope: "links"` / `"thoughts"`.',
       inputSchema: TypesListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.types.list'],
     },
@@ -1358,17 +1763,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Дельта событий',
       description:
-        'Delta feed over the real-time `event_log` for long-lived agents with their own cache ' +
-        '(task O9, docs/05-mcp-server.md §5.1c). Returns events with `seq > since_seq` in ' +
-        'ascending order, capped at `limit` (default 1000). The `cursor` echoes the current ' +
-        'retained window (`min_seq`/`max_seq`, `null` when the log is empty). Events with ' +
-        '`audience: "user"` are filtered: only events authored by the calling user are returned ' +
-        '(mirrors WebSocket audience routing, 04-realtime.md §5). Since task S9 the delta also ' +
-        'respects the caller\'s session layer (13-layers.md §12): network-audience events ' +
-        'invisible in that layer are dropped, and `truncated: true` is returned when `since_seq` ' +
-        'predates the session\'s last layer switch (migration 028) — in both cases the agent ' +
-        'must do a full resync (`etn.thoughts.search` + `etn.thoughts.get`) before resuming. ' +
-        'Each entry carries `layer_id` — the change-layer the write materialised in.',
+        'Delta feed over the real-time `event_log` for long-lived agents with their own cache: events ' +
+        'with `seq > since_seq`, ascending, capped at `limit` (default 1000); `cursor` echoes the retained ' +
+        'window. `audience: "user"` events are filtered to the caller\'s own; the delta respects the ' +
+        'caller\'s session layer. `truncated: true` — `since_seq` predates the retained window or the ' +
+        'session\'s last layer switch: do a full resync (`etn.thoughts.search` + `etn.thoughts.get`) ' +
+        'before resuming. Each entry carries `layer_id`.',
       inputSchema: ChangesListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.changes.list'],
     },
@@ -1455,15 +1855,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Метрики чтений мыслей',
       description:
-        'Per-thought read counters collected by the MCP read tools (task O10, ' +
-        'docs/05-mcp-server.md §5.1). `kind: "top"` (default) returns the most-read ' +
-        'thoughts ordered by `reads_count DESC, last_read_at DESC`. `kind: "cold"` ' +
-        'returns thoughts that have never been read, or — when `since` is given — ' +
-        'whose `last_read_at` is older than the cutoff, ordered by `updated_at DESC` ' +
-        'so the freshest un-touched nodes come first. Use this to spot hot spots ' +
-        'and dead zones; the counter is incremented by `etn.thoughts.get`, ' +
-        '`etn.thoughts.subgraph`, `etn.thoughts.query`, `etn.thoughts.search` and ' +
-        '`etn.networks.structure` after each successful read.',
+        'Per-thought read counters collected by the MCP read tools. `kind: "top"` (default) — most-read ' +
+        'thoughts (`reads_count DESC, last_read_at DESC`); `kind: "cold"` — never read, or (with `since`) ' +
+        'not read since the cutoff, ordered `updated_at DESC` so the freshest un-touched nodes come first. ' +
+        'Counted by `etn.thoughts.get`, `subgraph`, `query`, `search` and `etn.networks.structure`.',
       inputSchema: MetricsReadsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.metrics.reads'],
     },
@@ -1496,6 +1891,57 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
+  // etn.metrics.tools — 940a499d read tool (операция 254ba4db). Aggregate over
+  // the `_system.db` table `mcp_tool_call_metrics` written by the shared
+  // registration wrapper (`mcp/server.ts`): how often each tool is called and
+  // how often it errors. The evidence base for roster decisions — a tool with
+  // `calls_count = 0` over a period is a removal candidate, one with
+  // `errors_count / calls_count > 0.5` has an unclear contract/description.
+  // Admin sees every row; a regular member sees only the rows of their own
+  // networks plus their own network-less calls.
+  const MetricsToolsSchema = z.object({
+    network_id: NetworkId.optional(),
+    from_ms: z.number().int().nonnegative().optional(),
+    to_ms: z.number().int().nonnegative().optional(),
+    group_by: z.enum(['tool', 'tool+network', 'tool+key']).optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+  });
+  mcp.registerTool(
+    'etn.metrics.tools',
+    {
+      title: 'Телеметрия вызовов инструментов',
+      description:
+        'Aggregate call counters per MCP tool (successes and errors) from `mcp_tool_call_metrics`. ' +
+        '`group_by`: "tool" (default) | "tool+network" | "tool+key"; `from_ms`/`to_ms` bound `last_call_at` ' +
+        '(the table is an aggregate — the window bounds the observed interval). Ordered by `calls_count ' +
+        'DESC`; `limit` default 50, max 200. The owner (admin) sees everything; a regular member sees ' +
+        'only the rows of their own networks plus their own network-less calls. Verdicts: `calls_count = 0` ' +
+        'over a period — removal candidate; `errors_count / calls_count > 0.5` — unclear tool, revise its ' +
+        'contract/description.',
+      inputSchema: MetricsToolsSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.metrics.tools'],
+    },
+    (args) =>
+      runTool(async () => {
+        if (args.network_id !== undefined) {
+          assertNetworkAccess(rt, args.network_id);
+        }
+        const groupBy = args.group_by ?? 'tool';
+        const limit = Math.min(Math.max(args.limit ?? 50, 1), 200);
+        const isAdmin = rt.deps.auth.isAdmin;
+        const items = rt.deps.systemDb.aggregateToolCallMetrics({
+          groupBy,
+          networkId: args.network_id,
+          fromMs: args.from_ms,
+          toMs: args.to_ms,
+          limit,
+          visibleNetworks: isAdmin ? null : rt.deps.systemDb.listMemberNetworkIds(rt.deps.auth.userId),
+          visibleKeyIds: isAdmin ? [] : rt.deps.systemDb.listApiKeyIdsByUser(rt.deps.auth.userId),
+        });
+        return { group_by: groupBy, limit, items } satisfies McpMetricsToolsResult;
+      }),
+  );
+
   // etn.layers.list — S10 read tool, paritet with REST `GET .../layers`
   // (03-server-api.md §5a, 13-layers.md §10.1). Runs on the base-layer
   // connection: `layers`/`session_layers` are not branchable (§3), and the
@@ -1510,10 +1956,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Список слоёв',
       description:
-        'All layers of the network with hierarchy metadata (task S10, 13-layers.md §2.2, §10.1): ' +
-        'id, parent_id, title, comment, git_branch, depth, children_count (the DELETE cascade ' +
-        'confirmation, §2.4) and `current` — true on the calling key\'s own session layer. ' +
-        'Service (reserve) layers are hidden unless `include_service: true` (§8.2).',
+        'All layers of the network with hierarchy metadata: id, parent_id, title, comment, git_branch, ' +
+        'depth, children_count (the DELETE cascade confirmation) and `current` — true on the calling key\'s ' +
+        'own session layer. Service (reserve) layers are hidden unless `include_service: true`.',
       inputSchema: LayersListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.list'],
     },
@@ -1538,9 +1983,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Структурное отличие слоя',
       description:
-        'Structural diff of a layer against its parent (task S11, 13-layers.md §10.3; ' +
-        '03-server-api.md §5a.7): `links` — added/removed/type_changed/reparented (1:1 swaps of ' +
-        'the parent link)/reorder_collapsed (position-only batches, §6.5); `overridden` — the ids ' +
+        'Structural diff of a layer against its parent: `links` — added/removed/type_changed/reparented ' +
+        '(1:1 swaps of the parent link)/reorder_collapsed (position-only batches); `overridden` — the ids ' +
         'physically present in the layer (shadow rows, inserts and tombstones). The textual diff ' +
         '(`etn.layers.diff_doc`) is blind to all of these — use both.',
       inputSchema: LayersDiffSchema,
@@ -1560,10 +2004,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Содержательное отличие слоя (документы)',
       description:
-        'Textual diff payload of a layer against its parent (task S11, 13-layers.md §10.3; ' +
-        '03-server-api.md §5a.7): two deterministically assembled markdown documents ' +
-        '(`layer_doc`/`target_doc`) for a plain line-by-line comparison. Deterministic flat ' +
-        'assembly (all visible thoughts ordered by id); the hierarchical document is task T2.',
+        'Textual diff payload of a layer against its parent: two deterministically assembled markdown ' +
+        'documents (`layer_doc`/`target_doc`) for a plain line-by-line comparison (all visible thoughts ' +
+        'ordered by id).',
       inputSchema: LayersDiffSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.diff_doc'],
     },
@@ -1574,6 +2017,113 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const layerNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, layer.id);
         const targetNdb = openNetworkDb(rt.deps.dataDir, args.network_id, rt.deps.logger, target.id);
         return layerDiffDoc(layerNdb, targetNdb, layer, target);
+      }),
+  );
+
+  // =========================================================================
+  // `etn.chronicle.query` (задача 6d45ab37, спека 52767bdf, P1-паритет
+  // MCP↔REST `POST /chronicle/query`). Прокси над domain
+  // `parseChronicleQueryBody` + `queryChronicle` с резолвом имён типов.
+  // =========================================================================
+
+  // Объединённая схема — повторяет ключи REST `POST /chronicle/query`
+  // (docs/03-server-api.md §20). Имена типов и имён свойств резолвятся
+  // хелперами ниже, как в `etn.thoughts.query`/`search` (задача d5ab1630).
+  const ChronicleQuerySchema = z.object({
+    network_id: NetworkId,
+    keywords: z.string().optional(),
+    thought_ids: z.array(ThoughtId).optional(),
+    include_subtree: z.boolean().optional(),
+    // `type`/`type_id` XOR (задача 77351f03).
+    type: z.string().min(1).optional(),
+    type_id: z.array(ThoughtId).optional(),
+    // `link_type`/`link_type_id` XOR.
+    link_type: z.string().min(1).optional(),
+    link_type_id: z.array(ThoughtId).optional(),
+    link_scope: z.enum(['sources', 'targets', 'both']).optional(),
+    date_from: z.string().min(1).optional(),
+    date_to: z.string().min(1).optional(),
+    order: z.enum(['asc', 'desc']).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    offset: z.number().int().min(0).optional(),
+  });
+  mcp.registerTool(
+    'etn.chronicle.query',
+    {
+      title: 'Запрос хроники',
+      description:
+        'Двухфазный запрос хроники (паритет `POST /chronicle/query`): фаза 1 — мысли по ' +
+        '`keywords`/`thought_ids`/`include_subtree`/`type[]`; фаза 2 — хроно-комментарии к ним ' +
+        'или их связям с фильтрами `link_type[]`/`link_scope`/`date_from/to`. `{ rows[], meta }`.',
+      inputSchema: ChronicleQuerySchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.chronicle.query'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        // Резолв имён типов в id (задача d5ab1630 + 77351f03).
+        const typeIds = args.type === undefined
+          ? args.type_id
+          : (Array.isArray(args.type_id) ? args.type_id : []).concat([
+              resolveThoughtTypeIdByName(ndb, args.type),
+            ]);
+        const linkTypeIds = args.link_type === undefined
+          ? args.link_type_id
+          : (Array.isArray(args.link_type_id) ? args.link_type_id : []).concat([
+              resolveLinkTypeIdByName(ndb, args.link_type),
+            ]);
+        // Сборка тела запроса под domain `parseChronicleQueryBody` —
+        // повторяет ключи REST с минимальной правкой имён.
+        const body: Record<string, unknown> = {};
+        if (args.keywords !== undefined) body.keywords = args.keywords;
+        if (args.thought_ids !== undefined) body.thought_ids = args.thought_ids;
+        if (args.include_subtree !== undefined) body.include_subtree = args.include_subtree;
+        if (typeIds !== undefined) body.type_ids = typeIds;
+        if (linkTypeIds !== undefined) body.link_type_ids = linkTypeIds;
+        if (args.link_scope !== undefined) body.link_scope = args.link_scope;
+        if (args.date_from !== undefined) body.date_from = args.date_from;
+        if (args.date_to !== undefined) body.date_to = args.date_to;
+        if (args.order !== undefined) body.order = args.order;
+        if (args.limit !== undefined) body.limit = args.limit;
+        if (args.offset !== undefined) body.offset = args.offset;
+        const request = parseChronicleQueryBody(body, '');
+        const result = queryChronicle(ndb, request);
+        return {
+          rows: result.rows,
+          meta: { total: result.total, offset: request.offset, limit: request.limit },
+        };
+      }),
+  );
+
+  // =========================================================================
+  // `etn.members.list` (задача 6d45ab37, спека 6cccac39, P1-паритет MCP↔REST
+  // `GET /networks/{id}/members`). Доступ — участники сети или глобальный
+  // админ (проверка уже в `openMemberNetwork`).
+  // =========================================================================
+  const MembersListSchema = z.object({ network_id: NetworkId });
+  mcp.registerTool(
+    'etn.members.list',
+    {
+      title: 'Участники сети',
+      description:
+        'Список участников сети (user_id, display_name, role, joined_at). Паритет ' +
+        'с `GET /networks/{id}/members`. Доступ — участники или глобальный админ.',
+      inputSchema: MembersListSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.members.list'],
+    },
+    (args) =>
+      runTool(async () => {
+        // openMemberNetwork сам бросает FORBIDDEN, если ключ не привязан к сети.
+        openMemberNetwork(rt, args.network_id);
+        const rows = rt.deps.systemDb.listNetworkMembers(args.network_id);
+        return {
+          members: rows.map((r) => ({
+            user_id: r.user_id,
+            display_name: r.display_name,
+            role: r.role,
+            joined_at: r.added_at,
+          })),
+        };
       }),
   );
 
@@ -1598,12 +2148,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Создать слой',
       description:
-        'Create a layer under the given parent (task S10, 13-layers.md §2.3) — defaults to the ' +
-        'calling key\'s current session layer when `parent_id` is omitted. `comment` is optional ' +
-        'but strongly encouraged (§2.2): it is how the next agent understands the layer\'s purpose ' +
-        'without asking. Depth is capped at 4 ordinary layers above the base (§2.1) — a parent ' +
-        'already at that depth rejects with VALIDATION_ERROR. Does not switch the session to the ' +
-        'new layer — call `etn.layers.select` for that.',
+        'Create a layer under the given parent — defaults to the calling key\'s current session layer. ' +
+        '`comment` is strongly encouraged: it is how the next agent understands the layer\'s purpose. ' +
+        'Depth is capped at 4 ordinary layers above the base. Does not switch the session — call ' +
+        '`etn.layers.select` for that.',
       inputSchema: LayersCreateSchema,
     },
     (args, extra) =>
@@ -1623,6 +2171,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           comment: args.comment ?? null,
           gitBranch: args.git_branch ?? null,
           createdBy: rt.deps.auth.userId,
+        });
+        // Journal row, mirroring the REST POST /layers route: the snapshot
+        // layer is the calling key's session layer (creating does not switch).
+        recordLayerActivity(ndb, {
+          networkId: args.network_id,
+          userId: rt.deps.auth.userId,
+          action: 'created',
+          layer,
+          layerId: sessionLayer.id,
         });
         auditAgentCall(rt, 'etn.layers.create', args.network_id, 'layer', layer.id, {
           title: args.title,
@@ -1644,10 +2201,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Переименовать слой / изменить комментарий',
       description:
-        'Rename a layer and/or edit its comment (task S10, 13-layers.md §2.2, §10.1). The base ' +
-        'layer\'s title is fixed («Основа») — renaming it is a VALIDATION_ERROR; editing its ' +
-        'comment is allowed. `expected_version` is the usual optimistic-lock check (409 ' +
-        'VERSION_CONFLICT on mismatch).',
+        'Rename a layer and/or edit its comment. The base layer\'s title is fixed («Основа») — renaming it ' +
+        'is a VALIDATION_ERROR; editing its comment is allowed. `expected_version` — the usual optimistic ' +
+        'lock (409 VERSION_CONFLICT on mismatch).',
       inputSchema: LayersUpdateSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.update'],
     },
@@ -1677,6 +2233,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.expected_version,
           rt.deps.auth.userId,
         );
+        // Journal row, mirroring the REST PATCH /layers/:id route: the
+        // snapshot layer is the session layer (renaming does not switch).
+        recordLayerActivity(ndb, {
+          networkId: args.network_id,
+          userId: rt.deps.auth.userId,
+          action: 'updated',
+          layer,
+          layerId: sessionLayer.id,
+        });
         auditAgentCall(rt, 'etn.layers.update', args.network_id, 'layer', layer.id, {
           title: args.title,
           comment: args.comment,
@@ -1697,13 +2262,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Удалить слой',
       description:
-        'Delete a layer together with its whole descendant subtree (task S10, 13-layers.md §2.4). ' +
-        'A layer with descendants requires `cascade` to echo `children_count` from `etn.layers.list` ' +
-        '— a mismatch is 409, a missing value with living descendants is 422 carrying the actual ' +
-        'count. Physically removes every shadow row and tombstone of the subtree (not a merge — ' +
-        'nothing is transferred to the parent) and auto-purges the trash right after (rows the ' +
-        'deleted shadows were holding back). The base layer cannot be deleted. Returns ' +
-        '{ deleted, purged, skipped }.',
+        'Delete a layer together with its whole descendant subtree. A layer with descendants requires ' +
+        '`cascade` to echo `children_count` from `etn.layers.list` (mismatch → 409, missing with living ' +
+        'descendants → 422 with the actual count). Physically removes every shadow row and tombstone of ' +
+        'the subtree (nothing is transferred to the parent) and auto-purges the trash. The base layer ' +
+        'cannot be deleted.',
       inputSchema: LayersDeleteSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.delete'],
     },
@@ -1715,6 +2278,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         // route): their temp `layer_chain` would otherwise keep referencing
         // deleted layers.
         const ndb = openMemberNetworkBase(rt, args.network_id);
+        // Snapshot of the doomed layer BEFORE the cascade deletes its row —
+        // it goes to the journal (mirrors the REST DELETE /layers/:id route),
+        // and the parent id says where the subtree sessions were re-pointed.
+        const parentRow = ndb
+          .prepare('SELECT parent_id, title FROM layers WHERE id = ?')
+          .get(args.layer_id) as { parent_id: string | null; title: string } | undefined;
         const subtreeIds = layerSubtreeIds(ndb, args.layer_id);
         for (const id of subtreeIds) {
           if (id !== BASE_LAYER_ID) {
@@ -1723,11 +2292,25 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         }
         const switchedAtSeq = rt.deps.systemDb.getMaxEventSeq(args.network_id) ?? 0;
         const result = deleteLayerWithEvents(ndb, args.layer_id, args.cascade, switchedAtSeq);
+        // Per-row realtime events of the trash auto-purge — journaled rows
+        // are intentionally absent for them: the REST DELETE /layers/:id
+        // route records only the layer's own row (parity).
         for (const id of result.deleted_thought_ids) {
           emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
         }
         for (const id of result.deleted_link_ids) {
           emitAgentEvent(rt, args.network_id, 'link.deleted', { id }, extra.requestId);
+        }
+        if (parentRow) {
+          // Journal snapshot layer — where the deleted subtree's sessions were
+          // re-pointed (same choice as the REST route, 13-layers.md §2.4).
+          recordLayerActivity(ndb, {
+            networkId: args.network_id,
+            userId: rt.deps.auth.userId,
+            action: 'deleted',
+            layer: { id: args.layer_id, title: parentRow.title },
+            layerId: parentRow.parent_id ?? BASE_LAYER_ID,
+          });
         }
         auditAgentCall(rt, 'etn.layers.delete', args.network_id, 'layer', args.layer_id, {
           cascade: args.cascade,
@@ -1751,12 +2334,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Переключить текущий слой',
       description:
-        'Switch the calling API key\'s current session layer (task S10, 13-layers.md §7.1): every ' +
-        'later call of this key — reads and writes alike — runs in the new layer\'s context, ' +
-        'exactly like every other read/write tool that funnels through `etn.layers.list`\'s ' +
-        '`current` flag. A service (reserve) layer cannot be selected. Selecting the current layer ' +
-        'again is a no-op. `etn.changes.list` forces a full resync once `since_seq` predates this ' +
-        'switch (§12).',
+        'Switch the calling API key\'s current session layer: every later call of this key — reads and ' +
+        'writes alike — runs in the new layer\'s context. A service (reserve) layer cannot be selected; ' +
+        'selecting the current layer again is a no-op. `etn.changes.list` forces a full resync once ' +
+        '`since_seq` predates this switch.',
       inputSchema: LayersSelectSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.select'],
     },
@@ -1773,6 +2354,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.layer_id,
           switchedAtSeq,
         );
+        // No activity_log row: switching the session does not change the
+        // layer entity itself — the REST `/select` route does not journal it
+        // either (требование b0c7a57c covers entity mutations only).
         auditAgentCall(rt, 'etn.layers.select', args.network_id, 'layer', layer.id, {});
         return { ...layer, request_id: String(extra.requestId) };
       }),
@@ -1789,14 +2373,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Слить слой в родителя',
       description:
-        'Merge a layer into its parent — full (default) or a closed partial subset `tables: ' +
-        '{ <branchable table>: [row ids…] }` (task S10, 13-layers.md §8). A replay conflict (the ' +
-        'parent row changed since the layer was born) or an unclosed partial selection rejects the ' +
-        'WHOLE operation with VALIDATION_ERROR carrying `conflicts`/`missing_closure` — no partial ' +
-        'application. On success returns { applied, skipped, reorder_collapsed, reserve_layer_id, ' +
-        'purged }: `skipped` lists §6.4 residual link-endpoint-gone cases (merge still succeeds), ' +
-        '`reserve_layer_id` is the auto-created service layer holding the pre-merge state for a ' +
-        'manual rollback (§8.2). Emits one `layer.merged` event attributed to the merge target.',
+        'Merge a layer into its parent — full (default) or a closed partial subset `tables: { <branchable ' +
+        'table>: [row ids…] }`. A replay conflict or an unclosed partial selection rejects the WHOLE ' +
+        'operation with VALIDATION_ERROR (`conflicts`/`missing_closure`) — no partial application. Returns ' +
+        '{ applied, skipped, reorder_collapsed, reserve_layer_id (auto-created pre-merge state for manual ' +
+        'rollback), purged }. See prompt etn.how_to_merge_partial.',
       inputSchema: LayersMergeSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.layers.merge'],
     },
@@ -1821,6 +2402,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const ndb = openMemberNetworkBase(rt, args.network_id);
         const result = mergeLayer(ndb, args.layer_id, selection, rt.deps.auth.userId);
 
+        // No own activity_log row for the merge — parity with the REST merge
+        // route: mergeLayer already rolled the layer's journal rows up into
+        // the base (autoRollupLayerActivity, задача 6bcccd2b), and REST does
+        // not record a separate `layer` row for the merge operation itself.
+
         // Exactly one `layer.merged` event per merge (04-realtime.md §11.4),
         // attributed to the merge target — not the agent's session layer.
         const report: LayerMergeReport = {
@@ -1839,6 +2425,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           extra.requestId,
           result.target_layer.id,
         );
+        // The trash auto-purge victims are ordinary deletions outside the
+        // merge row set — realtime only, no journal rows (as the REST merge
+        // route; the journal side of the merge is the auto-rollup above).
         for (const id of result.deleted_thought_ids) {
           emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
         }
@@ -1850,6 +2439,395 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           applied: report.applied,
         });
         return { ...report, request_id: String(extra.requestId) };
+      }),
+  );
+
+  // =========================================================================
+  // `etn.thoughts.bulk_update` (задача 6d45ab37, спека 77502d93, P1-паритет
+  // MCP↔REST `POST /thoughts/batch`). Групповые операции над мыслями —
+  // одна запись бюджета на ВЕСЬ вызов; `failures[]` для отдельных id.
+  // Не включает `purge`/`delete` — это отдельный цикл работ (S13).
+  // =========================================================================
+
+  // Типы операций — в точности подмножество REST `ThoughtBatchOp`
+  // (shared/src/types/thought.ts), без `delete`/`purge`/`link_to_focus`/
+  // `unlink_from_focus` (последние два не нужны MCP-агенту: для единичной
+  // связи есть `etn.links.create`/`etn.links.delete`).
+  const BULK_UPDATE_OPS = [
+    'set_type',
+    'clear_type',
+    'set_active',
+    'set_inactive',
+    'trash',
+    'link_parents',
+    'link_children',
+    'set_only_parents',
+    'unlink_parents',
+    'unlink_children',
+  ] as const;
+
+  /**
+   * Разбор `args` для `etn.thoughts.bulk_update`. Возвращает нормализованный
+   * объект подмножества `ThoughtBatchArgs`, пригодный для вызова
+   * доменного/роутного кода. Используется в фасаде и тестах.
+   *
+   * XOR-пары (`type`/`type_id`, `link_type`/`link_type_id`) уже отсечены
+   * схемой Zod — здесь только нормализация резолва имён в id.
+   */
+  function normalizeBulkUpdateArgs(
+    ndb: NetworkDb,
+    op: (typeof BULK_UPDATE_OPS)[number],
+    args: {
+      type?: string;
+      type_id?: string | null;
+      parent_ids?: string[];
+      child_ids?: string[];
+      link_type?: string;
+      link_type_id?: string | null;
+    },
+  ): {
+    type_id: string | null | undefined;
+    parent_ids: string[] | undefined;
+    child_ids: string[] | undefined;
+    link_type_id: string | null | undefined;
+  } {
+    const out: {
+      type_id: string | null | undefined;
+      parent_ids: string[] | undefined;
+      child_ids: string[] | undefined;
+      link_type_id: string | null | undefined;
+    } = {
+      type_id: undefined,
+      parent_ids: undefined,
+      child_ids: undefined,
+      link_type_id: undefined,
+    };
+    if (op === 'set_type') {
+      out.type_id = args.type === undefined ? args.type_id : resolveThoughtTypeIdByName(ndb, args.type);
+    }
+    if (op === 'link_parents' || op === 'set_only_parents' || op === 'unlink_parents') {
+      out.parent_ids = args.parent_ids;
+    }
+    if (op === 'link_children' || op === 'unlink_children') {
+      out.child_ids = args.child_ids;
+    }
+    if (op === 'link_parents' || op === 'link_children' || op === 'set_only_parents') {
+      out.link_type_id = args.link_type === undefined ? args.link_type_id : resolveLinkTypeIdByName(ndb, args.link_type);
+    }
+    return out;
+  }
+
+  // Аргументы массовых операций: минимальный, жёсткий контракт.
+  // Запрещаем смешение `type`/`type_id`, `link_type`/`link_type_id` —
+  // схемой `.refine()` (задача 77351f03).
+  const BulkUpdateArgs = z
+    .object({
+      // set_type
+      type: z.string().min(1).optional(),
+      type_id: z.string().min(1).nullable().optional(),
+      // link_parents / set_only_parents / unlink_parents
+      parent_ids: z.array(ThoughtId).min(1).optional(),
+      // link_children / unlink_children
+      child_ids: z.array(ThoughtId).min(1).optional(),
+      // link_parents / link_children / set_only_parents
+      link_type: z.string().min(1).optional(),
+      link_type_id: z.string().min(1).nullable().optional(),
+    })
+    .refine((v) => v.type === undefined || v.type_id === undefined, {
+      message: TYPE_ID_TYPE_CONFLICT,
+    })
+    .refine((v) => v.link_type === undefined || v.link_type_id === undefined, {
+      message: 'provide at most one of link_type_id or link_type',
+    })
+    .refine((v) => Object.keys(v).length > 0, { message: 'args must not be empty when provided' })
+    .optional();
+
+  const BulkUpdateSchema = z.object({
+    network_id: NetworkId,
+    ids: z.array(ThoughtId).min(1),
+    op: z.enum(BULK_UPDATE_OPS),
+    args: BulkUpdateArgs,
+  });
+  mcp.registerTool(
+    'etn.thoughts.bulk_update',
+    {
+      title: 'Групповые операции над мыслями',
+      description:
+        'Групповые операции (одна запись бюджета на ВЕСЬ вызов): `op` ∈ {`set_type`,`clear_type`,' +
+        '`set_active`,`set_inactive`,`trash`,`link_parents`,`link_children`,`set_only_parents`,' +
+        '`unlink_parents`,`unlink_children`}. Возвращает `{ affected, failures[] }`. Без `purge`/`delete`.',
+      inputSchema: BulkUpdateSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.bulk_update'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const userId = rt.deps.auth.userId;
+        const layerId = resolveRuntimeLayer(rt, args.network_id).id;
+        const normalized = normalizeBulkUpdateArgs(
+          ndb,
+          args.op,
+          args.args ?? {},
+        );
+        const ids = [...new Set(args.ids)];
+        const failures: Array<{ id: string; code: string; message: string }> = [];
+        let affected = 0;
+        for (const id of ids) {
+          try {
+            switch (args.op) {
+              case 'set_type': {
+                const updated = updateThought(
+                  ndb,
+                  id,
+                  { type_id: normalized.type_id ?? null },
+                  undefined,
+                  userId,
+                );
+                emitAgentEvent(rt, args.network_id, 'thought.updated', {
+                  id,
+                  changes: { type_id: normalized.type_id ?? null },
+                  version: updated.version,
+                }, extra.requestId, layerId);
+                recordThoughtActivity(ndb, {
+                  networkId: args.network_id,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
+                break;
+              }
+              case 'clear_type': {
+                const updated = updateThought(ndb, id, { type_id: null }, undefined, userId);
+                emitAgentEvent(rt, args.network_id, 'thought.updated', {
+                  id,
+                  changes: { type_id: null },
+                  version: updated.version,
+                }, extra.requestId, layerId);
+                recordThoughtActivity(ndb, {
+                  networkId: args.network_id,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
+                break;
+              }
+              case 'set_active': {
+                const updated = updateThought(ndb, id, { active: true }, undefined, userId);
+                emitAgentEvent(rt, args.network_id, 'thought.updated', {
+                  id,
+                  changes: { active: true },
+                  version: updated.version,
+                }, extra.requestId, layerId);
+                recordThoughtActivity(ndb, {
+                  networkId: args.network_id,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
+                break;
+              }
+              case 'set_inactive': {
+                const updated = updateThought(ndb, id, { active: false }, undefined, userId);
+                emitAgentEvent(rt, args.network_id, 'thought.updated', {
+                  id,
+                  changes: { active: false },
+                  version: updated.version,
+                }, extra.requestId, layerId);
+                recordThoughtActivity(ndb, {
+                  networkId: args.network_id,
+                  userId,
+                  action: 'updated',
+                  thought: updated,
+                  layerId,
+                });
+                break;
+              }
+              case 'trash': {
+                const updated = updateThought(
+                  ndb,
+                  id,
+                  { marked_for_deletion: true },
+                  undefined,
+                  userId,
+                );
+                emitAgentEvent(rt, args.network_id, 'thought.updated', {
+                  id,
+                  changes: { marked_for_deletion: true },
+                  version: updated.version,
+                }, extra.requestId, layerId);
+                recordThoughtActivity(ndb, {
+                  networkId: args.network_id,
+                  userId,
+                  action: 'trashed',
+                  thought: updated,
+                  layerId,
+                });
+                break;
+              }
+              case 'link_parents': {
+                for (const parentId of normalized.parent_ids ?? []) {
+                  if (parentId === id) continue;
+                  if (findLinksBetween(ndb, parentId, id).length > 0) continue;
+                  const link = createLink(
+                    ndb,
+                    {
+                      source_id: parentId,
+                      target_id: id,
+                      type_id: normalized.link_type_id ?? null,
+                    },
+                    userId,
+                  );
+                  emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId, layerId);
+                  recordLinkActivity(ndb, {
+                    networkId: args.network_id,
+                    userId,
+                    action: 'created',
+                    link,
+                    layerId,
+                  });
+                }
+                break;
+              }
+              case 'link_children': {
+                for (const childId of normalized.child_ids ?? []) {
+                  if (childId === id) continue;
+                  if (findLinksBetween(ndb, id, childId).length > 0) continue;
+                  const link = createLink(
+                    ndb,
+                    {
+                      source_id: id,
+                      target_id: childId,
+                      type_id: normalized.link_type_id ?? null,
+                    },
+                    userId,
+                  );
+                  emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId, layerId);
+                  recordLinkActivity(ndb, {
+                    networkId: args.network_id,
+                    userId,
+                    action: 'created',
+                    link,
+                    layerId,
+                  });
+                }
+                break;
+              }
+              case 'set_only_parents': {
+                const wanted = new Set(normalized.parent_ids ?? []);
+                const existing = ndb
+                  .prepare(
+                    'SELECT id, type_id FROM links_v WHERE target_id = ? AND active = 1',
+                  )
+                  .all(id) as Array<{ id: string; type_id: string | null }>;
+                for (const link of existing) {
+                  if (!wanted.has(link.id)) continue;
+                  // Тут сравнение id'ов линков, а не пары (source,target) —
+                  // оставляем существующую линку на месте.
+                  void link;
+                }
+                // Drop parents not in the wanted set.
+                for (const link of existing) {
+                  const sourceRow = ndb
+                    .prepare('SELECT source_id FROM links_v WHERE id = ?')
+                    .get(link.id) as { source_id: string } | undefined;
+                  if (sourceRow === undefined) continue;
+                  if (!wanted.has(sourceRow.source_id)) {
+                    deleteLink(ndb, link.id, undefined);
+                    emitAgentEvent(rt, args.network_id, 'link.deleted', { id: link.id }, extra.requestId, layerId);
+                  }
+                }
+                // Add missing parents.
+                for (const parentId of normalized.parent_ids ?? []) {
+                  if (parentId === id) continue;
+                  if (findLinksBetween(ndb, parentId, id).length > 0) continue;
+                  const link = createLink(
+                    ndb,
+                    {
+                      source_id: parentId,
+                      target_id: id,
+                      type_id: normalized.link_type_id ?? null,
+                    },
+                    userId,
+                  );
+                  emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId, layerId);
+                  recordLinkActivity(ndb, {
+                    networkId: args.network_id,
+                    userId,
+                    action: 'created',
+                    link,
+                    layerId,
+                  });
+                }
+                break;
+              }
+              case 'unlink_parents': {
+                const wanted = new Set(normalized.parent_ids ?? []);
+                const existing = ndb
+                  .prepare(
+                    'SELECT l.id, l.source_id FROM links_v l WHERE l.target_id = ? AND l.active = 1',
+                  )
+                  .all(id) as Array<{ id: string; source_id: string }>;
+                for (const link of existing) {
+                  if (!wanted.has(link.source_id)) continue;
+                  deleteLink(ndb, link.id, undefined);
+                  emitAgentEvent(rt, args.network_id, 'link.deleted', { id: link.id }, extra.requestId, layerId);
+                  recordLinkActivity(ndb, {
+                    networkId: args.network_id,
+                    userId,
+                    action: 'deleted',
+                    link: { id: link.id, source_id: link.source_id, target_id: id, type_id: null },
+                    layerId,
+                  });
+                }
+                break;
+              }
+              case 'unlink_children': {
+                const wanted = new Set(normalized.child_ids ?? []);
+                const existing = ndb
+                  .prepare(
+                    'SELECT l.id, l.target_id FROM links_v l WHERE l.source_id = ? AND l.active = 1',
+                  )
+                  .all(id) as Array<{ id: string; target_id: string }>;
+                for (const link of existing) {
+                  if (!wanted.has(link.target_id)) continue;
+                  deleteLink(ndb, link.id, undefined);
+                  emitAgentEvent(rt, args.network_id, 'link.deleted', { id: link.id }, extra.requestId, layerId);
+                  recordLinkActivity(ndb, {
+                    networkId: args.network_id,
+                    userId,
+                    action: 'deleted',
+                    link: { id: link.id, source_id: id, target_id: link.target_id, type_id: null },
+                    layerId,
+                  });
+                }
+                break;
+              }
+            }
+            affected += 1;
+          } catch (err) {
+            const code = err instanceof EtnError ? err.code : 'INTERNAL';
+            const message =
+              err instanceof Error ? err.message : 'bulk update failed';
+            failures.push({ id, code, message });
+          }
+        }
+        // Per-id real-time event + activity row уже отправлены внутри цикла;
+        // здесь оставляем только аудит вызова (одна запись на КАЖДЫЙ вызов,
+        // независимо от числа id — контракт бюджета 0ff98632).
+        auditAgentCall(
+          rt,
+          'etn.thoughts.bulk_update',
+          args.network_id,
+          'thought',
+          ids[0] ?? '',
+          { op: args.op, ids: ids.length, affected, failures: failures.length },
+        );
+        return { affected, failures };
       }),
   );
 
@@ -1869,16 +2847,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Создать мысль',
       description:
-        'Create a thought, optionally attaching a link in the same transaction. `link.direction` ' +
-        'names the role of `link.target_thought_id` for the NEW thought: "parent" — attach the ' +
-        'new thought UNDER the target (target becomes its parent; use this to create a thought ' +
-        'inside a section), "child" — the NEW thought becomes the parent of the target. ' +
-        'Call `etn.thoughts.find_duplicates` first to avoid duplicates. `type`/`link.type` ' +
-        '(task O4) resolve a type by name instead of `type_id` (see `etn.types.list`). ' +
-        'Returns { id, version }; when the assigned type declares `required` properties and ' +
-        'the card leaves some of them unset, also returns `warnings: [{code: ' +
-        '"REQUIRED_PROPERTY_MISSING", key, …}]` so the agent can follow up with ' +
-        '`etn.properties.set` / another bundle (task O6).',
+        'Create a thought, optionally attaching a link in the same transaction. `link.direction` names ' +
+        'the role of `link.target_thought_id` for the NEW thought: "parent" — attach the new thought ' +
+        'UNDER the target (use this to create inside a section), "child" — the NEW thought becomes the ' +
+        'parent of the target. Call `etn.thoughts.find_duplicates` first. `type`/`link.type` resolve a ' +
+        'type by name (see `etn.types.list`). `warnings` lists the type\'s `required` properties left ' +
+        'unset — follow up with `etn.properties.set`.',
       inputSchema: CreateThoughtSchema,
     },
     (args, extra) =>
@@ -1950,11 +2924,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Изменить мысль',
       description:
-        'Patch a thought (last-write-wins per field). `expected_version` enables optimistic ' +
-        'concurrency — on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }; ' +
-        'when `changes.type_id` is present and the new type declares `required` properties that ' +
-        'the card leaves unset, also returns `warnings: [{code: ' +
-        '"REQUIRED_PROPERTY_MISSING", key, …}]` (task O6).',
+        'Patch a thought (last-write-wins per field). `expected_version` enables optimistic concurrency — ' +
+        'on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }; `warnings` lists the ' +
+        'new type\'s `required` properties left unset when `changes.type_id` is present.',
       inputSchema: UpdateThoughtSchema,
     },
     (args, extra) =>
@@ -1969,11 +2941,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.expected_version,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'thought.updated',
           { id: thought.id, changes: args.changes, version: thought.version },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.thoughts.update', args.network_id, 'thought', thought.id, args);
@@ -1996,11 +2969,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Удалить мысль',
       description:
-        'Delete a thought (cascades to links, comments, attachments, property values). ' +
-        'With S13 the same blocking check as `etn.thoughts.deletion_check` runs first: when ' +
-        'another thought references this one through a thought_ref property the call fails with ' +
-        'a `blocking` error instead of deleting — `marked_for_deletion` need not be set first. ' +
-        'Protected thoughts (HOME) are rejected. Returns { id, version: 0 }.',
+        'Delete a thought (cascades to links, comments, attachments, property values). The same blocking ' +
+        'check as `etn.thoughts.deletion_check` runs first: a `blocking` error means the thought is used in ' +
+        'a thought_ref property or held by a layer — it is not deleted. Protected thoughts (HOME) are ' +
+        'rejected. Returns { id, version: 0 }. See prompt etn.how_to_purge.',
       inputSchema: DeleteThoughtSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.delete'],
     },
@@ -2009,6 +2981,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        // Снимок мысли до удаления — он уйдёт в журнал (как `getThought`
+        // в REST DELETE /thoughts/:id); getThoughtOrThrow даёт тот же
+        // NOT_FOUND, что и сам deleteThought.
+        const existing = getThoughtOrThrow(ndb, args.thought_id);
         // actorUserId — для object-lock enforcement (задача 2031df5e).
         deleteThought(ndb, args.thought_id, args.expected_version, rt.deps.auth.userId);
         emitAgentEvent(
@@ -2018,6 +2994,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           { id: args.thought_id },
           extra.requestId,
         );
+        recordThoughtActivity(ndb, {
+          networkId: args.network_id,
+          userId: rt.deps.auth.userId,
+          action: 'deleted',
+          thought: existing,
+          layerId: ndb.layerId,
+        });
         auditAgentCall(rt, 'etn.thoughts.delete', args.network_id, 'thought', args.thought_id, {
           expected_version: args.expected_version,
         });
@@ -2039,9 +3022,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Поместить мысль в корзину / вернуть',
       description:
-        'Mark a thought for deletion (`trashed: true`) or restore it from the trash ' +
-        '(`trashed: false`) — S13. Does NOT run the blocking check: that only applies to the ' +
-        'physical `etn.thoughts.delete`. Returns { id, version }.',
+        'Mark a thought for deletion (`trashed: true`) or restore it from the trash (`trashed: false`). ' +
+        'Does NOT run the blocking check — that only applies to the physical `etn.thoughts.delete`. ' +
+        'Returns { id, version }. See prompt etn.how_to_purge.',
       inputSchema: TrashThoughtSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.trash'],
     },
@@ -2057,11 +3040,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           undefined,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'thought.updated',
           { id: thought.id, changes: { marked_for_deletion: args.trashed }, version: thought.version },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.thoughts.trash', args.network_id, 'thought', thought.id, {
@@ -2100,11 +3084,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           undefined,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'thought.updated',
           { id: thought.id, changes: { active: args.active }, version: thought.version },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.thoughts.set_active', args.network_id, 'thought', thought.id, {
@@ -2132,10 +3117,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Создать связь',
       description:
-        'Create a directed link source → target, optionally typed: source_id is the PARENT, ' +
-        'target_id is the CHILD. Duplicate pairs and ' +
-        'self-loops are rejected. `type` (task O4) resolves a link type by `name_forward`/' +
-        '`name_reverse` instead of `type_id` (see `etn.types.list`). Returns { id, version }.',
+        'Create a directed link source → target, optionally typed: source_id is the PARENT, target_id is ' +
+        'the CHILD. Duplicate pairs and self-loops are rejected. `type` resolves a link type by ' +
+        '`name_forward`/`name_reverse` instead of `type_id` (see `etn.types.list`). Returns { id, version }.',
       inputSchema: CreateLinkSchema,
     },
     (args, extra) =>
@@ -2149,7 +3133,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           { source_id: args.source_id, target_id: args.target_id, type_id: typeId ?? null },
           rt.deps.auth.userId,
         );
-        emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId);
+        emitAgentActivityEvent(rt, args.network_id, 'link.created', { link }, ndb, extra.requestId);
         auditAgentCall(rt, 'etn.links.create', args.network_id, 'link', link.id, {
           source_id: args.source_id,
           target_id: args.target_id,
@@ -2173,8 +3157,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Удалить связь',
       description:
-        'Delete a link. With S13 the same blocking check as `etn.links.deletion_check` runs first ' +
-        '(empty until 0.5.2). Returns { id, version: 0 }.',
+        'Delete a link. The same blocking check as `etn.links.deletion_check` runs first. ' +
+        'Returns { id, version: 0 }. See prompt etn.how_to_purge.',
       inputSchema: DeleteLinkSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.delete'],
     },
@@ -2183,8 +3167,20 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        // Снимок связи до удаления — он уйдёт в журнал (как `getLink`
+        // в REST DELETE /links/:id).
+        const existing = getLink(ndb, args.link_id);
         deleteLink(ndb, args.link_id, args.expected_version);
         emitAgentEvent(rt, args.network_id, 'link.deleted', { id: args.link_id }, extra.requestId);
+        if (existing !== null) {
+          recordLinkActivity(ndb, {
+            networkId: args.network_id,
+            userId: rt.deps.auth.userId,
+            action: 'deleted',
+            link: existing,
+            layerId: ndb.layerId,
+          });
+        }
         auditAgentCall(rt, 'etn.links.delete', args.network_id, 'link', args.link_id, {
           expected_version: args.expected_version,
         });
@@ -2206,8 +3202,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Поместить связь в корзину / вернуть',
       description:
-        'Mark a link for deletion (`trashed: true`) or restore it from the trash ' +
-        '(`trashed: false`) — S13. Does NOT run the blocking check. Returns { id, version }.',
+        'Mark a link for deletion (`trashed: true`) or restore it from the trash (`trashed: false`). ' +
+        'Does NOT run the blocking check. Returns { id, version }. See prompt etn.how_to_purge.',
       inputSchema: TrashLinkSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.trash'],
     },
@@ -2223,11 +3219,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           undefined,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'link.updated',
           { id: link.id, changes: { marked_for_deletion: args.trashed }, version: link.version },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.links.trash', args.network_id, 'link', link.id, {
@@ -2269,11 +3266,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Создать/обновить комментарий',
       description:
-        'For `permanent`: creates the single permanent comment of the owner, or updates it when ' +
-        'it already exists. For `chronological`: always appends a new dated entry ' +
-        '(`valid_from`/`valid_to`); pass `targets: [{owner_type, owner_id}]` (1..100, first is the ' +
-        'primary owner) instead of `owner_type`+`owner_id` to attach the same entry to several ' +
-        'thoughts/links at once. Returns { id, version }.',
+        'For `permanent`: creates the single permanent comment of the owner, or updates it when it already ' +
+        'exists. For `chronological`: always appends a new dated entry (`valid_from`/`valid_to`); pass ' +
+        '`targets: [{owner_type, owner_id}]` (1..100, first is the primary owner) instead of ' +
+        '`owner_type`+`owner_id` to attach the same entry to several thoughts/links at once. ' +
+        'Returns { id, version }.',
       inputSchema: UpsertCommentSchema,
     },
     (args, extra) =>
@@ -2300,11 +3297,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
               undefined,
               rt.deps.auth.userId,
             );
-            emitAgentEvent(
+            emitAgentActivityEvent(
               rt,
               args.network_id,
               'comment.updated',
               { id: comment.id, changes, version: comment.version },
+              ndb,
               extra.requestId,
             );
             auditAgentCall(rt, 'etn.comments.upsert', args.network_id, 'comment', comment.id, args);
@@ -2327,7 +3325,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           },
           rt.deps.auth.userId,
         );
-        emitAgentEvent(rt, args.network_id, 'comment.created', { comment }, extra.requestId);
+        emitAgentActivityEvent(rt, args.network_id, 'comment.created', { comment }, ndb, extra.requestId);
         auditAgentCall(rt, 'etn.comments.upsert', args.network_id, 'comment', comment.id, args);
         return {
           id: comment.id,
@@ -2356,10 +3354,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Изменить комментарий',
       description:
-        'Patch an existing comment (chronological or permanent) addressed by `comment_id` — ' +
-        'last-write-wins per field. `valid_from`/`valid_to` apply to chronological entries ' +
-        'only and are ignored for permanent ones. `expected_version` enables optimistic ' +
-        'concurrency — on mismatch the call fails with VERSION_CONFLICT. Returns { id, version }.',
+        'Patch an existing comment (chronological or permanent) by `comment_id` — last-write-wins per ' +
+        'field. `valid_from`/`valid_to` apply to chronological entries only and are ignored for permanent ' +
+        'ones. `expected_version` enables optimistic concurrency — on mismatch the call fails with ' +
+        'VERSION_CONFLICT. Returns { id, version }.',
       inputSchema: UpdateCommentSchema,
     },
     (args, extra) =>
@@ -2374,11 +3372,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.expected_version,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'comment.updated',
           { id: comment.id, changes: args.changes, version: comment.version },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.comments.update', args.network_id, 'comment', comment.id, args);
@@ -2387,6 +3386,110 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           version: comment.version,
           request_id: String(extra.requestId),
         } satisfies McpMutationResult;
+      }),
+  );
+
+  // Задача d28abe04 (0.7.2): секционная правка комментария ops-ами одной
+  // транзакцией. Поддерживает append / prepend / replace_section /
+  // delete_section; адресация секций — по тексту markdown-заголовка
+  // (виртуальная первая строка для текстов без `#`).
+  const EditAppendOp = z.object({ op: z.literal('append'), text: z.string().min(1) });
+  const EditPrependOp = z.object({ op: z.literal('prepend'), text: z.string().min(1) });
+  const EditReplaceSectionOp = z.object({
+    op: z.literal('replace_section'),
+    section: z.string().min(1),
+    text: z.string().min(1),
+  });
+  const EditDeleteSectionOp = z.object({
+    op: z.literal('delete_section'),
+    section: z.string().min(1),
+  });
+  const EditOpSchema = z.discriminatedUnion('op', [
+    EditAppendOp,
+    EditPrependOp,
+    EditReplaceSectionOp,
+    EditDeleteSectionOp,
+  ]);
+  const EditCommentSchema = z
+    .object({
+      network_id: NetworkId,
+      comment_id: z.string().min(1).optional(),
+      thought_id: ThoughtId.optional(),
+      expected_version: ExpectedVersion,
+      ops: z.array(EditOpSchema).min(1),
+    })
+    .refine((a) => (a.comment_id === undefined) !== (a.thought_id === undefined), {
+      message: 'provide exactly one of comment_id or thought_id',
+    });
+  mcp.registerTool(
+    'etn.comments.edit',
+    {
+      title: 'Частичная правка комментария',
+      description:
+        'Edit a comment by parts: `append`/`prepend`/`replace_section`/' +
+        '`delete_section` ops applied sequentially in one transaction ' +
+        '(failure rolls back the call). Addressing by markdown heading ' +
+        'text; for heading-less text the first non-empty line is a virtual ' +
+        'heading. `comment_id` XOR `thought_id`. Returns ' +
+        '`{ id, version, sections[], chars_total }`.',
+      inputSchema: EditCommentSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.comments.edit'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        let targetId: string;
+        if (args.thought_id !== undefined) {
+          // Постоянный комментарий мысли: проверяем, что мысль существует,
+          // и достаём единственный постоянный комментарий через listComments.
+          getThoughtOrThrow(ndb, args.thought_id);
+          const permanent =
+            listComments(ndb, 'thought', args.thought_id).find((c) => c.kind === 'permanent') ??
+            null;
+          if (permanent === null) {
+            throw new Error(
+              `ETN error [NOT_FOUND]: thought ${args.thought_id} has no permanent comment`,
+            );
+          }
+          targetId = permanent.id;
+        } else if (args.comment_id !== undefined) {
+          targetId = args.comment_id;
+        } else {
+          // refine гарантирует одну из двух; здесь — для TS.
+          throw new Error('ETN error [VALIDATION_ERROR]: comment_id or thought_id required');
+        }
+        const result = editComment(
+          ndb,
+          targetId,
+          args.ops,
+          args.expected_version,
+          rt.deps.auth.userId,
+        );
+        emitAgentActivityEvent(
+          rt,
+          args.network_id,
+          'comment.updated',
+          {
+            id: result.id,
+            changes: { body_md: result.body_md },
+            version: result.version,
+          },
+          ndb,
+          extra.requestId,
+        );
+        auditAgentCall(rt, 'etn.comments.edit', args.network_id, 'comment', result.id, {
+          expected_version: args.expected_version,
+          ops_count: args.ops.length,
+        });
+        return {
+          id: result.id,
+          version: result.version,
+          sections: result.sections,
+          chars_total: result.chars_total,
+          request_id: String(extra.requestId),
+        };
       }),
   );
 
@@ -2426,6 +3529,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           },
           extra.requestId,
         );
+        recordCommentActivity(ndb, {
+          networkId: args.network_id,
+          userId: rt.deps.auth.userId,
+          action: 'deleted',
+          comment: existing,
+          layerId: ndb.layerId,
+        });
         auditAgentCall(rt, 'etn.comments.delete', args.network_id, 'comment', args.comment_id, {
           expected_version: args.expected_version,
         });
@@ -2474,7 +3584,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           },
           rt.deps.auth.userId,
         );
-        emitAgentEvent(rt, args.network_id, 'attachment.created', { attachment }, extra.requestId);
+        emitAgentActivityEvent(rt, args.network_id, 'attachment.created', { attachment }, ndb, extra.requestId);
         auditAgentCall(
           rt,
           'etn.attachments.add',
@@ -2502,10 +3612,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Скопировать вложение',
       description:
-        'Copy an existing attachment to one or more target thoughts (workplan L25). ' +
-        'Each target receives a new row carrying the same visible fields as the source; ' +
-        'the underlying file is not duplicated. Targets that already own the same ' +
-        'attachment (same kind + same url/file_path) are skipped silently. ' +
+        'Copy an existing attachment to one or more target thoughts: each target receives a new row ' +
+        'carrying the same visible fields as the source; the underlying file is not duplicated. Targets ' +
+        'that already own the same attachment (same kind + same url/file_path) are skipped silently. ' +
         'Returns one `{id, version: 0, request_id}` per created row.',
       inputSchema: CopyAttachmentSchema,
     },
@@ -2521,11 +3630,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           rt.deps.auth.userId,
         );
         for (const attachment of result.created) {
-          emitAgentEvent(
+          emitAgentActivityEvent(
             rt,
             args.network_id,
             'attachment.created',
             { attachment },
+            ndb,
             extra.requestId,
           );
         }
@@ -2559,12 +3669,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Поиск вложений',
       description:
-        'Search attachments across the network by keywords (workplan L25). ' +
-        '`q` uses the same mini-syntax as `etn.thoughts.search`: AND of include-words, ' +
-        '`-word` exclusion, `*` infix wildcard. Searches title, description, url and ' +
-        'file_path (case-insensitive LIKE). Pass `exclude_owner_type`/`exclude_owner_id` ' +
-        'to hide rows that already belong to a specific owner (used by the editor\'s ' +
-        '"Найти существующее" dialog tab). No FTS index — LIKE under the hood.',
+        'Search attachments across the network by keywords over title, description, url and file_path ' +
+        '(case-insensitive LIKE, no FTS index). `q` uses the `etn.thoughts.search` mini-syntax: AND of ' +
+        'include-words, `-word` exclusion, `*` infix wildcard. Pass `exclude_owner_type`/' +
+        '`exclude_owner_id` to hide rows already attached to a specific owner.',
       inputSchema: SearchAttachmentsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.search'],
     },
@@ -2580,6 +3688,132 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           offset: args.offset,
         });
         return items;
+      }),
+  );
+
+  // =========================================================================
+  // `etn.attachments.update` (задача 6d45ab37, спека 0b23a32a, P1-паритет
+  // MCP↔REST `PATCH /attachments/{id}`). Last-write-wins по метаданным
+  // (title/description/url/file_path); kind неизменяем после создания.
+  // =========================================================================
+  const UpdateAttachmentSchema = z.object({
+    network_id: NetworkId,
+    attachment_id: z.string().min(1),
+    title: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    url: z.string().nullable().optional(),
+    file_path: z.string().nullable().optional(),
+  });
+  mcp.registerTool(
+    'etn.attachments.update',
+    {
+      title: 'Изменить вложение',
+      description:
+        'Правка метаданных (title/description/url/file_path). Last-write-wins (у `attachments` нет ' +
+        '`version`). `kind` неизменяем. Возвращает `{ id, version }`.',
+      inputSchema: UpdateAttachmentSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.update'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const changes: {
+          title?: string | null;
+          description?: string | null;
+          url?: string | null;
+          file_path?: string | null;
+        } = {};
+        if (args.title !== undefined) changes.title = args.title;
+        if (args.description !== undefined) changes.description = args.description;
+        if (args.url !== undefined) changes.url = args.url;
+        if (args.file_path !== undefined) changes.file_path = args.file_path;
+        const attachment = updateAttachment(
+          ndb,
+          args.attachment_id,
+          changes,
+          rt.deps.auth.userId,
+        );
+        emitAgentActivityEvent(
+          rt,
+          args.network_id,
+          'attachment.updated',
+          { id: attachment.id, changes },
+          ndb,
+          extra.requestId,
+        );
+        auditAgentCall(
+          rt,
+          'etn.attachments.update',
+          args.network_id,
+          'attachment',
+          attachment.id,
+          args,
+        );
+        return {
+          id: attachment.id,
+          version: 0,
+          request_id: String(extra.requestId),
+        } satisfies McpMutationResult;
+      }),
+  );
+
+  // =========================================================================
+  // `etn.attachments.delete` (задача 6d45ab37, спека 0b23a32a, P1-паритет
+  // MCP↔REST `DELETE /attachments/{id}`). Отвязывает вложение от владельца;
+  // физический файл НЕ удаляется — server-side cleanup в domain
+  // `deleteAttachment` (S4, 13-layers.md §5.3) решает судьбу файла по
+  // оставшимся ссылкам.
+  // =========================================================================
+  const DeleteAttachmentSchema = z.object({
+    network_id: NetworkId,
+    attachment_id: z.string().min(1),
+  });
+  mcp.registerTool(
+    'etn.attachments.delete',
+    {
+      title: 'Удалить вложение',
+      description:
+        'Отвязка вложения от владельца. Физический файл НЕ удаляется — судьбу решает domain ' +
+        'по оставшимся ссылкам. Возвращает `{ deleted: true }`.',
+      inputSchema: DeleteAttachmentSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.attachments.delete'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        // Берём снимок ДО удаления — это требование `recordAttachmentActivity`
+        // (deleted-ветка emitAgentActivityEvent не пишет журнал, как и REST-роут).
+        const existing = getAttachment(ndb, args.attachment_id);
+        deleteAttachment(ndb, args.attachment_id);
+        emitAgentEvent(
+          rt,
+          args.network_id,
+          'attachment.deleted',
+          { id: args.attachment_id },
+          extra.requestId,
+        );
+        if (existing !== null) {
+          recordAttachmentActivity(ndb, {
+            networkId: args.network_id,
+            userId: rt.deps.auth.userId,
+            action: 'deleted',
+            attachment: existing,
+            layerId: resolveRuntimeLayer(rt, args.network_id).id,
+          });
+        }
+        auditAgentCall(
+          rt,
+          'etn.attachments.delete',
+          args.network_id,
+          'attachment',
+          args.attachment_id,
+          args,
+        );
+        return { deleted: true, request_id: String(extra.requestId) };
       }),
   );
 
@@ -2637,22 +3871,14 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Установить свойство',
       description:
-        'Set (or clear with `value: null`) a property value on a thought/link, addressed by key; ' +
-        "the value must match the property definition's value_type. Properties with " +
-        '`config.multiple = true` also accept an array of values: `thought_ref` — an array of ' +
-        'thought ids; `url` — an array of URL/file-path strings (task 0.6.2, JSON-array payload in ' +
-        '`value_text`, not comma-join — URLs may contain commas). An empty array clears the value. ' +
-        'Hosts that stringify scalar parameters are tolerated in the single form: for `bool` the ' +
-        'exact strings "true"/"false" (case-insensitive) and for `number` finite numeric strings ' +
-        'are coerced back to their JSON types before validation. Either provide one ' +
-        '`key`+`value`, or a map `values: {key: value|null}` to write several properties in a ' +
-        'single transaction (any invalid key rolls back the whole set). Single form returns ' +
-        '{ id, version: 0 }; bulk form returns { values: {key: {id}}, version: 0 }. ' +
-        'The key is resolved against the network property registry (task f14cd5f1): a missing ' +
-        'property fails with NOT_FOUND; a property not attached to the owner\'s type chain fails ' +
-        'with VALIDATION_ERROR ("property X is not attached to this owner\'s type — attach it ' +
-        'first"), `details.property_id` names the registry id for the agent to call ' +
-        '`etn.types.list` against.',
+        'Set (or clear with `value: null`) a property value on a thought/link by key; the value must ' +
+        "match the definition's value_type. `config.multiple = true` properties accept an array: " +
+        '`thought_ref` — thought ids; `url` — URL/file-path strings (JSON array, not comma-join); an empty ' +
+        'array clears. Stringified scalars are tolerated in the single form: "true"/"false" for `bool`, ' +
+        'finite numeric strings for `number` — coerced back to JSON types. Either one `key`+`value`, or ' +
+        '`values: {key: value|null}` for several properties in one transaction (an invalid key rolls back ' +
+        'the whole set). Missing key → NOT_FOUND; a property not attached to the owner\'s type chain → ' +
+        'VALIDATION_ERROR with `details.property_id` (call `etn.types.list` against it).',
       inputSchema: SetPropertySchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.properties.set'],
     },
@@ -2671,7 +3897,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             rt.deps.auth.userId,
           );
           for (const value of Object.values(stored)) {
-            emitAgentEvent(
+            emitAgentActivityEvent(
               rt,
               args.network_id,
               'property-value.set',
@@ -2681,6 +3907,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
                 property_id: value.property_id,
                 value: value.value,
               },
+              ndb,
               extra.requestId,
             );
           }
@@ -2715,7 +3942,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           coerced,
           rt.deps.auth.userId,
         );
-        emitAgentEvent(
+        emitAgentActivityEvent(
           rt,
           args.network_id,
           'property-value.set',
@@ -2725,6 +3952,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             property_id: stored.property_id,
             value: stored.value,
           },
+          ndb,
           extra.requestId,
         );
         auditAgentCall(rt, 'etn.properties.set', args.network_id, args.owner_type, args.owner_id, {
@@ -2788,21 +4016,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Составная запись «единицы знания»',
       description:
-        'Create (or, via `thought_id`/`on_duplicate`, augment) a thought together with its ' +
-        'permanent comment, a map of property values, links and attachments — one atomic ' +
-        'transaction, one write-budget slot. `thought_id` addresses an existing thought to ' +
-        'augment in place; otherwise `thought.title`/`synonyms` are matched with the same ' +
-        'logic as `etn.thoughts.find_duplicates`, and `on_duplicate` decides what happens on a ' +
-        "match: `fail` (default) errors with `candidates`, `reuse` attaches the bundle's other " +
-        "parts to the existing thought unchanged, `update` also patches the thought's fields. " +
-        '`thought.type`/`links[].type` (task O4) resolve a type by name instead of `type_id` ' +
-        '(see `etn.types.list`). `links[].direction` names the role of `target_thought_id` for ' +
-        'the bundle thought: "parent" — attach the bundle thought UNDER the target (target ' +
-        'becomes its parent), "child" — the bundle thought becomes the parent of the target. ' +
-        'Returns { id, version, thought_action, matched_on, comment?, properties?, links?, attachments?, ' +
-        'warnings? }. `warnings` (task O6) lists the type\'s `required` properties that remain ' +
-        'unset on the resulting card so the agent can follow up with `etn.properties.set` ' +
-        '(empty array when the card is complete).',
+        'Create (or, via `thought_id`/`on_duplicate`, augment) a thought together with its permanent ' +
+        'comment, property values, links and attachments — one atomic transaction, one write-budget ' +
+        'slot. `thought_id` addresses an existing thought to augment in place; otherwise `thought.title`/' +
+        '`synonyms` are matched as in `etn.thoughts.find_duplicates` and `on_duplicate` decides the match ' +
+        'outcome: `fail` (default, errors with `candidates`), `reuse` (attach the other parts to the ' +
+        'match unchanged), `update` (also patch its fields). `thought.type`/`links[].type` resolve a type ' +
+        'by name (see `etn.types.list`). `links[].direction`: "parent" — attach the bundle thought UNDER ' +
+        'the target; "child" — the bundle thought becomes the parent of the target. `warnings` lists the ' +
+        'type\'s `required` properties left unset (empty when complete).',
       inputSchema: UpsertBundleSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.upsert_bundle'],
     },
@@ -2862,21 +4084,22 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         );
 
         if (result.thought_action === 'created') {
-          emitAgentEvent(rt, args.network_id, 'thought.created', { thought: result.thought }, extra.requestId);
+          emitAgentActivityEvent(rt, args.network_id, 'thought.created', { thought: result.thought }, ndb, extra.requestId);
         } else if (result.thought_action === 'updated') {
-          emitAgentEvent(
+          emitAgentActivityEvent(
             rt,
             args.network_id,
             'thought.updated',
             { id: result.thought.id, changes: resolvedThought ?? {}, version: result.thought.version },
+            ndb,
             extra.requestId,
           );
         }
         if (result.comment !== undefined) {
           if (result.comment_action === 'created') {
-            emitAgentEvent(rt, args.network_id, 'comment.created', { comment: result.comment }, extra.requestId);
+            emitAgentActivityEvent(rt, args.network_id, 'comment.created', { comment: result.comment }, ndb, extra.requestId);
           } else {
-            emitAgentEvent(
+            emitAgentActivityEvent(
               rt,
               args.network_id,
               'comment.updated',
@@ -2888,13 +4111,14 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
                 },
                 version: result.comment.version,
               },
+              ndb,
               extra.requestId,
             );
           }
         }
         if (result.properties !== undefined) {
           for (const stored of Object.values(result.properties)) {
-            emitAgentEvent(
+            emitAgentActivityEvent(
               rt,
               args.network_id,
               'property-value.set',
@@ -2904,18 +4128,19 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
                 property_id: stored.property_id,
                 value: stored.value,
               },
+              ndb,
               extra.requestId,
             );
           }
         }
         if (result.links !== undefined) {
-          for (const link of result.links) {
-            emitAgentEvent(rt, args.network_id, 'link.created', { link }, extra.requestId);
+          for (const lr of result.links) {
+            emitAgentActivityEvent(rt, args.network_id, 'link.created', { link: lr.link }, ndb, extra.requestId);
           }
         }
         if (result.attachments !== undefined) {
           for (const attachment of result.attachments) {
-            emitAgentEvent(rt, args.network_id, 'attachment.created', { attachment }, extra.requestId);
+            emitAgentActivityEvent(rt, args.network_id, 'attachment.created', { attachment }, ndb, extra.requestId);
           }
         }
 
@@ -2938,7 +4163,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
               }),
           ...(result.links === undefined
             ? {}
-            : { links: result.links.map((l) => ({ id: l.id, version: l.version })) }),
+            : { links: result.links.map((lr) => ({ id: lr.link.id, version: lr.link.version })) }),
           ...(result.attachments === undefined
             ? {}
             : { attachments: result.attachments.map((a) => ({ id: a.id })) }),
@@ -2953,6 +4178,252 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   );
 
   // =========================================================================
+  // `etn.thoughts.write` — задача 053751b5, 0.7.2: батч-запись связанных
+  // единиц знания одной транзакцией. Поглощает `etn.thoughts.create`/`update`/
+  // `set_active`/`upsert_bundle`, `etn.links.create`, `etn.properties.set`,
+  // `etn.comments.upsert` (помечены `deprecated_since: '0.7.2'` — см.
+  // `MCP_TOOL_ANNOTATIONS` и механизм пропуска в начале `registerTools`).
+  // =========================================================================
+
+  const WriteChronicleItemSchema = z.object({
+    title: z.string().nullable().optional(),
+    body_md: z.string().min(1),
+    valid_from: z.string().min(1).optional(),
+    valid_to: z.string().nullable().optional(),
+  });
+  const WriteLinkSpecSchema = z
+    .object({
+      direction: LinkDirection,
+      target_id: z.string().min(1).optional(),
+      target_ref: z.string().min(1).optional(),
+      type_id: z.string().min(1).nullable().optional(),
+      type: z.string().min(1).optional(),
+      properties: z.record(z.string(), PropertyValueSchema).optional(),
+      comment: z
+        .object({
+          title: z.string().nullable().optional(),
+          body_md: z.string().min(1),
+        })
+        .optional(),
+    })
+    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+    .refine(
+      (v) => (v.target_id !== undefined) !== (v.target_ref !== undefined),
+      { message: 'each links[] entry must set exactly one of target_id or target_ref' },
+    );
+  const WriteAttachmentSpecSchema = z.object({
+    kind: z.enum(ATTACHMENT_KINDS),
+    url: z.string().min(1).nullable().optional(),
+    file_path: z.string().min(1).nullable().optional(),
+    title: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+  });
+  const WriteItemSchema = z
+    .object({
+      ref: z.string().min(1).optional(),
+      thought_id: z.string().min(1).optional(),
+      thought: BundleThoughtSchema.optional(),
+      on_duplicate: z.enum(['fail', 'reuse', 'update']).optional(),
+      comment: BundleCommentSchema.optional(),
+      chronicle: z.array(WriteChronicleItemSchema).optional(),
+      properties: z.record(z.string(), PropertyValueSchema).optional(),
+      links: z.array(WriteLinkSpecSchema).optional(),
+      attachments: z.array(WriteAttachmentSpecSchema).optional(),
+    })
+    // Каждый элемент должен иметь ХОТЯ БЫ ОДНО из `thought_id` (адресация
+    // существующей мысли) или `thought` (новая/совпадающая мысль). Оба
+    // вместе — норм: `thought_id` адресует мысль, `thought` патчит её поля.
+    .refine(
+      (v) => v.thought_id !== undefined || v.thought !== undefined,
+      { message: 'each batch item must set thought_id or thought (at least one)' },
+    )
+    // Если задано `thought` И это новая мысль (нет `thought_id`), нужен
+    // `ref` для возможных `target_ref` в других элементах батча. Случай
+    // `thought + thought_id` (патч существующей) ref не требует.
+    .refine(
+      (v) => v.thought_id !== undefined || v.thought === undefined || v.ref !== undefined,
+      {
+        message:
+          'a batch item with `thought` (new thought) must also declare a local `ref`',
+      },
+    );
+  const LocalRefsSchema = z.record(z.string().min(1), z.string().uuid()).optional();
+  const WriteSchema = z.object({
+    network_id: NetworkId,
+    local_refs: LocalRefsSchema,
+    thoughts: z.array(WriteItemSchema).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
+  });
+  mcp.registerTool(
+    'etn.thoughts.write',
+    {
+      title: 'Батч-запись мыслей',
+      description:
+        'Пишет от 1 до ' + MCP_MAX_THOUGHTS_PER_WRITE + ' связанных единиц знания одной транзакцией: ' +
+        'мысли + постоянные/хронологические комментарии + свойства + связи + вложения. ' +
+        '`thought_id` XOR `thought` (с `ref`); `links[].target_id` XOR `target_ref`; `on_duplicate`: ' +
+        '`fail`/`reuse`/`update`. Циклы `ref`/`target_ref` разрешены (фаза 2 — мысли, фаза 3 — связи). ' +
+        'Поглощает `etn.thoughts.create`/`update`/`set_active`/`upsert_bundle`, `links.create`, ' +
+        '`properties.set`, `comments.upsert` (`deprecated_since: \'0.7.2\'`). Один write-бюджет + одна ' +
+        'строка `audit_log` на вызов. `warnings` агрегированы по батчу. Подробности — ' +
+        '`etn.how_to_write_batch`.',
+      inputSchema: WriteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const writeInput: McpThoughtWriteParams = {
+          network_id: args.network_id,
+          ...(args.local_refs === undefined ? {} : { local_refs: args.local_refs }),
+          thoughts: args.thoughts.map((item) => ({
+            ...(item.ref === undefined ? {} : { ref: item.ref }),
+            ...(item.thought_id === undefined ? {} : { thought_id: item.thought_id }),
+            ...(item.thought === undefined ? {} : { thought: item.thought }),
+            ...(item.on_duplicate === undefined ? {} : { on_duplicate: item.on_duplicate }),
+            ...(item.comment === undefined ? {} : { comment: item.comment }),
+            ...(item.chronicle === undefined ? {} : { chronicle: item.chronicle }),
+            ...(item.properties === undefined ? {} : { properties: item.properties }),
+            ...(item.links === undefined ? {} : { links: item.links }),
+            ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
+          })),
+        };
+        const result = writeThoughts(ndb, writeInput, rt.deps.auth.userId);
+
+        // Real-time events — one per actually-affected entity (per task spec).
+        // Done via the existing helpers so the WS gateway / activity log see
+        // the same shape they do for `etn.thoughts.upsert_bundle` etc.
+        for (const item of result.items) {
+          if (item.thought_action === 'reused') continue;
+          if (item.thought_action === 'created') {
+            const thought = getThoughtOrThrow(ndb, item.id);
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'thought.created',
+              { thought },
+              ndb,
+              extra.requestId,
+            );
+          } else {
+            // 'updated' — also covers the 'set_active' scenario: a batch item
+            // that only sets `active: false` (HOME is rejected, see domain
+            // service) lands here as a normal `thought.updated`. Empty
+            // `changes` is the contract for batched updates: the granular
+            // changes live across `comment`/`chronicle`/`properties`/`links`/
+            // `attachments` blocks of the same item, and the audit_log row
+            // carries the full story.
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'thought.updated',
+              { id: item.id, version: item.version, changes: {} },
+              ndb,
+              extra.requestId,
+            );
+          }
+          if (item.comment !== undefined) {
+            if (item.comment.action === 'created') {
+              const c = getComment(ndb, item.comment.id);
+              if (c !== null) {
+                emitAgentActivityEvent(
+                  rt,
+                  args.network_id,
+                  'comment.created',
+                  { comment: c },
+                  ndb,
+                  extra.requestId,
+                );
+              }
+            } else {
+              emitAgentActivityEvent(
+                rt,
+                args.network_id,
+                'comment.updated',
+                {
+                  id: item.comment.id,
+                  version: item.comment.version,
+                  changes: { body_md: '' },
+                },
+                ndb,
+                extra.requestId,
+              );
+            }
+          }
+          if (item.chronicle !== undefined) {
+            for (const entry of item.chronicle) {
+              const c = getComment(ndb, entry.id);
+              if (c !== null) {
+                emitAgentActivityEvent(
+                  rt,
+                  args.network_id,
+                  'comment.created',
+                  { comment: c },
+                  ndb,
+                  extra.requestId,
+                );
+              }
+            }
+          }
+          if (item.links !== undefined) {
+            for (const link of item.links) {
+              const l = getLink(ndb, link.id);
+              if (l !== null) {
+                emitAgentActivityEvent(
+                  rt,
+                  args.network_id,
+                  'link.created',
+                  { link: l },
+                  ndb,
+                  extra.requestId,
+                );
+              }
+            }
+          }
+          if (item.attachments !== undefined) {
+            for (const att of item.attachments) {
+              const a = getAttachment(ndb, att.id);
+              if (a !== null) {
+                emitAgentActivityEvent(
+                  rt,
+                  args.network_id,
+                  'attachment.created',
+                  { attachment: a },
+                  ndb,
+                  extra.requestId,
+                );
+              }
+            }
+          }
+        }
+
+        // ONE audit row for the whole batch (per task spec).
+        auditAgentCall(
+          rt,
+          'etn.thoughts.write',
+          args.network_id,
+          'network',
+          args.network_id,
+          {
+            thought_count: result.thought_count,
+            link_count: result.link_count,
+            item_count: result.items.length,
+          },
+        );
+
+        const layer = resolveRuntimeLayer(rt, args.network_id);
+        const items: McpThoughtWriteItemResult[] = result.items;
+        return {
+          items,
+          warnings: result.warnings,
+          layer: { id: layer.id, title: layer.title },
+          request_id: String(extra.requestId),
+        } satisfies McpThoughtWriteResult;
+      }),
+  );
+
+  // =========================================================================
   // Trash + usage-clear (S13)
   // =========================================================================
 
@@ -2962,9 +4433,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Очистить корзину',
       description:
-        '«Удалить всё, что возможно» (S13, 03-server-api.md §14b): physically delete every marked ' +
-        'thought/link for which `deletion_check` reports no blocking; blocked ones are skipped ' +
-        'silently. Returns { purged, skipped }.',
+        '«Удалить всё, что возможно»: physically delete every marked thought/link for which the blocking ' +
+        'check reports nothing; blocked ones are skipped silently. Returns { purged, skipped } — a ' +
+        'non-empty `skipped` also carries `how_to`. See prompt etn.how_to_purge.',
       inputSchema: TrashPurgeSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.trash.purge'],
     },
@@ -2973,18 +4444,50 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         requireWritable(rt);
         requireWriteBudget(rt);
         const ndb = openMemberNetwork(rt, args.network_id);
+        // Снимки помеченных на удаление строк ДО физического удаления —
+        // после purgeTrash их уже нет, а журналу нужен снимок на момент
+        // операции (тот же ход, что в REST POST /trash/purge).
+        const trash = listTrash(ndb);
+        const thoughtSnapshots = new Map(trash.thoughts.map((t) => [t.id, t]));
+        const linkSnapshots = new Map(trash.links.map((l) => [l.id, l]));
         const { purged, skipped, deleted_thought_ids, deleted_link_ids } = purgeTrash(ndb);
         for (const id of deleted_thought_ids) {
+          const snapshot = thoughtSnapshots.get(id);
           emitAgentEvent(rt, args.network_id, 'thought.deleted', { id }, extra.requestId);
+          if (snapshot !== undefined) {
+            recordThoughtActivity(ndb, {
+              networkId: args.network_id,
+              userId: rt.deps.auth.userId,
+              action: 'deleted',
+              thought: snapshot,
+              layerId: ndb.layerId,
+            });
+          }
         }
         for (const id of deleted_link_ids) {
+          const snapshot = linkSnapshots.get(id);
           emitAgentEvent(rt, args.network_id, 'link.deleted', { id }, extra.requestId);
+          if (snapshot !== undefined) {
+            recordLinkActivity(ndb, {
+              networkId: args.network_id,
+              userId: rt.deps.auth.userId,
+              action: 'deleted',
+              link: snapshot,
+              layerId: ndb.layerId,
+            });
+          }
         }
         auditAgentCall(rt, 'etn.trash.purge', args.network_id, 'network', args.network_id, {
           purged,
           skipped,
         });
-        return { purged, skipped };
+        return {
+          purged,
+          skipped,
+          // Hint-навигатор уровня 2 (ADR b2eebf8b): непустой skipped значит,
+          // что часть корзины заблокирована — промпт объясняет, что делать.
+          ...(skipped > 0 ? { how_to: 'etn.how_to_purge' } : {}),
+        };
       }),
   );
 
@@ -2997,9 +4500,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Очистить использование мысли',
       description:
-        'Null out every thought_ref property value of other thoughts that references this one ' +
-        '(S13, 03-server-api.md §9.2) — clears the «использование в свойствах» blocking arm in ' +
-        'one call instead of editing each property. Returns { cleared }.',
+        'Null out every thought_ref property value of other thoughts that references this one — clears ' +
+        'the «использование в свойствах» blocking arm in one call instead of editing each property. ' +
+        'Returns { cleared }.',
       inputSchema: UsageClearSchema,
     },
     (args, extra) =>
@@ -3030,6 +4533,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // эмитятся через `emitAgentEvent` — они доходят до подписчиков через тот же
   // поток, что и REST-события (`emitDomainEvent` использует
   // `REALTIME_EVENT_AUDIENCE[type]`, для `edit.*` это `network`).
+  // В журнал активности захваты НЕ пишутся — требование b0c7a57c — поэтому
+  // здесь именно `emitAgentEvent`, а не `emitAgentActivityEvent`.
   // =========================================================================
 
   const LocksAcquireSchema = z.object({
@@ -3042,13 +4547,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Захватить объект',
       description:
-        'Acquire (or refresh) the lock on `(entity_type, entity_id)` for the calling user ' +
-        '(task a88acf20, операция b6b776ff, задача 2031df5e). Idempotent for the same user — a ' +
-        'repeated acquire on an already-held object updates `client_id` / `acquired_at_ms` and ' +
-        'returns the existing row (`продление`). A different holder is rejected with `LOCKED` ' +
-        'carrying the holder coordinates in `details.holder`. Returns the canonical `LockRow`: ' +
-        '`{ id, entity_type, entity_id, user_id, client_id, acquired_at_ms }`. Emits the ' +
-        '`edit.acquired` real-time event.',
+        'Acquire (or refresh) the lock on `(entity_type, entity_id)` for the calling user. Idempotent for ' +
+        'the same user — a repeated acquire updates `client_id` / `acquired_at_ms` and returns the existing ' +
+        'row. A different holder is rejected with `LOCKED` carrying the holder coordinates in ' +
+        '`details.holder`. Returns the canonical `LockRow`.',
       inputSchema: LocksAcquireSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.acquire'],
     },
@@ -3091,9 +4593,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Снять свой захват',
       description:
-        'Release the lock with id `lock_id` for the calling user. Only the holder may release — ' +
-        'anyone else gets `FORBIDDEN`. Releasing an unknown lock id is `LOCK_NOT_FOUND`. Emits ' +
-        '`edit.released`. Returns `{ released: true }` as the analogue of REST `204 No Content`.',
+        'Release the lock with id `lock_id` for the calling user. Only the holder may release — anyone ' +
+        'else gets `FORBIDDEN`; an unknown lock id is `LOCK_NOT_FOUND`. Returns `{ released: true }`.',
       inputSchema: LocksReleaseSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.release'],
     },
@@ -3131,10 +4632,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Снять все захваты участника',
       description:
-        'Remove every lock held by `user_id` in the network — manual reset through the ' +
-        '«Снять все блокировки» affordance (task 2031df5e, requirement 9ac48831). Returns ' +
-        '`{ cleared: number }`. Emits one `edit.cleared` event per removed lock with ' +
-        '`reason: "manual"`. Any network member may invoke this for any other member (равноправие).',
+        'Remove every lock held by `user_id` in the network — any network member may invoke this for any ' +
+        'other member (равноправие). Returns `{ cleared: number }`.',
       inputSchema: LocksClearSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.clear'],
     },
@@ -3176,10 +4675,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Активные захваты сети',
       description:
-        'List active locks in the network, optionally filtered by `user_id` and/or `client_id`. ' +
-        'Each filter accepts a single value; passing `null` (or omitting) removes the constraint ' +
-        'for that column. Returns the same `{ data: LockRow[], meta: { total, offset, limit } }` ' +
-        'envelope as `GET /locks`. Read-only.',
+        'List active locks in the network, optionally filtered by `user_id` and/or `client_id` (a single ' +
+        'value each; `null` or omitted removes the constraint). Returns the same ' +
+        '`{ data: LockRow[], meta: { total, offset, limit } }` envelope as `GET /locks`.',
       inputSchema: LocksListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.locks.list'],
     },
@@ -3215,13 +4713,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Поиск дубликатов',
       description:
-        'Find existing thoughts matching a proposed title/synonyms (exact title, exact synonym, ' +
-        'partial). A partial match follows the synonym-pattern principle with an implicit `*` ' +
-        'around every typed word: the fragments must occur inside CONSECUTIVE words of the ' +
-        'title or of one synonym, in the typed order («дор» finds «Доработать!», «исправ ошиб» ' +
-        'finds «Исправленные ошибки», but not «исправить старую ошибку»); `-word` excludes ' +
-        'infix occurrences. Each candidate carries its icon/style and one `parent_title` for ' +
-        'disambiguation. Always call before `etn.thoughts.create` to avoid duplicates.',
+        'Find existing thoughts matching a proposed title/synonyms (exact title, exact synonym, partial). ' +
+        'A partial match requires the typed fragments to occur inside CONSECUTIVE words of the title or of ' +
+        'one synonym, in the typed order («исправ ошиб» finds «Исправленные ошибки», but not «исправить ' +
+        'старую ошибку»); `-word` excludes. Always call before `etn.thoughts.create`.',
       inputSchema: FindDuplicatesSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.find_duplicates'],
     },
@@ -3257,14 +4752,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Лента журнала активности',
       description:
-        'Read the activity log of a network (задача f2eca5a4, операция 70dfe81d). ' +
-        'Each row records one mutating operation by a network member: creation, update, ' +
-        'delete, trash or restore of a thought, link, type, property, comment, attachment ' +
-        'or layer. `entity_title` is a short snapshot of the entity at the moment of the ' +
-        'event (≤ 256 chars). Captures (`edit.*`) are NOT recorded. Filters combine with ' +
-        'AND; sorted by `occurred_at_ms DESC`; paginated with `limit` (default 50, max 200) ' +
-        'and `offset`. Returns the same `{ data: ActivityRow[], meta: { total, offset, limit } }' +
-        ' envelope as `GET /activity`.',
+        'Read the activity log of a network: one row per mutating operation by a network member — ' +
+        'creation, update, delete, trash/restore of a thought, link, type, property, comment, attachment ' +
+        'or layer; `entity_title` is a snapshot at the moment of the event. Captures (`edit.*`) are not ' +
+        'recorded. Filters combine with AND; sorted by `occurred_at_ms DESC`; paginated (`limit` default ' +
+        '50, max 200, + `offset`).',
       inputSchema: ActivityListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.list'],
     },
@@ -3305,12 +4797,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Свёртка журнала активности',
       description:
-        'Roll up the activity log of a network up to `until_ms` (задача 6bcccd2b, ' +
-        'требование 76443b7e «свёртка»). For each live `(entity_type, entity_id)` only ' +
-        'the earliest creation/update and the latest update stay; if there is a `deleted`/' +
-        '`trashed` event up to `until_ms` it alone remains. IRREVERSIBLE — the client ' +
-        'UI must request explicit confirmation. The whole operation runs in one SQLite ' +
-        'transaction. Returns `{ removed, kept }` mirroring `POST /activity/rollup`.',
+        'Roll up the activity log of a network up to `until_ms`: for each live `(entity_type, entity_id)` ' +
+        'only the earliest creation/update and the latest update stay; a `deleted`/`trashed` event up to ' +
+        '`until_ms` alone remains. IRREVERSIBLE; runs in one SQLite transaction. Returns `{ removed, kept }`.',
       inputSchema: ActivityRollupSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.rollup'],
     },
@@ -3338,11 +4827,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Обрезка журнала активности',
       description:
-        'Hard-truncate the activity log of a network up to `until_ms` (задача 6bcccd2b, ' +
-        'требование 9921a32b «обрезка»): every row with `occurred_at_ms <= until_ms` is ' +
-        'deleted, including creation and deletion records. IRREVERSIBLE — the client UI ' +
-        'must request explicit confirmation. The whole operation runs in one SQLite ' +
-        'transaction. Returns `{ removed }` mirroring `POST /activity/truncate`.',
+        'Hard-truncate the activity log of a network up to `until_ms`: every row with ' +
+        '`occurred_at_ms <= until_ms` is deleted, including creation and deletion records. ' +
+        'IRREVERSIBLE; runs in one SQLite transaction. Returns `{ removed }`.',
       inputSchema: ActivityTruncateSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.truncate'],
     },
@@ -3357,6 +4844,1335 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           removed: result.removed,
         });
         return { ...result, request_id: String(extra.requestId) };
+      }),
+  );
+
+  // =========================================================================
+  // 0.7.2 — task ba024a45: networks.write / networks.delete / instructions.
+  // =========================================================================
+
+  // ---------------------------------------------------------------------------
+  // этон.networks.write — upsert: создаёт сеть, если `network_id` не передан;
+  // иначе патчит существующую (права владельца/админа).
+  //
+  // Контракт повторяет REST `POST /networks` + `PATCH /networks/{id}` в одном
+  // фасаде — тело частично перекрывается, но `type_roles` принимает явный
+  // `null` для снятия роли. Невалидные ключи `type_roles` →
+  // `VALIDATION_ERROR` на этапе `validateTypeRoles`; несуществующий id типа
+  // → `VALIDATION_ERROR` через `networkService.validateTypeRoles`.
+  // ---------------------------------------------------------------------------
+  const NetworksWriteSchema = z
+    .object({
+      network_id: NetworkId.optional(),
+      display_name: z.string().min(1).optional(),
+      description: z.string().nullable().optional(),
+      when_to_use: z.string().nullable().optional(),
+      conventions: z.string().nullable().optional(),
+      examples: z.string().nullable().optional(),
+      type_roles: z.record(z.string(), z.string().nullable()).optional(),
+    })
+    .strict();
+  mcp.registerTool(
+    'etn.networks.write',
+    {
+      title: 'Создать или обновить сеть',
+      description:
+        'Upsert: omit `network_id` to create (caller → owner); pass `network_id` to patch (owner/admin). ' +
+        'Editable: `display_name`, `description`, `when_to_use`, `conventions`, `examples`, `type_roles`. ' +
+        'Unknown role keys / stale `type_id` → `VALIDATION_ERROR`. Returns the network card.',
+      inputSchema: NetworksWriteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.networks.write'],
+    },
+    (args, extra) => {
+      // `runWriteTool` resolves the session layer through `openNetworkDb`,
+      // which would fail on a brand-new network (the directory exists but
+      // no row in `_system.db`'s `networks` yet — the layer walker would
+      // succeed only after `createNetwork` returns). The clean split is:
+      //  * create path → `runTool` (read wrapper, no layer echo);
+      //  * patch path  → `runWriteTool` (echoes the existing layer).
+      const op = async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+
+        // 1. Validate `type_roles` shape (unknown role keys) before any I/O.
+        const requestedRoles =
+          args.type_roles !== undefined ? validateTypeRoles(args.type_roles) : undefined;
+
+        let network: Network;
+        if (args.network_id === undefined) {
+          // ---- CREATE ---------------------------------------------------
+          // Every authenticated principal may create a network (no admin
+          // gate); the caller becomes the owner of the new network.
+          const displayName = (args.display_name ?? '').trim();
+          if (displayName.length === 0) {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'display_name обязательно при создании сети.',
+              { field: 'display_name' },
+            );
+          }
+          const description =
+            args.description === undefined
+              ? null
+              : typeof args.description === 'string' && args.description === ''
+                ? null
+                : (args.description ?? null);
+          // The service validates that every non-null type id exists in the
+          // freshly created data.db. At create time the new network has no
+          // thought types yet, so any non-null id here is doomed — we
+          // surface that as `VALIDATION_ERROR` instead of letting the
+          // service reject it with a less informative message.
+          for (const [role, value] of Object.entries(requestedRoles ?? {}) as Array<
+            [string, string | null]
+          >) {
+            if (value !== null) {
+              throw new EtnError(
+                'VALIDATION_ERROR',
+                `На создании сети нельзя указывать непустую роль type_roles.${role}: в новой сети ещё нет типов.`,
+                { field: `type_roles.${role}`, value },
+              );
+            }
+          }
+          network = await rt.deps.networkService.createNetwork(
+            rt.deps.auth.userId,
+            displayName,
+            description,
+            requestedRoles ?? {},
+          );
+          rt.deps.systemDb.insertAuditLog({
+            actorUserId: rt.deps.auth.userId,
+            networkId: network.id,
+            category: 'network',
+            action: 'network.create',
+            targetType: 'network',
+            targetId: network.id,
+            details: {
+              display_name: displayName,
+              type_roles: requestedRoles ?? {},
+              via: 'mcp.etn.networks.write',
+            },
+          });
+        } else {
+          // ---- PATCH ----------------------------------------------------
+          const networkId = args.network_id;
+          const existing = rt.deps.systemDb.getNetworkById(networkId);
+          if (existing === null) {
+            throw new EtnError('NOT_FOUND', `Сеть ${networkId} не найдена.`, {
+              network_id: networkId,
+            });
+          }
+          // Authz: network owner OR global admin (06-auth.md §4.1).
+          const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, networkId);
+          if (!rt.deps.auth.isAdmin && role !== 'owner') {
+            throw new EtnError(
+              'FORBIDDEN',
+              'Требуются права владельца сети или администратора.',
+              { network_id: networkId },
+            );
+          }
+          // Merge roles: absent keys preserve the existing value, present
+          // keys (including explicit `null`) override it.
+          const mergedRoles =
+            requestedRoles === undefined
+              ? existing.type_roles
+              : { ...existing.type_roles, ...requestedRoles };
+          const validatedRoles = rt.deps.networkService.validateTypeRoles(
+            networkId,
+            mergedRoles,
+          );
+          const displayName =
+            typeof args.display_name === 'string'
+              ? args.display_name.trim() || existing.display_name
+              : existing.display_name;
+          // Markdown fields: null/empty clears, undefined preserves.
+          const description = normalizeOptionalText(args.description, existing.description);
+          const whenToUse = normalizeOptionalText(args.when_to_use, existing.when_to_use);
+          const conventions = normalizeOptionalText(args.conventions, existing.conventions);
+          const examples = normalizeOptionalText(args.examples, existing.examples);
+          rt.deps.systemDb.updateNetwork(networkId, {
+            displayName,
+            description,
+            when_to_use: whenToUse,
+            conventions,
+            examples,
+            type_roles: validatedRoles,
+          });
+          rt.deps.systemDb.insertAuditLog({
+            actorUserId: rt.deps.auth.userId,
+            networkId,
+            category: 'network',
+            action: 'network.update',
+            targetType: 'network',
+            targetId: networkId,
+            details: {
+              display_name: displayName,
+              description,
+              when_to_use: whenToUse,
+              conventions,
+              examples,
+              type_roles: validatedRoles,
+              via: 'mcp.etn.networks.write',
+            },
+          });
+          // Real-time: broadcast only the changed fields so subscribers
+          // can merge in place (matches REST PATCH /networks/{id}).
+          const changes: Record<string, unknown> = {};
+          if (displayName !== existing.display_name) changes['display_name'] = displayName;
+          if (description !== existing.description) changes['description'] = description;
+          if (whenToUse !== existing.when_to_use) changes['when_to_use'] = whenToUse;
+          if (conventions !== existing.conventions) changes['conventions'] = conventions;
+          if (examples !== existing.examples) changes['examples'] = examples;
+          if (JSON.stringify(validatedRoles) !== JSON.stringify(existing.type_roles)) {
+            changes['type_roles'] = validatedRoles;
+          }
+          if (Object.keys(changes).length > 0) {
+            emitDomainEvent(
+              { systemDb: rt.deps.systemDb, pubsub: rt.deps.pubsub },
+              networkId,
+              'network.updated',
+              changes,
+              {
+                user_id: rt.deps.auth.userId,
+                client_id: rt.deps.auth.keyId,
+              },
+              { meta: { request_id: String(extra.requestId) } },
+            );
+          }
+          network = rt.deps.systemDb.getNetworkById(networkId)!;
+        }
+        auditAgentCall(
+          rt,
+          'etn.networks.write',
+          network.id,
+          'network',
+          network.id,
+          {
+            created: args.network_id === undefined,
+            type_roles_keys: Object.keys(requestedRoles ?? {}),
+          },
+        );
+        return {
+          id: network.id,
+          display_name: network.display_name,
+          owner_id: network.owner_id,
+          description: network.description,
+          when_to_use: network.when_to_use,
+          conventions: network.conventions,
+          examples: network.examples,
+          type_roles: network.type_roles,
+          has_structure: typeof network.type_roles.table_of_contents === 'string',
+          created_at: network.created_at,
+          updated_at: network.updated_at,
+          request_id: String(extra.requestId),
+        };
+      };
+      return args.network_id === undefined
+        ? runTool(op)
+        : runWriteTool(rt, args.network_id, op);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // этон.networks.delete — destructive; admin only; дополнительно требует
+  // `confirm: true` (как для человека).
+  // ---------------------------------------------------------------------------
+  const NetworksDeleteSchema = z
+    .object({
+      network_id: NetworkId,
+      confirm: z.literal(true),
+    })
+    .strict();
+  mcp.registerTool(
+    'etn.networks.delete',
+    {
+      title: 'Удалить сеть',
+      description:
+        'Destructive: remove a network and its `data.db`. Admin only. Requires `confirm: true`. ' +
+        'Returns `{ deleted, network_id, request_id }`.',
+      inputSchema: NetworksDeleteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.networks.delete'],
+    },
+    (args, extra) =>
+      runTool(async () => {
+        // The doomed network's `data.db` is about to vanish, so we bypass
+        // `runWriteTool` (which would re-open the base layer for the layer
+        // echo and resurrect the directory through `mkdirSync`). Mutating
+        // tools still must observe the read-only + write-budget gates —
+        // apply them by hand.
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        if (!rt.deps.auth.isAdmin) {
+          throw new EtnError(
+            'FORBIDDEN',
+            'Удаление сети доступно только администратору сервера.',
+            { network_id: args.network_id },
+          );
+        }
+        const existing = rt.deps.systemDb.getNetworkById(args.network_id);
+        if (existing === null) {
+          throw new EtnError('NOT_FOUND', `Сеть ${args.network_id} не найдена.`, {
+            network_id: args.network_id,
+          });
+        }
+        // Emit before the registry row is gone (network_seq/event_log FK).
+        emitDomainEvent(
+          { systemDb: rt.deps.systemDb, pubsub: rt.deps.pubsub },
+          args.network_id,
+          'network.deleted',
+          { id: args.network_id },
+          { user_id: rt.deps.auth.userId, client_id: rt.deps.auth.keyId },
+          { meta: { request_id: String(extra.requestId) } },
+        );
+        await rt.deps.networkService.deleteNetwork(args.network_id);
+        rt.deps.systemDb.insertAuditLog({
+          actorUserId: rt.deps.auth.userId,
+          networkId: args.network_id,
+          category: 'network',
+          action: 'delete',
+          targetType: 'network',
+          targetId: args.network_id,
+          details: { by_admin: true, via: 'mcp.etn.networks.delete' },
+        });
+        auditAgentCall(rt, 'etn.networks.delete', args.network_id, 'network', args.network_id, {
+          confirm: args.confirm,
+        });
+        return {
+          deleted: true,
+          network_id: args.network_id,
+          request_id: String(extra.requestId),
+        };
+      }),
+  );
+
+  // ---------------------------------------------------------------------------
+  // этон.instructions — витрина инструкций сети (ADR 717f04df, спека 14b0cc4f).
+  //
+  // Три режима через дискриминированное объединение:
+  //   * `{ network_id, instruction_id }` — полный текст одной инструкции
+  //     (постоянный комментарий мысли целиком, без обрезки);
+  //   * `{ network_id, keywords }` — фильтр по title+synonyms мини-синтаксом;
+  //   * `{ network_id }` — все актуальные инструкции сети.
+  //
+  // Если роль `instructions` не задана, ответ — `{ has_instructions: false, instructions: [] }`
+  // (без ошибки). Только актуальные мысли; помеченные на удаление исключаются;
+  // учитываются подтипы роли (L21-иерархия типов); читается текущий слой сессии.
+  // ---------------------------------------------------------------------------
+  const InstructionsByIdSchema = z
+    .object({
+      network_id: NetworkId,
+      instruction_id: z.string().min(1),
+    })
+    .strict();
+  const InstructionsByKeywordsSchema = z
+    .object({
+      network_id: NetworkId,
+      keywords: z.string().min(1),
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .strict();
+  const InstructionsAllSchema = z
+    .object({
+      network_id: NetworkId,
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    })
+    .strict();
+  function buildInstructionsPreview(ndb: NetworkDb, thoughtId: string) {
+    // The permanent comment is read in full by spec 14b0cc4f ("БЕЗ обрезки").
+    // We still surface a `preview` for list responses — a short substring of
+    // the permanent body (200 chars), to keep the list payload compact while
+    // leaving `etn.comments.get` as the canonical full-text accessor.
+    const preview = getPermanentPreview(ndb, 'thought', thoughtId);
+    return preview;
+  }
+  function fetchInstructionsList(
+    ndb: NetworkDb,
+    instructionsTypeIds: string[],
+    keywords: string | undefined,
+    limit: number,
+    offset: number,
+  ): Array<{
+    id: string;
+    title: string;
+    synonyms: string[];
+    preview: ReturnType<typeof getPermanentPreview>;
+    type_id: string | null;
+  }> {
+    if (instructionsTypeIds.length === 0) return [];
+    const placeholders = instructionsTypeIds.map(() => '?').join(',');
+    const params: unknown[] = [...instructionsTypeIds];
+
+    const keywordClause: string[] = [];
+    const keywordParams: unknown[] = [];
+    if (keywords !== undefined && keywords.trim() !== '') {
+      const parsed = parseFilterKeywords(keywords);
+      // AND of all include words; `-word` exclusions negate.
+      for (const word of parsed.include) {
+        const pattern = buildLikePattern(word.toLowerCase());
+        keywordClause.push(
+          '(t.title_norm LIKE ? ESCAPE \'\\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+            ' WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE \'\\\'))',
+        );
+        keywordParams.push(pattern, pattern);
+      }
+      for (const word of parsed.exclude) {
+        const pattern = buildLikePattern(word.toLowerCase());
+        keywordClause.push(
+          'NOT (t.title_norm LIKE ? ESCAPE \'\\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+            ' WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE \'\\\'))',
+        );
+        keywordParams.push(pattern, pattern);
+      }
+    }
+    const whereKeyword = keywordClause.length > 0 ? ` AND ${keywordClause.join(' AND ')}` : '';
+
+    // First: the candidates that match the type + keyword filter. Apply
+    // title/synonyms inclusion order via a stable secondary sort.
+    const rows = ndb
+      .prepare(
+        `SELECT t.id AS id, t.title AS title, t.type_id AS type_id
+           FROM thoughts_v t
+          WHERE t.type_id IN (${placeholders})
+            AND t.active = 1
+            AND t.marked_for_deletion = 0${whereKeyword}
+          ORDER BY t.title COLLATE NOCASE ASC, t.created_at ASC
+          LIMIT ? OFFSET ?`,
+      )
+      .all(...params, ...keywordParams, limit, offset) as Array<{
+      id: string;
+      title: string;
+      type_id: string | null;
+    }>;
+    if (rows.length === 0) return [];
+
+    // Bulk-fetch synonyms for the page (one extra query).
+    const ids = rows.map((r) => r.id);
+    const idPlaceholders = ids.map(() => '?').join(',');
+    const synRows = ndb
+      .prepare(
+        `SELECT thought_id, synonym FROM thought_synonyms_v
+          WHERE thought_id IN (${idPlaceholders})
+          ORDER BY thought_id, synonym`,
+      )
+      .all(...ids) as Array<{ thought_id: string; synonym: string }>;
+    const synonymsById = new Map<string, string[]>();
+    for (const row of synRows) {
+      const list = synonymsById.get(row.thought_id);
+      if (list === undefined) {
+        synonymsById.set(row.thought_id, [row.synonym]);
+      } else {
+        list.push(row.synonym);
+      }
+    }
+
+    return rows.map((row) => {
+      const preview = buildInstructionsPreview(ndb, row.id);
+      return {
+        id: row.id,
+        title: row.title,
+        synonyms: synonymsById.get(row.id) ?? [],
+        preview,
+        type_id: row.type_id,
+      };
+    });
+  }
+
+  mcp.registerTool(
+    'etn.instructions',
+    {
+      title: 'Витрина инструкций сети',
+      description:
+        'Read the network\'s instructions. Three modes: `{ network_id, instruction_id }` returns the FULL ' +
+        'permanent comment (no truncation); `{ network_id, keywords }` filters by title+synonyms (mini-syntax: ' +
+        'whitespace-AND, `-word` exclusion); `{ network_id }` returns every active instruction. When the network ' +
+        'has not declared the `instructions` role → `{ has_instructions: false, instructions: [] }`.',
+      inputSchema: z.union([
+        InstructionsByIdSchema,
+        InstructionsByKeywordsSchema,
+        InstructionsAllSchema,
+      ]),
+      annotations: MCP_TOOL_ANNOTATIONS['etn.instructions'],
+    },
+    (args) => {
+      // Discriminate by the optional fields the caller provided. The schema is
+      // a union so TS keeps the args type wide; narrow it manually.
+      if ('instruction_id' in args) {
+        const idArgs = args as z.infer<typeof InstructionsByIdSchema>;
+        return runTool(async () => {
+          const network = rt.deps.systemDb.getNetworkById(idArgs.network_id);
+          if (network === null) {
+            throw new EtnError('NOT_FOUND', `Сеть ${idArgs.network_id} не найдена.`, {
+              network_id: idArgs.network_id,
+            });
+          }
+          assertNetworkAccess(rt, idArgs.network_id);
+          const roleTypeId = network.type_roles.instructions;
+          if (typeof roleTypeId !== 'string') {
+            return {
+              network_id: idArgs.network_id,
+              has_instructions: false as const,
+              instructions: [],
+            };
+          }
+          const ndb = openNetworkDb(rt.deps.dataDir, idArgs.network_id, rt.deps.logger);
+          const instructionsTypeIds = expandTypeIdsToSubtree(ndb, 'thought_types', [roleTypeId]);
+          if (instructionsTypeIds.length === 0) {
+            throw new EtnError(
+              'NOT_FOUND',
+              `Инструкция ${idArgs.instruction_id} не найдена — роль «instructions» не покрывает ни одного типа.`,
+              { instruction_id: idArgs.instruction_id, network_id: idArgs.network_id },
+            );
+          }
+          const placeholders = instructionsTypeIds.map(() => '?').join(',');
+          const row = ndb
+            .prepare(
+              `SELECT t.id AS id, t.title AS title, t.type_id AS type_id, t.active AS active,
+                      t.marked_for_deletion AS marked_for_deletion
+                 FROM thoughts_v t
+                WHERE t.id = ? AND t.type_id IN (${placeholders})
+                LIMIT 1`,
+            )
+            .get(idArgs.instruction_id, ...instructionsTypeIds) as
+            | {
+                id: string;
+                title: string;
+                type_id: string | null;
+                active: number;
+                marked_for_deletion: number;
+              }
+            | undefined;
+          if (row === undefined) {
+            throw new EtnError(
+              'NOT_FOUND',
+              `Инструкция ${idArgs.instruction_id} не найдена среди активных мыслей роли «instructions».`,
+              { instruction_id: idArgs.instruction_id, network_id: idArgs.network_id },
+            );
+          }
+          if (row.active !== 1 || row.marked_for_deletion !== 0) {
+            throw new EtnError(
+              'NOT_FOUND',
+              `Инструкция ${idArgs.instruction_id} неактуальна или помечена на удаление.`,
+              { instruction_id: idArgs.instruction_id, network_id: idArgs.network_id },
+            );
+          }
+          // Full body (no truncation) per spec 14b0cc4f.
+          const permanent = getPermanentFull(ndb, 'thought', row.id);
+          return {
+            network_id: idArgs.network_id,
+            has_instructions: true as const,
+            instruction_id: row.id,
+            title: row.title,
+            type_id: row.type_id,
+            body_md: permanent === null ? null : permanent.body_md,
+          };
+        });
+      }
+      const listArgs = args as z.infer<typeof InstructionsByKeywordsSchema | typeof InstructionsAllSchema>;
+      const keywords =
+        'keywords' in listArgs && typeof listArgs.keywords === 'string'
+          ? listArgs.keywords
+          : undefined;
+      return runTool(async () => {
+        const network = rt.deps.systemDb.getNetworkById(listArgs.network_id);
+        if (network === null) {
+          throw new EtnError('NOT_FOUND', `Сеть ${listArgs.network_id} не найдена.`, {
+            network_id: listArgs.network_id,
+          });
+        }
+        assertNetworkAccess(rt, listArgs.network_id);
+        const roleTypeId = network.type_roles.instructions;
+        if (typeof roleTypeId !== 'string') {
+          return {
+            network_id: listArgs.network_id,
+            has_instructions: false as const,
+            instructions: [],
+          };
+        }
+        const ndb = openNetworkDb(rt.deps.dataDir, listArgs.network_id, rt.deps.logger);
+        const instructionsTypeIds = expandTypeIdsToSubtree(ndb, 'thought_types', [roleTypeId]);
+        if (instructionsTypeIds.length === 0) {
+          return {
+            network_id: listArgs.network_id,
+            has_instructions: true as const,
+            instructions: [],
+            meta: { total: 0 },
+          };
+        }
+        const limit = Math.min(Math.max(listArgs.limit ?? 50, 1), 200);
+        const offset = Math.max(listArgs.offset ?? 0, 0);
+        const placeholders = instructionsTypeIds.map(() => '?').join(',');
+        const keywordClause: string[] = [];
+        const keywordParams: unknown[] = [];
+        if (keywords !== undefined && keywords.trim() !== '') {
+          const parsed = parseFilterKeywords(keywords);
+          for (const word of parsed.include) {
+            const pattern = buildLikePattern(word.toLowerCase());
+            keywordClause.push(
+              '(t.title_norm LIKE ? ESCAPE \'\\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+                ' WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE \'\\\'))',
+            );
+            keywordParams.push(pattern, pattern);
+          }
+          for (const word of parsed.exclude) {
+            const pattern = buildLikePattern(word.toLowerCase());
+            keywordClause.push(
+              'NOT (t.title_norm LIKE ? ESCAPE \'\\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts' +
+                ' WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE \'\\\'))',
+            );
+            keywordParams.push(pattern, pattern);
+          }
+        }
+        const whereKeyword = keywordClause.length > 0 ? ` AND ${keywordClause.join(' AND ')}` : '';
+        const totalRow = ndb
+          .prepare(
+            `SELECT COUNT(*) AS c
+               FROM thoughts_v t
+              WHERE t.type_id IN (${placeholders})
+                AND t.active = 1
+                AND t.marked_for_deletion = 0${whereKeyword}`,
+          )
+          .get(...instructionsTypeIds, ...keywordParams) as { c: number };
+        const instructions = fetchInstructionsList(
+          ndb,
+          instructionsTypeIds,
+          keywords,
+          limit,
+          offset,
+        );
+        return {
+          network_id: listArgs.network_id,
+          has_instructions: true as const,
+          instructions,
+          meta: { total: totalRow.c, matched: keywords !== undefined ? totalRow.c : undefined },
+        };
+      });
+    },
+  );
+
+  // =========================================================================
+  // `etn.ontology.write` / `etn.ontology.delete` — задача cc9ca65e, 0.7.2.
+  //
+  // Управление онтологией сети (типы мыслей/связей, реестр свойств,
+  // привязки свойств к типам) одной транзакцией.
+  //
+  // * `etn.ontology.write` — идемпотентный upsert пакетами `thought_types[]` /
+  //   `link_types[]` / `properties[]` / `type_properties[]`. Локальные `ref`/
+  //   `parent_ref`/`type_ref`/`property_ref` действуют только внутри батча.
+  //   Повторный вызов с теми же аргументами не меняет состояние (action =
+  //   `unchanged` на каждом элементе).
+  // * `etn.ontology.delete` — деструктивное удаление одной сущности; без
+  //   `force` отвергается на используемых элементах со счётчиками в
+  //   `details`. Элемент, занятый в `type_roles` сети, отвергается даже
+  //   с `force`.
+  //
+  // На каждый вызов — одна запись бюджета и одна строка `audit_log`. Real-time
+  // события — по одному на изменённую сущность (`thought-type.*`,
+  // `link-type.*`, `property-registry.*`, `property-definition.*`).
+  // =========================================================================
+
+  const OntologyWriteThoughtTypeSchema = z
+    .object({
+      ref: z.string().min(1).optional(),
+      id: z.string().min(1).nullable().optional(),
+      name: z.string().min(1).optional(),
+      parent: z.string().min(1).nullable().optional(),
+      parent_ref: z.string().min(1).nullable().optional(),
+      description: z.string().nullable().optional(),
+      icon: z.string().nullable().optional(),
+      icon_kind: z.enum(ICON_KINDS).optional(),
+      fg_color: z.string().nullable().optional(),
+      bg_color: z.string().nullable().optional(),
+      font_bold: z.boolean().nullable().optional(),
+      font_italic: z.boolean().nullable().optional(),
+      font_underline: z.boolean().nullable().optional(),
+      font_strike: z.boolean().nullable().optional(),
+      comment_template_md: z.string().nullable().optional(),
+    })
+    .strict();
+  const OntologyWriteLinkTypeSchema = z
+    .object({
+      ref: z.string().min(1).optional(),
+      id: z.string().min(1).nullable().optional(),
+      name_forward: z.string().min(1).optional(),
+      name_reverse: z.string().min(1).optional(),
+      parent: z.string().min(1).nullable().optional(),
+      parent_ref: z.string().min(1).nullable().optional(),
+      color: z.string().nullable().optional(),
+      style: z.enum(['solid', 'dashed', 'dotted']).nullable().optional(),
+      width: z.number().int().min(1).max(20).nullable().optional(),
+      description: z.string().nullable().optional(),
+    })
+    .strict();
+  const OntologyWritePropertySchema = z
+    .object({
+      ref: z.string().min(1).optional(),
+      id: z.string().min(1).nullable().optional(),
+      name: z.string().min(1).optional(),
+      value_type: z.enum(PROPERTY_VALUE_TYPES).optional(),
+      config: z.record(z.string(), z.unknown()).nullable().optional(),
+      description: z.string().nullable().optional(),
+    })
+    .strict();
+  const OntologyWriteTypePropertySchema = z
+    .object({
+      owner: z.enum(TYPE_OWNER_TYPES),
+      type: z.string().min(1).optional(),
+      type_ref: z.string().min(1).optional(),
+      property: z.string().min(1).optional(),
+      property_ref: z.string().min(1).optional(),
+      required: z.boolean().optional(),
+      position: z.number().int().min(0).optional(),
+    })
+    .strict();
+  const OntologyWriteSchema = z.object({
+    network_id: NetworkId,
+    thought_types: z.array(OntologyWriteThoughtTypeSchema).optional(),
+    link_types: z.array(OntologyWriteLinkTypeSchema).optional(),
+    properties: z.array(OntologyWritePropertySchema).optional(),
+    type_properties: z.array(OntologyWriteTypePropertySchema).optional(),
+  });
+  mcp.registerTool(
+    'etn.ontology.write',
+    {
+      title: 'Батч-запись онтологии',
+      description:
+        'Идемпотентный upsert онтологии сети одной транзакцией: `thought_types[]` / `link_types[]` / ' +
+        '`properties[]` / `type_properties[]`. Upsert по `id` XOR имени — повторный вызов с теми же ' +
+        'аргументами не меняет состояние (`action: unchanged` для каждого элемента). Локальные `ref` ' +
+        '(`parent_ref` для типов, `type_ref`/`property_ref` для привязок) действуют только внутри батча. ' +
+        'Цикл `parent_ref` → VALIDATION_ERROR. Смена `value_type` свойства использует ту же доменную ' +
+        'функцию конверсии, что `PATCH /properties/{id}`; ответ несёт `converted_values`/`dropped_values`. ' +
+        'Один write-бюджет + одна строка `audit_log` на ВЕСЬ вызов; real-time события — по одному на ' +
+        'изменённую сущность (`thought-type.*`, `link-type.*`, `property-registry.*`, ' +
+        '`property-definition.*`).',
+      inputSchema: OntologyWriteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.write'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const writeInput: OntologyWriteParams = {
+          network_id: args.network_id,
+          ...(args.thought_types !== undefined ? { thought_types: args.thought_types } : {}),
+          ...(args.link_types !== undefined ? { link_types: args.link_types } : {}),
+          ...(args.properties !== undefined ? { properties: args.properties } : {}),
+          ...(args.type_properties !== undefined ? { type_properties: args.type_properties } : {}),
+        };
+        const result = writeOntology(ndb, writeInput, rt.deps.auth.userId);
+
+        // Real-time + activity log: по одной записи на изменённую сущность.
+        // Снимок для удалённого берётся ДО мутации (тут мутация уже
+        // произошла — но мы используем `unchanged` как маркер для пропуска).
+        for (const item of result.thought_types) {
+          if (item.action === 'unchanged') continue;
+          // After create/update — read back the type for the snapshot.
+          const thoughtType = getThoughtType(ndb, item.id);
+          if (thoughtType === null) continue;
+          if (item.action === 'created') {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'thought-type.created',
+              { type: thoughtType },
+              ndb,
+              extra.requestId,
+            );
+          } else {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'thought-type.updated',
+              { id: item.id, version: item.version, changes: {} },
+              ndb,
+              extra.requestId,
+            );
+          }
+        }
+        for (const item of result.link_types) {
+          if (item.action === 'unchanged') continue;
+          const linkType = getLinkType(ndb, item.id);
+          if (linkType === null) continue;
+          if (item.action === 'created') {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'link-type.created',
+              { type: linkType },
+              ndb,
+              extra.requestId,
+            );
+          } else {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'link-type.updated',
+              { id: item.id, version: item.version, changes: {} },
+              ndb,
+              extra.requestId,
+            );
+          }
+        }
+        for (const item of result.properties) {
+          if (item.action === 'unchanged') continue;
+          const prop = getNetworkProperty(ndb, item.id);
+          if (prop === null) continue;
+          if (item.action === 'created') {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'property-registry.created',
+              { property: prop },
+              ndb,
+              extra.requestId,
+            );
+          } else {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'property-registry.updated',
+              {
+                id: item.id,
+                converted: item.converted_values,
+                dropped: item.dropped_values,
+                changes: {},
+              },
+              ndb,
+              extra.requestId,
+            );
+          }
+        }
+        for (const item of result.type_properties) {
+          if (item.action === 'unchanged') continue;
+          // Подключение свойства — это правка типа-владельца; в журнале
+          // фиксируем как обновление самого типа (требование b0c7a57c).
+          // Перечитываем привязку после её создания/обновления, чтобы
+          // передать полный snapshot в payload `property-definition.*`.
+          const defRow = ndb
+            .prepare(
+              `SELECT id, owner_type, owner_id, property_id, required, position
+                 FROM type_properties_v WHERE id = ?`,
+            )
+            .get(item.id) as
+            | {
+                id: string;
+                owner_type: 'thought_type' | 'link_type';
+                owner_id: string;
+                property_id: string;
+                required: number;
+                position: number;
+              }
+            | undefined;
+          if (defRow === undefined) continue;
+          const propertyRow = getNetworkProperty(ndb, defRow.property_id);
+          if (propertyRow === null) continue;
+          const definitionPayload = {
+            id: defRow.id,
+            property_id: defRow.property_id,
+            owner_type: defRow.owner_type,
+            owner_id: defRow.owner_id,
+            key: propertyRow.name,
+            value_type: propertyRow.value_type,
+            config: propertyRow.config,
+            required: defRow.required === 1,
+            position: defRow.position,
+            description: propertyRow.description,
+          };
+          emitAgentActivityEvent(
+            rt,
+              args.network_id,
+              'property-definition.created',
+              {
+                definition: definitionPayload,
+              },
+              ndb,
+              extra.requestId,
+            );
+          }
+
+        // ONE audit row for the whole batch.
+        auditAgentCall(
+          rt,
+          'etn.ontology.write',
+          args.network_id,
+          'network',
+          args.network_id,
+          {
+            thought_types_count: result.thought_types.length,
+            link_types_count: result.link_types.length,
+            properties_count: result.properties.length,
+            type_properties_count: result.type_properties.length,
+          },
+        );
+
+        const layer = resolveRuntimeLayer(rt, args.network_id);
+        return {
+          ...result,
+          layer: { id: layer.id, title: layer.title },
+          request_id: String(extra.requestId),
+        } satisfies OntologyWriteResult & { layer: { id: string; title: string }; request_id: string };
+      }),
+  );
+
+  const OntologyDeleteSchema = z.object({
+    network_id: NetworkId,
+    kind: z.enum(['thought_type', 'link_type', 'property', 'type_property']),
+    id: z.string().min(1),
+    force: z.boolean().optional(),
+  });
+  mcp.registerTool(
+    'etn.ontology.delete',
+    {
+      title: 'Удалить элемент онтологии',
+      description:
+        'Удалить одну сущность онтологии (`thought_type` / `link_type` / `property` / `type_property`). ' +
+        'Без `force` отвергается на используемых элементах со счётчиками в `details` ' +
+        '(`thoughts_count` / `links_count` / `property_values_count` / `type_properties_count`). ' +
+        'С `force` — каскад по правилам: `thought_type` обнуляет `type_id` связанных мыслей + ' +
+        '`type_properties`; `link_type` удаляет связи этого типа (со свойствами и комментариями) + ' +
+        '`type_properties`; `property` удаляет `property_values` + `type_properties`; `type_property` ' +
+        'удаляет строку привязки. Элемент, занятый в `type_roles` сети, отвергается даже с `force`. ' +
+        'HOME-мысль не имеет типа и не задевается. Один write-бюджет + одна строка `audit_log`.',
+      inputSchema: OntologyDeleteSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.delete'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const network = rt.deps.systemDb.getNetworkById(args.network_id);
+        const networkRoles = network?.type_roles ?? {};
+        // Pre-fetch snapshots BEFORE the mutation, to record accurate activity rows.
+        let snapshot: unknown = null;
+        try {
+          if (args.kind === 'thought_type') {
+            snapshot = getThoughtType(ndb, args.id);
+          } else if (args.kind === 'link_type') {
+            snapshot = getLinkType(ndb, args.id);
+          } else if (args.kind === 'property') {
+            snapshot = getNetworkProperty(ndb, args.id);
+          }
+        } catch {
+          snapshot = null;
+        }
+        const deleteInput: OntologyDeleteParams = {
+          network_id: args.network_id,
+          kind: args.kind,
+          id: args.id,
+          ...(args.force !== undefined ? { force: args.force } : {}),
+        };
+        const result: OntologyDeleteResult = deleteOntologyEntity(
+          ndb,
+          deleteInput,
+          rt.deps.auth.userId,
+          networkRoles,
+        );
+
+        // Real-time + activity log (mirror REST).
+        if (snapshot !== null && snapshot !== undefined) {
+          if (args.kind === 'thought_type') {
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'thought-type.deleted',
+              { id: args.id },
+              extra.requestId,
+            );
+          } else if (args.kind === 'link_type') {
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'link-type.deleted',
+              { id: args.id },
+              extra.requestId,
+            );
+          } else if (args.kind === 'property') {
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'property-registry.deleted',
+              { id: args.id },
+              extra.requestId,
+            );
+          }
+        }
+
+        // ONE audit row for the whole call.
+        auditAgentCall(
+          rt,
+          'etn.ontology.delete',
+          args.network_id,
+          args.kind,
+          args.id,
+          {
+            force: args.force === true,
+            affected_counts: result.affected_counts,
+          },
+        );
+
+        return {
+          ...result,
+          request_id: String(extra.requestId),
+        } satisfies OntologyDeleteResult & { request_id: string };
+      }),
+  );
+
+  // =========================================================================
+  // P3 (задача e488f4c1 / 0.7.2) — copy_subtree, mentions_scan, импорт/экспорт
+  // =========================================================================
+
+  const CopySubtreeSchema = z.object({
+    source_network_id: NetworkId,
+    target_network_id: NetworkId,
+    root_thought_ids: z.array(ThoughtId).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
+    max_depth: z.number().int().min(0).max(20).optional(),
+    include: z
+      .array(
+        z.enum(['thought', 'links', 'properties', 'comments', 'attachments']),
+      )
+      .optional(),
+    duplicate_policy: z.enum(['fail', 'reuse', 'skip', 'create_always']).optional(),
+    id_remap: z.boolean().optional(),
+    target_parent_thought_id: ThoughtId.optional(),
+  });
+  mcp.registerTool(
+    'etn.thoughts.copy_subtree',
+    {
+      title: 'Копирование подграфа между сетями',
+      description:
+        'Сервер сам собирает BFS-снапшот (`max_depth` ≤ 20, потолок ' +
+        MCP_MAX_THOUGHTS_PER_WRITE +
+        ' узлов) и материализует его в `target_network_id` одной транзакцией. ' +
+        '`include` — подмножество частей (`thought`/`links`/`properties`/`comments`/`attachments`). ' +
+        '`duplicate_policy`: `fail` — дубль в целевой сети возвращает VALIDATION_ERROR со списком; ' +
+        '`reuse` — дубль переиспользуется без перезаписи; `skip` — дубль и весь его подграф пропускаются; ' +
+        '`create_always` — всегда новая мысль. `id_remap: true` (default) возвращает `thought_id_map`/' +
+        '`link_id_map` для переписывания wiki-ссылок. HOME-мысль как корень — VALIDATION_ERROR. ' +
+        'Онтология целевой сети должна покрывать все используемые типы мыслей/связей — иначе ' +
+        'VALIDATION_ERROR со списком недостающих. Один write-бюджет + одна строка audit_log.',
+      inputSchema: CopySubtreeSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.copy_subtree'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.target_network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const sourceNdb = openNetworkDb(rt.deps.dataDir, args.source_network_id);
+        const targetNdb = openMemberNetwork(rt, args.target_network_id);
+
+        // `target_parent_thought_id` НЕ задан по умолчанию — копия подграфа
+        // должна быть «чистой», без автоматической привязки к HOME. Если
+        // пользователь явно передал `target_parent_thought_id`, подвешиваем
+        // к ней; иначе корневые мысли остаются без входящей связи.
+        let parentId: string;
+        if (args.target_parent_thought_id !== undefined) {
+          parentId = args.target_parent_thought_id;
+        } else {
+          parentId = '';
+        }
+
+        const summary = copySubtreeFn({
+          source_ndb: sourceNdb,
+          target_ndb: targetNdb,
+          root_thought_ids: args.root_thought_ids,
+          max_depth: args.max_depth ?? 5,
+          include: args.include ?? ['thought', 'links', 'properties', 'comments', 'attachments'],
+          duplicate_policy: args.duplicate_policy ?? 'fail',
+          target_parent_thought_id: parentId,
+          actor_user_id: rt.deps.auth.userId,
+        });
+
+        // Real-time events: одна запись на созданную/переиспользованную мысль
+        // и на созданную связь (per task spec).
+        const thoughtMapEntries = Object.entries(summary.thought_id_map);
+        for (const [, newId] of thoughtMapEntries) {
+          if (newId === '') continue;
+          const thought = getThoughtOrThrow(targetNdb, newId);
+          emitAgentActivityEvent(
+            rt,
+            args.target_network_id,
+            'thought.created',
+            { thought },
+            targetNdb,
+            extra.requestId,
+          );
+        }
+        const linkEntries = Object.entries(summary.link_id_map);
+        for (const [, newId] of linkEntries) {
+          if (newId === '') continue;
+          const link = getLink(targetNdb, newId);
+          if (link !== null) {
+            emitAgentActivityEvent(
+              rt,
+              args.target_network_id,
+              'link.created',
+              { link },
+              targetNdb,
+              extra.requestId,
+            );
+          }
+        }
+
+        // ONE audit row for the whole call (per task spec).
+        auditAgentCall(
+          rt,
+          'etn.thoughts.copy_subtree',
+          args.target_network_id,
+          'network',
+          args.target_network_id,
+          {
+            thoughts_created: summary.thoughts_created,
+            thoughts_reused: summary.thoughts_reused,
+            thoughts_skipped: summary.thoughts_skipped,
+            links_created: summary.links_created,
+          },
+        );
+
+        const layer = resolveRuntimeLayer(rt, args.target_network_id);
+        const includeRemap = args.id_remap !== false;
+        return {
+          thoughts_created: summary.thoughts_created,
+          thoughts_reused: summary.thoughts_reused,
+          thoughts_skipped: summary.thoughts_skipped,
+          links_created: summary.links_created,
+          ...(includeRemap ? { thought_id_map: summary.thought_id_map } : {}),
+          ...(includeRemap ? { link_id_map: summary.link_id_map } : {}),
+          conflicts: summary.conflicts,
+          layer: { id: layer.id, title: layer.title },
+          request_id: String(extra.requestId),
+        };
+      }),
+  );
+
+  const MentionsScanSchema = z
+    .object({
+      network_id: NetworkId,
+      text: z.string().min(1).optional(),
+      source: z
+        .object({
+          comment_id: z.string().min(1).optional(),
+          thought_id: z.string().min(1).optional(),
+        })
+        .optional(),
+      case_sensitive: z.boolean().optional(),
+      use_synonyms: z.boolean().optional(),
+      use_wildcards: z.boolean().optional(),
+      min_confidence: z.number().min(0).max(1).optional(),
+      create_links: z.boolean().optional(),
+      link_type: z.string().min(1).optional(),
+      link_direction: z.enum(['out', 'in']).optional(),
+      /**
+       * Мысль-источник для создаваемых связей (обязательна при
+       * `create_links: true` без `source`). Если задан `source` — id
+       * владельца комментария используется автоматически.
+       */
+      source_thought_id: ThoughtId.optional(),
+    })
+    .refine(
+      (v) => (v.text !== undefined) !== (v.source !== undefined),
+      { message: 'provide exactly one of `text` or `source`' },
+    );
+  mcp.registerTool(
+    'etn.thoughts.mentions_scan',
+    {
+      title: 'Поиск упоминаний мыслей в тексте',
+      description:
+        'Сканирует `text` (или тело комментария `source.comment_id`, или постоянный комментарий мысли ' +
+        '`source.thought_id`) на упоминания мыслей текущей сети через FTS по названиям и синонимам. ' +
+        'Возвращает `[{thought_id, title, confidence, matched_on}]` с `confidence` по шкале: точное ' +
+        'вхождение ≥ 0.9; точное + синоним = 1.0; только синоним = 0.7; `*`-инфикс = 0.6; ниже ' +
+        '`min_confidence` отбрасывается. С `create_links: true` создаёт направленные связи от ' +
+        '`source_thought_id` к найденным (требует `link_type` и `source_thought_id`). Без `create_links` — ' +
+        'read-only.',
+      inputSchema: MentionsScanSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.mentions_scan'],
+    },
+    (args, extra) => {
+      // Без create_links — read-only и не требует write-бюджета.
+      const willMutate = args.create_links === true;
+      if (willMutate) {
+        return runWriteTool(rt, args.network_id, async () => {
+          requireWritable(rt);
+          requireWriteBudget(rt);
+          const ndb = openMemberNetwork(rt, args.network_id);
+          const result = executeMentionsScan(ndb, args, rt.deps.auth.userId);
+          auditAgentCall(
+            rt,
+            'etn.thoughts.mentions_scan',
+            args.network_id,
+            'network',
+            args.network_id,
+            {
+              matches: result.matches.length,
+              links_created: result.links_created,
+            },
+          );
+          return {
+            matches: result.matches,
+            links_created: result.links_created,
+            request_id: String(extra.requestId),
+          };
+        });
+      }
+      return runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const result = executeMentionsScan(ndb, args, rt.deps.auth.userId);
+        return {
+          matches: result.matches,
+          links_created: result.links_created,
+          request_id: String(extra.requestId),
+        };
+      });
+    },
+  );
+
+  const ImportDryRunSchema = z.object({
+    network_id: NetworkId,
+    source: z.union([
+      z.object({ kind: z.literal('etnx_file'), path: z.string().min(1) }),
+      z.object({ kind: z.literal('etnx_base64'), content_base64: z.string().min(1) }),
+    ]),
+    collision_policy: z.enum(['fail', 'rename', 'skip', 'overwrite']).optional(),
+  });
+  mcp.registerTool(
+    'etn.import.dry_run',
+    {
+      title: 'Превью импорта .etnx',
+      description:
+        'Читает `.etnx` (file или base64), валидирует manifest и возвращает план: сколько мыслей/связей/' +
+        'вложений создастся в целевой сети. Без побочных эффектов — read-only.',
+      inputSchema: ImportDryRunSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.import.dry_run'],
+    },
+    (args) =>
+      runTool(async () => {
+        const buf = readImportSource(args.source);
+        const plan = await planImportFromBuffer(buf, rt.deps.logger);
+        return {
+          ok: true as const,
+          manifest_version: plan.manifest_version,
+          source_network_name: plan.source_network_name,
+          plan: plan.plan,
+          conflicts: plan.conflicts,
+        };
+      }),
+  );
+
+  const ImportSubgraphSchema = z.object({
+    network_id: NetworkId,
+    source: z.union([
+      z.object({ kind: z.literal('etnx_file'), path: z.string().min(1) }),
+      z.object({ kind: z.literal('etnx_base64'), content_base64: z.string().min(1) }),
+    ]),
+    collision_policy: z.enum(['fail', 'rename', 'skip', 'overwrite']).optional(),
+    confirm: z.literal(true),
+    parent_thought_id: ThoughtId.optional(),
+  });
+  mcp.registerTool(
+    'etn.import.subgraph',
+    {
+      title: 'Импорт .etnx',
+      description:
+        'Применяет `.etnx` (file или base64) к целевой сети одной транзакцией. Требует `confirm: true`. ' +
+        '`parent_thought_id` — куда подвесить корневые мысли; по умолчанию — HOME. Возвращает ' +
+        '`{ imported: {...counts...}, conflicts: [...], manifest_version, layer, request_id }`. ' +
+        'Один write-бюджет + одна строка audit_log. `destructiveHint: true`.',
+      inputSchema: ImportSubgraphSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.import.subgraph'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const buf = readImportSource(args.source);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        let parentId = args.parent_thought_id;
+        if (parentId === undefined) {
+          const homeRow = ndb
+            .prepare('SELECT id FROM thoughts_v WHERE is_root = 1 LIMIT 1')
+            .get() as { id: string } | undefined;
+          if (homeRow === undefined) {
+            throw new Error('ETN error [INTERNAL]: target network has no HOME thought');
+          }
+          parentId = homeRow.id;
+        }
+        const result = await importFromBuffer(
+          ndb,
+          buf,
+          {
+            actorUserId: rt.deps.auth.userId,
+            parentThoughtId: parentId,
+          },
+          rt.deps.logger,
+          args.collision_policy,
+        );
+
+        // Real-time events: одна запись на созданную/обновлённую сущность
+        // (мысль, связь, комментарий) — per task spec.
+        for (const id of result.createdThoughtIds) {
+          const thought = getThoughtOrThrow(ndb, id);
+          emitAgentActivityEvent(
+            rt,
+            args.network_id,
+            'thought.created',
+            { thought },
+            ndb,
+            extra.requestId,
+          );
+        }
+        for (const id of result.createdLinkIds) {
+          const link = getLink(ndb, id);
+          if (link !== null) {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'link.created',
+              { link },
+              ndb,
+              extra.requestId,
+            );
+          }
+        }
+
+        auditAgentCall(
+          rt,
+          'etn.import.subgraph',
+          args.network_id,
+          'network',
+          args.network_id,
+          {
+            thoughts_created: result.thoughts_created,
+            thoughts_updated: result.thoughts_updated,
+            thoughts_reused: result.thoughts_reused,
+            links_created: result.links_created,
+            attachments_imported: result.attachments_imported,
+          },
+        );
+
+        const layer = resolveRuntimeLayer(rt, args.network_id);
+        return {
+          imported: {
+            thoughts_created: result.thoughts_created,
+            thoughts_updated: result.thoughts_updated,
+            thoughts_reused: result.thoughts_reused,
+            links_created: result.links_created,
+            permanent_comments_updated: result.permanent_comments_updated,
+            chronological_comments_added: result.chronological_comments_added,
+            property_values_set: result.property_values_set,
+            attachments_imported: result.attachments_imported,
+            thought_types_created: result.thought_types_created,
+            thought_types_reused: result.thought_types_reused,
+            link_types_created: result.link_types_created,
+            link_types_reused: result.link_types_reused,
+          },
+          conflicts: [],
+          manifest_version: result.manifest_version,
+          layer: { id: layer.id, title: layer.title },
+          request_id: String(extra.requestId),
+        };
       }),
   );
 }

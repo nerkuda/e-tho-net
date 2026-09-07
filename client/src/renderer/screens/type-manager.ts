@@ -91,6 +91,7 @@ import {
 } from '../lib/type-tree.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import {
+  cacheAttachedRegistryRow,
   draftPropertiesFrom,
   nextDraftPropertyId,
   opToAttachInput,
@@ -997,7 +998,14 @@ function buildStagedPropertySection(opts: {
       inheritedPropertyIds: new Set(inherited.map((d) => d.property_id)),
     });
     if (picked === null) return;
-    ownDraft = [...ownDraft, picked];
+    // Merge the picked property into the section's own registry snapshot
+    // right away — the row may be brand-new (just created via «Добавить…»
+    // inside the attach dialog) or simply absent from the snapshot taken at
+    // the last `reload()`; either way `registryCache` must know it NOW so
+    // the table's «✎» button can look it up without waiting for a full
+    // reload (bug `da2d16c4-…`).
+    cacheAttachedRegistryRow(registryCache, picked.registry);
+    ownDraft = [...ownDraft, picked.draft];
     draftTouched = true;
     render();
   }
@@ -1072,12 +1080,35 @@ function buildStagedPropertySection(opts: {
     render();
   }
 
-  /** Opens the property manager dialog on the registry row that backs this
-   *  binding. The dialog itself warns about the network-wide impact. */
+  /**
+   * Opens the property manager dialog on the registry row that backs this
+   * binding. The dialog itself warns about the network-wide impact.
+   *
+   * `registryCache` is normally warm (attaching a property — existing or
+   * freshly created — merges it in right away, see
+   * {@link openAttachPropertyDialog}), but it is still just a snapshot: a
+   * miss can legitimately happen (e.g. another client created/renamed the
+   * property between this dialog's last reload and the click). Rather than
+   * a silent no-op (bug `da2d16c4-…` — «Править природу свойства…» did
+   * nothing), fetch the row once and cache it; a genuine failure (the
+   * property was deleted meanwhile) surfaces as an error dialog instead of
+   * pretending the click never happened.
+   */
   function editNature(row: DraftProperty): void {
-    const reg = registryCache.get(row.property_id);
-    if (reg === undefined) return;
-    openPropertyManagerEditor(reg, () => void reload());
+    const cached = registryCache.get(row.property_id);
+    if (cached !== undefined) {
+      openPropertyManagerEditor(cached, () => void reload());
+      return;
+    }
+    void etn.propertyRegistry
+      .get(networkId, row.property_id)
+      .then((reg) => {
+        cacheAttachedRegistryRow(registryCache, reg);
+        openPropertyManagerEditor(reg, () => void reload());
+      })
+      .catch((err) => {
+        errorDialog('Править природу свойства', err);
+      });
   }
 
   /** Stages the unbinding of one own row (persisted by «Применить и
@@ -1373,9 +1404,17 @@ function buildStagedPropertySection(opts: {
  * appends to its own-bindings list (or `null` when the user cancelled).
  * The row is fully resolved — the registry id (`property_id`) and the
  * immutable nature snapshot are both known — so the table can render it
- * without a second registry round-trip.
+ * without a second registry round-trip. `registry` is the source row the
+ * pick came from — the caller merges it into its own `registryCache` right
+ * away (bug `da2d16c4-…`: a property attached — existing or freshly created
+ * via «Добавить…» — was invisible to the type editor's own `registryCache`
+ * snapshot until the next full `reload()`, so the table's «✎ Править
+ * природу свойства» button silently no-op'd on it).
  */
-type AttachDialogResult = DraftProperty;
+interface AttachDialogResult {
+  draft: DraftProperty;
+  registry: RegistryRow;
+}
 
 /**
  * «Добавить свойство» dialog (0.6.5, переработан по итогам приёмки — ошибка
@@ -1567,7 +1606,7 @@ async function openAttachDialog(opts: {
         if (!ok) return;
       }
       close();
-      resolve(attachDraftFromExisting(selected));
+      resolve({ draft: attachDraftFromExisting(selected), registry: selected });
     }
 
     const body = div('form-stack');

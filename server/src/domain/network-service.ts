@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 
-import { EtnError, type Network } from '@etn/shared';
+import { EtnError, type Network, type TypeRoles } from '@etn/shared';
 
 import type { SystemDb } from '../db/system-db.js';
 import { closeNetworkDb, openNetworkDb } from '../db/network-db.js';
@@ -34,6 +34,7 @@ export interface NetworkService {
     ownerId: string,
     displayName: string,
     description?: string | null,
+    typeRoles?: TypeRoles,
   ): Promise<Network>;
 
   /**
@@ -44,15 +45,19 @@ export interface NetworkService {
   deleteNetwork(networkId: string): Promise<void>;
 
   /**
-   * Validate the `node_section_type_id` value a caller wants to persist on a
-   * network (task O5, docs/05-mcp-server.md §3). `null` clears the field and
-   * is always valid. A non-null id must exist as a `thought_types.id` row in
-   * this network's `data.db`; a stale id would silently break
-   * `etn.networks.structure`, so it is rejected here with `VALIDATION_ERROR`.
+   * Validate every non-null entry of a `type_roles` dictionary a caller wants
+   * to persist on a network (task ba024a45 / 0.7.2, ADR 46d17a91). `null`
+   * clears the role and is always valid. A non-null id must exist as a
+   * `thought_types.id` row in this network's `data.db`; a stale id would
+   * silently break `etn.networks.structure` / `etn.instructions`, so it is
+   * rejected here with `VALIDATION_ERROR`. The returned dictionary preserves
+   * the same shape — `null` entries stay `null`, valid ids are returned as
+   * the verified strings (currently a no-op but keeps the call symmetric with
+   * future enrichments).
    *
-   * @returns the value to persist (`null` or a verified id).
+   * @returns the value to persist (`null` entries preserved, verified ids echoed).
    */
-  validateNodeSectionType(networkId: string, typeId: string | null): string | null;
+  validateTypeRoles(networkId: string, typeRoles: TypeRoles): TypeRoles;
 }
 
 /**
@@ -80,6 +85,7 @@ export class NetworkServiceImpl implements NetworkService {
     ownerId: string,
     displayName: string,
     description?: string | null,
+    typeRoles: TypeRoles = {},
   ): Promise<Network> {
     const networkId = randomUUID();
     this.log?.debug({ networkId, ownerId, displayName }, 'creating network');
@@ -114,6 +120,7 @@ export class NetworkServiceImpl implements NetworkService {
         ownerId,
         displayName,
         description ?? null,
+        typeRoles,
       );
       this.systemDb.addNetworkMember(networkId, ownerId, 'owner', ownerId);
       return created;
@@ -142,25 +149,33 @@ export class NetworkServiceImpl implements NetworkService {
     this.log?.info({ networkId }, 'network deleted');
   }
 
-  validateNodeSectionType(networkId: string, typeId: string | null): string | null {
-    if (typeId === null) {
-      return null;
-    }
+  validateTypeRoles(networkId: string, typeRoles: TypeRoles): TypeRoles {
     // The network DB is cached process-wide; opening it here also keeps it warm
     // for the route's own follow-up requests. We deliberately do NOT close it
     // — concurrent requests share the same connection (better-sqlite3 is
     // synchronous and re-entrant inside a transaction).
     const ndb = openNetworkDb(this.dataDir, networkId, this.log);
-    const row = ndb
-      .prepare('SELECT id FROM thought_types_v WHERE id = ? LIMIT 1')
-      .get(typeId) as { id: string } | undefined;
-    if (row === undefined) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'Указанный тип узловых разделов не найден в сети.',
-        { field: 'node_section_type_id', value: typeId },
-      );
+    const out: TypeRoles = {};
+    for (const [role, value] of Object.entries(typeRoles) as Array<
+      [keyof TypeRoles, string | null]
+    >) {
+      if (value === null) {
+        // Explicit role clear: always accepted.
+        (out as Record<string, string | null>)[role] = null;
+        continue;
+      }
+      const row = ndb
+        .prepare('SELECT id FROM thought_types_v WHERE id = ? LIMIT 1')
+        .get(value) as { id: string } | undefined;
+      if (row === undefined) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `Тип для роли «${role}» не найден в сети.`,
+          { field: `type_roles.${role}`, value },
+        );
+      }
+      (out as Record<string, string | null>)[role] = row.id;
     }
-    return row.id;
+    return out;
   }
 }

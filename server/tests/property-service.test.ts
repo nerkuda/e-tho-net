@@ -312,7 +312,7 @@ describe(
       }
     });
 
-    it('upserts on repeated set and deletes', () => {
+    it('upserts on repeated set and deletes (idempotent on missing value)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const tt = createThoughtType(ndb, { name: 'Up' }, USER);
@@ -325,12 +325,17 @@ describe(
         assert.equal(values.length, 1);
         assert.equal(values[0]!.value, 'second');
 
-        deletePropertyValue(ndb, 'thought', thought, 'note', USER);
+        const removed = deletePropertyValue(ndb, 'thought', thought, 'note', USER);
+        assert.equal(removed.deleted, true, 'a stored value is really deleted');
         assert.equal(getPropertyValues(ndb, 'thought', thought).length, 0);
-        assert.throws(
-          () => deletePropertyValue(ndb, 'thought', thought, 'note', USER),
-          (e: unknown) => e instanceof EtnError && e.code === 'NOT_FOUND',
-        );
+
+        // Deleting again is an idempotent no-op (error cefb4db0): the editor
+        // may fire a remove against an already-empty field — DELETE semantics
+        // say success without effect, not 404.
+        const again = deletePropertyValue(ndb, 'thought', thought, 'note', USER);
+        assert.equal(again.deleted, false, 'no value stored — no-op');
+        assert.equal(again.property_id, removed.property_id, 'the property is still resolved');
+        assert.equal(getPropertyValues(ndb, 'thought', thought).length, 0);
       } finally {
         ndb.close();
       }

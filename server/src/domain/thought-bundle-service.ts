@@ -28,7 +28,11 @@ import type { NetworkDb } from '../db/network-db.js';
 import { createAttachment } from './attachment-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import { createLink } from './link-service.js';
-import { computeThoughtCardWarnings, setPropertyValue } from './property-service.js';
+import {
+  computeThoughtCardWarnings,
+  getPropertyValues,
+  setPropertyValue,
+} from './property-service.js';
 import { findDuplicates } from './search-service.js';
 import { createThought, getThoughtOrThrow, updateThought } from './thought-service.js';
 
@@ -168,6 +172,29 @@ export function upsertThoughtBundle(
       commentAction = upserted.action;
     }
 
+    // Chronicle entries — appended AFTER the permanent comment write so the
+    // chronology shares the same `created_at` timeline as the rest of the
+    // bundle. Each entry becomes its own dated `chronological` comment row
+    // (matches `etn.comments.upsert` semantics for `kind: 'chronological'`).
+    let chronicle: Comment[] | undefined;
+    if (input.chronicle !== undefined && input.chronicle.length > 0) {
+      chronicle = input.chronicle.map((c) =>
+        createComment(
+          ndb,
+          'thought',
+          thought.id,
+          {
+            kind: 'chronological',
+            title: c.title ?? null,
+            body_md: c.body_md,
+            ...(c.valid_from === undefined ? {} : { valid_from: c.valid_from }),
+            ...(c.valid_to === undefined ? {} : { valid_to: c.valid_to }),
+          },
+          actorUserId,
+        ),
+      );
+    }
+
     let properties: Record<string, PropertyValue> | undefined;
     if (input.properties !== undefined) {
       properties = {};
@@ -176,9 +203,16 @@ export function upsertThoughtBundle(
       }
     }
 
-    let links: Link[] | undefined;
+    // Links with optional inline knowledge (properties / permanent comment).
+    // Task 053751b5 (0.7.2) — createLink itself now accepts `properties` and
+    // `comment` and writes them inside its own transaction arm, so the whole
+    // bundle stays atomic on a property write failure (the link insert rolls
+    // back too).
+    let linkResults:
+      | Array<{ link: Link; properties?: Record<string, PropertyValue>; comment?: Comment }>
+      | undefined;
     if (input.links !== undefined) {
-      links = input.links.map((l) => {
+      linkResults = input.links.map((l) => {
         // parent: target sources a link to the bundle thought (bundle thought
         // hangs under target). child: the bundle thought sources a link to
         // target. Unified with the MCP `links[].direction` semantics
@@ -187,11 +221,41 @@ export function upsertThoughtBundle(
           l.direction === 'parent'
             ? [l.target_thought_id, thought.id]
             : [thought.id, l.target_thought_id];
-        return createLink(
+        const link = createLink(
           ndb,
-          { source_id: sourceId, target_id: targetId, type_id: l.type_id ?? null },
+          {
+            source_id: sourceId,
+            target_id: targetId,
+            type_id: l.type_id ?? null,
+            ...(l.properties === undefined ? {} : { properties: l.properties }),
+            ...(l.comment === undefined ? {} : { comment: l.comment }),
+          },
           actorUserId,
         );
+        // Read back the link's properties + permanent comment when the bundle
+        // attached any, so the caller (and the audit/event payload) sees the
+        // full picture. Re-reading the freshly written values is cheaper than
+        // threading them through createLink's return, which intentionally
+        // stays a `Link` to keep its public contract.
+        let writtenProps: Record<string, PropertyValue> | undefined;
+        let writtenComment: Comment | undefined;
+        if (l.properties !== undefined && Object.keys(l.properties).length > 0) {
+          const all = getPropertyValues(ndb, 'link', link.id);
+          writtenProps = {};
+          for (const key of Object.keys(l.properties)) {
+            const found = all.find((pv) => pv.property_name === key);
+            if (found !== undefined) writtenProps[key] = found;
+          }
+        }
+        if (l.comment !== undefined) {
+          const permanent = listComments(ndb, 'link', link.id).find((c) => c.kind === 'permanent');
+          writtenComment = permanent;
+        }
+        return {
+          link,
+          ...(writtenProps !== undefined ? { properties: writtenProps } : {}),
+          ...(writtenComment !== undefined ? { comment: writtenComment } : {}),
+        };
       });
     }
 
@@ -211,8 +275,9 @@ export function upsertThoughtBundle(
       matched_on: matchedOn,
       comment,
       comment_action: commentAction,
+      ...(chronicle !== undefined ? { chronicle } : {}),
       properties,
-      links,
+      ...(linkResults !== undefined ? { links: linkResults } : {}),
       attachments,
       warnings,
     } satisfies ThoughtBundleResult;

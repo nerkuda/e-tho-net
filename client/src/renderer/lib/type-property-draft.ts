@@ -167,3 +167,23 @@ export function planPropertyDiff(
 export function opToAttachInput(op: Extract<PropertyDiffOp, { kind: 'attach' }>): AttachPropertyInput {
   return { mode: 'attach', property_id: op.property_id, required: op.required };
 }
+
+/**
+ * Merges a picked registry row into the type editor's own `registryCache`
+ * snapshot (`client/src/renderer/screens/type-manager.ts`,
+ * `openAttachPropertyDialog`) — keyed by registry id, the SAME id space as
+ * {@link DraftProperty.property_id}. Pure `Map` op, pulled out for testing.
+ *
+ * Regression fix for bug `da2d16c4-…` («В редакторе типа не работает
+ * кнопка "Править природу свойства"»): the editor's `registryCache` used to
+ * be populated only once, by the section's own `reload()`. Attaching a
+ * property mid-session — an existing one the cache had not fetched yet, or
+ * a brand-new one just created via the attach dialog's «Добавить…» — never
+ * touched that cache, so the table's «✎» button looked the property up by
+ * `property_id`, found nothing (`registryCache.get(...) === undefined`) and
+ * silently did nothing. Calling this the moment a property is picked keeps
+ * the cache in sync without waiting for the next full reload.
+ */
+export function cacheAttachedRegistryRow<T extends { id: string }>(cache: Map<string, T>, row: T): void {
+  cache.set(row.id, row);
+}
