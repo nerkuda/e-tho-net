@@ -2,7 +2,9 @@
  * Enriched thought read (task N2, docs/05-mcp-server.md §3): «сигналы
  * полноты» для MCP-агентов — сколько у мысли входящих/исходящих активных
  * связей, вложений и хронологических записей, плюс (превью или полный
- * текст) единственного постоянного комментария.
+ * текст) единственного постоянного комментария. С 0.7.2 сюда же входит
+ * `link_stats` — профиль влияния мысли (счётчики связей по типам в обоих
+ * направлениях + справочник `link_types`).
  *
  * Цель: агент может решить, какие из отдельных ресурсов/инструментов
  * (`neighbors`, `attachments`, `comments`) ему действительно нужны, не
@@ -23,10 +25,11 @@
  *     текст её постоянного комментария возвращаётся без обрезки.
  */
 
-import type { ThoughtMeta, ThoughtMetaFull } from '@etn/shared';
+import type { LinkStatEntry, LinkStats, ThoughtMeta, ThoughtMetaFull } from '@etn/shared';
 
 import { getPermanentFull, getPermanentPreview } from './comment-service.js';
 import type { NetworkDb } from '../db/network-db.js';
+import { linkTypeCatalog } from '../mcp/catalogs.js';
 
 /** Escape a thought id for a LIKE pattern (paired with `ESCAPE '\'`). */
 function escapeLike(value: string): string {
@@ -104,5 +107,63 @@ export function getThoughtMeta(
     opts.fullPermanent === true
       ? getPermanentFull(ndb, 'thought', thoughtId)
       : getPermanentPreview(ndb, 'thought', thoughtId);
-  return { ...counters, permanent };
+  const link_stats = getLinkStats(ndb, thoughtId);
+  return { ...counters, permanent, link_stats };
+}
+
+/**
+ * Профиль влияния мысли (0.7.2) — задача 327be956, требование описано в
+ * спеке операции `etn.thoughts.get` (85f18572): активные связи мысли,
+ * сгруппированные по `(type_id, direction)`, плюс парный справочник
+ * `link_types` (только реально использованные типы). Считается одним SQL
+ * (`UNION ALL` двух `GROUP BY` по `links_v`) — без зависимости от `getNeighbors`,
+ * который читает соединение с `thoughts_v` и тащит за собой сортировки/ручные
+ * позиции. Нулевые группы в выдачу не попадают; типы без пары
+ * `(name_forward/reverse/description)` остаются, чтобы агент видел, что за
+ * тип.
+ *
+ * `type_id = null` означает нетипизированное ребро (отдельная группа).
+ */
+export function getLinkStats(ndb: NetworkDb, thoughtId: string): LinkStats {
+  const rows = ndb
+    .prepare(
+      `SELECT type_id AS link_type_id, 'in' AS direction, COUNT(*) AS count
+         FROM links_v WHERE target_id = ? AND active = 1
+         GROUP BY type_id
+       UNION ALL
+       SELECT type_id AS link_type_id, 'out' AS direction, COUNT(*) AS count
+         FROM links_v WHERE source_id = ? AND active = 1
+         GROUP BY type_id`,
+    )
+    .all(thoughtId, thoughtId) as Array<{
+    link_type_id: string | null;
+    direction: 'in' | 'out';
+    count: number;
+  }>;
+  const stats: LinkStatEntry[] = rows.map((row) => ({
+    link_type_id: row.link_type_id,
+    direction: row.direction,
+    count: row.count,
+  }));
+  // Catalogue of every non-null link type referenced — `linkTypeCatalog`
+  // already skips unknown ids, so a stale registry row never breaks the
+  // response. `null` link_type_id (untyped group) is not present here:
+  // there's nothing to look up.
+  const referencedTypeIds = rows
+    .map((row) => row.link_type_id)
+    .filter((id): id is string => id !== null);
+  const full = linkTypeCatalog(ndb, referencedTypeIds);
+  // Trim to the four fields `LinkStats.link_types` documents (the shared
+  // shape is independent of `LinkTypeRef` to avoid a type-level cycle with
+  // `./mcp.ts`).
+  const link_types: LinkStats['link_types'] = {};
+  for (const [id, entry] of Object.entries(full)) {
+    link_types[id] = {
+      id: entry.id,
+      name_forward: entry.name_forward,
+      name_reverse: entry.name_reverse,
+      description: entry.description,
+    };
+  }
+  return { stats, link_types };
 }

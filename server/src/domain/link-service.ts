@@ -771,3 +771,98 @@ export function listLinksByThought(
     untyped_children: untypedChildren,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Filling flags (0.7.2, requirement 8ab42ea8) — boolean tells on a set of
+// links, computed in two aggregating queries instead of one-per-edge.
+// `etn.thoughts.subgraph` and `etn.thoughts.neighbors` annotate every edge
+// with `has_properties` / `has_comment` so the agent can see, in one read,
+// which links carry knowledge worth a follow-up `etn.links.get { view: "full" }`.
+// ---------------------------------------------------------------------------
+
+/** Per-edge presence flags returned by {@link getLinkFillingFlags}. */
+export interface LinkFillingFlags {
+  has_properties: boolean;
+  has_comment: boolean;
+}
+
+/**
+ * For each id in `linkIds`, return `{has_properties, has_comment}`.
+ *
+ * `has_properties` — the link has at least one stored value whose
+ * value column (`value_text` / `value_number` / `value_bool` / `value_date` /
+ * `value_thought_ref`) is non-NULL. Tombstoned rows are excluded by the
+ * `property_values_v` view (13-layers.md §4.2).
+ *
+ * `has_comment` — at least one comment of any kind (`permanent` or
+ * `chronological`) is attached to the link as primary owner OR via the
+ * m2m `comment_targets` table (L20 — chronological comments may live on
+ * several owners at once). Same coverage as `getCommentsPreview`.
+ *
+ * Both flags are computed by ONE aggregating `EXISTS`/`GROUP BY` query each
+ * for the whole id set — not one query per link — so a 500-edge subgraph
+ * pays two SQL statements, not 1000.
+ *
+ * Unknown ids get the `{false, false}` default — the result map only
+ * contains entries the input asked about, so callers can simply look up
+ * `flags.get(id) ?? { has_properties: false, has_comment: false }`.
+ */
+export function getLinkFillingFlags(
+  ndb: NetworkDb,
+  linkIds: readonly string[],
+): Map<string, LinkFillingFlags> {
+  const result = new Map<string, LinkFillingFlags>();
+  if (linkIds.length === 0) return result;
+  for (const id of linkIds) {
+    result.set(id, { has_properties: false, has_comment: false });
+  }
+  const uniqueIds = [...new Set(linkIds)];
+  const placeholders = uniqueIds.map(() => '?').join(',');
+
+  // `has_properties`: a stored value whose value column is non-NULL on at
+  // least one row for this owner_type/id pair. `value_text` covers both text
+  // and url (02-data-model.md §3.5); `value_thought_ref` covers both single
+  // and the JSON-array multiple form (parsed separately by the reader).
+  const propRows = ndb
+    .prepare(
+      `SELECT owner_id AS link_id
+         FROM property_values_v
+        WHERE owner_type = 'link'
+          AND owner_id IN (${placeholders})
+          AND (value_text IS NOT NULL
+            OR value_number IS NOT NULL
+            OR value_bool IS NOT NULL
+            OR value_date IS NOT NULL
+            OR value_thought_ref IS NOT NULL)
+        GROUP BY owner_id`,
+    )
+    .all(...uniqueIds) as Array<{ link_id: string }>;
+  for (const row of propRows) {
+    const entry = result.get(row.link_id);
+    if (entry !== undefined) entry.has_properties = true;
+  }
+
+  // `has_comment`: at least one comment of any kind addressed at the link,
+  // either as the primary owner or via a secondary m2m target.
+  const commentRows = ndb
+    .prepare(
+      `SELECT owner_id AS link_id
+         FROM comments_v
+        WHERE owner_type = 'link'
+          AND owner_id IN (${placeholders})
+        GROUP BY owner_id
+       UNION
+       SELECT owner_id AS link_id
+         FROM comment_targets_v
+        WHERE owner_type = 'link'
+          AND owner_id IN (${placeholders})
+        GROUP BY owner_id`,
+    )
+    .all(...uniqueIds, ...uniqueIds) as Array<{ link_id: string }>;
+  for (const row of commentRows) {
+    const entry = result.get(row.link_id);
+    if (entry !== undefined) entry.has_comment = true;
+  }
+
+  return result;
+}

@@ -1237,6 +1237,10 @@ export function focus(
     parents: [],
     children: [],
     siblings: [],
+    // `both` (0.7.2) lives only in the MCP `etn.thoughts.neighbors` facade —
+    // the REST focus response keeps the original trio, so the key is present
+    // for the type but the array stays empty here.
+    both: [],
   };
   // Read the stored sort preferences per zone; siblings is not manually
   // orderable but does store a sort/order selection (03-server-api.md §6.8).
@@ -1247,6 +1251,7 @@ export function focus(
     parents: parentPref,
     children: childPref,
     siblings: siblingPref,
+    both: null,
   };
   for (const dir of dirs) {
     grouped[dir] = getNeighbors(ndb, thoughtId, dir, {

@@ -130,6 +130,7 @@ import {
   deleteLink,
   findLinksBetween,
   getLink,
+  getLinkFillingFlags,
   updateLink,
 } from '../domain/link-service.js';
 import {
@@ -137,11 +138,12 @@ import {
   deleteComment,
   getComment,
   getCommentsPreview,
+  getPermanentFull,
   getPermanentPreview,
   listComments,
   updateComment,
 } from '../domain/comment-service.js';
-import { createAttachment } from '../domain/attachment-service.js';
+import { createAttachment, listAttachments } from '../domain/attachment-service.js';
 import {
   copyAttachment,
   searchAttachments,
@@ -730,10 +732,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Fetch one thought with synonyms, type (AI-facing description included) and property values ' +
         '(`thought_ref` resolved to {id, title}; values whose property is not on the owner\'s type chain ' +
         'are flagged `outside_type: true` — do not treat such a card as empty). `meta.permanent` — the ' +
-        'full text of the permanent comment of this single thought (задача 3ea09a54 «Условная обрезка ' +
-        'текстов в ответах MCP»: в `etn.thoughts.get` обрезка отключена, форма `{ id, body_md, ' +
-        'valid_from, created_at, updated_at }`; в остальных выборках — preview ' +
-        '2000 chars, `etn.comments.get` для полного текста). `view: "compact"` (default) drops visual fields.',
+        'full text of the permanent comment (задача 3ea09a54: в `etn.thoughts.get` обрезка отключена; в ' +
+        'остальных выборках — preview 2000 chars, `etn.comments.get` для полного). `meta.link_stats` ' +
+        '(0.7.2) — счётчики активных связей по `(link_type_id, direction)` + `link_types`. ' +
+        '`view: "compact"` (default) drops visual fields.',
       inputSchema: GetSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -777,10 +779,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Соседи мысли',
       description:
-        'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`); `depth > 1` does a ' +
-        'bounded BFS walk. At `depth: 1` (default) the page is capped at 50 rows — `total`/`truncated` say ' +
-        'whether more exist; page through the rest with `etn.thoughts.query { in_subtree_of: <this id>, ' +
-        'max_depth: 1 }`. Responses carry `link_types`/`thought_types` reference tables.',
+        'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`) or `both` (0.7.2); ' +
+        '`depth > 1` does a bounded BFS walk. `dir: "both"` (0.7.2) — оба направления одним вызовом, ' +
+        'записи несут `direction: "in"|"out"`. Рёбра (0.7.2) несут `has_properties`/`has_comment` — ' +
+        'два агрегирующих запроса на весь набор рёбер, не на ребро. На `depth: 1` страница 50 — ' +
+        '`total`/`truncated` показывают остаток; дальше — `etn.thoughts.query { in_subtree_of, max_depth: 1 }`. ' +
+        'Справочники `link_types`/`thought_types`.',
       inputSchema: NeighborsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.neighbors'],
     },
@@ -792,16 +796,82 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
           const neighborOpts = { userId: rt.deps.auth.userId };
+          // `dir: "both"` (0.7.2) — both directions in one call. The domain
+          // `getNeighbors` is built for parents/children/siblings (REST trio)
+          // and would map `both` to siblings; we call it twice and glue the
+          // results here. Each entry carries its own `direction: "in"|"out"`.
+          if (args.dir === 'both') {
+            const parents = getNeighbors(ndb, args.thought_id, 'parents', neighborOpts).map((n) => ({
+              ...n,
+              direction: 'in' as const,
+            }));
+            const children = getNeighbors(ndb, args.thought_id, 'children', neighborOpts).map((n) => ({
+              ...n,
+              direction: 'out' as const,
+            }));
+            // Concatenate in arrival order (parents first, then children) — a
+            // single thought can appear in both lists when it has both an
+            // incoming and an outgoing edge to the focus, in which case BOTH
+            // entries surface (separate `link_id`s).
+            const rawNeighbors = [...parents, ...children];
+            const neighbors = rawNeighbors.map((n) => withSanitizedIcon(n));
+            // Edge flags: aggregating on the whole returned set.
+            const fillingFlags = getLinkFillingFlags(
+              ndb,
+              neighbors.map((n) => n.link_id),
+            );
+            const annotated = neighbors.map((n) => {
+              const flags = fillingFlags.get(n.link_id);
+              return {
+                ...n,
+                has_properties: flags?.has_properties ?? false,
+                has_comment: flags?.has_comment ?? false,
+              };
+            });
+            const linkTypes =
+              view === 'full'
+                ? linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id))
+                : linkTypeCatalogCompact(ndb, annotated.map((n) => n.link_type_id));
+            // Bug fix (0.6.3): honest counts come from the domain `countNeighbors`
+            // (one SQL per direction — same shape, no LIMIT). Sum them and
+            // compare to the trimmed page; `truncated` is per the page size.
+            const parentsTotal = countNeighbors(ndb, args.thought_id, 'parents', neighborOpts);
+            const childrenTotal = countNeighbors(ndb, args.thought_id, 'children', neighborOpts);
+            const total = parentsTotal + childrenTotal;
+            return {
+              thought: { id: thought.id, title: thought.title },
+              dir: args.dir,
+              depth: 1,
+              neighbors: annotated,
+              total,
+              truncated: total > annotated.length,
+              link_types: linkTypes,
+              thought_types: thoughtTypeCatalog(ndb, annotated.map((n) => n.type_id)),
+            };
+          }
           const rawNeighbors = getNeighbors(ndb, args.thought_id, args.dir, neighborOpts);
           // `FocusNeighbor` carries no visual fields of its own (only `icon`,
           // which is semantic), so the only O12 effect at depth=1 is on the
           // link-type catalogue. Bug fix (§5.1e): sanitize the `icon` itself —
           // it is not gated by `view`, a `data:` URL leaks at depth=1 either way.
           const neighbors = rawNeighbors.map((n) => withSanitizedIcon(n));
+          // Edge flags: aggregating on the whole returned set.
+          const fillingFlags = getLinkFillingFlags(
+            ndb,
+            neighbors.map((n) => n.link_id),
+          );
+          const annotated = neighbors.map((n) => {
+            const flags = fillingFlags.get(n.link_id);
+            return {
+              ...n,
+              has_properties: flags?.has_properties ?? false,
+              has_comment: flags?.has_comment ?? false,
+            };
+          });
           const linkTypes =
             view === 'full'
-              ? linkTypeCatalog(ndb, neighbors.map((n) => n.link_type_id))
-              : linkTypeCatalogCompact(ndb, neighbors.map((n) => n.link_type_id));
+              ? linkTypeCatalog(ndb, annotated.map((n) => n.link_type_id))
+              : linkTypeCatalogCompact(ndb, annotated.map((n) => n.link_type_id));
           // Bug fix (0.6.3, thought f2c7c7d3): this tool has no limit/offset
           // of its own and silently applied the domain default page size
           // (50) — a thought with more neighbours than that looked complete,
@@ -814,13 +884,17 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             thought: { id: thought.id, title: thought.title },
             dir: args.dir,
             depth: 1,
-            neighbors,
+            neighbors: annotated,
             total,
-            truncated: total > neighbors.length,
+            truncated: total > annotated.length,
             link_types: linkTypes,
-            thought_types: thoughtTypeCatalog(ndb, neighbors.map((n) => n.type_id)),
+            thought_types: thoughtTypeCatalog(ndb, annotated.map((n) => n.type_id)),
           };
         }
+        // `traverse` already supports `direction: "both"` (graph-traversal.ts)
+        // — same BFS in both directions, used here for both `dir: "both"`
+        // (explicit) and `dir: "siblings"` (legacy remap). For `parents`/
+        // `children` we pass the dir as-is.
         const direction = args.dir === 'siblings' ? 'both' : args.dir;
         const walk = traverse(ndb, [args.thought_id], direction, {
           maxDepth: depth,
@@ -874,8 +948,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'truncated to 2000 chars, last 10 chronological; fetch full texts via `etn.comments.get` when ' +
         '`truncated`). `max_nodes` is capped by the server setting max_nodes_per_subgraph; `max_chars` ' +
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
-        '(BFS level), reporting `truncated: true` + `reason`. `view: "compact"` (default) drops visual ' +
-        'fields — the dominant token saving on large subgraphs.',
+        '(BFS level), reporting `truncated: true` + `reason`. Edges (0.7.2) несут `has_properties`/`has_comment`. ' +
+        '`view: "compact"` (default) drops visual fields.',
       inputSchema: SubgraphSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.subgraph'],
     },
@@ -909,6 +983,22 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           view === 'full'
             ? linkTypeCatalog(ndb, result.edges.map((e) => e.type_id))
             : linkTypeCatalogCompact(ndb, result.edges.map((e) => e.type_id));
+        // 0.7.2 (requirement 8ab42ea8) — annotate every edge with two presence
+        // flags (`has_properties`, `has_comment`) so the agent sees, in one
+        // read, which links hold knowledge worth following up. Two aggregating
+        // queries on the whole edge set, not one per edge.
+        const fillingFlags = getLinkFillingFlags(
+          ndb,
+          result.edges.map((e) => e.id),
+        );
+        const edges = result.edges.map((edge) => {
+          const flags = fillingFlags.get(edge.id);
+          return {
+            ...edge,
+            has_properties: flags?.has_properties ?? false,
+            has_comment: flags?.has_comment ?? false,
+          };
+        });
         // When the hard `max_nodes` bound fires during traversal, the response is
         // already structurally incomplete — running the budget shrinker on top
         // would only hide that fact behind a softer reason. Surface the
@@ -916,13 +1006,13 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const thoughtTypes = thoughtTypeCatalog(ndb, nodes.map((n) => n.type_id));
         const payload: {
           nodes: typeof projectedNodes;
-          edges: typeof result.edges;
+          edges: typeof edges;
           thought_types: typeof thoughtTypes;
           link_types: typeof linkTypes;
           comments?: typeof comments;
         } = {
           nodes: projectedNodes,
-          edges: result.edges,
+          edges,
           thought_types: thoughtTypes,
           link_types: linkTypes,
           ...(comments === undefined ? {} : { comments }),
@@ -1008,12 +1098,29 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const LinkGetSchema = z.object({ network_id: NetworkId, link_id: LinkId });
+  const LinkGetSchema = z.object({
+    network_id: NetworkId,
+    link_id: LinkId,
+    /**
+     * Response projection (task O12, docs/05-mcp-server.md §4.1) — `compact`
+     * (default) returns the base link DTO plus its type; `full` (0.7.2) adds
+     * the link's property values, the permanent comment (full text, no
+     * truncation), a chronological-comment preview (last 10 entries with
+     * 2000-char bodies, mirroring `etn.thoughts.subgraph`) and the link's
+     * attachments. Use `compact` when only the relationship itself matters;
+     * use `full` once an edge's `has_properties`/`has_comment` flag in a
+     * `subgraph`/`neighbors` response has flagged it as worth reading.
+     */
+    view: z.enum(MCP_VIEW_MODES).default('compact'),
+  });
   mcp.registerTool(
     'etn.links.get',
     {
       title: 'Связь (с метаданными)',
-      description: 'Fetch one link with its link type (including the AI-facing description).',
+      description:
+        'Fetch one link with its link type (AI-facing description included). `view: "full"` (0.7.2) — ' +
+        'дополнительно возвращает `properties`, `permanent` (полный текст), `chrono` (превью, 10 записей), ' +
+        '`attachments`. Использовать после `subgraph`/`neighbors` по флагам `has_properties`/`has_comment`.',
       inputSchema: LinkGetSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.links.get'],
     },
@@ -1025,7 +1132,21 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           throw new Error(`ETN error [NOT_FOUND]: link ${args.link_id} not found`);
         }
         const type = link.type_id === null ? null : getLinkType(ndb, link.type_id);
-        return { ...link, type };
+        const compact = { ...link, type };
+        if (args.view === 'compact') {
+          return compact;
+        }
+        // `view: "full"` (0.7.2) — дополняем базовый DTO четырьмя блоками:
+        // свойства (резолвнутые `thought_ref`, как в `etn.thoughts.get`),
+        // полный постоянный комментарий, превью хронологии по образцу
+        // `etn.thoughts.subgraph` (последние 10, обрезка 2000 символов) и
+        // вложения. Все четыре функции уже полиморфны по `owner_type` и
+        // работают для `'link'` без обёрток.
+        const properties = getPropertyValuesResolved(ndb, 'link', link.id);
+        const permanent = getPermanentFull(ndb, 'link', link.id);
+        const chrono = getCommentsPreview(ndb, 'link', link.id);
+        const attachments = listAttachments(ndb, 'link', link.id);
+        return { ...compact, properties, permanent, chrono, attachments };
       }),
   );
 

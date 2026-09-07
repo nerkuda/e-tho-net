@@ -290,6 +290,46 @@ export interface FocusNeighbor {
    * of the row-major list, §11-settings-and-state.md §3.2).
    */
   manual_position: number | null;
+  /**
+   * 0.7.2 (requirement 8ab42ea8) — `true`, когда у связи `link_id` есть
+   * хотя бы одно заполненное значение свойства. `false`, если нет ни
+   * одного. REST не выставляет эти флаги; MCP `etn.thoughts.neighbors`
+   * выставляет всегда (по умолчанию `false`).
+   */
+  has_properties?: boolean;
+  /**
+   * 0.7.2 (requirement 8ab42ea8) — `true`, когда у связи `link_id` есть
+   * постоянный или хотя бы один хронологический комментарий. REST не
+   * выставляет; MCP `etn.thoughts.neighbors` выставляет всегда.
+   */
+  has_comment?: boolean;
+  /**
+   * 0.7.2 — направление ребра от точки зрения фокуса. `"in"` — ребро
+   * входит в фокус (сосед является `source`); `"out"` — ребро выходит из
+   * фокуса (сосед является `target`). Присутствует только когда MCP-фасад
+   * отдаёт оба направления одним вызовом (`etn.thoughts.neighbors` с
+   * `dir: "both"`). Для `parents` всегда `"in"`, для `children` всегда
+   * `"out"`, для `siblings` поле опускается (нет «направления»).
+   */
+  direction?: 'in' | 'out';
+}
+
+/**
+ * 0.7.2 — ребро подграфа в ответе `etn.thoughts.subgraph`. Совпадает с
+ * минимальной формой, которую возвращает domain `subgraph()` (task N6),
+ * плюс два булевых признака наполнения связи (requirement 8ab42ea8).
+ * REST-чтение подграфа (когда появится) и старые клиенты эти поля не
+ * получают — они опциональные и приходят только из MCP-фасада.
+ */
+export interface SubgraphEdge {
+  id: string;
+  source_id: string;
+  target_id: string;
+  type_id: string | null;
+  /** 0.7.2 — у связи есть хотя бы одно заполненное значение свойства. */
+  has_properties?: boolean;
+  /** 0.7.2 — у связи есть постоянный или хронологический комментарий. */
+  has_comment?: boolean;
 }
 
 /**
@@ -334,6 +374,49 @@ export interface FocusResponse {
   };
 }
 
+/**
+ * One row of `etn.thoughts.get.meta.link_stats` (0.7.2) — link counts for a
+ * single link type in one direction. `direction: "in"` — the link points AT
+ * this thought (`target_id = thoughtId`); `direction: "out"` — the link
+ * originates FROM this thought (`source_id = thoughtId`). Counted over active
+ * links only. `link_type_id` is `null` for the untyped-edges group.
+ */
+export interface LinkStatEntry {
+  /** Registry link type id, or `null` for the untyped-edges group. */
+  link_type_id: string | null;
+  /** `"in"` — link points at the thought; `"out"` — link originates from it. */
+  direction: 'in' | 'out';
+  /** Active-link count for `(link_type_id, direction)`. */
+  count: number;
+}
+
+/**
+ * The `link_stats` block of `etn.thoughts.get.meta` (0.7.2): the per-direction
+ * counters keyed by link type, paired with the catalogue of every link type
+ * actually referenced. Lets an agent read the influence profile of a thought
+ * in one MCP call without iterating `etn.thoughts.neighbors`.
+ */
+export interface LinkStats {
+  /** Counters grouped by link type and direction. */
+  stats: LinkStatEntry[];
+  /** Reference table of link types referenced by `stats` — name_forward,
+   *  name_reverse and the AI-facing description so the agent knows what each
+   *  counter means. Entries with `link_type_id: null` are absent (untyped). */
+  link_types: Record<string, LinkStatsLinkTypeRef>;
+}
+
+/** Compact reference of a link type, used as the value shape of
+ *  {@link LinkStats.link_types}. Re-declared here (instead of importing from
+ *  `./mcp.js`) to avoid a runtime circular import — `mcp.ts` already pulls
+ *  thought types from `./thought.js`, so a back-reference would touch the
+ *  cycle on the runtime side. The shape matches `LinkTypeRef` exactly. */
+export interface LinkStatsLinkTypeRef {
+  id: string;
+  name_forward: string;
+  name_reverse: string;
+  description: string | null;
+}
+
 /** «Сигналы полноты» мысли для MCP-чтения (task N2, docs/05-mcp-server.md
  * §3): счётчики соседних сущностей и превью постоянного комментария. */
 export interface ThoughtMeta {
@@ -358,6 +441,12 @@ export interface ThoughtMeta {
    * `null`, когда постоянного комментария нет.
    */
   permanent: PermanentCommentPreview | null;
+  /**
+   * Профиль влияния мысли (0.7.2): счётчики активных связей по
+   * `(link_type_id, direction)` + справочник `link_types`. Отвечает на
+   * «от чего зависит / на что влияет» одним вызовом, без обхода соседей.
+   */
+  link_stats: LinkStats;
 }
 
 /** Превью постоянного комментария (task N2). */
@@ -417,4 +506,11 @@ export interface ThoughtMetaFull {
   usage_count: number;
   /** Полный текст постоянного комментария; `null`, когда его нет. */
   permanent: PermanentCommentFull | null;
+  /**
+   * Профиль влияния мысли (0.7.2) — то же, что и {@link ThoughtMeta.link_stats}:
+   * счётчики активных связей по `(link_type_id, direction)` + справочник
+   * `link_types`. Поле общее у обеих проекций meta — это семантика, а не
+   * оформление.
+   */
+  link_stats: LinkStats;
 }
