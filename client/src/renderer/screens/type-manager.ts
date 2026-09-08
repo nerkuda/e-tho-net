@@ -102,6 +102,7 @@ import {
   openPropertyManagerEditor,
   type RegistryRow,
 } from './property-manager.js';
+import { buildViewsTab } from './thought-type/views-tab.js';
 import { store } from '../state.js';
 import { showIconDialog } from '../editor/icon-dialog.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
@@ -557,7 +558,57 @@ export function showThoughtTypeEditor(
   // the dialog closes.
   let createdId: string | null = null;
   const errorLine = span('', 'error-text');
-  const body = div('form-stack');
+  const body = div('form-stack type-editor');
+
+  // ---- Tabs (задача b8301c16, требование 344b8798) -----------------------
+  // Состояние черновика живёт в замыкании выше (draft, templateMd, props…)
+  // — при переключении вкладок ничего не теряется и ничего не пишется.
+  // Единственная точка записи — «Применить и закрыть» в футере диалога.
+  const TAB_KEYS = ['description', 'template', 'properties', 'views', 'metadata'] as const;
+  type TabKey = (typeof TAB_KEYS)[number];
+  const tabRow = div('type-editor-tabs');
+  const tabPanes = new Map<TabKey, HTMLElement>();
+  const tabButtons = new Map<TabKey, HTMLButtonElement>();
+  let activeTab: TabKey = 'description';
+
+  const activateTab = (key: TabKey): void => {
+    activeTab = key;
+    for (const [tabKey, pane] of tabPanes) {
+      pane.classList.toggle('active', tabKey === key);
+    }
+    for (const [tabKey, btn] of tabButtons) {
+      btn.classList.toggle('active', tabKey === key);
+    }
+  };
+
+  const tabButton = (key: TabKey, label: string): HTMLButtonElement => {
+    const btn = button(label, () => activateTab(key), 'type-editor-tab');
+    btn.type = 'button';
+    btn.dataset['tabKey'] = key;
+    tabButtons.set(key, btn);
+    return btn;
+  };
+
+  const tabPane = (key: TabKey): HTMLElement => {
+    const pane = div('type-editor-tab-pane');
+    tabPanes.set(key, pane);
+    return pane;
+  };
+
+  tabRow.append(
+    tabButton('description', 'Описание'),
+    tabButton('template', 'Шаблон'),
+    tabButton('properties', 'Свойства'),
+    tabButton('views', 'Отборы'),
+    tabButton('metadata', 'Метаданные'),
+  );
+  body.append(tabRow);
+
+  const descriptionPane = tabPane('description');
+  const templatePane = tabPane('template');
+  const propertiesPane = tabPane('properties');
+  const viewsPane = tabPane('views');
+  const metadataPane = tabPane('metadata');
 
   // Duplicate-name guard: type names are unique ignoring case (08-ui-spec.md
   // §8.4). The catalogue is loaded once on open; the server re-checks on apply.
@@ -610,7 +661,7 @@ export function showThoughtTypeEditor(
   const settingsBtn = button('', openStyle, 'icon-btn', 'Настройки типа');
   settingsBtn.append(svgIcon('settings', 14));
   topRow.append(iconBox, nameInput, settingsBtn);
-  body.append(topRow);
+  descriptionPane.append(topRow);
 
   // Parent picker (L21). The root type has no parent; the picked value is
   // staged and re-checked by the server on apply (a type in use cannot be
@@ -623,6 +674,8 @@ export function showThoughtTypeEditor(
     rootNote.style.margin = '0';
     parentField.append(rootNote);
   } else {
+    // Ссылка `props` объявлена ниже; функция обновит превью унаследованных
+    // свойств при смене родителя у НОВОГО типа.
     const picker = buildParentPicker({
       kinds: 'thought',
       currentId: () => current?.id ?? null,
@@ -634,14 +687,18 @@ export function showThoughtTypeEditor(
     });
     parentField.append(picker.root);
   }
-  body.append(parentField);
+  descriptionPane.append(parentField);
 
   // Comment (type description / usage rules) — placeholder only, no label.
   const descArea = el('textarea', 'textarea-input');
   descArea.value = draft.description;
   descArea.rows = 3;
   descArea.placeholder = 'Комментарий: описание типа, правила применения…';
-  body.append(descArea);
+  descriptionPane.append(descArea);
+
+  // errorLine живёт в «Описание»: имя и пометка «дубликат имени» относятся
+  // именно к этой вкладке.
+  descriptionPane.append(errorLine);
 
   // Шаблон постоянного комментария мысли (08-ui-spec.md §8.4, 02-data-model.md
   // §3.3). Поле — как у всех markdown-полей приложения: HTML-просмотр по
@@ -654,11 +711,11 @@ export function showThoughtTypeEditor(
     'muted',
     'Шаблон комментария (применяется к пустому комментарию мысли при создании/назначении типа)',
   );
-  templateLabel.style.margin = '8px 0 2px';
-  body.append(templateLabel);
+  templateLabel.style.margin = '0 0 2px';
+  templatePane.append(templateLabel);
   /** Last markdown committed inside the field (Esc reverts the mirror to it). */
   let committedTemplateMd = templateMd;
-  body.append(
+  templatePane.append(
     createMarkdownField({
       md: templateMd,
       html: renderTemplateHtml(templateMd),
@@ -677,8 +734,6 @@ export function showThoughtTypeEditor(
     }),
   );
 
-  body.append(errorLine);
-
   // Property sections (own staged + inherited). For a new type the inherited
   // preview follows the picked parent; for an existing type the inherited
   // defaults keep their explicit per-dialog «Применить» (as before).
@@ -690,14 +745,32 @@ export function showThoughtTypeEditor(
       draft.parent_id ?? findRootType(store.state.thoughtTypes)?.id ?? null,
     onOverrideApplied: onChanged,
   });
-  body.append(props.root);
+  propertiesPane.append(props.root);
 
-  // Блок «Метаданные» — автор, даты, id сущности (задача 04cd9794). Показываем
-  // только когда редактируется существующий тип; для нового id ещё не
-  // присвоен и блок ограничится подсказкой.
+  // Вкладка «Метаданные» — автор, даты, id сущности (задача 04cd9794). Для
+  // нового типа показываем подсказку «id будет присвоен при сохранении».
   if (type !== null) {
-    body.append(buildMetadataRowsFromType(type));
+    metadataPane.append(buildMetadataRowsFromType(type));
+  } else {
+    metadataPane.append(
+      el('p', 'muted', 'id появится после первой записи типа.'),
+    );
   }
+
+  // Вкладка «Отборы» — собственная подписка на realtime-события
+  // (thought-type-view.{created,updated,deleted}); диалог вызывает dispose()
+  // на onClose.
+  const viewsTab = buildViewsTab({
+    networkId,
+    getTypeId: () => current?.id ?? null,
+    typeName: () => draft.name,
+    onChanged,
+  });
+  viewsPane.append(viewsTab.root);
+
+  // Подвесить все панели к body и активировать первую.
+  body.append(descriptionPane, templatePane, propertiesPane, viewsPane, metadataPane);
+  activateTab(activeTab);
 
   /** Existing type with the same normalized name as `name` (self excluded). */
   function nameClash(name: string): ThoughtType | null {
@@ -846,7 +919,7 @@ export function showThoughtTypeEditor(
     showDialog({
       title: type === null ? 'Новый тип мысли' : 'Тип мысли',
       body,
-      width: 560,
+      width: 600,
       buttons: [
         { label: 'Отмена' },
         {
@@ -861,6 +934,7 @@ export function showThoughtTypeEditor(
       ],
       onMount: () => nameInput.focus(),
       onClose: () => {
+        viewsTab.dispose();
         void releaseHeld(editLock);
         editLock = null;
         resolve(createdId);
