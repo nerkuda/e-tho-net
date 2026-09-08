@@ -244,6 +244,28 @@ export function parseStructureFilter(
     if (op !== 'eq') filter[`${field}_op`] = op;
   }
 
+  // Фильтры по датам создания/изменения (задача 7032e55a, паритет с MCP
+  // `etn.thoughts.query.created_after/created_before/updated_after/updated_before`
+  // и панелью «Структур» §15.3). Любая граница может быть опущена; обе
+  // включающие (`>=`/`<=`); валидация формата — ISO-8601.
+  for (const field of ['created_after', 'created_before', 'updated_after', 'updated_before'] as const) {
+    const raw = body[field];
+    if (raw === undefined) continue;
+    if (typeof raw !== 'string') {
+      throw new EtnError('VALIDATION_ERROR', `${field} должен быть строкой ISO-8601.`, {
+        field,
+      }, requestId);
+    }
+    const trimmed = raw.trim();
+    if (trimmed === '') continue;
+    if (!isIso8601(trimmed)) {
+      throw new EtnError('VALIDATION_ERROR', `${field} должен быть ISO-8601 (например, 2024-01-02 или 2024-01-02T15:04:05Z).`, {
+        field,
+      }, requestId);
+    }
+    filter[field] = trimmed;
+  }
+
   const properties = body['properties'];
   if (properties !== undefined) {
     if (!Array.isArray(properties)) {
@@ -259,6 +281,38 @@ export function parseStructureFilter(
   }
 
   return filter;
+}
+
+/**
+ * Lax ISO-8601 check (задача 7032e55a). Accepts both date-only `YYYY-MM-DD`
+ * and full timestamps `YYYY-MM-DDTHH:MM:SS[.sss][Z|±HH:MM]` — the same
+ * formats that `chronicle/query` (`date_from`/`date_to`, §20) accepts. The
+ * downstream comparison uses the underlying `thoughts.created_at` /
+ * `updated_at` text columns, which are stored as ISO-8601; SQLite's text
+ * comparison is lexicographic and matches ISO-8601 ordering exactly, so the
+ * format only has to be a well-formed ISO date — time zone designators are
+ * accepted but not required.
+ */
+function isIso8601(value: string): boolean {
+  if (value.length < 10) return false;
+  // YYYY-MM-DD prefix.
+  if (
+    value[4] !== '-' ||
+    value[7] !== '-' ||
+    !/^\d{4}-\d{2}-\d{2}/.test(value)
+  ) {
+    return false;
+  }
+  // Date-only: nothing else to check.
+  if (value.length === 10) {
+    const month = Number(value.slice(5, 7));
+    const day = Number(value.slice(8, 10));
+    return month >= 1 && month <= 12 && day >= 1 && day <= 31;
+  }
+  // Full timestamp: 'T' separator and at least HH:MM.
+  if (value[10] !== 'T' && value[10] !== ' ') return false;
+  if (!/^\d{2}:\d{2}/.test(value.slice(11))) return false;
+  return true;
 }
 
 /** Parse the `*_op` field of an author filter; defaults to `eq` when absent. */
@@ -400,8 +454,17 @@ export function isFilterEmpty(filter: StructureFilter): boolean {
     filter.has_chronology === undefined &&
     filter.active === undefined &&
     authorFilterIsEmpty(filter.created_by, filter.created_by_op) &&
-    authorFilterIsEmpty(filter.updated_by, filter.updated_by_op)
+    authorFilterIsEmpty(filter.updated_by, filter.updated_by_op) &&
+    !dateBoundIsSet(filter.created_after) &&
+    !dateBoundIsSet(filter.created_before) &&
+    !dateBoundIsSet(filter.updated_after) &&
+    !dateBoundIsSet(filter.updated_before)
   );
+}
+
+/** True when a date bound carries a non-empty value worth applying. */
+function dateBoundIsSet(value: string | undefined): boolean {
+  return typeof value === 'string' && value.trim() !== '';
 }
 
 /** True when the author condition carries no useful clause (задача 59119797). */
@@ -488,6 +551,30 @@ function appendAuthorCondition(
   // `eq` (default) — exact match.
   where.push(`${column} = ?`);
   params.push(value);
+}
+
+/**
+ * Appends one or two date-bound WHERE clauses (задача 7032e55a): `after` →
+ * `column >= ?`, `before` → `column <= ?`. Both bounds are inclusive and
+ * optional; an empty string is treated as "not set" so the JSON filter can
+ * safely carry `''` from a cleared UI field without the parser dropping
+ * the rest of the row.
+ */
+function appendDateBound(
+  where: string[],
+  params: unknown[],
+  column: string,
+  after: string | undefined,
+  before: string | undefined,
+): void {
+  if (typeof after === 'string' && after.trim() !== '') {
+    where.push(`${column} >= ?`);
+    params.push(after.trim());
+  }
+  if (typeof before === 'string' && before.trim() !== '') {
+    where.push(`${column} <= ?`);
+    params.push(before.trim());
+  }
 }
 
 /** Convert a condition scalar to the SQL parameter of its value column. */
@@ -647,6 +734,13 @@ function buildFilterQuerySql(
   // `created_by`/`updated_by` (миграция 033).
   appendAuthorCondition(where, params, 't.created_by', req.created_by, req.created_by_op);
   appendAuthorCondition(where, params, 't.updated_by', req.updated_by, req.updated_by_op);
+
+  // Границы дат создания/изменения (задача 7032e55a, паритет с MCP и панелью
+  // «Структур» §15.3). `thoughts.created_at`/`updated_at` — текстовые ISO-8601
+  // колонки, сравнение лексикографическое совпадает с ISO-порядком. Границы
+  // включающие (`>=`/`<=`).
+  appendDateBound(where, params, 't.created_at', req.created_after, req.created_before);
+  appendDateBound(where, params, 't.updated_at', req.updated_after, req.updated_before);
 
   if (req.parent_ids !== undefined && req.parent_ids.length > 0) {
     const scoped = expandParentIdsToSubtree(ndb, req.parent_ids, showInactive === 1);

@@ -119,6 +119,18 @@ export interface StructureFilter {
   updated_by?: string | string[];
   /** Оператор условия `updated_by`. По умолчанию `eq`. */
   updated_by_op?: StructureAuthorOp;
+  /**
+   * Задача 7032e55a «Фильтры по датам создания и изменения»: границы дат
+   * (включительные) для `thoughts.created_at` / `thoughts.updated_at`.
+   * ISO-8601 (тот же формат, что у `chronicle/query` §20). Любая граница
+   * может быть опущена; комбинируются с остальными критериями по AND.
+   * Паритеты: MCP `etn.thoughts.query.created_after/created_before/updated_after/updated_before`
+   * (05-mcp-server.md §4.1) и панель «Структур» (08-ui-spec.md §15.3).
+   */
+  created_after?: string;
+  created_before?: string;
+  updated_after?: string;
+  updated_before?: string;
 }
 
 /** Filter + paging of `POST /thoughts/query` (the list envelope of §6.10). */

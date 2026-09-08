@@ -129,6 +129,14 @@ const QUERY_BODY_KEYS = new Set([
   // `author_id`/`editor_id` (имена расходятся по слоям).
   'created_by',
   'updated_by',
+  // Границы дат создания/изменения (задача 7032e55a, паритет с MCP
+  // `etn.thoughts.query.created_after/created_before/updated_after/updated_before`
+  // и панелью «Структур» §15.3). ISO-8601; обе границы включающие и
+  // необязательные; валидация формата — на парсере фильтра.
+  'created_after',
+  'created_before',
+  'updated_after',
+  'updated_before',
   'sort',
   'order',
   'ids_only',

@@ -24,6 +24,7 @@ import {
   getHierarchy,
   listSavedFilters,
   parseSavedFilterDefinition,
+  parseStructureFilter,
   queryThoughtIds,
   queryThoughts,
   updateSavedFilter,
@@ -50,10 +51,13 @@ function seedThought(
     active: number;
     is_root: number;
     created_at: string;
+    updated_at: string;
   }> = {},
 ): string {
   const id = overrides.id ?? randomUUID();
   const title = overrides.title ?? 'Seed';
+  const createdAt = overrides.created_at ?? '2024-01-01T00:00:00Z';
+  const updatedAt = overrides.updated_at ?? createdAt;
   ndb
     .prepare(
       `INSERT INTO thoughts (id, title, title_norm, type_id, active, is_protected, is_root,
@@ -68,10 +72,17 @@ function seedThought(
       overrides.active ?? 1,
       overrides.is_root ?? 0,
       overrides.is_root ?? 0,
-      overrides.created_at ?? '2024-01-01T00:00:00Z',
-      overrides.created_at ?? '2024-01-01T00:00:00Z',
+      createdAt,
+      updatedAt,
     );
   return id;
+}
+
+/** Overwrite `updated_at` of an already-seeded thought (задача 7032e55a). */
+function setUpdatedAt(ndb: NetworkDb, thoughtId: string, updatedAt: string): void {
+  ndb
+    .prepare(`UPDATE thoughts SET updated_at = ? WHERE id = ?`)
+    .run(updatedAt, thoughtId);
 }
 
 /** Insert a synonym row for a thought. */
@@ -1030,6 +1041,209 @@ describe(
             ['Банан', 'Вишня'],
           );
           assert.equal(page.total, 4);
+        } finally {
+          ndb.close();
+        }
+      });
+    });
+
+    describe('queryThoughts: created/updated date bounds (задача 7032e55a)', () => {
+      it('created_after / created_before сужают отбор по `thoughts.created_at` (включительно)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const a = seedThought(ndb, { title: 'A', created_at: '2024-01-01T00:00:00Z' });
+          const b = seedThought(ndb, { title: 'B', created_at: '2024-02-15T12:00:00Z' });
+          const c = seedThought(ndb, { title: 'C', created_at: '2024-03-30T23:59:59Z' });
+
+          // Граница включительная: '2024-02-01' ловит B и C, но не A.
+          const after = queryThoughts(ndb, USER, query({ created_after: '2024-02-01' }));
+          assert.deepEqual(
+            new Set(after.items.map((t) => t.id)),
+            new Set([b, c]),
+          );
+
+          // До включительно: '2024-02-15T12:00:00Z' ловит A и B, но не C.
+          const before = queryThoughts(ndb, USER, query({ created_before: '2024-02-15T12:00:00Z' }));
+          assert.deepEqual(
+            new Set(before.items.map((t) => t.id)),
+            new Set([a, b]),
+          );
+
+          // Обе границы — окно: только B.
+          const both = queryThoughts(
+            ndb,
+            USER,
+            query({ created_after: '2024-02-01', created_before: '2024-02-28' }),
+          );
+          assert.deepEqual(both.items.map((t) => t.id), [b]);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('updated_after / updated_before используют `updated_at`, не `created_at`', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          // Один и тот же `created_at`, разные `updated_at` — обновляем напрямую.
+          const x = seedThought(ndb, { title: 'X', created_at: '2024-01-10T00:00:00Z' });
+          setUpdatedAt(ndb, x, '2024-04-01T00:00:00Z');
+          const y = seedThought(ndb, { title: 'Y', created_at: '2024-01-10T00:00:00Z' });
+          setUpdatedAt(ndb, y, '2024-05-15T00:00:00Z');
+
+          // Без ограничения по created_at — `updated_after` отделяет Y от X.
+          const after = queryThoughts(ndb, USER, query({ updated_after: '2024-04-15' }));
+          assert.deepEqual(after.items.map((t) => t.id), [y]);
+
+          // updated_before=2024-04-15 — только X (обновлён 1 апреля).
+          const before = queryThoughts(ndb, USER, query({ updated_before: '2024-04-15' }));
+          assert.deepEqual(before.items.map((t) => t.id), [x]);
+
+          // updated_before=2024-04-01T00:00:00Z (ровно в момент X) — X включается.
+          const inclusive = queryThoughts(
+            ndb,
+            USER,
+            query({ updated_before: '2024-04-01T00:00:00Z' }),
+          );
+          assert.deepEqual(inclusive.items.map((t) => t.id), [x]);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('даты комбинируются с другими критериями по AND', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const taskType = seedThoughtType(ndb, 'задача');
+          const a = seedThought(ndb, {
+            title: 'A',
+            type_id: taskType,
+            created_at: '2024-02-01T00:00:00Z',
+          });
+          const b = seedThought(ndb, {
+            title: 'B',
+            type_id: taskType,
+            created_at: '2024-02-15T00:00:00Z',
+          });
+          const c = seedThought(ndb, {
+            title: 'C',
+            created_at: '2024-02-20T00:00:00Z',
+          });
+
+          // type=задача AND created_after=2024-02-10 → только B.
+          const result = queryThoughts(
+            ndb,
+            USER,
+            query({ type_ids: [taskType], created_after: '2024-02-10' }),
+          );
+          assert.deepEqual(result.items.map((t) => t.id), [b]);
+
+          // Границы + keywords.
+          const withKw = queryThoughts(
+            ndb,
+            USER,
+            query({ keywords: 'A', created_after: '2024-01-01', created_before: '2024-03-01' }),
+          );
+          assert.deepEqual(withKw.items.map((t) => t.id), [a]);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('parseStructureFilter отклоняет не-ISO значение с VALIDATION_ERROR', () => {
+        for (const field of ['created_after', 'created_before', 'updated_after', 'updated_before']) {
+          assert.throws(
+            () => parseStructureFilter({ [field]: 'не-дата' }),
+            (e: unknown) =>
+              e instanceof EtnError &&
+              e.code === 'VALIDATION_ERROR' &&
+              (e as { details?: { field?: string } }).details?.field === field,
+            `${field}: 'не-дата' → VALIDATION_ERROR`,
+          );
+          assert.throws(
+            () => parseStructureFilter({ [field]: '2024-13-40' }),
+            (e: unknown) =>
+              e instanceof EtnError &&
+              e.code === 'VALIDATION_ERROR' &&
+              (e as { details?: { field?: string } }).details?.field === field,
+            `${field}: '2024-13-40' → VALIDATION_ERROR (несуществующая дата)`,
+          );
+          // Не строка → VALIDATION_ERROR.
+          assert.throws(
+            () => parseStructureFilter({ [field]: 42 }),
+            (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+            `${field}: число → VALIDATION_ERROR`,
+          );
+        }
+      });
+
+      it('parseStructureFilter принимает YYYY-MM-DD, полный ISO с T и Z, и пустую строку как «не применять»', () => {
+        const cases: Array<
+          ['created_after' | 'created_before' | 'updated_after' | 'updated_before', string]
+        > = [
+          ['created_after', '2024-02-01'],
+          ['created_before', '2024-02-01T23:59:59Z'],
+          ['updated_after', '2024-02-01T12:00:00.000Z'],
+          ['updated_before', '2024-02-01T12:00:00+03:00'],
+        ];
+        for (const [field, value] of cases) {
+          const filter = parseStructureFilter({ [field]: value });
+          assert.equal(filter[field], value, `${field}=${value} → принято`);
+        }
+        // Пустая строка — фильтр не применяется, ключ не выставляется.
+        const empty = parseStructureFilter({
+          created_after: '   ',
+          created_before: '',
+          updated_after: '',
+          updated_before: '',
+        });
+        assert.equal(empty.created_after, undefined);
+        assert.equal(empty.created_before, undefined);
+        assert.equal(empty.updated_after, undefined);
+        assert.equal(empty.updated_before, undefined);
+      });
+
+      it('isFilterEmpty остаётся `true` без заполненных границ дат', () => {
+        // Парсер не выставляет ключ при пустой строке → фильтр пуст.
+        const empty = parseStructureFilter({
+          created_after: '',
+          created_before: '   ',
+          updated_after: '',
+          updated_before: '',
+        });
+        // Пустой фильтр + дефолты — попадает в HOME-ветку, total = 1.
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const r = queryThoughts(ndb, USER, {
+            ...empty,
+            sort: 'alpha',
+            order: 'asc',
+            limit: 100,
+            offset: 0,
+          });
+          assert.equal(r.total, 1);
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('границы работают в queryThoughtIds (ids-only bulk-команды)', () => {
+        const ndb = createInMemoryNetworkDb();
+        try {
+          const a = seedThought(ndb, { title: 'A', created_at: '2024-01-01T00:00:00Z' });
+          const b = seedThought(ndb, { title: 'B', created_at: '2024-02-15T12:00:00Z' });
+          seedThought(ndb, { title: 'C', created_at: '2024-03-30T23:59:59Z' });
+
+          const ids = queryThoughtIds(
+            ndb,
+            USER,
+            query({ created_after: '2024-02-01', created_before: '2024-02-28' }),
+          );
+          assert.deepEqual(ids.ids, [b]);
+          assert.equal(ids.total, 1);
+
+          // sanity check: A выпадает, B попадает.
+          assert.ok(!ids.ids.includes(a));
         } finally {
           ndb.close();
         }
