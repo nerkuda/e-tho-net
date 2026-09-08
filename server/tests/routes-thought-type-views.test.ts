@@ -533,6 +533,104 @@ describe(
         }
       });
 
+      it('happy path: thought_ref свойство + type_ids + $thought (регрессия бага 4)', async () => {
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          // Иерархия типов: «работа» → «задача»/«ошибка»; «версия» — отдельный
+          // тип (как в боевой сети ETN).
+          const rabotaType = await createThoughtType(ctx, 'работа');
+          const zadachaType = await createThoughtType(ctx, 'задача', rabotaType);
+          const oshibkaType = await createThoughtType(ctx, 'ошибка', rabotaType);
+          const versiyaType = await createThoughtType(ctx, 'версия');
+
+          // Свойство «версия» (thought_ref) на «работа» — наследуют задача/ошибка.
+          const propName = `версия-${randomUUID().slice(0, 8)}`;
+          const regRes = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/properties`,
+            headers: h,
+            payload: { name: propName, value_type: 'thought_ref' },
+          });
+          assert.equal(regRes.statusCode, 201, regRes.body?.toString());
+          const propId = (regRes.json().data as { id: string }).id;
+          const attach = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${rabotaType}/properties`,
+            headers: h,
+            payload: { property_id: propId, required: false },
+          });
+          assert.equal(attach.statusCode, 201, attach.body?.toString());
+
+          // Контекстная мысль-версия (тип «версия»).
+          const setType = async (thoughtId: string, typeId: string): Promise<void> => {
+            const res = await ctx.app.inject({
+              method: 'PATCH',
+              url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}`,
+              headers: h,
+              payload: { type_id: typeId },
+            });
+            assert.equal(res.statusCode, 200, res.body?.toString());
+          };
+          const setRef = async (thoughtId: string, value: string): Promise<void> => {
+            const res = await ctx.app.inject({
+              method: 'PUT',
+              url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/properties/${propName}`,
+              headers: h,
+              payload: { value },
+            });
+            assert.equal(res.statusCode, 200, res.body?.toString());
+          };
+          const versionThought = await createChild(ctx, 'Версия 1');
+          await setType(versionThought, versiyaType);
+
+          // Работы, привязанные к версии свойством «версия».
+          const createWork = async (title: string, typeId: string, versionId: string): Promise<string> => {
+            const id = await createChild(ctx, title);
+            await setType(id, typeId);
+            await setRef(id, versionId);
+            return id;
+          };
+          const inA = await createWork('Задача A', zadachaType, versionThought);
+          const inB = await createWork('Ошибка B', oshibkaType, versionThought);
+
+          // Чужая версия — не должна попасть в выборку.
+          const otherVersion = await createChild(ctx, 'Версия 2');
+          await setType(otherVersion, versiyaType);
+          const out = await createWork('Чужая задача', zadachaType, otherVersion);
+
+          // Отбор на типе «версия»: тип ∈ {задача, ошибка} И «версия» = $thought.
+          const definition = JSON.stringify({
+            type_ids: [zadachaType, oshibkaType],
+            properties: [{ property_id: propId, op: 'eq', value: '$thought' }],
+            sort: 'alpha',
+            order: 'asc',
+          });
+          const viewRes = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${versiyaType}/views`,
+            headers: h,
+            payload: { name: 'Работы версии', definition },
+          });
+          assert.equal(viewRes.statusCode, 201, viewRes.body?.toString());
+
+          const runUrl = `/api/v1/networks/${ctx.networkId}/thoughts/${versionThought}/views/${encodeURIComponent('Работы версии')}/run`;
+          const run = await ctx.app.inject({ method: 'POST', url: runUrl, headers: h, payload: {} });
+          assert.equal(run.statusCode, 200, run.body?.toString());
+          const body = run.json() as {
+            data: Array<{ id: string }>;
+            meta: { total: number; unresolved?: unknown[] };
+          };
+          assert.deepEqual(body.meta.unresolved ?? [], []);
+          assert.equal(body.meta.total, 2);
+          const ids = body.data.map((d) => d.id).sort();
+          assert.deepEqual(ids, [inA, inB].sort());
+          assert.ok(!ids.includes(out), 'посторонняя версия не должна попасть в результат');
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
       it('неразрешимый токен → 200 OK с пустым data и meta.unresolved', async () => {
         const ctx = await buildRestContext();
         try {
