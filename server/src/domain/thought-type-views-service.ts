@@ -23,11 +23,16 @@
  *     код ошибки `THOUGHT_TYPE_NOT_ASSIGNABLE`, который клиент превращает в
  *     скрытие кнопки «+»).
  *
- * Валидация `definition`. На этом этапе проверяется только синтаксис JSON
- * (строка парсится в объект). Полная валидация токенов (`$today`,
- * `$thought.*`) — отдельный этап 20b2fca0, и эта проверка намеренно не
- * повторяется здесь: зря падающие `422` на этапе хранения сломали бы
- * сохранение отбора, который сейчас валиден как JSON, но не как фильтр.
+ * Валидация `definition`. Синтаксис JSON проверяется здесь же (строка
+ * парсится в объект), поверх — полная валидация токенов из закрытого
+ * пространства имён (задача 20b2fca0, ADR 7c1c5bf5): имена свойств в
+ * `$thought.[…]` сверяются с цепочкой типов, `config.multiple=true` —
+ * с операцией условия. Невалидный отбор не сохранится.
+ *
+ * Исполнение отбора относительно мысли-контекста — через
+ * {@link runViewForThought}: токены резолвятся сервером перед движком
+ * отбора мыслей (требование 3697eb65); неразрешимые дают пустой
+ * результат с пояснением (требование b7fdab20).
  */
 
 import {
@@ -38,9 +43,21 @@ import {
   type ThoughtTypeView,
   type ThoughtTypeViewInput,
   type ThoughtTypeViewUpdateInput,
+  type ThoughtRef,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { getPropertyValues } from './property-service.js';
+import { parseStructureFilter, queryThoughts, type StructureQueryResult } from './structure-service.js';
+import {
+  buildResolveContext,
+  resolveTokensInDefinition as resolveTokensDefinition,
+  validateDefinitionForTokens,
+  type PropertyMeta,
+  type ResolveContext,
+  type ThoughtPropertyValue,
+  type TokenIssue,
+} from './thought-type-view-tokens.js';
 import {
   getRootThoughtType,
   thoughtTypeChain,
@@ -55,6 +72,8 @@ import {
   updateThoughtTypeView as repoUpdate,
   type ThoughtTypeViewRow,
 } from './thought-type-views-repo.js';
+import { getThought } from './thought-service.js';
+import { listEffectiveTypeProperties } from './property-service.js';
 
 /**
  * Доменное представление отбора (`ThoughtTypeView`). Различается с репозиторным
@@ -88,6 +107,21 @@ function rowToView(row: ThoughtTypeViewRow): ThoughtTypeView {
  */
 function viewNameKey(name: string): string {
   return name.trim().toLowerCase();
+}
+
+/**
+ * Метаданные свойств типа отбора для валидатора токенов (`thought-type-view-tokens`):
+ * имена, `multiple`, `value_type`. Цепочка типов здесь не нужна —
+ * `listEffectiveTypeProperties` уже сворачивает её (предок перекрывает
+ * потомка, см. 02-data-model.md §3.4.1), и до валидатора доходят ровно те
+ * ключи, что реально доступны мысли этого типа.
+ */
+function getTypePropertyMeta(ndb: NetworkDb, thoughtTypeId: string): PropertyMeta[] {
+  return listEffectiveTypeProperties(ndb, 'thought_type', thoughtTypeId).map((p) => ({
+    key: p.key,
+    multiple: p.config?.multiple === true,
+    value_type: p.value_type,
+  }));
 }
 
 /**
@@ -277,6 +311,18 @@ export function createThoughtTypeView(
   const description = validateDescription(input.description, requestId);
   const definition = validateDefinition(input.definition, requestId);
   const position = validatePosition(input.position, requestId);
+  // Полная валидация токенов (задача 20b2fca0): запускается после синтаксиса
+  // JSON и проверки типа мысли — нужно знать `thought_type_id`, чтобы сверить
+  // имена свойств в `$thought.[…]` с цепочкой типов и распознать `multiple`.
+  // Повторный JSON.parse дёшев — definition это пара KB; альтернатива
+  // (возвращать из `validateDefinition` ещё и parsed-объект) рвёт границу
+  // ответственности функции (валидация → парсинг).
+  const parsedDefinition = JSON.parse(definition) as Record<string, unknown>;
+  validateDefinitionForTokens(
+    parsedDefinition,
+    { thoughtType: { properties: getTypePropertyMeta(ndb, thoughtTypeId) } },
+    requestId,
+  );
 
   // Проверка типа — корневой тип нельзя «заселять отборами с холста».
   const root = getRootThoughtType(ndb);
@@ -382,6 +428,18 @@ export function updateThoughtTypeView(
           expected: expectedVersion,
           current: current.version,
         },
+        requestId,
+      );
+    }
+
+    if (validated.definition !== undefined) {
+      // Полная валидация токенов (задача 20b2fca0): нужен `thought_type_id`,
+      // поэтому выполняется внутри транзакции после `getViewOrThrow`. До
+      // UPDATE — иначе можно было бы сохранить невалидное определение.
+      const parsedDefinition = JSON.parse(validated.definition) as Record<string, unknown>;
+      validateDefinitionForTokens(
+        parsedDefinition,
+        { thoughtType: { properties: getTypePropertyMeta(ndb, current.thought_type_id) } },
         requestId,
       );
     }
@@ -538,4 +596,168 @@ export function getEffectiveViewsForThought(
   }
 
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Исполнение отбора относительно мысли-контекста (задача 20b2fca0, интерфейс
+// для этапа 5 — REST `POST /thoughts/{id}/views/{view}/run`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Результат исполнения отбора относительно конкретной мысли. Помимо
+ * страницы мыслей, как у {@link StructureQueryResult}, несёт `unresolved`
+ * — список токенов, которые не удалось разрешить на момент исполнения
+ * (требование b7fdab20). При непустом списке страница пустая.
+ */
+export interface RunViewResult {
+  items: ThoughtRef[];
+  total: number;
+  /** Направления связей для найденных мыслей (тот же формат, что в
+   *  `StructureQueryResult.directions` — фронт подсвечивает эллипсы). */
+  directions: StructureQueryResult['directions'];
+  /** `[]` — все токены разрешены, иначе условие с токеном не применилось,
+   *  и движок отбора возвращает пустую страницу с пояснением. */
+  unresolved: TokenIssue[];
+}
+
+/**
+ * Превратить «сырые» значения свойств мысли из `getPropertyValues` в
+ * плоскую форму, которую ест резолвер токенов: ключ + тип + флаг
+ * `multiple` (из `properties.config` через `effective`-цепочку) + скаляр
+ * или массив строк (для `multiple`). Внешние значения (`outside_type`)
+ * резолвер игнорирует — они не в цепочке типа, и валидация при сохранении
+ * отвергла бы `$thought.[…]` на такое имя.
+ */
+function collectThoughtPropertyValues(
+  ndb: NetworkDb,
+  thoughtId: string,
+  typeId: string | null,
+): ThoughtPropertyValue[] {
+  const raw = getPropertyValues(ndb, 'thought', thoughtId).filter((v) => !v.outside_type);
+  if (raw.length === 0) return [];
+  const meta = typeId === null
+    ? new Map<string, { multiple: boolean; value_type: typeof raw[number]['value_type'] }>()
+    : new Map(
+      listEffectiveTypeProperties(ndb, 'thought_type', typeId).map((p) => [
+        p.key,
+        { multiple: p.config?.multiple === true, value_type: p.value_type },
+      ] as const),
+    );
+  const out: ThoughtPropertyValue[] = [];
+  for (const v of raw) {
+    // `null` (и экзотика вроде пустого массива для одиночного свойства) —
+    // резолверу нечего подставлять: токен становится неразрешимым, отбор
+    // вернёт пустой результат с пояснением «у мысли не заполнено свойство
+    // …». Это требование b7fdab20.
+    if (v.value === null) continue;
+    if (Array.isArray(v.value) && v.value.length === 0) continue;
+    const m = meta.get(v.property_name);
+    out.push({
+      key: v.property_name,
+      value_type: m?.value_type ?? v.value_type,
+      multiple: m?.multiple === true,
+      value: v.value,
+    });
+  }
+  return out;
+}
+
+/**
+ * Исполнить отбор относительно конкретной мысли (задача 20b2fca0).
+ *
+ * Шаги:
+ *   1. Прочитать мысль (404 для несуществующей — `getThought` возвращает
+ *      `null`, бросаем `NOT_FOUND`).
+ *   2. Распарсить `definition` отбора как `StructureFilter` — этот же
+ *      парсер использует REST/MCP при прямых запросах структур, так что
+ *      токены и здесь проходят через `validateDefinitionForTokens` уже
+ *      на этапе сохранения (защита двойная).
+ *   3. Собрать контекст резолвера: поля мысли + значения свойств +
+ *      id пользователя + часы (`now()` по умолчанию).
+ *   4. Подставить токены. Если хоть один не разрешён — пустой результат
+ *      с пояснениями (требование b7fdab20), `queryThoughts` не вызывается.
+ *   5. Иначе — `queryThoughts` от имени `userId` с подставленным фильтром.
+ *
+ * Этап 5 упакует результат в REST-ответ `POST /thoughts/{id}/views/{view}/run`;
+ * здесь только чистый pipeline без HTTP-обвязки.
+ */
+export function runViewForThought(
+  ndb: NetworkDb,
+  view: ThoughtTypeView,
+  thoughtId: string,
+  userId: string,
+  requestId?: string,
+): RunViewResult {
+  const thought = getThought(ndb, thoughtId);
+  if (thought === null) {
+    throw new EtnError(
+      'NOT_FOUND',
+      `Мысль ${thoughtId} не найдена.`,
+      { entity: 'thought', id: thoughtId },
+      requestId,
+    );
+  }
+  const parsed = JSON.parse(view.definition) as Record<string, unknown>;
+  // Повторная защита: даже если по дороге кто-то подменил definition в БД,
+  // здесь отбор не выполнится с невалидными токенами — выбросим 422.
+  validateDefinitionForTokens(parsed, undefined, requestId);
+
+  const properties = collectThoughtPropertyValues(ndb, thoughtId, thought.type_id);
+  const ctx: ResolveContext = buildResolveContext(
+    {
+      id: thought.id,
+      title: thought.title,
+      synonyms: thought.synonyms,
+      type_id: thought.type_id,
+      active: thought.active,
+      // `created_by`/`updated_by` опциональны в DTO Thought; в контекст
+      // токенов пустую строку не отдаём — `$thought.author` уйдёт в
+      // «не разрешён», отбор вернёт пустой результат с пояснением.
+      created_by: thought.created_by ?? '',
+      updated_by: thought.updated_by ?? '',
+      created_at: thought.created_at,
+      updated_at: thought.updated_at,
+    },
+    properties,
+    userId,
+  );
+  const resolved = resolveTokensInDefinitionProxy(parsed, ctx);
+
+  if (resolved.unresolved.length > 0) {
+    return { items: [], total: 0, directions: {}, unresolved: resolved.unresolved };
+  }
+
+  // Парсер ожидает именно `Record<string, unknown>` (это `body` в REST).
+  // Резолвер оставляет на выходе объект, потому что на входе был объект
+  // (валидация отвергла бы не-объект), — cast для согласования типов.
+  const filter = parseStructureFilter(resolved.definition as Record<string, unknown>, requestId);
+  const query: Parameters<typeof queryThoughts>[2] = {
+    ...filter,
+    sort: 'alpha',
+    order: 'asc',
+    limit: 100,
+    offset: 0,
+  };
+  const result = queryThoughts(ndb, userId, query, requestId);
+  return {
+    items: result.items,
+    total: result.total,
+    directions: result.directions,
+    unresolved: [],
+  };
+}
+
+/**
+ * Тонкая обёртка над резолвером токенов: клонирует definition, подставляет,
+ * возвращает `{ definition, unresolved }`. Вынесено, чтобы
+ * `runViewForThought` не зависел от формы импорта резолвера напрямую.
+ */
+function resolveTokensInDefinitionProxy(
+  parsedDefinition: Record<string, unknown>,
+  ctx: ResolveContext,
+): { definition: unknown; unresolved: TokenIssue[] } {
+  // Резолвер делает обход по строкам, поэтому копия входного объекта —
+  // входной параметр остаётся неизменным для повторных вызовов и тестов.
+  const cloned = JSON.parse(JSON.stringify(parsedDefinition)) as Record<string, unknown>;
+  return resolveTokensDefinition(cloned, ctx);
 }
