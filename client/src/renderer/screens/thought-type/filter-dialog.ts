@@ -2,20 +2,20 @@
  * Диалог создания и правки отбора типа мысли (задача e37f3f04, спека
  * e0257ca5 «Диалог отбора типа мысли», версия 0.7.3).
  *
- * Поля: имя (обязательно, ≤200, уникально в пределах типа), описание (≤1000,
- * опц.), флажок «Открывать по умолчанию». Дальше — конструктор условий,
- * повторяющий панель «Структур» (`filter-panel.ts`) БЕЗ блока сохранённых
- * отборов, кнопок применения и сплиттера. К значениям условий свойств
- * пристёгнут токен-пикер: выпадающий список токенов для контекста отбора
- * (поля мысли + свойства типа и его предков + `$today`/`$now`/`$user`),
- * выбранный токен встаёт в значение и остаётся редактируемым.
+ * Конструктор условий повторяет панель «Структур» (`filter-panel.ts`) БЕЗ
+ * блока сохранённых отборов, кнопок применения и сплиттера: ключевые слова,
+ * родительские мысли, типы мыслей и связей, свойства, автор/редактор, даты,
+ * «Дополнительно» и сортировка. Тяжёлые группы («Свойства», «Дополнительно»,
+ * «Автор / Редактор», «Даты») — сворачиваемые, по умолчанию свёрнуты; заголовок
+ * любой группы, чьи условия не пусты, подсвечивается и помечается `*`.
  *
- * Списочные токены (множественные свойства) предлагаются только в условиях
- * с операцией `in` / `not_in` — попытка сохранить скаляр с массивом даёт
- * серверную 422, которая показывается через `notice` и под полем формы.
+ * К значениям условий пристёгнут токен-пикер: выпадающий список, собранный по
+ * типу, которому принадлежит отбор (поля мысли + свойства типа и его предков +
+ * `$today`/`$now`/`$user`). Выбранный токен подставляется текстом и остаётся
+ * редактируемым; списочные токены — только в «в списке»/«не в списке».
  *
- * Сохранение: `etn.thoughtTypeViews.create` или `.update` через IPC. На
- * успехе — `onSaved(savedView)`. Отмена и Esc закрывают без изменений.
+ * Сохранение: `etn.thoughtTypeViews.create`/`.update` через IPC. Пустой отбор
+ * (ни одного условия) сохранить нельзя — ошибка показывается под формой.
  */
 
 import {
@@ -43,7 +43,7 @@ import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { orderedTypeRows } from '../../lib/type-tree.js';
-import { buildUserMultiSelectWidget, buildUserSelectWidget } from '../../lib/users.js';
+import { buildUserSelectWidget, listUsers, resolveUserName } from '../../lib/users.js';
 import { store } from '../../state.js';
 
 import {
@@ -51,6 +51,7 @@ import {
   buildTokensForSpecialField,
   buildWireDefinition,
   defaultDialogCriteriaState,
+  hasAnyCriteria,
   parseViewDefinition,
   type ChainProperties,
   type DialogCriteriaState,
@@ -108,11 +109,9 @@ function buildAndShow(opts: OpenViewEditorOptions): Promise<void> {
 
 async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   const { networkId, thoughtTypeId, typeName } = opts;
-  // 1. Resolve the type chain (own + ancestors). The token-picker needs
-  //    every property available on this type so users can pin a condition
-  //    value to, say, `$thought.[версия]`. Order: the focused type first,
-  //    then each ancestor (closest last) — the picker lists them in this
-  //    order with a section heading per level.
+  // 1. Resolve the type chain (own + ancestors). The token-picker needs every
+  //    property available on this type so users can pin a condition value to,
+  //    say, `$thought.[версия]`.
   const chain = await loadTypeChain(networkId, thoughtTypeId);
   const chainProps = await loadTypeChainProperties(networkId, chain);
   activeChainProps = chainProps;
@@ -168,17 +167,12 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
   const defaultField = div('field');
   defaultField.append(defaultLabel);
 
-  // Criteria builder. Self-contained: it owns the FilterState for the
-  // dialog lifetime and rebuilds on every change.
-  const criteria = buildCriteriaBuilder({
-    networkId,
-    initial,
-    registryById,
-  });
+  // Criteria builder. Self-contained: it owns the criteria state for the
+  // dialog lifetime.
+  const criteria = buildCriteriaBuilder({ networkId, initial, registryById });
 
-  // Section title for the criteria block.
-  const criteriaLabel = el('p', 'muted', 'Критерии отбора');
-  criteriaLabel.style.margin = '8px 0 4px';
+  // Section title — жирный, чтобы «Критерии отбора» читались как заголовок.
+  const criteriaLabel = el('div', 'view-editor-section-title', 'Критерии отбора');
 
   body.append(nameField, descField, defaultField, criteriaLabel, criteria.root, errorLine);
 
@@ -253,6 +247,11 @@ async function onSave(ctx: SaveCtx): Promise<void> {
     );
     return;
   }
+  // Запрет пустого отбора (ошибка e8365d29): без условий отбор бессмыслен.
+  if (!ctx.criteria.hasAnyCriteria()) {
+    showFieldError(ctx, 'Укажите хотя бы одно условие отбора.');
+    return;
+  }
 
   const definition: ThoughtTypeViewDefinition = ctx.criteria.buildWire();
   const definitionJson = JSON.stringify(definition);
@@ -304,13 +303,9 @@ function showFieldError(ctx: SaveCtx, message: string): void {
 // ---------------------------------------------------------------------------
 
 /** Walks the type chain from a type up to the root, inclusive. */
-async function loadTypeChain(
-  networkId: string,
-  typeId: string,
-): Promise<ThoughtType[]> {
+async function loadTypeChain(networkId: string, typeId: string): Promise<ThoughtType[]> {
   // Prefer the store's catalogue (kept in sync by realtime-ui); fall back to
-  // a single fetch when the type is not in the catalogue (e.g. new types
-  // created on another tab).
+  // a single fetch when the type is not in the catalogue.
   let catalogue = store.state.thoughtTypes.slice();
   if (catalogue.length === 0) {
     try {
@@ -335,11 +330,7 @@ async function loadTypeChain(
   return chain;
 }
 
-/**
- * Loads the effective properties for each level of the chain. The dialog
- * only needs the property id, name, value type and `multiple` flag — the
- * token-picker references properties by id and writes `$thought.[<key>]`.
- */
+/** Loads the effective properties for each level of the chain. */
 async function loadTypeChainProperties(
   networkId: string,
   chain: ThoughtType[],
@@ -357,7 +348,6 @@ async function loadTypeChainProperties(
   return out;
 }
 
-
 // ---------------------------------------------------------------------------
 // Re-exports from the pure helper module (so existing callers and tests
 // can keep importing from `filter-dialog.js`).
@@ -369,13 +359,17 @@ export {
   buildTokensForSpecialField,
   buildWireDefinition,
   defaultDialogCriteriaState,
+  hasAnyCriteria,
   parseViewDefinition,
 } from './filter-dialog-pure.js';
 
-/** Length constants re-exported for tests so the assertions reference the
- *  same source of truth as the dialog's own input limits. */
+/** Length constants re-exported for tests. */
 export const VIEW_NAME_MAX = THOUGHT_TYPE_VIEW_NAME_MAX;
 export const VIEW_DESCRIPTION_MAX = THOUGHT_TYPE_VIEW_DESCRIPTION_MAX;
+
+// ---------------------------------------------------------------------------
+// Criteria builder
+// ---------------------------------------------------------------------------
 
 interface CriteriaBuilderOpts {
   networkId: string;
@@ -386,351 +380,507 @@ interface CriteriaBuilderOpts {
 interface CriteriaBuilder {
   root: HTMLElement;
   buildWire: () => ThoughtTypeViewDefinition;
+  hasAnyCriteria: () => boolean;
+}
+
+/** A group title whose conditions may be non-empty: the head is highlighted
+ *  and its `*` marker toggled by {@link refreshGroupTitles}. */
+interface GroupMarker {
+  head: HTMLElement;
+  star: HTMLElement;
+  isNonEmpty: () => boolean;
+}
+
+/** Plain section with a title and a group-marker star. */
+function block(title: string): { box: HTMLElement; body: HTMLElement; head: HTMLElement; star: HTMLElement } {
+  const box = div('st-f-block');
+  const head = el('div', 'st-f-title');
+  head.append(el('span', '', title));
+  const star = el('span', 'st-f-star', '');
+  head.append(star);
+  const body = div('st-f-body');
+  box.append(head, body);
+  return { box, body, head, star };
+}
+
+/** Collapsible section; `refresh()` toggles the caret and the body. */
+function collapsibleBlock(
+  title: string,
+  getCollapsed: () => boolean,
+  setCollapsed: (v: boolean) => void,
+): { box: HTMLElement; body: HTMLElement; head: HTMLElement; star: HTMLElement; refresh: () => void } {
+  const box = div('st-f-block');
+  const head = el('div', 'st-f-title st-f-collapsible-title');
+  const caret = el('span', 'st-f-caret', getCollapsed() ? '▸' : '▾');
+  head.append(caret, el('span', '', title));
+  const star = el('span', 'st-f-star', '');
+  head.append(star);
+  const body = div('st-f-body');
+  box.append(head, body);
+  const refresh = (): void => {
+    const collapsed = getCollapsed();
+    body.classList.toggle('hidden', collapsed);
+    caret.textContent = collapsed ? '▸' : '▾';
+  };
+  head.addEventListener('click', () => {
+    setCollapsed(!getCollapsed());
+    refresh();
+  });
+  refresh();
+  return { box, body, head, star, refresh };
+}
+
+/** Условие «Автор» или «Редактор» активно (для маркера группы). */
+function authorFieldActive(op: StructureAuthorOp, single: string, list: string[]): boolean {
+  if (op === 'empty' || op === 'not_empty') return true;
+  if (op === 'in' || op === 'not_in') return list.length > 0;
+  return single !== '';
+}
+
+/** Условие «Даты» активно (задана хотя бы одна граница). */
+function datesActive(state: DialogCriteriaState): boolean {
+  return (
+    state.createdAfter !== '' ||
+    state.createdBefore !== '' ||
+    state.updatedAfter !== '' ||
+    state.updatedBefore !== ''
+  );
+}
+
+/** Условие «Дополнительно» активно. */
+function extrasActive(state: DialogCriteriaState): boolean {
+  return (
+    state.hasProperties !== null ||
+    state.hasComment !== null ||
+    state.hasAttachments !== null ||
+    state.hasChronology !== null ||
+    state.active !== null ||
+    state.trashed
+  );
 }
 
 /**
- * Builds a self-contained criteria form (keywords, parent/types/link types,
- * property conditions with token-picker, extras, author/editor, dates and
- * sort/order). Returns the root element plus a builder that materialises
- * the wire `ThoughtTypeViewDefinition` from the live state.
+ * Builds a self-contained criteria form. Unlike the previous implementation,
+ * the form is built once and mutated in place: input handlers update `state`
+ * and refresh group markers WITHOUT rebuilding the DOM (which used to drop
+ * focus on every keystroke). Only structural changes (add/remove condition,
+ * switch operator, reorder the author list) rebuild the affected subtree.
  */
 function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
-  const { networkId } = opts;
-  const state: DialogCriteriaState = opts.initial;
+  const { networkId, registryById } = opts;
+  const state = opts.initial;
   const root = div('st-f-layout view-editor-criteria');
 
-  // Re-render the whole builder on any change. The panel is short — this
-  // is simpler than patching individual subtrees, and mirrors how
-  // filter-panel.ts handles its main render.
-  const render = (): void => {
-    clear(root);
-    root.append(buildKeywordsBlock(networkId, state, render));
-    root.append(buildParentBlock(networkId, state, render));
-    root.append(buildThoughtTypeBlock(networkId, state, render));
-    root.append(buildLinkTypeBlock(networkId, state, render));
-    root.append(
-      buildPropertyConditionsBlock({
-        networkId,
-        state,
-        registryById: opts.registryById,
-        render,
-      }),
-    );
-    root.append(buildExtrasBlock(state, render));
-    root.append(buildAuthorEditorBlock(networkId, state, render));
-    root.append(buildDateBoundsBlock(networkId, state, render));
-    root.append(buildSortOrderBlock(state, render));
+  // Transient collapse state (default collapsed, §e0257ca5).
+  let propsCollapsed = true;
+  let extraCollapsed = true;
+  let authorCollapsed = true;
+  let datesCollapsed = true;
+
+  // Uniform «group carries values» marking.
+  const markers: GroupMarker[] = [];
+  const refreshGroupTitles = (): void => {
+    for (const m of markers) {
+      const active = m.isNonEmpty();
+      m.head.classList.toggle('st-f-title-active', active);
+      m.star.textContent = active ? ' *' : '';
+    }
   };
-  render();
+  /** Persist-less touch: refresh markers only (no DOM rebuild). */
+  const touch = (): void => refreshGroupTitles();
 
-  return {
-    root,
-    buildWire: () => buildWireDefinition(state, opts.registryById),
-  };
-}
-
-/**
- * Builds the wire value+op for one author filter (задача 59119797).
- * `empty`/`not_empty` carry no value; `in`/`not_in` use the list; the
- * single-id ops use the scalar string.
- */
-function buildAuthorWireValue(
-  op: StructureAuthorOp,
-  single: string,
-  list: string[],
-): string | string[] | undefined {
-  if (op === 'empty' || op === 'not_empty') return undefined;
-  if (op === 'in' || op === 'not_in') {
-    if (list.length === 0) return undefined;
-    return list;
-  }
-  if (single === '') return undefined;
-  return single;
-}
-
-// ---------------------------------------------------------------------------
-// Per-block builders
-// ---------------------------------------------------------------------------
-
-function buildKeywordsBlock(networkId: string, state: DialogCriteriaState, render: () => void): HTMLElement {
-  const wrap = div('st-f-block');
-  const head = el('div', 'st-f-title', 'Ключевые слова');
-  const body = div('st-f-body');
-  wrap.append(head, body);
+  // --- Ключевые слова -------------------------------------------------------
+  const kw = block('Ключевые слова');
+  markers.push({ head: kw.head, star: kw.star, isNonEmpty: () => state.keywords.trim() !== '' });
 
   const kwWrap = div('st-f-kw-wrap');
-  const input = el('input', 'st-f-input st-f-keywords') as HTMLInputElement;
-  input.type = 'text';
-  input.value = state.keywords;
-  input.placeholder = 'счет* -вод*';
-  setTooltip(
-    input,
-    'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.',
-  );
-  // Баг 1: не пересоздаём поле на каждый input — только обновляем состояние,
-  // иначе фокус сбрасывается на каждой букве.
-  input.addEventListener('input', () => {
-    state.keywords = input.value;
+  const kwInput = el('input', 'st-f-input st-f-keywords') as HTMLInputElement;
+  kwInput.type = 'text';
+  kwInput.value = state.keywords;
+  kwInput.placeholder = 'счет* -вод*';
+  setTooltip(kwInput, 'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.');
+  kwInput.addEventListener('input', () => {
+    state.keywords = kwInput.value;
+    touch();
   });
-  // Баг 2: токен-пикер для ключевых слов ($thought.title/$thought.synonyms/
-  // $thought.[свойство текста]).
-  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
-  tokenBtn.type = 'button';
-  setTooltip(tokenBtn, 'Вставить токен');
-  tokenBtn.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    void openTokenPicker(networkId, tokenBtn, { kind: 'keywords' }, (tokenText) => {
-      const start = input.selectionStart ?? input.value.length;
-      const end = input.selectionEnd ?? input.value.length;
-      const next = input.value.slice(0, start) + tokenText + input.value.slice(end);
-      input.value = next;
-      state.keywords = next;
-      input.focus();
-      const caret = start + tokenText.length;
-      try {
-        input.setSelectionRange(caret, caret);
-      } catch {
-        /* some input types don't support selection */
-      }
-    });
+  const kwToken = makeTokenBtn(networkId, { kind: 'keywords' }, (token) => {
+    const start = kwInput.selectionStart ?? kwInput.value.length;
+    const end = kwInput.selectionEnd ?? kwInput.value.length;
+    const next = kwInput.value.slice(0, start) + token + kwInput.value.slice(end);
+    kwInput.value = next;
+    state.keywords = next;
+    kwInput.focus();
+    const caret = start + token.length;
+    try {
+      kwInput.setSelectionRange(caret, caret);
+    } catch {
+      /* ignore */
+    }
   });
-  const clearBtn = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
-  clearBtn.type = 'button';
-  setTooltip(clearBtn, 'Очистить');
-  clearBtn.addEventListener('click', () => {
+  const kwClear = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
+  kwClear.type = 'button';
+  setTooltip(kwClear, 'Очистить');
+  kwClear.addEventListener('click', () => {
     state.keywords = '';
-    input.value = '';
-    render();
+    kwInput.value = '';
+    touch();
   });
-  kwWrap.append(input, tokenBtn, clearBtn);
-  body.append(kwWrap);
+  kwWrap.append(kwInput, kwToken, kwClear);
+  kw.body.append(kwWrap);
+  kw.body.append(buildKeywordScopeRow(state, touch));
 
-  // Scope row.
-  const scopeRow = div('st-f-kw-scope');
-  for (const opt of [
-    { key: 'title', label: 'наименование', state: () => state.keywordInTitle, set: (v: boolean) => {
-      state.keywordInTitle = v;
-    } },
-    { key: 'synonyms', label: 'синонимы', state: () => state.keywordInSynonyms, set: (v: boolean) => {
-      state.keywordInSynonyms = v;
-    } },
-    { key: 'comment', label: 'комментарий', state: () => state.keywordInComment, set: (v: boolean) => {
-      state.keywordInComment = v;
-    } },
-  ]) {
-    const lbl = el('label', 'checkbox-row st-f-kw-scope-item') as HTMLLabelElement;
-    const cb = el('input') as HTMLInputElement;
-    cb.type = 'checkbox';
-    cb.checked = opt.state();
-    cb.addEventListener('change', () => {
-      opt.set(cb.checked);
-      // Last checked guard (mirrors filter-panel): default back to
-      // title+synonyms when the user clears every checkbox.
-      if (!state.keywordInTitle && !state.keywordInSynonyms && !state.keywordInComment) {
-        state.keywordInTitle = true;
-        state.keywordInSynonyms = true;
-      }
-      render();
-    });
-    lbl.append(cb, span(opt.label));
-    scopeRow.append(lbl);
-  }
-  body.append(scopeRow);
-  return wrap;
-}
-
-function buildParentBlock(
-  networkId: string,
-  state: DialogCriteriaState,
-  render: () => void,
-): HTMLElement {
-  const wrap = div('st-f-block');
-  wrap.append(el('div', 'st-f-title', 'Родительские мысли'));
-  const body = div('st-f-body');
-  wrap.append(body);
-
-  const row = div('st-f-fieldrow');
-  const chips = div('st-f-chipfield');
-  chips.tabIndex = 0;
-  setTooltip(chips, 'Ограничить отбор мыслями, подчинёнными указанным (клик — выбрать)');
-  const openPicker = (): void => {
+  // --- Родительские мысли ---------------------------------------------------
+  const pt = block('Родительские мысли');
+  markers.push({ head: pt.head, star: pt.star, isNonEmpty: () => state.parentIds.length > 0 });
+  const ptChips = div('st-f-chipfield');
+  ptChips.tabIndex = 0;
+  setTooltip(ptChips, 'Ограничить отбор мыслями, подчинёнными указанным (клик — выбрать)');
+  ptChips.addEventListener('click', () => {
     void openParentPicker(networkId, state.parentIds, (ids) => {
       state.parentIds = ids;
-      render();
+      renderParentChips(networkId, state.parentIds, ptChips);
+      touch();
     });
-  };
-  chips.addEventListener('click', openPicker);
-  chips.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') openPicker();
   });
-  row.append(chips);
-  if (state.parentIds.length > 0) {
-    const clr = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
-    clr.type = 'button';
-    setTooltip(clr, 'Очистить');
-    clr.addEventListener('click', (event) => {
-      event.stopPropagation();
-      state.parentIds = [];
-      render();
+  ptChips.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void openParentPicker(networkId, state.parentIds, (ids) => {
+      state.parentIds = ids;
+      renderParentChips(networkId, state.parentIds, ptChips);
+      touch();
     });
-    row.append(clr);
-  }
-  body.append(row);
+  });
+  const ptToken = makeTokenBtn(networkId, { kind: 'parent' }, (token) => {
+    state.parentIds = [token];
+    renderParentChips(networkId, state.parentIds, ptChips);
+    touch();
+  });
+  const ptClear = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
+  ptClear.type = 'button';
+  setTooltip(ptClear, 'Очистить');
+  ptClear.addEventListener('click', (event) => {
+    event.stopPropagation();
+    state.parentIds = [];
+    renderParentChips(networkId, state.parentIds, ptChips);
+    touch();
+  });
+  const ptRow = div('st-f-fieldrow');
+  ptRow.append(ptChips, ptToken, ptClear);
+  pt.body.append(ptRow);
+  renderParentChips(networkId, state.parentIds, ptChips);
 
-  // Render chips (titles resolved lazily).
-  renderParentChips(networkId, state.parentIds, chips);
-  return wrap;
-}
-
-function buildThoughtTypeBlock(
-  networkId: string,
-  state: DialogCriteriaState,
-  render: () => void,
-): HTMLElement {
-  const wrap = div('st-f-block');
-  wrap.append(el('div', 'st-f-title', 'Типы мыслей'));
-  const body = div('st-f-body');
-  wrap.append(body);
-
-  const row = div('st-f-fieldrow');
-  const chips = div('st-f-chipfield');
-  chips.tabIndex = 0;
-  chips.addEventListener('click', () => {
+  // --- Типы мыслей ----------------------------------------------------------
+  const tt = block('Типы мыслей');
+  markers.push({ head: tt.head, star: tt.star, isNonEmpty: () => state.typeIds.length > 0 });
+  const ttChips = div('st-f-chipfield');
+  ttChips.tabIndex = 0;
+  const openTtPicker = (): void => {
     void openThoughtTypesPicker(networkId, state.typeIds, (ids) => {
       state.typeIds = ids;
-      render();
+      renderTypeChips(networkId, 'thought', state.typeIds, ttChips);
+      touch();
     });
+  };
+  ttChips.addEventListener('click', openTtPicker);
+  ttChips.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') openTtPicker();
   });
-  chips.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      void openThoughtTypesPicker(networkId, state.typeIds, (ids) => {
-        state.typeIds = ids;
-        render();
-      });
-    }
+  const ttToken = makeTokenBtn(networkId, { kind: 'thought_type' }, (token) => {
+    state.typeIds = [token];
+    renderTypeChips(networkId, 'thought', state.typeIds, ttChips);
+    touch();
   });
-  row.append(chips);
-  if (state.typeIds.length > 0) {
-    const clr = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
-    clr.type = 'button';
-    setTooltip(clr, 'Очистить');
-    clr.addEventListener('click', (event) => {
-      event.stopPropagation();
-      state.typeIds = [];
-      render();
-    });
-    row.append(clr);
-  }
-  // Баг 2: токен-пикер «Типы мыслей» — $thought.type как альтернатива
-  // ручному списку типов (например, отбор наследуется от предка).
-  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
-  tokenBtn.type = 'button';
-  setTooltip(tokenBtn, 'Вставить токен ($thought.type — тип мысли в фокусе)');
-  tokenBtn.addEventListener('click', (event) => {
-    event.preventDefault();
+  const ttClear = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
+  ttClear.type = 'button';
+  setTooltip(ttClear, 'Очистить');
+  ttClear.addEventListener('click', (event) => {
     event.stopPropagation();
-    void openTokenPicker(networkId, tokenBtn, { kind: 'thought_type' }, (tokenText) => {
-      state.typeIds = [tokenText];
-      render();
-    });
+    state.typeIds = [];
+    renderTypeChips(networkId, 'thought', state.typeIds, ttChips);
+    touch();
   });
-  row.append(tokenBtn);
-  body.append(row);
-  renderTypeChips(networkId, 'thought', state.typeIds, chips);
-  return wrap;
-}
+  const ttRow = div('st-f-fieldrow');
+  ttRow.append(ttChips, ttToken, ttClear);
+  tt.body.append(ttRow);
+  renderTypeChips(networkId, 'thought', state.typeIds, ttChips);
 
-function buildLinkTypeBlock(
-  networkId: string,
-  state: DialogCriteriaState,
-  render: () => void,
-): HTMLElement {
-  const wrap = div('st-f-block');
-  wrap.append(el('div', 'st-f-title', 'Типы связей'));
-  const body = div('st-f-body');
-  wrap.append(body);
-
-  const row = div('st-f-fieldrow');
-  const chips = div('st-f-chipfield');
-  chips.tabIndex = 0;
-  chips.addEventListener('click', () => {
+  // --- Типы связей ----------------------------------------------------------
+  const lt = block('Типы связей');
+  markers.push({ head: lt.head, star: lt.star, isNonEmpty: () => state.linkTypeIds.length > 0 });
+  const ltChips = div('st-f-chipfield');
+  ltChips.tabIndex = 0;
+  const openLtPicker = (): void => {
     void openLinkTypesPicker(networkId, state.linkTypeIds, (ids) => {
       state.linkTypeIds = ids;
-      render();
+      renderTypeChips(networkId, 'link', state.linkTypeIds, ltChips);
+      touch();
     });
+  };
+  ltChips.addEventListener('click', openLtPicker);
+  ltChips.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') openLtPicker();
   });
-  chips.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      void openLinkTypesPicker(networkId, state.linkTypeIds, (ids) => {
-        state.linkTypeIds = ids;
-        render();
-      });
-    }
+  const ltClear = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
+  ltClear.type = 'button';
+  setTooltip(ltClear, 'Очистить');
+  ltClear.addEventListener('click', (event) => {
+    event.stopPropagation();
+    state.linkTypeIds = [];
+    renderTypeChips(networkId, 'link', state.linkTypeIds, ltChips);
+    touch();
   });
-  row.append(chips);
-  if (state.linkTypeIds.length > 0) {
-    const clr = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
-    clr.type = 'button';
-    setTooltip(clr, 'Очистить');
-    clr.addEventListener('click', (event) => {
-      event.stopPropagation();
-      state.linkTypeIds = [];
-      render();
-    });
-    row.append(clr);
-  }
-  body.append(row);
-  renderTypeChips(networkId, 'link', state.linkTypeIds, chips);
-  return wrap;
-}
+  const ltRow = div('st-f-fieldrow');
+  ltRow.append(ltChips, ltClear);
+  lt.body.append(ltRow);
+  renderTypeChips(networkId, 'link', state.linkTypeIds, ltChips);
 
-interface PropertyConditionsOpts {
-  networkId: string;
-  state: DialogCriteriaState;
-  registryById: Map<string, NetworkProperty>;
-  render: () => void;
-}
-
-function buildPropertyConditionsBlock(opts: PropertyConditionsOpts): HTMLElement {
-  const { networkId, state, registryById, render } = opts;
-  const wrap = div('st-f-block');
-  wrap.append(el('div', 'st-f-title', 'Свойства'));
-  const body = div('st-f-body');
-  wrap.append(body);
-
+  // --- Свойства (сворачиваемая группа) -------------------------------------
+  const props = collapsibleBlock('Свойства', () => propsCollapsed, (v) => (propsCollapsed = v));
+  markers.push({ head: props.head, star: props.star, isNonEmpty: () => state.properties.length > 0 });
   const condsBox = div('st-f-conds');
-  body.append(condsBox);
-  state.properties.forEach((cond, idx) => {
-    condsBox.append(
-      buildConditionRow({
-        networkId,
-        cond,
-        index: idx,
-        state,
-        registryById,
-        render,
-      }),
-    );
-  });
-
-  const addBtn = el('button', 'st-f-add', '+ условие по свойству') as HTMLButtonElement;
-  addBtn.type = 'button';
-  addBtn.addEventListener('click', () => {
+  const renderConditions = (): void => {
+    clear(condsBox);
+    if (state.properties.length === 0) {
+      condsBox.append(el('div', 'st-f-empty', 'Условий нет'));
+      return;
+    }
+    state.properties.forEach((cond, idx) => {
+      condsBox.append(buildConditionRow({ networkId, cond, index: idx, state, registryById, touch, renderConditions }));
+    });
+  };
+  renderConditions();
+  const addCond = el('button', 'st-f-add', '+ условие по свойству') as HTMLButtonElement;
+  addCond.type = 'button';
+  addCond.addEventListener('click', () => {
     const firstReg = registryById.values().next().value as NetworkProperty | undefined;
     if (firstReg === undefined) {
       notice('В реестре свойств сети пока нет ни одного свойства.', 'info');
       return;
     }
-    state.properties = [
-      ...state.properties,
-      { propertyId: firstReg.id, op: 'contains', values: [''] },
-    ];
-    render();
+    const firstOp = OPS_BY_TYPE[firstReg.value_type][0]!.op;
+    state.properties = [...state.properties, { propertyId: firstReg.id, op: firstOp, values: [''] }];
+    renderConditions();
+    touch();
   });
-  body.append(addBtn);
-  return wrap;
+  props.body.append(condsBox, addCond);
+
+  // --- Дополнительно (сворачиваемая группа) ---------------------------------
+  const extra = collapsibleBlock('Дополнительно', () => extraCollapsed, (v) => (extraCollapsed = v));
+  markers.push({ head: extra.head, star: extra.star, isNonEmpty: () => extrasActive(state) });
+  const triRow = (
+    label: string,
+    get: () => boolean | null,
+    set: (v: boolean | null) => void,
+    options?: { yes: string; no: string },
+  ): HTMLElement => {
+    const row = div('st-f-tri-row');
+    row.append(el('span', 'st-f-tri-label', label));
+    const select = el('select', 'st-f-input') as HTMLSelectElement;
+    for (const opt of [
+      { v: '', label: 'не важно' },
+      { v: 'true', label: options?.yes ?? 'да' },
+      { v: 'false', label: options?.no ?? 'нет' },
+    ]) {
+      const o = el('option', '', opt.label) as HTMLOptionElement;
+      o.value = opt.v;
+      select.append(o);
+    }
+    const cur = get();
+    select.value = cur === null ? '' : cur ? 'true' : 'false';
+    select.addEventListener('change', () => {
+      set(select.value === '' ? null : select.value === 'true');
+      touch();
+    });
+    row.append(select);
+    return row;
+  };
+  extra.body.append(
+    triRow('Есть значение свойства', () => state.hasProperties, (v) => (state.hasProperties = v)),
+    triRow('Есть постоянный комментарий', () => state.hasComment, (v) => (state.hasComment = v)),
+    triRow('Есть вложения', () => state.hasAttachments, (v) => (state.hasAttachments = v)),
+    triRow('Есть хронология', () => state.hasChronology, (v) => (state.hasChronology = v)),
+    triRow('Только актуальные', () => state.active, (v) => (state.active = v), { yes: 'актуальные', no: 'не актуальные' }),
+  );
+  const trashedRow = div('st-f-tri-row');
+  const trashedLbl = el('label', 'checkbox-row') as HTMLLabelElement;
+  const trashedCb = el('input') as HTMLInputElement;
+  trashedCb.type = 'checkbox';
+  trashedCb.checked = state.trashed;
+  trashedCb.addEventListener('change', () => {
+    state.trashed = trashedCb.checked;
+    touch();
+  });
+  trashedLbl.append(trashedCb, span('Включая помеченные на удаление'));
+  trashedRow.append(el('span', 'st-f-tri-label', 'Корзина'), trashedLbl);
+  extra.body.append(trashedRow);
+
+  // --- Автор / Редактор (сворачиваемая группа) ------------------------------
+  const authorship = collapsibleBlock('Автор / Редактор', () => authorCollapsed, (v) => (authorCollapsed = v));
+  markers.push({
+    head: authorship.head,
+    star: authorship.star,
+    isNonEmpty: () =>
+      authorFieldActive(state.authorOp, state.authorId, state.authorIds) ||
+      authorFieldActive(state.editorOp, state.editorId, state.editorIds),
+  });
+  const authorRows = div('st-f-author-rows');
+  const renderAuthor = (): void => {
+    clear(authorRows);
+    authorRows.append(
+      buildAuthorRow(networkId, {
+        label: 'Автор',
+        field: 'author',
+        op: state.authorOp,
+        singleId: state.authorId,
+        listIds: state.authorIds,
+        onOpChange: (op) => {
+          state.authorOp = op;
+          if (op !== 'eq' && op !== 'ne') state.authorId = '';
+          if (op !== 'in' && op !== 'not_in') state.authorIds = [];
+          renderAuthor();
+          touch();
+        },
+        onSingleChange: (id) => {
+          state.authorId = id;
+          touch();
+        },
+        onListChange: (ids) => {
+          state.authorIds = ids;
+          touch();
+        },
+      }),
+      buildAuthorRow(networkId, {
+        label: 'Редактор',
+        field: 'editor',
+        op: state.editorOp,
+        singleId: state.editorId,
+        listIds: state.editorIds,
+        onOpChange: (op) => {
+          state.editorOp = op;
+          if (op !== 'eq' && op !== 'ne') state.editorId = '';
+          if (op !== 'in' && op !== 'not_in') state.editorIds = [];
+          renderAuthor();
+          touch();
+        },
+        onSingleChange: (id) => {
+          state.editorId = id;
+          touch();
+        },
+        onListChange: (ids) => {
+          state.editorIds = ids;
+          touch();
+        },
+      }),
+    );
+  };
+  renderAuthor();
+  authorship.body.append(authorRows);
+
+  // --- Даты (сворачиваемая группа) ------------------------------------------
+  const dates = collapsibleBlock('Даты', () => datesCollapsed, (v) => (datesCollapsed = v));
+  markers.push({ head: dates.head, star: dates.star, isNonEmpty: () => datesActive(state) });
+  dates.body.append(
+    buildDateRangeRow(networkId, 'Создано', state.createdAfter, state.createdBefore, (from, to) => {
+      state.createdAfter = from;
+      state.createdBefore = to;
+      touch();
+    }),
+    buildDateRangeRow(networkId, 'Изменено', state.updatedAfter, state.updatedBefore, (from, to) => {
+      state.updatedAfter = from;
+      state.updatedBefore = to;
+      touch();
+    }),
+  );
+
+  // --- Сортировка -----------------------------------------------------------
+  const sort = block('Сортировка');
+  const sortRow = div('st-f-sort');
+  const sortSelect = el('select', 'st-f-input') as HTMLSelectElement;
+  for (const opt of [
+    { v: 'created', label: 'по дате создания' },
+    { v: 'updated', label: 'по дате изменения' },
+    { v: 'alpha', label: 'по алфавиту' },
+  ]) {
+    const o = el('option', '', opt.label) as HTMLOptionElement;
+    o.value = opt.v;
+    sortSelect.append(o);
+  }
+  sortSelect.value = state.sort;
+  sortSelect.addEventListener('change', () => {
+    state.sort = sortSelect.value as StructureSort;
+  });
+  const orderSelect = el('select', 'st-f-input') as HTMLSelectElement;
+  for (const opt of [
+    { v: 'asc', label: 'по возрастанию' },
+    { v: 'desc', label: 'по убыванию' },
+  ]) {
+    const o = el('option', '', opt.label) as HTMLOptionElement;
+    o.value = opt.v;
+    orderSelect.append(o);
+  }
+  orderSelect.value = state.order;
+  orderSelect.addEventListener('change', () => {
+    state.order = orderSelect.value as SortOrder;
+  });
+  sortRow.append(sortSelect, orderSelect);
+  sort.body.append(sortRow);
+
+  root.append(
+    kw.box,
+    pt.box,
+    tt.box,
+    lt.box,
+    props.box,
+    extra.box,
+    authorship.box,
+    dates.box,
+    sort.box,
+  );
+
+  refreshGroupTitles();
+
+  return {
+    root,
+    buildWire: () => buildWireDefinition(state, registryById),
+    hasAnyCriteria: () => hasAnyCriteria(state),
+  };
 }
+
+// ---------------------------------------------------------------------------
+// Keyword scope row
+// ---------------------------------------------------------------------------
+
+function buildKeywordScopeRow(state: DialogCriteriaState, touch: () => void): HTMLElement {
+  const row = div('st-f-kw-scope');
+  const items: Array<{ label: string; get: () => boolean; set: (v: boolean) => void; input: HTMLInputElement | null }> = [
+    { label: 'наименование', get: () => state.keywordInTitle, set: (v) => (state.keywordInTitle = v), input: null },
+    { label: 'синонимы', get: () => state.keywordInSynonyms, set: (v) => (state.keywordInSynonyms = v), input: null },
+    { label: 'комментарий', get: () => state.keywordInComment, set: (v) => (state.keywordInComment = v), input: null },
+  ];
+  for (const item of items) {
+    const lbl = el('label', 'checkbox-row st-f-kw-scope-item') as HTMLLabelElement;
+    const cb = el('input') as HTMLInputElement;
+    cb.type = 'checkbox';
+    cb.checked = item.get();
+    item.input = cb;
+    cb.addEventListener('change', () => {
+      item.set(cb.checked);
+      // Last checked guard: default back to title+synonyms when all cleared.
+      if (!state.keywordInTitle && !state.keywordInSynonyms && !state.keywordInComment) {
+        state.keywordInTitle = true;
+        state.keywordInSynonyms = true;
+      }
+      for (const other of items) other.input!.checked = other.get();
+      touch();
+    });
+    lbl.append(cb, span(item.label));
+    row.append(lbl);
+  }
+  return row;
+}
+
+// ---------------------------------------------------------------------------
+// Property condition row + value editor
+// ---------------------------------------------------------------------------
 
 interface ConditionRowOpts {
   networkId: string;
@@ -738,11 +888,12 @@ interface ConditionRowOpts {
   index: number;
   state: DialogCriteriaState;
   registryById: Map<string, NetworkProperty>;
-  render: () => void;
+  touch: () => void;
+  renderConditions: () => void;
 }
 
 function buildConditionRow(opts: ConditionRowOpts): HTMLElement {
-  const { networkId, cond, index, state, registryById, render } = opts;
+  const { networkId, cond, index, state, registryById, touch, renderConditions } = opts;
   const row = div('st-f-cond');
   const def = registryById.get(cond.propertyId);
 
@@ -766,7 +917,8 @@ function buildConditionRow(opts: ConditionRowOpts): HTMLElement {
     const ops = OPS_BY_TYPE[nextType];
     const nextOp = ops.some((o) => o.op === cond.op) ? cond.op : ops[0]!.op;
     state.properties[index] = { propertyId: nextId, op: nextOp, values: [''] };
-    render();
+    renderConditions();
+    touch();
   });
 
   // Operator picker.
@@ -784,7 +936,8 @@ function buildConditionRow(opts: ConditionRowOpts): HTMLElement {
   opSelect.addEventListener('change', () => {
     const live = state.properties[index] ?? cond;
     state.properties[index] = { ...live, op: opSelect.value as StructurePropertyOp, values: [''] };
-    render();
+    renderConditions();
+    touch();
   });
 
   // Value editor.
@@ -794,14 +947,15 @@ function buildConditionRow(opts: ConditionRowOpts): HTMLElement {
     index,
     state,
     registryById,
-    render,
+    touch,
   });
 
   const remove = el('button', 'st-f-remove', '×') as HTMLButtonElement;
   remove.type = 'button';
   remove.addEventListener('click', () => {
     state.properties = state.properties.filter((_, i) => i !== index);
-    render();
+    renderConditions();
+    touch();
   });
 
   row.append(propSelect, opSelect, valueBox, remove);
@@ -814,11 +968,11 @@ interface ConditionValueOpts {
   index: number;
   state: DialogCriteriaState;
   registryById: Map<string, NetworkProperty>;
-  render: () => void;
+  touch: () => void;
 }
 
 function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
-  const { networkId, cond, index, state, registryById, render } = opts;
+  const { networkId, cond, index, state, registryById, touch } = opts;
   const def = registryById.get(cond.propertyId);
   const valueType: PropertyValueType = def?.value_type ?? 'text';
   const box = div('st-f-values');
@@ -836,35 +990,24 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
     while (values.length <= i) values.push('');
     values[i] = v;
     state.properties[index] = { ...current, values };
+    touch();
   };
 
   const buildScalar = (i: number): HTMLElement => {
     if (valueType === 'number') {
-      return buildScalarInput('number', live().values[i] ?? '', (v) => {
-        setValue(i, v);
-      });
+      return buildScalarInput('number', live().values[i] ?? '', (v) => setValue(i, v));
     }
     if (valueType === 'date') {
-      // Баг 2: значение-дата может быть и токеном ($today+7d) — свободное
-      // текстовое поле + токен-пикер вместо <input type="date">.
-      return buildDateValueRow(networkId, live().values[i] ?? '', cond.op, (v) => {
-        setValue(i, v);
-      });
+      return buildDateValueRow(networkId, live().values[i] ?? '', cond.op, (v) => setValue(i, v));
     }
     if (valueType === 'bool') {
-      return buildBoolSelect(live().values[i] ?? '', (v) => {
-        setValue(i, v);
-      });
+      return buildBoolSelect(live().values[i] ?? '', (v) => setValue(i, v));
     }
     if (valueType === 'thought_ref') {
-      return buildThoughtRefInput(networkId, live().values[i] ?? '', cond.op, (v) => {
-        setValue(i, v);
-      });
+      return buildThoughtRefInput(networkId, def, live().values[i] ?? '', cond.op, (v) => setValue(i, v));
     }
     // text/url: free input + token button.
-    return buildTextValueRow(networkId, live().values[i] ?? '', valueType, cond.op, (v) => {
-      setValue(i, v);
-    });
+    return buildTextValueRow(networkId, live().values[i] ?? '', valueType, cond.op, (v) => setValue(i, v));
   };
 
   if (!isList) {
@@ -886,6 +1029,7 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
         const next = current.values.filter((_, j) => j !== i);
         state.properties[index] = { ...current, values: next.length > 0 ? next : [''] };
         renderList();
+        touch();
       });
       line.append(rm);
       box.append(line);
@@ -939,47 +1083,18 @@ function buildTextValueRow(
   input.type = 'text';
   input.value = value;
   input.addEventListener('input', () => onChange(input.value));
-  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
-  tokenBtn.type = 'button';
-  setTooltip(tokenBtn, 'Вставить токен');
-  tokenBtn.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    void openTokenPicker(networkId, tokenBtn, { kind: 'property', valueType, op }, (tokenText) => {
-      // Insert at the caret if focused, otherwise replace the value.
-      const start = input.selectionStart ?? input.value.length;
-      const end = input.selectionEnd ?? input.value.length;
-      const next = input.value.slice(0, start) + tokenText + input.value.slice(end);
-      input.value = next;
-      onChange(next);
-      input.focus();
-      const caret = start + tokenText.length;
-      try {
-        input.setSelectionRange(caret, caret);
-      } catch {
-        /* some input types don't support selection */
-      }
-    });
+  const tokenBtn = makeTokenBtn(networkId, { kind: 'property', valueType, op }, (token) => {
+    insertTokenAtCaret(input, token, onChange);
   });
   row.append(input, tokenBtn);
   return row;
 }
 
-/**
- * Value editor for `thought_ref` conditions (баг 2, 5467fb19). Unlike
- * `editor/properties.ts` / `selection/dialogs.ts`, this field must stay
- * freely editable — it stores either a thought id or a token (`$thought`,
- * `$thought.[<свойство>]`) — so it does NOT use `wireThoughtRefSearch`:
- * that helper's `blur` handler unconditionally reverts `input.value` to
- * the value it had when the field gained focus, which would erase a
- * hand-typed or token-picker-inserted token. Instead the field behaves
- * like `buildTextValueRow` (free text + `{…}` token button) plus a
- * separate «выбрать» button that opens the thought picker dialog and, on
- * selection, just substitutes the resolved title into the input while
- * `onChange` receives the id.
- */
+/** Value editor for `thought_ref` conditions: freely editable (id or token) +
+ *  `{…}` token button + «выбрать» (thought picker respecting `allowed_type_ids`). */
 function buildThoughtRefInput(
   networkId: string,
+  def: NetworkProperty | undefined,
   value: string,
   op: StructurePropertyOp,
   onChange: (v: string) => void,
@@ -991,35 +1106,19 @@ function buildThoughtRefInput(
   input.value = value;
   input.addEventListener('input', () => onChange(input.value));
 
-  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
-  tokenBtn.type = 'button';
-  setTooltip(tokenBtn, 'Вставить токен');
-  tokenBtn.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    void openTokenPicker(networkId, tokenBtn, { kind: 'property', valueType: 'thought_ref', op }, (tokenText) => {
-      const start = input.selectionStart ?? input.value.length;
-      const end = input.selectionEnd ?? input.value.length;
-      const next = input.value.slice(0, start) + tokenText + input.value.slice(end);
-      input.value = next;
-      onChange(next);
-      input.focus();
-      const caret = start + tokenText.length;
-      try {
-        input.setSelectionRange(caret, caret);
-      } catch {
-        /* some input types don't support selection */
-      }
-    });
+  const tokenBtn = makeTokenBtn(networkId, { kind: 'property', valueType: 'thought_ref', op }, (token) => {
+    insertTokenAtCaret(input, token, onChange);
   });
 
   const pick = el('button', 'st-f-add st-f-ref-pick', 'выбрать') as HTMLButtonElement;
   pick.type = 'button';
   pick.addEventListener('click', () => {
+    const allowedIds = allowedTypeIdsOf(def);
     void pickThoughtsDialog({
       networkId,
       allowCreate: false,
       allowLinkType: false,
+      searchTypeIds: allowedIds,
     }).then(async (result) => {
       const id = firstPickedThoughtId(result);
       if (id === null) return;
@@ -1036,12 +1135,14 @@ function buildThoughtRefInput(
   return row;
 }
 
-/**
- * Value editor for `date` property conditions (баг 2). A date value may be a
- * literal ISO date or a date token with `±Nd` arithmetic (`$today+7d`), so the
- * field is a free text input plus a `{…}` token button — `<input type="date">`
- * cannot hold a token.
- */
+/** `allowed_type_ids` / `allowed_type_id` свойства, без пустых. */
+function allowedTypeIdsOf(def: NetworkProperty | undefined): string[] {
+  const config = def?.config as { allowed_type_ids?: string[]; allowed_type_id?: string } | undefined;
+  const ids = config?.allowed_type_ids ?? (config?.allowed_type_id !== undefined ? [config.allowed_type_id] : []);
+  return ids.filter((id) => id !== '');
+}
+
+/** Value editor for `date` conditions: literal ISO date or token with ±Nd. */
 function buildDateValueRow(
   networkId: string,
   value: string,
@@ -1054,210 +1155,35 @@ function buildDateValueRow(
   input.value = value;
   input.placeholder = 'YYYY-MM-DD или токен ($today+7d)…';
   input.addEventListener('input', () => onChange(input.value));
-  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
-  tokenBtn.type = 'button';
-  setTooltip(tokenBtn, 'Вставить токен');
-  tokenBtn.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    void openTokenPicker(networkId, tokenBtn, { kind: 'property', valueType: 'date', op }, (tokenText) => {
-      const start = input.selectionStart ?? input.value.length;
-      const end = input.selectionEnd ?? input.value.length;
-      const next = input.value.slice(0, start) + tokenText + input.value.slice(end);
-      input.value = next;
-      onChange(next);
-      input.focus();
-      const caret = start + tokenText.length;
-      try {
-        input.setSelectionRange(caret, caret);
-      } catch {
-        /* some input types don't support selection */
-      }
-    });
+  const tokenBtn = makeTokenBtn(networkId, { kind: 'property', valueType: 'date', op }, (token) => {
+    insertTokenAtCaret(input, token, onChange);
   });
   row.append(input, tokenBtn);
   return row;
 }
 
-// ---------------------------------------------------------------------------
-// Extras / author / dates / sort
-// ---------------------------------------------------------------------------
-
-function buildExtrasBlock(state: DialogCriteriaState, render: () => void): HTMLElement {
-  const wrap = div('st-f-block');
-  wrap.append(el('div', 'st-f-title', 'Дополнительно'));
-  const body = div('st-f-body');
-  wrap.append(body);
-
-  const rows: Array<{
-    label: string;
-    state: () => boolean | null;
-    set: (v: boolean | null) => void;
-  }> = [
-    { label: 'Есть значение свойства', state: () => state.hasProperties, set: (v) => (state.hasProperties = v) },
-    { label: 'Есть постоянный комментарий', state: () => state.hasComment, set: (v) => (state.hasComment = v) },
-    { label: 'Есть вложения', state: () => state.hasAttachments, set: (v) => (state.hasAttachments = v) },
-    { label: 'Есть хронология', state: () => state.hasChronology, set: (v) => (state.hasChronology = v) },
-    { label: 'Только актуальные', state: () => state.active, set: (v) => (state.active = v) },
-  ];
-  for (const r of rows) {
-    const row = div('st-f-tri-row');
-    row.append(el('span', 'st-f-tri-label', r.label));
-    const select = el('select', 'st-f-input') as HTMLSelectElement;
-    for (const opt of [
-      { v: '', label: 'не важно' },
-      { v: 'true', label: 'да' },
-      { v: 'false', label: 'нет' },
-    ]) {
-      const o = el('option', '', opt.label) as HTMLOptionElement;
-      o.value = opt.v;
-      select.append(o);
-    }
-    const cur = r.state();
-    select.value = cur === null ? '' : cur ? 'true' : 'false';
-    select.addEventListener('change', () => {
-      const v = select.value;
-      r.set(v === '' ? null : v === 'true');
-      render();
-    });
-    row.append(select);
-    body.append(row);
+/** Inserts a token at the caret (or replaces the value) and refocuses. */
+function insertTokenAtCaret(input: HTMLInputElement, token: string, onChange: (v: string) => void): void {
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  const next = input.value.slice(0, start) + token + input.value.slice(end);
+  input.value = next;
+  onChange(next);
+  input.focus();
+  const caret = start + token.length;
+  try {
+    input.setSelectionRange(caret, caret);
+  } catch {
+    /* ignore */
   }
-  // Trashed checkbox.
-  const trashedRow = div('st-f-tri-row');
-  const trashedLbl = el('label', 'checkbox-row') as HTMLLabelElement;
-  const trashedCb = el('input') as HTMLInputElement;
-  trashedCb.type = 'checkbox';
-  trashedCb.checked = state.trashed;
-  trashedCb.addEventListener('change', () => {
-    state.trashed = trashedCb.checked;
-  });
-  trashedLbl.append(trashedCb, span('Включая помеченные на удаление'));
-  trashedRow.append(trashedLbl);
-  body.append(trashedRow);
-  return wrap;
-}
-
-function buildAuthorEditorBlock(
-  networkId: string,
-  state: DialogCriteriaState,
-  render: () => void,
-): HTMLElement {
-  const wrap = div('st-f-block');
-  wrap.append(el('div', 'st-f-title', 'Автор / Редактор'));
-  const body = div('st-f-body');
-  wrap.append(body);
-
-  body.append(
-    buildAuthorConditionRow(networkId, {
-      label: 'Автор',
-      field: 'author',
-      op: state.authorOp,
-      singleId: state.authorId,
-      listIds: state.authorIds,
-      onOpChange: (op) => {
-        state.authorOp = op;
-        if (op !== 'eq' && op !== 'ne') state.authorId = '';
-        if (op !== 'in' && op !== 'not_in') state.authorIds = [];
-        render();
-      },
-      onSingleChange: (id) => {
-        state.authorId = id;
-      },
-      onListChange: (ids) => {
-        state.authorIds = ids;
-      },
-    }),
-    buildAuthorConditionRow(networkId, {
-      label: 'Редактор',
-      field: 'editor',
-      op: state.editorOp,
-      singleId: state.editorId,
-      listIds: state.editorIds,
-      onOpChange: (op) => {
-        state.editorOp = op;
-        if (op !== 'eq' && op !== 'ne') state.editorId = '';
-        if (op !== 'in' && op !== 'not_in') state.editorIds = [];
-        render();
-      },
-      onSingleChange: (id) => {
-        state.editorId = id;
-      },
-      onListChange: (ids) => {
-        state.editorIds = ids;
-      },
-    }),
-  );
-  return wrap;
-}
-
-function buildDateBoundsBlock(networkId: string, state: DialogCriteriaState, render: () => void): HTMLElement {
-  const wrap = div('st-f-block');
-  wrap.append(el('div', 'st-f-title', 'Даты'));
-  const body = div('st-f-body');
-  wrap.append(body);
-  body.append(
-    buildDateRangeRow(networkId, 'Создано', state.createdAfter, state.createdBefore, (from, to) => {
-      state.createdAfter = from;
-      state.createdBefore = to;
-    }),
-  );
-  body.append(
-    buildDateRangeRow(networkId, 'Изменено', state.updatedAfter, state.updatedBefore, (from, to) => {
-      state.updatedAfter = from;
-      state.updatedBefore = to;
-    }),
-  );
-  return wrap;
-}
-
-function buildSortOrderBlock(state: DialogCriteriaState, render: () => void): HTMLElement {
-  const wrap = div('st-f-block');
-  wrap.append(el('div', 'st-f-title', 'Сортировка'));
-  const body = div('st-f-body');
-  wrap.append(body);
-  const row = div('st-f-fieldrow');
-  const sortSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of [
-    { v: 'created', label: 'по дате создания' },
-    { v: 'updated', label: 'по дате изменения' },
-    { v: 'alpha', label: 'по алфавиту' },
-  ]) {
-    const o = el('option', '', opt.label) as HTMLOptionElement;
-    o.value = opt.v;
-    sortSelect.append(o);
-  }
-  sortSelect.value = state.sort;
-  sortSelect.addEventListener('change', () => {
-    state.sort = sortSelect.value as StructureSort;
-    render();
-  });
-  const orderSelect = el('select', 'st-f-input') as HTMLSelectElement;
-  for (const opt of [
-    { v: 'asc', label: 'по возрастанию' },
-    { v: 'desc', label: 'по убыванию' },
-  ]) {
-    const o = el('option', '', opt.label) as HTMLOptionElement;
-    o.value = opt.v;
-    orderSelect.append(o);
-  }
-  orderSelect.value = state.order;
-  orderSelect.addEventListener('change', () => {
-    state.order = orderSelect.value as SortOrder;
-    render();
-  });
-  row.append(sortSelect, orderSelect);
-  body.append(row);
-  return wrap;
 }
 
 // ---------------------------------------------------------------------------
-// Author condition row + date range row
+// Author condition row
 // ---------------------------------------------------------------------------
 
 interface AuthorRowOpts {
   label: string;
-  /** Которое из полей — для токен-пикера ($thought.author / $thought.editor). */
   field: 'author' | 'editor';
   op: StructureAuthorOp;
   singleId: string;
@@ -1267,9 +1193,19 @@ interface AuthorRowOpts {
   onListChange: (ids: string[]) => void;
 }
 
-function buildAuthorConditionRow(networkId: string, opts: AuthorRowOpts): HTMLElement {
+const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
+  eq: 'равен',
+  ne: 'не равен',
+  in: 'в списке',
+  not_in: 'не в списке',
+  empty: 'не заполнено',
+  not_empty: 'заполнено',
+};
+
+function buildAuthorRow(networkId: string, opts: AuthorRowOpts): HTMLElement {
   const row = div('author-cond-row');
   row.append(el('span', 'author-cond-label', opts.label));
+
   const opSelect = el('select', 'select-input author-cond-op') as HTMLSelectElement;
   for (const op of ['eq', 'ne', 'in', 'not_in', 'empty', 'not_empty'] as StructureAuthorOp[]) {
     const o = el('option', '', AUTHOR_OP_LABELS[op]) as HTMLOptionElement;
@@ -1284,37 +1220,27 @@ function buildAuthorConditionRow(networkId: string, opts: AuthorRowOpts): HTMLEl
     row.append(el('span', 'author-cond-hint', 'значение не требуется'));
     return row;
   }
-  if (opts.op === 'in' || opts.op === 'not_in') {
-    const multi = buildUserMultiSelectWidget({
-      label: '',
-      currentIds: opts.listIds,
-      onChange: opts.onListChange,
-    });
-    row.append(multi);
+
+  const isList = opts.op === 'in' || opts.op === 'not_in';
+  if (isList) {
+    row.append(buildAuthorListEditor(networkId, opts));
     return row;
   }
-  // Баг 2: одиночное значение автора/редактора может быть и токеном
-  // ($thought.author / $thought.editor / $user) — свободный ввод + {…}.
+
+  // Одиночное значение: свободный ввод (id или токен) + `{…}` + выбор
+  // пользователя из каталога.
   const single = div('author-single-wrap');
   const input = el('input', 'st-f-input') as HTMLInputElement;
   input.type = 'text';
   input.value = opts.singleId;
-  input.placeholder = 'id пользователя или токен…';
+  input.placeholder = 'id или токен…';
   input.addEventListener('input', () => opts.onSingleChange(input.value));
-  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
-  tokenBtn.type = 'button';
-  setTooltip(tokenBtn, 'Вставить токен');
-  tokenBtn.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    void openTokenPicker(networkId, tokenBtn, { kind: opts.field }, (tokenText) => {
-      input.value = tokenText;
-      opts.onSingleChange(tokenText);
-      input.focus();
-    });
+  const tokenBtn = makeTokenBtn(networkId, { kind: opts.field }, (token) => {
+    input.value = token;
+    opts.onSingleChange(token);
+    input.focus();
   });
   single.append(input, tokenBtn);
-  // Удобный выбор пользователя из каталога — пишет id в то же поле.
   single.append(
     buildUserSelectWidget({
       label: '',
@@ -1329,14 +1255,79 @@ function buildAuthorConditionRow(networkId: string, opts: AuthorRowOpts): HTMLEl
   return row;
 }
 
-const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
-  eq: 'равен',
-  ne: 'не равен',
-  in: 'в списке',
-  not_in: 'не в списке',
-  empty: 'не заполнено',
-  not_empty: 'заполнено',
-};
+/**
+ * Редактор списка автора/редактора: чипы выбранных значений (имена
+ * пользователей или тексты токенов), кнопка токен-пикера и выпадающий список
+ * добавления пользователя. Держит локальную копию списка и сам перерисовывает
+ * чипы после изменения — `opts.listIds` (внешний массив) обновляется колбэком
+ * `onListChange`, но локальная копия не протухает.
+ */
+function buildAuthorListEditor(networkId: string, opts: AuthorRowOpts): HTMLElement {
+  const wrap = div('author-list-editor');
+  let ids = opts.listIds.slice();
+
+  const chips = div('author-value-chips');
+  const renderChips = (): void => {
+    clear(chips);
+    if (ids.length === 0) {
+      chips.append(el('span', 'muted', 'не выбрано'));
+      return;
+    }
+    for (const id of ids) {
+      const chip = div('st-f-chip');
+      chip.append(el('span', 'st-f-chip-label', resolveUserName(id) ?? id));
+      const x = el('button', 'st-f-remove', '×') as HTMLButtonElement;
+      x.type = 'button';
+      x.title = 'Убрать';
+      x.addEventListener('click', () => {
+        ids = ids.filter((v) => v !== id);
+        opts.onListChange(ids.slice());
+        renderChips();
+        renderAdd();
+      });
+      chip.append(x);
+      chips.append(chip);
+    }
+  };
+
+  const tokenBtn = makeTokenBtn(networkId, { kind: opts.field }, (token) => {
+    ids = [...ids, token];
+    opts.onListChange(ids.slice());
+    renderChips();
+  });
+
+  const addSelect = el('select', 'select-input author-list-add') as HTMLSelectElement;
+  const renderAdd = (): void => {
+    addSelect.replaceChildren();
+    const placeholder = el('option', '', '+ пользователь…') as HTMLOptionElement;
+    placeholder.value = '';
+    addSelect.append(placeholder);
+    for (const u of listUsers()) {
+      if (ids.includes(u.id)) continue;
+      const opt = el('option', '', `${u.display_name ?? u.username} (${u.username})`) as HTMLOptionElement;
+      opt.value = u.id;
+      addSelect.append(opt);
+    }
+  };
+  addSelect.addEventListener('change', () => {
+    const id = addSelect.value;
+    if (id === '') return;
+    ids = [...ids, id];
+    opts.onListChange(ids.slice());
+    renderChips();
+    renderAdd();
+    addSelect.value = '';
+  });
+
+  renderChips();
+  renderAdd();
+  wrap.append(chips, tokenBtn, addSelect);
+  return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// Date range row
+// ---------------------------------------------------------------------------
 
 function buildDateRangeRow(
   networkId: string,
@@ -1348,9 +1339,6 @@ function buildDateRangeRow(
   const row = div('st-f-date-row');
   row.append(el('span', 'st-f-date-label', label));
 
-  // Баг 2: граница даты может быть и токеном ($today, $now, $thought.created
-  // и т.п. с арифметикой ±Nd) — свободное текстовое поле + {…} вместо
-  // <input type="datetime-local">, который токен не примет.
   const buildField = (value: string, set: (v: string) => void): HTMLElement => {
     const wrap = div('st-f-date-field');
     const input = el('input', 'st-f-input st-f-date-input') as HTMLInputElement;
@@ -1358,17 +1346,10 @@ function buildDateRangeRow(
     input.value = value;
     input.placeholder = 'YYYY-MM-DD или токен…';
     input.addEventListener('input', () => set(input.value));
-    const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
-    tokenBtn.type = 'button';
-    setTooltip(tokenBtn, 'Вставить токен');
-    tokenBtn.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void openTokenPicker(networkId, tokenBtn, { kind: 'property', valueType: 'date', op: null }, (tokenText) => {
-        input.value = tokenText;
-        set(tokenText);
-        input.focus();
-      });
+    const tokenBtn = makeTokenBtn(networkId, { kind: 'property', valueType: 'date', op: null }, (token) => {
+      input.value = token;
+      set(token);
+      input.focus();
     });
     wrap.append(input, tokenBtn);
     return wrap;
@@ -1429,7 +1410,7 @@ const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; la
 };
 
 // ---------------------------------------------------------------------------
-// Pickers (parent / thought types / link types / tokens)
+// Pickers (parent / thought types / link types)
 // ---------------------------------------------------------------------------
 
 async function openParentPicker(
@@ -1488,7 +1469,6 @@ async function openLinkTypesPicker(
 /**
  * Modal type picker: a search box filtering as you type, a multi-column
  * checklist (checked first, then alphabetical) and «Отмена»/«Применить».
- * Resolves the picked id list, or `null` when cancelled.
  */
 function openTypePickerDialog(
   title: string,
@@ -1560,17 +1540,14 @@ function renderTypeChips(
     host.append(span('Любой', 'muted'));
     return;
   }
-  // Resolve names from the local catalogue (kept in sync by realtime-ui).
   const catalogue = kind === 'thought' ? store.state.thoughtTypes : store.state.linkTypes;
   const byId = new Map(catalogue.map((t) => [t.id, t]));
-  const chips = span('', 'st-f-chip-list');
   ids.forEach((id, index) => {
     const t = byId.get(id);
     const name = t === undefined ? id : 'name' in t ? t.name : t.name_forward;
-    chips.append(span(name, 'st-f-chip'));
-    if (index < ids.length - 1) chips.append(span(', ', 'st-f-chip-sep'));
+    host.append(span(name, 'st-f-chip'));
+    if (index < ids.length - 1) host.append(span(', ', 'st-f-chip-sep'));
   });
-  host.append(chips);
 }
 
 function renderParentChips(networkId: string, ids: string[], host: HTMLElement): void {
@@ -1579,36 +1556,54 @@ function renderParentChips(networkId: string, ids: string[], host: HTMLElement):
     host.append(span('Любые', 'muted'));
     return;
   }
+  // Токены (`$thought`) не резолвятся как id — показываем их текстом.
+  const plain = ids.filter((id) => !id.startsWith('$'));
   void Promise.all(
-    ids.map((id) => etn.thoughts.resolve(networkId, [id]).then((r) => r[0] as Thought | undefined).catch(() => undefined)),
+    plain.map((id) => etn.thoughts.resolve(networkId, [id]).then((r) => r[0] as Thought | undefined).catch(() => undefined)),
   ).then((refs) => {
     clear(host);
-    const chips = span('', 'st-f-chip-list');
-    refs.forEach((r, index) => {
-      chips.append(span(r?.title ?? '(не найдено)', 'st-f-chip'));
-      if (index < refs.length - 1) chips.append(span(', ', 'st-f-chip-sep'));
+    const byId = new Map(refs.map((r, i) => [plain[i]!, r?.title ?? '(не найдено)']));
+    ids.forEach((id, index) => {
+      const label = id.startsWith('$') ? id : (byId.get(id) ?? '(не найдено)');
+      host.append(span(label, 'st-f-chip'));
+      if (index < ids.length - 1) host.append(span(', ', 'st-f-chip-sep'));
     });
-    host.append(chips);
   });
 }
 
-/**
- * Поле, к которому пристёгнут токен-пикер. `property` — значение условия по
- * свойству (набор токенов ограничивается типом значения); специальные поля —
- * ключевые слова / тип мысли / автор / редактор (баг 2).
- */
+// ---------------------------------------------------------------------------
+// Token picker
+// ---------------------------------------------------------------------------
+
+/** Поле, к которому пристёгнут токен-пикер. */
 type TokenPickerField =
   | { kind: 'property'; valueType: PropertyValueType; op: StructurePropertyOp | null }
   | { kind: 'keywords' }
   | { kind: 'thought_type' }
+  | { kind: 'parent' }
   | { kind: 'author' }
   | { kind: 'editor' };
 
+/** Собирает кнопку токен-пикера `{…}` для переданного поля. */
+function makeTokenBtn(
+  networkId: string,
+  field: TokenPickerField,
+  onInsert: (token: string) => void,
+): HTMLButtonElement {
+  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
+  tokenBtn.type = 'button';
+  setTooltip(tokenBtn, 'Вставить токен');
+  tokenBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openTokenPicker(networkId, tokenBtn, field, onInsert);
+  });
+  return tokenBtn;
+}
+
 /**
  * Opens the token-picker dropdown next to `anchor`. The list is grouped by
- * section (`Глобальные`, `Поля мысли`, `Свойства «<тип>»`). For multiple
- * properties the label carries a `[…]` suffix and the entry is dimmed when
- * the current op is scalar.
+ * section (`Глобальные`, `Поля мысли`, `Свойства «<тип>»`).
  */
 async function openTokenPicker(
   networkId: string,
@@ -1622,6 +1617,8 @@ async function openTokenPicker(
   if (field.kind === 'property') {
     tokens = buildTokensForField(chainProps, field.valueType, field.op);
     op = field.op;
+  } else if (field.kind === 'parent') {
+    tokens = [{ text: '$thought', label: '$thought — id мысли в фокусе', section: 'Поля мысли' }];
   } else {
     tokens = buildTokensForSpecialField(chainProps, field.kind);
   }

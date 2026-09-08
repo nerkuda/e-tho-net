@@ -89,11 +89,12 @@ export function buildTokensForField(
     );
   }
   if (propertyValueType === 'text' || propertyValueType === 'url') {
+    // Для строковых свойств токен-пикер предлагает строковые поля мысли,
+    // а не id типа/пользователя — они не совпадут по типу со значением
+    // строкового свойства (ошибка e8365d29).
     out.push(
       { text: '$thought.title', label: '$thought.title', section: 'Поля мысли' },
-      { text: '$thought.type', label: '$thought.type' },
-      { text: '$thought.author', label: '$thought.author' },
-      { text: '$thought.editor', label: '$thought.editor' },
+      { text: '$thought.synonyms', label: '$thought.synonyms' },
     );
   }
   if (propertyValueType === 'date') {
@@ -166,15 +167,13 @@ export function buildTokensForSpecialField(
       { text: '$thought.type', label: '$thought.type — тип мысли в фокусе', section: 'Поля мысли' },
     ];
   }
-  if (field === 'author') {
+  if (field === 'author' || field === 'editor') {
+    // Для ОБОИХ полей (автор и редактор) доступны и `$thought.author`, и
+    // `$thought.editor`, и `$user` — отбор наследуется, поэтому «автор» и
+    // «редактор» должны адресоваться независимо от поля (ошибка e8365d29).
     return [
       { text: '$thought.author', label: '$thought.author', section: 'Поля мысли' },
-      { text: '$user', label: '$user — текущий пользователь', section: 'Глобальные' },
-    ];
-  }
-  if (field === 'editor') {
-    return [
-      { text: '$thought.editor', label: '$thought.editor', section: 'Поля мысли' },
+      { text: '$thought.editor', label: '$thought.editor' },
       { text: '$user', label: '$user — текущий пользователь', section: 'Глобальные' },
     ];
   }
@@ -493,4 +492,35 @@ function buildAuthorWireValue(
   }
   if (single === '') return undefined;
   return single;
+}
+
+/**
+ * Есть ли в состоянии хоть одно отличие от дефолта — т.е. задано ли хотя бы
+ * одно условие отбора (ошибка e8365d29: запрет сохранения пустого отбора).
+ * `sort`/`order` не учитываются — они всегда имеют значение.
+ */
+export function hasAnyCriteria(state: DialogCriteriaState): boolean {
+  return (
+    state.keywords.trim() !== '' ||
+    state.parentIds.length > 0 ||
+    state.typeIds.length > 0 ||
+    state.linkTypeIds.length > 0 ||
+    state.properties.length > 0 ||
+    state.hasProperties !== null ||
+    state.hasComment !== null ||
+    state.hasAttachments !== null ||
+    state.hasChronology !== null ||
+    state.active !== null ||
+    state.trashed ||
+    state.authorOp !== 'eq' ||
+    state.authorId !== '' ||
+    state.authorIds.length > 0 ||
+    state.editorOp !== 'eq' ||
+    state.editorId !== '' ||
+    state.editorIds.length > 0 ||
+    state.createdAfter !== '' ||
+    state.createdBefore !== '' ||
+    state.updatedAfter !== '' ||
+    state.updatedBefore !== ''
+  );
 }

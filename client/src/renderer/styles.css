@@ -7140,6 +7140,81 @@ table.activity-table thead th {
   color: var(--text);
 }
 
+/* «КРИТЕРИИ ОТБОРА» — заголовок секции в диалоге отбора (e8365d29). */
+.view-editor-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 8px 0 2px;
+}
+
+/* Маркер «группа заполнена» — звёздочка в заголовке группы. */
+.st-f-star {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Строки «Автор/Редактор» — вертикальный стек (каждое условие — строка). */
+.st-f-author-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Компактный редактор списка автора: чипы + кнопки в одну строку. */
+.author-list-editor {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.author-value-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.author-list-add {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 130px;
+}
+
+/* Одиночное значение автора: свободный ввод + токен + выбор пользователя. */
+.author-single-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.author-single-wrap .st-f-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.author-single-wrap .user-select-row {
+  flex: 0 0 auto;
+}
+
+.author-single-wrap .user-select-row .select-input {
+  width: auto;
+  min-width: 150px;
+}
+
 /* --- type-editor tabs (задача b8301c16, требование 344b8798) ---------- */
 /* Five tabs «Описание», «Шаблон», «Свойства», «Отборы», «Метаданные» для
    редактора типа мысли. Редактор типа связи остаётся без табов — состав

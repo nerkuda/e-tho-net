@@ -257,14 +257,14 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     const author = module.buildTokensForSpecialField(chainProps, 'author');
     const authorTexts = author.map((t) => t.text);
     assert.ok(authorTexts.includes('$thought.author'));
+    assert.ok(authorTexts.includes('$thought.editor'), 'оба поля адресуются и для автора');
     assert.ok(authorTexts.includes('$user'));
-    assert.ok(!authorTexts.includes('$thought.editor'));
 
     const editor = module.buildTokensForSpecialField(chainProps, 'editor');
     const editorTexts = editor.map((t) => t.text);
     assert.ok(editorTexts.includes('$thought.editor'));
+    assert.ok(editorTexts.includes('$thought.author'), 'оба поля адресуются и для редактора');
     assert.ok(editorTexts.includes('$user'));
-    assert.ok(!editorTexts.includes('$thought.author'));
   });
 
   it('list operations keep listOnly tokens (scalar ops hide them)', () => {
