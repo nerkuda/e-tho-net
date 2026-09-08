@@ -1539,12 +1539,25 @@ body.resizing-h {
 
 /* Focus filter strip (task 02ba2ae7, spec 9984aa98). Sits between the focus
  * row and the horizontal splitter; the buttons themselves enable pointer
- * events (the row is none, the strip re-enables them). */
+ * events (the row is none, the strip re-enables them).
+ *
+ * `position: relative` + `z-index: 1` (баг 5467fb19, баг 4): without an own
+ * stacking context a static block ALWAYS paints below any positioned
+ * descendant of the shared canvas host — DOM order does not matter between
+ * the two categories. `links-overlay-hit` (`initLinksOverlay`, links.ts) is
+ * `position: absolute; z-index: 0` and, despite living earlier in `host`'s
+ * children *before* this strip's DOM insertion point, still painted on top
+ * of it, so a click meant for a strip button hit the invisible wide link
+ * line (`pointer-events: stroke` on `.link-hit`) instead. `z-index: 1`
+ * matches `.canvas-focus-row`/`.zone-grid` — the same fix those two already
+ * carry for the same reason. */
 .canvas-filter-strip {
   flex: 0 0 auto;
   display: flex;
   justify-content: center;
   padding: 0 14px 8px;
+  position: relative;
+  z-index: 1;
   pointer-events: auto;
 }
 

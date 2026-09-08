@@ -1129,11 +1129,23 @@ export class RestClient {
     meta: { effective: import('@etn/shared').ThoughtTypeView[] };
   }> {
     const includeEffective = opts?.includeEffective !== false;
-    return this.request(
+    // `request()`/`parseResponse()` auto-unwrap the `{ data, meta }` success
+    // envelope down to `data` (see `queryStructureThoughts` for the same
+    // pattern) — `meta.effective` must be read separately via `lastMeta`
+    // right after the call. Returning `this.request(...)` directly here
+    // used to hand the *array* back typed as `{ data, meta }`, so every
+    // caller's `resp.data`/`resp.meta` read `undefined` at runtime (баг 3,
+    // 5467fb19: `Cannot read properties of undefined (reading 'filter')` in
+    // `views-tab.ts`'s `ownViewsOf(resp.data, ...)`).
+    const data = await this.request<import('@etn/shared').ThoughtTypeView[]>(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(thoughtTypeId)}/views`,
       { query: includeEffective ? { include_effective: 'true' } : undefined },
     );
+    const meta = this.lastMeta as
+      | { effective?: import('@etn/shared').ThoughtTypeView[] }
+      | undefined;
+    return { data, meta: { effective: meta?.effective ?? [] } };
   }
 
   /** `POST /networks/{nid}/thought-types/{id}/views` — create a view. The
@@ -1210,11 +1222,38 @@ export class RestClient {
       unresolved?: Array<{ token: string; reason: string; message: string }>;
     };
   }> {
-    return this.request(
+    // Same auto-unwrap pitfall as `listThoughtTypeViews` above (баг 3,
+    // 5467fb19): `request()` hands back `env.data` alone, so `meta` (with
+    // `unresolved`/`view`/`directions` — everything `runActiveViewIfNeeded`
+    // in `focus-filter-strip.ts` reads) must come from `lastMeta`.
+    const data = await this.request<import('@etn/shared').ThoughtRef[]>(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewName)}/run`,
       { body: opts ?? {} },
     );
+    const meta = this.lastMeta as {
+      total?: number;
+      limit?: number;
+      offset?: number;
+      directions?: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
+      view?: { id: string; name: string; type_id: string };
+      sort?: string;
+      order?: string;
+      unresolved?: Array<{ token: string; reason: string; message: string }>;
+    } | undefined;
+    return {
+      data,
+      meta: {
+        total: meta?.total ?? data.length,
+        limit: meta?.limit ?? data.length,
+        offset: meta?.offset ?? 0,
+        directions: meta?.directions ?? {},
+        view: meta?.view ?? { id: '', name: viewName, type_id: '' },
+        ...(meta?.sort !== undefined ? { sort: meta.sort } : {}),
+        ...(meta?.order !== undefined ? { order: meta.order } : {}),
+        ...(meta?.unresolved !== undefined ? { unresolved: meta.unresolved } : {}),
+      },
+    };
   }
 
   // -------------------------------------------------------------------------

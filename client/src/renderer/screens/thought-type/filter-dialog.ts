@@ -37,7 +37,6 @@ import {
 } from '@etn/shared';
 
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { wireThoughtRefSearch } from '../../editor/thought-picker.js';
 import { clear, div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
@@ -814,8 +813,9 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
       });
     }
     if (valueType === 'thought_ref') {
-      return buildThoughtRefInput(networkId, live().values[i] ?? '', (v) => {
+      return buildThoughtRefInput(networkId, live().values[i] ?? '', cond.op, (v) => {
         setValue(i, v);
+        render();
       });
     }
     // text/url: free input + token button.
@@ -923,25 +923,54 @@ function buildTextValueRow(
   return row;
 }
 
+/**
+ * Value editor for `thought_ref` conditions (баг 2, 5467fb19). Unlike
+ * `editor/properties.ts` / `selection/dialogs.ts`, this field must stay
+ * freely editable — it stores either a thought id or a token (`$thought`,
+ * `$thought.[<свойство>]`) — so it does NOT use `wireThoughtRefSearch`:
+ * that helper's `blur` handler unconditionally reverts `input.value` to
+ * the value it had when the field gained focus, which would erase a
+ * hand-typed or token-picker-inserted token. Instead the field behaves
+ * like `buildTextValueRow` (free text + `{…}` token button) plus a
+ * separate «выбрать» button that opens the thought picker dialog and, on
+ * selection, just substitutes the resolved title into the input while
+ * `onChange` receives the id.
+ */
 function buildThoughtRefInput(
   networkId: string,
   value: string,
+  op: StructurePropertyOp,
   onChange: (v: string) => void,
 ): HTMLElement {
   const row = div('st-f-ref-row');
   const input = el('input', 'st-f-input') as HTMLInputElement;
   input.type = 'text';
-  input.placeholder = 'введите название для поиска…';
+  input.placeholder = 'id мысли или токен ($thought)…';
   input.value = value;
-  // Allow tokens (the user can paste `$thought` directly).
   input.addEventListener('input', () => onChange(input.value));
-  wireThoughtRefSearch(input, {
-    networkId,
-    typeIds: [],
-    onPick: (id) => {
-      onChange(id);
-    },
+
+  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
+  tokenBtn.type = 'button';
+  setTooltip(tokenBtn, 'Вставить токен');
+  tokenBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openTokenPicker(networkId, tokenBtn, 'thought_ref', op, (tokenText) => {
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? input.value.length;
+      const next = input.value.slice(0, start) + tokenText + input.value.slice(end);
+      input.value = next;
+      onChange(next);
+      input.focus();
+      const caret = start + tokenText.length;
+      try {
+        input.setSelectionRange(caret, caret);
+      } catch {
+        /* some input types don't support selection */
+      }
+    });
   });
+
   const pick = el('button', 'st-f-add st-f-ref-pick', 'выбрать') as HTMLButtonElement;
   pick.type = 'button';
   pick.addEventListener('click', () => {
@@ -954,15 +983,14 @@ function buildThoughtRefInput(
       if (id === null) return;
       try {
         const [ref] = await etn.thoughts.resolve(networkId, [id]);
-        if (ref !== undefined) input.value = ref.title;
-        else input.value = id;
+        input.value = ref !== undefined ? ref.title : id;
       } catch {
         input.value = id;
       }
       onChange(id);
     });
   });
-  row.append(input, pick);
+  row.append(input, tokenBtn, pick);
   return row;
 }
 
@@ -1395,11 +1423,12 @@ function renderTypeChips(
   const catalogue = kind === 'thought' ? store.state.thoughtTypes : store.state.linkTypes;
   const byId = new Map(catalogue.map((t) => [t.id, t]));
   const chips = span('', 'st-f-chip-list');
-  for (const id of ids) {
+  ids.forEach((id, index) => {
     const t = byId.get(id);
     const name = t === undefined ? id : 'name' in t ? t.name : t.name_forward;
     chips.append(span(name, 'st-f-chip'));
-  }
+    if (index < ids.length - 1) chips.append(span(', ', 'st-f-chip-sep'));
+  });
   host.append(chips);
 }
 
@@ -1414,9 +1443,10 @@ function renderParentChips(networkId: string, ids: string[], host: HTMLElement):
   ).then((refs) => {
     clear(host);
     const chips = span('', 'st-f-chip-list');
-    for (const r of refs) {
+    refs.forEach((r, index) => {
       chips.append(span(r?.title ?? '(не найдено)', 'st-f-chip'));
-    }
+      if (index < refs.length - 1) chips.append(span(', ', 'st-f-chip-sep'));
+    });
     host.append(chips);
   });
 }
