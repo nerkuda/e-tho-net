@@ -131,6 +131,18 @@ export function __resetForTests(): void {
   state.listeners.clear();
 }
 
+/**
+ * Список известных пользователей (кэш, best-effort), отсортированный по
+ * отображаемому имени. Запускает ленивую загрузку ростера. Используется
+ * пикерами, которым нужен не `<select>`-виджет, а список для кастомного UI.
+ */
+export function listUsers(): User[] {
+  ensureLoaded();
+  return [...state.byId.values()].sort((a, b) =>
+    (a.display_name ?? a.username).localeCompare(b.display_name ?? b.username, 'ru'),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // User picker widget (задача 59119797 «Фильтры Автор/Редактор»)
 // ---------------------------------------------------------------------------
@@ -225,18 +237,27 @@ export function buildUserMultiSelectWidget(opts: {
   const chipsBox = div('user-multi-chips');
   const addSelect = el('select', 'select-input user-multi-add') as HTMLSelectElement;
 
+  // Локальная рабочая копия выбранных id. Раньше виджет читал `opts.currentIds`
+  // — массив, захваченный по ссылке при сборке — и после `onChange` продолжал
+  // видеть устаревший список (чипы не появлялись, «ничего не происходит»,
+  // ошибка e8365d29). Теперь виджет держит собственный список и перерисовывается
+  // после каждого изменения.
+  let ids = opts.currentIds.slice();
+
   /** Снимает выбор с указанного id и уведомляет. */
   const remove = (id: string): void => {
-    opts.onChange(opts.currentIds.filter((x) => x !== id));
+    ids = ids.filter((x) => x !== id);
+    opts.onChange(ids.slice());
+    render();
   };
 
   /** Рендер чипов и опций добавления. */
   const render = (): void => {
     chipsBox.replaceChildren();
-    if (opts.currentIds.length === 0) {
+    if (ids.length === 0) {
       chipsBox.append(el('span', 'user-multi-empty', 'не выбрано'));
     } else {
-      for (const id of opts.currentIds) {
+      for (const id of ids) {
         const user = state.byId.get(id);
         const name = user?.display_name ?? user?.username ?? id;
         const chip = div('user-multi-chip');
@@ -258,7 +279,7 @@ export function buildUserMultiSelectWidget(opts: {
       (a.display_name ?? a.username).localeCompare(b.display_name ?? b.username, 'ru'),
     );
     for (const u of users) {
-      if (opts.currentIds.includes(u.id)) continue;
+      if (ids.includes(u.id)) continue;
       const opt = el('option', undefined, `${u.display_name ?? u.username} (${u.username})`);
       opt.value = u.id;
       addSelect.append(opt);
@@ -266,7 +287,7 @@ export function buildUserMultiSelectWidget(opts: {
   };
 
   // Seed unknown ids so chips show something before the roster arrives.
-  for (const id of opts.currentIds) {
+  for (const id of ids) {
     if (id !== '' && !state.byId.has(id)) {
       state.byId.set(id, {
         id,
@@ -285,9 +306,11 @@ export function buildUserMultiSelectWidget(opts: {
   addSelect.addEventListener('change', () => {
     const id = addSelect.value;
     if (id === '') return;
-    if (opts.currentIds.includes(id)) return;
-    opts.onChange([...opts.currentIds, id]);
+    if (ids.includes(id)) return;
+    ids = [...ids, id];
+    opts.onChange(ids.slice());
     addSelect.value = '';
+    render();
   });
   subscribe(render);
 

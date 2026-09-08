@@ -502,11 +502,14 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     setNetwork();
     strip.mountFilterStrip(harness.host as any);
     const t = thought(FOCUS_ID, 'Версия 0.7.3');
+    // Сервер уже отдаёт `meta.views` в порядке «корень → тип, внутри уровня
+    // по position». Полоса сохраняет этот порядок как есть (не пересортировывает
+    // глобально по position — ошибка 9792d55a).
     state.thoughtsGet.response = {
       meta: {
         views: [
-          metaViewRow(view('v-2', 'Z-просмотр', { position: 2 })),
           metaViewRow(view('v-1', 'A-просмотр', { position: 1 })),
+          metaViewRow(view('v-2', 'Z-просмотр', { position: 2 })),
         ],
       },
     };
@@ -520,6 +523,37 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     assert.equal(btns[2]!.textContent, 'Z-просмотр');
     assert.equal(btns[3]!.textContent, '⋯');
     assert.equal(btns[4]!.textContent, '+');
+  });
+
+  it('preserves server order for inherited views instead of interleaving levels (ошибка 9792d55a)', async () => {
+    const harness = installShim();
+    setNetwork();
+    strip.mountFilterStrip(harness.host as any);
+    const ROOT_TYPE = '00000000-0000-4000-8000-0000000000aa';
+    // Пустой `meta.views` заставляет полосу пойти по fallback-пути
+    // `thoughtTypeViews.list` (`meta.effective`), который несёт `position`.
+    state.thoughtsGet.response = { meta: { views: [] } };
+    // Серверный порядок: корень (position 0,1), затем тип (position 0,1).
+    // Глобальная сортировка по position переплела бы уровни: root0, own0,
+    // root1, own1 — что и есть регрессия.
+    state.viewsList.effective = [
+      { ...view('r0', 'Root A', { position: 0 }), thought_type_id: ROOT_TYPE },
+      { ...view('r1', 'Root B', { position: 1 }), thought_type_id: ROOT_TYPE },
+      view('o0', 'Own A', { position: 0 }),
+      view('o1', 'Own B', { position: 1 }),
+    ];
+    await strip.renderStrip(focusOf(thought(FOCUS_ID, 'Версия', TYPE_ID)));
+    const stripEl = harness.findStrip();
+    assert.ok(stripEl !== null && !stripEl.classList.contains('hidden'));
+    const btns = (stripEl as ShimElement).querySelectorAll('.canvas-filter-strip-btn');
+    assert.equal(btns.length, 7, 'Потомки + 4 views + ⋯ + +');
+    assert.equal(btns[0]!.textContent, 'Потомки');
+    assert.equal(btns[1]!.textContent, 'Root A');
+    assert.equal(btns[2]!.textContent, 'Root B');
+    assert.equal(btns[3]!.textContent, 'Own A');
+    assert.equal(btns[4]!.textContent, 'Own B');
+    assert.equal(btns[5]!.textContent, '⋯');
+    assert.equal(btns[6]!.textContent, '+');
   });
 
   it('«+» is disabled for type-less thoughts (requirement 23e0f78e)', async () => {

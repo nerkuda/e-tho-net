@@ -238,6 +238,35 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     assert.ok(labels.includes('$now'));
   });
 
+  it('token-picker special fields: keywords / thought_type / author / editor', () => {
+    const chainProps = [
+      { type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! },
+      { type: TYPES[1]!, props: TYPE_PROPS[ANCESTOR_TYPE_ID]! },
+    ];
+    const keywords = module.buildTokensForSpecialField(chainProps, 'keywords');
+    const kwTexts = keywords.map((t) => t.text);
+    assert.ok(kwTexts.includes('$thought.title'));
+    assert.ok(kwTexts.includes('$thought.synonyms'));
+    assert.ok(kwTexts.includes('$thought.[метка]'), 'text property token');
+    assert.ok(!kwTexts.includes('$thought.[версия]'), 'thought_ref property hidden for keywords');
+    assert.ok(!kwTexts.includes('$thought.[теги]'), 'multiple thought_ref property hidden for keywords');
+
+    const typeTok = module.buildTokensForSpecialField(chainProps, 'thought_type');
+    assert.deepEqual(typeTok.map((t) => t.text), ['$thought.type']);
+
+    const author = module.buildTokensForSpecialField(chainProps, 'author');
+    const authorTexts = author.map((t) => t.text);
+    assert.ok(authorTexts.includes('$thought.author'));
+    assert.ok(authorTexts.includes('$thought.editor'), 'оба поля адресуются и для автора');
+    assert.ok(authorTexts.includes('$user'));
+
+    const editor = module.buildTokensForSpecialField(chainProps, 'editor');
+    const editorTexts = editor.map((t) => t.text);
+    assert.ok(editorTexts.includes('$thought.editor'));
+    assert.ok(editorTexts.includes('$thought.author'), 'оба поля адресуются и для редактора');
+    assert.ok(editorTexts.includes('$user'));
+  });
+
   it('list operations keep listOnly tokens (scalar ops hide them)', () => {
     const chainProps = [{ type: TYPES[1]!, props: TYPE_PROPS[ANCESTOR_TYPE_ID]! }];
     const tokensScalar = module.buildTokensForField(chainProps, 'thought_ref', 'eq');
@@ -636,5 +665,54 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     const registry = new Map<string, NetworkProperty>();
     const wire = module.buildWireDefinition(state, registry);
     assert.equal(wire.properties, undefined);
+  });
+
+  it('wire format: «Только актуальные» three-state maps to show_inactive/active (баг 56fdf252)', () => {
+    const makeState = (active: boolean | null): import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState => ({
+      keywords: '',
+      keywordInTitle: true,
+      keywordInSynonyms: true,
+      keywordInComment: false,
+      parentIds: [],
+      typeIds: [],
+      linkTypeIds: [],
+      properties: [],
+      hasProperties: null,
+      hasComment: null,
+      hasAttachments: null,
+      hasChronology: null,
+      active,
+      trashed: false,
+      authorOp: 'eq',
+      authorId: '',
+      authorIds: [],
+      editorOp: 'eq',
+      editorId: '',
+      editorIds: [],
+      createdAfter: '',
+      createdBefore: '',
+      updatedAfter: '',
+      updatedBefore: '',
+      sort: 'created',
+      order: 'asc',
+    });
+    const registry = new Map<string, NetworkProperty>();
+
+    // «не важно» (null) — без фильтра актуальности: показать и актуальные,
+    // и неактуальные. `active` не выставляется, `show_inactive = true`.
+    const all = module.buildWireDefinition(makeState(null), registry);
+    assert.equal(all.active, undefined);
+    assert.equal(all.show_inactive, true);
+
+    // «да» (true) — только актуальные.
+    const activeOnly = module.buildWireDefinition(makeState(true), registry);
+    assert.equal(activeOnly.active, true);
+    assert.equal(activeOnly.show_inactive, undefined);
+
+    // «нет» (false) — только неактуальные: `active = false` + неактивные
+    // включены в кандидатов.
+    const inactiveOnly = module.buildWireDefinition(makeState(false), registry);
+    assert.equal(inactiveOnly.active, false);
+    assert.equal(inactiveOnly.show_inactive, true);
   });
 });

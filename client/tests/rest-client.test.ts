@@ -566,3 +566,95 @@ describe('RestClient — §16 system endpoints', () => {
     assert.equal(version.version, '0.5.5');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Регрессия бага 3 (5467fb19): `{ data, meta }` envelope auto-unwraps to
+// `data` inside `request()`/`parseResponse()` — `listThoughtTypeViews` and
+// `runThoughtTypeView` used to return `this.request(...)` directly typed as
+// `{ data, meta }`, so callers (`views-tab.ts`'s `ownViewsOf(resp.data, …)`,
+// `focus-filter-strip.ts`'s `resp.meta.*`) read `undefined` at runtime and
+// crashed with «Cannot read properties of undefined (reading 'filter')».
+// ---------------------------------------------------------------------------
+describe('RestClient — thought-type views (0.7.3, баг 5467fb19)', () => {
+  it('listThoughtTypeViews resolves both `data` (own views) and `meta.effective` on the same object', async () => {
+    const ownView = { id: 'v1', thought_type_id: 'ty1', name: 'Own' };
+    const effectiveView = { id: 'v0', thought_type_id: 'root', name: 'Inherited' };
+    const { fetch, calls } = makeFetch([
+      {
+        status: 200,
+        body: { data: [ownView], meta: { effective: [effectiveView] } },
+      },
+    ]);
+    const client = makeClient(fetch);
+    const resp = await client.listThoughtTypeViews('net1', 'ty1', { includeEffective: true });
+
+    assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/networks/net1/thought-types/ty1/views?include_effective=true');
+    // `resp.data` must be the own-views array, not `undefined` — the exact
+    // shape `views-tab.ts`'s `ownViewsOf(resp.data, typeId)` relies on.
+    assert.deepEqual(resp.data, [ownView]);
+    assert.deepEqual(resp.meta.effective, [effectiveView]);
+  });
+
+  it('listThoughtTypeViews defaults `meta.effective` to [] when the server omits it', async () => {
+    const { fetch } = makeFetch([{ status: 200, body: { data: [] } }]);
+    const client = makeClient(fetch);
+    const resp = await client.listThoughtTypeViews('net1', 'ty1', { includeEffective: false });
+
+    assert.deepEqual(resp.data, []);
+    assert.deepEqual(resp.meta.effective, []);
+  });
+
+  it('runThoughtTypeView resolves both `data` (page items) and `meta` (view/unresolved/directions)', async () => {
+    const item = { id: 't1', title: 'Задача 0.7.3' };
+    const { fetch } = makeFetch([
+      {
+        status: 200,
+        body: {
+          data: [item],
+          meta: {
+            total: 1,
+            limit: 100,
+            offset: 0,
+            directions: { t1: { has_incoming: false, has_outgoing: true } },
+            view: { id: 'v1', name: 'Работы версии', type_id: 'ty1' },
+            sort: 'alpha',
+            order: 'asc',
+          },
+        },
+      },
+    ]);
+    const client = makeClient(fetch);
+    const resp = await client.runThoughtTypeView('net1', 'th1', 'Работы версии');
+
+    assert.deepEqual(resp.data, [item]);
+    assert.equal(resp.meta.total, 1);
+    assert.equal(resp.meta.view.name, 'Работы версии');
+    assert.deepEqual(resp.meta.directions, { t1: { has_incoming: false, has_outgoing: true } });
+    assert.equal(resp.meta.unresolved, undefined);
+  });
+
+  it('runThoughtTypeView carries `meta.unresolved` through when a token could not be resolved', async () => {
+    const { fetch } = makeFetch([
+      {
+        status: 200,
+        body: {
+          data: [],
+          meta: {
+            total: 0,
+            limit: 0,
+            offset: 0,
+            directions: {},
+            view: { id: 'v1', name: 'Работы версии', type_id: 'ty1' },
+            unresolved: [{ token: '$thought.[версия]', reason: 'unknown_property', message: 'нет свойства' }],
+          },
+        },
+      },
+    ]);
+    const client = makeClient(fetch);
+    const resp = await client.runThoughtTypeView('net1', 'th1', 'Работы версии');
+
+    assert.deepEqual(resp.data, []);
+    assert.equal(resp.meta.unresolved?.length, 1);
+    assert.equal(resp.meta.unresolved?.[0]?.reason, 'unknown_property');
+  });
+});

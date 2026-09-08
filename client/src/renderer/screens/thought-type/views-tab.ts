@@ -98,6 +98,45 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   let views: ThoughtTypeView[] = [];
   let loading = false;
 
+  /** Индекс строки, подсвеченной при навигации клавишами (стрелки + Enter). */
+  let selectedIdx = -1;
+
+  const applySelection = (): void => {
+    const rows = tableWrap.querySelectorAll<HTMLTableRowElement>('.views-tab-table tbody tr');
+    rows.forEach((r, i) => r.classList.toggle('selected', i === selectedIdx));
+  };
+  const selectedView = (): ThoughtTypeView | null => {
+    const rows = Array.from(tableWrap.querySelectorAll<HTMLTableRowElement>('.views-tab-table tbody tr'));
+    const row = rows[selectedIdx];
+    if (row === undefined) return null;
+    const viewId = row.dataset['viewId'];
+    return views.find((v) => v.id === viewId) ?? null;
+  };
+
+  // Навигация клавишами: стрелки — по строкам, Enter — открыть отбор.
+  tableWrap.tabIndex = 0;
+  tableWrap.addEventListener('keydown', (event) => {
+    const rows = Array.from(tableWrap.querySelectorAll<HTMLTableRowElement>('.views-tab-table tbody tr'));
+    if (rows.length === 0) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      selectedIdx = selectedIdx < 0 ? 0 : Math.min(rows.length - 1, selectedIdx + 1);
+      applySelection();
+      rows[selectedIdx]?.scrollIntoView({ block: 'nearest' });
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      selectedIdx = selectedIdx < 0 ? 0 : Math.max(0, selectedIdx - 1);
+      applySelection();
+      rows[selectedIdx]?.scrollIntoView({ block: 'nearest' });
+    } else if (event.key === 'Enter') {
+      const v = selectedView();
+      if (v !== null) {
+        event.preventDefault();
+        void onEdit(v);
+      }
+    }
+  });
+
   const unsubscribeRealtime = onRealtimeEvent((evt) => {
     if (
       evt.type !== 'thought-type-view.created' &&
@@ -159,10 +198,10 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     const head = el('thead');
     const headRow = el('tr');
     headRow.append(
-      el('th', undefined, 'Имя'),
-      el('th', undefined, 'Описание'),
-      el('th', undefined, 'По умолчанию'),
-      el('th'),
+      el('th', 'views-tab-col-name', 'Имя'),
+      el('th', 'views-tab-col-default', 'умлоч.'),
+      el('th', 'views-tab-col-actions'),
+      el('th', 'views-tab-col-desc', 'Описание'),
     );
     head.append(headRow);
     table.append(head);
@@ -170,63 +209,61 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     sorted.forEach((view, idx) => tbody.append(buildRow(view, idx, sorted)));
     table.append(tbody);
     tableWrap.append(table);
+    // Перечитали список — восстановим/обнулим подсветку выбранной строки.
+    if (selectedIdx >= sorted.length) selectedIdx = -1;
+    applySelection();
     errorLine.textContent = '';
   }
 
-  /** One row: name/description/default/actions. */
+  /** One row: name/default/actions/description. */
   function buildRow(view: ThoughtTypeView, idx: number, sorted: ThoughtTypeView[]): HTMLElement {
     const tr = el('tr');
     tr.dataset['viewId'] = view.id;
-    const nameCell = el('td');
-    nameCell.append(el('span', 'views-tab-name', view.name));
+
+    // Имя — 40% ширины, обрезается; двойной клик открывает редактор.
+    const nameCell = el('td', 'views-tab-name-cell');
+    const nameEl = el('span', 'views-tab-name', view.name);
+    nameEl.title = view.name;
+    nameCell.append(nameEl);
+    nameCell.addEventListener('dblclick', () => void onEdit(view));
     tr.append(nameCell);
-    const descCell = el(
-      'td',
-      'muted views-tab-desc',
-      (view.description ?? '').slice(0, 160) || '—',
-    );
-    descCell.style.maxWidth = '260px';
-    descCell.style.overflow = 'hidden';
-    descCell.style.textOverflow = 'ellipsis';
-    descCell.style.whiteSpace = 'nowrap';
-    tr.append(descCell);
-    const defaultCell = el('td');
-    if (view.is_default) {
-      const badge = el('span', 'views-tab-default-badge', '★ по умолчанию');
-      defaultCell.append(badge);
-    } else {
-      defaultCell.append(el('span', 'muted', '—'));
-    }
+
+    // По умолчанию — только галочка у помеченного.
+    const defaultCell = el('td', 'views-tab-default');
+    defaultCell.title = view.is_default ? 'Открывается по умолчанию' : '';
+    if (view.is_default) defaultCell.append(el('span', 'views-tab-default-mark', '✓'));
     tr.append(defaultCell);
 
-    const actions = el('td');
-    actions.style.whiteSpace = 'nowrap';
+    // Кнопки: порядок, «по умолчанию» и удаление — эмодзи.
+    const actions = el('td', 'views-tab-actions');
     actions.append(
       button('▲', () => void onMove(view, idx, idx - 1, sorted), 'btn small', 'Выше'),
       button('▼', () => void onMove(view, idx, idx + 1, sorted), 'btn small', 'Ниже'),
-      button('Изменить', () => void onEdit(view), 'btn small', 'Изменить отбор'),
-      button('Удалить', () => void onDelete(view), 'btn small', 'Удалить отбор'),
+      button(
+        view.is_default ? '☆' : '⭐',
+        () => (view.is_default ? void onClearDefault(view) : void onSetDefault(view)),
+        'btn small',
+        view.is_default ? 'Снять признак «по умолчанию»' : 'Сделать отбором по умолчанию',
+      ),
+      button('🗑️', () => void onDelete(view), 'btn small', 'Удалить отбор'),
     );
-    if (view.is_default) {
-      actions.append(
-        button(
-          'Снять с умолчания',
-          () => void onClearDefault(view),
-          'btn small',
-          'Снять признак «открывать по умолчанию»',
-        ),
-      );
-    } else {
-      actions.append(
-        button(
-          'По умолчанию',
-          () => void onSetDefault(view),
-          'btn small',
-          'Сделать отбором, который открывается сам',
-        ),
-      );
-    }
     tr.append(actions);
+
+    // Описание — последняя колонка, обрезается; двойной клик открывает редактор.
+    const descCell = el('td', 'views-tab-desc-cell');
+    const descEl = el('span', 'views-tab-desc muted', (view.description ?? '').slice(0, 160) || '—');
+    descEl.title = view.description ?? '';
+    descCell.append(descEl);
+    descCell.addEventListener('dblclick', () => void onEdit(view));
+    tr.append(descCell);
+
+    // Одиночный клик подсвечивает строку для клавишной навигации.
+    tr.addEventListener('click', () => {
+      const rows = Array.from(tableWrap.querySelectorAll<HTMLTableRowElement>('.views-tab-table tbody tr'));
+      selectedIdx = rows.indexOf(tr);
+      applySelection();
+    });
+
     return tr;
   }
 
@@ -375,6 +412,14 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       void load();
     }
   }
+
+  // Изначально вкладка подписывалась на realtime, но никогда не грузила
+  // список при построении — `load()` вызывался только по событиям и в
+  // обработчиках, поэтому при открытии редактора существующего типа вкладка
+  // оставалась пустой (ошибка 9792d55a). Загружаем сразу: для нового типа
+  // `getTypeId()` вернёт null → покажется подсказка, для существующего —
+  // список отборов.
+  void load();
 
   return {
     root,

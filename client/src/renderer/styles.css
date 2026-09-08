@@ -1539,12 +1539,25 @@ body.resizing-h {
 
 /* Focus filter strip (task 02ba2ae7, spec 9984aa98). Sits between the focus
  * row and the horizontal splitter; the buttons themselves enable pointer
- * events (the row is none, the strip re-enables them). */
+ * events (the row is none, the strip re-enables them).
+ *
+ * `position: relative` + `z-index: 1` (баг 5467fb19, баг 4): without an own
+ * stacking context a static block ALWAYS paints below any positioned
+ * descendant of the shared canvas host — DOM order does not matter between
+ * the two categories. `links-overlay-hit` (`initLinksOverlay`, links.ts) is
+ * `position: absolute; z-index: 0` and, despite living earlier in `host`'s
+ * children *before* this strip's DOM insertion point, still painted on top
+ * of it, so a click meant for a strip button hit the invisible wide link
+ * line (`pointer-events: stroke` on `.link-hit`) instead. `z-index: 1`
+ * matches `.canvas-focus-row`/`.zone-grid` — the same fix those two already
+ * carry for the same reason. */
 .canvas-filter-strip {
   flex: 0 0 auto;
   display: flex;
   justify-content: center;
   padding: 0 14px 8px;
+  position: relative;
+  z-index: 1;
   pointer-events: auto;
 }
 
@@ -4535,12 +4548,14 @@ body.cloud-dragging * {
   cursor: pointer;
 }
 
-/* Thought-ref value row: live-search input + «выбрать» button (§15.3). */
+/* Thought-ref value row: live-search input + «выбрать» button (§15.3).
+ * Без flex-basis/flex-grow: строка живёт внутри колонки `.st-f-values`, и
+ * `flex: 1 1 140px` трактовался бы как высота 140px (огромные вертикальные
+ * отступы у первого условия) — ошибка e8365d29. */
 .st-f-ref-row {
   display: flex;
   gap: 4px;
   align-items: center;
-  flex: 1 1 140px;
 }
 
 .st-f-ref-row .st-f-input {
@@ -7127,6 +7142,87 @@ table.activity-table thead th {
   color: var(--text);
 }
 
+/* «КРИТЕРИИ ОТБОРА» — заголовок секции в диалоге отбора (e8365d29). */
+.view-editor-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 8px 0 2px;
+}
+
+/* Маркер «группа заполнена» — звёздочка в заголовке группы. */
+.st-f-star {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Отступ между группами конструктора условий (половина кегля заголовка —
+ * 6px при .st-f-title font-size:12px). Без него свёрнутые группы сливаются. */
+.view-editor-criteria > .st-f-block + .st-f-block {
+  margin-top: 6px;
+}
+
+/* Строки «Автор/Редактор» — вертикальный стек (каждое условие — строка). */
+.st-f-author-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Компактный редактор списка автора: чипы + кнопки в одну строку. */
+.author-list-editor {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.author-value-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.author-list-add {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 130px;
+}
+
+/* Одиночное значение автора: свободный ввод + токен + выбор пользователя. */
+.author-single-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.author-single-wrap .st-f-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.author-single-wrap .user-select-row {
+  flex: 0 0 auto;
+}
+
+.author-single-wrap .user-select-row .select-input {
+  width: auto;
+  min-width: 150px;
+}
+
 /* --- type-editor tabs (задача b8301c16, требование 344b8798) ---------- */
 /* Five tabs «Описание», «Шаблон», «Свойства», «Отборы», «Метаданные» для
    редактора типа мысли. Редактор типа связи остаётся без табов — состав
@@ -7173,6 +7269,35 @@ table.activity-table thead th {
    семейства. */
 .views-tab-table .btn.small {
   font-size: 12px;
+}
+
+/* Колонки таблицы отборов (e8365d29, доработка): «Имя» — 40%, «Описание» —
+   последняя и обрезается, «умлоч.» — галочка у помеченного. */
+.views-tab-table .views-tab-col-name {
+  width: 40%;
+}
+
+.views-tab-table .views-tab-name,
+.views-tab-table .views-tab-desc {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.views-tab-table .views-tab-default {
+  text-align: center;
+  width: 60px;
+}
+
+.views-tab-table .views-tab-default-mark {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.views-tab-table .views-tab-actions {
+  white-space: nowrap;
+  width: 1%;
 }
 
 .views-tab-empty {

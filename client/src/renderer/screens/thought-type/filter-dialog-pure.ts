@@ -89,11 +89,12 @@ export function buildTokensForField(
     );
   }
   if (propertyValueType === 'text' || propertyValueType === 'url') {
+    // Для строковых свойств токен-пикер предлагает строковые поля мысли,
+    // а не id типа/пользователя — они не совпадут по типу со значением
+    // строкового свойства (ошибка e8365d29).
     out.push(
       { text: '$thought.title', label: '$thought.title', section: 'Поля мысли' },
-      { text: '$thought.type', label: '$thought.type' },
-      { text: '$thought.author', label: '$thought.author' },
-      { text: '$thought.editor', label: '$thought.editor' },
+      { text: '$thought.synonyms', label: '$thought.synonyms' },
     );
   }
   if (propertyValueType === 'date') {
@@ -139,6 +140,60 @@ export function buildTokensForField(
     }
   }
 
+  return out;
+}
+
+/**
+ * Поля отбора, у которых нет «типа значения» свойства, но которым нужен
+ * токен-пикер (баг 2): ключевые слова, тип мысли, автор, редактор.
+ */
+export type SpecialTokenField = 'keywords' | 'thought_type' | 'author' | 'editor';
+
+/**
+ * Токены для полей, не привязанных к типу значения свойства
+ * (баг 2, таблица токенов из решения №7 тех.проекта 918833e3):
+ *
+ *   * `keywords` — `$thought.title`, `$thought.synonyms` + свойства типа/предков
+ *     с типом значения text/url (поиск по тексту);
+ *   * `thought_type` — только `$thought.type` (id типа мысли-контекста);
+ *   * `author`/`editor` — `$thought.author`/`$thought.editor` + `$user`.
+ */
+export function buildTokensForSpecialField(
+  chainProps: ChainProperties[],
+  field: SpecialTokenField,
+): ViewToken[] {
+  if (field === 'thought_type') {
+    return [
+      { text: '$thought.type', label: '$thought.type — тип мысли в фокусе', section: 'Поля мысли' },
+    ];
+  }
+  if (field === 'author' || field === 'editor') {
+    // Для ОБОИХ полей (автор и редактор) доступны и `$thought.author`, и
+    // `$thought.editor`, и `$user` — отбор наследуется, поэтому «автор» и
+    // «редактор» должны адресоваться независимо от поля (ошибка e8365d29).
+    return [
+      { text: '$thought.author', label: '$thought.author', section: 'Поля мысли' },
+      { text: '$thought.editor', label: '$thought.editor' },
+      { text: '$user', label: '$user — текущий пользователь', section: 'Глобальные' },
+    ];
+  }
+  // keywords
+  const out: ViewToken[] = [
+    { text: '$thought.title', label: '$thought.title', section: 'Поля мысли' },
+    { text: '$thought.synonyms', label: '$thought.synonyms' },
+  ];
+  for (const level of chainProps) {
+    if (level.props.length === 0) continue;
+    const sectionName = `Свойства «${level.type.name}»`;
+    for (const def of level.props) {
+      if (def.value_type !== 'text' && def.value_type !== 'url') continue;
+      out.push({
+        text: `$thought.[${def.key}]`,
+        label: `$thought.[${def.key}] — ${def.value_type}`,
+        section: sectionName,
+      });
+    }
+  }
   return out;
 }
 
@@ -385,7 +440,20 @@ export function buildWireDefinition(
   if (state.hasComment !== null) out.has_comment = state.hasComment;
   if (state.hasAttachments !== null) out.has_attachments = state.hasAttachments;
   if (state.hasChronology !== null) out.has_chronology = state.hasChronology;
-  if (state.active !== null) out.active = state.active;
+  // «Только актуальные» — трёхзначное поле. Сервер при отсутствии `active`
+  // и `show_inactive` ставит дефолт `t.active = 1`, поэтому «не важно» (null)
+  // нельзя выразить простым опусканием `active` — нужно явно попросить
+  // включить неактивные (баг 56fdf252).
+  if (state.active === null) {
+    out.show_inactive = true;
+  } else if (state.active) {
+    out.active = true;
+  } else {
+    // «нет» — только неактуальные: `active` фильтрует, а `show_inactive`
+    // гарантирует, что неактивные попадут в кандидатов для parent-scope/рёбер.
+    out.active = false;
+    out.show_inactive = true;
+  }
   if (state.trashed) out.trashed = true;
 
   const authorWire = buildAuthorWireValue(state.authorOp, state.authorId, state.authorIds);
@@ -424,4 +492,35 @@ function buildAuthorWireValue(
   }
   if (single === '') return undefined;
   return single;
+}
+
+/**
+ * Есть ли в состоянии хоть одно отличие от дефолта — т.е. задано ли хотя бы
+ * одно условие отбора (ошибка e8365d29: запрет сохранения пустого отбора).
+ * `sort`/`order` не учитываются — они всегда имеют значение.
+ */
+export function hasAnyCriteria(state: DialogCriteriaState): boolean {
+  return (
+    state.keywords.trim() !== '' ||
+    state.parentIds.length > 0 ||
+    state.typeIds.length > 0 ||
+    state.linkTypeIds.length > 0 ||
+    state.properties.length > 0 ||
+    state.hasProperties !== null ||
+    state.hasComment !== null ||
+    state.hasAttachments !== null ||
+    state.hasChronology !== null ||
+    state.active !== null ||
+    state.trashed ||
+    state.authorOp !== 'eq' ||
+    state.authorId !== '' ||
+    state.authorIds.length > 0 ||
+    state.editorOp !== 'eq' ||
+    state.editorId !== '' ||
+    state.editorIds.length > 0 ||
+    state.createdAfter !== '' ||
+    state.createdBefore !== '' ||
+    state.updatedAfter !== '' ||
+    state.updatedBefore !== ''
+  );
 }
