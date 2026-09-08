@@ -240,7 +240,7 @@
 |-------|-----------------|
 | `$thought` | id мысли в фокусе |
 | `$thought.id` | то же самое |
-| `$thought.title` | название мысли |
+| `$thought.title` / `$thought.synonyms` | название; синонимы одной строкой |
 | `$thought.type` | id типа мысли |
 | `$thought.active` | актуальность |
 | `$thought.author` / `$thought.editor` | автор / последний редактор |
