@@ -288,3 +288,88 @@ export function deleteThoughtTypeView(ndb: NetworkDb, id: string): boolean {
   });
   return true;
 }
+
+/**
+ * Найти отбор по паре `(thought_type_id, name_key)`. Используется доменным
+ * слоем (задача 17eb741e) для проверки уникальности имени в пределах типа
+ * (требование 141c2576) до того, как ловить `UNIQUE constraint failed` от
+ * SQLite — чтобы выдать структурированный `409 DUPLICATE` с осмысленными
+ * `details.existing_id` / `details.existing_name`.
+ *
+ * `name_key` — нормализованная форма имени (trim + lowercase); сервис
+ * считает её через `viewNameKey`, репозиторий принимает готовое значение,
+ * чтобы случайно не разойтись по нормализации.
+ *
+ * `exceptId` — необязательный id, который надо исключить из поиска
+ * (нужен при переименовании, чтобы не считать самого себя дублем).
+ */
+export function findThoughtTypeViewByTypeAndNameKey(
+  ndb: NetworkDb,
+  thoughtTypeId: string,
+  nameKey: string,
+  exceptId?: string,
+): ThoughtTypeViewRow | null {
+  const row = ndb
+    .prepare(
+      `SELECT ${COLUMNS} FROM thought_type_views_v
+        WHERE thought_type_id = ? AND name_key = ?
+          ${exceptId ? 'AND id <> ?' : ''}
+        LIMIT 1`,
+    )
+    .get(...(exceptId ? [thoughtTypeId, nameKey, exceptId] : [thoughtTypeId, nameKey])) as
+    | ThoughtTypeViewRow
+    | undefined;
+  return row ?? null;
+}
+
+/**
+ * Снять пометку «по умолчанию» со ВСЕХ живых отборов данного типа в текущем
+ * слое, кроме `exceptId` (если указан). Используется доменным слоем для
+ * переноса пометки (требование 7263e565 «У типа не более одного отбора по
+ * умолчанию») — внутри одной транзакции вместе с обновлением нового
+ * «дефолтного» отбора.
+ *
+ * В слое действуем через `materializeShadow` для каждой видимой строки:
+ * иначе `UPDATE` текущего слоя не зацепил бы строку предка, у которой нет
+ * тени (S4, 13-layers.md §5.1). В основе материализация не нужна — там
+ * строка единственная, UPDATE работает напрямую.
+ *
+ * Возвращает количество строк, у которых пометка была снята (для диагностики
+ * и тестов).
+ */
+export function clearDefaultForThoughtType(
+  ndb: NetworkDb,
+  thoughtTypeId: string,
+  exceptId?: string,
+): number {
+  const rows = ndb
+    .prepare(
+      `SELECT id FROM thought_type_views_v
+        WHERE thought_type_id = ? AND is_default = 1
+          ${exceptId ? 'AND id <> ?' : ''}`,
+    )
+    .all(...(exceptId ? [thoughtTypeId, exceptId] : [thoughtTypeId])) as Array<{ id: string }>;
+
+  if (rows.length === 0) return 0;
+
+  ndb.transaction(() => {
+    for (const row of rows) {
+      materializeShadow(ndb, 'thought_type_views' as ThoughtTypeViewsTable, row.id);
+    }
+    ndb
+      .prepare(
+        `UPDATE thought_type_views
+            SET is_default = 0, version = version + 1, updated_at = ?
+          WHERE thought_type_id = ? AND is_default = 1 AND layer_id = ?
+            ${exceptId ? 'AND id <> ?' : ''}`,
+      )
+      .run(
+        new Date().toISOString(),
+        thoughtTypeId,
+        ndb.layerId,
+        ...(exceptId ? [exceptId] : []),
+      );
+  });
+
+  return rows.length;
+}

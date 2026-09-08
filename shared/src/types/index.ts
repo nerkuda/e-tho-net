@@ -8,6 +8,7 @@ export * from './network.js';
 export * from './thought.js';
 export * from './link.js';
 export * from './thought-type.js';
+export * from './thought-type-view.js';
 export * from './link-type.js';
 export * from './comment.js';
 export * from './attachment.js';
