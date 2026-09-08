@@ -4548,12 +4548,14 @@ body.cloud-dragging * {
   cursor: pointer;
 }
 
-/* Thought-ref value row: live-search input + «выбрать» button (§15.3). */
+/* Thought-ref value row: live-search input + «выбрать» button (§15.3).
+ * Без flex-basis/flex-grow: строка живёт внутри колонки `.st-f-values`, и
+ * `flex: 1 1 140px` трактовался бы как высота 140px (огромные вертикальные
+ * отступы у первого условия) — ошибка e8365d29. */
 .st-f-ref-row {
   display: flex;
   gap: 4px;
   align-items: center;
-  flex: 1 1 140px;
 }
 
 .st-f-ref-row .st-f-input {
