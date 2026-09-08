@@ -27,6 +27,7 @@
 import { UI_STATE_KEY } from '@etn/shared';
 import type { FocusResponse, ThoughtRef, ThoughtTypeView } from '@etn/shared';
 
+import { openViewEditorDialog } from '../screens/thought-type/filter-dialog.js';
 import { etn } from '../lib/etn.js';
 import { div, span } from '../lib/dom.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
@@ -520,7 +521,16 @@ function buildAddButton(): HTMLButtonElement {
   if (!typed) btn.title = 'Добавление отбора недоступно у мысли без типа';
   btn.addEventListener('click', () => {
     if (btn.disabled) return;
-    notice('Создание/правка отборов появится в этапе 8.', 'info');
+    const networkId = store.state.networkId;
+    const typeId = currentFocusTypeId;
+    if (networkId === null || typeId === null || typeId === undefined) return;
+    const typeName = store.state.thoughtTypes.find((t) => t.id === typeId)?.name ?? '';
+    openViewEditorDialog({
+      networkId,
+      thoughtTypeId: typeId,
+      typeName,
+      view: null,
+    });
   });
   return btn;
 }
@@ -535,7 +545,7 @@ function showViewMenu(x: number, y: number, view: EffectiveViewRow): void {
     {
       label: 'Изменить отбор',
       onClick: () => {
-        notice('Правка отбора появится в этапе 8.', 'info');
+        openViewEditorForExisting(networkId, view);
       },
     },
     {
@@ -561,6 +571,36 @@ function showViewMenu(x: number, y: number, view: EffectiveViewRow): void {
     },
   ];
   showMenuAt(x, y, items);
+}
+
+/**
+ * Opens the editor dialog for an existing view. The strip only carries the
+ * view's `EffectiveViewRow` (no `definition`); we resolve the full
+ * `ThoughtTypeView` via the IPC list before opening the dialog (a single
+ * round-trip keeps the dialog self-contained).
+ */
+async function openViewEditorForExisting(
+  networkId: string,
+  row: EffectiveViewRow,
+): Promise<void> {
+  try {
+    const resp = await etn.thoughtTypeViews.list(networkId, row.defined_on, { includeEffective: false });
+    const full = resp.data.find((v) => v.id === row.id);
+    if (full === undefined) {
+      notice('Не удалось открыть отбор для правки.', 'error');
+      return;
+    }
+    const typeName =
+      store.state.thoughtTypes.find((t) => t.id === row.defined_on)?.name ?? '';
+    openViewEditorDialog({
+      networkId,
+      thoughtTypeId: row.defined_on,
+      typeName,
+      view: full,
+    });
+  } catch (err) {
+    notice(formatStripError(err, 'Не удалось открыть отбор для правки.'), 'error');
+  }
 }
 
 async function setDefault(

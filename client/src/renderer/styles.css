@@ -7095,3 +7095,34 @@ table.activity-table thead th {
   margin: 6px 0 0 0;
   font-size: 12px;
 }
+
+/* Thought-type view editor dialog (задача e37f3f04, 0.7.3). */
+.view-editor-body {
+  max-height: min(70vh, 760px);
+  overflow-y: auto;
+}
+.view-editor-body .field-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.view-editor-criteria {
+  max-height: none;
+  padding: 4px 0;
+}
+.st-f-token-btn {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 6px;
+  font-family: var(--mono, monospace);
+  white-space: nowrap;
+}
+.st-f-token-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
