@@ -1167,6 +1167,116 @@ PUT    …/types/{id}/properties/{propertyId}/description  { description: string
 # Свойства подчинённых типов в редакторе родителя не видны и не учитываются.
 ```
 
+## 8a. Отборы типов мыслей (задача 65de7eaa, контракт b90bb6e6)
+
+Отбор, привязанный к **типу** мысли: именованное определение в формате
+`SavedFilterDefinition` + `sort`/`order` (§6.10), хранится в network-БД в
+ветвимой таблице `thought_type_views`. Адресуется по `thought_type_id`;
+`name_key` уникален в пределах `(тип, слой)` регистронезависимо
+(требование 141c2576). У типа не более одного `is_default = true`
+(требование 7263e565); пометка переносится транзакционно. Эффективный
+набор мысли — свои отборы типа + унаследованные от предков по `name_key`
+(требование eaca1253); у мысли без типа действуют отборы корневого типа
+(требование 23e0f78e, см. также ниже `meta.effective`).
+
+```
+GET    /api/v1/networks/{nid}/thought-types/{id}/views?include_effective=true|false
+       → 200 { data: [ View, … ],
+               meta: {
+                 effective?: [ EffectiveView, … ],   # только при ?include_effective=true
+                 layer: { id, title }
+               } }
+       # data — СОБСТВЕННЫЕ отборы типа в ТЕКУЩЕМ СЛОЕ (контракт b90bb6e6):
+       #   не подтягиваются ни из базового слоя (до слияния), ни от типов-предков.
+       # effective — эффективный набор для типа (L21): свой + унаследованные от
+       #   предков; каждый элемент несёт defined_on (id типа-владельца) и
+       #   inherited. У корневого типа effective совпадает с data.
+       # 404 если типа мысли {id} нет в текущем слое.
+
+POST   /api/v1/networks/{nid}/thought-types/{id}/views   # Client-Request-Id
+       { name: string,                      # 1..200 символов, trim
+         description?: string|null,         # до 1000 символов; пустая строка → null
+         definition: string,                # JSON-строка того же формата, что у
+                                            # saved_filters.definition (§18) +
+                                            # sort/order. Валидация: синтаксис JSON,
+                                            # целостность фильтра (как в §6.10) +
+                                            # токены `$thought.*` (задача 20b2fca0:
+                                            # свойство должно быть подключено к
+                                            # типу или его предкам; multiple в
+                                            # скалярной операции → 422).
+         position?: number,                 # неотрицательное целое
+         is_default?: boolean }             # true — снимает прежнюю пометку у того
+                                            # же типа транзакционно
+       → 201 { data: View, meta: { layer } }
+       # 404 если типа мысли {id} нет; 422 на невалидный payload или токены;
+       #   422 если {id} — корневой тип (нельзя заводить отборы через этот путь).
+
+GET    /api/v1/networks/{nid}/thought-types/{id}/views/{viewId}
+       → 200 { data: View, meta: { layer } }
+       # 404 если отбора нет в текущем слое.
+
+PATCH  /api/v1/networks/{nid}/thought-types/{id}/views/{viewId}     # If-Match
+       { name?, description?, definition?, position?, is_default? }
+       → 200 { data: View, meta: { layer, version, updated_at } }
+       # 404 если отбора нет; 409 VERSION_CONFLICT при несовпадении If-Match
+       #   или переданного expectedVersion; 409 DUPLICATE при переименовании
+       #   в занятое имя (с existing_id/existing_name); 422 на невалидный
+       #   definition/токены.
+
+DELETE /api/v1/networks/{nid}/thought-types/{id}/views/{viewId}     # If-Match
+       → 204
+       # 404 если отбора нет; 409 VERSION_CONFLICT при несовпадении If-Match
+       #   (если заголовок задан). В слое — надгробие, не физическое удаление
+       #   (13-layers.md §5.2); в основе — физическое удаление строки.
+
+POST   /api/v1/networks/{nid}/thoughts/{thoughtId}/views/{view}/run
+       { limit?, offset?, sort?, order? }    # sort/order: alpha|created|viewed × asc|desc
+       → 200 { data: [ ThoughtRef, … ],       # страница мыслей, удовлетворяющих
+                                            #   отбору; контекстная мысль исключена
+               meta: {
+                 total, limit, offset,
+                 directions,                   # для эллипсов (как в §6.10)
+                 view: { id, name, type_id },  # фактический отбор (после поиска
+                                               #   по id или name_key в эффективном
+                                               #   наборе контекстной мысли)
+                 unresolved?: [                # непустой при неразрешимом токене
+                   { token, reason, message }  # (требование b7fdab20): data пуст,
+                 ],                            # отбор в принципе не применился
+                 sort, order
+               } }
+       # `view` — id отбора или его name_key; ищется в эффективном наборе
+       #   контекстной мысли, поэтому попадают и унаследованные от предков.
+       # Сортировка/лимит по умолчанию — alpha asc с лимитом 100 (для
+       #   интерактивного UI; полная выборка — через POST /thoughts/query §6.10).
+       # 404 если мысли или отбора (по id/name_key в эффективном наборе) нет;
+       #   422 если отбор сохранён с определением, несовместимым с текущей
+       #   онтологией (свойство отключили от типа).
+```
+
+View: `id`, `thought_type_id`, `name`, `name_key`, `description`,
+`definition`, `position`, `is_default`, `version`, `created_at`,
+`updated_at`, `created_by`. EffectiveView добавляет `defined_on` и
+`inherited`.
+
+События real-time (`audience=network`, см. [04-realtime.md](04-realtime.md)
+§4):
+
+- `thought-type-view.created` (`{ thought_type_id, view: EffectiveView }`) —
+  после `POST /thought-types/{id}/views`. Событие привязано к строке
+  `thought_type_views` (ветвимая таблица), уважение слою обеспечивает
+  `layer-visibility.ts` (13-layers.md §12).
+- `thought-type-view.updated` (`{ thought_type_id, view_id, changes,
+  version, view: EffectiveView }`) — после `PATCH …/views/{viewId}`.
+  `changes` — переданные поля (без вычисленных сервером).
+- `thought-type-view.deleted` (`{ thought_type_id, view_id }`) — после
+  `DELETE …/views/{viewId}`. В слое событие ссылается на надгробие;
+  клиент в основе его не увидит до слияния.
+- `thought-type-view.run` (`{ thought_id, view_id, view_name, result_count,
+  unresolved }`) — после `POST /thoughts/{id}/views/{view}/run` (как REST,
+  так и MCP `etn.views.run`). Событие НЕ ветвимое — описывает действие
+  («отбор исполнили»), доставляется всем подписчикам сети (как
+  `layer.merged`).
+
 ## 9. Свойства
 
 ```

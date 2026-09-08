@@ -486,12 +486,21 @@ export function getThoughtTypeView(
   return row ? rowToView(row) : null;
 }
 
-/** Список отборов одного типа в текущем слое, по `position`. */
+/**
+ * Список отборов одного типа в текущем слое, по `position`.
+ *
+ * Параметр `currentLayerOnly` (по умолчанию `false`) переключает чтение с
+ * представления `thought_type_views_v` (свёртка по цепочке слоёв, нужно
+ * `getEffectiveViewsForThought`) на физическую таблицу с фильтром
+ * `layer_id = ndb.layerId` — для REST `GET /thought-types/{id}/views`,
+ * контракт b90bb6e6: «GET отдаёт собственные отборы типа».
+ */
 export function listThoughtTypeViewsByType(
   ndb: NetworkDb,
   thoughtTypeId: string,
+  options?: { currentLayerOnly?: boolean },
 ): ThoughtTypeView[] {
-  return repoListByType(ndb, thoughtTypeId).map(rowToView);
+  return repoListByType(ndb, thoughtTypeId, options).map(rowToView);
 }
 
 /**
@@ -739,9 +748,15 @@ export function runViewForThought(
     offset: 0,
   };
   const result = queryThoughts(ndb, userId, query, requestId);
+  // Исключаем саму контекстную мысль из результата: «отбор относительно
+  // мысли» показывает СОСЕДЕЙ, удовлетворяющих критериям, а не саму мысль.
+  // `StructureQueryRequest` пока не несёт `exclude_ids` — фильтруем после
+  // запроса. Это редкая операция (лимит 100), цена невелика.
+  const items = result.items.filter((i) => i.id !== thoughtId);
+  const total = Math.max(0, result.total - (result.items.length > items.length ? 1 : 0));
   return {
-    items: result.items,
-    total: result.total,
+    items,
+    total,
     directions: result.directions,
     unresolved: [],
   };

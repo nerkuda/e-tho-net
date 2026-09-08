@@ -132,8 +132,32 @@ export function getThoughtTypeView(ndb: NetworkDb, id: string): ThoughtTypeViewR
  *
  * Не выполняет обход цепочки предков типа — это задача доменного слоя
  * (задача 17eb741e). Здесь только сырьё по одному логическому типу.
+ *
+ * Параметр `currentLayerOnly` разделяет два сценария:
+ *   * `false` (по умолчанию) — читать через представление `thought_type_views_v`,
+ *     которое сворачивает цепочку слоёв по правилу «ближайший побеждает»
+ *     (13-layers.md §4.1). Нужно домену `getEffectiveViewsForThought`, чтобы
+ *     собрать набор с учётом базы под слоем.
+ *   * `true` — читать из физической таблицы с фильтром по `layer_id`:
+ *     «только мои определения отбора на этот тип в текущем слое», без
+ *     подтягивания отборов предков-слоёв. Это контракт REST
+ *     `GET /thought-types/{id}/views` (контракт b90bb6e6: «GET отдаёт
+ *     собственные отборы типа»); унаследованные показывает `meta.effective`.
  */
-export function listThoughtTypeViewsByType(ndb: NetworkDb, thoughtTypeId: string): ThoughtTypeViewRow[] {
+export function listThoughtTypeViewsByType(
+  ndb: NetworkDb,
+  thoughtTypeId: string,
+  options?: { currentLayerOnly?: boolean },
+): ThoughtTypeViewRow[] {
+  if (options?.currentLayerOnly === true) {
+    return ndb
+      .prepare(
+        `SELECT ${COLUMNS} FROM thought_type_views
+          WHERE layer_id = ? AND thought_type_id = ?
+          ORDER BY position, name`,
+      )
+      .all(ndb.layerId, thoughtTypeId) as ThoughtTypeViewRow[];
+  }
   return ndb
     .prepare(
       `SELECT ${COLUMNS} FROM thought_type_views_v

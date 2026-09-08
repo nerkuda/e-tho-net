@@ -32,6 +32,7 @@ import type {
 } from './thought-type.js';
 import type { SavedFilter } from './structure.js';
 import type { LayerMergeReport } from './layer.js';
+import type { EffectiveThoughtTypeView, ThoughtTypeView, ThoughtTypeViewUpdateInput } from './thought-type-view.js';
 
 // ---------------------------------------------------------------------------
 // Envelope
@@ -114,6 +115,11 @@ export const REALTIME_EVENT_TYPES = [
   'edit.acquired',
   'edit.released',
   'edit.cleared',
+  // thought-type views (task 65de7eaa — отборы типов мыслей)
+  'thought-type-view.created',
+  'thought-type-view.updated',
+  'thought-type-view.deleted',
+  'thought-type-view.run',
 ] as const;
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];
 
@@ -373,6 +379,42 @@ export interface EditClearedData {
   reason: 'server_start' | 'ws_disconnect' | 'manual';
 }
 
+// thought-type views (задача 65de7eaa) — CRUD-операции и `run` мыслесети.
+// `EffectiveThoughtTypeView` — то, что мыслесеть уже отдаёт в MCP
+// `etn.views.run`: собственный `ThoughtTypeView` + `defined_on` + `inherited`.
+// Используем этот тип и в `created`/`updated`, чтобы клиент не делал лишний
+// GET и не угадывал «свой/унаследованный».
+export interface ThoughtTypeViewCreatedData {
+  thought_type_id: string;
+  view: EffectiveThoughtTypeView;
+}
+export interface ThoughtTypeViewUpdatedData {
+  thought_type_id: string;
+  view_id: string;
+  changes: ThoughtTypeViewUpdateInput;
+  version: number;
+  view: EffectiveThoughtTypeView;
+}
+export interface ThoughtTypeViewDeletedData {
+  thought_type_id: string;
+  view_id: string;
+}
+/**
+ * `thought-type-view.run` — успешное исполнение отбора относительно мысли
+ * (как REST `POST /thoughts/{id}/views/{view}/run`, так и MCP `etn.views.run`).
+ * Полезен клиенту, чтобы пометить счётчик «обновлено в N мс» рядом с
+ * кнопкой отбора, не вытягивая весь список заново.
+ */
+export interface ThoughtTypeViewRunData {
+  thought_id: string;
+  view_id: string;
+  view_name: string;
+  /** Количество мыслей в странице (0 при непустом `unresolved`). */
+  result_count: number;
+  /** Непустой, если хоть один токен не разрешился (требование b7fdab20). */
+  unresolved: Array<{ token: string; reason: string; message: string }>;
+}
+
 /**
  * Maps each {@link RealtimeEventType} to its `data` payload type.
  * Used by {@link RealtimeEvent} and {@link AnyRealtimeEvent}.
@@ -425,6 +467,10 @@ export interface RealtimeEventMap {
   'edit.acquired': EditAcquiredData;
   'edit.released': EditReleasedData;
   'edit.cleared': EditClearedData;
+  'thought-type-view.created': ThoughtTypeViewCreatedData;
+  'thought-type-view.updated': ThoughtTypeViewUpdatedData;
+  'thought-type-view.deleted': ThoughtTypeViewDeletedData;
+  'thought-type-view.run': ThoughtTypeViewRunData;
 }
 
 /** Strongly-typed event envelope for a specific event name. */
@@ -515,6 +561,10 @@ export const REALTIME_EVENT_AUDIENCE = {
   'edit.acquired': 'network',
   'edit.released': 'network',
   'edit.cleared': 'network',
+  'thought-type-view.created': 'network',
+  'thought-type-view.updated': 'network',
+  'thought-type-view.deleted': 'network',
+  'thought-type-view.run': 'network',
 } as const satisfies Record<RealtimeEventType, RealtimeAudience>;
 
 // ---------------------------------------------------------------------------

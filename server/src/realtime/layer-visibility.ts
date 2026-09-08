@@ -107,6 +107,20 @@ function extractRowRef(event: AnyRealtimeEvent): RowRef | null {
         params: [d.owner_type, d.owner_id, d.property_id],
       };
     }
+    case 'thought-type-view.created':
+      return byId(
+        'thought_type_views',
+        (data.view as { id?: unknown } | undefined)?.id,
+      );
+    case 'thought-type-view.updated':
+    case 'thought-type-view.deleted':
+      return byId('thought_type_views', data.view_id);
+    case 'thought-type-view.run':
+      // Запуск отбора — это не правка ветвимой строки, а «прочитал/исполнил»
+      // (как и `layer.merged`). Подписчик в любом слое должен увидеть
+      // счётчик «обновлено N мс назад» рядом с кнопкой отбора, чтобы не
+      // путать отсутствие активности с лагом синхронизации.
+      return null;
     default:
       // network.*, member.*, presence.*, user-scoped settings (§4.6–4.8):
       // non-branchable, layer-independent (13-layers.md §3).

@@ -753,6 +753,14 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   'edit.acquired': 'захвачен объект',
   'edit.released': 'снят захват',
   'edit.cleared': 'сброшен захват',
+  // Thought-type views (задача 65de7eaa) — отборы типов мыслей.
+  // В статус-баре показываем только `run` (факт чтения/исполнения);
+  // created/updated/deleted — это синхронизация набора кнопок на холсте,
+  // отдельного уведомления не требуется.
+  'thought-type-view.created': 'добавлен отбор типа',
+  'thought-type-view.updated': 'изменён отбор типа',
+  'thought-type-view.deleted': 'удалён отбор типа',
+  'thought-type-view.run': 'исполнен отбор',
 };
 
 /**
