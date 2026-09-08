@@ -1111,6 +1111,113 @@ export class RestClient {
   }
 
   // -------------------------------------------------------------------------
+  // §8b Thought-type views (отборы типов мыслей, 0.7.3, task c1fa71d4)
+  // -------------------------------------------------------------------------
+
+  /**
+   * `GET /networks/{nid}/thought-types/{id}/views` — own views of a single
+   * thought type. `includeEffective: true` (default) folds the inherited
+   * chain (`meta.effective`) on top of the type's own rows — this is what
+   * the focus strip renders (spec `9984aa98`).
+   */
+  public async listThoughtTypeViews(
+    networkId: string,
+    thoughtTypeId: string,
+    opts?: { includeEffective?: boolean },
+  ): Promise<{
+    data: import('@etn/shared').ThoughtTypeView[];
+    meta: { effective: import('@etn/shared').ThoughtTypeView[] };
+  }> {
+    const includeEffective = opts?.includeEffective !== false;
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(thoughtTypeId)}/views`,
+      { query: includeEffective ? { include_effective: 'true' } : undefined },
+    );
+  }
+
+  /** `POST /networks/{nid}/thought-types/{id}/views` — create a view. The
+   *  dialog (stage 8) lives in the renderer; this method only wraps the
+   *  HTTP call. The optimistic version flow applies to `update`/`remove`. */
+  public async createThoughtTypeView(
+    networkId: string,
+    thoughtTypeId: string,
+    input: import('@etn/shared').ThoughtTypeViewInput,
+  ): Promise<import('@etn/shared').ThoughtTypeView> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(thoughtTypeId)}/views`,
+      { body: input },
+    );
+  }
+
+  /** `PATCH /networks/{nid}/thought-types/{id}/views/{viewId}` — partial
+   *  update with `If-Match: <expectedVersion>`. */
+  public async updateThoughtTypeView(
+    networkId: string,
+    thoughtTypeId: string,
+    viewId: string,
+    input: import('@etn/shared').ThoughtTypeViewUpdateInput,
+    expectedVersion: number,
+  ): Promise<import('@etn/shared').ThoughtTypeView> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(thoughtTypeId)}/views/${encodeURIComponent(viewId)}`,
+      { body: input, requestOptions: { expectedVersion } },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/thought-types/{id}/views/{viewId}` — optimistic
+   *  concurrency required. */
+  public async deleteThoughtTypeView(
+    networkId: string,
+    thoughtTypeId: string,
+    viewId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(thoughtTypeId)}/views/${encodeURIComponent(viewId)}`,
+      { requestOptions: { expectedVersion } },
+    );
+  }
+
+  /** `POST /networks/{nid}/thoughts/{thoughtId}/views/{view}/run` — run a
+   *  view relative to the context thought. The server substitutes
+   *  `$thought.*` tokens from the focused thought; on unresolved tokens
+   *  the response carries `meta.unresolved` (spec `9984aa98`,
+   *  requirement `b7fdab20`). */
+  public async runThoughtTypeView(
+    networkId: string,
+    thoughtId: string,
+    viewName: string,
+    opts?: {
+      sort?: 'alpha' | 'created' | 'updated';
+      order?: 'asc' | 'desc';
+      limit?: number;
+      offset?: number;
+    },
+  ): Promise<{
+    data: import('@etn/shared').ThoughtRef[];
+    meta: {
+      total: number;
+      limit: number;
+      offset: number;
+      directions: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
+      view: { id: string; name: string; type_id: string };
+      sort?: string;
+      order?: string;
+      unresolved?: Array<{ token: string; reason: string; message: string }>;
+    };
+  }> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewName)}/run`,
+      { body: opts ?? {} },
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // §8a Property registry (0.6.5)
   // -------------------------------------------------------------------------
 

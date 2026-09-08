@@ -17,6 +17,7 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 
 import { resyncAfterLayerSwitch, scheduleRefresh } from './app.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
+import { onThoughtTypeViewRealtime } from './canvas/focus-filter-strip.js';
 import { etn } from './lib/etn.js';
 import { invalidateHistoryBar } from './screens/history-bar.js';
 import { invalidatePinnedBar, invalidatePinnedRef } from './screens/pinned-bar.js';
@@ -211,6 +212,25 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
       scheduleRefresh();
       scheduleStructuresRefresh();
       scheduleChronicleRefresh();
+      break;
+
+    case 'thought-type-view.created':
+    case 'thought-type-view.updated':
+    case 'thought-type-view.deleted':
+      // The type-view strip (task 02ba2ae7, spec 9984aa98) is the primary
+      // consumer. `thought-type-view.run` is a non-branchable audit event
+      // and intentionally ignored here — the UI re-runs views itself when
+      // the mode changes.
+      onThoughtTypeViewRealtime({
+        type: evt.type,
+        thought_type_id: evt.data.thought_type_id,
+        // `created` carries the new view under `data.view.id`; `updated` and
+        // `deleted` carry `data.view_id` directly.
+        view_id:
+          'view_id' in evt.data
+            ? evt.data.view_id
+            : (evt.data.view?.id ?? ''),
+      });
       break;
 
     case 'network.updated': {

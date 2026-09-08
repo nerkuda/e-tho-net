@@ -1537,6 +1537,78 @@ body.resizing-h {
   pointer-events: none;
 }
 
+/* Focus filter strip (task 02ba2ae7, spec 9984aa98). Sits between the focus
+ * row and the horizontal splitter; the buttons themselves enable pointer
+ * events (the row is none, the strip re-enables them). */
+.canvas-filter-strip {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  padding: 0 14px 8px;
+  pointer-events: auto;
+}
+
+.canvas-filter-strip.hidden {
+  display: none;
+}
+
+.canvas-filter-strip-buttons {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+}
+
+.canvas-filter-strip-btn {
+  /* Reuse the toolbar button palette (.tb-btn) for consistent hover/active
+   * states across the app; the strip is the only canvas element that
+   * carries that palette. */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.canvas-filter-strip-btn:hover {
+  background: var(--surface-2);
+}
+
+.canvas-filter-strip-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.canvas-filter-strip-btn.inherited {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.canvas-filter-strip-btn.canvas-filter-strip-overflow,
+.canvas-filter-strip-btn.canvas-filter-strip-add {
+  padding: 4px 8px;
+  font-weight: 600;
+}
+
+.canvas-filter-strip-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+  background: var(--surface);
+}
+
+.canvas-filter-strip-btn.hidden {
+  display: none;
+}
+
 /* Three link layers:
  *   .links-overlay       — visual curves, UNDER the clouds, never interactive;
  *   .links-overlay-hit   — transparent wide hit curves, also UNDER the clouds:

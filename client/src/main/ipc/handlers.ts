@@ -858,6 +858,71 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
 
+  // --- thought-type views (отборы типов мыслей, 0.7.3, task c1fa71d4) ----
+  handlers.set(
+    'thoughtTypeViews.list',
+    bind(
+      (
+        networkId: string,
+        thoughtTypeId: string,
+        opts?: { includeEffective?: boolean },
+      ) => requireRest(deps).listThoughtTypeViews(networkId, thoughtTypeId, opts),
+    ),
+  );
+  handlers.set(
+    'thoughtTypeViews.create',
+    bind(
+      (networkId: string, thoughtTypeId: string, input: unknown) =>
+        requireRest(deps).createThoughtTypeView(
+          networkId,
+          thoughtTypeId,
+          input as Parameters<RestClient['createThoughtTypeView']>[2],
+        ),
+    ),
+  );
+  handlers.set(
+    'thoughtTypeViews.update',
+    bind(
+      (
+        networkId: string,
+        thoughtTypeId: string,
+        viewId: string,
+        input: unknown,
+        expectedVersion: number,
+      ) =>
+        requireRest(deps).updateThoughtTypeView(
+          networkId,
+          thoughtTypeId,
+          viewId,
+          input as Parameters<RestClient['updateThoughtTypeView']>[3],
+          expectedVersion,
+        ),
+    ),
+  );
+  handlers.set(
+    'thoughtTypeViews.remove',
+    bind(
+      (networkId: string, thoughtTypeId: string, viewId: string, expectedVersion: number) =>
+        requireRest(deps).deleteThoughtTypeView(networkId, thoughtTypeId, viewId, expectedVersion),
+    ),
+  );
+  handlers.set(
+    'thoughtTypeViews.run',
+    bind(
+      (
+        networkId: string,
+        thoughtId: string,
+        viewName: string,
+        opts?: {
+          sort?: 'alpha' | 'created' | 'updated';
+          order?: 'asc' | 'desc';
+          limit?: number;
+          offset?: number;
+        },
+      ) => requireRest(deps).runThoughtTypeView(networkId, thoughtId, viewName, opts),
+    ),
+  );
+
   // --- properties -----------------------------------------------------------
   handlers.set(
     'properties.get',

@@ -14,14 +14,30 @@
 
 import type { EtnApi } from '../../main/ipc/contract.js';
 
-const liveTarget = typeof window === 'undefined' ? null : window;
+/**
+ * Resolves the current `window.etn` lazily. `lib/etn.ts` is imported by the
+ * renderer modules as well as Node unit tests; the renderer always has
+ * `window` defined (preload runs first), but the test harness may not.
+ * Looking up `window` on every property access keeps the Proxy correct in
+ * both worlds without imposing a load-order constraint on the test
+ * bootstrap.
+ */
+function readWindow(): { etn?: EtnApi } | null {
+  if (typeof window === 'undefined') {
+    return (globalThis as { etn?: EtnApi }).etn !== undefined
+      ? (globalThis as unknown as { etn?: EtnApi })
+      : null;
+  }
+  return window as unknown as { etn?: EtnApi };
+}
 
 export const etn: EtnApi = new Proxy(
   // The target is never actually read — every access forwards to `window.etn`.
   {} as EtnApi,
   {
     get(_target, prop: string) {
-      const api = (liveTarget as { etn?: EtnApi } | null)?.etn;
+      const w = readWindow();
+      const api = w?.etn;
       if (!api) {
         throw new Error(
           `window.etn is not available yet (accessed .${prop} too early). ` +

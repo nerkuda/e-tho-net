@@ -70,6 +70,16 @@ import { showThoughtContextMenu, showZoneContextMenu } from './context-menu.js';
 import { wireCloudDrag } from './drag-cloud.js';
 import { initKbdNav, resetCanvasCursor, setCursor, syncCanvasCursor } from './kbd-nav.js';
 import { mountZoneSplitters } from './zone-splitters.js';
+import {
+  getActiveMode as getStripActiveMode,
+  loadPersistedStrip,
+  mountFilterStrip,
+  onModeChange as onStripModeChange,
+  renderStrip as renderFilterStrip,
+  runActiveViewIfNeeded,
+  takeViewResult,
+  type ViewResult,
+} from './focus-filter-strip.js';
 import { openThoughtDeleteDialog } from '../trash.js';
 
 /** Zone directions of the canvas (parents/siblings/children). */
@@ -256,6 +266,21 @@ export function mountCanvas(canvasHost: HTMLElement): void {
   emptyEl = empty;
   redrawLinks = initLinksOverlay(host).redraw;
   applyCanvasScaleVars(host);
+
+  // Focus filter strip (task 02ba2ae7, spec 9984aa98) — sits between the
+  // focus row and the children zone. It owns its own DOM and L4 state,
+  // but renders the lower zone's content together with the canvas render
+  // path via `getActiveMode()` + `takeViewResult()`.
+  mountFilterStrip(host);
+  // Wire the strip mode as a render trigger: every button click invalidates
+  // the lower zone, so the canvas must repaint. The strip fires the
+  // listener synchronously after persisting the new mode.
+  onStripModeChange(() => {
+    void render();
+  });
+  // Load the persisted strip map once per tab mount (the strip module owns
+  // it). Errors are swallowed — L4 is best-effort.
+  void loadPersistedStrip();
   mountZoneSplitters({
     host,
     top,
@@ -474,6 +499,8 @@ async function render(): Promise<void> {
     emptyEl?.classList.remove('hidden');
     resetFocusBand(host);
     resetCanvasCursor();
+    // The strip hides itself when there is no focus; nothing to do here.
+    void renderFilterStrip(null);
     return;
   }
   emptyEl?.classList.add('hidden');
@@ -500,10 +527,31 @@ async function render(): Promise<void> {
   await enrichRefs(focus);
   relatedTitles = visibleRelatedTitles(focus);
   renderFocusRow(focus);
+  // The strip must be in sync with the focus before we resolve the lower
+  // zone: its active mode decides whether the children zone shows real
+  // children or a view's run result.
+  await renderFilterStrip(focus);
   updateFocusBand();
   renderZone('parents', groupByThought(focus.parents));
   renderZone('siblings', groupByThought(focus.siblings));
-  renderZone('children', groupByThought(focus.children));
+  // Lower zone: pick the strip's active mode and paint accordingly. View
+  // results share the children-zone DOM (same virtualization, same cloud
+  // shape) but the gestures that imply a parent/child link to the focus
+  // (manual order, double-click-to-add) are gated on `viewResultActive`.
+  const stripMode = getStripActiveMode();
+  if (stripMode.kind === 'children') {
+    renderZone('children', groupByThought(focus.children));
+    setZoneAsViewResult(false, null);
+  } else {
+    // Run the view against the focused thought (no-op if already cached)
+    // and paint the result as the children zone. The mode change listener
+    // also calls `render()`, so this branch may execute repeatedly during
+    // a mode toggle; the strip's run cancellation keeps stale responses
+    // from overwriting fresh ones.
+    const result = await runActiveViewIfNeeded(focus.focused.id);
+    renderZone('children', viewResultToZoneEntries(result, focus));
+    setZoneAsViewResult(true, result);
+  }
   lastFocusId = focus.focused.id;
   scheduleIndicatorLoads();
   if (snapshot !== null) {
@@ -512,6 +560,76 @@ async function render(): Promise<void> {
     redrawLinks?.();
   }
   syncCanvasCursor();
+}
+
+/** Marks the children zone as carrying a view result so the gestures that
+ *  imply a parent/child link to the focus (manual order, double-click-to-add)
+ *  short-circuit (task 02ba2ae7, requirement «Исключительность зон»). */
+function setZoneAsViewResult(active: boolean, result: ViewResult | null): void {
+  if (zones === null) return;
+  const zone = zones['children'];
+  zone.classList.toggle('zone-children-view-result', active);
+  // The empty-state copy is owned by the zone renderer; here we only flip
+  // the body class so other modules (cloud drag, manual order, dblclick)
+  // can short-circuit. When `result` is non-null we also store it on the
+  // dataset so the empty-state text can switch between "Ничего не найдено"
+  // and the unresolved-token explanation.
+  if (result !== null) {
+    zone.dataset['viewResult'] = result.empty ? 'empty' : 'normal';
+    if (result.unresolved !== null) {
+      zone.dataset['viewResult'] = 'unresolved';
+      zone.dataset['unresolved'] = JSON.stringify(result.unresolved);
+    } else {
+      delete zone.dataset['unresolved'];
+    }
+  } else {
+    delete zone.dataset['viewResult'];
+    delete zone.dataset['unresolved'];
+  }
+}
+
+/** Builds ZoneEntry rows for the children zone from a view run result. The
+ *  canvas's virtualization expects `FocusNeighbor`-shaped entries (it uses
+ *  `id` for keys and the link count for ellipses), so we synthesise the
+ *  minimum surface and fill the metadata from the ref cache when known. */
+function viewResultToZoneEntries(
+  result: ViewResult | null,
+  focus: FocusResponse,
+): ZoneEntry[] {
+  if (result === null) return [];
+  const focusId = focus.focused.id;
+  // Exclude the focused thought itself — the server already filters it out,
+  // but a stale cached result may still contain it; guard explicitly so the
+  // user never sees the focus duplicated in its own view result.
+  return result.items
+    .filter((ref) => ref.id !== focusId)
+    .map((ref) => {
+      const flags = result.directions[ref.id] ?? { has_incoming: false, has_outgoing: false };
+      // The `FocusNeighbor` shape is wider than what the canvas actually
+      // reads for view results; we cast to satisfy the type. The fields
+      // below are the only ones the canvas touches for a non-focus cloud
+      // (id, type_id for line colour, has_incoming/has_outgoing for the
+      // ellipse fill, source_id/target_id for line geometry).
+      const neighbor = {
+        id: ref.id,
+        type_id: null,
+        link_id: `view-result:${ref.id}`,
+        source_id: focusId,
+        target_id: ref.id,
+        title: ref.title,
+        icon: ref.icon,
+        icon_kind: ref.icon_kind,
+        active: ref.active,
+        marked_for_deletion: ref.marked_for_deletion,
+        has_incoming: flags.has_incoming,
+        has_outgoing: flags.has_outgoing,
+      } as unknown as FocusNeighbor;
+      return {
+        id: ref.id,
+        links: [neighbor],
+        ref,
+      };
+    });
 }
 
 /** Focus id of the last render — gates the transition choreography (§2.8). */
@@ -955,11 +1073,17 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
   // gesture — the focus may have several parents, so there is no unambiguous
   // anchor. Double clicks on clouds keep their own handling; double clicks
   // with held modifiers are ignored.
+  //
+  // The children zone skips this gesture when it is currently painting a
+  // thought-type view's run result (spec `9984aa98`, «Исключительность
+  // зон»): the result rows are not children of the focus, so «add a child»
+  // would mislead the user.
   zone.addEventListener('dblclick', (event) => {
     if (dir === 'siblings') return;
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     const target = event.target as HTMLElement | null;
     if (target !== null && target.closest('.cloud') !== null) return;
+    if (zone.classList.contains('zone-children-view-result')) return;
     const focusId = store.state.focus?.focused.id;
     if (focusId === undefined) return;
     if (addDialogOpener !== null) {
@@ -1032,6 +1156,39 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     spacer.style.height = '0px';
     empty.classList.remove('hidden');
     clear(grid);
+    // The children zone carries a view-result empty state when the active
+    // strip mode is a view (spec 9984aa98). Distinguish three cases:
+    //   * "unresolved" — the filter referenced a token that did not bind;
+    //     surface the reason instead of the generic «Ничего не найдено».
+    //   * "empty" — the filter ran and returned nothing.
+    //   * otherwise — render the children zone's default hint.
+    if (dir === 'children') {
+      const viewResult = zone.dataset['viewResult'];
+      if (viewResult === 'unresolved') {
+        const raw = zone.dataset['unresolved'];
+        let text = 'Не удалось выполнить отбор: токен не разрешился.';
+        if (raw !== undefined) {
+          try {
+            const issues = JSON.parse(raw) as Array<{ token?: string; reason?: string }>;
+            if (issues.length > 0) {
+              const first = issues[0];
+              const token = typeof first?.token === 'string' ? first.token : '?';
+              const reason = typeof first?.reason === 'string' ? first.reason : 'причина не указана';
+              text = `Отбор вернул пустой результат: токен «${token}» не разрешился (${reason}).`;
+            }
+          } catch {
+            // Fall back to the generic message.
+          }
+        }
+        empty.textContent = text;
+      } else if (viewResult === 'empty') {
+        empty.textContent = 'Ничего не найдено';
+      } else {
+        empty.textContent = ZONE_EMPTY_LABELS[dir];
+      }
+    } else {
+      empty.textContent = ZONE_EMPTY_LABELS[dir];
+    }
     return;
   }
   empty.classList.add('hidden');

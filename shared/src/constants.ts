@@ -171,6 +171,11 @@ export const UI_STATE_KEY = {
   ACTIVITY_STATE: 'activity_state',
   CHRONICLE_LIST_HEIGHTS: 'chronicle_list_heights',
   MD_ZOOM: 'md_zoom',
+  /** Per-tab JSON map of `{ focusId: 'children' | viewId }` for the focus
+   *  filter strip (task 02ba2ae7, spec 9984aa98). One row per focus;
+   *  switching to a thought not in the map falls back to its default view
+   *  (or «Потомки»). */
+  FOCUS_FILTER_STRIP: 'focus_filter_strip',
 } as const satisfies Record<string, string>;
 export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];
 

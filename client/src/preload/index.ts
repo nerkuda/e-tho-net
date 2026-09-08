@@ -156,6 +156,18 @@ function buildApi(): EtnApi {
       setPropertyDescriptionOverride: (networkId, ownerType, typeId, propertyId, description) =>
         invoke('types.setPropertyDescriptionOverride', networkId, ownerType, typeId, propertyId, description),
     },
+    thoughtTypeViews: {
+      list: (networkId, thoughtTypeId, opts) =>
+        invoke('thoughtTypeViews.list', networkId, thoughtTypeId, opts),
+      create: (networkId, thoughtTypeId, input) =>
+        invoke('thoughtTypeViews.create', networkId, thoughtTypeId, input),
+      update: (networkId, thoughtTypeId, viewId, input, expectedVersion) =>
+        invoke('thoughtTypeViews.update', networkId, thoughtTypeId, viewId, input, expectedVersion),
+      remove: (networkId, thoughtTypeId, viewId, expectedVersion) =>
+        invoke('thoughtTypeViews.remove', networkId, thoughtTypeId, viewId, expectedVersion),
+      run: (networkId, thoughtId, viewName, opts) =>
+        invoke('thoughtTypeViews.run', networkId, thoughtId, viewName, opts),
+    },
     properties: {
       get: (networkId, ownerType, ownerId) =>
         invoke('properties.get', networkId, ownerType, ownerId),

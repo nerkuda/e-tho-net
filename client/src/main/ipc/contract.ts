@@ -90,6 +90,9 @@ import type {
   ThoughtTypeInput,
   ThoughtTypeUpdateInput,
   ThoughtUpdateInput,
+  ThoughtTypeView,
+  ThoughtTypeViewInput,
+  ThoughtTypeViewUpdateInput,
   ThoughtUsage,
   TrashListResult,
   TrashPurgeResult,
@@ -599,6 +602,75 @@ export interface EtnApi {
       propertyId: string,
       description: string | null,
     ): Promise<void>;
+  };
+  thoughtTypeViews: {
+    /** `GET /thought-types/{id}/views` — list views of a single thought type
+     *  (task c1fa71d4, 0.7.3). `includeEffective: true` (default) attaches
+     *  the effective chain (`meta.effective`) on top of the type's own
+     *  views; the strip renders the effective chain. */
+    list(
+      networkId: string,
+      thoughtTypeId: string,
+      opts?: { includeEffective?: boolean },
+    ): Promise<{
+      data: ThoughtTypeView[];
+      meta: {
+        /** Effective views chain: root → type, with the type's own
+         *  overrides replacing same-named parent views. Empty when
+         *  `includeEffective` is false. */
+        effective: ThoughtTypeView[];
+      };
+    }>;
+    /** `POST /thought-types/{id}/views` — create a new view. The dialog
+     *  (stage 8) lives at the editor; here we only provide the IPC. */
+    create(
+      networkId: string,
+      thoughtTypeId: string,
+      input: ThoughtTypeViewInput,
+    ): Promise<ThoughtTypeView>;
+    /** `PATCH /thought-types/{id}/views/{viewId}` — partial update with
+     *  optimistic concurrency (`expectedVersion` → `If-Match`). */
+    update(
+      networkId: string,
+      thoughtTypeId: string,
+      viewId: string,
+      input: ThoughtTypeViewUpdateInput,
+      expectedVersion: number,
+    ): Promise<ThoughtTypeView>;
+    /** `DELETE /thought-types/{id}/views/{viewId}` — optimistic
+     *  concurrency required; the strip context menu calls this on «Удалить
+     *  отбор». */
+    remove(
+      networkId: string,
+      thoughtTypeId: string,
+      viewId: string,
+      expectedVersion: number,
+    ): Promise<void>;
+    /** `POST /thoughts/{thoughtId}/views/{view}/run` — run a view
+     *  relative to a context thought. `view` is the view's `name_key`
+     *  (case-insensitive); the server matches it in the effective chain
+     *  and substitutes `$thought.*` tokens before executing the filter.
+     *  When the resolver cannot bind a token, `meta.unresolved` explains
+     *  why and the lower zone reads from there (spec `9984aa98`). */
+    run(
+      networkId: string,
+      thoughtId: string,
+      viewName: string,
+      opts?: { sort?: 'alpha' | 'created' | 'updated'; order?: 'asc' | 'desc'; limit?: number; offset?: number },
+    ): Promise<{
+      data: ThoughtRef[];
+      meta: {
+        total: number;
+        limit: number;
+        offset: number;
+        /** Direction flags used to fill ellipses on the result clouds. */
+        directions: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
+        view: { id: string; name: string; type_id: string };
+        sort?: string;
+        order?: string;
+        unresolved?: Array<{ token: string; reason: string; message: string }>;
+      };
+    }>;
   };
   properties: {
     get(
