@@ -98,6 +98,16 @@ export interface FilterState {
   editorId: string;
   /** Список id редакторов для `in`/`not_in`. */
   editorIds: string[];
+  /**
+   * Задача 7032e55a «Фильтры по датам создания и изменения»: ISO-8601
+   * (`YYYY-MM-DD` или `YYYY-MM-DDTHH:MM:SS[…][Z|±HH:MM]`); пустая строка —
+   * граница не выставляется. Серверная нормализация та же, что у
+   * `chronicle/query` §20.
+   */
+  createdAfter: string;
+  createdBefore: string;
+  updatedAfter: string;
+  updatedBefore: string;
   sort: StructureSort;
   order: SortOrder;
   savedFilterId: string | null;
@@ -190,6 +200,10 @@ function defaultState(): FilterState {
     editorOp: 'eq',
     editorId: '',
     editorIds: [],
+    createdAfter: '',
+    createdBefore: '',
+    updatedAfter: '',
+    updatedBefore: '',
     sort: 'created',
     order: 'asc',
     savedFilterId: null,
@@ -230,6 +244,12 @@ let savedListBox: HTMLElement | null = null;
 /** Collapse state of the two collapsible groups (transient, not persisted). */
 let propertiesCollapsed = true;
 let extraCollapsed = true;
+/**
+ * Свёрнута ли группа «Даты» (задача 7032e55a). По умолчанию свёрнута — это
+ * новая группа, существующий отбор её не касается; временное состояние, в
+ * L4 `structures_state` не сохраняется.
+ */
+let datesCollapsed = true;
 
 // ---------------------------------------------------------------------------
 // Public API (used by structures.ts / realtime)
@@ -253,6 +273,7 @@ export function setFilterState(next: FilterState): void {
     state.active === null &&
     !authorFilterActive(state.authorOp, state.authorId, state.authorIds) &&
     !authorFilterActive(state.editorOp, state.editorId, state.editorIds);
+  datesCollapsed = !dateFilterActive(state);
   renderPanel();
 }
 
@@ -334,6 +355,10 @@ export function buildExtraFilter(): Pick<
   | 'created_by_op'
   | 'updated_by'
   | 'updated_by_op'
+  | 'created_after'
+  | 'created_before'
+  | 'updated_after'
+  | 'updated_before'
 > {
   const out: ReturnType<typeof buildExtraFilter> = {};
   if (state.parentIds.length > 0) out.parent_ids = state.parentIds;
@@ -358,6 +383,12 @@ export function buildExtraFilter(): Pick<
     out.updated_by = editorWire;
     if (state.editorOp !== 'eq') out.updated_by_op = state.editorOp;
   }
+  // Задача 7032e55a «Фильтры по датам»: пустая строка → граница не выставляется
+  // (сервер тоже её игнорирует).
+  if (state.createdAfter.trim() !== '') out.created_after = state.createdAfter.trim();
+  if (state.createdBefore.trim() !== '') out.created_before = state.createdBefore.trim();
+  if (state.updatedAfter.trim() !== '') out.updated_after = state.updatedAfter.trim();
+  if (state.updatedBefore.trim() !== '') out.updated_before = state.updatedBefore.trim();
   return out;
 }
 
@@ -381,6 +412,16 @@ function authorFilterActive(op: StructureAuthorOp, single: string, list: string[
   if (op === 'empty' || op === 'not_empty') return true;
   if (op === 'in' || op === 'not_in') return list.length > 0;
   return single !== '';
+}
+
+/** True when at least one date bound is filled (задача 7032e55a). */
+function dateFilterActive(s: FilterState): boolean {
+  return (
+    s.createdAfter.trim() !== '' ||
+    s.createdBefore.trim() !== '' ||
+    s.updatedAfter.trim() !== '' ||
+    s.updatedBefore.trim() !== ''
+  );
 }
 
 /**
@@ -523,6 +564,7 @@ function clearAllCriteria(): void {
   state = { ...defaultState(), sort: state.sort, order: state.order, panelWidth: state.panelWidth };
   propertiesCollapsed = true;
   extraCollapsed = true;
+  datesCollapsed = true;
   renderPanel();
   touch();
 }
@@ -634,28 +676,70 @@ function buildKeywordScopeRow(): HTMLElement {
       input: null,
     },
   ];
-  for (const item of items) {
-    const lbl = el('label', 'checkbox-row st-f-kw-scope-item');
-    const input = el('input') as HTMLInputElement;
-    input.type = 'checkbox';
-    input.checked = item.get();
-    item.input = input;
-    setTooltip(lbl, item.tooltip);
-    input.addEventListener('change', () => {
-      item.set(input.checked);
-      // Cleared all three — revert to the default pair (§15.3 proposal).
-      if (!state.keywordInTitle && !state.keywordInSynonyms && !state.keywordInComment) {
-        state.keywordInTitle = true;
-        state.keywordInSynonyms = true;
-      }
-      for (const other of items) other.input!.checked = other.get();
-      touch();
-    });
-    lbl.append(input, span(item.label));
-    row.append(lbl);
+    for (const item of items) {
+      const lbl = el('label', 'checkbox-row st-f-kw-scope-item');
+      const input = el('input') as HTMLInputElement;
+      input.type = 'checkbox';
+      input.checked = item.get();
+      item.input = input;
+      setTooltip(lbl, item.tooltip);
+      input.addEventListener('change', () => {
+        item.set(input.checked);
+        // Cleared all three — revert to the default pair (§15.3 proposal).
+        if (!state.keywordInTitle && !state.keywordInSynonyms && !state.keywordInComment) {
+          state.keywordInTitle = true;
+          state.keywordInSynonyms = true;
+        }
+        for (const other of items) other.input!.checked = other.get();
+        touch();
+      });
+      lbl.append(input, span(item.label));
+      row.append(lbl);
+    }
+    return row;
   }
+
+/**
+ * Строка «от / до» одной временной группы (задача 7032e55a). Использует
+ * `<input type="datetime-local">` — нативный пикер даты/времени без
+ * зависимостей; формат значения `YYYY-MM-DDTHH:MM` совместим с ISO-8601,
+ * который сервер уже принимает (`created_after`/`created_before`/…).
+ * Пустая строка — граница не выставлена.
+ */
+function buildDateBoundRow(
+  label: string,
+  opts: {
+    after: string;
+    before: string;
+    onAfterChange: (v: string) => void;
+    onBeforeChange: (v: string) => void;
+  },
+): HTMLElement {
+  const row = div('st-f-date-row');
+  row.append(el('span', 'st-f-date-label', label));
+  const afterWrap = div('st-f-date-field');
+  afterWrap.append(el('span', 'st-f-date-tag', 'от'));
+  const afterInput = el('input', 'st-f-input') as HTMLInputElement;
+  afterInput.type = 'datetime-local';
+  afterInput.step = '1';
+  afterInput.value = opts.after;
+  setTooltip(afterInput, 'Включительно. Формат ISO-8601 (YYYY-MM-DDTHH:MM:SS)');
+  afterInput.addEventListener('input', () => opts.onAfterChange(afterInput.value));
+  afterWrap.append(afterInput);
+  row.append(afterWrap);
+
+  const beforeWrap = div('st-f-date-field');
+  beforeWrap.append(el('span', 'st-f-date-tag', 'до'));
+  const beforeInput = el('input', 'st-f-input') as HTMLInputElement;
+  beforeInput.type = 'datetime-local';
+  beforeInput.step = '1';
+  beforeInput.value = opts.before;
+  setTooltip(beforeInput, 'Включительно. Формат ISO-8601 (YYYY-MM-DDTHH:MM:SS)');
+  beforeInput.addEventListener('input', () => opts.onBeforeChange(beforeInput.value));
+  beforeWrap.append(beforeInput);
+  row.append(beforeWrap);
   return row;
-}
+  }
 
 // Group-title elements of the current panel (refreshGroupTitles toggles them).
 let kwTitle: HTMLElement | null = null;
@@ -664,6 +748,7 @@ let ttTitle: HTMLElement | null = null;
 let ltTitle: HTMLElement | null = null;
 let propsTitle: HTMLElement | null = null;
 let extraTitle: HTMLElement | null = null;
+let datesTitle: HTMLElement | null = null;
 
 /**
  * Uniform «group carries values» marking (§15.3): EVERY group whose criteria
@@ -685,6 +770,8 @@ function refreshGroupTitles(): void {
       state.hasChronology !== null ||
       (state.active !== null && store.state.showInactive),
   );
+  // Задача 7032e55a: маркер «Даты» заполнен, если задана хотя бы одна граница.
+  datesTitle?.classList.toggle('st-f-title-active', dateFilterActive(state));
 }
 
 /** Persists the state (L4) and refreshes the uniform group-title marking. */
@@ -951,6 +1038,50 @@ function renderPanel(): void {
   });
   props.body.append(conditionsBox, addCond);
   scroll.append(props.box);
+
+  // --- Даты (задача 7032e55a): сворачиваемая группа «Создано»/«Изменено»,
+  // две пары полей «от»/«до». По умолчанию свёрнута, существующий отбор
+  // её не касается.
+  const dates = collapsibleBlock(
+    'Даты',
+    () => datesCollapsed,
+    (v) => {
+      datesCollapsed = v;
+    },
+    () => dateFilterActive(state),
+  );
+  datesTitle = dates.head;
+  dates.body.append(
+    buildDateBoundRow('Создано', {
+      after: state.createdAfter,
+      before: state.createdBefore,
+      onAfterChange: (v) => {
+        state.createdAfter = v;
+        touch();
+        dates.refresh();
+      },
+      onBeforeChange: (v) => {
+        state.createdBefore = v;
+        touch();
+        dates.refresh();
+      },
+    }),
+    buildDateBoundRow('Изменено', {
+      after: state.updatedAfter,
+      before: state.updatedBefore,
+      onAfterChange: (v) => {
+        state.updatedAfter = v;
+        touch();
+        dates.refresh();
+      },
+      onBeforeChange: (v) => {
+        state.updatedBefore = v;
+        touch();
+        dates.refresh();
+      },
+    }),
+  );
+  scroll.append(dates.box);
 
   // --- «Дополнительно» (collapsible tri-state group, §15.3) ------------------
   const extra = collapsibleBlock(
@@ -1800,6 +1931,11 @@ function applySavedFilter(filter: SavedFilter): void {
     editorId: typeof def.updated_by === 'string' ? def.updated_by : '',
     editorIds: Array.isArray(def.updated_by) ? def.updated_by : [],
     editorOp: (def.updated_by_op ?? 'eq') as StructureAuthorOp,
+    // Задача 7032e55a: границы дат — теми же ключами, что отдаёт сервер.
+    createdAfter: typeof def.created_after === 'string' ? def.created_after : '',
+    createdBefore: typeof def.created_before === 'string' ? def.created_before : '',
+    updatedAfter: typeof def.updated_after === 'string' ? def.updated_after : '',
+    updatedBefore: typeof def.updated_before === 'string' ? def.updated_before : '',
     sort: def.sort,
     order: def.order,
     savedFilterId: filter.id,

@@ -4254,6 +4254,44 @@ body.cloud-dragging * {
   cursor: not-allowed;
 }
 
+/* «Даты» group rows (задача 7032e55a): «Создано» / «Изменено», в каждом
+ * «от» / «до» `<input type="datetime-local">`. Компактнее, чем tri-row —
+ * две пары полей на одной строке. */
+.st-f-date-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.st-f-date-label {
+  flex: 0 0 auto;
+  min-width: 70px;
+  color: var(--text);
+}
+
+.st-f-date-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.st-f-date-tag {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
+
+.st-f-date-field .st-f-input {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 6px;
+}
+
 /* Type/link-type picker dialog body (§15.3). */
 .st-f-picker {
   display: flex;

@@ -201,10 +201,10 @@ function parseFilterState(raw: string): FilterState {
       keywordInTitle: parsed.keywordInTitle !== false,
       keywordInSynonyms: parsed.keywordInSynonyms !== false,
       keywordInComment: parsed.keywordInComment === true,
-      parentIds: Array.isArray(parsed.parentIds) ? parsed.parentIds.filter((v) => typeof v === 'string') : [],
-      typeIds: Array.isArray(parsed.typeIds) ? parsed.typeIds.filter((v) => typeof v === 'string') : [],
+      parentIds: Array.isArray(parsed.parentIds) ? parsed.parentIds.filter((v): v is string => typeof v === 'string') : [],
+      typeIds: Array.isArray(parsed.typeIds) ? parsed.typeIds.filter((v): v is string => typeof v === 'string') : [],
       linkTypeIds: Array.isArray(parsed.linkTypeIds)
-        ? parsed.linkTypeIds.filter((v) => typeof v === 'string')
+        ? parsed.linkTypeIds.filter((v): v is string => typeof v === 'string')
         : [],
       properties: Array.isArray(parsed.properties)
         ? parsed.properties.filter(
@@ -230,6 +230,13 @@ function parseFilterState(raw: string): FilterState {
       editorIds: Array.isArray(parsed.editorIds)
         ? parsed.editorIds.filter((v): v is string => typeof v === 'string')
         : [],
+      // Задача 7032e55a «Фильтры по датам»: ISO-8601 строка (или пустая).
+      // В L4 `structures_state` сохраняется всегда (через `getFilterState()`);
+      // старые JSON без этих полей получат дефолт `''` — граница не выставляется.
+      createdAfter: typeof parsed.createdAfter === 'string' ? parsed.createdAfter : '',
+      createdBefore: typeof parsed.createdBefore === 'string' ? parsed.createdBefore : '',
+      updatedAfter: typeof parsed.updatedAfter === 'string' ? parsed.updatedAfter : '',
+      updatedBefore: typeof parsed.updatedBefore === 'string' ? parsed.updatedBefore : '',
       sort: parsed.sort === 'alpha' || parsed.sort === 'created' || parsed.sort === 'viewed' ? parsed.sort : 'created',
       order: parsed.order === 'asc' || parsed.order === 'desc' ? parsed.order : 'asc',
       savedFilterId: typeof parsed.savedFilterId === 'string' ? parsed.savedFilterId : null,

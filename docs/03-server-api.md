@@ -724,6 +724,17 @@ POST /api/v1/networks/{nid}/thoughts/query
                                   # выдачу наравне с обычными. Список самой
                                   # корзины отдаёт отдельный GET /trash (§14b),
                                   # не этот фильтр
+  created_after?: "2024-02-01",   # задача 7032e55a: нижняя граница (включительно)
+                                  # `thoughts.created_at`; ISO-8601 (`YYYY-MM-DD`
+                                  # или `YYYY-MM-DDTHH:MM:SS[…][Z|±HH:MM]` —
+                                  # тот же формат, что у `chronicle/query` §20).
+                                  # Пустая строка / отсутствие — граница не
+                                  # выставляется. Паритет с MCP
+                                  # `etn.thoughts.query.created_after` и панелью
+                                  # «Структур» (08-ui-spec.md §15.3)
+  created_before?: "2024-02-28",  # верхняя граница `created_at` (включительно)
+  updated_after?: "2024-03-01",   # нижняя граница `thoughts.updated_at`
+  updated_before?: "2024-03-31",  # верхняя граница `updated_at`
   sort: "alpha"|"created"|"viewed",
   order: "asc"|"desc",
   limit: 100, offset: 0,          # limit клампится в 1..100
@@ -749,13 +760,14 @@ POST /api/v1/networks/{nid}/thoughts/query
 
 - **Пустой фильтр** (нет ни одного из `keywords`, `parent_ids`, `type_ids`,
   `link_type_ids`, `properties`, `has_properties`, `has_comment`,
-  `has_attachments`, `has_chronology`, `active`) возвращает начальную мысль
-  сети HOME (`is_root=1`, всегда первой) и всех «сирот» — мысли без
-  родительских связей (нет ни одной active-связи, где мысль является целью).
-  Сироты идут за HOME в выбранной сортировке; `show_inactive` действует как
-  обычно (неактуальные сироты попадают в результат только при
-  `show_inactive: true`); `meta.total` = HOME + все сироты, `limit`/`offset`
-  пагинируют объединённый список.
+  `has_attachments`, `has_chronology`, `active`, `created_by`/`updated_by`,
+  `created_after`/`created_before`/`updated_after`/`updated_before`)
+  возвращает начальную мысль сети HOME (`is_root=1`, всегда первой) и всех
+  «сирот» — мысли без родительских связей (нет ни одной active-связи, где
+  мысль является целью). Сироты идут за HOME в выбранной сортировке;
+  `show_inactive` действует как обычно (неактуальные сироты попадают в
+  результат только при `show_inactive: true`); `meta.total` = HOME + все
+  сироты, `limit`/`offset` пагинируют объединённый список.
 - `meta.directions` — `{ "<thought_id>": { has_incoming, has_outgoing }, ... }`
   для всех мыслей страницы: наличие active входящих/исходящих связей. Клиент
   закрашивает эллипсы корней дерева сразу после отбора (та же семантика, что
@@ -816,6 +828,20 @@ POST /api/v1/networks/{nid}/thoughts/query
   (NULL — последними при `asc`).
 - Условие с несуществующим `property_id` игнорируется: определение свойства
   могло быть удалено после сохранения отбора — остальные условия применяются.
+- **`created_after`/`created_before`/`updated_after`/`updated_before`** (задача
+  7032e55a): границы дат создания/изменения, применяемые как
+  `t.created_at >= created_after AND t.created_at <= created_before` (и
+  аналогично для `updated_at`). Любая граница может быть опущена; обе
+  включающие. `thoughts.created_at`/`updated_at` — текстовые колонки с
+  ISO-8601 — сравнение лексикографическое совпадает с ISO-порядком, поэтому
+  формат достаточно проверить на корректный `YYYY-MM-DD[…T HH:MM:SS]`;
+  валидация на сервере (`parseStructureFilter`): не строка, пустая строка
+  или не-ISO-форма → `422 VALIDATION_ERROR` с `details.field`. Комбинируются
+  с остальными критериями по AND; пустой фильтр по датам (все четыре пусты)
+  фильтр не сужает (HOME + сироты — обычная ветка §6.10). Паритет с MCP
+  `etn.thoughts.query.created_after`/`created_before`/`updated_after`/
+  `updated_before` (05-mcp-server.md §4.1) и панелью «Структур»
+  (08-ui-spec.md §15.3, сворачиваемая группа «Даты» с двумя парами полей).
 
 ### 6.11. Иерархия одного уровня (для дерева «Структур»)
 ```
