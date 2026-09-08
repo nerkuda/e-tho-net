@@ -127,6 +127,56 @@ export interface OntologyWriteTypeProperty {
   default_value?: unknown;
 }
 
+/**
+ * Один элемент `type_views[]` в `etn.ontology.write` (задача c1fa71d4, 0.7.3,
+ * ADR 5c44f6a7 «Отборы правятся инструментами онтологии»). Создание,
+ * правка и удаление отборов типов идут той же транзакцией, что и сами
+ * типы, — без отдельного семейства `etn.views.*` на запись.
+ *
+ * Действие `action`:
+ *   * `create` — `thought_type_id` (или `thought_type_ref` из этого же
+ *     батча) + `name` обязательны; `definition` обязателен. Upsert:
+ *     если у указанного типа уже есть отбор с тем же `name_key`, обновит
+ *     его (как `update`).
+ *   * `update` — требуется `id` существующего отбора (или `ref_for_update`,
+ *     если был создан в этом же батче под `ref`); меняются только
+ *     переданные поля.
+ *   * `delete` — требуется `id` существующего отбора (или `ref_for_update`
+ *     из этого же батча). В этом случае остальные поля игнорируются.
+ *
+ * `thought_type` / `thought_type_ref` — XOR. `definition` обязан быть
+ * валидной JSON-строкой того же формата, что и `saved_filters.definition`
+ * (требование 141c2576, 7263e565, eaca1253, 3697eb65 — те же, что и для
+ * REST `POST /thought-types/{id}/views`).
+ */
+export interface OntologyWriteTypeView {
+  /** Локальное имя в пределах батча. Используется для адресации из этого
+   *  же батча через `ref_for_update` других элементов `type_views[]`. */
+  ref?: string;
+  /** Действие: создание (upsert), правка или удаление. */
+  action: 'create' | 'update' | 'delete';
+  /** Id существующего отбора для `update` / `delete`. */
+  id?: string;
+  /** Локальный `ref` другого элемента `type_views[]` из этого же батча,
+   *  адресующий только что созданный/обновлённый отбор. */
+  ref_for_update?: string;
+  /** Id существующего типа-владельца (XOR с `thought_type_ref`). */
+  thought_type?: string;
+  /** Локальный `ref` типа из `thought_types[]` этого же батча (XOR с
+   *  `thought_type`). */
+  thought_type_ref?: string;
+  /** Видимое имя (1..200 символов, trim+lowercase для сравнения). */
+  name?: string;
+  /** Описание отбора (≤1000 символов). `null` снимает описание. */
+  description?: string | null;
+  /** JSON-строка определения отбора (`SavedFilterDefinition`). */
+  definition?: string;
+  /** Позиция в списке отборов типа. */
+  position?: number;
+  /** `true` — отбор открывается сам при переводе мысли в фокус. */
+  is_default?: boolean;
+}
+
 /** Действие, выполненное над одним элементом `thought_types[]`. */
 export type OntologyWriteThoughtTypeAction = 'created' | 'updated' | 'unchanged';
 
@@ -139,6 +189,9 @@ export type OntologyWritePropertyAction = 'created' | 'updated' | 'unchanged';
 
 /** Действие, выполненное над одним элементом `type_properties[]`. */
 export type OntologyWriteTypePropertyAction = 'created' | 'updated' | 'unchanged';
+
+/** Действие, выполненное над одним элементом `type_views[]`. */
+export type OntologyWriteTypeViewAction = 'created' | 'updated' | 'deleted' | 'unchanged';
 
 /** Результат одного элемента `thought_types[]`. */
 export interface OntologyWriteThoughtTypeResult {
@@ -190,6 +243,22 @@ export interface OntologyWriteTypePropertyResult {
   action: OntologyWriteTypePropertyAction;
 }
 
+/**
+ * Результат одного элемента `type_views[]` (задача c1fa71d4, 0.7.3).
+ * `id` и `version` возвращаются для созданных/обновлённых/удалённых; для
+ * `unchanged` (повторный upsert с теми же аргументами) совпадают с БД.
+ */
+export interface OntologyWriteTypeViewResult {
+  /** `ref` из запроса или `null`, если адресация шла по `id`. */
+  ref: string | null;
+  /** Id отбора в `thought_type_views` (после create/update или до delete). */
+  id: string;
+  /** Resolved id типа-владельца. */
+  thought_type_id: string;
+  version: number;
+  action: OntologyWriteTypeViewAction;
+}
+
 /** Параметры `etn.ontology.write`. */
 export interface OntologyWriteParams {
   network_id: string;
@@ -197,6 +266,13 @@ export interface OntologyWriteParams {
   link_types?: OntologyWriteLinkType[];
   properties?: OntologyWriteProperty[];
   type_properties?: OntologyWriteTypeProperty[];
+  /**
+   * Отборы типов мыслей (задача c1fa71d4, 0.7.3). Upsert/delete в одной
+   * транзакции с типами и свойствами. Локальные `ref` действуют внутри
+   * батча; `thought_type_ref` позволяет привязать отбор к типу,
+   * создаваемому в этом же батче.
+   */
+  type_views?: OntologyWriteTypeView[];
 }
 
 /** Результат `etn.ontology.write`. */
@@ -205,6 +281,7 @@ export interface OntologyWriteResult {
   link_types: OntologyWriteLinkTypeResult[];
   properties: OntologyWritePropertyResult[];
   type_properties: OntologyWriteTypePropertyResult[];
+  type_views: OntologyWriteTypeViewResult[];
   /** Слой сессии, в котором материализовался батч. */
   layer: { id: string; title: string };
   request_id?: string;
@@ -215,7 +292,16 @@ export interface OntologyWriteResult {
 // ===========================================================================
 
 /** Вид удаляемой сущности в `etn.ontology.delete`. */
-export type OntologyDeleteKind = 'thought_type' | 'link_type' | 'property' | 'type_property';
+export type OntologyDeleteKind =
+  | 'thought_type'
+  | 'link_type'
+  | 'property'
+  | 'type_property'
+  // `type_view` (задача c1fa71d4, 0.7.3) — отбор типа мысли. Без `force`
+  // удаляется безусловно (отбор не имеет входящих зависимостей кроме
+  // владеющего типа, который остаётся). Удаление типа с `force` каскадно
+  // удаляет и его отборы.
+  | 'type_view';
 
 /** Параметры `etn.ontology.delete`. Без `force` используемый элемент
  *  отвергается со счётчиками в `details`. С `force` — каскад по правилам:
@@ -247,6 +333,9 @@ export interface OntologyDeleteAffectedCounts {
   property_values_count?: number;
   /** Число привязок `type_properties`, удалённых каскадом. */
   type_properties_count?: number;
+  /** Для `thought_type` (с `force=true`) — число отборов, удалённых
+   *  каскадом вместе с типом (задача c1fa71d4, 0.7.3). */
+  type_views_count?: number;
 }
 
 /** Результат `etn.ontology.delete`. */

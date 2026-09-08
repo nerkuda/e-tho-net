@@ -498,7 +498,7 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
     }
   });
 
-  it('tools/list stays within the 0.7.2 size budget', async () => {
+  it('tools/list stays within the 0.7.3 size budget', async () => {
     const ctx = await buildMcpContext();
     try {
       const handle = await connectMcpClient(ctx, ctx.adminKey);
@@ -521,10 +521,13 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // P3) re-baselines до 78 000 B для 67 инструментов: `copy_subtree`,
         // `mentions_scan`, `import.dry_run`, `import.subgraph` добавляют
         // ~5 500 B (длинные описания подграфных операций и dry_run/scan).
+        // Задача c1fa71d4 (0.7.3) re-baselines до 84 000 B для 68
+        // инструментов: `etn.views.run` добавляет ~3 500 B (длинное
+        // описание контракта + описание `meta.views` в `etn.thoughts.get`).
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
         assert.ok(
-          bytes <= 78_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.7.2 budget of 78000`,
+          bytes <= 84_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.7.3 budget of 84000`,
         );
       } finally {
         await handle.close();

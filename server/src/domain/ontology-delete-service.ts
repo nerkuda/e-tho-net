@@ -36,6 +36,7 @@ import { getRootTypeId } from './type-hierarchy.js';
 import { deleteTypeProperty } from './property-service.js';
 import { deleteThoughtType } from './thought-type-service.js';
 import { deleteLinkType } from './link-type-service.js';
+import { deleteThoughtTypeView, listThoughtTypeViewsByType } from './thought-type-views-service.js';
 
 export {
   EtnError,
@@ -51,7 +52,8 @@ function isKind(value: unknown): value is OntologyDeleteKind {
     value === 'thought_type' ||
     value === 'link_type' ||
     value === 'property' ||
-    value === 'type_property'
+    value === 'type_property' ||
+    value === 'type_view'
   );
 }
 
@@ -64,6 +66,8 @@ interface OntologyDeleteUsage {
   links_count?: number;
   type_properties_count?: number;
   property_values_count?: number;
+  /** Для `thought_type` — число отборов типа (задача c1fa71d4, 0.7.3). */
+  type_views_count?: number;
 }
 
 function buildUsageDetails(
@@ -116,8 +120,13 @@ export function deleteOntologyEntity(
       );
     }
   }
+  // Защита `type_view` (задача c1fa71d4): отбор не может быть занят в роли
+  // сети (роли — это типы), отдельная проверка не нужна.
+  void networkRoles;
 
-  // Без force — отвергаем на любом использовании.
+  // Без force — отвергаем на любом использовании. `type_view` не имеет
+  // использований (нет мыслей/связей/привязок, ссылающихся на отбор), так
+  // что для него ветка force-блока тривиальна.
   if (!force) {
     const hasUsage =
       (usage.thoughts_count ?? 0) > 0 ||
@@ -135,9 +144,18 @@ export function deleteOntologyEntity(
 
   ndb.transaction(() => {
     switch (params.kind) {
-      case 'thought_type':
+      case 'thought_type': {
         deleteThoughtType(ndb, params.id, undefined, { force, actorUserId });
+        // Каскад отборов типа (задача c1fa71d4). Делается всегда — отборы
+        // не переживают удаление владеющего типа даже без `force` (тип-то
+        // уже удалён/скрыт в слое), а в базе каскад обязателен.
+        const viewIds = listThoughtTypeViewsByType(ndb, params.id).map((v) => v.id);
+        for (const viewId of viewIds) {
+          deleteThoughtTypeView(ndb, viewId);
+        }
+        usage.type_views_count = viewIds.length;
         break;
+      }
       case 'link_type':
         deleteLinkType(ndb, params.id, undefined, { force, actorUserId });
         break;
@@ -157,6 +175,14 @@ export function deleteOntologyEntity(
       }
       case 'type_property': {
         deleteTypeProperty(ndb, params.id, actorUserId);
+        break;
+      }
+      case 'type_view': {
+        // `deleteThoughtTypeView` уже идемпотентен: возвращает `false`,
+        // если строки нет. NOT_FOUND на стороне репозитория не бросаем —
+        // здесь мы НЕ делаем pre-check через `getViewOrThrow`, чтобы
+        // повторный delete не падал.
+        deleteThoughtTypeView(ndb, params.id);
         break;
       }
     }
@@ -202,7 +228,16 @@ function collectUsage(
           c: number;
         }
       ).c;
-      return { thoughts_count: thoughts, type_properties_count: countTypeProperties(ndb, 'thought_type', id) };
+      const typeViews = (
+        ndb.prepare('SELECT COUNT(*) AS c FROM thought_type_views_v WHERE thought_type_id = ?').get(id) as {
+          c: number;
+        }
+      ).c;
+      return {
+        thoughts_count: thoughts,
+        type_properties_count: countTypeProperties(ndb, 'thought_type', id),
+        type_views_count: typeViews,
+      };
     }
     case 'link_type': {
       const links = (
@@ -226,6 +261,11 @@ function collectUsage(
       return { property_values_count: valuesCount, type_properties_count: tpCount };
     }
     case 'type_property': {
+      return {};
+    }
+    case 'type_view': {
+      // `type_view` сам по себе не имеет использований: нет мыслей, ссылок
+      // или свойств, привязанных к отбору. Удаление идёмпотентно.
       return {};
     }
   }

@@ -59,6 +59,10 @@ export const MCP_TOOL_NAMES = [
   'etn.comments.get',
   'etn.export.subgraph',
   'etn.types.list',
+  // `etn.views.run` (задача c1fa71d4, 0.7.3, операция cb8d8e43) — исполнение
+  // именованного отбора типа относительно конкретной мысли. Read-only:
+  // бюджет записи не тратит, `audit_log` не пишет.
+  'etn.views.run',
   'etn.changes.list',
   'etn.chronicle.query',
   'etn.members.list',
@@ -194,6 +198,9 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.comments.get': { readOnlyHint: true },
   'etn.export.subgraph': { readOnlyHint: true },
   'etn.types.list': { readOnlyHint: true },
+  // `etn.views.run` (задача c1fa71d4, 0.7.3) — read-only исполнение отбора;
+  // не пишет событий и audit_log, всегда идемпотентно для одного набора аргументов.
+  'etn.views.run': { readOnlyHint: true },
   'etn.changes.list': { readOnlyHint: true },
   'etn.chronicle.query': { readOnlyHint: true },
   'etn.metrics.reads': { readOnlyHint: true },
@@ -364,9 +371,27 @@ export interface LinkTypeRef {
 // ---------------------------------------------------------------------------
 
 /** A thought type entry of `etn.types.list`: {@link ThoughtTypeRef} + its
- *  effective property list (own + inherited along the L21 chain). */
+ *  effective property list (own + inherited along the L21 chain) +
+ *  собственные отборы (задача c1fa71d4, 0.7.3): без наследования от предков
+ *  (это контракт `etn.types.list` для типов; эффективный набор для конкретной
+ *  мысли — через `etn.thoughts.get { meta.views }`). */
 export interface McpThoughtTypeEntry extends ThoughtTypeRef {
   properties: EffectiveTypeProperty[];
+  views: McpThoughtTypeViewEntry[];
+}
+
+/**
+ * Один собственный отбор типа мысли в `etn.types.list` (задача c1fa71d4,
+ * 0.7.3). `definition` намеренно не включается — для каталога типов
+ * достаточно имени и описания, а полное исполнение даёт `etn.views.run`.
+ */
+export interface McpThoughtTypeViewEntry {
+  id: string;
+  name: string;
+  name_key: string;
+  description: string | null;
+  position: number;
+  is_default: boolean;
 }
 
 /** A link type entry of `etn.types.list`: {@link LinkTypeRef} + its effective

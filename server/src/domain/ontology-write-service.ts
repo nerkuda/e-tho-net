@@ -47,6 +47,9 @@ import {
   type OntologyWriteThoughtTypeResult,
   type OntologyWriteTypeProperty,
   type OntologyWriteTypePropertyResult,
+  type OntologyWriteTypeView,
+  type OntologyWriteTypeViewAction,
+  type OntologyWriteTypeViewResult,
   type PropertyConfig,
   type PropertyDefinition,
   type PropertyValueType,
@@ -83,6 +86,12 @@ import {
   updateTypeProperty,
 } from './property-service.js';
 import { assertParentValid } from './type-hierarchy.js';
+import {
+  createThoughtTypeView,
+  deleteThoughtTypeView,
+  getThoughtTypeView,
+  updateThoughtTypeView,
+} from './thought-type-views-service.js';
 
 export {
   EtnError,
@@ -100,6 +109,9 @@ export {
   type OntologyWriteThoughtTypeResult,
   type OntologyWriteTypeProperty,
   type OntologyWriteTypePropertyResult,
+  type OntologyWriteTypeView,
+  type OntologyWriteTypeViewAction,
+  type OntologyWriteTypeViewResult,
 };
 
 // ===========================================================================
@@ -167,6 +179,34 @@ interface ResolvedTypeProperty {
   property_ref: string | null;
   required: boolean;
   position: number | undefined;
+}
+
+/**
+ * Внутреннее представление элемента `type_views[]` после resolve (задача
+ * c1fa71d4, 0.7.3). Проще `ResolvedTypeProperty`: тип-владелец ровно один
+ * (нет owner), `id`/`ref_for_update` адресует существующий или только что
+ * созданный в этом же батче отбор.
+ */
+interface ResolvedTypeView {
+  index: number;
+  ref: string | null;
+  action: OntologyWriteTypeView['action'];
+  /** Id существующего отбора для update/delete (или resolved из
+   *  `ref_for_update` после write-фазы). `null` для create. */
+  viewId: string | null;
+  /** Локальный `ref` другого `type_views[]` из этого же батча, который
+   *  должен быть разрешён в id после write-фазы. */
+  ref_for_update: string | null;
+  /** Тип-владелец отбора: existing id или batch_ref. */
+  thoughtTypeRef:
+    | { kind: 'existing'; id: string }
+    | { kind: 'batch_ref'; ref: string };
+  thought_type_ref: string | null;
+  name: string | undefined;
+  description: string | null | undefined;
+  definition: string | undefined;
+  position: number | undefined;
+  is_default: boolean | undefined;
 }
 
 // ===========================================================================
@@ -541,6 +581,109 @@ function resolveTypeProperties(
   return out;
 }
 
+/**
+ * Резолв `type_views[]` (задача c1fa71d4, 0.7.3, ADR 5c44f6a7). Здесь
+ * проверяется синтаксис полей, XOR `thought_type` / `thought_type_ref`,
+ * существование `id` для update/delete, объявленность `ref_for_update` в
+ * `type_views[]` этого же батча. Полная доменная валидация (включая
+ * токены и уникальность имени) — внутри `createThoughtTypeView` /
+ * `updateThoughtTypeView`, чтобы не дублировать правила.
+ *
+ * Тип-владелец должен существовать либо быть объявлен в `thought_types[]`
+ * этого же батча — иначе `VALIDATION_ERROR` со списком известных `ref`.
+ * Удаление отбора (`action: 'delete'`) не требует `name` / `definition`
+ * — остальные поля игнорируются, кроме адресации.
+ */
+function resolveTypeViews(
+  ndb: NetworkDb,
+  items: OntologyWriteTypeView[] | undefined,
+  tvRefs: Set<string>,
+  ttDefinedRefs: Set<string>,
+): ResolvedTypeView[] {
+  if (items === undefined) return [];
+  const out: ResolvedTypeView[] = [];
+  for (const [index, item] of items.entries()) {
+    if (item.action !== 'create' && item.action !== 'update' && item.action !== 'delete') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `type_views[${index}].action must be create|update|delete`,
+        { field: `type_views[${index}].action`, allowed: ['create', 'update', 'delete'] },
+      );
+    }
+    let viewId: string | null = null;
+    if (item.id !== undefined && item.id !== undefined && item.id !== null) {
+      const existing = getThoughtTypeView(ndb, item.id);
+      if (existing === null) {
+        throw new EtnError('NOT_FOUND', `thought_type_view ${item.id} not found`, {
+          entity: 'thought_type_view',
+          id: item.id,
+          field: `type_views[${index}].id`,
+        });
+      }
+      viewId = existing.id;
+    }
+    let refForUpdate: string | null = item.ref_for_update ?? null;
+    if (refForUpdate !== null && !tvRefs.has(refForUpdate)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `ref_for_update "${refForUpdate}" is not declared in this batch`,
+        { field: `type_views[${index}].ref_for_update`, ref_for_update: refForUpdate },
+      );
+    }
+    // XOR `thought_type` / `thought_type_ref` только если тип указывается
+    // (для create обязателен, для update/delete опционален — тип не меняется).
+    const hasType = item.thought_type !== undefined && item.thought_type !== null && item.thought_type !== '';
+    const hasTypeRef = item.thought_type_ref !== undefined && item.thought_type_ref !== null;
+    if (hasType && hasTypeRef) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `type_views[${index}] must set at most one of thought_type or thought_type_ref`,
+        { field: `type_views[${index}]` },
+      );
+    }
+    let thoughtTypeRef: ResolvedTypeView['thoughtTypeRef'];
+    if (hasType) {
+      const id = resolveThoughtTypeIdByName(ndb, item.thought_type as string);
+      thoughtTypeRef = { kind: 'existing', id };
+    } else if (hasTypeRef) {
+      const ref = item.thought_type_ref as string;
+      if (!ttDefinedRefs.has(ref)) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `thought_type_ref "${ref}" is not declared in this batch`,
+          { field: `type_views[${index}].thought_type_ref`, thought_type_ref: ref },
+        );
+      }
+      thoughtTypeRef = { kind: 'batch_ref', ref };
+    } else if (item.action === 'create') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `type_views[${index}] with action=create requires thought_type or thought_type_ref`,
+        { field: `type_views[${index}]` },
+      );
+    } else {
+      // update/delete без указания типа — id/ref_for_update уже задаёт
+      // адрес существующего отбора, тип берём из него. Резолв в write-фазе.
+      thoughtTypeRef = { kind: 'existing', id: '' };
+    }
+    out.push({
+      index,
+      ref: item.ref ?? null,
+      action: item.action,
+      viewId,
+      ref_for_update: refForUpdate,
+      thoughtTypeRef,
+      thought_type_ref: hasTypeRef ? (item.thought_type_ref as string) : null,
+      name: item.name,
+      description: item.description,
+      definition: item.definition,
+      position: item.position,
+      is_default: item.is_default,
+    });
+  }
+  return out;
+}
+
 // ===========================================================================
 // Hierarchy cycle / depth validation
 // ===========================================================================
@@ -748,11 +891,21 @@ export function writeOntology(
   const ttRefs = collectRefs(input.thought_types, 'thought_types');
   const ltRefs = collectRefs(input.link_types, 'link_types');
   const pRefs = collectRefs(input.properties, 'properties');
+  const tvRefs = collectRefs(input.type_views, 'type_views');
 
   // -- Resolve pass ----------------------------------------------------------
   const resolvedThoughtTypes = resolveThoughtTypes(ndb, input.thought_types, ttRefs.definedRefs);
   const resolvedLinkTypes = resolveLinkTypes(ndb, input.link_types, ltRefs.definedRefs);
   const resolvedProperties = resolveProperties(ndb, input.properties);
+  // type_views (задача c1fa71d4): резолв после типов, чтобы `thought_type_ref`
+  // мог адресовать тип, объявленный в этом же батче. `thoughtTypeRef.id` для
+  // batch_ref подставляется в write-фазе из `ttIdByRef`.
+  const resolvedTypeViews = resolveTypeViews(
+    ndb,
+    input.type_views,
+    tvRefs.definedRefs,
+    ttRefs.definedRefs,
+  );
 
   // Цикл / глубина среди parent_ref.
   validateRefHierarchy(resolvedThoughtTypes, 'thought_types');
@@ -1113,11 +1266,188 @@ export function writeOntology(
       });
     }
 
+    // ---- type_views (задача c1fa71d4, 0.7.3) ------------------------
+    // Отборы типов правятся той же транзакцией (ADR 5c44f6a7). Все типы
+    // и свойства уже созданы — резолвим batch_ref → id. `ref_for_update`
+    // (отбор, который в этом же батче создаётся/правится и на который
+    // ссылается другой элемент) резолвится ниже отдельным проходом после
+    // первой итерации `viewIdByRef`.
+    const tvResults: OntologyWriteTypeViewResult[] = [];
+    const viewIdByRef = new Map<string, string>();
+    for (const item of resolvedTypeViews) {
+      // Пропуск delete с нерезолвнутым id/ref_for_update — это пустой
+      // проход, резолвится во втором.
+      if (item.action === 'delete' && item.viewId === null && item.ref_for_update === null) {
+        // Не должно случаться: resolveTypeViews уже валидирует. Но на
+        // всякий случай — fail-safe: пропускаем до второго прохода.
+        tvResults.push({
+          ref: item.ref,
+          id: '',
+          thought_type_id: '',
+          version: 0,
+          action: 'unchanged',
+        });
+        continue;
+      }
+      const thoughtTypeId =
+        item.thoughtTypeRef.kind === 'existing'
+          ? item.thoughtTypeRef.id
+          : (ttIdByRef.get(item.thoughtTypeRef.ref) ?? '');
+      if (thoughtTypeId === '') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `thought_type_ref "${item.thoughtTypeRef.kind === 'batch_ref' ? item.thoughtTypeRef.ref : ''}" was not resolved`,
+          { field: `type_views[${item.index}].thought_type_ref` },
+        );
+      }
+      let id = '';
+      let version = 0;
+      let action: OntologyWriteTypeViewAction = 'unchanged';
+      if (item.action === 'create') {
+        if (item.name === undefined || item.definition === undefined) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `type_views[${item.index}] action=create requires name and definition`,
+            { field: `type_views[${item.index}]` },
+          );
+        }
+        const created = createThoughtTypeView(
+          ndb,
+          thoughtTypeId,
+          {
+            name: item.name,
+            ...(item.description !== undefined ? { description: item.description } : {}),
+            definition: item.definition,
+            ...(item.position !== undefined ? { position: item.position } : {}),
+            ...(item.is_default !== undefined ? { is_default: item.is_default } : {}),
+          },
+          actorUserId,
+        );
+        id = created.id;
+        version = created.version;
+        action = 'created';
+      } else if (item.action === 'update') {
+        if (item.viewId === null) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `type_views[${item.index}] action=update requires id or ref_for_update`,
+            { field: `type_views[${item.index}]` },
+          );
+        }
+        const updated = updateThoughtTypeView(
+          ndb,
+          item.viewId,
+          {
+            ...(item.name !== undefined ? { name: item.name } : {}),
+            ...(item.description !== undefined ? { description: item.description } : {}),
+            ...(item.definition !== undefined ? { definition: item.definition } : {}),
+            ...(item.position !== undefined ? { position: item.position } : {}),
+            ...(item.is_default !== undefined ? { is_default: item.is_default } : {}),
+          },
+          undefined,
+          actorUserId,
+        );
+        id = updated.id;
+        version = updated.version;
+        action = 'updated';
+      } else {
+        // delete
+        if (item.viewId === null) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `type_views[${item.index}] action=delete requires id or ref_for_update`,
+            { field: `type_views[${item.index}]` },
+          );
+        }
+        deleteThoughtTypeView(ndb, item.viewId);
+        id = item.viewId;
+        version = 0;
+        action = 'deleted';
+      }
+      tvResults.push({
+        ref: item.ref,
+        id,
+        thought_type_id: thoughtTypeId,
+        version,
+        action,
+      });
+      if (item.ref !== null) viewIdByRef.set(item.ref, id);
+    }
+    // Второй проход: резолв `ref_for_update` для тех, что зависят от id,
+    // полученного в первом проходе (создание отбора в этом же батче).
+    for (let i = 0; i < resolvedTypeViews.length; i += 1) {
+      const item = resolvedTypeViews[i]!;
+      if (item.ref_for_update === null) continue;
+      const resolvedId = viewIdByRef.get(item.ref_for_update);
+      if (resolvedId === undefined) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `ref_for_update "${item.ref_for_update}" не удалось разрешить в этом батче`,
+          { field: `type_views[${item.index}].ref_for_update` },
+        );
+      }
+      // Применяем операцию с подставленным id.
+      const thoughtTypeId =
+        item.thoughtTypeRef.kind === 'existing'
+          ? item.thoughtTypeRef.id
+          : (ttIdByRef.get(item.thoughtTypeRef.ref) ?? '');
+      let id = '';
+      let version = 0;
+      let action: OntologyWriteTypeViewAction = 'unchanged';
+      if (item.action === 'create') {
+        const created = createThoughtTypeView(
+          ndb,
+          thoughtTypeId,
+          {
+            name: item.name as string,
+            ...(item.description !== undefined ? { description: item.description } : {}),
+            definition: item.definition as string,
+            ...(item.position !== undefined ? { position: item.position } : {}),
+            ...(item.is_default !== undefined ? { is_default: item.is_default } : {}),
+          },
+          actorUserId,
+        );
+        id = created.id;
+        version = created.version;
+        action = 'created';
+      } else if (item.action === 'update') {
+        const updated = updateThoughtTypeView(
+          ndb,
+          resolvedId,
+          {
+            ...(item.name !== undefined ? { name: item.name } : {}),
+            ...(item.description !== undefined ? { description: item.description } : {}),
+            ...(item.definition !== undefined ? { definition: item.definition } : {}),
+            ...(item.position !== undefined ? { position: item.position } : {}),
+            ...(item.is_default !== undefined ? { is_default: item.is_default } : {}),
+          },
+          undefined,
+          actorUserId,
+        );
+        id = updated.id;
+        version = updated.version;
+        action = 'updated';
+      } else {
+        deleteThoughtTypeView(ndb, resolvedId);
+        id = resolvedId;
+        version = 0;
+        action = 'deleted';
+      }
+      // Перезаписываем placeholder из первого прохода.
+      const existing = tvResults[i]!;
+      existing.id = id;
+      existing.thought_type_id = thoughtTypeId;
+      existing.version = version;
+      existing.action = action;
+      if (item.ref !== null) viewIdByRef.set(item.ref, id);
+    }
+
     return {
       thought_types: ttResults,
       link_types: ltResults,
       properties: propResults,
       type_properties: tpResults,
+      type_views: tvResults,
       layer: { id: ndb.layerId, title: '' },
     };
   });

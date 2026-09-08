@@ -364,8 +364,9 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // их наравне с остальными.
         // P3 (задача e488f4c1): +4 (`copy_subtree`, `mentions_scan`,
         // `import.dry_run`, `import.subgraph`) → 67.
-        assert.equal(annotated, 67);
-        assert.equal(hintReadOnly, 34);
+        // Задача c1fa71d4 / 0.7.3: +1 (`etn.views.run`, readOnlyHint) → 68.
+        assert.equal(annotated, 68);
+        assert.equal(hintReadOnly, 35);
         assert.equal(hintDestructive, 14);
         assert.equal(hintIdempotent, 12);
       } finally {

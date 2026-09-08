@@ -245,6 +245,11 @@ import {
 import { writeOntology } from '../domain/ontology-write-service.js';
 import { deleteOntologyEntity } from '../domain/ontology-delete-service.js';
 import {
+  getEffectiveViewsForThought,
+  listThoughtTypeViewsByType,
+  runViewForThought,
+} from '../domain/thought-type-views-service.js';
+import {
   copySubtree as copySubtreeFn,
 } from '../domain/thought-subtree-copy-service.js';
 import { scanMentions } from '../domain/mentions-scan-service.js';
@@ -840,6 +845,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'full text of the permanent comment (задача 3ea09a54: в `etn.thoughts.get` обрезка отключена; в ' +
         'остальных выборках — preview 2000 chars, `etn.comments.get` для полного). `meta.link_stats` ' +
         '(0.7.2) — счётчики активных связей по `(link_type_id, direction)` + `link_types`. ' +
+        '`meta.views` (0.7.3, задача c1fa71d4) — эффективный набор отборов для мысли: ' +
+        'имя, описание и тип-владелец каждого доступного отбора (без `definition`); ' +
+        'исполняется через `etn.views.run { view_name }`. ' +
         '`view: "compact"` (default) drops visual fields.',
       inputSchema: GetSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
@@ -856,6 +864,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         // полным текстом (без `chars_*`/`truncated`). Все остальные выборки
         // сущностей (subgraph, structure, списки) продолжают получать
         // preview-форму — требование «выборка сущностей → превью».
+        // `meta.views` (задача c1fa71d4, операция cb8d8e43) собирается
+        // внутри `getThoughtMeta` (домен, требование eaca1253): эффективный
+        // набор отборов для мысли по цепочке типов. Агент видит, какие
+        // отборы доступны, и дёргает их по имени через `etn.views.run`.
         const meta = getThoughtMeta(ndb, args.thought_id, { fullPermanent: true });
         const view: McpViewMode = args.view ?? 'compact';
         // Bug fix (docs/05-mcp-server.md §5.1e): a `data:` icon URL is dropped
@@ -888,8 +900,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Пакетное чтение мыслей',
       description:
         'Батч-чтение по списку id: `items[]` (карточки в порядке первого появления, дубли ' +
-        'схлопываются) + `missing[]`. Карточка несёт мысль, тип, свойства, `meta.link_stats` и ' +
-        'полнотекстовый `comment_preview`. Лимит — `maxNodesPerSubgraph`.',
+        'схлопываются) + `missing[]`. Карточка несёт мысль, тип, свойства, `meta.link_stats`, ' +
+        'полнотекстовый `comment_preview` и `meta.views` (0.7.3, задача c1fa71d4) — ' +
+        'эффективный набор отборов для каждой мысли (по цепочке типов). ' +
+        'Лимит — `maxNodesPerSubgraph`.',
       inputSchema: ResolveSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],
     },
@@ -914,10 +928,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           ...withSanitizedIcon(card),
           type: card.type === null ? null : withSanitizedIcon(card.type),
         }));
+        // `meta.views` (задача c1fa71d4) — собирается внутри `getThoughtMeta`,
+        // которую зовёт `getThoughtsByIdsResolved` (домен, требование eaca1253).
+        // Дополнительной обвязки здесь не требуется — `card.meta.views` уже
+        // заполнен.
+        const itemsWithViews = sanitizedItems;
         const items =
           view === 'full'
-            ? sanitizedItems
-            : sanitizedItems.map((card) => ({
+            ? itemsWithViews
+            : itemsWithViews.map((card) => ({
                 // Проекция касается только полей самой мысли (id/title/...);
                 // `type`, `properties`, `meta` и `comment_preview` остаются в
                 // полной форме — тот же контракт, что и у `etn.thoughts.get`.
@@ -1132,6 +1151,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         '`truncated`). `max_nodes` is capped by the server setting max_nodes_per_subgraph; `max_chars` ' +
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
         '(BFS level), reporting `truncated: true` + `reason`. Edges (0.7.2) несут `has_properties`/`has_comment`. ' +
+        '`meta.views` (0.7.3) для seed-узлов — эффективный набор отборов, ' +
+        'исполняется через `etn.views.run { view_name }`. ' +
         '`view: "compact"` (default) drops visual fields.',
       inputSchema: SubgraphSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.subgraph'],
@@ -1147,6 +1168,20 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         // Bug fix (§5.1e): sanitize before the O12 branch so `view: 'full'`
         // subgraphs cannot leak inline `data:` icon URLs either.
         const nodes = result.nodes.map((id) => withSanitizedIcon(getThoughtOrThrow(ndb, id)));
+        // `meta.views` (задача c1fa71d4) — эффективный набор отборов только
+        // для seed-узлов: для остальных узлов агент может прочитать карточку
+        // через `etn.thoughts.get` отдельно. SeedSet вычисляем один раз —
+        // O(N) проверок по id.
+        const seedSet = new Set(args.seed_ids);
+        const seedViews = new Map<string, ReturnType<typeof getEffectiveViewsForThought>>();
+        for (const seedId of args.seed_ids) {
+          const seed = nodes.find((n) => n.id === seedId);
+          if (seed === undefined) continue;
+          seedViews.set(
+            seedId,
+            getEffectiveViewsForThought(ndb, { type_id: seed.type_id }),
+          );
+        }
         const comments =
           args.include_comments === true
             ? result.nodes.map((id) => ({
@@ -1187,14 +1222,35 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         // would only hide that fact behind a softer reason. Surface the
         // `max_nodes` reason verbatim in that case and skip budget trimming.
         const thoughtTypes = thoughtTypeCatalog(ndb, nodes.map((n) => n.type_id));
+        // `meta.views` (задача c1fa71d4) — отборы для seed-узлов. Для
+        // остальных узлов поле пустое (агент может прочитать их карточку
+        // отдельно через `etn.thoughts.get`).
+        const projectedNodesWithViews = projectedNodes.map((n) => {
+          const effectiveViews = seedViews.get(n.id);
+          if (effectiveViews === undefined) {
+            return { ...n, views: [] };
+          }
+          return {
+            ...n,
+            views: effectiveViews.map((v) => ({
+              id: v.id,
+              name: v.name,
+              name_key: v.name_key,
+              description: v.description,
+              defined_on: v.defined_on,
+              inherited: v.inherited,
+              is_default: v.is_default,
+            })),
+          };
+        });
         const payload: {
-          nodes: typeof projectedNodes;
+          nodes: typeof projectedNodesWithViews;
           edges: typeof edges;
           thought_types: typeof thoughtTypes;
           link_types: typeof linkTypes;
           comments?: typeof comments;
         } = {
-          nodes: projectedNodes,
+          nodes: projectedNodesWithViews,
           edges,
           thought_types: thoughtTypes,
           link_types: linkTypes,
@@ -1654,11 +1710,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'Both type catalogues in full — thought and link types with hierarchy (`parent_id`/`is_root`), ' +
         'AI-facing `description` and effective property definitions (own + inherited along the type ' +
         'chain): `key`, `value_type`, `required`, `config` (incl. `options`/`allowed_type_ids`), ' +
-        '`default_value`, `inherited`, `defined_on`, `property_id` (the registry id). Call before creating ' +
-        'a typed thought/link; also lets `type_id` be replaced by a type name in `etn.thoughts.create`, ' +
-        '`etn.links.create` and `etn.thoughts.upsert_bundle`. `in_subtree_of` (+`max_depth`) scopes to the ' +
-        'types actually used inside that subtree, each with a `usage_count`. When the response risks being ' +
-        'cut off, fetch a single catalogue via `scope: "links"` / `"thoughts"`.',
+        '`default_value`, `inherited`, `defined_on`, `property_id` (the registry id). Каждый ' +
+        'тип мысли несёт собственные `views[]` (задача c1fa71d4, 0.7.3): имя, ' +
+        'описание и `is_default` отборов этого типа без наследования от предков ' +
+        '(эффективный набор для конкретной мысли — через `etn.thoughts.get { meta.views }`). ' +
+        'Call before creating a typed thought/link; also lets `type_id` be replaced by a type name in ' +
+        '`etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`. `in_subtree_of` ' +
+        '(+`max_depth`) scopes to the types actually used inside that subtree, each with a ' +
+        '`usage_count`. When the response risks being cut off, fetch a single catalogue via ' +
+        '`scope: "links"` / `"thoughts"`.',
       inputSchema: TypesListSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.types.list'],
     },
@@ -1698,6 +1758,21 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             // sanitize the inline `data:` icon URL.
             icon: sanitizeIcon(t.icon),
             properties: listEffectiveTypeProperties(ndb, 'thought_type', t.id),
+            // Собственные отборы типа (задача c1fa71d4, 0.7.3): без
+            // наследования от предков — это контракт `etn.types.list`,
+            // эффективный набор для конкретной мысли идёт через
+            // `etn.thoughts.get { meta.views }`. `currentLayerOnly: true`
+            // ограничивает чтение слоем, чтобы не подмешивать отборы
+            // предков-слоёв (это поведение `GET /thought-types/{id}/views`,
+            // контракт b90bb6e6).
+            views: listThoughtTypeViewsByType(ndb, t.id, { currentLayerOnly: true }).map((v) => ({
+              id: v.id,
+              name: v.name,
+              name_key: v.name_key,
+              description: v.description,
+              position: v.position,
+              is_default: v.is_default,
+            })),
             ...(thoughtTypeCounts === null
               ? {}
               : { usage_count: thoughtTypeCounts.get(t.id) ?? 0 }),
@@ -1739,6 +1814,141 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             thought_types_total: number;
             link_types_total: number;
           };
+        };
+      }),
+  );
+
+  // =========================================================================
+  // `etn.views.run` (задача c1fa71d4, 0.7.3, операция cb8d8e43) — исполнение
+  // именованного отбора типа относительно конкретной мысли.
+  //
+  // Агент узнаёт о доступных отборах через `meta.views` в `etn.thoughts.get`
+  // и каталог типов в `etn.types.list`; здесь дёргает отбор по `view_name`
+  // (нормализованное имя отбора) или по его `id`. Тонкая обёртка над
+  // `runViewForThought` (домен, задача 20b2fca0): резолв отбора по
+  // эффективному набору мысли, подстановка токенов `$thought.*`/`$today`/…,
+  // `queryThoughts` с фильтром. Read-only: бюджет записи не тратит,
+  // `audit_log` не пишет.
+  // =========================================================================
+  const ViewsRunSchema = z.object({
+    network_id: NetworkId,
+    thought_id: ThoughtId,
+    /** Имя отбора из `meta.views` карточки мысли (нормализованное
+     *  сравнение — регистр не важен) или его id. */
+    view_name: z.string().min(1),
+    /** Лимит найденных мыслей (по умолчанию 100, потолок — лимит
+     *  `queryThoughts`). */
+    limit: z.number().int().min(1).optional(),
+    /** Смещение пагинации. */
+    offset: z.number().int().min(0).optional(),
+    /** Направление сортировки. */
+    order: z.enum(['asc', 'desc']).optional(),
+  });
+  mcp.registerTool(
+    'etn.views.run',
+    {
+      title: 'Исполнить отбор типа относительно мысли',
+      description:
+        'Run a thought-type view for one thought. `view_name` — имя отбора из `meta.views` ' +
+        'карточки мысли (нормализованное сравнение, регистр не важен) или его `id`. ' +
+        'Read-only: бюджет записи не тратит, `audit_log` не пишет. ' +
+        'Возвращает страницу мыслей + `meta.view` (отбор, который был исполнен) и ' +
+        '`meta.unresolved` (не пусто, если в `definition` встретился токен, ' +
+        'неразрешимый на момент исполнения — тогда `data` пустая).',
+      inputSchema: ViewsRunSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.views.run'],
+    },
+    (args) =>
+      runTool(async () => {
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const thought = getThoughtOrThrow(ndb, args.thought_id);
+        // Резолв отбора по эффективному набору мысли.
+        const effective = getEffectiveViewsForThought(ndb, thought);
+        // Сравнение по `name_key` (trim+lowercase) — соответствует правилу
+        // сравнения дублей в `findThoughtTypeViewByTypeAndNameKey`. Если
+        // в `view_name` пришёл uuid отбора (id), тоже сматчим — иначе
+        // агенту пришлось бы всегда передавать имя.
+        const trimmed = args.view_name.trim();
+        const lower = trimmed.toLowerCase();
+        const matched =
+          effective.find((v) => v.name_key === lower) ??
+          effective.find((v) => v.id === trimmed) ??
+          null;
+        if (matched === null) {
+          // Доступно ошибочное состояние, при котором `view_name` похоже на
+          // имя, но не входит в эффективный набор. Чтобы помочь агенту,
+          // возвращаем 404 c `details.available_views` — список имён
+          // эффективного набора. Не молча пустой массив.
+          throw new EtnError(
+            'NOT_FOUND',
+            `Отбор «${args.view_name}» не найден в эффективном наборе мысли ${args.thought_id}.`,
+            {
+              entity: 'thought_type_view',
+              view_name: args.view_name,
+              thought_id: args.thought_id,
+              available_views: effective.map((v) => ({
+                id: v.id,
+                name: v.name,
+                name_key: v.name_key,
+                is_default: v.is_default,
+              })),
+            },
+          );
+        }
+        // `runViewForThought` (домен) уже подставляет токены и фильтрует
+        // саму мысль из результата. Здесь — тонкая обёртка: пользовательский
+        // `limit`/`offset` пробрасывается в базовый фильтр, токены берёт
+        // на себя `runViewForThought`.
+        const base = runViewForThought(
+          ndb,
+          matched,
+          args.thought_id,
+          rt.deps.auth.userId,
+        );
+        // Простейшая пагинация на уровне MCP (сама runViewForThought
+        // возвращает первые 100). Параметры `sort`/`order`/`limit`/
+        // `offset` приходят из запроса; здесь делаем лёгкий slice +
+        // учитываем order. Полная интеграция с `queryThoughts` — отдельная
+        // задача (текущий контракт — превью результата).
+        const limit = args.limit ?? 100;
+        const offset = args.offset ?? 0;
+        const ordered = base.items.slice().sort((a, b) => {
+          if (args.order === 'desc') return b.title.localeCompare(a.title);
+          return a.title.localeCompare(b.title);
+        });
+        const pageItems = ordered.slice(offset, offset + limit);
+        // Reference table: типы мыслей, реально использованные в items.
+        const thoughtTypes = thoughtTypeCatalog(
+          ndb,
+          pageItems.map((it) => it.type_id),
+        );
+        // O10: посещение контекстной мысли считается за чтение.
+        recordReads(ndb, [args.thought_id], { now: new Date().toISOString() });
+        return {
+          thought: { id: thought.id, title: thought.title },
+          view: {
+            id: matched.id,
+            name: matched.name,
+            name_key: matched.name_key,
+            description: matched.description,
+            defined_on: matched.defined_on,
+            inherited: matched.inherited,
+          },
+          data: pageItems,
+          thought_types: thoughtTypes,
+          meta: {
+            total: ordered.length,
+            limit,
+            offset,
+            ...(base.unresolved.length > 0
+              ? {
+                  unresolved: base.unresolved.map((u) => ({
+                    token: u.token,
+                    reason: u.reason,
+                  })),
+                }
+              : {}),
+          },
         };
       }),
   );
@@ -5525,12 +5735,32 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       position: z.number().int().min(0).optional(),
     })
     .strict();
+  // `type_views[]` (задача c1fa71d4, 0.7.3, ADR 5c44f6a7). Правка отборов
+  // идёт тем же батчем онтологии: `action: create|update|delete`,
+  // `thought_type` XOR `thought_type_ref`, `id` XOR `ref_for_update` для
+  // update/delete.
+  const OntologyWriteTypeViewSchema = z
+    .object({
+      ref: z.string().min(1).optional(),
+      action: z.enum(['create', 'update', 'delete']),
+      id: z.string().min(1).optional(),
+      ref_for_update: z.string().min(1).optional(),
+      thought_type: z.string().min(1).optional(),
+      thought_type_ref: z.string().min(1).optional(),
+      name: z.string().min(1).optional(),
+      description: z.string().nullable().optional(),
+      definition: z.string().min(1).optional(),
+      position: z.number().int().min(0).optional(),
+      is_default: z.boolean().optional(),
+    })
+    .strict();
   const OntologyWriteSchema = z.object({
     network_id: NetworkId,
     thought_types: z.array(OntologyWriteThoughtTypeSchema).optional(),
     link_types: z.array(OntologyWriteLinkTypeSchema).optional(),
     properties: z.array(OntologyWritePropertySchema).optional(),
     type_properties: z.array(OntologyWriteTypePropertySchema).optional(),
+    type_views: z.array(OntologyWriteTypeViewSchema).optional(),
   });
   mcp.registerTool(
     'etn.ontology.write',
@@ -5538,11 +5768,17 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Батч-запись онтологии',
       description:
         'Идемпотентный upsert онтологии сети одной транзакцией: `thought_types[]` / `link_types[]` / ' +
-        '`properties[]` / `type_properties[]`. Upsert по `id` XOR имени — повторный вызов с теми же ' +
-        'аргументами не меняет состояние (`action: unchanged` для каждого элемента). Локальные `ref` ' +
-        '(`parent_ref` для типов, `type_ref`/`property_ref` для привязок) действуют только внутри батча. ' +
+        '`properties[]` / `type_properties[]` / `type_views[]` (задача c1fa71d4, 0.7.3). ' +
+        'Upsert по `id` XOR имени — повторный вызов с теми же аргументами не меняет состояние ' +
+        '(`action: unchanged` для каждого элемента). Локальные `ref` ' +
+        '(`parent_ref` для типов, `type_ref`/`property_ref` для привязок, ' +
+        '`thought_type_ref`/`ref_for_update` для отборов) действуют только внутри батча. ' +
         'Цикл `parent_ref` → VALIDATION_ERROR. Смена `value_type` свойства использует ту же доменную ' +
         'функцию конверсии, что `PATCH /properties/{id}`; ответ несёт `converted_values`/`dropped_values`. ' +
+        '`type_views[]` — отборы типов мыслей: `action: create|update|delete`, ' +
+        '`thought_type` XOR `thought_type_ref`. Доменная валидация имени ' +
+        '(уникальность в пределах типа), токенов и `is_default` — как у ' +
+        '`POST /thought-types/{id}/views`. ' +
         'Один write-бюджет + одна строка `audit_log` на ВЕСЬ вызов; real-time события — по одному на ' +
         'изменённую сущность (`thought-type.*`, `link-type.*`, `property-registry.*`, ' +
         '`property-definition.*`).',
@@ -5560,6 +5796,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           ...(args.link_types !== undefined ? { link_types: args.link_types } : {}),
           ...(args.properties !== undefined ? { properties: args.properties } : {}),
           ...(args.type_properties !== undefined ? { type_properties: args.type_properties } : {}),
+          ...(args.type_views !== undefined ? { type_views: args.type_views } : {}),
         };
         const result = writeOntology(ndb, writeInput, rt.deps.auth.userId);
 
@@ -5692,6 +5929,103 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             );
           }
 
+        // ---- type_views events (задача c1fa71d4, 0.7.3) -------------
+        // По одному событию `thought-type-view.{created,updated,deleted}` на
+        // изменённую сущность; `unchanged` пропускаем (идемпотентный upsert).
+        for (const item of result.type_views) {
+          if (item.action === 'unchanged') continue;
+          if (item.action === 'created') {
+            // Перечитываем созданный отбор для payload `view` (effective DTO).
+            const viewRow = ndb
+              .prepare(
+                'SELECT id, thought_type_id, name, name_key, description, definition, position, is_default, version, created_at, updated_at, created_by FROM thought_type_views_v WHERE id = ?',
+              )
+              .get(item.id) as
+              | {
+                  id: string;
+                  thought_type_id: string;
+                  name: string;
+                  name_key: string;
+                  description: string | null;
+                  definition: string;
+                  position: number;
+                  is_default: number;
+                  version: number;
+                  created_at: string;
+                  updated_at: string;
+                  created_by: string;
+                }
+              | undefined;
+            if (viewRow === undefined) continue;
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'thought-type-view.created',
+              {
+                thought_type_id: viewRow.thought_type_id,
+                view: {
+                  ...viewRow,
+                  is_default: viewRow.is_default === 1,
+                  defined_on: viewRow.thought_type_id,
+                  inherited: false,
+                },
+              },
+              ndb,
+              extra.requestId,
+            );
+          } else if (item.action === 'updated') {
+            const viewRow = ndb
+              .prepare(
+                'SELECT id, thought_type_id, name, name_key, description, definition, position, is_default, version, created_at, updated_at, created_by FROM thought_type_views_v WHERE id = ?',
+              )
+              .get(item.id) as
+              | {
+                  id: string;
+                  thought_type_id: string;
+                  name: string;
+                  name_key: string;
+                  description: string | null;
+                  definition: string;
+                  position: number;
+                  is_default: number;
+                  version: number;
+                  created_at: string;
+                  updated_at: string;
+                  created_by: string;
+                }
+              | undefined;
+            if (viewRow === undefined) continue;
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'thought-type-view.updated',
+              {
+                thought_type_id: viewRow.thought_type_id,
+                view_id: viewRow.id,
+                changes: {},
+                version: viewRow.version,
+                view: {
+                  ...viewRow,
+                  is_default: viewRow.is_default === 1,
+                  defined_on: viewRow.thought_type_id,
+                  inherited: false,
+                },
+              },
+              ndb,
+              extra.requestId,
+            );
+          } else {
+            // deleted
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'thought-type-view.deleted',
+              { thought_type_id: item.thought_type_id, view_id: item.id },
+              extra.requestId,
+            );
+          }
+        }
+
         // ONE audit row for the whole batch.
         auditAgentCall(
           rt,
@@ -5704,6 +6038,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             link_types_count: result.link_types.length,
             properties_count: result.properties.length,
             type_properties_count: result.type_properties.length,
+            type_views_count: result.type_views.length,
           },
         );
 
@@ -5718,7 +6053,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
 
   const OntologyDeleteSchema = z.object({
     network_id: NetworkId,
-    kind: z.enum(['thought_type', 'link_type', 'property', 'type_property']),
+    // `type_view` (задача c1fa71d4, 0.7.3) — отбор типа мысли.
+    kind: z.enum(['thought_type', 'link_type', 'property', 'type_property', 'type_view']),
     id: z.string().min(1),
     force: z.boolean().optional(),
   });
@@ -5727,13 +6063,16 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Удалить элемент онтологии',
       description:
-        'Удалить одну сущность онтологии (`thought_type` / `link_type` / `property` / `type_property`). ' +
+        'Удалить одну сущность онтологии (`thought_type` / `link_type` / `property` / `type_property` ' +
+        '/ `type_view`, задача c1fa71d4 / 0.7.3). ' +
         'Без `force` отвергается на используемых элементах со счётчиками в `details` ' +
         '(`thoughts_count` / `links_count` / `property_values_count` / `type_properties_count`). ' +
         'С `force` — каскад по правилам: `thought_type` обнуляет `type_id` связанных мыслей + ' +
-        '`type_properties`; `link_type` удаляет связи этого типа (со свойствами и комментариями) + ' +
-        '`type_properties`; `property` удаляет `property_values` + `type_properties`; `type_property` ' +
-        'удаляет строку привязки. Элемент, занятый в `type_roles` сети, отвергается даже с `force`. ' +
+        '`type_properties` + отборы типа (`type_views_count` в affected_counts); ' +
+        '`link_type` удаляет связи этого типа (со свойствами и комментариями) + ' +
+        '`type_properties`; `property` удаляет `property_values` + `type_properties`; ' +
+        '`type_property` удаляет строку привязки; `type_view` удаляется безусловно ' +
+        '(не имеет использований). Элемент, занятый в `type_roles` сети, отвергается даже с `force`. ' +
         'HOME-мысль не имеет типа и не задевается. Один write-бюджет + одна строка `audit_log`.',
       inputSchema: OntologyDeleteSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.delete'],
@@ -5781,6 +6120,24 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
               { id: args.id },
               extra.requestId,
             );
+            // Каскад отборов (задача c1fa71d4): отдельное событие
+            // `thought-type-view.deleted` на каждый каскадно удалённый отбор,
+            // чтобы агенты с подпиской могли его поймать.
+            const cascadedViews =
+              (result.affected_counts.type_views_count ?? 0) > 0
+                ? (ndb
+                    .prepare('SELECT id FROM thought_type_views_v WHERE thought_type_id = ?')
+                    .all(args.id) as Array<{ id: string }>)
+                : [];
+            for (const view of cascadedViews) {
+              emitAgentEvent(
+                rt,
+                args.network_id,
+                'thought-type-view.deleted',
+                { thought_type_id: args.id, view_id: view.id },
+                extra.requestId,
+              );
+            }
           } else if (args.kind === 'link_type') {
             emitAgentEvent(
               rt,
@@ -5797,7 +6154,28 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
               { id: args.id },
               extra.requestId,
             );
+          } else if (args.kind === 'type_view') {
+            // Отдельная ветка задачи c1fa71d4: `type_view` удаляется
+            // без `snapshot` (он не нужен — у отбора нет rich-DTO для
+            // эха), событие шлём всегда.
+            emitAgentEvent(
+              rt,
+              args.network_id,
+              'thought-type-view.deleted',
+              { thought_type_id: '', view_id: args.id },
+              extra.requestId,
+            );
           }
+        } else if (args.kind === 'type_view') {
+          // snapshot null (отбор уже удалили раньше или не было): всё равно
+          // шлём событие, чтобы подписчики узнали об удалении.
+          emitAgentEvent(
+            rt,
+            args.network_id,
+            'thought-type-view.deleted',
+            { thought_type_id: '', view_id: args.id },
+            extra.requestId,
+          );
         }
 
         // ONE audit row for the whole call.

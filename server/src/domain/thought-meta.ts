@@ -30,6 +30,7 @@ import type { LinkStatEntry, LinkStats, ThoughtMeta, ThoughtMetaFull } from '@et
 import { getPermanentFull, getPermanentPreview } from './comment-service.js';
 import type { NetworkDb } from '../db/network-db.js';
 import { linkTypeCatalog } from '../mcp/catalogs.js';
+import { getEffectiveViewsForThought } from './thought-type-views-service.js';
 
 /** Escape a thought id for a LIKE pattern (paired with `ESCAPE '\'`). */
 function escapeLike(value: string): string {
@@ -108,7 +109,25 @@ export function getThoughtMeta(
       ? getPermanentFull(ndb, 'thought', thoughtId)
       : getPermanentPreview(ndb, 'thought', thoughtId);
   const link_stats = getLinkStats(ndb, thoughtId);
-  return { ...counters, permanent, link_stats };
+  // `meta.views` (задача c1fa71d4, 0.7.3) — эффективный набор отборов.
+  // Считается здесь же, чтобы MCP-фасады могли полагаться на
+  // `getThoughtMeta` как единый источник сигналов полноты. REST-вызовы
+  // `getThoughtMeta` не делают: meta добавляется только MCP-фасадом.
+  const thoughtRow = ndb
+    .prepare('SELECT id, type_id FROM thoughts_v WHERE id = ?')
+    .get(thoughtId) as { id: string; type_id: string | null } | undefined;
+  const views = thoughtRow === undefined
+    ? []
+    : getEffectiveViewsForThought(ndb, { type_id: thoughtRow.type_id }).map((v) => ({
+        id: v.id,
+        name: v.name,
+        name_key: v.name_key,
+        description: v.description,
+        defined_on: v.defined_on,
+        inherited: v.inherited,
+        is_default: v.is_default,
+      }));
+  return { ...counters, permanent, link_stats, views };
 }
 
 /**
