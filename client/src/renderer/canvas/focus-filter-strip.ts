@@ -534,6 +534,24 @@ function buildAddButton(): HTMLButtonElement {
       thoughtTypeId: typeId,
       typeName,
       view: null,
+      // Детерминированное переключение на новый отбор (ошибка 04da7519):
+      // после сохранения новый отбор сразу становится активным, выбор
+      // персистится, а канвасный render исполняет его через
+      // `runActiveViewIfNeeded`. Кнопку/имя дорисует realtime-событие
+      // `thought-type-view.created`.
+      onSaved: (savedView) => {
+        setMode(
+          {
+            kind: 'view',
+            viewId: savedView.id,
+            viewName: savedView.name_key,
+            viewTypeId: savedView.thought_type_id,
+          },
+          true,
+        );
+        persistForCurrentFocus();
+        notifyModeChange();
+      },
     });
   });
   return btn;
@@ -601,6 +619,26 @@ async function openViewEditorForExisting(
       thoughtTypeId: row.defined_on,
       typeName,
       view: full,
+      // Детерминированное обновление того же клиента (ошибка 04da7519):
+      // realtime-событие `thought-type-view.updated` тоже перестраивает
+      // полосу, но два пути гоняют между собой, и протухший ответ
+      // `runActiveViewIfNeeded` возвращает null — нижняя зона красится
+      // пустым/старым. Поэтому при правке активного отбора переисполняем
+      // результат немедленно, не дожидаясь realtime.
+      onSaved: (savedView) => {
+        void (async () => {
+          if (currentMode.kind === 'view' && currentMode.viewId === savedView.id) {
+            // Отбор могли переименовать — обновляем кэшированное имя перед
+            // перезапуском, чтобы run выполнился по актуальному определению.
+            currentMode.viewName = savedView.name_key;
+            const focus = store.state.focus;
+            if (focus !== null) {
+              await runActiveViewIfNeeded(focus.focused.id);
+              notifyModeChange();
+            }
+          }
+        })();
+      },
     });
   } catch (err) {
     notice(formatStripError(err, 'Не удалось открыть отбор для правки.'), 'error');
@@ -632,22 +670,13 @@ async function deleteView(networkId: string, view: EffectiveViewRow): Promise<vo
   try {
     await etn.thoughtTypeViews.remove(networkId, view.defined_on, view.id, view.version);
     notice('Отбор удалён.', 'info');
-    // If the deleted view was active, fall back to the default view (or
-    // children). The realtime event will arrive shortly; preempt it so the
-    // strip does not briefly flash the deleted button.
+    // If the deleted view was active, switch to «Потомки» immediately. The
+    // realtime event will arrive shortly; preempt it so the strip does not
+    // briefly flash the deleted button.
     if (currentMode.kind === 'view' && currentMode.viewId === view.id) {
-      const fallback = effectiveViews.find((v) => v.is_default);
-      setMode(
-        fallback !== undefined
-          ? {
-              kind: 'view',
-              viewId: fallback.id,
-              viewName: fallback.name_key,
-              viewTypeId: fallback.defined_on,
-            }
-          : { kind: 'children' },
-        true,
-      );
+      // Удаление активного отбора всегда переключает на «Потомки»
+      // (ошибка 04da7519), а не на отбор по умолчанию.
+      setMode({ kind: 'children' }, true);
       persistForCurrentFocus();
       notifyModeChange();
     }
