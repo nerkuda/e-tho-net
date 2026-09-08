@@ -58,6 +58,7 @@ const EXPECTED_FILES = [
   '034_object_locks.sql',
   '035_activity_log.sql',
   '036_property_values_deterministic_id.sql',
+  '037_thought_type_views.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -67,6 +68,7 @@ const EXPECTED_TABLES = [
   'thoughts',
   'thought_synonyms',
   'thought_types',
+  'thought_type_views',
   'link_types',
   'properties',
   'type_properties',
@@ -267,6 +269,7 @@ describe(
           'thoughts',
           'thought_synonyms',
           'thought_types',
+          'thought_type_views',
           'link_types',
           'properties',
           'type_properties',
@@ -592,6 +595,7 @@ describe(
           '034_object_locks.sql',
           '035_activity_log.sql',
           '036_property_values_deterministic_id.sql',
+          '037_thought_type_views.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged
@@ -849,7 +853,10 @@ describe(
         seedPv(db, '11111111-2222-4333-8444-555555555555', '22222222-2222-4222-8222-222222222222', owner, prop, 'в работе (А)', 1);
 
         const applied = runMigrations(db, networkMigrationsDir());
-        assert.deepEqual(applied.applied, ['036_property_values_deterministic_id.sql']);
+        assert.deepEqual(applied.applied, [
+          '036_property_values_deterministic_id.sql',
+          '037_thought_type_views.sql',
+        ]);
 
         const expectedId = propertyValueId('thought', owner, prop);
         const rows = db

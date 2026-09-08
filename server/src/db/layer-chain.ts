@@ -40,6 +40,7 @@ export const BRANCHABLE_TABLES = [
   'thought_synonyms',
   'links',
   'thought_types',
+  'thought_type_views',
   'link_types',
   'properties',
   'type_properties',

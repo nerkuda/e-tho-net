@@ -279,12 +279,14 @@ describe(
           '034_object_locks.sql',
           '035_activity_log.sql',
           '036_property_values_deterministic_id.sql',
+          '037_thought_type_views.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else
         // kept; 032 turns the seeded definition into one registry property;
         // 034 creates object_locks, пустую при апгрейде чистой базы;
-        // 035 — activity_log, тоже пустую).
+        // 035 — activity_log, тоже пустую; 037 — thought_type_views, пустую
+        // при апгрейде чистой базы).
         const after = tableCounts(db);
         assert.deepEqual(after, {
           ...before,
@@ -293,6 +295,7 @@ describe(
           properties: 1,
           object_locks: 0,
           activity_log: 0,
+          thought_type_views: 0,
         });
 
         // 2. The base layer row.
@@ -324,6 +327,7 @@ describe(
           'thoughts',
           'thought_synonyms',
           'thought_types',
+          'thought_type_views',
           'link_types',
           'properties',
           'type_properties',
