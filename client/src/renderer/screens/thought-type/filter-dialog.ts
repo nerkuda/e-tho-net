@@ -1090,6 +1090,9 @@ function buildTextValueRow(
   return row;
 }
 
+/** Кэш id → название мысли для отображения ссылочных значений (e8365d29). */
+const refTitleCache = new Map<string, string>();
+
 /** Value editor for `thought_ref` conditions: freely editable (id or token) +
  *  `{…}` token button + «выбрать» (thought picker respecting `allowed_type_ids`). */
 function buildThoughtRefInput(
@@ -1105,6 +1108,9 @@ function buildThoughtRefInput(
   input.placeholder = 'id мысли или токен ($thought)…';
   input.value = value;
   input.addEventListener('input', () => onChange(input.value));
+  // Ссылочное значение хранится как id, но показываем название мысли
+  // (асинхронно резолвим); токены (`$…`) показываем текстом.
+  resolveRefTitleForDisplay(networkId, input, value);
 
   const tokenBtn = makeTokenBtn(networkId, { kind: 'property', valueType: 'thought_ref', op }, (token) => {
     insertTokenAtCaret(input, token, onChange);
@@ -1124,7 +1130,9 @@ function buildThoughtRefInput(
       if (id === null) return;
       try {
         const [ref] = await etn.thoughts.resolve(networkId, [id]);
-        input.value = ref !== undefined ? ref.title : id;
+        const title = ref !== undefined ? ref.title : id;
+        refTitleCache.set(id, title);
+        input.value = title;
       } catch {
         input.value = id;
       }
@@ -1133,6 +1141,26 @@ function buildThoughtRefInput(
   });
   row.append(input, tokenBtn, pick);
   return row;
+}
+
+/** Показывает название мысли вместо id в поле ссылочного значения. */
+function resolveRefTitleForDisplay(networkId: string, input: HTMLInputElement, value: string): void {
+  if (value === '' || value.startsWith('$')) return;
+  const cached = refTitleCache.get(value);
+  if (cached !== undefined) {
+    input.value = cached;
+    return;
+  }
+  void etn.thoughts
+    .resolve(networkId, [value])
+    .then((refs) => {
+      const ref = refs[0];
+      if (ref === undefined) return;
+      refTitleCache.set(ref.id, ref.title);
+      // Обновляем только если пользователь не начал редактировать поле.
+      if (input.isConnected && input.value === value) input.value = ref.title;
+    })
+    .catch(() => undefined);
 }
 
 /** `allowed_type_ids` / `allowed_type_id` свойства, без пустых. */

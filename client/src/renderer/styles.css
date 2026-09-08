@@ -7158,6 +7158,12 @@ table.activity-table thead th {
   font-weight: 700;
 }
 
+/* Отступ между группами конструктора условий (половина кегля заголовка —
+ * 6px при .st-f-title font-size:12px). Без него свёрнутые группы сливаются. */
+.view-editor-criteria > .st-f-block + .st-f-block {
+  margin-top: 6px;
+}
+
 /* Строки «Автор/Редактор» — вертикальный стек (каждое условие — строка). */
 .st-f-author-rows {
   display: flex;
@@ -7263,6 +7269,35 @@ table.activity-table thead th {
    семейства. */
 .views-tab-table .btn.small {
   font-size: 12px;
+}
+
+/* Колонки таблицы отборов (e8365d29, доработка): «Имя» — 40%, «Описание» —
+   последняя и обрезается, «умлоч.» — галочка у помеченного. */
+.views-tab-table .views-tab-col-name {
+  width: 40%;
+}
+
+.views-tab-table .views-tab-name,
+.views-tab-table .views-tab-desc {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.views-tab-table .views-tab-default {
+  text-align: center;
+  width: 60px;
+}
+
+.views-tab-table .views-tab-default-mark {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.views-tab-table .views-tab-actions {
+  white-space: nowrap;
+  width: 1%;
 }
 
 .views-tab-empty {
