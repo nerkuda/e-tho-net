@@ -441,7 +441,20 @@ export function buildWireDefinition(
   if (state.hasComment !== null) out.has_comment = state.hasComment;
   if (state.hasAttachments !== null) out.has_attachments = state.hasAttachments;
   if (state.hasChronology !== null) out.has_chronology = state.hasChronology;
-  if (state.active !== null) out.active = state.active;
+  // «Только актуальные» — трёхзначное поле. Сервер при отсутствии `active`
+  // и `show_inactive` ставит дефолт `t.active = 1`, поэтому «не важно» (null)
+  // нельзя выразить простым опусканием `active` — нужно явно попросить
+  // включить неактивные (баг 56fdf252).
+  if (state.active === null) {
+    out.show_inactive = true;
+  } else if (state.active) {
+    out.active = true;
+  } else {
+    // «нет» — только неактуальные: `active` фильтрует, а `show_inactive`
+    // гарантирует, что неактивные попадут в кандидатов для parent-scope/рёбер.
+    out.active = false;
+    out.show_inactive = true;
+  }
   if (state.trashed) out.trashed = true;
 
   const authorWire = buildAuthorWireValue(state.authorOp, state.authorId, state.authorIds);

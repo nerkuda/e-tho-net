@@ -666,4 +666,53 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     const wire = module.buildWireDefinition(state, registry);
     assert.equal(wire.properties, undefined);
   });
+
+  it('wire format: «Только актуальные» three-state maps to show_inactive/active (баг 56fdf252)', () => {
+    const makeState = (active: boolean | null): import('../src/renderer/screens/thought-type/filter-dialog.js').DialogCriteriaState => ({
+      keywords: '',
+      keywordInTitle: true,
+      keywordInSynonyms: true,
+      keywordInComment: false,
+      parentIds: [],
+      typeIds: [],
+      linkTypeIds: [],
+      properties: [],
+      hasProperties: null,
+      hasComment: null,
+      hasAttachments: null,
+      hasChronology: null,
+      active,
+      trashed: false,
+      authorOp: 'eq',
+      authorId: '',
+      authorIds: [],
+      editorOp: 'eq',
+      editorId: '',
+      editorIds: [],
+      createdAfter: '',
+      createdBefore: '',
+      updatedAfter: '',
+      updatedBefore: '',
+      sort: 'created',
+      order: 'asc',
+    });
+    const registry = new Map<string, NetworkProperty>();
+
+    // «не важно» (null) — без фильтра актуальности: показать и актуальные,
+    // и неактуальные. `active` не выставляется, `show_inactive = true`.
+    const all = module.buildWireDefinition(makeState(null), registry);
+    assert.equal(all.active, undefined);
+    assert.equal(all.show_inactive, true);
+
+    // «да» (true) — только актуальные.
+    const activeOnly = module.buildWireDefinition(makeState(true), registry);
+    assert.equal(activeOnly.active, true);
+    assert.equal(activeOnly.show_inactive, undefined);
+
+    // «нет» (false) — только неактуальные: `active = false` + неактивные
+    // включены в кандидатов.
+    const inactiveOnly = module.buildWireDefinition(makeState(false), registry);
+    assert.equal(inactiveOnly.active, false);
+    assert.equal(inactiveOnly.show_inactive, true);
+  });
 });
