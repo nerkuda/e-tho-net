@@ -391,15 +391,11 @@ export async function renderStrip(focus: FocusResponse | null): Promise<void> {
     }
   }
 
-  // Stable, server-supplied order: position ascending, then by id for
-  // determinism (ties on position are rare but defined by the contract).
-  views.sort((a, b) => {
-    const pa = a.position ?? 0;
-    const pb = b.position ?? 0;
-    if (pa !== pb) return pa - pb;
-    return a.id.localeCompare(b.id);
-  });
-
+  // Сохраняем порядок сервера как есть: эффективный набор уже собран как
+  // «корень → тип, внутри уровня по position» (getEffectiveViewsForThought,
+  // требование eaca1253). Пересортировка здесь по глобальному `position`
+  // переплетает уровни для унаследованных отборов (каждый уровень типов
+  // нумерует свои `position` с 0) — ошибка 9792d55a, поэтому НЕ сортируем.
   return views.map((v, idx): EffectiveViewRow => ({
     id: v.id,
     name: v.name,
