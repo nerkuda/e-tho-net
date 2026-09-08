@@ -238,6 +238,35 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     assert.ok(labels.includes('$now'));
   });
 
+  it('token-picker special fields: keywords / thought_type / author / editor', () => {
+    const chainProps = [
+      { type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! },
+      { type: TYPES[1]!, props: TYPE_PROPS[ANCESTOR_TYPE_ID]! },
+    ];
+    const keywords = module.buildTokensForSpecialField(chainProps, 'keywords');
+    const kwTexts = keywords.map((t) => t.text);
+    assert.ok(kwTexts.includes('$thought.title'));
+    assert.ok(kwTexts.includes('$thought.synonyms'));
+    assert.ok(kwTexts.includes('$thought.[метка]'), 'text property token');
+    assert.ok(!kwTexts.includes('$thought.[версия]'), 'thought_ref property hidden for keywords');
+    assert.ok(!kwTexts.includes('$thought.[теги]'), 'multiple thought_ref property hidden for keywords');
+
+    const typeTok = module.buildTokensForSpecialField(chainProps, 'thought_type');
+    assert.deepEqual(typeTok.map((t) => t.text), ['$thought.type']);
+
+    const author = module.buildTokensForSpecialField(chainProps, 'author');
+    const authorTexts = author.map((t) => t.text);
+    assert.ok(authorTexts.includes('$thought.author'));
+    assert.ok(authorTexts.includes('$user'));
+    assert.ok(!authorTexts.includes('$thought.editor'));
+
+    const editor = module.buildTokensForSpecialField(chainProps, 'editor');
+    const editorTexts = editor.map((t) => t.text);
+    assert.ok(editorTexts.includes('$thought.editor'));
+    assert.ok(editorTexts.includes('$user'));
+    assert.ok(!editorTexts.includes('$thought.author'));
+  });
+
   it('list operations keep listOnly tokens (scalar ops hide them)', () => {
     const chainProps = [{ type: TYPES[1]!, props: TYPE_PROPS[ANCESTOR_TYPE_ID]! }];
     const tokensScalar = module.buildTokensForField(chainProps, 'thought_ref', 'eq');

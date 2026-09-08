@@ -142,6 +142,62 @@ export function buildTokensForField(
   return out;
 }
 
+/**
+ * Поля отбора, у которых нет «типа значения» свойства, но которым нужен
+ * токен-пикер (баг 2): ключевые слова, тип мысли, автор, редактор.
+ */
+export type SpecialTokenField = 'keywords' | 'thought_type' | 'author' | 'editor';
+
+/**
+ * Токены для полей, не привязанных к типу значения свойства
+ * (баг 2, таблица токенов из решения №7 тех.проекта 918833e3):
+ *
+ *   * `keywords` — `$thought.title`, `$thought.synonyms` + свойства типа/предков
+ *     с типом значения text/url (поиск по тексту);
+ *   * `thought_type` — только `$thought.type` (id типа мысли-контекста);
+ *   * `author`/`editor` — `$thought.author`/`$thought.editor` + `$user`.
+ */
+export function buildTokensForSpecialField(
+  chainProps: ChainProperties[],
+  field: SpecialTokenField,
+): ViewToken[] {
+  if (field === 'thought_type') {
+    return [
+      { text: '$thought.type', label: '$thought.type — тип мысли в фокусе', section: 'Поля мысли' },
+    ];
+  }
+  if (field === 'author') {
+    return [
+      { text: '$thought.author', label: '$thought.author', section: 'Поля мысли' },
+      { text: '$user', label: '$user — текущий пользователь', section: 'Глобальные' },
+    ];
+  }
+  if (field === 'editor') {
+    return [
+      { text: '$thought.editor', label: '$thought.editor', section: 'Поля мысли' },
+      { text: '$user', label: '$user — текущий пользователь', section: 'Глобальные' },
+    ];
+  }
+  // keywords
+  const out: ViewToken[] = [
+    { text: '$thought.title', label: '$thought.title', section: 'Поля мысли' },
+    { text: '$thought.synonyms', label: '$thought.synonyms' },
+  ];
+  for (const level of chainProps) {
+    if (level.props.length === 0) continue;
+    const sectionName = `Свойства «${level.type.name}»`;
+    for (const def of level.props) {
+      if (def.value_type !== 'text' && def.value_type !== 'url') continue;
+      out.push({
+        text: `$thought.[${def.key}]`,
+        label: `$thought.[${def.key}] — ${def.value_type}`,
+        section: sectionName,
+      });
+    }
+  }
+  return out;
+}
+
 function isListOp(op: StructurePropertyOp | null): boolean {
   return op === 'in' || op === 'not_in';
 }

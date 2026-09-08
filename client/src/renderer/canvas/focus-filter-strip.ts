@@ -441,8 +441,12 @@ function buildViewButton(view: EffectiveViewRow, mode: StripMode): HTMLButtonEle
   btn.type = 'button';
   btn.className = 'canvas-filter-strip-btn';
   btn.dataset['viewId'] = view.id;
-  btn.textContent = view.name;
-  btn.title = view.description ?? view.name;
+  // Баг 3: обрезаем отображаемое имя после 30-го символа; полное имя — в
+  // тултипе (с описанием, если оно есть), чтобы его можно было прочитать.
+  btn.textContent = view.name.length > 30 ? `${view.name.slice(0, 30)}…` : view.name;
+  btn.title = view.description !== null && view.description !== ''
+    ? `${view.name}\n${view.description}`
+    : view.name;
   if (view.inherited) btn.classList.add('inherited');
   if (mode.kind === 'view' && mode.viewId === view.id) btn.classList.add('active');
   btn.addEventListener('click', () => {

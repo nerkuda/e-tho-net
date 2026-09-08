@@ -48,12 +48,14 @@ import { store } from '../../state.js';
 
 import {
   buildTokensForField,
+  buildTokensForSpecialField,
   buildWireDefinition,
   defaultDialogCriteriaState,
   parseViewDefinition,
   type ChainProperties,
   type DialogCriteriaState,
   type DialogPropertyCondition,
+  type SpecialTokenField,
   type ViewToken,
 } from './filter-dialog-pure.js';
 
@@ -361,9 +363,10 @@ async function loadTypeChainProperties(
 // can keep importing from `filter-dialog.js`).
 // ---------------------------------------------------------------------------
 
-export type { ChainProperties, DialogCriteriaState, DialogPropertyCondition, ViewToken } from './filter-dialog-pure.js';
+export type { ChainProperties, DialogCriteriaState, DialogPropertyCondition, SpecialTokenField, ViewToken } from './filter-dialog-pure.js';
 export {
   buildTokensForField,
+  buildTokensForSpecialField,
   buildWireDefinition,
   defaultDialogCriteriaState,
   parseViewDefinition,
@@ -401,7 +404,7 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   // filter-panel.ts handles its main render.
   const render = (): void => {
     clear(root);
-    root.append(buildKeywordsBlock(state, render));
+    root.append(buildKeywordsBlock(networkId, state, render));
     root.append(buildParentBlock(networkId, state, render));
     root.append(buildThoughtTypeBlock(networkId, state, render));
     root.append(buildLinkTypeBlock(networkId, state, render));
@@ -415,7 +418,7 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
     );
     root.append(buildExtrasBlock(state, render));
     root.append(buildAuthorEditorBlock(networkId, state, render));
-    root.append(buildDateBoundsBlock(state, render));
+    root.append(buildDateBoundsBlock(networkId, state, render));
     root.append(buildSortOrderBlock(state, render));
   };
   render();
@@ -449,7 +452,7 @@ function buildAuthorWireValue(
 // Per-block builders
 // ---------------------------------------------------------------------------
 
-function buildKeywordsBlock(state: DialogCriteriaState, render: () => void): HTMLElement {
+function buildKeywordsBlock(networkId: string, state: DialogCriteriaState, render: () => void): HTMLElement {
   const wrap = div('st-f-block');
   const head = el('div', 'st-f-title', 'Ключевые слова');
   const body = div('st-f-body');
@@ -464,18 +467,43 @@ function buildKeywordsBlock(state: DialogCriteriaState, render: () => void): HTM
     input,
     'Слова через пробел, все обязательны; * — любые символы; -слово — исключение.',
   );
+  // Баг 1: не пересоздаём поле на каждый input — только обновляем состояние,
+  // иначе фокус сбрасывается на каждой букве.
   input.addEventListener('input', () => {
     state.keywords = input.value;
-    render();
+  });
+  // Баг 2: токен-пикер для ключевых слов ($thought.title/$thought.synonyms/
+  // $thought.[свойство текста]).
+  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
+  tokenBtn.type = 'button';
+  setTooltip(tokenBtn, 'Вставить токен');
+  tokenBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openTokenPicker(networkId, tokenBtn, { kind: 'keywords' }, (tokenText) => {
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? input.value.length;
+      const next = input.value.slice(0, start) + tokenText + input.value.slice(end);
+      input.value = next;
+      state.keywords = next;
+      input.focus();
+      const caret = start + tokenText.length;
+      try {
+        input.setSelectionRange(caret, caret);
+      } catch {
+        /* some input types don't support selection */
+      }
+    });
   });
   const clearBtn = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
   clearBtn.type = 'button';
   setTooltip(clearBtn, 'Очистить');
   clearBtn.addEventListener('click', () => {
     state.keywords = '';
+    input.value = '';
     render();
   });
-  kwWrap.append(input, clearBtn);
+  kwWrap.append(input, tokenBtn, clearBtn);
   body.append(kwWrap);
 
   // Scope row.
@@ -594,6 +622,20 @@ function buildThoughtTypeBlock(
     });
     row.append(clr);
   }
+  // Баг 2: токен-пикер «Типы мыслей» — $thought.type как альтернатива
+  // ручному списку типов (например, отбор наследуется от предка).
+  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
+  tokenBtn.type = 'button';
+  setTooltip(tokenBtn, 'Вставить токен ($thought.type — тип мысли в фокусе)');
+  tokenBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openTokenPicker(networkId, tokenBtn, { kind: 'thought_type' }, (tokenText) => {
+      state.typeIds = [tokenText];
+      render();
+    });
+  });
+  row.append(tokenBtn);
   body.append(row);
   renderTypeChips(networkId, 'thought', state.typeIds, chips);
   return wrap;
@@ -803,7 +845,9 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
       });
     }
     if (valueType === 'date') {
-      return buildScalarInput('date', live().values[i] ?? '', (v) => {
+      // Баг 2: значение-дата может быть и токеном ($today+7d) — свободное
+      // текстовое поле + токен-пикер вместо <input type="date">.
+      return buildDateValueRow(networkId, live().values[i] ?? '', cond.op, (v) => {
         setValue(i, v);
       });
     }
@@ -815,13 +859,11 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
     if (valueType === 'thought_ref') {
       return buildThoughtRefInput(networkId, live().values[i] ?? '', cond.op, (v) => {
         setValue(i, v);
-        render();
       });
     }
     // text/url: free input + token button.
     return buildTextValueRow(networkId, live().values[i] ?? '', valueType, cond.op, (v) => {
       setValue(i, v);
-      render();
     });
   };
 
@@ -903,7 +945,7 @@ function buildTextValueRow(
   tokenBtn.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    void openTokenPicker(networkId, tokenBtn, valueType, op, (tokenText) => {
+    void openTokenPicker(networkId, tokenBtn, { kind: 'property', valueType, op }, (tokenText) => {
       // Insert at the caret if focused, otherwise replace the value.
       const start = input.selectionStart ?? input.value.length;
       const end = input.selectionEnd ?? input.value.length;
@@ -955,7 +997,7 @@ function buildThoughtRefInput(
   tokenBtn.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    void openTokenPicker(networkId, tokenBtn, 'thought_ref', op, (tokenText) => {
+    void openTokenPicker(networkId, tokenBtn, { kind: 'property', valueType: 'thought_ref', op }, (tokenText) => {
       const start = input.selectionStart ?? input.value.length;
       const end = input.selectionEnd ?? input.value.length;
       const next = input.value.slice(0, start) + tokenText + input.value.slice(end);
@@ -991,6 +1033,49 @@ function buildThoughtRefInput(
     });
   });
   row.append(input, tokenBtn, pick);
+  return row;
+}
+
+/**
+ * Value editor for `date` property conditions (баг 2). A date value may be a
+ * literal ISO date or a date token with `±Nd` arithmetic (`$today+7d`), so the
+ * field is a free text input plus a `{…}` token button — `<input type="date">`
+ * cannot hold a token.
+ */
+function buildDateValueRow(
+  networkId: string,
+  value: string,
+  op: StructurePropertyOp,
+  onChange: (v: string) => void,
+): HTMLElement {
+  const row = div('st-f-value-row');
+  const input = el('input', 'st-f-input') as HTMLInputElement;
+  input.type = 'text';
+  input.value = value;
+  input.placeholder = 'YYYY-MM-DD или токен ($today+7d)…';
+  input.addEventListener('input', () => onChange(input.value));
+  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
+  tokenBtn.type = 'button';
+  setTooltip(tokenBtn, 'Вставить токен');
+  tokenBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openTokenPicker(networkId, tokenBtn, { kind: 'property', valueType: 'date', op }, (tokenText) => {
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? input.value.length;
+      const next = input.value.slice(0, start) + tokenText + input.value.slice(end);
+      input.value = next;
+      onChange(next);
+      input.focus();
+      const caret = start + tokenText.length;
+      try {
+        input.setSelectionRange(caret, caret);
+      } catch {
+        /* some input types don't support selection */
+      }
+    });
+  });
+  row.append(input, tokenBtn);
   return row;
 }
 
@@ -1066,6 +1151,7 @@ function buildAuthorEditorBlock(
   body.append(
     buildAuthorConditionRow(networkId, {
       label: 'Автор',
+      field: 'author',
       op: state.authorOp,
       singleId: state.authorId,
       listIds: state.authorIds,
@@ -1084,6 +1170,7 @@ function buildAuthorEditorBlock(
     }),
     buildAuthorConditionRow(networkId, {
       label: 'Редактор',
+      field: 'editor',
       op: state.editorOp,
       singleId: state.editorId,
       listIds: state.editorIds,
@@ -1104,19 +1191,19 @@ function buildAuthorEditorBlock(
   return wrap;
 }
 
-function buildDateBoundsBlock(state: DialogCriteriaState, render: () => void): HTMLElement {
+function buildDateBoundsBlock(networkId: string, state: DialogCriteriaState, render: () => void): HTMLElement {
   const wrap = div('st-f-block');
   wrap.append(el('div', 'st-f-title', 'Даты'));
   const body = div('st-f-body');
   wrap.append(body);
   body.append(
-    buildDateRangeRow('Создано', state.createdAfter, state.createdBefore, (from, to) => {
+    buildDateRangeRow(networkId, 'Создано', state.createdAfter, state.createdBefore, (from, to) => {
       state.createdAfter = from;
       state.createdBefore = to;
     }),
   );
   body.append(
-    buildDateRangeRow('Изменено', state.updatedAfter, state.updatedBefore, (from, to) => {
+    buildDateRangeRow(networkId, 'Изменено', state.updatedAfter, state.updatedBefore, (from, to) => {
       state.updatedAfter = from;
       state.updatedBefore = to;
     }),
@@ -1170,6 +1257,8 @@ function buildSortOrderBlock(state: DialogCriteriaState, render: () => void): HT
 
 interface AuthorRowOpts {
   label: string;
+  /** Которое из полей — для токен-пикера ($thought.author / $thought.editor). */
+  field: 'author' | 'editor';
   op: StructureAuthorOp;
   singleId: string;
   listIds: string[];
@@ -1204,11 +1293,38 @@ function buildAuthorConditionRow(networkId: string, opts: AuthorRowOpts): HTMLEl
     row.append(multi);
     return row;
   }
-  const single = buildUserSelectWidget({
-    label: '',
-    currentId: opts.singleId,
-    onChange: opts.onSingleChange,
+  // Баг 2: одиночное значение автора/редактора может быть и токеном
+  // ($thought.author / $thought.editor / $user) — свободный ввод + {…}.
+  const single = div('author-single-wrap');
+  const input = el('input', 'st-f-input') as HTMLInputElement;
+  input.type = 'text';
+  input.value = opts.singleId;
+  input.placeholder = 'id пользователя или токен…';
+  input.addEventListener('input', () => opts.onSingleChange(input.value));
+  const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
+  tokenBtn.type = 'button';
+  setTooltip(tokenBtn, 'Вставить токен');
+  tokenBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openTokenPicker(networkId, tokenBtn, { kind: opts.field }, (tokenText) => {
+      input.value = tokenText;
+      opts.onSingleChange(tokenText);
+      input.focus();
+    });
   });
+  single.append(input, tokenBtn);
+  // Удобный выбор пользователя из каталога — пишет id в то же поле.
+  single.append(
+    buildUserSelectWidget({
+      label: '',
+      currentId: opts.singleId,
+      onChange: (id) => {
+        input.value = id;
+        opts.onSingleChange(id);
+      },
+    }),
+  );
   row.append(single);
   return row;
 }
@@ -1223,6 +1339,7 @@ const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
 };
 
 function buildDateRangeRow(
+  networkId: string,
   label: string,
   from: string,
   to: string,
@@ -1230,15 +1347,39 @@ function buildDateRangeRow(
 ): HTMLElement {
   const row = div('st-f-date-row');
   row.append(el('span', 'st-f-date-label', label));
-  const fromInput = el('input', 'st-f-input st-f-date-field') as HTMLInputElement;
-  fromInput.type = 'datetime-local';
-  fromInput.value = from;
-  fromInput.addEventListener('input', () => onChange(fromInput.value, to));
-  const toInput = el('input', 'st-f-input st-f-date-field') as HTMLInputElement;
-  toInput.type = 'datetime-local';
-  toInput.value = to;
-  toInput.addEventListener('input', () => onChange(from, toInput.value));
-  row.append(span('от', 'st-f-date-tag'), fromInput, span('до', 'st-f-date-tag'), toInput);
+
+  // Баг 2: граница даты может быть и токеном ($today, $now, $thought.created
+  // и т.п. с арифметикой ±Nd) — свободное текстовое поле + {…} вместо
+  // <input type="datetime-local">, который токен не примет.
+  const buildField = (value: string, set: (v: string) => void): HTMLElement => {
+    const wrap = div('st-f-date-field');
+    const input = el('input', 'st-f-input st-f-date-input') as HTMLInputElement;
+    input.type = 'text';
+    input.value = value;
+    input.placeholder = 'YYYY-MM-DD или токен…';
+    input.addEventListener('input', () => set(input.value));
+    const tokenBtn = el('button', 'st-f-token-btn', '{…}') as HTMLButtonElement;
+    tokenBtn.type = 'button';
+    setTooltip(tokenBtn, 'Вставить токен');
+    tokenBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void openTokenPicker(networkId, tokenBtn, { kind: 'property', valueType: 'date', op: null }, (tokenText) => {
+        input.value = tokenText;
+        set(tokenText);
+        input.focus();
+      });
+    });
+    wrap.append(input, tokenBtn);
+    return wrap;
+  };
+
+  row.append(
+    span('от', 'st-f-date-tag'),
+    buildField(from, (v) => onChange(v, to)),
+    span('до', 'st-f-date-tag'),
+    buildField(to, (v) => onChange(from, v)),
+  );
   return row;
 }
 
@@ -1452,6 +1593,18 @@ function renderParentChips(networkId: string, ids: string[], host: HTMLElement):
 }
 
 /**
+ * Поле, к которому пристёгнут токен-пикер. `property` — значение условия по
+ * свойству (набор токенов ограничивается типом значения); специальные поля —
+ * ключевые слова / тип мысли / автор / редактор (баг 2).
+ */
+type TokenPickerField =
+  | { kind: 'property'; valueType: PropertyValueType; op: StructurePropertyOp | null }
+  | { kind: 'keywords' }
+  | { kind: 'thought_type' }
+  | { kind: 'author' }
+  | { kind: 'editor' };
+
+/**
  * Opens the token-picker dropdown next to `anchor`. The list is grouped by
  * section (`Глобальные`, `Поля мысли`, `Свойства «<тип>»`). For multiple
  * properties the label carries a `[…]` suffix and the entry is dimmed when
@@ -1460,12 +1613,18 @@ function renderParentChips(networkId: string, ids: string[], host: HTMLElement):
 async function openTokenPicker(
   networkId: string,
   anchor: HTMLElement,
-  valueType: PropertyValueType,
-  op: StructurePropertyOp,
+  field: TokenPickerField,
   onInsert: (token: string) => void,
 ): Promise<void> {
   const chainProps = activeChainProps ?? [];
-  const tokens = buildTokensForField(chainProps, valueType, op);
+  let tokens: ViewToken[];
+  let op: StructurePropertyOp | null = null;
+  if (field.kind === 'property') {
+    tokens = buildTokensForField(chainProps, field.valueType, field.op);
+    op = field.op;
+  } else {
+    tokens = buildTokensForSpecialField(chainProps, field.kind);
+  }
   if (tokens.length === 0) {
     notice('Для этого типа и значения доступных токенов нет.', 'info');
     return;
