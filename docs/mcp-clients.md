@@ -13,8 +13,8 @@ IDE-агенты, кастомные скрипты) читают и измен�
   каждым изменяющим вызовом).
 - Лимит записи `max_writes_per_minute` можно переопределить на ключ
   (`NULL` — серверный дефолт): задаётся при создании ключа и меняется через
-  `PATCH /api/v1/me/keys/{id}`. Составной `etn.thoughts.upsert_bundle`
-  считается одной записью для лимита.
+  `PATCH /api/v1/me/keys/{id}`. Составной `etn.thoughts.write` (и
+  `etn.thoughts.upsert_bundle`) считается одной записью для лимита.
 
 ```bash
 curl -X POST https://etn.example.com/api/v1/me/keys \
@@ -29,15 +29,16 @@ curl -X POST https://etn.example.com/api/v1/me/keys \
   "mcpServers": {
     "etn": {
       "command": "node",
-      "args": ["/opt/etn/server/dist/mcp-stdio.js", "--api-key", "etn_..."],
+      "args": ["/opt/etn/server/dist/cli.js", "mcp", "--api-key", "etn_..."],
       "env": { "ETN_DATA_DIR": "/var/lib/etn" }
     }
   }
 }
 ```
 
-> Точное имя stdio-точки входа см. в README сервера (`etn mcp` — CLI-команда).
-> Ключ также можно передать через `ETN_API_KEY`.
+> Stdio-точка входа — CLI-команда `etn mcp` (то же, что
+> `node server/dist/cli.js mcp`); API-key передаётся `--api-key` или через
+> переменную окружения `ETN_API_KEY`.
 
 ## 3. Режим HTTP (удалённые агенты)
 
@@ -52,36 +53,70 @@ curl -X POST https://etn.example.com/api/v1/me/keys \
 | Инструмент | Назначение |
 |-----------|------------|
 | `etn.networks.list` | список доступных сетей (с `description`, `when_to_use`, `has_structure`) |
-| `etn.networks.get` | одна сеть с полным самоописанием (`conventions`, `examples`) |
-| `etn.networks.structure` | «оглавление» сети: активные мысли узлового типа с превью комментариев и счётчиками |
+| `etn.networks.structure` | «оглавление» сети: активные мысли узлового типа с превью комментариев и счётчиками; несёт `conventions` и (с `include_examples`) `examples` |
+| `etn.instructions` | инструкции сети для агентов: перечень / по ключевым словам / полный текст по id |
 | `etn.thoughts.search` | полнотекстовый поиск (имена, тексты, связи, хроника; `scope`, `in_subtree_of`, пагинация `offset`) |
 | `etn.thoughts.query` | структурная выборка: ключевые слова (мини-синтаксис `*`/`-слово`), тип, поддерево, актуальность, пометка на удаление, свойства, даты |
-| `etn.thoughts.get` | чтение мысли: `meta` (счётчики, превью постоянного комментария), резолв `thought_ref`-свойств в `{id, title}` |
+| `etn.thoughts.get` | чтение мысли: `meta` (счётчики, превью постоянного комментария, `views` — доступные отборы типа), резолв `thought_ref`-свойств в `{id, title}` |
+| `etn.thoughts.resolve` | батч-чтение по списку id: карточки в порядке первого появления + `missing[]` |
 | `etn.thoughts.neighbors` | окружение мысли (родители/дети/братья, `depth` до 20) |
 | `etn.thoughts.subgraph` | подграф радиуса N — ключевой RAG-инструмент (см. §9 про `max_chars`) |
 | `etn.thoughts.path` | кратчайший путь между мыслями |
 | `etn.thoughts.mentions` | комментарии, упоминающие мысль по имени/синониму |
 | `etn.thoughts.backlinks` | комментарии с явными ID-ссылками `[[#<id>]]` на мысль |
+| `etn.thoughts.mentions_scan` | сканировать текст (или комментарий/постоянный комментарий) на упоминания мыслей; опционально создать связи |
 | `etn.thoughts.usage` | кто ссылается на мысль через свойства, по свойствам |
 | `etn.thoughts.find_duplicates` | **обязателен перед созданием** — поиск дубликатов |
-| `etn.types.list` | оба каталога типов (иерархия + эффективные свойства); `in_subtree_of` — только типы раздела |
+| `etn.types.list` | каталоги типов (иерархия + эффективные свойства + `views[]` — отборы типа); `in_subtree_of` — только типы раздела |
+| `etn.views.run` | исполнить отбор типа относительно мысли (см. «Отборы типов») |
+| `etn.chronicle.query` | двухфазный запрос хроники: мысли по критериям → их хроно-комментарии |
 | `etn.attachments.search` | поиск вложений по ключевым словам |
 | `etn.changes.list` | дельта-фид событий с `since_seq` — для собственного кеша агента |
 | `etn.metrics.reads` | счётчики чтения мыслей (топ/холодные) — где горячие и мёртвые зоны |
+| `etn.metrics.tools` | счётчики вызовов по MCP-инструментам (для ревизии неиспользуемых/непонятных инструментов) |
+| `etn.members.list` | участники сети (роль, дата входа) |
 
 ### Запись
 
 | Инструмент | Назначение |
 |-----------|------------|
+| `etn.thoughts.write` | **основной** инструмент записи: от 1 до 50 связанных «единиц знания» одной транзакцией (мысли + постоянные/хронологические комментарии + свойства + связи + вложения). Поглощает `create`/`update`/`set_active`/`upsert_bundle`, `links.create`, `properties.set`, `comments.upsert` |
 | `etn.thoughts.create` / `update` / `delete` | мысли; тип — по `type_id` или имени |
-| `etn.thoughts.upsert_bundle` | составная запись «единицы знания» (мысль + постоянный комментарий + свойства + связи + вложения) **одной транзакцией**; `on_duplicate: fail\|reuse\|update` |
+| `etn.thoughts.upsert_bundle` | составная запись «единицы знания» одной транзакцией (устаревает в пользу `etn.thoughts.write`) |
 | `etn.thoughts.set_active` | актуальность |
+| `etn.thoughts.bulk_update` | групповые операции одним вызовом: смена/снятие типа, актуальность, корзина, привязка родителей/детей |
+| `etn.thoughts.copy_subtree` | скопировать поддерево мыслей в другую сеть одной транзакцией (с `id_remap` для переписывания wiki-ссылок) |
 | `etn.links.create` / `delete` / `get` | связи; тип — по `type_id` или по паре имён |
 | `etn.comments.upsert` | постоянный (create-or-update) или хронологический комментарий; `targets[]` — привязка одной записи к нескольким владельцам |
-| `etn.comments.update` / `delete` / `get` | правка/удаление/полный текст по `comment_id` |
+| `etn.comments.update` / `delete` / `get` / `edit` | правка/удаление/полный текст по `comment_id`; `edit` — секционная правка (`append`/`prepend`/`replace_section`/`delete_section`) |
 | `etn.properties.set` | значения свойств: одно (`key`+`value`) или набор (`values`), массивы для multi-value |
-| `etn.attachments.add` / `copy` | вложения: URL/путь; копия существующего на несколько владельцев |
-| `etn.export.subgraph` | подграф как Markdown/HTML-документ |
+| `etn.attachments.add` / `copy` / `update` / `delete` | вложения: URL/путь; копия существующего на несколько владельцев; правка метаданных; отвязка |
+| `etn.export.subgraph` | подграф как Markdown/HTML/PDF/`.etnx` |
+| `etn.import.dry_run` / `import.subgraph` | импорт `.etnx`-архива: план без записи / применение одной транзакцией |
+| `etn.networks.write` / `networks.delete` | создать/обновить сеть (описание, `when_to_use`, `conventions`, `examples`, `type_roles`); удалить сеть (админ, `confirm: true`) |
+
+### Онтология
+
+| Инструмент | Назначение |
+|-----------|------------|
+| `etn.ontology.write` | идемпотентный upsert онтологии сети одной транзакцией: `thought_types[]` / `link_types[]` / `properties[]` / `type_properties[]` / `type_views[]` (отборы — 0.7.3) |
+| `etn.ontology.delete` | удалить одну сущность онтологии: `thought_type` / `link_type` / `property` / `type_property` / `type_view` (с `force` — каскад) |
+
+### Отборы типов (0.7.3)
+
+У типа мысли — набор именованных отборов (правил, исполняемых относительно
+конкретной мысли-контекста). Агент видит их в `meta.views` карточки мысли
+(`etn.thoughts.get`) и в `views[]` каталога `etn.types.list`, исполняет одним
+вызовом, а заводит/правит/удаляет через онтологию.
+
+| Инструмент | Назначение |
+|-----------|------------|
+| `etn.views.run` | исполнить отбор типа относительно мысли: `view_name` — имя отбора из `meta.views` (или его id). Read-only, бюджет записи не тратит. Возвращает страницу мыслей + `meta.view`; `meta.unresolved` непусто, если токен условия не разрешился (тогда `data` пустая) |
+
+Заведение/правка/удаление отборов — `etn.ontology.write` (секция `type_views[]`)
+и `etn.ontology.delete` (вид `type_view`). Семантика условий и токенов
+(`$thought`, `$thought.[свойство]`, `$today±Nd`) — в
+[user-guide-editing.md §5.4](user-guide-editing.md).
 
 ### Захваты (0.7.1)
 
@@ -93,6 +128,7 @@ curl -X POST https://etn.example.com/api/v1/me/keys \
 | Инструмент | Назначение |
 |-----------|------------|
 | `etn.locks.list` | активные захваты сети: кто, какой объект, с какого момента |
+| `etn.locks.acquire` / `release` | занять/освободить захват на `(entity_type, entity_id)` |
 | `etn.locks.clear` | снять все захваты указанного пользователя (доступно любому участнику сети) |
 
 ### Слои (см. §7)
@@ -130,10 +166,11 @@ curl -X POST https://etn.example.com/api/v1/me/keys \
 
 Перед `etn.thoughts.create` агент **обязан** вызывать
 `etn.thoughts.find_duplicates` и переиспользовать существующую мысль при
-совпадении имени/синонима. `etn.thoughts.upsert_bundle` делает эту проверку
-сам (параметр `on_duplicate: fail|reuse|update`, по умолчанию `fail`) — для
-записи «мысль + всё остальное» одним вызовом предпочтительнее его, а не
-связку `find_duplicates` → `create` → … .
+совпадении имени/синонима. `etn.thoughts.write` (и устаревший
+`etn.thoughts.upsert_bundle`) делает эту проверку сам (параметр
+`on_duplicate: fail|reuse|update`, по умолчанию `fail`) — для записи
+«мысль + всё остальное» одним вызовом предпочтительнее его, а не связку
+`find_duplicates` → `create` → … .
 
 ## 6. Самоописание сети: маршрутизация и формат записи
 
@@ -152,11 +189,11 @@ curl -X POST https://etn.example.com/api/v1/me/keys \
    `etn.thoughts.search` / `subgraph`.
 5. Перед `create`/`update` прочитать `conventions` (правила записи сети;
    приходят в `etn.networks.structure` одним вызовом) и при сомнениях по
-   форме — `examples` (`etn.networks.get`).
+   форме — `examples` (`etn.networks.structure { include_examples: true }`).
 
-Запись одной «единицы знания» — идемпотентный `upsert_bundle`: мысль +
-комментарий + свойства + связи + вложения одной транзакцией. Политика
-`on_duplicate` делает повторный импорт безопасным.
+Запись одной «единицы знания» — `etn.thoughts.write`: мысль + комментарий +
+свойства + связи + вложения одной транзакцией. Политика `on_duplicate`
+делает повторный импорт безопасным.
 
 ## 7. Слои изменений
 
@@ -224,13 +261,13 @@ curl -X POST https://etn.example.com/api/v1/me/keys \
 ## 10. Warnings о незаполненных required-свойствах
 
 Тип мысли может объявлять обязательные свойства. `etn.thoughts.create`,
-`etn.thoughts.update` (при смене типа) и `etn.thoughts.upsert_bundle`
+`etn.thoughts.update` (при смене типа) и `etn.thoughts.write`
 **не падают** на неполной карточке — возвращают
 `warnings: [{code: "REQUIRED_PROPERTY_MISSING", key, …}]`: карточка записана,
 но её нужно дозаполнить.
 
-- `warnings` появляются только при расхождениях (у `upsert_bundle` поле есть
-  всегда, включая пустой массив).
+- `warnings` появляются только при расхождениях (у `etn.thoughts.write` поле
+  есть всегда, включая пустой массив).
 - Дефолты значений **не маскируют** предупреждение — значение нужно записать
   явно (`etn.properties.set` или в `properties` следующего bundle).
 - Перед записью список обязательных ключей подскажет `etn.types.list`.
