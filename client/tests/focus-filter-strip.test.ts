@@ -298,15 +298,26 @@ function focusOf(t: Thought): FocusResponse {
 function view(
   id: string,
   name: string,
-  options: { is_default?: boolean; position?: number; version?: number } = {},
+  options: {
+    is_default?: boolean;
+    position?: number;
+    version?: number;
+    sort?: 'alpha' | 'created' | 'viewed';
+    order?: 'asc' | 'desc';
+  } = {},
 ): ThoughtTypeView {
+  // `definition` для тестов — это та же JSON-строка, что хранится на сервере;
+  // клиент читает из неё `sort`/`order` и передаёт их в opts `run`.
+  const definitionObj: Record<string, unknown> = { criteria: [] };
+  if (options.sort !== undefined) definitionObj['sort'] = options.sort;
+  if (options.order !== undefined) definitionObj['order'] = options.order;
   return {
     id,
     thought_type_id: TYPE_ID,
     name,
     name_key: name.toLowerCase(),
     description: null,
-    definition: '{}',
+    definition: JSON.stringify(definitionObj),
     position: options.position ?? 0,
     is_default: options.is_default ?? false,
     version: options.version ?? 1,
@@ -340,7 +351,7 @@ interface FakeState {
   uiSet: { calls: { nid: string; key: string; value: string }[] };
   viewUpdate: { calls: any[] };
   viewRemove: { calls: any[] };
-  viewRun: { calls: { nid: string; tid: string; name: string }[]; response: any };
+  viewRun: { calls: { nid: string; tid: string; name: string; opts?: unknown }[]; response: any };
 }
 
 let state: FakeState;
@@ -370,8 +381,8 @@ function installFakeApi(): any {
           meta: { effective: state.viewsList.effective },
         };
       },
-      run: async (nid: string, tid: string, name: string) => {
-        state.viewRun.calls.push({ nid, tid, name });
+      run: async (nid: string, tid: string, name: string, opts?: unknown) => {
+        state.viewRun.calls.push({ nid, tid, name, opts });
         return state.viewRun.response;
       },
       update: async (...args: any[]) => {
@@ -804,6 +815,45 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     assert.ok(result !== null);
     assert.equal(result!.empty, false);
     assert.ok(Array.isArray(result!.unresolved));
+  });
+
+  it('runActiveViewIfNeeded: passes sort/order from the view definition as opts (error 119b314f)', async () => {
+    // Сервер по умолчанию сортирует результат отбора «alpha asc», и без
+    // явных sort/order opts в `etn.thoughtTypeViews.run` порядок из
+    // определения отбора теряется. Полоса должна читать `sort`/`order` из
+    // `definition` (один `thoughtTypeViews.list` на viewId, кешируется) и
+    // передавать их серверу, чтобы `sortItems` применил нужный порядок.
+    const harness = installShim();
+    setNetwork();
+    strip.mountFilterStrip(harness.host as any);
+    state.thoughtsGet.response = {
+      meta: { views: [metaViewRow(view('v-d', 'D', { is_default: true, position: 0 }))] },
+    };
+    state.viewsList.effective = [
+      view('v-d', 'D', { is_default: true, position: 0, sort: 'created', order: 'desc' }),
+    ];
+    state.viewRun.response = {
+      data: [],
+      meta: {
+        total: 0,
+        limit: 50,
+        offset: 0,
+        directions: {},
+        view: { id: 'v-d', name: 'D', type_id: TYPE_ID },
+        unresolved: [],
+      },
+    };
+    await strip.renderStrip(focusOf(thought(FOCUS_ID, 'В')));
+    await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(state.viewRun.calls.length, 1);
+    const opts = state.viewRun.calls[0]?.opts as { sort?: string; order?: string } | undefined;
+    assert.deepEqual(opts, { sort: 'created', order: 'desc' });
+    // Повторный запуск без смены отбора должен идти из кеша — `list` зовётся
+    // ровно один раз, opts не меняются.
+    await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(state.viewsList.calls.length, 1);
+    assert.equal(state.viewRun.calls.length, 2);
+    assert.deepEqual(state.viewRun.calls[1]?.opts, { sort: 'created', order: 'desc' });
   });
 
   it('realtime thought-type-view event triggers a strip rebuild', async () => {

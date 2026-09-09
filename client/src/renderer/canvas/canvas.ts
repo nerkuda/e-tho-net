@@ -1074,16 +1074,15 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
   // anchor. Double clicks on clouds keep their own handling; double clicks
   // with held modifiers are ignored.
   //
-  // The children zone skips this gesture when it is currently painting a
-  // thought-type view's run result (spec `9984aa98`, «Исключительность
-  // зон»): the result rows are not children of the focus, so «add a child»
-  // would mislead the user.
+  // Жест работает и при активном отборе (ошибка 119b314f): «Добавить мысль»
+  // подвешивает новую мысль к фокусу, отбор на это не влияет; блокировать
+  // жест из-за временно отображаемого результата отбора — лишать
+  // пользователя быстрого способа добавить ребёнка в фокус.
   zone.addEventListener('dblclick', (event) => {
     if (dir === 'siblings') return;
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     const target = event.target as HTMLElement | null;
     if (target !== null && target.closest('.cloud') !== null) return;
-    if (zone.classList.contains('zone-children-view-result')) return;
     const focusId = store.state.focus?.focused.id;
     if (focusId === undefined) return;
     if (addDialogOpener !== null) {
