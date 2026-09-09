@@ -31,6 +31,7 @@ import type { StructureSort, SortOrder } from '@etn/shared';
 import { openViewEditorDialog } from '../screens/thought-type/filter-dialog.js';
 import { etn } from '../lib/etn.js';
 import { div, span } from '../lib/dom.js';
+import { isInBaseLayer } from '../lib/layer-base.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
@@ -524,6 +525,13 @@ function buildAddButton(): HTMLButtonElement {
   if (!typed) btn.title = 'Добавление отбора недоступно у мысли без типа';
   btn.addEventListener('click', () => {
     if (btn.disabled) return;
+    // Отборы — сервисный инструмент общего пользования; правка в слоях
+    // изменений запрещена (задача d9b66617). Кнопку оставляем видимой, чтобы
+    // пользователь видел, что функция существует, но сейчас недоступна.
+    if (!isInBaseLayer()) {
+      notice('Для добавления отборов переключитесь в Основу.', 'info');
+      return;
+    }
     const networkId = store.state.networkId;
     const typeId = currentFocusTypeId;
     if (networkId === null || typeId === null || typeId === undefined) return;
@@ -562,10 +570,17 @@ function buildAddButton(): HTMLButtonElement {
 function showViewMenu(x: number, y: number, view: EffectiveViewRow): void {
   const networkId = store.state.networkId;
   if (networkId === null) return;
+  // В слоях изменений правка отборов запрещена (задача d9b66617) — пункты
+  // меню остаются видимыми, но клик показывает понятное сообщение.
+  const inBase = isInBaseLayer();
   const items: MenuItem[] = [
     {
       label: 'Изменить отбор',
       onClick: () => {
+        if (!inBase) {
+          notice('Для изменения отбора переключитесь в Основу.', 'info');
+          return;
+        }
         openViewEditorForExisting(networkId, view);
       },
     },
@@ -575,6 +590,10 @@ function showViewMenu(x: number, y: number, view: EffectiveViewRow): void {
       // inherited defaults are governed by their declaring type (spec).
       disabled: !view.isOwn && !view.is_default,
       onClick: () => {
+        if (!inBase) {
+          notice('Для изменения отбора переключитесь в Основу.', 'info');
+          return;
+        }
         void setDefault(networkId, view, !view.is_default);
       },
     },
@@ -587,6 +606,10 @@ function showViewMenu(x: number, y: number, view: EffectiveViewRow): void {
       // inherited views from the editor of their declaring type.
       disabled: view.inherited,
       onClick: () => {
+        if (!inBase) {
+          notice('Для удаления отбора переключитесь в Основу.', 'info');
+          return;
+        }
         void deleteView(networkId, view);
       },
     },

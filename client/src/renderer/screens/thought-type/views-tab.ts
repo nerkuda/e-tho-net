@@ -32,6 +32,7 @@ import { requireNetworkId } from '../../app.js';
 import { confirmDialog, errorDialog } from '../../lib/dialog.js';
 import { button, div, el, errText, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
+import { isInBaseLayer } from '../../lib/layer-base.js';
 import { notice } from '../../lib/notice.js';
 import { onRealtimeEvent } from '../../realtime.js';
 
@@ -159,6 +160,12 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       renderEmptyTypeHint();
       return;
     }
+    // Правка отборов в слоях изменений запрещена (задача d9b66617): отборы —
+    // сервисный инструмент общего пользования, а не предмет «песочниц».
+    if (!isInBaseLayer()) {
+      renderChangeLayerNotice();
+      return;
+    }
     if (loading) return;
     loading = true;
     try {
@@ -182,6 +189,17 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
         'muted views-tab-empty',
         'Сохраните тип, чтобы добавлять отборы — у нового типа ещё нет id.',
       ),
+    );
+    errorLine.textContent = '';
+  }
+
+  /** Заглушка для слоёв изменений (задача d9b66617): список и кнопки
+   *  редактирования недоступны, но кнопка «+ отбор» остаётся видимой —
+   *  клик по ней показывает понятное сообщение через {@link onAdd}. */
+  function renderChangeLayerNotice(): void {
+    tableWrap.replaceChildren();
+    tableWrap.append(
+      el('p', 'muted views-tab-empty', 'Отборы доступны только в Основе.'),
     );
     errorLine.textContent = '';
   }
@@ -283,6 +301,13 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   }
 
   function onAdd(): void {
+    // Отборы — сервисный инструмент общего пользования; правка в слоях
+    // изменений запрещена (задача d9b66617). Кнопка остаётся видимой, но
+    // клик показывает понятное сообщение.
+    if (!isInBaseLayer()) {
+      notice('Для добавления отборов переключитесь в Основу.', 'info');
+      return;
+    }
     const typeId = getTypeId();
     if (typeId === null) {
       notice('Сначала сохраните тип, чтобы добавлять отборы.', 'info');
@@ -301,6 +326,13 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   }
 
   function onEdit(view: ThoughtTypeView): void {
+    // Правка отбора в слое изменений запрещена (задача d9b66617) — покажем
+    // сообщение, не открывая диалог (который всё равно вернёт ошибку
+    // сервера или молча примет изменение).
+    if (!isInBaseLayer()) {
+      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      return;
+    }
     openViewEditorDialog({
       networkId,
       thoughtTypeId: view.thought_type_id,
@@ -314,6 +346,11 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   }
 
   async function onDelete(view: ThoughtTypeView): Promise<void> {
+    // Удаление отбора в слое изменений запрещено (задача d9b66617).
+    if (!isInBaseLayer()) {
+      notice('Для удаления отбора переключитесь в Основу.', 'info');
+      return;
+    }
     const ok = await confirmDialog(
       'Удалить отбор',
       `Удалить отбор «${view.name}»? Это действие необратимо.`,
@@ -334,6 +371,11 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   }
 
   async function onSetDefault(view: ThoughtTypeView): Promise<void> {
+    // Правка «по умолчанию» в слое изменений запрещена (задача d9b66617).
+    if (!isInBaseLayer()) {
+      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      return;
+    }
     const plan = planSetDefault(views, view.id);
     if (plan === null) return;
     const prev = views.map((v) => ({ ...v }));
@@ -374,6 +416,11 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   }
 
   async function onClearDefault(view: ThoughtTypeView): Promise<void> {
+    // Правка «по умолчанию» в слое изменений запрещена (задача d9b66617).
+    if (!isInBaseLayer()) {
+      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      return;
+    }
     const plan = planClearDefault(views, view.id);
     if (plan === null) return;
     const prev = views.map((v) => ({ ...v }));
@@ -408,6 +455,11 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     toIndex: number,
     sorted: ThoughtTypeView[],
   ): Promise<void> {
+    // Перестановка отбора в слое изменений запрещена (задача d9b66617).
+    if (!isInBaseLayer()) {
+      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      return;
+    }
     const plan = planReorder(sorted, fromIndex, toIndex);
     if (plan === null) return;
     const prev = views.map((v) => ({ ...v }));
