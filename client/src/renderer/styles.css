@@ -2486,13 +2486,15 @@ body.cloud-dragging * {
   margin-bottom: 6px;
 }
 
-/* Default list height: five rows, then it scrolls (§6.5). */
+/* Fixed list height: five rows by default, then it scrolls (§6.5). */
 .attachments-list {
   overflow-y: auto;
-  /* Manual splitter drags persist as the list's max height (ee745368): the
-     cap lives in --clamp-attachments on the editor scroll box (list-heights.ts),
-     the fallback is the spec default — five rows (§6.5). */
-  max-height: var(--clamp-attachments, 260px);
+  /* Height is always fixed (bug 6b757336: was max-height, so a shorter list
+     collapsed the area before growing back — visible "jitter"). Manual
+     splitter drags persist as the list's height (ee745368): the value lives
+     in --clamp-attachments on the editor scroll box (list-heights.ts), the
+     fallback is the spec default — five rows (§6.5). */
+  height: var(--clamp-attachments, 260px);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 2px 4px;
@@ -2600,13 +2602,15 @@ body.cloud-dragging * {
   margin-bottom: 6px;
 }
 
-/* Default table height: five rows, then it scrolls (§6.6). */
+/* Fixed table height: five rows by default, then it scrolls (§6.6). */
 /* The doubled selector outranks `.admin-table-wrap`'s own `max-height: 380px`
-   (same specificity, later source order) — otherwise the saved clamp is
+   (same specificity, later source order) — otherwise the saved height is
    ignored after the editor re-renders (ee745368). */
 .admin-table-wrap.chrono-table {
-  /* Saved manual max height (ee745368, list-heights.ts); default — five rows. */
-  max-height: var(--clamp-chrono, 190px);
+  /* Height is always fixed (bug 6b757336: was max-height, so a shorter table
+     collapsed the area before growing back — visible "jitter"). Saved manual
+     height (ee745368, list-heights.ts); default — five rows. */
+  height: var(--clamp-chrono, 190px);
 }
 
 /* Pin the header row while the body scrolls — the same pattern as the
@@ -2670,14 +2674,17 @@ body.cloud-dragging * {
   background: var(--accent-soft);
 }
 
-/* --- Properties table: headerless, at most five rows (L7, §6.3.1) ---------- */
+/* --- Properties table: headerless, five rows by default (L7, §6.3.1) ------- */
 
 /* The doubled selector outranks `.admin-table-wrap`'s own `max-height: 380px`
-   (same specificity, later source order) — otherwise the saved clamp is
+   (same specificity, later source order) — otherwise the saved height is
    ignored after the editor re-renders (ee745368). */
 .admin-table-wrap.prop-wrap {
-  /* Saved manual max height (ee745368, list-heights.ts); default — five rows. */
-  max-height: var(--clamp-props, 190px);
+  /* Height is always fixed (bug 6b757336: was max-height, so editing a
+     thought_ref property collapsed the area to the "Загрузка…" placeholder
+     before growing back — visible "jitter"). Saved manual height (ee745368,
+     list-heights.ts); default — five rows. */
+  height: var(--clamp-props, 190px);
 }
 
 .editor-field {
