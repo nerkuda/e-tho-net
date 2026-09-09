@@ -139,6 +139,13 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     }
   });
 
+  /** View ids, чьи PATCH прямо сейчас в полёте — realtime-обработчик
+   *  пропускает `load()` для них, чтобы оптимистичный reorder или
+   *  переключение «по умолчанию» не перетёрся эхом или промежуточным
+   *  чтением сервера, на котором PATCH-и ещё не оба легли
+   *  (регрессия a62190d1). */
+  const pendingPatches = new Set<string>();
+
   const unsubscribeRealtime = onRealtimeEvent((evt) => {
     if (
       evt.type !== 'thought-type-view.created' &&
@@ -150,6 +157,14 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     const typeId = getTypeId();
     if (typeId === null) return;
     if (evt.data.thought_type_id !== typeId) return;
+    // Событие `updated` несёт `view_id` затронутого отбора; если он в
+    // `pendingPatches`, наш собственный PATCH в полёте — `applyViewUpdates`
+    // на ответе `Promise.all`/`await` и так положит актуальное состояние,
+    // лишний `load()` только мешает (перетирает позиции промежуточным
+    // состоянием сервера).
+    if (evt.type === 'thought-type-view.updated' && pendingPatches.has(evt.data.view_id)) {
+      return;
+    }
     void load();
   });
 
@@ -473,6 +488,14 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       return v;
     });
     renderRows();
+    // Помечаем оба id как «PATCH в полёте» — realtime-обработчик не будет
+    // вызывать `load()` для их `updated`-событий, пока `Promise.all` не
+    // разрешится. Без этого промежуточное чтение сервера (когда только
+    // один из двух PATCH-ей лёг) возвращало бы обе строки с одинаковой
+    // позицией и сортировка по id кидала порядок обратно (регрессия
+    // a62190d1 «порядок не меняется»).
+    pendingPatches.add(plan.movedId);
+    pendingPatches.add(plan.neighbourId);
     try {
       const [updatedMoved, updatedNeighbour] = await Promise.all([
         etn.thoughtTypeViews.update(
@@ -501,6 +524,9 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       views = prev;
       renderRows();
       void load();
+    } finally {
+      pendingPatches.delete(plan.movedId);
+      pendingPatches.delete(plan.neighbourId);
     }
   }
 
