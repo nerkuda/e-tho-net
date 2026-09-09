@@ -155,11 +155,14 @@ export function defaultLayerColors(): LayerColors {
 // Resolving the active layer's theme
 // ---------------------------------------------------------------------------
 
-/** Colours of the session's current layer: `null` on/for the base layer and
- *  for a layer that carries no explicit colours (theme defaults, §2.2a). */
+/** Colours of the session's current layer: `null` on/for the base layer.
+ *  For a non-base layer that carries no explicit colours (e.g. a layer created
+ *  through MCP, which cannot set `colors`), the client falls back to the
+ *  creation defaults so the active layer is always visually distinct from the
+ *  base — independent of the layer's origin (§2.2a, task 86dc675f). */
 export function currentLayerColors(layers: Layer[], current: LayerEcho | null): LayerColors | null {
   if (current === null || current.id === BASE_LAYER_ID) return null;
-  return layers.find((l) => l.id === current.id)?.colors ?? null;
+  return layers.find((l) => l.id === current.id)?.colors ?? defaultLayerColors();
 }
 
 /** The current theme's variant of a layer's colours; `null` → theme defaults. */
