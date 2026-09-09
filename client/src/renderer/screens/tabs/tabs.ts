@@ -18,7 +18,7 @@ import { svgIcon } from '../../lib/icons.js';
 import { etn } from '../../lib/etn.js';
 import { store } from '../../state.js';
 import type { TabDto } from '../../../main/ipc/contract.js';
-import { clearTabDirty, removeTab, upsertTab } from './tab-state.js';
+import { clearTabDirty, pickNeighborTab, removeTab, upsertTab } from './tab-state.js';
 import {
   buildOverflowButton,
   recomputeOverflow,
@@ -231,12 +231,31 @@ async function openNetworkTab(networkId: string, tabId: string): Promise<void> {
   await openNetwork(networkId, tabId);
 }
 
-/** Closes a tab via IPC and removes it from the store. */
-async function closeTab(tabId: string): Promise<void> {
+/**
+ * Closes a tab via IPC and removes it from the store. If the closed tab was
+ * active, activates a neighbour — left first, else right (bug cace2597):
+ * `removeTab` only resets `activeTabId` to `null`, so without this the
+ * just-closed network's workspace stayed on screen with nothing pointing at
+ * it. No neighbour left (last tab closed) opens the network picker, same as
+ * clicking «+».
+ *
+ * Exported for unit tests.
+ */
+export async function closeTab(tabId: string): Promise<void> {
+  const wasActive = store.state.activeTabId === tabId;
+  const tabsBeforeClose = store.state.tabs;
+  const closedIndex = tabsBeforeClose.findIndex((t) => t.tab_id === tabId);
   try {
     await etn.tabs.close(tabId);
   } finally {
     removeTab(tabId);
+  }
+  if (!wasActive || closedIndex === -1) return;
+  const neighbor = pickNeighborTab(tabsBeforeClose, closedIndex);
+  if (neighbor !== null) {
+    await activateTab(neighbor.tab_id);
+  } else {
+    store.update({ pickerOpen: true });
   }
 }
 

@@ -47,6 +47,18 @@ export function upsertTab(tab: TabDto): void {
   store.update({ tabs: next });
 }
 
+/**
+ * Picks the tab that should become active after closing the tab at
+ * `closedIndex` in `tabs` (the list BEFORE removal): the left neighbour,
+ * else the right one, else `null` when none remain (bug cace2597 — closing
+ * the active tab used to leave `activeTabId` at `null` with no replacement
+ * picked, so the just-closed network's workspace stayed on screen).
+ */
+export function pickNeighborTab(tabs: TabDto[], closedIndex: number): TabDto | null {
+  if (closedIndex > 0) return tabs[closedIndex - 1] ?? null;
+  return tabs[closedIndex + 1] ?? null;
+}
+
 /** Drops a tab by id (after `etn.tabs.close`). */
 export function removeTab(tabId: string): void {
   store.update({
