@@ -18,6 +18,7 @@
 import type { FocusDir, Link } from '@etn/shared';
 
 import { onThoughtDeleted, scheduleRefresh, requireNetworkId, setFocus } from '../app.js';
+import { getActiveMode as getStripActiveMode } from './focus-filter-strip.js';
 import { openAddDialog } from './add-dialog.js';
 import {
   buildSingleThoughtSnapshot,
@@ -768,6 +769,14 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
   // so we can mark the matching row of the submenu — otherwise the user has
   // no signal of which mode is currently active.
   const current = focus.sorts[dir];
+  // When the focus has an active view filter, the children zone shows the
+  // view's run result, not real children. The result's order is owned by
+  // the view's own definition (fixed by the run, 08-ui-spec.md §2.7) — the
+  // manual/alpha/created/viewed submenu would silently no-op and mislead
+  // the user (ошибка 119b314f). Disable it; «Добавить мысль» stays usable
+  // because adding a child of the focus is independent of the view result.
+  const viewResultActive =
+    dir === 'children' && getStripActiveMode().kind === 'view';
 
   const sortItem = (
     label: string,
@@ -799,22 +808,28 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
     ...addItem,
     {
       label: 'Сортировка',
-      submenu: [
-        sortItem('по алфавиту (возр)', 'alpha', 'asc'),
-        sortItem('по алфавиту (убыв)', 'alpha', 'desc'),
-        sortItem('по дате создания (возр)', 'created', 'asc'),
-        sortItem('по дате создания (убыв)', 'created', 'desc'),
-        sortItem('по дате просмотра (возр)', 'viewed', 'asc'),
-        sortItem('по дате просмотра (убыв)', 'viewed', 'desc'),
-        {
-          label: 'ручной',
-          checked: current.sort === 'manual',
-          disabled: !manual,
-          onClick: () => {
-            if (manual) void setZoneSort(networkId, focus.focused.id, dir, 'manual', 'asc');
-          },
-        },
-      ],
+      // View result owns the order (см. описание viewResultActive выше) —
+      // показываем заглушку подменю, чтобы сразу было видно, что режим
+      // сменился. Подменю недоступно, пока в фокусе активен отбор.
+      disabled: viewResultActive,
+      submenu: viewResultActive
+        ? [{ label: 'порядок задаётся отбором', disabled: true }]
+        : [
+            sortItem('по алфавиту (возр)', 'alpha', 'asc'),
+            sortItem('по алфавиту (убыв)', 'alpha', 'desc'),
+            sortItem('по дате создания (возр)', 'created', 'asc'),
+            sortItem('по дате создания (убыв)', 'created', 'desc'),
+            sortItem('по дате просмотра (возр)', 'viewed', 'asc'),
+            sortItem('по дате просмотра (убыв)', 'viewed', 'desc'),
+            {
+              label: 'ручной',
+              checked: current.sort === 'manual',
+              disabled: !manual,
+              onClick: () => {
+                if (manual) void setZoneSort(networkId, focus.focused.id, dir, 'manual', 'asc');
+              },
+            },
+          ],
     },
   ]);
 }

@@ -26,10 +26,13 @@
 
 import { UI_STATE_KEY } from '@etn/shared';
 import type { FocusResponse, ThoughtRef, ThoughtTypeView } from '@etn/shared';
+import type { StructureSort, SortOrder } from '@etn/shared';
 
 import { openViewEditorDialog } from '../screens/thought-type/filter-dialog.js';
+import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { div, span } from '../lib/dom.js';
+import { isInBaseLayer } from '../lib/layer-base.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
@@ -254,6 +257,11 @@ export async function renderStrip(focus: FocusResponse | null): Promise<void> {
   }
   currentFocusId = focus.focused.id;
   currentFocusTypeId = focus.focused.type_id ?? null;
+  // Reset view-result cache for the new focus.
+  lastResult = null;
+  // Сбрасываем кеш `sort`/`order` отбора — для нового фокуса отборы могут
+  // быть другими. Перечитываем заново при следующем `runActiveViewIfNeeded`.
+  invalidateViewSortCache();
   // Resolve the effective chain. The focus endpoint doesn't ship
   // `meta.views` yet, so the strip reads the focus via `thoughts.get` and
   // falls back to a `thoughtTypeViews.list` direct call for typed thoughts
@@ -261,9 +269,6 @@ export async function renderStrip(focus: FocusResponse | null): Promise<void> {
   // root id; requirement 23e0f78e).
   const views = await loadEffectiveViews(focus);
   effectiveViews = views;
-
-  // Reset view-result cache for the new focus.
-  lastResult = null;
   // Pick the mode: persisted > default view > «Потомки».
   const persistedMode = persisted[focus.focused.id];
   const isValidPersisted =
@@ -521,6 +526,13 @@ function buildAddButton(): HTMLButtonElement {
   if (!typed) btn.title = 'Добавление отбора недоступно у мысли без типа';
   btn.addEventListener('click', () => {
     if (btn.disabled) return;
+    // Отборы — сервисный инструмент общего пользования; правка в слоях
+    // изменений запрещена (задача d9b66617). Кнопку оставляем видимой, чтобы
+    // пользователь видел, что функция существует, но сейчас недоступна.
+    if (!isInBaseLayer()) {
+      notice('Для добавления отборов переключитесь в Основу.', 'info');
+      return;
+    }
     const networkId = store.state.networkId;
     const typeId = currentFocusTypeId;
     if (networkId === null || typeId === null || typeId === undefined) return;
@@ -559,10 +571,17 @@ function buildAddButton(): HTMLButtonElement {
 function showViewMenu(x: number, y: number, view: EffectiveViewRow): void {
   const networkId = store.state.networkId;
   if (networkId === null) return;
+  // В слоях изменений правка отборов запрещена (задача d9b66617) — пункты
+  // меню остаются видимыми, но клик показывает понятное сообщение.
+  const inBase = isInBaseLayer();
   const items: MenuItem[] = [
     {
       label: 'Изменить отбор',
       onClick: () => {
+        if (!inBase) {
+          notice('Для изменения отбора переключитесь в Основу.', 'info');
+          return;
+        }
         openViewEditorForExisting(networkId, view);
       },
     },
@@ -572,6 +591,10 @@ function showViewMenu(x: number, y: number, view: EffectiveViewRow): void {
       // inherited defaults are governed by their declaring type (spec).
       disabled: !view.isOwn && !view.is_default,
       onClick: () => {
+        if (!inBase) {
+          notice('Для изменения отбора переключитесь в Основу.', 'info');
+          return;
+        }
         void setDefault(networkId, view, !view.is_default);
       },
     },
@@ -584,6 +607,10 @@ function showViewMenu(x: number, y: number, view: EffectiveViewRow): void {
       // inherited views from the editor of their declaring type.
       disabled: view.inherited,
       onClick: () => {
+        if (!inBase) {
+          notice('Для удаления отбора переключитесь в Основу.', 'info');
+          return;
+        }
         void deleteView(networkId, view);
       },
     },
@@ -627,6 +654,9 @@ async function openViewEditorForExisting(
             // Отбор могли переименовать — обновляем кэшированное имя перед
             // перезапуском, чтобы run выполнился по актуальному определению.
             currentMode.viewName = savedView.name_key;
+            // Определение могло поменяться (sort/order/limit и т.п.) —
+            // сбрасываем кеш, чтобы новый run прочитал свежую `definition`.
+            invalidateViewSortCache();
             const focus = store.state.focus;
             if (focus !== null) {
               await runActiveViewIfNeeded(focus.focused.id);
@@ -663,6 +693,19 @@ async function setDefault(
 }
 
 async function deleteView(networkId: string, view: EffectiveViewRow): Promise<void> {
+  // Унаследованный отбор удаляется из редактора его собственного типа —
+  // кнопка в контекстном меню уже `disabled: view.inherited`, но прямой
+  // вызов из кода не должен молча отправлять DELETE на чужой тип.
+  if (view.inherited) return;
+  // Симметрия с `onDelete` во вкладке «Отборы» редактора типа
+  // (regression a62190d1): без подтверждения клик по «Удалить отбор» молча
+  // стирал отбор — действие необратимое.
+  const ok = await confirmDialog(
+    'Удалить отбор',
+    `Удалить отбор «${view.name || view.name_key}»? Это действие необратимо.`,
+    true,
+  );
+  if (!ok) return;
   try {
     await etn.thoughtTypeViews.remove(networkId, view.defined_on, view.id, view.version);
     notice('Отбор удалён.', 'info');
@@ -741,16 +784,107 @@ function notifyModeChange(): void {
  */
 let runSeq = 0;
 
+/** Cache of `sort`/`order` parsed from each view's definition, keyed by
+ *  `viewId`. `null` — определение уже пытались прочитать и распарсить не
+ *  удалось (битый JSON / отсутствуют поля). Сбрасывается при смене фокуса
+ *  (renderStrip) и realtime-событиях по отборам — см. `invalidateViewSortCache`. */
+const viewSortOrderCache = new Map<
+  string,
+  { sort: StructureSort; order: SortOrder } | null
+>();
+
+/** Drops every cached view `sort`/`order` (вызывается при rebuild полосы). */
+function invalidateViewSortCache(): void {
+  viewSortOrderCache.clear();
+}
+
+/** Загружает `sort`/`order` из определения отбора и кеширует по `viewId`.
+ *  Серверная операция `etn.thoughtTypeViews.run` сама по себе сортирует
+ *  результат `alpha asc` (домен `thought-type-views-service.ts`), и без
+ *  явных `sort`/`order` opts порядок отбора игнорируется — клиент должен
+ *  передавать `sort`/`order`, прочитанные из `definition`. Кеш по `viewId`
+ *  избавляет от повторного `list` на каждый ре-рендер. */
+async function loadViewSortOrder(
+  networkId: string,
+  viewTypeId: string,
+  viewId: string,
+): Promise<{ sort: StructureSort; order: SortOrder } | null> {
+  const cached = viewSortOrderCache.get(viewId);
+  if (cached !== undefined) return cached;
+  try {
+    const resp = await etn.thoughtTypeViews.list(networkId, viewTypeId, {
+      includeEffective: false,
+    });
+    const full = resp.data.find((v) => v.id === viewId);
+    if (full === undefined) {
+      viewSortOrderCache.set(viewId, null);
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(full.definition) as unknown;
+    } catch {
+      viewSortOrderCache.set(viewId, null);
+      return null;
+    }
+    const obj = parsed as { sort?: unknown; order?: unknown };
+    const sort = obj?.sort;
+    const order = obj?.order;
+    if (typeof sort !== 'string' || typeof order !== 'string') {
+      viewSortOrderCache.set(viewId, null);
+      return null;
+    }
+    // Принимаем только значения, которые сервер примет (`STRUCTURE_SORTS`
+    // и `SORT_ORDERS`). Нештатные значения оставляем на откуп сервера.
+    if (sort !== 'alpha' && sort !== 'created' && sort !== 'viewed') {
+      viewSortOrderCache.set(viewId, null);
+      return null;
+    }
+    if (order !== 'asc' && order !== 'desc') {
+      viewSortOrderCache.set(viewId, null);
+      return null;
+    }
+    const value: { sort: StructureSort; order: SortOrder } = { sort, order };
+    viewSortOrderCache.set(viewId, value);
+    return value;
+  } catch {
+    viewSortOrderCache.set(viewId, null);
+    return null;
+  }
+}
+
 export async function runActiveViewIfNeeded(focusId: string): Promise<ViewResult | null> {
   if (currentMode.kind !== 'view') return null;
   const networkId = store.state.networkId;
   if (networkId === null) return null;
   const seq = ++runSeq;
   try {
+    // Передаём `sort`/`order` из определения отбора — иначе сервер возвращает
+    // фиксированный `alpha asc` и порядок отбора (например, «по дате
+    // создания») теряется (ошибка 119b314f). REST `run` уже принимает эти
+    // opts и применяет через `sortItems` (server/routes/thought-type-views.ts).
+    const sortOrder = await loadViewSortOrder(
+      networkId,
+      currentMode.viewTypeId,
+      currentMode.viewId,
+    );
     const resp = await etn.thoughtTypeViews.run(
       networkId,
       focusId,
       currentMode.viewName,
+      // Тип opts в `rest-client.runThoughtTypeView` объявлен как
+      // `'alpha' | 'created' | 'updated'` — это устаревшее значение,
+      // серверный `parseSort` валидирует против `STRUCTURE_SORTS`
+      // (`'alpha' | 'created' | 'viewed'`, shared/enums.ts), куда «updated»
+      // не входит. `sort`/`order` из `definition` уже отфильтрованы в
+      // `loadViewSortOrder` под этот набор — приводим к типу opts только
+      // на границе IPC.
+      sortOrder === null
+        ? undefined
+        : ({ sort: sortOrder.sort, order: sortOrder.order } as {
+            sort: 'alpha' | 'created' | 'updated';
+            order: 'asc' | 'desc';
+          }),
     );
     // Stale response (focus changed or user re-clicked) — drop it.
     if (seq !== runSeq) return lastResult;

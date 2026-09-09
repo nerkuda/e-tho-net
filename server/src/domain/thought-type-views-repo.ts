@@ -173,6 +173,14 @@ export function listThoughtTypeViewsByType(
  * `(thought_type_id, name_key, layer_id)` миграции 037 охраняет имя внутри
  * типа в пределах слоя; дубль выльется в `UNIQUE constraint failed`.
  *
+ * `position` без явного значения — за максимальным видимым в типе (как у
+ * привязок свойств `type_properties`, property-service.ts): новый отбор
+ * встаёт в конец списка, и позиции создаваемых без `position` отборов не
+ * дублируются. Раньше дефолт был `0`, поэтому у типов, чьи отборы заводили
+ * через UI (клиент `position` не передаёт), все строки получали позицию 0,
+ * и перестановка ▲/▼ обменом позиций соседей не меняла порядок (ошибка
+ * a62190d1 «порядок не меняется»).
+ *
  * Ограничение «один is_default в пределах типа» (требование 7263e565)
  * здесь НЕ обеспечивается: доменный слой (задача 17eb741e) снимает пометку
  * с прежнего отбора того же типа в одной транзакции. Уровень хранения
@@ -191,6 +199,18 @@ export function insertThoughtTypeView(
   const now = new Date(nowMs).toISOString();
 
   ndb.transaction(() => {
+    // Следующая позиция — за максимальной среди видимых отборов типа (в
+    // слое чтение `*_v` сворачивает цепочку «ближайший слой побеждает»).
+    // Запрос внутри транзакции видит её собственные изменения.
+    const position =
+      input.position ??
+      (
+        ndb
+          .prepare(
+            'SELECT COALESCE(MAX(position), -1) + 1 AS p FROM thought_type_views_v WHERE thought_type_id = ?',
+          )
+          .get(input.thought_type_id) as { p: number }
+      ).p;
     ndb
       .prepare(
         `INSERT INTO thought_type_views
@@ -207,7 +227,7 @@ export function insertThoughtTypeView(
         nameKey,
         input.description ?? null,
         input.definition,
-        input.position ?? 0,
+        position,
         input.is_default ? 1 : 0,
         now,
         now,

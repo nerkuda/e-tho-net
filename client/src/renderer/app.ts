@@ -704,10 +704,16 @@ export function initKeyboard(): void {
           }
         }
       }
-      if (event.key.toLowerCase() === 'f') {
+      // Same `event.code` fallback as Ctrl+C/V above — on a Cyrillic layout
+      // the physical F key reports `event.key` as a Cyrillic character, not
+      // 'f', so Ctrl+F silently never matched (bug 98302e81).
+      const isF = event.key.toLowerCase() === 'f' || event.code === 'KeyF';
+      if (isF) {
         // Ctrl+F focuses the canvas search row — hidden in the structures
-        // view (§15.1), so the shortcut does nothing there.
-        if (store.state.screen === 'workspace' && store.state.activeView === 'map') {
+        // view (§15.1) and while a comment/field is being edited (native
+        // find should not be hijacked there), so the shortcut does nothing
+        // in those cases.
+        if (!editable && store.state.screen === 'workspace' && store.state.activeView === 'map') {
           event.preventDefault();
           document.querySelector<HTMLInputElement>('.search-input')?.focus();
         }

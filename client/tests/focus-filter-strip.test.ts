@@ -40,6 +40,7 @@ import type {
   Thought,
   ThoughtTypeView,
 } from '@etn/shared';
+import { BASE_LAYER_ID } from '@etn/shared';
 
 import { store } from '../src/renderer/state.js';
 
@@ -298,15 +299,26 @@ function focusOf(t: Thought): FocusResponse {
 function view(
   id: string,
   name: string,
-  options: { is_default?: boolean; position?: number; version?: number } = {},
+  options: {
+    is_default?: boolean;
+    position?: number;
+    version?: number;
+    sort?: 'alpha' | 'created' | 'viewed';
+    order?: 'asc' | 'desc';
+  } = {},
 ): ThoughtTypeView {
+  // `definition` для тестов — это та же JSON-строка, что хранится на сервере;
+  // клиент читает из неё `sort`/`order` и передаёт их в opts `run`.
+  const definitionObj: Record<string, unknown> = { criteria: [] };
+  if (options.sort !== undefined) definitionObj['sort'] = options.sort;
+  if (options.order !== undefined) definitionObj['order'] = options.order;
   return {
     id,
     thought_type_id: TYPE_ID,
     name,
     name_key: name.toLowerCase(),
     description: null,
-    definition: '{}',
+    definition: JSON.stringify(definitionObj),
     position: options.position ?? 0,
     is_default: options.is_default ?? false,
     version: options.version ?? 1,
@@ -340,7 +352,7 @@ interface FakeState {
   uiSet: { calls: { nid: string; key: string; value: string }[] };
   viewUpdate: { calls: any[] };
   viewRemove: { calls: any[] };
-  viewRun: { calls: { nid: string; tid: string; name: string }[]; response: any };
+  viewRun: { calls: { nid: string; tid: string; name: string; opts?: unknown }[]; response: any };
 }
 
 let state: FakeState;
@@ -370,8 +382,8 @@ function installFakeApi(): any {
           meta: { effective: state.viewsList.effective },
         };
       },
-      run: async (nid: string, tid: string, name: string) => {
-        state.viewRun.calls.push({ nid, tid, name });
+      run: async (nid: string, tid: string, name: string, opts?: unknown) => {
+        state.viewRun.calls.push({ nid, tid, name, opts });
         return state.viewRun.response;
       },
       update: async (...args: any[]) => {
@@ -806,6 +818,45 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     assert.ok(Array.isArray(result!.unresolved));
   });
 
+  it('runActiveViewIfNeeded: passes sort/order from the view definition as opts (error 119b314f)', async () => {
+    // Сервер по умолчанию сортирует результат отбора «alpha asc», и без
+    // явных sort/order opts в `etn.thoughtTypeViews.run` порядок из
+    // определения отбора теряется. Полоса должна читать `sort`/`order` из
+    // `definition` (один `thoughtTypeViews.list` на viewId, кешируется) и
+    // передавать их серверу, чтобы `sortItems` применил нужный порядок.
+    const harness = installShim();
+    setNetwork();
+    strip.mountFilterStrip(harness.host as any);
+    state.thoughtsGet.response = {
+      meta: { views: [metaViewRow(view('v-d', 'D', { is_default: true, position: 0 }))] },
+    };
+    state.viewsList.effective = [
+      view('v-d', 'D', { is_default: true, position: 0, sort: 'created', order: 'desc' }),
+    ];
+    state.viewRun.response = {
+      data: [],
+      meta: {
+        total: 0,
+        limit: 50,
+        offset: 0,
+        directions: {},
+        view: { id: 'v-d', name: 'D', type_id: TYPE_ID },
+        unresolved: [],
+      },
+    };
+    await strip.renderStrip(focusOf(thought(FOCUS_ID, 'В')));
+    await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(state.viewRun.calls.length, 1);
+    const opts = state.viewRun.calls[0]?.opts as { sort?: string; order?: string } | undefined;
+    assert.deepEqual(opts, { sort: 'created', order: 'desc' });
+    // Повторный запуск без смены отбора должен идти из кеша — `list` зовётся
+    // ровно один раз, opts не меняются.
+    await strip.runActiveViewIfNeeded(FOCUS_ID);
+    assert.equal(state.viewsList.calls.length, 1);
+    assert.equal(state.viewRun.calls.length, 2);
+    assert.deepEqual(state.viewRun.calls[1]?.opts, { sort: 'created', order: 'desc' });
+  });
+
   it('realtime thought-type-view event triggers a strip rebuild', async () => {
     const harness = installShim();
     setNetwork();
@@ -905,5 +956,166 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     } finally {
       delete (globalThis as any).window;
     }
+  });
+
+  // -------------------------------------------------------------------
+  // Задача d9b66617: понятные сообщения о запрете правки отборов в слоях
+  // изменений. Полоса и контекстное меню должны показывать тост вместо
+  // диалога/вызова API, когда активный слой — не Основа.
+  // -------------------------------------------------------------------
+
+  /** Возвращает текст всего поддерева — ShimElement не агрегирует
+   *  textContent из детей, поэтому собираем руками. */
+  function textOf(node: ShimElement): string {
+    let out = node.textContent;
+    for (const child of node.children) out += textOf(child);
+    return out;
+  }
+
+  /** Возвращает полные тексты всех тостов в `document.body`. */
+  function noticesOnBody(): string[] {
+    const doc = (globalThis as any).document as { body: ShimElement };
+    return doc.body.children.map(textOf);
+  }
+
+  /** Ищет пункт меню по его подписи (текст лежит в дочернем span.menu-item-label). */
+  function findMenuItemByLabel(menu: ShimElement, label: string): ShimElement | undefined {
+    return menu.children.find((row) => textOf(row).includes(label));
+  }
+
+  /** Минимальный `window` со `setTimeout`/слушателями — нужен `notice()` для
+   *  авто-скрытия тоста и `showMenuAt` для расчёта координат. `etn` —
+   *  Proxy-прокси из `lib/etn.ts`, читает `window.etn` при каждом обращении,
+   *  поэтому ссылка на fake-стенд обязательно должна быть здесь. */
+  function installWindow(): void {
+    (globalThis as any).window = {
+      innerWidth: 1024,
+      innerHeight: 768,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      setTimeout: () => 0,
+      clearTimeout: () => undefined,
+      etn: (globalThis as any).etn,
+    };
+  }
+
+  /** Пустая `document.body` перед тестом, чтобы тосты предыдущего теста
+   *  не утёкли в текущий. */
+  function clearBody(): void {
+    const doc = (globalThis as any).document as { body: ShimElement };
+    while (doc.body.children.length > 0) doc.body.children.pop();
+  }
+
+  it('«+» в полосе под фокусом показывает тост «Для добавления отборов…» в слое изменений', async () => {
+    installWindow();
+    clearBody();
+    setNetwork();
+    // Активный слой изменений — не Основа. `BASE_LAYER_ID` для Основы
+    // определён в `@etn/shared`, поэтому используем любой другой id.
+    store.update({ currentLayer: { id: '11111111-2222-3333-4444-555555555555', title: 'Черновик' } });
+    const harness = installShim();
+    strip.mountFilterStrip(harness.host as any);
+    // Тип у фокуса есть — кнопка «+» будет доступна.
+    const t = thought(FOCUS_ID, 'Версия 0.7.4', TYPE_ID);
+    state.thoughtsGet.response = { meta: { views: [] } };
+    await strip.renderStrip(focusOf(t));
+    const plus = harness.findPlusButton();
+    assert.ok(plus !== null, 'кнопка «+» должна быть видна');
+    plus!.click();
+    const notices = noticesOnBody();
+    assert.ok(
+      notices.some((t) => t.includes('Для добавления отборов переключитесь в Основу')),
+      `ожидался тост про Основу; фактически: ${JSON.stringify(notices)}`,
+    );
+  });
+
+  it('«+» в полосе под фокусом открывает диалог в Основе (контрольное поведение)', async () => {
+    installWindow();
+    clearBody();
+    setNetwork();
+    // Основа выбрана явно — `currentLayer.id === BASE_LAYER_ID`.
+    store.update({ currentLayer: { id: BASE_LAYER_ID, title: 'Основа' } });
+    const harness = installShim();
+    strip.mountFilterStrip(harness.host as any);
+    const t = thought(FOCUS_ID, 'Версия 0.7.4', TYPE_ID);
+    state.thoughtsGet.response = { meta: { views: [] } };
+    await strip.renderStrip(focusOf(t));
+    const plus = harness.findPlusButton();
+    assert.ok(plus !== null);
+    plus!.click();
+    // Даём тикам пройти — `openViewEditorDialog` ставит слушатели
+    // `window.addEventListener`, чистка не нужна, перед следующим тестом
+    // `beforeEach` всё равно переустановит `etn`.
+    await Promise.resolve();
+    const notices = noticesOnBody();
+    assert.equal(
+      notices.filter((t) => t.includes('Для добавления отборов')).length,
+      0,
+      'в Основе тостов про слой быть не должно',
+    );
+  });
+
+  it('контекстное меню «Изменить отбор» показывает тост в слое изменений', async () => {
+    installWindow();
+    clearBody();
+    setNetwork();
+    store.update({ currentLayer: { id: '11111111-2222-3333-4444-555555555555', title: 'Черновик' } });
+    const harness = installShim();
+    strip.mountFilterStrip(harness.host as any);
+    const t = thought(FOCUS_ID, 'Версия 0.7.4', TYPE_ID);
+    state.thoughtsGet.response = {
+      meta: {
+        views: [metaViewRow(view('v-1', 'A-просмотр', { position: 0, version: 3 }))],
+      },
+    };
+    await strip.renderStrip(focusOf(t));
+    const viewBtn = harness.findViewButton('v-1');
+    assert.ok(viewBtn !== null, 'кнопка отбора должна быть в полосе');
+    viewBtn!.dispatchContextMenu();
+    // `showMenuAt` добавляет корнечный `<div class="menu">…</div>` в конец body.
+    const doc = (globalThis as any).document as { body: ShimElement };
+    const menu = doc.body.children[doc.body.children.length - 1];
+    assert.ok(menu !== undefined, 'контекстное меню должно быть открыто');
+    const item = findMenuItemByLabel(menu, 'Изменить отбор');
+    assert.ok(item !== undefined, 'пункт «Изменить отбор» должен быть в меню');
+    item!.click();
+    const notices = noticesOnBody();
+    assert.ok(
+      notices.some((t) => t.includes('Для изменения отбора переключитесь в Основу')),
+      `ожидался тост про Основу; фактически: ${JSON.stringify(notices)}`,
+    );
+    // Защитная ветка не пустила дальше — `thoughtTypeViews.list` не вызывался.
+    assert.equal(state.viewsList.calls.length, 0);
+  });
+
+  it('контекстное меню «Удалить отбор» показывает тост в слое изменений', async () => {
+    installWindow();
+    clearBody();
+    setNetwork();
+    store.update({ currentLayer: { id: '11111111-2222-3333-4444-555555555555', title: 'Черновик' } });
+    const harness = installShim();
+    strip.mountFilterStrip(harness.host as any);
+    const t = thought(FOCUS_ID, 'Версия 0.7.4', TYPE_ID);
+    state.thoughtsGet.response = {
+      meta: {
+        views: [metaViewRow(view('v-1', 'A-просмотр', { position: 0, version: 3 }))],
+      },
+    };
+    await strip.renderStrip(focusOf(t));
+    const viewBtn = harness.findViewButton('v-1');
+    assert.ok(viewBtn !== null);
+    viewBtn!.dispatchContextMenu();
+    const doc = (globalThis as any).document as { body: ShimElement };
+    const menu = doc.body.children[doc.body.children.length - 1];
+    assert.ok(menu !== undefined);
+    const item = findMenuItemByLabel(menu, 'Удалить отбор');
+    assert.ok(item !== undefined, 'пункт «Удалить отбор» должен быть в меню');
+    item!.click();
+    const notices = noticesOnBody();
+    assert.ok(
+      notices.some((t) => t.includes('Для удаления отбора переключитесь в Основу')),
+      `ожидался тост про Основу; фактически: ${JSON.stringify(notices)}`,
+    );
+    assert.equal(state.viewRemove.calls.length, 0);
   });
 });

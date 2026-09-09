@@ -189,9 +189,24 @@ describe('resolveLayerTheme + currentLayerColors + applyLayerThemeStyle', () => 
 
     const base = layer({ id: BASE_LAYER_ID, title: 'Основа', is_base: true, current: true });
     assert.equal(currentLayerColors([base], { id: BASE_LAYER_ID, title: 'Основа' }), null);
+  });
 
+  it('non-base layer without explicit colours falls back to creation defaults (task 86dc675f)', () => {
+    // A layer created via MCP carries no `colors` (the MCP schema omits the
+    // field by design — colour indication is the client's prerogative per
+    // §2.2a). The client must still render the active layer as visually
+    // distinct from the base, so it falls back to the same violet pair the
+    // GUI uses on creation.
     const plain = layer({ id: 'l1', title: 'Слой' });
-    assert.equal(currentLayerColors([plain], { id: 'l1', title: 'Слой' }), null);
+    const fallback = currentLayerColors([plain], { id: 'l1', title: 'Слой' });
+    assert.deepEqual(fallback, defaultLayerColors());
+
+    // The pipeline then writes the defaults into the --layer-* variables.
+    const vars = resolveLayerTheme(fallback, 'dark');
+    assert.deepEqual(vars, {
+      focusStripe: defaultLayerColors().focus_stripe.dark,
+      background: defaultLayerColors().background.dark,
+    });
   });
 
   it('picks the current theme variant of the active layer', () => {
@@ -263,6 +278,36 @@ describe('layer theme pipeline (store → document root)', () => {
       if (originalDocument === undefined) delete (globalThis as any).document;
       else (globalThis as any).document = originalDocument;
       // Leave the store on the base for the other suites.
+      store.update({
+        layers: [],
+        currentLayer: null,
+        theme: 'light',
+      });
+    }
+  });
+
+  it('a non-base layer without colours still gets the violet defaults (task 86dc675f)', () => {
+    // MCP-created layers carry no `colors`; the client must still write the
+    // creation defaults so the active layer is visually distinct from the
+    // base regardless of how the layer was created.
+    const style = shimStyle();
+    const originalDocument = (globalThis as any).document;
+    (globalThis as any).document = { documentElement: { style } };
+    try {
+      initLayerTheme();
+      store.update({
+        layers: [
+          layer({ id: BASE_LAYER_ID, title: 'Основа', is_base: true, depth: 0 }),
+          layer({ id: 'l1', title: 'MCP-слой' /* colors: null */ }),
+        ],
+        currentLayer: { id: 'l1', title: 'MCP-слой' },
+        theme: 'dark',
+      });
+      assert.equal(style.vars.get('--layer-focus-stripe'), defaultLayerColors().focus_stripe.dark);
+      assert.equal(style.vars.get('--layer-bg'), defaultLayerColors().background.dark);
+    } finally {
+      if (originalDocument === undefined) delete (globalThis as any).document;
+      else (globalThis as any).document = originalDocument;
       store.update({
         layers: [],
         currentLayer: null,

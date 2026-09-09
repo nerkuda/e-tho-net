@@ -278,6 +278,28 @@ let titleEl: HTMLElement | null = null;
 let lastSignature = '';
 
 /**
+ * Identity part of the render signature (bug 6b757336): `ownerType|ownerId|
+ * editorPosition`, without the version. A full DOM rebuild (`renderFull`) is
+ * only warranted when this changes — a different entity/dock, not merely a
+ * new version of the SAME entity. Kept separate from `lastSignature` (which
+ * still includes the version, guarding the early "nothing changed at all"
+ * exit) so a version-only change can take the cheaper `patchHeader` path.
+ */
+let lastIdentitySignature = '';
+
+/**
+ * Live DOM handles of the current render, kept at module scope (not local to
+ * `render()`) so `patchHeader` can replace just the header and leave the tab
+ * bar / pane cache alone on a version-only change of the same entity. Reset
+ * on every full rebuild.
+ */
+let headerEl: HTMLElement | null = null;
+let tabBarEl: HTMLElement | null = null;
+let paneHostEl: HTMLElement | null = null;
+let tabButtons = new Map<EditorTabId, HTMLButtonElement>();
+let builtPanes = new Map<EditorTabId, HTMLElement>();
+
+/**
  * Guards the one-time module registrations (sections, tabs, the document
  * listener). `mountEditor` runs again on every network open — `showScreen`
  * rebuilds the whole workspace — and re-registering would append duplicate
@@ -330,6 +352,24 @@ export function mountEditor(editorHost: HTMLElement): void {
   // Carries the saved list max-heights as --clamp-* variables (ee745368).
   setClampRoot(scrollBox);
   host.append(header, scrollBox);
+
+  // `mountEditor` re-runs on every network open (`showScreen` rebuilds the
+  // whole workspace) and replaces `scrollBox` with a brand-new element every
+  // time. The module-level DOM handles `patchHeader` relies on (`headerEl` /
+  // `tabBarEl` / `paneHostEl`) would otherwise still point at nodes belonging
+  // to the PREVIOUS `scrollBox` — if the next render happens to compute the
+  // same identity signature as before the remount, `canPatch` could try to
+  // `replaceChild` a node that is not a child of the new `scrollBox`
+  // (bug 6b757336 fix). Resetting them — and the signatures that gate the
+  // patch path — guarantees the first `render()` after any mount always takes
+  // the full-rebuild branch, which populates them fresh.
+  headerEl = null;
+  tabBarEl = null;
+  paneHostEl = null;
+  tabButtons = new Map();
+  builtPanes = new Map();
+  lastSignature = '';
+  lastIdentitySignature = '';
 
   // The collapse state is global per group id (ee745368): it survives entity
   // changes and restarts, so switching to another thought does not restore
@@ -405,25 +445,187 @@ export function mountEditor(editorHost: HTMLElement): void {
   void render();
 }
 
+/**
+ * Builds one tab's pane content against the CURRENT `renderCtx` (not a
+ * closure-captured one — `invalidateMainPane` may rebuild the «Основное» pane
+ * from a `patchHeader` call that ran after the original full render, when a
+ * newer `ctx` is already current).
+ */
+function buildTabPane(id: EditorTabId): HTMLElement {
+  const ctx = renderCtx;
+  const pane = div('tab-pane fixed');
+  if (ctx === null) return pane;
+  if (id === 'main') {
+    // Two areas with a single boundary (L7, 08-ui-spec.md §6.3.1): the
+    // table sections on top, the view/edit section filling the rest of the
+    // tab. The last section is always the view/edit one (the permanent
+    // comment; for a link it is the only section and fills the whole tab).
+    const specs = mainSectionBuilders
+      .map((section) => section(ctx))
+      .filter((spec): spec is GroupSpec => spec !== null);
+    if (specs.length === 0) {
+      pane.append(el('p', 'muted', 'Нет содержимого.'));
+      return pane;
+    }
+    const topSpecs = specs.slice(0, -1);
+    const bottomSpec = specs[specs.length - 1]!;
+    let top: HTMLElement | null = null;
+    for (const spec of topSpecs) {
+      top = groupSection(spec);
+      top.classList.add('tab-top');
+      pane.append(top);
+    }
+    if (top !== null) {
+      // Resizes the top group's scrollable table (`.prop-wrap`); inert when
+      // the group is collapsed (no body at all, §6.3). The drag is
+      // remembered as the table's fixed height (bug 6b757336, ee745368,
+      // list-heights.ts).
+      const topEl = top;
+      pane.append(
+        rowSplitter(
+          () => topEl.querySelector('.prop-wrap') ?? topEl.querySelector('.group-body'),
+          { min: 34, persistKey: 'props' },
+        ),
+      );
+    }
+    const bottom = div('main-bottom');
+    bottom.append(groupSection(bottomSpec));
+    pane.append(bottom);
+    return pane;
+  }
+  const builder = tabContentBuilders.get(id);
+  pane.append(builder !== undefined ? builder(ctx) : el('p', 'muted', 'Нет содержимого.'));
+  return pane;
+}
+
+/** Activates a tab: (re)builds its pane on first activation, caches it after. */
+function activateEditorTab(id: EditorTabId): void {
+  if (paneHostEl === null) return;
+  activeTab = id;
+  for (const [tabId, tab] of tabButtons) {
+    tab.classList.toggle('active', tabId === id);
+  }
+  let pane = builtPanes.get(id);
+  if (pane === undefined) {
+    pane = buildTabPane(id);
+    builtPanes.set(id, pane);
+  }
+  paneHostEl.replaceChildren(pane);
+}
+
+/**
+ * Drops the cached «Основное» pane so it rebuilds from the current `ctx` on
+ * next activation (bug 6b757336): a thought's type change can add/remove
+ * properties, so the cached properties+comment pane can no longer be trusted
+ * as-is. If «Основное» is the active tab this rebuilds it right away — the
+ * comment's CodeMirror instance is destroyed in that case, same as before
+ * this fix, but only for an actual type change, not for every header save.
+ */
+function invalidateMainPane(): void {
+  builtPanes.delete('main');
+  if (activeTab === 'main') activateEditorTab('main');
+}
+
+/** Updates the panel title text + trash marker for the current context. */
+function updateTitleEl(ctx: EditorContext | null): void {
+  if (titleEl === null) return;
+  clear(titleEl);
+  if (ctx !== null && ctx.ownerType === 'thought' && ctx.thought?.marked_for_deletion === true) {
+    const mark = span('', 'editor-trash-mark');
+    mark.append(svgIcon('trash', 14));
+    setTooltip(mark, 'Мысль находится в корзине');
+    titleEl.append(mark);
+  }
+  titleEl.append(ctx === null ? '' : ctx.ownerType === 'link' ? 'Связь' : 'Мысль');
+}
+
+/**
+ * Patches the editor for a version-only change of the SAME already-loaded
+ * entity (bug 6b757336): replaces just the header — the small, cheap,
+ * effectively stateless part — and leaves the tab bar, the pane cache and
+ * their DOM (in particular the comment's CodeMirror instance, scroll
+ * position and collapsed groups) untouched. Used when a header field save
+ * (title/synonyms/type/icon/active/style) bumps `thought.version`/
+ * `link.version` on the entity already open — previously this took the same
+ * full-teardown path as switching to a different entity, visibly "flashing"
+ * the whole editor for a one-field edit.
+ */
+function patchHeader(ctx: EditorContext): void {
+  if (scrollBox === null || headerEl === null) return;
+  // Body-mounted widgets (type-combobox dropdowns) anchored to the OLD header
+  // nodes must close before those nodes are replaced — same reasoning as the
+  // full rebuild below.
+  window.dispatchEvent(new Event('etn:editor-rebuild'));
+
+  const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const refocus = activeEl !== null && headerEl.contains(activeEl) ? activeEl : null;
+
+  const prevCtx = renderCtx;
+  renderCtx = ctx;
+  updateTitleEl(ctx);
+
+  const newHeader =
+    ctx.ownerType === 'thought' && ctx.thought !== null
+      ? buildThoughtHeader(ctx.thought)
+      : ctx.ownerType === 'link' && ctx.link !== null
+        ? buildLinkHeader(ctx.link)
+        : null;
+  if (newHeader === null) return; // guarded by the caller — kept for type-safety only
+  scrollBox.replaceChild(newHeader, headerEl);
+  headerEl = newHeader;
+
+  if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
+
+  // A thought's type change can add/remove properties (and NULL visual
+  // fields inherit new defaults) — the cached «Основное» pane must rebuild.
+  // Every other header field (title/synonyms/icon/active/style) leaves the
+  // property set and the comment untouched, so no pane invalidation.
+  const typeChanged =
+    ctx.ownerType === 'thought' &&
+    prevCtx?.ownerType === 'thought' &&
+    prevCtx.thought?.type_id !== ctx.thought?.type_id;
+  if (typeChanged) invalidateMainPane();
+}
+
 /** Renders the editor for the current target (signature-guarded). */
 async function render(): Promise<void> {
   if (host === null || scrollBox === null || positionButton === null) return;
   const ctx = currentEditorContext();
 
-  // Signature guards a full DOM rebuild. Bug 206e33a1 «Бессмысленное
-  // обновление редактора при получении внешних событий»: a rebuild destroys
-  // the CodeMirror editor instance, so it must only run when the open entity
-  // actually changes (different id / kind, version bump, dock move). The
-  // canvas's focus-edge signature is intentionally NOT part of this key —
-  // link events don't change which thought the editor opens, and the
-  // links-tab has its own subscription (`currentReload`).
-  const signature =
-    ctx === null
-      ? 'null'
-      : `${ctx.ownerType}|${ctx.ownerId}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}` +
-        `|${store.state.editorPosition}`;
-  if (signature === lastSignature) return;
-  lastSignature = signature;
+  // Two-part signature (bug 6b757336). `identitySignature` — the open entity
+  // and dock — governs which path runs; `fullSignature` adds the version and
+  // guards the "nothing changed at all" early exit that used to be the only
+  // check here.
+  const identitySignature =
+    ctx === null ? 'null' : `${ctx.ownerType}|${ctx.ownerId}|${store.state.editorPosition}`;
+  const fullSignature =
+    ctx === null ? 'null' : `${identitySignature}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}`;
+  if (fullSignature === lastSignature) return;
+
+  // A version-only change of the SAME already-rendered, already-loaded
+  // entity patches just the header (see `patchHeader`) instead of the full
+  // teardown+rebuild below — that full rebuild remains a Bug 206e33a1
+  // «Бессмысленное обновление редактора при получении внешних событий»
+  // concern: it destroys the CodeMirror comment instance, so it must still
+  // only run when the open entity itself changes (different id/kind, dock
+  // move) or on the very first render of it (loading → loaded — `renderCtx`
+  // below is the OLD, still-loading context in that case, so its own
+  // `thought`/`link` is null and this correctly falls through to the full
+  // rebuild instead of patching a header that was never really built for a
+  // loaded entity). `headerEl`/`tabBarEl`/`paneHostEl` are reset to null by
+  // `mountEditor` on every (re)mount, so they can only be non-null here when
+  // they belong to the CURRENT `scrollBox` — no DOM containment check needed.
+  const canPatch =
+    ctx !== null &&
+    identitySignature === lastIdentitySignature &&
+    headerEl !== null &&
+    tabBarEl !== null &&
+    paneHostEl !== null &&
+    ((ctx.ownerType === 'thought' && ctx.thought !== null && renderCtx?.ownerType === 'thought' && renderCtx.thought !== null) ||
+      (ctx.ownerType === 'link' && ctx.link !== null && renderCtx?.ownerType === 'link' && renderCtx.link !== null));
+
+  lastSignature = fullSignature;
+  lastIdentitySignature = identitySignature;
   // Remember the live open entity so the cheap store-subscribe gate in
   // `mountEditor` can skip unrelated updates (canvas-only state, indicators,
   // pin list, etc.). Cleared here on every rebuild so the next store tick
@@ -439,22 +641,18 @@ async function render(): Promise<void> {
               : (ctx.link?.version ?? ''),
         };
 
+  if (canPatch) {
+    patchHeader(ctx);
+    return;
+  }
+
+  // --- full teardown + rebuild (different entity, dock move, or first load) -
+
   // Panel title reflects what is selected (08-ui-spec.md §6.2). A thought in
   // the trash (S13) additionally shows the bright-red trash marker before the
   // word «Мысль» — the editor must state the trashed state explicitly, not
-  // only the canvas badge. Inside the signature guard so unrelated store
-  // updates (the previous code wrote the title on every `render()` call,
-  // i.e. every store change — wasteful when the open entity is unchanged).
-  if (titleEl !== null) {
-    clear(titleEl);
-    if (ctx !== null && ctx.ownerType === 'thought' && ctx.thought?.marked_for_deletion === true) {
-      const mark = span('', 'editor-trash-mark');
-      mark.append(svgIcon('trash', 14));
-      setTooltip(mark, 'Мысль находится в корзине');
-      titleEl.append(mark);
-    }
-    titleEl.append(ctx === null ? '' : ctx.ownerType === 'link' ? 'Связь' : 'Мысль');
-  }
+  // only the canvas badge.
+  updateTitleEl(ctx);
 
   // Remember what had the focus: the rebuild destroys the old DOM, and a
   // field focused at that moment (e.g. the type picker reached by Tab from
@@ -466,12 +664,17 @@ async function render(): Promise<void> {
   // Body-mounted widgets (type-combobox dropdowns) must close before the old
   // DOM is destroyed — otherwise their fixed-position lists stay behind as
   // ghosts that neither Escape nor an outside click can dismiss (e.g. Tab
-  // from an edited title into the type field opens the list, then the header
-  // save bumps the version and re-renders the editor).
+  // from an edited title into the type field opens the list, then a dock
+  // move re-renders the editor).
   window.dispatchEvent(new Event('etn:editor-rebuild'));
 
   clear(scrollBox);
   tabCountSpans.clear();
+  headerEl = null;
+  tabBarEl = null;
+  paneHostEl = null;
+  tabButtons = new Map();
+  builtPanes = new Map();
   renderCtx = ctx;
 
   if (ctx === null) {
@@ -482,9 +685,9 @@ async function render(): Promise<void> {
   }
 
   if (ctx.ownerType === 'thought' && ctx.thought !== null) {
-    scrollBox.append(buildThoughtHeader(ctx.thought));
+    headerEl = buildThoughtHeader(ctx.thought);
   } else if (ctx.ownerType === 'link' && ctx.link !== null) {
-    scrollBox.append(buildLinkHeader(ctx.link));
+    headerEl = buildLinkHeader(ctx.link);
   } else if (ctx.ownerType === 'thought' && ctx.thought === null) {
     // The thought is the new editor target but its full entity has not
     // arrived yet (`etn.thoughts.get` in flight from a canvas click, a
@@ -494,14 +697,15 @@ async function render(): Promise<void> {
     // visibly "in progress" rather than a misleading static icon. The
     // thought id sits in the title placeholder so the user sees which
     // card is loading.
-    scrollBox.append(buildThoughtHeaderLoading(ctx.ownerId));
+    headerEl = buildThoughtHeaderLoading(ctx.ownerId);
   } else if (ctx.ownerType === 'link' && ctx.link === null) {
-    scrollBox.append(buildLinkHeaderLoading(ctx.ownerId));
+    headerEl = buildLinkHeaderLoading(ctx.ownerId);
   }
+  if (headerEl !== null) scrollBox.append(headerEl);
 
   // --- tab bar (L7) ---------------------------------------------------------
   const tabBar = div('editor-tabs');
-  const buttons = new Map<EditorTabId, HTMLButtonElement>();
+  tabBarEl = tabBar;
   for (const def of TABS) {
     const tab = el('button', 'editor-tab') as HTMLButtonElement;
     tab.type = 'button';
@@ -520,74 +724,17 @@ async function render(): Promise<void> {
         });
       }
     }
-    tab.addEventListener('click', () => activateTab(def.id));
-    buttons.set(def.id, tab);
+    tab.addEventListener('click', () => activateEditorTab(def.id));
+    tabButtons.set(def.id, tab);
     tabBar.append(tab);
   }
 
   // --- tab panes (lazily built, cached for this render) ---------------------
   const paneHost = div('tab-pane-root');
-  const built = new Map<EditorTabId, HTMLElement>();
-
-  const buildPane = (id: EditorTabId): HTMLElement => {
-    const pane = div('tab-pane fixed');
-    if (id === 'main') {
-      // Two areas with a single boundary (L7, 08-ui-spec.md §6.3.1): the
-      // table sections on top, the view/edit section filling the rest of the
-      // tab. The last section is always the view/edit one (the permanent
-      // comment; for a link it is the only section and fills the whole tab).
-      const specs = mainSectionBuilders
-        .map((section) => section(ctx))
-        .filter((spec): spec is GroupSpec => spec !== null);
-      if (specs.length === 0) {
-        pane.append(el('p', 'muted', 'Нет содержимого.'));
-        return pane;
-      }
-      const topSpecs = specs.slice(0, -1);
-      const bottomSpec = specs[specs.length - 1]!;
-      let top: HTMLElement | null = null;
-      for (const spec of topSpecs) {
-        top = groupSection(spec);
-        top.classList.add('tab-top');
-        pane.append(top);
-      }
-      if (top !== null) {
-        // Resizes the top group's scrollable table (`.prop-wrap`); inert when
-        // the group is collapsed (no body at all, §6.3). The drag is
-        // remembered as the table's max height (ee745368, list-heights.ts).
-        const topEl = top;
-        pane.append(
-          rowSplitter(
-            () => topEl.querySelector('.prop-wrap') ?? topEl.querySelector('.group-body'),
-            { min: 34, persistKey: 'props' },
-          ),
-        );
-      }
-      const bottom = div('main-bottom');
-      bottom.append(groupSection(bottomSpec));
-      pane.append(bottom);
-      return pane;
-    }
-    const builder = tabContentBuilders.get(id);
-    pane.append(builder !== undefined ? builder(ctx) : el('p', 'muted', 'Нет содержимого.'));
-    return pane;
-  };
-
-  function activateTab(id: EditorTabId): void {
-    activeTab = id;
-    for (const [tabId, tab] of buttons) {
-      tab.classList.toggle('active', tabId === id);
-    }
-    let pane = built.get(id);
-    if (pane === undefined) {
-      pane = buildPane(id);
-      built.set(id, pane);
-    }
-    paneHost.replaceChildren(pane);
-  }
+  paneHostEl = paneHost;
 
   scrollBox.append(tabBar, paneHost);
-  activateTab(activeTab);
+  activateEditorTab(activeTab);
 
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
 }

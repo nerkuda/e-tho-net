@@ -404,13 +404,68 @@ export interface McpLinkTypeEntry extends LinkTypeRef {
 export const TYPES_LIST_SCOPES = ['thoughts', 'links', 'all'] as const;
 export type TypesListScope = (typeof TYPES_LIST_SCOPES)[number];
 
+/**
+ * Reason `etn.types.list` had to shrink its payload (task f9c7dbc5, 0.7.4).
+ *
+ *  - `max_chars_preview` — the byte budget was met after shrinking every type
+ *    `description` to {@link TYPES_LIST_BUDGET_PREVIEW_CHARS}.
+ *  - `max_chars_items` — even with shortened descriptions the response did not
+ *    fit, so the server additionally dropped whole type entries from the tail
+ *    of each catalogue (`thought_types` before `link_types`).
+ */
+export type McpTypesListTruncationReason =
+  | 'max_chars_preview'
+  | 'max_chars_items';
+
+/**
+ * Soft-cap on each type's `description` body used by the first shrink step
+ * of `etn.types.list`'s `max_chars` budgeter. Chosen to fit comfortably under
+ * the default MCP-client `maxModelBytes=50000` when combined with 2–3
+ * mid-sized catalogues — far below the per-comment preview used by
+ * {@link SUBGRAPH_BUDGET_PREVIEW_CHARS} because type entries are densely
+ * packed in the JSON envelope.
+ */
+export const TYPES_LIST_BUDGET_PREVIEW_CHARS = 200;
+
+/**
+ * Diagnostics block returned by `etn.types.list` whenever pagination or the
+ * `max_chars` budget kicked in. Echo of the original payload size lets the
+ * agent decide whether to retry with a tighter `limit`/`max_chars`.
+ */
+export interface McpTypesListMeta {
+  /** True when the response had to be shrunk. */
+  truncated?: boolean;
+  /** Why the shrink ran; `null`/absent when nothing was trimmed. */
+  reason?: McpTypesListTruncationReason | null;
+  /** Total `thought_types` available before pagination/trim (excluding the
+   *  `link_types` half). Absent when `scope` skips thought types. */
+  thought_types_total?: number;
+  /** Total `link_types` available before pagination/trim. Absent when `scope`
+   *  skips link types. */
+  link_types_total?: number;
+  /** Echo of the requested `limit`; absent when not set. */
+  limit?: number;
+  /** Echo of the requested `offset`; absent when not set. */
+  offset?: number;
+  /** Echo of the `max_chars` budget that triggered shrinking; absent when the
+   *  caller did not set `max_chars` and nothing was trimmed. */
+  max_chars?: number;
+  /** JSON-encoded size of the (untrimmed, fully paginated) payload — present
+   *  whenever the shrinker ran, for diagnostics. */
+  original_chars?: number;
+  /** JSON-encoded size of the final payload after shrinking. */
+  final_chars?: number;
+}
+
 /** Result of `etn.types.list` — both catalogues in full (not just the types
  *  used in some other response, unlike {@link ThoughtTypeRef}/{@link LinkTypeRef}
  *  reference tables). With `scope: "thoughts"` / `"links"` only the matching
- *  field is present. */
+ *  field is present. The optional `meta` block is present whenever pagination
+ *  or `max_chars` trimming was applied. */
 export interface McpTypesListResult {
   thought_types?: McpThoughtTypeEntry[];
   link_types?: McpLinkTypeEntry[];
+  meta?: McpTypesListMeta;
 }
 
 // ---------------------------------------------------------------------------

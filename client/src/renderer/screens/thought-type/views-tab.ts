@@ -32,11 +32,13 @@ import { requireNetworkId } from '../../app.js';
 import { confirmDialog, errorDialog } from '../../lib/dialog.js';
 import { button, div, el, errText, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
+import { isInBaseLayer } from '../../lib/layer-base.js';
 import { notice } from '../../lib/notice.js';
 import { onRealtimeEvent } from '../../realtime.js';
 
 import { openViewEditorDialog } from './filter-dialog.js';
 import {
+  applyViewUpdates,
   ownViewsOf,
   planClearDefault,
   planReorder,
@@ -137,6 +139,13 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     }
   });
 
+  /** View ids, чьи PATCH прямо сейчас в полёте — realtime-обработчик
+   *  пропускает `load()` для них, чтобы оптимистичный reorder или
+   *  переключение «по умолчанию» не перетёрся эхом или промежуточным
+   *  чтением сервера, на котором PATCH-и ещё не оба легли
+   *  (регрессия a62190d1). */
+  const pendingPatches = new Set<string>();
+
   const unsubscribeRealtime = onRealtimeEvent((evt) => {
     if (
       evt.type !== 'thought-type-view.created' &&
@@ -148,6 +157,14 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     const typeId = getTypeId();
     if (typeId === null) return;
     if (evt.data.thought_type_id !== typeId) return;
+    // Событие `updated` несёт `view_id` затронутого отбора; если он в
+    // `pendingPatches`, наш собственный PATCH в полёте — `applyViewUpdates`
+    // на ответе `Promise.all`/`await` и так положит актуальное состояние,
+    // лишний `load()` только мешает (перетирает позиции промежуточным
+    // состоянием сервера).
+    if (evt.type === 'thought-type-view.updated' && pendingPatches.has(evt.data.view_id)) {
+      return;
+    }
     void load();
   });
 
@@ -156,6 +173,12 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     const typeId = getTypeId();
     if (typeId === null) {
       renderEmptyTypeHint();
+      return;
+    }
+    // Правка отборов в слоях изменений запрещена (задача d9b66617): отборы —
+    // сервисный инструмент общего пользования, а не предмет «песочниц».
+    if (!isInBaseLayer()) {
+      renderChangeLayerNotice();
       return;
     }
     if (loading) return;
@@ -181,6 +204,17 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
         'muted views-tab-empty',
         'Сохраните тип, чтобы добавлять отборы — у нового типа ещё нет id.',
       ),
+    );
+    errorLine.textContent = '';
+  }
+
+  /** Заглушка для слоёв изменений (задача d9b66617): список и кнопки
+   *  редактирования недоступны, но кнопка «+ отбор» остаётся видимой —
+   *  клик по ней показывает понятное сообщение через {@link onAdd}. */
+  function renderChangeLayerNotice(): void {
+    tableWrap.replaceChildren();
+    tableWrap.append(
+      el('p', 'muted views-tab-empty', 'Отборы доступны только в Основе.'),
     );
     errorLine.textContent = '';
   }
@@ -236,9 +270,23 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
 
     // Кнопки: порядок, «по умолчанию» и удаление — эмодзи.
     const actions = el('td', 'views-tab-actions');
+    const upBtn = button(
+      '▲',
+      () => void onMove(view, idx, idx - 1, sorted),
+      'btn small',
+      idx === 0 ? 'Уже первый — выше некуда' : 'Выше',
+    );
+    if (idx === 0) upBtn.disabled = true;
+    const downBtn = button(
+      '▼',
+      () => void onMove(view, idx, idx + 1, sorted),
+      'btn small',
+      idx === sorted.length - 1 ? 'Уже последний — ниже некуда' : 'Ниже',
+    );
+    if (idx === sorted.length - 1) downBtn.disabled = true;
     actions.append(
-      button('▲', () => void onMove(view, idx, idx - 1, sorted), 'btn small', 'Выше'),
-      button('▼', () => void onMove(view, idx, idx + 1, sorted), 'btn small', 'Ниже'),
+      upBtn,
+      downBtn,
       button(
         view.is_default ? '☆' : '⭐',
         () => (view.is_default ? void onClearDefault(view) : void onSetDefault(view)),
@@ -268,6 +316,13 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   }
 
   function onAdd(): void {
+    // Отборы — сервисный инструмент общего пользования; правка в слоях
+    // изменений запрещена (задача d9b66617). Кнопка остаётся видимой, но
+    // клик показывает понятное сообщение.
+    if (!isInBaseLayer()) {
+      notice('Для добавления отборов переключитесь в Основу.', 'info');
+      return;
+    }
     const typeId = getTypeId();
     if (typeId === null) {
       notice('Сначала сохраните тип, чтобы добавлять отборы.', 'info');
@@ -286,6 +341,13 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   }
 
   function onEdit(view: ThoughtTypeView): void {
+    // Правка отбора в слое изменений запрещена (задача d9b66617) — покажем
+    // сообщение, не открывая диалог (который всё равно вернёт ошибку
+    // сервера или молча примет изменение).
+    if (!isInBaseLayer()) {
+      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      return;
+    }
     openViewEditorDialog({
       networkId,
       thoughtTypeId: view.thought_type_id,
@@ -299,6 +361,11 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   }
 
   async function onDelete(view: ThoughtTypeView): Promise<void> {
+    // Удаление отбора в слое изменений запрещено (задача d9b66617).
+    if (!isInBaseLayer()) {
+      notice('Для удаления отбора переключитесь в Основу.', 'info');
+      return;
+    }
     const ok = await confirmDialog(
       'Удалить отбор',
       `Удалить отбор «${view.name}»? Это действие необратимо.`,
@@ -319,9 +386,19 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   }
 
   async function onSetDefault(view: ThoughtTypeView): Promise<void> {
+    // Правка «по умолчанию» в слое изменений запрещена (задача d9b66617).
+    if (!isInBaseLayer()) {
+      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      return;
+    }
     const plan = planSetDefault(views, view.id);
     if (plan === null) return;
     const prev = views.map((v) => ({ ...v }));
+    // Запоминаем прежний отбор «по умолчанию» ДО локального флипа: сервер
+    // снимет с него пометку в той же транзакции и бампнет версию — её
+    // надо подтянуть, иначе правка по тому отбору следом упадёт в
+    // VERSION_CONFLICT (ошибка a62190d1).
+    const previousDefault = views.find((v) => v.is_default && v.id !== view.id) ?? null;
     // Optimistic local flip: the row gets the badge, the previous default
     // loses it. Server-side transactional clear runs in parallel.
     views = views.map((v) =>
@@ -329,13 +406,21 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     );
     renderRows();
     try {
-      await etn.thoughtTypeViews.update(
+      const updated = await etn.thoughtTypeViews.update(
         networkId,
         view.thought_type_id,
         view.id,
         { is_default: true },
         view.version,
       );
+      // Целевой отбор — из ответа сервера; бывшему «по умолчанию» бампим
+      // версию локально (транзакционный clear сервера инкрементит её на 1).
+      const updates: ThoughtTypeView[] = [updated];
+      if (previousDefault !== null) {
+        updates.push({ ...previousDefault, is_default: false, version: previousDefault.version + 1 });
+      }
+      views = applyViewUpdates(views, updates);
+      renderRows();
       opts.onChanged?.();
     } catch (err) {
       errorDialog('Сделать отбором по умолчанию', err);
@@ -346,19 +431,30 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   }
 
   async function onClearDefault(view: ThoughtTypeView): Promise<void> {
+    // Правка «по умолчанию» в слое изменений запрещена (задача d9b66617).
+    if (!isInBaseLayer()) {
+      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      return;
+    }
     const plan = planClearDefault(views, view.id);
     if (plan === null) return;
     const prev = views.map((v) => ({ ...v }));
     views = views.map((v) => (v.id === view.id ? { ...v, is_default: false } : v));
     renderRows();
     try {
-      await etn.thoughtTypeViews.update(
+      const updated = await etn.thoughtTypeViews.update(
         networkId,
         view.thought_type_id,
         view.id,
         { is_default: false },
         view.version,
       );
+      // Ответ сервера — источник истины для версии и `is_default`.
+      // Без подтяжки локальной версии следующая правка того же отбора
+      // пошлёт устаревший `If-Match` и упадёт в VERSION_CONFLICT
+      // (ошибка a62190d1).
+      views = applyViewUpdates(views, [updated]);
+      renderRows();
       opts.onChanged?.();
     } catch (err) {
       errorDialog('Снять признак «по умолчанию»', err);
@@ -374,42 +470,56 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     toIndex: number,
     sorted: ThoughtTypeView[],
   ): Promise<void> {
+    // Перестановка отбора в слое изменений запрещена (задача d9b66617).
+    if (!isInBaseLayer()) {
+      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      return;
+    }
     const plan = planReorder(sorted, fromIndex, toIndex);
     if (plan === null) return;
     const prev = views.map((v) => ({ ...v }));
-    // Apply the swap locally — both rows get their new `position`. The
-    // server doesn't renumber siblings on update, so the next `load()`
-    // could in theory disagree until both PATCHes land; we keep the
-    // optimistic swap until either error forces a rollback.
+    const plannedById = new Map(plan.map((p) => [p.id, p]));
+    // Применяем план локально: новые позиции видит пользователь сразу, а
+    // сервер догоняет пачкой PATCH. План перенумеровывает список в 0..n-1,
+    // поэтому он чинит и исторические дубли позиций (когда все отборы типа
+    // создавались без position и лежат с position = 0 — обмен соседней пары
+    // был бы no-op, ошибка a62190d1).
     views = views.map((v) => {
-      if (v.id === plan.movedId) return { ...v, position: plan.movedPosition };
-      if (v.id === plan.neighbourId) return { ...v, position: plan.neighbourPosition };
-      return v;
+      const p = plannedById.get(v.id);
+      return p === undefined ? v : { ...v, position: p.position };
     });
     renderRows();
+    // Помечаем все id плана как «PATCH в полёте» — realtime-обработчик не
+    // будет вызывать `load()` для их `updated`-событий, пока `Promise.all` не
+    // разрешится. Без этого промежуточное чтение сервера (когда легла только
+    // часть PATCH-ей) возвращало бы список в нежелательном состоянии
+    // (регрессия a62190d1 «порядок не меняется»).
+    for (const p of plan) pendingPatches.add(p.id);
     try {
-      await Promise.all([
-        etn.thoughtTypeViews.update(
-          networkId,
-          view.thought_type_id,
-          plan.movedId,
-          { position: plan.movedPosition },
-          sorted.find((v) => v.id === plan.movedId)!.version,
+      const results = await Promise.all(
+        plan.map((p) =>
+          etn.thoughtTypeViews.update(
+            networkId,
+            view.thought_type_id,
+            p.id,
+            { position: p.position },
+            sorted.find((v) => v.id === p.id)!.version,
+          ),
         ),
-        etn.thoughtTypeViews.update(
-          networkId,
-          view.thought_type_id,
-          plan.neighbourId,
-          { position: plan.neighbourPosition },
-          sorted.find((v) => v.id === plan.neighbourId)!.version,
-        ),
-      ]);
+      );
+      // Сервер инкрементит `version` каждого ответа — кладём их в локальный
+      // кэш, чтобы следующий reorder- или правка «по умолчанию» не уехала
+      // в VERSION_CONFLICT по устаревшему `If-Match` (ошибка a62190d1).
+      views = applyViewUpdates(views, results);
+      renderRows();
       opts.onChanged?.();
     } catch (err) {
       errorDialog('Переставить отбор', err);
       views = prev;
       renderRows();
       void load();
+    } finally {
+      for (const p of plan) pendingPatches.delete(p.id);
     }
   }
 

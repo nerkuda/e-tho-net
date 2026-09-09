@@ -27,6 +27,17 @@ export function getTabById(tabId: string): TabDto | null {
   return store.state.tabs.find((t) => t.tab_id === tabId) ?? null;
 }
 
+/**
+ * Finds an already-open tab pointing at `networkId` — the last one, when
+ * several tabs show the same network. Cross-network wiki-links (bug
+ * bcdb3dc6) reuse this tab instead of always opening a new one; `null` means
+ * the target network is not open in any tab, so a new tab is warranted.
+ */
+export function findTabForNetwork(tabs: TabDto[], networkId: string): TabDto | null {
+  const matches = tabs.filter((t) => t.network_id === networkId);
+  return matches.at(-1) ?? null;
+}
+
 /** Returns the network id of the active tab (or `null`). */
 export function getActiveNetworkId(): string | null {
   return getActiveTab()?.network_id ?? null;
@@ -45,6 +56,18 @@ export function upsertTab(tab: TabDto): void {
   else next.push(tab);
   next.sort((a, b) => a.slot_idx - b.slot_idx);
   store.update({ tabs: next });
+}
+
+/**
+ * Picks the tab that should become active after closing the tab at
+ * `closedIndex` in `tabs` (the list BEFORE removal): the left neighbour,
+ * else the right one, else `null` when none remain (bug cace2597 — closing
+ * the active tab used to leave `activeTabId` at `null` with no replacement
+ * picked, so the just-closed network's workspace stayed on screen).
+ */
+export function pickNeighborTab(tabs: TabDto[], closedIndex: number): TabDto | null {
+  if (closedIndex > 0) return tabs[closedIndex - 1] ?? null;
+  return tabs[closedIndex + 1] ?? null;
 }
 
 /** Drops a tab by id (after `etn.tabs.close`). */

@@ -261,6 +261,48 @@ describe(
         }
       });
 
+      it('создание без position нумерует отборы в конец списка (0,1,2…)', async () => {
+        // Регрессия a62190d1: дефолт position=0 у всех отборов типа, заведённых
+        // без явной позиции (так создаёт отборы клиент), делал перестановку
+        // ▲/▼ обменом позиций бессмысленной — 0↔0 порядок не меняет. Теперь
+        // новый отбор встаёт за максимальной видимой позицией типа.
+        const ctx = await buildRestContext();
+        try {
+          const h = authHeaders(ctx);
+          const typeId = await createThoughtType(ctx, 'task');
+          const definition = JSON.stringify({ keywords: 'alpha' });
+          // Имена не в алфавитном порядке — порядок list обязан быть
+          // порядком вставки (позиции 0,1,2), а не по имени.
+          for (const name of ['Зета', 'Альфа', 'Бета']) {
+            const created = await ctx.app.inject({
+              method: 'POST',
+              url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+              headers: h,
+              payload: { name, definition },
+            });
+            assert.equal(created.statusCode, 201, created.body?.toString());
+          }
+
+          const list = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${ctx.networkId}/thought-types/${typeId}/views`,
+            headers: h,
+          });
+          assert.equal(list.statusCode, 200);
+          const rows = list.json().data as ViewDto[];
+          assert.deepEqual(
+            rows.map((v) => ({ name: v.name, position: v.position })),
+            [
+              { name: 'Зета', position: 0 },
+              { name: 'Альфа', position: 1 },
+              { name: 'Бета', position: 2 },
+            ],
+          );
+        } finally {
+          await closeRestContext(ctx);
+        }
+      });
+
       it('POST с дублем имени в пределах типа → 409 DUPLICATE с details.existing_id', async () => {
         const ctx = await buildRestContext();
         try {

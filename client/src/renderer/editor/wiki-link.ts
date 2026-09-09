@@ -26,6 +26,7 @@ import { notice } from '../lib/notice.js';
 import { isThoughtInResults, openStructuresThought } from '../screens/structures/structures.js';
 import { setActiveView } from '../screens/active-view.js';
 import { openChronicleThought } from '../screens/chronicle/chronicle.js';
+import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
 import { searchLegacyWikiTarget } from './wiki-link-resolver.js';
 import { tryCreateThoughtFromLegacyLink } from './wiki-link-create.js';
@@ -223,17 +224,28 @@ export async function openWikiTarget(name: string, linkEl?: HTMLElement): Promis
 
 /**
  * Разрешает ID-ссылку ([[#<id>]] / [[n:<net>#<id>]]) в мысль и открывает её
- * (task R8). Если `targetNetworkId` отличается от текущей, сначала
- * переключает активную сеть через {@link openNetwork} — это меняет
- * `currentNetworkId` в store, после чего `etn.thoughts.get` уже работает в
- * нужной сети. Если сеть недоступна (403/404) — сообщение пользователю.
+ * (task R8). Если `targetNetworkId` отличается от текущей, переключает
+ * активную сеть через {@link openNetwork} — это меняет `currentNetworkId` в
+ * store, после чего `etn.thoughts.get` уже работает в нужной сети. Если
+ * сеть недоступна (403/404) — сообщение пользователю.
+ *
+ * Bug bcdb3dc6: раньше всегда открывалась НОВАЯ вкладка. Теперь сначала
+ * ищем среди уже открытых вкладок ту, что смотрит на `targetNetworkId`
+ * (последнюю, если их несколько) — `openNetwork` активирует именно её вместо
+ * создания новой; новая вкладка появляется только если целевой сети нет ни в
+ * одной вкладке. Кросс-сетевой переход всегда переключает экран на «Карта
+ * мыслей» — сохранённый вид (ре)активированной вкладки не имеет отношения к
+ * «перейти по ссылке», в отличие от навигации внутри одной сети, которая
+ * уважает текущий вид ({@link openThoughtByRef}).
  */
 export async function openWikiIdTarget(targetNetworkId: string, thoughtId: string): Promise<void> {
   const currentNetworkId = safeCurrentNetworkId();
 
   if (targetNetworkId !== currentNetworkId) {
+    const existingTabId = findTabForNetwork(store.state.tabs, targetNetworkId)?.tab_id;
     try {
-      await openNetwork(targetNetworkId);
+      if (existingTabId !== undefined) await etn.tabs.activate(existingTabId).catch(() => undefined);
+      await openNetwork(targetNetworkId, existingTabId);
     } catch (err) {
       notice(
         `Сеть недоступна: ${errText(err)}. Ссылка на мысль в другой сети не может быть открыта.`,
@@ -241,6 +253,7 @@ export async function openWikiIdTarget(targetNetworkId: string, thoughtId: strin
       );
       return;
     }
+    setActiveView('map');
   }
 
   let thought: Thought;
