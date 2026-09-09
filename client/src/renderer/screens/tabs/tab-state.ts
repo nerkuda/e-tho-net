@@ -27,6 +27,17 @@ export function getTabById(tabId: string): TabDto | null {
   return store.state.tabs.find((t) => t.tab_id === tabId) ?? null;
 }
 
+/**
+ * Finds an already-open tab pointing at `networkId` — the last one, when
+ * several tabs show the same network. Cross-network wiki-links (bug
+ * bcdb3dc6) reuse this tab instead of always opening a new one; `null` means
+ * the target network is not open in any tab, so a new tab is warranted.
+ */
+export function findTabForNetwork(tabs: TabDto[], networkId: string): TabDto | null {
+  const matches = tabs.filter((t) => t.network_id === networkId);
+  return matches.at(-1) ?? null;
+}
+
 /** Returns the network id of the active tab (or `null`). */
 export function getActiveNetworkId(): string | null {
   return getActiveTab()?.network_id ?? null;
