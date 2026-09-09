@@ -1790,11 +1790,19 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
             // Собственные отборы типа (задача c1fa71d4, 0.7.3): без
             // наследования от предков — это контракт `etn.types.list`,
             // эффективный набор для конкретной мысли идёт через
-            // `etn.thoughts.get { meta.views }`. `currentLayerOnly: true`
-            // ограничивает чтение слоем, чтобы не подмешивать отборы
-            // предков-слоёв (это поведение `GET /thought-types/{id}/views`,
-            // контракт b90bb6e6).
-            views: listThoughtTypeViewsByType(ndb, t.id, { currentLayerOnly: true }).map((v) => ({
+            // `etn.thoughts.get { meta.views }`. Читаем через
+            // `thought_type_views_v` (представление сворачивает слои
+            // по правилу «ближайший побеждает»): отборы, определённые
+            // на самом типе в текущем слое, перекрывают базовый слой;
+            // отборы же с предков-типов НЕ подтягиваем — это не
+            // эффективный набор. Параметр `currentLayerOnly: true`
+            // (как у REST `GET /thought-types/{id}/views`, контракт
+            // b90bb6e6) здесь НЕ уместен: он фильтрует по
+            // `ndb.layerId` и при работе из дочернего слоя
+            // возвращает отборы только этого слоя — отсюда пустой
+            // `views: []` для типов, чьи отборы лежат в базовом
+            // слое (ошибка 24632488-…-…, 0.7.4).
+            views: listThoughtTypeViewsByType(ndb, t.id).map((v) => ({
               id: v.id,
               name: v.name,
               name_key: v.name_key,

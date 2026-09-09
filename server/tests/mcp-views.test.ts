@@ -353,6 +353,68 @@ describe('etn.views (0.7.3, c1fa71d4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('etn.types.list видит отборы типа, заведённые в базовом слое, при работе из дочернего слоя (ошибка 24632488)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      makeThoughtType(ndb, 'версия', ctx.adminId, { isRoot: false });
+
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Отбор создаётся, пока сессия сидит на базовом слое.
+        await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            type_views: [
+              {
+                ref: 'version_works',
+                action: 'create',
+                thought_type: 'версия',
+                name: 'Работы версии',
+                description: null,
+                definition: JSON.stringify({ filters: [], sort: 'alpha', order: 'asc' }),
+                position: 0,
+                is_default: true,
+              },
+            ],
+          },
+        });
+
+        // Создаём и выбираем дочерний слой — сессия этого ключа теперь
+        // читает через него, отбор физически лежит в слое-родителе (базе).
+        const layer = toolJson<{ id: string }>(
+          await handle.client.callTool({
+            name: 'etn.layers.create',
+            arguments: { network_id: ctx.networkId, title: 'Слой версии' },
+          }),
+        );
+        await handle.client.callTool({
+          name: 'etn.layers.select',
+          arguments: { network_id: ctx.networkId, layer_id: layer.id },
+        });
+
+        const listRes = await handle.client.callTool({
+          name: 'etn.types.list',
+          arguments: { network_id: ctx.networkId, scope: 'thoughts' },
+        });
+        assert.equal(listRes.isError, undefined, toolText(listRes));
+        const data = toolJson<TypesListResponse>(listRes);
+        const versionType = data.thought_types!.find((t) => t.name === 'версия');
+        assert.ok(versionType, 'тип «версия» должен быть в каталоге');
+        // До фикса 24632488 здесь было `views: []` — `currentLayerOnly: true`
+        // фильтровал физическую таблицу по `layer_id` дочернего слоя и не
+        // видел отбор, лежащий в базе.
+        assert.equal(versionType!.views.length, 1);
+        assert.equal(versionType!.views[0]?.name, 'Работы версии');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('etn.views.run возвращает NOT_FOUND со списком доступных view_name', async () => {
     const ctx = await buildMcpContext();
     try {
