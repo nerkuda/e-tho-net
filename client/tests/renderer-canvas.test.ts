@@ -222,7 +222,7 @@ describe('canvasRenderKey / selectionKey (2e418bc3)', () => {
     assert.equal(selectionKey(), 'a\u0000b');
   });
 
-  it('changes with the focus, cloud geometry and editor target', () => {
+  it('changes with the focus and cloud geometry', () => {
     store.update({ focus: focusResponse(), cloudWidth: 180, editorTarget: null });
     const base = canvasRenderKey();
     store.update({ focus: focusResponse() });
@@ -231,8 +231,26 @@ describe('canvasRenderKey / selectionKey (2e418bc3)', () => {
     assert.notEqual(canvasRenderKey(), base, 'edited focus title — new key');
     store.update({ focus: focusResponse(), cloudWidth: 200 });
     assert.notEqual(canvasRenderKey(), base, 'cloud width — new key');
-    store.update({ focus: focusResponse(), editorTarget: { kind: 'thought', id: 'f' } });
-    assert.notEqual(canvasRenderKey(), base, 'editor target — new key');
+  });
+
+  it('ignores editorTarget / selectedLinkId — clicks in the upper zones must NOT rebuild the lower zone (task ff82809a)', () => {
+    store.update({
+      focus: focusResponse(),
+      editorTarget: null,
+      selectedLinkId: null,
+    });
+    const base = canvasRenderKey();
+    // Opening a parent thought in the editor (openThoughtInEditor) only
+    // changes editorTarget — the zone geometry and contents are the same,
+    // so the canvas must take the selection-only fast path instead of
+    // rebuilding every zone.
+    store.update({ editorTarget: { kind: 'thought', id: 'p' } });
+    assert.equal(canvasRenderKey(), base, 'editorTarget — same key');
+    // Selecting a link (links.ts already has its own subscription that
+    // re-draws lines on store changes) must likewise not cascade into a
+    // full zone rebuild.
+    store.update({ editorTarget: null, selectedLinkId: 'e1' });
+    assert.equal(canvasRenderKey(), base, 'selectedLinkId — same key');
   });
 
   it('changes with the layer overrides — the badge repaints after a mutation (71d7e27a)', () => {

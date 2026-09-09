@@ -336,10 +336,26 @@ export function mountCanvas(canvasHost: HTMLElement): void {
         lastSelectionKey = selKey;
         paintSelection();
       }
+      // `editorTarget` is intentionally NOT part of `canvasRenderKey`
+      // (task ff82809a): a click on a parent/sibling only changes which
+      // thought is open in the editor. Update the single `.halo` cloud in
+      // place instead of rebuilding every zone.
+      const haloId =
+        store.state.editorTarget?.kind === 'thought'
+          ? store.state.editorTarget.id
+          : null;
+      if (haloId !== lastHaloId) {
+        lastHaloId = haloId;
+        paintHalo();
+      }
       return;
     }
     lastRenderKey = key;
     lastSelectionKey = selectionKey();
+    lastHaloId =
+      store.state.editorTarget?.kind === 'thought'
+        ? store.state.editorTarget.id
+        : null;
     void render();
   });
   // The focus band follows the focus row, whose position depends on the zone
@@ -451,6 +467,12 @@ export function applyCanvasScaleVars(h: HTMLElement): void {
  * cloud classes instead of rebuilding the zones (see the mountCanvas
  * subscriber). `zoneAnimationPending` is part of the signature so a requested
  * FLIP transition is never skipped by the unchanged-data fast path.
+ *
+ * `editorTarget` / `selectedLinkId` are deliberately excluded: they only
+ * affect the editor and the `.halo` class on a single cloud, and would
+ * otherwise force a full zone rebuild on every click in the upper zones
+ * (task ff82809a). Their updates are handled in the subscriber's
+ * fast path (`paintHalo` + `links.ts`'s own subscription).
  */
 function canvasRenderKey(): string {
   const s = store.state;
@@ -463,8 +485,6 @@ function canvasRenderKey(): string {
     zoneOrder: s.zoneOrder,
     linkTypes: s.linkTypes,
     thoughtTypes: s.thoughtTypes,
-    editorTarget: s.editorTarget,
-    selectedLinkId: s.selectedLinkId,
     // Live override marking (08-ui-spec.md §2.2): the badge/dashed outline is
     // painted by a full render — without this field a post-mutation override
     // refresh hit the selection-only fast path and the badge only appeared
@@ -487,6 +507,20 @@ function paintSelection(): void {
     const id = cloud.dataset['id'];
     if (id === undefined) continue;
     cloud.classList.toggle('selected', selected.has(id));
+  }
+}
+
+/** Repaints the `.halo` cloud class — the single thought open in the editor
+ *  (§2.2.4). Called from the store subscriber when `editorTarget` changes;
+ *  cheap (one DOM pass) and keeps clicks in the upper zones from rebuilding
+ *  the lower zone (task ff82809a). */
+function paintHalo(): void {
+  if (host === null) return;
+  const editorTarget = store.state.editorTarget;
+  const haloId = editorTarget?.kind === 'thought' ? editorTarget.id : null;
+  for (const cloud of host.querySelectorAll<HTMLElement>('.cloud')) {
+    const id = cloud.dataset['id'];
+    cloud.classList.toggle('halo', id !== undefined && id === haloId);
   }
 }
 
@@ -639,6 +673,10 @@ let lastFocusId: string | null = null;
  *  selection-only fast path (2e418bc3). */
 let lastRenderKey: string | null = null;
 let lastSelectionKey = '';
+/** Id of the cloud currently carrying the `.halo` class (task ff82809a).
+ *  Used to repaint the halo in the selection-only fast path without
+ *  rebuilding any zone. */
+let lastHaloId: string | null = null;
 
 /**
  * Positions the focus band gradient (L12, 08-ui-spec.md §2.1): writes the
