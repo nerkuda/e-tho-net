@@ -11,18 +11,15 @@
  */
 
 /**
- * The shape of a server-side patch that reorders two adjacent views.
- * The renderer applies both patches in parallel and reloads on failure.
+ * The shape of a server-side patch that assigns a new `position` to one view
+ * after a reorder. The renderer applies every changed patch in parallel and
+ * reloads on failure.
  */
-export interface ViewPositionSwap {
-  /** View that physically moves (▲/▼ target). */
-  readonly movedId: string;
-  /** The view it swaps places with (the neighbour in the opposite slot). */
-  readonly neighbourId: string;
-  /** `position` value to push to `movedId`. */
-  readonly movedPosition: number;
-  /** `position` value to push to `neighbourId` (the slot `movedId` vacated). */
-  readonly neighbourPosition: number;
+export interface ViewReorderPatch {
+  /** View whose `position` changes. */
+  readonly id: string;
+  /** New `position` value to push via PATCH. */
+  readonly position: number;
 }
 
 /**
@@ -40,33 +37,39 @@ export function sortViewsByPosition<T extends { id: string; position: number }>(
 }
 
 /**
- * Plans the pair of `position` patches required to move the row at
- * `fromIndex` to `toIndex`. Both indices are interpreted in the
- * already-sorted list (use {@link sortViewsByPosition} first).
+ * Plans the `position` patches required to move the row at `fromIndex` to
+ * `toIndex`. Both indices are interpreted in the already-sorted list (use
+ * {@link sortViewsByPosition} first).
  *
- * The plan swaps the moved view's `position` with its neighbour's so the
- * server-side order stays consistent after a single PATCH pair (the server
- * does not auto-renumber siblings on every update).
+ * The plan re-numbers the whole list to `0..n-1` in the post-move order and
+ * returns patches only for the rows whose `position` actually changes. For a
+ * list that already carries unique consecutive positions that is exactly the
+ * moved row and its neighbour (same cost as a pairwise swap); for lists whose
+ * rows share positions — the historical state when views were created without
+ * an explicit `position` and the server defaulted them all to `0` — a pairwise
+ * swap would be a no-op (`0 ↔ 0`), so the re-numbering is the only way to make
+ * ▲/▼ change the visible order (ошибка a62190d1 «порядок не меняется»).
  *
- * Returns `null` when the move would leave the list unchanged (out of
- * range or a no-op).
+ * Returns `null` when the move would leave the list unchanged (out of range
+ * or a no-op).
  */
 export function planReorder(
   sorted: readonly { id: string; position: number }[],
   fromIndex: number,
   toIndex: number,
-): ViewPositionSwap | null {
+): ViewReorderPatch[] | null {
   if (fromIndex === toIndex) return null;
   if (fromIndex < 0 || fromIndex >= sorted.length) return null;
   if (toIndex < 0 || toIndex >= sorted.length) return null;
-  const moved = sorted[fromIndex]!;
-  const neighbour = sorted[toIndex]!;
-  return {
-    movedId: moved.id,
-    neighbourId: neighbour.id,
-    movedPosition: neighbour.position,
-    neighbourPosition: moved.position,
-  };
+  const nextOrder = [...sorted];
+  // fromIndex валиден (проверено выше) — вынутый элемент гарантированно есть.
+  const moved = nextOrder.splice(fromIndex, 1)[0]!;
+  nextOrder.splice(toIndex, 0, moved);
+  const patches: ViewReorderPatch[] = [];
+  nextOrder.forEach((row, index) => {
+    if (row.position !== index) patches.push({ id: row.id, position: index });
+  });
+  return patches.length === 0 ? null : patches;
 }
 
 /**

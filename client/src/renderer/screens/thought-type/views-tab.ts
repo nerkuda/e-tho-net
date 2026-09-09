@@ -478,45 +478,39 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     const plan = planReorder(sorted, fromIndex, toIndex);
     if (plan === null) return;
     const prev = views.map((v) => ({ ...v }));
-    // Apply the swap locally — both rows get their new `position`. The
-    // server doesn't renumber siblings on update, so the next `load()`
-    // could in theory disagree until both PATCHes land; we keep the
-    // optimistic swap until either error forces a rollback.
+    const plannedById = new Map(plan.map((p) => [p.id, p]));
+    // Применяем план локально: новые позиции видит пользователь сразу, а
+    // сервер догоняет пачкой PATCH. План перенумеровывает список в 0..n-1,
+    // поэтому он чинит и исторические дубли позиций (когда все отборы типа
+    // создавались без position и лежат с position = 0 — обмен соседней пары
+    // был бы no-op, ошибка a62190d1).
     views = views.map((v) => {
-      if (v.id === plan.movedId) return { ...v, position: plan.movedPosition };
-      if (v.id === plan.neighbourId) return { ...v, position: plan.neighbourPosition };
-      return v;
+      const p = plannedById.get(v.id);
+      return p === undefined ? v : { ...v, position: p.position };
     });
     renderRows();
-    // Помечаем оба id как «PATCH в полёте» — realtime-обработчик не будет
-    // вызывать `load()` для их `updated`-событий, пока `Promise.all` не
-    // разрешится. Без этого промежуточное чтение сервера (когда только
-    // один из двух PATCH-ей лёг) возвращало бы обе строки с одинаковой
-    // позицией и сортировка по id кидала порядок обратно (регрессия
-    // a62190d1 «порядок не меняется»).
-    pendingPatches.add(plan.movedId);
-    pendingPatches.add(plan.neighbourId);
+    // Помечаем все id плана как «PATCH в полёте» — realtime-обработчик не
+    // будет вызывать `load()` для их `updated`-событий, пока `Promise.all` не
+    // разрешится. Без этого промежуточное чтение сервера (когда легла только
+    // часть PATCH-ей) возвращало бы список в нежелательном состоянии
+    // (регрессия a62190d1 «порядок не меняется»).
+    for (const p of plan) pendingPatches.add(p.id);
     try {
-      const [updatedMoved, updatedNeighbour] = await Promise.all([
-        etn.thoughtTypeViews.update(
-          networkId,
-          view.thought_type_id,
-          plan.movedId,
-          { position: plan.movedPosition },
-          sorted.find((v) => v.id === plan.movedId)!.version,
+      const results = await Promise.all(
+        plan.map((p) =>
+          etn.thoughtTypeViews.update(
+            networkId,
+            view.thought_type_id,
+            p.id,
+            { position: p.position },
+            sorted.find((v) => v.id === p.id)!.version,
+          ),
         ),
-        etn.thoughtTypeViews.update(
-          networkId,
-          view.thought_type_id,
-          plan.neighbourId,
-          { position: plan.neighbourPosition },
-          sorted.find((v) => v.id === plan.neighbourId)!.version,
-        ),
-      ]);
+      );
       // Сервер инкрементит `version` каждого ответа — кладём их в локальный
       // кэш, чтобы следующий reorder- или правка «по умолчанию» не уехала
       // в VERSION_CONFLICT по устаревшему `If-Match` (ошибка a62190d1).
-      views = applyViewUpdates(views, [updatedMoved, updatedNeighbour]);
+      views = applyViewUpdates(views, results);
       renderRows();
       opts.onChanged?.();
     } catch (err) {
@@ -525,8 +519,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       renderRows();
       void load();
     } finally {
-      pendingPatches.delete(plan.movedId);
-      pendingPatches.delete(plan.neighbourId);
+      for (const p of plan) pendingPatches.delete(p.id);
     }
   }
 
