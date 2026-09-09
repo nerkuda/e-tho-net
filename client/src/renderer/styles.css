@@ -1558,7 +1558,12 @@ body.resizing-h {
   padding: 0 14px 8px;
   position: relative;
   z-index: 1;
-  pointer-events: auto;
+  /* Полоса перекрывает линии связи от фокуса к потомкам по всей своей
+   * ширине: левая/правая части padding-а и gap между кнопками не должны
+   * перехватывать события, иначе курсор и клик по линии вне кнопок
+   * отбора не доходят до hit-слоя (баг 2bfd3e6d). Сами кнопки
+   * включают `pointer-events: auto` на `.canvas-filter-strip-btn`. */
+  pointer-events: none;
 }
 
 .canvas-filter-strip.hidden {
@@ -1589,6 +1594,10 @@ body.resizing-h {
   font-size: 12px;
   line-height: 1.4;
   cursor: pointer;
+  /* Родительская полоса отключает pointer-events, чтобы линии связи
+   * проходили сквозь padding и gap между кнопками (баг 2bfd3e6d);
+   * сами кнопки снова включают перехват событий. */
+  pointer-events: auto;
 }
 
 .canvas-filter-strip-btn:hover {
