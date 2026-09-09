@@ -27,6 +27,7 @@ import { describe, it } from 'node:test';
 import type { ThoughtTypeView } from '@etn/shared';
 
 import {
+  applyViewUpdates,
   ownViewsOf,
   planClearDefault,
   planReorder,
@@ -191,6 +192,51 @@ describe('thought-type editor — views-tab pure helpers (задача b8301c16)
     it('returns an empty array when nothing matches', () => {
       const mixed = [view('b1', 0, TYPE_B, false)];
       assert.deepEqual(ownViewsOf(mixed, TYPE_A), []);
+    });
+  });
+
+  describe('applyViewUpdates', () => {
+    it('replaces matching views with the server response rows', () => {
+      const list = [view('a', 10), view('b', 20), view('c', 30)];
+      const updates = [
+        { ...view('a', 11), version: 2 },
+        { ...view('b', 19), version: 2 },
+      ];
+      const next = applyViewUpdates(list, updates);
+      const a = next.find((v) => v.id === 'a')!;
+      const b = next.find((v) => v.id === 'b')!;
+      const c = next.find((v) => v.id === 'c')!;
+      assert.equal(a.version, 2);
+      assert.equal(a.position, 11);
+      assert.equal(b.version, 2);
+      assert.equal(b.position, 19);
+      // Untouched row keeps its original position and version.
+      assert.equal(c.position, 30);
+      assert.equal(c.version, 1);
+    });
+
+    it('does not mutate the input list', () => {
+      const list = [view('a', 10)];
+      const updates = [{ ...view('a', 11), version: 2 }];
+      const snapshot = JSON.stringify(list);
+      applyViewUpdates(list, updates);
+      assert.equal(JSON.stringify(list), snapshot);
+    });
+
+    it('returns a shallow copy when no updates are given', () => {
+      const list = [view('a', 10)];
+      const next = applyViewUpdates(list, []);
+      assert.notEqual(next, list);
+      assert.deepEqual(next, list);
+    });
+
+    it('keeps views whose id has no matching update untouched', () => {
+      const list = [view('a', 10), view('b', 20)];
+      const updates = [{ ...view('a', 99), version: 5 }];
+      const next = applyViewUpdates(list, updates);
+      const b = next.find((v) => v.id === 'b')!;
+      assert.equal(b.version, 1);
+      assert.equal(b.position, 20);
     });
   });
 });

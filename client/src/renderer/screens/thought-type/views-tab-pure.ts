@@ -114,3 +114,28 @@ export function ownViewsOf<T extends { thought_type_id: string }>(
 ): T[] {
   return views.filter((v) => v.thought_type_id === typeId);
 }
+
+/**
+ * Applies server responses to the local view cache after a successful PATCH.
+ * Each view whose `id` matches a response is replaced by the response row
+ * (carrying the fresh `version` and any field the server echoed back);
+ * views without a matching response are kept untouched.
+ *
+ * Зачем (ошибка a62190d1): без обновления локальной версии следующая
+ * правка того же отбора снова пошлёт устаревший `If-Match` → сервер
+ * ответит `VERSION_CONFLICT` «Версия отбора изменилась с момента чтения»,
+ * хотя менял её сам пользователь. Используется после reorder-а, смены
+ * «по умолчанию» и её снятия.
+ */
+export function applyViewUpdates<T extends { id: string }>(
+  list: readonly T[],
+  updates: readonly T[],
+): T[] {
+  if (updates.length === 0) return [...list];
+  const byId = new Map<string, T>();
+  for (const u of updates) byId.set(u.id, u);
+  return list.map((v) => {
+    const u = byId.get(v.id);
+    return u === undefined ? v : { ...v, ...u };
+  });
+}

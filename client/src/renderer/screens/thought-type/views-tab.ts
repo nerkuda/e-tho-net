@@ -37,6 +37,7 @@ import { onRealtimeEvent } from '../../realtime.js';
 
 import { openViewEditorDialog } from './filter-dialog.js';
 import {
+  applyViewUpdates,
   ownViewsOf,
   planClearDefault,
   planReorder,
@@ -236,9 +237,23 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
 
     // Кнопки: порядок, «по умолчанию» и удаление — эмодзи.
     const actions = el('td', 'views-tab-actions');
+    const upBtn = button(
+      '▲',
+      () => void onMove(view, idx, idx - 1, sorted),
+      'btn small',
+      idx === 0 ? 'Уже первый — выше некуда' : 'Выше',
+    );
+    if (idx === 0) upBtn.disabled = true;
+    const downBtn = button(
+      '▼',
+      () => void onMove(view, idx, idx + 1, sorted),
+      'btn small',
+      idx === sorted.length - 1 ? 'Уже последний — ниже некуда' : 'Ниже',
+    );
+    if (idx === sorted.length - 1) downBtn.disabled = true;
     actions.append(
-      button('▲', () => void onMove(view, idx, idx - 1, sorted), 'btn small', 'Выше'),
-      button('▼', () => void onMove(view, idx, idx + 1, sorted), 'btn small', 'Ниже'),
+      upBtn,
+      downBtn,
       button(
         view.is_default ? '☆' : '⭐',
         () => (view.is_default ? void onClearDefault(view) : void onSetDefault(view)),
@@ -322,6 +337,11 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     const plan = planSetDefault(views, view.id);
     if (plan === null) return;
     const prev = views.map((v) => ({ ...v }));
+    // Запоминаем прежний отбор «по умолчанию» ДО локального флипа: сервер
+    // снимет с него пометку в той же транзакции и бампнет версию — её
+    // надо подтянуть, иначе правка по тому отбору следом упадёт в
+    // VERSION_CONFLICT (ошибка a62190d1).
+    const previousDefault = views.find((v) => v.is_default && v.id !== view.id) ?? null;
     // Optimistic local flip: the row gets the badge, the previous default
     // loses it. Server-side transactional clear runs in parallel.
     views = views.map((v) =>
@@ -329,13 +349,21 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     );
     renderRows();
     try {
-      await etn.thoughtTypeViews.update(
+      const updated = await etn.thoughtTypeViews.update(
         networkId,
         view.thought_type_id,
         view.id,
         { is_default: true },
         view.version,
       );
+      // Целевой отбор — из ответа сервера; бывшему «по умолчанию» бампим
+      // версию локально (транзакционный clear сервера инкрементит её на 1).
+      const updates: ThoughtTypeView[] = [updated];
+      if (previousDefault !== null) {
+        updates.push({ ...previousDefault, is_default: false, version: previousDefault.version + 1 });
+      }
+      views = applyViewUpdates(views, updates);
+      renderRows();
       opts.onChanged?.();
     } catch (err) {
       errorDialog('Сделать отбором по умолчанию', err);
@@ -352,13 +380,19 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     views = views.map((v) => (v.id === view.id ? { ...v, is_default: false } : v));
     renderRows();
     try {
-      await etn.thoughtTypeViews.update(
+      const updated = await etn.thoughtTypeViews.update(
         networkId,
         view.thought_type_id,
         view.id,
         { is_default: false },
         view.version,
       );
+      // Ответ сервера — источник истины для версии и `is_default`.
+      // Без подтяжки локальной версии следующая правка того же отбора
+      // пошлёт устаревший `If-Match` и упадёт в VERSION_CONFLICT
+      // (ошибка a62190d1).
+      views = applyViewUpdates(views, [updated]);
+      renderRows();
       opts.onChanged?.();
     } catch (err) {
       errorDialog('Снять признак «по умолчанию»', err);
@@ -388,7 +422,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     });
     renderRows();
     try {
-      await Promise.all([
+      const [updatedMoved, updatedNeighbour] = await Promise.all([
         etn.thoughtTypeViews.update(
           networkId,
           view.thought_type_id,
@@ -404,6 +438,11 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
           sorted.find((v) => v.id === plan.neighbourId)!.version,
         ),
       ]);
+      // Сервер инкрементит `version` каждого ответа — кладём их в локальный
+      // кэш, чтобы следующий reorder- или правка «по умолчанию» не уехала
+      // в VERSION_CONFLICT по устаревшему `If-Match` (ошибка a62190d1).
+      views = applyViewUpdates(views, [updatedMoved, updatedNeighbour]);
+      renderRows();
       opts.onChanged?.();
     } catch (err) {
       errorDialog('Переставить отбор', err);
