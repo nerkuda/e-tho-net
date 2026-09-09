@@ -29,6 +29,7 @@ import type { FocusResponse, ThoughtRef, ThoughtTypeView } from '@etn/shared';
 import type { StructureSort, SortOrder } from '@etn/shared';
 
 import { openViewEditorDialog } from '../screens/thought-type/filter-dialog.js';
+import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { div, span } from '../lib/dom.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
@@ -692,6 +693,19 @@ async function setDefault(
 }
 
 async function deleteView(networkId: string, view: EffectiveViewRow): Promise<void> {
+  // Унаследованный отбор удаляется из редактора его собственного типа —
+  // кнопка в контекстном меню уже `disabled: view.inherited`, но прямой
+  // вызов из кода не должен молча отправлять DELETE на чужой тип.
+  if (view.inherited) return;
+  // Симметрия с `onDelete` во вкладке «Отборы» редактора типа
+  // (regression a62190d1): без подтверждения клик по «Удалить отбор» молча
+  // стирал отбор — действие необратимое.
+  const ok = await confirmDialog(
+    'Удалить отбор',
+    `Удалить отбор «${view.name || view.name_key}»? Это действие необратимо.`,
+    true,
+  );
+  if (!ok) return;
   try {
     await etn.thoughtTypeViews.remove(networkId, view.defined_on, view.id, view.version);
     notice('Отбор удалён.', 'info');
