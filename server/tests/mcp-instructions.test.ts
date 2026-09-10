@@ -332,6 +332,34 @@ describe('etn.instructions (0.7.2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  // Ошибка 18d7774a: union-схема заменена одним объектом со взаимоисключением
+  // через `.refine()` — режимы обязаны остаться взаимоисключимыми.
+  it('rejects instruction_id and keywords passed together', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+      const instructionsTypeId = makeThoughtType(ndb, 'Инструкция', ctx.adminId);
+      setTypeRoles(ctx, { instructions: instructionsTypeId });
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const err = await handle.client.callTool({
+          name: 'etn.instructions',
+          arguments: {
+            network_id: ctx.networkId,
+            instruction_id: '00000000-0000-4000-8000-0000000000aa',
+            keywords: 'up',
+          },
+        });
+        assert.equal(err.isError, true);
+        assert.match(toolText(err), /взаимоисключимы/);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('by keywords filters by title + synonyms (mini-syntax)', async () => {
     const ctx = await buildMcpContext();
     try {

@@ -5470,27 +5470,32 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
   // (без ошибки). Только актуальные мысли; помеченные на удаление исключаются;
   // учитываются подтипы роли (L21-иерархия типов); читается текущий слой сессии.
   // ---------------------------------------------------------------------------
-  const InstructionsByIdSchema = z
+  // ВАЖНО (ошибка 18d7774a): схема инструмента — ОДИН объект, а не
+  // `z.union([...])`. MCP-SDK публикует в `inputSchema` только объектные схемы
+  // (`normalizeObjectSchema` в `server/zod-compat.js` отдаёт `undefined` на
+  // всём, у чего нет `shape`), и union вырождался в пустой
+  // `{ type: "object", properties: {} }`: агент видел инструмент без
+  // параметров, звал его без аргументов и получал `Invalid input` на
+  // обязательном `network_id`. Валидация при этом работала (SDK откатывается
+  // на исходную схему), поэтому расхождение было видно только в витрине.
+  // Взаимоисключение режимов выражено `.refine()`: в zod 4 он возвращает тот
+  // же `ZodObject`, `shape` не теряется и схема публикуется целиком.
+  const InstructionsSchema = z
     .object({
       network_id: NetworkId,
-      instruction_id: z.string().min(1),
-    })
-    .strict();
-  const InstructionsByKeywordsSchema = z
-    .object({
-      network_id: NetworkId,
-      keywords: z.string().min(1),
+      instruction_id: z.string().min(1).optional(),
+      keywords: z.string().min(1).optional(),
       limit: z.number().int().min(1).max(200).optional(),
       offset: z.number().int().min(0).optional(),
     })
-    .strict();
-  const InstructionsAllSchema = z
-    .object({
-      network_id: NetworkId,
-      limit: z.number().int().min(1).max(200).optional(),
-      offset: z.number().int().min(0).optional(),
+    .strict()
+    .refine((v) => v.instruction_id === undefined || v.keywords === undefined, {
+      message: 'instruction_id и keywords взаимоисключимы',
     })
-    .strict();
+    .refine(
+      (v) => v.instruction_id === undefined || (v.limit === undefined && v.offset === undefined),
+      { message: 'limit/offset применимы только к режимам перечня, не к instruction_id' },
+    );
   function buildInstructionsPreview(ndb: NetworkDb, thoughtId: string) {
     // The permanent comment is read in full by spec 14b0cc4f ("БЕЗ обрезки").
     // We still surface a `preview` for list responses — a short substring of
@@ -5600,18 +5605,15 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'permanent comment (no truncation); `{ network_id, keywords }` filters by title+synonyms (mini-syntax: ' +
         'whitespace-AND, `-word` exclusion); `{ network_id }` returns every active instruction. When the network ' +
         'has not declared the `instructions` role → `{ has_instructions: false, instructions: [] }`.',
-      inputSchema: z.union([
-        InstructionsByIdSchema,
-        InstructionsByKeywordsSchema,
-        InstructionsAllSchema,
-      ]),
+      inputSchema: InstructionsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.instructions'],
     },
     (args) => {
-      // Discriminate by the optional fields the caller provided. The schema is
-      // a union so TS keeps the args type wide; narrow it manually.
-      if ('instruction_id' in args) {
-        const idArgs = args as z.infer<typeof InstructionsByIdSchema>;
+      // Режим выбирается по фактически переданным полям (взаимоисключение
+      // `instruction_id` / `keywords` гарантировано схемой).
+      const instructionId = args.instruction_id;
+      if (instructionId !== undefined) {
+        const idArgs = { network_id: args.network_id, instruction_id: instructionId };
         return runTool(async () => {
           const network = rt.deps.systemDb.getNetworkById(idArgs.network_id);
           if (network === null) {
@@ -5681,11 +5683,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           };
         });
       }
-      const listArgs = args as z.infer<typeof InstructionsByKeywordsSchema | typeof InstructionsAllSchema>;
-      const keywords =
-        'keywords' in listArgs && typeof listArgs.keywords === 'string'
-          ? listArgs.keywords
-          : undefined;
+      const listArgs = args;
+      const keywords = listArgs.keywords;
       return runTool(async () => {
         const network = rt.deps.systemDb.getNetworkById(listArgs.network_id);
         if (network === null) {

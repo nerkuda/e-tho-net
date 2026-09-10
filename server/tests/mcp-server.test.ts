@@ -71,6 +71,70 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  // Ошибка 18d7774a: `etn.instructions` регистрировался с `z.union([...])`, и
+  // MCP-SDK публиковал пустую схему (`{ type: "object", properties: {} }`) —
+  // агент, следующий витрине, звал инструмент без аргументов и получал
+  // `Invalid input` на обязательном `network_id`. Схема инструмента обязана
+  // совпадать с фактическим контрактом.
+  it('etn.instructions publishes its parameters with a required network_id', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const { tools } = await handle.client.listTools();
+        const tool = tools.find((t) => t.name === 'etn.instructions');
+        assert.ok(tool !== undefined, 'etn.instructions отсутствует в каталоге');
+        const schema = tool.inputSchema as {
+          properties?: Record<string, unknown>;
+          required?: string[];
+        };
+        const properties = Object.keys(schema.properties ?? {});
+        assert.ok(
+          properties.includes('network_id'),
+          `схема не объявляет network_id: [${properties.join(', ')}]`,
+        );
+        assert.deepEqual(schema.required, ['network_id']);
+        for (const optional of ['instruction_id', 'keywords']) {
+          assert.ok(
+            properties.includes(optional),
+            `схема не объявляет опциональный ${optional}`,
+          );
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // Общая страховка того же класса регрессий: любой инструмент, у которого
+  // есть параметры, обязан объявлять их в публикуемой схеме. Пустая схема
+  // допустима только для инструментов, которые параметров действительно не
+  // принимают.
+  it('every parameterised tool publishes a non-empty inputSchema', async () => {
+    const PARAMETERLESS = new Set(['etn.networks.list']);
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const { tools } = await handle.client.listTools();
+        const empty = tools
+          .filter((t) => !PARAMETERLESS.has(t.name))
+          .filter((t) => {
+            const schema = t.inputSchema as { properties?: Record<string, unknown> };
+            return Object.keys(schema.properties ?? {}).length === 0;
+          })
+          .map((t) => t.name);
+        assert.deepEqual(empty, [], `инструменты с пустой схемой: ${empty.join(', ')}`);
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('lists the 13 etn:// resources (1 static + 12 templated)', async () => {
     const ctx = await buildMcpContext();
     try {
