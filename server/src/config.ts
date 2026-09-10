@@ -3,7 +3,7 @@
  *
  * Required: `ETN_DATA_DIR` (absolute path to the data root). Optional: `ETN_HOST`,
  * `ETN_PORT`, `ETN_TLS_CERT`/`ETN_TLS_KEY` (both-or-neither), `ETN_LOG_LEVEL`,
- * `ETN_MCP_ENABLED`, `ETN_MCP_PORT`.
+ * `ETN_MCP_ENABLED`, `ETN_MCP_PORT`, `ETN_MCP_SESSION_IDLE_TTL_MS`.
  *
  * A bad configuration raises {@link ConfigError} with a human-readable message;
  * the CLI/server entry point surfaces it to the operator at startup.
@@ -36,6 +36,15 @@ export interface McpConfig {
    * served on the main `ETN_PORT` listener.
    */
   port: number | null;
+  /**
+   * How long an idle StreamableHTTP MCP session stays alive before the
+   * endpoint sweeps it (`ETN_MCP_SESSION_IDLE_TTL_MS`, milliseconds). The
+   * next request of a swept session gets `404 Unknown or expired MCP
+   * session`, so the value must comfortably exceed the pauses an agent makes
+   * between calls — hence the 24 h default
+   * ({@link DEFAULT_MCP_SESSION_IDLE_TTL_MS}).
+   */
+  sessionIdleTtlMs: number;
 }
 
 /** Fully-validated server configuration. */
@@ -50,7 +59,10 @@ export interface ServerConfig {
   tls: TlsConfig | null;
   /** pino log level (`ETN_LOG_LEVEL`). */
   logLevel: string;
-  /** MCP endpoint configuration (`ETN_MCP_ENABLED`, `ETN_MCP_PORT`). */
+  /**
+   * MCP endpoint configuration (`ETN_MCP_ENABLED`, `ETN_MCP_PORT`,
+   * `ETN_MCP_SESSION_IDLE_TTL_MS`).
+   */
   mcp: McpConfig;
 }
 
@@ -75,6 +87,21 @@ const PORT_MIN = 1;
 const PORT_MAX = 65535;
 /** Default pino log level when `ETN_LOG_LEVEL` is unset. */
 const DEFAULT_LOG_LEVEL = 'info';
+
+/**
+ * Default idle TTL of a StreamableHTTP MCP session — 24 hours.
+ *
+ * An MCP session lives in the endpoint's memory and is swept once it stays
+ * idle longer than the TTL; the client then has to re-run `initialize`. A
+ * long-running agent pauses between calls for arbitrarily long stretches, so
+ * the default is deliberately generous — the operator lowers it via
+ * `ETN_MCP_SESSION_IDLE_TTL_MS` when memory matters more than continuity.
+ */
+export const DEFAULT_MCP_SESSION_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
+/** Lowest accepted `ETN_MCP_SESSION_IDLE_TTL_MS` (1 second). */
+const MCP_SESSION_IDLE_TTL_MIN_MS = 1_000;
+/** Highest accepted `ETN_MCP_SESSION_IDLE_TTL_MS` (30 days). */
+const MCP_SESSION_IDLE_TTL_MAX_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** pino log levels accepted by `ETN_LOG_LEVEL`. */
 const VALID_LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'] as const;
@@ -148,5 +175,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     mcpPort = parsed;
   }
 
-  return { dataDir, host, port, tls, logLevel, mcp: { enabled: mcpEnabled, port: mcpPort } };
+  // --- ETN_MCP_SESSION_IDLE_TTL_MS (optional) ---
+  let mcpSessionIdleTtlMs = DEFAULT_MCP_SESSION_IDLE_TTL_MS;
+  const mcpTtlRaw = env.ETN_MCP_SESSION_IDLE_TTL_MS?.trim();
+  if (mcpTtlRaw !== undefined && mcpTtlRaw !== '') {
+    const parsed = Number(mcpTtlRaw);
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < MCP_SESSION_IDLE_TTL_MIN_MS ||
+      parsed > MCP_SESSION_IDLE_TTL_MAX_MS
+    ) {
+      throw new ConfigError(
+        `ETN_MCP_SESSION_IDLE_TTL_MS must be an integer number of milliseconds in ` +
+          `[${MCP_SESSION_IDLE_TTL_MIN_MS}, ${MCP_SESSION_IDLE_TTL_MAX_MS}], ` +
+          `got: ${JSON.stringify(mcpTtlRaw)}`,
+      );
+    }
+    mcpSessionIdleTtlMs = parsed;
+  }
+
+  return {
+    dataDir,
+    host,
+    port,
+    tls,
+    logLevel,
+    mcp: { enabled: mcpEnabled, port: mcpPort, sessionIdleTtlMs: mcpSessionIdleTtlMs },
+  };
 }

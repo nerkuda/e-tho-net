@@ -14,6 +14,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance } from 'fastify';
 
+import { DEFAULT_MCP_SESSION_IDLE_TTL_MS } from '../src/config.js';
 import type { ServerConfig } from '../src/config.js';
 import { SystemDb } from '../src/db/system-db.js';
 import { runMigrations } from '../src/db/migrator.js';
@@ -38,7 +39,7 @@ const TEST_CONFIG: ServerConfig = {
   port: 0,
   tls: null,
   logLevel: 'silent',
-  mcp: { enabled: false, port: null },
+  mcp: { enabled: false, port: null, sessionIdleTtlMs: DEFAULT_MCP_SESSION_IDLE_TTL_MS },
 };
 
 /** Seed user + key material. */

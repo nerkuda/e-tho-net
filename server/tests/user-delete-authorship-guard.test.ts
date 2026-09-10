@@ -33,6 +33,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { BASE_LAYER_ID } from '@etn/shared';
 
+import { DEFAULT_MCP_SESSION_IDLE_TTL_MS } from '../src/config.js';
 import type { ServerConfig } from '../src/config.js';
 import { SystemDb } from '../src/db/system-db.js';
 import { closeAll as closeAllNetworkDbs, openNetworkDb } from '../src/db/network-db.js';
@@ -85,7 +86,7 @@ const TEST_CONFIG_BASE: ServerConfig = {
   port: 0,
   tls: null,
   logLevel: 'silent',
-  mcp: { enabled: false, port: null },
+  mcp: { enabled: false, port: null, sessionIdleTtlMs: DEFAULT_MCP_SESSION_IDLE_TTL_MS },
 };
 
 /**
