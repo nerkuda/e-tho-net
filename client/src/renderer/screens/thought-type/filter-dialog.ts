@@ -98,13 +98,15 @@ export function openViewEditorDialog(opts: OpenViewEditorOptions): void {
 
 /** Module-scoped chain of properties for the currently open dialog.
  *  The token-picker reads it lazily — there is at most one dialog open at
- *  a time. Reset to `null` when the dialog closes. */
+ *  a time. Set when the chain loads, cleared in the dialog's `onClose`
+ *  (see `buildAndShowImpl`) — NOT in a `finally`, because `buildAndShowImpl`
+ *  resolves once the DOM is mounted and the dialog has not closed yet, so a
+ *  `finally` would wipe the chain before the user clicks any token button.
+ */
 let activeChainProps: ChainProperties[] | null = null;
 
 function buildAndShow(opts: OpenViewEditorOptions): Promise<void> {
-  return buildAndShowImpl(opts).finally(() => {
-    activeChainProps = null;
-  });
+  return buildAndShowImpl(opts);
 }
 
 async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
@@ -207,6 +209,9 @@ async function buildAndShowImpl(opts: OpenViewEditorOptions): Promise<void> {
         },
       },
     ],
+    onClose: () => {
+      activeChainProps = null;
+    },
   });
 }
 
