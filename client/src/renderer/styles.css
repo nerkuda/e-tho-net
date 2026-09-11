@@ -4260,6 +4260,70 @@ body.cloud-dragging * {
   color: var(--text-faint);
 }
 
+/* ---------------------------------------------------------------------------
+ * Unified condition-value combo (задача 27472616): tag-input chip list +
+ * live-search dropdown, replaces the old click-to-open chip fields and the
+ * static `{…}` token menu.
+ * ------------------------------------------------------------------------- */
+
+.value-combo-row {
+  align-items: flex-start;
+}
+
+/* The chip field now doubles as a text input container — no longer
+ * click-to-open, so it keeps the text cursor instead of a pointer. */
+.value-combo-field {
+  cursor: text;
+  flex: 1;
+  min-width: 0;
+}
+
+.value-combo-chip {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 1px 4px 1px 8px;
+}
+
+.value-combo-add {
+  flex: 1 1 80px;
+  min-width: 60px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  padding: 2px 2px;
+}
+
+.value-combo-add:focus {
+  outline: none;
+}
+
+.value-combo-pick {
+  white-space: nowrap;
+  align-self: flex-start;
+}
+
+/* Section header inside the live-search dropdown (mirrors the old menu's
+ * grouping, e.g. «Свойства «Версия»»). */
+.value-combo-section {
+  margin: 4px 8px 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.value-combo-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
 /* Keyword-history / saved-filter dropdowns: a small absolute list under the
  * anchor field (§15.3). */
 .st-f-kw-wrap {

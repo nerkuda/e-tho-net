@@ -240,6 +240,52 @@ function isListOp(op: StructurePropertyOp | null): boolean {
   return op === 'in' || op === 'not_in';
 }
 
+// ---------------------------------------------------------------------------
+// Value combo — live-search candidate list (задача 27472616)
+// ---------------------------------------------------------------------------
+
+/** One candidate row of the unified value-combo (see `value-combo.ts`). */
+export interface ComboOption {
+  /** Text stored in the field when the row is picked (token or literal id). */
+  value: string;
+  /** Human-readable label shown in the dropdown. */
+  label: string;
+  /** Optional section header shown above the row (grouping, mirrors {@link ViewToken.section}). */
+  section?: string;
+  /** `true` — the row cannot be picked in the current operator (e.g. a
+   *  list-only token offered for a scalar `eq` condition). */
+  disabled?: boolean;
+}
+
+/** Converts a token list into combo options, baking in the existing
+ *  `listOnly` vs `op` disable rule (mirrors the old `openTokenPicker` menu). */
+export function tokensToComboOptions(
+  tokens: ViewToken[],
+  op: StructurePropertyOp | null,
+): ComboOption[] {
+  return tokens.map((t) => ({
+    value: t.text,
+    label: t.label,
+    section: t.section,
+    disabled: t.listOnly === true && !isListOp(op),
+  }));
+}
+
+/**
+ * Live-search filter: case-insensitive substring match against the label OR
+ * the stored value (so typing part of `$today` or part of «сегодня» both
+ * work). An empty/whitespace query returns every option unfiltered — the
+ * dropdown then shows the full candidate list, grouped by section, exactly
+ * like the old static menu did on open.
+ */
+export function filterComboOptions(options: ComboOption[], query: string): ComboOption[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return options;
+  return options.filter(
+    (o) => o.label.toLowerCase().includes(needle) || o.value.toLowerCase().includes(needle),
+  );
+}
+
 function propertyMatches(
   defType: PropertyValueType,
   condType: PropertyValueType,

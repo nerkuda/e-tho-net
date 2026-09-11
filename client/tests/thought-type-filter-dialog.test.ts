@@ -784,3 +784,46 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     assert.equal(inactiveOnly.show_inactive, true);
   });
 });
+
+describe('единый редактор значения условия — комбо-кандидаты (задача 27472616)', () => {
+  let module: typeof import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+
+  before(async () => {
+    module = await import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+  });
+
+  it('tokensToComboOptions disables listOnly tokens outside in/not_in', () => {
+    const tokens: import('../src/renderer/screens/thought-type/filter-dialog-pure.js').ViewToken[] = [
+      { text: '$today', label: '$today — сегодня' },
+      { text: '$thought.[теги]', label: '$thought.[теги] […] — thought_ref', listOnly: true },
+    ];
+    const scalar = module.tokensToComboOptions(tokens, 'eq');
+    assert.equal(scalar.find((o) => o.value === '$today')?.disabled, false);
+    assert.equal(scalar.find((o) => o.value === '$thought.[теги]')?.disabled, true);
+
+    const list = module.tokensToComboOptions(tokens, 'in');
+    assert.equal(list.find((o) => o.value === '$thought.[теги]')?.disabled, false);
+
+    // `op: null` (полей вроде «Ключевые слова») трактуется как не-списочный.
+    const noOp = module.tokensToComboOptions(tokens, null);
+    assert.equal(noOp.find((o) => o.value === '$thought.[теги]')?.disabled, true);
+  });
+
+  it('filterComboOptions matches the label or the stored value, case-insensitively', () => {
+    const options: import('../src/renderer/screens/thought-type/filter-dialog-pure.js').ComboOption[] = [
+      { value: '$today', label: '$today — сегодня' },
+      { value: '$thought.type', label: '$thought.type — тип мысли в фокусе' },
+    ];
+    assert.deepEqual(
+      module.filterComboOptions(options, 'СЕГОДНЯ').map((o) => o.value),
+      ['$today'],
+    );
+    assert.deepEqual(
+      module.filterComboOptions(options, 'thought.type').map((o) => o.value),
+      ['$thought.type'],
+    );
+    assert.equal(module.filterComboOptions(options, 'нет совпадений').length, 0);
+    // Пустой запрос — весь список без фильтрации (полное открытие меню).
+    assert.equal(module.filterComboOptions(options, '   ').length, 2);
+  });
+});
