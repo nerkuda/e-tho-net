@@ -198,9 +198,10 @@ describe(
         }, USER);
         createTypeProperty(ndb, 'thought_type', colleague.id, { key: 'кабинет', value_type: 'text' }, USER);
 
-        // Коллега sees its own + Персона's + root's properties.
+        // Коллега sees its own + Персона's + root's properties (структурные
+        // «Родители»/«Потомки» на корне наследуются, но это не скаляры).
         const effective = listEffectiveTypeProperties(ndb, 'thought_type', colleague.id);
-        const keys = effective.map((d) => d.key).sort();
+        const keys = effective.filter((d) => d.value_type !== 'link').map((d) => d.key).sort();
         assert.deepEqual(keys, ['заметка', 'кабинет', 'пол']);
 
         const inheritedGender = effective.find((d) => d.key === 'пол')!;

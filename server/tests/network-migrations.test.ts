@@ -60,6 +60,7 @@ const EXPECTED_FILES = [
   '036_property_values_deterministic_id.sql',
   '037_thought_type_views.sql',
   '038_search_trigram.sql',
+  '039_structural_link_properties.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -600,11 +601,13 @@ describe(
           '036_property_values_deterministic_id.sql',
           '037_thought_type_views.sql',
           '038_search_trigram.sql',
+          '039_structural_link_properties.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged
         // («Плановый срок» d5+d9, «слой» d8+d18, «путь»/«Путь» d12+d15),
-        // zero renames.
+        // zero renames. Плюс 2 структурных свойства-связи «Родители»/«Потомки»
+        // от миграции 039.
         const props = db
           .prepare('SELECT id, name, name_key, value_type, config FROM properties ORDER BY name')
           .all() as Array<{
@@ -614,7 +617,7 @@ describe(
           value_type: string;
           config: string | null;
         }>;
-        assert.equal(props.length, 15, '18 − 3 merged = 15');
+        assert.equal(props.length, 17, '18 − 3 merged + 2 structural = 17');
         const names = props.map((p) => p.name);
         for (const expected of [
           'URL',
@@ -648,7 +651,9 @@ describe(
         const bindings = db
           .prepare('SELECT id, owner_id, property_id FROM type_properties ORDER BY id')
           .all() as Array<{ id: string; owner_id: string; property_id: string }>;
-        assert.equal(bindings.length, 18);
+        // 18 старых определений → 18 привязок; + 2 структурных «Родители»/
+        // «Потомки» на корневом типе от миграции 039.
+        assert.equal(bindings.length, 20);
         const byId = new Map(bindings.map((b) => [b.id, b.property_id]));
         assert.equal(byId.get('d5'), 'd5');
         assert.equal(byId.get('d9'), 'd5');
@@ -732,8 +737,9 @@ describe(
         const props = db
           .prepare('SELECT id, name, value_type, config FROM properties ORDER BY name')
           .all() as Array<{ id: string; name: string; value_type: string; config: string | null }>;
-        // 5 definitions − 1 merge (a4+a5) = 4 registry properties.
-        assert.equal(props.length, 4);
+        // 5 definitions − 1 merge (a4+a5) = 4 registry properties; плюс 2
+        // структурных свойства-связи «Родители»/«Потомки» от миграции 039.
+        assert.equal(props.length, 6);
 
         // The earliest definition (a1) keeps the plain name; the others get
         // composite names from their owner types (link type → forward name).
@@ -861,6 +867,7 @@ describe(
           '036_property_values_deterministic_id.sql',
           '037_thought_type_views.sql',
           '038_search_trigram.sql',
+          '039_structural_link_properties.sql',
         ]);
 
         const expectedId = propertyValueId('thought', owner, prop);

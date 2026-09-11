@@ -235,8 +235,14 @@ describe(
           inherited: boolean;
           default_value: unknown;
           overridden_here: boolean;
+          value_type?: string;
         }>;
-        assert.deepEqual(effective.map((d) => d.key).sort(), ['заметка', 'пол']);
+        // Структурные «Родители»/«Потомки» наследуются от корня — это свойства-
+        // связи, а не скаляры: отфильтруем их для скалярного списка.
+        assert.deepEqual(
+          effective.filter((d) => d.value_type !== 'link').map((d) => d.key).sort(),
+          ['заметка', 'пол'],
+        );
         assert.ok(effective.every((d) => d.inherited));
 
         // Duplicate keys along the chain are rejected (DUPLICATE 409).

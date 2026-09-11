@@ -1,11 +1,14 @@
 /**
  * Link routes (task D2, 03-server-api.md §7).
  *
- *   POST   /networks/:networkId/links                      — create a directed link
  *   GET    /networks/:networkId/links/:id                  — fetch one
  *   PATCH  /networks/:networkId/links/:id                  — update endpoints/type/active (If-Match)
- *   DELETE /networks/:networkId/links/:id                  — delete (If-Match)
  *   GET    /networks/:networkId/thoughts/:id/links?group=type — grouped editor view
+ *
+ * 0.8.1 (требование 3ea5c6af): создание и удаление связей отдельными операциями
+ * упразднено — `POST /links` и `DELETE /links/{id}` сняты, они ушли в операции
+ * над свойствами-связями. От семейства остаётся восстановление из корзины через
+ * `PATCH /links/{id}` (`marked_for_deletion: false`).
  *
  * All routes require network membership. Invariants (self-loops, duplicate
  * pairs, unknown endpoints/types) are enforced by the link domain service.
@@ -13,9 +16,9 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { EtnError, type LinkCreateInput, type LinkUpdateInput } from '@etn/shared';
+import { EtnError, type LinkUpdateInput } from '@etn/shared';
 
-import { sendCreated, sendSuccess } from '../http/responses.js';
+import { sendSuccess } from '../http/responses.js';
 import {
   fieldBoolean,
   fieldNullableInt,
@@ -33,8 +36,6 @@ import {
 } from './helpers.js';
 import {
   checkLinkDeletion,
-  createLink,
-  deleteLink,
   getLink,
   listLinksByThought,
   updateLink,
@@ -51,29 +52,6 @@ interface LinkIdParams {
 interface ThoughtIdParams {
   networkId: string;
   id: string;
-}
-
-/** Parse and validate the body of `POST /links`. */
-function parseLinkCreateBody(body: Record<string, unknown>, requestId: string): LinkCreateInput {
-  const sourceId = fieldString(body, 'source_id', requestId);
-  const targetId = fieldString(body, 'target_id', requestId);
-  if (sourceId === undefined || sourceId === '' || targetId === undefined || targetId === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'source_id и target_id обязательны.',
-      { field: 'source_id' },
-      requestId,
-    );
-  }
-  return {
-    source_id: sourceId,
-    target_id: targetId,
-    type_id: fieldNullableString(body, 'type_id', requestId),
-    color: fieldNullableString(body, 'color', requestId),
-    style: parseLinkStyle(fieldNullableString(body, 'style', requestId), requestId),
-    width: fieldNullableInt(body, 'width', requestId),
-    active: fieldBoolean(body, 'active', requestId),
-  };
 }
 
 /** Parse and validate the body of `PATCH /links/:id`. */
@@ -119,30 +97,6 @@ function parseLinkUpdateBody(body: Record<string, unknown>, requestId: string): 
 export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
   return async (app: FastifyInstance) => {
     const { requireNetworkMember } = app.accessControl;
-
-    app.post(
-      '/networks/:networkId/links',
-      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
-      async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as LinkIdParams;
-        const input = parseLinkCreateBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const link = createLink(ndb, input, req.auth!.user.id);
-        deps.emit(req, networkId, 'link.created', { link });
-        recordLinkActivity(ndb, {
-          networkId,
-          userId: req.auth!.user.id,
-          action: 'created',
-          link,
-          layerId: req.layerEcho?.id ?? null,
-        });
-        sendCreated(reply, link, {
-          version: link.version,
-          updated_at: link.updated_at,
-          request_id: req.id,
-        });
-      },
-    );
 
     app.get(
       '/networks/:networkId/links/:id',
@@ -211,30 +165,6 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
           updated_at: link.updated_at,
           request_id: req.id,
         });
-      },
-    );
-
-    app.delete(
-      '/networks/:networkId/links/:id',
-      { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
-      async (req: FastifyRequest, reply) => {
-        const { networkId, id } = req.params as LinkIdParams;
-        const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        // Сохраняем снимок связи до удаления — он уйдёт в activity_log.
-        const existing = getLink(ndb, id);
-        deleteLink(ndb, id, expectedVersion);
-        deps.emit(req, networkId, 'link.deleted', { id });
-        if (existing) {
-          recordLinkActivity(ndb, {
-            networkId,
-            userId: req.auth!.user.id,
-            action: 'deleted',
-            link: existing,
-            layerId: req.layerEcho?.id ?? null,
-          });
-        }
-        reply.code(204).send();
       },
     );
 

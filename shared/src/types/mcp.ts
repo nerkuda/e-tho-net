@@ -49,12 +49,10 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.neighbors',
   'etn.thoughts.subgraph',
   'etn.thoughts.path',
-  'etn.links.get',
   'etn.thoughts.mentions',
   'etn.thoughts.backlinks',
   'etn.thoughts.usage',
   'etn.thoughts.deletion_check',
-  'etn.links.deletion_check',
   'etn.trash.list',
   'etn.comments.get',
   'etn.export.subgraph',
@@ -79,9 +77,7 @@ export const MCP_TOOL_NAMES = [
   'etn.thoughts.delete',
   'etn.thoughts.trash',
   'etn.thoughts.set_active',
-  'etn.links.create',
-  'etn.links.delete',
-  'etn.links.trash',
+  'etn.links.restore',
   'etn.comments.upsert',
   'etn.comments.update',
   'etn.comments.edit',
@@ -92,6 +88,8 @@ export const MCP_TOOL_NAMES = [
   'etn.attachments.update',
   'etn.attachments.delete',
   'etn.properties.set',
+  'etn.properties.add',
+  'etn.properties.remove',
   'etn.thoughts.upsert_bundle',
   // `etn.thoughts.write` (task 053751b5, 0.7.2) — батч-запись: одна транзакция
   // для многих связанных единиц знания (мысли + постоянные/хронологические
@@ -188,12 +186,10 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   'etn.thoughts.neighbors': { readOnlyHint: true },
   'etn.thoughts.subgraph': { readOnlyHint: true },
   'etn.thoughts.path': { readOnlyHint: true },
-  'etn.links.get': { readOnlyHint: true },
   'etn.thoughts.mentions': { readOnlyHint: true },
   'etn.thoughts.backlinks': { readOnlyHint: true },
   'etn.thoughts.usage': { readOnlyHint: true },
   'etn.thoughts.deletion_check': { readOnlyHint: true },
-  'etn.links.deletion_check': { readOnlyHint: true },
   'etn.trash.list': { readOnlyHint: true },
   'etn.comments.get': { readOnlyHint: true },
   'etn.export.subgraph': { readOnlyHint: true },
@@ -217,7 +213,6 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // ---- mutating tools — destructiveHint ---------------------------
   'etn.thoughts.delete': { destructiveHint: true },
   'etn.thoughts.bulk_update': { destructiveHint: false, idempotentHint: false },
-  'etn.links.delete': { destructiveHint: true },
   'etn.comments.delete': { destructiveHint: true },
   'etn.attachments.delete': { destructiveHint: true },
   'etn.trash.purge': { destructiveHint: true },
@@ -237,8 +232,10 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // ---- mutating tools — idempotentHint ----------------------------
   'etn.thoughts.set_active': { idempotentHint: true, deprecated_since: '0.7.2' },
   'etn.thoughts.trash': { idempotentHint: true },
-  'etn.links.trash': { idempotentHint: true },
+  'etn.links.restore': { idempotentHint: true },
   'etn.properties.set': { idempotentHint: true, deprecated_since: '0.7.2' },
+  'etn.properties.add': { idempotentHint: true },
+  'etn.properties.remove': { idempotentHint: true },
   'etn.thoughts.upsert_bundle': { idempotentHint: true, deprecated_since: '0.7.2' },
   'etn.layers.update': { idempotentHint: true },
   'etn.layers.select': { idempotentHint: true },
@@ -256,7 +253,6 @@ export const MCP_TOOL_ANNOTATIONS: { readonly [K in McpToolName]?: McpToolAnnota
   // Обработчики сохранены для отката и для старых клиентов в период миграции.
   'etn.thoughts.create': { deprecated_since: '0.7.2' },
   'etn.thoughts.update': { deprecated_since: '0.7.2' },
-  'etn.links.create': { deprecated_since: '0.7.2' },
   'etn.comments.upsert': { deprecated_since: '0.7.2' },
 
   // ---- `etn.thoughts.write` (задача 053751b5 / 0.7.2) — главный пишущий ----

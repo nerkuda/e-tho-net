@@ -281,6 +281,7 @@ describe(
           '036_property_values_deterministic_id.sql',
           '037_thought_type_views.sql',
           '038_search_trigram.sql',
+          '039_structural_link_properties.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else
@@ -294,7 +295,8 @@ describe(
           ...before,
           layers: 1,
           session_layers: 0,
-          properties: 1,
+          properties: 3, // +2 структурных свойства-связи от миграции 039
+          type_properties: 3, // +2 привязки «Родители»/«Потомки» к корню
           object_locks: 0,
           activity_log: 0,
           thought_type_views: 0,

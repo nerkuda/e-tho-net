@@ -340,14 +340,14 @@ describe(
         const x = await createThought(ctx, { title: 'Отобранная X' });
         const y = await createThought(ctx, { title: 'Отобранная Y' });
 
-        // A foreign incoming link parent2 → x (typed with no type).
+        // A foreign incoming link parent2 → x (структурная, через «Потомки»).
         const seed = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
+          method: 'PUT',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${parent2}/properties/${encodeURIComponent('Потомки')}`,
           headers: authHeaders(ctx),
-          payload: { source_id: parent2, target_id: x },
+          payload: { value: [x] },
         });
-        assert.equal(seed.statusCode, 201);
+        assert.equal(seed.statusCode, 200);
 
         const parentsOf = async (id: string): Promise<string[]> => {
           const res = await ctx.app.inject({

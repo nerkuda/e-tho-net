@@ -98,19 +98,6 @@ async function apiDeleteThought(
   return res.statusCode;
 }
 
-async function apiCreateLink(
-  ctx: RestTestContext,
-  payload: Record<string, unknown>,
-): Promise<{ statusCode: number; data: Record<string, unknown> }> {
-  const res = await ctx.app.inject({
-    method: 'POST',
-    url: `/api/v1/networks/${ctx.networkId}/links`,
-    headers: authHeaders(ctx),
-    payload,
-  });
-  return { statusCode: res.statusCode, data: res.json().data as Record<string, unknown> };
-}
-
 async function apiAcquireLock(
   ctx: RestTestContext,
   key: string,
@@ -282,32 +269,20 @@ describe(
       try {
         const a = await apiCreateThought(ctx, { title: 'Мысль A' });
         const b = await apiCreateThought(ctx, { title: 'Мысль B' });
-        const link = await apiCreateLink(ctx, {
-          source_id: a.data.id,
-          target_id: b.data.id,
-        });
-        assert.equal(link.statusCode, 201);
-        const linkId = link.data.id as string;
-
-        const delRes = await ctx.app.inject({
-          method: 'DELETE',
-          url: `/api/v1/networks/${ctx.networkId}/links/${linkId}`,
+        // 0.8.1: связь создаётся через свойство-связь (структурные «Потомки»);
+        // POST /links снят. Запись значения свойства — операция владельца:
+        // журнал пишет обновление мысли A, а не связь.
+        const setRes = await ctx.app.inject({
+          method: 'PUT',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${a.data.id}/properties/${encodeURIComponent('Потомки')}`,
           headers: authHeaders(ctx),
+          payload: { value: [b.data.id] },
         });
-        assert.equal(delRes.statusCode, 204);
+        assert.equal(setRes.statusCode, 200);
 
-        const list = await apiListActivity(
-          ctx,
-          ctx.adminKey,
-          `?entity_type=link&entity_id=${linkId}`,
-        );
-        assert.equal(list.meta.total, 2);
-        assert.deepEqual(
-          list.data.map((r) => r.action),
-          ['deleted', 'created'],
-        );
-        const createdRow = list.data.find((r) => r.action === 'created')!;
-        assert.match(createdRow.entity_title, /→/);
+        const list = await apiListActivity(ctx, ctx.adminKey, `?entity_type=thought&entity_id=${a.data.id}`);
+        assert.ok(list.meta.total >= 1);
+        assert.match(list.data[0]!.entity_title, /Мысль A/);
       } finally {
         await closeRestContext(ctx);
       }

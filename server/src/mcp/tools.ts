@@ -20,7 +20,7 @@
  * delete/select/merge) and, like the REST layer routes, run on the base-layer
  * connection because `layers`/`session_layers` are not branchable (§3).
  *
- * `etn.thoughts.create`, `etn.links.create` and `etn.thoughts.upsert_bundle`
+ * `etn.thoughts.create` and `etn.thoughts.upsert_bundle`
  * additionally accept a type **by name** (`type`, task O4) as an alternative
  * to `type_id` — resolved case-insensitively against `etn.types.list`'s
  * catalogues before the domain call.
@@ -178,6 +178,8 @@ import {
   listEffectiveTypeProperties,
   resolveDefinition,
   resolvePropertyIdByName,
+  addLinkPropertyValue,
+  removeLinkPropertyValue,
   setPropertyValue,
   setPropertyValues,
 } from '../domain/property-service.js';
@@ -1380,58 +1382,6 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const LinkGetSchema = z.object({
-    network_id: NetworkId,
-    link_id: LinkId,
-    /**
-     * Response projection (task O12, docs/05-mcp-server.md §4.1) — `compact`
-     * (default) returns the base link DTO plus its type; `full` (0.7.2) adds
-     * the link's property values, the permanent comment (full text, no
-     * truncation), a chronological-comment preview (last 10 entries with
-     * 2000-char bodies, mirroring `etn.thoughts.subgraph`) and the link's
-     * attachments. Use `compact` when only the relationship itself matters;
-     * use `full` once an edge's `has_properties`/`has_comment` flag in a
-     * `subgraph`/`neighbors` response has flagged it as worth reading.
-     */
-    view: z.enum(MCP_VIEW_MODES).default('compact'),
-  });
-  mcp.registerTool(
-    'etn.links.get',
-    {
-      title: 'Связь (с метаданными)',
-      description:
-        'Fetch one link with its link type (AI-facing description included). `view: "full"` (0.7.2) — ' +
-        'дополнительно возвращает `properties`, `permanent` (полный текст), `chrono` (превью, 10 записей), ' +
-        '`attachments`. Использовать после `subgraph`/`neighbors` по флагам `has_properties`/`has_comment`.',
-      inputSchema: LinkGetSchema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.links.get'],
-    },
-    (args) =>
-      runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const link = getLink(ndb, args.link_id);
-        if (link === null) {
-          throw new Error(`ETN error [NOT_FOUND]: link ${args.link_id} not found`);
-        }
-        const type = link.type_id === null ? null : getLinkType(ndb, link.type_id);
-        const compact = { ...link, type };
-        if (args.view === 'compact') {
-          return compact;
-        }
-        // `view: "full"` (0.7.2) — дополняем базовый DTO четырьмя блоками:
-        // свойства (резолвнутые `thought_ref`, как в `etn.thoughts.get`),
-        // полный постоянный комментарий, превью хронологии по образцу
-        // `etn.thoughts.subgraph` (последние 10, обрезка 2000 символов) и
-        // вложения. Все четыре функции уже полиморфны по `owner_type` и
-        // работают для `'link'` без обёрток.
-        const properties = getPropertyValuesResolved(ndb, 'link', link.id);
-        const permanent = getPermanentFull(ndb, 'link', link.id);
-        const chrono = getCommentsPreview(ndb, 'link', link.id);
-        const attachments = listAttachments(ndb, 'link', link.id);
-        return { ...compact, properties, permanent, chrono, attachments };
-      }),
-  );
-
   const MentionsSchema = z.object({ network_id: NetworkId, thought_id: ThoughtId });
   mcp.registerTool(
     'etn.thoughts.mentions',
@@ -1539,32 +1489,6 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const result: Record<string, unknown> = {};
         for (const id of [...new Set(args.thought_ids)]) {
           result[id] = checkThoughtDeletion(ndb, id);
-        }
-        return result;
-      }),
-  );
-
-  const DeletionCheckLinksSchema = z.object({
-    network_id: NetworkId,
-    link_ids: z.array(LinkId).min(1).max(200),
-  });
-  mcp.registerTool(
-    'etn.links.deletion_check',
-    {
-      title: 'Проверка блокировки удаления связи',
-      description:
-        'Check what blocks a link from being physically deleted: only holding layers (no thought_ref usage ' +
-        'and no children for links). Accepts an array; returns a map id → { blocked, blocking }. ' +
-        'See prompt etn.how_to_purge.',
-      inputSchema: DeletionCheckLinksSchema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.links.deletion_check'],
-    },
-    (args) =>
-      runTool(async () => {
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const result: Record<string, unknown> = {};
-        for (const id of [...new Set(args.link_ids)]) {
-          result[id] = checkLinkDeletion(ndb, id);
         }
         return result;
       }),
@@ -3452,109 +3376,20 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  const CreateLinkSchema = z
-    .object({
-      network_id: NetworkId,
-      source_id: ThoughtId,
-      target_id: ThoughtId,
-      type_id: z.string().min(1).nullable().optional(),
-      type: z.string().min(1).optional(),
-    })
-    .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT });
-  mcp.registerTool(
-    'etn.links.create',
-    {
-      title: 'Создать связь',
-      description:
-        'Create a directed link source → target, optionally typed: source_id is the PARENT, target_id is ' +
-        'the CHILD. Duplicate pairs and self-loops are rejected. `type` resolves a link type by ' +
-        '`name_forward`/`name_reverse` instead of `type_id` (see `etn.types.list`). Returns { id, version }.',
-      inputSchema: CreateLinkSchema,
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        const typeId = effectiveLinkTypeId(ndb, args.type_id, args.type);
-        const link = createLink(
-          ndb,
-          { source_id: args.source_id, target_id: args.target_id, type_id: typeId ?? null },
-          rt.deps.auth.userId,
-        );
-        emitAgentActivityEvent(rt, args.network_id, 'link.created', { link }, ndb, extra.requestId);
-        auditAgentCall(rt, 'etn.links.create', args.network_id, 'link', link.id, {
-          source_id: args.source_id,
-          target_id: args.target_id,
-          type_id: typeId,
-        });
-        return {
-          id: link.id,
-          version: link.version,
-          request_id: String(extra.requestId),
-        } satisfies McpMutationResult;
-      }),
-  );
-
-  const DeleteLinkSchema = z.object({
+  const RestoreLinkSchema = z.object({
     network_id: NetworkId,
     link_id: LinkId,
-    expected_version: ExpectedVersion,
   });
   mcp.registerTool(
-    'etn.links.delete',
+    'etn.links.restore',
     {
-      title: 'Удалить связь',
+      title: 'Восстановить связь из корзины',
       description:
-        'Delete a link. The same blocking check as `etn.links.deletion_check` runs first. ' +
-        'Returns { id, version: 0 }. See prompt etn.how_to_purge.',
-      inputSchema: DeleteLinkSchema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.links.delete'],
-    },
-    (args, extra) =>
-      runWriteTool(rt, args.network_id, async () => {
-        requireWritable(rt);
-        requireWriteBudget(rt);
-        const ndb = openMemberNetwork(rt, args.network_id);
-        // Снимок связи до удаления — он уйдёт в журнал (как `getLink`
-        // в REST DELETE /links/:id).
-        const existing = getLink(ndb, args.link_id);
-        deleteLink(ndb, args.link_id, args.expected_version);
-        emitAgentEvent(rt, args.network_id, 'link.deleted', { id: args.link_id }, extra.requestId);
-        if (existing !== null) {
-          recordLinkActivity(ndb, {
-            networkId: args.network_id,
-            userId: rt.deps.auth.userId,
-            action: 'deleted',
-            link: existing,
-            layerId: ndb.layerId,
-          });
-        }
-        auditAgentCall(rt, 'etn.links.delete', args.network_id, 'link', args.link_id, {
-          expected_version: args.expected_version,
-        });
-        return {
-          id: args.link_id,
-          version: 0,
-          request_id: String(extra.requestId),
-        } satisfies McpMutationResult;
-      }),
-  );
-
-  const TrashLinkSchema = z.object({
-    network_id: NetworkId,
-    link_id: LinkId,
-    trashed: z.boolean(),
-  });
-  mcp.registerTool(
-    'etn.links.trash',
-    {
-      title: 'Поместить связь в корзину / вернуть',
-      description:
-        'Mark a link for deletion (`trashed: true`) or restore it from the trash (`trashed: false`). ' +
-        'Does NOT run the blocking check. Returns { id, version }. See prompt etn.how_to_purge.',
-      inputSchema: TrashLinkSchema,
-      annotations: MCP_TOOL_ANNOTATIONS['etn.links.trash'],
+        'Restore a link from the trash (`trashed: false`). The only remaining operation of the former ' +
+        '`etn.links.*` family — creation and deletion moved to property operations (0.8.1). ' +
+        'Returns { id, version }.',
+      inputSchema: RestoreLinkSchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.links.restore'],
     },
     (args, extra) =>
       runWriteTool(rt, args.network_id, async () => {
@@ -3564,7 +3399,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const link = updateLink(
           ndb,
           args.link_id,
-          { marked_for_deletion: args.trashed },
+          { marked_for_deletion: false },
           undefined,
           rt.deps.auth.userId,
         );
@@ -3572,13 +3407,11 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           rt,
           args.network_id,
           'link.updated',
-          { id: link.id, changes: { marked_for_deletion: args.trashed }, version: link.version },
+          { id: link.id, changes: { marked_for_deletion: false }, version: link.version },
           ndb,
           extra.requestId,
         );
-        auditAgentCall(rt, 'etn.links.trash', args.network_id, 'link', link.id, {
-          trashed: args.trashed,
-        });
+        auditAgentCall(rt, 'etn.links.restore', args.network_id, 'link', link.id, {});
         return {
           id: link.id,
           version: link.version,
@@ -4313,6 +4146,112 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           version: 0,
           request_id: String(extra.requestId),
         } satisfies McpMutationResult;
+      }),
+  );
+
+  // 0.8.1 (b3ce5014): операции над набором свойства-связи — добавить/убрать одну
+  // цель, без чтения текущего набора. `add` принимает необязательный комментарий.
+  const AddPropertySchema = z.object({
+    network_id: NetworkId,
+    owner_type: z.enum(PROPERTY_OWNER_TYPES),
+    owner_id: z.string().min(1),
+    key: z.string().min(1),
+    value: z.string().min(1),
+    comment: z.string().min(1).optional(),
+  });
+  mcp.registerTool(
+    'etn.properties.add',
+    {
+      title: 'Добавить цель в свойство-связь',
+      description:
+        'Add one target (thought id) to a link property by key — idempotent: an already-live edge is a ' +
+        'no-op. Accepts an optional `comment` explaining «why this link». Direction comes from the property ' +
+        'definition, never from the call. Returns { link_id, created }.',
+      inputSchema: AddPropertySchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.properties.add'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const res = addLinkPropertyValue(
+          ndb,
+          args.owner_type,
+          args.owner_id,
+          args.key,
+          args.value,
+          args.comment ?? null,
+          rt.deps.auth.userId,
+        );
+        const createdLink = res.created ? getLink(ndb, res.link_id) : null;
+        if (createdLink !== null) {
+          emitAgentActivityEvent(rt, args.network_id, 'link.created', { link: createdLink }, ndb, extra.requestId);
+        }
+        auditAgentCall(rt, 'etn.properties.add', args.network_id, args.owner_type, args.owner_id, {
+          key: args.key,
+          value: args.value,
+          comment: args.comment,
+        });
+        return {
+          link_id: res.link_id,
+          created: res.created,
+          request_id: String(extra.requestId),
+        };
+      }),
+  );
+
+  const RemovePropertySchema = z.object({
+    network_id: NetworkId,
+    owner_type: z.enum(PROPERTY_OWNER_TYPES),
+    owner_id: z.string().min(1),
+    key: z.string().min(1),
+    value: z.string().min(1),
+  });
+  mcp.registerTool(
+    'etn.properties.remove',
+    {
+      title: 'Убрать цель из свойства-связи',
+      description:
+        'Remove one target (thought id) from a link property by key — marks the edge for deletion (trash), ' +
+        'preserving its comment. Idempotent: an absent edge is a no-op (`link_id: null`). Returns ' +
+        '{ link_id }.',
+      inputSchema: RemovePropertySchema,
+      annotations: MCP_TOOL_ANNOTATIONS['etn.properties.remove'],
+    },
+    (args, extra) =>
+      runWriteTool(rt, args.network_id, async () => {
+        requireWritable(rt);
+        requireWriteBudget(rt);
+        const ndb = openMemberNetwork(rt, args.network_id);
+        const res = removeLinkPropertyValue(
+          ndb,
+          args.owner_type,
+          args.owner_id,
+          args.key,
+          args.value,
+          rt.deps.auth.userId,
+        );
+        if (res.link_id !== null) {
+          // Помечаем в корзину — событие `link.updated` с marked_for_deletion
+          // (журнал пишет `trashed`, а не `deleted`).
+          const marked = getLink(ndb, res.link_id);
+          if (marked !== null) {
+            emitAgentActivityEvent(
+              rt,
+              args.network_id,
+              'link.updated',
+              { id: marked.id, changes: { marked_for_deletion: true }, version: marked.version },
+              ndb,
+              extra.requestId,
+            );
+          }
+        }
+        auditAgentCall(rt, 'etn.properties.remove', args.network_id, args.owner_type, args.owner_id, {
+          key: args.key,
+          value: args.value,
+        });
+        return { link_id: res.link_id, request_id: String(extra.requestId) };
       }),
   );
 

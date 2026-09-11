@@ -208,10 +208,16 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
             arguments: { network_id: ctx.networkId, title: 'Ребёнок' },
           }),
         );
-        const link = toolJson<McpMutationResult>(
+        const link = toolJson<{ link_id: string }>(
           await agent.client.callTool({
-            name: 'etn.links.create',
-            arguments: { network_id: ctx.networkId, source_id: parent.id, target_id: child.id },
+            name: 'etn.properties.add',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: parent.id,
+              key: 'Потомки',
+              value: child.id,
+            },
           }),
         );
 
@@ -223,7 +229,7 @@ describe('MCP layer tools (S10)', { skip: !nativeAvailable() }, () => {
           arguments: {
             network_id: ctx.networkId,
             layer_id: created.id,
-            tables: { links: [link.id] },
+            tables: { links: [link.link_id] },
           },
         });
         assert.equal(rejected.isError, true);

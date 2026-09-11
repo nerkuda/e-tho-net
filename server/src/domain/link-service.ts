@@ -358,10 +358,10 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
     const now = new Date(nowMs).toISOString();
     ndb
       .prepare(
-        `INSERT INTO links (id, layer_id, source_id, target_id, type_id, color, style, width, active, version,
+        `INSERT INTO links (id, layer_id, source_id, target_id, type_id, position, color, style, width, active, version,
                             created_at, updated_at, created_by, updated_by,
                             created_at_ms, updated_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -369,6 +369,7 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
         input.source_id,
         input.target_id,
         typeId,
+        input.position ?? 0,
         input.color ?? null,
         input.style ?? null,
         input.width ?? null,

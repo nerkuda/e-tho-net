@@ -122,7 +122,9 @@ describe(
 
         // Visible in A: `etn.types.list` reads through these very services.
         assert.ok(listThoughtTypes(ndb).some((t) => t.id === type.id));
-        const eff = listEffectiveTypeProperties(ndb, 'thought_type', type.id);
+        const eff = listEffectiveTypeProperties(ndb, 'thought_type', type.id).filter(
+          (d) => d.value_type !== 'link',
+        );
         assert.equal(eff.length, 1);
         assert.deepEqual(
           {
@@ -242,7 +244,9 @@ describe(
         ndb.useLayer(LAYER_A);
         const child = createThoughtType(ndb, { name: 'Акт', parent_id: parent.id }, USER);
         createTypeProperty(ndb, 'thought_type', child.id, { key: 'номер', value_type: 'number' }, USER);
-        const eff = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        const eff = listEffectiveTypeProperties(ndb, 'thought_type', child.id).filter(
+          (d) => d.value_type !== 'link',
+        );
         assert.deepEqual(
           eff.map((d) => [d.key, d.inherited, d.defined_on]),
           [

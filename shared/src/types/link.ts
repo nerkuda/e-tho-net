@@ -155,6 +155,13 @@ export interface LinkCreateInput {
   width?: number | null;
   active?: boolean;
   /**
+   * Порядок ребра среди «потомков» источника (0.8.1, структурные свойства
+   * «Родители»/«Потомки»): позиция в наборе «Потомки» задаёт порядок детей.
+   * По умолчанию `0` — рёбра, созданные не через свойства, сохраняют прежний
+   * порядок по умолчанию.
+   */
+  position?: number;
+  /**
    * Map of property key → value to apply to the freshly created link
    * (task 053751b5, 0.7.2). Each key is resolved against the network property
    * registry by name; missing key → NOT_FOUND; property not attached to the

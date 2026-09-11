@@ -67,7 +67,12 @@ describe(
           headers: h,
         });
         assert.equal(emptyRes.statusCode, 200);
-        assert.deepEqual(emptyRes.json().data, []);
+        // Структурные «Родители»/«Потомки» засеяны миграцией 039 — скалярный
+        // список пуст.
+        assert.deepEqual(
+          (emptyRes.json().data as Array<{ value_type: string }>).filter((p) => p.value_type !== 'link'),
+          [],
+        );
 
         // Create one.
         const created = await createRegistryProperty(ctx, {
@@ -84,12 +89,13 @@ describe(
           headers: h,
         });
         assert.equal(listRes.statusCode, 200);
-        const listed = listRes.json().data as Array<{
+        const listed = (listRes.json().data as Array<{
           id: string;
           name: string;
           types_count: number;
           values_count: number;
-        }>;
+          value_type: string;
+        }>).filter((p) => p.value_type !== 'link');
         assert.equal(listed.length, 1);
         assert.equal(listed[0]!.id, created.id);
         assert.equal(listed[0]!.types_count, 0);
@@ -485,10 +491,11 @@ describe(
           url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
           headers: h,
         });
-        const listed = listRes.json().data as Array<{
+        const listed = (listRes.json().data as Array<{
           property_id: string;
           key: string;
-        }>;
+          value_type: string;
+        }>).filter((p) => p.value_type !== 'link');
         assert.equal(listed.length, 1);
         assert.equal(listed[0]!.property_id, prop.id);
         assert.equal(listed[0]!.key, 'email');
@@ -643,14 +650,15 @@ describe(
           payload: { value: 'важно' },
         });
 
-        // Detach the binding.
+        // Detach the binding (структурные «Родители»/«Потомки» наследуются от
+        // корня и идут первыми — ищем привязку по ключу, а не по индексу).
         const bindingId = (
           await ctx.app.inject({
             method: 'GET',
             url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties`,
             headers: h,
           })
-        ).json().data[0].id as string;
+        ).json().data.find((p: { key: string }) => p.key === 'метка').id as string;
         const detach = await ctx.app.inject({
           method: 'DELETE',
           url: `/api/v1/networks/${ctx.networkId}/thought-types/${type.id}/properties/${bindingId}`,

@@ -32,6 +32,7 @@ import { BASE_LAYER_ID, type Layer, type LayerMergeReport } from '@etn/shared';
 
 import { openNetworkDb } from '../src/db/network-db.js';
 import { materializeShadow } from '../src/db/layer-write.js';
+import { createLink, deleteLink } from '../src/domain/link-service.js';
 import {
   authHeaders,
   buildRestContext,
@@ -72,23 +73,22 @@ async function thought(ctx: RestTestContext, title: string, clientId?: string): 
   return (res.json().data as { id: string }).id;
 }
 
-/** Create a link and return its id. */
+/** Create a link and return its id. 0.8.1: создание через домен (POST /links снят);
+ *  `layerId` — в какой слой писать (по умолчанию основа). */
 async function link(
   ctx: RestTestContext,
   sourceId: string,
   targetId: string,
   typeId?: string,
-  clientId?: string,
+  layerId?: string,
 ): Promise<string> {
-  const res = await call(
-    ctx,
-    'POST',
-    '/links',
-    { source_id: sourceId, target_id: targetId, ...(typeId !== undefined ? { type_id: typeId } : {}) },
-    { clientId },
+  const ndb = layerId === undefined ? ctx.ndb : openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layerId);
+  const l = createLink(
+    ndb,
+    { source_id: sourceId, target_id: targetId, type_id: typeId ?? null },
+    'system',
   );
-  assert.equal(res.statusCode, 201, res.body?.toString());
-  return (res.json().data as { id: string }).id;
+  return l.id;
 }
 
 /** Create a layer (base-layer session) and return the DTO. */
@@ -150,7 +150,7 @@ describe(
         const patchA = await call(ctx, 'PATCH', `/thoughts/${a}`, { title: 'A (слой)' }, { clientId: WORKER });
         assert.equal(patchA.statusCode, 200);
         const c = await thought(ctx, 'C', WORKER);
-        const ab = await link(ctx, a, b, undefined, WORKER);
+        const ab = await link(ctx, a, b, undefined, layer.id);
         const d = await thought(ctx, 'D', WORKER);
         const delD = await call(ctx, 'DELETE', `/thoughts/${d}`, undefined, { clientId: WORKER });
         assert.equal(delD.statusCode, 204);
@@ -263,7 +263,7 @@ describe(
         const layer = await createLayer(ctx, 'Частичное');
         await selectLayer(ctx, layer.id, WORKER);
         const x = await thought(ctx, 'X (слой)', WORKER);
-        const ab = await link(ctx, a, x, undefined, WORKER);
+        const ab = await link(ctx, a, x, undefined, layer.id);
 
         // Selecting the link alone leaves X outside both the merge and the
         // parent — the set is not closed (§8.1).
@@ -433,9 +433,9 @@ describe(
         const repointedId = repoint.json().data.id as string;
         assert.notEqual(repointedId, linkC2);
 
-        // (c) delete a link — a tombstone;
-        const del = await call(ctx, 'DELETE', `/links/${linkC3}`, undefined, { clientId: WORKER });
-        assert.equal(del.statusCode, 204);
+        // (c) delete a link — a tombstone (0.8.1: через домен, DELETE /links снят);
+        const delNdb = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layer.id);
+        deleteLink(delNdb, linkC3, undefined);
 
         // (d) reorder the D-children — position-only writes on three rows.
         const layerNdb = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layer.id);
@@ -503,7 +503,7 @@ describe(
         const layer = await createLayer(ctx, 'Дубль');
         await selectLayer(ctx, layer.id, WORKER);
         // The layer creates A→B of type T first…
-        const layerLinkId = await link(ctx, a, b, typeId, WORKER);
+        const layerLinkId = await link(ctx, a, b, typeId, layer.id);
         const layerNdb = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layer.id);
         layerNdb
           .prepare('UPDATE links SET position = ? WHERE id = ? AND layer_id = ?')
@@ -546,7 +546,7 @@ describe(
         // L1 creates a link onto B; a sibling layer L2 deletes B.
         const l1 = await createLayer(ctx, 'Связь');
         await selectLayer(ctx, l1.id, 'worker-1');
-        const ab = await link(ctx, a, b, undefined, 'worker-1');
+        const ab = await link(ctx, a, b, undefined, l1.id);
 
         const l2 = await createLayer(ctx, 'Удаление B');
         await selectLayer(ctx, l2.id, 'worker-2');

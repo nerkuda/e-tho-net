@@ -53,6 +53,11 @@ function nativeAvailable(): boolean {
   }
 }
 
+/** Скалярные эффективные свойства типа — без структурных «Родители»/«Потомки». */
+function scalarProps(ndb: NetworkDb, ownerType: 'thought_type' | 'link_type', ownerId: string) {
+  return listEffectiveTypeProperties(ndb, ownerType, ownerId).filter((d) => d.value_type !== 'link');
+}
+
 /** Seed a typed thought and return its id. */
 function seedTypedThought(ndb: NetworkDb, typeId: string): string {
   const id = randomUUID();
@@ -1037,7 +1042,7 @@ describe(
         const child = createThoughtType(ndb, { name: 'DescChild', parent_id: parent.id }, USER);
 
         // Inherited as-is: the effective description equals the definition's.
-        let effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        let effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective.length, 1);
         assert.equal(effective[0]!.description, 'кто отвечает за элемент');
         assert.equal(effective[0]!.description_overridden, false);
@@ -1046,18 +1051,18 @@ describe(
 
         // The child overrides the description for itself.
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, 'исполнитель задачи', USER);
-        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.description, 'исполнитель задачи');
         assert.equal(effective[0]!.description_overridden, true);
 
         // The parent's own list is untouched by the child's override.
-        const parentEffective = listEffectiveTypeProperties(ndb, 'thought_type', parent.id);
+        const parentEffective = scalarProps(ndb, 'thought_type', parent.id);
         assert.equal(parentEffective[0]!.description, 'кто отвечает за элемент');
         assert.equal(parentEffective[0]!.description_overridden, false);
 
         // Clearing the override falls back to the definition's description.
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, null, USER);
-        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.description, 'кто отвечает за элемент');
         assert.equal(effective[0]!.description_overridden, false);
       } finally {
@@ -1080,7 +1085,7 @@ describe(
         // Override BOTH the default and the description.
         setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, 5, USER);
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, 'размер в паллетах', USER);
-        let effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        let effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.default_value, 5);
         assert.equal(effective[0]!.overridden_here, true);
         assert.equal(effective[0]!.description, 'размер в паллетах');
@@ -1088,7 +1093,7 @@ describe(
 
         // Resetting the DEFAULT keeps the description override.
         setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, null, USER);
-        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.default_value, 1);
         assert.equal(effective[0]!.overridden_here, false);
         assert.equal(effective[0]!.description, 'размер в паллетах');
@@ -1096,7 +1101,7 @@ describe(
 
         // Resetting the DESCRIPTION removes the row entirely (nothing left).
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, null, USER);
-        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.description, 'размер в штуках');
         assert.equal(effective[0]!.description_overridden, false);
         const rows = ndb
@@ -1108,7 +1113,7 @@ describe(
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, 'размер в ящиках', USER);
         setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, 9, USER);
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, null, USER);
-        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.default_value, 9);
         assert.equal(effective[0]!.overridden_here, true);
         assert.equal(effective[0]!.description, 'размер в штуках');
@@ -1184,14 +1189,18 @@ describe(
         }, USER);
         createTypeProperty(ndb, 'link_type', lt.id, { key: 'приоритет', value_type: 'number' }, USER);
 
-        assert.equal(listNetworkProperties(ndb).length, 1, 'one registry property');
+        assert.equal(
+          listNetworkProperties(ndb).filter((p) => p.value_type !== 'link').length,
+          1,
+          'one registry property',
+        );
         assert.equal(onB.value_type, 'number', 'registry nature wins');
         for (const [ownerType, ownerId] of [
           ['thought_type', a.id],
           ['thought_type', b.id],
           ['link_type', lt.id],
         ] as const) {
-          const eff = listEffectiveTypeProperties(ndb, ownerType, ownerId);
+          const eff = scalarProps(ndb, ownerType, ownerId);
           assert.equal(eff.length, 1);
           assert.equal(eff[0]!.key, 'приоритет');
           assert.equal(eff[0]!.value_type, 'number');
@@ -1212,7 +1221,7 @@ describe(
         }, USER);
         const th = seedTypedThought(ndb, child.id);
         setPropertyValue(ndb, 'thought', th, 'статус', 'в работе', USER);
-        assert.equal(listEffectiveTypeProperties(ndb, 'thought_type', child.id).length, 1);
+        assert.equal(scalarProps(ndb, 'thought_type', child.id).length, 1);
 
         // Attach the SAME property to the parent: the child's binding is
         // redundant and must be dropped in the same transaction.
@@ -1223,7 +1232,7 @@ describe(
         assert.equal(parentBinding.property_id, childBinding.property_id);
         assert.equal(bindingCount(ndb, child.id, childBinding.property_id), 0);
         // The property is still effective for the child — by inheritance now.
-        const eff = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        const eff = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(eff.length, 1);
         assert.equal(eff[0]!.inherited, true);
         assert.equal(eff[0]!.defined_on, parent.id);
@@ -1363,7 +1372,7 @@ describe(
         deleteTypeProperty(ndb, held.id, USER);
         deletePropertyValue(ndb, 'thought', th, 'счётчик', USER);
         deleteNetworkProperty(ndb, held.property_id);
-        assert.equal(listNetworkProperties(ndb).length, 0);
+        assert.equal(listNetworkProperties(ndb).filter((p) => p.value_type !== 'link').length, 0);
       } finally {
         ndb.close();
       }
@@ -1438,18 +1447,18 @@ describe(
 
         // The middle type overrides; the leaf inherits the override.
         setTypePropertyDefaultOverride(ndb, 'thought_type', mid.id, def.id, 5, USER);
-        let eff = listEffectiveTypeProperties(ndb, 'thought_type', leaf.id);
+        let eff = scalarProps(ndb, 'thought_type', leaf.id);
         assert.equal(eff[0]!.default_value, 5);
         assert.equal(eff[0]!.overridden_here, false, 'stored on the ancestor, not the leaf');
 
         // The leaf re-overrides for itself.
         setTypePropertyDefaultOverride(ndb, 'thought_type', leaf.id, def.id, 9, USER);
-        eff = listEffectiveTypeProperties(ndb, 'thought_type', leaf.id);
+        eff = scalarProps(ndb, 'thought_type', leaf.id);
         assert.equal(eff[0]!.default_value, 9);
         assert.equal(eff[0]!.overridden_here, true);
 
         // The middle keeps its own view.
-        eff = listEffectiveTypeProperties(ndb, 'thought_type', mid.id);
+        eff = scalarProps(ndb, 'thought_type', mid.id);
         assert.equal(eff[0]!.default_value, 5);
         assert.equal(eff[0]!.overridden_here, true);
       } finally {

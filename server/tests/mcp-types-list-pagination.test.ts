@@ -277,13 +277,14 @@ describe('etn.types.list pagination + max_chars (f9c7dbc5)', {
             arguments: {
               network_id: ctx.networkId,
               scope: 'thoughts',
-              max_chars: 2000,
+              max_chars: 6000,
             },
           }),
         );
         // Soft step landed — no entries dropped, every description clipped
         // to the budget preview floor (200 chars). The total catalogue is
-        // 4 entries (3 seeds + 1 root).
+        // 4 entries (3 seeds + 1 root; корень несёт структурные «Родители»/
+        // «Потомки», поэтому бюджет поднят относительно доклада 0.7.3).
         assert.equal(truncated.thought_types?.length, 4, 'no entries dropped');
         for (const t of truncated.thought_types!) {
           if (t.description !== null) {
@@ -295,13 +296,13 @@ describe('etn.types.list pagination + max_chars (f9c7dbc5)', {
         }
         assert.equal(truncated.meta?.truncated, true);
         assert.equal(truncated.meta?.reason, 'max_chars_preview');
-        assert.equal(truncated.meta?.max_chars, 2000);
+        assert.equal(truncated.meta?.max_chars, 6000);
         assert.ok(
-          (truncated.meta?.original_chars ?? 0) > 2000,
+          (truncated.meta?.original_chars ?? 0) > 6000,
           'original_chars must exceed budget',
         );
         assert.ok(
-          (truncated.meta?.final_chars ?? 0) <= 2000,
+          (truncated.meta?.final_chars ?? 0) <= 6000,
           'final_chars must fit under budget',
         );
         assert.equal(truncated.meta?.thought_types_total, 4);

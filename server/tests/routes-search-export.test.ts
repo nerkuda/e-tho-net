@@ -246,14 +246,15 @@ describe(
         const rootId = await createThought(ctx, 'Корень экспорта');
         const childId = await createThought(ctx, 'Потомок');
 
-        // Link parent → child so include_subtree has something to walk.
+        // Link parent → child so include_subtree has something to walk
+        // (0.8.1: связь создаётся через структурное свойство «Потомки»).
         const link = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
+          method: 'PUT',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${rootId}/properties/${encodeURIComponent('Потомки')}`,
           headers: authHeaders(ctx),
-          payload: { source_id: rootId, target_id: childId },
+          payload: { value: [childId] },
         });
-        assert.equal(link.statusCode, 201);
+        assert.equal(link.statusCode, 200);
 
         const start = await ctx.app.inject({
           method: 'POST',

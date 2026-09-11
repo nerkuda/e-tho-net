@@ -60,7 +60,7 @@ describe(
           USER,
         );
         const effective = listEffectiveTypeProperties(ndb, 'thought_type', tt.id);
-        const linkProp = effective.find((p) => p.value_type === 'link');
+        const linkProp = effective.find((p) => p.value_type === 'link' && p.key === 'применяется к');
         assert.ok(linkProp !== undefined);
         // Имя берётся из типа связи (name_forward), а не из переданного key.
         assert.equal(linkProp!.key, 'применяется к');
@@ -87,7 +87,8 @@ describe(
           USER,
         );
         const effective = listEffectiveTypeProperties(ndb, 'thought_type', tt.id);
-        const linkProp = effective.find((p) => p.value_type === 'link');
+        const linkProp = effective.find((p) => p.value_type === 'link' && p.key === 'регулируется из');
+        assert.ok(linkProp !== undefined);
         assert.equal(linkProp!.key, 'регулируется из');
       } finally {
         ndb.close();
@@ -164,7 +165,7 @@ describe(
         );
         assert.equal(card.length, 0, 'no scalar values on the task');
         const links = getPropertyValuesResolved(ndb, 'thought', a.id).filter(
-          (v) => v.value_type === 'link',
+          (v) => v.value_type === 'link' && !(v as ResolvedLinkProperty).structural,
         );
         assert.equal(links.length, 1);
         const linkProp = links[0] as Extract<(typeof links)[number], { value_type: 'link' }>;
@@ -175,7 +176,7 @@ describe(
 
         // Запрос значений: id ребра + цель.
         const values = getPropertyValuesWithLinks(ndb, 'thought', a.id);
-        const linkValues = values.find((v) => v.value_type === 'link');
+        const linkValues = values.find((v) => v.value_type === 'link' && 'values' in v && v.property_name === 'зависит от');
         assert.ok(linkValues !== undefined && 'values' in linkValues);
         const items = (linkValues as { values: Array<{ link_id: string; target_id: string; target_title: string | null }> }).values;
         assert.equal(items.length, 2);
@@ -185,7 +186,7 @@ describe(
 
         // Обратная сторона: компонент видит «используется в» внетиповым.
         const bLinks = getPropertyValuesResolved(ndb, 'thought', b.id).filter(
-          (v): v is ResolvedLinkProperty => v.value_type === 'link',
+          (v): v is ResolvedLinkProperty => v.value_type === 'link' && !(v as ResolvedLinkProperty).structural,
         );
         assert.equal(bLinks.length, 1);
         assert.equal(bLinks[0]!.property_name, 'используется в');
@@ -223,7 +224,7 @@ describe(
 
         // Цель (компонент) получает зеркальное обратное свойство, не внетиповое.
         const cLinks = getPropertyValuesResolved(ndb, 'thought', c.id).filter(
-          (v): v is ResolvedLinkProperty => v.value_type === 'link',
+          (v): v is ResolvedLinkProperty => v.value_type === 'link' && !(v as ResolvedLinkProperty).structural,
         );
         assert.equal(cLinks.length, 1);
         assert.equal(cLinks[0]!.property_name, 'регулируется из');

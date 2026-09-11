@@ -61,6 +61,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
 import { propertyValueId } from '../db/property-value-id.js';
 import { getLinkType } from './link-type-service.js';
+import { createComment, listComments, updateComment } from './comment-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import {
   expandTypeIdsToSubtree,
@@ -220,6 +221,17 @@ function linkPropertyDirection(config: PropertyConfig | null): LinkPropertyDirec
   return config?.direction === 'in' ? 'in' : 'out';
 }
 
+/** `true` для структурного свойства-связи (нетипизированные рёбра, `type_id IS NULL`). */
+function isStructuralLinkProperty(config: PropertyConfig | null): boolean {
+  return config?.structural === true;
+}
+
+/** Id типа связи свойства-связи; `null` — структурное (нетипизированное). */
+function linkPropertyLinkTypeId(config: PropertyConfig | null): string | null {
+  const id = config?.link_type_id;
+  return typeof id === 'string' && id !== '' ? id : null;
+}
+
 /**
  * Имя свойства-связи, вычисленное из типа связи по направлению (требование
  * 38eaa15c): у источника (`out`) — `name_forward`, у цели (`in`) — `name_reverse`.
@@ -250,24 +262,35 @@ function validateLinkConfig(
 ): PropertyConfig {
   const cfg = config ?? {};
   const linkTypeId = cfg.link_type_id;
-  if (typeof linkTypeId !== 'string' || linkTypeId === '') {
-    throw new EtnError('VALIDATION_ERROR', 'свойство-связь требует config.link_type_id', {
-      field: `${field}.link_type_id`,
-    });
-  }
-  const lt = getLinkType(ndb, linkTypeId);
-  if (lt === null) {
-    throw new EtnError('VALIDATION_ERROR', `тип связи ${linkTypeId} не найден`, {
-      field: `${field}.link_type_id`,
-      link_type_id: linkTypeId,
-    });
-  }
-  if (lt.is_root) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'корневой тип связи не может быть свойством-связью',
-      { field: `${field}.link_type_id`, link_type_id: linkTypeId },
-    );
+  if (cfg.structural === true) {
+    // Структурное свойство-связь: типа связи нет (нетипизированные рёбра).
+    if (typeof linkTypeId === 'string' && linkTypeId !== '') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'структурное свойство-связь не может иметь тип связи',
+        { field: `${field}.link_type_id`, link_type_id: linkTypeId },
+      );
+    }
+  } else {
+    if (typeof linkTypeId !== 'string' || linkTypeId === '') {
+      throw new EtnError('VALIDATION_ERROR', 'свойство-связь требует config.link_type_id', {
+        field: `${field}.link_type_id`,
+      });
+    }
+    const lt = getLinkType(ndb, linkTypeId);
+    if (lt === null) {
+      throw new EtnError('VALIDATION_ERROR', `тип связи ${linkTypeId} не найден`, {
+        field: `${field}.link_type_id`,
+        link_type_id: linkTypeId,
+      });
+    }
+    if (lt.is_root) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'корневой тип связи не может быть свойством-связью',
+        { field: `${field}.link_type_id`, link_type_id: linkTypeId },
+      );
+    }
   }
   if (
     cfg.direction !== undefined &&
@@ -312,7 +335,7 @@ function assertLinkPropertyPairUnique(
   ndb: NetworkDb,
   ownerType: TypeOwnerType,
   ownerId: string,
-  linkTypeId: string,
+  linkTypeId: string | null,
   direction: LinkPropertyDirection,
   exceptPropertyId: string | null,
 ): void {
@@ -332,7 +355,7 @@ function assertLinkPropertyPairUnique(
     } catch {
       cfg = null;
     }
-    if ((cfg?.link_type_id ?? '') !== linkTypeId) continue;
+    if (linkPropertyLinkTypeId(cfg) !== linkTypeId) continue;
     if (linkPropertyDirection(cfg) !== direction) continue;
     throw new EtnError(
       'DUPLICATE',
@@ -353,11 +376,11 @@ function linkEdgeCounts(ndb: NetworkDb, thoughtId: string): Map<string, number> 
   const rows = ndb
     .prepare(
       `SELECT type_id AS link_type_id, 'out' AS direction, COUNT(*) AS count
-         FROM links_v WHERE source_id = ? AND active = 1 AND type_id IS NOT NULL
+         FROM links_v WHERE source_id = ? AND active = 1 AND marked_for_deletion = 0 AND type_id IS NOT NULL
          GROUP BY type_id
        UNION ALL
        SELECT type_id AS link_type_id, 'in' AS direction, COUNT(*) AS count
-         FROM links_v WHERE target_id = ? AND active = 1 AND type_id IS NOT NULL
+         FROM links_v WHERE target_id = ? AND active = 1 AND marked_for_deletion = 0 AND type_id IS NOT NULL
          GROUP BY type_id`,
     )
     .all(thoughtId, thoughtId) as Array<{
@@ -371,6 +394,18 @@ function linkEdgeCounts(ndb: NetworkDb, thoughtId: string): Map<string, number> 
     out.set(key, (out.get(key) ?? 0) + row.count);
   }
   return out;
+}
+
+/** Счётчики живых нетипизированных (структурных) рёбер мысли по направлениям. */
+function structuralEdgeCounts(ndb: NetworkDb, thoughtId: string): { out: number; in: number } {
+  const row = ndb
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM links_v WHERE source_id = ? AND active = 1 AND marked_for_deletion = 0 AND type_id IS NULL) AS out_count,
+         (SELECT COUNT(*) FROM links_v WHERE target_id = ? AND active = 1 AND marked_for_deletion = 0 AND type_id IS NULL) AS in_count`,
+    )
+    .get(thoughtId, thoughtId) as { out_count: number; in_count: number } | undefined;
+  return { out: row?.out_count ?? 0, in: row?.in_count ?? 0 };
 }
 
 /**
@@ -390,8 +425,10 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
 
   interface Entry {
     property_id: string;
-    link_type_id: string;
+    link_type_id: string | null;
     direction: LinkPropertyDirection;
+    structural: boolean;
+    property_name: string;
     outside_type: boolean;
     description: string | null;
     required: boolean;
@@ -400,27 +437,42 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
   const byPair = new Map<string, Entry>();
 
   const putEntry = (e: Entry): void => {
-    const key = `${e.link_type_id}|${e.direction}`;
+    const key = `${e.link_type_id ?? ''}|${e.direction}`;
     if (!byPair.has(key)) byPair.set(key, e);
   };
 
-  // 1. Явные свойства-связи из цепочки типа (только для типизированной мысли).
+  const emitExplicit = (def: EffectiveTypeProperty): void => {
+    if (def.value_type !== 'link') return;
+    const cfg = def.config ?? {};
+    const structural = isStructuralLinkProperty(cfg);
+    const linkTypeId = linkPropertyLinkTypeId(cfg);
+    if (!structural && linkTypeId === null) return;
+    putEntry({
+      property_id: def.property_id,
+      link_type_id: structural ? null : linkTypeId,
+      direction: linkPropertyDirection(def.config),
+      structural,
+      property_name: def.key,
+      outside_type: false,
+      description: def.description,
+      required: def.required,
+      count: 0,
+    });
+  };
+
+  // 1. Явные свойства-связи из цепочки типа. Структурные «Родители»/«Потомки»
+  //    объявлены на корневом типе и наследуются всеми — присутствуют у каждой
+  //    мысли, включая бестиповую (корневой тип применяется и к ней).
   if (typeId !== null) {
     for (const def of listEffectiveTypeProperties(ndb, 'thought_type', typeId)) {
-      if (def.value_type !== 'link') continue;
-      const cfg = def.config ?? {};
-      const linkTypeId = cfg.link_type_id;
-      if (typeof linkTypeId !== 'string' || linkTypeId === '') continue;
-      const direction = linkPropertyDirection(def.config);
-      putEntry({
-        property_id: def.property_id,
-        link_type_id: linkTypeId,
-        direction,
-        outside_type: false,
-        description: def.description,
-        required: def.required,
-        count: 0,
-      });
+      emitExplicit(def);
+    }
+  } else {
+    const rootId = getRootTypeId(ndb, 'thought_types');
+    if (rootId !== null) {
+      for (const def of listEffectiveTypeProperties(ndb, 'thought_type', rootId)) {
+        emitExplicit(def);
+      }
     }
   }
 
@@ -428,8 +480,9 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
   for (const prop of listNetworkProperties(ndb)) {
     if (prop.value_type !== 'link') continue;
     const cfg = prop.config ?? {};
-    const linkTypeId = cfg.link_type_id;
-    if (typeof linkTypeId !== 'string' || linkTypeId === '') continue;
+    if (isStructuralLinkProperty(cfg)) continue;
+    const linkTypeId = linkPropertyLinkTypeId(cfg);
+    if (linkTypeId === null) continue;
     const allowed = cfg.allowed_target_type_ids ?? [];
     if (allowed.length === 0) continue;
     if (typeId === null) continue;
@@ -440,6 +493,8 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
       property_id: prop.id,
       link_type_id: linkTypeId,
       direction,
+      structural: false,
+      property_name: linkPropertyDisplayName(ndb, linkTypeId, direction),
       outside_type: false,
       description: prop.description,
       required: false,
@@ -456,8 +511,8 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
   const registryLinkTypes = new Set<string>();
   for (const prop of listNetworkProperties(ndb)) {
     if (prop.value_type !== 'link') continue;
-    const linkTypeId = prop.config?.link_type_id;
-    if (typeof linkTypeId === 'string' && linkTypeId !== '') registryLinkTypes.add(linkTypeId);
+    const linkTypeId = linkPropertyLinkTypeId(prop.config);
+    if (linkTypeId !== null) registryLinkTypes.add(linkTypeId);
   }
   for (const [pair, count] of counts) {
     if (count === 0) continue;
@@ -472,6 +527,8 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
       property_id: '',
       link_type_id: linkTypeId,
       direction,
+      structural: false,
+      property_name: linkPropertyDisplayName(ndb, linkTypeId, direction),
       outside_type: true,
       description: null,
       required: false,
@@ -479,19 +536,26 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
     });
   }
 
+  // Счётчики структурных свойств — по нетипизированным рёбрам.
+  const structuralCounts = structuralEdgeCounts(ndb, thoughtId);
+
   // Дозаписать счётчики для явных/зеркальных свойств (в т.ч. нулевые).
   const result: ResolvedLinkProperty[] = [];
   for (const entry of byPair.values()) {
+    if (entry.structural) {
+      entry.count = entry.direction === 'out' ? structuralCounts.out : structuralCounts.in;
+    }
     result.push({
       id: entry.property_id,
       owner_type: 'thought',
       owner_id: thoughtId,
       property_id: entry.property_id,
       outside_type: entry.outside_type,
-      property_name: linkPropertyDisplayName(ndb, entry.link_type_id, entry.direction),
+      property_name: entry.property_name,
       value_type: 'link',
       direction: entry.direction,
       link_type_id: entry.link_type_id,
+      structural: entry.structural,
       count: entry.count,
       ...(entry.description !== null ? { description: entry.description } : {}),
     });
@@ -504,7 +568,7 @@ export function getLinkPropertyValues(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
-  linkTypeId: string,
+  linkTypeId: string | null,
   direction: LinkPropertyDirection,
 ): LinkPropertyValueItem[] {
   if (ownerType !== 'thought') return [];
@@ -513,15 +577,22 @@ export function getLinkPropertyValues(
       ? 'JOIN thoughts_v t ON t.id = l.target_id'
       : 'JOIN thoughts_v t ON t.id = l.source_id';
   const ownerCol = direction === 'out' ? 'l.source_id' : 'l.target_id';
+  // Структурное свойство (linkTypeId = null) — нетипизированные рёбра, порядок
+  // по `position` (порядок детей в наборе «Потомки»); типизированное — по
+  // убыванию новизны.
+  const typeClause = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
+  const orderBy =
+    linkTypeId === null ? 'l.position ASC, l.id ASC' : 'l.created_at DESC, l.id DESC';
+  const params = linkTypeId === null ? [ownerId] : [ownerId, linkTypeId];
   const rows = ndb
     .prepare(
       `SELECT l.id AS link_id, t.id AS target_id, t.title AS target_title, t.type_id AS target_type_id
          FROM links_v l
          ${targetJoin}
-        WHERE ${ownerCol} = ? AND l.type_id = ? AND l.active = 1
-        ORDER BY l.created_at DESC, l.id DESC`,
+        WHERE ${ownerCol} = ? AND ${typeClause} AND l.active = 1 AND l.marked_for_deletion = 0
+        ORDER BY ${orderBy}`,
     )
-    .all(ownerId, linkTypeId) as Array<{
+    .all(...params) as Array<{
     link_id: string;
     target_id: string;
     target_title: string | null;
@@ -547,6 +618,275 @@ export function getLinkPropertyValues(
     target_type_id: r.target_type_id,
     comment: commentByLink.get(r.link_id) ?? null,
   }));
+}
+
+// ===========================================================================
+// Link property write (0.8.1) — запись рёбер через заполнение свойств-связей
+// ===========================================================================
+
+/** Нормализовать входящее значение свойства-связи в список id целей. */
+function normalizeLinkTargets(value: PropertyValueValue, key: string): string[] {
+  if (value === null || value === undefined) return [];
+  if (Array.isArray(value)) {
+    if (value.some((v) => typeof v !== 'string' || v === '')) {
+      throw new EtnError('VALIDATION_ERROR', `свойство «${key}» ожидает id мыслей`, { key });
+    }
+    return [...new Set(value)];
+  }
+  if (typeof value === 'string' && value !== '') return [value];
+  throw new EtnError('VALIDATION_ERROR', `свойство «${key}» ожидает id мысли или массив id`, {
+    key,
+  });
+}
+
+/** Концы ребра по направлению свойства: `out` — владелец источник, `in` — цель. */
+function linkEndpoints(
+  ownerId: string,
+  direction: LinkPropertyDirection,
+  targetId: string,
+): [string, string] {
+  return direction === 'out' ? [ownerId, targetId] : [targetId, ownerId];
+}
+
+/** Проверить, что цель существует и подходит под `allowed_target_type_ids`. */
+function validateLinkTargetType(ndb: NetworkDb, prop: PropertyLike, targetId: string): void {
+  const target = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(targetId) as
+    | { type_id: string | null }
+    | undefined;
+  if (!target) {
+    throw new EtnError('VALIDATION_ERROR', `referenced thought ${targetId} does not exist`, {
+      key: prop.name,
+      ref: targetId,
+    });
+  }
+  const allowedIds = expandTypeIdsToSubtree(
+    ndb,
+    'thought_types',
+    (prop.config?.allowed_target_type_ids ?? []).filter((id) => id !== ''),
+  );
+  if (allowedIds.length > 0 && (target.type_id === null || !allowedIds.includes(target.type_id))) {
+    throw new EtnError('VALIDATION_ERROR', `thought ${targetId} is not of a required type`, {
+      key: prop.name,
+      ref: targetId,
+      allowed_type_ids: allowedIds,
+      actual_type_id: target.type_id,
+    });
+  }
+}
+
+/** Живые (не в корзине) рёбра свойства-связи владельца: target_id → строка. */
+function listLiveLinkTargets(
+  ndb: NetworkDb,
+  ownerId: string,
+  linkTypeId: string | null,
+  direction: LinkPropertyDirection,
+): Map<string, { id: string; position: number }> {
+  const ownerCol = direction === 'out' ? 'source_id' : 'target_id';
+  const targetCol = direction === 'out' ? 'target_id' : 'source_id';
+  const typeClause = linkTypeId === null ? 'type_id IS NULL' : 'type_id = ?';
+  const params = linkTypeId === null ? [ownerId] : [ownerId, linkTypeId];
+  const rows = ndb
+    .prepare(
+      `SELECT id, ${targetCol} AS target_id, position FROM links_v
+        WHERE ${ownerCol} = ? AND ${typeClause} AND active = 1 AND marked_for_deletion = 0`,
+    )
+    .all(...params) as Array<{ id: string; target_id: string; position: number }>;
+  const out = new Map<string, { id: string; position: number }>();
+  for (const r of rows) out.set(r.target_id, { id: r.id, position: r.position });
+  return out;
+}
+
+/** Создать ребро (низкоуровневая вставка, без связи с link-service — цикл). */
+function insertLinkRow(
+  ndb: NetworkDb,
+  sourceId: string,
+  targetId: string,
+  linkTypeId: string | null,
+  position: number,
+  actorUserId: string,
+): string {
+  const id = randomUUID();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  ndb
+    .prepare(
+      `INSERT INTO links (id, layer_id, source_id, target_id, type_id, position, active, version,
+                          created_at, updated_at, created_by, updated_by, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(id, ndb.layerId, sourceId, targetId, linkTypeId, position, now, now, actorUserId, actorUserId, nowMs, nowMs);
+  return id;
+}
+
+/** Пометить ребро в корзину (не физическое удаление — комментарий сохраняется). */
+function markLinkForDeletion(ndb: NetworkDb, linkId: string, actorUserId: string): void {
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  materializeShadow(ndb, 'links', linkId);
+  ndb
+    .prepare(
+      `UPDATE links SET marked_for_deletion = 1, marked_for_deletion_at = ?, marked_for_deletion_by = ?,
+                        updated_at = ?, updated_by = ?, updated_at_ms = ?, version = version + 1
+        WHERE id = ? AND layer_id = ?`,
+    )
+    .run(now, actorUserId, now, actorUserId, nowMs, linkId, ndb.layerId);
+}
+
+/** Позиция нового ребра в списке детей источника (структурное: в конец). */
+function nextStructuralPosition(ndb: NetworkDb, sourceId: string): number {
+  const row = ndb
+    .prepare(
+      `SELECT COALESCE(MAX(position), -1) + 1 AS p FROM links_v
+        WHERE source_id = ? AND active = 1 AND marked_for_deletion = 0 AND type_id IS NULL`,
+    )
+    .get(sourceId) as { p: number };
+  return row.p;
+}
+
+/**
+ * Полная замена набора свойства-связи (операция `set`): создаёт недостающие
+ * рёбра, помечает в корзину лишние. Направление из определения, симметрия —
+ * заполнение прямого и обратного свойства создаёт одно и то же ребро.
+ * Идемпотентно: уже живое ребро к цели не трогается.
+ */
+function setLinkPropertyTargets(
+  ndb: NetworkDb,
+  ownerId: string,
+  prop: PropertyLike,
+  targetIds: string[],
+  actorUserId: string,
+): string[] {
+  const cfg = prop.config ?? {};
+  const structural = isStructuralLinkProperty(cfg);
+  const linkTypeId = linkPropertyLinkTypeId(cfg);
+  const direction = linkPropertyDirection(cfg);
+
+  for (const targetId of targetIds) validateLinkTargetType(ndb, prop, targetId);
+  for (const targetId of targetIds) {
+    const [src, dst] = linkEndpoints(ownerId, direction, targetId);
+    if (src === dst) {
+      throw new EtnError('VALIDATION_ERROR', 'a link cannot connect a thought to itself', {
+        key: prop.name,
+        ref: targetId,
+      });
+    }
+  }
+
+  const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction);
+  const wanted = new Set(targetIds);
+  for (const [targetId, link] of existing) {
+    if (!wanted.has(targetId)) markLinkForDeletion(ndb, link.id, actorUserId);
+  }
+
+  const result: string[] = [];
+  targetIds.forEach((targetId, index) => {
+    const [src, dst] = linkEndpoints(ownerId, direction, targetId);
+    const current = existing.get(targetId);
+    if (current !== undefined) {
+      // Структурный «Потомки»: `set` задаёт и порядок детей (позиция = индекс).
+      if (structural && direction === 'out' && current.position !== index) {
+        setLinkPosition(ndb, current.id, index, actorUserId);
+      }
+      result.push(targetId);
+      return;
+    }
+    const position = structural
+      ? direction === 'out'
+        ? index
+        : nextStructuralPosition(ndb, src)
+      : 0;
+    insertLinkRow(ndb, src, dst, linkTypeId, position, actorUserId);
+    result.push(targetId);
+  });
+  return result;
+}
+
+/** Переставить ребро на позицию `position` (структурный порядок детей). */
+function setLinkPosition(
+  ndb: NetworkDb,
+  linkId: string,
+  position: number,
+  actorUserId: string,
+): void {
+  materializeShadow(ndb, 'links', linkId);
+  ndb
+    .prepare(
+      `UPDATE links SET position = ?, updated_at = ?, updated_by = ?, updated_at_ms = ?, version = version + 1
+        WHERE id = ? AND layer_id = ?`,
+    )
+    .run(position, new Date().toISOString(), actorUserId, Date.now(), linkId, ndb.layerId);
+}
+
+/** Написать/обновить постоянный комментарий ребра («зачем именно эта ссылка»). */
+function upsertLinkComment(
+  ndb: NetworkDb,
+  linkId: string,
+  comment: string,
+  actorUserId: string,
+): void {
+  const existing = listComments(ndb, 'link', linkId).find((c) => c.kind === 'permanent');
+  if (existing !== undefined) {
+    updateComment(ndb, existing.id, { body_md: comment }, undefined, actorUserId);
+  } else {
+    createComment(ndb, 'link', linkId, { kind: 'permanent', title: null, body_md: comment }, actorUserId);
+  }
+}
+
+/**
+ * Добавить одну цель в набор свойства-связи (операция `add`): идемпотентно
+ * (живое ребро уже есть — no-op), принимает необязательный комментарий.
+ * Один вызов, без чтения текущего набора.
+ */
+function addLinkPropertyTarget(
+  ndb: NetworkDb,
+  ownerId: string,
+  prop: PropertyLike,
+  targetId: string,
+  comment: string | null,
+  actorUserId: string,
+): string {
+  const cfg = prop.config ?? {};
+  const structural = isStructuralLinkProperty(cfg);
+  const linkTypeId = linkPropertyLinkTypeId(cfg);
+  const direction = linkPropertyDirection(cfg);
+
+  validateLinkTargetType(ndb, prop, targetId);
+  const [src, dst] = linkEndpoints(ownerId, direction, targetId);
+  if (src === dst) {
+    throw new EtnError('VALIDATION_ERROR', 'a link cannot connect a thought to itself', {
+      key: prop.name,
+      ref: targetId,
+    });
+  }
+  const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
+  if (existing !== undefined) {
+    if (comment !== null) upsertLinkComment(ndb, existing.id, comment, actorUserId);
+    return existing.id;
+  }
+  const position = structural ? (direction === 'out' ? nextStructuralPosition(ndb, src) : nextStructuralPosition(ndb, src)) : 0;
+  const id = insertLinkRow(ndb, src, dst, linkTypeId, position, actorUserId);
+  if (comment !== null) upsertLinkComment(ndb, id, comment, actorUserId);
+  return id;
+}
+
+/**
+ * Убрать одну цель из набора свойства-связи (операция `remove`): помечает ребро
+ * в корзину (комментарий не теряется). Отсутствующее ребро — no-op.
+ */
+function removeLinkPropertyTarget(
+  ndb: NetworkDb,
+  ownerId: string,
+  prop: PropertyLike,
+  targetId: string,
+  actorUserId: string,
+): string | null {
+  const cfg = prop.config ?? {};
+  const linkTypeId = linkPropertyLinkTypeId(cfg);
+  const direction = linkPropertyDirection(cfg);
+  const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
+  if (existing === undefined) return null;
+  markLinkForDeletion(ndb, existing.id, actorUserId);
+  return existing.id;
 }
 
 // ===========================================================================
@@ -675,11 +1015,13 @@ export function createNetworkProperty(
   let name: string;
   if (valueType === 'link') {
     config = validateLinkConfig(ndb, config, 'config');
-    name = linkPropertyDisplayName(
-      ndb,
-      config.link_type_id as string,
-      linkPropertyDirection(config),
-    );
+    name = isStructuralLinkProperty(config)
+      ? validateKey(input.name)
+      : linkPropertyDisplayName(
+          ndb,
+          config.link_type_id as string,
+          linkPropertyDirection(config),
+        );
   } else {
     name = validateKey(input.name);
   }
@@ -753,11 +1095,13 @@ export function updateNetworkProperty(
   let nextName = changes.name !== undefined ? validateKey(changes.name) : undefined;
   if (finalType === 'link') {
     validatedConfig = validateLinkConfig(ndb, finalConfig, 'config');
-    nextName = linkPropertyDisplayName(
-      ndb,
-      (validatedConfig.link_type_id as string),
-      linkPropertyDirection(validatedConfig),
-    );
+    if (!isStructuralLinkProperty(validatedConfig)) {
+      nextName = linkPropertyDisplayName(
+        ndb,
+        (validatedConfig.link_type_id as string),
+        linkPropertyDirection(validatedConfig),
+      );
+    }
   }
 
   return ndb.transaction(() => {
@@ -1007,9 +1351,10 @@ export function listEffectiveTypeProperties(
       out.push({
         ...def,
         // Имя свойства-связи вычисляется из типа связи по направлению
-        // (требование 38eaa15c), а не берётся из справочника.
+        // (требование 38eaa15c), а не берётся из справочника. Структурное
+        // свойство-связь хранит имя в реестре (типа связи у него нет).
         key:
-          def.value_type === 'link'
+          def.value_type === 'link' && !isStructuralLinkProperty(def.config)
             ? linkPropertyDisplayName(
                 ndb,
                 (def.config?.link_type_id ?? '') as string,
@@ -1333,7 +1678,7 @@ export function createTypeProperty(
         ndb,
         ownerType,
         ownerId,
-        cfg.link_type_id as string,
+        linkPropertyLinkTypeId(prop.config),
         linkPropertyDirection(prop.config),
         null,
       );
@@ -1556,7 +1901,7 @@ export function updateTypeProperty(
         ndb,
         updated.owner_type,
         updated.owner_id,
-        cfg.link_type_id as string,
+        linkPropertyLinkTypeId(updated.config),
         linkPropertyDirection(updated.config),
         updated.property_id,
       );
@@ -2008,13 +2353,63 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     }
     group.thoughts.push(rowToThoughtRef(row));
   }
-  return { total: rows.length, groups, holding_layers: [] };
+
+  // 0.8.1 (dbf1e4aa): использование через свойства-связи с blocks_target_deletion
+  // — рёбра, у которых мысль является целью ссылки.
+  for (const bp of listBlockingLinkProperties(ndb)) {
+    const refCol = bp.direction === 'out' ? 'source_id' : 'target_id';
+    const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
+    const typeClause = bp.link_type_id === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
+    const params = bp.link_type_id === null ? [thoughtId] : [thoughtId, bp.link_type_id];
+    const linkRows = ndb
+      .prepare(
+        `SELECT t.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,
+                t.active, t.fg_color, t.bg_color, t.font_bold, t.font_italic,
+                t.font_underline, t.font_strike, t.font_manual
+           FROM links_v l
+           JOIN thoughts_v t ON t.id = l.${refCol}
+          WHERE l.${ownerCol} = ? AND ${typeClause} AND l.active = 1 AND l.marked_for_deletion = 0
+          ORDER BY t.title_norm COLLATE NOCASE`,
+      )
+      .all(...params) as Array<Parameters<typeof rowToThoughtRef>[0]>;
+    if (linkRows.length === 0) continue;
+    let group = byProperty.get(bp.property_id);
+    if (group === undefined) {
+      group = { property_id: bp.property_id, key: bp.name, thoughts: [] };
+      byProperty.set(bp.property_id, group);
+      groups.push(group);
+    }
+    for (const row of linkRows) group.thoughts.push(rowToThoughtRef(row));
+  }
+
+  const total = groups.reduce((acc, g) => acc + g.thoughts.length, 0);
+  return { total, groups, holding_layers: [] };
+}
+
+/** Свойства-связи, чьё ребро блокирует удаление цели (blocks_target_deletion). */
+function listBlockingLinkProperties(
+  ndb: NetworkDb,
+): Array<{ property_id: string; name: string; direction: LinkPropertyDirection; link_type_id: string | null }> {
+  const out: Array<{ property_id: string; name: string; direction: LinkPropertyDirection; link_type_id: string | null }> = [];
+  for (const prop of listNetworkProperties(ndb)) {
+    if (prop.value_type !== 'link') continue;
+    const cfg = prop.config ?? {};
+    if (cfg.blocks_target_deletion !== true) continue;
+    out.push({
+      property_id: prop.id,
+      name: prop.name,
+      direction: linkPropertyDirection(cfg),
+      link_type_id: linkPropertyLinkTypeId(cfg),
+    });
+  }
+  return out;
 }
 
 /**
  * Number of distinct thoughts referencing `thoughtId` through a `thought_ref`
- * property value (single or inside a multiple-ref JSON array). Backs the
- * "использование в свойствах" blocking arm of the S13 deletion check.
+ * property value (single or inside a multiple-ref JSON array) OR through a
+ * link-property edge with `blocks_target_deletion = true` (0.8.1, dbf1e4aa).
+ * Backs the "использование в свойствах" blocking arm of the S13 deletion check.
  * The check must see live values of every layer; tombstones do not block.
  */
 export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
@@ -2027,19 +2422,36 @@ export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
          AND (pv.value_thought_ref = ? OR pv.value_thought_ref LIKE ? ESCAPE '\\')`,
     )
     .get(thoughtId, refLikePattern(thoughtId)) as { c: number };
-  return row.c;
+  let total = row.c;
+  // Свойства-связи с blocks_target_deletion: блокирует цель (противоположный
+  // конец от владельца). Считаем рёбра, где мысль — цель ссылки.
+  for (const bp of listBlockingLinkProperties(ndb)) {
+    const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
+    const typeClause = bp.link_type_id === null ? 'type_id IS NULL' : 'type_id = ?';
+    const params = bp.link_type_id === null ? [thoughtId] : [thoughtId, bp.link_type_id];
+    const lrow = ndb
+      .prepare(
+        `SELECT COUNT(*) AS c FROM links_v l -- layers:physical-read
+          WHERE l.${ownerCol} = ? AND ${typeClause} AND l.active = 1 AND l.marked_for_deletion = 0`,
+      )
+      .get(...params) as { c: number };
+    total += lrow.c;
+  }
+  return total;
 }
 
 /**
  * Null out every `thought_ref` value referencing `thoughtId` (single and
- * multiple form) in one sweep — «Очистить использование» (03-server-api.md
- * §9.2). Returns how many property-value rows were cleared.
+ * multiple form) in one sweep, and mark every blocking link-property edge to
+ * `thoughtId` for deletion (0.8.1, dbf1e4aa) — «Очистить использование»
+ * (03-server-api.md §9.2). Returns how many references were cleared.
  *
  * S4: the base-layer sweep clears live rows of every layer; a working layer
  * clears its visible values as shadow edits only.
  */
 export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
   const now = new Date().toISOString();
+  let cleared = 0;
   if (isBaseContext(ndb)) {
     // layers:physical-read — зеркально плечу блокировки: живые значения всех слоёв.
     const result = ndb
@@ -2049,24 +2461,41 @@ export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
            AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')`, // layers:physical-read
       )
       .run(now, thoughtId, refLikePattern(thoughtId));
-    return result.changes;
-  }
-  const rows = ndb
-    .prepare(
-      `SELECT id FROM property_values_v
+    cleared += result.changes;
+  } else {
+    const rows = ndb
+      .prepare(
+        `SELECT id FROM property_values_v
        WHERE owner_type = 'thought'
          AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')`,
-    )
-    .all(thoughtId, refLikePattern(thoughtId)) as { id: string }[];
-  for (const row of rows) {
-    materializeShadow(ndb, 'property_values', row.id);
-    ndb
-      .prepare(
-        'UPDATE property_values SET value_thought_ref = NULL, updated_at = ? WHERE id = ? AND layer_id = ?',
       )
-      .run(now, row.id, ndb.layerId);
+      .all(thoughtId, refLikePattern(thoughtId)) as { id: string }[];
+    for (const row of rows) {
+      materializeShadow(ndb, 'property_values', row.id);
+      ndb
+        .prepare(
+          'UPDATE property_values SET value_thought_ref = NULL, updated_at = ? WHERE id = ? AND layer_id = ?',
+        )
+        .run(now, row.id, ndb.layerId);
+    }
+    cleared += rows.length;
   }
-  return rows.length;
+  // Рёбра блокирующих свойств-связей — помечаем в корзину (комментарий не теряется).
+  for (const bp of listBlockingLinkProperties(ndb)) {
+    const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
+    const typeClause = bp.link_type_id === null ? 'type_id IS NULL' : 'type_id = ?';
+    const params = bp.link_type_id === null ? [thoughtId] : [thoughtId, bp.link_type_id];
+    const links = ndb
+      .prepare(
+        `SELECT id FROM links_v l WHERE l.${ownerCol} = ? AND ${typeClause} AND l.active = 1 AND l.marked_for_deletion = 0`,
+      )
+      .all(...params) as Array<{ id: string }>;
+    for (const link of links) {
+      markLinkForDeletion(ndb, link.id, 'system');
+      cleared += 1;
+    }
+  }
+  return cleared;
 }
 
 /**
@@ -2341,6 +2770,42 @@ function setPropertyValueForProperty(
   errKey: { key: string },
   actorUserId: string,
 ): PropertyValue {
+  // Свойство-связь: запись — создание/правка рёбер, а не значение в
+  // property_values (ADR «свойство-связь — проекция ребра»). Запись вне типа
+  // разрешена (обратная сторона/внетиповое свойство) — требование 2fe173c5.
+  if (prop.value_type === 'link') {
+    if (ownerType !== 'thought') {
+      throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
+        owner_type: ownerType,
+        key: errKey.key,
+      });
+    }
+    const targetIds = setLinkPropertyTargets(
+      ndb,
+      ownerId,
+      prop,
+      normalizeLinkTargets(value, errKey.key),
+      actorUserId,
+    );
+    touchOwner(ndb, ownerType, ownerId, actorUserId);
+    const nowMs = Date.now();
+    return {
+      id: '',
+      owner_type: ownerType,
+      owner_id: ownerId,
+      property_id: prop.id,
+      outside_type: false,
+      property_name: prop.name,
+      value_type: 'link',
+      value: targetIds.length === 0 ? null : targetIds.length === 1 ? (targetIds[0] ?? null) : targetIds,
+      updated_at: new Date(nowMs).toISOString(),
+      created_by: actorUserId,
+      updated_by: actorUserId,
+      created_at_ms: nowMs,
+      updated_at_ms: nowMs,
+    };
+  }
+
   const attached = attachedPropertyIds(ndb, ownerType, ownerId);
   if (!attached.has(prop.id)) {
     throw new EtnError(
@@ -2491,6 +2956,77 @@ export function setPropertyValues(
       stored[key] = setPropertyValue(ndb, ownerType, ownerId, key, value, actorUserId);
     }
     return stored;
+  });
+}
+
+/**
+ * Добавить одну цель в набор свойства-связи (операция `add`, 0.8.1): идемпотентно
+ * (живое ребро уже есть — no-op), принимает необязательный комментарий «зачем
+ * именно эта ссылка». Один вызов, без чтения текущего набора.
+ */
+export function addLinkPropertyValue(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  key: string,
+  targetId: string,
+  comment: string | null,
+  actorUserId: string,
+): { link_id: string; created: boolean } {
+  if (ownerType !== 'thought') {
+    throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
+      owner_type: ownerType,
+      key,
+    });
+  }
+  return ndb.transaction(() => {
+    const prop = resolveDefinition(ndb, ownerType, ownerId, key);
+    if (!prop || prop.value_type !== 'link') {
+      throw new EtnError('NOT_FOUND', `property "${key}" does not exist or is not a link property`, {
+        key,
+      });
+    }
+    const existing = listLiveLinkTargets(
+      ndb,
+      ownerId,
+      linkPropertyLinkTypeId(prop.config),
+      linkPropertyDirection(prop.config),
+    ).get(targetId);
+    const id = addLinkPropertyTarget(ndb, ownerId, prop, targetId, comment, actorUserId);
+    touchOwner(ndb, ownerType, ownerId, actorUserId);
+    return { link_id: id, created: existing === undefined };
+  });
+}
+
+/**
+ * Убрать одну цель из набора свойства-связи (операция `remove`, 0.8.1): помечает
+ * ребро в корзину (комментарий не теряется). Отсутствующее ребро — no-op
+ * (`link_id: null`).
+ */
+export function removeLinkPropertyValue(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  key: string,
+  targetId: string,
+  actorUserId: string,
+): { link_id: string | null } {
+  if (ownerType !== 'thought') {
+    throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
+      owner_type: ownerType,
+      key,
+    });
+  }
+  return ndb.transaction(() => {
+    const prop = resolveDefinition(ndb, ownerType, ownerId, key);
+    if (!prop || prop.value_type !== 'link') {
+      throw new EtnError('NOT_FOUND', `property "${key}" does not exist or is not a link property`, {
+        key,
+      });
+    }
+    const id = removeLinkPropertyTarget(ndb, ownerId, prop, targetId, actorUserId);
+    if (id !== null) touchOwner(ndb, ownerType, ownerId, actorUserId);
+    return { link_id: id };
   });
 }
 
