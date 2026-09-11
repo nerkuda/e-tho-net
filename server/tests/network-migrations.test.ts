@@ -59,6 +59,7 @@ const EXPECTED_FILES = [
   '035_activity_log.sql',
   '036_property_values_deterministic_id.sql',
   '037_thought_type_views.sql',
+  '038_search_trigram.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -381,18 +382,20 @@ describe(
         // Adding a synonym rebuilds the row to include it.
         db.prepare(
           'INSERT INTO thought_synonyms (thought_id,synonym,synonym_norm) VALUES (?,?,?)',
-        ).run('t1', 'Hi', 'hi');
+        ).run('t1', 'Hey', 'hey');
         rows = db
           .prepare('SELECT thought_id, text FROM fts_thought_names WHERE thought_id = ?')
           .all('t1') as {
           thought_id: string;
           text: string;
         }[];
-        assert.equal(rows[0]!.text, 'Hello World Hi');
+        assert.equal(rows[0]!.text, 'Hello World Hey');
 
-        // Search matches both the title and the synonym.
+        // Search matches both the title and the synonym. `MATCH 'hey'`, not
+        // `'hi'`: the `trigram` tokenizer (038_search_trigram.sql) needs ≥3
+        // characters per term to produce any index entry.
         const hitHi = db
-          .prepare("SELECT thought_id FROM fts_thought_names WHERE fts_thought_names MATCH 'hi'")
+          .prepare("SELECT thought_id FROM fts_thought_names WHERE fts_thought_names MATCH 'hey'")
           .all() as { thought_id: string }[];
         assert.deepEqual(
           hitHi.map((r) => r.thought_id),
@@ -596,6 +599,7 @@ describe(
           '035_activity_log.sql',
           '036_property_values_deterministic_id.sql',
           '037_thought_type_views.sql',
+          '038_search_trigram.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged
@@ -856,6 +860,7 @@ describe(
         assert.deepEqual(applied.applied, [
           '036_property_values_deterministic_id.sql',
           '037_thought_type_views.sql',
+          '038_search_trigram.sql',
         ]);
 
         const expectedId = propertyValueId('thought', owner, prop);

@@ -16,6 +16,20 @@
  * declares the payload column first (a known quirk in this SQLite build), so a
  * deterministic JS highlighter is safer and version-independent.
  *
+ * All three FTS5 tables are `tokenize = 'trigram case_sensitive 0'` (bug
+ * 0258fd9d «Не ищет мысль по части слова не с начала», migration
+ * `038_search_trigram.sql`): unlike the previous `unicode61` tokenizer, this
+ * matches an include word as a literal substring anywhere in the text (not
+ * only a token prefix), and case-folds Cyrillic correctly without any custom
+ * JS code. {@link buildTrigramQuery} builds the boolean `MATCH` expression
+ * (`"счет" NOT "вод"`) from the keywords mini-syntax (§6.10). The tokenizer's
+ * one limitation: a fragment shorter than 3 characters produces zero
+ * trigrams, so `MATCH` silently returns nothing for it — {@link searchNames}
+ * (the only group with a normalized column to fall back to, `title_norm`/
+ * `synonym_norm`) covers such words via `LIKE`; `by_texts`/`by_links`/
+ * `by_chrono` do not filter on them at all (Tier 1 — see the bug's
+ * chronological comments for the Tier 2 scope, adding `comments.body_norm`).
+ *
  * Filters: `in_subtree_of` (recursive CTE), `scope`, `type_id[]`,
  * `link_type_id[]`, `show_inactive`. Results are bounded per group by
  * `limit`/`offset` (default 50 / 0).
@@ -89,8 +103,8 @@ export { resolveThoughts } from './thought-service.js';
 
 /**
  * Split raw input into clean search terms: trimmed, quote-free tokens of
- * length ≥ 1. Used both to build the FTS MATCH expression and to drive
- * client-side-style snippet highlighting.
+ * length ≥ 1. Used to drive client-side-style snippet highlighting (the FTS
+ * MATCH expression is built by {@link buildTrigramQuery} instead).
  */
 function tokenize(text: string): string[] {
   return text
@@ -100,32 +114,109 @@ function tokenize(text: string): string[] {
 }
 
 /**
- * Build a safe FTS5 MATCH expression from user input using the keywords
- * mini-syntax (03-server-api.md §6.10): every include word is a required
- * phrase of word-prefixes, `-word` exclusions join as NOT. FTS5 cannot express
- * an infix `*`, so a star degenerates into a phrase break (`сло*во` → the
- * adjacent prefixes «сло» «во»); a trailing star folds into the FTS5 prefix
- * marker the tokenizer already produced. Double quotes are stripped from
- * tokens first, so the input cannot break out of the phrase literals. Returns
- * an empty string when no usable include tokens remain — callers treat that
- * as "no match" (a query of pure exclusions matches nothing).
+ * Minimum literal-fragment length the `trigram` FTS5 tokenizer can index
+ * (migration `038_search_trigram.sql`): a phrase shorter than 3 characters
+ * produces zero trigrams, so `MATCH` always returns zero rows for it rather
+ * than erroring — {@link trigramPhrase} treats such words as "unusable"
+ * instead of emitting a query that would silently match nothing.
  */
-function sanitizeFtsQuery(text: string, operator: 'AND' | 'OR' = 'AND'): string {
-  const phrase = (word: string): string => {
-    const tokens = tokenize(word.replace(/\*/g, ' '));
-    if (tokens.length === 0) return '';
-    return tokens.map((t) => `"${t}"*`).join(' ');
-  };
+const TRIGRAM_MIN_LEN = 3;
+
+/**
+ * Build one word's trigram phrase for the boolean MATCH expression, or
+ * `null` when every literal fragment (split on `*`) is shorter than
+ * {@link TRIGRAM_MIN_LEN}. A `*` splits the word into independent literal
+ * fragments joined by `AND` (each must occur somewhere in the text, in no
+ * particular relative order) — the ordering guarantee of a plain LIKE
+ * `%…%…%` pattern is not preserved, but `*` inside a single word is a rare
+ * edge case of the keywords mini-syntax (03-server-api.md §6.10), not the
+ * bug's primary scenario (whole-word infix search, 0258fd9d). Fragments
+ * shorter than {@link TRIGRAM_MIN_LEN} are dropped rather than failing the
+ * whole word, so `сло*во` still filters on `сло` even if `во`-equivalent
+ * fragments were too short.
+ */
+function trigramPhrase(word: string): string | null {
+  const fragments = word
+    .split('*')
+    .map((f) => f.toLowerCase())
+    .filter((f) => f.length >= TRIGRAM_MIN_LEN);
+  if (fragments.length === 0) return null;
+  return fragments.map((f) => `"${f.replace(/"/g, '""')}"`).join(' AND ');
+}
+
+/** Parsed `q` ready for the four FTS groups + the `by_names` LIKE fallback. */
+interface TrigramQuery {
+  /**
+   * Boolean MATCH expression for `<table> MATCH ?`, or `''` when no include
+   * word produced a usable trigram phrase — callers must skip the `MATCH`
+   * clause entirely in that case (an empty string is not a valid FTS5 query
+   * and `by_texts`/`by_links`/`by_chrono` have no other way to filter, so
+   * they return no hits; `by_names` still has {@link TrigramQuery.nameShortInclude}).
+   */
+  match: string;
+  /**
+   * Include words with no usable (≥3-char) trigram fragment. Only `by_names`
+   * has a fallback for these (`title_norm`/`synonym_norm` are already
+   * NFC+lowercase — see {@link buildShortWordNameClause}); Tier 1 of bug
+   * 0258fd9d leaves `by_texts`/`by_links`/`by_chrono` unfiltered by them
+   * (`comments.body_md` has no equivalent normalized column).
+   */
+  nameShortInclude: string[];
+  /**
+   * Exclude words that must be applied via the `by_names` LIKE fallback
+   * instead of `NOT "phrase"`: either the word itself is too short, or (when
+   * `match === ''`) there is no trigram anchor at all to attach a `NOT` to
+   * (FTS5 has no unary NOT) — in that case EVERY exclude word ends up here,
+   * regardless of its own length.
+   */
+  nameShortExclude: string[];
+}
+
+/**
+ * Build the `trigram`-tokenizer boolean MATCH expression from user input
+ * using the keywords mini-syntax (03-server-api.md §6.10): every include
+ * word is a required literal substring (in any position, not just a token
+ * prefix — bug 0258fd9d), `-word` exclusions join as `NOT`. A combined
+ * expression like `"счет" NOT "вод"` is a SINGLE `MATCH` call — FTS5 forbids
+ * `MATCH` twice on the same virtual table in one query, but a boolean
+ * expression with `AND`/`NOT` inside one `MATCH` is not "twice". Returns
+ * `match: ''` when no include word clears the trigram floor — callers treat
+ * that as "no FTS match possible" (a query of pure exclusions, or of only
+ * short words with no anchor, also degenerates to this per FTS5's lack of
+ * unary NOT).
+ */
+function buildTrigramQuery(text: string): TrigramQuery {
   const { include, exclude } = parseFilterKeywords(text);
-  const positives = include.map(phrase).filter((p) => p !== '');
-  if (positives.length === 0) return '';
-  const joiner = operator === 'OR' ? ' OR ' : ' ';
-  let match = positives.join(joiner);
-  for (const word of exclude) {
-    const negative = phrase(word);
-    if (negative !== '') match += ` NOT ${negative}`;
+  if (include.length === 0) {
+    // No include words at all (empty query, or pure exclusions like `-dog`)
+    // — nothing to anchor a match or even a LIKE fallback to.
+    return { match: '', nameShortInclude: [], nameShortExclude: [] };
   }
-  return match;
+
+  const positives: string[] = [];
+  const nameShortInclude: string[] = [];
+  for (const word of include) {
+    const phrase = trigramPhrase(word);
+    if (phrase === null) nameShortInclude.push(word);
+    else positives.push(phrase);
+  }
+
+  if (positives.length === 0) {
+    // Every include word is too short for the trigram index: `by_names`
+    // falls back to a pure LIKE pass (no FTS anchor at all), so every
+    // exclude word — long or short — must go through the same LIKE-based
+    // NOT for names; the other three groups stay unfiltered (Tier 1).
+    return { match: '', nameShortInclude, nameShortExclude: exclude };
+  }
+
+  let match = positives.join(' AND ');
+  const nameShortExclude: string[] = [];
+  for (const word of exclude) {
+    const phrase = trigramPhrase(word);
+    if (phrase === null) nameShortExclude.push(word);
+    else match += ` NOT ${phrase}`;
+  }
+  return { match, nameShortInclude, nameShortExclude };
 }
 
 /** HTML-escape the five significant characters of a text node. */
@@ -153,14 +244,19 @@ function candidateMatchForTerm(term: string): string | null {
   const parts: string[] = [];
   for (const word of words) {
     const star = word.indexOf('*');
-    if (star === -1) {
-      // A pattern word without `*` must match exactly.
-      parts.push(`"${word.toLowerCase().replace(/"/g, '""')}"`);
-      continue;
-    }
-    const literal = word.slice(0, star).toLowerCase();
-    if (literal === '') return null;
-    parts.push(`"${literal.replace(/"/g, '""')}"*`);
+    const literal = (star === -1 ? word : word.slice(0, star)).toLowerCase();
+    // `fts_thought_texts`/`fts_link_texts` are `trigram`-tokenized (migration
+    // 038_search_trigram.sql, bug 0258fd9d): a phrase shorter than 3
+    // characters produces zero trigrams, so `MATCH` would always return zero
+    // rows instead of the broad candidate set this function is meant to
+    // provide — that would silently hide real mentions behind a query that
+    // structurally cannot match. Falling through to `null` here routes the
+    // caller to the existing full-scan branch (same one already used for
+    // `*ян`-style patterns with no literal prefix at all), so correctness is
+    // preserved at the cost of skipping the FTS prefilter for short terms.
+    if (literal.length < TRIGRAM_MIN_LEN) return null;
+    const escaped = literal.replace(/"/g, '""');
+    parts.push(star === -1 ? `"${escaped}"` : `"${escaped}"*`);
   }
   return parts.join(' ');
 }
@@ -425,54 +521,81 @@ function joinClauses(clauses: Array<Clause | null>): { where: string; params: un
 // Group: by_names
 // ---------------------------------------------------------------------------
 
-/** Query the thought-names group. */
+/**
+ * LIKE-fallback clause for one `by_names` short/anchor-less word (Tier 1,
+ * bug 0258fd9d): `title_norm`/`synonym_norm` are already NFC+lowercase, so
+ * this is correct for Cyrillic without any custom case-folding — the exact
+ * pattern already proven in {@link findDuplicates} (same escaping, same
+ * `ESCAPE '\'` — copied deliberately rather than re-derived, see the bug's
+ * chronological comment on why re-deriving it went wrong last time).
+ */
+function buildShortWordNameClause(word: string, negate: boolean): Clause {
+  const pattern = buildLikePattern(word);
+  const sql =
+    "(t.title_norm LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM thought_synonyms_v ts" +
+    " WHERE ts.thought_id = t.id AND ts.synonym_norm LIKE ? ESCAPE '\\'))";
+  return { sql: negate ? `NOT ${sql}` : sql, params: [pattern, pattern] };
+}
+
+/**
+ * Query the thought-names group. `trigram.match === ''` means no include
+ * word cleared the trigram floor — the FTS5 join/MATCH is skipped entirely
+ * (querying `MATCH ''` is invalid) and the result rests solely on
+ * {@link buildShortWordNameClause} fallbacks; the caller only reaches this
+ * state when {@link TrigramQuery.nameShortInclude} is non-empty (otherwise
+ * `search()` already returned the empty response for the whole request).
+ */
 function searchNames(
   ndb: NetworkDb,
-  match: string,
+  trigram: TrigramQuery,
   f: SearchFilters,
 ): { hits: SearchNameHit[]; total: number } {
   if (f.subtreeIds !== null && f.subtreeIds.size === 0) return { hits: [], total: 0 };
+  const useFts = trigram.match !== '';
+  const join = useFts ? 'JOIN fts_thought_names fnames ON fnames.rowid = t.rowid' : '';
+  const orderBy = useFts ? 'ORDER BY rank' : 'ORDER BY t.title_norm';
   const { where, params } = joinClauses([
-    { sql: 'fts_thought_names MATCH ?', params: [match] },
+    useFts ? { sql: 'fts_thought_names MATCH ?', params: [trigram.match] } : null,
     { sql: '(t.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] },
     { sql: '(t.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
     inListClause('t.type_id', f.typeIds),
-    subtreeClause('f.thought_id', f.subtreeIds),
+    subtreeClause('t.id', f.subtreeIds),
     f.authorId !== null ? { sql: 't.created_by = ?', params: [f.authorId] } : null,
     f.editorId !== null ? { sql: 't.updated_by = ?', params: [f.editorId] } : null,
+    ...trigram.nameShortInclude.map((w) => buildShortWordNameClause(w, false)),
+    ...trigram.nameShortExclude.map((w) => buildShortWordNameClause(w, true)),
   ]);
-  // S6 (13-layers.md §9): the names index carries one FTS row per PHYSICAL
-  // thought row (rowid = thoughts.pk), so an overridden thought has rows for
-  // every layer of the chain. The join is by rowid with `thoughts_v` — the
-  // view exposes the winner row's rowid — so only the winner's text matches:
-  // stale ancestor revisions, other layers' rows and tombstones (no view row)
-  // never reach the result. Dedup by logical id comes free: one FTS row joins
-  // per visible thought (`UNIQUE (id, layer_id)`). FTS5 ranks first, the
-  // layer visibility filter runs on top — `LIMIT`/`OFFSET` and the total are
-  // computed after the filtering/dedup, never pushed into the FTS scan.
+  // S6 (13-layers.md §9): when the FTS5 join is used, the names index carries
+  // one row per PHYSICAL thought row (rowid = thoughts.pk), so an overridden
+  // thought has rows for every layer of the chain. The join is by rowid with
+  // `thoughts_v` — the view exposes the winner row's rowid — so only the
+  // winner's text matches: stale ancestor revisions, other layers' rows and
+  // tombstones (no view row) never reach the result. Dedup by logical id
+  // comes free: one FTS row joins per visible thought (`UNIQUE (id,
+  // layer_id)`). FTS5 ranks first, the layer visibility filter runs on top —
+  // `LIMIT`/`OFFSET` and the total are computed after the filtering/dedup,
+  // never pushed into the FTS scan. The LIKE-only fallback path (no join)
+  // already starts from `thoughts_v`, so it inherits the same layer-winner
+  // guarantee without needing the FTS rowid join at all.
   const total = (
     ndb
-      .prepare(
-        `SELECT COUNT(*) AS c FROM fts_thought_names f
-         JOIN thoughts_v t ON t.rowid = f.rowid WHERE ${where}`,
-      )
+      .prepare(`SELECT COUNT(*) AS c FROM thoughts_v t ${join} WHERE ${where}`)
       .get(...params) as { c: number }
   ).c;
   // Visual style and `active` are joined from the winner row so the client can
   // render the hit row like a cloud on the canvas (08-ui-spec.md §2.2).
   const rows = ndb
     .prepare(
-      `SELECT f.thought_id AS thought_id, t.title AS title, t.icon AS icon,
+      `SELECT t.id AS thought_id, t.title AS title, t.icon AS icon,
               t.icon_kind AS icon_kind, t.icon_attachment_id AS icon_attachment_id,
               t.fg_color AS fg_color, t.bg_color AS bg_color,
               t.font_bold AS font_bold, t.font_italic AS font_italic,
               t.font_underline AS font_underline, t.font_strike AS font_strike,
               t.font_manual AS font_manual,
               t.type_id AS type_id, t.active AS active
-       FROM fts_thought_names f
-       JOIN thoughts_v t ON t.rowid = f.rowid
+       FROM thoughts_v t ${join}
        WHERE ${where}
-       ORDER BY rank
+       ${orderBy}
        LIMIT ? OFFSET ?`,
     )
     .all(...params, f.limit, f.offset) as Array<{
@@ -816,7 +939,7 @@ export function search(
     (SEARCH_SCOPES as readonly string[]).includes(request.scope)
       ? (request.scope as SearchScope)
       : 'all';
-  const match = sanitizeFtsQuery(request.q);
+  const trigram = buildTrigramQuery(request.q);
   const paging = clampPaging(request.limit, request.offset);
   // Highlight terms: the include words only (`*` folded away, exclusions
   // dropped) — they are what the matches above actually found in the text.
@@ -863,15 +986,26 @@ export function search(
     by_chrono: [],
     meta: { total_in_group: { names: 0, texts: 0, links: 0, chronology: 0 } },
   };
-  if (match === '') {
+  // `match === ''` with no `by_names` LIKE fallback either means: no include
+  // word at all (empty query already rejected above, or a pure exclusion —
+  // FTS5 has no unary NOT, "matches nothing" is the deliberate rule here).
+  if (trigram.match === '' && trigram.nameShortInclude.length === 0) {
     return empty;
   }
 
   const wants = (group: SearchScope): boolean => scope === 'all' || scope === group;
-  const names = wants('names') ? searchNames(ndb, match, filters) : { hits: [], total: 0 };
-  const texts = wants('texts') ? searchTexts(ndb, match, filters) : { hits: [], total: 0 };
-  const links = wants('links') ? searchLinks(ndb, match, filters) : { hits: [], total: 0 };
-  const chrono = wants('chronology') ? searchChrono(ndb, match, filters) : { hits: [], total: 0 };
+  // `by_names` alone can run on the LIKE-only fallback (trigram.match === ''
+  // but nameShortInclude is non-empty); the other three groups have no such
+  // fallback (Tier 1, bug 0258fd9d) and simply stay empty without it.
+  const names = wants('names') ? searchNames(ndb, trigram, filters) : { hits: [], total: 0 };
+  const texts =
+    wants('texts') && trigram.match !== '' ? searchTexts(ndb, trigram.match, filters) : { hits: [], total: 0 };
+  const links =
+    wants('links') && trigram.match !== '' ? searchLinks(ndb, trigram.match, filters) : { hits: [], total: 0 };
+  const chrono =
+    wants('chronology') && trigram.match !== ''
+      ? searchChrono(ndb, trigram.match, filters)
+      : { hits: [], total: 0 };
 
   const meta: SearchResponseMeta = {
     total_in_group: {

@@ -280,13 +280,15 @@ describe(
           '035_activity_log.sql',
           '036_property_values_deterministic_id.sql',
           '037_thought_type_views.sql',
+          '038_search_trigram.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else
         // kept; 032 turns the seeded definition into one registry property;
         // 034 creates object_locks, пустую при апгрейде чистой базы;
         // 035 — activity_log, тоже пустую; 037 — thought_type_views, пустую
-        // при апгрейде чистой базы).
+        // при апгрейде чистой базы; 038 пересоздаёт FTS5-таблицы с новым
+        // токенизатором — бэкфилл сохраняет те же строки).
         const after = tableCounts(db);
         assert.deepEqual(after, {
           ...before,
