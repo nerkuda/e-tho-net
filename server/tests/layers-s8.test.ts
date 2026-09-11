@@ -39,6 +39,7 @@ import {
   nativeAvailable,
   type RestTestContext,
 } from './rest-helpers.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 
 /** Methods used by this suite; `inject`'s `method` (light-my-request) rejects
  * fastify's wider `HTTPMethods` union (no `trace`), so keep a local one. */
@@ -307,23 +308,11 @@ describe(
         // touched by the layer) — exactly the production shape that used to
         // fail closure: value_thought_ref holds a JSON array, and the whole
         // JSON text was passed as one "thought id".
-        const prop = await call(ctx, 'POST', '/properties', {
-          name: 'связанные задачи',
-          value_type: 'thought_ref',
-          config: { multiple: true },
-        });
-        assert.equal(prop.statusCode, 201, prop.body?.toString());
-        const propertyId = (prop.json().data as { id: string }).id;
-
+        // 0.8.1: thought_ref больше не создаётся через реестр — сеем напрямую.
         const type = await call(ctx, 'POST', '/thought-types', { name: 'Носитель свойств' });
         assert.equal(type.statusCode, 201, type.body?.toString());
         const typeId = (type.json().data as { id: string }).id;
-
-        const attach = await call(ctx, 'POST', `/thought-types/${typeId}/properties`, {
-          mode: 'attach',
-          property_id: propertyId,
-        });
-        assert.equal(attach.statusCode, 201, attach.body?.toString());
+        seedThoughtRefProperty(ctx.ndb, 'thought_type', typeId, 'связанные задачи', { multiple: true });
 
         const t1 = await thought(ctx, 'Цель 1');
         const t2 = await thought(ctx, 'Цель 2');

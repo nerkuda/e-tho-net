@@ -254,6 +254,9 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   number: 'value_number',
   bool: 'value_bool',
   thought_ref: 'value_thought_ref',
+  // Свойство-связь значений в property_values не хранит (ADR «проекция
+  // ребра»); значение недостижимо — SUPPORTED_OPS['link'] пусто.
+  link: 'value_thought_ref',
 };
 
 /** SQL operator per `value_type` × `PropertyQueryOperator` (the query subset of
@@ -267,6 +270,8 @@ const SUPPORTED_OPS: Record<PropertyValueType, ReadonlySet<PropertyQueryOperator
   number: new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte']),
   bool: new Set(['eq', 'ne']),
   thought_ref: new Set(['eq', 'ne']),
+  // Отбор по свойствам-связям — отдельная задача (4); до неё операций нет.
+  link: new Set([]),
 };
 
 /** Minimal registry row read in one batched lookup of all conditions. */
@@ -425,6 +430,14 @@ function coerceScalar(
         );
       }
       return value;
+    case 'link':
+      // Недостижимо (SUPPORTED_OPS['link'] пуст), но для полноты.
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'Свойство-связь не фильтруется скалярным оператором.',
+        { field: 'value' },
+        requestId,
+      );
   }
 }
 

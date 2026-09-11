@@ -28,7 +28,7 @@
 
 import {
   EtnError,
-  PROPERTY_VALUE_TYPES,
+  PROPERTY_VALUE_TYPES_WRITABLE,
   TYPE_OWNER_TYPES,
   typeNameKey,
   type IconKind,
@@ -453,11 +453,11 @@ function resolveProperties(
     validateIdNameXor(item, 'properties', index);
     if (
       item.value_type !== undefined &&
-      !(PROPERTY_VALUE_TYPES as readonly string[]).includes(item.value_type)
+      !(PROPERTY_VALUE_TYPES_WRITABLE as readonly string[]).includes(item.value_type)
     ) {
       throw new EtnError('VALIDATION_ERROR', `invalid value_type: ${item.value_type}`, {
         field: `properties[${index}].value_type`,
-        allowed: PROPERTY_VALUE_TYPES,
+        allowed: PROPERTY_VALUE_TYPES_WRITABLE,
       });
     }
     let id: string | null = null;
@@ -818,6 +818,10 @@ function classifyStoredValues(
         } else value = raw;
         break;
       }
+      case 'link':
+        // Значение свойства-связи не хранится в property_values.
+        value = null;
+        break;
     }
     if (canConvert(value, to, ISO_DATE_RE)) converted += 1;
     else dropped += 1;
@@ -859,6 +863,9 @@ function canConvert(
       }
       return false;
     case 'thought_ref':
+      return false;
+    case 'link':
+      // Конверсия в 'link' сбрасывает сохранённое значение (ребро — отдельно).
       return false;
   }
 }

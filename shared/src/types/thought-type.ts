@@ -174,6 +174,29 @@ export interface PropertyConfig {
    *  type ids (absent/empty = any type). Stored values are never reprocessed
    *  when the filter changes. */
   allowed_type_ids?: string[];
+  /**
+   * For `value_type = 'link'` (0.8.1): тип связи, обязательный. Проекция —
+   * рёбра этого типа.
+   */
+  link_type_id?: string;
+  /**
+   * For `value_type = 'link'`: направление от владельца свойства — `out`
+   * (владелец — источник ребра, имя `name_forward`) или `in` (владелец —
+   * цель, имя `name_reverse`). По умолчанию `out`.
+   */
+  direction?: 'out' | 'in';
+  /**
+   * For `value_type = 'link'`: опциональное ограничение типов
+   * противоположной стороны; раскрывается до поддеревьев типов. При
+   * заполнении у допустимых типов появляется зеркальное обратное свойство.
+   */
+  allowed_target_type_ids?: string[];
+  /** For `value_type = 'link'`: рисовать ли связь на карте по умолчанию
+   *  (по умолчанию `false`). */
+  show_on_map?: boolean;
+  /** For `value_type = 'link'`: блокирует ли ссылка физическое удаление
+   *  цели (по умолчанию `false`). */
+  blocks_target_deletion?: boolean;
   /** For `value_type = 'text'`: predefined values to pick from — an input aid,
    *  not a restriction: arbitrary typed values stay allowed. */
   options?: string[];
@@ -339,6 +362,63 @@ export interface ResolvedThoughtRefValue {
  * REST-контракт не меняется. */
 export interface ResolvedPropertyValue extends Omit<PropertyValue, 'value'> {
   value: PropertyValueValue | ResolvedThoughtRefValue | ResolvedThoughtRefValue[];
+}
+
+/**
+ * Одно значение свойства-связи — живое ребро `links` (0.8.1). Возвращается
+ * запросом значений свойства-связи (REST `GET …/properties`); карточка мысли
+ * вместо списка отдаёт счётчик {@link ResolvedLinkProperty.count}.
+ */
+export interface LinkPropertyValueItem {
+  /** Id ребра — адрес для `etn.links.get` и операций записи связи. */
+  link_id: string;
+  /** Id цели (противоположный конец ребра от владельца свойства). */
+  target_id: string;
+  /** Заголовок цели; `null` — цель удалена. */
+  target_title: string | null;
+  /** Тип цели; `null` — без типа. */
+  target_type_id: string | null;
+  /** Полный текст постоянного комментария ребра; `null` — комментария нет. */
+  comment: string | null;
+}
+
+/**
+ * Свойство-связь в карточке мысли (0.8.1): связи отдаются счётчиком
+ * {@link count}, а не списком целей. Скаляры — значениями, связи — счётчиками.
+ * Полный список рёбер — отдельным запросом значений ({@link LinkPropertyValues}).
+ */
+export interface ResolvedLinkProperty {
+  /** Id свойства реестра. */
+  id: string;
+  owner_type: 'thought' | 'link';
+  owner_id: string;
+  property_id: string;
+  /**
+   * `true`, когда свойство не подключено к типу владельца: внетиповое
+   * свойство-связь либо зеркало без ограничения типа цели.
+   */
+  outside_type: boolean;
+  /** Имя свойства, вычисленное из типа связи по направлению (не хранится). */
+  property_name: string;
+  value_type: 'link';
+  /** Направление от владельца: `out` — владелец источник, `in` — цель. */
+  direction: 'out' | 'in';
+  /** Id типа связи. */
+  link_type_id: string;
+  /** Счётчик живых рёбер, проецируемых в это свойство. */
+  count: number;
+  /** Собственное описание свойства (уточняет применение для типа). */
+  description?: string | null;
+}
+
+/**
+ * Значения свойства-связи в ответе на запрос значений (REST
+ * `GET …/properties`, 0.8.1): список живых рёбер {@link LinkPropertyValueItem}
+ * плюс счётчик. Отличается от {@link ResolvedLinkProperty} наличием `values`.
+ */
+export interface LinkPropertyValues extends ResolvedLinkProperty {
+  /** Рёбра в порядке убывания новизны. */
+  values: LinkPropertyValueItem[];
 }
 
 /** Body of `PUT …/{id}/properties/{key}` (03-server-api.md §9). */

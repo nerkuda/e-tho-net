@@ -91,7 +91,7 @@ import {
   MCP_TOOL_ANNOTATIONS,
   MCP_VIEW_MODES,
   PROPERTY_OWNER_TYPES,
-  PROPERTY_VALUE_TYPES,
+  PROPERTY_VALUE_TYPES_WRITABLE,
   REALTIME_DEFAULTS,
   SEARCH_SCOPES,
   TYPE_OWNER_TYPES,
@@ -5857,7 +5857,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       ref: z.string().min(1).optional(),
       id: z.string().min(1).nullable().optional(),
       name: z.string().min(1).optional(),
-      value_type: z.enum(PROPERTY_VALUE_TYPES).optional(),
+      value_type: z.enum(PROPERTY_VALUE_TYPES_WRITABLE).optional(),
       config: z.record(z.string(), z.unknown()).nullable().optional(),
       description: z.string().nullable().optional(),
     })

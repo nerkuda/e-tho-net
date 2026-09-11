@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { EtnError, type PropertyDefinition } from '@etn/shared';
+import { EtnError, type PropertyDefinition, type ResolvedPropertyValue } from '@etn/shared';
 
 import DatabaseConstructor from 'better-sqlite3';
 
@@ -40,6 +40,7 @@ import {
 } from '../src/domain/property-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -193,11 +194,7 @@ describe(
       try {
         const author = createThoughtType(ndb, { name: 'Author' }, USER);
         const book = createThoughtType(ndb, { name: 'Book2' }, USER);
-        createTypeProperty(ndb, 'thought_type', book.id, {
-          key: 'author',
-          value_type: 'thought_ref',
-          config: { allowed_type_id: author.id },
-        }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', book.id, 'author', { allowed_type_id: author.id }, USER);
         const goodAuthor = seedTypedThought(ndb, author.id);
         const wrongType = seedTypedThought(ndb, book.id);
         const bookThought = seedTypedThought(ndb, book.id);
@@ -225,11 +222,7 @@ describe(
         const author = createThoughtType(ndb, { name: 'AuthorL' }, USER);
         const editor = createThoughtType(ndb, { name: 'EditorL' }, USER);
         const book = createThoughtType(ndb, { name: 'BookL' }, USER);
-        createTypeProperty(ndb, 'thought_type', book.id, {
-          key: 'author',
-          value_type: 'thought_ref',
-          config: { allowed_type_ids: [author.id, editor.id] },
-        }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', book.id, 'author', { allowed_type_ids: [author.id, editor.id] }, USER);
         const goodAuthor = seedTypedThought(ndb, author.id);
         const goodEditor = seedTypedThought(ndb, editor.id);
         const wrongType = seedTypedThought(ndb, book.id);
@@ -253,11 +246,7 @@ describe(
       try {
         const ta = createThoughtType(ndb, { name: 'AnyA' }, USER);
         const tb = createThoughtType(ndb, { name: 'AnyB' }, USER);
-        createTypeProperty(ndb, 'thought_type', ta.id, {
-          key: 'ref',
-          value_type: 'thought_ref',
-          config: { allowed_type_ids: [] },
-        }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', ta.id, 'ref', { allowed_type_ids: [] }, USER);
         const owner = seedTypedThought(ndb, ta.id);
         const other = seedTypedThought(ndb, tb.id);
         setPropertyValue(ndb, 'thought', owner, 'ref', other, USER);
@@ -272,10 +261,7 @@ describe(
       try {
         const author = createThoughtType(ndb, { name: 'AuthorR' }, USER);
         const book = createThoughtType(ndb, { name: 'BookR' }, USER);
-        createTypeProperty(ndb, 'thought_type', book.id, {
-          key: 'author',
-          value_type: 'thought_ref',
-        }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', book.id, 'author', {}, USER);
         const authorThought = seedTypedThought(ndb, author.id);
         const bookThought = seedTypedThought(ndb, book.id);
         // A plain text value must pass through untouched.
@@ -283,7 +269,9 @@ describe(
         setPropertyValue(ndb, 'thought', bookThought, 'author', authorThought, USER);
         setPropertyValue(ndb, 'thought', bookThought, 'note', 'hello', USER);
 
-        const resolved = getPropertyValuesResolved(ndb, 'thought', bookThought);
+        const resolved = getPropertyValuesResolved(ndb, 'thought', bookThought).filter(
+          (v): v is ResolvedPropertyValue => v.value_type !== 'link',
+        );
         assert.equal(resolved.length, 2);
         const ref = resolved.find((v) => typeof v.value === 'object' && v.value !== null);
         const note = resolved.find((v) => v.value === 'hello');
@@ -298,14 +286,16 @@ describe(
              VALUES (?, 'thought', ?, ?, ?, '2024')`,
           )
           .run(randomUUID(), orphan, ref?.property_id, 'no-such-thought');
-        const dangling = getPropertyValuesResolved(ndb, 'thought', orphan).find(
-          (v) =>
-            !Array.isArray(v.value) &&
-            typeof v.value === 'object' &&
-            v.value !== null &&
-            'title' in v.value &&
-            v.value.title === null,
-        );
+        const dangling = getPropertyValuesResolved(ndb, 'thought', orphan)
+          .filter((v): v is ResolvedPropertyValue => v.value_type !== 'link')
+          .find(
+            (v) =>
+              !Array.isArray(v.value) &&
+              typeof v.value === 'object' &&
+              v.value !== null &&
+              'title' in v.value &&
+              v.value.title === null,
+          );
         assert.deepEqual(dangling?.value, { id: 'no-such-thought', title: null });
       } finally {
         ndb.close();
@@ -405,8 +395,8 @@ describe(
       try {
         const person = createThoughtType(ndb, { name: 'Person' }, USER);
         const book = createThoughtType(ndb, { name: 'BookU' }, USER);
-        createTypeProperty(ndb, 'thought_type', book.id, { key: 'author', value_type: 'thought_ref' }, USER);
-        createTypeProperty(ndb, 'thought_type', book.id, { key: 'editor', value_type: 'thought_ref' }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', book.id, 'author', {}, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', book.id, 'editor', {}, USER);
         const target = seedTypedThought(ndb, person.id);
         const other = seedTypedThought(ndb, person.id);
         const b1 = seedTypedThought(ndb, book.id);
@@ -464,11 +454,7 @@ describe(
     } {
       const person = createThoughtType(ndb, { name: 'PersonM' }, USER);
       const book = createThoughtType(ndb, { name: 'BookM' }, USER);
-      const def = createTypeProperty(ndb, 'thought_type', book.id, {
-        key: 'authors',
-        value_type: 'thought_ref',
-        config: { multiple: true, ...config },
-      }, USER);
+      const def = seedThoughtRefProperty(ndb, 'thought_type', book.id, 'authors', { multiple: true, ...config }, USER);
       return {
         def,
         a: seedTypedThought(ndb, person.id),
@@ -505,11 +491,14 @@ describe(
       try {
         const authorType = createThoughtType(ndb, { name: 'AuthorMM' }, USER);
         const bookType = createThoughtType(ndb, { name: 'BookMM' }, USER);
-        const def = createTypeProperty(ndb, 'thought_type', bookType.id, {
-          key: 'authors',
-          value_type: 'thought_ref',
-          config: { multiple: true, allowed_type_ids: [authorType.id] },
-        }, USER);
+        const def = seedThoughtRefProperty(
+          ndb,
+          'thought_type',
+          bookType.id,
+          'authors',
+          { multiple: true, allowed_type_ids: [authorType.id] },
+          USER,
+        );
         const good = seedTypedThought(ndb, authorType.id);
         const wrongType = seedTypedThought(ndb, bookType.id);
         const owner = seedTypedThought(ndb, bookType.id);
@@ -539,7 +528,7 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         const tt = createThoughtType(ndb, { name: 'Single' }, USER);
-        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'ref', value_type: 'thought_ref' }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', tt.id, 'ref', {}, USER);
         const target = seedTypedThought(ndb, tt.id);
         const owner = seedTypedThought(ndb, tt.id);
         assert.throws(
@@ -602,7 +591,9 @@ describe(
           .prepare('UPDATE property_values SET value_thought_ref = ? WHERE owner_id = ? AND property_id = ?')
           .run(JSON.stringify([a, 'gone', b]), owner, def.property_id);
 
-        const resolved = getPropertyValuesResolved(ndb, 'thought', owner);
+        const resolved = getPropertyValuesResolved(ndb, 'thought', owner).filter(
+          (v): v is ResolvedPropertyValue => v.value_type !== 'link',
+        );
         assert.deepEqual(resolved[0]!.value, [
           { id: a, title: 'T' },
           { id: 'gone', title: null },
@@ -648,12 +639,15 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         const tt = createThoughtType(ndb, { name: 'ReqMulti' }, USER);
-        const def = createTypeProperty(ndb, 'thought_type', tt.id, {
-          key: 'refs',
-          value_type: 'thought_ref',
-          required: true,
-          config: { multiple: true },
-        }, USER);
+        const def = seedThoughtRefProperty(
+          ndb,
+          'thought_type',
+          tt.id,
+          'refs',
+          { multiple: true },
+          USER,
+          { required: true },
+        );
         const target = seedTypedThought(ndb, tt.id);
         const owner = seedTypedThought(ndb, tt.id);
         // Hand-made empty array row (writes normalize empty to a clear).

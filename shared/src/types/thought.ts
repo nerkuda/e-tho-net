@@ -622,8 +622,9 @@ export interface ThoughtCard {
    */
   type: import('./mcp.js').ThoughtTypeRef | null;
   /** Свойства мысли в форме `etn.thoughts.get` (резолвнутые `thought_ref`,
-   *  пометка `outside_type` для значений вне L21-цепочки). */
-  properties: import('./thought-type.js').ResolvedPropertyValue[];
+   *  пометка `outside_type` для значений вне L21-цепочки; свойства-связи —
+   *  счётчиком `count`, 0.8.1). */
+  properties: (import('./thought-type.js').ResolvedPropertyValue | import('./thought-type.js').ResolvedLinkProperty)[];
   /** «Сигналы полноты» (см. {@link ThoughtMeta}). */
   meta: ThoughtMeta;
   /** Полнотекстовый постоянный комментарий либо `null`. */

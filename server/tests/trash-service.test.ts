@@ -17,6 +17,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import {
   createTypeProperty,
   clearThoughtRefUsages,
@@ -53,10 +54,7 @@ describe(
       const ndb: NetworkDb = createInMemoryNetworkDb();
       try {
         const type = createThoughtType(ndb, { name: 'Проект' }, 'u');
-        createTypeProperty(ndb, 'thought_type', type.id, {
-          key: 'см. также',
-          value_type: 'thought_ref',
-        }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', type.id, 'см. также', {}, USER);
         const a = createThought(ndb, { title: 'A' }, 'u');
         const b = createThought(ndb, { title: 'B', type_id: type.id }, 'u');
         setPropertyValue(ndb, 'thought', b.id, 'см. также', a.id, USER);
@@ -103,7 +101,7 @@ describe(
       const ndb: NetworkDb = createInMemoryNetworkDb();
       try {
         const type = createThoughtType(ndb, { name: 'Задача' }, 'u');
-        createTypeProperty(ndb, 'thought_type', type.id, { key: 'исполнитель', value_type: 'thought_ref' }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', type.id, 'исполнитель', {}, USER);
         const target = createThought(ndb, { title: 'T' }, 'u');
         const ref = createThought(ndb, { title: 'R', type_id: type.id }, 'u');
         setPropertyValue(ndb, 'thought', ref.id, 'исполнитель', target.id, USER);

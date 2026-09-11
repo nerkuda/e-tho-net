@@ -118,6 +118,7 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   bool: 'булево',
   thought_ref: 'ссылка на мысль',
   url: 'URL (сайт или файл)',
+  link: 'связь',
 };
 
 /** Reloads the thought-type catalogue (selects and cloud styles read it). */
@@ -1854,6 +1855,7 @@ function defaultInputFor(
       return input;
     }
     case 'thought_ref':
+    case 'link':
       return span('не задаётся', 'muted');
   }
 }

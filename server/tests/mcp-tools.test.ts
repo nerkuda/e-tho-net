@@ -19,6 +19,7 @@ import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
 import { createTypeProperty, setTypePropertyDescriptionOverride } from '../src/domain/property-service.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import { ICON_DATA_URL_PLACEHOLDER } from '../src/mcp/catalogs.js';
 import {
   buildMcpContext,
@@ -2488,11 +2489,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       // Seed a multiple thought_ref property (direct inserts).
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const bookType = createThoughtType(ndb, { name: 'BookMR' }, ctx.adminId);
-      const def = createTypeProperty(ndb, 'thought_type', bookType.id, {
-        key: 'authors',
-        value_type: 'thought_ref',
-        config: { multiple: true },
-      }, USER);
+      const def = seedThoughtRefProperty(ndb, 'thought_type', bookType.id, 'authors', { multiple: true }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -2544,10 +2541,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
         // An array on a single-valued property is rejected.
         const personType = createThoughtType(ndb, { name: 'PersonMR' }, ctx.adminId);
-        createTypeProperty(ndb, 'thought_type', personType.id, {
-          key: 'ref',
-          value_type: 'thought_ref',
-        }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', personType.id, 'ref', {}, USER);
         const owner = await handle.client.callTool({
           name: 'etn.thoughts.create',
           arguments: { network_id: ctx.networkId, title: 'Владелец', type_id: personType.id },
@@ -2841,10 +2835,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const typeA = createThoughtType(ndb, { name: 'UseA' }, ctx.adminId);
       const typeB = createThoughtType(ndb, { name: 'UseB' }, ctx.adminId);
-      const defA = createTypeProperty(ndb, 'thought_type', typeA.id, {
-        key: 'refersto',
-        value_type: 'thought_ref',
-      }, USER);
+      const defA = seedThoughtRefProperty(ndb, 'thought_type', typeA.id, 'refersto', {}, USER);
       // Attach the SAME registry property to typeB by name — re-attaching an
       // already-bound property to a sibling type shares the registry id and
       // (after 0.6.5) is rejected as DUPLICATE (an ancestor owns it). So we

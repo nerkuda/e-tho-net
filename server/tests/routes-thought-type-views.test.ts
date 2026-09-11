@@ -37,6 +37,7 @@ import {
   nativeAvailable,
   type RestTestContext,
 } from './rest-helpers.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 
 /** Create a child of HOME and return its id. */
 async function createChild(ctx: RestTestContext, title: string): Promise<string> {
@@ -587,22 +588,9 @@ describe(
           const versiyaType = await createThoughtType(ctx, 'версия');
 
           // Свойство «версия» (thought_ref) на «работа» — наследуют задача/ошибка.
+          // 0.8.1: thought_ref больше не создаётся через реестр — сеем напрямую.
           const propName = `версия-${randomUUID().slice(0, 8)}`;
-          const regRes = await ctx.app.inject({
-            method: 'POST',
-            url: `/api/v1/networks/${ctx.networkId}/properties`,
-            headers: h,
-            payload: { name: propName, value_type: 'thought_ref' },
-          });
-          assert.equal(regRes.statusCode, 201, regRes.body?.toString());
-          const propId = (regRes.json().data as { id: string }).id;
-          const attach = await ctx.app.inject({
-            method: 'POST',
-            url: `/api/v1/networks/${ctx.networkId}/thought-types/${rabotaType}/properties`,
-            headers: h,
-            payload: { property_id: propId, required: false },
-          });
-          assert.equal(attach.statusCode, 201, attach.body?.toString());
+          const seededProp = seedThoughtRefProperty(ctx.ndb, 'thought_type', rabotaType, propName, {});
 
           // Контекстная мысль-версия (тип «версия»).
           const setType = async (thoughtId: string, typeId: string): Promise<void> => {
@@ -644,7 +632,7 @@ describe(
           // Отбор на типе «версия»: тип ∈ {задача, ошибка} И «версия» = $thought.
           const definition = JSON.stringify({
             type_ids: [zadachaType, oshibkaType],
-            properties: [{ property_id: propId, op: 'eq', value: '$thought' }],
+            properties: [{ property_id: seededProp.property_id, op: 'eq', value: '$thought' }],
             sort: 'alpha',
             order: 'asc',
           });

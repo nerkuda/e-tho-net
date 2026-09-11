@@ -26,6 +26,7 @@ import { MCP_TOOL_NAMES } from '@etn/shared';
 import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import { NetworkServiceImpl } from '../src/domain/network-service.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { createLogger } from '../src/logger.js';
@@ -443,13 +444,7 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
     try {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const type = createThoughtType(ndb, { name: 'TRefHolder' }, ctx.adminId);
-      createTypeProperty(
-        ndb,
-        'thought_type',
-        type.id,
-        { key: 'related', value_type: 'thought_ref' },
-        ctx.adminId,
-      );
+      seedThoughtRefProperty(ndb, 'thought_type', type.id, 'related', {}, ctx.adminId);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {

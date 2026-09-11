@@ -65,6 +65,7 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   bool: 'булево',
   thought_ref: 'ссылка на мысль',
   url: 'URL (сайт или файл)',
+  link: 'связь',
 };
 
 /** A registry row as returned by `GET /networks/{nid}/properties` (with counters). */
@@ -747,6 +748,7 @@ function defaultInputFor(
       return input;
     }
     case 'thought_ref':
+    case 'link':
       return span('не задаётся', 'muted');
   }
 }

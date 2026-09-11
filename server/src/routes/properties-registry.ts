@@ -18,7 +18,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  PROPERTY_VALUE_TYPES,
+  PROPERTY_VALUE_TYPES_WRITABLE,
   type NetworkProperty,
   type NetworkPropertyInput,
   type NetworkPropertyUpdateInput,
@@ -87,12 +87,12 @@ function parseCreateBody(
   const valueType = body.value_type;
   if (
     typeof valueType !== 'string' ||
-    !(PROPERTY_VALUE_TYPES as readonly string[]).includes(valueType)
+    !(PROPERTY_VALUE_TYPES_WRITABLE as readonly string[]).includes(valueType)
   ) {
     throw new EtnError(
       'VALIDATION_ERROR',
       'value_type обязателен и должен быть одним из поддерживаемых.',
-      { field: 'value_type', allowed: PROPERTY_VALUE_TYPES },
+      { field: 'value_type', allowed: PROPERTY_VALUE_TYPES_WRITABLE },
       requestId,
     );
   }
@@ -135,12 +135,12 @@ function parseUpdateBody(
   if (body.value_type !== undefined) {
     if (
       typeof body.value_type !== 'string' ||
-      !(PROPERTY_VALUE_TYPES as readonly string[]).includes(body.value_type)
+      !(PROPERTY_VALUE_TYPES_WRITABLE as readonly string[]).includes(body.value_type)
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
         'value_type должен быть одним из поддерживаемых.',
-        { field: 'value_type', allowed: PROPERTY_VALUE_TYPES },
+        { field: 'value_type', allowed: PROPERTY_VALUE_TYPES_WRITABLE },
         requestId,
       );
     }
@@ -242,6 +242,9 @@ function classifyStoredValues(
         } else value = raw;
         break;
       }
+      case 'link':
+        value = null;
+        break;
     }
     // Same conversion rules as the domain service.
     if (canConvert(value, to, ISO_DATE_RE)) converted += 1;
@@ -282,6 +285,8 @@ function canConvert(
       }
       return false;
     case 'thought_ref':
+      return false;
+    case 'link':
       return false;
   }
 }

@@ -81,6 +81,8 @@ const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly StructurePropertyOp[
   number: ['eq', 'gt', 'lt', 'is_empty', 'not_empty'],
   bool: ['eq'],
   thought_ref: ['eq', 'in', 'not_in', 'is_empty', 'not_empty'],
+  // Отбор по свойствам-связям — отдельная задача (4); до неё операций нет.
+  link: [],
 };
 
 /** Storage column of `property_values` per property `value_type`. */
@@ -91,6 +93,9 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   number: 'value_number',
   bool: 'value_bool',
   thought_ref: 'value_thought_ref',
+  // Свойство-связь значений в property_values не хранит (ADR «проекция
+  // ребра»); значение недостижимо — OPS_BY_VALUE_TYPE['link'] пуст.
+  link: 'value_thought_ref',
 };
 
 /** Default keyword scope (03-server-api.md §6.10): title + synonyms only —

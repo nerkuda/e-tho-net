@@ -29,10 +29,15 @@ import { randomUUID } from 'node:crypto';
 
 import {
   EtnError,
+  LINK_PROPERTY_DIRECTIONS,
   PROPERTY_VALUE_TYPES,
+  PROPERTY_VALUE_TYPES_WRITABLE,
   TYPE_OWNER_TYPES,
   typeNameKey,
   type EffectiveTypeProperty,
+  type LinkPropertyDirection,
+  type LinkPropertyValueItem,
+  type LinkPropertyValues,
   type NetworkProperty,
   type NetworkPropertyInput,
   type NetworkPropertyUpdateInput,
@@ -44,6 +49,7 @@ import {
   type PropertyValueType,
   type PropertyValue,
   type PropertyValueValue,
+  type ResolvedLinkProperty,
   type ResolvedPropertyValue,
   type ThoughtCardWarning,
   type ThoughtUsage,
@@ -54,6 +60,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
 import { propertyValueId } from '../db/property-value-id.js';
+import { getLinkType } from './link-type-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import {
   expandTypeIdsToSubtree,
@@ -100,15 +107,21 @@ function validateKey(key: unknown): string {
   return key.trim();
 }
 
-/** Validate a value type against the accepted enum. */
+/**
+ * Validate a value type for a NEW or CHANGED registry property definition.
+ * Uses {@link PROPERTY_VALUE_TYPES_WRITABLE}: `thought_ref` excluded (ADR «вид
+ * значения thought_ref упраздняется»), `link` included (0.8.1). Унаследованные
+ * `thought_ref`-свойства продолжают читаться — запрещено только их создание и
+ * возврат вида в реестр.
+ */
 function validateValueType(valueType: unknown): PropertyValueType {
   if (
     typeof valueType !== 'string' ||
-    !(PROPERTY_VALUE_TYPES as readonly string[]).includes(valueType)
+    !(PROPERTY_VALUE_TYPES_WRITABLE as readonly string[]).includes(valueType)
   ) {
     throw new EtnError('VALIDATION_ERROR', `invalid value_type: ${String(valueType)}`, {
       field: 'value_type',
-      allowed: PROPERTY_VALUE_TYPES,
+      allowed: PROPERTY_VALUE_TYPES_WRITABLE,
     });
   }
   return valueType as PropertyValueType;
@@ -196,6 +209,344 @@ function ownerTypeName(ndb: NetworkDb, ownerType: TypeOwnerType, ownerId: string
     .prepare('SELECT name_forward, name_reverse FROM link_types_v WHERE id = ?')
     .get(ownerId) as { name_forward: string; name_reverse: string } | undefined;
   return row ? `${row.name_forward} / ${row.name_reverse}` : ownerId;
+}
+
+// ===========================================================================
+// Link properties (0.8.1) — проекция типизированных рёбер в свойства
+// ===========================================================================
+
+/** Направление свойства-связи из config (по умолчанию `out` — владелец источник). */
+function linkPropertyDirection(config: PropertyConfig | null): LinkPropertyDirection {
+  return config?.direction === 'in' ? 'in' : 'out';
+}
+
+/**
+ * Имя свойства-связи, вычисленное из типа связи по направлению (требование
+ * 38eaa15c): у источника (`out`) — `name_forward`, у цели (`in`) — `name_reverse`.
+ * Имя НЕ хранится в определении свойства и не переопределяется на уровне типа.
+ * Если тип связи пропал (удалён/не виден в слое) — fallback на id, чтобы
+ * карточка не падала и агент видел, что ссылка повисла.
+ */
+function linkPropertyDisplayName(
+  ndb: NetworkDb,
+  linkTypeId: string,
+  direction: LinkPropertyDirection,
+): string {
+  const lt = getLinkType(ndb, linkTypeId);
+  if (lt === null) return linkTypeId;
+  return direction === 'in' ? lt.name_reverse : lt.name_forward;
+}
+
+/**
+ * Проверить конфигурацию свойства-связи (требование 2b9b5287): `link_type_id`
+ * обязателен и существует (не корневой), `direction` из enum,
+ * `allowed_target_type_ids` — существующие типы мыслей. Возвращает config
+ * (как есть — нормализация `direction` происходит при чтении).
+ */
+function validateLinkConfig(
+  ndb: NetworkDb,
+  config: PropertyConfig | null,
+  field: string,
+): PropertyConfig {
+  const cfg = config ?? {};
+  const linkTypeId = cfg.link_type_id;
+  if (typeof linkTypeId !== 'string' || linkTypeId === '') {
+    throw new EtnError('VALIDATION_ERROR', 'свойство-связь требует config.link_type_id', {
+      field: `${field}.link_type_id`,
+    });
+  }
+  const lt = getLinkType(ndb, linkTypeId);
+  if (lt === null) {
+    throw new EtnError('VALIDATION_ERROR', `тип связи ${linkTypeId} не найден`, {
+      field: `${field}.link_type_id`,
+      link_type_id: linkTypeId,
+    });
+  }
+  if (lt.is_root) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'корневой тип связи не может быть свойством-связью',
+      { field: `${field}.link_type_id`, link_type_id: linkTypeId },
+    );
+  }
+  if (
+    cfg.direction !== undefined &&
+    cfg.direction !== 'out' &&
+    cfg.direction !== 'in'
+  ) {
+    throw new EtnError('VALIDATION_ERROR', `invalid direction: ${String(cfg.direction)}`, {
+      field: `${field}.direction`,
+      allowed: LINK_PROPERTY_DIRECTIONS,
+    });
+  }
+  const allowed = cfg.allowed_target_type_ids;
+  if (allowed !== undefined) {
+    if (!Array.isArray(allowed) || allowed.some((id) => typeof id !== 'string' || id === '')) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'allowed_target_type_ids должен быть массивом id типов мыслей',
+        { field: `${field}.allowed_target_type_ids` },
+      );
+    }
+    for (const id of allowed) {
+      const row = ndb.prepare('SELECT id FROM thought_types_v WHERE id = ?').get(id);
+      if (!row) {
+        throw new EtnError('VALIDATION_ERROR', `тип мысли ${id} не найден`, {
+          field: `${field}.allowed_target_type_ids`,
+          id,
+        });
+      }
+    }
+  }
+  return cfg;
+}
+
+/**
+ * Проверить, что в наборе собственных свойств типа нет другого свойства-связи
+ * с той же парой (тип связи + направление) (требование 597b1c1a). Проверка —
+ * при правке онтологии, а не при записи мысли. `exceptPropertyId` исключает
+ * само правимое свойство. Внетиповые свойства-связи проверяются отдельно
+ * (совпадение типового и внетипового — не ошибка).
+ */
+function assertLinkPropertyPairUnique(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  ownerId: string,
+  linkTypeId: string,
+  direction: LinkPropertyDirection,
+  exceptPropertyId: string | null,
+): void {
+  const rows = ndb
+    .prepare(
+      `SELECT tp.property_id AS property_id, p.config AS config
+         FROM type_properties_v tp
+         JOIN properties_v p ON p.id = tp.property_id
+        WHERE tp.owner_type = ? AND tp.owner_id = ? AND p.value_type = 'link'`,
+    )
+    .all(ownerType, ownerId) as Array<{ property_id: string; config: string | null }>;
+  for (const row of rows) {
+    if (row.property_id === exceptPropertyId) continue;
+    let cfg: PropertyConfig | null = null;
+    try {
+      cfg = row.config ? (JSON.parse(row.config) as PropertyConfig) : null;
+    } catch {
+      cfg = null;
+    }
+    if ((cfg?.link_type_id ?? '') !== linkTypeId) continue;
+    if (linkPropertyDirection(cfg) !== direction) continue;
+    throw new EtnError(
+      'DUPLICATE',
+      'свойство-связь с этим типом связи и направлением уже есть в типе',
+      {
+        owner_type: ownerType,
+        owner_id: ownerId,
+        link_type_id: linkTypeId,
+        direction,
+        conflict_property_id: row.property_id,
+      },
+    );
+  }
+}
+
+/** Счётчики активных типизированных рёбер мысли по (type_id, direction). */
+function linkEdgeCounts(ndb: NetworkDb, thoughtId: string): Map<string, number> {
+  const rows = ndb
+    .prepare(
+      `SELECT type_id AS link_type_id, 'out' AS direction, COUNT(*) AS count
+         FROM links_v WHERE source_id = ? AND active = 1 AND type_id IS NOT NULL
+         GROUP BY type_id
+       UNION ALL
+       SELECT type_id AS link_type_id, 'in' AS direction, COUNT(*) AS count
+         FROM links_v WHERE target_id = ? AND active = 1 AND type_id IS NOT NULL
+         GROUP BY type_id`,
+    )
+    .all(thoughtId, thoughtId) as Array<{
+    link_type_id: string;
+    direction: 'out' | 'in';
+    count: number;
+  }>;
+  const out = new Map<string, number>();
+  for (const row of rows) {
+    const key = `${row.link_type_id}|${row.direction}`;
+    out.set(key, (out.get(key) ?? 0) + row.count);
+  }
+  return out;
+}
+
+/**
+ * Эффективные свойства-связи мысли: явные (из цепочки типа) + зеркальные
+ * (требование dde92461: `allowed_target_type_ids` порождает обратное свойство
+ * у допустимых типов) + внетиповые (обратная сторона свойства-связи без
+ * ограничения, либо свойство-связь не из типа мысли — `outside_type: true`).
+ *
+ * Каждая запись несёт счётчик {@link ResolvedLinkProperty.count}; рёбра в
+ * `property_values` не пишутся (ADR «свойство-связь — проекция ребра»).
+ */
+export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): ResolvedLinkProperty[] {
+  const typeRow = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(thoughtId) as
+    | { type_id: string | null }
+    | undefined;
+  const typeId = typeRow?.type_id ?? null;
+
+  interface Entry {
+    property_id: string;
+    link_type_id: string;
+    direction: LinkPropertyDirection;
+    outside_type: boolean;
+    description: string | null;
+    required: boolean;
+    count: number;
+  }
+  const byPair = new Map<string, Entry>();
+
+  const putEntry = (e: Entry): void => {
+    const key = `${e.link_type_id}|${e.direction}`;
+    if (!byPair.has(key)) byPair.set(key, e);
+  };
+
+  // 1. Явные свойства-связи из цепочки типа (только для типизированной мысли).
+  if (typeId !== null) {
+    for (const def of listEffectiveTypeProperties(ndb, 'thought_type', typeId)) {
+      if (def.value_type !== 'link') continue;
+      const cfg = def.config ?? {};
+      const linkTypeId = cfg.link_type_id;
+      if (typeof linkTypeId !== 'string' || linkTypeId === '') continue;
+      const direction = linkPropertyDirection(def.config);
+      putEntry({
+        property_id: def.property_id,
+        link_type_id: linkTypeId,
+        direction,
+        outside_type: false,
+        description: def.description,
+        required: def.required,
+        count: 0,
+      });
+    }
+  }
+
+  // 2. Зеркала: свойство-связь с allowed_target_type_ids, покрывающим тип мысли.
+  for (const prop of listNetworkProperties(ndb)) {
+    if (prop.value_type !== 'link') continue;
+    const cfg = prop.config ?? {};
+    const linkTypeId = cfg.link_type_id;
+    if (typeof linkTypeId !== 'string' || linkTypeId === '') continue;
+    const allowed = cfg.allowed_target_type_ids ?? [];
+    if (allowed.length === 0) continue;
+    if (typeId === null) continue;
+    const expanded = expandTypeIdsToSubtree(ndb, 'thought_types', allowed);
+    if (!expanded.includes(typeId)) continue;
+    const direction = linkPropertyDirection(cfg) === 'out' ? 'in' : 'out';
+    putEntry({
+      property_id: prop.id,
+      link_type_id: linkTypeId,
+      direction,
+      outside_type: false,
+      description: prop.description,
+      required: false,
+      count: 0,
+    });
+  }
+
+  const counts = linkEdgeCounts(ndb, thoughtId);
+
+  // 3. Внетиповые: рёбра, чья пара (тип связи + направление) не покрыта
+  //    явным/зеркальным свойством, но у типа связи есть свойство-связь в
+  //    реестре (обратная сторона без ограничения, требование dde92461, либо
+  //    свойство-связь не из типа мысли — dfaacb05).
+  const registryLinkTypes = new Set<string>();
+  for (const prop of listNetworkProperties(ndb)) {
+    if (prop.value_type !== 'link') continue;
+    const linkTypeId = prop.config?.link_type_id;
+    if (typeof linkTypeId === 'string' && linkTypeId !== '') registryLinkTypes.add(linkTypeId);
+  }
+  for (const [pair, count] of counts) {
+    if (count === 0) continue;
+    const [linkTypeId, direction] = pair.split('|') as [string, LinkPropertyDirection];
+    if (byPair.has(pair)) {
+      const e = byPair.get(pair)!;
+      e.count = count;
+      continue;
+    }
+    if (!registryLinkTypes.has(linkTypeId)) continue;
+    putEntry({
+      property_id: '',
+      link_type_id: linkTypeId,
+      direction,
+      outside_type: true,
+      description: null,
+      required: false,
+      count,
+    });
+  }
+
+  // Дозаписать счётчики для явных/зеркальных свойств (в т.ч. нулевые).
+  const result: ResolvedLinkProperty[] = [];
+  for (const entry of byPair.values()) {
+    result.push({
+      id: entry.property_id,
+      owner_type: 'thought',
+      owner_id: thoughtId,
+      property_id: entry.property_id,
+      outside_type: entry.outside_type,
+      property_name: linkPropertyDisplayName(ndb, entry.link_type_id, entry.direction),
+      value_type: 'link',
+      direction: entry.direction,
+      link_type_id: entry.link_type_id,
+      count: entry.count,
+      ...(entry.description !== null ? { description: entry.description } : {}),
+    });
+  }
+  return result;
+}
+
+/** Рёбра свойства-связи мысли (запрос значений): id ребра + цель + комментарий. */
+export function getLinkPropertyValues(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+  linkTypeId: string,
+  direction: LinkPropertyDirection,
+): LinkPropertyValueItem[] {
+  if (ownerType !== 'thought') return [];
+  const targetJoin =
+    direction === 'out'
+      ? 'JOIN thoughts_v t ON t.id = l.target_id'
+      : 'JOIN thoughts_v t ON t.id = l.source_id';
+  const ownerCol = direction === 'out' ? 'l.source_id' : 'l.target_id';
+  const rows = ndb
+    .prepare(
+      `SELECT l.id AS link_id, t.id AS target_id, t.title AS target_title, t.type_id AS target_type_id
+         FROM links_v l
+         ${targetJoin}
+        WHERE ${ownerCol} = ? AND l.type_id = ? AND l.active = 1
+        ORDER BY l.created_at DESC, l.id DESC`,
+    )
+    .all(ownerId, linkTypeId) as Array<{
+    link_id: string;
+    target_id: string;
+    target_title: string | null;
+    target_type_id: string | null;
+  }>;
+  const linkIds = rows.map((r) => r.link_id);
+  const commentByLink = new Map<string, string | null>();
+  if (linkIds.length > 0) {
+    const commentRows = ndb
+      .prepare(
+        `SELECT owner_id, body_md FROM comments_v
+          WHERE owner_type = 'link' AND kind = 'permanent' AND owner_id IN (${linkIds
+            .map(() => '?')
+            .join(',')})`,
+      )
+      .all(...linkIds) as Array<{ owner_id: string; body_md: string }>;
+    for (const c of commentRows) commentByLink.set(c.owner_id, c.body_md);
+  }
+  return rows.map((r) => ({
+    link_id: r.link_id,
+    target_id: r.target_id,
+    target_title: r.target_title,
+    target_type_id: r.target_type_id,
+    comment: commentByLink.get(r.link_id) ?? null,
+  }));
 }
 
 // ===========================================================================
@@ -317,10 +668,22 @@ export function createNetworkProperty(
   input: NetworkPropertyInput,
   actorUserId: string,
 ): NetworkProperty {
-  const name = validateKey(input.name);
   const valueType = validateValueType(input.value_type);
-  const configJson =
-    input.config === undefined || input.config === null ? null : JSON.stringify(input.config);
+  let config = input.config === undefined || input.config === null ? null : input.config;
+  // Свойство-связь: имя не хранится/не правится — вычисляется из типа связи
+  // по направлению (требование 38eaa15c). Входной name игнорируется.
+  let name: string;
+  if (valueType === 'link') {
+    config = validateLinkConfig(ndb, config, 'config');
+    name = linkPropertyDisplayName(
+      ndb,
+      config.link_type_id as string,
+      linkPropertyDirection(config),
+    );
+  } else {
+    name = validateKey(input.name);
+  }
+  const configJson = config === null ? null : JSON.stringify(config);
   const description = normalizeDescription(input.description);
   const id = randomUUID();
   const nowMs = Date.now();
@@ -379,9 +742,23 @@ export function updateNetworkProperty(
   if (!current) {
     throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'property', id });
   }
-  const nextName = changes.name !== undefined ? validateKey(changes.name) : undefined;
   const nextType =
     changes.value_type !== undefined ? validateValueType(changes.value_type) : undefined;
+  const finalType = nextType ?? current.value_type;
+  const finalConfig = changes.config !== undefined ? changes.config : current.config;
+
+  // Свойство-связь: имя выводится из типа связи, а не из запроса. Правка
+  // config/value_type на 'link' валидируется здесь же.
+  let validatedConfig: PropertyConfig | null | undefined = undefined;
+  let nextName = changes.name !== undefined ? validateKey(changes.name) : undefined;
+  if (finalType === 'link') {
+    validatedConfig = validateLinkConfig(ndb, finalConfig, 'config');
+    nextName = linkPropertyDisplayName(
+      ndb,
+      (validatedConfig.link_type_id as string),
+      linkPropertyDirection(validatedConfig),
+    );
+  }
 
   return ndb.transaction(() => {
     if (nextName !== undefined && nextName !== current.name) {
@@ -400,7 +777,10 @@ export function updateNetworkProperty(
       sets.push('value_type = ?');
       args.push(nextType);
     }
-    if (changes.config !== undefined) {
+    if (validatedConfig !== undefined) {
+      sets.push('config = ?');
+      args.push(JSON.stringify(validatedConfig));
+    } else if (changes.config !== undefined) {
       sets.push('config = ?');
       args.push(changes.config === null ? null : JSON.stringify(changes.config));
     }
@@ -626,6 +1006,16 @@ export function listEffectiveTypeProperties(
       const ownDefault = def.config?.default_value ?? null;
       out.push({
         ...def,
+        // Имя свойства-связи вычисляется из типа связи по направлению
+        // (требование 38eaa15c), а не берётся из справочника.
+        key:
+          def.value_type === 'link'
+            ? linkPropertyDisplayName(
+                ndb,
+                (def.config?.link_type_id ?? '') as string,
+                linkPropertyDirection(def.config),
+              )
+            : def.key,
         inherited,
         defined_on: typeId,
         defined_on_name: ownerTypeName(ndb, ownerType, typeId),
@@ -935,6 +1325,20 @@ export function createTypeProperty(
       );
     }
 
+    // Уникальность пары (тип связи + направление) в наборе собственных свойств
+    // типа (требование 597b1c1a). Совпадение с внетиповым свойством — не ошибка.
+    if (prop.value_type === 'link') {
+      const cfg = prop.config ?? {};
+      assertLinkPropertyPairUnique(
+        ndb,
+        ownerType,
+        ownerId,
+        cfg.link_type_id as string,
+        linkPropertyDirection(prop.config),
+        null,
+      );
+    }
+
     // Attaching here makes the same property's bindings across the subtree
     // redundant (02-data-model.md §3.4.1): drop them in this transaction.
     // Values survive — they reference the property, not the binding.
@@ -1033,6 +1437,10 @@ function convertStoredValue(
       return null;
     }
     case 'thought_ref':
+      return null;
+    case 'link':
+      // Значение свойства-связи не хранится — конверсия в 'link' всегда
+      // сбрасывает значение (ребро создаётся отдельно, задача 3).
       return null;
   }
 }
@@ -1139,7 +1547,21 @@ export function updateTypeProperty(
     if (typeTouched) {
       touchType(ndb, current.owner_type, current.owner_id, actorUserId);
     }
-    return getTypeProperty(ndb, id)!;
+    // Уникальность пары (тип связи + направление) при правке свойства-связи
+    // (требование 597b1c1a): смена value_type/config могла изменить пару.
+    const updated = getTypeProperty(ndb, id);
+    if (updated !== null && updated.value_type === 'link') {
+      const cfg = updated.config ?? {};
+      assertLinkPropertyPairUnique(
+        ndb,
+        updated.owner_type,
+        updated.owner_id,
+        cfg.link_type_id as string,
+        linkPropertyDirection(updated.config),
+        updated.property_id,
+      );
+    }
+    return updated!;
   });
 }
 
@@ -1249,6 +1671,10 @@ function readValue(
       if (raw.startsWith('[')) return parseRefIds(raw);
       return multiple ? [raw] : raw;
     }
+    case 'link':
+      // Значения свойства-связи не хранятся в property_values (ADR «свойство-связь
+      // — проекция ребра») — строка-призрак читается как null.
+      return null;
   }
 }
 
@@ -1410,6 +1836,28 @@ export function getPropertyValues(
 }
 
 /**
+ * Значения свойств для REST `GET …/properties` (0.8.1): скаляры как раньше
+ * плюс свойства-связи — списком рёбер (id ребра + цель + комментарий,
+ * требование d024dbd6). Карточка MCP отдаёт счётчики, этот запрос — рёбра.
+ */
+export function getPropertyValuesWithLinks(
+  ndb: NetworkDb,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
+): (PropertyValue | LinkPropertyValues)[] {
+  const out: (PropertyValue | LinkPropertyValues)[] = getPropertyValues(ndb, ownerType, ownerId);
+  if (ownerType === 'thought') {
+    for (const lp of listThoughtLinkProperties(ndb, ownerId)) {
+      out.push({
+        ...lp,
+        values: getLinkPropertyValues(ndb, ownerType, ownerId, lp.link_type_id, lp.direction),
+      });
+    }
+  }
+  return out;
+}
+
+/**
  * MCP-чтение значений свойств (task N4, docs/05-mcp-server.md §4.1): то же,
  * что {@link getPropertyValues}, но `thought_ref`-значения резолвнуты в
  * `{id, title}` — агенту не нужны отдельные вызовы `etn.thoughts.get` на
@@ -1421,7 +1869,7 @@ export function getPropertyValuesResolved(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
-): ResolvedPropertyValue[] {
+): (ResolvedPropertyValue | ResolvedLinkProperty)[] {
   const rows = ndb
     .prepare(
       `SELECT pv.*, p.name AS property_name, p.value_type AS property_value_type, p.config AS property_config,
@@ -1469,7 +1917,7 @@ export function getPropertyValuesResolved(
       .all(...ids) as Array<{ id: string; title: string }>;
     for (const t of titleRows) titlesById.set(t.id, t.title);
   }
-  const out: ResolvedPropertyValue[] = [];
+  const out: (ResolvedPropertyValue | ResolvedLinkProperty)[] = [];
   for (const { row, prop, value } of prepared) {
     let resolved: ResolvedPropertyValue['value'] = value;
     if (prop.value_type === 'thought_ref') {
@@ -1494,6 +1942,12 @@ export function getPropertyValuesResolved(
       created_at_ms: row.created_at_ms,
       updated_at_ms: row.updated_at_ms,
     });
+  }
+  // Свойства-связи: карточка отдаёт их счётчиками (требование d024dbd6).
+  if (ownerType === 'thought') {
+    for (const lp of listThoughtLinkProperties(ndb, ownerId)) {
+      out.push(lp);
+    }
   }
   return out;
 }
@@ -1728,6 +2182,15 @@ function validateAndCoerce(
       validateThoughtRefTarget(ndb, prop, value);
       return { column, raw: isMultipleProperty(prop) ? JSON.stringify([value]) : value };
     }
+    case 'link':
+      // Значение свойства-связи записывается созданием/правкой ребра, а не
+      // значением в property_values (ADR «свойство-связь — проекция ребра»).
+      // Запись через свойства — отдельная задача (3), здесь — явный отказ.
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `свойство «${prop.name}» — связь: заполняется ребром, а не значением`,
+        { key: prop.name, expected: 'link' },
+      );
   }
 }
 
@@ -2055,15 +2518,27 @@ export function computeThoughtCardWarnings(
   if (effective.length === 0) {
     return [];
   }
-  // Map (property_id → value) of everything currently stored on the thought.
+  // Map (property_id → value) of everything currently stored on the thought
+  // (только скаляры: свойства-связи значений в property_values не хранят).
   const stored = new Map<string, PropertyValueValue>();
   for (const v of getPropertyValues(ndb, 'thought', thoughtId)) {
+    if (v.value_type === 'link') continue;
     stored.set(v.property_id, v.value);
   }
+  // Счётчики рёбер — для проверки обязательных свойств-связей (требование
+  // 7df6b966): заполнено, если есть хотя бы одно живое ребро.
+  const edgeCounts = linkEdgeCounts(ndb, thoughtId);
   const warnings: ThoughtCardWarning[] = [];
   for (const def of effective) {
     if (!def.required) continue;
-    if (hasValue(stored.get(def.property_id))) continue;
+    if (def.value_type === 'link') {
+      const cfg = def.config ?? {};
+      const linkTypeId = cfg.link_type_id as string;
+      const direction = linkPropertyDirection(def.config);
+      if ((edgeCounts.get(`${linkTypeId}|${direction}`) ?? 0) > 0) continue;
+    } else if (hasValue(stored.get(def.property_id))) {
+      continue;
+    }
     warnings.push({
       code: 'REQUIRED_PROPERTY_MISSING',
       key: def.key,

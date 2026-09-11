@@ -1377,6 +1377,7 @@ const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; la
     { op: 'not_empty', label: 'заполнено' },
     { op: 'is_empty', label: 'не заполнено' },
   ],
+  link: [],
 };
 
 // ---------------------------------------------------------------------------

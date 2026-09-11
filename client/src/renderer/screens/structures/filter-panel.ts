@@ -185,6 +185,7 @@ export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropert
     { op: 'not_empty', label: 'заполнено' },
     { op: 'is_empty', label: 'не заполнено' },
   ],
+  link: [],
 };
 
 /** Default panel state: empty filter → HOME only (§15.3). */

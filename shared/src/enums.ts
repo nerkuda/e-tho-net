@@ -15,7 +15,12 @@ export const NETWORK_ROLES = ['owner', 'member'] as const;
 export type NetworkRole = (typeof NETWORK_ROLES)[number];
 
 /** Value types accepted by a {@link PropertyDefinition} (02-data-model.md §3.4).
- *  `url` (a web address or a file link) is stored in `value_text` like `text`. */
+ *  `url` (a web address or a file link) is stored in `value_text` like `text`.
+ *  `link` (0.8.1) — свойство-связь: значение вычисляется из рёбер `links` и в
+ *  `property_values` не хранится (ADR «свойство-связь — проекция ребра»).
+ *  `thought_ref` сохранён в union только для чтения/миграции унаследованных
+ *  данных — новые свойства этим видом не создаются и в реестр не возвращаются
+ *  (ADR «вид значения thought_ref упраздняется»), см. {@link PROPERTY_VALUE_TYPES_WRITABLE}. */
 export const PROPERTY_VALUE_TYPES = [
   'text',
   'date',
@@ -23,8 +28,33 @@ export const PROPERTY_VALUE_TYPES = [
   'bool',
   'thought_ref',
   'url',
+  'link',
 ] as const;
 export type PropertyValueType = (typeof PROPERTY_VALUE_TYPES)[number];
+
+/**
+ * Виды значения, допустимые для СОЗДАНИЯ/ПРАВКИ определения свойства в реестре
+ * (0.8.1). Отличается от {@link PROPERTY_VALUE_TYPES} отсутствием `thought_ref`:
+ * ADR «вид значения thought_ref упраздняется» — всякая ссылка на мысль теперь
+ * моделируется свойством-связью. Унаследованные `thought_ref`-свойства и их
+ * значения продолжают читаться (миграция — отдельная задача), но объявить
+ * новое или вернуть вид в реестр нельзя.
+ */
+export const PROPERTY_VALUE_TYPES_WRITABLE = [
+  'text',
+  'date',
+  'number',
+  'bool',
+  'url',
+  'link',
+] as const;
+export type WritablePropertyValueType = (typeof PROPERTY_VALUE_TYPES_WRITABLE)[number];
+
+/** Направление свойства-связи от владельца (0.8.1): `out` — владелец является
+ *  источником ребра (свойство читается прямым именем `name_forward`), `in` —
+ *  владелец является целью (обратным именем `name_reverse`). */
+export const LINK_PROPERTY_DIRECTIONS = ['out', 'in'] as const;
+export type LinkPropertyDirection = (typeof LINK_PROPERTY_DIRECTIONS)[number];
 
 /** Kinds of comments an entity may own (02-data-model.md §3.8). */
 export const COMMENT_KINDS = ['permanent', 'chronological'] as const;
