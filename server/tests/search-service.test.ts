@@ -655,6 +655,108 @@ describe(
       }
     });
 
+    it('search finds an infix occurrence anywhere in a word, not just its prefix (bug 0258fd9d)', () => {
+      // The `trigram` FTS5 tokenizer (migration 038_search_trigram.sql)
+      // replaced the old `unicode61` prefix-only matching precisely so that
+      // «публик» finds «опубликовано»/«перепубликация», not only words that
+      // START with «публик».
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Опубликовано на Хабре');
+        seedThought(ndb, 'Черновик статьи о перепубликации');
+        seedThought(ndb, 'Не имеет отношения к делу');
+        const res = search(ndb, { q: 'публик' });
+        assert.deepEqual(
+          new Set(res.by_names.map((h) => h.title)),
+          new Set(['Опубликовано на Хабре', 'Черновик статьи о перепубликации']),
+          'infix «публик» matches both titles regardless of position in the word',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search matches infix fragments in any order and finds them in comment bodies (§ example)', () => {
+      // The bug's own example: «публик хаб» must find «опубликовано на
+      // гитхабе» (both fragments present, any order, any position) — and the
+      // same substring semantics apply to by_texts/by_links/by_chrono, not
+      // only by_names.
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Заметка о ГитХабе');
+        const t = seedThought(ndb, 'Owner');
+        seedThoughtComment(ndb, t, 'опубликовано на гитхабе вчера');
+        const namesRes = search(ndb, { q: 'хаб' });
+        assert.ok(namesRes.by_names.some((h) => h.title === 'Заметка о ГитХабе'));
+        const textsRes = search(ndb, { q: 'публик хаб' });
+        assert.equal(textsRes.by_texts.length, 1, 'both infix fragments matched in any order');
+        assert.equal(textsRes.by_texts[0]!.thought_id, t);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search infix matching case-folds Cyrillic without a custom lower()', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Бета-тема тестовая');
+        const res = search(ndb, { q: 'БЕТА' });
+        assert.equal(res.by_names.length, 1, 'uppercase Cyrillic query still matches');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search by_names falls back to LIKE for fragments shorter than the trigram floor (Tier 1)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Хаб публикаций');
+        seedThought(ndb, 'Совсем другая тема');
+        // A 2-character include word has no usable trigram phrase — by_names
+        // still filters via `title_norm LIKE '%ха%'`.
+        const res = search(ndb, { q: 'ха' });
+        assert.deepEqual(
+          res.by_names.map((h) => h.title),
+          ['Хаб публикаций'],
+          'a short (<3 char) fragment still filters by_names via the LIKE fallback',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search by_names LIKE fallback also honours short -word exclusions', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Хаб публикаций');
+        seedThought(ndb, 'Хаб без слова на "ав"ов');
+        const res = search(ndb, { q: 'хаб -ав' });
+        assert.deepEqual(
+          res.by_names.map((h) => h.title),
+          ['Хаб публикаций'],
+          'short exclusion word narrows by_names via NOT LIKE',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('search by_texts/by_links/by_chrono do not filter on fragments shorter than 3 chars (Tier 1 scope)', () => {
+      // Documented limitation (bug 0258fd9d, Tier 1): comments.body_md has no
+      // normalized column to power a Cyrillic-correct LIKE fallback, so a
+      // query with ONLY short words returns nothing for these three groups —
+      // by_names is the only group with a fallback.
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Owner');
+        seedThoughtComment(ndb, t, 'remember the milk');
+        const res = search(ndb, { q: 'ha' });
+        assert.equal(res.by_texts.length, 0, 'no trigram anchor and no LIKE fallback for body text');
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('findDuplicates matches consecutive input words inside the phrase (0.4.5)', () => {
       const ndb = createInMemoryNetworkDb();
       try {

@@ -19,6 +19,7 @@ import type Database from 'better-sqlite3';
 import type { FastifyInstance } from 'fastify';
 import { WebSocket } from 'ws';
 
+import { DEFAULT_MCP_SESSION_IDLE_TTL_MS } from '../src/config.js';
 import type { ServerConfig } from '../src/config.js';
 import type { RealtimeGatewayOptions } from '../src/realtime/gateway.js';
 import { SystemDb } from '../src/db/system-db.js';
@@ -45,7 +46,7 @@ const TEST_CONFIG: ServerConfig = {
   port: 0,
   tls: null,
   logLevel: 'silent',
-  mcp: { enabled: false, port: null },
+  mcp: { enabled: false, port: null, sessionIdleTtlMs: DEFAULT_MCP_SESSION_IDLE_TTL_MS },
 };
 
 /** A seeded user with a usable API-key. */

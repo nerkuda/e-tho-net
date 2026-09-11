@@ -310,14 +310,23 @@ let registrationsDone = false;
 /** Unsubscribes the store subscription of the previous editor mount. */
 let storeUnsubscribe: (() => void) | null = null;
 /**
- * Cache of the last (open entity id + version) for the cheap store-subscribe
- * gate in `mountEditor`. Compared against the live `currentEditorContext()` —
- * when both match, the store update is for canvas-only state and the editor
- * is left alone (bug 206e33a1 «Бессмысленное обновление редактора при
- * получении внешних событий»). The render signature guard is still the
+ * Cache of the last (open entity id + layer + version) for the cheap
+ * store-subscribe gate in `mountEditor`. Compared against the live
+ * `currentEditorContext()` and `store.state.currentLayer` — when all three
+ * match, the store update is for canvas-only state and the editor is left
+ * alone (bug 206e33a1 «Бессмысленное обновление редактора при получении
+ * внешних событий»). The `layerId` leg matters on its own: a layer switch
+ * must re-render even when the focused thought is the same id+version in
+ * both layers — its properties can differ through shadow overrides, and
+ * ETN error dc4e0c07 made the editor keep the old layer's header + a
+ * raw 404 in the property list. The render signature guard is still the
  * authoritative filter for an actual rebuild.
  */
-let liveRenderedKey: { ownerId: string; version: string | number } | null = null;
+let liveRenderedKey: {
+  ownerId: string;
+  layerId: string | null;
+  version: string | number;
+} | null = null;
 
 /** Badge spans of the current render, per counted tab (for refreshTabCount). */
 const tabCountSpans = new Map<EditorTabId, HTMLElement>();
@@ -433,9 +442,11 @@ export function mountEditor(editorHost: HTMLElement): void {
       return;
     }
     const liveVersion = ctx.ownerType === 'thought' ? ctx.thought?.version : ctx.link?.version;
+    const liveLayerId = store.state.currentLayer?.id ?? null;
     if (
       liveRenderedKey !== null &&
       liveRenderedKey.ownerId === ctx.ownerId &&
+      liveRenderedKey.layerId === liveLayerId &&
       liveRenderedKey.version === (liveVersion ?? '')
     ) {
       return;
@@ -595,11 +606,18 @@ async function render(): Promise<void> {
   // Two-part signature (bug 6b757336). `identitySignature` — the open entity
   // and dock — governs which path runs; `fullSignature` adds the version and
   // guards the "nothing changed at all" early exit that used to be the only
-  // check here.
+  // check here. The session's `currentLayer` is part of both signatures on
+  // purpose (ETN error dc4e0c07): a layer switch must rebuild even when the
+  // focused thought is the same id+version in both layers — its properties
+  // can differ through shadow overrides, and the editor must not keep the
+  // old layer's header + property cache.
+  const layerId = store.state.currentLayer?.id ?? '';
   const identitySignature =
-    ctx === null ? 'null' : `${ctx.ownerType}|${ctx.ownerId}|${store.state.editorPosition}`;
+    ctx === null ? 'null' : `${ctx.ownerType}|${ctx.ownerId}|${store.state.editorPosition}|${layerId}`;
   const fullSignature =
-    ctx === null ? 'null' : `${identitySignature}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}`;
+    ctx === null
+      ? 'null'
+      : `${identitySignature}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}`;
   if (fullSignature === lastSignature) return;
 
   // A version-only change of the SAME already-rendered, already-loaded
@@ -629,12 +647,15 @@ async function render(): Promise<void> {
   // Remember the live open entity so the cheap store-subscribe gate in
   // `mountEditor` can skip unrelated updates (canvas-only state, indicators,
   // pin list, etc.). Cleared here on every rebuild so the next store tick
-  // re-reads the live context.
+  // re-reads the live context. The `layerId` leg is what makes a layer
+  // switch force a rebuild (ETN error dc4e0c07) — same thought in two
+  // layers is still a different render target for the editor.
   liveRenderedKey =
     ctx === null
       ? null
       : {
           ownerId: ctx.ownerId,
+          layerId: store.state.currentLayer?.id ?? null,
           version:
             ctx.ownerType === 'thought'
               ? (ctx.thought?.version ?? '')

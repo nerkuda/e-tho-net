@@ -18,8 +18,8 @@ import { buildEtnMcpServer } from './server.js';
 import type { McpDeps } from './types.js';
 
 export { createApiKeyAuthProvider } from './auth.js';
-export { createMcpHttpEndpoint, handleMcpNodeRequest, MCP_SESSION_IDLE_TTL_MS } from './http.js';
-export type { McpHttpEndpoint, McpHttpOutcome } from './http.js';
+export { createMcpHttpEndpoint, handleMcpNodeRequest } from './http.js';
+export type { McpHttpEndpoint, McpHttpOptions, McpHttpOutcome } from './http.js';
 export { runStdioMcp } from './stdio.js';
 export { resolveMcpLimits, WriteRateLimiter } from './limits.js';
 export type { ResolvedMcpLimits } from './limits.js';

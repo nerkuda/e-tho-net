@@ -16,6 +16,13 @@ import type { FocusResponse, Thought } from '@etn/shared';
 import { closeDialog, errorDialog } from './lib/dialog.js';
 import { hasTextSelection } from './lib/dom.js';
 import { etn } from './lib/etn.js';
+import {
+  refreshFocusOrNull,
+  resetFocusToHome,
+  zoneStateFromFocus,
+  ensureManualPositionsInitialized,
+  findRootThought,
+} from './lib/layer-resync.js';
 import { closeMenu } from './lib/menu.js';
 import { notice } from './lib/notice.js';
 import { logUiEvent } from './lib/ui-log.js';
@@ -60,25 +67,12 @@ const REFRESH_DEBOUNCE_MS = 200;
 let refreshTimer: number | null = null;
 
 /**
- * Finds the protected HOME (root) thought of a freshly opened network. The root
- * is identified by the `is_root` flag, not by its title — the home thought may
- * be renamed (e.g. to the network's own name), so a title search would miss it.
- * The structural query with an empty filter returns exactly the root thought
- * (03-server-api.md §6.10).
+ * Re-exported from `lib/layer-resync.ts` for callers that already import
+ * `findRootThought` from here (chronicle.ts, others). The implementation
+ * lives there to keep the focus-side helpers canvas-free and individually
+ * testable.
  */
-export async function findRootThought(networkId: string): Promise<Thought> {
-  const result = await etn.structures.query(networkId, {
-    sort: 'alpha',
-    order: 'asc',
-    limit: 1,
-    offset: 0,
-  });
-  const root = result.items[0];
-  if (root === undefined) {
-    throw new Error('Не удалось найти корневую мысль этой сети.');
-  }
-  return etn.thoughts.get(networkId, root.id);
-}
+export { findRootThought } from './lib/layer-resync.js';
 
 /**
  * Opens a network (H3): loads L2 meta, L3 preferences and L4 ui_state, picks
@@ -304,57 +298,11 @@ export async function loadFocusForTab(
 /**
  * Derives the per-zone sort and display order from a focus response, so the
  * cloud drag module can decide reorder-vs-bounce-back and rebuild an order.
+ *
+ * (`zoneStateFromFocus` and `ensureManualPositionsInitialized` live in
+ * `lib/layer-resync.ts` — imported above — so the focus-reset path is
+ * canvas-free and individually testable.)
  */
-function zoneStateFromFocus(response: FocusResponse): {
-  zoneSorts: FocusResponse['sorts'];
-  zoneOrder: { parents: string[]; children: string[] };
-} {
-  const order = (arr: typeof response.parents): string[] => [...new Set(arr.map((n) => n.id))];
-  return {
-    zoneSorts: response.sorts,
-    zoneOrder: { parents: order(response.parents), children: order(response.children) },
-  };
-}
-
-/**
- * Initialise `user_focus_order` for any `manual`-sorted zone whose neighbours
- * all came back with `manual_position === null`. This catches two cases:
- *
- *  1. The user just switched a zone to manual — `setZoneSort` already commits
- *     the current order up-front, but if that call was on an older client
- *     (or the request failed silently), `user_focus_order` may be empty.
- *  2. The zone was already manual before this client started, and no one has
- *     reordered since — the server has no positions to surface.
- *
- * Without this backstop the .cloud-pos indicator (08-ui-spec.md §2.2) stays
- * hidden for every neighbour in the zone, which looks exactly like the
- * feature being broken.
- *
- * Safe to call repeatedly: once positions exist, the second pass is a no-op
- * (no neighbour has `manual_position === null` any more).
- */
-async function ensureManualPositionsInitialized(
-  networkId: string,
-  focusId: string,
-  response: FocusResponse,
-  zoneOrder: { parents: string[]; children: string[] },
-): Promise<void> {
-  for (const dir of ['parents', 'children'] as const) {
-    if (response.sorts[dir].sort !== 'manual') continue;
-    const neighbourArr = dir === 'parents' ? response.parents : response.children;
-    if (neighbourArr.length === 0) continue;
-    const allUnpositioned = neighbourArr.every((n) => n.manual_position === null);
-    if (!allUnpositioned) continue;
-    const ordered_ids = zoneOrder[dir];
-    if (ordered_ids.length === 0) continue;
-    try {
-      await etn.thoughts.setFocusOrder(networkId, focusId, { dir, ordered_ids });
-    } catch {
-      // Best-effort — if this fails the user can still reorder manually and
-      // the next refresh will see the now-existing positions.
-    }
-  }
-}
 
 /**
  * Focuses a thought (H5): fetches the focus response, rotates local history
@@ -398,15 +346,17 @@ export async function setFocus(id: string): Promise<void> {
 /**
  * Refetches the current focus without touching the focus history (used for
  * realtime refreshes and `resume.stale`).
+ *
+ * Returns when the focus was either re-read or silently kept (no thought to
+ * refresh, or the focused thought is not present in the current layer — that
+ * is `refreshFocusOrNull`'s job and its `null` is treated as "nothing to
+ * do" here; layer switches handle the 404 case separately, in
+ * `resyncAfterLayerSwitch`).
  */
 export async function refreshFocus(): Promise<void> {
   const networkId = store.state.networkId;
-  const focusId = store.state.focus?.focused.id;
-  if (networkId === null || focusId === undefined) return;
-  const response: FocusResponse = await etn.thoughts.focus(networkId, focusId);
-  const zoneState = zoneStateFromFocus(response);
-  store.update({ focus: response, ...zoneState });
-  void ensureManualPositionsInitialized(networkId, focusId, response, zoneState.zoneOrder).catch(() => undefined);
+  if (networkId === null) return;
+  await refreshFocusOrNull(networkId);
 }
 
 /** Coalesces consecutive refresh requests into one call. */
@@ -427,6 +377,12 @@ export function scheduleRefresh(): void {
  * in the previous layer's context — drop them and re-read everything the
  * new layer resolves. Called on the local layer switch (`selectLayerForTab`)
  * and on the server-side `layer.switched`/`layer.deleted` control frames.
+ *
+ * If the previously focused thought is not present in the new layer (it was
+ * created in a non-base layer that the tab just left), the focus refresh
+ * 404s — fall back to HOME so the editor/canvas have a valid row to render
+ * instead of pinning the stale entity from the previous layer's context
+ * (ETN error dc4e0c07).
  */
 export async function resyncAfterLayerSwitch(): Promise<void> {
   const networkId = store.state.networkId;
@@ -441,7 +397,18 @@ export async function resyncAfterLayerSwitch(): Promise<void> {
   // Re-read the focus FIRST: the editor follows it once the cached snapshots
   // are dropped below, and this way it renders straight into the new layer's
   // data instead of flashing the old layer's focus for a frame.
-  await refreshFocus().catch(() => undefined);
+  //
+  // If the focused thought is not present in the new layer (it was created in
+  // a non-base layer that the tab just left), `refreshFocusOrNull` returns
+  // `null` — fall back to HOME so the editor/canvas have a valid row in the
+  // new layer instead of pinning the stale entity from the previous layer's
+  // context. Without this, the editor would keep rendering the cached header
+  // and every property fetch would 404 with a raw server string in the UI
+  // (ETN error dc4e0c07).
+  const focusOk = await refreshFocusOrNull(networkId);
+  if (focusOk === null) {
+    await resetFocusToHome(networkId);
+  }
   store.update({
     editorTarget: null,
     selectedLinkId: null,

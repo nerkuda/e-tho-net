@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { ConfigError, loadConfig } from '../src/config.js';
+import { ConfigError, DEFAULT_MCP_SESSION_IDLE_TTL_MS, loadConfig } from '../src/config.js';
 
 describe('loadConfig', () => {
   it('accepts a minimal valid environment', () => {
@@ -117,5 +117,46 @@ describe('loadConfig', () => {
       () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_MCP_PORT: 'abc' }),
       (err: unknown) => err instanceof ConfigError && /ETN_MCP_PORT/.test(err.message),
     );
+  });
+
+  // --- ETN_MCP_SESSION_IDLE_TTL_MS (fix: MCP session expired mid-work) ------
+
+  it('MCP session idle TTL defaults to 24 hours', () => {
+    const cfg = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data' });
+    assert.equal(cfg.mcp.sessionIdleTtlMs, DEFAULT_MCP_SESSION_IDLE_TTL_MS);
+    assert.equal(cfg.mcp.sessionIdleTtlMs, 24 * 60 * 60 * 1000);
+  });
+
+  it('accepts ETN_MCP_SESSION_IDLE_TTL_MS', () => {
+    const cfg = loadConfig({
+      ETN_DATA_DIR: '/tmp/etn-data',
+      ETN_MCP_SESSION_IDLE_TTL_MS: '600000',
+    });
+    assert.equal(cfg.mcp.sessionIdleTtlMs, 600_000);
+  });
+
+  it('treats an empty ETN_MCP_SESSION_IDLE_TTL_MS as unset', () => {
+    const cfg = loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_MCP_SESSION_IDLE_TTL_MS: '  ' });
+    assert.equal(cfg.mcp.sessionIdleTtlMs, DEFAULT_MCP_SESSION_IDLE_TTL_MS);
+  });
+
+  it('throws on a non-numeric ETN_MCP_SESSION_IDLE_TTL_MS', () => {
+    for (const value of ['abc', '600000ms', '1.5']) {
+      assert.throws(
+        () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_MCP_SESSION_IDLE_TTL_MS: value }),
+        (err: unknown) =>
+          err instanceof ConfigError && /ETN_MCP_SESSION_IDLE_TTL_MS/.test(err.message),
+      );
+    }
+  });
+
+  it('throws on an out-of-range ETN_MCP_SESSION_IDLE_TTL_MS', () => {
+    for (const value of ['0', '999', '-1000', String(30 * 24 * 60 * 60 * 1000 + 1)]) {
+      assert.throws(
+        () => loadConfig({ ETN_DATA_DIR: '/tmp/etn-data', ETN_MCP_SESSION_IDLE_TTL_MS: value }),
+        (err: unknown) =>
+          err instanceof ConfigError && /ETN_MCP_SESSION_IDLE_TTL_MS/.test(err.message),
+      );
+    }
   });
 });

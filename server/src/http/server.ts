@@ -362,20 +362,27 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Mounted when ETN_MCP_ENABLED=1; agents authenticate with the same
   // API-keys as REST (Bearer). With ETN_MCP_PORT set, the entry point
   // additionally serves the endpoint on a dedicated listener (see index.ts).
+  // The idle session TTL comes from ETN_MCP_SESSION_IDLE_TTL_MS (24 h default).
   if (config.mcp.enabled) {
-    const mcpHttp = createMcpHttpEndpoint({
-      systemDb,
-      dataDir: config.dataDir,
-      pubsub,
-      authProvider: createApiKeyAuthProvider(systemDb),
-      logger,
-      networkService,
-      fileLog,
-    });
+    const mcpHttp = createMcpHttpEndpoint(
+      {
+        systemDb,
+        dataDir: config.dataDir,
+        pubsub,
+        authProvider: createApiKeyAuthProvider(systemDb),
+        logger,
+        networkService,
+        fileLog,
+      },
+      { sessionIdleTtlMs: config.mcp.sessionIdleTtlMs },
+    );
     await mcpHttp.register(app);
     app.decorate('mcpHttp', mcpHttp);
     app.addHook('onClose', () => mcpHttp.close());
-    logger.info('MCP endpoint enabled: /mcp (StreamableHTTP)');
+    logger.info(
+      { sessionIdleTtlMs: config.mcp.sessionIdleTtlMs },
+      'MCP endpoint enabled: /mcp (StreamableHTTP)',
+    );
   }
 
   return app;

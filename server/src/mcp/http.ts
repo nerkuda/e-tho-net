@@ -14,8 +14,9 @@
  * Auth (F2): the bearer key is resolved through the injected
  * {@link McpAuthProvider} — `null` means missing/unknown/disabled key or
  * disabled owner → 401. The key is **re-validated on every request**, so
- * revoking/disabling a key cuts the session off mid-flight. Sessions idle for
- * {@link MCP_SESSION_IDLE_TTL_MS} are closed and swept.
+ * revoking/disabling a key cuts the session off mid-flight. Sessions idle
+ * longer than {@link McpHttpOptions.sessionIdleTtlMs} (operator setting
+ * `ETN_MCP_SESSION_IDLE_TTL_MS`, 24 h by default) are closed and swept.
  *
  * The endpoint is transport-agnostic at the bottom: {@link prepareRequest}
  * returns a decision, and the caller (Fastify route or the dedicated
@@ -30,11 +31,19 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
+import { DEFAULT_MCP_SESSION_IDLE_TTL_MS } from '../config.js';
 import { createMcpServer } from './index.js';
 import type { McpAuthContext, McpBaseDeps } from './types.js';
 
-/** How long an idle session stays alive before being swept (05 §2, MVP). */
-export const MCP_SESSION_IDLE_TTL_MS = 10 * 60 * 1000;
+/** Tunables of one endpoint instance (resolved from the server config). */
+export interface McpHttpOptions {
+  /**
+   * How long an idle session stays alive before being swept, in milliseconds
+   * (`ETN_MCP_SESSION_IDLE_TTL_MS`). Defaults to
+   * {@link DEFAULT_MCP_SESSION_IDLE_TTL_MS} (24 h) when omitted.
+   */
+  sessionIdleTtlMs?: number;
+}
 
 /** Upper bound on a single POST body (protects the dedicated listener). */
 const MAX_MCP_BODY_BYTES = 10 * 1024 * 1024;
@@ -112,12 +121,16 @@ function isInitializeRequest(body: unknown): boolean {
 }
 
 /** Build the endpoint over shared deps (auth resolved per session). */
-export function createMcpHttpEndpoint(deps: McpBaseDeps): McpHttpEndpoint {
+export function createMcpHttpEndpoint(
+  deps: McpBaseDeps,
+  options: McpHttpOptions = {},
+): McpHttpEndpoint {
   const sessions = new Map<string, McpSession>();
+  const sessionIdleTtlMs = options.sessionIdleTtlMs ?? DEFAULT_MCP_SESSION_IDLE_TTL_MS;
 
   /** Drop sessions idle for longer than the TTL. */
   function sweep(): void {
-    const cutoff = Date.now() - MCP_SESSION_IDLE_TTL_MS;
+    const cutoff = Date.now() - sessionIdleTtlMs;
     for (const [sessionId, session] of sessions) {
       if (session.lastUsed <= cutoff) {
         void session.transport.close().catch(() => undefined);

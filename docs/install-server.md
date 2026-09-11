@@ -96,6 +96,7 @@ ETN инициализирован.
 | `ETN_LOG_LEVEL` | `info` | `trace`/`debug`/`info`/`warn`/`error` |
 | `ETN_MCP_ENABLED` | `0` | `1` — включить MCP-эндпоинт `/mcp` на сервере |
 | `ETN_MCP_PORT` | — | Отдельный порт только для MCP (опционально) |
+| `ETN_MCP_SESSION_IDLE_TTL_MS` | `86400000` (24 ч) | Сколько живёт простаивающая MCP-сессия, мс; допустимо `1000`…`2592000000` (30 суток) |
 
 **Как задать переменные** — три варианта.
 
@@ -197,7 +198,7 @@ curl http://localhost:4321/api/v1/health        # bash
 Invoke-RestMethod http://localhost:4321/api/v1/health   # PowerShell
 ```
 
-Должно вернуть `{"status":"ok","version":"0.7.4","uptime":...}`.
+Должно вернуть `{"status":"ok","version":"0.7.5","uptime":...}`.
 
 ### 5.1. systemd (Linux)
 

@@ -124,7 +124,9 @@ export function buildTokensForField(
         section: sectionName,
       };
       if (
-        (def.value_type === 'thought_ref' || def.value_type === 'url') &&
+        (def.value_type === 'thought_ref' ||
+          def.value_type === 'url' ||
+          def.value_type === 'text') &&
         multiple
       ) {
         token.listOnly = true;
@@ -145,27 +147,64 @@ export function buildTokensForField(
 
 /**
  * Поля отбора, у которых нет «типа значения» свойства, но которым нужен
- * токен-пикер (баг 2): ключевые слова, тип мысли, автор, редактор.
+ * токен-пикер (баг 2): ключевые слова, тип мысли/связи, автор, редактор.
  */
-export type SpecialTokenField = 'keywords' | 'thought_type' | 'author' | 'editor';
+export type SpecialTokenField =
+  | 'keywords'
+  | 'thought_type'
+  | 'link_type'
+  | 'author'
+  | 'editor';
 
 /**
  * Токены для полей, не привязанных к типу значения свойства
- * (баг 2, таблица токенов из решения №7 тех.проекта 918833e3):
+ * (баг 2, таблица токенов из решения №7 тех.проекта 918833e3, расширено в
+ * задаче 68ec0b5b для текстовых свойств с id онтологии):
  *
  *   * `keywords` — `$thought.title`, `$thought.synonyms` + свойства типа/предков
  *     с типом значения text/url (поиск по тексту);
- *   * `thought_type` — только `$thought.type` (id типа мысли-контекста);
+ *   * `thought_type` — `$thought.type` (id типа мысли-контекста) плюс
+ *     текстовые/url-свойства цепочки типов: текстовое свойство может
+ *     хранить id нужного типа, резолвер подставит его «как есть» без
+ *     проверки соответствия типов;
+ *   * `link_type` — то же, что `thought_type`, только без `$thought.type`
+ *     (у мысли нет поля «id типа связи»): только текстовые/url-свойства
+ *     цепочки типов;
  *   * `author`/`editor` — `$thought.author`/`$thought.editor` + `$user`.
+ *
+ * Скалярные операции (`eq`) несовместимы с множественными свойствами
+ * (валидируется сервером по `validateDefinitionForTokens`) — такие
+ * токены из кандидатов исключаются.
  */
 export function buildTokensForSpecialField(
   chainProps: ChainProperties[],
   field: SpecialTokenField,
 ): ViewToken[] {
-  if (field === 'thought_type') {
-    return [
-      { text: '$thought.type', label: '$thought.type — тип мысли в фокусе', section: 'Поля мысли' },
-    ];
+  if (field === 'thought_type' || field === 'link_type') {
+    const out: ViewToken[] = [];
+    if (field === 'thought_type') {
+      out.push({
+        text: '$thought.type',
+        label: '$thought.type — тип мысли в фокусе',
+        section: 'Поля мысли',
+      });
+    }
+    for (const level of chainProps) {
+      if (level.props.length === 0) continue;
+      const sectionName = `Свойства «${level.type.name}»`;
+      for (const def of level.props) {
+        if (def.value_type !== 'text' && def.value_type !== 'url') continue;
+        // Скалярные операции `eq` несовместимы с множественными свойствами
+        // (валидация сервера: `validateDefinitionForTokens`).
+        if (def.config?.multiple === true) continue;
+        out.push({
+          text: `$thought.[${def.key}]`,
+          label: `$thought.[${def.key}] — ${def.value_type}`,
+          section: sectionName,
+        });
+      }
+    }
+    return out;
   }
   if (field === 'author' || field === 'editor') {
     // Для ОБОИХ полей (автор и редактор) доступны и `$thought.author`, и
@@ -201,6 +240,52 @@ function isListOp(op: StructurePropertyOp | null): boolean {
   return op === 'in' || op === 'not_in';
 }
 
+// ---------------------------------------------------------------------------
+// Value combo — live-search candidate list (задача 27472616)
+// ---------------------------------------------------------------------------
+
+/** One candidate row of the unified value-combo (see `value-combo.ts`). */
+export interface ComboOption {
+  /** Text stored in the field when the row is picked (token or literal id). */
+  value: string;
+  /** Human-readable label shown in the dropdown. */
+  label: string;
+  /** Optional section header shown above the row (grouping, mirrors {@link ViewToken.section}). */
+  section?: string;
+  /** `true` — the row cannot be picked in the current operator (e.g. a
+   *  list-only token offered for a scalar `eq` condition). */
+  disabled?: boolean;
+}
+
+/** Converts a token list into combo options, baking in the existing
+ *  `listOnly` vs `op` disable rule (mirrors the old `openTokenPicker` menu). */
+export function tokensToComboOptions(
+  tokens: ViewToken[],
+  op: StructurePropertyOp | null,
+): ComboOption[] {
+  return tokens.map((t) => ({
+    value: t.text,
+    label: t.label,
+    section: t.section,
+    disabled: t.listOnly === true && !isListOp(op),
+  }));
+}
+
+/**
+ * Live-search filter: case-insensitive substring match against the label OR
+ * the stored value (so typing part of `$today` or part of «сегодня» both
+ * work). An empty/whitespace query returns every option unfiltered — the
+ * dropdown then shows the full candidate list, grouped by section, exactly
+ * like the old static menu did on open.
+ */
+export function filterComboOptions(options: ComboOption[], query: string): ComboOption[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return options;
+  return options.filter(
+    (o) => o.label.toLowerCase().includes(needle) || o.value.toLowerCase().includes(needle),
+  );
+}
+
 function propertyMatches(
   defType: PropertyValueType,
   condType: PropertyValueType,
@@ -209,6 +294,12 @@ function propertyMatches(
   if (defMultiple) return true;
   if (defType === condType) return true;
   if ((defType === 'text' || defType === 'url') && (condType === 'text' || condType === 'url')) {
+    return true;
+  }
+  // Текстовое/url-свойство может хранить id мысли (задача 68ec0b5b):
+  // резолвер подставит значение «как есть» без проверки соответствия
+  // типов, поэтому его разрешено выбирать для условия по `thought_ref`.
+  if ((defType === 'text' || defType === 'url') && condType === 'thought_ref') {
     return true;
   }
   return false;

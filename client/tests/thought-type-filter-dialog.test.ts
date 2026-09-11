@@ -13,6 +13,9 @@
  *     to the default (`title+synonyms`), and always emits `sort`/`order`.
  *   * The author's `op` is preserved when not `eq` (in/not_in), and the
  *     scalar string is sent for `eq`/`ne`.
+ *   * (задача 68ec0b5b) Текстовые/url-свойства предлагаются токен-пикером
+ *     для полей «Типы мыслей»/«Типы связей» и для условий по `thought_ref`;
+ *     множественные свойства для скалярных операций исключены.
  *
  * The dialog's full DOM harness is exercised visually in the renderer
  * (the focus-filter-strip.test.ts follows the same «no DOM» convention):
@@ -220,9 +223,9 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     assert.ok(labels.includes('$thought.[версия]'), 'own property token');
     // The `теги` property is thought_ref + multiple: appears, marked listOnly.
     assert.ok(labels.includes('$thought.[теги]'), 'inherited multiple property token');
-    // The `метка` property is text, doesn't match thought_ref — the
-    // propertyMatches gate excludes it from scalar-op thought_ref values.
-    assert.ok(!labels.includes('$thought.[метка]'), 'text property hidden for thought_ref');
+    // The `метка` property is text — задача 68ec0b5b: текстовое свойство
+    // может хранить id мысли, резолвер подставит его без проверки типа.
+    assert.ok(labels.includes('$thought.[метка]'), 'text property offered for thought_ref');
     // Multi-valued property token is marked listOnly so the picker dims it.
     const tags = tokens.find((t) => t.text === '$thought.[теги]');
     assert.equal(tags?.listOnly, true);
@@ -238,7 +241,7 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     assert.ok(labels.includes('$now'));
   });
 
-  it('token-picker special fields: keywords / thought_type / author / editor', () => {
+  it('token-picker special fields: keywords / thought_type / link_type / author / editor', () => {
     const chainProps = [
       { type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! },
       { type: TYPES[1]!, props: TYPE_PROPS[ANCESTOR_TYPE_ID]! },
@@ -251,8 +254,21 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     assert.ok(!kwTexts.includes('$thought.[версия]'), 'thought_ref property hidden for keywords');
     assert.ok(!kwTexts.includes('$thought.[теги]'), 'multiple thought_ref property hidden for keywords');
 
+    // thought_type (задача 68ec0b5b): $thought.type + текстовые/url-свойства цепочки.
     const typeTok = module.buildTokensForSpecialField(chainProps, 'thought_type');
-    assert.deepEqual(typeTok.map((t) => t.text), ['$thought.type']);
+    const ttTexts = typeTok.map((t) => t.text);
+    assert.ok(ttTexts.includes('$thought.type'), '$thought.type остаётся в списке');
+    assert.ok(ttTexts.includes('$thought.[метка]'), 'text property из цепочки типов');
+    assert.ok(!ttTexts.includes('$thought.[версия]'), 'thought_ref property скрыт');
+    assert.ok(!ttTexts.includes('$thought.[теги]'), 'multiple text/url property скрыт для скалярной eq');
+
+    // link_type (задача 68ec0b5b): текстовые/url-свойства цепочки, без $thought.type.
+    const ltTok = module.buildTokensForSpecialField(chainProps, 'link_type');
+    const ltTexts = ltTok.map((t) => t.text);
+    assert.ok(!ltTexts.includes('$thought.type'), 'нет $thought.type для link_type');
+    assert.ok(ltTexts.includes('$thought.[метка]'), 'text property из цепочки типов');
+    assert.ok(!ltTexts.includes('$thought.[версия]'), 'thought_ref property скрыт');
+    assert.ok(!ltTexts.includes('$thought.[теги]'), 'multiple property скрыт для скалярной eq');
 
     const author = module.buildTokensForSpecialField(chainProps, 'author');
     const authorTexts = author.map((t) => t.text);
@@ -275,6 +291,58 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     const tokensList = module.buildTokensForField(chainProps, 'thought_ref', 'in');
     const tagsList = tokensList.find((t) => t.text === '$thought.[теги]');
     assert.equal(tagsList?.listOnly, true);
+  });
+
+  it('multiple text property is listOnly for scalar ops and excluded from scalar special fields (задача 68ec0b5b)', () => {
+    // Свойство «теги-текст» — text + multiple=true: токен-список несовместим
+    // со скалярной операцией (eq), как и `thought_ref`/`url` с multiple=true.
+    const multiTextProp: EffectiveTypeProperty = {
+      id: 'tp-multiText',
+      property_id: 'p-multiText',
+      owner_type: 'thought_type',
+      owner_id: ANCESTOR_TYPE_ID,
+      key: 'теги-текст',
+      value_type: 'text',
+      config: { multiple: true },
+      required: false,
+      position: 2,
+      description: null,
+      inherited: false,
+      defined_on: ANCESTOR_TYPE_ID,
+      defined_on_name: 'Версия',
+      default_value: null,
+      overridden_here: false,
+      description_overridden: false,
+    };
+    const chainProps = [
+      { type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! },
+      { type: TYPES[1]!, props: [...TYPE_PROPS[ANCESTOR_TYPE_ID]!, multiTextProp] },
+    ];
+
+    // Для условия по thought_ref (eq) — multiple text помечается listOnly,
+    // а не удаляется, чтобы быть видимым для in/not_in.
+    const tokensScalar = module.buildTokensForField(chainProps, 'thought_ref', 'eq');
+    const mtScalar = tokensScalar.find((t) => t.text === '$thought.[теги-текст]');
+    assert.ok(mtScalar !== undefined, 'multiple text appears in scalar thought_ref list');
+    assert.equal(mtScalar?.listOnly, true, 'multiple text is listOnly for scalar eq');
+
+    // Для in — то же самое, но токен доступен для выбора.
+    const tokensList = module.buildTokensForField(chainProps, 'thought_ref', 'in');
+    const mtList = tokensList.find((t) => t.text === '$thought.[теги-текст]');
+    assert.equal(mtList?.listOnly, true, 'multiple text is listOnly regardless of op');
+
+    // thought_type / link_type используют скалярную семантику — multiple text
+    // исключается целиком (валидация сервера отвергнет такое условие).
+    const tt = module.buildTokensForSpecialField(chainProps, 'thought_type');
+    assert.ok(
+      !tt.some((t) => t.text === '$thought.[теги-текст]'),
+      'multiple text excluded from thought_type (scalar eq)',
+    );
+    const lt = module.buildTokensForSpecialField(chainProps, 'link_type');
+    assert.ok(
+      !lt.some((t) => t.text === '$thought.[теги-текст]'),
+      'multiple text excluded from link_type (scalar eq)',
+    );
   });
 
   it('wire format: «Работы версии» round-trips a thought_ref condition with $thought.[версия]', () => {
@@ -714,5 +782,48 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     const inactiveOnly = module.buildWireDefinition(makeState(false), registry);
     assert.equal(inactiveOnly.active, false);
     assert.equal(inactiveOnly.show_inactive, true);
+  });
+});
+
+describe('единый редактор значения условия — комбо-кандидаты (задача 27472616)', () => {
+  let module: typeof import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+
+  before(async () => {
+    module = await import('../src/renderer/screens/thought-type/filter-dialog-pure.js');
+  });
+
+  it('tokensToComboOptions disables listOnly tokens outside in/not_in', () => {
+    const tokens: import('../src/renderer/screens/thought-type/filter-dialog-pure.js').ViewToken[] = [
+      { text: '$today', label: '$today — сегодня' },
+      { text: '$thought.[теги]', label: '$thought.[теги] […] — thought_ref', listOnly: true },
+    ];
+    const scalar = module.tokensToComboOptions(tokens, 'eq');
+    assert.equal(scalar.find((o) => o.value === '$today')?.disabled, false);
+    assert.equal(scalar.find((o) => o.value === '$thought.[теги]')?.disabled, true);
+
+    const list = module.tokensToComboOptions(tokens, 'in');
+    assert.equal(list.find((o) => o.value === '$thought.[теги]')?.disabled, false);
+
+    // `op: null` (полей вроде «Ключевые слова») трактуется как не-списочный.
+    const noOp = module.tokensToComboOptions(tokens, null);
+    assert.equal(noOp.find((o) => o.value === '$thought.[теги]')?.disabled, true);
+  });
+
+  it('filterComboOptions matches the label or the stored value, case-insensitively', () => {
+    const options: import('../src/renderer/screens/thought-type/filter-dialog-pure.js').ComboOption[] = [
+      { value: '$today', label: '$today — сегодня' },
+      { value: '$thought.type', label: '$thought.type — тип мысли в фокусе' },
+    ];
+    assert.deepEqual(
+      module.filterComboOptions(options, 'СЕГОДНЯ').map((o) => o.value),
+      ['$today'],
+    );
+    assert.deepEqual(
+      module.filterComboOptions(options, 'thought.type').map((o) => o.value),
+      ['$thought.type'],
+    );
+    assert.equal(module.filterComboOptions(options, 'нет совпадений').length, 0);
+    // Пустой запрос — весь список без фильтрации (полное открытие меню).
+    assert.equal(module.filterComboOptions(options, '   ').length, 2);
   });
 });
