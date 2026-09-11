@@ -21,6 +21,7 @@ import {
   type LinkCreateInput,
   type LinkDeletionCheckResult,
   type LinkStyle,
+  type LinkTypeFilterInput,
   type LinkUpdateInput,
   type ThoughtLinkItem,
   type ThoughtLinksGrouped,
@@ -35,6 +36,7 @@ import { purgeOwnerDependants, tombstoneOwnerDependants } from './owner-cleanup.
 import { assertLinkTypeAssignable } from './link-type-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import { setPropertyValues } from './property-service.js';
+import { linkTypeFilterClause } from './type-hierarchy.js';
 
 import {
   FONT_BOLD_BIT,
@@ -235,17 +237,29 @@ export function incomingLinksOf(ndb: NetworkDb, thoughtId: string): Link[] {
  * Returns every link whose both ends are in `ids` (the visible thoughts of a
  * focus response), optionally including inactive ones. Used to draw all links
  * among the visible clouds — not just those incident to the focus.
+ *
+ * Задача c965ad03 (0.8.1): `linkFilter` ограничивает типы возвращаемых рёбер
+ * (типы с потомками + опционально структурные) — фокус-ответ с фильтром не
+ * должен рисовать линии, которые обход отфильтровал.
  */
-export function getEdgesAmong(ndb: NetworkDb, ids: string[], showInactive: boolean): Link[] {
+export function getEdgesAmong(
+  ndb: NetworkDb,
+  ids: string[],
+  showInactive: boolean,
+  linkFilter?: LinkTypeFilterInput,
+): Link[] {
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(',');
+  const typeClause = linkTypeFilterClause(ndb, linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
   const rows = ndb
     .prepare(
-      `SELECT * FROM links_v
-       WHERE source_id IN (${placeholders}) AND target_id IN (${placeholders})
-         AND (active = 1 OR ?)`,
+      `SELECT l.* FROM links_v l
+       WHERE l.source_id IN (${placeholders}) AND l.target_id IN (${placeholders})
+         AND (l.active = 1 OR ?)${typeSql}`,
     )
-    .all(...ids, ...ids, showInactive ? 1 : 0) as LinkRow[];
+    .all(...ids, ...ids, showInactive ? 1 : 0, ...typeParams) as LinkRow[];
   return rows.map(rowToLink);
 }
 
@@ -253,21 +267,29 @@ export function getEdgesAmong(ndb: NetworkDb, ids: string[], showInactive: boole
  * For each id, whether it has any active incoming / outgoing link at all —
  * drives the top/bottom ellipse fill of a cloud so the user can see that a
  * thought continues the chain even when its other links are off-screen.
+ *
+ * Задача c965ad03 (0.8.1): `linkFilter` ограничивает типы учитываемых рёбер —
+ * с фильтром эллипсы показывают раскрываемость по тем же типам, по которым
+ * ходит обход.
  */
 export function getLinkDirections(
   ndb: NetworkDb,
   ids: string[],
+  linkFilter?: LinkTypeFilterInput,
 ): Map<string, { has_in: boolean; has_out: boolean }> {
   const result = new Map<string, { has_in: boolean; has_out: boolean }>();
   if (ids.length === 0) return result;
   for (const id of ids) result.set(id, { has_in: false, has_out: false });
   const placeholders = ids.map(() => '?').join(',');
+  const typeClause = linkTypeFilterClause(ndb, linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
   const rows = ndb
     .prepare(
-      `SELECT source_id, target_id FROM links_v WHERE active = 1
-         AND (source_id IN (${placeholders}) OR target_id IN (${placeholders}))`,
+      `SELECT l.source_id, l.target_id FROM links_v l WHERE l.active = 1
+         AND (l.source_id IN (${placeholders}) OR l.target_id IN (${placeholders}))${typeSql}`,
     )
-    .all(...ids, ...ids) as Array<{ source_id: string; target_id: string }>;
+    .all(...ids, ...ids, ...typeParams) as Array<{ source_id: string; target_id: string }>;
   for (const row of rows) {
     const src = result.get(row.source_id);
     if (src !== undefined) src.has_out = true;

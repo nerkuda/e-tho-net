@@ -11,7 +11,7 @@
  * connection's layer resolves, not over raw physical rows of every layer.
  */
 
-import { EtnError } from '@etn/shared';
+import { EtnError, isLinkTypeFilterActive, type LinkTypeFilterInput } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 
@@ -127,6 +127,41 @@ export function expandTypeIdsToSubtree(
     for (const sub of subtreeIds(ndb, table, id)) expanded.add(sub);
   }
   return [...expanded];
+}
+
+/**
+ * SQL clause of the traversal link-type filter (задача c965ad03, требование
+ * bed23c25 «Фильтр обхода по типам связей»).
+ *
+ * `alias` is the SQL alias of a `links_v` reference (`'l'`, `'lp'`, …) whose
+ * `type_id` column the clause constrains. Returns `null` when the filter is
+ * absent/empty — the caller must then keep the historical "walk every edge"
+ * behaviour. The typed ids are expanded to their `link_types` subtrees here,
+ * so every caller shares the same descendant semantics; unknown ids are kept
+ * verbatim (they match nothing — same preservation rule as the thought-type
+ * filters). A filter that selects no types and no structural links yields the
+ * guaranteed-false `0` fragment.
+ */
+export function linkTypeFilterClause(
+  ndb: NetworkDb,
+  filter: LinkTypeFilterInput | undefined,
+  alias: string,
+): { sql: string; params: unknown[] } | null {
+  if (!isLinkTypeFilterActive(filter)) return null;
+  const expanded = expandTypeIdsToSubtree(ndb, 'link_types', filter?.type_ids ?? []);
+  const structural = filter?.include_structural === true;
+  if (expanded.length === 0) {
+    return structural
+      ? { sql: `${alias}.type_id IS NULL`, params: [] }
+      : { sql: '0', params: [] };
+  }
+  const placeholders = expanded.map(() => '?').join(',');
+  return {
+    sql: structural
+      ? `(${alias}.type_id IN (${placeholders}) OR ${alias}.type_id IS NULL)`
+      : `${alias}.type_id IN (${placeholders})`,
+    params: expanded,
+  };
 }
 
 /**

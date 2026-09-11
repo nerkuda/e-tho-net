@@ -116,6 +116,10 @@ const QUERY_BODY_KEYS = new Set([
   'parent_ids',
   'type_ids',
   'link_type_ids',
+  // Фильтр обхода по типам связей (задача c965ad03): ограничивает рёбра, по
+  // которым `parent_ids` раскрывается в поддерево (паритет с MCP
+  // `link_filter` и панелью «Структур»).
+  'link_filter',
   'show_inactive',
   'has_properties',
   'has_comment',

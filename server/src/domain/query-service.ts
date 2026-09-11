@@ -49,7 +49,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { resolvePropertyIdByName } from './property-service.js';
 import { resolveThoughtTypeIdByName } from './thought-type-service.js';
-import { expandTypeIdsToSubtree } from './type-hierarchy.js';
+import { expandTypeIdsToSubtree, linkTypeFilterClause } from './type-hierarchy.js';
 
 /**
  * Title/synonym match clause of one keyword — the same shape as
@@ -91,15 +91,23 @@ function clampPaging(limit: number | undefined, offset: number | undefined): {
  * Walk the directed subtree of `seedId` (source → target edges, active only)
  * breadth-first, keeping each node's depth. `null` when no seed is given
  * (meaning «no subtree restriction»).
+ *
+ * Задача c965ad03: `linkFilter` ограничивает рёбра, по которым спуск
+ * происходит (типы с потомками + опционально структурные); без фильтра —
+ * все рёбра, как раньше.
  */
 function walkSubtree(ndb: NetworkDb, seedId: string | undefined, opts: {
   maxDepth: number;
   maxNodes: number;
+  linkFilter?: ThoughtQueryRequest['link_filter'];
 }): WalkResult {
   if (seedId === undefined) {
     return { depths: null, truncated: false, reason: null };
   }
   const { maxDepth, maxNodes } = opts;
+  const typeClause = linkTypeFilterClause(ndb, opts.linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
   const visited = new Set<string>();
   const depths = new Map<string, number>();
   const queue: Array<{ id: string; depth: number }> = [{ id: seedId, depth: 0 }];
@@ -107,7 +115,7 @@ function walkSubtree(ndb: NetworkDb, seedId: string | undefined, opts: {
   let reason: WalkResult['reason'] = null;
 
   const childrenOf = ndb.prepare(
-    'SELECT target_id AS nid FROM links_v WHERE source_id = ? AND active = 1',
+    `SELECT l.target_id AS nid FROM links_v l WHERE l.source_id = ? AND l.active = 1${typeSql}`,
   );
 
   while (queue.length > 0) {
@@ -121,7 +129,7 @@ function walkSubtree(ndb: NetworkDb, seedId: string | undefined, opts: {
     visited.add(id);
     depths.set(id, depth);
     if (depth >= maxDepth) continue;
-    const rows = childrenOf.all(id) as Array<{ nid: string }>;
+    const rows = childrenOf.all(id, ...typeParams) as Array<{ nid: string }>;
     for (const { nid } of rows) {
       if (!visited.has(nid)) {
         queue.push({ id: nid, depth: depth + 1 });
@@ -484,6 +492,7 @@ export function queryThoughts(
   const walk = walkSubtree(ndb, request.in_subtree_of, {
     maxDepth,
     maxNodes: bounds.maxNodes,
+    linkFilter: request.link_filter,
   });
 
   const active: ThoughtQueryActive = request.active ?? 'true';

@@ -16,9 +16,11 @@ import {
   EtnError,
   ICON_KINDS,
   LINK_STYLES,
+  parseLinkTypeFilterValue,
   type IconKind,
   type LayerEcho,
   type LinkStyle,
+  type LinkTypeFilterInput,
   type RealtimeAudience,
   type RealtimeEventMap,
   type RealtimeEventType,
@@ -461,4 +463,48 @@ export function queryBoolean(
 /** Read a request body that may be absent (empty payload → `{}`). */
 export function requestBody(req: FastifyRequest): Record<string, unknown> {
   return bodyObject(req.body ?? {}, req.id);
+}
+
+// ---------------------------------------------------------------------------
+// Traversal link-type filter (задача c965ad03, 0.8.1, требование bed23c25)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the traversal link-type filter from a JSON body field `link_filter`
+ * (shape validation in `parseLinkTypeFilterValue`). `undefined` when the
+ * field is absent — the caller keeps the historical "walk every edge"
+ * behaviour.
+ */
+export function parseLinkTypeFilter(
+  obj: Record<string, unknown>,
+  requestId?: string,
+): LinkTypeFilterInput | undefined {
+  return parseLinkTypeFilterValue(obj['link_filter'], requestId);
+}
+
+/**
+ * Parse the same filter from repeatable query parameters — `link_type_id`
+ * (repeatable id list) plus `include_structural=true/false`. `undefined`
+ * when neither parameter is present; both present but yielding an empty
+ * filter (no ids, no structural) → `VALIDATION_ERROR`.
+ */
+export function parseLinkTypeFilterQuery(
+  query: Record<string, unknown>,
+  requestId?: string,
+): LinkTypeFilterInput | undefined {
+  const typeIds = queryStrings(query['link_type_id']);
+  const includeStructural = queryBoolean(query['include_structural'], 'include_structural', requestId);
+  if (typeIds.length === 0 && includeStructural === undefined) return undefined;
+  if (typeIds.length === 0 && includeStructural !== true) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'фильтр типов связей пуст: укажите link_type_id и/или include_structural=true.',
+      { field: 'link_type_id' },
+      requestId,
+    );
+  }
+  const out: LinkTypeFilterInput = {};
+  if (typeIds.length > 0) out.type_ids = typeIds;
+  if (includeStructural === true) out.include_structural = true;
+  return out;
 }

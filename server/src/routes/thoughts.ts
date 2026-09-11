@@ -51,6 +51,8 @@ import {
   openRouteNetworkDb,
   parseIconKind,
   parseIfMatch,
+  parseLinkTypeFilter,
+  parseLinkTypeFilterQuery,
   queryBoolean,
   queryInt,
   queryStrings,
@@ -447,8 +449,11 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const body = requestBody(req);
         const override = fieldBoolean(body, 'show_inactive', req.id);
         const showInactive = resolveShowInactive(app, req, networkId, override);
+        // Задача c965ad03: фильтр обхода по типам связей — зоны, рёбра и
+        // индикаторы направлений ограничиваются выбранными типами.
+        const linkFilter = parseLinkTypeFilter(body, req.id);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const response = focus(ndb, req.auth!.user.id, id, { showInactive });
+        const response = focus(ndb, req.auth!.user.id, id, { showInactive, linkFilter });
         deps.emit(req, networkId, 'thought-view.updated', {
           thought_id: id,
           last_viewed_at: new Date().toISOString(),
@@ -638,6 +643,9 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           );
         }
         const typeId = queryStrings(query.type_id)[0];
+        // Задача c965ad03: фильтр обхода по типам связей (repeatable
+        // `link_type_id` + `include_structural`).
+        const linkFilter = parseLinkTypeFilterQuery(query, req.id);
         const limit = queryInt(query.limit, 50, { field: 'limit', min: 1, requestId: req.id });
         const offset = queryInt(query.offset, 0, { field: 'offset', min: 0, requestId: req.id });
 
@@ -653,6 +661,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           sort: sortRaw as SortKind | undefined,
           order: orderRaw as SortOrder | undefined,
           typeId,
+          linkFilter,
         };
         const neighbors = getNeighbors(ndb, id, dirRaw as FocusDir, { ...neighborOpts, limit, offset });
         // Bug fix (0.6.3, thought f2c7c7d3): `total` used to echo the

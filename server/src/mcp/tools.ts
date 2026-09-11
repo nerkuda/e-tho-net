@@ -300,6 +300,21 @@ const View = z
     "Response projection: 'compact' (default, drops visual/service fields) or 'full' (legacy shape).",
   );
 
+/**
+ * Фильтр обхода по типам связей (задача c965ad03, требование bed23c25):
+ * объект `{ type_ids?: string[], include_structural?: boolean }`. Каждый id
+ * типа раскрывается вместе с потомками по иерархии `link_types` (L21);
+ * `include_structural: true` включает нетипизированные (структурные) связи.
+ * Отсутствует — обход по всем рёбрам, как раньше. Общий для
+ * `etn.thoughts.query`/`neighbors`/`subgraph`/`path`.
+ */
+const LinkFilter = z
+  .object({
+    type_ids: z.array(z.string().min(1)).optional(),
+    include_structural: z.boolean().optional(),
+  })
+  .optional();
+
 /** Error text shared by every `type_id`/`type` pair (task O4). */
 const TYPE_ID_TYPE_CONFLICT = 'provide at most one of type_id or type';
 
@@ -740,6 +755,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       // создавшего мысль (`author_id`) или последним изменившего (`editor_id`).
       author_id: z.string().optional(),
       editor_id: z.string().optional(),
+      // Фильтр обхода по типам связей (задача c965ad03): ограничивает рёбра,
+      // по которым `in_subtree_of` спускается вниз.
+      link_filter: LinkFilter,
       sort: z.enum(['title', 'created_at', 'updated_at']).optional(),
       order: z.enum(['asc', 'desc']).optional(),
       limit: z.number().int().min(1).max(200).optional(),
@@ -763,7 +781,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         '`property`, same resolve semantics) + operator eq/ne/contains/gt/gte/lt/lte + value (unknown ' +
         '`property_id` matches nothing; the `value_type` picks the column: number → value_number, bool → ' +
         'value_bool, others on their text columns); `created_*`/`updated_*` — ISO-8601 ranges; ' +
-        '`author_id`/`editor_id` — id пользователя, создавшего/последним изменившего мысль. Response carries ' +
+        '`author_id`/`editor_id` — id пользователя, создавшего/последним изменившего мысль; ' +
+        '`link_filter` — { type_ids?, include_structural? } ограничивает рёбра спуска `in_subtree_of`. Response carries ' +
         'a `thought_types` reference table plus the optional `resolved_types` / `resolved_properties` echoes ' +
         'for inputs that came in by name.',
       inputSchema: QuerySchema,
@@ -977,6 +996,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     thought_id: ThoughtId,
     dir: z.enum(FOCUS_DIRS),
     depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
+    // Фильтр обхода по типам связей (задача c965ad03): сосед держится за фокус
+    // только связью, прошедшей фильтр (для depth > 1 — весь BFS-обход).
+    link_filter: LinkFilter,
     view: View,
   });
   mcp.registerTool(
@@ -989,6 +1011,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'записи несут `direction: "in"|"out"`. Рёбра (0.7.2) несут `has_properties`/`has_comment` — ' +
         'два агрегирующих запроса на весь набор рёбер, не на ребро. На `depth: 1` страница 50 — ' +
         '`total`/`truncated` показывают остаток; дальше — `etn.thoughts.query { in_subtree_of, max_depth: 1 }`. ' +
+        '`link_filter` — { type_ids?, include_structural? } ограничивает связи, по которым считается соседство. ' +
         'Справочники `link_types`/`thought_types`.',
       inputSchema: NeighborsSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.neighbors'],
@@ -1000,7 +1023,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const view: McpViewMode = args.view ?? 'compact';
         if (depth === 1) {
           const thought = getThoughtOrThrow(ndb, args.thought_id);
-          const neighborOpts = { userId: rt.deps.auth.userId };
+          const neighborOpts = { userId: rt.deps.auth.userId, linkFilter: args.link_filter };
           // `dir: "both"` (0.7.2) — both directions in one call. The domain
           // `getNeighbors` is built for parents/children/siblings (REST trio)
           // and would map `both` to siblings; we call it twice and glue the
@@ -1104,6 +1127,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         const walk = traverse(ndb, [args.thought_id], direction, {
           maxDepth: depth,
           maxNodes: rt.limits.maxNodesPerSubgraph,
+          linkFilter: args.link_filter,
         });
         // Bug fix (§5.1e): sanitize before the O12 branch so both `view`s drop
         // any inline `data:` icon URL, not just the compact projection.
@@ -1141,6 +1165,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
      */
     max_chars: z.number().int().min(1).optional(),
     include_comments: z.boolean().optional(),
+    // Фильтр обхода по типам связей (задача c965ad03): ограничивает рёбра,
+    // по которым строится подграф (и рёбра ответа — те же типы).
+    link_filter: LinkFilter,
     view: View,
   });
   mcp.registerTool(
@@ -1155,7 +1182,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
         '(BFS level), reporting `truncated: true` + `reason`. Edges (0.7.2) несут `has_properties`/`has_comment`. ' +
         '`meta.views` (0.7.3) для seed-узлов — эффективный набор отборов, ' +
-        'исполняется через `etn.views.run { view_name }`. ' +
+        'исполняется через `etn.views.run { view_name }`. `link_filter` — { type_ids?, include_structural? } ' +
+        'ограничивает рёбра подграфа. ' +
         '`view: "compact"` (default) drops visual fields.',
       inputSchema: SubgraphSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.subgraph'],
@@ -1167,7 +1195,10 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.max_nodes ?? rt.limits.maxNodesPerSubgraph,
           rt.limits.maxNodesPerSubgraph,
         );
-        const result = subgraph(ndb, args.seed_ids, args.radius, { maxNodes: effectiveMax });
+        const result = subgraph(ndb, args.seed_ids, args.radius, {
+          maxNodes: effectiveMax,
+          linkFilter: args.link_filter,
+        });
         // Bug fix (§5.1e): sanitize before the O12 branch so `view: 'full'`
         // subgraphs cannot leak inline `data:` icon URLs either.
         const nodes = result.nodes.map((id) => withSanitizedIcon(getThoughtOrThrow(ndb, id)));
@@ -1305,6 +1336,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     from_id: ThoughtId,
     to_id: ThoughtId,
     max_depth: z.number().int().min(1).max(100).optional(),
+    // Фильтр обхода по типам связей (задача c965ad03): путь ищется только по
+    // рёбрам, прошедшим фильтр.
+    link_filter: LinkFilter,
   });
   mcp.registerTool(
     'etn.thoughts.path',
@@ -1312,7 +1346,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Путь между мыслями',
       description:
         'Shortest path between two thoughts through undirected parent/child edges, bounded by ' +
-        '`max_depth`. Returns the id sequence or `path: null` when unreachable.',
+        '`max_depth`. `link_filter` — { type_ids?, include_structural? } ограничивает рёбра, по ' +
+        'которым ищется путь. Returns the id sequence or `path: null` when unreachable.',
       inputSchema: PathSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.path'],
     },
@@ -1324,6 +1359,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
           args.from_id,
           args.to_id,
           args.max_depth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH,
+          args.link_filter,
         );
         // Bug fix (§5.1e): sanitize before returning — `resolveThoughts` gives
         // raw `data:` icon URLs, but the agent can never resolve an image; the

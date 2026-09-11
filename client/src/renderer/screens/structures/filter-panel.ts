@@ -14,6 +14,7 @@
 
 import {
   STRUCTURE_AUTHOR_OPS,
+  type LinkTypeFilterInput,
   type NetworkProperty,
   type PropertyConfig,
   type PropertyValueType,
@@ -71,6 +72,15 @@ export interface FilterState {
   parentIds: string[];
   typeIds: string[];
   linkTypeIds: string[];
+  /**
+   * Задача c965ad03 «Фильтр обхода по типам связей»: типы связей, по которым
+   * раскрывается `parentIds` (поддерево). Отличие от `linkTypeIds`: тот
+   * отбирает мысли, у которых есть связь перечисленных типов, а этот
+   * ограничивает рёбра обхода.
+   */
+  linkFilterTypeIds: string[];
+  /** Включить нетипизированные (структурные) связи в обход. */
+  linkFilterStructural: boolean;
   properties: PropertyConditionState[];
   hasProperties: TriState;
   hasComment: TriState;
@@ -187,6 +197,8 @@ function defaultState(): FilterState {
     parentIds: [],
     typeIds: [],
     linkTypeIds: [],
+    linkFilterTypeIds: [],
+    linkFilterStructural: false,
     properties: [],
     hasProperties: null,
     hasComment: null,
@@ -235,6 +247,7 @@ let keywordsInput: HTMLInputElement | null = null;
 let parentFieldBox: HTMLElement | null = null;
 let typeFieldBox: HTMLElement | null = null;
 let linkTypeFieldBox: HTMLElement | null = null;
+let linkFilterFieldBox: HTMLElement | null = null;
 let conditionsBox: HTMLElement | null = null;
 let sortSelect: HTMLSelectElement | null = null;
 let orderSelect: HTMLSelectElement | null = null;
@@ -389,6 +402,19 @@ export function buildExtraFilter(): Pick<
   if (state.createdBefore.trim() !== '') out.created_before = state.createdBefore.trim();
   if (state.updatedAfter.trim() !== '') out.updated_after = state.updatedAfter.trim();
   if (state.updatedBefore.trim() !== '') out.updated_before = state.updatedBefore.trim();
+  return out;
+}
+
+/**
+ * Wire `link_filter` обхода (задача c965ad03): ограничивает рёбра, по которым
+ * `parent_ids` раскрывается в поддерево. `undefined` — без ограничения (обход
+ * по всем рёбрам, прежнее поведение).
+ */
+export function buildTraversalFilter(): LinkTypeFilterInput | undefined {
+  if (state.linkFilterTypeIds.length === 0 && !state.linkFilterStructural) return undefined;
+  const out: LinkTypeFilterInput = {};
+  if (state.linkFilterTypeIds.length > 0) out.type_ids = state.linkFilterTypeIds;
+  if (state.linkFilterStructural) out.include_structural = true;
   return out;
 }
 
@@ -746,6 +772,7 @@ let kwTitle: HTMLElement | null = null;
 let parentTitle: HTMLElement | null = null;
 let ttTitle: HTMLElement | null = null;
 let ltTitle: HTMLElement | null = null;
+let lftTitle: HTMLElement | null = null;
 let propsTitle: HTMLElement | null = null;
 let extraTitle: HTMLElement | null = null;
 let datesTitle: HTMLElement | null = null;
@@ -761,6 +788,10 @@ function refreshGroupTitles(): void {
   parentTitle?.classList.toggle('st-f-title-active', state.parentIds.length > 0);
   ttTitle?.classList.toggle('st-f-title-active', state.typeIds.length > 0);
   ltTitle?.classList.toggle('st-f-title-active', state.linkTypeIds.length > 0);
+  lftTitle?.classList.toggle(
+    'st-f-title-active',
+    state.linkFilterTypeIds.length > 0 || state.linkFilterStructural,
+  );
   propsTitle?.classList.toggle('st-f-title-active', state.properties.length > 0);
   extraTitle?.classList.toggle(
     'st-f-title-active',
@@ -943,6 +974,49 @@ function renderPanel(): void {
   lt.body.append(ltRow);
   scroll.append(lt.box);
   renderLinkTypeField();
+
+  // --- обход по связям (задача c965ad03) -------------------------------------
+  // Ограничивает рёбра, по которым `parent_ids` раскрывается в поддерево:
+  // перечисленные типы связей (+ структурные по флагу). Не путать с «Типы
+  // связей» выше — тот отбирает мысли, у которых есть связь этих типов.
+  const lf = block('Обход по связям');
+  lftTitle = lf.head;
+  linkFilterFieldBox = div('st-f-chipfield');
+  linkFilterFieldBox.tabIndex = 0;
+  setTooltip(linkFilterFieldBox, 'Ограничить рёбра, по которым раскрывается отбор (клик — выбрать)');
+  linkFilterFieldBox.addEventListener('click', () => void openLinkFilterPicker());
+  linkFilterFieldBox.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void openLinkFilterPicker();
+  });
+  const lfClear = el('button', 'st-f-clear-inline', '×');
+  lfClear.type = 'button';
+  setTooltip(lfClear, 'Очистить');
+  lfClear.addEventListener('click', (event) => {
+    event.stopPropagation();
+    state.linkFilterTypeIds = [];
+    touch();
+    renderLinkFilterField();
+  });
+  const lfRow = div('st-f-fieldrow');
+  lfRow.append(linkFilterFieldBox, lfClear);
+  lf.body.append(lfRow);
+
+  const lfStructRow = div('st-f-tri-row');
+  const lfStructLabel = el('label', 'checkbox-row');
+  const lfStructCheck = el('input');
+  lfStructCheck.type = 'checkbox';
+  lfStructCheck.checked = state.linkFilterStructural;
+  setTooltip(lfStructLabel, 'Включить нетипизированные (структурные) связи в обход');
+  lfStructCheck.addEventListener('change', () => {
+    state.linkFilterStructural = lfStructCheck.checked;
+    touch();
+  });
+  lfStructLabel.append(lfStructCheck, span('структурные связи'));
+  lfStructRow.append(el('span', 'st-f-tri-label', 'Структура'), lfStructLabel);
+  lf.body.append(lfStructRow);
+
+  scroll.append(lf.box);
+  renderLinkFilterField();
 
   // --- property conditions (collapsible, §15.3) ------------------------------
   // --- authorship (задача 59119797, эволюция операторов) -------------------
@@ -1410,6 +1484,46 @@ async function openLinkTypesPicker(): Promise<void> {
   state.linkTypeIds = picked;
   touch();
   renderLinkTypeField();
+}
+
+/** Renders the «Обход по связям» chips (задача c965ad03). */
+function renderLinkFilterField(): void {
+  if (linkFilterFieldBox === null) return;
+  renderChips(
+    linkFilterFieldBox,
+    state.linkFilterTypeIds.flatMap((id) => {
+      const type = store.state.linkTypes.find((t) => t.id === id);
+      if (type === undefined) return [];
+      const visual = resolveLinkTypeVisual(store.state.linkTypes, type.id);
+      return [
+        {
+          key: id,
+          label: type.name_forward,
+          icon: null,
+          style: {
+            fg: visual.color,
+            bg: null,
+            bold: false,
+            italic: false,
+            underline: false,
+            strike: false,
+          },
+        },
+      ];
+    }),
+  );
+}
+
+/** Opens the link-type picker for the traversal filter (задача c965ad03). */
+async function openLinkFilterPicker(): Promise<void> {
+  const rows = orderedTypeRows(store.state.linkTypes)
+    .filter((row) => !row.type.is_root)
+    .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 }));
+  const picked = await openTypePickerDialog('Обход по связям', rows, state.linkFilterTypeIds);
+  if (picked === null) return;
+  state.linkFilterTypeIds = picked;
+  touch();
+  renderLinkFilterField();
 }
 
 // ---------------------------------------------------------------------------
@@ -1912,6 +2026,8 @@ function applySavedFilter(filter: SavedFilter): void {
     parentIds: def.parent_ids ?? [],
     typeIds: def.type_ids ?? [],
     linkTypeIds: def.link_type_ids ?? [],
+    linkFilterTypeIds: def.link_filter?.type_ids ?? [],
+    linkFilterStructural: def.link_filter?.include_structural ?? false,
     properties: (def.properties ?? []).map((c) => ({
       propertyId: c.property_id,
       op: c.op,
@@ -1955,12 +2071,14 @@ async function saveCurrentFilter(): Promise<void> {
     return;
   }
   const keywordScope = buildKeywordScope();
+  const traversalFilter = buildTraversalFilter();
   const definition = {
     ...(state.keywords.trim() !== '' ? { keywords: state.keywords.trim() } : {}),
     ...(state.keywords.trim() !== '' && keywordScope !== undefined ? { keyword_scope: keywordScope } : {}),
     ...(state.parentIds.length > 0 ? { parent_ids: state.parentIds } : {}),
     ...(state.typeIds.length > 0 ? { type_ids: state.typeIds } : {}),
     ...(state.linkTypeIds.length > 0 ? { link_type_ids: state.linkTypeIds } : {}),
+    ...(traversalFilter !== undefined ? { link_filter: traversalFilter } : {}),
     ...(buildConditions().length > 0 ? { properties: buildConditions() } : {}),
     ...buildExtraFilter(),
     ...(store.state.showInactive ? { show_inactive: true } : {}),

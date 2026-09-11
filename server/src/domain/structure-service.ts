@@ -29,7 +29,9 @@ import {
   STRUCTURE_SORTS,
   SORT_ORDERS,
   buildLikePattern,
+  isLinkTypeFilterActive,
   parseFilterKeywords,
+  parseLinkTypeFilterValue,
   type ChronicleFilterDefinition,
   type ChronicleSavedFilter,
   type PropertyValueType,
@@ -54,7 +56,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { getNetworkProperty } from './property-service.js';
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
 import { getThoughtOrThrow, rowToThoughtRef } from './thought-service.js';
-import { expandTypeIdsToSubtree } from './type-hierarchy.js';
+import { expandTypeIdsToSubtree, linkTypeFilterClause } from './type-hierarchy.js';
 
 /** Display columns every thought-ref SELECT must carry (see `resolveThoughts`). */
 export const REF_COLUMNS =
@@ -209,6 +211,12 @@ export function parseStructureFilter(
     }
     if (linkTypeIds.length > 0) filter.link_type_ids = linkTypeIds as string[];
   }
+
+  // Фильтр обхода по типам связей (задача c965ad03): ограничивает рёбра, по
+  // которым `parent_ids` раскрывается в поддерево и разворачивается дерево
+  // «Структур». Валидация формы — в `parseLinkTypeFilterValue` (shared).
+  const linkFilter = parseLinkTypeFilterValue(body['link_filter'], requestId);
+  if (linkFilter !== undefined) filter.link_filter = linkFilter;
 
   const showInactive = body['show_inactive'];
   if (showInactive !== undefined) {
@@ -445,6 +453,7 @@ export function isFilterEmpty(filter: StructureFilter): boolean {
   return (
     (filter.keywords ?? '').trim() === '' &&
     (filter.parent_ids ?? []).length === 0 &&
+    !isLinkTypeFilterActive(filter.link_filter) &&
     (filter.type_ids ?? []).length === 0 &&
     (filter.link_type_ids ?? []).length === 0 &&
     (filter.properties ?? []).length === 0 &&
@@ -613,33 +622,56 @@ function sqlScalar(
  * links (parent_ids scoping, 03-server-api.md §6.10). The graph may contain
  * cycles (docs/AGENTS.md §7) — the depth cap terminates the walk without a
  * separate visited-set; the final `DISTINCT id` dedups the output.
+ *
+ * Задача c965ad03: `linkFilter` ограничивает рёбра, по которым раскрывается
+ * поддерево (типы с потомками + опционально структурные); без фильтра — все
+ * рёбра, как раньше.
  */
-function expandParentIdsToSubtree(ndb: NetworkDb, rootIds: string[], showInactive: boolean): string[] {
+function expandParentIdsToSubtree(
+  ndb: NetworkDb,
+  rootIds: string[],
+  showInactive: boolean,
+  linkFilter?: StructureFilter['link_filter'],
+): string[] {
   if (rootIds.length === 0) return [];
   const placeholders = rootIds.map(() => '?').join(',');
   const activeFlag = showInactive ? 1 : 0;
+  const typeClause = linkTypeFilterClause(ndb, linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
   const rows = ndb
     .prepare(
       `WITH RECURSIVE subtree(id, depth) AS (
          SELECT l.target_id, 1
          FROM links_v l
-         WHERE l.source_id IN (${placeholders}) AND (l.active = 1 OR ?)
+         WHERE l.source_id IN (${placeholders}) AND (l.active = 1 OR ?)${typeSql}
          UNION
          SELECT l.target_id, s.depth + 1
          FROM links_v l
          JOIN subtree s ON l.source_id = s.id
-         WHERE (l.active = 1 OR ?) AND s.depth < ?
+         WHERE (l.active = 1 OR ?) AND s.depth < ?${typeSql}
        )
        SELECT DISTINCT id FROM subtree`,
     )
-    .all(...rootIds, activeFlag, activeFlag, STRUCTURES_PARENT_SCOPE_MAX_DEPTH) as Array<{ id: string }>;
+    .all(
+      ...rootIds,
+      activeFlag,
+      ...typeParams,
+      activeFlag,
+      STRUCTURES_PARENT_SCOPE_MAX_DEPTH,
+      ...typeParams,
+    ) as Array<{ id: string }>;
   return rows.map((r) => r.id);
 }
 
 /** Reads the link-direction flags of the given thoughts as a plain record. */
-function directionsOf(ndb: NetworkDb, ids: string[]): StructureDirectionFlags {
+function directionsOf(
+  ndb: NetworkDb,
+  ids: string[],
+  linkFilter?: StructureFilter['link_filter'],
+): StructureDirectionFlags {
   const out: StructureDirectionFlags = {};
-  for (const [id, d] of getLinkDirections(ndb, ids)) {
+  for (const [id, d] of getLinkDirections(ndb, ids, linkFilter)) {
     out[id] = { has_incoming: d.has_in, has_outgoing: d.has_out };
   }
   return out;
@@ -743,7 +775,12 @@ function buildFilterQuerySql(
   appendDateBound(where, params, 't.updated_at', req.updated_after, req.updated_before);
 
   if (req.parent_ids !== undefined && req.parent_ids.length > 0) {
-    const scoped = expandParentIdsToSubtree(ndb, req.parent_ids, showInactive === 1);
+    const scoped = expandParentIdsToSubtree(
+      ndb,
+      req.parent_ids,
+      showInactive === 1,
+      req.link_filter,
+    );
     if (scoped.length === 0) return null;
     where.push(`t.id IN (${scoped.map(() => '?').join(',')})`);
     params.push(...scoped);
@@ -991,6 +1028,14 @@ export interface HierarchyOptions {
   excludeIds?: string[];
   /** Page offset into the post-exclude neighbor list (§15.5 per-node pagination). */
   offset?: number;
+  /**
+   * Фильтр обхода по типам связей (задача c965ad03, 0.8.1): с фильтром узел
+   * дерева разворачивается только по рёбрам выбранных типов (+структурные при
+   * `include_structural`), эллипсы и рёбра ответа — те же типы. Держит
+   * раскрытие дерева «Структур» согласован с отбором `parent_ids` +
+   * `link_filter` запроса выборки.
+   */
+  linkFilter?: StructureFilter['link_filter'];
 }
 
 /**
@@ -1013,6 +1058,9 @@ export function getHierarchy(
   getThoughtOrThrow(ndb, thoughtId);
   const showInactive = opts.showInactive === true ? 1 : 0;
   const exclude = new Set((opts.excludeIds ?? []).slice(0, HIERARCHY_EXCLUDE_MAX_IDS));
+  const typeClause = linkTypeFilterClause(ndb, opts.linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
 
   const neighbourJoin = dir === 'children' ? 'l.target_id' : 'l.source_id';
   const focusSide = dir === 'children' ? 'l.source_id' : 'l.target_id';
@@ -1021,10 +1069,10 @@ export function getHierarchy(
       `SELECT DISTINCT ${REF_COLUMNS}
        FROM links_v l
        JOIN thoughts_v t ON t.id = ${neighbourJoin}
-       WHERE ${focusSide} = ? AND (l.active = 1 OR ?) AND (t.active = 1 OR ?)
+       WHERE ${focusSide} = ? AND (l.active = 1 OR ?) AND (t.active = 1 OR ?)${typeSql}
        ORDER BY t.title COLLATE NOCASE ASC`,
     )
-    .all(thoughtId, showInactive, showInactive) as Array<ThoughtRefRow>;
+    .all(thoughtId, showInactive, showInactive, ...typeParams) as Array<ThoughtRefRow>;
   const fresh = rows.filter((row) => !exclude.has(row.id));
   const offset = Math.max(opts.offset ?? 0, 0);
   const page = fresh.slice(offset, offset + STRUCTURES_NODE_NEIGHBORS_LIMIT);
@@ -1032,7 +1080,7 @@ export function getHierarchy(
   const neighbors = page.map(rowToThoughtRef);
 
   const visibleIds = [thoughtId, ...neighbors.map((n) => n.id)];
-  const edges = getEdgesAmong(ndb, visibleIds, opts.showInactive === true).map((l) => ({
+  const edges = getEdgesAmong(ndb, visibleIds, opts.showInactive === true, opts.linkFilter).map((l) => ({
     id: l.id,
     source_id: l.source_id,
     target_id: l.target_id,
@@ -1049,7 +1097,7 @@ export function getHierarchy(
     edges,
     truncated: hasMore,
     has_more: hasMore,
-    directions: directionsOf(ndb, visibleIds),
+    directions: directionsOf(ndb, visibleIds, opts.linkFilter),
   };
 }
 

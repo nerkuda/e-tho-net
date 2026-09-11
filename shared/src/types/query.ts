@@ -5,6 +5,8 @@
  * depth of every hit.
  */
 
+import type { LinkTypeFilterInput } from './link.js';
+
 /** Актуальность мысли в выборке: `'true'` — только активные, `'false'` —
  * только неактивные, `'any'` — без фильтра. */
 export type ThoughtQueryActive = 'true' | 'false' | 'any';
@@ -89,6 +91,13 @@ export interface ThoughtQueryRequest {
    * Отсутствует/пустая строка — фильтр не применяется.
    */
   editor_id?: string;
+  /**
+   * Фильтр обхода по типам связей (задача c965ad03, 0.8.1): ограничивает
+   * рёбра, по которым `in_subtree_of` спускается вниз. Задан — типы
+   * раскрываются с потомками, нетипизированные связи участвуют только при
+   * `include_structural: true`; не задан — обход по всем рёбрам, как раньше.
+   */
+  link_filter?: LinkTypeFilterInput;
   /** Сортировка (по умолчанию `title`). */
   sort?: ThoughtQuerySort;
   /** Направление (по умолчанию `asc`). */
