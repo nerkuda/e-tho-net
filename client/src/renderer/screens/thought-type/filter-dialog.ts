@@ -619,6 +619,11 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
   ltChips.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') openLtPicker();
   });
+  const ltToken = makeTokenBtn(networkId, { kind: 'link_type' }, (token) => {
+    state.linkTypeIds = [token];
+    renderTypeChips(networkId, 'link', state.linkTypeIds, ltChips);
+    touch();
+  });
   const ltClear = el('button', 'st-f-clear-inline', '×') as HTMLButtonElement;
   ltClear.type = 'button';
   setTooltip(ltClear, 'Очистить');
@@ -629,7 +634,7 @@ function buildCriteriaBuilder(opts: CriteriaBuilderOpts): CriteriaBuilder {
     touch();
   });
   const ltRow = div('st-f-fieldrow');
-  ltRow.append(ltChips, ltClear);
+  ltRow.append(ltChips, ltToken, ltClear);
   lt.body.append(ltRow);
   renderTypeChips(networkId, 'link', state.linkTypeIds, ltChips);
 
@@ -1608,6 +1613,7 @@ type TokenPickerField =
   | { kind: 'property'; valueType: PropertyValueType; op: StructurePropertyOp | null }
   | { kind: 'keywords' }
   | { kind: 'thought_type' }
+  | { kind: 'link_type' }
   | { kind: 'parent' }
   | { kind: 'author' }
   | { kind: 'editor' };

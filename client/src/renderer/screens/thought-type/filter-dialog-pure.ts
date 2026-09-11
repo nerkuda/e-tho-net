@@ -124,7 +124,9 @@ export function buildTokensForField(
         section: sectionName,
       };
       if (
-        (def.value_type === 'thought_ref' || def.value_type === 'url') &&
+        (def.value_type === 'thought_ref' ||
+          def.value_type === 'url' ||
+          def.value_type === 'text') &&
         multiple
       ) {
         token.listOnly = true;
@@ -145,27 +147,64 @@ export function buildTokensForField(
 
 /**
  * Поля отбора, у которых нет «типа значения» свойства, но которым нужен
- * токен-пикер (баг 2): ключевые слова, тип мысли, автор, редактор.
+ * токен-пикер (баг 2): ключевые слова, тип мысли/связи, автор, редактор.
  */
-export type SpecialTokenField = 'keywords' | 'thought_type' | 'author' | 'editor';
+export type SpecialTokenField =
+  | 'keywords'
+  | 'thought_type'
+  | 'link_type'
+  | 'author'
+  | 'editor';
 
 /**
  * Токены для полей, не привязанных к типу значения свойства
- * (баг 2, таблица токенов из решения №7 тех.проекта 918833e3):
+ * (баг 2, таблица токенов из решения №7 тех.проекта 918833e3, расширено в
+ * задаче 68ec0b5b для текстовых свойств с id онтологии):
  *
  *   * `keywords` — `$thought.title`, `$thought.synonyms` + свойства типа/предков
  *     с типом значения text/url (поиск по тексту);
- *   * `thought_type` — только `$thought.type` (id типа мысли-контекста);
+ *   * `thought_type` — `$thought.type` (id типа мысли-контекста) плюс
+ *     текстовые/url-свойства цепочки типов: текстовое свойство может
+ *     хранить id нужного типа, резолвер подставит его «как есть» без
+ *     проверки соответствия типов;
+ *   * `link_type` — то же, что `thought_type`, только без `$thought.type`
+ *     (у мысли нет поля «id типа связи»): только текстовые/url-свойства
+ *     цепочки типов;
  *   * `author`/`editor` — `$thought.author`/`$thought.editor` + `$user`.
+ *
+ * Скалярные операции (`eq`) несовместимы с множественными свойствами
+ * (валидируется сервером по `validateDefinitionForTokens`) — такие
+ * токены из кандидатов исключаются.
  */
 export function buildTokensForSpecialField(
   chainProps: ChainProperties[],
   field: SpecialTokenField,
 ): ViewToken[] {
-  if (field === 'thought_type') {
-    return [
-      { text: '$thought.type', label: '$thought.type — тип мысли в фокусе', section: 'Поля мысли' },
-    ];
+  if (field === 'thought_type' || field === 'link_type') {
+    const out: ViewToken[] = [];
+    if (field === 'thought_type') {
+      out.push({
+        text: '$thought.type',
+        label: '$thought.type — тип мысли в фокусе',
+        section: 'Поля мысли',
+      });
+    }
+    for (const level of chainProps) {
+      if (level.props.length === 0) continue;
+      const sectionName = `Свойства «${level.type.name}»`;
+      for (const def of level.props) {
+        if (def.value_type !== 'text' && def.value_type !== 'url') continue;
+        // Скалярные операции `eq` несовместимы с множественными свойствами
+        // (валидация сервера: `validateDefinitionForTokens`).
+        if (def.config?.multiple === true) continue;
+        out.push({
+          text: `$thought.[${def.key}]`,
+          label: `$thought.[${def.key}] — ${def.value_type}`,
+          section: sectionName,
+        });
+      }
+    }
+    return out;
   }
   if (field === 'author' || field === 'editor') {
     // Для ОБОИХ полей (автор и редактор) доступны и `$thought.author`, и
@@ -209,6 +248,12 @@ function propertyMatches(
   if (defMultiple) return true;
   if (defType === condType) return true;
   if ((defType === 'text' || defType === 'url') && (condType === 'text' || condType === 'url')) {
+    return true;
+  }
+  // Текстовое/url-свойство может хранить id мысли (задача 68ec0b5b):
+  // резолвер подставит значение «как есть» без проверки соответствия
+  // типов, поэтому его разрешено выбирать для условия по `thought_ref`.
+  if ((defType === 'text' || defType === 'url') && condType === 'thought_ref') {
     return true;
   }
   return false;
