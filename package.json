@@ -1,6 +1,6 @@
 {
   "name": "etn",
-  "version": "0.7.5",
+  "version": "0.8.1",
   "private": true,
   "description": "ETN — The Endless Thought Network. Self-hosted graph-of-thoughts application.",
   "workspaces": [
