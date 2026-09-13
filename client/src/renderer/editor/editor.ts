@@ -3,18 +3,19 @@
  *
  * H8 ships the shell and the header:
  *  - position switcher (left/right/top/bottom/hidden → L4 `editor_position`);
- *  - thought header: title, synonyms (comma string), type, icon (emoji),
- *    active, fg/bg colors, four font-style toggles — every change saves via
- *    `thoughts.update` with `If-Match`;
+ *  - thought header (3 строки, задача 8ab775d9): иконка/заголовок, синонимы,
+ *    тип ▾ + «актуально» + подменю «Действия» + «Настройки мысли» ⚙; все правки
+ *    сохраняются через `thoughts.update` с `If-Match`;
  *  - link header (when a link is picked): type + active via `links.update`.
  *
  * L7 turns the group stack below the header into tabs (08-ui-spec.md §6.3):
- * «Основное», «Вложения (N)», «Связи», «Хроника (N)». A tab's content is
- * built lazily on first activation and cached for the lifetime of one editor
- * render (a signature change rebuilds everything). The active tab survives
- * focus changes. Modules register tab content builders (`registerTabContent`),
- * tab badge counters (`registerTabCount`) and «Основное» sections
- * (`registerMainSection` — collapsible groups).
+ * «Основное», «Свойства», «Вложения (N)», «Связи», «Хроника (N)»,
+ * «Метаданные». A tab's content is built lazily on first activation and cached
+ * for the lifetime of one editor render (a signature change rebuilds everything).
+ * The active tab survives focus changes (persisted to L4
+ * `UI_STATE_KEY.EDITOR_ACTIVE_TAB`). Modules register tab content builders
+ * (`registerTabContent`), tab badge counters (`registerTabCount`) and
+ * «Основное» sections (`registerMainSection` — collapsible groups).
  */
 
 import {
@@ -85,8 +86,8 @@ export interface EditorContext {
   link: Link | null;
 }
 
-/** Editor tab ids (08-ui-spec.md §6.3). */
-export type EditorTabId = 'main' | 'attachments' | 'links' | 'chrono' | 'metadata';
+/** Editor tab ids (08-ui-spec.md §6.3, задача 8ab775d9). */
+export type EditorTabId = 'main' | 'properties' | 'attachments' | 'links' | 'chrono' | 'metadata';
 
 /** Builds the content of one tab for the current entity. */
 export type TabContentBuilder = (ctx: EditorContext) => HTMLElement;
@@ -100,6 +101,7 @@ export type MainSectionBuilder = (ctx: EditorContext) => GroupSpec | null;
 /** Static tab bar definition; badges come from registered count loaders. */
 const TABS: Array<{ id: EditorTabId; title: string; counted: boolean }> = [
   { id: 'main', title: 'Основное', counted: false },
+  { id: 'properties', title: 'Свойства', counted: false },
   { id: 'attachments', title: 'Вложения', counted: true },
   { id: 'links', title: 'Связи', counted: false },
   { id: 'chrono', title: 'Хроника', counted: true },
@@ -110,8 +112,42 @@ const tabContentBuilders = new Map<EditorTabId, TabContentBuilder>();
 const tabCountLoaders = new Map<EditorTabId, TabCountLoader>();
 const mainSectionBuilders: MainSectionBuilder[] = [];
 
-/** The active tab — module-level so it survives focus/entity changes (L7). */
+/** The active tab — module-level so it survives focus/entity changes (L7).
+ *  Initial value is loaded from the persisted L4 `EDITOR_ACTIVE_TAB` slot
+ *  (задача 8ab775d9), so reopening the editor restores the same tab the
+ *  user was on. The module-level shadow stays in sync with `persistActiveTab`. */
 let activeTab: EditorTabId = 'main';
+let activeTabLoaded = false;
+
+/** Loads the persisted active tab id once. Safe to call repeatedly. */
+async function loadActiveTab(): Promise<void> {
+  if (activeTabLoaded) return;
+  activeTabLoaded = true;
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  try {
+    const raw = await etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_ACTIVE_TAB);
+    if (typeof raw === 'string' && (TABS.find((t) => t.id === raw) ?? null) !== null) {
+      activeTab = raw as EditorTabId;
+    }
+  } catch {
+    // Ошибка чтения (нет сети, нет значения) — оставляем дефолт 'main'.
+  }
+}
+
+let persistActiveTabTimer: number | null = null;
+/** Persists the active tab id to the local DB (debounced). */
+function persistActiveTab(): void {
+  if (persistActiveTabTimer !== null) window.clearTimeout(persistActiveTabTimer);
+  persistActiveTabTimer = window.setTimeout(() => {
+    persistActiveTabTimer = null;
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    void etn.ui
+      .setState(networkId, UI_STATE_KEY.EDITOR_ACTIVE_TAB, activeTab)
+      .catch(() => undefined);
+  }, 200);
+}
 
 /** Registers a tab content builder (L7). */
 export function registerTabContent(id: EditorTabId, builder: TabContentBuilder): void {
@@ -453,6 +489,13 @@ export function mountEditor(editorHost: HTMLElement): void {
     }
     void render();
   });
+  // Restore the persisted active tab id (задача 8ab775d9) before the first
+  // render so the user lands on the tab they left on, not always «Основное».
+  void loadActiveTab().then(() => {
+    if (host?.isConnected === true && paneHostEl !== null) {
+      activateEditorTab(activeTab);
+    }
+  });
   void render();
 }
 
@@ -467,15 +510,26 @@ function buildTabPane(id: EditorTabId): HTMLElement {
   const pane = div('tab-pane fixed');
   if (ctx === null) return pane;
   if (id === 'main') {
-    // Two areas with a single boundary (L7, 08-ui-spec.md §6.3.1): the
-    // table sections on top, the view/edit section filling the rest of the
-    // tab. The last section is always the view/edit one (the permanent
-    // comment; for a link it is the only section and fills the whole tab).
+    // Структура вкладки (задача 8ab775d9): в «Основное» теперь живёт только
+    // постоянный комментарий мысли на всю высоту вкладки. Свойства переехали
+    // в отдельную вкладку «Свойства». Если когда-то в этой вкладке снова
+    // зарегистрируют верхние секции (как было до 0.8.1), вернётся прежняя
+    // компоновка «top + splitter + bottom»; сейчас же — одиночная секция,
+    // которая и есть комментарий, на всю высоту.
     const specs = mainSectionBuilders
       .map((section) => section(ctx))
       .filter((spec): spec is GroupSpec => spec !== null);
     if (specs.length === 0) {
       pane.append(el('p', 'muted', 'Нет содержимого.'));
+      return pane;
+    }
+    if (specs.length === 1) {
+      // Одиночная секция (сейчас — постоянный комментарий) занимает всю
+      // высоту вкладки. Обёртка `main-full` нужна, чтобы CSS отдельно
+      // управлял растяжением и отсутствием верхнего сплиттера.
+      const wrap = div('main-full');
+      wrap.append(groupSection(specs[0]!));
+      pane.append(wrap);
       return pane;
     }
     const topSpecs = specs.slice(0, -1);
@@ -512,6 +566,7 @@ function buildTabPane(id: EditorTabId): HTMLElement {
 /** Activates a tab: (re)builds its pane on first activation, caches it after. */
 function activateEditorTab(id: EditorTabId): void {
   if (paneHostEl === null) return;
+  const changed = activeTab !== id;
   activeTab = id;
   for (const [tabId, tab] of tabButtons) {
     tab.classList.toggle('active', tabId === id);
@@ -522,6 +577,7 @@ function activateEditorTab(id: EditorTabId): void {
     builtPanes.set(id, pane);
   }
   paneHostEl.replaceChildren(pane);
+  if (changed) persistActiveTab();
 }
 
 /**
@@ -1037,6 +1093,11 @@ function synonymsEqual(a: string[], b: string[]): boolean {
 /**
  * Builds the thought header form (08-ui-spec.md §6.2.1).
  *
+ * Структура — три строки (задача 8ab775d9):
+ *   1. иконка · заголовок · ⚙ (Настройки мысли)
+ *   2. синонимы
+ *   3. тип ▾ · «актуально» · подменю «Действия»
+ *
  * Bug fix (editor shaking on Tab after a title edit): `blur` on the synonyms
  * field used to save unconditionally, even when the field was untouched.
  * Renaming a thought via Tab triggers an async `saveThought` that, on
@@ -1055,8 +1116,7 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   const box = div('editor-fields');
   const networkId = requireNetworkId();
 
-  // Top row: clickable icon box + large multiline title (no field labels —
-  // placeholders only, 08-ui-spec.md §6.2).
+  // --- Строка 1: иконка · заголовок · ⚙ (Настройки мысли) -----------------
   const topRow = div('editor-top-row');
 
   const iconBox = el('button', 'editor-icon-box') as HTMLButtonElement;
@@ -1158,10 +1218,14 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     }
   });
 
-  topRow.append(iconBox, titleArea);
+  const settingsBtn = button('', () => openThoughtSettings(thought), 'icon-btn', 'Цвет и стиль');
+  settingsBtn.append(svgIcon('settings', 14));
+  settingsBtn.setAttribute('aria-label', 'Настройки мысли');
+
+  topRow.append(iconBox, titleArea, settingsBtn);
   box.append(topRow);
 
-  // Synonyms (single line, comma-separated).
+  // --- Строка 2: синонимы -------------------------------------------------
   const synonymsInput = el('input', 'text-input synonyms-input');
   synonymsInput.type = 'text';
   synonymsInput.value = thought.synonyms.join(', ');
@@ -1184,7 +1248,7 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   });
   box.append(synonymsInput);
 
-  // Bottom row: type + settings (⚙) + active toggle.
+  // --- Строка 3: тип ▾ · «актуально» · подменю «Действия» -----------------
   const row = div('editor-header-row');
 
   // Searchable type picker (L6/L21): the type tree without the hierarchy
@@ -1216,9 +1280,6 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     },
   });
 
-  const settingsBtn = button('', () => openThoughtSettings(thought), 'icon-btn', 'Цвет и стиль');
-  settingsBtn.append(svgIcon('settings', 14));
-
   const activeLabel = el('label', 'checkbox-row');
   const activeCheck = el('input');
   activeCheck.type = 'checkbox';
@@ -1229,12 +1290,72 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   });
   activeLabel.append(activeCheck, span('актуально'));
 
-  row.append(typeCombo.root, settingsBtn, activeLabel);
+  // Подменю «Действия» — задача 8ab775d9. Команды зеркалят контекстное меню
+  // облачка: «В фокус», toggle выделения, toggle закрепления. Меню открывается
+  // и с клавиатуры (Enter/Space).
+  const actionsBtn = button('Действия ▾', () => void openThoughtActionsMenu(thought, actionsBtn), 'btn small');
+  actionsBtn.type = 'button';
+
+  row.append(typeCombo.root, activeLabel, actionsBtn);
   box.append(row);
 
   // The title height depends on layout; size it once mounted.
   queueMicrotask(resizeTitle);
   return box;
+}
+
+/**
+ * Подменю «Действия» в шапке редактора (задача 8ab775d9). Команды зеркалят
+ * контекстное меню облачка мысли на холсте: «В фокус», toggle выделения,
+ * toggle закрепления. Меню вызывается и с клавиатуры (Enter/Space на кнопке
+ * «Действия ▾»).
+ */
+async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElement): Promise<void> {
+  const networkId = requireNetworkId();
+  // Импортируем лениво, чтобы не тащить холст в редактор и не плодить
+  // циклические зависимости (canvas ↔ editor ↔ canvas/context-menu).
+  const { isPinned, togglePinned } = await import('../pinned/pins.js');
+  const { addToSelection, removeFromSelection } = await import('../selection/selection.js');
+  const { setFocus } = await import('../app.js');
+  const inSelection = store.state.selection.includes(thought.id);
+  const items: MenuItem[] = [
+    {
+      label: 'В фокус',
+      onClick: () => {
+        if (!canSave()) {
+          offlineNotice();
+          return;
+        }
+        void setFocus(thought.id);
+      },
+    },
+    {
+      label: inSelection ? 'Убрать из выделенных' : 'Добавить к выделению',
+      onClick: () => {
+        if (inSelection) removeFromSelection([thought.id]);
+        else addToSelection([thought.id]);
+      },
+    },
+    {
+      label: isPinned(thought.id) ? 'Открепить мысль' : 'Закрепить мысль',
+      onClick: () => void togglePinned(thought.id),
+    },
+    {
+      label: 'Копировать ID',
+      onClick: () => {
+        void navigator.clipboard.writeText(thought.id).then(
+          () => notice('ID мысли скопирован.'),
+          () => notice('Не удалось скопировать ID.', 'error'),
+        );
+      },
+    },
+    {
+      label: thought.active ? 'Сделать неактуальной' : 'Сделать актуальной',
+      onClick: () => void saveThought({ active: !thought.active }),
+    },
+  ];
+  const rect = anchor.getBoundingClientRect();
+  showMenuAt(rect.left, rect.bottom + 2, items);
 }
 
 /** Opens the thought settings dialog (colours + font style + reset). */

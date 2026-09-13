@@ -7384,3 +7384,174 @@ table.activity-table thead th {
   padding: 8px 0;
   color: var(--text-dim);
 }
+
+/* ---------------------------------------------------------------------------
+ * Адаптация редактора под единую модель связей (задача 8ab775d9)
+ * --------------------------------------------------------------------------- */
+
+/* Шапка — три строки: иконка · заголовок · ⚙ / синонимы / тип ▾ · актуально · Действия */
+.editor-top-row .editor-icon-box {
+  flex: 0 0 auto;
+}
+.editor-top-row .editor-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.editor-top-row > .icon-btn {
+  flex: 0 0 auto;
+}
+
+/* Подменю «Действия» в шапке */
+.editor-header-row .btn.small {
+  flex: 0 0 auto;
+}
+
+/* Вкладка «Основное» — единая зона комментария на всю высоту */
+.main-full {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.main-full > .group {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.main-full > .group > .group-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Плейсхолдер пустого комментария */
+.md-field-placeholder {
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 12px 4px;
+}
+
+/* Вкладка «Свойства» */
+.properties-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.properties-body,
+.properties-outside-body {
+  padding: 4px 0;
+}
+.link-value-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.link-value-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.link-value-add {
+  flex: 1 1 120px;
+  min-width: 120px;
+}
+.link-value-single {
+  align-items: center;
+  gap: 4px;
+}
+.link-value-current-label {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* Вкладка «Связи» — группа «Локальный граф» */
+.links-local-graph {
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+}
+.mini-graph {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+.mini-graph-header {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mini-graph-viewport {
+  position: relative;
+  width: 100%;
+  height: 280px;
+  overflow: hidden;
+  background: var(--bg-soft, rgba(0, 0, 0, 0.04));
+  border-radius: 4px;
+  cursor: grab;
+}
+.mini-graph-viewport:active {
+  cursor: grabbing;
+}
+.mini-graph-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.mini-graph-edge {
+  stroke: var(--text-dim, #888);
+  stroke-width: 1;
+  opacity: 0.7;
+}
+.mini-graph-edge-label {
+  fill: var(--text-dim, #666);
+  font-size: 10px;
+  pointer-events: none;
+}
+.mini-graph-nodes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.mini-graph-cloud {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  background: var(--bg, #fff);
+  color: var(--fg, #222);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+}
+.mini-graph-cloud:focus {
+  outline: 2px solid var(--accent, #6aa);
+  outline-offset: 2px;
+}
+.mini-graph-cloud-center {
+  background: var(--accent-bg, #eef);
+  font-weight: 600;
+}
+.mini-graph-more,
+.mini-graph-mass-chip {
+  position: absolute;
+  background: var(--bg-soft, #f4f4f4);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-dim, #666);
+  pointer-events: auto;
+}
+.mini-graph-hint {
+  font-size: 11px;
+}

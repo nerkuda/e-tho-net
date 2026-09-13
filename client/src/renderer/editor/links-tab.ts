@@ -47,6 +47,7 @@ import { patchFocusEdge, store } from '../state.js';
 import { openLinkInEditor, registerTabContent, type EditorContext } from './editor.js';
 import { groupSection, type GroupSpec } from './group.js';
 import { applyGroupClamp } from './list-heights.js';
+import { buildMiniGraph } from './mini-graph.js';
 import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from './wiki-link-resolver.js';
 import { rowSplitter } from './splitter.js';
 
@@ -117,6 +118,19 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
       buildBody: () => buildMentionsParentBody(ctx),
     },
   );
+  // «Локальный граф» (задача 8ab775d9): мини-граф в стиле Obsidian —
+  // центр = редактируемая мысль, вокруг — все прямые соседи. Свёрнут по
+  // умолчанию (как и «Упоминания»), чтобы не рендерить SVG до явного
+  // запроса пользователя. Строится лениво при первом разворачивании.
+  const localGraph = groupSection(
+    {
+      id: 'links.local-graph',
+      title: 'Локальный граф',
+      lazyCount: true,
+      defaultCollapsed: true,
+      buildBody: () => buildLocalGraphBody(ctx),
+    },
+  );
   const usage = groupSection(
     {
       id: 'usage',
@@ -137,12 +151,102 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
     group.querySelector(':scope > .group-body') !== null ? group : null;
   applyGroupClamp(direct, 'links.direct');
   applyGroupClamp(mentions, 'links.mentions');
+  applyGroupClamp(localGraph, 'links.local-graph');
   root.append(
     direct,
     rowSplitter(() => resizable(direct), { min: 50, persistKey: 'links.direct' }),
     mentions,
     rowSplitter(() => resizable(mentions), { min: 50, persistKey: 'links.mentions' }),
+    localGraph,
+    rowSplitter(() => resizable(localGraph), { min: 50, persistKey: 'links.local-graph' }),
     usage,
+  );
+  return root;
+}
+
+/**
+ * Тело группы «Локальный граф»: стягивает всех прямых соседей мысли
+ * (структурные «Родители»/«Потомки» + типизированные связи в обе стороны)
+ * и рисует мини-канвас. Массовые связи (≥10 одинакового типа к одной цели)
+ * скрываются за чипом «+N».
+ */
+async function buildLocalGraphBody(ctx: EditorContext): Promise<HTMLElement> {
+  const networkId = requireNetworkId();
+  const root = div('links-local-graph');
+  if (ctx.thought === null) {
+    root.append(el('p', 'muted', 'Граф недоступен — мысль ещё загружается.'));
+    return root;
+  }
+  // Параллельно: соседи (оба направления одним вызовом), полный список связей
+  // мысли (для подписей рёбер), сама мысль (уже есть в `ctx.thought`).
+  let neighbours: Array<{ id: string; title: string }> = [];
+  let links: Link[] = [];
+  try {
+    const [parents, children, grouped] = await Promise.all([
+      etn.thoughts.neighbors(networkId, ctx.ownerId, 'parents', 200),
+      etn.thoughts.neighbors(networkId, ctx.ownerId, 'children', 200),
+      etn.links.listByThought(networkId, ctx.ownerId, true),
+    ]);
+    const seen = new Set<string>();
+    const all = [...parents, ...children];
+    for (const item of all) {
+      if (item.id !== ctx.ownerId && !seen.has(item.id)) {
+        seen.add(item.id);
+        neighbours.push({ id: item.id, title: item.title });
+      }
+    }
+    links = [
+      ...grouped.by_type.flatMap((g) => g.items) as unknown as Link[],
+      ...grouped.untyped_parents as unknown as Link[],
+      ...grouped.untyped_children as unknown as Link[],
+    ];
+  } catch (err) {
+    root.append(el('p', 'muted', `Не удалось загрузить граф: ${errText(err)}`));
+    return root;
+  }
+
+  // Считаем массовые связи: для каждой связи с типом группируем по типу,
+  // и если у одной и той же цели несколько связей одного типа — прячем
+  // избыточные рёбра.
+  const massMap = new Map<string, { hidden: number; label: string }>();
+  // Простая эвристика: считаем повторяющиеся пары (type_id, target_id) и
+  // если их >= MASS_LINK_THRESHOLD — считаем массовыми.
+  const pairCounts = new Map<string, { typeName: string; count: number }>();
+  for (const link of links) {
+    const otherId = link.source_id === ctx.ownerId ? link.target_id : link.source_id;
+    if (otherId === ctx.ownerId) continue;
+    const key = `${link.type_id ?? ''}|${otherId}`;
+    const existing = pairCounts.get(key);
+    if (existing === undefined) {
+      const typeName =
+        store.state.linkTypes.find((t) => t.id === link.type_id)?.name_forward ?? 'связь';
+      pairCounts.set(key, { typeName, count: 1 });
+    } else {
+      existing.count += 1;
+    }
+  }
+  for (const [key, info] of pairCounts) {
+    if (info.count >= 10) {
+      const [, otherId] = key.split('|') as [string, string];
+      const target = massMap.get(otherId) ?? { hidden: 0, label: info.typeName };
+      target.hidden += info.count - 1; // одно ребро рисуем, остальные прячем
+      target.label = info.typeName;
+      massMap.set(otherId, target);
+    }
+  }
+
+  if (neighbours.length === 0) {
+    root.append(el('p', 'muted', 'У мысли нет прямых связей.'));
+    return root;
+  }
+
+  root.append(
+    buildMiniGraph({
+      thought: ctx.thought,
+      neighbours,
+      links,
+      mass: massMap,
+    }),
   );
   return root;
 }

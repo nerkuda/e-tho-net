@@ -160,6 +160,9 @@ export const UI_STATE_KEY = {
   EDITOR_POSITION: 'editor_position',
   EDITOR_COLLAPSED_GROUPS: 'editor_collapsed_groups',
   EDITOR_LIST_HEIGHTS: 'editor_list_heights',
+  /** Active editor tab id («Основное» / «Свойства» / «Связи» / etc.), задача
+   *  8ab775d9 — переживает переоткрытие редактора и смену мысли. */
+  EDITOR_ACTIVE_TAB: 'editor_active_tab',
   WINDOW_LAYOUT: 'window_layout',
   CANVAS_LAYOUT: 'canvas_layout',
   CANVAS_ZOOM: 'canvas_zoom',

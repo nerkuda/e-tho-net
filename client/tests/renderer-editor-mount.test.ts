@@ -139,7 +139,9 @@ describe('editor mount (DOM-shimmed)', () => {
 
     mountEditor(new ShimElement('div') as any);
     const countAfterFirstMount = editorInternals.mainSectionCount();
-    assert.equal(countAfterFirstMount, 2, '«Свойства» + «Комментарий» on the first mount');
+    // Только «Комментарий» — «Свойства» переехали в собственную вкладку
+    // (задача 8ab775d9); «Локальный граф» живёт во вкладке «Связи».
+    assert.equal(countAfterFirstMount, 1, '«Комментарий» only — properties moved to their own tab (8ab775d9)');
 
     // Two more network opens rebuild the workspace and re-run mountEditor.
     mountEditor(new ShimElement('div') as any);

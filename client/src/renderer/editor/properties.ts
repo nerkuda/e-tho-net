@@ -1,27 +1,19 @@
 /**
- * Editor group: properties (H11, 08-ui-spec.md §6.3; 09-scenarios.md D4).
+ * Editor tab «Свойства» (задача 8ab775d9, тех.проект a94998c6 — единая модель
+ * связей). Две сворачиваемые группы:
+ *  - «Свойства типа» (развёрнута по умолчанию) — таблица редактирования
+ *    значений всех типов из определений свойств типа владельца. Поддерживает
+ *    `text`, `number`, `date`, `bool`, `url`, `link` (свойство-связь) — для
+ *    `link` используется автокомплит по заголовку мысли и чипы для множественных
+ *    значений.
+ *  - «Свойства вне типа» (свёрнута по умолчанию) — read-only таблица значений,
+ *    чьё свойство больше не подключено к типу владельца (0.6.5).
  *
- * Thought-only. When the thought has a type with property definitions, a table
- * of value editors is rendered per `value_type`:
- *  - text/number/date → inputs, saved on blur (empty → remove); a text value
- *    with predefined options also gets a suggestion dropdown that filters as
- *    the user types (an input aid, never a restriction);
- *  - url → input plus an «Открыть» button that hands the value to the OS
- *    default handler (http/https, file://, local paths, registered protocols);
- *  - bool → checkbox;
- *  - link (свойство-связь) — без редактора значения: ссылки создаются
- *    рёбрами на карте/вкладке «Связи», а не заполнением свойства
- *    (0.8.1, thought_ref упразднён миграцией 040).
- *
- * Values are written with `properties.set`, cleared with `properties.remove`;
- * realtime `property-value.*` events reload the table when the open entity is
- * the owner (a single module-level listener keeps closures bounded).
+ * Значения пишутся через `etn.properties.set` / `remove`; realtime
+ * `property-value.*` события перезагружают таблицу (модульный слушатель).
  *
  * Single text values also keep a client-local history of the 10 last saved
- * values per property (localStorage, `recent-values.ts`): focusing the empty
- * field — or clearing it back to empty — offers the history as a dropdown;
- * typing closes it so the field's regular behaviour takes over.
- * Multiple-value properties (`config.multiple`) keep no history.
+ * values per property (localStorage, `recent-values.ts`).
  */
 
 import type { EffectiveTypeProperty, PropertyValue } from '@etn/shared';
@@ -30,38 +22,28 @@ import { onRealtimeEvent } from '../realtime.js';
 import { button, div, el, errText, positionBodyDropdown, setTooltip, span } from '../lib/dom.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
+import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
-import { registerMainSection, type EditorContext } from './editor.js';
+import { registerTabContent, type EditorContext } from './editor.js';
+import { groupSection } from './group.js';
 import { loadRecentValues, recordRecentValue, wireRecentValues } from './recent-values.js';
+import { wireTokenCombo, type ComboOption } from '../screens/thought-type/value-combo.js';
 
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
 let wired = false;
 
 /**
- * Registers the properties section of the «Основное» tab (thoughts and links):
- * the main type-driven table of values, and the read-only «Свойства вне типа»
- * group underneath for values whose property is no longer attached to the
- * owner's type (0.6.5; спека «Значения вне типа сохраняются»).
+ * Registers the «Свойства» tab (task 8ab775d9). Replaces the previous
+ * «Свойства» section in the «Основное» tab — values now live in their own
+ * tab with two collapsible groups, leaving «Основное» to the permanent
+ * comment full-height editor.
  */
 export function registerPropertiesGroup(): void {
-  registerMainSection((ctx) => {
-    // Both owners share the same section: the underlying render path
-    // (buildPropertiesBody) is ownerType-driven. An owner without a type
-    // resolves the catalogue root, just like untyped thoughts already do
-    // (L21).
-    const typeId = resolveEditorTypeId(ctx);
-    if (typeId === null) return null;
-    return {
-      id: 'properties',
-      title: 'Свойства',
-      loadCount: () => countProperties(ctx),
-      buildBody: () => buildPropertiesBody(ctx),
-    };
-  });
+  registerTabContent('properties', buildPropertiesTab);
   if (!wired) {
     wired = true;
     onRealtimeEvent((evt) => {
@@ -70,6 +52,55 @@ export function registerPropertiesGroup(): void {
       }
     });
   }
+}
+
+/** Builds the «Свойства» tab content (two collapsible groups). */
+function buildPropertiesTab(ctx: EditorContext): HTMLElement {
+  const box = div('properties-tab');
+  // No type → no properties at all (an owner with no type resolves the root,
+  // but a network mid-migration might have no root either — show empty state).
+  const typeId = resolveEditorTypeId(ctx);
+  if (typeId === null) {
+    box.append(el('p', 'muted', 'Свойства недоступны — нет подходящего типа.'));
+    return box;
+  }
+  // Group 1 — «Свойства типа» (expanded by default). Read-only outside-type
+  // values are rendered inline as a second group further down.
+  box.append(
+    groupSection({
+      id: 'properties.type',
+      title: 'Свойства типа',
+      defaultCollapsed: false,
+      buildBody: () => buildPropertiesBody(ctx),
+    }),
+  );
+  // Group 2 — «Свойства вне типа» (collapsed by default). Hidden entirely
+  // when there are no such values (rendered inside the main body once the
+  // reload pass resolves).
+  box.append(
+    groupSection({
+      id: 'properties.outside',
+      title: 'Свойства вне типа',
+      defaultCollapsed: true,
+      lazyCount: true,
+      loadCount: async () => {
+        try {
+          const networkId = requireNetworkId();
+          const values = await etn.properties.get(
+            networkId,
+            ctx.ownerType,
+            ctx.ownerId,
+          );
+          const outside = values.filter((v) => v.outside_type === true);
+          return outside.length === 0 ? '(0)' : `(${outside.length})`;
+        } catch {
+          return undefined;
+        }
+      },
+      buildBody: () => buildOutsidePropertiesBody(ctx),
+    }),
+  );
+  return box;
 }
 
 /** Counts the type's effective property definitions for the group badge. */
@@ -114,16 +145,14 @@ function rootTypeIdFor(ownerType: 'thought' | 'link'): string | null {
 }
 
 /**
- * Builds the properties group body for the current owner — thoughts and
- * links share the same render path. The main table shows in-type values;
- * the read-only «Свойства вне типа» group underneath lists values whose
- * property is no longer attached to the owner's type (0.6.5; спека
- * «Значения вне типа сохраняются»).
+ * Builds the «Свойства типа» body for the current owner — thoughts and links
+ * share the same render path. The main table shows in-type values; outside-type
+ * values are now in a separate group below.
  */
 function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
-  const ownerId = ctx.ownerId;
   const ownerType = ctx.ownerType;
+  const ownerId = ctx.ownerId;
   const typeOwner = ownerTypeOf(ctx);
   const typeId = resolveEditorTypeId(ctx);
 
@@ -132,135 +161,93 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     box.append(el('p', 'muted', 'Свойства недоступны.'));
     return box;
   }
-  // Guarded above; the fallback is unreachable but keeps closure typing honest.
+  // Delegate the actual rendering to the standalone builder; this wrapper
+  // exists for the legacy `propertiesInternals.buildPropertiesBody` test seam
+  // (still called by `renderer-properties.test.ts`).
   const typedId: string = typeId;
+  const typeBody = buildTypePropertiesBody(networkId, ownerType, ownerId, typeOwner, typedId);
+  box.append(typeBody);
+  return box;
+}
 
-  const tableWrap = div('admin-table-wrap prop-wrap');
-  // No column headers and at most five visible rows — vertical scroll beyond
-  // that (08-ui-spec.md §6.3.1).
-  tableWrap.append(el('span', 'muted', 'Загрузка…'));
-  box.append(tableWrap);
+/**
+ * Builds the «Свойства вне типа» body — read-only table for values whose
+ * property is no longer attached to the owner's type (0.6.5; спека «Значения
+ * вне типа сохраняются»). The group is hidden entirely when no such values
+ * exist (`loadCount` returns `(0)` and the section is rendered empty).
+ */
+function buildOutsidePropertiesBody(ctx: EditorContext): HTMLElement {
+  const networkId = requireNetworkId();
+  const ownerId = ctx.ownerId;
+  const ownerType = ctx.ownerType;
 
-  // The read-only «Свойства вне типа» group: hidden until the reload pass
-  // finds at least one such value. The render happens inside the same
-  // `reload()` so a freshly-deleted value refreshes both views at once.
-  const outsideWrap = div('prop-outside-wrap');
+  const box = div('properties-outside-body');
+  const wrap = div('admin-table-wrap prop-wrap');
+  wrap.append(el('span', 'muted', 'Загрузка…'));
+  box.append(wrap);
 
-  // Declared BEFORE the initial reload() call below: reload is a hoisted
-  // function declaration, and reading this from inside it during the call at
-  // the `void reload()` line would hit the temporal dead zone.
   let everMounted = false;
-  currentReload = () => void reload();
-  void reload();
-
-  /** Loads definitions + values and renders the table. */
-  async function reload(): Promise<void> {
-    // The first reload starts before the group mounts this box — it must
-    // proceed detached. Skip only bodies that were mounted and then replaced
-    // by a newer editor render.
+  const reload = async (): Promise<void> => {
     if (everMounted && !box.isConnected) return;
-    const startedAt = Date.now();
-    tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
-    outsideWrap.replaceChildren();
-    let definitions: EffectiveTypeProperty[];
+    wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let values: PropertyValue[];
     try {
-      [definitions, values] = await Promise.all([
-        etn.types.listTypeProperties(networkId, typeOwner, typedId),
-        etn.properties.get(networkId, ownerType, ownerId),
-      ]);
+      values = await etn.properties.get(networkId, ownerType, ownerId);
     } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      wrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
     if (box.isConnected) everMounted = true;
-    if (definitions.length === 0) {
-      tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
-      renderOutsideType(values);
-      return;
-    }
-
-    // Значение адресуется реестровым id свойства (`PropertyValue.property_id`
-    // = `properties.id`), а НЕ id строки привязки (`type_properties.id`).
-    // У легаси-привязок (созданных до реестра свойств 0.6.5) эти id разошлись,
-    // поэтому сопоставление по `definition.id` теряло значения и поля на
-    // клиенте выглядели пустыми, хотя на сервере хранились (баг 7d094c26).
-    const valueByProp = new Map(values.map((v) => [v.property_id, v]));
-    const table = el('table', 'table-list prop-table');
-    // Headerless table (08-ui-spec.md §6.3.1): rows only.
-    const tbody = el('tbody');
-    for (const definition of definitions) {
-      const value = valueByProp.get(definition.property_id);
-      const row = el('tr');
-      const source = definition.inherited
-        ? ` · из «${definition.defined_on_name}»`
-        : '';
-      const nameCell = el(
-        'td',
-        undefined,
-        `${definition.key}${definition.required ? ' *' : ''} (${typeName(definition.value_type)})${source}`,
-      );
-      // Property description (task «Добавить описание (description) к
-      // определениям свойств типов»): a hint next to the property name —
-      // the ⓘ marker shows one is there, the tooltip carries the text
-      // (override-aware: the effective description of the L21 chain).
-      const hint = propertyHint(definition);
-      if (hint !== null) {
-        setTooltip(nameCell, hint);
-        nameCell.append(span(' ⓘ', 'muted'));
-      }
-      row.append(nameCell);
-      row.append(buildEditorCell(definition, value));
-      tbody.append(row);
-    }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
-    // The outside-type group lives BELOW the main table (08-ui-spec.md
-    // §6.3.1, спека «Значения вне типа сохраняются»). The two are
-    // re-rendered together so a delete in either place refreshes the other.
-    renderOutsideType(values);
-    // Milestone journal mark (task 92b89e6f): the properties table really
-    // rendered — the closing bracket of the «stuck "Загрузка…"» symptom path.
-    logUiEvent('ui.editor.props.loaded', {
-      id: ownerId,
-      ms: Date.now() - startedAt,
-      definitions: definitions.length,
-    });
-  }
-
-  /** Confirmed deletion of an outside-type value (custom confirmation dialog). */
-  async function confirmOutsideRemove(name: string): Promise<boolean> {
-    return confirmDialog(
-      'Удалить значение свойства',
-      `Свойство «${name}» больше не подключено к типу. Удалить сохранённое значение? Действие необратимо — таких значений система сама не очищает.`,
-      true,
-    );
-  }
-
-  /**
-   * Renders the «Свойства вне типа» group under the main table. Hidden
-   * entirely when no values carry `outside_type: true` — the group's mere
-   * presence would otherwise hint at non-existent clutter (08-ui-spec.md
-   * §6.3.1, спека «Значения вне типа сохраняются»).
-   */
-  function renderOutsideType(values: PropertyValue[]): void {
     const outside = values.filter((v) => v.outside_type === true);
     if (outside.length === 0) {
-      outsideWrap.replaceChildren();
+      wrap.replaceChildren(el('p', 'muted', 'Нет значений вне типа.'));
       return;
     }
-    outsideWrap.replaceChildren(buildOutsideTypeTable(outside));
-  }
+    wrap.replaceChildren(buildOutsideTypeTable(outside, networkId, ownerType, ownerId, () => void reload()));
+  };
+  void reload();
+  // Keep the outside-type body in sync with the main properties reload (a
+  // delete in either group should refresh the other). The realtime listener
+  // already invokes `currentReload` for both groups; piggy-back on it by
+  // re-rendering ourselves whenever it fires.
+  onRealtimeEvent((evt) => {
+    if (evt.type === 'property-value.set' || evt.type === 'property-value.deleted') {
+      if (box.isConnected) void reload();
+    }
+  });
+  return box;
+}
 
-  /**
-   * The body of the «Свойства вне типа» group: a headerless read-only table
-   * mirroring the main one, with one row per orphaned value. The row carries
-   * the property name and value (chips for multiple url, plain text
-   * otherwise) — visually identical to the main table,
-   * but without any editor widget. The only action is «×» removing the value
-   * with a confirmation prompt (the system itself never deletes such values).
-   */
-  function buildOutsideTypeTable(values: PropertyValue[]): HTMLElement {
+/**
+ * Confirmed deletion of an outside-type value (custom confirmation dialog).
+ */
+async function confirmOutsideRemove(name: string): Promise<boolean> {
+  return confirmDialog(
+    'Удалить значение свойства',
+    `Свойство «${name}» больше не подключено к типу. Удалить сохранённое значение? Действие необратимо — таких значений система сама не очищает.`,
+    true,
+  );
+}
+
+/**
+ * The body of the «Свойства вне типа» group: a headerless read-only table
+ * mirroring the main one, with one row per orphaned value. The row carries
+ * the property name and value (chips for multiple url, plain text
+ * otherwise) — visually identical to the main table,
+ * but without any editor widget. The only action is «×» removing the value
+ * with a confirmation prompt (the system itself never deletes such values).
+ *
+ * Used by the standalone «Свойства вне типа» group in the «Свойства» tab
+ * (task 8ab775d9); no longer rendered below the main table in the
+ * «Основное» tab.
+ */
+function buildOutsideTypeTable(
+  values: PropertyValue[],
+  networkId: string,
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  onRemove: () => void,
+): HTMLElement {
     const root = div('prop-outside');
     const header = div('prop-outside-header');
     header.append(span('Свойства вне типа', 'prop-outside-title'));
@@ -285,7 +272,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
       );
       row.append(nameCell);
-      row.append(buildOutsideValueCell(value));
+      row.append(buildOutsideValueCell(value, networkId, ownerType, ownerId, onRemove));
       tbody.append(row);
     }
     table.append(tbody);
@@ -294,19 +281,21 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   }
 
   /** Read-only value cell for an outside-type value: same visuals, no editor. */
-  function buildOutsideValueCell(value: PropertyValue): HTMLElement {
+function buildOutsideValueCell(
+  value: PropertyValue,
+  networkId: string,
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  onRemove: () => void,
+): HTMLElement {
     const cell = el('td', 'prop-outside-cell');
     const remove = (): void => {
       void (async () => {
         const ok = await confirmOutsideRemove(value.property_name);
         if (!ok) return;
         try {
-          // The only allowed write against an outside-type value (02-data-
-          // model.md §3.5a): removal. The server resolves the property by
-          // `property_name` (a UUID would also work) so a stale name no
-          // longer breaks the call.
           await etn.properties.remove(networkId, ownerType, ownerId, value.property_name);
-          void reload();
+          onRemove();
         } catch (err) {
           notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
         }
@@ -340,8 +329,6 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         cell.append(span('—', 'muted'));
     }
 
-    // The «×» on every row — same convention as the main table's mini cloud
-    // «×», so the action reads the same regardless of which group it's in.
     const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
     clearBtn.type = 'button';
     clearBtn.title = 'Удалить значение';
@@ -362,7 +349,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   }
 
   /** Read-only «Открыть» button for a single URL value. */
-  function buildUrlOpenBtn(value: string): HTMLButtonElement {
+function buildUrlOpenBtn(value: string): HTMLButtonElement {
     const btn = button(
       'Открыть',
       () => void openOneUrl(value),
@@ -373,16 +360,89 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     return btn;
   }
 
-  // The outside-type group is appended AFTER the main table once, so the
-  // layout (main on top, outside below) stays stable across reloads. The
-  // group's content is replaced inside `renderOutsideType`.
-  box.append(outsideWrap);
+/** Builds the «Свойства типа» body — основная таблица редактирования. */
+function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link', ownerId: string, typeOwner: 'thought_type' | 'link_type', typedId: string): HTMLElement {
+  const box = div('properties-type-body');
+  const tableWrap = div('admin-table-wrap prop-wrap');
+  tableWrap.append(span('Загрузка…', 'muted'));
+  box.append(tableWrap);
 
-  /** Builds the value editor cell for one property. */
-  function buildEditorCell(
+  let everMounted = false;
+  currentReload = () => void reload();
+  void reload();
+
+  async function reload(): Promise<void> {
+    if (everMounted && !box.isConnected) return;
+    const startedAt = Date.now();
+    tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    let definitions: EffectiveTypeProperty[];
+    try {
+      definitions = await etn.types.listTypeProperties(networkId, typeOwner, typedId);
+    } catch (err) {
+      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      return;
+    }
+    if (box.isConnected) everMounted = true;
+    if (definitions.length === 0) {
+      tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
+      return;
+    }
+    let values: PropertyValue[] = [];
+    try {
+      values = await etn.properties.get(networkId, ownerType, ownerId);
+    } catch {
+      // The main table still renders even if the values fetch fails.
+    }
+    const valueByProp = new Map(values.map((v) => [v.property_id, v]));
+    const table = el('table', 'table-list prop-table');
+    const tbody = el('tbody');
+    for (const definition of definitions) {
+      const value = valueByProp.get(definition.property_id);
+      const row = el('tr');
+      const source = definition.inherited ? ` · из «${definition.defined_on_name}»` : '';
+      const nameCell = el(
+        'td',
+        undefined,
+        `${definition.key}${definition.required ? ' *' : ''} (${typeName(definition.value_type)})${source}`,
+      );
+      const hint = propertyHint(definition);
+      if (hint !== null) {
+        setTooltip(nameCell, hint);
+        nameCell.append(span(' ⓘ', 'muted'));
+      }
+      row.append(nameCell);
+      row.append(
+        buildEditorCell({
+          networkId,
+          ownerType,
+          ownerId,
+          definition,
+          current: value,
+        }),
+      );
+      tbody.append(row);
+    }
+    table.append(tbody);
+    tableWrap.replaceChildren(table);
+    logUiEvent('ui.editor.props.loaded', {
+      id: ownerId,
+      ms: Date.now() - startedAt,
+      definitions: definitions.length,
+    });
+  }
+
+  return box;
+}
+
+/** Builds the value editor cell for one property. */
+function buildEditorCell(opts: {
+    networkId: string;
+    ownerType: 'thought' | 'link';
+    ownerId: string;
     definition: EffectiveTypeProperty,
     current: PropertyValue | undefined,
-  ): HTMLElement {
+  }): HTMLElement {
+    const { networkId, ownerType, ownerId, definition, current } = opts;
     const cell = el('td');
     const stored = current?.value ?? null;
 
@@ -600,11 +660,56 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         cell.append(input);
         break;
       }
+      case 'link': {
+        // Свойство-связь (задача 8ab775d9, единая модель связей): значение —
+        // список id мыслей (single или multiple по `config.multiple`).
+        // Автокомплит по заголовку мысли переиспользует value-combo из
+        // конструктора отборов; множественные значения — чипы с контекстным
+        // меню облачка, click = открыть в редакторе, double-click = в фокус.
+        const storedIds = readLinkValue(stored);
+        const isMulti = definition.config?.multiple === true;
+        cell.append(
+          buildLinkValueEditor({
+            networkId,
+            ownerType,
+            ownerId,
+            definition,
+            values: storedIds,
+            multiple: isMulti,
+            save,
+          }),
+        );
+        break;
+      }
     }
     return cell;
   }
 
-  return box;
+/**
+ * Нормализует значение свойства-ссылки: одиночная ссылка — строка id или
+ * объект `{ id, ... }`, множественная — массив таких же; возможны пустые
+ * и ошибочные формы после миграций, всё приводим к массиву строк.
+ */
+function readLinkValue(stored: unknown): string[] {
+  if (stored === null || stored === undefined) return [];
+  if (typeof stored === 'string') return stored === '' ? [] : [stored];
+  if (Array.isArray(stored)) {
+    return stored
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item !== null && typeof item === 'object' && 'id' in item) {
+          const id = (item as { id: unknown }).id;
+          return typeof id === 'string' ? id : '';
+        }
+        return '';
+      })
+      .filter((s) => s !== '');
+  }
+  if (typeof stored === 'object' && stored !== null && 'id' in stored) {
+    const id = (stored as { id: unknown }).id;
+    return typeof id === 'string' && id !== '' ? [id] : [];
+  }
+  return [];
 }
 
 /** Human-readable property type name (used by both the main table and the
@@ -979,4 +1084,270 @@ export function buildValueOptionsCaret(
     'btn small',
     multiple ? 'Выбрать несколько значений' : 'Выбрать значение из списка',
   );
+}
+
+// ---------------------------------------------------------------------------
+// Link value editor (задача 8ab775d9, единая модель связей)
+// ---------------------------------------------------------------------------
+
+/**
+ * Список названий мыслей, подходящих под префикс `query`. Использует
+ * `etn.thoughts.search` (живой поиск мыслей) — это та же лента, что и в
+ * wiki-резолвере. На пустой `query` отдаём до 20 свежих мыслей без фильтра,
+ * чтобы комбобокс сразу подсказывал что-то осмысленное.
+ */
+async function fetchLinkCandidates(networkId: string, query: string): Promise<ComboOption[]> {
+  try {
+    const res = await etn.thoughts.search(networkId, {
+      q: query,
+      scope: 'names',
+      limit: 20,
+    });
+    return res.by_names.map((hit) => ({
+      value: hit.thought_id,
+      label: hit.title,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/** Резолвит название мысли по id (для подписи чипа и одиночного значения). */
+async function fetchLinkLabel(networkId: string, id: string): Promise<string> {
+  try {
+    const t = await etn.thoughts.get(networkId, id);
+    return t.title;
+  } catch {
+    return id.slice(0, 8);
+  }
+}
+
+/**
+ * Открывает мысль в редакторе без смены фокуса (как облачко на холсте). На
+ * ошибке показывает тост.
+ */
+function openLinkRefInEditor(networkId: string, id: string): void {
+  void Promise.resolve()
+    .then(async () => {
+      const { openThoughtInEditor } = await import('./editor.js');
+      openThoughtInEditor(id);
+    })
+    .catch((err: unknown) => notice(errText(err), 'error'));
+}
+
+/** Ставит мысль в фокус на карте. */
+function focusLinkRef(networkId: string, id: string): void {
+  void Promise.resolve()
+    .then(async () => {
+      const { setFocus } = await import('../app.js');
+      await setFocus(id);
+    })
+    .catch((err: unknown) => notice(errText(err), 'error'));
+}
+
+/**
+ * Контекстное меню чипа ссылки на мысль (задача 8ab775d9). Идентично
+ * контекстному меню облачка на холсте — единый набор команд во всех местах
+ * (редактор, мини-граф, панель «Упоминания»).
+ */
+async function showLinkChipMenu(
+  networkId: string,
+  id: string,
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  propertyKey: string,
+  currentValue: string[],
+  onChange: (next: string[]) => void,
+  anchor: HTMLElement,
+): Promise<void> {
+  const items: MenuItem[] = [
+    {
+      label: 'Открыть в редакторе',
+      onClick: () => openLinkRefInEditor(networkId, id),
+    },
+    {
+      label: 'В фокус',
+      onClick: () => focusLinkRef(networkId, id),
+    },
+    {
+      label: 'Копировать ID',
+      onClick: () => {
+        void navigator.clipboard.writeText(id).then(
+          () => notice('ID мысли скопирован.'),
+          () => notice('Не удалось скопировать ID.', 'error'),
+        );
+      },
+    },
+    {
+      label: 'Убрать из значения',
+      onClick: () => onChange(currentValue.filter((v) => v !== id)),
+    },
+  ];
+  const rect = anchor.getBoundingClientRect();
+  showMenuAt(rect.left, rect.bottom + 2, items);
+}
+
+/**
+ * Редактор значения свойства-ссылки (задача 8ab775d9). Одиночный режим —
+ * автокомплит по заголовку мысли, чип-ввод с клавиатурой. Множественный
+ * режим — чипы с кликом (открыть в редакторе), двойным кликом (в фокус),
+ * правым кликом и Shift+F10 (контекстное меню облачка); добавление —
+ * inline-input с автокомплитом.
+ */
+export function buildLinkValueEditor(opts: {
+  networkId: string;
+  ownerType: 'thought' | 'link';
+  ownerId: string;
+  definition: EffectiveTypeProperty;
+  values: string[];
+  multiple: boolean;
+  save: (next: unknown) => Promise<boolean>;
+}): HTMLElement {
+  const { networkId, ownerType, ownerId, definition, multiple } = opts;
+  let current: string[] = [...opts.values];
+  const root = div('link-value-editor');
+
+  const persist = async (next: string[]): Promise<void> => {
+    if (multiple) {
+      await opts.save(next.length > 0 ? next : null);
+    } else {
+      await opts.save(next[0] ?? null);
+    }
+  };
+
+  /** Открывает дропдаун с живым поиском мыслей. */
+  const wirePicker = (input: HTMLInputElement, onPick: (id: string) => void): void => {
+    wireTokenCombo({
+      input,
+      getOptions: (query) => fetchLinkCandidates(networkId, query),
+      onPick: (id) => {
+        onPick(id);
+        input.value = '';
+      },
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && input.value.trim() !== '') {
+        // Разрешаем ввести id напрямую — некоторые сценарии (вставка из
+        // буфера, ссылка из хроники) неудобны через автокомплит.
+        event.preventDefault();
+        onPick(input.value.trim());
+        input.value = '';
+      }
+    });
+  };
+
+  /** Рисует чип для одной мысли в множественном режиме. */
+  const buildChip = (id: string): HTMLElement => {
+    const chip = div('st-f-chip value-combo-chip');
+    const label = span(id.slice(0, 8) + '…', 'st-f-chip-label');
+    chip.append(label);
+    void fetchLinkLabel(networkId, id).then((text) => {
+      if (chip.isConnected) label.textContent = text;
+    });
+    chip.tabIndex = 0;
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('aria-label', label.textContent ?? '');
+    chip.addEventListener('click', (event) => {
+      // Различаем одиночный клик (открыть в редакторе) и пункт контекстного
+      // меню «Открыть в редакторе» — поведение совпадает.
+      event.preventDefault();
+      openLinkRefInEditor(networkId, id);
+    });
+    chip.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      focusLinkRef(networkId, id);
+    });
+    chip.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      void showLinkChipMenu(
+        networkId,
+        id,
+        ownerType,
+        ownerId,
+        definition.key,
+        current,
+        (next) => {
+          current = next;
+          render();
+          void persist(current);
+        },
+        chip,
+      );
+    });
+    chip.addEventListener('keydown', (event) => {
+      // Доступность: Shift+F10 — стандартный шорткат открытия контекстного
+      // меню; Enter — открыть в редакторе, Space — в фокус.
+      if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+        event.preventDefault();
+        void showLinkChipMenu(
+          networkId,
+          id,
+          ownerType,
+          ownerId,
+          definition.key,
+          current,
+          (next) => {
+            current = next;
+            render();
+            void persist(current);
+          },
+          chip,
+        );
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        openLinkRefInEditor(networkId, id);
+      } else if (event.key === ' ' || event.key === 'Spacebar') {
+        event.preventDefault();
+        focusLinkRef(networkId, id);
+      }
+    });
+    return chip;
+  };
+
+  const render = (): void => {
+    root.replaceChildren();
+    if (multiple) {
+      const field = div('st-f-chipfield value-combo-field link-value-field');
+      for (const id of current) field.append(buildChip(id));
+      const addInput = el('input', 'value-combo-add link-value-add') as HTMLInputElement;
+      addInput.type = 'text';
+      addInput.placeholder = current.length === 0 ? 'Введите мысль или id…' : '+ ещё одну мысль';
+      wirePicker(addInput, (id) => {
+        if (current.includes(id)) return;
+        current = [...current, id];
+        render();
+        void persist(current);
+      });
+      field.append(addInput);
+      root.append(field);
+      return;
+    }
+    // Single mode — автокомплит + одна подпись выбранной мысли рядом.
+    const row = div('form-row link-value-single');
+    row.style.marginBottom = '0';
+    const input = el('input', 'text-input prop-editor link-value-input') as HTMLInputElement;
+    input.type = 'text';
+    input.placeholder = 'Введите название или id мысли…';
+    wirePicker(input, (id) => {
+      current = [id];
+      render();
+      void persist(current);
+    });
+    if (current.length > 0) {
+      const label = span('', 'link-value-current-label');
+      void fetchLinkLabel(networkId, current[0]!).then((text) => {
+        if (label.isConnected) label.textContent = ` → ${text}`;
+      });
+      row.append(input, label);
+    } else {
+      row.append(input);
+    }
+    root.append(row);
+  };
+
+  render();
+  return root;
 }

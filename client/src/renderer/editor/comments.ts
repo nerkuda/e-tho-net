@@ -235,6 +235,7 @@ function buildPermanentBody(ctx: EditorContext): HTMLElement {
     field = createMarkdownField({
       md: permanent?.body_md ?? '',
       html: permanent?.body_html ?? '',
+      placeholder: 'Введите комментарий…',
       attachmentsOwner: { ownerType: ctx.ownerType, ownerId: ctx.ownerId },
       // Контекст комментария для флоу «создать мысль по legacy-ссылке»
       // (карточка ETN 34ffbd75): владелец — родитель создаваемой мысли.
