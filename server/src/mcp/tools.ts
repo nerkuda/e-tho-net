@@ -727,8 +727,27 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       // реестра). Взаимоисключающе — XOR, иначе 422.
       property_id: z.string().min(1).optional(),
       property: z.string().min(1).optional(),
-      operator: z.enum(['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 'lte']),
-      value: z.union([z.string(), z.number(), z.boolean()]),
+      // Задача 20effcbd (0.8.1): `any_of`/`all_of`/`none_of` — операторы для
+      // наборов значений (свойство-связь + `config.multiple` thought_ref/url);
+      // их `value` — непустой массив id/строк.
+      operator: z.enum([
+        'eq',
+        'ne',
+        'contains',
+        'gt',
+        'gte',
+        'lt',
+        'lte',
+        'any_of',
+        'all_of',
+        'none_of',
+      ]),
+      value: z.union([
+        z.string(),
+        z.number(),
+        z.boolean(),
+        z.array(z.string().min(1)).min(1),
+      ]),
     })
     .refine(
       (v) => v.property_id === undefined || v.property === undefined,
@@ -780,9 +799,14 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         'with `details.candidates` on ambiguity); `active` and `trashed` (`true`/`false`/`any`; `trashed` ' +
         'defaults to `false`); `keywords` — mini-syntax over title and synonyms (words all required, ' +
         '`*` infix wildcard, `-word` exclusion); `properties` — registry `property_id` (or its name-form ' +
-        '`property`, same resolve semantics) + operator eq/ne/contains/gt/gte/lt/lte + value (unknown ' +
-        '`property_id` matches nothing; the `value_type` picks the column: number → value_number, bool → ' +
-        'value_bool, others on their text columns); `created_*`/`updated_*` — ISO-8601 ranges; ' +
+        '`property`, same resolve semantics) + operator eq/ne/contains/gt/gte/lt/lte/any_of/all_of/none_of + ' +
+        'value (unknown `property_id` matches nothing; the `value_type` picks the column: number → ' +
+        'value_number, bool → value_bool, others on their text columns). `value_type: \'link\'` (свойство-связь, ' +
+        '0.8.1) переводится в запрос по рёбрам, а не по значениям: `eq`/`ne` со строкой — связь с конкретной ' +
+        'целью (id мысли), с boolean — связь такого типа есть/отсутствует независимо от цели; работает в обе ' +
+        'стороны (по направлению свойства). `any_of`/`all_of`/`none_of` — операторы для наборов (свойство-связь ' +
+        'и `config.multiple` thought_ref/url): `value` — непустой массив id/строк; пересечение непусто / набор ' +
+        'содержит все перечисленные / пересечения нет. `created_*`/`updated_*` — ISO-8601 ranges; ' +
         '`author_id`/`editor_id` — id пользователя, создавшего/последним изменившего мысль; ' +
         '`link_filter` — { type_ids?, include_structural? } ограничивает рёбра спуска `in_subtree_of`. Response carries ' +
         'a `thought_types` reference table plus the optional `resolved_types` / `resolved_properties` echoes ' +

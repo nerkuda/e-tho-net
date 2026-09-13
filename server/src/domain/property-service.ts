@@ -216,18 +216,22 @@ function ownerTypeName(ndb: NetworkDb, ownerType: TypeOwnerType, ownerId: string
 // Link properties (0.8.1) — проекция типизированных рёбер в свойства
 // ===========================================================================
 
-/** Направление свойства-связи из config (по умолчанию `out` — владелец источник). */
-function linkPropertyDirection(config: PropertyConfig | null): LinkPropertyDirection {
+/**
+ * Направление свойства-связи из config (по умолчанию `out` — владелец источник).
+ * Экспортирована для `query-service.ts` (задача 20effcbd, отбор по свойствам-связям) —
+ * единая точка интерпретации `config`, без дублирования логики в движке отбора.
+ */
+export function linkPropertyDirection(config: PropertyConfig | null): LinkPropertyDirection {
   return config?.direction === 'in' ? 'in' : 'out';
 }
 
 /** `true` для структурного свойства-связи (нетипизированные рёбра, `type_id IS NULL`). */
-function isStructuralLinkProperty(config: PropertyConfig | null): boolean {
+export function isStructuralLinkProperty(config: PropertyConfig | null): boolean {
   return config?.structural === true;
 }
 
 /** Id типа связи свойства-связи; `null` — структурное (нетипизированное). */
-function linkPropertyLinkTypeId(config: PropertyConfig | null): string | null {
+export function linkPropertyLinkTypeId(config: PropertyConfig | null): string | null {
   const id = config?.link_type_id;
   return typeof id === 'string' && id !== '' ? id : null;
 }

@@ -60,16 +60,29 @@ function seedThought(
   return id;
 }
 
-/** Insert a directed link source → target. */
-function seedLink(ndb: NetworkDb, sourceId: string, targetId: string): string {
+/** Insert a directed link source → target, optionally typed. */
+function seedLink(ndb: NetworkDb, sourceId: string, targetId: string, typeId: string | null = null): string {
   const id = randomUUID();
   ndb
     .prepare(
       `INSERT INTO links (id, source_id, target_id, type_id, active, version,
                           created_at, updated_at, created_by, updated_by)
-       VALUES (?, ?, ?, NULL, 1, 1, '2024', '2024', 'u', 'u')`,
+       VALUES (?, ?, ?, ?, 1, 1, '2024', '2024', 'u', 'u')`,
     )
-    .run(id, sourceId, targetId);
+    .run(id, sourceId, targetId, typeId);
+  return id;
+}
+
+/** Insert a link type and return its id. */
+function seedLinkType(ndb: NetworkDb, nameForward: string, nameReverse: string): string {
+  const id = randomUUID();
+  ndb
+    .prepare(
+      `INSERT INTO link_types (id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+                               version, created_at, updated_at, created_by)
+       VALUES (?, ?, lower(?), ?, lower(?), 1, '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z', 'u')`,
+    )
+    .run(id, nameForward, nameForward, nameReverse, nameReverse);
   return id;
 }
 
@@ -95,17 +108,23 @@ function seedThoughtType(ndb: NetworkDb, name: string): string {
 }
 
 /** Insert a property definition (on a fake thought type) and return its id. */
-function seedPropertyDefinition(ndb: NetworkDb, key: string, valueType: string): string {
+function seedPropertyDefinition(
+  ndb: NetworkDb,
+  key: string,
+  valueType: string,
+  config: Record<string, unknown> | null = null,
+): string {
   // 0.6.5: properties live in the `properties` registry; `property_values.property_id`
   // references the registry, so the test id is a registry id. No type binding is
   // created — the test only needs the registry row to match `p.name` in queries.
+  // Задача 20effcbd: `config` — для `value_type: 'link'` (link_type_id/direction/structural).
   const id = randomUUID();
   ndb
     .prepare(
       `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
-       VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', ?, lower(?), ?, NULL, NULL, '2024', '2024')`,
+       VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', ?, lower(?), ?, ?, NULL, '2024', '2024')`,
     )
-    .run(id, key, key, valueType);
+    .run(id, key, key, valueType, config === null ? null : JSON.stringify(config));
   return id;
 }
 
@@ -472,5 +491,256 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     assert.equal(res.truncated, true);
     assert.equal(res.reason, 'max_nodes');
     assert.ok(res.total <= 3);
+  });
+
+  // ===========================================================================
+  // Задача 20effcbd (0.8.1): отбор по свойствам-связям + операторы наборов.
+  // ===========================================================================
+
+  describe('link property conditions (задача 20effcbd)', () => {
+    it('eq/ne by a specific target work in the direct direction (owner = source)', () => {
+      const ndb = createInMemoryNetworkDb();
+      const lt = seedLinkType(ndb, 'зависит от', 'используется в');
+      const propId = seedPropertyDefinition(ndb, 'зависит от', 'link', {
+        link_type_id: lt,
+        direction: 'out',
+      });
+      const a = seedThought(ndb, 'A');
+      const b = seedThought(ndb, 'B');
+      const c = seedThought(ndb, 'C');
+      seedLink(ndb, a, b, lt); // A --зависит от--> B
+
+      const eqB = run(ndb, { properties: [{ property_id: propId, operator: 'eq', value: b }] });
+      assert.deepEqual(eqB.hits.map((h) => h.title), ['A']);
+
+      const neB = run(ndb, { properties: [{ property_id: propId, operator: 'ne', value: b }] });
+      assert.deepEqual(neB.hits.map((h) => h.title).sort(), ['B', 'C']);
+    });
+
+    it('eq/ne with a boolean value test presence of the link type regardless of target', () => {
+      const ndb = createInMemoryNetworkDb();
+      const lt = seedLinkType(ndb, 'зависит от', 'используется в');
+      const propId = seedPropertyDefinition(ndb, 'зависит от', 'link', {
+        link_type_id: lt,
+        direction: 'out',
+      });
+      const a = seedThought(ndb, 'A');
+      const b = seedThought(ndb, 'B');
+      const c = seedThought(ndb, 'C');
+      seedLink(ndb, a, b, lt);
+
+      const hasLink = run(ndb, { properties: [{ property_id: propId, operator: 'eq', value: true }] });
+      assert.deepEqual(hasLink.hits.map((h) => h.title), ['A']);
+
+      const noLink = run(ndb, { properties: [{ property_id: propId, operator: 'eq', value: false }] });
+      assert.deepEqual(noLink.hits.map((h) => h.title).sort(), ['B', 'C']);
+
+      // `ne` is the mirror of `eq` for booleans (De Morgan).
+      const neTrue = run(ndb, { properties: [{ property_id: propId, operator: 'ne', value: true }] });
+      assert.deepEqual(neTrue.hits.map((h) => h.title).sort(), noLink.hits.map((h) => h.title).sort());
+      const neFalse = run(ndb, { properties: [{ property_id: propId, operator: 'ne', value: false }] });
+      assert.deepEqual(neFalse.hits.map((h) => h.title), hasLink.hits.map((h) => h.title));
+    });
+
+    it('works in the reverse direction too (owner = target)', () => {
+      const ndb = createInMemoryNetworkDb();
+      const lt = seedLinkType(ndb, 'зависит от', 'используется в');
+      // «используется в» — обратное свойство (direction: 'in'): владелец — цель ребра.
+      const usedInProp = seedPropertyDefinition(ndb, 'используется в', 'link', {
+        link_type_id: lt,
+        direction: 'in',
+      });
+      const a = seedThought(ndb, 'A');
+      const b = seedThought(ndb, 'B');
+      seedLink(ndb, a, b, lt); // A --зависит от--> B, т.е. «B используется в A».
+
+      const usedInA = run(ndb, {
+        properties: [{ property_id: usedInProp, operator: 'eq', value: a }],
+      });
+      assert.deepEqual(usedInA.hits.map((h) => h.title), ['B']);
+
+      const anyOf = run(ndb, {
+        properties: [{ property_id: usedInProp, operator: 'any_of', value: [a] }],
+      });
+      assert.deepEqual(anyOf.hits.map((h) => h.title), ['B']);
+    });
+
+    it('any_of/all_of/none_of on a link property test the whole set of edge targets', () => {
+      const ndb = createInMemoryNetworkDb();
+      const lt = seedLinkType(ndb, 'зависит от', 'используется в');
+      const propId = seedPropertyDefinition(ndb, 'зависит от', 'link', {
+        link_type_id: lt,
+        direction: 'out',
+      });
+      const x = seedThought(ndb, 'X');
+      const y = seedThought(ndb, 'Y');
+      const z = seedThought(ndb, 'Z');
+      const w = seedThought(ndb, 'W'); // not referenced by X
+      seedLink(ndb, x, y, lt);
+      seedLink(ndb, x, z, lt);
+
+      const anyOfYW = run(ndb, {
+        properties: [{ property_id: propId, operator: 'any_of', value: [y, w] }],
+      });
+      assert.deepEqual(anyOfYW.hits.map((h) => h.title), ['X']);
+
+      const allOfYZ = run(ndb, {
+        properties: [{ property_id: propId, operator: 'all_of', value: [y, z] }],
+      });
+      assert.deepEqual(allOfYZ.hits.map((h) => h.title), ['X']);
+
+      const allOfYW = run(ndb, {
+        properties: [{ property_id: propId, operator: 'all_of', value: [y, w] }],
+      });
+      assert.equal(allOfYW.total, 0);
+
+      const noneOfW = run(ndb, {
+        properties: [{ property_id: propId, operator: 'none_of', value: [w] }],
+      });
+      assert.ok(noneOfW.hits.some((h) => h.title === 'X'));
+
+      const noneOfY = run(ndb, {
+        properties: [{ property_id: propId, operator: 'none_of', value: [y] }],
+      });
+      assert.ok(!noneOfY.hits.some((h) => h.title === 'X'));
+    });
+
+    it('a misconfigured link property (no link_type_id, not structural) matches nothing instead of throwing', () => {
+      const ndb = createInMemoryNetworkDb();
+      const propId = seedPropertyDefinition(ndb, 'битое свойство-связь', 'link', {});
+      seedThought(ndb, 'Кто-то');
+      const res = run(ndb, { properties: [{ property_id: propId, operator: 'eq', value: true }] });
+      assert.equal(res.total, 0);
+    });
+
+    it('structural link properties («Родители»/«Потомки», migration 039) project untyped edges', () => {
+      const ndb = createInMemoryNetworkDb();
+      const PARENTS_PROP_ID = '00000000-0000-4000-8000-0000000000c1'; // direction: in
+      const CHILDREN_PROP_ID = '00000000-0000-4000-8000-0000000000c2'; // direction: out
+      const root = seedThought(ndb, 'Root');
+      const child = seedThought(ndb, 'Child');
+      seedLink(ndb, root, child); // untyped edge — type_id NULL
+
+      const rootHasChild = run(ndb, {
+        properties: [{ property_id: CHILDREN_PROP_ID, operator: 'any_of', value: [child] }],
+      });
+      assert.deepEqual(rootHasChild.hits.map((h) => h.title), ['Root']);
+
+      const childHasParent = run(ndb, {
+        properties: [{ property_id: PARENTS_PROP_ID, operator: 'eq', value: root }],
+      });
+      assert.deepEqual(childHasParent.hits.map((h) => h.title), ['Child']);
+    });
+
+    it('rejects an eq/ne value that is neither a thought id (string) nor a boolean', () => {
+      const ndb = createInMemoryNetworkDb();
+      const lt = seedLinkType(ndb, 'связано с', 'связано с');
+      const propId = seedPropertyDefinition(ndb, 'связано с', 'link', {
+        link_type_id: lt,
+        direction: 'out',
+      });
+      seedThought(ndb, 'A');
+      assert.throws(
+        () => run(ndb, { properties: [{ property_id: propId, operator: 'eq', value: 5 }] }),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+    });
+  });
+
+  describe('set operators any_of/all_of/none_of on ordinary multiple properties (задача 20effcbd)', () => {
+    it('work on a multiple thought_ref property (JSON array in value_thought_ref)', () => {
+      const ndb = createInMemoryNetworkDb();
+      const teamDef = seedPropertyDefinition(ndb, 'команда', 'thought_ref');
+      const project = seedThought(ndb, 'Проект');
+      const member1 = seedThought(ndb, 'Участник 1');
+      const member2 = seedThought(ndb, 'Участник 2');
+      const control = seedThought(ndb, 'Без значения');
+      seedPropertyValue(ndb, member1, teamDef, 'thought_ref', JSON.stringify([project, member2]));
+      seedPropertyValue(ndb, member2, teamDef, 'thought_ref', member2);
+      // `control` has no property_values row at all for this property.
+
+      const anyOfProject = run(ndb, {
+        properties: [{ property_id: teamDef, operator: 'any_of', value: [project] }],
+      });
+      assert.deepEqual(anyOfProject.hits.map((h) => h.title), ['Участник 1']);
+
+      const allOfBoth = run(ndb, {
+        properties: [{ property_id: teamDef, operator: 'all_of', value: [project, member2] }],
+      });
+      assert.deepEqual(allOfBoth.hits.map((h) => h.title), ['Участник 1']);
+
+      const allOfJustMember2 = run(ndb, {
+        properties: [{ property_id: teamDef, operator: 'all_of', value: [member2] }],
+      });
+      assert.deepEqual(
+        allOfJustMember2.hits.map((h) => h.title).sort(),
+        ['Участник 1', 'Участник 2'],
+      );
+
+      const noneOfProject = run(ndb, {
+        properties: [{ property_id: teamDef, operator: 'none_of', value: [project] }],
+      });
+      assert.deepEqual(
+        noneOfProject.hits.map((h) => h.title).sort(),
+        ['Без значения', 'Проект', 'Участник 2'].sort(),
+      );
+    });
+
+    it('work on a multiple url property (JSON array in value_text)', () => {
+      const ndb = createInMemoryNetworkDb();
+      const linksDef = seedPropertyDefinition(ndb, 'ссылки', 'url', { multiple: true });
+      const withBoth = seedThought(ndb, 'С обеими');
+      const withOne = seedThought(ndb, 'С одной');
+      seedPropertyValue(
+        ndb,
+        withBoth,
+        linksDef,
+        'url',
+        JSON.stringify(['https://a.example', 'https://b.example']),
+      );
+      seedPropertyValue(ndb, withOne, linksDef, 'url', 'https://a.example');
+
+      const anyOfA = run(ndb, {
+        properties: [{ property_id: linksDef, operator: 'any_of', value: ['https://a.example'] }],
+      });
+      assert.deepEqual(anyOfA.hits.map((h) => h.title).sort(), ['С обеими', 'С одной']);
+
+      const allOfBoth = run(ndb, {
+        properties: [
+          {
+            property_id: linksDef,
+            operator: 'all_of',
+            value: ['https://a.example', 'https://b.example'],
+          },
+        ],
+      });
+      assert.deepEqual(allOfBoth.hits.map((h) => h.title), ['С обеими']);
+
+      const noneOfB = run(ndb, {
+        properties: [{ property_id: linksDef, operator: 'none_of', value: ['https://b.example'] }],
+      });
+      assert.deepEqual(noneOfB.hits.map((h) => h.title), ['С одной']);
+    });
+
+    it('rejects an empty value array', () => {
+      const ndb = createInMemoryNetworkDb();
+      const teamDef = seedPropertyDefinition(ndb, 'команда 2', 'thought_ref');
+      seedThought(ndb, 'X');
+      assert.throws(
+        () => run(ndb, { properties: [{ property_id: teamDef, operator: 'any_of', value: [] }] }),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+    });
+
+    it('rejects any_of/all_of/none_of on value_types that do not support sets (e.g. number)', () => {
+      const ndb = createInMemoryNetworkDb();
+      const priorityDef = seedPropertyDefinition(ndb, 'приоритет 2', 'number');
+      seedThought(ndb, 'X');
+      assert.throws(
+        () =>
+          run(ndb, { properties: [{ property_id: priorityDef, operator: 'any_of', value: ['1'] }] }),
+        (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+      );
+    });
   });
 });

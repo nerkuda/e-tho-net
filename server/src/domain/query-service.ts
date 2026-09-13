@@ -36,6 +36,8 @@ import {
   TRAVERSAL_DEFAULTS,
   buildLikePattern,
   parseFilterKeywords,
+  type LinkPropertyDirection,
+  type PropertyConfig,
   type PropertyQueryCondition,
   type PropertyQueryOperator,
   type PropertyValueType,
@@ -47,7 +49,12 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { resolvePropertyIdByName } from './property-service.js';
+import {
+  isStructuralLinkProperty,
+  linkPropertyDirection,
+  linkPropertyLinkTypeId,
+  resolvePropertyIdByName,
+} from './property-service.js';
 import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { expandTypeIdsToSubtree, linkTypeFilterClause } from './type-hierarchy.js';
 
@@ -236,7 +243,10 @@ function dateRangeClause(
 }
 
 /** SQL comparison for each supported operator (no string interpolation of user input). */
-const SQL_OPS: Record<Exclude<PropertyQueryOperator, 'contains'>, string> = {
+const SQL_OPS: Record<
+  Exclude<PropertyQueryOperator, 'contains' | 'any_of' | 'all_of' | 'none_of'>,
+  string
+> = {
   eq: '=',
   ne: '<>',
   gt: '>',
@@ -259,19 +269,26 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   link: 'value_thought_ref',
 };
 
-/** SQL operator per `value_type` × `PropertyQueryOperator` (the query subset of
- *  `structure-service.OPS_BY_VALUE_TYPE` — `in`/`not_in`/`is_empty`/`not_empty`
- *  belong only to the structures filter). `null` means the operator is not
- *  meaningful for the value type. */
+/**
+ * SQL operator per `value_type` × `PropertyQueryOperator` (the query subset of
+ * `structure-service.OPS_BY_VALUE_TYPE` — `in`/`not_in`/`is_empty`/`not_empty`
+ * belong only to the structures filter, not to `etn.thoughts.query`).
+ *
+ * Задача 20effcbd (0.8.1): `link` получает `eq`/`ne` (конкретная цель id
+ * строкой, либо наличие/отсутствие связи такого типа boolean-значением —
+ * {@link linkPropertyClause}) и три оператора для наборов. Те же три
+ * оператора добавлены `thought_ref`/`url` — обычные множественные свойства
+ * (`config.multiple`) страдали той же дырой (требование 92b9c55b): выразить
+ * «значение — одно из списка» или «значение — все из списка» было нечем.
+ */
 const SUPPORTED_OPS: Record<PropertyValueType, ReadonlySet<PropertyQueryOperator>> = {
   text: new Set(['eq', 'ne', 'contains']),
-  url: new Set(['eq', 'ne', 'contains']),
+  url: new Set(['eq', 'ne', 'contains', 'any_of', 'all_of', 'none_of']),
   date: new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte']),
   number: new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte']),
   bool: new Set(['eq', 'ne']),
-  thought_ref: new Set(['eq', 'ne']),
-  // Отбор по свойствам-связям — отдельная задача (4); до неё операций нет.
-  link: new Set([]),
+  thought_ref: new Set(['eq', 'ne', 'any_of', 'all_of', 'none_of']),
+  link: new Set(['eq', 'ne', 'any_of', 'all_of', 'none_of']),
 };
 
 /** Minimal registry row read in one batched lookup of all conditions. */
@@ -279,6 +296,197 @@ interface RegistryPropertyRow {
   id: string;
   name: string;
   value_type: string;
+  /** Raw JSON `config` (§3.4a) — parsed lazily, only for `value_type: 'link'`. */
+  config: string | null;
+}
+
+/** Parse a registry property's stored `config` JSON; malformed/absent → `null`. */
+function parsePropertyConfig(raw: string | null): PropertyConfig | null {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as PropertyConfig;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Non-empty array of non-empty strings required by `any_of`/`all_of`/`none_of`
+ * (задача 20effcbd) — mirrors the `in`/`not_in` validation of the structures
+ * filter (`structure-service.ts`).
+ */
+function coerceValueList(
+  value: PropertyQueryCondition['value'],
+  operator: PropertyQueryOperator,
+  requestId?: string,
+): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Для операции ${operator} нужен непустой массив значений.`,
+      { field: 'value', operator },
+      requestId,
+    );
+  }
+  if (value.some((v) => typeof v !== 'string' || v === '')) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Массив значений операции ${operator} должен состоять из непустых строк.`,
+      { field: 'value', operator },
+      requestId,
+    );
+  }
+  return [...new Set(value)];
+}
+
+/**
+ * Раскрыть значение множественного свойства (`property_values.<column>`) в
+ * набор элементов (задача 20effcbd). Множественное значение хранится JSON-
+ * массивом строк (`["a","b"]`, 02-data-model.md §3.5), одиночное — обычным
+ * скаляром — «форма хранения важнее флага `multiple`» (та же оговорка, что у
+ * `readValue` в `property-service.ts`). `json_each` требует валидный JSON-
+ * массив на входе, поэтому скаляр оборачивается в массив из одного элемента;
+ * `json_quote` корректно эскейпит кавычки/спецсимволы при оборачивании.
+ */
+function multipleValueElementsSql(column: string): string {
+  return `json_each(CASE WHEN pv.${column} LIKE '[%' THEN pv.${column} ELSE '[' || json_quote(pv.${column}) || ']' END)`;
+}
+
+/**
+ * Клауза `any_of`/`all_of`/`none_of` по множественному свойству (`thought_ref`/
+ * `url`, задача 20effcbd). `any_of`/`none_of` — один `EXISTS`/`NOT EXISTS` с
+ * `IN (...)`; `all_of` — конъюнкция по одному `EXISTS` на каждое искомое
+ * значение (пересечение не выразить одним `IN`).
+ */
+function multipleValueSetClause(
+  propertyId: string,
+  column: string,
+  operator: 'any_of' | 'all_of' | 'none_of',
+  value: PropertyQueryCondition['value'],
+  requestId?: string,
+): Clause {
+  const values = coerceValueList(value, operator, requestId);
+  const elementsSql = multipleValueElementsSql(column);
+  const existsOne = (v: string): Clause => ({
+    sql: `EXISTS (
+      SELECT 1 FROM property_values_v pv, ${elementsSql} je
+      WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+        AND pv.${column} IS NOT NULL AND je.value = ?)`,
+    params: [propertyId, v],
+  });
+  if (operator === 'all_of') {
+    const parts: string[] = [];
+    const params: unknown[] = [];
+    for (const v of values) {
+      const one = existsOne(v);
+      parts.push(one.sql);
+      params.push(...one.params);
+    }
+    return { sql: parts.join(' AND '), params };
+  }
+  const placeholders = values.map(() => '?').join(',');
+  const any: Clause = {
+    sql: `EXISTS (
+      SELECT 1 FROM property_values_v pv, ${elementsSql} je
+      WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+        AND pv.${column} IS NOT NULL AND je.value IN (${placeholders}))`,
+    params: [propertyId, ...values],
+  };
+  return operator === 'any_of' ? any : { sql: `NOT ${any.sql}`, params: any.params };
+}
+
+/**
+ * Клауза условия по свойству-связи (`value_type: 'link'`, задача 20effcbd,
+ * требование 9f42fc25) — транслируется в запрос по рёбрам (`links_v`), а не
+ * по `property_values`: значения свойства-связи там не хранятся (ADR
+ * «свойство-связь — проекция ребра»). Направление свойства (`out`/`in`) и
+ * тип связи/структурность читаются из `config` тем же кодом, что использует
+ * чтение карточки (`property-service.linkPropertyDirection` и соседи) —
+ * единая точка интерпретации.
+ *
+ * Операторы:
+ *   * `eq`/`ne` со строкой — «связь с конкретной целью» (id мысли);
+ *   * `eq`/`ne` с boolean — «связь такого типа есть/отсутствует» независимо
+ *     от цели (`eq true` / `ne false` — есть; `eq false` / `ne true` — нет);
+ *   * `any_of`/`all_of`/`none_of` — набор целей рёбер против перечисленных id.
+ *
+ * Работает в обе стороны: `direction: 'in'` считает рёбра, где владелец —
+ * цель (`l.target_id = t.id`), сравнение идёт по `l.source_id`.
+ */
+function linkPropertyClause(
+  def: RegistryPropertyRow,
+  cond: PropertyQueryCondition,
+  requestId?: string,
+): Clause {
+  const config = parsePropertyConfig(def.config);
+  const structural = isStructuralLinkProperty(config);
+  const linkTypeId = structural ? null : linkPropertyLinkTypeId(config);
+  if (!structural && linkTypeId === null) {
+    // Свойство-связь без корректного config (валидируется при правке
+    // онтологии — сюда не должно доходить) — условие не матчит ничего.
+    return { sql: '0', params: [] };
+  }
+  const direction: LinkPropertyDirection = linkPropertyDirection(config);
+  const ownerCol = direction === 'out' ? 'source_id' : 'target_id';
+  const targetCol = direction === 'out' ? 'target_id' : 'source_id';
+  const typeSql = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
+  const typeParams = linkTypeId === null ? [] : [linkTypeId];
+  const existsSql = (extraSql: string, extraParams: unknown[]): Clause => ({
+    sql: `EXISTS (
+      SELECT 1 FROM links_v l
+      WHERE l.${ownerCol} = t.id AND ${typeSql} AND l.active = 1 AND l.marked_for_deletion = 0${extraSql})`,
+    params: [...typeParams, ...extraParams],
+  });
+
+  switch (cond.operator) {
+    case 'eq':
+    case 'ne': {
+      const value = cond.value;
+      if (typeof value === 'boolean') {
+        const presence = existsSql('', []);
+        const wantPresent = cond.operator === 'eq' ? value : !value;
+        return wantPresent ? presence : { sql: `NOT ${presence.sql}`, params: presence.params };
+      }
+      if (typeof value !== 'string' || value === '') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Значение условия по свойству-связи для eq/ne должно быть id мысли (строка) или boolean.',
+          { field: 'value' },
+          requestId,
+        );
+      }
+      const specific = existsSql(` AND l.${targetCol} = ?`, [value]);
+      return cond.operator === 'eq'
+        ? specific
+        : { sql: `NOT ${specific.sql}`, params: specific.params };
+    }
+    case 'any_of':
+    case 'none_of': {
+      const ids = coerceValueList(cond.value, cond.operator, requestId);
+      const placeholders = ids.map(() => '?').join(',');
+      const any = existsSql(` AND l.${targetCol} IN (${placeholders})`, ids);
+      return cond.operator === 'any_of' ? any : { sql: `NOT ${any.sql}`, params: any.params };
+    }
+    case 'all_of': {
+      const ids = coerceValueList(cond.value, cond.operator, requestId);
+      const parts: string[] = [];
+      const params: unknown[] = [];
+      for (const id of ids) {
+        const one = existsSql(` AND l.${targetCol} = ?`, [id]);
+        parts.push(one.sql);
+        params.push(...one.params);
+      }
+      return { sql: parts.join(' AND '), params };
+    }
+    default:
+      // Недостижимо — SUPPORTED_OPS['link'] ограничивает набор операторов выше.
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Операция ${cond.operator} недопустима для свойства-связи.`,
+        { field: 'operator' },
+        requestId,
+      );
+  }
 }
 
 /**
@@ -310,7 +518,7 @@ function propertyClauses(
   const placeholders = ids.map(() => '?').join(',');
   const rows = ndb
     .prepare(
-      `SELECT id, name, value_type FROM properties_v WHERE id IN (${placeholders})`,
+      `SELECT id, name, value_type, config FROM properties_v WHERE id IN (${placeholders})`,
     )
     .all(...ids) as RegistryPropertyRow[];
   const byId = new Map(rows.map((r) => [r.id, r] as const));
@@ -333,8 +541,25 @@ function propertyClauses(
         requestId,
       );
     }
+
+    // Свойство-связь (задача 20effcbd): условие переводится в запрос по
+    // рёбрам, а не по `property_values` — значения там не хранятся.
+    if (valueType === 'link') {
+      out.push(linkPropertyClause(def, cond, requestId));
+      continue;
+    }
+
     const column = VALUE_COLUMN[valueType];
     const refMultiple = valueType === 'thought_ref';
+
+    // Операторы наборов (задача 20effcbd) — общие для `thought_ref`/`url`
+    // (`config.multiple`): значение может быть одиночным скаляром или
+    // JSON-массивом (§3.5) — {@link multipleValueSetClause} раскрывает обе
+    // формы.
+    if (cond.operator === 'any_of' || cond.operator === 'all_of' || cond.operator === 'none_of') {
+      out.push(multipleValueSetClause(def.id, column, cond.operator, cond.value, requestId));
+      continue;
+    }
 
     if (cond.operator === 'contains') {
       // Only `text`/`url` allow `contains` per SUPPORTED_OPS — `value_text`
@@ -390,12 +615,26 @@ function propertyClauses(
   return out;
 }
 
-/** Coerce a wire value to the SQL scalar form its `value_*` column expects. */
+/**
+ * Coerce a wire value to the SQL scalar form its `value_*` column expects.
+ * Only reached for `eq`/`ne`/`gt`/`gte`/`lt`/`lte` on non-`link` properties —
+ * `any_of`/`all_of`/`none_of` (array `value`) and `link` (own clause builder)
+ * are handled before this call, so `value` is always a scalar here despite
+ * the wire type allowing an array too.
+ */
 function coerceScalar(
   valueType: PropertyValueType,
-  value: string | number | boolean,
+  value: PropertyQueryCondition['value'],
   requestId?: string,
 ): string | number {
+  if (Array.isArray(value)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Значение свойства ${valueType} не может быть массивом для этого оператора.`,
+      { field: 'value' },
+      requestId,
+    );
+  }
   switch (valueType) {
     case 'number':
       if (typeof value !== 'number' || !Number.isFinite(value)) {

@@ -15,8 +15,28 @@ export type ThoughtQueryActive = 'true' | 'false' | 'any';
  * `'false'` (default) — только непомеченные, `'any'` — без фильтра. */
 export type ThoughtQueryTrashed = 'true' | 'false' | 'any';
 
-/** Оператор условия по значению свойства. */
-export type PropertyQueryOperator = 'eq' | 'ne' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte';
+/**
+ * Оператор условия по значению свойства.
+ *
+ * `any_of`/`all_of`/`none_of` (задача 20effcbd, 0.8.1) — операторы для
+ * наборов значений: свойство-связь (`value_type: 'link'`, набор целей рёбер)
+ * и обычные множественные свойства (`config.multiple` — `thought_ref`/`url`).
+ * `value` для них — непустой массив id/строк (см. {@link PropertyQueryCondition.value}):
+ *   * `any_of` — набор пересекается с перечисленными значениями (хотя бы одно);
+ *   * `all_of` — набор содержит все перечисленные значения;
+ *   * `none_of` — набор не содержит ни одного из перечисленных.
+ */
+export type PropertyQueryOperator =
+  | 'eq'
+  | 'ne'
+  | 'contains'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'any_of'
+  | 'all_of'
+  | 'none_of';
 
 /** Одно условие по значению свойства мысли (AND-группа). */
 export interface PropertyQueryCondition {
@@ -36,8 +56,15 @@ export interface PropertyQueryCondition {
    * `value_number` / `value_bool` / `value_thought_ref`) выбирается по
    * `value_type` адресуемого свойства, а не по runtime-типу значения —
    * подробности см. в `query-service.ts`.
+   *
+   * Для свойства-связи (`value_type: 'link'`, задача 20effcbd): `eq`/`ne` со
+   * строкой — id конкретной цели («связь с конкретной целью»); `eq`/`ne` с
+   * boolean — наличие/отсутствие живого ребра этого типа независимо от цели
+   * («связь такого типа есть либо отсутствует»). Для `any_of`/`all_of`/`none_of`
+   * (свойство-связь и `config.multiple` `thought_ref`/`url`) — непустой массив
+   * id/строк.
    */
-  value: string | number | boolean;
+  value: string | number | boolean | string[];
 }
 
 /** Сортировка результата. */
