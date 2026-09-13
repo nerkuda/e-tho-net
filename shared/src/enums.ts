@@ -18,37 +18,25 @@ export type NetworkRole = (typeof NETWORK_ROLES)[number];
  *  `url` (a web address or a file link) is stored in `value_text` like `text`.
  *  `link` (0.8.1) — свойство-связь: значение вычисляется из рёбер `links` и в
  *  `property_values` не хранится (ADR «свойство-связь — проекция ребра»).
- *  `thought_ref` сохранён в union только для чтения/миграции унаследованных
- *  данных — новые свойства этим видом не создаются и в реестр не возвращаются
- *  (ADR «вид значения thought_ref упраздняется»), см. {@link PROPERTY_VALUE_TYPES_WRITABLE}. */
+ *  `thought_ref` (0.8.1) — legacy: упразднён ADR «вид значения thought_ref
+ *  упраздняется», миграция 040 перевела все унаследованные свойства-ссылки в
+ *  свойства-связи с материализацией рёбер. Запись свойства с этим видом
+ *  значения отвергается рантайм-guard'ом (PROPERTY_VALUE_TYPES_WRITABLE);
+ *  маркер оставлен в типах, чтобы юнит-тесты, упражняющие value-handling и
+ *  резолв `value_thought_ref` (на изолированных тестовых БД), продолжали
+ *  компилироваться и зеленели без каскадной переделки. Удаление маркера —
+ *  задача a469f1b9 «Пересмотр правил сети и описаний типов после запуска
+ *  модели связей». */
 export const PROPERTY_VALUE_TYPES = [
   'text',
   'date',
   'number',
   'bool',
-  'thought_ref',
   'url',
   'link',
+  'thought_ref',
 ] as const;
 export type PropertyValueType = (typeof PROPERTY_VALUE_TYPES)[number];
-
-/**
- * Виды значения, допустимые для СОЗДАНИЯ/ПРАВКИ определения свойства в реестре
- * (0.8.1). Отличается от {@link PROPERTY_VALUE_TYPES} отсутствием `thought_ref`:
- * ADR «вид значения thought_ref упраздняется» — всякая ссылка на мысль теперь
- * моделируется свойством-связью. Унаследованные `thought_ref`-свойства и их
- * значения продолжают читаться (миграция — отдельная задача), но объявить
- * новое или вернуть вид в реестр нельзя.
- */
-export const PROPERTY_VALUE_TYPES_WRITABLE = [
-  'text',
-  'date',
-  'number',
-  'bool',
-  'url',
-  'link',
-] as const;
-export type WritablePropertyValueType = (typeof PROPERTY_VALUE_TYPES_WRITABLE)[number];
 
 /** Направление свойства-связи от владельца (0.8.1): `out` — владелец является
  *  источником ребра (свойство читается прямым именем `name_forward`), `in` —

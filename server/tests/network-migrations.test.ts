@@ -61,6 +61,7 @@ const EXPECTED_FILES = [
   '037_thought_type_views.sql',
   '038_search_trigram.sql',
   '039_structural_link_properties.sql',
+  '040_thought_ref_to_link_properties.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -602,6 +603,7 @@ describe(
           '037_thought_type_views.sql',
           '038_search_trigram.sql',
           '039_structural_link_properties.sql',
+          '040_thought_ref_to_link_properties.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged
@@ -746,14 +748,28 @@ describe(
         const byName = new Map(props.map((p) => [p.name, p]));
         assert.equal(byName.get('подсистема')!.id, 'a1');
         assert.equal(byName.get('задача2.подсистема')!.value_type, 'number');
-        assert.equal(byName.get('связан с.подсистема')!.value_type, 'thought_ref');
+        // 040 конвертирует thought_ref-свойства в свойства-связи.
+        assert.equal(byName.get('связан с.подсистема')!.value_type, 'link');
         assert.equal(byName.get('связь')!.id, 'a4');
 
-        // Merged thought_ref property: allowed ids unioned across both forms.
+        // Merged thought_ref property: allowed ids unioned across both forms;
+        // 040 конвертирует в свойство-связь — multiple сохранён, объединённый
+        // allowed_type_ids переехал в allowed_target_type_ids.
         const svyaz = byName.get('связь')!;
-        const cfg = JSON.parse(svyaz.config!) as { multiple?: boolean; allowed_type_ids?: string[] };
-        assert.equal(cfg.multiple, true);
-        assert.deepEqual([...(cfg.allowed_type_ids ?? [])].sort(), ['t-problem', 't-zadacha']);
+        const cfg = JSON.parse(svyaz.config!) as {
+          multiple?: number | boolean;
+          allowed_target_type_ids?: string[];
+          link_type_id?: string;
+          direction?: string;
+          show_on_map?: number;
+          blocks_target_deletion?: number;
+        };
+        assert.equal(cfg.multiple, 1);
+        assert.equal(cfg.direction, 'out');
+        assert.equal(cfg.show_on_map, 0);
+        assert.equal(cfg.blocks_target_deletion, 1);
+        assert.ok(typeof cfg.link_type_id === 'string' && cfg.link_type_id.length > 0);
+        assert.deepEqual([...(cfg.allowed_target_type_ids ?? [])].sort(), ['t-problem', 't-zadacha']);
 
         // Bindings: a5 attaches to the surviving a4.
         const a5 = db
@@ -868,6 +884,7 @@ describe(
           '037_thought_type_views.sql',
           '038_search_trigram.sql',
           '039_structural_link_properties.sql',
+          '040_thought_ref_to_link_properties.sql',
         ]);
 
         const expectedId = propertyValueId('thought', owner, prop);
@@ -922,6 +939,196 @@ describe(
           byOwner.get(owner2),
           propertyValueId('thought', owner2, prop),
           'other natural key gets its OWN deterministic id',
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    it('040 converts thought_ref properties to link properties with materialised edges', () => {
+      const db = new Database(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      try {
+        const res = runMigrations(db, networkMigrationsDir());
+        assert.equal(res.applied[res.applied.length - 1], '040_thought_ref_to_link_properties.sql');
+        // 040 уже применён в прогоне — откатываем запись, сеем данные
+        // thought_ref-эпохи и применяем повторно (как апгрейд живой сети).
+        db.prepare(
+          "DELETE FROM _migrations WHERE name = '040_thought_ref_to_link_properties.sql'",
+        ).run();
+        const now = '2026-09-13T00:00:00Z';
+        const BASE = '00000000-0000-4000-8000-0000000000ba5e';
+
+        const insThought = db.prepare(
+          `INSERT INTO thoughts (id, layer_id, title, title_norm, active, created_at, updated_at, created_by, updated_by, created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, ?, 1, ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        insThought.run('ta', BASE, 'Мысль A', 'мысль a', now, now);
+        insThought.run('tb', BASE, 'Мысль B', 'мысль b', now, now);
+        insThought.run('tc', BASE, 'Мысль C', 'мысль c', now, now);
+
+        const insProp = db.prepare(
+          `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, type_name_key(?), 'thought_ref', ?, ?, ?, 'u1', 'u1')`,
+        );
+        insProp.run('p1', BASE, 'версия', 'версия', '{"allowed_type_ids":["tt1"]}', now, now);
+        insProp.run('p2', BASE, 'подсистемы', 'подсистемы', '{"multiple":true}', now, now);
+
+        const insVal = db.prepare(
+          `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, value_thought_ref, updated_at, created_by, updated_by, created_at_ms, updated_at_ms)
+           VALUES (?, ?, 'thought', ?, ?, ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        insVal.run('v1', BASE, 'ta', 'p1', 'tb', now); // одиночная
+        insVal.run('v2', BASE, 'tc', 'p2', '["ta","tb"]', now); // multiple: порядок → position
+        insVal.run('v3', BASE, 'ta', 'p2', '["tb","tz"]', now); // цель tz не существует — призрак
+
+        // Второй слой со своим thought_ref-свойством и значением.
+        db.prepare(
+          `INSERT INTO layers (id, parent_id, title, comment, git_branch, is_service, is_base, depth, created_by, updated_by, created_at, last_activity_at, created_at_ms, updated_at_ms, version)
+           VALUES ('lay1', ?, 'слой', NULL, NULL, 0, 0, 1, 'u1', 'u1', ?, ?, 0, 0, 1)`,
+        ).run(BASE, now, now);
+        insProp.run('p3', 'lay1', 'источник', 'источник', null, now, now);
+        insVal.run('v4', 'lay1', 'tb', 'p3', 'ta', now);
+
+        // Ребро с хроно-комментарием, вложением, значением свойства на ребре,
+        // постоянным комментарием и привязкой свойства к типу связи.
+        db.prepare(
+          `INSERT INTO links (id, layer_id, source_id, target_id, type_id, position, active, version, created_at, updated_at, created_by, updated_by)
+           VALUES ('lnk1', ?, 'ta', 'tb', NULL, 0, 1, 1, ?, ?, 'u1', 'u1')`,
+        ).run(BASE, now, now);
+        const insComment = db.prepare(
+          `INSERT INTO comments (id, layer_id, owner_type, owner_id, kind, title, body_md, body_html, valid_from, version, created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, ?, 'u1', 'u1')`,
+        );
+        insComment.run('cch', BASE, 'link', 'lnk1', 'chronological', 'хроника ребра', '<p>x</p>', now, now, now);
+        insComment.run('cper', BASE, 'link', 'lnk1', 'permanent', 'постоянный', '<p>x</p>', now, now, now);
+        db.prepare(
+          `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, title, position, created_at, created_by)
+           VALUES ('at1', ?, 'link', 'lnk1', 'url', 'https://x', 'вложение', 0, ?, 'u1')`,
+        ).run(BASE, now);
+        db.prepare(
+          `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, created_at, updated_at, created_by, updated_by)
+           VALUES ('p9', ?, 'путь', type_name_key('путь'), 'text', NULL, ?, ?, 'u1', 'u1')`,
+        ).run(BASE, now, now);
+        db.prepare(
+          `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, value_text, updated_at, created_by, updated_by, created_at_ms, updated_at_ms)
+           VALUES ('v5', ?, 'link', 'lnk1', 'p9', ' docs/x.md ', ?, 'u1', 'u1', 0, 0)`,
+        ).run(BASE, now);
+        db.prepare(
+          `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, property_id, required, position)
+           VALUES ('tp9', ?, 'link_type', '00000000-0000-4000-8000-000000000002', 'p9', 0, 0)`,
+        ).run(BASE);
+
+        const res2 = runMigrations(db, networkMigrationsDir());
+        assert.deepEqual(res2.applied, ['040_thought_ref_to_link_properties.sql']);
+
+        // Виды связи: по одному на якорь каждого свойства, в слое якоря.
+        const lts = db
+          .prepare(
+            "SELECT id, name_forward, layer_id FROM link_types WHERE name_forward LIKE 'upd: %'",
+          )
+          .all() as Array<{ id: string; name_forward: string; layer_id: string }>;
+        assert.equal(lts.length, 3, JSON.stringify(lts));
+        const ltNames = lts.map((l) => `${l.name_forward}@${l.layer_id === BASE ? 'base' : 'lay1'}`);
+        for (const expected of ['upd: версия@base', 'upd: подсистемы@base', 'upd: источник@lay1']) {
+          assert.ok(ltNames.includes(expected), `missing ${expected}`);
+        }
+
+        // Определения сконвертированы на месте (id сохранены), config по АДР.
+        const props = db
+          .prepare("SELECT id, value_type, config FROM properties WHERE id IN ('p1','p2','p3')")
+          .all() as Array<{ id: string; value_type: string; config: string }>;
+        assert.equal(props.length, 3);
+        const cfg1 = JSON.parse(props.find((p) => p.id === 'p1')!.config!);
+        assert.equal(props.find((p) => p.id === 'p1')!.value_type, 'link');
+        assert.ok(typeof cfg1.link_type_id === 'string' && cfg1.link_type_id.length > 0);
+        assert.equal(cfg1.direction, 'out');
+        assert.equal(cfg1.show_on_map, 0);
+        assert.equal(cfg1.blocks_target_deletion, 1);
+        assert.deepEqual(cfg1.allowed_target_type_ids, ['tt1']);
+        assert.equal(cfg1.multiple, undefined);
+        const cfg2 = JSON.parse(props.find((p) => p.id === 'p2')!.config!);
+        assert.equal(cfg2.multiple, 1);
+        assert.equal(cfg2.allowed_target_type_ids, undefined);
+
+        // Значения → рёбра в тех же слоях; position хранит порядок массива.
+        const edges = db
+          .prepare(
+            `SELECT source_id, target_id, layer_id, position FROM links
+              WHERE type_id IN (SELECT id FROM link_types WHERE name_forward LIKE 'upd: %')
+              ORDER BY source_id, position`,
+          )
+          .all() as Array<{ source_id: string; target_id: string; layer_id: string; position: number }>;
+        assert.equal(edges.length, 4, JSON.stringify(edges));
+        const e1 = edges.find((e) => e.source_id === 'ta' && e.target_id === 'tb');
+        assert.ok(e1 !== undefined && e1.layer_id === BASE && e1.position === 0);
+        const tcEdges = edges.filter((e) => e.source_id === 'tc');
+        assert.deepEqual(
+          tcEdges.map((e) => [e.target_id, e.position]),
+          [
+            ['ta', 0],
+            ['tb', 1],
+          ],
+        );
+        const layEdge = edges.find((e) => e.layer_id === 'lay1');
+        assert.ok(layEdge !== undefined && layEdge.source_id === 'tb' && layEdge.target_id === 'ta');
+
+        // Призрак с несуществующей целью остался строкой; остальные значения удалены.
+        const ghost = db
+          .prepare("SELECT owner_id, value_thought_ref FROM property_values WHERE id = 'v3'")
+          .get() as { owner_id: string; value_thought_ref: string };
+        assert.equal(ghost.owner_id, 'ta');
+        assert.equal(ghost.value_thought_ref, '["tb","tz"]');
+        assert.equal(
+          (db.prepare('SELECT COUNT(*) AS c FROM property_values').get() as { c: number }).c,
+          1,
+        );
+
+        // Хроно-комментарий переподчинён источнику с пометкой о переносе.
+        const chrono = db
+          .prepare("SELECT owner_type, owner_id, body_md, body_html FROM comments WHERE id = 'cch'")
+          .get() as { owner_type: string; owner_id: string; body_md: string; body_html: string };
+        assert.equal(chrono.owner_type, 'thought');
+        assert.equal(chrono.owner_id, 'ta');
+        assert.ok(
+          chrono.body_md.startsWith('*(перенесено с связи «Мысль A» → «Мысль B»'),
+          chrono.body_md,
+        );
+        assert.ok(chrono.body_md.endsWith('хроника ребра'));
+        assert.equal(chrono.body_html, '', 'body_html пересоберёт markdown-sweep');
+
+        // Вложение ребра переподчинено источнику.
+        const att = db
+          .prepare("SELECT owner_type, owner_id FROM attachments WHERE id = 'at1'")
+          .get() as { owner_type: string; owner_id: string };
+        assert.equal(att.owner_type, 'thought');
+        assert.equal(att.owner_id, 'ta');
+
+        // Значение свойства на ребре дописано в постоянный комментарий
+        // (markdown-списком), строка значения удалена.
+        const perm = db
+          .prepare("SELECT body_md FROM comments WHERE id = 'cper'")
+          .get() as { body_md: string };
+        assert.ok(perm.body_md.startsWith('постоянный'), perm.body_md);
+        assert.ok(perm.body_md.includes('- путь: docs/x.md'), perm.body_md);
+        assert.equal(
+          (
+            db
+              .prepare("SELECT COUNT(*) AS c FROM property_values WHERE owner_type = 'link'")
+              .get() as { c: number }
+          ).c,
+          0,
+        );
+
+        // Привязка свойства к типу связи удалена.
+        assert.equal(
+          (
+            db
+              .prepare("SELECT COUNT(*) AS c FROM type_properties WHERE owner_type = 'link_type'")
+              .get() as { c: number }
+          ).c,
+          0,
         );
       } finally {
         db.close();

@@ -1869,7 +1869,7 @@ export class RestClient {
     });
   }
 
-  /** `GET /networks/{nid}/thoughts/{id}/usage` — reverse thought_ref lookup (L7). */
+  /** `GET /networks/{nid}/thoughts/{id}/usage` — reverse link-property lookup (L7). */
   public async getThoughtUsage(
     networkId: string,
     thoughtId: string,
@@ -2051,7 +2051,7 @@ export class RestClient {
   /**
    * `GET /networks/{nid}/thoughts/duplicates` — live duplicate lookup powering
    * the add-thought dialog (H14, docs/03-server-api.md §6.3, 08-ui-spec.md §4.4)
-   * and the thought_ref property pickers (`type_ids` filter).
+   * and the link-property pickers (`type_ids` filter).
    */
   public async findDuplicates(
     networkId: string,

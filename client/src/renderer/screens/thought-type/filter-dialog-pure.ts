@@ -106,9 +106,6 @@ export function buildTokensForField(
   if (propertyValueType === 'bool') {
     out.push({ text: '$thought.active', label: '$thought.active', section: 'Поля мысли' });
   }
-  if (propertyValueType === 'thought_ref') {
-    out.push({ text: '$thought', label: '$thought — id мысли в фокусе', section: 'Поля мысли' });
-  }
 
   // Property tokens (one section per ancestor level).
   for (const level of chainProps) {
@@ -123,12 +120,7 @@ export function buildTokensForField(
         label: `${tokenText}${labelSuffix} — ${def.value_type}`,
         section: sectionName,
       };
-      if (
-        (def.value_type === 'thought_ref' ||
-          def.value_type === 'url' ||
-          def.value_type === 'text') &&
-        multiple
-      ) {
+      if ((def.value_type === 'url' || def.value_type === 'text') && multiple) {
         token.listOnly = true;
       }
       if (
@@ -294,12 +286,6 @@ function propertyMatches(
   if (defMultiple) return true;
   if (defType === condType) return true;
   if ((defType === 'text' || defType === 'url') && (condType === 'text' || condType === 'url')) {
-    return true;
-  }
-  // Текстовое/url-свойство может хранить id мысли (задача 68ec0b5b):
-  // резолвер подставит значение «как есть» без проверки соответствия
-  // типов, поэтому его разрешено выбирать для условия по `thought_ref`.
-  if ((defType === 'text' || defType === 'url') && condType === 'thought_ref') {
     return true;
   }
   return false;

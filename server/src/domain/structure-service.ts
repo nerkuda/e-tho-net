@@ -80,9 +80,10 @@ const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly StructurePropertyOp[
   date: ['eq', 'gt', 'lt', 'is_empty', 'not_empty'],
   number: ['eq', 'gt', 'lt', 'is_empty', 'not_empty'],
   bool: ['eq'],
-  thought_ref: ['eq', 'in', 'not_in', 'is_empty', 'not_empty'],
   // Отбор по свойствам-связям — отдельная задача (4); до неё операций нет.
   link: [],
+  // Legacy thought_ref (миграция 040): таких свойств в живой БД не остаётся.
+  thought_ref: [],
 };
 
 /** Storage column of `property_values` per property `value_type`. */
@@ -92,10 +93,11 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   date: 'value_date',
   number: 'value_number',
   bool: 'value_bool',
-  thought_ref: 'value_thought_ref',
   // Свойство-связь значений в property_values не хранит (ADR «проекция
   // ребра»); значение недостижимо — OPS_BY_VALUE_TYPE['link'] пуст.
-  link: 'value_thought_ref',
+  link: 'value_text',
+  // Legacy thought_ref (миграция 040): таких свойств в живой БД не остаётся.
+  thought_ref: 'value_text',
 };
 
 /** Default keyword scope (03-server-api.md §6.10): title + synonyms only —
@@ -849,11 +851,6 @@ function buildFilterQuerySql(
       );
     }
     const column = `pv.${VALUE_COLUMN[def.value_type]}`;
-    // thought_ref values may be stored as a JSON array of ids (config.multiple,
-    // 02-data-model.md §3.5): exact arms match single ids, LIKE arms match ids
-    // inside arrays. Quotes in the pattern make the id match exact.
-    const refLike = def.value_type === 'thought_ref';
-    const likePattern = (v: string): string => `%"${v.replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`;
     if (cond.op === 'in' || cond.op === 'not_in') {
       if (!Array.isArray(cond.value) || cond.value.length === 0) {
         throw new EtnError(
@@ -864,16 +861,11 @@ function buildFilterQuerySql(
         );
       }
       const values = cond.value.map((v) => sqlScalar(def, v, requestId));
-      const likeFrags = refLike ? values.map(() => `${column} LIKE ? ESCAPE '\\'`) : [];
       const listSql = `SELECT 1 FROM property_values_v pv
          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-           AND (${column} IN (${values.map(() => '?').join(',')})${likeFrags.length > 0 ? ` OR ${likeFrags.join(' OR ')}` : ''})`;
+           AND ${column} IN (${values.map(() => '?').join(',')})`;
       where.push(cond.op === 'in' ? `EXISTS (${listSql})` : `NOT EXISTS (${listSql})`);
-      params.push(
-        cond.property_id,
-        ...values,
-        ...(refLike ? values.map((v) => likePattern(String(v))) : []),
-      );
+      params.push(cond.property_id, ...values);
       continue;
     }
     if (cond.op === 'contains') {
@@ -890,14 +882,10 @@ function buildFilterQuerySql(
       // `is_empty` — the thought has no filled value for this property;
       // `not_empty` — there is at least one filled value. The single-column
       // invariant (§3.5) guarantees the value column is NULL for other value
-      // types. Empty-string `''` (text/url) and JSON `'[]'`/`'null'`
-      // (thought_ref) are also "empty" — defensive against an editor that
-      // submits a placeholder string. The `value` payload is ignored: presence
-      // is decided by the row + column alone.
-      const filledExpr =
-        def.value_type === 'thought_ref'
-          ? `${column} IS NOT NULL AND ${column} != '' AND ${column} != '[]' AND ${column} != 'null'`
-          : `${column} IS NOT NULL AND ${column} != ''`;
+      // types. Empty-string `''` (text/url) is also "empty" — defensive
+      // against an editor that submits a placeholder string. The `value`
+      // payload is ignored: presence is decided by the row + column alone.
+      const filledExpr = `${column} IS NOT NULL AND ${column} != ''`;
       const filledSql = `SELECT 1 FROM property_values_v pv
          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
            AND ${filledExpr}`;
@@ -909,15 +897,12 @@ function buildFilterQuerySql(
     }
     const value = sqlScalar(def, cond.value as StructurePropertyValue, requestId);
     const opSql = cond.op === 'eq' ? '=' : cond.op === 'gt' ? '>' : '<';
-    // thought_ref allows eq only (see OPS_BY_VALUE_TYPE) — the LIKE arm there
-    // covers multiple-ref arrays.
-    const eqLike = refLike && cond.op === 'eq' ? ` OR ${column} LIKE ? ESCAPE '\\'` : '';
     where.push(
       `EXISTS (SELECT 1 FROM property_values_v pv
          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-           AND (${column} ${opSql} ?${eqLike}))`,
+           AND ${column} ${opSql} ?)`,
     );
-    params.push(cond.property_id, value, ...(eqLike !== '' ? [likePattern(String(value))] : []));
+    params.push(cond.property_id, value);
   }
 
   if (req.link_type_ids !== undefined && req.link_type_ids.length > 0) {

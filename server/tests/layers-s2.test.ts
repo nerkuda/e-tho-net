@@ -282,6 +282,7 @@ describe(
           '037_thought_type_views.sql',
           '038_search_trigram.sql',
           '039_structural_link_properties.sql',
+          '040_thought_ref_to_link_properties.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else

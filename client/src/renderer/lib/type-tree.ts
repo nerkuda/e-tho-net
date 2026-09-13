@@ -170,7 +170,7 @@ export function subtreeTypeIds(types: readonly TypeNode[], typeId: string): Set<
 
 /**
  * Expand selected type ids to whole subtrees (client-side mirror of the
- * server-side filter expansion): used to feed `thought_ref` pickers whose
+ * server-side filter expansion): used to feed type-filtered pickers whose
  * `allowed_type_ids` must match descendants too (L21).
  */
 export function expandTypeIdsToSubtree(

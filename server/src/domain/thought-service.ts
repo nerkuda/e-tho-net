@@ -412,7 +412,7 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
  *
  * На одну мысль:
  *  * `synonyms` — из `thought_synonyms_v`;
- *  * `properties` — резолвнутые `thought_ref`, помеченные `outside_type`,
+ *  * `properties` — значения свойств, помеченные `outside_type`,
  *    в форме `etn.thoughts.get` (используется общий с `etn.thoughts.get`
  *    сервис `getPropertyValuesResolved`);
  *  * `meta` — счётчики + превью постоянного комментария (используется общий
@@ -1020,7 +1020,7 @@ function countOrphanedChildren(ndb: NetworkDb, thoughtId: string): number {
 
 /**
  * Check whether a thought can be physically deleted (docs/03-server-api.md
- * §6.5a). Blocking arms: "использование в свойствах" (`thought_ref` from other
+ * §6.5a). Blocking arms: "использование в свойствах" (link-property edges,
  * thoughts) and live (`deleted = 0`) shadow rows of the thought itself or of
  * links where it is an endpoint in layers other than the connection's own,
  * plus — when the check runs in a working layer — a live row of the thought in
@@ -1103,7 +1103,7 @@ export function deleteThought(
       return;
     }
     // S13: refuse physical deletion while other thoughts reference this one
-    // through a thought_ref property, or while a non-base layer holds a live
+    // through a blocking link-property edge, or while a non-base layer holds a live
     // shadow row of it / of a link where it is an endpoint
     // (02-data-model.md §3.1.2).
     const check = checkThoughtDeletion(ndb, id);

@@ -1072,7 +1072,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
     // --- Copy-batch (workplan L26, task bb8277f6) ----------------------------
     // Paste a clipboard snapshot under `parent_thought_id` in this network.
     // Type and link-type resolution falls back to "drop the type" per spec
-    // when nothing fits; thought_ref values are re-resolved by id → title.
+    // when nothing fits; scalar property values pass through verbatim.
     // The whole batch is one transaction — partial failure rolls back.
 
     app.post(
@@ -1162,7 +1162,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
     );
 
-    // --- Usage: reverse thought_ref lookup (03-server-api.md §9.1, L7) ------
+    // --- Usage: reverse link-property lookup (03-server-api.md §9.1, L7) ----
 
     app.get(
       '/networks/:networkId/thoughts/:id/usage',
@@ -1207,7 +1207,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         // Synonyms: repeatable ?synonyms=a&synonyms=b or a comma-separated value.
         const synonyms = queryStrings(query.synonyms).flatMap((value) => value.split(','));
-        // Optional thought-type filter (thought_ref property pickers): repeatable
+        // Optional thought-type filter (link-property pickers): repeatable
         // ?type_ids=… or a comma-separated value.
         const typeIds = queryStrings(query.type_ids).flatMap((value) => value.split(','));
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);

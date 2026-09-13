@@ -36,8 +36,14 @@ export {
  * `markdown-it/4`: ID-form wiki-links with an alias (`[[#<id>|алиас]]`) render
  * the alias as the span body — cached `body_html` (rendered by v3 with empty
  * bodies) must re-render so the alias becomes visible in view mode.
+ *
+ * `markdown-it/5`: no renderer change. Bumped by migration 040 (0.8.1,
+ * thought_ref → свойства-связи): the migration edits `body_md` of comments
+ * moved from links to thoughts (a transfer note is prepended) and folds
+ * on-link property values into permanent comments, leaving `body_html`
+ * stale on purpose — the sweep re-renders every comment after the migration.
  */
-export const MD_RENDER_VERSION = 'markdown-it/4';
+export const MD_RENDER_VERSION = 'markdown-it/5';
 
 /** Default input cap (256 KiB) to bound rendering work for a single document. */
 export const DEFAULT_MAX_LENGTH = 256 * 1024;

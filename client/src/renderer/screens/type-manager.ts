@@ -116,9 +116,11 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   number: 'число',
   date: 'дата',
   bool: 'булево',
-  thought_ref: 'ссылка на мысль',
   url: 'URL (сайт или файл)',
   link: 'связь',
+  // Legacy (миграция 040): в живой БД таких свойств не остаётся, но в
+  // типах маркер оставлен для компиляции тестов и импорта архивов.
+  thought_ref: 'ссылка на мысль (legacy)',
 };
 
 /** Reloads the thought-type catalogue (selects and cloud styles read it). */
@@ -1252,7 +1254,7 @@ function buildStagedPropertySection(opts: {
         actions.style.whiteSpace = 'nowrap';
         // Override buttons exist only for an already-created type: the
         // override row needs a server id to attach to.
-        if (typeId !== null && def.value_type !== 'thought_ref') {
+        if (typeId !== null && def.value_type !== 'link') {
           actions.append(
             button('по умолчанию…', () => showOverrideDialog(def), 'btn small', 'Переопределить значение по умолчанию'),
           );
@@ -1854,9 +1856,12 @@ function defaultInputFor(
       input.addEventListener('change', () => read(input.checked));
       return input;
     }
-    case 'thought_ref':
     case 'link':
       return span('не задаётся', 'muted');
+    case 'thought_ref':
+      // Legacy (миграция 040): создание свойств этого типа отвергается
+      // рантайм-guard'ом; редактор default-значения недостижим.
+      return span('упразднено', 'muted');
   }
 }
 

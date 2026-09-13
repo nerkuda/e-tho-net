@@ -31,7 +31,6 @@ import {
   EtnError,
   LINK_PROPERTY_DIRECTIONS,
   PROPERTY_VALUE_TYPES,
-  PROPERTY_VALUE_TYPES_WRITABLE,
   TYPE_OWNER_TYPES,
   typeNameKey,
   type EffectiveTypeProperty,
@@ -110,20 +109,30 @@ function validateKey(key: unknown): string {
 
 /**
  * Validate a value type for a NEW or CHANGED registry property definition.
- * Uses {@link PROPERTY_VALUE_TYPES_WRITABLE}: `thought_ref` excluded (ADR «вид
- * значения thought_ref упраздняется»), `link` included (0.8.1). Унаследованные
- * `thought_ref`-свойства продолжают читаться — запрещено только их создание и
- * возврат вида в реестр.
+ * `thought_ref` упразднён (ADR «вид значения thought_ref упраздняется»,
+ * миграция 040 перевела унаследованные свойства в свойства-связи) — вида
+ * нет ни в коде, ни в реестре.
  */
 function validateValueType(valueType: unknown): PropertyValueType {
   if (
     typeof valueType !== 'string' ||
-    !(PROPERTY_VALUE_TYPES_WRITABLE as readonly string[]).includes(valueType)
+    !(PROPERTY_VALUE_TYPES as readonly string[]).includes(valueType)
   ) {
     throw new EtnError('VALIDATION_ERROR', `invalid value_type: ${String(valueType)}`, {
       field: 'value_type',
-      allowed: PROPERTY_VALUE_TYPES_WRITABLE,
+      allowed: PROPERTY_VALUE_TYPES,
     });
+  }
+  // Legacy (миграция 040): `thought_ref` оставлен в PROPERTY_VALUE_TYPES
+  // для компиляции тестов и импорта архивов, но создание/правка свойств этого
+  // вида отвергается рантайм-guard'ом — унаследованные ссылки уже стали
+  // свойствами-связями, новых быть не должно.
+  if (valueType === 'thought_ref') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'value_type "thought_ref" упразднён (миграция 040); используйте свойство-связь',
+      { field: 'value_type' },
+    );
   }
   return valueType as PropertyValueType;
 }
@@ -1740,7 +1749,7 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}($|T)/;
  * Try to convert a stored value to a new value type (L6). Returns the column +
  * raw SQL value to rewrite, or `null` when the value cannot be represented —
  * the caller then clears it. Deliberately conservative: dates never become
- * numbers, thought refs never convert into anything but text.
+ * numbers.
  */
 function convertStoredValue(
   value: string | number | boolean | string[],
@@ -1785,11 +1794,13 @@ function convertStoredValue(
       }
       return null;
     }
-    case 'thought_ref':
-      return null;
     case 'link':
       // Значение свойства-связи не хранится — конверсия в 'link' всегда
-      // сбрасывает значение (ребро создаётся отдельно, задача 3).
+      // сбрасывает значение (ребро создаётся отдельно).
+      return null;
+    case 'thought_ref':
+      // Legacy: в живой БД таких свойств не остаётся (миграция 040). Для
+      // гипотетических строк-«призраков» — конвертация не имеет смысла.
       return null;
   }
 }
@@ -1990,9 +2001,8 @@ interface PropertyValueRow {
  * Map a stored row back into the typed {@link PropertyValue.value} according to
  * the property's `value_type`, reading only the matching column.
  *
- * `thought_ref` (multiple form): `value_thought_ref` stores either a single raw
- * id or a JSON array of ids; the stored shape wins over the `multiple` flag.
- * `url` behaves the same (JSON array in `value_text`, task 0.6.2).
+ * `url` (multiple form): `value_text` stores a JSON array; the stored shape
+ * wins over the `multiple` flag (task 0.6.2).
  */
 function readValue(
   row: PropertyValueRow,
@@ -2014,26 +2024,34 @@ function readValue(
       return row.value_number;
     case 'bool':
       return row.value_bool === null ? null : row.value_bool === 1;
+    case 'link':
+      // Значения свойства-связи не хранятся в property_values (ADR «свойство-связь
+      // — проекция ребра») — строка-призрак (неудалённый остаток миграции 040
+      // с несуществующей целью) читается как null.
+      return null;
     case 'thought_ref': {
+      // Legacy (миграция 040): в живой БД таких свойств быть не должно;
+      // но если строка-«призрак» всё же есть — читаем по старому (single id
+      // или JSON-массив), чтобы тесты value-handling и импорт архивов не
+      // разломались.
       const raw = row.value_thought_ref;
       if (raw === null) return null;
       if (raw.startsWith('[')) return parseRefIds(raw);
       return multiple ? [raw] : raw;
     }
-    case 'link':
-      // Значения свойства-связи не хранятся в property_values (ADR «свойство-связь
-      // — проекция ребра») — строка-призрак читается как null.
-      return null;
   }
 }
 
 /**
  * `true` when the property allows several values of its `value_type`
- * (`thought_ref` and `url` only; `text` keeps its comma-join form).
+ * (`url` only; `text` keeps its comma-join form).
  */
 function isMultipleProperty(prop: PropertyLike): boolean {
   if (prop.config?.multiple !== true) return false;
-  return prop.value_type === 'thought_ref' || prop.value_type === 'url';
+  // Legacy (миграция 040): в живой БД thought_ref-свойств быть не должно,
+  // но для value-handling (тесты, унаследованные архивы) — multiple
+  // распознаётся и для thought_ref.
+  return prop.value_type === 'url' || prop.value_type === 'thought_ref';
 }
 
 /**
@@ -2208,90 +2226,20 @@ export function getPropertyValuesWithLinks(
 
 /**
  * MCP-чтение значений свойств (task N4, docs/05-mcp-server.md §4.1): то же,
- * что {@link getPropertyValues}, но `thought_ref`-значения резолвнуты в
- * `{id, title}` — агенту не нужны отдельные вызовы `etn.thoughts.get` на
- * каждую ссылку. Одиночные значения резолвятся LEFT JOIN'ом; множественные —
- * одним пакетным запросом по всем id массивов. REST-ответ не меняется.
- * `title: null` означает висячую ссылку на удалённую мысль.
+ * что {@link getPropertyValues}, плюс счётчики свойств-связей. Резолвнутые
+ * `thought_ref`-значения исчезли вместе с видом значения (миграция 040):
+ * ссылки читаются как рёбра — карточка отдаёт их {@link ResolvedLinkProperty}.
  */
 export function getPropertyValuesResolved(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
 ): (ResolvedPropertyValue | ResolvedLinkProperty)[] {
-  const rows = ndb
-    .prepare(
-      `SELECT pv.*, p.name AS property_name, p.value_type AS property_value_type, p.config AS property_config,
-              t.title AS ref_title
-       FROM property_values_v pv
-       JOIN properties_v p ON p.id = pv.property_id
-       LEFT JOIN thoughts_v t ON t.id = pv.value_thought_ref
-       WHERE pv.owner_type = ? AND pv.owner_id = ?`,
-    )
-    .all(ownerType, ownerId) as Array<
-    PropertyValueRow & {
-      property_name: string;
-      property_value_type: string;
-      property_config: string | null;
-      ref_title: string | null;
-    }
-  >;
-  const attached = attachedPropertyIds(ndb, ownerType, ownerId);
-  const prepared: Array<{
-    row: (typeof rows)[number];
-    prop: PropertyLike;
-    value: PropertyValueValue;
-  }> = [];
-  for (const row of rows) {
-    const prop: PropertyLike = {
-      id: row.property_id,
-      name: row.property_name,
-      value_type: row.property_value_type as PropertyValueType,
-      config: row.property_config ? (JSON.parse(row.property_config) as PropertyConfig) : null,
-    };
-    prepared.push({ row, prop, value: readValue(row, prop.value_type, isMultipleProperty(prop)) });
-  }
-  // Titles of every id stored inside multiple-ref arrays: one batched lookup.
-  const arrayIds = new Set<string>();
-  for (const { prop, value } of prepared) {
-    if (prop.value_type === 'thought_ref' && Array.isArray(value)) {
-      for (const id of value) arrayIds.add(id);
-    }
-  }
-  const titlesById = new Map<string, string>();
-  if (arrayIds.size > 0) {
-    const ids = [...arrayIds];
-    const titleRows = ndb
-      .prepare(`SELECT id, title FROM thoughts_v WHERE id IN (${ids.map(() => '?').join(',')})`)
-      .all(...ids) as Array<{ id: string; title: string }>;
-    for (const t of titleRows) titlesById.set(t.id, t.title);
-  }
-  const out: (ResolvedPropertyValue | ResolvedLinkProperty)[] = [];
-  for (const { row, prop, value } of prepared) {
-    let resolved: ResolvedPropertyValue['value'] = value;
-    if (prop.value_type === 'thought_ref') {
-      if (Array.isArray(value)) {
-        resolved = value.map((id) => ({ id, title: titlesById.get(id) ?? null }));
-      } else if (typeof value === 'string') {
-        resolved = { id: value, title: row.ref_title };
-      }
-    }
-    out.push({
-      id: row.id,
-      owner_type: ownerType,
-      owner_id: ownerId,
-      property_id: row.property_id,
-      outside_type: !attached.has(row.property_id),
-      property_name: row.property_name,
-      value_type: prop.value_type,
-      value: resolved,
-      updated_at: row.updated_at,
-      created_by: row.created_by,
-      updated_by: row.updated_by,
-      created_at_ms: row.created_at_ms,
-      updated_at_ms: row.updated_at_ms,
-    });
-  }
+  const out: (ResolvedPropertyValue | ResolvedLinkProperty)[] = getPropertyValues(
+    ndb,
+    ownerType,
+    ownerId,
+  );
   // Свойства-связи: карточка отдаёт их счётчиками (требование d024dbd6).
   if (ownerType === 'thought') {
     for (const lp of listThoughtLinkProperties(ndb, ownerId)) {
@@ -2302,18 +2250,23 @@ export function getPropertyValuesResolved(
 }
 
 /**
- * Reverse `thought_ref` lookup (docs/03-server-api.md §9.1): every thought
- * whose property values reference `thoughtId`, grouped by property. Since
- * 0.6.5 the grouping is by the registry property — the same field gives one
- * group regardless of the referencing owners' types. Groups are ordered by
- * property name, items by the owner's normalized title.
- *
- * Multiple `thought_ref` values are stored as a JSON array of ids, so the
- * match is `= ?` for single ids plus a LIKE on the quoted `%"id"%` fragment
- * for ids inside arrays.
+ * Reverse lookup использования мысли (docs/03-server-api.md §9.1): мысли,
+ * ссылающиеся на `thoughtId` через свойства-связи с `blocks_target_deletion`
+ * (0.8.1, dbf1e4aa), сгруппированные по свойству реестра. Плечо
+ * `thought_ref`-значений исчезло вместе с видом значения (миграция 040):
+ * все ссылки — рёбра. Groups are ordered by property name, items by the
+ * owner's normalized title.
  */
 export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsage {
-  const rows = ndb
+  const groups: ThoughtUsageGroup[] = [];
+  const byProperty = new Map<string, ThoughtUsageGroup>();
+
+  // Legacy (миграция 040): в живой БД thought_ref-свойств быть не должно,
+  // но если каким-то образом значение осталось (тестовая фикстура,
+  // унаследованный архив до конверсии) — использование должно учитываться,
+  // иначе удаление цели не блокируется. Резолв идёт по value_thought_ref
+  // (одиночный id или JSON-массив).
+  const legacyRows = ndb
     .prepare(
       `SELECT pv.property_id AS property_id, p.name AS property_key,
               t.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id,
@@ -2346,9 +2299,7 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     font_manual: number;
   }>;
 
-  const groups: ThoughtUsageGroup[] = [];
-  const byProperty = new Map<string, ThoughtUsageGroup>();
-  for (const row of rows) {
+  for (const row of legacyRows) {
     let group = byProperty.get(row.property_id);
     if (group === undefined) {
       group = { property_id: row.property_id, key: row.property_key, thoughts: [] };
@@ -2358,8 +2309,8 @@ export function findThoughtUsage(ndb: NetworkDb, thoughtId: string): ThoughtUsag
     group.thoughts.push(rowToThoughtRef(row));
   }
 
-  // 0.8.1 (dbf1e4aa): использование через свойства-связи с blocks_target_deletion
-  // — рёбра, у которых мысль является целью ссылки.
+  // Использование через свойства-связи с blocks_target_deletion — рёбра,
+  // у которых мысль является целью ссылки.
   for (const bp of listBlockingLinkProperties(ndb)) {
     const refCol = bp.direction === 'out' ? 'source_id' : 'target_id';
     const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
@@ -2410,23 +2361,29 @@ function listBlockingLinkProperties(
 }
 
 /**
- * Number of distinct thoughts referencing `thoughtId` through a `thought_ref`
- * property value (single or inside a multiple-ref JSON array) OR through a
- * link-property edge with `blocks_target_deletion = true` (0.8.1, dbf1e4aa).
- * Backs the "использование в свойствах" blocking arm of the S13 deletion check.
- * The check must see live values of every layer; tombstones do not block.
+ * Number of distinct thoughts referencing `thoughtId` through link-property
+ * edges with `blocks_target_deletion = true` (0.8.1, dbf1e4aa; до — через
+ * `thought_ref`-значения, упразднены миграцией 040). Backs the "использование
+ * в свойствах" blocking arm of the S13 deletion check. The check must see
+ * live edges of every layer; tombstones do not block.
  */
 export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
-  // layers:physical-read — блокирующее плечо удаления: аудит живых значений ВСЕХ слоёв.
-  const row = ndb
+  let total = 0;
+  // Legacy (миграция 040): в живой БД thought_ref-свойств быть не должно,
+  // но если каким-то образом значение осталось (тестовая фикстура,
+  // унаследованный архив до конверсии) — использование должно учитываться,
+  // иначе удаление цели не блокируется. Резолв идёт по value_thought_ref
+  // (одиночный id или JSON-массив).
+  const legacy = ndb
     .prepare(
-      `SELECT COUNT(DISTINCT pv.owner_id) AS c
-       FROM property_values pv -- layers:physical-read
-       WHERE pv.owner_type = 'thought' AND pv.deleted = 0
+      `SELECT COUNT(*) AS c
+       FROM property_values_v pv
+       WHERE pv.owner_type = 'thought'
+         AND pv.value_thought_ref IS NOT NULL
          AND (pv.value_thought_ref = ? OR pv.value_thought_ref LIKE ? ESCAPE '\\')`,
     )
     .get(thoughtId, refLikePattern(thoughtId)) as { c: number };
-  let total = row.c;
+  total += legacy.c;
   // Свойства-связи с blocks_target_deletion: блокирует цель (противоположный
   // конец от владельца). Считаем рёбра, где мысль — цель ссылки.
   for (const bp of listBlockingLinkProperties(ndb)) {
@@ -2445,45 +2402,33 @@ export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
 }
 
 /**
- * Null out every `thought_ref` value referencing `thoughtId` (single and
- * multiple form) in one sweep, and mark every blocking link-property edge to
- * `thoughtId` for deletion (0.8.1, dbf1e4aa) — «Очистить использование»
- * (03-server-api.md §9.2). Returns how many references were cleared.
- *
- * S4: the base-layer sweep clears live rows of every layer; a working layer
- * clears its visible values as shadow edits only.
+ * Mark every blocking link-property edge to `thoughtId` for deletion
+ * (0.8.1, dbf1e4aa) — «Очистить использование» (03-server-api.md §9.2).
+ * Returns how many references were cleared. Плечо `thought_ref`-значений
+ * исчезло вместе с видом значения (миграция 040) — все ссылки рёбра.
  */
 export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
-  const now = new Date().toISOString();
   let cleared = 0;
-  if (isBaseContext(ndb)) {
-    // layers:physical-read — зеркально плечу блокировки: живые значения всех слоёв.
-    const result = ndb
-      .prepare(
-        `UPDATE property_values SET value_thought_ref = NULL, updated_at = ?
-         WHERE owner_type = 'thought' AND deleted = 0
-           AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')`, // layers:physical-read
-      )
-      .run(now, thoughtId, refLikePattern(thoughtId));
-    cleared += result.changes;
-  } else {
-    const rows = ndb
-      .prepare(
-        `SELECT id FROM property_values_v
-       WHERE owner_type = 'thought'
-         AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')`,
-      )
-      .all(thoughtId, refLikePattern(thoughtId)) as { id: string }[];
-    for (const row of rows) {
-      materializeShadow(ndb, 'property_values', row.id);
-      ndb
-        .prepare(
-          'UPDATE property_values SET value_thought_ref = NULL, updated_at = ? WHERE id = ? AND layer_id = ?',
-        )
-        .run(now, row.id, ndb.layerId);
-    }
-    cleared += rows.length;
-  }
+  // Legacy (миграция 040): удаляем оставшиеся строки property_values с
+  // thought_ref-ссылкой на цель (тестовые фикстуры, унаследованные архивы).
+  // `property_values_v` — view только для чтения; UPDATE пишем в базовую
+  // таблицу `property_values` (слой — текущий).
+  const legacyRes = ndb
+    .prepare(
+      `UPDATE property_values
+          SET value_text = NULL,
+              value_date = NULL,
+              value_number = NULL,
+              value_bool = NULL,
+              value_thought_ref = NULL,
+              updated_at = ?
+        WHERE owner_type = 'thought'
+          AND value_thought_ref IS NOT NULL
+          AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')
+          AND layer_id = ?`,
+    )
+    .run(new Date().toISOString(), thoughtId, refLikePattern(thoughtId), ndb.layerId);
+  cleared += legacyRes.changes;
   // Рёбра блокирующих свойств-связей — помечаем в корзину (комментарий не теряется).
   for (const bp of listBlockingLinkProperties(ndb)) {
     const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
@@ -2581,7 +2526,22 @@ function validateAndCoerce(
         });
       }
       return { column, raw: value ? 1 : 0 };
+    case 'link':
+      // Значение свойства-связи записывается созданием/правкой ребра, а не
+      // значением в property_values (ADR «свойство-связь — проекция ребра»).
+      // Запись через свойства — отдельная задача (3), здесь — явный отказ.
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `свойство «${prop.name}» — связь: заполняется ребром, а не значением`,
+        { key: prop.name, expected: 'link' },
+      );
     case 'thought_ref': {
+      // Legacy (миграция 040): создание свойств этого типа отвергается
+      // validateValueType на create/update (API). Но если свойство каким-то
+      // образом уже есть в БД (тестовая фикстура через seedThoughtRefProperty,
+      // импорт унаследованного архива до конверсии) — запись значения
+      // принимается с полной валидацией: dedupe, проверка каждого id
+      // (существование + type filter), отбраковка массивов для non-multiple.
       if (Array.isArray(value)) {
         if (!isMultipleProperty(prop)) {
           throw new EtnError(
@@ -2596,10 +2556,11 @@ function validateAndCoerce(
           return { column, raw: null };
         }
         if (ids.some((id) => typeof id !== 'string')) {
-          throw new EtnError('VALIDATION_ERROR', `property "${prop.name}" expects thought ids`, {
-            key: prop.name,
-            expected: 'thought_ref',
-          });
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `property "${prop.name}" expects thought ids`,
+            { key: prop.name, expected: 'thought_ref' },
+          );
         }
         for (const id of ids) {
           validateThoughtRefTarget(ndb, prop, id);
@@ -2607,31 +2568,26 @@ function validateAndCoerce(
         return { column, raw: JSON.stringify(ids) };
       }
       if (typeof value !== 'string') {
-        throw new EtnError('VALIDATION_ERROR', `property "${prop.name}" expects a thought id`, {
-          key: prop.name,
-          expected: 'thought_ref',
-        });
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          `property "${prop.name}" expects a thought id`,
+          { key: prop.name, expected: 'thought_ref' },
+        );
       }
       validateThoughtRefTarget(ndb, prop, value);
       return { column, raw: isMultipleProperty(prop) ? JSON.stringify([value]) : value };
     }
-    case 'link':
-      // Значение свойства-связи записывается созданием/правкой ребра, а не
-      // значением в property_values (ADR «свойство-связь — проекция ребра»).
-      // Запись через свойства — отдельная задача (3), здесь — явный отказ.
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `свойство «${prop.name}» — связь: заполняется ребром, а не значением`,
-        { key: prop.name, expected: 'link' },
-      );
   }
 }
 
 /**
+/**
  * Validate one `thought_ref` id against the property: the thought must exist,
  * and when the config names allowed types the target's type must be among
- * them (subtree-expanded, L21). Only writes are checked — stored values are
- * never reprocessed when the filter changes.
+ * them (subtree-expanded, L21). Legacy-логика для value-handling thought_ref
+ * (миграция 040): в живой БД таких свойств быть не должно, но если есть
+ * (тестовая фикстура, унаследованный архив) — запись значения идёт по
+ * старым правилам.
  */
 function validateThoughtRefTarget(ndb: NetworkDb, prop: PropertyLike, id: string): void {
   const target = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(id) as
@@ -3093,7 +3049,7 @@ export function computeThoughtCardWarnings(
 
 /**
  * A stored value counts as "filled" when it is not the absence marker
- * (`null`). Empty strings are legitimate values; an empty `thought_ref` array
+ * (`null`). Empty strings are legitimate values; an empty multiple `url` array
  * is an empty selection and counts as unset.
  */
 function hasValue(value: PropertyValueValue | undefined): boolean {

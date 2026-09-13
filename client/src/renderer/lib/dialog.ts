@@ -202,7 +202,7 @@ export function showDialog(opts: DialogOptions): () => void {
   window.addEventListener('keydown', onKey, true);
   const onConfirm = (event: KeyboardEvent): void => {
     // Bubble phase: field-level handlers (batch add, the thought picker,
-    // thought_ref candidate lists) consume Ctrl+Enter first via
+    // candidate lists) consume Ctrl+Enter first via
     // preventDefault; the dialog confirms only a still-unhandled press.
     if (!isConfirmShortcut(event)) return;
     if (event.defaultPrevented) return;

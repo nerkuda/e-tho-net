@@ -109,9 +109,9 @@ export interface PropertyDefinition {
   key: string;
   value_type: PropertyValueType;
   /**
-   * JSON config. Commonly `{ allowed_type_id }` constraining the target of a
-   * `thought_ref` property. Kept as an opaque map; the storage layer persists
-   * it as JSON text.
+   * JSON config of the property's value type (e.g. `options` for `text`,
+   * `link_type_id`/`direction` для свойства-связи). Kept as an opaque map;
+   * the storage layer persists it as JSON text.
    */
   config: PropertyConfig | null;
   required: boolean;
@@ -165,15 +165,8 @@ export interface NetworkPropertyUpdateInput {
 
 /** Recognised keys inside a {@link PropertyDefinition.config} JSON blob. */
 export interface PropertyConfig {
-  /** Default value applied to future items of the type (not `thought_ref`). */
+  /** Default value applied to future items of the type (scalar kinds only). */
   default_value?: string | number | boolean;
-  /** For `value_type = 'thought_ref'`: restrict the referenced thought type
-   *  (legacy single form; superseded by `allowed_type_ids`). */
-  allowed_type_id?: string;
-  /** For `value_type = 'thought_ref'`: restrict picking to thoughts of these
-   *  type ids (absent/empty = any type). Stored values are never reprocessed
-   *  when the filter changes. */
-  allowed_type_ids?: string[];
   /**
    * For `value_type = 'link'`: тип связи, обязательный. Проекция —
    * рёбра этого типа.
@@ -212,9 +205,9 @@ export interface PropertyConfig {
    *   * `value_type = 'text'` with `options` — a comma-separated list of
    *     predefined values may be picked; the stored shape is a single string,
    *     not an array.
-   *   * `value_type = 'thought_ref'` — an array of referenced thoughts; each
-   *     element is a thought id, the value is stored as a JSON array in
-   *     `value_thought_ref` (02-data-model.md §3.4–3.5).
+   *   * `value_type = 'link'` — набор целей не ограничен (сколько рёбер типа
+   *     существует, столько и значений); флаг сохранён миграцией 040 из
+   *     бывшего `thought_ref`.
    *   * `value_type = 'url'` — an array of URL/file-path strings; the value is
    *     stored as a JSON array in `value_text` (02-data-model.md §3.4–3.5). A
    *     JSON-array payload is used (not comma-join as for `text`) because URLs
@@ -308,16 +301,16 @@ export interface PropertyDefaultOverrideInput {
 /**
  * Union of all value payloads that may be stored against a property. Exactly
  * one of the storage columns (`value_text`/`value_date`/`value_number`/
- * `value_bool`/`value_thought_ref`) is populated; the API exposes a single
- * `value` field whose runtime type matches {@link PropertyValueType}.
+ * `value_bool`) is populated; the API exposes a single `value` field whose
+ * runtime type matches {@link PropertyValueType}. Свойство-связь (`link`)
+ * значений в `property_values` не хранит — его значение читается из рёбер
+ * (ADR «свойство-связь — проекция ребра»).
  *
- * `string[]` is the multiple form of two property kinds (definitions with
- * `config.multiple = true`, 02-data-model.md §3.4–3.5):
- *   * `thought_ref` — an array of thought ids, stored as a JSON array inside
- *     `value_thought_ref`;
- *   * `url` — an array of URL/file-path strings, stored as a JSON array inside
- *     `value_text` (task 0.6.2). A JSON-array payload is used (not comma-join
- *     as for `text`) because URLs may contain commas.
+ * `string[]` is the multiple form of `url` (definitions with
+ * `config.multiple = true`, 02-data-model.md §3.4–3.5): an array of
+ * URL/file-path strings, stored as a JSON array inside `value_text`
+ * (task 0.6.2). A JSON-array payload is used (not comma-join as for `text`)
+ * because URLs may contain commas.
  */
 export type PropertyValueValue = string | number | boolean | string[] | null;
 
@@ -355,21 +348,13 @@ export interface PropertyValue {
   updated_at_ms?: number;
 }
 
-/** `thought_ref`-значение в MCP-чтении (task N4): ссылка на мысль,
- * резолвнутая в `{id, title}` одним JOIN. `title: null` — висячая ссылка
- * (мысль удалена; `value_thought_ref` без SQL FK). */
-export interface ResolvedThoughtRefValue {
-  id: string;
-  title: string | null;
-}
-
-/** PropertyValue MCP-чтения (task N4): `thought_ref`-значения резолвнуты
- * в {@link ResolvedThoughtRefValue} (одиночные) либо в массив
- * {@link ResolvedThoughtRefValue} (множественные, `config.multiple`);
- * REST-контракт не меняется. */
-export interface ResolvedPropertyValue extends Omit<PropertyValue, 'value'> {
-  value: PropertyValueValue | ResolvedThoughtRefValue | ResolvedThoughtRefValue[];
-}
+/**
+ * PropertyValue MCP-чтения (task N4): форма совпадает с {@link PropertyValue}
+ * (резолвнутые `thought_ref`-значения исчезли вместе с видом значения —
+ * миграция 040, ссылки читаются как рёбра свойств-связей); тип сохранён как
+ * элемент союза со {@link ResolvedLinkProperty} в карточке мысли.
+ */
+export interface ResolvedPropertyValue extends PropertyValue {}
 
 /**
  * Одно значение свойства-связи — живое ребро `links` (0.8.1). Возвращается

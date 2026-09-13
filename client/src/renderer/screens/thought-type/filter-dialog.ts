@@ -968,9 +968,6 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
     if (valueType === 'bool') {
       return buildBoolSelect(live().values[i] ?? '', (v) => setValue(i, v));
     }
-    if (valueType === 'thought_ref') {
-      return buildThoughtRefInput(networkId, def, live().values[i] ?? '', cond.op, (v) => setValue(i, v));
-    }
     // text/url: free input + token button.
     return buildTextValueRow(networkId, live().values[i] ?? '', valueType, cond.op, (v) => setValue(i, v));
   };
@@ -981,8 +978,7 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
   }
 
   // List editor: chip-модель (задача 27472616) — несколько литералов и
-  // токенов свободно смешиваются; для `thought_ref` дополнительно доступен
-  // поиск мыслей и модальный пикер, ограниченный `allowed_type_ids`.
+  // токенов свободно смешиваются.
   const chipField = buildChipListField({
     getValues: () => live().values.filter((v) => v !== ''),
     onChange: (values) => {
@@ -993,10 +989,6 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
     getOptions: (query) => propertyValueComboOptions(networkId, valueType, cond.op, def, query),
     renderLabel: (value) => propertyValueChipLabel(networkId, valueType, value),
     placeholder: 'Добавить значение…',
-    picker:
-      valueType === 'thought_ref'
-        ? { label: 'выбрать…', open: (managed) => pickThoughtRefValues(networkId, def, managed) }
-        : undefined,
   });
   box.append(chipField.root);
   return box;
@@ -1050,78 +1042,9 @@ function buildTextValueRow(
 /** Кэш id → название мысли для отображения ссылочных значений (e8365d29). */
 const refTitleCache = new Map<string, string>();
 
-/** Value editor for `thought_ref` conditions: freely editable (id or token,
- *  живой поиск мыслей и токенов в одном поле) + «выбрать» (thought picker
- *  respecting `allowed_type_ids`). */
-function buildThoughtRefInput(
-  networkId: string,
-  def: NetworkProperty | undefined,
-  value: string,
-  op: StructurePropertyOp,
-  onChange: (v: string) => void,
-): HTMLElement {
-  const row = div('st-f-ref-row');
-  const input = el('input', 'st-f-input') as HTMLInputElement;
-  input.type = 'text';
-  input.placeholder = 'id мысли, название или токен ($thought)…';
-  input.value = value;
-  input.addEventListener('input', () => onChange(input.value));
-  // Ссылочное значение хранится как id, но показываем название мысли
-  // (асинхронно резолвим); токены (`$…`) показываем текстом.
-  resolveRefTitleForDisplay(networkId, input, value);
-
-  const allowedIds = allowedTypeIdsOf(def);
-  wireTokenCombo({
-    input,
-    getOptions: async (query) => {
-      const tokenOpts = filterComboOptions(
-        getTokenOptions({ kind: 'property', valueType: 'thought_ref', op }, query),
-        query,
-      );
-      if (query.trim() === '') return tokenOpts;
-      const hits = await findThoughtCandidates(networkId, query, allowedIds);
-      return [...tokenOpts, ...hits];
-    },
-    onPick: (picked) => {
-      if (picked.startsWith('$')) {
-        replaceComboValue(input, picked, onChange);
-        return;
-      }
-      const cached = refTitleCache.get(picked);
-      input.value = cached ?? picked;
-      onChange(picked);
-    },
-  });
-
-  const pick = el('button', 'st-f-add st-f-ref-pick', 'выбрать') as HTMLButtonElement;
-  pick.type = 'button';
-  pick.addEventListener('click', () => {
-    void pickThoughtsDialog({
-      networkId,
-      allowCreate: false,
-      allowLinkType: false,
-      searchTypeIds: allowedIds,
-    }).then(async (result) => {
-      const id = firstPickedThoughtId(result);
-      if (id === null) return;
-      try {
-        const [ref] = await etn.thoughts.resolve(networkId, [id]);
-        const title = ref !== undefined ? ref.title : id;
-        refTitleCache.set(id, title);
-        input.value = title;
-      } catch {
-        input.value = id;
-      }
-      onChange(id);
-    });
-  });
-  row.append(input, pick);
-  return row;
-}
-
-/** Live-search кандидаты мыслей для комбобокса значения `thought_ref`
- *  (задача 27472616): найденные заголовки резолвятся в `refTitleCache`, а
- *  сам поиск честно ищет по подстроке — тот же движок, что у «выбрать». */
+/** Live-search кандидаты мыслей для комбобоксов (задача 27472616):
+ *  найденные заголовки резолвятся в `refTitleCache`, а сам поиск честно
+ *  ищет по подстроке — тот же движок, что у «выбрать». */
 async function findThoughtCandidates(
   networkId: string,
   query: string,
@@ -1136,33 +1059,6 @@ async function findThoughtCandidates(
   } catch {
     return [];
   }
-}
-
-/** Показывает название мысли вместо id в поле ссылочного значения. */
-function resolveRefTitleForDisplay(networkId: string, input: HTMLInputElement, value: string): void {
-  if (value === '' || value.startsWith('$')) return;
-  const cached = refTitleCache.get(value);
-  if (cached !== undefined) {
-    input.value = cached;
-    return;
-  }
-  void etn.thoughts
-    .resolve(networkId, [value])
-    .then((refs) => {
-      const ref = refs[0];
-      if (ref === undefined) return;
-      refTitleCache.set(ref.id, ref.title);
-      // Обновляем только если пользователь не начал редактировать поле.
-      if (input.isConnected && input.value === value) input.value = ref.title;
-    })
-    .catch(() => undefined);
-}
-
-/** `allowed_type_ids` / `allowed_type_id` свойства, без пустых. */
-function allowedTypeIdsOf(def: NetworkProperty | undefined): string[] {
-  const config = def?.config as { allowed_type_ids?: string[]; allowed_type_id?: string } | undefined;
-  const ids = config?.allowed_type_ids ?? (config?.allowed_type_id !== undefined ? [config.allowed_type_id] : []);
-  return ids.filter((id) => id !== '');
 }
 
 /** Value editor for `date` conditions: literal ISO date or token with ±Nd. */
@@ -1370,14 +1266,9 @@ const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; la
     { op: 'is_empty', label: 'не заполнено' },
   ],
   bool: [{ op: 'eq', label: 'равно' }],
-  thought_ref: [
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
   link: [],
+  // Legacy (миграция 040): таких свойств в живой БД не остаётся.
+  thought_ref: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -1502,29 +1393,6 @@ function openTypePickerDialog(
   });
 }
 
-async function pickThoughtRefValues(
-  networkId: string,
-  def: NetworkProperty | undefined,
-  managedIds: string[],
-): Promise<string[] | null> {
-  const result = await pickThoughtsDialog({
-    networkId,
-    allowCreate: false,
-    allowLinkType: false,
-    searchTypeIds: allowedTypeIdsOf(def),
-    selectedIds: managedIds,
-  });
-  if (result === null) return null;
-  const ids = pickedThoughtIds(result);
-  for (const id of ids) {
-    void etn.thoughts.resolve(networkId, [id]).then((refs) => {
-      const ref = refs[0];
-      if (ref !== undefined) refTitleCache.set(ref.id, ref.title);
-    });
-  }
-  return ids;
-}
-
 // ---------------------------------------------------------------------------
 // Value-combo wiring — кандидаты и подписи чипов для каждого поля условия
 // (задача 27472616). Формат хранимых значений не меняется: строка (литерал
@@ -1609,7 +1477,7 @@ function typeChipLabel(kind: 'thought' | 'link', value: string): string {
 }
 
 /** Живой поиск для списочных условий по свойству (`in`/`not_in`): токены +
- *  для `thought_ref` — поиск мыслей, ограниченный `allowed_type_ids`. */
+ *  свойства со списочными операторами). */
 async function propertyValueComboOptions(
   networkId: string,
   valueType: PropertyValueType,
@@ -1617,18 +1485,17 @@ async function propertyValueComboOptions(
   def: NetworkProperty | undefined,
   query: string,
 ): Promise<ComboOption[]> {
-  const tokenOpts = getTokenOptions({ kind: 'property', valueType, op }, query);
-  if (valueType !== 'thought_ref' || query.trim() === '') return tokenOpts;
-  return [...tokenOpts, ...(await findThoughtCandidates(networkId, query, allowedTypeIdsOf(def)))];
+  void def;
+  return getTokenOptions({ kind: 'property', valueType, op }, query);
 }
 
-/** Подпись чипа списочного условия: для `thought_ref` — название мысли
- *  (резолвится асинхронно), для остальных типов — значение как есть. */
+/** Подпись чипа списочного условия: значение как есть. */
 function propertyValueChipLabel(
   networkId: string,
   valueType: PropertyValueType,
   value: string,
 ): string | Promise<string> {
-  if (valueType !== 'thought_ref') return value;
-  return resolveParentChipLabel(networkId, value);
+  void networkId;
+  void valueType;
+  return value;
 }

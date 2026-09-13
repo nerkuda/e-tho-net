@@ -23,8 +23,8 @@ export type StructurePropertyValue = string | number | boolean;
  * One property condition of a filter. `value` is a scalar for scalar
  * operations and an array for `in`/`not_in` (OR inside the list).
  * Allowed ops per property `value_type` (03-server-api.md §6.10):
- * text/url — contains|eq|in|not_in; number/date — eq|gt|lt; bool — eq;
- * thought_ref — eq|in|not_in.
+ * text/url — contains|eq|in|not_in; number/date — eq|gt|lt; bool — eq.
+ * Свойства-связи отбора не имеют (значения — рёбра).
  */
 export interface StructurePropertyCondition {
   property_id: string;

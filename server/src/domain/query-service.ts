@@ -19,14 +19,11 @@
  *     (type, key) pair — one id addresses the property on every thought
  *     type that has attached it;
  *   * the storage column (`value_text` / `value_date` / `value_number` /
- *     `value_bool` / `value_thought_ref`) is selected from the property's
+ *     `value_bool`) is selected from the property's
  *     `value_type`, never from the runtime type of the supplied value —
  *     `eq "согласовано"` on a `text` property hits `value_text`, the same
  *     payload on a `date` property would hit `value_date` and likely match
  *     nothing;
- *   * `eq` on `thought_ref` also matches ids inside the JSON arrays of
- *     `multiple` thought_ref values (02-data-model.md §3.5), same as the
- *     structures filter.
  * An unknown `property_id` simply matches nothing for that condition — the
  * registry row may have been deleted after the filter was saved.
  */
@@ -151,10 +148,6 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
-/** LIKE pattern matching a stored id inside a JSON array of ids. */
-function refLikePattern(id: string): string {
-  return `%"${id.replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`;
-}
 
 /** A WHERE clause fragment plus its bind parameters, in order. */
 interface Clause {
@@ -263,10 +256,13 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   date: 'value_date',
   number: 'value_number',
   bool: 'value_bool',
-  thought_ref: 'value_thought_ref',
   // Свойство-связь значений в property_values не хранит (ADR «проекция
-  // ребра»); значение недостижимо — SUPPORTED_OPS['link'] пусто.
-  link: 'value_thought_ref',
+  // ребра»); значение недостижимо — условие уходит в linkPropertyClause.
+  link: 'value_text',
+  // Legacy thought_ref (миграция 040): в живой БД таких свойств быть не
+  // должно; для не призрачных строк читаем из value_thought_ref, но в query
+  // тип не используется — пустая колонка-пылесос для удовлетворения типа.
+  thought_ref: 'value_text',
 };
 
 /**
@@ -277,9 +273,9 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
  * Задача 20effcbd (0.8.1): `link` получает `eq`/`ne` (конкретная цель id
  * строкой, либо наличие/отсутствие связи такого типа boolean-значением —
  * {@link linkPropertyClause}) и три оператора для наборов. Те же три
- * оператора добавлены `thought_ref`/`url` — обычные множественные свойства
- * (`config.multiple`) страдали той же дырой (требование 92b9c55b): выразить
- * «значение — одно из списка» или «значение — все из списка» было нечем.
+ * оператора доступны `url` — обычному множественному свойству
+ * (`config.multiple`, требование 92b9c55b): выразить «значение — одно из
+ * списка» или «значение — все из списка».
  */
 const SUPPORTED_OPS: Record<PropertyValueType, ReadonlySet<PropertyQueryOperator>> = {
   text: new Set(['eq', 'ne', 'contains']),
@@ -287,8 +283,10 @@ const SUPPORTED_OPS: Record<PropertyValueType, ReadonlySet<PropertyQueryOperator
   date: new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte']),
   number: new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte']),
   bool: new Set(['eq', 'ne']),
-  thought_ref: new Set(['eq', 'ne', 'any_of', 'all_of', 'none_of']),
   link: new Set(['eq', 'ne', 'any_of', 'all_of', 'none_of']),
+  // Legacy thought_ref (миграция 040): свойств этого типа в живой БД не
+  // остаётся; в query не должно приходить, но тип-маркер требует ключ.
+  thought_ref: new Set<PropertyQueryOperator>(),
 };
 
 /** Minimal registry row read in one batched lookup of all conditions. */
@@ -353,8 +351,8 @@ function multipleValueElementsSql(column: string): string {
 }
 
 /**
- * Клауза `any_of`/`all_of`/`none_of` по множественному свойству (`thought_ref`/
- * `url`, задача 20effcbd). `any_of`/`none_of` — один `EXISTS`/`NOT EXISTS` с
+ * Клауза `any_of`/`all_of`/`none_of` по множественному свойству `url`
+ * (`config.multiple`, задача 20effcbd). `any_of`/`none_of` — один `EXISTS`/`NOT EXISTS` с
  * `IN (...)`; `all_of` — конъюнкция по одному `EXISTS` на каждое искомое
  * значение (пересечение не выразить одним `IN`).
  */
@@ -550,12 +548,10 @@ function propertyClauses(
     }
 
     const column = VALUE_COLUMN[valueType];
-    const refMultiple = valueType === 'thought_ref';
 
-    // Операторы наборов (задача 20effcbd) — общие для `thought_ref`/`url`
-    // (`config.multiple`): значение может быть одиночным скаляром или
-    // JSON-массивом (§3.5) — {@link multipleValueSetClause} раскрывает обе
-    // формы.
+    // Операторы наборов (задача 20effcbd) — `url` с `config.multiple`:
+    // значение может быть одиночным скаляром или JSON-массивом (§3.5) —
+    // {@link multipleValueSetClause} раскрывает обе формы.
     if (cond.operator === 'any_of' || cond.operator === 'all_of' || cond.operator === 'none_of') {
       out.push(multipleValueSetClause(def.id, column, cond.operator, cond.value, requestId));
       continue;
@@ -578,32 +574,6 @@ function propertyClauses(
     const cmp = SQL_OPS[cond.operator];
     const scalar = coerceScalar(valueType, cond.value, requestId);
 
-    if (refMultiple && cond.operator === 'eq') {
-      // thought_ref single id + ids inside the JSON arrays of multiple
-      // thought_ref values (§3.5).
-      out.push({
-        sql: `EXISTS (
-          SELECT 1 FROM property_values_v pv
-          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-            AND (pv.${column} = ? OR pv.${column} LIKE ? ESCAPE '\\'))`,
-        params: [def.id, scalar, refLikePattern(String(scalar))],
-      });
-      continue;
-    }
-    if (refMultiple && cond.operator === 'ne') {
-      // `ne` only excludes the exact single id; ids inside JSON arrays are
-      // matched only by `eq`. A «не равно» semantic over multiple-ref values
-      // would require scanning JSON, which we deliberately do not do — the
-      // accepted behaviour mirrors the structures filter's `eq` arm.
-      out.push({
-        sql: `EXISTS (
-          SELECT 1 FROM property_values_v pv
-          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-            AND pv.${column} ${cmp} ?)`,
-        params: [def.id, scalar],
-      });
-      continue;
-    }
     out.push({
       sql: `EXISTS (
         SELECT 1 FROM property_values_v pv
@@ -659,7 +629,6 @@ function coerceScalar(
     case 'text':
     case 'url':
     case 'date':
-    case 'thought_ref':
       if (typeof value !== 'string') {
         throw new EtnError(
           'VALIDATION_ERROR',
@@ -674,6 +643,16 @@ function coerceScalar(
       throw new EtnError(
         'VALIDATION_ERROR',
         'Свойство-связь не фильтруется скалярным оператором.',
+        { field: 'value' },
+        requestId,
+      );
+    case 'thought_ref':
+      // Legacy (миграция 040): в живой БД таких свойств не остаётся;
+      // SUPPORTED_OPS['thought_ref'] пуст, сюда попасть нельзя — но
+      // для полноты switch.
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'Свойство thought_ref упразднено (миграция 040).',
         { field: 'value' },
         requestId,
       );

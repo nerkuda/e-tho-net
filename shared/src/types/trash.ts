@@ -4,8 +4,9 @@
  *
  * `marked_for_deletion` is a plain, reversible column on thoughts and links —
  * the entity stays fully readable and editable until it is physically purged.
- * Physical deletion is blocked while other thoughts reference it through a
- * `thought_ref` property (and, from 0.5.2, while layer shadow rows hold it);
+ * Physical deletion is blocked while other thoughts reference it through
+ * link-property edges with `blocks_target_deletion` (0.8.1; до — через
+ * `thought_ref`-значения) and, from 0.5.2, while layer shadow rows hold it;
  * `deletion-check` reports that blocking so the UI can refuse or offer to
  * resolve it first.
  */
@@ -21,7 +22,8 @@ export interface HoldingLayerRef {
 
 /** What blocks a thought from being physically deleted. */
 export interface ThoughtDeletionBlocking {
-  /** Number of thoughts referencing this one through `thought_ref` properties. */
+  /** Number of thoughts referencing this one through blocking link
+   *  properties / leftover stored values. */
   properties: number;
   /** Layers holding the row (empty until layers land in 0.5.2, §3.1.2). */
   layers: HoldingLayerRef[];
@@ -75,6 +77,6 @@ export interface TrashPurgeResult {
 
 /** Response of `POST /thoughts/{id}/usage/clear` (03-server-api.md §9.2). */
 export interface UsageClearResult {
-  /** How many `thought_ref` values were nulled. */
+  /** How many references were cleared (values nulled, edges trashed). */
   cleared: number;
 }

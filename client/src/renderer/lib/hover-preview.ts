@@ -165,7 +165,7 @@ export function markAttachmentsPreview(
 /**
  * Universal "show this thought's permanent comment" trigger — for a thought
  * icon/row with no indicators of its own (search results, pinned/history bar,
- * selection panel, links-tab, thought-picker). Not wired to any screen yet in
+ * selection panel, links-tab). Not wired to any screen yet in
  * this stage (those lists are stage 3); exposed now so stage 3 only needs to
  * call it.
  */

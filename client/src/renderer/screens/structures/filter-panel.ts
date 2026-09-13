@@ -32,7 +32,6 @@ import {
 import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canvas/canvas.js';
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { buildValueOptionsCaret } from '../../editor/properties.js';
-import { wireThoughtRefSearch } from '../../editor/thought-picker.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
 import { confirmDialog, errorDialog, promptDialog, showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
@@ -178,14 +177,13 @@ export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropert
     { op: 'is_empty', label: 'не заполнено' },
   ],
   bool: [{ op: 'eq', label: 'равно' }],
+  link: [],
+  // Legacy (миграция 040): таких свойств в живой БД не остаётся;
+  // присутствие проверяется теми же кнопками «заполнено»/«не заполнено».
   thought_ref: [
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
     { op: 'not_empty', label: 'заполнено' },
     { op: 'is_empty', label: 'не заполнено' },
   ],
-  link: [],
 };
 
 /** Default panel state: empty filter → HOME only (§15.3). */
@@ -1728,8 +1726,7 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
  * Builds the value editor for the condition's current value type (§15.3).
  *
  * The editor mirrors the thought editor (§6.3): text properties with
- * predefined options get the options dropdown, `thought_ref` gets the live
- * candidate search plus the dialog picker. Every handler reads the CURRENT
+ * predefined options get the options dropdown. Every handler reads the CURRENT
  * condition row from the state (`live()`), never the closure-captured one —
  * the «+ значение» button must not lose values typed into earlier rows.
  */
@@ -1780,9 +1777,6 @@ function buildValueEditor(
       select.value = live().values[i] === 'false' ? 'false' : 'true';
       select.addEventListener('change', () => setValue(i, select.value));
       return select;
-    }
-    if (valueType === 'thought_ref') {
-      return buildThoughtRefEditor(def, index, i);
     }
     const input = el('input', 'st-f-input') as HTMLInputElement;
     input.type = 'text';
@@ -1850,99 +1844,6 @@ function buildValueEditor(
   };
   renderList();
   return box;
-}
-
-/**
- * Thought-ref value editor, same as the thought editor (§6.3): the field
- * doubles as a live candidate search and a dialog picker button; only an
- * explicitly picked thought writes the value (its id), the field shows the
- * thought's title.
- */
-function buildThoughtRefEditor(
-  def: { config?: PropertyConfig | null } | undefined,
-  index: number,
-  valueIndex: number,
-): HTMLElement {
-  const networkId = store.state.networkId;
-  const row = div('st-f-ref-row');
-  const live = (): PropertyConditionState => state.properties[index]!;
-  const setValue = (v: string): void => {
-    const current = live();
-    const values = [...current.values];
-    while (values.length <= valueIndex) values.push('');
-    values[valueIndex] = v;
-    state.properties[index] = { ...current, values };
-    touch();
-  };
-
-  const input = el('input', 'st-f-input') as HTMLInputElement;
-  input.type = 'text';
-  input.autocomplete = 'off';
-  input.placeholder = 'введите название для поиска…';
-
-  const storedId = live().values[valueIndex] ?? '';
-  if (storedId !== '') {
-    const title = refTitles.get(storedId) ?? 'Мысль…';
-    input.value = title;
-    if (networkId !== null && !refTitles.has(storedId)) {
-      // The stored id may have no title cached (restored from a saved
-      // filter) — resolve it asynchronously.
-      void etn.thoughts
-        .resolve(networkId, [storedId])
-        .then((refs) => {
-          const ref = refs[0];
-          if (ref !== undefined) {
-            refTitles.set(ref.id, ref.title);
-            if (input.isConnected) input.value = ref.title;
-          }
-        })
-        .catch(() => undefined);
-    }
-  }
-
-  if (networkId !== null) {
-    const filterIds = (
-      def?.config?.allowed_type_ids ??
-      (def?.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
-    ).filter((id) => id !== '');
-    wireThoughtRefSearch(input, {
-      networkId,
-      typeIds: filterIds,
-      onPick: (id) => {
-        refTitles.set(id, input.value);
-        setValue(id);
-      },
-    });
-    const pick = el('button', 'st-f-add st-f-ref-pick', 'выбрать') as HTMLButtonElement;
-    pick.type = 'button';
-    pick.addEventListener('click', () => {
-      void pickThoughtsDialog({
-        networkId,
-        allowCreate: false,
-        allowLinkType: false,
-        searchTypeIds: filterIds,
-      }).then(async (result) => {
-        const id = firstPickedThoughtId(result);
-        if (id === null) return;
-        try {
-          const [ref] = await etn.thoughts.resolve(networkId, [id]);
-          if (ref !== undefined) {
-            refTitles.set(ref.id, ref.title);
-            input.value = ref.title;
-          } else {
-            input.value = 'Мысль…';
-          }
-        } catch {
-          input.value = 'Мысль…';
-        }
-        setValue(id);
-      });
-    });
-    row.append(input, pick);
-  } else {
-    row.append(input);
-  }
-  return row;
 }
 
 // ---------------------------------------------------------------------------

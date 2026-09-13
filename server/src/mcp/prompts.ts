@@ -209,7 +209,7 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
           `2. Посмотри корзину целиком: \`etn.trash.list\` — каждая строка уже с готовой проверкой блокировки (blocked/blocking), без отдельных вызовов deletion_check.`,
           ``,
           `Что блокирует физическое удаление:`,
-          `- использование мысли как значения thought_ref-свойства другой мысли (снять: \`etn.thoughts.usage_clear\` или убрать свойство у владельца);`,
+          `- использование мысли как цели свойства-связи другой мысли (снять: \`etn.thoughts.usage_clear\` или убрать связь у владельца);`,
           `- удержание живой теневой строкой рабочего слоя (holding_layers в blocking; сначала разбери/слей слой через etn.layers.merge);`,
           `- будущие сироты: физическое удаление мысли с детьми не удаляет детей, но о них сообщит проверка (orphaned_children).`,
           `Точечная проверка без корзины: \`etn.thoughts.deletion_check { network_id, thought_ids: [...] }\` / \`etn.links.deletion_check\`.`,

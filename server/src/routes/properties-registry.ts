@@ -18,7 +18,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  PROPERTY_VALUE_TYPES_WRITABLE,
+  PROPERTY_VALUE_TYPES,
   type NetworkProperty,
   type NetworkPropertyInput,
   type NetworkPropertyUpdateInput,
@@ -87,12 +87,12 @@ function parseCreateBody(
   const valueType = body.value_type;
   if (
     typeof valueType !== 'string' ||
-    !(PROPERTY_VALUE_TYPES_WRITABLE as readonly string[]).includes(valueType)
+    !(PROPERTY_VALUE_TYPES as readonly string[]).includes(valueType)
   ) {
     throw new EtnError(
       'VALIDATION_ERROR',
       'value_type обязателен и должен быть одним из поддерживаемых.',
-      { field: 'value_type', allowed: PROPERTY_VALUE_TYPES_WRITABLE },
+      { field: 'value_type', allowed: PROPERTY_VALUE_TYPES },
       requestId,
     );
   }
@@ -135,12 +135,12 @@ function parseUpdateBody(
   if (body.value_type !== undefined) {
     if (
       typeof body.value_type !== 'string' ||
-      !(PROPERTY_VALUE_TYPES_WRITABLE as readonly string[]).includes(body.value_type)
+      !(PROPERTY_VALUE_TYPES as readonly string[]).includes(body.value_type)
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
         'value_type должен быть одним из поддерживаемых.',
-        { field: 'value_type', allowed: PROPERTY_VALUE_TYPES_WRITABLE },
+        { field: 'value_type', allowed: PROPERTY_VALUE_TYPES },
         requestId,
       );
     }
@@ -197,7 +197,7 @@ function classifyStoredValues(
   const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}($|T)/;
   const rows = ndb
     .prepare(
-      `SELECT value_text, value_date, value_number, value_bool, value_thought_ref
+      `SELECT value_text, value_date, value_number, value_bool
        FROM property_values_v WHERE property_id = ?`,
     )
     .all(propertyId) as Array<{
@@ -205,7 +205,6 @@ function classifyStoredValues(
     value_date: string | null;
     value_number: number | null;
     value_bool: number | null;
-    value_thought_ref: string | null;
   }>;
 
   let converted = 0;
@@ -227,21 +226,6 @@ function classifyStoredValues(
       case 'bool':
         value = row.value_bool === null ? null : row.value_bool === 1;
         break;
-      case 'thought_ref': {
-        const raw = row.value_thought_ref;
-        if (raw === null) value = null;
-        else if (raw.startsWith('[')) {
-          try {
-            const parsed: unknown = JSON.parse(raw);
-            value = Array.isArray(parsed)
-              ? (parsed.filter((v): v is string => typeof v === 'string') as string[])
-              : [];
-          } catch {
-            value = [];
-          }
-        } else value = raw;
-        break;
-      }
       case 'link':
         value = null;
         break;
@@ -284,9 +268,10 @@ function canConvert(
         return s === 'true' || s === 'да' || s === '1' || s === 'false' || s === 'нет' || s === '0';
       }
       return false;
-    case 'thought_ref':
-      return false;
     case 'link':
+      return false;
+    case 'thought_ref':
+      // Legacy (миграция 040): таких свойств в живой БД не остаётся.
       return false;
   }
 }

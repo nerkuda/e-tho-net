@@ -11,8 +11,8 @@
  *    `…` badge becomes `(N)`. Rows open the mentioning thought (focus) or link
  *    (link editor); the active tab never changes.
  *  - «Использование …» (collapsed): thoughts referencing this one through
- *    `thought_ref` property values (03-server-api.md §9.1), grouped by
- *    property name into collapsible sub-groups. Rows focus the referencing
+ *    link-property edges (03-server-api.md §9.1), grouped by property
+ *    name into collapsible sub-groups. Rows focus the referencing
  *    thought. Realtime `property-value.*` events reload an expanded body.
  *
  * Inactive thoughts/links appear in every list according to the

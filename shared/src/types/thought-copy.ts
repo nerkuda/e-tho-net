@@ -8,9 +8,9 @@
  *
  *  - each thought gets a new id, the type is resolved by id → by name →
  *    cleared (the root type is never assignable, L21);
- *  - for `thought_ref` property values the referenced thought is looked up
- *    by id → by title in the destination network; unresolvable values are
- *    dropped (the spec calls for a silent clear);
+ *  - link-property references travel as edges: links among the copied
+ *    thoughts are re-created with the type resolved by id → by name in the
+ *    destination network (0.8.1, миграция 040 упразднила thought_ref);
  *  - attachments are re-created with the visible fields the client sent
  *    (kind, url/file_path, mime_type, title, description, file_size) — the
  *    actual file bytes are **not** copied (only the path is kept, the user
@@ -97,9 +97,8 @@ export interface ThoughtCopyItem {
   } | null;
   /**
    * Property values keyed by the source property **key** (not id — the id
-   * is meaningless on the target network). For `thought_ref` the value is
-   * a JSON `{ id, title }` shape the server tries to resolve by id then
-   * by title; on miss the value is dropped.
+   * is meaningless on the target network). Значения свойств-связей сюда не
+   * попадают — они переносятся рёбрами (`links`).
    */
   properties?: Record<string, PropertyValueValue>;
   attachments?: ThoughtCopyAttachment[];

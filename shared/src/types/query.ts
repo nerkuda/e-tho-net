@@ -20,7 +20,7 @@ export type ThoughtQueryTrashed = 'true' | 'false' | 'any';
  *
  * `any_of`/`all_of`/`none_of` (задача 20effcbd, 0.8.1) — операторы для
  * наборов значений: свойство-связь (`value_type: 'link'`, набор целей рёбер)
- * и обычные множественные свойства (`config.multiple` — `thought_ref`/`url`).
+ * и обычные множественные свойства (`config.multiple` — `url`).
  * `value` для них — непустой массив id/строк (см. {@link PropertyQueryCondition.value}):
  *   * `any_of` — набор пересекается с перечисленными значениями (хотя бы одно);
  *   * `all_of` — набор содержит все перечисленные значения;
@@ -53,7 +53,7 @@ export interface PropertyQueryCondition {
   operator: PropertyQueryOperator;
   /**
    * Значение для сравнения. Колонка хранения (`value_text` / `value_date` /
-   * `value_number` / `value_bool` / `value_thought_ref`) выбирается по
+   * `value_number` / `value_bool`) выбирается по
    * `value_type` адресуемого свойства, а не по runtime-типу значения —
    * подробности см. в `query-service.ts`.
    *
@@ -61,7 +61,7 @@ export interface PropertyQueryCondition {
    * строкой — id конкретной цели («связь с конкретной целью»); `eq`/`ne` с
    * boolean — наличие/отсутствие живого ребра этого типа независимо от цели
    * («связь такого типа есть либо отсутствует»). Для `any_of`/`all_of`/`none_of`
-   * (свойство-связь и `config.multiple` `thought_ref`/`url`) — непустой массив
+   * (свойство-связь и `config.multiple` `url`) — непустой массив
    * id/строк.
    */
   value: string | number | boolean | string[];

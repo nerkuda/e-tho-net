@@ -350,7 +350,7 @@ export interface EtnApi {
     backlinks(networkId: string, id: string): Promise<MentionHit[]>;
     /** `POST /mentions/scan` — thought mentions in caller-supplied text (§21, L24). */
     mentionsScan(networkId: string, request: MentionsScanRequest): Promise<MentionsScanResponse>;
-    /** `GET /thoughts/{id}/usage` — thoughts referencing this one via thought_ref (L7). */
+    /** `GET /thoughts/{id}/usage` — thoughts referencing this one through link-property edges (L7). */
     usage(networkId: string, id: string): Promise<ThoughtUsage>;
     /**
      * `POST /thoughts/deletion-check-batch` — blocking check before physical
@@ -360,14 +360,14 @@ export interface EtnApi {
       networkId: string,
       ids: string[],
     ): Promise<Record<string, ThoughtDeletionCheckResult>>;
-    /** `POST /thoughts/{id}/usage/clear` — null every thought_ref referencing this (S13). */
+    /** `POST /thoughts/{id}/usage/clear` — trash every blocking link-property edge to this thought (S13). */
     usageClear(networkId: string, id: string): Promise<UsageClearResult>;
     /** `GET /thoughts/duplicates` — live duplicate candidates for the add dialog (H14). */
     findDuplicates(
       networkId: string,
       title: string,
       synonyms?: string[],
-      /** Optional thought-type filter (thought_ref property pickers). */
+      /** Optional thought-type filter (link-property pickers). */
       typeIds?: string[],
     ): Promise<DuplicateHit[]>;
     setFocusPreferences(

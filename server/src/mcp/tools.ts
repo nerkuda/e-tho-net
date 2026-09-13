@@ -91,7 +91,7 @@ import {
   MCP_TOOL_ANNOTATIONS,
   MCP_VIEW_MODES,
   PROPERTY_OWNER_TYPES,
-  PROPERTY_VALUE_TYPES_WRITABLE,
+  PROPERTY_VALUE_TYPES,
   REALTIME_DEFAULTS,
   SEARCH_SCOPES,
   TYPE_OWNER_TYPES,
@@ -728,8 +728,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       property_id: z.string().min(1).optional(),
       property: z.string().min(1).optional(),
       // Задача 20effcbd (0.8.1): `any_of`/`all_of`/`none_of` — операторы для
-      // наборов значений (свойство-связь + `config.multiple` thought_ref/url);
-      // их `value` — непустой массив id/строк.
+      // наборов значений (свойство-связь + `config.multiple` url); их
+      // `value` — непустой массив id/строк.
       operator: z.enum([
         'eq',
         'ne',
@@ -805,7 +805,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         '0.8.1) переводится в запрос по рёбрам, а не по значениям: `eq`/`ne` со строкой — связь с конкретной ' +
         'целью (id мысли), с boolean — связь такого типа есть/отсутствует независимо от цели; работает в обе ' +
         'стороны (по направлению свойства). `any_of`/`all_of`/`none_of` — операторы для наборов (свойство-связь ' +
-        'и `config.multiple` thought_ref/url): `value` — непустой массив id/строк; пересечение непусто / набор ' +
+        'и `config.multiple` url): `value` — непустой массив id/строк; пересечение непусто / набор ' +
         'содержит все перечисленные / пересечения нет. `created_*`/`updated_*` — ISO-8601 ranges; ' +
         '`author_id`/`editor_id` — id пользователя, создавшего/последним изменившего мысль; ' +
         '`link_filter` — { type_ids?, include_structural? } ограничивает рёбра спуска `in_subtree_of`. Response carries ' +
@@ -888,7 +888,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Мысль (полная)',
       description:
         'Fetch one thought with synonyms, type (AI-facing description included) and property values ' +
-        '(`thought_ref` resolved to {id, title}; values whose property is not on the owner\'s type chain ' +
+        '(values whose property is not on the owner\'s type chain ' +
         'are flagged `outside_type: true` — do not treat such a card as empty). `meta.permanent` — the ' +
         'full text of the permanent comment (задача 3ea09a54: в `etn.thoughts.get` обрезка отключена; в ' +
         'остальных выборках — preview 2000 chars, `etn.comments.get` для полного). `meta.link_stats` ' +
@@ -1449,7 +1449,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Где используется мысль',
       description:
-        'Thoughts referencing this thought as a `thought_ref` property value (formal links), grouped by the ' +
+        'Thoughts referencing this thought through link-property edges (formal links), grouped by the ' +
         'registry property: { total, groups: [{property_id, key, thoughts[]}], thought_types } — one group ' +
         'per network property. `view: "compact"` (default) drops visual fields from each referencing thought.',
       inputSchema: UsageSchema,
@@ -1501,7 +1501,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Проверка блокировки удаления мысли',
       description:
-        'Check what blocks a thought from being physically deleted: use in thought_ref properties, holding ' +
+        'Check what blocks a thought from being physically deleted: use in blocking link properties, holding ' +
         'layers, and future orphans among its children. Accepts an array; returns a map id → ' +
         '{ blocked, blocking, orphaned_children }. See prompt etn.how_to_purge for the two-phase deletion flow.',
       inputSchema: DeletionCheckThoughtsSchema,
@@ -3267,8 +3267,8 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       title: 'Удалить мысль',
       description:
         'Delete a thought (cascades to links, comments, attachments, property values). The same blocking ' +
-        'check as `etn.thoughts.deletion_check` runs first: a `blocking` error means the thought is used in ' +
-        'a thought_ref property or held by a layer — it is not deleted. Protected thoughts (HOME) are ' +
+        'check as `etn.thoughts.deletion_check` runs first: a `blocking` error means the thought is the ' +
+        'target of blocking link-property edges or held by a layer — it is not deleted. Protected thoughts (HOME) are ' +
         'rejected. Returns { id, version: 0 }. See prompt etn.how_to_purge.',
       inputSchema: DeleteThoughtSchema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.delete'],
@@ -4079,7 +4079,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Set (or clear with `value: null`) a property value on a thought/link by key; the value must ' +
         "match the definition's value_type. `config.multiple = true` properties accept an array: " +
-        '`thought_ref` — thought ids; `url` — URL/file-path strings (JSON array, not comma-join); an empty ' +
+        '`url` — URL/file-path strings (JSON array, not comma-join); an empty ' +
         'array clears. Stringified scalars are tolerated in the single form: "true"/"false" for `bool`, ' +
         'finite numeric strings for `number` — coerced back to JSON types. Either one `key`+`value`, or ' +
         '`values: {key: value|null}` for several properties in one transaction (an invalid key rolls back ' +
@@ -4812,7 +4812,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Очистить использование мысли',
       description:
-        'Null out every thought_ref property value of other thoughts that references this one — clears ' +
+        'Trash every blocking link-property edge of other thoughts that references this one — clears ' +
         'the «использование в свойствах» blocking arm in one call instead of editing each property. ' +
         'Returns { cleared }.',
       inputSchema: UsageClearSchema,
@@ -5820,7 +5820,7 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       ref: z.string().min(1).optional(),
       id: z.string().min(1).nullable().optional(),
       name: z.string().min(1).optional(),
-      value_type: z.enum(PROPERTY_VALUE_TYPES_WRITABLE).optional(),
+      value_type: z.enum(PROPERTY_VALUE_TYPES).optional(),
       config: z.record(z.string(), z.unknown()).nullable().optional(),
       description: z.string().nullable().optional(),
     })

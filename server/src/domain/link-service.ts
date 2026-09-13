@@ -668,7 +668,7 @@ function repointLinkInLayer(
 
 /**
  * Check whether a link can be physically deleted (docs/03-server-api.md §6.5a).
- * Links have no `thought_ref` usage and no children, so the only blocking arm
+ * Links have no property usage and no children, so the only blocking arm
  * is a live (`deleted = 0`) shadow row of the link in a non-base layer
  * (02-data-model.md §3.1.2 п.3; until layers are created via S7 the list is
  * always empty).
@@ -850,10 +850,11 @@ export interface LinkFillingFlags {
 /**
  * For each id in `linkIds`, return `{has_properties, has_comment}`.
  *
- * `has_properties` — the link has at least one stored value whose
- * value column (`value_text` / `value_number` / `value_bool` / `value_date` /
- * `value_thought_ref`) is non-NULL. Tombstoned rows are excluded by the
- * `property_values_v` view (13-layers.md §4.2).
+ * `has_properties` — the link has at least one stored value whose value
+ * column (`value_text` / `value_number` / `value_bool` / `value_date`) is
+ * non-NULL. Tombstoned rows are excluded by the `property_values_v` view
+ * (13-layers.md §4.2). После миграции 040 значений на рёбрах нет (свернуты в
+ * постоянный комментарий ребра), флаг остаётся для совместимости контракта.
  *
  * `has_comment` — at least one comment of any kind (`permanent` or
  * `chronological`) is attached to the link as primary owner OR via the
@@ -882,8 +883,7 @@ export function getLinkFillingFlags(
 
   // `has_properties`: a stored value whose value column is non-NULL on at
   // least one row for this owner_type/id pair. `value_text` covers both text
-  // and url (02-data-model.md §3.5); `value_thought_ref` covers both single
-  // and the JSON-array multiple form (parsed separately by the reader).
+  // and url (02-data-model.md §3.5).
   const propRows = ndb
     .prepare(
       `SELECT owner_id AS link_id
@@ -893,8 +893,7 @@ export function getLinkFillingFlags(
           AND (value_text IS NOT NULL
             OR value_number IS NOT NULL
             OR value_bool IS NOT NULL
-            OR value_date IS NOT NULL
-            OR value_thought_ref IS NOT NULL)
+            OR value_date IS NOT NULL)
         GROUP BY owner_id`,
     )
     .all(...uniqueIds) as Array<{ link_id: string }>;

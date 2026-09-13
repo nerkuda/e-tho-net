@@ -9,56 +9,33 @@
  *  - url → input plus an «Открыть» button that hands the value to the OS
  *    default handler (http/https, file://, local paths, registered protocols);
  *  - bool → checkbox;
- *  - thought_ref → the stored thought is shown as a mini cloud of itself
- *    (icon + title in the thought's own colours/font, `applyCloudStyle`, dimmed
- *    when inactive/marked, red trash glyph when marked — the same reading as
- *    the history bar and the selection panel): single form with no value is an
- *    editable field doubling as a live candidate search (plus the
- *    duplicate-search dialog picker) — a picked value turns into the cloud;
- *    with `config.multiple` the cell is a chip list of mini clouds (the same
- *    chip styling as the structures filter panel). The «×» on a cloud removes
- *    the thought from the value; clicking the cloud (not the «×») switches to
- *    the map view, focuses the thought and opens it in the editor (the editor
- *    follows the focus).
+ *  - link (свойство-связь) — без редактора значения: ссылки создаются
+ *    рёбрами на карте/вкладке «Связи», а не заполнением свойства
+ *    (0.8.1, thought_ref упразднён миграцией 040).
  *
  * Values are written with `properties.set`, cleared with `properties.remove`;
  * realtime `property-value.*` events reload the table when the open entity is
  * the owner (a single module-level listener keeps closures bounded).
  *
- * Single text and thought_ref values also keep a client-local history of the
- * 10 last saved values per property (localStorage, `recent-values.ts`):
- * focusing the empty field — or clearing it back to empty — offers the
- * history as a dropdown; typing closes it so the field's regular behaviour
- * takes over. Multiple-value properties (`config.multiple`) keep no history.
+ * Single text values also keep a client-local history of the 10 last saved
+ * values per property (localStorage, `recent-values.ts`): focusing the empty
+ * field — or clearing it back to empty — offers the history as a dropdown;
+ * typing closes it so the field's regular behaviour takes over.
+ * Multiple-value properties (`config.multiple`) keep no history.
  */
 
-import type { EffectiveTypeProperty, PropertyValue, ThoughtRef } from '@etn/shared';
+import type { EffectiveTypeProperty, PropertyValue } from '@etn/shared';
 
 import { onRealtimeEvent } from '../realtime.js';
 import { button, div, el, errText, positionBodyDropdown, setTooltip, span } from '../lib/dom.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
-import { svgIcon } from '../lib/icons.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
-import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
-import { requireNetworkId, setFocus } from '../app.js';
-import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
-import { setActiveView } from '../screens/active-view.js';
+import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { registerMainSection, type EditorContext } from './editor.js';
-import {
-  loadRecentRefEntries,
-  loadRecentValues,
-  recordRecentValue,
-  wireRecentValues,
-} from './recent-values.js';
-import { wireThoughtRefSearch } from './thought-picker.js';
-import {
-  firstPickedThoughtId,
-  pickThoughtsDialog,
-  pickedThoughtIds,
-} from '../canvas/add-dialog.js';
+import { loadRecentValues, recordRecentValue, wireRecentValues } from './recent-values.js';
 
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
@@ -169,9 +146,6 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   // `reload()` so a freshly-deleted value refreshes both views at once.
   const outsideWrap = div('prop-outside-wrap');
 
-  // Full metadata of every referenced thought (single ids and multiple-ref
-  // arrays alike) — titles, icon, colours and flags for the mini clouds.
-  const refCache = new Map<string, ThoughtRef>();
   // Declared BEFORE the initial reload() call below: reload is a hoisted
   // function declaration, and reading this from inside it during the call at
   // the `void reload()` line would hit the temporal dead zone.
@@ -195,24 +169,6 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         etn.types.listTypeProperties(networkId, typeOwner, typedId),
         etn.properties.get(networkId, ownerType, ownerId),
       ]);
-      // Full metadata of every referenced thought — single ids and
-      // multiple-ref arrays alike (one resolve call, capped at 100 ids) —
-      // cached for the mini-cloud rendering (title, icon, styles, flags).
-      const refIds = [
-        ...new Set(
-          values.flatMap((v) =>
-            typeof v.value === 'string'
-              ? [v.value]
-              : Array.isArray(v.value)
-                ? v.value
-                : [],
-          ),
-        ),
-      ];
-      if (refIds.length > 0) {
-        const resolved = await etn.thoughts.resolve(networkId, refIds.slice(0, 100));
-        for (const ref of resolved) refCache.set(ref.id, ref);
-      }
     } catch (err) {
       tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
@@ -299,8 +255,8 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   /**
    * The body of the «Свойства вне типа» group: a headerless read-only table
    * mirroring the main one, with one row per orphaned value. The row carries
-   * the property name and value (mini-cloud for thought_ref, chips for
-   * multiple, plain text otherwise) — visually identical to the main table,
+   * the property name and value (chips for multiple url, plain text
+   * otherwise) — visually identical to the main table,
    * but without any editor widget. The only action is «×» removing the value
    * with a confirmation prompt (the system itself never deletes such values).
    */
@@ -359,33 +315,6 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
 
     const stored = value.value;
     switch (value.value_type) {
-      case 'thought_ref': {
-        if (Array.isArray(stored)) {
-          cell.append(
-            buildMultiThoughtRefReadonly({
-              ids: stored,
-              refs: refCache,
-              onOpen: openThoughtRefTarget,
-            }),
-          );
-        } else if (typeof stored === 'string') {
-          const row = div('form-row');
-          row.style.marginBottom = '0';
-          row.append(
-            buildThoughtRefCloud(stored, {
-              refs: refCache,
-              onOpen: openThoughtRefTarget,
-              // The cloud's «×» removes the value — the only write path
-              // outside-type values support. The same confirmation covers it.
-              onRemove: remove,
-            }),
-          );
-          cell.append(row);
-        } else {
-          cell.append(span('—', 'muted'));
-        }
-        break;
-      }
       case 'text':
       case 'url':
       case 'number':
@@ -449,25 +378,6 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   // group's content is replaced inside `renderOutsideType`.
   box.append(outsideWrap);
 
-  /**
-   * Opens a thought referenced by a property value (08-ui-spec.md §6.3.1):
-   * switches to the map view, then focuses the thought — the editor follows
-   * the focus and opens it (the same landing rule as deep links,
-   * 12-wiki-id-refs.md §7.4). An inactive thought with «скрывать неактуальное»
-   * on is refused with the same notice as wiki-links (§6.4).
-   */
-  function openThoughtRefTarget(id: string): void {
-    const ref = refCache.get(id);
-    if (ref !== undefined && !ref.active && !store.state.showInactive) {
-      notice('Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.', 'error');
-      return;
-    }
-    setActiveView('map');
-    void setFocus(id).catch((err: unknown) => {
-      notice(`Не удалось открыть мысль: ${errText(err)}`, 'error');
-    });
-  }
-
   /** Builds the value editor cell for one property. */
   function buildEditorCell(
     definition: EffectiveTypeProperty,
@@ -483,7 +393,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         } else {
           await etn.properties.set(networkId, ownerType, ownerId, definition.key, value);
           // A successful save feeds the client-local recent-values history of
-          // single text/thought_ref properties (recent-values.ts).
+          // single text properties (recent-values.ts).
           if (typeof value === 'string' && tracksRecentValues(definition)) {
             recordRecentValue(networkId, definition.property_id, value);
           }
@@ -690,114 +600,6 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         cell.append(input);
         break;
       }
-      case 'thought_ref': {
-        // Type filter from the definition config (list form supersedes the
-        // legacy single id); an input aid — stored values are untouched.
-        // L21: the filter expands to whole subtrees — a parent type matches
-        // its descendants (mirror of the server-side validation).
-        const filterIds = expandTypeIdsToSubtree(
-          store.state.thoughtTypes,
-          (
-            definition.config?.allowed_type_ids ??
-            (definition.config?.allowed_type_id !== undefined
-              ? [definition.config.allowed_type_id]
-              : [])
-          ).filter((id) => id !== ''),
-        );
-        /** Opens the duplicate-search dialog picker (single mode). */
-        const openSinglePicker = (): void => {
-          void pickThoughtsDialog({
-            networkId,
-            allowCreate: false,
-            allowLinkType: false,
-            searchTypeIds: filterIds,
-          }).then(async (result) => {
-            const id = firstPickedThoughtId(result);
-            if (id !== null && (await save(id))) void reload();
-          });
-        };
-        // Multiple form (02-data-model.md §3.4): a chip list of mini clouds
-        // (the same chip styling as the structures filter panel); the dialog
-        // picker runs in multi mode (prefilled), each chip is removable
-        // (08-ui-spec.md §6.3.1).
-        if (definition.config?.multiple === true) {
-          const storedIds = Array.isArray(stored)
-            ? stored
-            : typeof stored === 'string'
-              ? [stored]
-              : [];
-          cell.append(
-            buildMultiThoughtRefEditor({
-              networkId,
-              filterIds,
-              refs: refCache,
-              ids: storedIds,
-              onOpen: openThoughtRefTarget,
-              save: async (ids) => {
-                const ok = await save(ids.length > 0 ? ids : null);
-                if (ok) void reload();
-              },
-            }),
-          );
-          break;
-        }
-        const storedId = typeof stored === 'string' ? stored : null;
-        // A stored value renders as the thought's mini cloud (icon + title in
-        // its own colours/font): the «×» on the cloud clears the value and
-        // brings the live-search field back, a click opens the thought on the
-        // map (08-ui-spec.md §6.3.1).
-        if (storedId !== null) {
-          const row = div('form-row');
-          row.style.marginBottom = '0';
-          row.append(
-            buildThoughtRefCloud(storedId, {
-              refs: refCache,
-              onOpen: openThoughtRefTarget,
-              onRemove: () => {
-                void save(null).then((ok) => {
-                  if (ok) void reload();
-                });
-              },
-            }),
-            button('выбрать', openSinglePicker, 'btn small'),
-          );
-          cell.append(row);
-          break;
-        }
-        const input = el('input', 'text-input prop-editor');
-        input.type = 'text';
-        input.autocomplete = 'off';
-        input.placeholder = 'введите название для поиска…';
-        // The field doubles as a live search: typing lists candidates (with
-        // the type filter applied); only a picked candidate writes the value.
-        // The modal picker stays as an alternative way to choose.
-        wireThoughtRefSearch(input, {
-          networkId,
-          typeIds: filterIds,
-          // No realtime echo to the actor (04-realtime.md §5) — reload the
-          // table after a successful save so the mini cloud appears at once.
-          onPick: async (id) => {
-            if (await save(id)) void reload();
-          },
-        });
-        // Recent-values suggestions (recent-values.ts): focusing the empty
-        // field — or clearing it back to empty — offers the 10 last saved
-        // values as resolved titles; typing closes the list so the live
-        // candidate search takes over.
-        wireRecentValues(input, {
-          load: () => loadRecentRefEntries(networkId, definition.property_id, refCache),
-          onPick: (entry) => {
-            void save(entry.value).then((ok) => {
-              if (ok) void reload();
-            });
-          },
-        });
-        const row = div('form-row');
-        row.style.marginBottom = '0';
-        row.append(input, button('выбрать', openSinglePicker, 'btn small'));
-        cell.append(row);
-        break;
-      }
     }
     return cell;
   }
@@ -817,10 +619,10 @@ function typeName(valueType: string): string {
       return 'дата';
     case 'bool':
       return 'да/нет';
-    case 'thought_ref':
-      return 'мысль';
     case 'url':
       return 'URL';
+    case 'link':
+      return 'связь';
     default:
       return valueType;
   }
@@ -843,199 +645,12 @@ export function propertyHint(definition: EffectiveTypeProperty): string | null {
 
 /**
  * Whether a property definition keeps the client-local recent-values history
- * (recent-values.ts): single `text` and `thought_ref` properties only —
- * multiple-value properties (`config.multiple`) and the other value types
- * (number/date/bool/url) are out of scope.
+ * (recent-values.ts): single `text` properties only — multiple-value
+ * properties (`config.multiple`) and the other value types are out of scope.
  */
 function tracksRecentValues(definition: EffectiveTypeProperty): boolean {
   if (definition.config?.multiple === true) return false;
-  return definition.value_type === 'text' || definition.value_type === 'thought_ref';
-}
-
-// ---------------------------------------------------------------------------
-// thought_ref mini clouds (08-ui-spec.md §6.3.1)
-// ---------------------------------------------------------------------------
-
-/**
- * Builds the mini cloud of a stored single `thought_ref` value: icon + title
- * in the thought's own colours/font (`applyCloudStyle`), dimmed when the
- * thought is inactive/marked, the red trash glyph when marked — the same
- * reading as the history-bar chips (§11.1). Clicking the cloud calls
- * {@link opts.onOpen}; the «×» inside it calls {@link opts.onRemove} without
- * triggering the open.
- */
-export function buildThoughtRefCloud(
-  id: string,
-  opts: {
-    /** Shared id → resolved ref cache: label, icon, styles, flags. */
-    refs: Map<string, ThoughtRef>;
-    /** Click-to-open handler (map view + focus). */
-    onOpen: (id: string) => void;
-    /** «×» handler — removes the value. */
-    onRemove: () => void;
-  },
-): HTMLElement {
-  const ref = opts.refs.get(id);
-  const cloud = div('prop-ref-cloud');
-  cloud.dataset['id'] = id;
-  if (ref !== undefined) applyCloudStyle(cloud, resolveCloudStyle(ref));
-  if (ref?.active === false || ref?.marked_for_deletion === true) {
-    cloud.classList.add('dim');
-  }
-  const icon = el('span', 'mini-icon');
-  if (ref !== undefined) applyThoughtIcon(icon, ref);
-  else icon.textContent = '💭';
-  const title = ref?.title ?? id;
-  cloud.append(icon, el('span', 'prc-title', title));
-  setTooltip(cloud, title);
-  // A thought in the trash (S13, §5a.2): the cloud dims and carries the red
-  // trash glyph — the same marked reading as the history bar, chip-sized.
-  if (ref?.marked_for_deletion === true) {
-    const mark = span('', 'list-trash-mark');
-    mark.append(svgIcon('trash', 10));
-    cloud.append(mark);
-  }
-  cloud.addEventListener('click', () => opts.onOpen(id));
-  const removeBtn = el('button', 'st-f-clear-inline', '✕');
-  removeBtn.type = 'button';
-  removeBtn.title = 'Очистить значение';
-  // The cloud's own click opens the thought — stop it here.
-  removeBtn.addEventListener('click', (event) => {
-    event.stopPropagation();
-    opts.onRemove();
-  });
-  cloud.append(removeBtn);
-  return cloud;
-}
-
-// ---------------------------------------------------------------------------
-// Multiple thought_ref picker (08-ui-spec.md §6.3.1)
-// ---------------------------------------------------------------------------
-
-/**
- * Builds the multi-value `thought_ref` editor (definitions with
- * `config.multiple`): a chip field listing the selected thoughts as mini
- * clouds (icon + title in the thought's own colours/font — the same chip
- * styling as the structures filter panel) plus a «выбрать» button. Clicking
- * the field or «выбрать» opens the universal thought picker in **multi mode**
- * (prefilled with the current ids, honouring the definition's type filter);
- * applying writes the full replacement list through `save`. Every chip has a
- * «×» removing that single value; removing the last one clears the property.
- * When {@link opts.onOpen} is given (the editor's properties table), clicking
- * a chip navigates to the thought instead of bubbling into the picker.
- *
- * Missing chip metadata is resolved in the background via `thoughts.resolve`
- * into the shared `refs` cache, then the chips re-render.
- *
- * Also reused by the selection panel's property-values dialog: there `save`
- * writes the list into the dialog state instead of saving it immediately and
- * `onOpen` is omitted, so chip clicks keep opening the picker.
- */
-export function buildMultiThoughtRefEditor(opts: {
-  networkId: string;
-  /** Thought-type filter of the definition config (input aid). */
-  filterIds: string[];
-  /** Shared id → resolved ref cache: chip labels, icons and styles. */
-  refs: Map<string, ThoughtRef>;
-  /** Currently selected thought ids. */
-  ids: string[];
-  /** Writes the full replacement list; an empty list clears the value. */
-  save: (ids: string[]) => Promise<unknown> | unknown;
-  /** Click-to-open handler of a chip (map view + focus); omitted → picker. */
-  onOpen?: (id: string) => void;
-}): HTMLElement {
-  const field = div('st-f-chipfield');
-  field.tabIndex = 0;
-  field.title = 'Выбрать мысли (несколько)';
-
-  const renderChips = (): void => {
-    field.replaceChildren();
-    if (opts.ids.length === 0) {
-      field.append(span('— не задано —', 'st-f-chip-empty'));
-      return;
-    }
-    opts.ids.forEach((id, index) => {
-      const ref = opts.refs.get(id);
-      const chip = div('st-f-chip');
-      const icon = div('st-f-chip-icon');
-      applyThoughtIcon(icon, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
-      chip.append(icon);
-      const label = span(ref?.title ?? id, 'st-f-chip-label');
-      label.title = ref?.title ?? id;
-      if (ref !== undefined) applyCloudStyle(label, resolveCloudStyle(ref));
-      chip.append(label);
-      // A thought in the trash (S13, §5a.2): the chip dims and carries the
-      // red trash glyph — the same marked reading as everywhere else.
-      if (ref?.active === false || ref?.marked_for_deletion === true) {
-        chip.classList.add('dim');
-      }
-      if (ref?.marked_for_deletion === true) {
-        const mark = span('', 'list-trash-mark');
-        mark.append(svgIcon('trash', 10));
-        chip.append(mark);
-      }
-      const removeBtn = el('button', 'st-f-clear-inline', '×');
-      removeBtn.type = 'button';
-      removeBtn.title = 'Убрать значение';
-      removeBtn.addEventListener('click', (event) => {
-        // The field's own click opens the picker — stop it here.
-        event.stopPropagation();
-        void opts.save(opts.ids.filter((_, i) => i !== index));
-      });
-      chip.append(removeBtn);
-      // With an open handler the chip navigates to the thought instead of
-      // bubbling into the picker (08-ui-spec.md §6.3.1).
-      chip.addEventListener('click', (event) => {
-        if (opts.onOpen === undefined) return;
-        event.stopPropagation();
-        opts.onOpen(id);
-      });
-      field.append(chip);
-    });
-  };
-
-  const openPicker = (): void => {
-    void pickThoughtsDialog({
-      networkId: opts.networkId,
-      allowCreate: false,
-      allowLinkType: false,
-      searchTypeIds: opts.filterIds,
-      // Prefill switches the dialog into multi mode automatically.
-      selectedIds: opts.ids,
-      title: 'Выбрать мысли',
-      applyLabel: 'Выбрать',
-    }).then((result) => {
-      if (result === null) return;
-      void opts.save(pickedThoughtIds(result));
-    });
-  };
-
-  field.addEventListener('click', openPicker);
-  field.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') openPicker();
-  });
-
-  // Resolve chip metadata that is not in the cache yet (fresh picks), then
-  // re-render; the raw id stays visible when resolve fails.
-  const missing = opts.ids.filter((id) => !opts.refs.has(id));
-  if (missing.length > 0) {
-    void etn.thoughts
-      .resolve(opts.networkId, missing)
-      .then((refs) => {
-        for (const ref of refs) opts.refs.set(ref.id, ref);
-        renderChips();
-      })
-      .catch(() => undefined);
-  }
-
-  renderChips();
-  const row = div('form-row');
-  row.style.marginBottom = '0';
-  row.append(
-    field,
-    button('выбрать', openPicker, 'btn small', 'Выбрать мысли (несколько)'),
-  );
-  return row;
+  return definition.value_type === 'text';
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,9 +663,8 @@ export function buildMultiThoughtRefEditor(opts: {
  * text input + «Открыть» button + «×» removing that single value. The bottom
  * of the editor carries an «+» button that appends a new empty row and
  * immediately focuses it. Every edit is debounced and committed through
- * {@link opts.save}; an empty value list clears the property (the same
- * semantics as `thought_ref`'s multi editor). URL/file-path strings are
- * stored verbatim — no parsing, no comma-join (02-data-model.md §3.5).
+ * {@link opts.save}; an empty value list clears the property. URL/file-path
+ * strings are stored verbatim — no parsing, no comma-join (02-data-model.md §3.5).
  */
 export function buildMultiUrlEditor(opts: {
   /** Currently stored URLs (already normalized server-side: `string[]`). */
@@ -1156,53 +770,8 @@ export function buildMultiUrlEditor(opts: {
 
 // ---------------------------------------------------------------------------
 // Outside-type read-only renderers (08-ui-spec.md §6.3.1, 0.6.5 «Значения вне
-// типа сохраняются»)
+// типа сохраняются»; thought_ref-рендеры удалены вместе с видом значения)
 // ---------------------------------------------------------------------------
-
-/**
- * Read-only chip list for a multi-value `thought_ref` outside-type value:
- * same chip styling as the main editor (icon + title in the thought's own
- * colours/font, dimmed when inactive/marked, trash glyph when marked), but
- * without the «×» removing the value (the only removal action lives on the
- * row's clear button). Clicking a chip still navigates to the thought via
- * {@link opts.onOpen}.
- */
-export function buildMultiThoughtRefReadonly(opts: {
-  ids: string[];
-  refs: Map<string, ThoughtRef>;
-  onOpen: (id: string) => void;
-}): HTMLElement {
-  const field = div('st-f-chipfield prop-outside-chipfield');
-  if (opts.ids.length === 0) {
-    field.append(span('—', 'st-f-chip-empty'));
-    return field;
-  }
-  for (const id of opts.ids) {
-    const ref = opts.refs.get(id);
-    const chip = div('st-f-chip');
-    const icon = div('st-f-chip-icon');
-    applyThoughtIcon(icon, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
-    chip.append(icon);
-    const label = span(ref?.title ?? id, 'st-f-chip-label');
-    label.title = ref?.title ?? id;
-    if (ref !== undefined) applyCloudStyle(label, resolveCloudStyle(ref));
-    chip.append(label);
-    if (ref?.active === false || ref?.marked_for_deletion === true) {
-      chip.classList.add('dim');
-    }
-    if (ref?.marked_for_deletion === true) {
-      const mark = span('', 'list-trash-mark');
-      mark.append(svgIcon('trash', 10));
-      chip.append(mark);
-    }
-    chip.addEventListener('click', (event) => {
-      event.stopPropagation();
-      opts.onOpen(id);
-    });
-    field.append(chip);
-  }
-  return field;
-}
 
 /**
  * Read-only list of URL strings for an outside-type multi-`url` value: one

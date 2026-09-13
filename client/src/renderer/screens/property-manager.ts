@@ -49,8 +49,6 @@ import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
 import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import { notice } from '../lib/notice.js';
-import { createTypeCheckPicker } from '../lib/type-check-picker.js';
-import { thoughtTypeOptions } from '../lib/type-tree.js';
 import { store } from '../state.js';
 import {
   showLinkTypeEditor,
@@ -63,9 +61,11 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   number: 'число',
   date: 'дата',
   bool: 'булево',
-  thought_ref: 'ссылка на мысль',
   url: 'URL (сайт или файл)',
   link: 'связь',
+  // Legacy (миграция 040): в живой БД таких свойств не остаётся, но в
+  // типах маркер оставлен для компиляции тестов и импорта архивов.
+  thought_ref: 'ссылка на мысль (legacy)',
 };
 
 /** A registry row as returned by `GET /networks/{nid}/properties` (with counters). */
@@ -358,19 +358,13 @@ export function openPropertyManagerEditor(
   let choiceOn = draft.value_type === 'text' && (draft.config?.options?.length ?? 0) > 0;
   let optionsText = choiceOn ? (draft.config?.options ?? []).join('\n') : '';
 
-  // Multiple values flag — shared by text / url / thought_ref (02-data-model
-  // md §3.4–3.5): whichever of the three kinds the property has, the flag
-  // survives a value-type switch and is rendered in every kind's block.
+  // Multiple values flag — shared by text / url (02-data-model.md §3.4–3.5):
+  // whichever of the two kinds the property has, the flag survives a
+  // value-type switch and is rendered in every kind's block.
   let multipleOn = draft.config?.multiple === true;
 
-  // thought_ref type filter (multi-select picker over the thought-types tree).
-  let allowedTypeIds = new Set<string>(
-    draft.value_type === 'thought_ref' ? (draft.config?.allowed_type_ids ?? []) : [],
-  );
-
-  // The default value (thought_ref has no default — types must bind it
-  // themselves).
-  let defaultValue: unknown = draft.value_type === 'thought_ref' ? null : (draft.config?.default_value ?? null);
+  // The default value (link has no default — the value is an edge).
+  let defaultValue: unknown = draft.config?.default_value ?? null;
 
   // ---- Header ------------------------------------------------------------
   const nameInput = el('input', 'text-input') as HTMLInputElement;
@@ -408,30 +402,23 @@ export function openPropertyManagerEditor(
   // ---- Value-type-specific extras ---------------------------------------
   const defaultHost = div('form-row');
   const textExtrasHost = div('form-stack');
-  const refFilterHost = div('form-stack');
   const urlExtrasHost = div('form-row');
 
   /**
    * Re-renders the value-type-specific blocks (default value, text options,
-   * thought_ref filter, url multiple). Called on first mount and on every
-   * `value_type` change (the in-progress default value does not carry over —
-   * it lives only on the currently-rendered input).
+   * url multiple). Called on first mount and on every `value_type` change
+   * (the in-progress default value does not carry over — it lives only on
+   * the currently-rendered input).
    */
   function renderValueTypeExtras(): void {
     defaultHost.replaceChildren();
     textExtrasHost.replaceChildren();
-    refFilterHost.replaceChildren();
     urlExtrasHost.replaceChildren();
     const vt = typeSelect.value as PropertyValueType;
-    if (vt === 'thought_ref') {
-      defaultHost.append(span('не задаётся', 'muted'));
-    } else {
-      defaultHost.append(defaultInputFor(vt, defaultValue, (v) => {
-        defaultValue = v;
-      }));
-    }
+    defaultHost.append(defaultInputFor(vt, defaultValue, (v) => {
+      defaultValue = v;
+    }));
     if (vt === 'text') renderTextExtras();
-    if (vt === 'thought_ref') renderRefFilter();
     if (vt === 'url') renderUrlExtras();
   }
 
@@ -468,35 +455,6 @@ export function openPropertyManagerEditor(
     textExtrasHost.append(multiRow);
   }
 
-  function renderRefFilter(): void {
-    refFilterHost.replaceChildren();
-    const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
-    const multiCheck = el('input') as HTMLInputElement;
-    multiCheck.type = 'checkbox';
-    multiCheck.checked = multipleOn;
-    multiCheck.addEventListener('change', () => {
-      multipleOn = multiCheck.checked;
-    });
-    multiRow.append(multiCheck, span('несколько значений'));
-    refFilterHost.append(multiRow);
-    const label = el('p', 'muted', 'Отбор по типам (пусто — любой тип)');
-    label.style.margin = '6px 0 2px';
-    refFilterHost.append(label);
-    refFilterHost.append(
-      createTypeCheckPicker({
-        // The same visual shape as every other type list: tree order, icons,
-        // colours and font styles (0.6.5 приёмка — «без иконок и иерархии»).
-        options: () => thoughtTypeOptions(store.state.thoughtTypes),
-        selected: allowedTypeIds,
-        onChange: (next) => {
-          allowedTypeIds = new Set(next);
-        },
-        placeholder: 'Поиск типа…',
-        maxHeightPx: 200,
-      }).root,
-    );
-  }
-
   function renderUrlExtras(): void {
     urlExtrasHost.replaceChildren();
     const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
@@ -510,7 +468,7 @@ export function openPropertyManagerEditor(
     urlExtrasHost.append(multiRow);
   }
 
-  body.append(defaultHost, textExtrasHost, refFilterHost, urlExtrasHost);
+  body.append(defaultHost, textExtrasHost, urlExtrasHost);
   renderValueTypeExtras();
 
   // Блок «Метаданные» — автор, даты, id сущности (задача 04cd9794). Только
@@ -589,8 +547,7 @@ export function openPropertyManagerEditor(
         choiceOn = false;
         optionsText = '';
       }
-      if (prev === 'thought_ref') allowedTypeIds = new Set();
-      if (draft.value_type === 'thought_ref') defaultValue = null;
+      if (draft.value_type === 'link') defaultValue = null;
     }
     renderValueTypeExtras();
   });
@@ -611,7 +568,6 @@ export function openPropertyManagerEditor(
       choiceOn,
       optionsText,
       multipleOn,
-      allowedTypeIds,
     });
 
     try {
@@ -706,8 +662,8 @@ export function openPropertyManagerEditor(
 
 /**
  * Builds a default-value input matching `valueType`; `read(value)` is called
- * once when the input commits (blur/change). `thought_ref` has no default —
- * the type binding decides the target.
+ * once when the input commits (blur/change). `link` has no default — the
+ * value is an edge, not a scalar.
  */
 function defaultInputFor(
   valueType: PropertyValueType,
@@ -747,20 +703,23 @@ function defaultInputFor(
       input.addEventListener('change', () => read(input.checked));
       return input;
     }
-    case 'thought_ref':
     case 'link':
       return span('не задаётся', 'muted');
+    case 'thought_ref':
+      // Legacy (миграция 040): создание свойств этого типа отвергается
+      // рантайм-guard'ом; редактор default-значения недостижим.
+      return span('упразднено', 'muted');
   }
 }
 
 /**
  * Builds the `PropertyConfig` JSON to send on create/update. Returns `null`
  * when there is nothing meaningful to store (no default, no options, no
- * multiple flag, no allowed types) so the server stores the column as JSON
- * `null` rather than `{}`.
+ * multiple flag) so the server stores the column as JSON `null` rather than
+ * `{}`.
  *
- * Multiple values are valid for text / url / thought_ref alike (02-data-model
- * md §3.4–3.5) — one flag covers all three kinds.
+ * Multiple values are valid for text / url alike (02-data-model.md §3.4–3.5)
+ * — one flag covers both kinds.
  */
 function buildConfig(
   valueType: PropertyValueType,
@@ -769,11 +728,10 @@ function buildConfig(
     choiceOn: boolean;
     optionsText: string;
     multipleOn: boolean;
-    allowedTypeIds: Set<string>;
   },
 ): PropertyConfig | null {
   const config: PropertyConfig = {};
-  if (valueType !== 'thought_ref' && defaultValue !== null && defaultValue !== undefined) {
+  if (valueType !== 'link' && defaultValue !== null && defaultValue !== undefined) {
     config.default_value = defaultValue as string | number | boolean;
   }
   if (valueType === 'text' && options.choiceOn) {
@@ -782,9 +740,6 @@ function buildConfig(
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
     if (list.length > 0) config.options = list;
-  }
-  if (valueType === 'thought_ref' && options.allowedTypeIds.size > 0) {
-    config.allowed_type_ids = Array.from(options.allowedTypeIds);
   }
   if (options.multipleOn) {
     config.multiple = true;

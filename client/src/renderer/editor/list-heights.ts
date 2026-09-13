@@ -7,7 +7,7 @@
  * stays exactly this value regardless of the row count — fewer rows leave
  * empty space, more rows scroll. This is deliberate: an area whose height
  * tracked the row count used to collapse and jump back on every reload
- * (thought_ref property edits, chronicle/attachments refresh) or on
+ * (property edits, chronicle/attachments refresh) or on
  * switching between thoughts with a different amount of content — the
  * visible "jitter" reported in bug 6b757336. The values are global per
  * screen (not per entity/record), live in the store-free module map and are

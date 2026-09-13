@@ -195,7 +195,7 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       }),
   );
 
-  // --- usage (reverse thought_ref lookup, 03-server-api.md §9.1) --------------
+  // --- usage (reverse link-property lookup, 03-server-api.md §9.1) ------------
   mcp.registerResource(
     'etn.thought.usage',
     new ResourceTemplate('etn://networks/{network_id}/thoughts/{thought_id}/usage', {
@@ -204,7 +204,7 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     {
       title: 'Использование мысли',
       description:
-        'Мысли, ссылающиеся на эту как на значение thought_ref-свойства (формальные связи, ' +
+        'Мысли, ссылающиеся на эту через свойства-связи (формальные связи, ' +
         '«Использование» в редакторе), сгруппированные по свойству.',
       mimeType: JSON_MIME,
     },

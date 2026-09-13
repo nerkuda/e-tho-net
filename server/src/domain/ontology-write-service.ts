@@ -28,7 +28,7 @@
 
 import {
   EtnError,
-  PROPERTY_VALUE_TYPES_WRITABLE,
+  PROPERTY_VALUE_TYPES,
   TYPE_OWNER_TYPES,
   typeNameKey,
   type IconKind,
@@ -453,11 +453,11 @@ function resolveProperties(
     validateIdNameXor(item, 'properties', index);
     if (
       item.value_type !== undefined &&
-      !(PROPERTY_VALUE_TYPES_WRITABLE as readonly string[]).includes(item.value_type)
+      !(PROPERTY_VALUE_TYPES as readonly string[]).includes(item.value_type)
     ) {
       throw new EtnError('VALIDATION_ERROR', `invalid value_type: ${item.value_type}`, {
         field: `properties[${index}].value_type`,
-        allowed: PROPERTY_VALUE_TYPES_WRITABLE,
+        allowed: PROPERTY_VALUE_TYPES,
       });
     }
     let id: string | null = null;
@@ -775,7 +775,7 @@ function classifyStoredValues(
   const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}($|T)/;
   const rows = ndb
     .prepare(
-      `SELECT value_text, value_date, value_number, value_bool, value_thought_ref
+      `SELECT value_text, value_date, value_number, value_bool
        FROM property_values_v WHERE property_id = ?`,
     )
     .all(propertyId) as Array<{
@@ -783,7 +783,6 @@ function classifyStoredValues(
     value_date: string | null;
     value_number: number | null;
     value_bool: number | null;
-    value_thought_ref: string | null;
   }>;
   let converted = 0;
   let dropped = 0;
@@ -803,21 +802,6 @@ function classifyStoredValues(
       case 'bool':
         value = row.value_bool === null ? null : row.value_bool === 1;
         break;
-      case 'thought_ref': {
-        const raw = row.value_thought_ref;
-        if (raw === null) value = null;
-        else if (raw.startsWith('[')) {
-          try {
-            const parsed: unknown = JSON.parse(raw);
-            value = Array.isArray(parsed)
-              ? (parsed.filter((v): v is string => typeof v === 'string') as string[])
-              : [];
-          } catch {
-            value = [];
-          }
-        } else value = raw;
-        break;
-      }
       case 'link':
         // Значение свойства-связи не хранится в property_values.
         value = null;
@@ -862,10 +846,12 @@ function canConvert(
         return s === 'true' || s === 'да' || s === '1' || s === 'false' || s === 'нет' || s === '0';
       }
       return false;
-    case 'thought_ref':
-      return false;
     case 'link':
       // Конверсия в 'link' сбрасывает сохранённое значение (ребро — отдельно).
+      return false;
+    case 'thought_ref':
+      // Legacy (миграция 040): таких свойств в живой БД не остаётся;
+      // конвертировать не во что — отказываем.
       return false;
   }
 }

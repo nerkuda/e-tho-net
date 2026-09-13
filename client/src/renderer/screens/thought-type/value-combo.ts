@@ -25,7 +25,7 @@ export type { ComboOption } from './filter-dialog-pure.js';
 // Live-search dropdown — attaches to an existing <input>
 // ---------------------------------------------------------------------------
 
-/** Pure index math for ↑/↓ over a candidate list (mirrors thought-picker.ts). */
+/** Pure index math for ↑/↓ over a candidate list. */
 function navIndex(cursor: number | null, count: number, delta: 1 | -1): number | null {
   if (count === 0) return null;
   const base = cursor === null || cursor >= count ? (delta === 1 ? -1 : count) : cursor;
@@ -151,13 +151,13 @@ export function wireTokenCombo(opts: TokenComboOptions): void {
   });
   input.addEventListener('blur', () => {
     // A short delay lets a row's `mousedown`/click land before the dropdown
-    // is torn down (mirrors thought-picker.ts's blur-restore pattern).
+    // is torn down (blur-restore pattern).
     window.setTimeout(close, 0);
   });
 }
 
 /** Replaces the whole input value with `token` and refocuses — the default
- *  pick behaviour for atomic scalar fields (date/text/url/thought_ref/
+ *  pick behaviour for atomic scalar fields (date/text/url/
  *  author/editor single value): the typed prefix that produced the match is
  *  fully replaced, matching a standard combobox, not appended to. */
 export function replaceComboValue(input: HTMLInputElement, token: string, onChange: (v: string) => void): void {
