@@ -394,7 +394,12 @@ describe(
           assert.ok(total > 0 && total === distinct, `${table}.id not unique after backfill`);
         }
 
-        // 6. FTS rebuilt: same counts, base layer, same texts, rowid joins intact.
+        // 6. FTS rebuilt: names unchanged, total comment texts unchanged,
+        //    rowid joins intact. Миграция 040 (задача 9542b640) переносит
+        //    хроно-комментарии рёбер на мысли-источники — это легитимно
+        //    двигает строки из fts_link_texts в fts_thought_texts (UPDATE на
+        //    comments → DELETE+INSERT триггеры FTS), но общий счётчик и
+        //    rowid-связи сохраняются.
         const fts = {
           names: (
             db.prepare('SELECT COUNT(*) AS c FROM fts_thought_names').get() as { c: number }
@@ -406,7 +411,12 @@ describe(
             db.prepare('SELECT COUNT(*) AS c FROM fts_link_texts').get() as { c: number }
           ).c,
         };
-        assert.deepEqual(fts, beforeFts);
+        assert.equal(fts.names, beforeFts.names, 'FTS names count must be preserved');
+        assert.equal(
+          fts.texts + fts.links,
+          beforeFts.texts + beforeFts.links,
+          'total FTS comment-text rows must be preserved across migration 040 retargeting',
+        );
         const nameRow = db
           .prepare("SELECT layer_id, text FROM fts_thought_names WHERE thought_id = 't1'")
           .get() as { layer_id: string; text: string };

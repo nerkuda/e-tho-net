@@ -314,6 +314,17 @@ export interface PropertyDefaultOverrideInput {
  */
 export type PropertyValueValue = string | number | boolean | string[] | null;
 
+/**
+ * Резолвнутая форма legacy `thought_ref` для MCP-чтения (задача N4, миграция
+ * 040): одиночный id → `{id, title}`, JSON-массив id → массив таких же.
+ * `title: null` означает висячую ссылку на удалённую мысль. Используется
+ * только в {@link ResolvedPropertyValue.value}; EAV-форма {@link PropertyValueValue}
+ * остаётся прежней (запись идёт строкой/JSON-массивом в `value_thought_ref`).
+ */
+export type ResolvedThoughtRefValue =
+  | { id: string; title: string | null }
+  | Array<{ id: string; title: string | null }>;
+
 /** A stored property value — polymorphic EAV (02-data-model.md §3.5). */
 export interface PropertyValue {
   id: string;
@@ -349,12 +360,14 @@ export interface PropertyValue {
 }
 
 /**
- * PropertyValue MCP-чтения (task N4): форма совпадает с {@link PropertyValue}
- * (резолвнутые `thought_ref`-значения исчезли вместе с видом значения —
- * миграция 040, ссылки читаются как рёбра свойств-связей); тип сохранён как
- * элемент союза со {@link ResolvedLinkProperty} в карточке мысли.
+ * PropertyValue MCP-чтения (task N4): форма совпадает с {@link PropertyValue},
+ * но `value` для legacy `thought_ref` расширен до {@link ResolvedThoughtRefValue}
+ * — агенту не нужны отдельные вызовы `etn.thoughts.get` на каждую ссылку.
+ * Тип сохранён как элемент союза со {@link ResolvedLinkProperty} в карточке мысли.
  */
-export interface ResolvedPropertyValue extends PropertyValue {}
+export interface ResolvedPropertyValue extends Omit<PropertyValue, 'value'> {
+  value: PropertyValue['value'] | ResolvedThoughtRefValue;
+}
 
 /**
  * Одно значение свойства-связи — живое ребро `links` (0.8.1). Возвращается

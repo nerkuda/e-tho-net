@@ -2226,20 +2226,100 @@ export function getPropertyValuesWithLinks(
 
 /**
  * MCP-чтение значений свойств (task N4, docs/05-mcp-server.md §4.1): то же,
- * что {@link getPropertyValues}, плюс счётчики свойств-связей. Резолвнутые
- * `thought_ref`-значения исчезли вместе с видом значения (миграция 040):
- * ссылки читаются как рёбра — карточка отдаёт их {@link ResolvedLinkProperty}.
+ * что {@link getPropertyValues}, плюс счётчики свойств-связей и резолв
+ * legacy `thought_ref` к `{id, title}` (одиночные — LEFT JOIN, множественные
+ * — пакетный запрос). Агенту не нужны отдельные вызовы `etn.thoughts.get`
+ * на каждую ссылку; `title: null` — висячая ссылка на удалённую мысль.
+ * Legacy-ветка восстановлена для тестов value-handling и импорта архивов
+ * (миграция 040): в живой БД таких свойств быть не должно.
  */
 export function getPropertyValuesResolved(
   ndb: NetworkDb,
   ownerType: PropertyOwnerType,
   ownerId: string,
 ): (ResolvedPropertyValue | ResolvedLinkProperty)[] {
-  const out: (ResolvedPropertyValue | ResolvedLinkProperty)[] = getPropertyValues(
-    ndb,
-    ownerType,
-    ownerId,
-  );
+  const rows = ndb
+    .prepare(
+      `SELECT pv.*, p.name AS property_name, p.value_type AS property_value_type, p.config AS property_config,
+              t.title AS ref_title
+       FROM property_values_v pv
+       JOIN properties_v p ON p.id = pv.property_id
+       LEFT JOIN thoughts_v t ON t.id = pv.value_thought_ref
+       WHERE pv.owner_type = ? AND pv.owner_id = ?`,
+    )
+    .all(ownerType, ownerId) as Array<
+    PropertyValueRow & {
+      property_name: string;
+      property_value_type: string;
+      property_config: string | null;
+      ref_title: string | null;
+    }
+  >;
+  const attached = attachedPropertyIds(ndb, ownerType, ownerId);
+  const prepared: Array<{
+    row: (typeof rows)[number];
+    prop: PropertyLike;
+    value: PropertyValueValue;
+  }> = [];
+  for (const row of rows) {
+    const prop: PropertyLike = {
+      id: row.property_id,
+      name: row.property_name,
+      value_type: row.property_value_type as PropertyValueType,
+      config: row.property_config ? (JSON.parse(row.property_config) as PropertyConfig) : null,
+    };
+    prepared.push({ row, prop, value: readValue(row, prop.value_type, isMultipleProperty(prop)) });
+  }
+  // Titles of every id stored inside multiple-ref arrays: one batched lookup.
+  const arrayIds = new Set<string>();
+  for (const { prop, value } of prepared) {
+    if (prop.value_type === 'thought_ref' && Array.isArray(value)) {
+      for (const id of value) arrayIds.add(id);
+    }
+  }
+  const titlesById = new Map<string, string>();
+  if (arrayIds.size > 0) {
+    const ids = [...arrayIds];
+    const titleRows = ndb
+      .prepare(`SELECT id, title FROM thoughts_v WHERE id IN (${ids.map(() => '?').join(',')})`)
+      .all(...ids) as Array<{ id: string; title: string }>;
+    for (const t of titleRows) titlesById.set(t.id, t.title);
+  }
+  const out: (ResolvedPropertyValue | ResolvedLinkProperty)[] = [];
+  for (const { row, prop, value } of prepared) {
+    let resolved: ResolvedPropertyValue['value'] = value;
+    if (prop.value_type === 'thought_ref') {
+      if (Array.isArray(value)) {
+        // Legacy thought_ref: одиночный id или JSON-массив id
+        // (02-data-model.md §3.5). Каждый id резолвится через пакетный
+        // lookup, отсутствующая цель — `title: null`.
+        const ids = value as string[];
+        resolved = ids.map(
+          (id): { id: string; title: string | null } => ({
+            id,
+            title: titlesById.get(id) ?? null,
+          }),
+        );
+      } else if (typeof value === 'string') {
+        resolved = { id: value, title: row.ref_title };
+      }
+    }
+    out.push({
+      id: row.id,
+      owner_type: ownerType,
+      owner_id: ownerId,
+      property_id: row.property_id,
+      outside_type: !attached.has(row.property_id),
+      property_name: row.property_name,
+      value_type: prop.value_type,
+      value: resolved,
+      updated_at: row.updated_at,
+      created_by: row.created_by,
+      updated_by: row.updated_by,
+      created_at_ms: row.created_at_ms,
+      updated_at_ms: row.updated_at_ms,
+    });
+  }
   // Свойства-связи: карточка отдаёт их счётчиками (требование d024dbd6).
   if (ownerType === 'thought') {
     for (const lp of listThoughtLinkProperties(ndb, ownerId)) {
@@ -2602,9 +2682,11 @@ function validateThoughtRefTarget(ndb: NetworkDb, prop: PropertyLike, id: string
     ndb,
     'thought_types',
     (
-      prop.config?.allowed_type_ids ??
-      (prop.config?.allowed_type_id !== undefined ? [prop.config.allowed_type_id] : [])
-    ).filter((id) => id !== ''),
+      (prop.config?.allowed_type_ids as unknown[] | undefined) ??
+      (prop.config?.allowed_type_id !== undefined && prop.config?.allowed_type_id !== ''
+        ? [prop.config.allowed_type_id as string]
+        : [])
+    ).filter((id): id is string => typeof id === 'string' && id !== ''),
   );
   if (allowedIds.length > 0 && (target.type_id === null || !allowedIds.includes(target.type_id))) {
     throw new EtnError('VALIDATION_ERROR', `thought ${id} is not of a required type`, {

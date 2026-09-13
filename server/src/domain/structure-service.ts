@@ -82,8 +82,11 @@ const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly StructurePropertyOp[
   bool: ['eq'],
   // Отбор по свойствам-связям — отдельная задача (4); до неё операций нет.
   link: [],
-  // Legacy thought_ref (миграция 040): таких свойств в живой БД не остаётся.
-  thought_ref: [],
+  // Legacy thought_ref (миграция 040): таких свойств в живой БД не остаётся,
+  // но value-handling (тесты, унаследованные архивы) пользуется тем же
+  // набором операторов, что и `url` — eq/in/not_in ищут по одиночному id и
+  // внутри JSON-массива, is_empty/not_empty — по наличию хоть какого-то id.
+  thought_ref: ['eq', 'in', 'not_in', 'is_empty', 'not_empty'],
 };
 
 /** Storage column of `property_values` per property `value_type`. */
@@ -96,8 +99,9 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   // Свойство-связь значений в property_values не хранит (ADR «проекция
   // ребра»); значение недостижимо — OPS_BY_VALUE_TYPE['link'] пуст.
   link: 'value_text',
-  // Legacy thought_ref (миграция 040): таких свойств в живой БД не остаётся.
-  thought_ref: 'value_text',
+  // Legacy thought_ref (миграция 040): value-handling читает одиночный id
+  // и JSON-массив id из этого столбца.
+  thought_ref: 'value_thought_ref',
 };
 
 /** Default keyword scope (03-server-api.md §6.10): title + synonyms only —
@@ -851,6 +855,56 @@ function buildFilterQuerySql(
       );
     }
     const column = `pv.${VALUE_COLUMN[def.value_type]}`;
+    // Legacy thought_ref (миграция 040): значение в `value_thought_ref`
+    // может быть одиночным id или JSON-массивом id. Все скалярные операции
+    // (eq/in/not_in/is_empty/not_empty) раскрывают обе формы: одиночное
+    // равенство и вхождение в массив считаются одним и тем же. `contains`
+    // для thought_ref недопустим (см. OPS_BY_VALUE_TYPE).
+    const thoughtRefElements = (col: string): string =>
+      `json_each(CASE WHEN ${col} LIKE '[%' THEN ${col} ELSE '[' || json_quote(${col}) || ']' END)`;
+    if (def.value_type === 'thought_ref') {
+      if (cond.op === 'in' || cond.op === 'not_in') {
+        if (!Array.isArray(cond.value) || cond.value.length === 0) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'Для операции "в списке"/"не в списке" value должен быть непустым массивом.',
+            { field: 'value' },
+            requestId,
+          );
+        }
+        const values = cond.value.map((v) => sqlScalar(def, v, requestId) as string);
+        const placeholders = values.map(() => '?').join(',');
+        const matchSql = `SELECT 1 FROM property_values_v pv, ${thoughtRefElements(column)} je
+           WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+             AND pv.${VALUE_COLUMN[def.value_type]} IS NOT NULL AND je.value IN (${placeholders})`;
+        where.push(cond.op === 'in' ? `EXISTS (${matchSql})` : `NOT EXISTS (${matchSql})`);
+        params.push(cond.property_id, ...values);
+        continue;
+      }
+      if (cond.op === 'is_empty' || cond.op === 'not_empty') {
+        // Заполнено = значение не NULL, не пустая строка, не '[]' и не 'null'.
+        // Массив '[]' и строка 'null' (легаси-форма «пустой ссылки») считаются
+        // пустыми, как и отсутствующая строка value_thought_ref.
+        const filledExpr =
+          `${column} IS NOT NULL AND ${column} != '' AND ${column} != '[]' AND ${column} != 'null'`;
+        const filledSql = `SELECT 1 FROM property_values_v pv
+           WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+             AND ${filledExpr}`;
+        where.push(
+          cond.op === 'not_empty' ? `EXISTS (${filledSql})` : `NOT EXISTS (${filledSql})`,
+        );
+        params.push(cond.property_id);
+        continue;
+      }
+      // eq: одиночный id или вхождение в массив.
+      const value = sqlScalar(def, cond.value as StructurePropertyValue, requestId) as string;
+      const matchSql = `SELECT 1 FROM property_values_v pv, ${thoughtRefElements(column)} je
+         WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+           AND pv.${VALUE_COLUMN[def.value_type]} IS NOT NULL AND je.value = ?`;
+      where.push(`EXISTS (${matchSql})`);
+      params.push(cond.property_id, value);
+      continue;
+    }
     if (cond.op === 'in' || cond.op === 'not_in') {
       if (!Array.isArray(cond.value) || cond.value.length === 0) {
         throw new EtnError(

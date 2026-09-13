@@ -360,7 +360,7 @@ function upsertUpdLinkType(
   const nameKey = name.trim().toLowerCase();
   const existing = ndb
     .prepare(
-      `SELECT id FROM link_types WHERE layer_id = '00000000-0000-4000-8000-0000000000ba5e'
+      `SELECT id FROM link_types WHERE layer_id = '00000000-0000-4000-8000-0000000000ba5e' /* layers:physical-read — ищем существующий «upd:»-вид связи строго в слое основы */
          AND name_forward_key = ? AND name_reverse_key = ? AND deleted = 0 LIMIT 1`,
     )
     .get(nameKey, nameKey) as { id: string } | undefined;
@@ -1200,7 +1200,7 @@ export function applyManifest(
         for (const targetId of targets) {
           const resolvedTargetId = thoughtIdRemap.get(targetId) ?? targetId;
           const exists = ndb
-            .prepare('SELECT 1 FROM thoughts WHERE id = ? AND deleted = 0 LIMIT 1')
+            .prepare('SELECT 1 FROM thoughts_v WHERE id = ? AND deleted = 0 LIMIT 1')
             .get(resolvedTargetId);
           if (exists === undefined) continue;
           const result = ndb

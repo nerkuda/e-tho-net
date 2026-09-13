@@ -260,9 +260,9 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   // ребра»); значение недостижимо — условие уходит в linkPropertyClause.
   link: 'value_text',
   // Legacy thought_ref (миграция 040): в живой БД таких свойств быть не
-  // должно; для не призрачных строк читаем из value_thought_ref, но в query
-  // тип не используется — пустая колонка-пылесос для удовлетворения типа.
-  thought_ref: 'value_text',
+  // должно, но value-handling (тесты, унаследованные архивы) ходит по этому
+  // столбцу — одиночный id или JSON-массив id.
+  thought_ref: 'value_thought_ref',
 };
 
 /**
@@ -285,8 +285,11 @@ const SUPPORTED_OPS: Record<PropertyValueType, ReadonlySet<PropertyQueryOperator
   bool: new Set(['eq', 'ne']),
   link: new Set(['eq', 'ne', 'any_of', 'all_of', 'none_of']),
   // Legacy thought_ref (миграция 040): свойств этого типа в живой БД не
-  // остаётся; в query не должно приходить, но тип-маркер требует ключ.
-  thought_ref: new Set<PropertyQueryOperator>(),
+  // остаётся, но value-handling в тестах и при импорте архивов пользуется
+  // тем же набором операторов, что и `url`: eq/ne сравнивает с одиночным
+  // id (или ищет внутри JSON-массива), три оператора наборов работают по
+  // элементам массива (одиночный id тоже считается массивом из одного).
+  thought_ref: new Set(['eq', 'ne', 'any_of', 'all_of', 'none_of']),
 };
 
 /** Minimal registry row read in one batched lookup of all conditions. */
@@ -574,6 +577,23 @@ function propertyClauses(
     const cmp = SQL_OPS[cond.operator];
     const scalar = coerceScalar(valueType, cond.value, requestId);
 
+    // Legacy thought_ref (миграция 040): значение в `value_thought_ref` —
+    // одиночный id или JSON-массив. `eq`/`ne` должны ловить и то, и другое
+    // (одиночное равенство или вхождение в массив) — отдельная клауза через
+    // `json_each`, без неё `eq` на массиве вернёт «нет» даже при наличии id.
+    if (valueType === 'thought_ref') {
+      const cmpStr = cmp === '=' ? '=' : '<>';
+      const elementsSql = multipleValueElementsSql(column);
+      out.push({
+        sql: `EXISTS (
+          SELECT 1 FROM property_values_v pv, ${elementsSql} je
+          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+            AND pv.${column} IS NOT NULL AND je.value ${cmpStr} ?)`,
+        params: [def.id, scalar as string],
+      });
+      continue;
+    }
+
     out.push({
       sql: `EXISTS (
         SELECT 1 FROM property_values_v pv
@@ -629,6 +649,7 @@ function coerceScalar(
     case 'text':
     case 'url':
     case 'date':
+    case 'thought_ref':
       if (typeof value !== 'string') {
         throw new EtnError(
           'VALIDATION_ERROR',
@@ -643,16 +664,6 @@ function coerceScalar(
       throw new EtnError(
         'VALIDATION_ERROR',
         'Свойство-связь не фильтруется скалярным оператором.',
-        { field: 'value' },
-        requestId,
-      );
-    case 'thought_ref':
-      // Legacy (миграция 040): в живой БД таких свойств не остаётся;
-      // SUPPORTED_OPS['thought_ref'] пуст, сюда попасть нельзя — но
-      // для полноты switch.
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        'Свойство thought_ref упразднено (миграция 040).',
         { field: 'value' },
         requestId,
       );
