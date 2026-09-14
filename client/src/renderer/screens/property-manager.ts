@@ -31,6 +31,7 @@
 
 import type {
   AnyRealtimeEvent,
+  LinkPropertyDirection,
   NetworkProperty,
   NetworkPropertyInput,
   NetworkPropertyUpdateInput,
@@ -42,6 +43,7 @@ import { requireNetworkId } from '../app.js';
 import {
   confirmDialog,
   errorDialog,
+  field,
   showDialog,
 } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
@@ -50,6 +52,8 @@ import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
+import { createTypeCombobox } from '../lib/type-combobox.js';
+import { linkTypeOptions, thoughtTypeOptions } from '../lib/type-tree.js';
 import {
   showLinkTypeEditor,
   showThoughtTypeEditor,
@@ -366,6 +370,19 @@ export function openPropertyManagerEditor(
   // The default value (link has no default — the value is an edge).
   let defaultValue: unknown = draft.config?.default_value ?? null;
 
+  // Link-only state (value_type === 'link'). Structural marks the two
+  // system-seeded properties «Родители»/«Потомки» (migration 039): their link
+  // type/direction are fixed and not offered for editing here — only the
+  // flags below and the description stay editable through this dialog. A
+  // brand-new property (`property === null`) is never structural — there is
+  // no UI path to create one.
+  const isStructuralLink = draft.config?.structural === true;
+  let linkTypeId: string | null = draft.config?.link_type_id ?? null;
+  let linkDirection: LinkPropertyDirection = draft.config?.direction === 'in' ? 'in' : 'out';
+  let allowedTargetTypeIds: string[] = [...(draft.config?.allowed_target_type_ids ?? [])];
+  let showOnMap = draft.config?.show_on_map === true;
+  let blocksTargetDeletion = draft.config?.blocks_target_deletion === true;
+
   // ---- Header ------------------------------------------------------------
   const nameInput = el('input', 'text-input') as HTMLInputElement;
   nameInput.type = 'text';
@@ -403,21 +420,34 @@ export function openPropertyManagerEditor(
   const defaultHost = div('form-row');
   const textExtrasHost = div('form-stack');
   const urlExtrasHost = div('form-row');
+  const linkExtrasHost = div('form-stack');
 
   /**
    * Re-renders the value-type-specific blocks (default value, text options,
-   * url multiple). Called on first mount and on every `value_type` change
-   * (the in-progress default value does not carry over — it lives only on
-   * the currently-rendered input).
+   * url multiple, link config). Called on first mount and on every
+   * `value_type` change (the in-progress default value does not carry over —
+   * it lives only on the currently-rendered input).
    */
   function renderValueTypeExtras(): void {
     defaultHost.replaceChildren();
     textExtrasHost.replaceChildren();
     urlExtrasHost.replaceChildren();
+    linkExtrasHost.replaceChildren();
     const vt = typeSelect.value as PropertyValueType;
-    defaultHost.append(defaultInputFor(vt, defaultValue, (v) => {
-      defaultValue = v;
-    }));
+    // A link property's name is computed from the link type + direction
+    // (server-enforced, `linkPropertyDisplayName`) — read-only here so the
+    // computed name is visible before save instead of being silently ignored.
+    nameInput.readOnly = vt === 'link' && !isStructuralLink;
+    nameInput.placeholder = nameInput.readOnly
+      ? 'выберите тип связи ниже'
+      : 'Заголовок свойства (обязательно)';
+    if (vt === 'link') {
+      renderLinkExtras();
+    } else {
+      defaultHost.append(defaultInputFor(vt, defaultValue, (v) => {
+        defaultValue = v;
+      }));
+    }
     if (vt === 'text') renderTextExtras();
     if (vt === 'url') renderUrlExtras();
   }
@@ -468,7 +498,118 @@ export function openPropertyManagerEditor(
     urlExtrasHost.append(multiRow);
   }
 
-  body.append(defaultHost, textExtrasHost, urlExtrasHost);
+  /**
+   * Recomputes the read-only name shown in `nameInput` for a non-structural
+   * link property from the selected link type + direction (mirrors the
+   * server's `linkPropertyDisplayName`). A structural property keeps its
+   * stored, user-editable name untouched — this is a no-op for it.
+   */
+  function updateComputedName(): void {
+    if (isStructuralLink || typeSelect.value !== 'link') return;
+    const lt = linkTypeId === null ? null : store.state.linkTypes.find((t) => t.id === linkTypeId) ?? null;
+    nameInput.value = lt === null ? '' : linkDirection === 'in' ? lt.name_reverse : lt.name_forward;
+    revalidateName();
+  }
+
+  /**
+   * Renders the `value_type = 'link'` extras: link type, direction, optional
+   * target-type restriction and the two link-only flags — the fields
+   * `PropertyConfig` already carries (`shared/src/types/thought-type.ts`) but
+   * this dialog never exposed (bug found while auditing тех.проект
+   * «Единая модель связей»). The two system-seeded structural properties
+   * («Родители»/«Потомки», migration 039) only show the flags — their link
+   * type/direction are fixed and not offered here.
+   */
+  function renderLinkExtras(): void {
+    linkExtrasHost.replaceChildren();
+    if (isStructuralLink) {
+      linkExtrasHost.append(
+        el(
+          'p',
+          'muted',
+          'Структурное свойство: тип связи и направление заданы системой (не редактируются здесь).',
+        ),
+      );
+    } else {
+      const combo = createTypeCombobox({
+        options: () => linkTypeOptions(store.state.linkTypes),
+        value: linkTypeId,
+        placeholder: 'Тип связи (обязательно)',
+        onChange: (id) => {
+          linkTypeId = id;
+          updateComputedName();
+        },
+      });
+      linkExtrasHost.append(field('Тип связи', combo.root));
+
+      const dirSelect = el('select', 'select-input') as HTMLSelectElement;
+      const directionOptions: Array<[LinkPropertyDirection, string]> = [
+        ['out', 'исходящее (эта мысль — источник ребра)'],
+        ['in', 'входящее (эта мысль — цель ребра)'],
+      ];
+      for (const [value, label] of directionOptions) {
+        const option = el('option', undefined, label) as HTMLOptionElement;
+        option.value = value;
+        dirSelect.append(option);
+      }
+      dirSelect.value = linkDirection;
+      dirSelect.addEventListener('change', () => {
+        linkDirection = dirSelect.value === 'in' ? 'in' : 'out';
+        updateComputedName();
+      });
+      linkExtrasHost.append(field('Направление', dirSelect));
+    }
+
+    const allowedWrap = div('admin-table-wrap');
+    allowedWrap.style.maxHeight = '160px';
+    const allowedList = div('form-stack');
+    const targetOptions = thoughtTypeOptions(store.state.thoughtTypes);
+    if (targetOptions.length === 0) {
+      allowedList.append(span('Нет типов мыслей.', 'muted'));
+    }
+    for (const opt of targetOptions) {
+      const id = opt.id;
+      if (id === null) continue;
+      const row = el('label', 'checkbox-row') as HTMLLabelElement;
+      row.style.paddingLeft = `${Math.max(0, (opt.depth ?? 1) - 1) * 16}px`;
+      const check = el('input') as HTMLInputElement;
+      check.type = 'checkbox';
+      check.checked = allowedTargetTypeIds.includes(id);
+      check.addEventListener('change', () => {
+        allowedTargetTypeIds = check.checked
+          ? [...allowedTargetTypeIds, id]
+          : allowedTargetTypeIds.filter((x) => x !== id);
+      });
+      row.append(check, span(opt.label));
+      allowedList.append(row);
+    }
+    allowedWrap.append(allowedList);
+    linkExtrasHost.append(field('Допустимые типы цели (пусто — любой)', allowedWrap));
+
+    const showOnMapRow = el('label', 'checkbox-row') as HTMLLabelElement;
+    const showOnMapCheck = el('input') as HTMLInputElement;
+    showOnMapCheck.type = 'checkbox';
+    showOnMapCheck.checked = showOnMap;
+    showOnMapCheck.addEventListener('change', () => {
+      showOnMap = showOnMapCheck.checked;
+    });
+    showOnMapRow.append(showOnMapCheck, span('рисовать связь на карте по умолчанию'));
+    linkExtrasHost.append(showOnMapRow);
+
+    const blocksRow = el('label', 'checkbox-row') as HTMLLabelElement;
+    const blocksCheck = el('input') as HTMLInputElement;
+    blocksCheck.type = 'checkbox';
+    blocksCheck.checked = blocksTargetDeletion;
+    blocksCheck.addEventListener('change', () => {
+      blocksTargetDeletion = blocksCheck.checked;
+    });
+    blocksRow.append(blocksCheck, span('заполненная ссылка блокирует удаление цели'));
+    linkExtrasHost.append(blocksRow);
+
+    updateComputedName();
+  }
+
+  body.append(defaultHost, textExtrasHost, urlExtrasHost, linkExtrasHost);
   renderValueTypeExtras();
 
   // Блок «Метаданные» — автор, даты, id сущности (задача 04cd9794). Только
@@ -554,6 +695,10 @@ export function openPropertyManagerEditor(
 
   // ---- Apply -------------------------------------------------------------
   async function apply(close: () => void): Promise<void> {
+    if (draft.value_type === 'link' && !isStructuralLink && linkTypeId === null) {
+      errorLine.textContent = 'Выберите тип связи.';
+      return;
+    }
     const name = nameInput.value.trim();
     if (name === '') {
       errorLine.textContent = 'Название свойства обязательно.';
@@ -564,11 +709,24 @@ export function openPropertyManagerEditor(
       return;
     }
     const description = descArea.value.trim();
-    const config = buildConfig(draft.value_type, defaultValue, {
-      choiceOn,
-      optionsText,
-      multipleOn,
-    });
+    const config = buildConfig(
+      draft.value_type,
+      defaultValue,
+      { choiceOn, optionsText, multipleOn },
+      {
+        structural: isStructuralLink,
+        linkTypeId,
+        direction: linkDirection,
+        allowedTargetTypeIds,
+        showOnMap,
+        blocksTargetDeletion,
+        // Carries over `config.multiple` left by the thought_ref→link
+        // migration (040) — meaningless for a link property (the target
+        // count is never capped) but preserved verbatim since this form has
+        // no control for it, so an unrelated edit never drops it.
+        legacyMultiple: draft.config?.multiple === true,
+      },
+    );
 
     try {
       if (current === null) {
@@ -712,16 +870,41 @@ function defaultInputFor(
   }
 }
 
+/** Link-config inputs gathered by {@link renderLinkExtras}, passed to
+ *  {@link buildConfig} as a group so a `value_type = 'link'` edit never drops
+ *  a field the form has no control for (see `legacyMultiple`).
+ *  Exported for `buildConfig`'s unit tests. */
+export interface LinkConfigDraft {
+  structural: boolean;
+  linkTypeId: string | null;
+  direction: LinkPropertyDirection;
+  allowedTargetTypeIds: string[];
+  showOnMap: boolean;
+  blocksTargetDeletion: boolean;
+  legacyMultiple: boolean;
+}
+
 /**
- * Builds the `PropertyConfig` JSON to send on create/update. Returns `null`
- * when there is nothing meaningful to store (no default, no options, no
- * multiple flag) so the server stores the column as JSON `null` rather than
- * `{}`.
+ * Builds the `PropertyConfig` JSON to send on create/update.
  *
- * Multiple values are valid for text / url alike (02-data-model.md §3.4–3.5)
- * — one flag covers both kinds.
+ * For `value_type = 'link'` the config always carries `direction`, plus
+ * `structural`/`link_type_id` (mutually exclusive — see
+ * `shared/src/types/thought-type.ts` `PropertyConfig`) and whichever of the
+ * optional link flags the user set; it is never `null` (the server requires
+ * `config.link_type_id` for a non-structural link property).
+ *
+ * For every other kind, returns `null` when there is nothing meaningful to
+ * store (no default, no options, no multiple flag) so the server stores the
+ * column as JSON `null` rather than `{}`. Multiple values are valid for
+ * text / url alike (02-data-model.md §3.4–3.5) — one flag covers both kinds.
+ *
+ * Exported for unit tests (the dialog itself is rendered against the live
+ * DOM) — the regression this covers: the pre-fix `buildConfig` had no
+ * `value_type = 'link'` branch at all, so saving an existing link property
+ * through this dialog silently dropped `config.link_type_id` and the server
+ * rejected the patch with `VALIDATION_ERROR`.
  */
-function buildConfig(
+export function buildConfig(
   valueType: PropertyValueType,
   defaultValue: unknown,
   options: {
@@ -729,9 +912,25 @@ function buildConfig(
     optionsText: string;
     multipleOn: boolean;
   },
+  link: LinkConfigDraft,
 ): PropertyConfig | null {
+  if (valueType === 'link') {
+    const config: PropertyConfig = { direction: link.direction };
+    if (link.structural) {
+      config.structural = true;
+    } else if (link.linkTypeId !== null) {
+      config.link_type_id = link.linkTypeId;
+    }
+    if (link.allowedTargetTypeIds.length > 0) {
+      config.allowed_target_type_ids = [...link.allowedTargetTypeIds];
+    }
+    if (link.showOnMap) config.show_on_map = true;
+    if (link.blocksTargetDeletion) config.blocks_target_deletion = true;
+    if (link.legacyMultiple) config.multiple = true;
+    return config;
+  }
   const config: PropertyConfig = {};
-  if (valueType !== 'link' && defaultValue !== null && defaultValue !== undefined) {
+  if (defaultValue !== null && defaultValue !== undefined) {
     config.default_value = defaultValue as string | number | boolean;
   }
   if (valueType === 'text' && options.choiceOn) {
