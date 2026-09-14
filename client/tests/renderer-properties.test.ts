@@ -467,13 +467,36 @@ describe('editor properties group body (DOM-shimmed)', () => {
     };
     etnApi['properties'] = {
       get: async () => [
+        // Свойство-связь приходит формой LinkPropertyValues (0.8.1): рёбра
+        // в values[], поля .value нет.
         {
-          id: 'vlk1',
+          id: 'vlk2',
           owner_type: 'thought',
           owner_id: 't1',
           property_id: 'lk2',
-          value: ['ta1', 'ta2'],
-          updated_at: '2026',
+          outside_type: false,
+          property_name: 'Соавторы',
+          value_type: 'link',
+          direction: 'out',
+          link_type_id: null,
+          structural: false,
+          count: 2,
+          values: [
+            {
+              link_id: 'e1',
+              target_id: 'ta1',
+              target_title: 'Мысль ta1',
+              target_type_id: null,
+              comment: null,
+            },
+            {
+              link_id: 'e2',
+              target_id: 'ta2',
+              target_title: 'Мысль ta2',
+              target_type_id: null,
+              comment: null,
+            },
+          ],
         },
       ],
     };

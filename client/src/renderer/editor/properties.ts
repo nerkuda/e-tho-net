@@ -34,6 +34,8 @@ import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
 import { groupSection } from './group.js';
+import { applyGroupClamp } from './list-heights.js';
+import { rowSplitter } from './splitter.js';
 import { loadRecentValues, recordRecentValue, wireRecentValues } from './recent-values.js';
 import { wireTokenCombo, type ComboOption } from '../screens/thought-type/value-combo.js';
 
@@ -71,39 +73,48 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
   }
   // Group 1 — «Свойства типа» (expanded by default). Read-only outside-type
   // values are rendered inline as a second group further down.
-  box.append(
-    groupSection({
-      id: 'properties.type',
-      title: 'Свойства типа',
-      defaultCollapsed: false,
-      buildBody: () => buildPropertiesBody(ctx),
-    }),
-  );
+  const typeGroup = groupSection({
+    id: 'properties.type',
+    title: 'Свойства типа',
+    defaultCollapsed: false,
+    buildBody: () => buildPropertiesBody(ctx),
+  });
   // Group 2 — «Свойства вне типа» (collapsed by default). Hidden entirely
   // when there are no such values (rendered inside the main body once the
   // reload pass resolves).
+  const outsideGroup = groupSection({
+    id: 'properties.outside',
+    title: 'Свойства вне типа',
+    defaultCollapsed: true,
+    lazyCount: true,
+    loadCount: async () => {
+      try {
+        const networkId = requireNetworkId();
+        const values = await etn.properties.get(
+          networkId,
+          ctx.ownerType,
+          ctx.ownerId,
+        );
+        const outside = values.filter((v) => !isLinkPropertyValues(v) && v.outside_type === true);
+        return outside.length === 0 ? '(0)' : `(${outside.length})`;
+      } catch {
+        return undefined;
+      }
+    },
+    buildBody: () => buildOutsidePropertiesBody(ctx),
+  });
+  // Разделители высоты — тот же паттерн, что у вкладки «Связи» (08-ui-spec.md
+  // §6.3): сплиттер клампит группу выше себя; протяжка запоминается
+  // (list-heights.ts, L4 ui_state) и переживает смену мысли и перезапуск.
+  // Свернутая группа (без body) не ресайзится — сплиттер инертен.
+  const resizable = (group: HTMLElement): HTMLElement | null =>
+    group.querySelector(':scope > .group-body') !== null ? group : null;
+  applyGroupClamp(typeGroup, 'properties.type');
+  applyGroupClamp(outsideGroup, 'properties.outside');
   box.append(
-    groupSection({
-      id: 'properties.outside',
-      title: 'Свойства вне типа',
-      defaultCollapsed: true,
-      lazyCount: true,
-      loadCount: async () => {
-        try {
-          const networkId = requireNetworkId();
-          const values = await etn.properties.get(
-            networkId,
-            ctx.ownerType,
-            ctx.ownerId,
-          );
-          const outside = values.filter((v) => v.outside_type === true);
-          return outside.length === 0 ? '(0)' : `(${outside.length})`;
-        } catch {
-          return undefined;
-        }
-      },
-      buildBody: () => buildOutsidePropertiesBody(ctx),
-    }),
+    typeGroup,
+    rowSplitter(() => resizable(typeGroup), { min: 50, persistKey: 'properties.type' }),
+    outsideGroup,
   );
   return box;
 }
