@@ -291,6 +291,11 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     rect.setAttribute('height', String(CLOUD_H));
     rect.setAttribute('rx', String(CLOUD_H / 2));
     rect.setAttribute('width', String(node.w));
+    // Пилюля центрирована на узле: rect по умолчанию рисуется от (0,0)
+    // вправо-вниз — без x/y заголовок и иконка (координаты от центра)
+    // оказываются «рядом» с облачком, а не внутри него.
+    rect.setAttribute('x', String(-node.w / 2));
+    rect.setAttribute('y', String(-CLOUD_H / 2));
     rect.setAttribute('fill', v.bg);
     g.append(rect);
 

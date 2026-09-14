@@ -131,6 +131,20 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     );
   });
 
+  it('пилюля центрирована на узле (rect x/y) — заголовок и иконка внутри неё', () => {
+    // Регрессия: rect без x/y рисуется от (0,0) вправо-вниз, а текст/иконка
+    // позиционированы от центра — облачко «отклеивалось» от содержимого.
+    const src = readText(SRC.graph);
+    assert.ok(
+      src.includes("rect.setAttribute('x', String(-node.w / 2))"),
+      'cloud rect is centered horizontally',
+    );
+    assert.ok(
+      src.includes("rect.setAttribute('y', String(-CLOUD_H / 2))"),
+      'cloud rect is centered vertically',
+    );
+  });
+
   it('links-tab резолвит соседей до полных карточек (значки/цвета) для графа', () => {
     const src = readText(SRC.links);
     assert.ok(
