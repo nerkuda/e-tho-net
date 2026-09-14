@@ -16,7 +16,12 @@
  * values per property (localStorage, `recent-values.ts`).
  */
 
-import type { EffectiveTypeProperty, PropertyValue } from '@etn/shared';
+import type {
+  EffectiveTypeProperty,
+  LinkPropertyValueItem,
+  LinkPropertyValues,
+  PropertyValue,
+} from '@etn/shared';
 
 import { onRealtimeEvent } from '../realtime.js';
 import { button, div, el, errText, positionBodyDropdown, setTooltip, span } from '../lib/dom.js';
@@ -190,7 +195,7 @@ function buildOutsidePropertiesBody(ctx: EditorContext): HTMLElement {
   const reload = async (): Promise<void> => {
     if (everMounted && !box.isConnected) return;
     wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
-    let values: PropertyValue[];
+    let values: Array<PropertyValue | LinkPropertyValues>;
     try {
       values = await etn.properties.get(networkId, ownerType, ownerId);
     } catch (err) {
@@ -198,7 +203,11 @@ function buildOutsidePropertiesBody(ctx: EditorContext): HTMLElement {
       return;
     }
     if (box.isConnected) everMounted = true;
-    const outside = values.filter((v) => v.outside_type === true);
+    // Свойства-связи вне типа не бывают: их «значение» — живые рёбра, а не
+    // сохранённые строки property_values. Вне типа остаются только скаляры.
+    const outside: PropertyValue[] = values.filter(
+      (v): v is PropertyValue => !isLinkPropertyValues(v) && v.outside_type === true,
+    );
     if (outside.length === 0) {
       wrap.replaceChildren(el('p', 'muted', 'Нет значений вне типа.'));
       return;
@@ -387,7 +396,7 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
       tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
       return;
     }
-    let values: PropertyValue[] = [];
+    let values: Array<PropertyValue | LinkPropertyValues> = [];
     try {
       values = await etn.properties.get(networkId, ownerType, ownerId);
     } catch {
@@ -440,17 +449,20 @@ function buildEditorCell(opts: {
     ownerType: 'thought' | 'link';
     ownerId: string;
     definition: EffectiveTypeProperty,
-    current: PropertyValue | undefined,
+    current: PropertyValue | LinkPropertyValues | undefined,
   }): HTMLElement {
     const { networkId, ownerType, ownerId, definition, current } = opts;
     const cell = el('td');
-    const stored = current?.value ?? null;
+    const stored = current !== undefined && current.value_type !== 'link' ? current.value : null;
 
     const save = async (value: unknown | null): Promise<boolean> => {
       try {
-        if (value === null) {
+        if (value === null && definition.value_type !== 'link') {
           await etn.properties.remove(networkId, ownerType, ownerId, definition.key);
         } else {
+          // Свойство-связь очищается тоже через set: `set(null)` убирает все
+          // рёбра свойства (normalizeLinkTargets → []), а DELETE /properties
+          // для связей — no-op (в property_values ничего не хранится).
           await etn.properties.set(networkId, ownerType, ownerId, definition.key, value);
           // A successful save feeds the client-local recent-values history of
           // single text properties (recent-values.ts).
@@ -661,21 +673,21 @@ function buildEditorCell(opts: {
         break;
       }
       case 'link': {
-        // Свойство-связь (задача 8ab775d9, единая модель связей): значение —
-        // список id мыслей (single или multiple по `config.multiple`).
-        // Автокомплит по заголовку мысли переиспользует value-combo из
-        // конструктора отборов; множественные значения — чипы с контекстным
-        // меню облачка, click = открыть в редакторе, double-click = в фокус.
-        const storedIds = readLinkValue(stored);
-        const isMulti = definition.config?.multiple === true;
+        // Свойство-связь (задача 8ab775d9, единая модель связей): сервер
+        // отдаёт его формой LinkPropertyValues — значения это живые рёбра
+        // (`values[].target_id`), поля `.value` у формы нет. Чипы строятся из
+        // рёбер; автокомплит — value-combo из конструктора отборов; клик —
+        // открыть в редакторе, двойной — в фокус, правый — меню облачка.
+        const edges =
+          current !== undefined && isLinkPropertyValues(current) ? current.values : [];
         cell.append(
           buildLinkValueEditor({
             networkId,
             ownerType,
             ownerId,
             definition,
-            values: storedIds,
-            multiple: isMulti,
+            values: edges,
+            multiple: definition.config?.multiple === true,
             save,
           }),
         );
@@ -684,33 +696,6 @@ function buildEditorCell(opts: {
     }
     return cell;
   }
-
-/**
- * Нормализует значение свойства-ссылки: одиночная ссылка — строка id или
- * объект `{ id, ... }`, множественная — массив таких же; возможны пустые
- * и ошибочные формы после миграций, всё приводим к массиву строк.
- */
-function readLinkValue(stored: unknown): string[] {
-  if (stored === null || stored === undefined) return [];
-  if (typeof stored === 'string') return stored === '' ? [] : [stored];
-  if (Array.isArray(stored)) {
-    return stored
-      .map((item) => {
-        if (typeof item === 'string') return item;
-        if (item !== null && typeof item === 'object' && 'id' in item) {
-          const id = (item as { id: unknown }).id;
-          return typeof id === 'string' ? id : '';
-        }
-        return '';
-      })
-      .filter((s) => s !== '');
-  }
-  if (typeof stored === 'object' && stored !== null && 'id' in stored) {
-    const id = (stored as { id: unknown }).id;
-    return typeof id === 'string' && id !== '' ? [id] : [];
-  }
-  return [];
-}
 
 /** Human-readable property type name (used by both the main table and the
  * «Свойства вне типа» group, so it lives at module scope). */
@@ -735,6 +720,18 @@ function typeName(valueType: string): string {
 
 /** Test seam for unit tests. */
 export const propertiesInternals = { buildPropertiesBody };
+
+/**
+ * Type guard: скалярное значение (`PropertyValue`) против формы
+ * свойства-связи (`LinkPropertyValues`, без поля `.value`, зато со счётчиком
+ * и рёбрами `values[]`). Сужение по `value_type` ненадёжно — `"link"`
+ * встречается в обоих union-членах, поэтому различаем по форме.
+ */
+export function isLinkPropertyValues(
+  v: PropertyValue | LinkPropertyValues,
+): v is LinkPropertyValues {
+  return 'values' in v && 'count' in v;
+}
 
 /**
  * The hint shown next to a property name in the thought editor (task
@@ -1193,18 +1190,27 @@ async function showLinkChipMenu(
  * режим — чипы с кликом (открыть в редакторе), двойным кликом (в фокус),
  * правым кликом и Shift+F10 (контекстное меню облачка); добавление —
  * inline-input с автокомплитом.
+ *
+ * `values` — живые рёбра из `LinkPropertyValues.values[]`: подписи чипов
+ * берутся из `target_title` без дополнительного запроса; для id, попавшего
+ * в значение иначе (ввод id вручную), подпись до-резолвится одним
+ * `etn.thoughts.get`.
  */
 export function buildLinkValueEditor(opts: {
   networkId: string;
   ownerType: 'thought' | 'link';
   ownerId: string;
   definition: EffectiveTypeProperty;
-  values: string[];
+  values: LinkPropertyValueItem[];
   multiple: boolean;
   save: (next: unknown) => Promise<boolean>;
 }): HTMLElement {
   const { networkId, ownerType, ownerId, definition, multiple } = opts;
-  let current: string[] = [...opts.values];
+  let current: string[] = opts.values.map((edge) => edge.target_id);
+  const labels = new Map<string, string>();
+  for (const edge of opts.values) {
+    if (edge.target_title !== null) labels.set(edge.target_id, edge.target_title);
+  }
   const root = div('link-value-editor');
 
   const persist = async (next: string[]): Promise<void> => {
@@ -1239,11 +1245,14 @@ export function buildLinkValueEditor(opts: {
   /** Рисует чип для одной мысли в множественном режиме. */
   const buildChip = (id: string): HTMLElement => {
     const chip = div('st-f-chip value-combo-chip');
-    const label = span(id.slice(0, 8) + '…', 'st-f-chip-label');
+    const known = labels.get(id);
+    const label = span(known ?? `${id.slice(0, 8)}…`, 'st-f-chip-label');
     chip.append(label);
-    void fetchLinkLabel(networkId, id).then((text) => {
-      if (chip.isConnected) label.textContent = text;
-    });
+    if (known === undefined) {
+      void fetchLinkLabel(networkId, id).then((text) => {
+        if (chip.isConnected) label.textContent = text;
+      });
+    }
     chip.tabIndex = 0;
     chip.setAttribute('role', 'button');
     chip.setAttribute('aria-label', label.textContent ?? '');
@@ -1338,9 +1347,14 @@ export function buildLinkValueEditor(opts: {
     });
     if (current.length > 0) {
       const label = span('', 'link-value-current-label');
-      void fetchLinkLabel(networkId, current[0]!).then((text) => {
-        if (label.isConnected) label.textContent = ` → ${text}`;
-      });
+      const known = labels.get(current[0]!);
+      if (known !== undefined) {
+        label.textContent = ` → ${known}`;
+      } else {
+        void fetchLinkLabel(networkId, current[0]!).then((text) => {
+          if (label.isConnected) label.textContent = ` → ${text}`;
+        });
+      }
       row.append(input, label);
     } else {
       row.append(input);

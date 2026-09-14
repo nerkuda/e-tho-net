@@ -45,6 +45,7 @@ import type {
   HealthResponse,
   HierarchyResponse,
   Link,
+  LinkPropertyValues,
   LinkCreateInput,
   LinkDeletionCheckResult,
   LinkType,
@@ -673,11 +674,17 @@ export interface EtnApi {
     }>;
   };
   properties: {
+    /**
+     * `GET /networks/{nid}/thoughts|links/{id}/properties`. Для скалярных
+     * свойств — `PropertyValue`; свойства-связи (0.8.1) приходят формой
+     * `LinkPropertyValues` (счётчик + рёбра `values[]` с `target_id`/
+     * `target_title`) — поля `.value` у них нет.
+     */
     get(
       networkId: string,
       ownerType: 'thought' | 'link',
       ownerId: string,
-    ): Promise<PropertyValue[]>;
+    ): Promise<(PropertyValue | LinkPropertyValues)[]>;
     set(
       networkId: string,
       ownerType: 'thought' | 'link',

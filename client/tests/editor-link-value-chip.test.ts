@@ -179,6 +179,21 @@ const baseDefinition = {
   defined_on_name: 'Тест',
 };
 
+/**
+ * Ребро-фикстура `LinkPropertyValueItem` (0.8.1: значения свойства-связи —
+ * живые рёбра с `target_id`/`target_title`, не строки id). `target_title:
+ * null` — заголовок до-резолвится клиентом (`etn.thoughts.get`), как раньше.
+ */
+function edge(id: string) {
+  return {
+    link_id: `link-${id}`,
+    target_id: id,
+    target_title: null,
+    target_type_id: null,
+    comment: null,
+  };
+}
+
 describe('buildLinkValueEditor — single mode (8ab775d9)', () => {
   it('renders an autocomplete input with the right placeholder', async () => {
     installShim();
@@ -212,7 +227,7 @@ describe('buildLinkValueEditor — single mode (8ab775d9)', () => {
       ownerType: 'thought',
       ownerId: 't1',
       definition: baseDefinition as any,
-      values: ['ta-single'],
+      values: [edge('ta-single')],
       multiple: false,
       save: async () => true,
     }) as unknown as ShimElement;
@@ -236,7 +251,7 @@ describe('buildLinkValueEditor — multiple mode (chips, 8ab775d9)', () => {
       ownerType: 'thought',
       ownerId: 't1',
       definition: { ...baseDefinition, config: { multiple: true } } as any,
-      values: ['ta-1', 'ta-2'],
+      values: [edge('ta-1'), edge('ta-2')],
       multiple: true,
       save: async () => true,
     }) as unknown as ShimElement;
@@ -296,7 +311,7 @@ describe('buildLinkValueEditor — multiple mode (chips, 8ab775d9)', () => {
       ownerType: 'thought',
       ownerId: 't1',
       definition: { ...baseDefinition, config: { multiple: true } } as any,
-      values: ['ta-1'],
+      values: [edge('ta-1')],
       multiple: true,
       save: async () => true,
     }) as unknown as ShimElement;
@@ -318,7 +333,7 @@ describe('buildLinkValueEditor — multiple mode (chips, 8ab775d9)', () => {
       ownerType: 'thought',
       ownerId: 't1',
       definition: { ...baseDefinition, config: { multiple: true } } as any,
-      values: ['ta-1'],
+      values: [edge('ta-1')],
       multiple: true,
       save: async () => true,
     }) as unknown as ShimElement;
@@ -340,7 +355,7 @@ describe('buildLinkValueEditor — multiple mode (chips, 8ab775d9)', () => {
       ownerType: 'thought',
       ownerId: 't1',
       definition: { ...baseDefinition, config: { multiple: true } } as any,
-      values: ['ta-42'],
+      values: [edge('ta-42')],
       multiple: true,
       save: async () => true,
     }) as unknown as ShimElement;
@@ -355,6 +370,42 @@ describe('buildLinkValueEditor — multiple mode (chips, 8ab775d9)', () => {
     assert.ok(
       seenGets.includes('ta-42'),
       'chip must request the thought title via `etn.thoughts.get`',
+    );
+  });
+
+  it('uses the edge target_title as the chip label without an extra fetch', async () => {
+    // 0.8.1 / dde92461-фикс: значения свойства-связи приходят рёбрами
+    // LinkPropertyValues — готовый target_title подставляется в чип сразу,
+    // без по-мысльного `etn.thoughts.get` на каждое значение.
+    installShim();
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const editor = buildLinkValueEditor({
+      networkId: 'n1',
+      ownerType: 'thought',
+      ownerId: 't1',
+      definition: { ...baseDefinition, config: { multiple: true } } as any,
+      values: [
+        { ...edge('ta-known'), target_title: 'Готовый заголовок' },
+        edge('ta-unknown'),
+      ],
+      multiple: true,
+      save: async () => true,
+    }) as unknown as ShimElement;
+
+    const chips = findAllChips(editor);
+    assert.equal(chips.length, 2, 'one chip per edge');
+    const knownChip = chips.find((c) => c.children[0]!.textContent === 'Готовый заголовок');
+    assert.ok(knownChip !== undefined, 'known title renders synchronously');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(
+      seenGets.includes('ta-known'),
+      false,
+      'no extra fetch for an edge that carries target_title',
+    );
+    assert.equal(
+      seenGets.includes('ta-unknown'),
+      true,
+      'a null-title edge still resolves via etn.thoughts.get',
     );
   });
 });

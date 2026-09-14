@@ -661,6 +661,9 @@ function makeSnapshotDeps(networkId: string): SnapshotDeps {
       ]);
       const out: Record<string, unknown> = {};
       for (const v of values) {
+        // Свойства-связи приходят формой LinkPropertyValues (без .value) —
+        // в шаблоны подставляются только скаляры.
+        if ('values' in v) continue;
         const key = keys.get(v.property_id);
         if (key === undefined) continue;
         out[key] = v.value;
