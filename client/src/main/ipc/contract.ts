@@ -476,8 +476,12 @@ export interface EtnApi {
   trash: {
     /** `GET /trash` — marked-for-deletion thoughts/links with precomputed blocking (S13). */
     list(networkId: string): Promise<TrashListResult>;
-    /** `POST /trash/purge` — delete every unblocked marked row (S13). */
-    purge(networkId: string): Promise<TrashPurgeResult>;
+    /**
+     * `POST /trash/purge` — physically delete unblocked marked rows. `ids`
+     * narrows the sweep to the listed rows (ошибка 8b4b7a7e: per-item
+     * «Удалить совсем» of a link — `DELETE /links/{id}` снят 0.8.1).
+     */
+    purge(networkId: string, ids?: string[]): Promise<TrashPurgeResult>;
   };
   /**
    * Activity-log REST bridge (задачи f2eca5a4, 6bcccd2b;

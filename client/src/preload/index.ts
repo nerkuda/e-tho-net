@@ -117,7 +117,7 @@ function buildApi(): EtnApi {
     },
     trash: {
       list: (networkId) => invoke('trash.list', networkId),
-      purge: (networkId) => invoke('trash.purge', networkId),
+      purge: (networkId, ids) => invoke('trash.purge', networkId, ids),
     },
     activity: {
       list: (networkId, filters) => invoke('activity.list', networkId, filters),

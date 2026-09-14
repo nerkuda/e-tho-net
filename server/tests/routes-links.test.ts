@@ -145,5 +145,57 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('«удалить совсем» одной связи: пометка + точечный purge по ids (8b4b7a7e)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const keep = await createThought(ctx, 'Останется в корзине');
+        const gone = await createThought(ctx, 'Уйдёт совсем');
+        assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', [keep, gone]), 200);
+
+        // Оба ребра в корзину через набор свойства (модель 0.8.1).
+        assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', []), 200);
+        const trash = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/trash`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(trash.statusCode, 200);
+        const links = (trash.json().data as { links: Array<{ id: string; target_id: string }> })
+          .links;
+        assert.equal(links.length, 2);
+        const goneLink = links.find((l) => l.target_id === gone)!;
+
+        // Пустой ids — ошибка валидации (не «очистить всё» по ошибке).
+        const emptyIds = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/trash/purge`,
+          headers: authHeaders(ctx),
+          payload: { ids: [] },
+        });
+        assert.equal(emptyIds.statusCode, 422);
+
+        // Точечная очистка: уходит только ребро к «Уйдёт совсем».
+        const purge = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/trash/purge`,
+          headers: authHeaders(ctx),
+          payload: { ids: [goneLink.id] },
+        });
+        assert.equal(purge.statusCode, 200, purge.body?.toString());
+        assert.deepEqual(purge.json().data as Record<string, number>, { purged: 1, skipped: 0 });
+
+        const rest = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/trash`,
+          headers: authHeaders(ctx),
+        });
+        const restLinks = (rest.json().data as { links: Array<{ id: string }> }).links;
+        assert.equal(restLinks.length, 1);
+        assert.notEqual(restLinks[0]!.id, goneLink.id);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );

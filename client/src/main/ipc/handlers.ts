@@ -600,7 +600,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'trash.purge',
-    bind((networkId: string) => requireRest(deps).purgeTrash(networkId)),
+    bind((networkId: string, ids?: string[]) => requireRest(deps).purgeTrash(networkId, ids)),
   );
 
   // --- activity log (задачи f2eca5a4, 6bcccd2b; docs/03-server-api.md §13d) -

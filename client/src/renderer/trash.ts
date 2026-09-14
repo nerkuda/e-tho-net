@@ -77,6 +77,29 @@ async function linkVersion(networkId: string, id: string): Promise<number> {
 }
 
 /**
+ * 0.8.1 (ошибка 8b4b7a7e): `DELETE /links/{id}` снят (требование 3ea5c6af) —
+ * физическое удаление одного ребра идёт через корзину (7c226d3e): пометка
+ * «marked_for_deletion» (если ещё не стоит) + точечный purge по id. Возвращает
+ * false, когда purge не смог удалить строку (заблокирована удерживающим слоем).
+ */
+export async function purgeLinkCompletely(
+  networkId: string,
+  linkId: string,
+  alreadyMarked: boolean,
+): Promise<boolean> {
+  if (!alreadyMarked) {
+    await etn.links.update(
+      networkId,
+      linkId,
+      { marked_for_deletion: true },
+      await linkVersion(networkId, linkId),
+    );
+  }
+  const { purged } = await etn.trash.purge(networkId, [linkId]);
+  return purged > 0;
+}
+
+/**
  * Single-delete dialog for a thought (08-ui-spec.md §5a.1). Fetches the blocking
  * check once, then offers «Удалить совсем» (disabled when blocked),
  * «Поместить в корзину» / «Вернуть из корзины», and «Отмена».
@@ -243,7 +266,13 @@ export async function openLinkDeleteDialog(
         keepOpen: true,
         onClick: async (close) => {
           try {
-            await etn.links.remove(networkId, linkId, await linkVersion(networkId, linkId));
+            const purged = await purgeLinkCompletely(networkId, linkId, link.marked_for_deletion);
+            if (!purged) {
+              // Race with a layer/deletion-check change — same picture the
+              // disabled button would have shown.
+              notice('Связь не удалена: теперь заблокирована (удерживающий слой).', 'error');
+              return;
+            }
             patchFocusEdge({ ...link, active: false });
             const target = store.state.editorTarget;
             if (target !== null && target.kind === 'link' && target.id === linkId) {
@@ -660,7 +689,9 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   };
   const deleteLinkFromTrash = async (networkId: string, id: string): Promise<void> => {
     try {
-      await etn.links.remove(networkId, id, await linkVersion(networkId, id));
+      // 0.8.1: `DELETE /links/{id}` снят (3ea5c6af) — пер-элементная чистка
+      // ребра из корзины идёт точечным purge (строка уже помечена).
+      await etn.trash.purge(networkId, [id]);
       scheduleRefresh();
       await render();
     } catch (err) {

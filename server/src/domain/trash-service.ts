@@ -88,6 +88,12 @@ export function listTrash(ndb: NetworkDb): TrashListResult {
  * marked thought/link that is not blocked; blocked ones are skipped silently
  * (an expected outcome, not a failure). Returns purged/skipped counts.
  *
+ * `ids` narrows the sweep to the listed rows (ошибка 8b4b7a7e: per-item
+ * «Удалить совсем» из диалога связи и экрана корзины — `DELETE /links/{id}`
+ * снят 0.8.1, физическая чистка одного ребра идёт через purge). A requested id
+ * that is not in the trash (unmarked or already gone) counts as skipped, same
+ * silent philosophy as a blocked row.
+ *
  * In a working layer blocked rows (base-held and other-layer shadows) are
  * skipped just like in the base: the «Удалить» in a layer means a tombstone
  * (13-layers.md §5.2), which the user has not consciously agreed to for rows
@@ -96,20 +102,42 @@ export function listTrash(ndb: NetworkDb): TrashListResult {
  * whole sweep in a single outer transaction for auto-cleanup after layer
  * operations.
  */
-export function purgeTrash(ndb: NetworkDb): TrashPurgeOutcome {
+export function purgeTrash(ndb: NetworkDb, ids?: string[]): TrashPurgeOutcome {
   let purged = 0;
   let skipped = 0;
   const deletedThoughtIds: string[] = [];
   const deletedLinkIds: string[] = [];
 
+  const wanted = ids === undefined ? null : new Set(ids);
+  const takeId = (id: string): boolean => {
+    if (wanted === null) return true;
+    if (!wanted.has(id)) return false;
+    wanted.delete(id); // count each requested id once
+    return true;
+  };
+
   const thoughtIds = (
     ndb.prepare('SELECT id FROM thoughts_v WHERE marked_for_deletion = 1').all() as { id: string }[]
-  ).map((r) => r.id);
+  )
+    .map((r) => r.id)
+    .filter(takeId);
   const linkIds = (
     ndb.prepare('SELECT id FROM links_v WHERE marked_for_deletion = 1').all() as { id: string }[]
-  ).map((r) => r.id);
+  )
+    .map((r) => r.id)
+    .filter(takeId);
+  if (wanted !== null) skipped += wanted.size; // requested but not in the trash
 
   for (const id of thoughtIds) {
+    // A candidate may already be gone mid-sweep. It left the trash all the
+    // same, so it counts as purged and its `*.deleted` event still fires —
+    // the route-level fan-out is the only event source (the domain cascade of
+    // `deleteThought` emits nothing).
+    if (getThought(ndb, id) === null) {
+      deletedThoughtIds.push(id);
+      purged += 1;
+      continue;
+    }
     if (trashCheckThought(ndb, id).blocked) {
       skipped += 1;
       continue;
@@ -121,6 +149,16 @@ export function purgeTrash(ndb: NetworkDb): TrashPurgeOutcome {
     purged += 1;
   }
   for (const id of linkIds) {
+    // Cascade guard: a link listed for purge is often physically deleted by
+    // an earlier thought deletion of this same sweep (deleteThought cascades
+    // the thought's links). Counting + reporting it keeps `purged` truthful
+    // and delivers the `link.deleted` event the cascade never emitted —
+    // before, this spot crashed the whole purge with NOT_FOUND.
+    if (getLink(ndb, id) === null) {
+      deletedLinkIds.push(id);
+      purged += 1;
+      continue;
+    }
     if (trashCheckLink(ndb, id).blocked) {
       skipped += 1;
       continue;

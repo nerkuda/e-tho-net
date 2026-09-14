@@ -1929,11 +1929,18 @@ export class RestClient {
   }
 
   /** `POST /networks/{nid}/trash/purge` (03-server-api.md §14b). */
+  /**
+   * `POST /networks/{nid}/trash/purge` — physically delete unblocked marked
+   * rows; `ids` narrows the sweep to the listed rows (ошибка 8b4b7a7e:
+   * per-item «Удалить совсем» of a link — `DELETE /links/{id}` снят 0.8.1).
+   */
   public async purgeTrash(
     networkId: string,
+    ids?: string[],
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').TrashPurgeResult> {
     return this.request('POST', `/networks/${encodeURIComponent(networkId)}/trash/purge`, {
+      body: ids === undefined ? {} : { ids },
       requestOptions: opts,
     });
   }
