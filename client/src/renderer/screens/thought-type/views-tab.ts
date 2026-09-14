@@ -254,12 +254,11 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     const tr = el('tr');
     tr.dataset['viewId'] = view.id;
 
-    // Имя — 40% ширины, обрезается; двойной клик открывает редактор.
+    // Имя — 40% ширины, обрезается.
     const nameCell = el('td', 'views-tab-name-cell');
     const nameEl = el('span', 'views-tab-name', view.name);
     nameEl.title = view.name;
     nameCell.append(nameEl);
-    nameCell.addEventListener('dblclick', () => void onEdit(view));
     tr.append(nameCell);
 
     // По умолчанию — только галочка у помеченного.
@@ -297,12 +296,11 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     );
     tr.append(actions);
 
-    // Описание — последняя колонка, обрезается; двойной клик открывает редактор.
+    // Описание — последняя колонка, обрезается.
     const descCell = el('td', 'views-tab-desc-cell');
     const descEl = el('span', 'views-tab-desc muted', (view.description ?? '').slice(0, 160) || '—');
     descEl.title = view.description ?? '';
     descCell.append(descEl);
-    descCell.addEventListener('dblclick', () => void onEdit(view));
     tr.append(descCell);
 
     // Одиночный клик подсвечивает строку для клавишной навигации.
@@ -310,6 +308,18 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       const rows = Array.from(tableWrap.querySelectorAll<HTMLTableRowElement>('.views-tab-table tbody tr'));
       selectedIdx = rows.indexOf(tr);
       applySelection();
+    });
+
+    // Двойной клик по строке открывает редактор отбора (ошибка
+    // `06eae5d3-…`). Раньше обработчик висел только на ячейках имени и
+    // описания — клик по колонке «умлоч.» или в просвет между кнопками
+    // не давал никакой реакции. Кнопки сами по себе — отдельный сценарий
+    // (порядок/по-умолчанию/удаление), их активация не должна открывать
+    // редактор; тот же приём `closest('button')` уже стоит в `type-manager.ts`
+    // для строки каталога типов.
+    tr.addEventListener('dblclick', (event) => {
+      if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
+      void onEdit(view);
     });
 
     return tr;
