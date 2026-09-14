@@ -430,11 +430,13 @@ describe('editor properties group body (DOM-shimmed)', () => {
     );
   });
 
-  it('renders link properties through the autocomplete+chips path (8ab775d9)', async () => {
-    // link-свойство теперь рендерится через `buildLinkValueEditor` —
-    // автокомплит по заголовку мысли (single) или чипы (multiple). Здесь
-    // мы проверяем, что single-режим даёт поле ввода без `text/url`-стиля
-    // и с правильным плейсхолдером, а multiple — чип-поле.
+  it('renders link properties through the mini-cloud/chip picker path (a47947c8)', async () => {
+    // link-свойство рендерится через `buildLinkValueEditor` — мини-облачко
+    // выбранной мысли + «выбрать» (single) или чипы-мини-облачка + «выбрать»
+    // (multiple), инструкция «Использовать унифицированные поля выбора
+    // ссылок в диалогах». Здесь проверяем, что single-режим без значения
+    // даёт поле живого поиска с правильным плейсхолдером, а multiple —
+    // мини-облачко на каждое сохранённое значение.
     sharedWindow = (globalThis as any).window ?? {};
     (globalThis as any).window = sharedWindow;
     if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
@@ -501,27 +503,24 @@ describe('editor properties group body (DOM-shimmed)', () => {
       ],
     };
     etnApi['thoughts'] = {
-      search: async () => ({ by_names: [] }),
-      get: async (_n: string, id: string) => ({
-        id,
-        title: `Мысль ${id}`,
-        type_id: null,
-        icon: null,
-        icon_kind: 'emoji',
-        icon_attachment_id: null,
-        active: true,
-        marked_for_deletion: false,
-        fg_color: null,
-        bg_color: null,
-        font_bold: null,
-        font_italic: null,
-        font_underline: null,
-        font_strike: null,
-        synonyms: [],
-        version: 1,
-        created_at: '2026',
-        updated_at: '2026',
-      }),
+      findDuplicates: async () => [],
+      resolve: async (_n: string, ids: string[]) =>
+        ids.map((id) => ({
+          id,
+          title: `Мысль ${id}`,
+          type_id: null,
+          icon: null,
+          icon_kind: 'emoji',
+          icon_attachment_id: null,
+          active: true,
+          marked_for_deletion: false,
+          fg_color: null,
+          bg_color: null,
+          font_bold: null,
+          font_italic: null,
+          font_underline: null,
+          font_strike: null,
+        })),
     };
     if (etnApi['system'] === undefined) etnApi['system'] = {};
     (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
@@ -562,12 +561,11 @@ describe('editor properties group body (DOM-shimmed)', () => {
     const table = tableWrap.children[0]!;
     const tbody = table.children[0]!;
 
-    // Row 0 — single link property «Упоминание»: рендерится через
-    // buildLinkValueEditor в single-режиме.
+    // Row 0 — single link property «Упоминание» без значения:
+    // buildLinkValueEditor в single-режиме, пустое значение — живой поиск.
     const singleCell = tbody.children[0]?.children[1];
     assert.ok(singleCell !== undefined, 'single link cell rendered');
-    // Структура single-режима: link-value-editor > form-row.link-value-single
-    // > [input]. Ищем input внутри row.
+    // Структура: link-value-editor > form-row.link-value-single > [input, button].
     const singleRoot = singleCell.children[0];
     const singleRow = singleRoot?.children[0];
     const singleInput = singleRow?.children.find(
@@ -576,22 +574,26 @@ describe('editor properties group body (DOM-shimmed)', () => {
     assert.ok(singleInput !== undefined, 'single link input rendered');
     assert.equal(
       (singleInput as ShimElement).placeholder,
-      'Введите название или id мысли…',
-      'single link uses autocomplete placeholder',
+      'введите название для поиска…',
+      'empty single link uses the live-search placeholder',
     );
+    const singlePickBtn = singleRow?.children.find(
+      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    );
+    assert.ok(singlePickBtn !== undefined, 'single link has a «выбрать» button');
 
-    // Row 1 — multiple link property «Соавторы»: чип-поле с двумя чипами +
-    // поле добавления.
+    // Row 1 — multiple link property «Соавторы»: два мини-облачка + поле
+    // добавления + «выбрать».
     const multiCell = tbody.children[1]?.children[1];
     assert.ok(multiCell !== undefined, 'multi link cell rendered');
-    // Структура multi-режима: link-value-editor > st-f-chipfield.value-combo-field
-    // > [chip, chip, addInput].
+    // Структура: link-value-editor > form-row > [st-f-chipfield, button].
     const multiRoot = multiCell.children[0];
-    const multiField = multiRoot?.children[0];
-    const chips = multiField?.children.filter((c) =>
-      (c as ShimElement).className.split(' ').includes('value-combo-chip'),
+    const multiRow = multiRoot?.children[0];
+    const multiField = multiRow?.children[0];
+    const clouds = multiField?.children.filter((c) =>
+      (c as ShimElement).className.split(' ').includes('prop-ref-cloud'),
     );
-    assert.equal(chips?.length, 2, 'one chip per stored id (multi link)');
+    assert.equal(clouds?.length, 2, 'one mini-cloud per stored id (multi link)');
     const addInput = multiField?.children.find(
       (c) => c.tagName === 'input',
     ) as ShimElement | undefined;
@@ -599,8 +601,12 @@ describe('editor properties group body (DOM-shimmed)', () => {
     assert.equal(
       (addInput as ShimElement).placeholder,
       '+ ещё одну мысль',
-      'multi link uses chip add placeholder',
+      'multi link uses the chip add placeholder',
     );
+    const multiPickBtn = multiRow?.children.find(
+      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    );
+    assert.ok(multiPickBtn !== undefined, 'multi link has a «выбрать» button');
   });
 });
 

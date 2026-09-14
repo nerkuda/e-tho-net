@@ -23,7 +23,8 @@
  * adapt it to a pure picker:
  *   - `allowCreate: false` forbids new thoughts and hides the type field;
  *   - `allowLinkType: false` hides the link-type field;
- *   - `selectedIds` prefills the list (multi mode switches on automatically).
+ *   - `selectedIds` prefills the list (multi mode switches on automatically);
+ *   - `searchTypeIds` narrows the live search (link-property type configs).
  *
  * Also handles the drop of files/URLs onto the canvas (08-ui-spec.md §7):
  * the zone drop handlers create thoughts with an attachment.
@@ -73,6 +74,8 @@ export interface ThoughtPickerOptions {
   allowCreate?: boolean;
   /** Show the link-type field (default true — the canvas add flows). */
   allowLinkType?: boolean;
+  /** Restrict the live search to these thought types (link-property configs). */
+  searchTypeIds?: string[];
   /** Prefill the list with these thoughts; multi mode switches on. */
   selectedIds?: string[];
   /**
@@ -243,6 +246,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
   const networkId = opts.networkId;
   const allowCreate = opts.allowCreate !== false;
   const allowLinkType = opts.allowLinkType !== false;
+  const searchFilter = (opts.searchTypeIds ?? []).filter((id) => id !== '');
 
   return new Promise((resolve) => {
     let multi = (opts.selectedIds ?? []).length > 0;
@@ -393,6 +397,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
               networkId,
               parsed.title,
               parsed.synonyms,
+              searchFilter,
             );
             lastCandidates = hits.filter((hit) => hit.id !== anchorId);
             renderCandidates(lastCandidates);

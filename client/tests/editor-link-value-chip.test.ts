@@ -1,17 +1,16 @@
 /**
  * Unit tests for `buildLinkValueEditor` (задача 8ab775d9, 0.8.1, единая
- * модель связей) — редактор значения свойства-ссылки на мысль. Single-режим
- * (автокомплит по заголовку мысли) и multiple-режим (чипы + добавление +
- * контекстное меню облачка) проверяются через DOM-shim, как соседние editor-*
- * тесты.
+ * модель связей; правка — инструкция «Использовать унифицированные поля
+ * выбора ссылок в диалогах», a47947c8) — редактор значения свойства-связи на
+ * мысль: мини-облачко(-а) выбранных мыслей + «✕» + кнопка «выбрать»
+ * (`pickThoughtsDialog`) + живой поиск (`wireThoughtRefSearch`) для пустого
+ * поля / добавления.
  *
- * Здесь намеренно избегаем dispatch('input') (внутренняя `wireTokenCombo`
- * запускает асинхронную цепочку `etn.thoughts.search → document.body.append`
- * → positionBodyDropdown → requestAnimationFrame, в shim-среде
- * зависающую на неопределённое время) — тесты покрывают статическую
- * структуру DOM и факт регистрации click/dblclick/contextmenu/keydown
- * обработчиков чипов; интерактивный автокомплит покрывается отдельным
- * value-combo test'ом.
+ * Здесь намеренно избегаем dispatch('input') (внутренняя `wireThoughtRefSearch`
+ * запускает асинхронную цепочку `etn.thoughts.findDuplicates →
+ * document.body.append → positionBodyDropdown`, в shim-среде зависающую на
+ * неопределённое время) — тесты покрывают статическую структуру DOM и факт
+ * регистрации click/dblclick/contextmenu/keydown обработчиков облачка.
  */
 
 import assert from 'node:assert/strict';
@@ -19,7 +18,7 @@ import { describe, it } from 'node:test';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-/** Element-stub с поддержкой keydown / contextmenu / setAttribute. */
+/** Element-stub с поддержкой keydown / contextmenu / dataset / setAttribute. */
 class ShimElement {
   tagName: string;
   className = '';
@@ -30,8 +29,10 @@ class ShimElement {
   checked = false;
   title = '';
   placeholder = '';
+  autocomplete = '';
   isConnected = true;
   tabIndex = -1;
+  dataset: Record<string, string> = {};
   attributes: Record<string, string> = {};
   listeners: Record<string, Array<(event?: any) => void>> = {};
   style: Record<string, string> = {};
@@ -91,15 +92,18 @@ class ShimElement {
 }
 
 let sharedWindow: Record<string, unknown> = {};
-let seenGets: string[] = [];
+/** Ids requested via `etn.thoughts.resolve` (style/metadata resolve). */
+let seenResolves: string[] = [];
 
 /**
- * Установка шима: document/window + минимальный `etn.thoughts.get` для
- * подписи чипа. `lib/etn.ts` привязывается к `window.etn` при первом
- * импорте — оставляем ОДИН глобальный объект на весь test-файл.
+ * Установка шима: document/window + минимальные `etn.thoughts.resolve` /
+ * `etn.thoughts.findDuplicates` (для `wireThoughtRefSearch`, не вызывается в
+ * этих тестах, но должен существовать, чтобы модуль импортировался).
+ * `lib/etn.ts` привязывается к `window.etn` при первом импорте — оставляем
+ * ОДИН глобальный объект на весь test-файл.
  */
 function installShim(): void {
-  seenGets = [];
+  seenResolves = [];
   if ((globalThis as any).document === undefined) {
     (globalThis as any).document = {
       createElement: (tag: string) => new ShimElement(tag),
@@ -117,13 +121,11 @@ function installShim(): void {
   (globalThis as any).window = sharedWindow;
   if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
   const etnApi = sharedWindow['etn'] as Record<string, unknown>;
-  // `search` не нужен этим тестам — пробрасываем заглушку, чтобы случайный
-  // позыв из `wireTokenCombo` не уходил в undefined.
   etnApi['thoughts'] = {
-    search: async () => ({ by_names: [] }),
-    get: async (_n: string, id: string) => {
-      seenGets.push(id);
-      return {
+    findDuplicates: async () => [],
+    resolve: async (_n: string, ids: string[]) => {
+      seenResolves.push(...ids);
+      return ids.map((id) => ({
         id,
         title: `Title of ${id}`,
         type_id: null,
@@ -138,11 +140,7 @@ function installShim(): void {
         font_italic: null,
         font_underline: null,
         font_strike: null,
-        synonyms: [],
-        version: 1,
-        created_at: '2026',
-        updated_at: '2026',
-      };
+      }));
     },
   };
   if (etnApi['system'] === undefined) etnApi['system'] = {};
@@ -156,15 +154,14 @@ function installShim(): void {
   sharedWindow['dispatchEvent'] = () => undefined;
 }
 
-/** Возвращает все чипы (`.value-combo-chip`) в поддереве. */
-function findAllChips(root: ShimElement): ShimElement[] {
+/** Возвращает все мини-облачка (`.prop-ref-cloud`) в поддереве, в порядке документа. */
+function findAllClouds(root: ShimElement): ShimElement[] {
   const out: ShimElement[] = [];
-  const stack: ShimElement[] = [root];
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    if (node.className.split(' ').includes('value-combo-chip')) out.push(node);
-    stack.push(...node.children);
-  }
+  const walk = (node: ShimElement): void => {
+    if (node.className.split(' ').includes('prop-ref-cloud')) out.push(node);
+    for (const child of node.children) walk(child);
+  };
+  walk(root);
   return out;
 }
 
@@ -181,21 +178,20 @@ const baseDefinition = {
 
 /**
  * Ребро-фикстура `LinkPropertyValueItem` (0.8.1: значения свойства-связи —
- * живые рёбра с `target_id`/`target_title`, не строки id). `target_title:
- * null` — заголовок до-резолвится клиентом (`etn.thoughts.get`), как раньше.
+ * живые рёбра с `target_id`/`target_title`, не строки id).
  */
-function edge(id: string) {
+function edge(id: string, title: string | null = null) {
   return {
     link_id: `link-${id}`,
     target_id: id,
-    target_title: null,
+    target_title: title,
     target_type_id: null,
     comment: null,
   };
 }
 
-describe('buildLinkValueEditor — single mode (8ab775d9)', () => {
-  it('renders an autocomplete input with the right placeholder', async () => {
+describe('buildLinkValueEditor — single mode, мини-облачко (a47947c8)', () => {
+  it('empty value renders a live-search input + «выбрать» button', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const editor = buildLinkValueEditor({
@@ -208,18 +204,23 @@ describe('buildLinkValueEditor — single mode (8ab775d9)', () => {
       save: async () => true,
     }) as unknown as ShimElement;
 
-    const input = editor.children[0]?.children.find(
+    const row = editor.children[0]!;
+    const input = row.children.find(
       (c) => c.tagName === 'input' && c.type === 'text',
     ) as ShimElement | undefined;
-    assert.ok(input !== undefined, 'single input rendered');
+    assert.ok(input !== undefined, 'search input rendered');
     assert.equal(
-      (input as ShimElement).placeholder,
-      'Введите название или id мысли…',
-      'single input uses the autocomplete placeholder',
+      input!.placeholder,
+      'введите название для поиска…',
+      'empty single input uses the live-search placeholder',
     );
+    const pickBtn = row.children.find(
+      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    );
+    assert.ok(pickBtn !== undefined, '«выбрать» button rendered for the empty single field');
   });
 
-  it('single mode shows the resolved title next to the input when a value is set', async () => {
+  it('set value renders a mini-cloud (prop-ref-cloud) with «✕» + «выбрать» button', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const editor = buildLinkValueEditor({
@@ -227,23 +228,67 @@ describe('buildLinkValueEditor — single mode (8ab775d9)', () => {
       ownerType: 'thought',
       ownerId: 't1',
       definition: baseDefinition as any,
-      values: [edge('ta-single')],
+      values: [edge('ta-single', 'Единственная мысль')],
       multiple: false,
       save: async () => true,
     }) as unknown as ShimElement;
 
-    // Single-режим с заполненным значением: input + span с подписью.
-    const row = editor.children[0];
-    assert.ok(row !== undefined, 'form-row rendered');
-    const label = row!.children.find((c) =>
-      (c as ShimElement).className.split(' ').includes('link-value-current-label'),
+    const row = editor.children[0]!;
+    const cloud = row.children.find((c) =>
+      c.className.split(' ').includes('prop-ref-cloud'),
+    ) as ShimElement | undefined;
+    assert.ok(cloud !== undefined, 'mini-cloud rendered for the stored value');
+    assert.equal(cloud!.tabIndex, 0, 'cloud is keyboard-focusable');
+    assert.equal(cloud!.getAttribute('role'), 'button', 'cloud is exposed as role=button');
+    assert.equal(
+      cloud!.dataset['id'],
+      'ta-single',
+      'cloud carries the target id in dataset',
     );
-    assert.ok(label !== undefined, 'single mode renders a current-label span');
+    // Заголовок берётся из ребра (target_title) сразу, без ожидания резолва.
+    const titleSpan = cloud!.children.find((c) => c.className === 'prc-title');
+    assert.equal(titleSpan?.textContent, 'Единственная мысль');
+
+    const removeBtn = cloud!.children.find((c) =>
+      c.className.split(' ').includes('st-f-clear-inline'),
+    );
+    assert.ok(removeBtn !== undefined, 'cloud has a «✕» clear button');
+
+    const pickBtn = row.children.find(
+      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    );
+    assert.ok(pickBtn !== undefined, '«выбрать» button rendered alongside the cloud');
+  });
+
+  it('«✕» on the cloud clears the value and persists null', async () => {
+    installShim();
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const saved: unknown[] = [];
+    const editor = buildLinkValueEditor({
+      networkId: 'n1',
+      ownerType: 'thought',
+      ownerId: 't1',
+      definition: baseDefinition as any,
+      values: [edge('ta-single', 'Единственная мысль')],
+      multiple: false,
+      save: async (next) => {
+        saved.push(next);
+        return true;
+      },
+    }) as unknown as ShimElement;
+
+    const cloud = findAllClouds(editor)[0]!;
+    const removeBtn = cloud.children.find((c) =>
+      c.className.split(' ').includes('st-f-clear-inline'),
+    )!;
+    removeBtn.dispatch('click', { stopPropagation: () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(saved, [null], 'clearing the single value persists null');
   });
 });
 
-describe('buildLinkValueEditor — multiple mode (chips, 8ab775d9)', () => {
-  it('renders one chip per stored id with a «+ ещё одну мысль» add input', async () => {
+describe('buildLinkValueEditor — multiple mode, чипы мини-облачков (a47947c8)', () => {
+  it('renders one mini-cloud per stored id with a «+ ещё одну мысль» add input', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const editor = buildLinkValueEditor({
@@ -251,36 +296,37 @@ describe('buildLinkValueEditor — multiple mode (chips, 8ab775d9)', () => {
       ownerType: 'thought',
       ownerId: 't1',
       definition: { ...baseDefinition, config: { multiple: true } } as any,
-      values: [edge('ta-1'), edge('ta-2')],
+      values: [edge('ta-1', 'Мысль 1'), edge('ta-2', 'Мысль 2')],
       multiple: true,
       save: async () => true,
     }) as unknown as ShimElement;
 
-    const chips = findAllChips(editor);
-    assert.equal(chips.length, 2, 'one chip per stored id');
-    for (const chip of chips) {
-      const idAttr = chip.getAttribute('aria-label');
-      assert.ok(idAttr !== null, 'chip has aria-label for screen readers');
-      assert.equal(chip.tabIndex, 0, 'chip is keyboard-focusable (tabIndex=0)');
-      assert.equal(
-        chip.getAttribute('role'),
-        'button',
-        'chip is exposed as role=button',
-      );
+    const clouds = findAllClouds(editor);
+    assert.equal(clouds.length, 2, 'one mini-cloud per stored id');
+    for (const cloud of clouds) {
+      assert.ok(cloud.getAttribute('aria-label') !== null, 'cloud has aria-label');
+      assert.equal(cloud.tabIndex, 0, 'cloud is keyboard-focusable (tabIndex=0)');
+      assert.equal(cloud.getAttribute('role'), 'button', 'cloud is exposed as role=button');
     }
 
-    const addInput = editor.children[0]?.children.find(
-      (c) => c.tagName === 'input',
-    ) as ShimElement | undefined;
+    const row = editor.children[0]!;
+    const field = row.children[0]!;
+    const addInput = field.children.find((c) => c.tagName === 'input') as
+      | ShimElement
+      | undefined;
     assert.ok(addInput !== undefined, '«add» input is present');
     assert.equal(
-      (addInput as ShimElement).placeholder,
+      addInput!.placeholder,
       '+ ещё одну мысль',
-      'multi link uses chip-add placeholder',
+      'non-empty multi field uses the add placeholder',
     );
+    const pickBtn = row.children.find(
+      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    );
+    assert.ok(pickBtn !== undefined, '«выбрать» button rendered next to the chip field');
   });
 
-  it('empty multi-mode renders the «Введите мысль или id…» placeholder', async () => {
+  it('empty multi-mode renders the «Название мысли…» seed placeholder', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const editor = buildLinkValueEditor({
@@ -292,18 +338,19 @@ describe('buildLinkValueEditor — multiple mode (chips, 8ab775d9)', () => {
       multiple: true,
       save: async () => true,
     }) as unknown as ShimElement;
-    const addInput = editor.children[0]?.children.find(
-      (c) => c.tagName === 'input',
-    ) as ShimElement | undefined;
+    const field = editor.children[0]!.children[0]!;
+    const addInput = field.children.find((c) => c.tagName === 'input') as
+      | ShimElement
+      | undefined;
     assert.ok(addInput !== undefined, 'add input rendered');
     assert.equal(
-      (addInput as ShimElement).placeholder,
-      'Введите мысль или id…',
+      addInput!.placeholder,
+      'Название мысли…',
       'empty multi mode uses the seed placeholder',
     );
   });
 
-  it('chip registers click / dblclick / contextmenu / keydown listeners', async () => {
+  it('cloud registers click / dblclick / contextmenu / keydown listeners', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const editor = buildLinkValueEditor({
@@ -311,21 +358,21 @@ describe('buildLinkValueEditor — multiple mode (chips, 8ab775d9)', () => {
       ownerType: 'thought',
       ownerId: 't1',
       definition: { ...baseDefinition, config: { multiple: true } } as any,
-      values: [edge('ta-1')],
+      values: [edge('ta-1', 'Мысль 1')],
       multiple: true,
       save: async () => true,
     }) as unknown as ShimElement;
 
-    const chip = findAllChips(editor)[0]!;
+    const cloud = findAllClouds(editor)[0]!;
     for (const type of ['click', 'dblclick', 'contextmenu', 'keydown']) {
       assert.ok(
-        chip.listeners[type] !== undefined && chip.listeners[type]!.length > 0,
-        `chip must register a «${type}» listener`,
+        cloud.listeners[type] !== undefined && cloud.listeners[type]!.length > 0,
+        `cloud must register a «${type}» listener`,
       );
     }
   });
 
-  it('chip click handler is wired (smoke: dispatch does not throw)', async () => {
+  it('cloud click handler is wired (smoke: dispatch does not throw)', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const editor = buildLinkValueEditor({
@@ -333,90 +380,21 @@ describe('buildLinkValueEditor — multiple mode (chips, 8ab775d9)', () => {
       ownerType: 'thought',
       ownerId: 't1',
       definition: { ...baseDefinition, config: { multiple: true } } as any,
-      values: [edge('ta-1')],
+      values: [edge('ta-1', 'Мысль 1')],
       multiple: true,
       save: async () => true,
     }) as unknown as ShimElement;
 
-    const chip = findAllChips(editor)[0]!;
+    const cloud = findAllClouds(editor)[0]!;
     // click handler зовёт openLinkRefInEditor, который внутри делает
     // динамический import('./editor.js'). Это не должно падать с нашим
     // шимом — проверяем контракт регистрации listener'а.
     assert.doesNotThrow(() => {
-      chip.dispatch('click', { preventDefault: () => undefined });
+      cloud.dispatch('click', { preventDefault: () => undefined });
     });
   });
 
-  it('chip shows the resolved thought title as label after `etn.thoughts.get`', async () => {
-    installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
-    const editor = buildLinkValueEditor({
-      networkId: 'n1',
-      ownerType: 'thought',
-      ownerId: 't1',
-      definition: { ...baseDefinition, config: { multiple: true } } as any,
-      values: [edge('ta-42')],
-      multiple: true,
-      save: async () => true,
-    }) as unknown as ShimElement;
-
-    const chip = findAllChips(editor)[0]!;
-    const label = chip.children[0];
-    assert.ok(label !== undefined, 'chip has a label child');
-    assert.equal(label.textContent, 'ta-42…', 'pre-fetch placeholder is the truncated id');
-
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.equal(label.textContent, 'Title of ta-42', 'post-fetch label is the resolved title');
-    assert.ok(
-      seenGets.includes('ta-42'),
-      'chip must request the thought title via `etn.thoughts.get`',
-    );
-  });
-
-  it('uses the edge target_title as the chip label without an extra fetch', async () => {
-    // 0.8.1 / dde92461-фикс: значения свойства-связи приходят рёбрами
-    // LinkPropertyValues — готовый target_title подставляется в чип сразу,
-    // без по-мысльного `etn.thoughts.get` на каждое значение.
-    installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
-    const editor = buildLinkValueEditor({
-      networkId: 'n1',
-      ownerType: 'thought',
-      ownerId: 't1',
-      definition: { ...baseDefinition, config: { multiple: true } } as any,
-      values: [
-        { ...edge('ta-known'), target_title: 'Готовый заголовок' },
-        edge('ta-unknown'),
-      ],
-      multiple: true,
-      save: async () => true,
-    }) as unknown as ShimElement;
-
-    const chips = findAllChips(editor);
-    assert.equal(chips.length, 2, 'one chip per edge');
-    const knownChip = chips.find((c) => c.children[0]!.textContent === 'Готовый заголовок');
-    assert.ok(knownChip !== undefined, 'known title renders synchronously');
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.equal(
-      seenGets.includes('ta-known'),
-      false,
-      'no extra fetch for an edge that carries target_title',
-    );
-    assert.equal(
-      seenGets.includes('ta-unknown'),
-      true,
-      'a null-title edge still resolves via etn.thoughts.get',
-    );
-  });
-});
-
-describe('buildLinkValueEditor — multiple-mode save dispatch (8ab775d9)', () => {
-  it('persists the new value list when the user picks a chip-candidate', async () => {
-    // Smoke на save-канал: мы не запускаем UI (input → wireTokenCombo →
-    // dropdown click → onPick → save), а напрямую имитируем «уже
-    // разрешённый выбор через addInput», подменяя save и проверяя
-    // контракт вызова. Также здесь видно, что multiple-режим сериализует
-    // пустой список как `null` (см. `persist` в buildLinkValueEditor).
+  it('«✕» on a chip cloud removes only that id and persists the rest', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const saved: unknown[] = [];
@@ -425,36 +403,83 @@ describe('buildLinkValueEditor — multiple-mode save dispatch (8ab775d9)', () =
       ownerType: 'thought',
       ownerId: 't1',
       definition: { ...baseDefinition, config: { multiple: true } } as any,
-      values: [],
+      values: [edge('ta-1', 'Мысль 1'), edge('ta-2', 'Мысль 2')],
       multiple: true,
-      save: async (next: unknown) => {
+      save: async (next) => {
         saved.push(next);
         return true;
       },
     }) as unknown as ShimElement;
 
-    // Sanity: для empty multiple в DOM должна быть ровно пустая чип-обёртка
-    // и инпут для добавления.
-    const field = editor.children[0];
-    assert.ok(field !== undefined, 'chip-field rendered');
-    const chips = findAllChips(editor);
-    assert.equal(chips.length, 0, 'no chips for empty values');
-    const addInput = field!.children.find((c) => c.tagName === 'input') as ShimElement;
-    assert.ok(addInput !== undefined, 'add input is present even when empty');
-
-    // Имитируем ввод id руками через keydown Enter — это документированный
-    // сценарий для вставки id из буфера обмена / хроники (см. wirePicker
-    // в properties.ts: input.addEventListener('keydown', ...)).
-    (addInput as ShimElement).value = 'paste-id';
-    (addInput as ShimElement).dispatch('keydown', {
-      key: 'Enter',
-      preventDefault: () => undefined,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    const clouds = findAllClouds(editor);
+    const firstRemove = clouds[0]!.children.find((c) =>
+      c.className.split(' ').includes('st-f-clear-inline'),
+    )!;
+    firstRemove.dispatch('click', { stopPropagation: () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 10));
     assert.deepEqual(
       saved,
-      [['paste-id']],
-      'multi mode persists the id wrapped in an array',
+      [['ta-2']],
+      'removing the first chip persists the remaining id array',
+    );
+  });
+
+  it('uses the edge target_title as the cloud label without waiting for resolve', async () => {
+    // 0.8.1 / dde92461-фикс: значения свойства-связи приходят рёбрами
+    // LinkPropertyValues — готовый target_title подставляется в облачко
+    // сразу, синхронно с первым рендером.
+    installShim();
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const editor = buildLinkValueEditor({
+      networkId: 'n1',
+      ownerType: 'thought',
+      ownerId: 't1',
+      definition: { ...baseDefinition, config: { multiple: true } } as any,
+      values: [edge('ta-known', 'Готовый заголовок'), edge('ta-unknown')],
+      multiple: true,
+      save: async () => true,
+    }) as unknown as ShimElement;
+
+    const clouds = findAllClouds(editor);
+    assert.equal(clouds.length, 2, 'one cloud per edge');
+    const knownTitle = clouds
+      .find((c) => c.dataset['id'] === 'ta-known')!
+      .children.find((c) => c.className === 'prc-title');
+    assert.equal(
+      knownTitle?.textContent,
+      'Готовый заголовок',
+      'known title renders synchronously from the edge',
+    );
+    const unknownTitle = clouds
+      .find((c) => c.dataset['id'] === 'ta-unknown')!
+      .children.find((c) => c.className === 'prc-title');
+    assert.equal(
+      unknownTitle?.textContent,
+      'ta-unkno…',
+      'unknown title falls back to the truncated id before resolve',
+    );
+  });
+
+  it('resolves full metadata (icon/colours/active) for every current id via etn.thoughts.resolve', async () => {
+    installShim();
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    buildLinkValueEditor({
+      networkId: 'n1',
+      ownerType: 'thought',
+      ownerId: 't1',
+      definition: { ...baseDefinition, config: { multiple: true } } as any,
+      values: [edge('ta-known', 'Готовый заголовок'), edge('ta-unknown')],
+      multiple: true,
+      save: async () => true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Стиль облачка (значок/цвета/актуальность) резолвится даже для рёбер с
+    // уже известным заголовком — заголовок и стиль приходят из разных мест.
+    assert.deepEqual(
+      [...seenResolves].sort(),
+      ['ta-known', 'ta-unknown'],
+      'resolve is requested for every current id, known-title or not',
     );
   });
 });
+

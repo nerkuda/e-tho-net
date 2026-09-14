@@ -21,15 +21,36 @@ import type {
   LinkPropertyValueItem,
   LinkPropertyValues,
   PropertyValue,
+  ThoughtRef,
 } from '@etn/shared';
 
 import { onRealtimeEvent } from '../realtime.js';
-import { button, div, el, errText, positionBodyDropdown, setTooltip, span } from '../lib/dom.js';
+import {
+  button,
+  div,
+  el,
+  errText,
+  positionBodyDropdown,
+  setTooltip,
+  span,
+} from '../lib/dom.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
+import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
+import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
+import {
+  applyCloudStyle,
+  applyThoughtIcon,
+  resolveCloudStyle,
+} from '../canvas/canvas.js';
+import {
+  firstPickedThoughtId,
+  pickThoughtsDialog,
+  pickedThoughtIds,
+} from '../canvas/add-dialog.js';
 import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
@@ -37,7 +58,7 @@ import { groupSection } from './group.js';
 import { applyGroupClamp } from './list-heights.js';
 import { rowSplitter } from './splitter.js';
 import { loadRecentValues, recordRecentValue, wireRecentValues } from './recent-values.js';
-import { wireTokenCombo, type ComboOption } from '../screens/thought-type/value-combo.js';
+import { wireThoughtRefSearch } from './thought-picker.js';
 
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
@@ -1098,35 +1119,27 @@ export function buildValueOptionsCaret(
 // Link value editor (задача 8ab775d9, единая модель связей)
 // ---------------------------------------------------------------------------
 
-/**
- * Список названий мыслей, подходящих под префикс `query`. Использует
- * `etn.thoughts.search` (живой поиск мыслей) — это та же лента, что и в
- * wiki-резолвере. На пустой `query` отдаём до 20 свежих мыслей без фильтра,
- * чтобы комбобокс сразу подсказывал что-то осмысленное.
- */
-async function fetchLinkCandidates(networkId: string, query: string): Promise<ComboOption[]> {
-  try {
-    const res = await etn.thoughts.search(networkId, {
-      q: query,
-      scope: 'names',
-      limit: 20,
-    });
-    return res.by_names.map((hit) => ({
-      value: hit.thought_id,
-      label: hit.title,
-    }));
-  } catch {
-    return [];
-  }
-}
+/** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
+const RESOLVE_BATCH = 100;
 
-/** Резолвит название мысли по id (для подписи чипа и одиночного значения). */
-async function fetchLinkLabel(networkId: string, id: string): Promise<string> {
+/**
+ * Дозаполняет кеш метаданных целей (значок, цвета, active, пометка) батч-резолвом
+ * `etn.thoughts.resolve`. Подписи уже есть в рёбрах (`target_title`); этот
+ * запрос нужен только для отрисовки мини-облачков. Неудача не фатальна —
+ * облачко показывает сырой id.
+ */
+async function resolveLinkRefs(
+  networkId: string,
+  ids: string[],
+  refs: Map<string, ThoughtRef>,
+): Promise<void> {
+  const missing = ids.filter((id) => !refs.has(id));
+  if (missing.length === 0) return;
   try {
-    const t = await etn.thoughts.get(networkId, id);
-    return t.title;
+    const resolved = await etn.thoughts.resolve(networkId, missing.slice(0, RESOLVE_BATCH));
+    for (const ref of resolved) refs.set(ref.id, ref);
   } catch {
-    return id.slice(0, 8);
+    // Оффлайн-мигание — чипы останутся с подписями из рёбер.
   }
 }
 
@@ -1154,7 +1167,7 @@ function focusLinkRef(networkId: string, id: string): void {
 }
 
 /**
- * Контекстное меню чипа ссылки на мысль (задача 8ab775d9). Идентично
+ * Контекстное меню мини-облачка ссылки (задача 8ab775d9). Идентично
  * контекстному меню облачка на холсте — единый набор команд во всех местах
  * (редактор, мини-граф, панель «Упоминания»).
  */
@@ -1196,16 +1209,21 @@ async function showLinkChipMenu(
 }
 
 /**
- * Редактор значения свойства-ссылки (задача 8ab775d9). Одиночный режим —
- * автокомплит по заголовку мысли, чип-ввод с клавиатурой. Множественный
- * режим — чипы с кликом (открыть в редакторе), двойным кликом (в фокус),
- * правым кликом и Shift+F10 (контекстное меню облачка); добавление —
- * inline-input с автокомплитом.
+ * Редактор значения свойства-связи (задача 8ab775d9) — паттерн «Таблица
+ * свойств редактора» (08-ui-spec.md §6.3.1) и инструкции «Использовать
+ * унифицированные поля выбора ссылок в диалогах»:
+ *  - одиночное значение — мини-облачко выбранной мысли (значок, цвета, шрифт;
+ *    неактуальная — бледная, помеченная на удаление — с корзиной) с «✕»,
+ *    очищающим значение и возвращающим живой поиск;
+ *  - множественное — чипы-мини-облачка с «✕» на каждом + поле живого поиска;
+ *  - кнопка «выбрать» открывает `pickThoughtsDialog` (в режиме «несколько» —
+ *    предзаполнен; применение перезаписывает список);
+ *  - живой поиск (клик/Enter по кандидату) учитывает отбор по типам из
+ *    конфига свойства (`allowed_target_type_ids`, с потомками — L21); набранный
+ *    текст сам по себе значение не меняет — только явный выбор.
  *
  * `values` — живые рёбра из `LinkPropertyValues.values[]`: подписи чипов
- * берутся из `target_title` без дополнительного запроса; для id, попавшего
- * в значение иначе (ввод id вручную), подпись до-резолвится одним
- * `etn.thoughts.get`.
+ * берутся из `target_title`, метаданные для облачков — батч-резолвом.
  */
 export function buildLinkValueEditor(opts: {
   networkId: string;
@@ -1218,10 +1236,25 @@ export function buildLinkValueEditor(opts: {
 }): HTMLElement {
   const { networkId, ownerType, ownerId, definition, multiple } = opts;
   let current: string[] = opts.values.map((edge) => edge.target_id);
+
+  // Отбор по типам — input aid из конфига свойства-связи: список
+  // `allowed_target_type_ids` расширяется до поддеревьев типов (L21) —
+  // зеркало серверной валидации; сохранённые значения фильтром не трогаются.
+  const filterIds = expandTypeIdsToSubtree(
+    store.state.thoughtTypes,
+    ((definition.config?.allowed_target_type_ids as string[] | undefined) ?? []).filter(
+      (id) => id !== '',
+    ),
+  );
+
+  // Кеш метаданных целей: подписи есть в рёбрах, значок/цвета/флаги —
+  // резолвом; чипы перерисовываются по готовности.
+  const refs = new Map<string, ThoughtRef>();
   const labels = new Map<string, string>();
   for (const edge of opts.values) {
     if (edge.target_title !== null) labels.set(edge.target_id, edge.target_title);
   }
+
   const root = div('link-value-editor');
 
   const persist = async (next: string[]): Promise<void> => {
@@ -1232,54 +1265,71 @@ export function buildLinkValueEditor(opts: {
     }
   };
 
-  /** Открывает дропдаун с живым поиском мыслей. */
-  const wirePicker = (input: HTMLInputElement, onPick: (id: string) => void): void => {
-    wireTokenCombo({
-      input,
-      getOptions: (query) => fetchLinkCandidates(networkId, query),
-      onPick: (id) => {
-        onPick(id);
-        input.value = '';
-      },
-    });
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && input.value.trim() !== '') {
-        // Разрешаем ввести id напрямую — некоторые сценарии (вставка из
-        // буфера, ссылка из хроники) неудобны через автокомплит.
-        event.preventDefault();
-        onPick(input.value.trim());
-        input.value = '';
+  const setAndPersist = (next: string[]): void => {
+    current = next;
+    render();
+    void persist(current);
+  };
+
+  /** Кнопка «выбрать» — диалоговый пикер; одиночный режим без предзаполнения. */
+  const openPicker = (): void => {
+    void pickThoughtsDialog({
+      networkId,
+      allowCreate: false,
+      allowLinkType: false,
+      searchTypeIds: filterIds,
+      // Предзаполнение переключает диалог в режим «несколько»; одиночному
+      // режиму предзаполнение не передаём.
+      selectedIds: multiple ? current : undefined,
+      title: multiple ? 'Выбрать мысли' : 'Выбрать мысль',
+      applyLabel: 'Выбрать',
+    }).then((result) => {
+      if (result === null) return;
+      if (multiple) {
+        setAndPersist(pickedThoughtIds(result));
+        return;
       }
+      const id = firstPickedThoughtId(result);
+      if (id !== null) setAndPersist([id]);
     });
   };
 
-  /** Рисует чип для одной мысли в множественном режиме. */
-  const buildChip = (id: string): HTMLElement => {
-    const chip = div('st-f-chip value-combo-chip');
-    const known = labels.get(id);
-    const label = span(known ?? `${id.slice(0, 8)}…`, 'st-f-chip-label');
-    chip.append(label);
-    if (known === undefined) {
-      void fetchLinkLabel(networkId, id).then((text) => {
-        if (chip.isConnected) label.textContent = text;
-      });
+  /** Мини-облачко цели: значок + подпись в цветах/шрифте мысли (§6.3.1). */
+  const buildCloud = (id: string, onRemove: () => void): HTMLElement => {
+    const ref = refs.get(id);
+    const known = ref?.title ?? labels.get(id) ?? `${id.slice(0, 8)}…`;
+    const cloud = div('prop-ref-cloud');
+    cloud.dataset['id'] = id;
+    if (ref !== undefined) applyCloudStyle(cloud, resolveCloudStyle(ref));
+    if (ref?.active === false || ref?.marked_for_deletion === true) {
+      cloud.classList.add('dim');
     }
-    chip.tabIndex = 0;
-    chip.setAttribute('role', 'button');
-    chip.setAttribute('aria-label', label.textContent ?? '');
-    chip.addEventListener('click', (event) => {
-      // Различаем одиночный клик (открыть в редакторе) и пункт контекстного
-      // меню «Открыть в редакторе» — поведение совпадает.
+    const icon = el('span', 'mini-icon');
+    if (ref !== undefined) applyThoughtIcon(icon, ref);
+    else icon.textContent = '💭';
+    cloud.append(icon, el('span', 'prc-title', known));
+    setTooltip(cloud, known);
+    // Мысль в корзине (S13, §5a.2): облачко бледное + красная метка корзины.
+    if (ref?.marked_for_deletion === true) {
+      const mark = span('', 'list-trash-mark');
+      mark.append(svgIcon('trash', 10));
+      cloud.append(mark);
+    }
+    cloud.tabIndex = 0;
+    cloud.setAttribute('role', 'button');
+    cloud.setAttribute('aria-label', known);
+    // Клики как у чипа связи: одиночный — открыть в редакторе, двойной — в
+    // фокус, правый / Shift+F10 — контекстное меню облачка.
+    cloud.addEventListener('click', (event) => {
       event.preventDefault();
       openLinkRefInEditor(networkId, id);
     });
-    chip.addEventListener('dblclick', (event) => {
+    cloud.addEventListener('dblclick', (event) => {
       event.preventDefault();
       event.stopPropagation();
       focusLinkRef(networkId, id);
     });
-    chip.addEventListener('contextmenu', (event) => {
-      event.preventDefault();
+    const openMenu = (): void => {
       void showLinkChipMenu(
         networkId,
         id,
@@ -1287,33 +1337,18 @@ export function buildLinkValueEditor(opts: {
         ownerId,
         definition.key,
         current,
-        (next) => {
-          current = next;
-          render();
-          void persist(current);
-        },
-        chip,
+        setAndPersist,
+        cloud,
       );
+    };
+    cloud.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      openMenu();
     });
-    chip.addEventListener('keydown', (event) => {
-      // Доступность: Shift+F10 — стандартный шорткат открытия контекстного
-      // меню; Enter — открыть в редакторе, Space — в фокус.
+    cloud.addEventListener('keydown', (event) => {
       if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
         event.preventDefault();
-        void showLinkChipMenu(
-          networkId,
-          id,
-          ownerType,
-          ownerId,
-          definition.key,
-          current,
-          (next) => {
-            current = next;
-            render();
-            void persist(current);
-          },
-          chip,
-        );
+        openMenu();
         return;
       }
       if (event.key === 'Enter') {
@@ -1324,54 +1359,81 @@ export function buildLinkValueEditor(opts: {
         focusLinkRef(networkId, id);
       }
     });
-    return chip;
+    // «✕» удаляет из значения, не открывая мысль (§6.3.1).
+    const removeBtn = el('button', 'st-f-clear-inline', '✕');
+    removeBtn.type = 'button';
+    removeBtn.title = 'Убрать из значения';
+    removeBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      onRemove();
+    });
+    cloud.append(removeBtn);
+    return cloud;
   };
 
   const render = (): void => {
     root.replaceChildren();
     if (multiple) {
-      const field = div('st-f-chipfield value-combo-field link-value-field');
-      for (const id of current) field.append(buildChip(id));
+      const field = div('st-f-chipfield link-value-field');
+      for (const id of current) {
+        field.append(
+          buildCloud(id, () => setAndPersist(current.filter((v) => v !== id))),
+        );
+      }
       const addInput = el('input', 'value-combo-add link-value-add') as HTMLInputElement;
       addInput.type = 'text';
-      addInput.placeholder = current.length === 0 ? 'Введите мысль или id…' : '+ ещё одну мысль';
-      wirePicker(addInput, (id) => {
-        if (current.includes(id)) return;
-        current = [...current, id];
-        render();
-        void persist(current);
+      addInput.placeholder = current.length === 0 ? 'Название мысли…' : '+ ещё одну мысль';
+      wireThoughtRefSearch(addInput, {
+        networkId,
+        typeIds: filterIds,
+        onPick: (id) => {
+          if (!current.includes(id)) setAndPersist([...current, id]);
+        },
       });
       field.append(addInput);
-      root.append(field);
+      // Клик по свободному месту поля — фокус в живой поиск; кнопка «выбрать»
+      // открывает диалог в режиме «несколько» (§6.3.1).
+      field.addEventListener('click', (event) => {
+        if (event.target === field) addInput.focus();
+      });
+      const row = div('form-row');
+      row.style.marginBottom = '0';
+      row.append(
+        field,
+        button('выбрать', openPicker, 'btn small', 'Выбрать мысли (несколько)'),
+      );
+      root.append(row);
       return;
     }
-    // Single mode — автокомплит + одна подпись выбранной мысли рядом.
+    // Одиночное значение: заданное — мини-облачко («✕» возвращает живой
+    // поиск), пустое — поле живого поиска; «выбрать» — диалог-альтернатива.
     const row = div('form-row link-value-single');
     row.style.marginBottom = '0';
-    const input = el('input', 'text-input prop-editor link-value-input') as HTMLInputElement;
-    input.type = 'text';
-    input.placeholder = 'Введите название или id мысли…';
-    wirePicker(input, (id) => {
-      current = [id];
-      render();
-      void persist(current);
-    });
     if (current.length > 0) {
-      const label = span('', 'link-value-current-label');
-      const known = labels.get(current[0]!);
-      if (known !== undefined) {
-        label.textContent = ` → ${known}`;
-      } else {
-        void fetchLinkLabel(networkId, current[0]!).then((text) => {
-          if (label.isConnected) label.textContent = ` → ${text}`;
-        });
-      }
-      row.append(input, label);
+      row.append(
+        buildCloud(current[0]!, () => setAndPersist([])),
+        button('выбрать', openPicker, 'btn small'),
+      );
     } else {
-      row.append(input);
+      const input = el('input', 'text-input prop-editor link-value-input') as HTMLInputElement;
+      input.type = 'text';
+      input.autocomplete = 'off';
+      input.placeholder = 'введите название для поиска…';
+      wireThoughtRefSearch(input, {
+        networkId,
+        typeIds: filterIds,
+        onPick: (id) => setAndPersist([id]),
+      });
+      row.append(input, button('выбрать', openPicker, 'btn small'));
     }
     root.append(row);
   };
+
+  // Метаданные облачков: батч-резолв недостающих, затем перерисовка (при
+  // неудаче облачко остаётся с подписью из ребра/сырым id).
+  void resolveLinkRefs(networkId, current, refs).then(() => {
+    if (root.isConnected) render();
+  });
 
   render();
   return root;
