@@ -1,25 +1,48 @@
 /**
- * Мини-граф редактора (задача 8ab775d9, единая модель связей).
+ * Мини-граф редактора (задача 8ab775d9, единая модель связей; переработан по
+ * приёмке 0.8.1 на d3-force/d3-drag/d3-zoom — ADR «Локальный граф на d3»).
  *
  * В стиле Obsidian: центральный узел — редактируемая мысль, вокруг — все
  * мысли, до которых из центра доходит одно ребро любого типа (структурное
  * «Родители»/«Потомки» или типизированное свойство-связь, оба направления).
- * Линии — тонкие, с подписью прямого имени типа связи от центра.
+ *
+ * Интерактив:
+ *  - force-физика (притягивание по рёбрам, отталкивание, столкновения
+ *    пилюль) — узлы можно перетаскивать, симуляция «дожимает» соседей;
+ *  - колесо — зум, правая кнопка — панорамирование; ЛИНИИ И УЗЛЫ ЖИВУТ В
+ *    ОДНОМ пространстве координат (единый трансформ world-группы), поэтому
+ *    облачка всегда «приклеяны» к концам связей;
+ *  - hover на связи — tooltip с названием типа связи, линия подсвечивается,
+ *    связанные мысли получают оранжевую рамку и всплывают наверх (важно,
+ *    когда облачка перекрывают друг друга);
+ *  - стрелки на линиях показывают направление (исходящая/входящая от центра);
+ *  - облачка мыс­лей — как везде: значок (эмодзи/картинка), цвета и шрифт
+ *    мысли, неактуальная бледная, помеченная на удаление — с меткой корзины;
+ *  - Ctrl+hover — предпросмотр постоянного комментария (как на карте);
+ *  - клик — открыть в редакторе, двойной — в фокус (с активацией карты),
+ *    правый/Shift+F10 — контекстное меню облачка.
  *
  * Массовые связи (>=10 одинакового типа к одной цели) скрываются за чипом
- * «+N». Колесо мыши — зум, правая кнопка — панорамирование холста,
- * Ctrl+hover — предпросмотр (как на основной карте).
- *
- * Реализация намеренно упрощённая: позиции периферийных узлов — по кругу
- * вокруг центра; физики нет. На больших графах (>40 соседей) часть соседей
- * выводится за порог через чип «+N ещё».
+ * «+N». На больших графах (>40 соседей) часть соседей выводится за порог
+ * через чип «+N ещё».
  */
 
-import type { Link, Thought } from '@etn/shared';
+import type { Link, Thought, ThoughtRef } from '@etn/shared';
+import { drag } from 'd3-drag';
+import {
+  forceCollide,
+  forceLink,
+  forceManyBody,
+  forceSimulation,
+  forceX,
+  forceY,
+  type Simulation,
+  type SimulationNodeDatum,
+} from 'd3-force';
+import { select } from 'd3-selection';
+import { zoom, type D3ZoomEvent } from 'd3-zoom';
 
-import { button, div, el, setTooltip, span } from '../lib/dom.js';
-import { svgIcon } from '../lib/icons.js';
-import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import { div, span } from '../lib/dom.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 
@@ -29,242 +52,422 @@ const MASS_LINK_THRESHOLD = 10;
 /** Скрываем периферийных соседей, если их больше этого числа. */
 const PERIPHERY_CAP = 40;
 
+/** Геометрия пилюли-облачка: высота и максимальная ширина, px (мир графа). */
+const CLOUD_H = 24;
+const CLOUD_MAX_W = 220;
+/** Обрезка заголовка в пилюле; полный текст — в tooltip. */
+const CLOUD_TITLE_CLIP = 28;
+/** Размер стрелки направления на ребре, px. */
+const ARROW_LEN = 9;
+const ARROW_W = 7;
+
 export interface MiniGraphOptions {
-  /** Текущая редактируемая мысль. */
+  /** Текущая редактируемая мысль (центр). */
   thought: Thought;
-  /** Прямые соседи редактируемой мысли — минимально нужные id + title. */
-  neighbours: Array<{ id: string; title: string }>;
-  /** Связи текущей мысли (нужны для подписей рёбер и определения типа). */
+  /** Прямые соседи — полные карточки (значок/цвета/шрифт/пометки). */
+  neighbours: ThoughtRef[];
+  /** Связи текущей мысли (тип ребра и направление от центра). */
   links: Link[];
   /** Соседи с массовыми связями: id цели → { hidden: number, label: string }. */
   mass: Map<string, { hidden: number; label: string }>;
 }
 
-/** Итоговая модель узла для отрисовки. */
-interface NodePos {
+/** Узел симуляции: пилюля-облачко. */
+interface GNode extends SimulationNodeDatum {
   id: string;
   title: string;
-  /** Угол на окружности (для периферийных), радианы. */
-  angle: number;
-  /** Расстояние от центра (для центра = 0). */
-  radius: number;
-  /** Для центра: true. */
+  /** Полная карточка для отрисовки в цветах/шрифте мысли. */
+  ref: ThoughtRef | Thought;
+  /** Ширина пилюли (по тексту), px. */
+  w: number;
   center: boolean;
+  /** SVG-группа узла (проставляется при отрисовке). */
+  g?: SVGGElement;
 }
 
-/** Ребро для отрисовки. */
-interface EdgeDraw {
-  from: string;
-  to: string;
+/** Ребро симуляции. */
+interface GEdge {
+  source: GNode;
+  target: GNode;
+  /** Имя типа связи в направлении источника→цели. */
   label: string;
 }
 
+/** SVG namespace helper. */
+function svgEl<K extends keyof SVGElementTagNameMap>(tag: K): SVGElementTagNameMap[K] {
+  return document.createElementNS('http://www.w3.org/2000/svg', tag);
+}
+
+/** Стиль мысли → атрибуты пилюли (SVG-зеркало applyCloudStyle). */
+interface CloudVisual {
+  bg: string;
+  fg: string;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  dim: boolean;
+}
+
+function cloudVisual(ref: ThoughtRef | Thought): CloudVisual {
+  const bg = ref.bg_color ?? 'var(--surface-2)';
+  const fg = ref.fg_color ?? (ref.bg_color !== null ? '#ffffff' : 'var(--text)');
+  return {
+    bg,
+    fg,
+    bold: ref.font_bold === true,
+    italic: ref.font_italic === true,
+    underline: ref.font_underline === true,
+    strike: ref.font_strike === true,
+    dim: ref.active === false || ref.marked_for_deletion === true,
+  };
+}
+
 /**
- * Рисует мини-граф. Возвращает корневой DOM-узел. Все интерактивы
- * (клик/двойной клик/правый клик/колесо/Ctrl+hover) навешиваются
+ * Рисует мини-граф. Возвращает корневой DOM-узел. Все интерактивы навешиваются
  * внутри; внешний код не должен ими управлять.
  */
 export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   const root = div('mini-graph');
-  // Виджет «больше нет, скрыто» — для центрального облачка + периферии.
   const center = opts.thought;
 
-  // Построим плоский список узлов: центр + до PERIPHERY_CAP соседей; остальное
-  // показываем как «+N ещё».
   const totalNeighbours = opts.neighbours.length;
   const visibleNeighbours = opts.neighbours.slice(0, PERIPHERY_CAP);
   const hiddenNeighbours = totalNeighbours - visibleNeighbours.length;
 
-  const nodes: NodePos[] = [];
-  nodes.push({ id: center.id, title: center.title, angle: 0, radius: 0, center: true });
-  const cx = 220;
-  const cy = 160;
-  const r = 110;
+  // --- Модель симуляции -----------------------------------------------------
+  const nodes: GNode[] = [];
+  const widthOf = (title: string): number =>
+    Math.min(CLOUD_MAX_W, 30 + Math.min(title.length, CLOUD_TITLE_CLIP) * 6.6);
+  nodes.push({
+    id: center.id,
+    title: center.title,
+    ref: center,
+    w: widthOf(center.title),
+    center: true,
+    x: 0,
+    y: 0,
+  });
+  // Стартовые позиции по кругу — физике легче расходиться.
   visibleNeighbours.forEach((nb, i) => {
     const angle = (2 * Math.PI * i) / Math.max(visibleNeighbours.length, 1);
     nodes.push({
       id: nb.id,
       title: nb.title,
-      angle,
-      radius: r,
+      ref: nb,
+      w: widthOf(nb.title),
       center: false,
+      x: 120 * Math.cos(angle),
+      y: 90 * Math.sin(angle),
     });
   });
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-  // Сборка рёбер: для каждого видимого соседа возьмём все связи с ним.
-  const edges: EdgeDraw[] = [];
-  const linkTypeNames = store.state.linkTypes;
+  // Рёбра: для каждого видимого соседа возьмём все связи с ним; направление
+  // — от центра (source) к соседу (target), имя — прямое/обратное по типу.
+  const edges: GEdge[] = [];
+  const linkTypes = store.state.linkTypes;
   for (const nb of visibleNeighbours) {
     const between = opts.links.filter((l) => l.target_id === nb.id || l.source_id === nb.id);
     if (between.length === 0) {
-      // Сосед есть, а рёбер в `links` нет (например, родительские/дочерние
-      // связи в `neighbours` без полной выборки ребра) — рисуем безымянное
-      // ребро, чтобы пользователь видел связь.
-      edges.push({ from: center.id, to: nb.id, label: '' });
+      const c = nodeById.get(center.id);
+      const t = nodeById.get(nb.id);
+      if (c !== undefined && t !== undefined) edges.push({ source: c, target: t, label: '' });
       continue;
     }
     for (const link of between) {
-      const type = linkTypeNames.find((t) => t.id === link.type_id);
-      const nameForward = type?.name_forward ?? '';
-      const nameReverse = type?.name_reverse ?? '';
-      // Прямое имя от центра к периферии: link.source_id — это id центра
-      // (или нет, тогда центр наоборот).
+      const c = nodeById.get(center.id);
+      const t = nodeById.get(nb.id);
+      if (c === undefined || t === undefined) continue;
+      const type = linkTypes.find((lt) => lt.id === link.type_id);
       const isCenterSource = link.source_id === center.id;
-      const label = isCenterSource ? nameForward : nameReverse;
-      edges.push({ from: center.id, to: nb.id, label });
+      edges.push({
+        source: isCenterSource ? c : t,
+        target: isCenterSource ? t : c,
+        label: isCenterSource ? (type?.name_forward ?? '') : (type?.name_reverse ?? ''),
+      });
     }
   }
 
-  // SVG-холст с линиями + DOM-узлы поверх (для интерактива и стилей).
-  const canvas = document.createElementNS('http://www.w3.org/2000/svg', 'svg') as SVGSVGElement;
-  canvas.setAttribute('class', 'mini-graph-canvas');
-  canvas.setAttribute('viewBox', `0 0 440 320`);
-  canvas.setAttribute('width', '100%');
-  canvas.setAttribute('height', '100%');
-  // Слои для линий и для предпросмотра.
-  const edgeLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-  edgeLayer.setAttribute('class', 'mini-graph-edges');
-  const previewLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-  previewLayer.setAttribute('class', 'mini-graph-preview');
-  canvas.append(edgeLayer, previewLayer);
+  // --- SVG-холст: единое пространство координат -----------------------------
+  const svg = svgEl('svg');
+  svg.setAttribute('class', 'mini-graph-canvas');
+  // Мировые координаты: центр (0,0); viewBox центрирует стартовый вид.
+  svg.setAttribute('viewBox', '-240 -170 480 340');
+  const world = svgEl('g');
+  world.setAttribute('class', 'mini-graph-world');
+  const edgesG = svgEl('g');
+  edgesG.setAttribute('class', 'mini-graph-edges');
+  const nodesG = svgEl('g');
+  nodesG.setAttribute('class', 'mini-graph-nodes');
+  world.append(edgesG, nodesG);
+  svg.append(world);
 
-  // Точки узлов (используются для расчёта координат).
-  const nodePos = new Map<string, { x: number; y: number }>();
-  nodePos.set(center.id, { x: cx, y: cy });
-  for (const n of nodes) {
-    if (n.center) continue;
-    nodePos.set(n.id, { x: cx + r * Math.cos(n.angle), y: cy + r * Math.sin(n.angle) });
+  // pannedSinceDown: жест правой кнопкой был панорамированием (движение), а
+  // не кликом — узел в contextmenu не открывает меню после пана. Объявлено
+  // до отрисовки узлов: wireNodeInteractions замыкает wasPanned.
+  let pannedSinceDown = false;
+  const wasPanned = (): boolean => {
+    const moved = pannedSinceDown;
+    pannedSinceDown = false;
+    return moved;
+  };
+
+  /** Точка на границе эллипса пилюли `n` в направлении к `other`. */
+  const edgePoint = (n: GNode, other: GNode): { x: number; y: number } => {
+    const dx = other.x! - n.x!;
+    const dy = other.y! - n.y!;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len;
+    const uy = dy / len;
+    const rx = n.w / 2 + 2;
+    const ry = CLOUD_H / 2 + 2;
+    const t = 1 / Math.sqrt((ux / rx) ** 2 + (uy / ry) ** 2);
+    return { x: n.x! + ux * t, y: n.y! + uy * t };
+  };
+
+  // --- Рёбра: линия + стрелка + прозрачная зона ховера ----------------------
+  interface EdgeDraw {
+    edge: GEdge;
+    line: SVGLineElement;
+    arrow: SVGPolygonElement;
+    hit: SVGLineElement;
+  }
+  const edgeDraws: EdgeDraw[] = [];
+  for (const edge of edges) {
+    const line = svgEl('line');
+    line.setAttribute('class', 'mini-graph-edge');
+    edgesG.append(line);
+    // Стрелка направления: источник → цель.
+    const arrow = svgEl('polygon');
+    arrow.setAttribute('class', 'mini-graph-edge-arrow');
+    edgesG.append(arrow);
+    // Прозрачная толстая линия — зона наведения (pointer-events: stroke).
+    const hit = svgEl('line');
+    hit.setAttribute('class', 'mini-graph-edge-hit');
+    const label = edge.label === '' ? 'связь' : edge.label;
+    const title = svgEl('title');
+    title.textContent = `${label} · ${edge.source.title} → ${edge.target.title}`;
+    hit.append(title);
+    edgesG.append(hit);
+
+    const raiseNodes = (): void => {
+      // g проставлен при отрисовке узлов ниже; к моменту события он есть.
+      nodesG.append(edge.source.g!, edge.target.g!);
+    };
+    hit.addEventListener('mouseenter', () => {
+      line.classList.add('hovered');
+      arrow.classList.add('hovered');
+      edge.source.g!.classList.add('edge-hi');
+      edge.target.g!.classList.add('edge-hi');
+      edgesG.append(line, arrow);
+      raiseNodes();
+    });
+    hit.addEventListener('mouseleave', () => {
+      line.classList.remove('hovered');
+      arrow.classList.remove('hovered');
+      edge.source.g!.classList.remove('edge-hi');
+      edge.target.g!.classList.remove('edge-hi');
+    });
+    edgeDraws.push({ edge, line, arrow, hit });
   }
 
-  for (const edge of edges) {
-    const a = nodePos.get(edge.from);
-    const b = nodePos.get(edge.to);
-    if (a === undefined || b === undefined) continue;
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  // --- Узлы: пилюли-облачка --------------------------------------------------
+  const byId = new Map<string, { node: GNode; g: SVGGElement }>();
+  for (const node of nodes) {
+    const g = svgEl('g');
+    g.setAttribute('class', node.center ? 'mini-node mini-node-center' : 'mini-node');
+    g.setAttribute('tabindex', '0');
+    g.setAttribute('role', 'button');
+    const v = cloudVisual(node.ref);
+    if (v.dim) g.classList.add('dim');
+
+    const title = svgEl('title');
+    title.textContent = node.title;
+    g.append(title);
+
+    const rect = svgEl('rect');
+    rect.setAttribute('class', 'mini-node-cloud');
+    rect.setAttribute('height', String(CLOUD_H));
+    rect.setAttribute('rx', String(CLOUD_H / 2));
+    rect.setAttribute('width', String(node.w));
+    rect.setAttribute('fill', v.bg);
+    g.append(rect);
+
+    // Значок: эмодзи — текст, картинка — <image> (icon хранит data: URL).
+    const iconLabel =
+      node.title.length > CLOUD_TITLE_CLIP
+        ? `${node.title.slice(0, CLOUD_TITLE_CLIP)}…`
+        : node.title;
+    const iconX = -node.w / 2 + 4;
+    if (node.ref.icon !== null && node.ref.icon !== '') {
+      if (node.ref.icon_kind === 'image') {
+        const img = svgEl('image');
+        img.setAttribute('href', node.ref.icon);
+        img.setAttribute('width', '16');
+        img.setAttribute('height', '16');
+        img.setAttribute('x', String(iconX + 1));
+        img.setAttribute('y', String(-CLOUD_H / 2 + 4));
+        g.append(img);
+      } else {
+        const icon = svgEl('text');
+        icon.setAttribute('class', 'mini-node-icon');
+        icon.setAttribute('x', String(iconX + 9));
+        icon.setAttribute('y', '0');
+        icon.setAttribute('text-anchor', 'middle');
+        icon.textContent = node.ref.icon;
+        g.append(icon);
+      }
+    }
+
+    const text = svgEl('text');
+    text.setAttribute('class', 'mini-node-title');
+    text.setAttribute('x', String(iconX + 22));
+    text.setAttribute('y', '0');
+    if (v.fg !== '') text.setAttribute('fill', v.fg);
+    if (v.bold) text.setAttribute('font-weight', '700');
+    if (v.italic) text.setAttribute('font-style', 'italic');
+    if (v.underline) text.setAttribute('text-decoration', 'underline');
+    if (v.strike) text.setAttribute('text-decoration', 'line-through');
+    text.textContent = iconLabel;
+    g.append(text);
+
+    // Помеченная на удаление — метка-корзина (S13).
+    if (node.ref.marked_for_deletion === true) {
+      const trash = svgEl('text');
+      trash.setAttribute('class', 'mini-node-trash');
+      trash.setAttribute('x', String(node.w / 2 - 8));
+      trash.setAttribute('y', '-4');
+      trash.textContent = '🗑';
+      g.append(trash);
+    }
+
+    node.g = g;
+    byId.set(node.id, { node, g });
+    nodesG.append(g);
+    wireNodeInteractions(g, node, wasPanned);
+  }
+  // Массовые чипы «+N» — рядом с узлом, позиция обновляется в tick.
+  const massChips: Array<{ g: SVGGElement; node: GNode }> = [];
+  for (const nb of visibleNeighbours) {
+    const mass = opts.mass.get(nb.id);
+    const entry = byId.get(nb.id);
+    if (mass === undefined || entry === undefined) continue;
+    const chip = svgEl('g');
+    chip.setAttribute('class', 'mini-graph-mass-chip');
+    const chipTitle = svgEl('title');
+    chipTitle.textContent = `${mass.label}: ещё ${mass.hidden} связей`;
+    chip.append(chipTitle);
+    const chipText = svgEl('text');
+    chipText.textContent = `+${mass.hidden}`;
+    chip.append(chipText);
+    edgesG.append(chip);
+    massChips.push({ g: chip, node: entry.node });
+  }
+
+  // --- Раскладка каждого кадра симуляции ------------------------------------
+  const paintEdge = (draw: EdgeDraw): void => {
+    const { edge, line, arrow, hit } = draw;
+    const a = edgePoint(edge.source, edge.target);
+    const b = edgePoint(edge.target, edge.source);
     line.setAttribute('x1', String(a.x));
     line.setAttribute('y1', String(a.y));
     line.setAttribute('x2', String(b.x));
     line.setAttribute('y2', String(b.y));
-    line.setAttribute('class', 'mini-graph-edge');
-    edgeLayer.append(line);
-    if (edge.label !== '') {
-      const mx = (a.x + b.x) / 2;
-      const my = (a.y + b.y) / 2;
-      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      text.setAttribute('x', String(mx));
-      text.setAttribute('y', String(my - 4));
-      text.setAttribute('class', 'mini-graph-edge-label');
-      text.setAttribute('text-anchor', 'middle');
-      text.textContent = edge.label;
-      edgeLayer.append(text);
-    }
-  }
-
-  // DOM-узлы поверх SVG.
-  const nodesLayer = div('mini-graph-nodes');
-  for (const n of nodes) {
-    const pos = nodePos.get(n.id);
-    if (pos === undefined) continue;
-    const cloud = n.center
-      ? div('mini-graph-cloud mini-graph-cloud-center')
-      : div('mini-graph-cloud');
-    cloud.style.left = `${pos.x}px`;
-    cloud.style.top = `${pos.y}px`;
-    const labelEl = n.center
-      ? el('span', 'mini-graph-cloud-title mini-graph-cloud-title-center', n.title)
-      : el('span', 'mini-graph-cloud-title', n.title);
-    cloud.append(labelEl);
-    wireCloudInteractions(cloud, n.id, n.center);
-    nodesLayer.append(cloud);
-  }
-
-  // Чип «+N ещё», если есть скрытые соседи.
-  if (hiddenNeighbours > 0) {
-    const more = div('mini-graph-more');
-    more.append(span(`+${hiddenNeighbours} ещё`, 'mini-graph-more-label'));
-    setTooltip(more, `Скрыто соседей: ${hiddenNeighbours}`);
-    nodesLayer.append(more);
-  }
-
-  // Чипы «+N» для массовых связей — привязаны к соответствующему узлу.
-  for (const nb of visibleNeighbours) {
-    const mass = opts.mass.get(nb.id);
-    if (mass === undefined) continue;
-    const pos = nodePos.get(nb.id);
-    if (pos === undefined) continue;
-    const chip = div('mini-graph-mass-chip');
-    chip.append(span(`+${mass.hidden}`, 'mini-graph-mass-label'));
-    setTooltip(chip, `${mass.label}: ещё ${mass.hidden} связей`);
-    chip.style.left = `${pos.x + 30}px`;
-    chip.style.top = `${pos.y - 18}px`;
-    nodesLayer.append(chip);
-  }
-
-  canvas.addEventListener('wheel', (event) => {
-    // Колесо — зум. Упрощённо: меняем viewBox.
-    event.preventDefault();
-    const current = canvas.getAttribute('viewBox') ?? '0 0 440 320';
-    const parts = current.split(/\s+/).map(Number);
-    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return;
-    const scale = event.deltaY > 0 ? 1.1 : 0.9;
-    const newW = parts[2]! * scale;
-    const newH = parts[3]! * scale;
-    const newX = parts[0]! + (parts[2]! - newW) / 2;
-    const newY = parts[1]! + (parts[3]! - newH) / 2;
-    canvas.setAttribute('viewBox', `${newX} ${newY} ${newW} ${newH}`);
-  }, { passive: false });
-
-  // Правая кнопка — панорамирование. Реализация упрощённая: тянем viewBox.
-  let panning = false;
-  let panStart = { x: 0, y: 0 };
-  let viewBoxStart = { x: 0, y: 0, w: 440, h: 320 };
-  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
-  canvas.addEventListener('mousedown', (event) => {
-    if (event.button !== 2) return;
-    panning = true;
-    panStart = { x: event.clientX, y: event.clientY };
-    const parts = (canvas.getAttribute('viewBox') ?? '0 0 440 320').split(/\s+/).map(Number);
-    if (parts.length === 4 && !parts.some((n) => Number.isNaN(n))) {
-      viewBoxStart = { x: parts[0]!, y: parts[1]!, w: parts[2]!, h: parts[3]! };
-    }
-    event.preventDefault();
-  });
-  window.addEventListener('mousemove', (event) => {
-    if (!panning) return;
-    const dx = ((event.clientX - panStart.x) * viewBoxStart.w) / canvas.clientWidth;
-    const dy = ((event.clientY - panStart.y) * viewBoxStart.h) / canvas.clientHeight;
-    canvas.setAttribute(
-      'viewBox',
-      `${viewBoxStart.x - dx} ${viewBoxStart.y - dy} ${viewBoxStart.w} ${viewBoxStart.h}`,
+    hit.setAttribute('x1', String(a.x));
+    hit.setAttribute('y1', String(a.y));
+    hit.setAttribute('x2', String(b.x));
+    hit.setAttribute('y2', String(b.y));
+    // Стрелка у конца (цель), ориентированная по вектору.
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    const bx = b.x - Math.cos(ang) * 2;
+    const by = b.y - Math.sin(ang) * 2;
+    const pts: Array<[number, number]> = [
+      [bx, by],
+      [bx - ARROW_LEN * Math.cos(ang) - (ARROW_W / 2) * Math.sin(ang), by - ARROW_LEN * Math.sin(ang) + (ARROW_W / 2) * Math.cos(ang)],
+      [bx - ARROW_LEN * Math.cos(ang) + (ARROW_W / 2) * Math.sin(ang), by - ARROW_LEN * Math.sin(ang) - (ARROW_W / 2) * Math.cos(ang)],
+    ];
+    arrow.setAttribute(
+      'points',
+      pts.map(([x, y]) => `${x},${y}`).join(' '),
     );
-  });
-  window.addEventListener('mouseup', () => {
-    panning = false;
-  });
+  };
 
-  // Контейнер с прокруткой, чтобы узлы не выходили за края при панорамировании.
-  const viewport = div('mini-graph-viewport');
-  viewport.append(canvas, nodesLayer);
-
-  // Ctrl+hover на узле — предпросмотр (как на основной карте).
-  nodesLayer.addEventListener('mouseover', async (event) => {
-    if (!event.ctrlKey) return;
-    const target = event.target as HTMLElement | null;
-    if (target === null) return;
-    const cloud = target.closest('.mini-graph-cloud') as HTMLElement | null;
-    if (cloud === null) return;
-    const id = cloud.dataset.thoughtId;
-    if (id === undefined) return;
-    const networkId = store.state.networkId;
-    if (networkId === null) return;
-    try {
-      const { markThoughtCommentPreview } = await import('../lib/hover-preview.js');
-      const t = await (await import('../lib/etn.js')).etn.thoughts.get(networkId, id);
-      markThoughtCommentPreview(cloud, t.id, t.title);
-    } catch {
-      // нет связного превью — игнор
+  const ticked = (): void => {
+    for (const entry of byId.values()) {
+      entry.g.setAttribute('transform', `translate(${entry.node.x ?? 0},${entry.node.y ?? 0})`);
     }
-  });
+    for (const draw of edgeDraws) paintEdge(draw);
+    for (const chip of massChips) {
+      chip.g.setAttribute(
+        'transform',
+        `translate(${(chip.node.x ?? 0) + chip.node.w / 2 + 4},${(chip.node.y ?? 0) - CLOUD_H / 2 - 4})`,
+      );
+    }
+  };
+
+  // --- Симуляция -------------------------------------------------------------
+  const simulation: Simulation<GNode, undefined> = forceSimulation<GNode>(nodes)
+    .force(
+      'link',
+      forceLink<GNode, GEdge>(edges)
+        .id((d) => d.id)
+        .distance(95)
+        .strength(0.25),
+    )
+    .force('charge', forceManyBody<GNode>().strength(-170))
+    .force(
+      'collide',
+      forceCollide<GNode>()
+        .radius((d) => d.w / 2 + 6)
+        .iterations(2),
+    )
+    .force('x', forceX<GNode>(0).strength(0.045))
+    .force('y', forceY<GNode>(0).strength(0.045))
+    .on('tick', ticked);
+  ticked();
+
+  // --- Зум (колесо) и пан (правая кнопка) единым трансформом world ----------
+  const zoomBehavior = zoom<SVGSVGElement, unknown>()
+    .scaleExtent([0.3, 3])
+    .filter((event) => event.type === 'wheel' || (event.type === 'mousedown' && event.button === 2))
+    .on('zoom', (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
+      world.setAttribute('transform', event.transform.toString());
+      if (event.sourceEvent !== null && event.sourceEvent.type === 'mousemove') {
+        pannedSinceDown = true;
+      }
+    });
+  svg.addEventListener('contextmenu', (event) => event.preventDefault());
+  select(svg).call(zoomBehavior).on('dblclick.zoom', null);
+
+  // --- Drag узлов ------------------------------------------------------------
+  for (const entry of byId.values()) {
+    const { node, g } = entry;
+    select(g)
+      .datum(node)
+      .call(
+        drag<SVGGElement, GNode>()
+          .on('start', () => {
+            draggedByDrag.add(g);
+            node.fx = node.x;
+            node.fy = node.y;
+            simulation.alphaTarget(0.3).restart();
+          })
+          .on('drag', (event) => {
+            node.fx = event.x;
+            node.fy = event.y;
+          })
+          .on('end', () => {
+            // Узел остаётся там, куда его положили (fx/fy закреплены) —
+            // как в Obsidian; остальной граф «дожимается» физикой.
+            simulation.alphaTarget(0);
+          }),
+      );
+  }
+
+  // --- Контейнер ---------------------------------------------------------------
+  const viewport = div('mini-graph-viewport');
+  viewport.append(svg);
 
   root.append(viewport);
 
@@ -273,52 +476,93 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   header.append(span(`соседей: ${totalNeighbours}`, 'mini-graph-header-stat'));
   if (opts.mass.size > 0) {
     const hiddenMass = [...opts.mass.values()].reduce((s, m) => s + m.hidden, 0);
-    header.append(
-      span(` · скрыто массовых: ${hiddenMass}`, 'mini-graph-header-stat'),
-    );
+    header.append(span(` · скрыто массовых: ${hiddenMass}`, 'mini-graph-header-stat'));
   }
   root.append(header);
+  if (hiddenNeighbours > 0) {
+    const more = div('mini-graph-more');
+    more.textContent = `+${hiddenNeighbours} ещё (порог ${PERIPHERY_CAP}, массовых ≥${MASS_LINK_THRESHOLD})`;
+    header.append(more);
+  }
   // Подвал с подсказкой.
   const hint = div('mini-graph-hint muted');
   hint.textContent =
-    'Колесо — зум, правая кнопка — панорама. Ctrl+hover — предпросмотр.';
+    'Колесо — зум, правая кнопка — панорама, узлы можно таскать. Наведите на связь — тип и подсветка. Ctrl+hover — предпросмотр.';
   root.append(hint);
+
+  // Останавливаем физику, когда граф скрыт (группа свёрнута/вкладка сменилась),
+  // и оживляем при показе — без холостых тиков в фоне.
+  if (typeof IntersectionObserver === 'function') {
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          if (simulation.alpha() > 0) simulation.restart();
+        } else {
+          simulation.stop();
+        }
+      }
+    });
+    io.observe(root);
+  }
 
   return root;
 }
 
-/** Навешивает клик/dblclick/contextmenu/keyboard на узел мини-графа. */
-function wireCloudInteractions(cloud: HTMLElement, id: string, center: boolean): void {
-  cloud.dataset.thoughtId = id;
-  cloud.tabIndex = 0;
-  cloud.setAttribute('role', 'button');
-  cloud.setAttribute(
-    'aria-label',
-    center ? `Редактируемая мысль: ${cloud.textContent ?? ''}` : `Сосед: ${cloud.textContent ?? ''}`,
-  );
-  cloud.addEventListener('click', (event) => {
+/**
+ * Узлы, чей последний жест был перетаскиванием: клик, который браузер
+ * отправит сразу после drag, подавляется (не открывает редактор).
+ */
+const draggedByDrag = new WeakSet<Element>();
+
+/** Интерактив узла: клики/меню/Ctrl-hover (SVG-версия wireCloudInteractions). */
+function wireNodeInteractions(g: SVGGElement, node: GNode, wasPanned: () => boolean): void {
+  g.addEventListener('click', (event) => {
+    if (draggedByDrag.has(g)) {
+      draggedByDrag.delete(g);
+      event.stopPropagation();
+      return;
+    }
     event.preventDefault();
-    void openLinkRefInEditor(id);
+    void openLinkRefInEditor(node.id);
   });
-  cloud.addEventListener('dblclick', (event) => {
+  g.addEventListener('dblclick', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    void focusLinkRef(id);
+    void focusLinkRef(node.id);
   });
-  cloud.addEventListener('contextmenu', (event) => {
+  g.addEventListener('contextmenu', (event) => {
+    // После панорамирования правой кнопкой меню не открываем (движение было).
+    if (wasPanned()) return;
     event.preventDefault();
-    void showCloudContextMenu(id, cloud);
+    event.stopPropagation();
+    void showCloudContextMenu(node.id, g);
   });
-  cloud.addEventListener('keydown', (event) => {
+  g.addEventListener('keydown', (event) => {
     if (event.key === 'F10' && event.shiftKey) {
       event.preventDefault();
-      void showCloudContextMenu(id, cloud);
+      void showCloudContextMenu(node.id, g);
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      void openLinkRefInEditor(id);
+      void openLinkRefInEditor(node.id);
     } else if (event.key === ' ' || event.key === 'Spacebar') {
       event.preventDefault();
-      void focusLinkRef(id);
+      void focusLinkRef(node.id);
+    }
+  });
+  // Ctrl+hover — предпросмотр постоянного комментария (общий механизм
+  // hover-preview: читает data-атрибуты делегированно; SVG-элементы
+  // совместимы — dataset у них есть).
+  g.addEventListener('mouseover', async (event) => {
+    if (!event.ctrlKey) return;
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    try {
+      const { markThoughtCommentPreview } = await import('../lib/hover-preview.js');
+      const { etn } = await import('../lib/etn.js');
+      const t = await etn.thoughts.get(networkId, node.id);
+      markThoughtCommentPreview(g as unknown as HTMLElement, t.id, t.title);
+    } catch {
+      // нет превью — игнор
     }
   });
 }
@@ -337,21 +581,16 @@ async function focusLinkRef(id: string): Promise<void> {
   await setFocus(id);
 }
 
-async function showCloudContextMenu(id: string, anchor: HTMLElement): Promise<void> {
+async function showCloudContextMenu(id: string, anchor: Element): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   const { isPinned, togglePinned } = await import('../pinned/pins.js');
   const { addToSelection, removeFromSelection } = await import('../selection/selection.js');
+  const { showMenuAt } = await import('../lib/menu.js');
   const inSelection = store.state.selection.includes(id);
-  const items: MenuItem[] = [
-    {
-      label: 'Открыть в редакторе',
-      onClick: () => void openLinkRefInEditor(id),
-    },
-    {
-      label: 'В фокус',
-      onClick: () => void focusLinkRef(id),
-    },
+  const items = [
+    { label: 'Открыть в редакторе', onClick: () => void openLinkRefInEditor(id) },
+    { label: 'В фокус', onClick: () => void focusLinkRef(id) },
     {
       label: inSelection ? 'Убрать из выделенных' : 'Добавить к выделению',
       onClick: () => {
@@ -361,37 +600,10 @@ async function showCloudContextMenu(id: string, anchor: HTMLElement): Promise<vo
     },
     {
       label: isPinned(id) ? 'Открепить мысль' : 'Закрепить мысль',
-      onClick: () => void togglePinned(id),
-    },
-    {
-      label: 'Копировать ID',
-      onClick: () => {
-        void navigator.clipboard.writeText(id).then(
-          () => notice('ID мысли скопирован.'),
-          () => notice('Не удалось скопировать ID.', 'error'),
-        );
-      },
+      onClick: () => togglePinned(id),
     },
   ];
   const rect = anchor.getBoundingClientRect();
   showMenuAt(rect.left, rect.bottom + 2, items);
+  void networkId; // сеть уже в store; идентификатор не нужен меню
 }
-
-/**
- * Считает прямых соседей мысли по обоим направлениям (`neighbors`-эндпоинт
- * возвращает массив `ThoughtRef`). Используется для оценки числа соседей до
- * подгрузки.
- */
-export function isMassLinkCount(count: number): boolean {
-  return count >= MASS_LINK_THRESHOLD;
-}
-
-export const miniGraphInternals = {
-  MASS_LINK_THRESHOLD,
-  PERIPHERY_CAP,
-};
-
-// Кнопка (не используется пока, но держим импорт, чтобы лишний раз не
-// обращаться к IDE-предупреждениям о неиспользуемом импорте).
-void button;
-void svgIcon;

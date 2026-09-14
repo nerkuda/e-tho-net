@@ -186,10 +186,40 @@ async function buildLocalGraphBody(ctx: EditorContext): Promise<HTMLElement> {
     return root;
   }
 
+  // Соседи для мини-графа — полными карточками (значок/цвета/шрифт/пометки,
+  // приёмка 0.8.1 «облачка как везде»): батч-резолв; неудача — нейтральная
+  // карточка из id/title.
+  let graphRefs: ThoughtRef[] = neighbours.map((nb) => ({
+    id: nb.id,
+    title: nb.title,
+    type_id: null,
+    icon: null,
+    icon_kind: 'emoji' as const,
+    icon_attachment_id: null,
+    active: true,
+    marked_for_deletion: false,
+    fg_color: null,
+    bg_color: null,
+    font_bold: null,
+    font_italic: null,
+    font_underline: null,
+    font_strike: null,
+  }));
+  try {
+    const resolved = await etn.thoughts.resolve(
+      networkId,
+      neighbours.slice(0, 100).map((nb) => nb.id),
+    );
+    const byId = new Map(resolved.map((r) => [r.id, r]));
+    graphRefs = graphRefs.map((r) => byId.get(r.id) ?? r);
+  } catch {
+    // Оффлайн-мигание — граф рисуется с нейтральными пилюлями.
+  }
+
   root.append(
     buildMiniGraph({
       thought: ctx.thought,
-      neighbours,
+      neighbours: graphRefs,
       links,
       mass: massMap,
     }),
