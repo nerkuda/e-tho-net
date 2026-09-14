@@ -54,6 +54,7 @@ import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import { linkTypeOptions, thoughtTypeOptions } from '../lib/type-tree.js';
+import { buildChipListField } from './thought-type/value-combo.js';
 import {
   showLinkTypeEditor,
   showThoughtTypeEditor,
@@ -560,31 +561,45 @@ export function openPropertyManagerEditor(
       linkExtrasHost.append(field('Направление', dirSelect));
     }
 
-    const allowedWrap = div('admin-table-wrap');
-    allowedWrap.style.maxHeight = '160px';
-    const allowedList = div('form-stack');
-    const targetOptions = thoughtTypeOptions(store.state.thoughtTypes);
+    // Унифицированный чип-пикер типов мыслей (инструкция a47947c8 —
+    // «Использовать унифицированные поля выбора ссылок в диалогах»):
+    // живой поиск + чипы-мини-облачка + крестик, как в редакторе мысли
+    // (buildChipListField из value-combo.ts — тот же компонент, что в
+    // отборе типов мыслей и в полях «Родительские мысли» / «Типы мыслей»
+    // / «Типы связей» filter-dialog.ts). Раньше тут был голый чек-лист без
+    // поиска — нарушение паттерна.
+    const targetOptions = thoughtTypeOptions(store.state.thoughtTypes).filter(
+      (opt) => opt.id !== null,
+    ) as Array<{ id: string; label: string; depth?: number }>;
+    const labelById = new Map(targetOptions.map((opt) => [opt.id, opt.label]));
+    const labelFor = (id: string): string => {
+      const cached = labelById.get(id);
+      if (cached !== undefined) return cached;
+      const fresh = store.state.thoughtTypes.find((t) => t.id === id);
+      return fresh !== undefined ? fresh.name : id.slice(0, 8);
+    };
+    const allowedField = buildChipListField({
+      getValues: () => allowedTargetTypeIds,
+      onChange: (next) => {
+        allowedTargetTypeIds = next;
+      },
+      getOptions: (query) => {
+        const q = query.trim().toLowerCase();
+        const visible = q === '' ? targetOptions : targetOptions.filter((opt) => opt.label.toLowerCase().includes(q));
+        return visible.slice(0, 50).map((opt) => ({
+          value: opt.id,
+          label: opt.label,
+        }));
+      },
+      renderLabel: labelFor,
+      placeholder: '+ допустимый тип мысли…',
+    });
+    const allowedHost = div('form-stack');
+    allowedHost.append(allowedField.root);
     if (targetOptions.length === 0) {
-      allowedList.append(span('Нет типов мыслей.', 'muted'));
+      allowedHost.append(span('Нет типов мыслей.', 'muted'));
     }
-    for (const opt of targetOptions) {
-      const id = opt.id;
-      if (id === null) continue;
-      const row = el('label', 'checkbox-row') as HTMLLabelElement;
-      row.style.paddingLeft = `${Math.max(0, (opt.depth ?? 1) - 1) * 16}px`;
-      const check = el('input') as HTMLInputElement;
-      check.type = 'checkbox';
-      check.checked = allowedTargetTypeIds.includes(id);
-      check.addEventListener('change', () => {
-        allowedTargetTypeIds = check.checked
-          ? [...allowedTargetTypeIds, id]
-          : allowedTargetTypeIds.filter((x) => x !== id);
-      });
-      row.append(check, span(opt.label));
-      allowedList.append(row);
-    }
-    allowedWrap.append(allowedList);
-    linkExtrasHost.append(field('Допустимые типы цели (пусто — любой)', allowedWrap));
+    linkExtrasHost.append(field('Допустимые типы цели (пусто — любой)', allowedHost));
 
     const showOnMapRow = el('label', 'checkbox-row') as HTMLLabelElement;
     const showOnMapCheck = el('input') as HTMLInputElement;
