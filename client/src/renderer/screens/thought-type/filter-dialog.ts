@@ -1267,17 +1267,8 @@ const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; la
   ],
   bool: [{ op: 'eq', label: 'равно' }],
   link: [],
-  // Legacy (миграция 040): таких свойств в живой БД не остаётся;
-  // присутствие проверяется теми же кнопками «заполнено»/«не заполнено».
-  // Должно совпадать с `OPS_BY_TYPE` в `filter-panel.ts` — иначе при открытии
-  // диалога по существующему отбору с условием на legacy-`thought_ref`
-  // падает «Cannot read properties of undefined (reading 'op')» (ошибка
-  // f7080aea): `OPS_BY_TYPE['thought_ref']` пуст, а `buildConditionRow` берёт
-  // `ops[0]!.op` для восстановления валидной операции.
-  thought_ref: [
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
-  ],
+  // Legacy (миграция 040): таких свойств в живой БД не остаётся.
+  thought_ref: [],
 };
 
 // ---------------------------------------------------------------------------
