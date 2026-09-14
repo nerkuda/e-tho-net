@@ -145,6 +145,45 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     );
   });
 
+  it('клики как на канвасе: Ctrl+клик — выделение, одиночный отложен (dblclick успевает)', () => {
+    const src = readText(SRC.graph);
+    assert.ok(
+      src.includes('deferSingleClick'),
+      'single click is deferred so dblclick (focus) wins the race',
+    );
+    assert.ok(
+      src.includes('toggleSelection([node.id])'),
+      'Ctrl+click toggles the selection panel membership',
+    );
+    assert.ok(
+      src.includes('event.ctrlKey || event.metaKey'),
+      'Ctrl and Cmd are both honoured',
+    );
+    // d3-drag стартует на mousedown: подавление клика — только при реальном
+    // движении, иначе каждый клик глох как drag (баг приёмки 0.8.1).
+    assert.ok(
+      !/on\('start', \(\) => \{\s*draggedByDrag\.add/.test(src),
+      'the drag-suppression flag is NOT set on drag start (mousedown)',
+    );
+    assert.ok(
+      /on\('drag', \(event\) => \{[\s\S]*?draggedByDrag\.add\(g\)/.test(src),
+      'the drag-suppression flag is set on actual movement only',
+    );
+  });
+
+  it('типы связей видны всегда: постоянная подпись на середине ребра', () => {
+    const src = readText(SRC.graph);
+    assert.ok(
+      src.includes('mini-graph-edge-label'),
+      'edges carry a persistent type label',
+    );
+    const css = readText(SRC.css);
+    assert.ok(
+      css.includes('.mini-graph-edge-label'),
+      'CSS styles the persistent edge label',
+    );
+  });
+
   it('links-tab резолвит соседей до полных карточек (значки/цвета) для графа', () => {
     const src = readText(SRC.links);
     assert.ok(

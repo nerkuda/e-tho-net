@@ -45,9 +45,11 @@ import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
 import {
   applyCloudStyle,
   applyThoughtIcon,
+  deferSingleClick,
   resolveCloudStyle,
 } from '../canvas/canvas.js';
 import { pickThoughtsDialog } from '../canvas/add-dialog.js';
+import { toggleSelection } from '../selection/selection.js';
 import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
@@ -1437,15 +1439,29 @@ export function buildLinkValueEditor(opts: {
     cloud.tabIndex = 0;
     cloud.setAttribute('role', 'button');
     cloud.setAttribute('aria-label', known);
-    // Клики как у чипа связи: одиночный — открыть в редакторе, двойной — в
-    // фокус, правый / Shift+F10 — контекстное меню облачка.
+    // Клики как на канвасе (08-ui-spec.md): Ctrl/Cmd+клик — добавить/убрать
+    // из панели выбранных; одиночный клик отложен на SINGLE_CLICK_DELAY_MS,
+    // чтобы двойной клик (в фокус) успевал до открытия редактора.
+    let pendingClick: { cancel: () => void } | null = null;
     cloud.addEventListener('click', (event) => {
       event.preventDefault();
-      openLinkRefInEditor(networkId, id);
+      if (event.ctrlKey || event.metaKey) {
+        pendingClick?.cancel();
+        pendingClick = null;
+        toggleSelection([id]);
+        return;
+      }
+      pendingClick?.cancel();
+      pendingClick = deferSingleClick(() => {
+        pendingClick = null;
+        openLinkRefInEditor(networkId, id);
+      });
     });
     cloud.addEventListener('dblclick', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      pendingClick?.cancel();
+      pendingClick = null;
       focusLinkRef(networkId, id);
     });
     const openMenu = (): void => {

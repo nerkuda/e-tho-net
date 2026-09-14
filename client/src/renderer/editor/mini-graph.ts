@@ -45,6 +45,8 @@ import { zoom, type D3ZoomEvent } from 'd3-zoom';
 import { div, span } from '../lib/dom.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
+import { deferSingleClick } from '../canvas/canvas.js';
+import { toggleSelection } from '../selection/selection.js';
 
 /** Mass-link threshold: ≥10 ребер одного типа к одной цели скрываются за чипом. */
 const MASS_LINK_THRESHOLD = 10;
@@ -226,11 +228,12 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     return { x: n.x! + ux * t, y: n.y! + uy * t };
   };
 
-  // --- Рёбра: линия + стрелка + прозрачная зона ховера ----------------------
+  // --- Рёбра: линия + стрелка + постоянная подпись типа + зона ховера ------
   interface EdgeDraw {
     edge: GEdge;
     line: SVGLineElement;
     arrow: SVGPolygonElement;
+    label: SVGTextElement | null;
     hit: SVGLineElement;
   }
   const edgeDraws: EdgeDraw[] = [];
@@ -242,12 +245,22 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     const arrow = svgEl('polygon');
     arrow.setAttribute('class', 'mini-graph-edge-arrow');
     edgesG.append(arrow);
+    // Постоянная подпись типа связи на середине ребра (приёмка 0.8.1:
+    // типы должны быть видны всегда, не только в hover-подсказке).
+    let label: SVGTextElement | null = null;
+    if (edge.label !== '') {
+      label = svgEl('text');
+      label.setAttribute('class', 'mini-graph-edge-label');
+      label.setAttribute('text-anchor', 'middle');
+      label.textContent = edge.label;
+      edgesG.append(label);
+    }
     // Прозрачная толстая линия — зона наведения (pointer-events: stroke).
     const hit = svgEl('line');
     hit.setAttribute('class', 'mini-graph-edge-hit');
-    const label = edge.label === '' ? 'связь' : edge.label;
+    const tooltipText = edge.label === '' ? 'связь' : edge.label;
     const title = svgEl('title');
-    title.textContent = `${label} · ${edge.source.title} → ${edge.target.title}`;
+    title.textContent = `${tooltipText} · ${edge.source.title} → ${edge.target.title}`;
     hit.append(title);
     edgesG.append(hit);
 
@@ -261,6 +274,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       edge.source.g!.classList.add('edge-hi');
       edge.target.g!.classList.add('edge-hi');
       edgesG.append(line, arrow);
+      if (label !== null) edgesG.append(label);
       raiseNodes();
     });
     hit.addEventListener('mouseleave', () => {
@@ -269,7 +283,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       edge.source.g!.classList.remove('edge-hi');
       edge.target.g!.classList.remove('edge-hi');
     });
-    edgeDraws.push({ edge, line, arrow, hit });
+    edgeDraws.push({ edge, line, arrow, label, hit });
   }
 
   // --- Узлы: пилюли-облачка --------------------------------------------------
@@ -372,7 +386,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
 
   // --- Раскладка каждого кадра симуляции ------------------------------------
   const paintEdge = (draw: EdgeDraw): void => {
-    const { edge, line, arrow, hit } = draw;
+    const { edge, line, arrow, label, hit } = draw;
     const a = edgePoint(edge.source, edge.target);
     const b = edgePoint(edge.target, edge.source);
     line.setAttribute('x1', String(a.x));
@@ -396,6 +410,19 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       'points',
       pts.map(([x, y]) => `${x},${y}`).join(' '),
     );
+    // Подпись типа — над серединой линии (перпендикуляр вверх).
+    if (label !== null) {
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      let px = -Math.sin(ang);
+      let py = Math.cos(ang);
+      if (py > 0) {
+        px = -px;
+        py = -py;
+      }
+      label.setAttribute('x', String(mx + px * 6));
+      label.setAttribute('y', String(my + py * 6));
+    }
   };
 
   const ticked = (): void => {
@@ -453,12 +480,15 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       .call(
         drag<SVGGElement, GNode>()
           .on('start', () => {
-            draggedByDrag.add(g);
             node.fx = node.x;
             node.fy = node.y;
             simulation.alphaTarget(0.3).restart();
           })
           .on('drag', (event) => {
+            // d3-drag стартует уже на mousedown — помечаем «было
+            // перетаскивание» только при реальном движении, иначе любой
+            // клик с микросдвигом подавлялся бы как drag (приёмка 0.8.1).
+            draggedByDrag.add(g);
             node.fx = event.x;
             node.fy = event.y;
           })
@@ -521,6 +551,10 @@ const draggedByDrag = new WeakSet<Element>();
 
 /** Интерактив узла: клики/меню/Ctrl-hover (SVG-версия wireCloudInteractions). */
 function wireNodeInteractions(g: SVGGElement, node: GNode, wasPanned: () => boolean): void {
+  // Клики как на канвасе (08-ui-spec.md): Ctrl/Cmd+клик — добавить/убрать из
+  // панели выбранных; одиночный клик отложен на SINGLE_CLICK_DELAY_MS, чтобы
+  // двойной клик (в фокус) успевал до открытия редактора.
+  let pendingClick: { cancel: () => void } | null = null;
   g.addEventListener('click', (event) => {
     if (draggedByDrag.has(g)) {
       draggedByDrag.delete(g);
@@ -528,11 +562,23 @@ function wireNodeInteractions(g: SVGGElement, node: GNode, wasPanned: () => bool
       return;
     }
     event.preventDefault();
-    void openLinkRefInEditor(node.id);
+    if (event.ctrlKey || event.metaKey) {
+      pendingClick?.cancel();
+      pendingClick = null;
+      toggleSelection([node.id]);
+      return;
+    }
+    pendingClick?.cancel();
+    pendingClick = deferSingleClick(() => {
+      pendingClick = null;
+      void openLinkRefInEditor(node.id);
+    });
   });
   g.addEventListener('dblclick', (event) => {
     event.preventDefault();
     event.stopPropagation();
+    pendingClick?.cancel();
+    pendingClick = null;
     void focusLinkRef(node.id);
   });
   g.addEventListener('contextmenu', (event) => {

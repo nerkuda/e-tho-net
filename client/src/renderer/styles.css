@@ -7653,6 +7653,17 @@ table.activity-table thead th {
 .mini-graph-edge-arrow.hovered {
   fill: var(--accent);
 }
+/* Постоянная подпись типа связи на середине ребра (приёмка 0.8.1). */
+.mini-graph-edge-label {
+  fill: var(--text-dim);
+  font-size: 9px;
+  pointer-events: none;
+  user-select: none;
+  paint-order: stroke;
+  stroke: var(--surface, #fff);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
 /* Прозрачная толстая линия — зона наведения для tooltip/подсветки. */
 .mini-graph-edge-hit {
   stroke: transparent;
