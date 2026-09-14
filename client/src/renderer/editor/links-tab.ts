@@ -30,7 +30,7 @@ import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-prev
 import { store } from '../state.js';
 import { openLinkInEditor, registerTabContent, type EditorContext } from './editor.js';
 import { groupSection } from './group.js';
-import { applyGroupClamp } from './list-heights.js';
+import { applyTabGroupClamp } from './list-heights.js';
 import { buildMiniGraph } from './mini-graph.js';
 import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from './wiki-link-resolver.js';
 import { rowSplitter } from './splitter.js';
@@ -88,23 +88,23 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
       buildBody: () => buildLocalGraphBody(ctx),
     },
   );
-  // Splitters clamp the whole group above them (header + body) — expanded
-  // groups flex-fill the tab, so a clamp must stop the group itself, not just
-  // its body. A collapsed group (no body) is not resizable: its splitter is
-  // inert and never leaves a stale clamp behind (08-ui-spec.md §6.3).
-  // The drag is remembered as the group's fixed height (always-fixed
-  // policy, bug 6b757336 + 4cc6248c): once dragged, the group keeps that
-  // exact size regardless of the row count, and the size survives entity
-  // changes and restarts (ee745368, list-heights.ts). Before any drag the
-  // groups flex-fill the tab as usual — `applyGroupClamp` is a no-op without
-  // a saved value.
-  const resizable = (group: HTMLElement): HTMLElement | null =>
-    group.querySelector(':scope > .group-body') !== null ? group : null;
-  applyGroupClamp(mentions, 'links.mentions');
-  applyGroupClamp(localGraph, 'links.local-graph');
+  // Раскладка пары (приёмка 0.8.1): сплиттер и фиксированные высоты действуют
+  // только когда ОБЕ группы развёрнуты; свёрнутая группа схлопывается до
+  // заголовка, единственная развёрнутая растягивается на всю вкладку,
+  // сплиттер над свёрнутой группой инертен (тела нет — resizable → null).
+  const bodyOf = (group: HTMLElement): HTMLElement | null =>
+    group.querySelector(':scope > .group-body') as HTMLElement | null;
+  const relayout = (): void => {
+    const both = bodyOf(mentions) !== null && bodyOf(localGraph) !== null;
+    applyTabGroupClamp(mentions, 'links.mentions', both);
+    applyTabGroupClamp(localGraph, 'links.local-graph', both);
+  };
+  mentions.addEventListener('etn:toggled', () => relayout());
+  localGraph.addEventListener('etn:toggled', () => relayout());
+  relayout();
   root.append(
     mentions,
-    rowSplitter(() => resizable(mentions), { min: 50, persistKey: 'links.mentions' }),
+    rowSplitter(() => bodyOf(mentions), { min: 50, persistKey: 'links.mentions' }),
     localGraph,
   );
   return root;

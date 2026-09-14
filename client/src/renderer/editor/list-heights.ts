@@ -167,4 +167,43 @@ export function applyGroupClamp(group: HTMLElement, key: string): void {
   group.style.flexGrow = '0';
   group.style.flexBasis = 'auto';
   group.style.maxHeight = '';
+  // Кламп на теле группы (приёмка 0.8.1): сама группа-родитель тоже не
+  // должна flex-fill вкладку, иначе под зафиксированным телом останется
+  // пустота. `closest` безопасен для прочих вызовов (экран хроники) — там
+  // родительской `.group` нет, и стиль не трогается.
+  const owner = group.closest<HTMLElement>('.group');
+  if (owner !== null && owner !== group) {
+    owner.style.flexGrow = '0';
+    owner.style.flexBasis = 'auto';
+  }
+}
+
+/**
+ * Раскладка пары групп вкладки со сплиттером (приёмка 0.8.1): сплиттер и
+ * фиксированная высота действуют, ТОЛЬКО когда обе группы развёрнуты;
+ * свёрнутая группа не держит место (кламп снимается, группа схлопывается до
+ * заголовка), а единственная развёрнутая группа растягивается на всю вкладку
+ * — независимо от сохранённой высоты. Значение при этом не теряется: как
+ * только обе группы снова развёрнуты, кламп применяется заново.
+ *
+ * `active = false` снимает кламп с тела и возвращает группе CSS-растяжение;
+ * для свёрнутой группы (тела нет) — no-op, кроме возврата инлайнов.
+ */
+export function applyTabGroupClamp(group: HTMLElement, key: string, active: boolean): void {
+  const body = group.querySelector<HTMLElement>(':scope > .group-body');
+  if (!active || body === null) {
+    if (body !== null) {
+      body.style.height = '';
+      body.style.maxHeight = '';
+      body.style.flexGrow = '';
+      body.style.flexBasis = '';
+    }
+    group.style.flexGrow = '';
+    group.style.flexBasis = '';
+    return;
+  }
+  applyGroupClamp(body, key);
+  const clamped = clamps[key] !== undefined;
+  group.style.flexGrow = clamped ? '0' : '';
+  group.style.flexBasis = clamped ? 'auto' : '';
 }

@@ -30,14 +30,25 @@ function readText(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
-describe('вкладка «Свойства» — регулятор высоты (8ab775d9, приёмка №7)', () => {
-  it('группы оснащены сплиттером с запоминанием высоты (паттерн links-tab)', () => {
+describe('вкладка «Свойства» — регулятор высоты (8ab775d9, приёмка №7 + приёмка 0.8.1)', () => {
+  it('группы оснащены сплиттером и парной раскладкой с запоминанием высоты', () => {
     const src = readText(SRC.properties);
-    // Сплиттер клампит группу выше себя: «Свойства типа» получает
-    // rowSplitter; «Свойства вне типа» (последняя) — только restore-кламп.
+    // Сплиттер клампит ТЕЛО группы выше себя; раскладка парная
+    // (applyTabGroupClamp): кламп действует только когда ОБЕ группы
+    // развёрнуты, свёрнутая схлопывается, соседняя растягивается.
     assert.ok(src.includes("persistKey: 'properties.type'"), 'type group splitter key');
-    assert.ok(src.includes("applyGroupClamp(typeGroup"), 'type group clamp');
-    assert.ok(src.includes("applyGroupClamp(outsideGroup"), 'outside group clamp');
+    assert.ok(
+      src.includes("applyTabGroupClamp(typeGroup, 'properties.type'"),
+      'type group paired clamp',
+    );
+    assert.ok(
+      src.includes("applyTabGroupClamp(outsideGroup, 'properties.outside'"),
+      'outside group paired clamp',
+    );
+    assert.ok(
+      src.includes("addEventListener('etn:toggled'"),
+      'collapse toggles re-run the paired layout',
+    );
   });
 
   it('CSS даёт группам flex-вёрстку с клампом (как .links-tab)', () => {

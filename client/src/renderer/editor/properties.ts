@@ -52,7 +52,7 @@ import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
 import { groupSection } from './group.js';
-import { applyGroupClamp } from './list-heights.js';
+import { applyTabGroupClamp } from './list-heights.js';
 import { rowSplitter } from './splitter.js';
 import { loadRecentValues, recordRecentValue, wireRecentValues } from './recent-values.js';
 import { wireThoughtRefSearch } from './thought-picker.js';
@@ -121,17 +121,23 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
     },
     buildBody: () => buildOutsidePropertiesBody(ctx),
   });
-  // Разделители высоты — тот же паттерн, что у вкладки «Связи» (08-ui-spec.md
-  // §6.3): сплиттер клампит группу выше себя; протяжка запоминается
-  // (list-heights.ts, L4 ui_state) и переживает смену мысли и перезапуск.
-  // Свернутая группа (без body) не ресайзится — сплиттер инертен.
-  const resizable = (group: HTMLElement): HTMLElement | null =>
-    group.querySelector(':scope > .group-body') !== null ? group : null;
-  applyGroupClamp(typeGroup, 'properties.type');
-  applyGroupClamp(outsideGroup, 'properties.outside');
+  // Раскладка пары (приёмка 0.8.1): сплиттер и фиксированные высоты действуют
+  // только когда ОБЕ группы развёрнуты; свёрнутая группа схлопывается до
+  // заголовка, единственная развёрнутая растягивается на всю вкладку,
+  // сплиттер над свёрнутой группой инертен (тела нет — bodyOf → null).
+  const bodyOf = (group: HTMLElement): HTMLElement | null =>
+    group.querySelector(':scope > .group-body') as HTMLElement | null;
+  const relayout = (): void => {
+    const both = bodyOf(typeGroup) !== null && bodyOf(outsideGroup) !== null;
+    applyTabGroupClamp(typeGroup, 'properties.type', both);
+    applyTabGroupClamp(outsideGroup, 'properties.outside', both);
+  };
+  typeGroup.addEventListener('etn:toggled', () => relayout());
+  outsideGroup.addEventListener('etn:toggled', () => relayout());
+  relayout();
   box.append(
     typeGroup,
-    rowSplitter(() => resizable(typeGroup), { min: 50, persistKey: 'properties.type' }),
+    rowSplitter(() => bodyOf(typeGroup), { min: 50, persistKey: 'properties.type' }),
     outsideGroup,
   );
   return box;
@@ -1487,7 +1493,16 @@ export function buildLinkValueEditor(opts: {
   const render = (): void => {
     root.replaceChildren();
     const field = div('st-f-chipfield link-value-field');
-    for (const id of current) {
+    // Чипы всегда в алфавитном порядке подписи (приёмка 0.8.1) — легче
+    // искать глазами. Сортируется только ОТОБРАЖЕНИЕ: порядок данных
+    // (`current`) не трогаем — он несёт смысл (структурный порядок детей
+    // «Потомков» задаёт позиции), persist всегда шлёт исходный порядок.
+    const displayTitle = (id: string): string =>
+      refs.get(id)?.title ?? labels.get(id) ?? id;
+    const ordered = [...current].sort((a, b) =>
+      displayTitle(a).localeCompare(displayTitle(b), 'ru'),
+    );
+    for (const id of ordered) {
       field.append(
         buildCloud(id, () => setAndPersist(current.filter((v) => v !== id))),
       );

@@ -108,15 +108,15 @@ describe('always-fixed политика сплиттера (bug 4cc6248c, тре
     }
   });
 
-  it('вкладка «Связи» использует applyGroupClamp для обеих групп', () => {
+  it('вкладка «Связи» использует парную раскладку клампов для обеих групп', () => {
     const src = readText(SRC.links);
     assert.ok(
-      /applyGroupClamp\(mentions,\s*'links\.mentions'\)/.test(src),
-      'mentions group uses applyGroupClamp(links.mentions)',
+      /applyTabGroupClamp\(mentions,\s*'links\.mentions'/.test(src),
+      'mentions group uses applyTabGroupClamp(links.mentions)',
     );
     assert.ok(
-      /applyGroupClamp\(localGraph,\s*'links\.local-graph'\)/.test(src),
-      'localGraph group uses applyGroupClamp(links.local-graph)',
+      /applyTabGroupClamp\(localGraph,\s*'links\.local-graph'/.test(src),
+      'localGraph group uses applyTabGroupClamp(links.local-graph)',
     );
     assert.ok(
       /persistKey:\s*'links\.mentions'/.test(src),
