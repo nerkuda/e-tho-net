@@ -92,9 +92,12 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
   // groups flex-fill the tab, so a clamp must stop the group itself, not just
   // its body. A collapsed group (no body) is not resizable: its splitter is
   // inert and never leaves a stale clamp behind (08-ui-spec.md §6.3).
-  // The drag is remembered as the group's max height: a clamped group shrinks
-  // to its content (flex-grow 0) instead of filling the tab, and the cap
-  // survives entity changes and restarts (ee745368, list-heights.ts).
+  // The drag is remembered as the group's fixed height (always-fixed
+  // policy, bug 6b757336 + 4cc6248c): once dragged, the group keeps that
+  // exact size regardless of the row count, and the size survives entity
+  // changes and restarts (ee745368, list-heights.ts). Before any drag the
+  // groups flex-fill the tab as usual — `applyGroupClamp` is a no-op without
+  // a saved value.
   const resizable = (group: HTMLElement): HTMLElement | null =>
     group.querySelector(':scope > .group-body') !== null ? group : null;
   applyGroupClamp(mentions, 'links.mentions');

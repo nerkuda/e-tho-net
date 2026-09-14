@@ -1,6 +1,7 @@
 /**
  * Persistent fixed heights of the editor lists and the chronicle screen areas
- * (bug ee745368; always-fixed policy since bug 6b757336).
+ * (bug ee745368; always-fixed policy since bug 6b757336; bug 4cc6248c extended
+ * the policy to every group with a `persistKey` rowSplitter).
  *
  * A manual splitter drag is remembered as the area's **fixed** height
  * (08-ui-spec.md §6.3, §17.1): on every content refresh the visible height
@@ -24,13 +25,13 @@
  *    editor scroll box — the property survives the editor re-renders (the
  *    scroll box is only cleared, never replaced), and the CSS fallback keeps
  *    the spec default (five rows) until the user drags;
- *  - areas that are stable for the whole mount are set inline (height +
- *    `flex-grow: 0`, so the area keeps its fixed height instead of
- *    flex-filling the remaining space): whole-group targets of the «Связи»
- *    tab (re-applied on every tab rebuild, see applyGroupClamp — still
- *    content-following there, see its own doc comment) and the chronicle
- *    screen areas (one clamp per mount in mountChronicle — the elements
- *    persist, only their content is re-rendered).
+ *  - groups with a `persistKey` rowSplitter (the «Связи» tab groups, the
+ *    «Свойства типа» group, the chronicle screen areas) read the fixed
+ *    height inline via `applyGroupClamp` — the inline `height` is re-applied
+ *    on every tab rebuild and is paired with `flex-grow: 0` so the area
+ *    keeps its saved size instead of flex-filling the remaining space (bug
+ *    4cc6248c: was a `max-height` cap, so dragging was content-bound and the
+ *    user could never grow the group past its current rows).
  */
 
 import { UI_STATE_KEY } from '@etn/shared';
@@ -45,8 +46,12 @@ const PERSIST_DEBOUNCE_MS = 300;
  * Keys whose target element reads the cap from a CSS custom property. The
  * variable is set on the editor scroll box (see {@link setClampRoot}); the
  * stylesheet provides the default (five visible rows) via `var(..., fallback)`.
+ * `rowSplitter` consults this table to keep `props`/`chrono`/`attachments`
+ * drag-ranges pinned to the natural content height — letting them stretch
+ * past it would persist a huge value into the CSS variable and inflate the
+ * table to that height on every render.
  */
-const CSS_VAR_KEYS: Record<string, string> = {
+export const CSS_VAR_KEYS: Record<string, string> = {
   props: '--clamp-props',
   chrono: '--clamp-chrono',
   attachments: '--clamp-attachments',
@@ -143,21 +148,23 @@ function applyClampVars(): void {
 
 /**
  * Applies a saved height to an area that lives for the whole mount
- * («Связи» tab groups, rebuilt with the tab; chronicle screen areas, rebuilt
- * by mountChronicle on every network open): inline `max-height` plus
- * `flex-grow: 0`, so the area's height equals its content (never more than
- * the saved cap) instead of flex-filling the remaining space. No-op when the
- * user has never dragged this splitter.
+ * («Связи» tab groups, the «Свойства типа» group, the chronicle screen
+ * areas — rebuilt with the tab / on every network open): inline `height`
+ * plus `flex-grow: 0` and `flex-basis: auto`, so the area keeps the exact
+ * size the user dragged (more rows scroll inside, fewer leave empty space)
+ * instead of flex-filling the remaining space. No-op when the user has
+ * never dragged this splitter — the area keeps the CSS-default flex layout.
  *
- * Unlike the CSS-var channel above, «Связи» tab groups are NOT covered by
- * the always-fixed policy (bug 6b757336 fixed only `props`/`chrono`/
- * `attachments`): several sibling groups here share the tab's height by
- * flex-filling it, and giving every one of them a hard default would break
- * that layout without a saved value. This stays content-bound intentionally.
+ * Always-fixed policy (bug 6b757336, bug 4cc6248c): the inline `height` is
+ * re-applied on every tab rebuild, so the saved size survives entity
+ * changes and restarts. Any stale `max-height` (the older «cap» channel) is
+ * cleared so a leftover inline cap cannot clip the new fixed `height`.
  */
 export function applyGroupClamp(group: HTMLElement, key: string): void {
   const px = clamps[key];
   if (px === undefined) return;
-  group.style.maxHeight = `${px}px`;
+  group.style.height = `${px}px`;
   group.style.flexGrow = '0';
+  group.style.flexBasis = 'auto';
+  group.style.maxHeight = '';
 }
