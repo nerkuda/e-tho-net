@@ -7482,14 +7482,6 @@ table.activity-table thead th {
   flex: 1 1 120px;
   min-width: 120px;
 }
-.link-value-single {
-  align-items: center;
-  gap: 4px;
-}
-.link-value-current-label {
-  color: var(--text-dim);
-  white-space: nowrap;
-}
 
 /* Вкладка «Связи» — группа «Локальный граф» */
 .links-local-graph {

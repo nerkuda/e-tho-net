@@ -431,12 +431,12 @@ describe('editor properties group body (DOM-shimmed)', () => {
   });
 
   it('renders link properties through the mini-cloud/chip picker path (a47947c8)', async () => {
-    // link-свойство рендерится через `buildLinkValueEditor` — мини-облачко
-    // выбранной мысли + «выбрать» (single) или чипы-мини-облачка + «выбрать»
-    // (multiple), инструкция «Использовать унифицированные поля выбора
-    // ссылок в диалогах». Здесь проверяем, что single-режим без значения
-    // даёт поле живого поиска с правильным плейсхолдером, а multiple —
-    // мини-облачко на каждое сохранённое значение.
+    // link-свойство рендерится через `buildLinkValueEditor` — всегда
+    // чип-режим (число целей link-свойства не ограничено, спека «properties»
+    // 0.8.1): чипы-мини-облачка + поле живого поиска + «выбрать», инструкция
+    // «Использовать унифицированные поля выбора ссылок в диалогах». Пустое
+    // свойство без значений тоже даёт чип-поле с живым поиском — ввод не
+    // пропадает после выбора значения.
     sharedWindow = (globalThis as any).window ?? {};
     (globalThis as any).window = sharedWindow;
     if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
@@ -461,7 +461,7 @@ describe('editor properties group body (DOM-shimmed)', () => {
           owner_id: 'ty1',
           key: 'Соавторы',
           value_type: 'link',
-          config: { multiple: true },
+          config: {},
           required: false,
           position: 1,
         },
@@ -561,26 +561,29 @@ describe('editor properties group body (DOM-shimmed)', () => {
     const table = tableWrap.children[0]!;
     const tbody = table.children[0]!;
 
-    // Row 0 — single link property «Упоминание» без значения:
-    // buildLinkValueEditor в single-режиме, пустое значение — живой поиск.
+    // Row 0 — single link property «Упоминание»: рендерится через
+    // buildLinkValueEditor — всегда чип-режим (число целей link-свойства не
+    // ограничено, спека «properties» 0.8.1), поле живого поиска остаётся в
+    // поле вместе с чипами.
     const singleCell = tbody.children[0]?.children[1];
     assert.ok(singleCell !== undefined, 'single link cell rendered');
-    // Структура: link-value-editor > form-row.link-value-single > [input, button].
+    // Структура: link-value-editor > form-row > [st-f-chipfield, button].
     const singleRoot = singleCell.children[0];
     const singleRow = singleRoot?.children[0];
-    const singleInput = singleRow?.children.find(
+    const singleField = singleRow?.children[0];
+    const singleInput = singleField?.children.find(
       (c) => c.tagName === 'input' && c.type === 'text',
     ) as ShimElement | undefined;
-    assert.ok(singleInput !== undefined, 'single link input rendered');
+    assert.ok(singleInput !== undefined, 'link chip field has a live-search input');
     assert.equal(
-      (singleInput as ShimElement).placeholder,
-      'введите название для поиска…',
-      'empty single link uses the live-search placeholder',
+      singleInput!.placeholder,
+      'Название мысли…',
+      'empty link chip field uses the seed placeholder',
     );
     const singlePickBtn = singleRow?.children.find(
       (c) => c.tagName === 'button' && c.textContent === 'выбрать',
     );
-    assert.ok(singlePickBtn !== undefined, 'single link has a «выбрать» button');
+    assert.ok(singlePickBtn !== undefined, 'link chip field has a «выбрать» button');
 
     // Row 1 — multiple link property «Соавторы»: два мини-облачка + поле
     // добавления + «выбрать».

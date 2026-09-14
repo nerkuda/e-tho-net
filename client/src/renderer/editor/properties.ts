@@ -46,11 +46,7 @@ import {
   applyThoughtIcon,
   resolveCloudStyle,
 } from '../canvas/canvas.js';
-import {
-  firstPickedThoughtId,
-  pickThoughtsDialog,
-  pickedThoughtIds,
-} from '../canvas/add-dialog.js';
+import { pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
 import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
@@ -707,9 +703,10 @@ function buildEditorCell(opts: {
       case 'link': {
         // Свойство-связь (задача 8ab775d9, единая модель связей): сервер
         // отдаёт его формой LinkPropertyValues — значения это живые рёбра
-        // (`values[].target_id`), поля `.value` у формы нет. Чипы строятся из
-        // рёбер; автокомплит — value-combo из конструктора отборов; клик —
-        // открыть в редакторе, двойной — в фокус, правый — меню облачка.
+        // (`values[].target_id`), поля `.value` у формы нет. Редактор всегда
+        // чип-режим: число целей свойства-связи не ограничено (спека
+        // «properties», модель 0.8.1), `config.multiple` для link не
+        // существует.
         const edges =
           current !== undefined && isLinkPropertyValues(current) ? current.values : [];
         cell.append(
@@ -719,7 +716,6 @@ function buildEditorCell(opts: {
             ownerId,
             definition,
             values: edges,
-            multiple: definition.config?.multiple === true,
             save,
           }),
         );
@@ -1211,16 +1207,23 @@ async function showLinkChipMenu(
 /**
  * Редактор значения свойства-связи (задача 8ab775d9) — паттерн «Таблица
  * свойств редактора» (08-ui-spec.md §6.3.1) и инструкции «Использовать
- * унифицированные поля выбора ссылок в диалогах»:
- *  - одиночное значение — мини-облачко выбранной мысли (значок, цвета, шрифт;
- *    неактуальная — бледная, помеченная на удаление — с корзиной) с «✕»,
- *    очищающим значение и возвращающим живой поиск;
- *  - множественное — чипы-мини-облачка с «✕» на каждом + поле живого поиска;
- *  - кнопка «выбрать» открывает `pickThoughtsDialog` (в режиме «несколько» —
- *    предзаполнен; применение перезаписывает список);
- *  - живой поиск (клик/Enter по кандидату) учитывает отбор по типам из
- *    конфига свойства (`allowed_target_type_ids`, с потомками — L21); набранный
- *    текст сам по себе значение не меняет — только явный выбор.
+ * унифицированные поля выбора ссылок в диалогах».
+ *
+ * Всегда чип-режим, без «одиночного» варианта: по спеке «properties —
+ * справочник свойств сети» (раздел «Модель 0.8.1») число целей
+ * свойства-связи НИКОГДА не ограничено — значение это проекция рёбер, а не
+ * скалярная запись, поэтому `config.multiple` для `link` не существует и
+ * ветвление по нему было ошибкой (баг: структурные «Родители»/«Потомки»,
+ * миграция 039, не задают `multiple` в конфиге вовсе и попадали в
+ * одиночный режим, хотя у мысли может быть сколько угодно потомков).
+ *
+ * Устройство: чипы-мини-облачка (значок, цвета, шрифт; неактуальная —
+ * бледная, помеченная на удаление — с корзиной) с «✕» на каждом + поле
+ * живого поиска для добавления + кнопка «выбрать» (`pickThoughtsDialog` в
+ * режиме «несколько», предзаполнен; применение перезаписывает список).
+ * Живой поиск (клик/Enter по кандидату) учитывает отбор по типам из
+ * конфига свойства (`allowed_target_type_ids`, с потомками — L21); набранный
+ * текст сам по себе значение не меняет — только явный выбор.
  *
  * `values` — живые рёбра из `LinkPropertyValues.values[]`: подписи чипов
  * берутся из `target_title`, метаданные для облачков — батч-резолвом.
@@ -1231,10 +1234,9 @@ export function buildLinkValueEditor(opts: {
   ownerId: string;
   definition: EffectiveTypeProperty;
   values: LinkPropertyValueItem[];
-  multiple: boolean;
   save: (next: unknown) => Promise<boolean>;
 }): HTMLElement {
-  const { networkId, ownerType, ownerId, definition, multiple } = opts;
+  const { networkId, ownerType, ownerId, definition } = opts;
   let current: string[] = opts.values.map((edge) => edge.target_id);
 
   // Отбор по типам — input aid из конфига свойства-связи: список
@@ -1258,11 +1260,7 @@ export function buildLinkValueEditor(opts: {
   const root = div('link-value-editor');
 
   const persist = async (next: string[]): Promise<void> => {
-    if (multiple) {
-      await opts.save(next.length > 0 ? next : null);
-    } else {
-      await opts.save(next[0] ?? null);
-    }
+    await opts.save(next.length > 0 ? next : null);
   };
 
   const setAndPersist = (next: string[]): void => {
@@ -1271,26 +1269,19 @@ export function buildLinkValueEditor(opts: {
     void persist(current);
   };
 
-  /** Кнопка «выбрать» — диалоговый пикер; одиночный режим без предзаполнения. */
+  /** Кнопка «выбрать» — диалоговый пикер в режиме «несколько» (предзаполнен). */
   const openPicker = (): void => {
     void pickThoughtsDialog({
       networkId,
       allowCreate: false,
       allowLinkType: false,
       searchTypeIds: filterIds,
-      // Предзаполнение переключает диалог в режим «несколько»; одиночному
-      // режиму предзаполнение не передаём.
-      selectedIds: multiple ? current : undefined,
-      title: multiple ? 'Выбрать мысли' : 'Выбрать мысль',
+      selectedIds: current,
+      title: 'Выбрать мысли',
       applyLabel: 'Выбрать',
     }).then((result) => {
       if (result === null) return;
-      if (multiple) {
-        setAndPersist(pickedThoughtIds(result));
-        return;
-      }
-      const id = firstPickedThoughtId(result);
-      if (id !== null) setAndPersist([id]);
+      setAndPersist(pickedThoughtIds(result));
     });
   };
 
@@ -1373,59 +1364,34 @@ export function buildLinkValueEditor(opts: {
 
   const render = (): void => {
     root.replaceChildren();
-    if (multiple) {
-      const field = div('st-f-chipfield link-value-field');
-      for (const id of current) {
-        field.append(
-          buildCloud(id, () => setAndPersist(current.filter((v) => v !== id))),
-        );
-      }
-      const addInput = el('input', 'value-combo-add link-value-add') as HTMLInputElement;
-      addInput.type = 'text';
-      addInput.placeholder = current.length === 0 ? 'Название мысли…' : '+ ещё одну мысль';
-      wireThoughtRefSearch(addInput, {
-        networkId,
-        typeIds: filterIds,
-        onPick: (id) => {
-          if (!current.includes(id)) setAndPersist([...current, id]);
-        },
-      });
-      field.append(addInput);
-      // Клик по свободному месту поля — фокус в живой поиск; кнопка «выбрать»
-      // открывает диалог в режиме «несколько» (§6.3.1).
-      field.addEventListener('click', (event) => {
-        if (event.target === field) addInput.focus();
-      });
-      const row = div('form-row');
-      row.style.marginBottom = '0';
-      row.append(
-        field,
-        button('выбрать', openPicker, 'btn small', 'Выбрать мысли (несколько)'),
+    const field = div('st-f-chipfield link-value-field');
+    for (const id of current) {
+      field.append(
+        buildCloud(id, () => setAndPersist(current.filter((v) => v !== id))),
       );
-      root.append(row);
-      return;
     }
-    // Одиночное значение: заданное — мини-облачко («✕» возвращает живой
-    // поиск), пустое — поле живого поиска; «выбрать» — диалог-альтернатива.
-    const row = div('form-row link-value-single');
+    const addInput = el('input', 'value-combo-add link-value-add') as HTMLInputElement;
+    addInput.type = 'text';
+    addInput.placeholder = current.length === 0 ? 'Название мысли…' : '+ ещё одну мысль';
+    wireThoughtRefSearch(addInput, {
+      networkId,
+      typeIds: filterIds,
+      onPick: (id) => {
+        if (!current.includes(id)) setAndPersist([...current, id]);
+      },
+    });
+    field.append(addInput);
+    // Клик по свободному месту поля — фокус в живой поиск; кнопка «выбрать»
+    // открывает диалог в режиме «несколько» (§6.3.1).
+    field.addEventListener('click', (event) => {
+      if (event.target === field) addInput.focus();
+    });
+    const row = div('form-row');
     row.style.marginBottom = '0';
-    if (current.length > 0) {
-      row.append(
-        buildCloud(current[0]!, () => setAndPersist([])),
-        button('выбрать', openPicker, 'btn small'),
-      );
-    } else {
-      const input = el('input', 'text-input prop-editor link-value-input') as HTMLInputElement;
-      input.type = 'text';
-      input.autocomplete = 'off';
-      input.placeholder = 'введите название для поиска…';
-      wireThoughtRefSearch(input, {
-        networkId,
-        typeIds: filterIds,
-        onPick: (id) => setAndPersist([id]),
-      });
-      row.append(input, button('выбрать', openPicker, 'btn small'));
-    }
+    row.append(
+      field,
+      button('выбрать', openPicker, 'btn small', 'Выбрать мысли (несколько)'),
+    );
     root.append(row);
   };
 

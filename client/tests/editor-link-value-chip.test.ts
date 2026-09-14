@@ -190,8 +190,8 @@ function edge(id: string, title: string | null = null) {
   };
 }
 
-describe('buildLinkValueEditor — single mode, мини-облачко (a47947c8)', () => {
-  it('empty value renders a live-search input + «выбрать» button', async () => {
+describe('buildLinkValueEditor — всегда чип-режим, поле живого поиска не пропадает', () => {
+  it('empty value renders the chip field with a live-search input + «выбрать» button', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const editor = buildLinkValueEditor({
@@ -200,67 +200,64 @@ describe('buildLinkValueEditor — single mode, мини-облачко (a47947c
       ownerId: 't1',
       definition: baseDefinition as any,
       values: [],
-      multiple: false,
       save: async () => true,
     }) as unknown as ShimElement;
 
+    // Чип-режим и без значений: поле с инпутом живого поиска остаётся
+    // доступным — ввод не пропадает после выбора (баг: single-режим без
+    // config.multiple убирал поле после первого выбранного значения).
     const row = editor.children[0]!;
-    const input = row.children.find(
+    const field = row.children[0]!;
+    const input = field.children.find(
       (c) => c.tagName === 'input' && c.type === 'text',
     ) as ShimElement | undefined;
-    assert.ok(input !== undefined, 'search input rendered');
+    assert.ok(input !== undefined, 'search input rendered inside the chip field');
     assert.equal(
       input!.placeholder,
-      'введите название для поиска…',
-      'empty single input uses the live-search placeholder',
+      'Название мысли…',
+      'empty chip field uses the seed placeholder',
     );
     const pickBtn = row.children.find(
       (c) => c.tagName === 'button' && c.textContent === 'выбрать',
     );
-    assert.ok(pickBtn !== undefined, '«выбрать» button rendered for the empty single field');
+    assert.ok(pickBtn !== undefined, '«выбрать» button rendered');
   });
 
-  it('set value renders a mini-cloud (prop-ref-cloud) with «✕» + «выбрать» button', async () => {
+  it('a property WITHOUT config.multiple (structural «Потомки», migration 039) still renders the chip field', async () => {
+    // Регрессия бага: структурные «Родители»/«Потомки» не задают multiple в
+    // конфиге вовсе — по спеке модели 0.8.1 у link-свойств числа целей нет,
+    // редактор обязан всегда работать в чип-режиме.
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
       ownerId: 't1',
-      definition: baseDefinition as any,
-      values: [edge('ta-single', 'Единственная мысль')],
-      multiple: false,
+      // config без ключа multiple — как у «Потомки» из миграции 039.
+      definition: { ...baseDefinition, config: { structural: true, direction: 'out' } } as any,
+      values: [edge('ta-kid-1', 'Первый потомок'), edge('ta-kid-2', 'Второй потомок')],
       save: async () => true,
     }) as unknown as ShimElement;
 
+    const clouds = findAllClouds(editor);
+    assert.equal(clouds.length, 2, 'one mini-cloud per stored edge');
     const row = editor.children[0]!;
-    const cloud = row.children.find((c) =>
-      c.className.split(' ').includes('prop-ref-cloud'),
-    ) as ShimElement | undefined;
-    assert.ok(cloud !== undefined, 'mini-cloud rendered for the stored value');
-    assert.equal(cloud!.tabIndex, 0, 'cloud is keyboard-focusable');
-    assert.equal(cloud!.getAttribute('role'), 'button', 'cloud is exposed as role=button');
+    const field = row.children[0]!;
+    const addInput = field.children.find((c) => c.tagName === 'input') as
+      | ShimElement
+      | undefined;
+    assert.ok(
+      addInput !== undefined,
+      'live-search input stays available alongside the chips',
+    );
     assert.equal(
-      cloud!.dataset['id'],
-      'ta-single',
-      'cloud carries the target id in dataset',
+      addInput!.placeholder,
+      '+ ещё одну мысль',
+      'non-empty chip field uses the add placeholder',
     );
-    // Заголовок берётся из ребра (target_title) сразу, без ожидания резолва.
-    const titleSpan = cloud!.children.find((c) => c.className === 'prc-title');
-    assert.equal(titleSpan?.textContent, 'Единственная мысль');
-
-    const removeBtn = cloud!.children.find((c) =>
-      c.className.split(' ').includes('st-f-clear-inline'),
-    );
-    assert.ok(removeBtn !== undefined, 'cloud has a «✕» clear button');
-
-    const pickBtn = row.children.find(
-      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
-    );
-    assert.ok(pickBtn !== undefined, '«выбрать» button rendered alongside the cloud');
   });
 
-  it('«✕» on the cloud clears the value and persists null', async () => {
+  it('«✕» on the cloud persists null (the whole set cleared)', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const saved: unknown[] = [];
@@ -270,7 +267,6 @@ describe('buildLinkValueEditor — single mode, мини-облачко (a47947c
       ownerId: 't1',
       definition: baseDefinition as any,
       values: [edge('ta-single', 'Единственная мысль')],
-      multiple: false,
       save: async (next) => {
         saved.push(next);
         return true;
@@ -283,11 +279,11 @@ describe('buildLinkValueEditor — single mode, мини-облачко (a47947c
     )!;
     removeBtn.dispatch('click', { stopPropagation: () => undefined });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.deepEqual(saved, [null], 'clearing the single value persists null');
+    assert.deepEqual(saved, [null], 'removing the last chip clears the value (null)');
   });
 });
 
-describe('buildLinkValueEditor — multiple mode, чипы мини-облачков (a47947c8)', () => {
+describe('buildLinkValueEditor — чип-режим мини-облачков (a47947c8)', () => {
   it('renders one mini-cloud per stored id with a «+ ещё одну мысль» add input', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
@@ -295,9 +291,9 @@ describe('buildLinkValueEditor — multiple mode, чипы мини-облачк
       networkId: 'n1',
       ownerType: 'thought',
       ownerId: 't1',
-      definition: { ...baseDefinition, config: { multiple: true } } as any,
+      definition: { ...baseDefinition, config: {} } as any,
       values: [edge('ta-1', 'Мысль 1'), edge('ta-2', 'Мысль 2')],
-      multiple: true,
+
       save: async () => true,
     }) as unknown as ShimElement;
 
@@ -333,9 +329,9 @@ describe('buildLinkValueEditor — multiple mode, чипы мини-облачк
       networkId: 'n1',
       ownerType: 'thought',
       ownerId: 't1',
-      definition: { ...baseDefinition, config: { multiple: true } } as any,
+      definition: { ...baseDefinition, config: {} } as any,
       values: [],
-      multiple: true,
+
       save: async () => true,
     }) as unknown as ShimElement;
     const field = editor.children[0]!.children[0]!;
@@ -357,9 +353,9 @@ describe('buildLinkValueEditor — multiple mode, чипы мини-облачк
       networkId: 'n1',
       ownerType: 'thought',
       ownerId: 't1',
-      definition: { ...baseDefinition, config: { multiple: true } } as any,
+      definition: { ...baseDefinition, config: {} } as any,
       values: [edge('ta-1', 'Мысль 1')],
-      multiple: true,
+
       save: async () => true,
     }) as unknown as ShimElement;
 
@@ -379,9 +375,9 @@ describe('buildLinkValueEditor — multiple mode, чипы мини-облачк
       networkId: 'n1',
       ownerType: 'thought',
       ownerId: 't1',
-      definition: { ...baseDefinition, config: { multiple: true } } as any,
+      definition: { ...baseDefinition, config: {} } as any,
       values: [edge('ta-1', 'Мысль 1')],
-      multiple: true,
+
       save: async () => true,
     }) as unknown as ShimElement;
 
@@ -402,9 +398,9 @@ describe('buildLinkValueEditor — multiple mode, чипы мини-облачк
       networkId: 'n1',
       ownerType: 'thought',
       ownerId: 't1',
-      definition: { ...baseDefinition, config: { multiple: true } } as any,
+      definition: { ...baseDefinition, config: {} } as any,
       values: [edge('ta-1', 'Мысль 1'), edge('ta-2', 'Мысль 2')],
-      multiple: true,
+
       save: async (next) => {
         saved.push(next);
         return true;
@@ -434,9 +430,9 @@ describe('buildLinkValueEditor — multiple mode, чипы мини-облачк
       networkId: 'n1',
       ownerType: 'thought',
       ownerId: 't1',
-      definition: { ...baseDefinition, config: { multiple: true } } as any,
+      definition: { ...baseDefinition, config: {} } as any,
       values: [edge('ta-known', 'Готовый заголовок'), edge('ta-unknown')],
-      multiple: true,
+
       save: async () => true,
     }) as unknown as ShimElement;
 
@@ -467,9 +463,9 @@ describe('buildLinkValueEditor — multiple mode, чипы мини-облачк
       networkId: 'n1',
       ownerType: 'thought',
       ownerId: 't1',
-      definition: { ...baseDefinition, config: { multiple: true } } as any,
+      definition: { ...baseDefinition, config: {} } as any,
       values: [edge('ta-known', 'Готовый заголовок'), edge('ta-unknown')],
-      multiple: true,
+
       save: async () => true,
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
