@@ -147,13 +147,13 @@ export function mountChronicle(hostEl: HTMLElement): void {
 
   const filterArea = div('chron-filter-area');
   // Horizontal grab strip between the filter panel and the table: dragging
-  // changes the panel's max-height (rowSplitter), the rest flows below. The
-  // drag is remembered as the panel's max height (ee745368, L4
-  // `chronicle_list_heights`) — the cap is applied inline at mount, because
-  // the area element lives for the whole mount (only its content changes).
+  // changes the panel's exact fixed height (rowSplitter), the rest flows
+  // below. The drag is remembered as the panel's fixed height (ee745368, L4
+  // `chronicle_list_heights`) — the value is applied inline at mount and on
+  // drag end, because the area element lives for the whole mount (only its
+  // content changes).
   const splitter = rowSplitter(() => filterArea, {
     min: 80,
-    max: () => filterArea.scrollHeight,
     persistKey: 'chronicle.filters',
   });
   splitter.classList.add('chron-splitter');
@@ -178,15 +178,14 @@ export function mountChronicle(hostEl: HTMLElement): void {
   top.append(wrap, pager);
   editorArea = div('chron-editor');
 
-  // The drag is remembered as the table's max height (ee745368, L4
-  // `chronicle_list_heights`); the cap is applied inline — the wrap element is
+  // The drag is remembered as the table's exact fixed height (ee745368, L4
+  // `chronicle_list_heights`); it is applied inline — the wrap element is
   // stable for the whole mount, only rows are re-rendered inside it.
   applyGroupClamp(wrap, 'chronicle.table');
   main.append(
     top,
     rowSplitter(() => wrap, {
       min: 48,
-      max: () => wrap.scrollHeight,
       persistKey: 'chronicle.table',
     }),
     editorArea,

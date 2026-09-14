@@ -43,13 +43,13 @@ import { store } from '../state.js';
 const PERSIST_DEBOUNCE_MS = 300;
 
 /**
- * Keys whose target element reads the cap from a CSS custom property. The
+ * Keys whose target element reads the height from a CSS custom property. The
  * variable is set on the editor scroll box (see {@link setClampRoot}); the
  * stylesheet provides the default (five visible rows) via `var(..., fallback)`.
- * `rowSplitter` consults this table to keep `props`/`chrono`/`attachments`
- * drag-ranges pinned to the natural content height — letting them stretch
- * past it would persist a huge value into the CSS variable and inflate the
- * table to that height on every render.
+ * Since bug 4cc6248c the splitter drag range is content-unbounded for these
+ * keys too: the variable is consumed as an exact `height`, so a value larger
+ * than the current content just leaves empty space (more rows scroll inside)
+ * — the visible size still never depends on the row count.
  */
 export const CSS_VAR_KEYS: Record<string, string> = {
   props: '--clamp-props',
