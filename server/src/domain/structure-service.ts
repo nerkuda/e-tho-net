@@ -53,7 +53,12 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { getNetworkProperty } from './property-service.js';
+import {
+  getNetworkProperty,
+  isStructuralLinkProperty,
+  linkPropertyDirection,
+  linkPropertyLinkTypeId,
+} from './property-service.js';
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
 import { getThoughtOrThrow, rowToThoughtRef } from './thought-service.js';
 import { expandTypeIdsToSubtree, linkTypeFilterClause } from './type-hierarchy.js';
@@ -73,6 +78,12 @@ type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
  * `is_empty` / `not_empty` test for the presence of a value at all and are
  * allowed for every type except `bool` — there the same intent is covered
  * by `eq true` / `eq false`, so an extra toggle would be redundant noise.
+ *
+ * Свойство-связь (`link`) хранит значение в рёбрах (links_v), а не в
+ * property_values (ADR «проекция ребра»). Поддержан тот же набор, что и
+ * для legacy `thought_ref`: eq/in/not_in ищут по конкретной цели/списку
+ * целей, is_empty/not_empty — по наличию любого живого ребра этого типа
+ * (структурная проверка `EXISTS` по `links_v` в `buildFilterQuerySql`).
  */
 const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly StructurePropertyOp[]> = {
   text: ['contains', 'eq', 'in', 'not_in', 'is_empty', 'not_empty'],
@@ -80,8 +91,7 @@ const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly StructurePropertyOp[
   date: ['eq', 'gt', 'lt', 'is_empty', 'not_empty'],
   number: ['eq', 'gt', 'lt', 'is_empty', 'not_empty'],
   bool: ['eq'],
-  // Отбор по свойствам-связям — отдельная задача (4); до неё операций нет.
-  link: [],
+  link: ['eq', 'in', 'not_in', 'is_empty', 'not_empty'],
   // Legacy thought_ref (миграция 040): таких свойств в живой БД не остаётся,
   // но value-handling (тесты, унаследованные архивы) пользуется тем же
   // набором операторов, что и `url` — eq/in/not_in ищут по одиночному id и
@@ -97,7 +107,9 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   number: 'value_number',
   bool: 'value_bool',
   // Свойство-связь значений в property_values не хранит (ADR «проекция
-  // ребра»); значение недостижимо — OPS_BY_VALUE_TYPE['link'] пуст.
+  // ребра»); условие транслируется в `links_v` отдельной веткой
+  // `buildFilterQuerySql`. Колонка сохранена для совместимости типа, но в
+  // SQL не подставляется.
   link: 'value_text',
   // Legacy thought_ref (миграция 040): value-handling читает одиночный id
   // и JSON-массив id из этого столбца.
@@ -855,6 +867,71 @@ function buildFilterQuerySql(
       );
     }
     const column = `pv.${VALUE_COLUMN[def.value_type]}`;
+    // Свойство-связь (`value_type: 'link'`, задача 20effcbd + расширение в
+    // этом коммите): значение хранится в `links_v` (рёбрах), а не в
+    // `property_values`. Направление (`out`/`in`) и тип связи читаются из
+    // `config` свойства через те же хелперы, что использует
+    // `query-service.linkPropertyClause` (единая точка интерпретации — без
+    // дублирования логики). Поддержан набор `eq`/`in`/`not_in`/`is_empty`/
+    // `not_empty` — паритет с legacy `thought_ref` ниже.
+    if (def.value_type === 'link') {
+      const cfg = def.config;
+      const structural = isStructuralLinkProperty(cfg);
+      const linkTypeId = structural ? null : linkPropertyLinkTypeId(cfg);
+      if (!structural && linkTypeId === null) {
+        // Некорректный config (валидируется при правке онтологии — сюда не
+        // должно доходить). Условие не матчит ничего: 0 → пустой результат.
+        where.push('0');
+        continue;
+      }
+      const direction = linkPropertyDirection(cfg);
+      const ownerCol = direction === 'out' ? 'source_id' : 'target_id';
+      const targetCol = direction === 'out' ? 'target_id' : 'source_id';
+      const typeSql = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
+      const typeParams = linkTypeId === null ? [] : [linkTypeId];
+      const existsSql = (extraSql: string, extraParams: unknown[]): { sql: string; params: unknown[] } => ({
+        sql: `EXISTS (SELECT 1 FROM links_v l
+           WHERE l.${ownerCol} = t.id AND ${typeSql}
+             AND l.active = 1 AND l.marked_for_deletion = 0${extraSql})`,
+        params: [...typeParams, ...extraParams],
+      });
+      if (cond.op === 'in' || cond.op === 'not_in') {
+        if (!Array.isArray(cond.value) || cond.value.length === 0) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'Для операции "в списке"/"не в списке" value должен быть непустым массивом.',
+            { field: 'value' },
+            requestId,
+          );
+        }
+        const values = cond.value.map((v) => sqlScalar(def, v, requestId) as string);
+        const placeholders = values.map(() => '?').join(',');
+        const matchSql = existsSql(` AND l.${targetCol} IN (${placeholders})`, values);
+        where.push(cond.op === 'in' ? matchSql.sql : `NOT ${matchSql.sql}`);
+        params.push(...matchSql.params);
+        continue;
+      }
+      if (cond.op === 'is_empty' || cond.op === 'not_empty') {
+        const presence = existsSql('', []);
+        where.push(cond.op === 'not_empty' ? presence.sql : `NOT ${presence.sql}`);
+        params.push(...presence.params);
+        continue;
+      }
+      // `eq`: ровно одно активное ребро заданного типа к указанной цели.
+      if (typeof cond.value !== 'string' || cond.value === '') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Для свойства-связи значение условия eq должно быть id цели (строкой).',
+          { field: 'value' },
+          requestId,
+        );
+      }
+      const targetId = sqlScalar(def, cond.value as StructurePropertyValue, requestId) as string;
+      const specific = existsSql(` AND l.${targetCol} = ?`, [targetId]);
+      where.push(specific.sql);
+      params.push(...specific.params);
+      continue;
+    }
     // Legacy thought_ref (миграция 040): значение в `value_thought_ref`
     // может быть одиночным id или JSON-массивом id. Все скалярные операции
     // (eq/in/not_in/is_empty/not_empty) раскрывают обе формы: одиночное

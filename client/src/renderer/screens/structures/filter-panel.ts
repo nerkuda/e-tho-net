@@ -177,7 +177,18 @@ export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropert
     { op: 'is_empty', label: 'не заполнено' },
   ],
   bool: [{ op: 'eq', label: 'равно' }],
-  link: [],
+  // Свойство-связь (0.8.1): значение хранится в рёбрах, не в property_values.
+  // На сервере поддержан тот же набор, что у legacy `thought_ref` ниже —
+  // паритет между `OPS_BY_TYPE` здесь и `OPS_BY_VALUE_TYPE` в
+  // `server/src/domain/structure-service.ts` обязателен, иначе UI предложит
+  // операцию, которую сервер отвергнет (ошибка 31a05292).
+  link: [
+    { op: 'eq', label: 'равно' },
+    { op: 'in', label: 'в списке' },
+    { op: 'not_in', label: 'не в списке' },
+    { op: 'not_empty', label: 'заполнено' },
+    { op: 'is_empty', label: 'не заполнено' },
+  ],
   // Legacy (миграция 040): таких свойств в живой БД не остаётся;
   // присутствие проверяется теми же кнопками «заполнено»/«не заполнено».
   thought_ref: [
