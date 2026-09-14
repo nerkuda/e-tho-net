@@ -1234,13 +1234,19 @@ function buildStagedPropertySection(opts: {
       for (const def of inherited) {
         const row = el('tr');
         const nameCell = el('td', undefined, def.key);
-        if (def.description !== null) {
-          setTooltip(nameCell, def.description);
+        const hint = def.mirrored === true
+          ? `Зеркальное свойство-связь: порождено свойством «${def.key}» другого типа через ограничение типов цели. Тип связи и направление не редактируются здесь.`
+          : def.description;
+        if (hint !== null) {
+          setTooltip(nameCell, hint);
           nameCell.append(span(' ⓘ', 'muted'));
         }
         row.append(nameCell);
         row.append(el('td', 'muted', VALUE_TYPE_LABELS[def.value_type]));
-        row.append(el('td', 'muted', def.defined_on_name));
+        const sourceLabel = def.mirrored === true
+          ? `зеркало · ${def.defined_on_name}`
+          : def.defined_on_name;
+        row.append(el('td', 'muted', sourceLabel));
         row.append(
           el(
             'td',
@@ -1253,13 +1259,16 @@ function buildStagedPropertySection(opts: {
         const actions = el('td');
         actions.style.whiteSpace = 'nowrap';
         // Override buttons exist only for an already-created type: the
-        // override row needs a server id to attach to.
-        if (typeId !== null && def.value_type !== 'link') {
+        // override row needs a server id to attach to. A mirrored link
+        // property (dde92461) has no physical binding to override at all —
+        // its nature lives in the source property's config.
+        const overridable = typeId !== null && def.value_type !== 'link' && def.mirrored !== true;
+        if (overridable) {
           actions.append(
             button('по умолчанию…', () => showOverrideDialog(def), 'btn small', 'Переопределить значение по умолчанию'),
           );
         }
-        if (typeId !== null) {
+        if (typeId !== null && def.mirrored !== true) {
           actions.append(
             button('описание…', () => showDescriptionOverrideDialog(def), 'btn small', 'Переопределить описание свойства'),
           );
@@ -1375,8 +1384,12 @@ function buildStagedPropertySection(opts: {
       registryCache = new Map(registryRows.map((row) => [row.id, row]));
       if (typeId !== null) {
         // An existing type: own rows seed the draft (once), inherited shown.
-        originalOwn = defs.filter((d) => !d.inherited);
-        inherited = defs.filter((d) => d.inherited);
+        // Mirrored link properties (dde92461) are synthesized by the server —
+        // they have no `type_properties` binding, so they must never seed the
+        // own draft (the diff planner would try to attach them); they render
+        // in the inherited table with a «зеркало» source label instead.
+        originalOwn = defs.filter((d) => !d.inherited && d.mirrored !== true);
+        inherited = defs.filter((d) => d.inherited || d.mirrored === true);
         if (ownDraft.length === 0 && deletedIds.length === 0 && !draftTouched) {
           ownDraft = draftPropertiesFrom(originalOwn);
         }

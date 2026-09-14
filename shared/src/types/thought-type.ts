@@ -123,6 +123,14 @@ export interface PropertyDefinition {
    * editor and given to AI agents through `etn.types.list`.
    */
   description: string | null;
+  /**
+   * `true` для зеркального свойства-связи (требование dde92461): свойство не
+   * привязано к типу явно — оно синтезируется при чтении из чужого
+   * свойства-связи, чей `allowed_target_type_ids` покрывает этот тип. У
+   * физических привязок `type_properties` флаг отсутствует (`undefined`);
+   * направление зеркала противоположно направлению исходного свойства.
+   */
+  mirrored?: boolean;
 }
 
 /** A network-wide property of the `properties` registry (02-data-model.md §3.4a). */
@@ -290,6 +298,8 @@ export interface EffectiveTypeProperty extends PropertyDefinition {
    * definition's own. This flag tells the two apart.
    */
   description_overridden: boolean;
+  /** `true` — зеркальное свойство-связь (см. {@link PropertyDefinition.mirrored}). */
+  mirrored?: boolean;
 }
 
 /** Body of `PUT …/types/{id}/properties/{prop_id}/default` (03-server-api.md §8). */

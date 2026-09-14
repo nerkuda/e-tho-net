@@ -1384,7 +1384,79 @@ export function listEffectiveTypeProperties(
       });
     }
   }
+  if (ownerType === 'thought_type') {
+    appendMirroredLinkProperties(ndb, ownerId, out);
+  }
   return out;
+}
+
+/**
+ * Дописать в эффективный набор типа мысли зеркальные свойства-связи
+ * (требование dde92461): каждое свойство-связь реестра с непустым
+ * `allowed_target_type_ids` порождает у накрываемых типов обратное свойство —
+ * без явной привязки, направлением противоположным исходному. «Определяющий»
+ * тип для `defined_on` — самый глубокий предок `ownerId`, входящий в
+ * `allowed_target_type_ids` (обычно сам список и есть; поддерево расширяет
+ * его вниз, и для потомка определяющий тип — его предок из списка).
+ *
+ * Пара (тип связи + направление) адресует свойство однозначно (требование
+ * 597b1c1a) — если пара уже покрыта явной/унаследованной привязкой, зеркало
+ * не добавляется (та же свёртка, что в `listThoughtLinkProperties`).
+ * Структурные свойства («Родители»/«Потомки») зеркал не порождают: у
+ * нетипизированных рёбер обратная сторона уже покрыта парой самих свойств.
+ */
+function appendMirroredLinkProperties(
+  ndb: NetworkDb,
+  ownerId: string,
+  out: EffectiveTypeProperty[],
+): void {
+  const covered = new Set<string>();
+  for (const def of out) {
+    if (def.value_type !== 'link') continue;
+    covered.add(
+      `${linkPropertyLinkTypeId(def.config) ?? ''}|${linkPropertyDirection(def.config)}`,
+    );
+  }
+  const ancestorsSelfFirst = typeAncestors(ndb, 'thought_types', ownerId);
+  const ancestorSet = new Set(ancestorsSelfFirst);
+  for (const prop of listNetworkProperties(ndb)) {
+    if (prop.value_type !== 'link') continue;
+    const cfg = prop.config ?? {};
+    if (isStructuralLinkProperty(cfg)) continue;
+    const linkTypeId = linkPropertyLinkTypeId(cfg);
+    if (linkTypeId === null) continue;
+    const allowed = cfg.allowed_target_type_ids ?? [];
+    if (allowed.length === 0) continue;
+    const direction = linkPropertyDirection(cfg) === 'out' ? 'in' : 'out';
+    const pair = `${linkTypeId}|${direction}`;
+    if (covered.has(pair)) continue;
+    // Тип накрыт, если сам или какой-то его предок входит в allowed-список
+    // (эквивалент расширения списка на поддеревья, как в
+    // `listThoughtLinkProperties`).
+    if (!allowed.some((id) => ancestorSet.has(id))) continue;
+    const defining = ancestorsSelfFirst.find((id) => allowed.includes(id));
+    if (defining === undefined) continue;
+    covered.add(pair);
+    out.push({
+      id: `mirror:${prop.id}`,
+      property_id: prop.id,
+      owner_type: 'thought_type',
+      owner_id: ownerId,
+      key: linkPropertyDisplayName(ndb, linkTypeId, direction),
+      value_type: 'link',
+      config: { ...cfg, direction },
+      required: false,
+      position: out.length,
+      description: prop.description,
+      mirrored: true,
+      inherited: defining !== ownerId,
+      defined_on: defining,
+      defined_on_name: ownerTypeName(ndb, 'thought_type', defining),
+      default_value: null,
+      overridden_here: false,
+      description_overridden: false,
+    });
+  }
 }
 
 /**

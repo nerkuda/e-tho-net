@@ -269,5 +269,186 @@ describe(
         ndb.close();
       }
     });
+
+    // -------------------------------------------------------------------------
+    // Зеркала в каталоге типа (требование dde92461): listEffectiveTypeProperties
+    // синтезирует обратное свойство у накрываемых типов, а не только при чтении
+    // карточки мысли. Без этого редактор типа, etn.types.list и конструктор
+    // отборов зеркало не видели вовсе.
+    // -------------------------------------------------------------------------
+
+    it('mirror in type catalogue: allowed type gets the reverse property (mirrored, not own)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'версия -> работы', name_reverse: 'работы версии' },
+          USER,
+        );
+        const ver = createThoughtType(ndb, { name: 'Версия' }, USER);
+        const task = createThoughtType(ndb, { name: 'ЗадачаM' }, USER);
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          task.id,
+          {
+            key: 'версия',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out', allowed_target_type_ids: [ver.id] },
+          },
+          USER,
+        );
+
+        // У исходного типа — прямое свойство, без флага mirrored.
+        const taskEffective = listEffectiveTypeProperties(ndb, 'thought_type', task.id);
+        const taskLink = taskEffective.find(
+          (p) => p.value_type === 'link' && p.config?.link_type_id === lt.id && !p.mirrored,
+        );
+        assert.ok(taskLink !== undefined);
+        assert.equal(taskLink!.key, 'версия -> работы');
+
+        // У накрываемого типа — зеркальное обратное, синтетическое (не own).
+        const verEffective = listEffectiveTypeProperties(ndb, 'thought_type', ver.id);
+        const mirrors = verEffective.filter((p) => p.mirrored === true);
+        assert.equal(mirrors.length, 1);
+        const mirror = mirrors[0]!;
+        assert.equal(mirror.key, 'работы версии');
+        assert.equal(mirror.value_type, 'link');
+        assert.equal(mirror.config?.link_type_id, lt.id);
+        assert.equal(mirror.config?.direction, 'in');
+        assert.equal(mirror.inherited, false);
+        assert.equal(mirror.defined_on, ver.id);
+        assert.equal(mirror.required, false);
+        // Кроме зеркала собственных link-привязок у накрываемого типа нет.
+        assert.equal(
+          verEffective.filter(
+            (p) => p.value_type === 'link' && p.mirrored !== true && !p.inherited,
+          ).length,
+          0,
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('mirror in type catalogue: inherited by descendants of an allowed type', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'применяется к', name_reverse: 'регулируется из' },
+          USER,
+        );
+        const req = createThoughtType(ndb, { name: 'ТребованиеD' }, USER);
+        const comp = createThoughtType(ndb, { name: 'КомпонентD' }, USER);
+        const subComp = createThoughtType(
+          ndb,
+          { name: 'ПодкомпонентD', parent_id: comp.id },
+          USER,
+        );
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          req.id,
+          {
+            key: 'применяется к',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out', allowed_target_type_ids: [comp.id] },
+          },
+          USER,
+        );
+
+        // Потомок накрываемого типа наследует зеркало; определяющий тип —
+        // сам «КомпонентD» из allowed-списка.
+        const subEffective = listEffectiveTypeProperties(ndb, 'thought_type', subComp.id);
+        const mirrors = subEffective.filter((p) => p.mirrored === true);
+        assert.equal(mirrors.length, 1);
+        assert.equal(mirrors[0]!.key, 'регулируется из');
+        assert.equal(mirrors[0]!.inherited, true);
+        assert.equal(mirrors[0]!.defined_on, comp.id);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('mirror in type catalogue: no duplicate when the pair is already explicit', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'применяется к', name_reverse: 'регулируется из' },
+          USER,
+        );
+        const req = createThoughtType(ndb, { name: 'ТребованиеU' }, USER);
+        const comp = createThoughtType(ndb, { name: 'КомпонентU' }, USER);
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          req.id,
+          {
+            key: 'применяется к',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out', allowed_target_type_ids: [comp.id] },
+          },
+          USER,
+        );
+        // Явная привязка той же пары (тип связи, направление in) на целевом типе.
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          comp.id,
+          {
+            key: 'регулируется из',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'in' },
+          },
+          USER,
+        );
+
+        const compEffective = listEffectiveTypeProperties(ndb, 'thought_type', comp.id);
+        const samePair = compEffective.filter(
+          (p) =>
+            p.value_type === 'link' &&
+            p.config?.link_type_id === lt.id &&
+            p.config?.direction === 'in',
+        );
+        // Пара адресует ровно одно свойство: явное, зеркала не добавлено.
+        assert.equal(samePair.length, 1);
+        assert.equal(samePair[0]!.mirrored ?? false, false);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('mirror in type catalogue: absent without allowed_target_type_ids and for link types', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'см. также', name_reverse: 'см. также' },
+          USER,
+        );
+        const a = createThoughtType(ndb, { name: 'ТипA' }, USER);
+        const b = createThoughtType(ndb, { name: 'ТипB' }, USER);
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          a.id,
+          { key: 'см. также', value_type: 'link', config: { link_type_id: lt.id, direction: 'out' } },
+          USER,
+        );
+
+        // Без ограничения — в каталоге типа B зеркала нет (обратная сторона
+        // остаётся внетиповой при чтении мысли, требование dde92461).
+        const bEffective = listEffectiveTypeProperties(ndb, 'thought_type', b.id);
+        assert.equal(bEffective.filter((p) => p.mirrored === true).length, 0);
+
+        // У типов связей зеркал тоже не появляется (владелец не thought_type).
+        const ltEffective = listEffectiveTypeProperties(ndb, 'link_type', lt.id);
+        assert.equal(ltEffective.filter((p) => p.mirrored === true).length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
   },
 );
