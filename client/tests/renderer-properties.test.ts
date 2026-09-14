@@ -419,8 +419,11 @@ describe('editor properties group body (DOM-shimmed)', () => {
     assert.ok(tbody !== undefined, 'tbody rendered');
 
     // Single url property («Сайт», row index 0): the input must carry the value.
+    // Приёмка 0.8.1: input обёрнут в .clearable-field (угловой «✕») внутри
+    // form-row — [clearable-field, «Открыть»].
     const urlCell = tbody.children[0]?.children[1];
-    const urlInput = urlCell?.children[0]?.children.find(
+    const urlRow = urlCell?.children[0];
+    const urlInput = urlRow?.children[0]?.children.find(
       (c) => c.tagName === 'input' && c.type === 'text',
     ) as ShimElement | undefined;
     assert.equal(
@@ -567,10 +570,12 @@ describe('editor properties group body (DOM-shimmed)', () => {
     // поле вместе с чипами.
     const singleCell = tbody.children[0]?.children[1];
     assert.ok(singleCell !== undefined, 'single link cell rendered');
-    // Структура: link-value-editor > form-row > [st-f-chipfield, button].
+    // Структура (приёмка 0.8.1): link-value-editor > form-row >
+    // link-value-wrap > [link-value-field, link-value-corner].
     const singleRoot = singleCell.children[0];
     const singleRow = singleRoot?.children[0];
-    const singleField = singleRow?.children[0];
+    const singleWrap = singleRow?.children[0];
+    const singleField = singleWrap?.children[0];
     const singleInput = singleField?.children.find(
       (c) => c.tagName === 'input' && c.type === 'text',
     ) as ShimElement | undefined;
@@ -580,19 +585,23 @@ describe('editor properties group body (DOM-shimmed)', () => {
       'Название мысли…',
       'empty link chip field uses the seed placeholder',
     );
-    const singlePickBtn = singleRow?.children.find(
-      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    const singleCorner = singleWrap?.children.find((c) =>
+      (c as ShimElement).className.split(' ').includes('link-value-corner'),
     );
-    assert.ok(singlePickBtn !== undefined, 'link chip field has a «выбрать» button');
+    assert.ok(
+      singleCorner !== undefined &&
+        singleCorner.children.some((c) => c.textContent === '…'),
+      'link chip field has the compact «…» picker button',
+    );
 
-    // Row 1 — multiple link property «Соавторы»: два мини-облачка + поле
-    // добавления + «выбрать».
+    // Row 1 — link property «Соавторы»: два мини-облачка + поле добавления +
+    // угловые кнопки.
     const multiCell = tbody.children[1]?.children[1];
     assert.ok(multiCell !== undefined, 'multi link cell rendered');
-    // Структура: link-value-editor > form-row > [st-f-chipfield, button].
     const multiRoot = multiCell.children[0];
     const multiRow = multiRoot?.children[0];
-    const multiField = multiRow?.children[0];
+    const multiWrap = multiRow?.children[0];
+    const multiField = multiWrap?.children[0];
     const clouds = multiField?.children.filter((c) =>
       (c as ShimElement).className.split(' ').includes('prop-ref-cloud'),
     );
@@ -606,10 +615,15 @@ describe('editor properties group body (DOM-shimmed)', () => {
       '+ ещё одну мысль',
       'multi link uses the chip add placeholder',
     );
-    const multiPickBtn = multiRow?.children.find(
-      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    const multiCorner = multiWrap?.children.find((c) =>
+      (c as ShimElement).className.split(' ').includes('link-value-corner'),
     );
-    assert.ok(multiPickBtn !== undefined, 'multi link has a «выбрать» button');
+    assert.ok(
+      multiCorner !== undefined &&
+        multiCorner.children.some((c) => c.textContent === '…') &&
+        multiCorner.children.some((c) => c.textContent === '✕'),
+      'multi link has the corner «…» and «✕» buttons',
+    );
   });
 });
 
@@ -1023,7 +1037,9 @@ describe('editor properties — date/number blur commits (error cefb4db0)', () =
 
   /** Returns the input element of row `index` (0 = date, 1 = number). */
   function rowInput(box: ShimElement, index: number): ShimElement | undefined {
-    return rowCell(box, index)?.children[0];
+    // Приёмка 0.8.1: одиночные поля обёрнуты в .clearable-field с угловым
+    // «✕» — input лежит внутри обёртки.
+    return rowCell(box, index)?.children[0]?.children[0];
   }
 
   it('blur on an already-empty date/number field fires no remove and shows no error', async () => {
@@ -1382,14 +1398,15 @@ describe('editor properties — text/url save failure rolls back baseline (7d094
 
   /** The text cell's input — wrapped in row > cell (with-options layout). */
   function rowInput(box: ShimElement): ShimElement | undefined {
-    // Новая вложенность (8ab775d9): box → properties-type-body →
-    // admin-table-wrap.prop-wrap → table → tbody → tr → td(cell).
+    // Вложенность (8ab775d9 + приёмка 0.8.1): box → properties-type-body →
+    // admin-table-wrap.prop-wrap → table → tbody → tr → td(cell) →
+    // form-row → clearable-field → input.
     const typeBody = box.children[0];
     const tableWrap = typeBody?.children[0];
     const table = tableWrap?.children[0];
     const tbody = table?.children[0];
     const cell = tbody?.children[0]?.children[1];
-    return cell?.children[0]?.children[0];
+    return cell?.children[0]?.children[0]?.children[0];
   }
 
   /** The value cell of the only row (with-options layout: row > cell). */

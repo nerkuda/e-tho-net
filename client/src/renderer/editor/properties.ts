@@ -40,13 +40,14 @@ import { svgIcon } from '../lib/icons.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
+import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
 import {
   applyCloudStyle,
   applyThoughtIcon,
   resolveCloudStyle,
 } from '../canvas/canvas.js';
-import { pickThoughtsDialog, pickedThoughtIds } from '../canvas/add-dialog.js';
+import { pickThoughtsDialog } from '../canvas/add-dialog.js';
 import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
 import { registerTabContent, type EditorContext } from './editor.js';
@@ -436,16 +437,21 @@ function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link
     for (const definition of definitions) {
       const value = valueByProp.get(definition.property_id);
       const row = el('tr');
-      const source = definition.inherited ? ` · из «${definition.defined_on_name}»` : '';
+      // Заголовок при заполнении: имя (+ « *» обязательности) и число значений
+      // у множественных свойств; тип значения и место определения здесь не
+      // нужны — это информация редактора типа (приёмка пользователя 0.8.1).
+      // ⓘ несёт tooltip с описанием свойства.
+      const count = valueCountOf(definition, value);
       const nameCell = el(
         'td',
-        undefined,
-        `${definition.key}${definition.required ? ' *' : ''} (${typeName(definition.value_type)})${source}`,
+        'prop-name-cell',
+        `${definition.key}${definition.required ? ' *' : ''}${count === null ? '' : ` (${count})`}`,
       );
       const hint = propertyHint(definition);
       if (hint !== null) {
-        setTooltip(nameCell, hint);
-        nameCell.append(span(' ⓘ', 'muted'));
+        const info = span('ⓘ', 'muted prop-hint');
+        setTooltip(info, hint);
+        nameCell.append(info);
       }
       row.append(nameCell);
       row.append(
@@ -597,7 +603,7 @@ function buildEditorCell(opts: {
           const row = div('form-row');
           row.style.marginBottom = '0';
           row.append(
-            input,
+            wrapClearable(input, () => clearViaBlur(input)),
             buildValueOptionsCaret(
               input,
               options,
@@ -630,10 +636,10 @@ function buildEditorCell(opts: {
           syncOpenBtn();
           const row = div('form-row');
           row.style.marginBottom = '0';
-          row.append(input, openBtn);
+          row.append(wrapClearable(input, () => clearViaBlur(input)), openBtn);
           cell.append(row);
         } else {
-          cell.append(input);
+          cell.append(wrapClearable(input, () => clearViaBlur(input)));
         }
         break;
       }
@@ -666,7 +672,7 @@ function buildEditorCell(opts: {
             if (!ok) baseline = prev;
           });
         });
-        cell.append(input);
+        cell.append(wrapClearable(input, () => clearViaBlur(input)));
         break;
       }
       case 'date': {
@@ -689,7 +695,7 @@ function buildEditorCell(opts: {
             if (!ok) baseline = prev;
           });
         });
-        cell.append(input);
+        cell.append(wrapClearable(input, () => clearViaBlur(input)));
         break;
       }
       case 'bool': {
@@ -746,6 +752,35 @@ function typeName(valueType: string): string {
   }
 }
 
+/**
+ * Оборачивает поле ввода с кнопкой «✕» очистки значения в правом верхнем
+ * углу (приёмка пользователя 0.8.1): у любого поля ввода должен быть
+ * однозначный способ убрать значение целиком.
+ */
+function wrapClearable(input: HTMLElement, onClear: () => void): HTMLElement {
+  const wrap = div('clearable-field');
+  wrap.append(input);
+  const btn = el('button', 'clearable-clear', '✕');
+  btn.type = 'button';
+  btn.title = 'Очистить';
+  btn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    onClear();
+  });
+  wrap.append(btn);
+  return wrap;
+}
+
+/**
+ * Очистка полей с blur-коммитом: пустое значение + программный blur —
+ * переиспользует существующие обработчики поля (пустое → `null` → удаление
+ * значения на сервере, с rollback baseline при неудаче).
+ */
+function clearViaBlur(input: HTMLInputElement): void {
+  input.value = '';
+  input.dispatchEvent(new Event('blur'));
+}
+
 /** Test seam for unit tests. */
 export const propertiesInternals = { buildPropertiesBody };
 
@@ -771,6 +806,31 @@ export function isLinkPropertyValues(
 export function propertyHint(definition: EffectiveTypeProperty): string | null {
   const text = definition.description?.trim();
   return text === undefined || text === '' ? null : text;
+}
+
+/**
+ * Число текущих значений для заголовка множественного свойства (приёмка
+ * пользователя 0.8.1: «Работы версии (4)»): свойства-связи множественны по
+ * природе (число целей не ограничено) — счётчик берётся из формы
+ * `LinkPropertyValues`; `url`/`text` с `config.multiple` считают элементы
+ * массива / фрагменты запятой. `null` — свойство одиночное, счётчик не нужен.
+ */
+function valueCountOf(
+  definition: EffectiveTypeProperty,
+  value: PropertyValue | LinkPropertyValues | undefined,
+): number | null {
+  if (definition.value_type === 'link') {
+    return value !== undefined && isLinkPropertyValues(value) ? value.count : 0;
+  }
+  if (definition.config?.multiple === true) {
+    const stored = value !== undefined && !isLinkPropertyValues(value) ? value.value : null;
+    if (Array.isArray(stored)) return stored.length;
+    if (definition.value_type === 'text' && typeof stored === 'string') {
+      return splitMultiValue(stored).length;
+    }
+    return stored === null || stored === undefined ? 0 : 1;
+  }
+  return null;
 }
 
 /**
@@ -807,6 +867,21 @@ export function buildMultiUrlEditor(opts: {
   // baseline diff stays meaningful (the host calls `save` with the latest
   // trimmed non-empty list and reloads once the write succeeds).
   let current: string[] = [...opts.urls];
+  // Угловая кнопка «✕» — очистка всего списка (приёмка 0.8.1). Пересоздаётся
+  // в каждом renderRows: replaceChildren() внутри стирает её вместе со строками.
+  const buildClearCorner = (): HTMLElement => {
+    const btn = el('button', 'multi-url-clear', '✕');
+    btn.type = 'button';
+    btn.title = 'Очистить все значения';
+    btn.addEventListener('click', (event) => {
+      event?.stopPropagation?.();
+      current = [];
+      collapseTrailingEmpty();
+      renderRows();
+      void opts.save([]);
+    });
+    return btn;
+  };
 
   const renderRows = (): void => {
     root.replaceChildren();
@@ -877,6 +952,7 @@ export function buildMultiUrlEditor(opts: {
     addBtn.title = 'Добавить ещё одно значение';
     addBtn.type = 'button';
     root.append(addBtn);
+    root.append(buildClearCorner());
   };
 
   /** Drop trailing empty rows so a freshly-added «+» row collapses on blur. */
@@ -1119,6 +1195,13 @@ export function buildValueOptionsCaret(
 const RESOLVE_BATCH = 100;
 
 /**
+ * Максимум символов заголовка в подписи чипа (приёмка пользователя 0.8.1):
+ * длинные имена обрезаются с «…», полный текст — в tooltip и Ctrl-hover
+ * предпросмотре.
+ */
+const TITLE_CLIP = 200;
+
+/**
  * Дозаполняет кеш метаданных целей (значок, цвета, active, пометка) батч-резолвом
  * `etn.thoughts.resolve`. Подписи уже есть в рёбрах (`target_title`); этот
  * запрос нужен только для отрисовки мини-облачков. Неудача не фатальна —
@@ -1152,11 +1235,18 @@ function openLinkRefInEditor(networkId: string, id: string): void {
     .catch((err: unknown) => notice(errText(err), 'error'));
 }
 
-/** Ставит мысль в фокус на карте. */
+/**
+ * Ставит мысль в фокус и активирует экран «Карта мыслей» — фокус без
+ * переключения на карту незаметен, если пользователь находится на другом
+ * экране (структуры, хроника): пункт «В фокус» контекстного меню чипа
+ * обязан привести и карту, и фокус.
+ */
 function focusLinkRef(networkId: string, id: string): void {
   void Promise.resolve()
     .then(async () => {
       const { setFocus } = await import('../app.js');
+      const { setActiveView } = await import('../screens/active-view.js');
+      setActiveView('map');
       await setFocus(id);
     })
     .catch((err: unknown) => notice(errText(err), 'error'));
@@ -1269,26 +1359,54 @@ export function buildLinkValueEditor(opts: {
     void persist(current);
   };
 
-  /** Кнопка «выбрать» — диалоговый пикер в режиме «несколько» (предзаполнен). */
+  /**
+   * Кнопка «выбрать» — диалог поиска/добавления мыслей (приёмка 0.8.1):
+   * создание новых разрешено — тип связи и направление известны из
+   * определения свойства, а при отборе по типам цели тип новой мысли
+   * предустановлен первым типом из списка (в диалоге его можно сменить).
+   */
   const openPicker = (): void => {
     void pickThoughtsDialog({
       networkId,
-      allowCreate: false,
+      allowCreate: true,
       allowLinkType: false,
       searchTypeIds: filterIds,
+      defaultNewThoughtTypeId: filterIds[0] ?? null,
       selectedIds: current,
-      title: 'Выбрать мысли',
+      title: 'Выбрать или создать мысли',
       applyLabel: 'Выбрать',
-    }).then((result) => {
+    }).then(async (result) => {
       if (result === null) return;
-      setAndPersist(pickedThoughtIds(result));
+      const ids: string[] = [];
+      for (const item of result.items) {
+        if (item.kind === 'existing') {
+          ids.push(item.id);
+          continue;
+        }
+        try {
+          const created = await etn.thoughts.create(networkId, {
+            title: item.title,
+            synonyms: item.synonyms,
+            type_id: result.thoughtTypeId ?? filterIds[0] ?? null,
+          });
+          ids.push(created.id);
+        } catch (err) {
+          notice(`Не удалось создать «${item.title}»: ${errText(err)}`, 'error');
+        }
+      }
+      setAndPersist(ids);
     });
   };
 
   /** Мини-облачко цели: значок + подпись в цветах/шрифте мысли (§6.3.1). */
   const buildCloud = (id: string, onRemove: () => void): HTMLElement => {
     const ref = refs.get(id);
-    const known = ref?.title ?? labels.get(id) ?? `${id.slice(0, 8)}…`;
+    // Полный заголовок — в tooltip и Ctrl-hover предпросмотре; подпись чипа
+    // обрезается до TITLE_CLIP символов, чтобы длинные имена не растягивали
+    // чип-поле в горизонтальную прокрутку (приёмка пользователя 0.8.1).
+    const fullTitle = ref?.title ?? labels.get(id) ?? `${id.slice(0, 8)}…`;
+    const known =
+      fullTitle.length > TITLE_CLIP ? `${fullTitle.slice(0, TITLE_CLIP)}…` : fullTitle;
     const cloud = div('prop-ref-cloud');
     cloud.dataset['id'] = id;
     if (ref !== undefined) applyCloudStyle(cloud, resolveCloudStyle(ref));
@@ -1299,7 +1417,11 @@ export function buildLinkValueEditor(opts: {
     if (ref !== undefined) applyThoughtIcon(icon, ref);
     else icon.textContent = '💭';
     cloud.append(icon, el('span', 'prc-title', known));
-    setTooltip(cloud, known);
+    setTooltip(cloud, fullTitle);
+    // Стандартное поведение чипов мыслей: Ctrl+hover — предпросмотр
+    // постоянного комментария цели, если он есть (как в истории, упоминаниях,
+    // мини-графе).
+    markThoughtCommentPreview(cloud, id, fullTitle);
     // Мысль в корзине (S13, §5a.2): облачко бледное + красная метка корзины.
     if (ref?.marked_for_deletion === true) {
       const mark = span('', 'list-trash-mark');
@@ -1381,17 +1503,25 @@ export function buildLinkValueEditor(opts: {
       },
     });
     field.append(addInput);
-    // Клик по свободному месту поля — фокус в живой поиск; кнопка «выбрать»
-    // открывает диалог в режиме «несколько» (§6.3.1).
+    // Клик по свободному месту поля — фокус в живой поиск.
     field.addEventListener('click', (event) => {
       if (event.target === field) addInput.focus();
     });
+    // Обёртка с угловыми кнопками (приёмка 0.8.1): «…» — диалог
+    // поиска/добавления (compact, не отъедает ширину поля), «✕» — очистка
+    // всего значения. Поле ограничено десятью строками чипов, дальше
+    // внутренняя прокрутка (CSS max-height) — таблица свойств больше не
+    // растягивается на высоту списка.
+    const corner = div('link-value-corner');
+    corner.append(
+      button('…', openPicker, 'link-value-corner-btn', 'Выбрать или создать мысли'),
+      button('✕', () => setAndPersist([]), 'link-value-corner-btn', 'Очистить значение'),
+    );
+    const wrap = div('link-value-wrap');
+    wrap.append(field, corner);
     const row = div('form-row');
     row.style.marginBottom = '0';
-    row.append(
-      field,
-      button('выбрать', openPicker, 'btn small', 'Выбрать мысли (несколько)'),
-    );
+    row.append(wrap);
     root.append(row);
   };
 

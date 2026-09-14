@@ -206,8 +206,11 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     // Чип-режим и без значений: поле с инпутом живого поиска остаётся
     // доступным — ввод не пропадает после выбора (баг: single-режим без
     // config.multiple убирал поле после первого выбранного значения).
+    // Структура (приёмка 0.8.1): form-row > link-value-wrap >
+    // [link-value-field, link-value-corner(«…», «✕»)].
     const row = editor.children[0]!;
-    const field = row.children[0]!;
+    const wrap = row.children[0]!;
+    const field = wrap.children[0]!;
     const input = field.children.find(
       (c) => c.tagName === 'input' && c.type === 'text',
     ) as ShimElement | undefined;
@@ -217,10 +220,17 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
       'Название мысли…',
       'empty chip field uses the seed placeholder',
     );
-    const pickBtn = row.children.find(
-      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    const corner = wrap.children.find((c) =>
+      c.className.split(' ').includes('link-value-corner'),
+    )!;
+    assert.ok(
+      corner.children.some((c) => c.textContent === '…'),
+      'compact «…» picker button in the corner',
     );
-    assert.ok(pickBtn !== undefined, '«выбрать» button rendered');
+    assert.ok(
+      corner.children.some((c) => c.textContent === '✕'),
+      '«✕» clear-all button in the corner',
+    );
   });
 
   it('a property WITHOUT config.multiple (structural «Потомки», migration 039) still renders the chip field', async () => {
@@ -242,7 +252,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     const clouds = findAllClouds(editor);
     assert.equal(clouds.length, 2, 'one mini-cloud per stored edge');
     const row = editor.children[0]!;
-    const field = row.children[0]!;
+    const field = row.children[0]!.children[0]!;
     const addInput = field.children.find((c) => c.tagName === 'input') as
       | ShimElement
       | undefined;
@@ -257,7 +267,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     );
   });
 
-  it('«✕» on the cloud persists null (the whole set cleared)', async () => {
+  it('«✕» corner button clears the whole value set at once', async () => {
     installShim();
     const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
     const saved: unknown[] = [];
@@ -266,20 +276,41 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
       ownerType: 'thought',
       ownerId: 't1',
       definition: baseDefinition as any,
-      values: [edge('ta-single', 'Единственная мысль')],
+      values: [edge('ta-1', 'Первая'), edge('ta-2', 'Вторая')],
       save: async (next) => {
         saved.push(next);
         return true;
       },
     }) as unknown as ShimElement;
 
-    const cloud = findAllClouds(editor)[0]!;
-    const removeBtn = cloud.children.find((c) =>
-      c.className.split(' ').includes('st-f-clear-inline'),
+    const wrap = editor.children[0]!.children[0]!;
+    const corner = wrap.children.find((c) =>
+      c.className.split(' ').includes('link-value-corner'),
     )!;
-    removeBtn.dispatch('click', { stopPropagation: () => undefined });
+    const clearBtn = corner.children.find((c) => c.textContent === '✕')!;
+    clearBtn.dispatch('click', { stopPropagation: () => undefined });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.deepEqual(saved, [null], 'removing the last chip clears the value (null)');
+    assert.deepEqual(saved, [null], 'corner «✕» clears all values (persists null)');
+  });
+
+  it('chip label is clipped at 200 chars; the tooltip keeps the full title', async () => {
+    installShim();
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const longTitle = 'Д'.repeat(500);
+    const editor = buildLinkValueEditor({
+      networkId: 'n1',
+      ownerType: 'thought',
+      ownerId: 't1',
+      definition: baseDefinition as any,
+      values: [edge('ta-long', longTitle)],
+      save: async () => true,
+    }) as unknown as ShimElement;
+
+    const cloud = findAllClouds(editor)[0]!;
+    const title = cloud.children.find((c) => c.className === 'prc-title')!;
+    assert.equal(title.textContent!.length, 201, 'label clipped to 200 chars + ellipsis');
+    assert.equal(title.textContent!.endsWith('…'), true, 'clipped label ends with …');
+    assert.equal(cloud.title, longTitle, 'tooltip carries the FULL title');
   });
 });
 
@@ -306,7 +337,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
     }
 
     const row = editor.children[0]!;
-    const field = row.children[0]!;
+    const field = row.children[0]!.children[0]!;
     const addInput = field.children.find((c) => c.tagName === 'input') as
       | ShimElement
       | undefined;
@@ -316,10 +347,14 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
       '+ ещё одну мысль',
       'non-empty multi field uses the add placeholder',
     );
-    const pickBtn = row.children.find(
-      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
+    const wrap = row.children[0]!;
+    const corner = wrap.children.find((c) =>
+      c.className.split(' ').includes('link-value-corner'),
     );
-    assert.ok(pickBtn !== undefined, '«выбрать» button rendered next to the chip field');
+    assert.ok(
+      corner !== undefined && corner.children.some((c) => c.textContent === '…'),
+      'compact «…» picker button rendered in the field corner',
+    );
   });
 
   it('empty multi-mode renders the «Название мысли…» seed placeholder', async () => {
@@ -334,7 +369,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
 
       save: async () => true,
     }) as unknown as ShimElement;
-    const field = editor.children[0]!.children[0]!;
+    const field = editor.children[0]!.children[0]!.children[0]!;
     const addInput = field.children.find((c) => c.tagName === 'input') as
       | ShimElement
       | undefined;

@@ -7472,15 +7472,130 @@ table.activity-table thead th {
   flex-direction: column;
   gap: 4px;
 }
+/* Обёртка чип-поля с угловыми кнопками «…» (диалог) и «✕» (очистить) —
+ * приёмка пользователя 0.8.1: кнопки компактные, в правом верхнем углу
+ * поля, не отъедают ширину у списка значений. */
+.link-value-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 220px;
+}
 .link-value-field {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
+  /* Приёмка 0.8.1: поле не растягивает таблицу — максимум 10 строк чипов
+   * (~28px на строку с gap), дальше внутренняя прокрутка; прокрутка
+   * колесом над полем крутит поле, над именами полей — таблицу. */
+  max-height: 280px;
+  overflow-y: auto;
+  /* Свободная полоса под угловыми кнопками, чтобы последний чип не уходил
+   * под них при прокрутке. */
+  padding-right: 56px;
+}
+.link-value-corner {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  gap: 2px;
+  z-index: 2;
+}
+.link-value-corner-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.link-value-corner-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .link-value-add {
   flex: 1 1 120px;
   min-width: 120px;
+}
+/* Поле ввода с угловым «✕» очистки значения (приёмка 0.8.1) — обёртка
+ * любого одиночного поля таблицы свойств (text/number/date/url). */
+.clearable-field {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+}
+.clearable-field .text-input {
+  width: 100%;
+  padding-right: 22px;
+}
+.clearable-clear {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+.clearable-clear:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+/* Имя свойства в таблице: липнет к верхней кромке прокручиваемой области,
+ * пока его (возможно многострочная) ячейка значения не проскроллится
+ * целиком (приёмка 0.8.1). Фон обязателен — под ним проплывают чипы. */
+.properties-type-body .prop-table td.prop-name-cell {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  vertical-align: top;
+}
+.prop-hint {
+  margin-left: 2px;
+  cursor: help;
+}
+/* Список URL-значений: угловая кнопка «✕» очистки всех значений. */
+.multi-url-editor {
+  position: relative;
+  padding-right: 26px;
+}
+.multi-url-clear {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+.multi-url-clear:hover {
+  color: var(--accent);
+  background: var(--surface-2);
 }
 
 /* Вкладка «Связи» — группа «Локальный граф» */

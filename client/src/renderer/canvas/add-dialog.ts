@@ -76,6 +76,13 @@ export interface ThoughtPickerOptions {
   allowLinkType?: boolean;
   /** Restrict the live search to these thought types (link-property configs). */
   searchTypeIds?: string[];
+  /**
+   * Preselect the thought type for NEW thoughts (the type field stays
+   * editable). Used by link-property pickers whose definition restricts the
+   * target types: the first allowed type is the sensible default for a
+   * thought created right from the property editor.
+   */
+  defaultNewThoughtTypeId?: string | null;
   /** Prefill the list with these thoughts; multi mode switches on. */
   selectedIds?: string[];
   /**
@@ -293,11 +300,13 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     // Type of the created thought(s) — searchable picker over the catalogue
     // tree (L6/L21): rows carry the type's icon and style; the hierarchy root
     // is not offered (it only lives in «Типы мыслей»). Hidden when creation is
-    // forbidden (the picker mode never changes existing thoughts).
-    let newThoughtTypeId: string | null = null;
+    // forbidden (the picker mode never changes existing thoughts). The
+    // `defaultNewThoughtTypeId` option preselects a type (link-property
+    // pickers pass the first allowed target type).
+    let newThoughtTypeId: string | null = opts.defaultNewThoughtTypeId ?? null;
     const thoughtTypeCombo = createTypeCombobox({
       options: () => thoughtTypeOptions(store.state.thoughtTypes),
-      value: null,
+      value: opts.defaultNewThoughtTypeId ?? null,
       placeholder: 'без типа',
       emptyLabel: 'без типа',
       onChange: (typeId) => {
