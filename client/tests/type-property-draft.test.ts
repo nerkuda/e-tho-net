@@ -10,12 +10,17 @@
  * onto `POST /types/{id}/properties`, `DELETE …/properties/{pid}`, and
  * `PATCH …/properties/{pid} { required }`:
  *   * `unbind`   — DELETE
- *   * `attach`   — POST { mode: 'attach', property_id }
+ *   * `attach`   — POST { mode: 'attach', property_id, side }
  *   * `set-role` — PATCH { required }
  * plus the trailing `needsReorder` flag when the order moved or new rows
  * landed in the middle. New rows ALWAYS attach an existing registry property
  * — brand-new properties are created through the shared property editor
  * first (0.6.5 приёмка), so there is no create-and-attach op any more.
+ *
+ * 0.8.1 (задача 935ec90e, требование 15b88319): двусторонняя вкладка
+ * «Свойства» — каждая привязка несёт `side` (`source`/`target`/`null`).
+ * `side` пробрасывается в `attach` op (создание) и в `opToAttachInput`
+ * (тело POST), на стороне сервера записывается в `type_properties.side`.
  */
 
 import assert from 'node:assert/strict';
@@ -50,17 +55,20 @@ function def(id: string, key: string, extra: Partial<PropertyDefinition> = {}): 
   };
 }
 
-/** A staged attach row — references an existing registry property. */
+/** A staged attach row — references an existing registry property.
+ *  `side` (0.8.1) — сторона привязки для свойств-связей; `null` для скаляров. */
 function attach(
   draftId: string,
   propertyId: string,
-  snapshot: { key: string; value_type?: 'text' | 'number' | 'date' | 'bool' | 'thought_ref' | 'url'; description?: string | null },
+  snapshot: { key: string; value_type?: 'text' | 'number' | 'date' | 'bool' | 'thought_ref' | 'url' | 'link'; description?: string | null },
   required = false,
+  side: 'source' | 'target' | null = null,
 ): DraftProperty {
   return {
     id: draftId,
     isNew: true,
     property_id: propertyId,
+    side,
     required,
     key: snapshot.key,
     value_type: snapshot.value_type ?? 'text',
@@ -81,6 +89,7 @@ describe('draftPropertiesFrom', () => {
         id: 'p1',
         isNew: false,
         property_id: 'p1',
+        side: null,
         required: false,
         key: 'A',
         value_type: 'text',
@@ -91,6 +100,7 @@ describe('draftPropertiesFrom', () => {
         id: 'p2',
         isNew: false,
         property_id: 'p2',
+        side: null,
         required: false,
         key: 'B',
         value_type: 'number',
@@ -110,6 +120,16 @@ describe('draftPropertiesFrom', () => {
     const own = [def('p1', 'A', { required: true })];
     const draft = draftPropertiesFrom(own);
     assert.equal(draft[0]!.required, true);
+  });
+
+  it('mirrors the stored `side` into the draft row (0.8.1, двусторонняя вкладка)', () => {
+    const own = [
+      def('p1', 'A', { side: 'source' }),
+      def('p2', 'B', { side: 'target' }),
+    ];
+    const draft = draftPropertiesFrom(own);
+    assert.equal(draft[0]!.side, 'source');
+    assert.equal(draft[1]!.side, 'target');
   });
 });
 
@@ -143,9 +163,31 @@ describe('planPropertyDiff', () => {
     const draft = [...draftPropertiesFrom(original), attach('draft:1', 'reg-2', { key: 'B' })];
     const plan = planPropertyDiff(original, draft, []);
     assert.deepEqual(plan.ops, [
-      { kind: 'attach', draftId: 'draft:1', property_id: 'reg-2', required: false },
+      { kind: 'attach', draftId: 'draft:1', property_id: 'reg-2', required: false, side: null },
     ]);
     assert.equal(plan.needsReorder, true);
+  });
+
+  it('attaching a link property on the source side carries `side: "source"` through the planner', () => {
+    const original: PropertyDefinition[] = [];
+    const draft: DraftProperty[] = [
+      attach('draft:1', 'reg-link', { key: 'parent-of', value_type: 'link' }, false, 'source'),
+    ];
+    const plan = planPropertyDiff(original, draft, []);
+    assert.deepEqual(plan.ops, [
+      { kind: 'attach', draftId: 'draft:1', property_id: 'reg-link', required: false, side: 'source' },
+    ]);
+  });
+
+  it('attaching a link property on the target side carries `side: "target"` through the planner', () => {
+    const original: PropertyDefinition[] = [];
+    const draft: DraftProperty[] = [
+      attach('draft:1', 'reg-link', { key: 'child-of', value_type: 'link' }, false, 'target'),
+    ];
+    const plan = planPropertyDiff(original, draft, []);
+    assert.deepEqual(plan.ops, [
+      { kind: 'attach', draftId: 'draft:1', property_id: 'reg-link', required: false, side: 'target' },
+    ]);
   });
 
   it('toggling `required` on an existing binding becomes a `set-role` op with only the changed field', () => {
@@ -212,7 +254,7 @@ describe('planPropertyDiff', () => {
     const plan = planPropertyDiff(original, draft, ['p2']);
     assert.deepEqual(plan.ops, [
       { kind: 'unbind', id: 'p2' },
-      { kind: 'attach', draftId: 'draft:9', property_id: 'reg-d', required: false },
+      { kind: 'attach', draftId: 'draft:9', property_id: 'reg-d', required: false, side: null },
       { kind: 'set-role', id: 'p1', required: true },
     ]);
     assert.equal(plan.needsReorder, true);
@@ -226,17 +268,27 @@ describe('planPropertyDiff', () => {
     ];
     const plan = planPropertyDiff(original, draft, []);
     assert.deepEqual(plan.ops, [
-      { kind: 'attach', draftId: 'draft:1', property_id: 'reg-1', required: false },
-      { kind: 'attach', draftId: 'draft:2', property_id: 'reg-y', required: false },
+      { kind: 'attach', draftId: 'draft:1', property_id: 'reg-1', required: false, side: null },
+      { kind: 'attach', draftId: 'draft:2', property_id: 'reg-y', required: false, side: null },
     ]);
     assert.equal(plan.needsReorder, true);
   });
 });
 
 describe('opToAttachInput', () => {
-  it('serialises an `attach` op to `{ mode: "attach", property_id, required }`', () => {
-    const out = opToAttachInput({ kind: 'attach', draftId: 'd', property_id: 'reg-1', required: true });
-    assert.deepEqual(out, { mode: 'attach', property_id: 'reg-1', required: true });
+  it('serialises an `attach` op to `{ mode: "attach", property_id, required, side }`', () => {
+    const out = opToAttachInput({ kind: 'attach', draftId: 'd', property_id: 'reg-1', required: true, side: null });
+    assert.deepEqual(out, { mode: 'attach', property_id: 'reg-1', required: true, side: null });
+  });
+
+  it('passes `side: "source"` through for a link property attached on the source side', () => {
+    const out = opToAttachInput({ kind: 'attach', draftId: 'd', property_id: 'reg-link', required: false, side: 'source' });
+    assert.deepEqual(out, { mode: 'attach', property_id: 'reg-link', required: false, side: 'source' });
+  });
+
+  it('passes `side: "target"` through for a link property attached on the target side', () => {
+    const out = opToAttachInput({ kind: 'attach', draftId: 'd', property_id: 'reg-link', required: false, side: 'target' });
+    assert.deepEqual(out, { mode: 'attach', property_id: 'reg-link', required: false, side: 'target' });
   });
 });
 
