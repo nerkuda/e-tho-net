@@ -80,7 +80,8 @@ import {
 import { showIconDialog, type IconPickResult } from './icon-dialog.js';
 import { editMarkdownField } from './markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
-import { showLinkTypeEditor, showThoughtTypeEditor } from '../screens/type-manager.js';
+import { showThoughtTypeEditor } from '../screens/type-manager.js';
+import { openPropertyManagerEditor } from '../screens/property-manager.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import {
   acquireOrShowBlocked,
@@ -1625,10 +1626,24 @@ function buildLinkHeader(link: Link): HTMLElement {
       });
     },
     onCreateNew: async (query) => {
-      const id = await showLinkTypeEditor(null, () => undefined, { initialName: query });
-      if (id === null) return null;
-      focusCommentAfterTypeSave = true;
-      return id;
+      // Создание типа связи теперь идёт через единый диалог свойства
+      // (требование 09f692ff, задача 09201bd4): пользователь выбирает
+      // `value_type = 'link'`, вводит имена сторон, сервер автоматически
+      // создаёт связанный link_type. `query` подсказывает имя в поле
+      // «Имя в источнике» как начальное значение.
+      return new Promise<string | null>((resolve) => {
+        openPropertyManagerEditor(
+          null,
+          () => undefined,
+          (created) => {
+            focusCommentAfterTypeSave = true;
+            resolve(created.id);
+          },
+          // initialName от вызывающей стороны; в новой форме — это имя
+          // первой стороны (name_forward).
+          { initialSide: 'source' },
+        );
+      });
     },
   });
 

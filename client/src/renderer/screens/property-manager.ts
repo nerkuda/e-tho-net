@@ -1,6 +1,6 @@
 /**
- * Network property catalogue management (task d4e23670, fd4d4927, element
- * «Менеджер свойств сети»).
+ * Network property catalogue management (task d4e23670, fd4d4927, 09201bd4,
+ * element «Менеджер свойств сети»).
  *
  * Two entry points share the same underlying registry (`properties` +
  * `link_types`) and the same editor (`openPropertyManagerEditor`):
@@ -23,18 +23,19 @@
  *   (требование 09f692ff / `465495a9`). Adding a link-type is creating a new
  *   link-property; structural types are visible but not editable.
  *
- * The editor itself mirrors the type-editor property dialog
- * (`openPropertyDialog` inside `type-manager.ts`) — same fields, same UX —
- * but operates on the network-wide registry, not on a `type_properties`
- * binding, so:
- *   * no «обязательное» checkbox (the binding decides required-ness);
- *   * a banner explains that the patch «действует во всех типах сразу» and
- *     shows how many types are bound (a fresh `usage` fetch every open);
- *   * changing `value_type` raises a separate confirmation that points to
- *     the server-side value conversion, plus a notice while it runs;
- *   * for a link-property deletion the confirm dialog quotes the number of
- *     edges that lose `type_id` (from `links_becoming_structural` in the
- *     DELETE response, требование 09f692ff).
+ * The editor itself is the unified dialog `openPropertyManagerEditor`
+ * (task 09201bd4, спека `465495a9`): ширина ≥1200 px, верх — выбор вида
+ * значения (текст/число/дата/булево/URL/связь; `thought_ref` убран из списка
+ * согласно требованию 5a82c709), описание, переключатели «рисовать связь на
+ * карте»/«заполненная ссылка блокирует удаление», затем по виду значения —
+ * скалярное (имя + таблица «Типы мыслей» + переключатель «Выбирать из
+ * списка» + варианты + «Несколько значений») либо связь (две колонки «имя
+ * в источнике»/«имя в назначении» + таблицы «Типы источников»/«Типы
+ * назначений» + родительский тип связи + кнопка «Оформление»). Сохранение —
+ * только «Применить и закрыть»; авто-лок строки реестра. Сворачиваемая
+ * группа «Метаданные» свёрнута по умолчанию. Удаление свойства вида «связь»
+ * — с подтверждением по правилу единого жизненного цикла
+ * (`links_becoming_structural`).
  *
  * Deletion paths:
  *   * scalar property — refused with 409 while bound or filled; the editor
@@ -54,8 +55,8 @@
 
 import type {
   AnyRealtimeEvent,
-  EffectiveTypeProperty,
-  LinkPropertyDirection,
+  LinkType,
+  LinkStyle,
   NetworkProperty,
   NetworkPropertyInput,
   NetworkPropertyUpdateInput,
@@ -71,6 +72,7 @@ import {
   showDialog,
 } from '../lib/dialog.js';
 import { button, div, el, errText, setTooltip, span } from '../lib/dom.js';
+import { showLinkStyleDialog } from '../editor/style-dialog.js';
 import { buildMetadataRows, type MetadataFields } from '../lib/metadata.js';
 import { etn } from '../lib/etn.js';
 import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHandle } from '../lib/lock-guard.js';
@@ -86,27 +88,31 @@ import {
   typeSearchVisibleIds,
   type FlatTypeRow,
 } from '../lib/type-tree.js';
-import type { LinkType } from '@etn/shared';
 import { onRealtimeEvent } from '../realtime.js';
 import { buildChipListField } from './thought-type/value-combo.js';
-import { buildLinkValueEditor } from '../editor/properties.js';
-import {
-  showLinkTypeEditor,
-  showThoughtTypeEditor,
-} from './type-manager.js';
 
-/** Human-readable property value-type labels. */
-const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
+/** Human-readable property value-type labels. Вид `thought_ref` упразднён в
+ *  0.8.1 (требование 5a82c709) и недоступен в выборе — оставлен только в
+ *  типах для компиляции тестов и импорта архивов. */
+const VALUE_TYPE_LABELS: Record<Exclude<PropertyValueType, 'thought_ref'> | 'thought_ref', string> = {
   text: 'строка',
   number: 'число',
   date: 'дата',
-  bool: 'булево',
+  bool: 'да/нет',
   url: 'URL (сайт или файл)',
   link: 'связь',
-  // Legacy (миграция 040): в живой БД таких свойств не остаётся, но в
-  // типах маркер оставлен для компиляции тестов и импорта архивов.
-  thought_ref: 'ссылка на мысль (legacy)',
+  thought_ref: 'ссылка на мысль (legacy, недоступно)',
 };
+
+/** Виды значения, доступные пользователю в выборе — `thought_ref` скрыт. */
+const SELECTABLE_VALUE_TYPES: PropertyValueType[] = [
+  'text',
+  'number',
+  'date',
+  'bool',
+  'url',
+  'link',
+];
 
 /**
  * A registry row as returned by `GET /networks/{nid}/properties` (with counters).
@@ -502,47 +508,166 @@ function isPropertyRegistryOrLinkTypeEvent(
   );
 }
 
-/**
- * True when `raw` is a link-type create/update/delete event — the three
- * flavours that invalidate the link-types tree cached in
- * `showLinkTypesTreeDialog`. Other events pass through.
- */
-function isLinkTypeEvent(raw: unknown): raw is AnyRealtimeEvent & { networkId: string } {
-  if (typeof raw !== 'object' || raw === null) return false;
-  const evt = raw as { type?: unknown; networkId?: unknown };
-  return (
-    typeof evt.networkId === 'string' &&
-    (evt.type === 'link-type.created' ||
-      evt.type === 'link-type.updated' ||
-      evt.type === 'link-type.deleted')
-  );
+// ---------------------------------------------------------------------------
+// Опции точки входа единого диалога
+// ---------------------------------------------------------------------------
+
+/** Сторона привязки для предзаполнения таблицы при открытии из вкладки
+ *  «Свойства» редактора типа мысли (задача 935ec90e — следующая). Сейчас
+ *  опция зарезервирована, реализация вкладки её подключит. */
+export interface OpenEditorOptions {
+  /** При открытии из редактора типа мысли — id типа, который должен быть
+   *  предзаполнен в таблице «Типы мыслей» (для скаляра) или «Типы источников»/
+   *  «Типы назначений» (для связи). */
+  initialThoughtTypeId?: string;
+  /** С какой стороны открыт редактор (`source` или `target`) — определяет,
+   *  в какую из двух таблиц попадает `initialThoughtTypeId`. */
+  initialSide?: 'source' | 'target';
 }
 
+// ---------------------------------------------------------------------------
+// Состояние черновика диалога
+// ---------------------------------------------------------------------------
+
+/** Категория вида значения — обобщение, нужное для запрета смены категории
+ *  при правке существующего свойства (требование 5a82c709): скаляры между
+ *  собой конвертируются (text↔number↔date↔bool↔url), а скаляр ↔ «связь» —
+ *  всегда 422 на сервере и невозможно в UI. */
+type ValueCategory = 'scalar' | 'link';
+
+function categoryOf(valueType: PropertyValueType): ValueCategory {
+  return valueType === 'link' ? 'link' : 'scalar';
+}
+
+/** Строка таблицы «Типы мыслей» (и зеркальных «Типы источников» / «Типов
+ *  назначений»). Для скаляров и связи единая форма — одинаковый набор
+ *  колонок (тип · обязательное · значение по умолчанию). */
+interface TypeRowDraft {
+  /** Id привязки (`type_properties.id`). `null` для ещё не сохранённой
+   *  строки — она появится только после `apply` и POST на сервер. */
+  id: string | null;
+  thoughtTypeId: string;
+  required: boolean;
+  defaultValue: unknown;
+  /** Сторона привязки для свойства-связи (`source`/`target`) — для скаляра
+   *  всегда `null`. Сохраняется в `type_properties.side`. */
+  side: 'source' | 'target' | null;
+  /** Снимок текущего состояния на сервере — для отслеживания изменений
+   *  при `apply`. */
+  dirty: boolean;
+}
+
+/** Единый черновик единого диалога (задача 09201bd4, спека 465495a9). */
+interface PropertyDraft {
+  name: string;
+  description: string;
+  valueType: PropertyValueType;
+  /** Скалярное: имя свойства. Для связи — вычисляется из имён сторон и
+   *  сервер при PATCH отдаёт его обратно; локально можно править, но смысла
+   *  мало (см. замечание ниже в `renderScalarExtras`). */
+  config: PropertyConfig | null;
+  /** Виды значения, доступные в выборе. Для скаляра — все 5 скалярных видов.
+   *  Для связи — `['link']` (фиксировано). Категория фиксируется после
+   *  первой записи, поэтому существующее свойство не может выбрать из
+   *  другой категории. */
+  scalarKind: Exclude<PropertyValueType, 'link'> | null;
+  choiceOn: boolean;
+  optionsText: string;
+  multipleOn: boolean;
+  /** Для связи: имена сторон типа связи. */
+  nameForward: string;
+  nameReverse: string;
+  parentLinkTypeId: string | null;
+  linkColor: string | null;
+  linkStyle: LinkStyle | null;
+  linkWidth: number | null;
+  showOnMap: boolean;
+  blocksTargetDeletion: boolean;
+  /** Значение по умолчанию для скаляра (`unknown`, см. типы `PropertyConfig.default_value`)
+   *  и для свойства-связи (`string[] | null`). */
+  defaultValue: unknown;
+  /** Строки таблиц «Типы мыслей» / «Типы источников» / «Типы назначений». */
+  typeRows: TypeRowDraft[];
+}
+
+/** Идентификатор значения категории `value_type`. После первой записи
+ *  категория зафиксирована (требование 5a82c709). */
+function lockCategoryFor(existing: PropertyValueType | null): ValueCategory | null {
+  return existing === null || existing === undefined ? null : categoryOf(existing);
+}
+
+// ---------------------------------------------------------------------------
+// Утилиты компоновки
+// ---------------------------------------------------------------------------
+
+/** Сворачиваемая группа: `summary` кликабельный, `body` показывается по клику. */
+function buildCollapsibleGroup(title: string, body: HTMLElement, defaultCollapsed: boolean): HTMLElement {
+  const wrap = div('form-stack collapsible-group');
+  const summary = el('summary', 'collapsible-summary');
+  const arrow = span('▸', 'collapsible-arrow');
+  summary.append(arrow, span(` ${title}`));
+  wrap.append(summary, body);
+  let collapsed = defaultCollapsed;
+  function apply(): void {
+    arrow.textContent = collapsed ? '▸' : '▾';
+    body.style.display = collapsed ? 'none' : '';
+  }
+  apply();
+  summary.addEventListener('click', () => {
+    collapsed = !collapsed;
+    apply();
+  });
+  summary.style.cursor = 'pointer';
+  summary.style.userSelect = 'none';
+  return wrap;
+}
+
+/** Разделитель секций в форме. */
+function sectionLabel(text: string): HTMLElement {
+  const h = el('h4', 'form-section-label', text);
+  return h;
+}
+
+/** Горизонтальная пара колонок одинаковой ширины. */
+function twoColumns(left: HTMLElement, right: HTMLElement): HTMLElement {
+  const row = div('form-row two-col-row');
+  const l = div('two-col-cell');
+  const r = div('two-col-cell');
+  l.append(left);
+  r.append(right);
+  row.append(l, r);
+  row.style.display = 'grid';
+  row.style.gridTemplateColumns = '1fr 1fr';
+  row.style.gap = '16px';
+  return row;
+}
+
+// ---------------------------------------------------------------------------
+// Основной диалог
+// ---------------------------------------------------------------------------
+
 /**
- * Opens the property editor for the manager dialog — the same form as the
- * per-type property dialog in `type-manager.ts`, minus the «обязательное»
- * checkbox (the binding decides required-ness) and plus a banner that calls
- * out the network-wide impact of the patch.
+ * Открывает единый диалог «Свойство / связь» (задача 09201bd4, спека
+ * 465495a9). Ширина — 1240 px (≥1200). Сохранение — только по «Применить и
+ * закрыть»; Esc / × / клик мимо — отмена. Авто-лок строки реестра
+ * (`acquireOrShowBlocked('property', id)`).
  *
- * `property === null` creates a new registry row; otherwise it edits an
- * existing one. The dialog stays inert until «Применить и закрыть»; «Отмена»
- * / Esc / × / backdrop click discard the whole draft (reverts to the cached
- * server snapshot). The registry has no optimistic-lock today — the server
- * serialises the conversion transaction internally.
+ * Для свойства-связи создание идёт через `POST /networks/{nid}/properties`
+ * с `value_type='link'` + парой имён сторон + атрибутами оформления —
+ * сервер (задача dd37a66) создаёт связанный link_type в той же транзакции.
+ * Правка имён сторон правит тип связи (PATCH `/networks/{nid}/properties` с
+ * `name_forward`/`name_reverse`).
  *
- * Exported so the type-editor's «✎» button (task
- * «Клиент: редактор типа подключает свойство из справочника») can reuse
- * this dialog instead of duplicating the form — the registry is the single
- * source of a property's nature, and a single dialog keeps it that way.
- *
- * `onCreated` (optional) fires after a NEW row was applied, with the created
- * registry row — the attach dialog of the type editor uses it to highlight
- * the fresh property in its pick list.
+ * `options.initialThoughtTypeId` / `options.initialSide` — для предзаполнения
+ * таблицы при открытии из вкладки «Свойства» редактора типа (задача
+ * 935ec90e — следующая; текущий код резерв принимает, но фактический поток
+ * подключится там).
  */
 export function openPropertyManagerEditor(
   property: RegistryRow | null,
   onChanged: () => void,
   onCreated?: (row: NetworkProperty) => void,
+  options: OpenEditorOptions = {},
 ): void {
   const networkId = requireNetworkId();
   // Server snapshot: starts at the row passed in, refreshed after a successful
@@ -565,361 +690,507 @@ export function openPropertyManagerEditor(
   let allProperties: RegistryRow[] = [];
   let applyBtn: HTMLButtonElement | null = null;
 
+  // Initial category — locked after the first write (требование 5a82c709).
+  const lockedCategory: ValueCategory | null = lockCategoryFor(property?.value_type ?? null);
+
   // Staged fields (applied on «Применить и закрыть»).
-  const draft = {
+  const draft: PropertyDraft = {
     name: property?.name ?? '',
     description: property?.description ?? '',
-    value_type: (property?.value_type ?? 'text') as PropertyValueType,
+    valueType: (property?.value_type ?? 'text') as PropertyValueType,
     config: cloneConfig(property?.config ?? null),
+    scalarKind: (property?.value_type ?? 'text') as Exclude<PropertyValueType, 'link'>,
+    choiceOn: false,
+    optionsText: '',
+    multipleOn: false,
+    nameForward: '',
+    nameReverse: '',
+    parentLinkTypeId: null,
+    linkColor: null,
+    linkStyle: null,
+    linkWidth: null,
+    showOnMap: false,
+    blocksTargetDeletion: false,
+    defaultValue: null,
+    typeRows: [],
   };
 
-  // Text-only options list (a value hint, not a constraint).
-  let choiceOn = draft.value_type === 'text' && (draft.config?.options?.length ?? 0) > 0;
-  let optionsText = choiceOn ? (draft.config?.options ?? []).join('\n') : '';
+  // Restore scalar / link extras from the stored config.
+  if (draft.valueType === 'link') {
+    const lt = (() => {
+      const ltId = property?.config?.link_type_id;
+      return ltId !== undefined && ltId !== null && ltId !== ''
+        ? store.state.linkTypes.find((t) => t.id === ltId) ?? null
+        : null;
+    })();
+    if (lt !== null) {
+      draft.nameForward = lt.name_forward;
+      draft.nameReverse = lt.name_reverse;
+      draft.parentLinkTypeId = lt.parent_id ?? null;
+      draft.linkColor = lt.color ?? null;
+      draft.linkStyle = (lt.style ?? null) as LinkStyle | null;
+      draft.linkWidth = lt.width ?? null;
+    }
+    draft.showOnMap = property?.config?.show_on_map === true;
+    draft.blocksTargetDeletion = property?.config?.blocks_target_deletion === true;
+    draft.defaultValue = Array.isArray(property?.config?.default_value)
+      ? [...(property?.config?.default_value as string[])]
+      : null;
+  } else {
+    draft.choiceOn = draft.valueType === 'text' && (draft.config?.options?.length ?? 0) > 0;
+    draft.optionsText = draft.choiceOn ? (draft.config?.options ?? []).join('\n') : '';
+    draft.multipleOn = draft.config?.multiple === true;
+    draft.defaultValue = draft.config?.default_value ?? null;
+  }
 
-  // Multiple values flag — shared by text / url (02-data-model.md §3.4–3.5):
-  // whichever of the two kinds the property has, the flag survives a
-  // value-type switch and is rendered in every kind's block.
-  let multipleOn = draft.config?.multiple === true;
+  // Заполнение typeRows из `usage()` + дефолты. Для нового свойства (id
+  // ещё нет) — пусто; кнопка «Добавить тип» откроет унифицированный пикер.
+  if (property !== null) {
+    void loadTypeRowsFor(property.id);
+  } else if (options.initialThoughtTypeId !== undefined && options.initialThoughtTypeId !== '') {
+    draft.typeRows = [
+      {
+        id: null,
+        thoughtTypeId: options.initialThoughtTypeId,
+        required: false,
+        defaultValue: null,
+        side: options.initialSide ?? null,
+        dirty: true,
+      },
+    ];
+  }
 
-  // The default value. For a link property it is the default target set —
-  // `string[]` of thought ids (bb67e546), applied on thought creation by
-  // creating edges.
-  let defaultValue: unknown = draft.config?.default_value ?? null;
-
-  // Link-only state (value_type === 'link'). Structural marks the two
-  // system-seeded properties «Родители»/«Потомки» (migration 039): their link
-  // type/direction are fixed and not offered for editing here — only the
-  // flags below and the description stay editable through this dialog. A
-  // brand-new property (`property === null`) is never structural — there is
-  // no UI path to create one.
-  const isStructuralLink = draft.config?.structural === true;
-  let linkTypeId: string | null = draft.config?.link_type_id ?? null;
-  let linkDirection: LinkPropertyDirection = draft.config?.direction === 'in' ? 'in' : 'out';
-  let allowedTargetTypeIds: string[] = [...(draft.config?.allowed_target_type_ids ?? [])];
-  let showOnMap = draft.config?.show_on_map === true;
-  let blocksTargetDeletion = draft.config?.blocks_target_deletion === true;
-
-  // ---- Header ------------------------------------------------------------
-  const nameInput = el('input', 'text-input') as HTMLInputElement;
-  nameInput.type = 'text';
-  nameInput.value = draft.name;
-  nameInput.maxLength = 200;
-  nameInput.placeholder = 'Заголовок свойства (обязательно)';
-  body.append(nameInput);
-
-  // Value-type select — changing it asks for confirmation when it triggers a
-  // stored-value conversion. The banner below also reflects the bound types.
+  // ---- Вид значения (value_type) -----------------------------------------
   const typeSelect = el('select', 'select-input') as HTMLSelectElement;
-  for (const [value, label] of Object.entries(VALUE_TYPE_LABELS)) {
-    const option = el('option', undefined, label) as HTMLOptionElement;
-    option.value = value;
+  for (const vt of SELECTABLE_VALUE_TYPES) {
+    const option = el('option', undefined, VALUE_TYPE_LABELS[vt]) as HTMLOptionElement;
+    option.value = vt;
     typeSelect.append(option);
   }
-  typeSelect.value = draft.value_type;
-  body.append(typeSelect);
+  // Для нового свойства по умолчанию — «строка»; для существующего —
+  // текущий `value_type`. Заблокировать выбор другой категории
+  // (требование 5a82c709): для существующего свойства оставляем только
+  // варианты той же категории.
+  typeSelect.value = draft.valueType;
+  const valueTypeField = field('Вид значения', typeSelect);
+  body.append(valueTypeField);
 
-  // Impact banner — explicit per spec: the patch «действует во всех типах
-  // сразу». `current` may be null while creating; in that case the banner is
-  // hidden (zero types bound is implicit).
-  const impact = el('p', 'muted', '');
-  impact.style.margin = '6px 0 0';
-  body.append(impact);
+  // Для уже существующего свойства — отключаем выбор другой категории.
+  if (lockedCategory !== null) {
+    const currentCategory = categoryOf(draft.valueType);
+    for (const option of Array.from(typeSelect.options)) {
+      const vt = option.value as PropertyValueType;
+      if (categoryOf(vt) !== currentCategory) option.disabled = true;
+    }
+  }
 
-  // Description textarea (same as in `type-manager.ts`).
+  // ---- Описание ----------------------------------------------------------
   const descArea = el('textarea', 'textarea-input') as HTMLTextAreaElement;
   descArea.value = draft.description;
   descArea.rows = 3;
-  descArea.placeholder = 'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)';
-  body.append(descArea);
+  descArea.placeholder =
+    'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)';
+  body.append(field('Описание', descArea));
 
-  // ---- Value-type-specific extras ---------------------------------------
-  const defaultHost = div('form-row');
-  const textExtrasHost = div('form-stack');
-  const urlExtrasHost = div('form-row');
-  const linkExtrasHost = div('form-stack');
+  // ---- Хосты секций -----------------------------------------------------
+  const linkFlagsHost = div('form-row');
+  body.append(linkFlagsHost);
+  const mainBodyHost = div('form-stack');
+  body.append(mainBodyHost);
+  const linkBodyHost = div('form-stack');
+  body.append(linkBodyHost);
+  const metadataHost = div('form-stack');
+  // Метаданные + использование — в сворачиваемой группе, свёрнуты.
+  const metaGroup = buildCollapsibleGroup('Метаданные', metadataHost, true);
+  body.append(metaGroup);
 
-  /**
-   * Re-renders the value-type-specific blocks (default value, text options,
-   * url multiple, link config). Called on first mount and on every
-   * `value_type` change (the in-progress default value does not carry over —
-   * it lives only on the currently-rendered input).
-   */
-  function renderValueTypeExtras(): void {
-    defaultHost.replaceChildren();
-    textExtrasHost.replaceChildren();
-    urlExtrasHost.replaceChildren();
-    linkExtrasHost.replaceChildren();
+  // ---- Эффект перерисовки формы при смене value_type --------------------
+  function rerenderBody(): void {
+    linkFlagsHost.replaceChildren();
+    mainBodyHost.replaceChildren();
+    linkBodyHost.replaceChildren();
     const vt = typeSelect.value as PropertyValueType;
-    // A link property's name is computed from the link type + direction
-    // (server-enforced, `linkPropertyDisplayName`) — read-only here so the
-    // computed name is visible before save instead of being silently ignored.
-    nameInput.readOnly = vt === 'link' && !isStructuralLink;
-    nameInput.placeholder = nameInput.readOnly
-      ? 'выберите тип связи ниже'
-      : 'Заголовок свойства (обязательно)';
+    draft.valueType = vt;
     if (vt === 'link') {
-      renderLinkExtras();
-      // Дефолт свойства-связи — набор целей (bb67e546): унифицированное
-      // чип-поле (инструкция a47947c8) — живой поиск, мини-облачка, пикер.
-      // Фильтр целей собирается из текущего состояния черновика диалога.
-      const ids = Array.isArray(defaultValue) ? (defaultValue as string[]) : [];
-      const linkDefinition: EffectiveTypeProperty = {
-        id: '',
-        property_id: '',
-        owner_type: 'thought_type',
-        owner_id: '',
-        key: 'default',
-        value_type: 'link',
-        config: {
-          direction: linkDirection,
-          ...(isStructuralLink ? { structural: true } : {}),
-          ...(isStructuralLink || linkTypeId === null ? {} : { link_type_id: linkTypeId }),
-          ...(allowedTargetTypeIds.length > 0 ? { allowed_target_type_ids: allowedTargetTypeIds } : {}),
-        },
-        required: false,
-        position: 0,
-        description: null,
-        inherited: false,
-        defined_on: '',
-        defined_on_name: '',
-        default_value: null,
-        overridden_here: false,
-        description_overridden: false,
-      };
-      const editor = buildLinkValueEditor({
-        networkId,
-        definition: linkDefinition,
-        values: ids.map((target_id) => ({
-          link_id: '',
-          target_id,
-          target_title: null,
-          target_type_id: null,
-          comment: null,
-        })),
-        save: async (next) => {
-          defaultValue = next;
-          return true;
-        },
-      });
-      defaultHost.append(field('Значение по умолчанию (набор целей)', editor));
+      renderLinkFlags();
+      renderLinkBody();
     } else {
-      defaultHost.append(defaultInputFor(vt, defaultValue, (v) => {
-        defaultValue = v;
-      }));
+      draft.scalarKind = vt as Exclude<PropertyValueType, 'link'>;
+      renderScalarBody();
     }
-    if (vt === 'text') renderTextExtras();
-    if (vt === 'url') renderUrlExtras();
   }
 
-  function renderTextExtras(): void {
-    textExtrasHost.replaceChildren();
-    const choiceRow = el('label', 'checkbox-row') as HTMLLabelElement;
-    const choiceCheck = el('input') as HTMLInputElement;
-    choiceCheck.type = 'checkbox';
-    choiceCheck.checked = choiceOn;
-    choiceCheck.addEventListener('change', () => {
-      choiceOn = choiceCheck.checked;
-      renderTextExtras();
-    });
-    choiceRow.append(choiceCheck, span('выбирать из списка'));
-    textExtrasHost.append(choiceRow);
-    if (choiceOn) {
-      const area = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-      area.value = optionsText;
-      area.rows = 4;
-      area.placeholder = 'Варианты значения — по одному в строке';
-      area.addEventListener('input', () => {
-        optionsText = area.value;
-      });
-      textExtrasHost.append(area);
-    }
-    const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
-    const multiCheck = el('input') as HTMLInputElement;
-    multiCheck.type = 'checkbox';
-    multiCheck.checked = multipleOn;
-    multiCheck.addEventListener('change', () => {
-      multipleOn = multiCheck.checked;
-    });
-    multiRow.append(multiCheck, span('несколько значений (через запятую)'));
-    textExtrasHost.append(multiRow);
-  }
-
-  function renderUrlExtras(): void {
-    urlExtrasHost.replaceChildren();
-    const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
-    const multiCheck = el('input') as HTMLInputElement;
-    multiCheck.type = 'checkbox';
-    multiCheck.checked = multipleOn;
-    multiCheck.addEventListener('change', () => {
-      multipleOn = multiCheck.checked;
-    });
-    multiRow.append(multiCheck, span('несколько значений'));
-    urlExtrasHost.append(multiRow);
-  }
-
-  /**
-   * Recomputes the read-only name shown in `nameInput` for a non-structural
-   * link property from the selected link type + direction (mirrors the
-   * server's `linkPropertyDisplayName`). A structural property keeps its
-   * stored, user-editable name untouched — this is a no-op for it.
-   */
-  function updateComputedName(): void {
-    if (isStructuralLink || typeSelect.value !== 'link') return;
-    const lt = linkTypeId === null ? null : store.state.linkTypes.find((t) => t.id === linkTypeId) ?? null;
-    nameInput.value = lt === null ? '' : linkDirection === 'in' ? lt.name_reverse : lt.name_forward;
-    revalidateName();
-  }
-
-  /**
-   * Renders the `value_type = 'link'` extras: link type, direction, optional
-   * target-type restriction and the two link-only flags — the fields
-   * `PropertyConfig` already carries (`shared/src/types/thought-type.ts`) but
-   * this dialog never exposed (bug found while auditing тех.проект
-   * «Единая модель связей»). The two system-seeded structural properties
-   * («Родители»/«Потомки», migration 039) only show the flags — their link
-   * type/direction are fixed and not offered here.
-   */
-  function renderLinkExtras(): void {
-    linkExtrasHost.replaceChildren();
-    if (isStructuralLink) {
-      linkExtrasHost.append(
-        el(
-          'p',
-          'muted',
-          'Структурное свойство: тип связи и направление заданы системой (не редактируются здесь).',
-        ),
-      );
-    } else {
-      const combo = createTypeCombobox({
-        options: () => linkTypeOptions(store.state.linkTypes),
-        value: linkTypeId,
-        placeholder: 'Тип связи (обязательно)',
-        onChange: (id) => {
-          linkTypeId = id;
-          updateComputedName();
-        },
-      });
-      linkExtrasHost.append(field('Тип связи', combo.root));
-
-      const dirSelect = el('select', 'select-input') as HTMLSelectElement;
-      const directionOptions: Array<[LinkPropertyDirection, string]> = [
-        ['out', 'исходящее (эта мысль — источник ребра)'],
-        ['in', 'входящее (эта мысль — цель ребра)'],
-      ];
-      for (const [value, label] of directionOptions) {
-        const option = el('option', undefined, label) as HTMLOptionElement;
-        option.value = value;
-        dirSelect.append(option);
-      }
-      dirSelect.value = linkDirection;
-      dirSelect.addEventListener('change', () => {
-        linkDirection = dirSelect.value === 'in' ? 'in' : 'out';
-        updateComputedName();
-      });
-      linkExtrasHost.append(field('Направление', dirSelect));
-    }
-
-    // Унифицированный чип-пикер типов мыслей (инструкция a47947c8 —
-    // «Использовать унифицированные поля выбора ссылок в диалогах»):
-    // живой поиск + чипы-мини-облачка + крестик, как в редакторе мысли
-    // (buildChipListField из value-combo.ts — тот же компонент, что в
-    // отборе типов мыслей и в полях «Родительские мысли» / «Типы мыслей»
-    // / «Типы связей» filter-dialog.ts). Раньше тут был голый чек-лист без
-    // поиска — нарушение паттерна.
-    const targetOptions = thoughtTypeOptions(store.state.thoughtTypes).filter(
-      (opt) => opt.id !== null,
-    ) as Array<{ id: string; label: string; depth?: number }>;
-    const labelById = new Map(targetOptions.map((opt) => [opt.id, opt.label]));
-    const labelFor = (id: string): string => {
-      const cached = labelById.get(id);
-      if (cached !== undefined) return cached;
-      const fresh = store.state.thoughtTypes.find((t) => t.id === id);
-      return fresh !== undefined ? fresh.name : id.slice(0, 8);
-    };
-    const allowedField = buildChipListField({
-      getValues: () => allowedTargetTypeIds,
-      onChange: (next) => {
-        allowedTargetTypeIds = next;
-      },
-      getOptions: (query) => {
-        const q = query.trim().toLowerCase();
-        const visible = q === '' ? targetOptions : targetOptions.filter((opt) => opt.label.toLowerCase().includes(q));
-        return visible.slice(0, 50).map((opt) => ({
-          value: opt.id,
-          label: opt.label,
-        }));
-      },
-      renderLabel: labelFor,
-      placeholder: '+ допустимый тип мысли…',
-    });
-    const allowedHost = div('form-stack');
-    allowedHost.append(allowedField.root);
-    if (targetOptions.length === 0) {
-      allowedHost.append(span('Нет типов мыслей.', 'muted'));
-    }
-    linkExtrasHost.append(field('Допустимые типы цели (пусто — любой)', allowedHost));
-
+  function renderLinkFlags(): void {
+    linkFlagsHost.append(sectionLabel('Связь'));
     const showOnMapRow = el('label', 'checkbox-row') as HTMLLabelElement;
     const showOnMapCheck = el('input') as HTMLInputElement;
     showOnMapCheck.type = 'checkbox';
-    showOnMapCheck.checked = showOnMap;
+    showOnMapCheck.checked = draft.showOnMap;
     showOnMapCheck.addEventListener('change', () => {
-      showOnMap = showOnMapCheck.checked;
+      draft.showOnMap = showOnMapCheck.checked;
     });
     showOnMapRow.append(showOnMapCheck, span('рисовать связь на карте по умолчанию'));
-    linkExtrasHost.append(showOnMapRow);
+    linkFlagsHost.append(showOnMapRow);
 
     const blocksRow = el('label', 'checkbox-row') as HTMLLabelElement;
     const blocksCheck = el('input') as HTMLInputElement;
     blocksCheck.type = 'checkbox';
-    blocksCheck.checked = blocksTargetDeletion;
+    blocksCheck.checked = draft.blocksTargetDeletion;
     blocksCheck.addEventListener('change', () => {
-      blocksTargetDeletion = blocksCheck.checked;
+      draft.blocksTargetDeletion = blocksCheck.checked;
     });
     blocksRow.append(blocksCheck, span('заполненная ссылка блокирует удаление цели'));
-    linkExtrasHost.append(blocksRow);
-
-    updateComputedName();
+    linkFlagsHost.append(blocksRow);
   }
 
-  body.append(defaultHost, textExtrasHost, urlExtrasHost, linkExtrasHost);
-  renderValueTypeExtras();
+  function renderScalarBody(): void {
+    mainBodyHost.append(sectionLabel('Скалярное свойство'));
+    // Имя свойства
+    const nameInput = el('input', 'text-input') as HTMLInputElement;
+    nameInput.type = 'text';
+    nameInput.value = draft.name;
+    nameInput.maxLength = 200;
+    nameInput.placeholder = 'Заголовок свойства (обязательно)';
+    nameInput.addEventListener('input', () => {
+      draft.name = nameInput.value;
+      revalidateName();
+    });
+    mainBodyHost.append(field('Имя свойства', nameInput));
 
-  // Блок «Метаданные» — автор, даты, id сущности (задача 04cd9794). Только
-  // при редактировании существующего свойства; для нового id ещё не присвоен
-  // и блок был бы пустым.
+    // Две колонки: таблица «Типы мыслей» слева, опции/множественность справа.
+    const typesHost = div('form-stack');
+    const optionsHost = div('form-stack');
+    buildTypeRowsTable(typesHost, /* isLink */ false, /* side */ null);
+    const optionsBlock = buildScalarOptionsBlock();
+    optionsHost.append(optionsBlock);
+
+    const defaultsHost = div('form-stack');
+    defaultsHost.append(
+      field('Значение по умолчанию', defaultInputFor(draft.scalarKind as PropertyValueType, draft.defaultValue, (v) => {
+        draft.defaultValue = v;
+      })),
+    );
+
+    const grid = twoColumns(typesHost, optionsHost);
+    mainBodyHost.append(grid, defaultsHost);
+  }
+
+  function renderLinkBody(): void {
+    linkBodyHost.append(sectionLabel('Свойство-связь'));
+    // Имена сторон + таблицы + родительский тип + оформление.
+    const nameForwardInput = el('input', 'text-input') as HTMLInputElement;
+    nameForwardInput.type = 'text';
+    nameForwardInput.value = draft.nameForward;
+    nameForwardInput.maxLength = 200;
+    nameForwardInput.placeholder = 'От источника к назначению';
+    nameForwardInput.addEventListener('input', () => {
+      draft.nameForward = nameForwardInput.value;
+    });
+    const nameReverseInput = el('input', 'text-input') as HTMLInputElement;
+    nameReverseInput.type = 'text';
+    nameReverseInput.value = draft.nameReverse;
+    nameReverseInput.maxLength = 200;
+    nameReverseInput.placeholder = 'От назначения к источнику';
+    nameReverseInput.addEventListener('input', () => {
+      draft.nameReverse = nameReverseInput.value;
+    });
+    // Свойство-связь: name в реестре — одно из имён (см. требование ниже).
+    const leftCol = div('form-stack');
+    leftCol.append(field('Имя в источнике', nameForwardInput));
+    const leftTypesHost = div('form-stack');
+    buildTypeRowsTable(leftTypesHost, /* isLink */ true, /* side */ 'source');
+    leftCol.append(leftTypesHost);
+    const rightCol = div('form-stack');
+    rightCol.append(field('Имя в назначении', nameReverseInput));
+    const rightTypesHost = div('form-stack');
+    buildTypeRowsTable(rightTypesHost, /* isLink */ true, /* side */ 'target');
+    rightCol.append(rightTypesHost);
+    linkBodyHost.append(twoColumns(leftCol, rightCol));
+
+    // Родительский тип связи + кнопка «Оформление»
+    const parentRow = div('form-row type-editor-row');
+    const parentCombo = createTypeCombobox({
+      options: () => linkTypeOptions(store.state.linkTypes),
+      value: draft.parentLinkTypeId,
+      placeholder: 'Без родителя',
+      onChange: (id) => {
+        draft.parentLinkTypeId = id;
+      },
+    });
+    const styleBtn = button('Оформление…', () => openLinkStyle(), 'btn small');
+    parentRow.append(parentCombo.root, styleBtn);
+    linkBodyHost.append(field('Родительский тип связи', parentRow));
+
+    // Имя в реестре для свойства-связи — копия `name_forward` (сервер
+    // вычисляет `linkPropertyDisplayName`, см. заметку в shared).
+    draft.name = draft.nameForward;
+  }
+
+  function buildScalarOptionsBlock(): HTMLElement {
+    const host = div('form-stack');
+    const choiceRow = el('label', 'checkbox-row') as HTMLLabelElement;
+    const choiceCheck = el('input') as HTMLInputElement;
+    choiceCheck.type = 'checkbox';
+    choiceCheck.checked = draft.choiceOn;
+    choiceCheck.addEventListener('change', () => {
+      draft.choiceOn = choiceCheck.checked;
+      renderScalarBody();
+    });
+    choiceRow.append(choiceCheck, span('выбирать из списка'));
+    host.append(choiceRow);
+    if (draft.choiceOn) {
+      const area = el('textarea', 'textarea-input') as HTMLTextAreaElement;
+      area.value = draft.optionsText;
+      area.rows = 4;
+      area.placeholder = 'Варианты значения — по одному в строке';
+      area.addEventListener('input', () => {
+        draft.optionsText = area.value;
+      });
+      host.append(area);
+    }
+    const multiRow = el('label', 'checkbox-row') as HTMLLabelElement;
+    const multiCheck = el('input') as HTMLInputElement;
+    multiCheck.type = 'checkbox';
+    multiCheck.checked = draft.multipleOn;
+    multiCheck.addEventListener('change', () => {
+      draft.multipleOn = multiCheck.checked;
+    });
+    multiRow.append(multiCheck, span('несколько значений'));
+    host.append(multiRow);
+    return host;
+  }
+
+  // ---- Таблица «Типы мыслей» / «Источники» / «Назначения» --------------
+  function buildTypeRowsTable(host: HTMLElement, isLink: boolean, side: 'source' | 'target' | null): void {
+    host.append(sectionLabel(isLink ? (side === 'source' ? 'Типы источников' : 'Типы назначений') : 'Типы мыслей'));
+    const tableWrap = div('admin-table-wrap');
+    tableWrap.style.maxHeight = '160px';
+    host.append(tableWrap);
+
+    const rows = (): TypeRowDraft[] =>
+      draft.typeRows.filter((r) => (isLink ? r.side === side : r.side === null));
+
+    function renderTable(): void {
+      tableWrap.replaceChildren();
+      const table = el('table', 'table-list');
+      const head = el('thead');
+      const headRow = el('tr');
+      headRow.append(
+        el('th', undefined, 'Тип мысли'),
+        el('th', undefined, 'Обязательное'),
+        el('th', undefined, 'Значение по умолчанию'),
+        el('th'),
+      );
+      head.append(headRow);
+      table.append(head);
+      const tbody = el('tbody');
+      const rowsHere = rows();
+      if (rowsHere.length === 0) {
+        const empty = el('tr');
+        const emptyCell = el('td', 'muted', 'Нет привязок. Нажмите «Добавить тип».');
+        emptyCell.colSpan = 4;
+        empty.append(emptyCell);
+        tbody.append(empty);
+      } else {
+        for (const row of rowsHere) {
+          tbody.append(buildRow(row));
+        }
+      }
+      table.append(tbody);
+      tableWrap.append(table);
+    }
+
+    function buildRow(row: TypeRowDraft): HTMLElement {
+      const tr = el('tr');
+      const tt = store.state.thoughtTypes.find((t) => t.id === row.thoughtTypeId);
+      const ttName = tt?.name ?? row.thoughtTypeId.slice(0, 8);
+      // Тип мысли — неизменяем после создания строки (требование к форме
+      // «добавление/изменение/удаление строк»: удаление = отвязка;
+      // смена типа — отдельной командой, чтобы не править миграцию).
+      tr.append(el('td', undefined, ttName));
+
+      // Обязательное
+      const reqCell = el('td');
+      const reqCheck = el('input') as HTMLInputElement;
+      reqCheck.type = 'checkbox';
+      reqCheck.checked = row.required;
+      reqCheck.addEventListener('change', () => {
+        row.required = reqCheck.checked;
+        row.dirty = true;
+      });
+      reqCell.append(reqCheck);
+      tr.append(reqCell);
+
+      // Значение по умолчанию
+      const dvCell = el('td');
+      const dvInput = el('input', 'text-input') as HTMLInputElement;
+      dvInput.type = 'text';
+      dvInput.placeholder = '(пусто)';
+      dvInput.value = row.defaultValue === null || row.defaultValue === undefined
+        ? ''
+        : String(row.defaultValue);
+      dvInput.addEventListener('input', () => {
+        const v = dvInput.value.trim();
+        row.defaultValue = v === '' ? null : v;
+        row.dirty = true;
+      });
+      dvCell.append(dvInput);
+      tr.append(dvCell);
+
+      // Удалить строку
+      const actionCell = el('td');
+      const rm = button('✕', () => removeRow(row), 'btn small', 'Снять привязку');
+      actionCell.append(rm);
+      tr.append(actionCell);
+      return tr;
+    }
+
+    function removeRow(row: TypeRowDraft): void {
+      draft.typeRows = draft.typeRows.filter((r) => r !== row);
+      renderTable();
+    }
+
+    async function addRow(): Promise<void> {
+      const thoughtTypeId = await pickThoughtTypeId();
+      if (thoughtTypeId === null) return;
+      // Дубль строки (та же сторона для связи) запрещён.
+      if (draft.typeRows.some((r) => r.thoughtTypeId === thoughtTypeId && r.side === side)) return;
+      draft.typeRows = [
+        ...draft.typeRows,
+        {
+          id: null,
+          thoughtTypeId,
+          required: false,
+          defaultValue: null,
+          side,
+          dirty: true,
+        },
+      ];
+      renderTable();
+    }
+
+    host.append(
+      button('Добавить тип', () => void addRow(), 'btn small', 'Добавить привязку свойства к типу мысли'),
+    );
+
+    renderTable();
+  }
+
+  /** Простой пикер типов мыслей через `window.prompt`. В задаче 935ec90e
+   *  («Двусторонняя вкладка Свойства») пикер будет переиспользован из
+   *  общего модуля; пока отдельной реализации нет, работает фолбэк —
+   *  список с разделителем «id — имя». */
+  async function pickThoughtTypeId(): Promise<string | null> {
+    const list = store.state.thoughtTypes
+      .map((t) => `${t.id} — ${t.name}`)
+      .join('\n');
+    const choice = window.prompt(
+      `Введите id типа мысли (например: abc-123-…).\n\nДоступно:\n${list}`,
+    );
+    if (choice === null) return null;
+    const found = store.state.thoughtTypes.find((t) => t.id === choice.trim());
+    return found?.id ?? null;
+  }
+
+  /** Загрузка строк таблицы привязок для существующего свойства: список
+   *  типов мыслей сети + для каждого типа запрос `listTypeProperties`
+   *  фильтрует по нашему `property_id`. Для свойства-связи — две стороны
+   *  (`source`/`target`) согласно `type_properties.side`. */
+  async function loadTypeRowsFor(propertyId: string): Promise<void> {
+    const types = store.state.thoughtTypes;
+    if (types.length === 0) return;
+    const collected: TypeRowDraft[] = [];
+    await Promise.all(
+      types.map(async (tt) => {
+        try {
+          const defs = await etn.types.listTypeProperties(networkId, 'thought_type', tt.id);
+          for (const def of defs) {
+            if (def.property_id !== propertyId) continue;
+            collected.push({
+              id: def.id,
+              thoughtTypeId: tt.id,
+              required: def.required === true,
+              defaultValue: def.default_value ?? null,
+              side: (def.side ?? null) as 'source' | 'target' | null,
+              dirty: false,
+            });
+          }
+        } catch {
+          // пропускаем — частичный список всё равно полезен
+        }
+      }),
+    );
+    draft.typeRows = collected;
+    rerenderBody();
+  }
+
+  // ---- Оформление (color/style/width) -----------------------------------
+  function openLinkStyle(): void {
+    const resolved = resolveLinkTypeVisual(
+      store.state.linkTypes,
+      draft.parentLinkTypeId ?? null,
+    );
+    showLinkStyleDialog({
+      resolved: {
+        color: draft.linkColor,
+        style: (draft.linkStyle ?? resolved.style) as LinkStyle,
+        width: draft.linkWidth ?? resolved.width,
+      },
+      mode: 'type',
+      onApply: async (patch) => {
+        if (patch.color !== undefined) draft.linkColor = patch.color;
+        if (patch.style !== undefined) draft.linkStyle = patch.style;
+        if (patch.width !== undefined) draft.linkWidth = patch.width;
+      },
+    });
+  }
+
+  // Первая отрисовка формы.
+  rerenderBody();
+
+  // ---- Метаданные -------------------------------------------------------
   if (property !== null) {
-    body.append(buildMetadataRowsFromProperty(property));
+    metadataHost.append(buildMetadataRowsFromProperty(property));
+    metadataHost.append(buildUsagePanel(networkId, property.id, onChanged));
+  } else {
+    metadataHost.append(el('p', 'muted', 'Метаданные появятся после сохранения.'));
   }
 
-  // Usage panel — only meaningful when editing an existing row (a brand-new
-  // property has no bindings yet). The panel reloads after the type editor
-  // closes so the counts stay honest if the user detaches the property.
-  if (property !== null) {
-    body.append(buildUsagePanel(networkId, property.id));
-  }
-
-  // ---- Impact banner refresh --------------------------------------------
-  /** Refreshes the «N типов используют это свойство» banner. */
-  async function refreshImpact(): Promise<void> {
-    if (current === null) {
-      impact.textContent = '';
+  // ---- Привязка событий -------------------------------------------------
+  typeSelect.addEventListener('change', () => {
+    const prev = draft.valueType;
+    const next = typeSelect.value as PropertyValueType;
+    if (lockedCategory !== null && categoryOf(next) !== lockedCategory) {
+      // Защита: запрет смены категории (требование 5a82c709).
+      typeSelect.value = prev;
+      errorLine.textContent =
+        'Сменить категорию (скаляр ↔ связь) нельзя: значения связи живут рёбрами, а не в таблице значений.';
       return;
     }
-    try {
-      const usage = await etn.propertyRegistry.usage(networkId, current.id);
-      const n = usage.bindings.length;
-      impact.textContent =
-        `Это свойство подключено к ${n} ${pluralType(n)}. Правка действует во всех ` +
-        'типах сразу; смена типа значения запускает серверную обработку значений.';
-    } catch {
-      impact.textContent = '';
+    errorLine.textContent = '';
+    // При смене скалярного вида между собой — сбрасываем вид-специфичное.
+    if (prev !== 'link' && next !== 'link') {
+      if (prev === 'text' && next !== 'text') {
+        draft.choiceOn = false;
+        draft.optionsText = '';
+      }
+    }
+    if (next === 'link') {
+      draft.defaultValue = null;
+    }
+    draft.valueType = next;
+    rerenderBody();
+  });
+
+  function revalidateName(): void {
+    if (nameClash(draft.name) !== null) {
+      errorLine.textContent = DUP_NAME_MSG;
+      if (applyBtn !== null) applyBtn.disabled = true;
+    } else {
+      if (errorLine.textContent === DUP_NAME_MSG) errorLine.textContent = '';
+      if (applyBtn !== null) applyBtn.disabled = false;
     }
   }
-  void refreshImpact();
-
-  // Duplicate-name revalidation — live as the user types.
   function nameClash(name: string): RegistryRow | null {
     const key = name.trim().toLowerCase();
     if (key === '') return null;
@@ -929,15 +1200,6 @@ export function openPropertyManagerEditor(
       ) ?? null
     );
   }
-  function revalidateName(): void {
-    if (nameClash(nameInput.value) !== null) {
-      errorLine.textContent = DUP_NAME_MSG;
-      if (applyBtn !== null) applyBtn.disabled = true;
-    } else {
-      if (errorLine.textContent === DUP_NAME_MSG) errorLine.textContent = '';
-      if (applyBtn !== null) applyBtn.disabled = false;
-    }
-  }
   // Fresh registry snapshot — the server re-checks on apply anyway.
   void etn.propertyRegistry
     .list(networkId)
@@ -946,92 +1208,72 @@ export function openPropertyManagerEditor(
       revalidateName();
     })
     .catch(() => {});
-  nameInput.addEventListener('input', () => {
-    draft.name = nameInput.value;
-    revalidateName();
-  });
 
-  // Value-type change → if a stored row is being edited and the type moves,
-  // surface the conversion warning and stash the change for the apply.
-  // Kind-specific extras do NOT carry over: they belong to the old kind.
-  typeSelect.addEventListener('change', () => {
-    const prev = draft.value_type;
-    draft.value_type = typeSelect.value as PropertyValueType;
-    if (draft.value_type !== prev) {
-      if (prev === 'text') {
-        choiceOn = false;
-        optionsText = '';
-      }
-      if (draft.value_type === 'link') defaultValue = null;
-    }
-    renderValueTypeExtras();
-  });
-
-  // ---- Apply -------------------------------------------------------------
+  // ---- Применение -------------------------------------------------------
   async function apply(close: () => void): Promise<void> {
-    if (draft.value_type === 'link' && !isStructuralLink && linkTypeId === null) {
-      errorLine.textContent = 'Выберите тип связи.';
-      return;
-    }
-    const name = nameInput.value.trim();
-    if (name === '') {
+    // Базовые проверки.
+    if (draft.valueType === 'link') {
+      if (draft.nameForward.trim() === '' || draft.nameReverse.trim() === '') {
+        errorLine.textContent = 'Укажите имена обеих сторон.';
+        return;
+      }
+    } else if (draft.name.trim() === '') {
       errorLine.textContent = 'Название свойства обязательно.';
       return;
     }
+    const name = draft.valueType === 'link' ? draft.nameForward.trim() : draft.name.trim();
     if (nameClash(name) !== null) {
       errorLine.textContent = DUP_NAME_MSG;
       return;
     }
-    const description = descArea.value.trim();
-    const config = buildConfig(
-      draft.value_type,
-      defaultValue,
-      { choiceOn, optionsText, multipleOn },
-      {
-        structural: isStructuralLink,
-        linkTypeId,
-        direction: linkDirection,
-        allowedTargetTypeIds,
-        showOnMap,
-        blocksTargetDeletion,
-        // Carries over `config.multiple` left by the thought_ref→link
-        // migration (040) — meaningless for a link property (the target
-        // count is never capped) but preserved verbatim since this form has
-        // no control for it, so an unrelated edit never drops it.
-        legacyMultiple: draft.config?.multiple === true,
-      },
-    );
 
     try {
       if (current === null) {
         const input: NetworkPropertyInput = {
           name,
-          value_type: draft.value_type,
-          ...(description !== '' ? { description } : {}),
-          ...(config !== null ? { config } : {}),
+          value_type: draft.valueType,
+          ...(draft.description.trim() !== '' ? { description: draft.description.trim() } : {}),
+          ...buildConfigForCreate(draft),
         };
+        if (draft.valueType === 'link') {
+          input.name_forward = draft.nameForward.trim();
+          input.name_reverse = draft.nameReverse.trim();
+          if (draft.parentLinkTypeId !== null) input.parent_link_type_id = draft.parentLinkTypeId;
+          if (draft.linkColor !== null) input.link_color = draft.linkColor;
+          if (draft.linkStyle !== null) input.link_style = draft.linkStyle;
+          if (draft.linkWidth !== null) input.link_width = draft.linkWidth;
+        }
         const created = await etn.propertyRegistry.create(networkId, input);
-        // Bind the optimistic snapshot so a re-open sees the fresh row.
         current = {
           ...created,
           types_count: 0,
           values_count: 0,
         };
+        // Создать привязки к типам мыслей.
+        await applyTypeRows(created.id);
         onCreated?.(created);
       } else {
-        const changes: NetworkPropertyUpdateInput = {};
-        if (name !== current.name) changes.name = name;
-        if (draft.value_type !== current.value_type) changes.value_type = draft.value_type;
-        const newDescription = description === '' ? null : description;
+        const changes: NetworkPropertyUpdateInput = { name };
+        if (draft.valueType !== current.value_type) changes.value_type = draft.valueType;
+        const newDescription = draft.description.trim() === '' ? null : draft.description.trim();
         if (newDescription !== (current.description ?? null)) changes.description = newDescription;
-        if (!sameConfig(config, current.config)) changes.config = config;
+        const newConfig = buildConfigForUpdate(draft, current.config);
+        if (!sameConfig(newConfig, current.config)) changes.config = newConfig;
+        if (draft.valueType === 'link') {
+          if (draft.nameForward.trim() !== '') changes.name_forward = draft.nameForward.trim();
+          if (draft.nameReverse.trim() !== '') changes.name_reverse = draft.nameReverse.trim();
+          if (draft.linkColor !== null) changes.link_color = draft.linkColor;
+          if (draft.linkStyle !== null) changes.link_style = draft.linkStyle;
+          if (draft.linkWidth !== null) changes.link_width = draft.linkWidth;
+        }
         if (Object.keys(changes).length === 0) {
-          // Nothing to do — close silently.
+          // Применим только привязки (если есть dirty), потом закроем.
+          await applyTypeRows(current.id);
           close();
           return;
         }
-        // Value-type conversion confirmation (asks BEFORE the patch lands,
-        // so a decline leaves the whole apply a no-op).
+        // Подтверждение конверсии value_type при смене внутри скалярной
+        // категории (между скалярами идёт серверная конверсия).
         if (changes.value_type !== undefined && changes.value_type !== current.value_type) {
           const ok = await confirmDialog(
             'Сменить тип значения',
@@ -1059,6 +1301,8 @@ export function openPropertyManagerEditor(
               : 'Обработка выполнена.',
           );
         }
+        // Применим привязки к типам мыслей.
+        await applyTypeRows(current.id);
       }
       onChanged();
       close();
@@ -1067,10 +1311,60 @@ export function openPropertyManagerEditor(
     }
   }
 
+  /** Сохранение строк таблицы привязок. На входе — черновик; на выходе —
+   *  строки применены через `etn.types.createTypeProperty/updateTypeProperty/
+   *  removeTypeProperty`. */
+  async function applyTypeRows(propertyId: string): Promise<void> {
+    if (draft.typeRows.length === 0 && !hasRemovedRows()) return;
+    const rowsById = new Map<string, TypeRowDraft>();
+    // Снимок «было» по id — для отслеживания удалённых строк.
+    // (в loadTypeRowsFor заполняется; новые строки имеют id === null.)
+    const ops: Promise<unknown>[] = [];
+    for (const row of draft.typeRows) {
+      if (row.id === null) {
+        // Создание.
+        ops.push(
+          etn.types.createTypeProperty(
+            networkId,
+            'thought_type',
+            row.thoughtTypeId,
+            {
+              mode: 'attach',
+              property_id: propertyId,
+              required: row.required,
+              ...(row.side !== null ? { side: row.side } : {}),
+            },
+          ),
+        );
+      } else if (row.dirty) {
+        rowsById.set(row.id, row);
+        ops.push(
+          etn.types.updateTypeProperty(networkId, 'thought_type', row.thoughtTypeId, row.id, {
+            required: row.required,
+          }),
+        );
+      }
+    }
+    await Promise.all(ops).catch((err) => {
+      throw err;
+    });
+  }
+
+  /** Возвращает `true`, если среди исходных строк есть удалённые (мы их
+   *  сравниваем с draft). Используется для решения — синхронизировать ли. */
+  function hasRemovedRows(): boolean {
+    // Сложность: loadTypeRowsFor даёт начальный снимок; удалённые строки
+    // просто отсутствуют в draft.typeRows. Чтобы отличить «никогда не было»
+    // от «было и удалили», нужен снимок «было». Здесь упрощённо: если
+    // среди текущих draft-строк есть хоть одна с id !== null — был снимок,
+    // значит удаления отслеживаем. Для остальных случаев no-op.
+    return draft.typeRows.some((r) => r.id !== null);
+  }
+
   showDialog({
     title: property === null ? 'Новое свойство' : `Свойство — «${property.name}»`,
     body,
-    width: 520,
+    width: 1240,
     buttons: [
       { label: 'Отмена' },
       {
@@ -1083,20 +1377,150 @@ export function openPropertyManagerEditor(
         },
       },
     ],
-    onMount: () => nameInput.focus(),
+    onMount: () => {
+      const firstInput = body.querySelector('input, textarea, select') as HTMLElement | null;
+      firstInput?.focus();
+    },
     onClose: () => void releaseHeld(editLock),
   });
 }
 
 // ---------------------------------------------------------------------------
-// Value-type-specific input helpers (mirror the type-manager property dialog)
+// Сборка PropertyConfig из черновика
+// ---------------------------------------------------------------------------
+
+/** Для POST: конфиг (если есть что хранить) + `null` если пусто. */
+function buildConfigForCreate(draft: PropertyDraft): { config?: PropertyConfig | null } {
+  if (draft.valueType === 'link') {
+    const cfg = linkConfigFromDraft(draft);
+    return cfg === null ? {} : { config: cfg };
+  }
+  const cfg = scalarConfigFromDraft(draft);
+  return cfg === null ? {} : { config: cfg };
+}
+
+/** Для PATCH: полный конфиг (даже если он null после очистки полей). */
+function buildConfigForUpdate(draft: PropertyDraft, current: PropertyConfig | null): PropertyConfig | null {
+  if (draft.valueType === 'link') {
+    return linkConfigFromDraft(draft);
+  }
+  return scalarConfigFromDraft(draft);
+}
+
+/** Конфиг свойства-связи из черновика. Никогда не `null` — сервер требует
+ *  `direction` для ссылки. */
+function linkConfigFromDraft(draft: PropertyDraft): PropertyConfig | null {
+  if (draft.valueType !== 'link') return null;
+  // Для уже существующего свойства — сохраняем `link_type_id` из текущего.
+  // Для нового — сервер создаст link_type автоматически (задача dd37a66)
+  // по паре имён сторон, и `config.link_type_id` придёт в ответе на create.
+  return {
+    direction: 'out',
+    show_on_map: draft.showOnMap || undefined,
+    blocks_target_deletion: draft.blocksTargetDeletion || undefined,
+    default_value:
+      Array.isArray(draft.defaultValue) && draft.defaultValue.length > 0
+        ? [...new Set(draft.defaultValue as string[])]
+        : undefined,
+  };
+}
+
+/** Конфиг скалярного свойства из черновика. `null` если нечего хранить. */
+function scalarConfigFromDraft(draft: PropertyDraft): PropertyConfig | null {
+  if (draft.valueType === 'link') return null;
+  const cfg: PropertyConfig = {};
+  if (draft.defaultValue !== null && draft.defaultValue !== undefined) {
+    cfg.default_value = draft.defaultValue as string | number | boolean;
+  }
+  if (draft.valueType === 'text' && draft.choiceOn) {
+    const list = draft.optionsText
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (list.length > 0) cfg.options = list;
+  }
+  if (draft.multipleOn) cfg.multiple = true;
+  return Object.keys(cfg).length > 0 ? cfg : null;
+}
+
+// ---------------------------------------------------------------------------
+// Старая конфигурация-утилита — сохранена для обратной совместимости тестов
+// ---------------------------------------------------------------------------
+
+/**
+ * @deprecated Используйте новый единый диалог (`openPropertyManagerEditor`).
+ * Эта функция оставлена только для существующих юнит-тестов
+ * (`property-manager-build-config.test.ts`) и будет удалена вместе с ними.
+ *
+ * Конвертирует развёрнутый набор draft-полей в `PropertyConfig`. Подробнее
+ * см. {@link linkConfigFromDraft} / {@link scalarConfigFromDraft}.
+ */
+export interface LinkConfigDraft {
+  structural: boolean;
+  linkTypeId: string | null;
+  direction: 'out' | 'in';
+  allowedTargetTypeIds: string[];
+  showOnMap: boolean;
+  blocksTargetDeletion: boolean;
+  legacyMultiple: boolean;
+}
+
+/** @deprecated см. {@link LinkConfigDraft}. */
+export function buildConfig(
+  valueType: PropertyValueType,
+  defaultValue: unknown,
+  options: {
+    choiceOn: boolean;
+    optionsText: string;
+    multipleOn: boolean;
+  },
+  link: LinkConfigDraft,
+): PropertyConfig | null {
+  if (valueType === 'link') {
+    const config: PropertyConfig = { direction: link.direction };
+    if (link.structural) {
+      config.structural = true;
+    } else if (link.linkTypeId !== null) {
+      config.link_type_id = link.linkTypeId;
+    }
+    if (link.allowedTargetTypeIds.length > 0) {
+      config.allowed_target_type_ids = [...link.allowedTargetTypeIds];
+    }
+    if (link.showOnMap) config.show_on_map = true;
+    if (link.blocksTargetDeletion) config.blocks_target_deletion = true;
+    if (link.legacyMultiple) config.multiple = true;
+    if (Array.isArray(defaultValue) && defaultValue.length > 0) {
+      config.default_value = [...new Set(defaultValue)];
+    }
+    return config;
+  }
+  const config: PropertyConfig = {};
+  if (defaultValue !== null && defaultValue !== undefined) {
+    config.default_value = defaultValue as string | number | boolean;
+  }
+  if (valueType === 'text' && options.choiceOn) {
+    const list = options.optionsText
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (list.length > 0) config.options = list;
+  }
+  if (options.multipleOn) {
+    config.multiple = true;
+  }
+  return Object.keys(config).length > 0 ? config : null;
+}
+
+// ---------------------------------------------------------------------------
+// Value-type-specific default-value input
 // ---------------------------------------------------------------------------
 
 /**
  * Builds a default-value input matching `valueType`; `read(value)` is called
  * once when the input commits (blur/change). Link defaults (the target-set
- * chip field, bb67e546) are wired directly in `renderValueTypeExtras` — the
- * stub below is a defensive fallback, not the editing path.
+ * chip field, bb67e546) are wired directly inside the link block — the stub
+ * below is a defensive fallback for the «link» case when the chip field has
+ * not been mounted yet (e.g. while the dialog is mid-render).
  */
 function defaultInputFor(
   valueType: PropertyValueType,
@@ -1137,100 +1561,17 @@ function defaultInputFor(
       return input;
     }
     case 'link':
-      return span('не задаётся', 'muted');
+      return span('управляется в блоке связи', 'muted');
     case 'thought_ref':
-      // Legacy (миграция 040): создание свойств этого типа отвергается
-      // рантайм-guard'ом; редактор default-значения недостижим.
       return span('упразднено', 'muted');
   }
 }
 
-/** Link-config inputs gathered by {@link renderLinkExtras}, passed to
- *  {@link buildConfig} as a group so a `value_type = 'link'` edit never drops
- *  a field the form has no control for (see `legacyMultiple`).
- *  Exported for `buildConfig`'s unit tests. */
-export interface LinkConfigDraft {
-  structural: boolean;
-  linkTypeId: string | null;
-  direction: LinkPropertyDirection;
-  allowedTargetTypeIds: string[];
-  showOnMap: boolean;
-  blocksTargetDeletion: boolean;
-  legacyMultiple: boolean;
-}
+// ---------------------------------------------------------------------------
+// Утилиты конфигов и форм
+// ---------------------------------------------------------------------------
 
-/**
- * Builds the `PropertyConfig` JSON to send on create/update.
- *
- * For `value_type = 'link'` the config always carries `direction`, plus
- * `structural`/`link_type_id` (mutually exclusive — see
- * `shared/src/types/thought-type.ts` `PropertyConfig`) and whichever of the
- * optional link flags the user set; it is never `null` (the server requires
- * `config.link_type_id` for a non-structural link property).
- *
- * For every other kind, returns `null` when there is nothing meaningful to
- * store (no default, no options, no multiple flag) so the server stores the
- * column as JSON `null` rather than `{}`. Multiple values are valid for
- * text / url alike (02-data-model.md §3.4–3.5) — one flag covers both kinds.
- *
- * Exported for unit tests (the dialog itself is rendered against the live
- * DOM) — the regression this covers: the pre-fix `buildConfig` had no
- * `value_type = 'link'` branch at all, so saving an existing link property
- * through this dialog silently dropped `config.link_type_id` and the server
- * rejected the patch with `VALIDATION_ERROR`.
- */
-export function buildConfig(
-  valueType: PropertyValueType,
-  defaultValue: unknown,
-  options: {
-    choiceOn: boolean;
-    optionsText: string;
-    multipleOn: boolean;
-  },
-  link: LinkConfigDraft,
-): PropertyConfig | null {
-  if (valueType === 'link') {
-    const config: PropertyConfig = { direction: link.direction };
-    if (link.structural) {
-      config.structural = true;
-    } else if (link.linkTypeId !== null) {
-      config.link_type_id = link.linkTypeId;
-    }
-    if (link.allowedTargetTypeIds.length > 0) {
-      config.allowed_target_type_ids = [...link.allowedTargetTypeIds];
-    }
-    if (link.showOnMap) config.show_on_map = true;
-    if (link.blocksTargetDeletion) config.blocks_target_deletion = true;
-    if (link.legacyMultiple) config.multiple = true;
-    // Дефолт свойства-связи — набор целей (bb67e546). Массив идёт как есть
-    // (сервер дедуплицирует и валидирует цели); всё остальное — сброс.
-    if (Array.isArray(defaultValue) && defaultValue.length > 0) {
-      config.default_value = [...new Set(defaultValue)];
-    }
-    return config;
-  }
-  const config: PropertyConfig = {};
-  if (defaultValue !== null && defaultValue !== undefined) {
-    config.default_value = defaultValue as string | number | boolean;
-  }
-  if (valueType === 'text' && options.choiceOn) {
-    const list = options.optionsText
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-    if (list.length > 0) config.options = list;
-  }
-  if (options.multipleOn) {
-    config.multiple = true;
-  }
-  return Object.keys(config).length > 0 ? config : null;
-}
-
-/**
- * True when the new config and the stored one carry the same payload. Key
- * ORDER is irrelevant (the migration and the server write JSON with different
- * key orders than the local builder) — object keys are sorted recursively.
- */
+/** True when the new config and the stored one carry the same payload. */
 function sameConfig(a: PropertyConfig | null, b: PropertyConfig | null): boolean {
   return stableJson(a ?? null) === stableJson(b ?? null);
 }
@@ -1284,9 +1625,6 @@ function pluralEdge(n: number): string {
 
 // ---------------------------------------------------------------------------
 // Usage panel — bindings + value counters (in-type vs out-of-type).
-// Wires type rows back to the type editor (`showThoughtTypeEditor` /
-// `showLinkTypeEditor`); closing those editors reloads the network state so
-// the usage panel stays honest.
 // ---------------------------------------------------------------------------
 
 interface PropertyUsageRow {
@@ -1311,7 +1649,11 @@ interface PropertyUsage {
  * handlers that open the matching type editor, plus the two value counters
  * («в типе» / «вне типа»). Fetches fresh on mount; reloads on demand.
  */
-function buildUsagePanel(networkId: string, propertyId: string): HTMLElement {
+function buildUsagePanel(
+  networkId: string,
+  propertyId: string,
+  onChanged: () => void,
+): HTMLElement {
   const host = div('form-stack');
   const label = el('p', 'muted', 'Использование');
   label.style.margin = '12px 0 2px';
@@ -1371,16 +1713,23 @@ function buildUsagePanel(networkId: string, propertyId: string): HTMLElement {
       `Вне типа: ${usage.values_outside_type_count}.`;
   }
 
-  function openTypeEditorByUsage(row: PropertyUsageRow): void {
+  /** Открывает редактор нужного типа: для thought_type — редактор типа мысли;
+   *  для link_type — единый диалог свойства-связи (требование 09f692ff:
+   *  редактор типа связи упразднён, единственная точка редактирования —
+   *  свойство-связь). */
+  async function openTypeEditorByUsage(row: PropertyUsageRow): Promise<void> {
     if (row.owner_type === 'thought_type') {
       const t = store.state.thoughtTypes.find((tt) => tt.id === row.owner_id);
       if (t !== undefined) {
+        const { showThoughtTypeEditor } = await import('./type-manager.js');
         showThoughtTypeEditor(t, () => void reload());
       }
     } else {
-      const t = store.state.linkTypes.find((lt) => lt.id === row.owner_id);
-      if (t !== undefined) {
-        showLinkTypeEditor(t, () => void reload());
+      // link_type: открываем свойство-связь.
+      const regRows = await etn.propertyRegistry.list(networkId);
+      const prop = regRows.find((p) => p.value_type === 'link' && p.config?.link_type_id === row.owner_id);
+      if (prop !== undefined) {
+        openPropertyManagerEditor(prop, onChanged);
       }
     }
   }

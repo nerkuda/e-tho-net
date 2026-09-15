@@ -43,6 +43,14 @@ const SOURCE_FILES = {
     'screens',
     'type-manager.ts',
   ),
+  propertyManager: resolve(
+    import.meta.dirname,
+    '..',
+    'src',
+    'renderer',
+    'screens',
+    'property-manager.ts',
+  ),
   viewsTab: resolve(
     import.meta.dirname,
     '..',
@@ -106,39 +114,41 @@ describe('thought-type editor — tabs (задача b8301c16)', () => {
     assert.ok(src.includes('viewsTab.dispose()'), 'views tab disposed on close');
   });
 
-  it('the link-type editor stays unchanged (no tabs in showLinkTypeEditor)', () => {
+  it('the link-type editor is removed in 0.8.1 (single dialog «Свойство / связь», задача 09201bd4)', () => {
     const src = readText(SOURCE_FILES.typeManager);
-    // Locate the body of showLinkTypeEditor — it must not contain the new
-    // tab classes, otherwise the requirement «Редактор типа связи вкладок
-    // не получает» is violated.
-    const linkIdx = src.indexOf('export function showLinkTypeEditor');
-    assert.ok(linkIdx > 0, 'showLinkTypeEditor not found');
-    // Slice until the next exported top-level declaration (the next
-    // `export function` / `function buildMetadataRowsFromLinkType`).
-    const tailIdx = src.indexOf('function buildMetadataRowsFromLinkType', linkIdx);
-    const linkBody = src.slice(linkIdx, tailIdx > 0 ? tailIdx : src.length);
-    assert.ok(!linkBody.includes('type-editor-tabs'), 'link-type editor must not use tabs');
-    assert.ok(!linkBody.includes('type-editor-tab'), 'link-type editor must not use tab buttons');
-    assert.ok(!linkBody.includes('buildViewsTab'), 'link-type editor must not embed the views tab');
+    // Требование 09f692ff: редактор типа связи упразднён — единственная точка
+    // редактирования связи это свойство-связь через `openPropertyManagerEditor`.
+    assert.equal(
+      src.indexOf('export function showLinkTypeEditor'),
+      -1,
+      'showLinkTypeEditor must be removed from type-manager (use openPropertyManagerEditor instead)',
+    );
+    assert.equal(
+      src.indexOf('showLinkTypesDialog'),
+      -1,
+      'showLinkTypesDialog must be removed — replaced by property-manager.showLinkTypesTreeDialog',
+    );
   });
 
-  it('the link-type editor has no property section (0.8.1: свойства типов связей упраздняются, e5cfacb9)', () => {
-    const src = readText(SOURCE_FILES.typeManager);
-    const linkIdx = src.indexOf('export function showLinkTypeEditor');
-    assert.ok(linkIdx > 0, 'showLinkTypeEditor not found');
-    const tailIdx = src.indexOf('function buildMetadataRowsFromLinkType', linkIdx);
-    const linkBody = src.slice(linkIdx, tailIdx > 0 ? tailIdx : src.length);
+  it('property-manager exports the unified dialog with the required 09201bd4 surface', () => {
+    const src = readText(SOURCE_FILES.propertyManager);
+    // Единый диалог «Свойство / связь» экспортируется и принимает опции
+    // предзаполнения (используется в задаче 935ec90e).
+    assert.ok(src.includes('export function openPropertyManagerEditor'));
+    assert.ok(src.includes('export interface OpenEditorOptions'));
+    assert.ok(src.includes('initialThoughtTypeId'));
+    assert.ok(src.includes('initialSide'));
+    // Ширина диалога ≥ 1200 px (требование 465495a9).
+    assert.ok(src.includes('width: 1240'), 'editor width must be at least 1200 px');
+    // Вид `thought_ref` исключён из выбора (требование 5a82c709).
+    assert.ok(src.includes('SELECTABLE_VALUE_TYPES'));
+    // Список выбора НЕ включает `thought_ref` (только скаляры + link).
+    const selectableBody = src.match(
+      /const SELECTABLE_VALUE_TYPES: PropertyValueType\[\] = \[([^\]]+)\]/,
+    )?.[1] ?? '';
     assert.ok(
-      !linkBody.includes('buildStagedPropertySection'),
-      'link-type editor must not build a property section',
-    );
-    assert.ok(
-      !linkBody.includes('Добавить свойство'),
-      'link-type editor must not offer «Добавить свойство»',
-    );
-    assert.ok(
-      !linkBody.includes('props.applyChanges'),
-      'link-type editor must not persist property changes on apply',
+      !selectableBody.includes("'thought_ref'"),
+      'SELECTABLE_VALUE_TYPES must not include thought_ref',
     );
   });
 

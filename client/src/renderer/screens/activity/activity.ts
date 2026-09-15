@@ -31,7 +31,8 @@ import { etn } from '../../lib/etn.js';
 import { formatDateTime } from '../../lib/metadata.js';
 import { notice } from '../../lib/notice.js';
 import { openLayerPropsDialog } from '../layers.js';
-import { showLinkTypeEditor, showThoughtTypeEditor } from '../type-manager.js';
+import { showThoughtTypeEditor } from '../type-manager.js';
+import { openPropertyManagerEditor } from '../property-manager.js';
 
 import {
   buildUserMultiSelectWidget,
@@ -1124,9 +1125,22 @@ async function openEntity(row: ActivityRow): Promise<void> {
         return;
       }
       case 'link_type': {
-        const cached = store.state.linkTypes.find((t) => t.id === row.entity_id);
-        const type = cached ?? (await etn.types.getLinkType(networkId, row.entity_id));
-        void showLinkTypeEditor(type, () => undefined);
+        // Редактор типа связи упразднён (требование 09f692ff, задача
+        // 09201bd4): единственная точка редактирования типа связи —
+        // свойство-связь через единый диалог. Ищем связанное свойство по
+        // `link_type_id` в реестре; если его нет — сообщаем пользователю
+        // (тип связи без свойства бесполезен в 0.8.1).
+        try {
+          const rows = await etn.propertyRegistry.list(networkId);
+          const prop = rows.find((r) => r.value_type === 'link' && r.config?.link_type_id === row.entity_id);
+          if (prop === undefined) {
+            notice('Для этого типа связи ещё нет свойства в реестре — редактирование невозможно.');
+            return;
+          }
+          openPropertyManagerEditor(prop, () => undefined);
+        } catch (err) {
+          errorDialog('Открыть свойство-связь', err);
+        }
         return;
       }
       // Слой: диалог свойств слоя (название/комментарий/цвета). Работает
