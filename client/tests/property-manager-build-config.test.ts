@@ -88,6 +88,27 @@ describe('buildConfig — value_type "link"', () => {
     assert.deepEqual(config, { direction: 'in', structural: true });
   });
 
+  it('stores the default target set, deduplicated (bb67e546)', () => {
+    const config = buildConfig('link', ['t1', 't2', 't1'], { choiceOn: false, optionsText: '', multipleOn: false }, linkDraft({
+      linkTypeId: 'lt-1',
+    }));
+    assert.deepEqual(config?.default_value, ['t1', 't2']);
+  });
+
+  it('drops an empty default target set (reset, not `[]`)', () => {
+    const config = buildConfig('link', [], { choiceOn: false, optionsText: '', multipleOn: false }, linkDraft({
+      linkTypeId: 'lt-1',
+    }));
+    assert.equal('default_value' in (config ?? {}), false);
+  });
+
+  it('drops a stale scalar default left over from a value-type switch', () => {
+    const config = buildConfig('link', 'текст', { choiceOn: false, optionsText: '', multipleOn: false }, linkDraft({
+      linkTypeId: 'lt-1',
+    }));
+    assert.equal('default_value' in (config ?? {}), false);
+  });
+
   it('never returns null for a link property (server requires an object)', () => {
     const config = buildConfig('link', null, { choiceOn: false, optionsText: '', multipleOn: false }, linkDraft());
     assert.notEqual(config, null);

@@ -1083,7 +1083,7 @@ export class RestClient {
     ownerType: TypeOwnerType,
     typeId: string,
     propertyId: string,
-    value: string | number | boolean | null,
+    value: string | number | boolean | string[] | null,
     opts?: RequestOptions,
   ): Promise<void> {
     await this.request(

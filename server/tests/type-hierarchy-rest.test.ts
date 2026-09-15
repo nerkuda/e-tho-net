@@ -444,5 +444,181 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('link-property default: override with a target set, apply on create, skip stale targets (bb67e546)', async () => {
+      const ctx: RestTestContext = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+
+        const mkType = async (name: string, parentId: string | null): Promise<string> => {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${nid}/thought-types`,
+            headers: h,
+            payload: { name, parent_id: parentId },
+          });
+          assert.equal(res.statusCode, 201, res.body?.toString());
+          return (res.json().data as { id: string }).id;
+        };
+        const person = await mkType('Персона', null);
+        const colleague = await mkType('Коллега', person);
+        const mkThought = async (title: string, typeId: string | null): Promise<string> => {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${nid}/thoughts`,
+            headers: h,
+            payload: { title, ...(typeId === null ? {} : { type_id: typeId }) },
+          });
+          assert.equal(res.statusCode, 201, res.body?.toString());
+          return (res.json().data as { id: string }).id;
+        };
+
+        const ltRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/link-types`,
+          headers: h,
+          payload: { name_forward: 'работает в', name_reverse: 'сотрудники' },
+        });
+        assert.equal(ltRes.statusCode, 201, ltRes.body?.toString());
+        const lt = ltRes.json().data as { id: string; name_forward: string };
+
+        // Link property on Персона; Коллега наследует его.
+        const propRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types/${person}/properties`,
+          headers: h,
+          payload: {
+            key: 'игнорируется',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out' },
+          },
+        });
+        assert.equal(propRes.statusCode, 201, propRes.body?.toString());
+        const prop = propRes.json().data as { id: string; property_id: string };
+
+        const firm = await mkThought('Фирма 1С', null);
+        const firm2 = await mkThought('Фирка 2', null);
+
+        // Override the default on Коллега with a target set.
+        const overrideRes = await ctx.app.inject({
+          method: 'PUT',
+          url: `/api/v1/networks/${nid}/thought-types/${colleague}/properties/${prop.property_id}/default`,
+          headers: h,
+          payload: { value: [firm, firm2, firm] }, // duplicate folds away
+        });
+        assert.equal(overrideRes.statusCode, 200, overrideRes.body?.toString());
+
+        const eff = (
+          (
+            await ctx.app.inject({
+              method: 'GET',
+              url: `/api/v1/networks/${nid}/thought-types/${colleague}/properties`,
+              headers: h,
+            })
+          ).json().data as Array<{ key: string; default_value: unknown; overridden_here: boolean }>
+        ).find((d) => d.key === lt.name_forward)!;
+        assert.ok(eff !== undefined, 'эффективный набор несёт свойство-связь под display-именем');
+        assert.deepEqual(eff.default_value, [firm, firm2]);
+        assert.equal(eff.overridden_here, true);
+
+        // Unknown target id → 422.
+        const badRes = await ctx.app.inject({
+          method: 'PUT',
+          url: `/api/v1/networks/${nid}/thought-types/${colleague}/properties/${prop.property_id}/default`,
+          headers: h,
+          payload: { value: [firm, '00000000-0000-4000-8000-0000000000ff'] },
+        });
+        assert.equal(badRes.statusCode, 422);
+
+        // Empty array resets the override (back to the registry's own null).
+        const resetRes = await ctx.app.inject({
+          method: 'PUT',
+          url: `/api/v1/networks/${nid}/thought-types/${colleague}/properties/${prop.property_id}/default`,
+          headers: h,
+          payload: { value: [] },
+        });
+        assert.equal(resetRes.statusCode, 200);
+        const afterReset = (
+          (
+            await ctx.app.inject({
+              method: 'GET',
+              url: `/api/v1/networks/${nid}/thought-types/${colleague}/properties`,
+              headers: h,
+            })
+          ).json().data as Array<{ key: string; default_value: unknown; overridden_here: boolean }>
+        ).find((d) => d.key === lt.name_forward)!;
+        assert.equal(afterReset.default_value, null);
+        assert.equal(afterReset.overridden_here, false);
+
+        // Registry-level default (the nature dialog's path): config.default_value.
+        const regRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/properties/${prop.property_id}`,
+          headers: h,
+          payload: { config: { link_type_id: lt.id, direction: 'out', default_value: [firm] } },
+        });
+        assert.equal(regRes.statusCode, 200, regRes.body?.toString());
+        const afterReg = (
+          (
+            await ctx.app.inject({
+              method: 'GET',
+              url: `/api/v1/networks/${nid}/thought-types/${person}/properties`,
+              headers: h,
+            })
+          ).json().data as Array<{ key: string; default_value: unknown }>
+        ).find((d) => d.key === lt.name_forward)!;
+        assert.deepEqual(afterReg.default_value, [firm]);
+
+        // A bad registry default (unknown id) is rejected.
+        const badReg = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/properties/${prop.property_id}`,
+          headers: h,
+          payload: {
+            config: { link_type_id: lt.id, direction: 'out', default_value: ['nope'] },
+          },
+        });
+        assert.equal(badReg.statusCode, 422);
+
+        // Applying on create: a new Коллега gets the edge to «Фирма 1С».
+        const created = await mkThought('Новиков Семён', colleague);
+        const grouped = (
+          await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${nid}/thoughts/${created}/links?group=type`,
+            headers: h,
+          })
+        ).json().data as {
+          by_type: Array<{ items: Array<{ link: { target_id: string } }> }>;
+        };
+        const targets = grouped.by_type.flatMap((g) => g.items.map((i) => i.link.target_id));
+        assert.deepEqual(targets, [firm]);
+
+        // Stale target: trash «Фирма 1С» → a new thought is still created, the
+        // dead default is skipped silently.
+        const firmRow = (
+          await ctx.app.inject({ method: 'GET', url: `/api/v1/networks/${nid}/thoughts/${firm}`, headers: h })
+        ).json().data as { version: number };
+        const trashRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/thoughts/${firm}`,
+          headers: { ...h, 'If-Match': String(firmRow.version) },
+          payload: { marked_for_deletion: true },
+        });
+        assert.equal(trashRes.statusCode, 200);
+        const created2 = await mkThought('Ещё коллега', colleague);
+        const grouped2 = (
+          await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/networks/${nid}/thoughts/${created2}/links?group=type`,
+            headers: h,
+          })
+        ).json().data as { by_type: Array<{ items: unknown[] }> };
+        assert.equal(grouped2.by_type.length, 0, 'протухшая цель не создаёт ребра и не валит создание');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );

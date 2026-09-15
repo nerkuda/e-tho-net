@@ -334,6 +334,11 @@ function validateLinkConfig(
       }
     }
   }
+  // Дефолт свойства-связи — набор целей (bb67e546): валидируется целиком,
+  // чтобы неработающий дефолт не сохранился в реестр.
+  if (cfg.default_value !== undefined && cfg.default_value !== null) {
+    normalizeLinkDefaultValue(ndb, { id: '', name: field, value_type: 'link', config: cfg }, cfg.default_value);
+  }
   return cfg;
 }
 
@@ -685,6 +690,53 @@ function validateLinkTargetType(ndb: NetworkDb, prop: PropertyLike, targetId: st
       actual_type_id: target.type_id,
     });
   }
+}
+
+/**
+ * Дефолт свойства-связи — набор целей (ошибка bb67e546): дедупликация с
+ * сохранением порядка + полная валидация каждой цели (существование, отбор
+ * по типам цели). Пустой набор — `null` (дефолта нет).
+ */
+function normalizeLinkDefaultValue(
+  ndb: NetworkDb,
+  prop: PropertyLike,
+  value: PropertyValueValue,
+): string[] | null {
+  if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || id === '')) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `дефолт свойства-связи «${prop.name}» — массив id мыслей`,
+      { key: prop.name, expected: 'link' },
+    );
+  }
+  const ids = [...new Set(value)];
+  for (const id of ids) validateLinkTargetType(ndb, prop, id);
+  return ids.length > 0 ? ids : null;
+}
+
+/**
+ * Отфильтровать цели link-дефолта, применимые СЕЙЧАС: живые (не удалённые и не
+ * в корзине) и проходящие отбор по типам цели. Применение дефолта при создании
+ * мысли не должно падать из-за цели, исчезнувшей или сменившей тип после
+ * установки дефолта (bb67e546) — такие молча пропускаются.
+ */
+export function filterApplicableLinkDefaultTargets(
+  ndb: NetworkDb,
+  config: PropertyConfig | null,
+  ids: string[],
+): string[] {
+  const prop: PropertyLike = { id: '', name: 'default', value_type: 'link', config };
+  return ids.filter((id) => {
+    try {
+      validateLinkTargetType(ndb, prop, id);
+      const row = ndb
+        .prepare('SELECT marked_for_deletion FROM thoughts_v WHERE id = ?')
+        .get(id) as { marked_for_deletion: number } | undefined;
+      return row !== undefined && row.marked_for_deletion === 0;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Живые (не в корзине) рёбра свойства-связи владельца: target_id → строка. */
@@ -1572,11 +1624,16 @@ export function setTypePropertyDefaultOverride(
 ): void {
   ndb.transaction(() => {
     const prop = assertOverridableInheritedProperty(ndb, ownerType, ownerId, propertyId);
-    if (value !== null) {
-      validateAndCoerce(ndb, prop, value);
-    }
+    // Дефолт свойства-связи — набор целей (bb67e546): нормализация (дедуп +
+    // валидация каждой цели) вместо скалярной coerce; пустой набор = сброс.
+    const normalized =
+      value === null
+        ? null
+        : prop.value_type === 'link'
+          ? normalizeLinkDefaultValue(ndb, prop, value)
+          : (validateAndCoerce(ndb, prop, value), value);
     const now = new Date().toISOString();
-    if (value === null) {
+    if (normalized === null) {
       // Reset the default only: a row that still carries a description
       // override survives with default_value = 'null' (JSON null reads back
       // as "no override"); a row overriding nothing is removed.
@@ -1611,7 +1668,7 @@ export function setTypePropertyDefaultOverride(
              updated_at = excluded.updated_at,
              deleted = 0`,
         )
-        .run(randomUUID(), ndb.layerId, ownerType, ownerId, prop.id, JSON.stringify(value), now, now);
+        .run(randomUUID(), ndb.layerId, ownerType, ownerId, prop.id, JSON.stringify(normalized), now, now);
     }
     // Любая правка дефолта (включая сброс) — это правка настроек типа:
     // обновим авторство самого типа (требование e6d4165e, приравнивание).

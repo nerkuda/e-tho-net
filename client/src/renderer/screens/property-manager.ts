@@ -31,6 +31,7 @@
 
 import type {
   AnyRealtimeEvent,
+  EffectiveTypeProperty,
   LinkPropertyDirection,
   NetworkProperty,
   NetworkPropertyInput,
@@ -55,6 +56,7 @@ import { store } from '../state.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
 import { linkTypeOptions, thoughtTypeOptions } from '../lib/type-tree.js';
 import { buildChipListField } from './thought-type/value-combo.js';
+import { buildLinkValueEditor } from '../editor/properties.js';
 import {
   showLinkTypeEditor,
   showThoughtTypeEditor,
@@ -368,7 +370,9 @@ export function openPropertyManagerEditor(
   // value-type switch and is rendered in every kind's block.
   let multipleOn = draft.config?.multiple === true;
 
-  // The default value (link has no default — the value is an edge).
+  // The default value. For a link property it is the default target set —
+  // `string[]` of thought ids (bb67e546), applied on thought creation by
+  // creating edges.
   let defaultValue: unknown = draft.config?.default_value ?? null;
 
   // Link-only state (value_type === 'link'). Structural marks the two
@@ -444,6 +448,49 @@ export function openPropertyManagerEditor(
       : 'Заголовок свойства (обязательно)';
     if (vt === 'link') {
       renderLinkExtras();
+      // Дефолт свойства-связи — набор целей (bb67e546): унифицированное
+      // чип-поле (инструкция a47947c8) — живой поиск, мини-облачка, пикер.
+      // Фильтр целей собирается из текущего состояния черновика диалога.
+      const ids = Array.isArray(defaultValue) ? (defaultValue as string[]) : [];
+      const linkDefinition: EffectiveTypeProperty = {
+        id: '',
+        property_id: '',
+        owner_type: 'thought_type',
+        owner_id: '',
+        key: 'default',
+        value_type: 'link',
+        config: {
+          direction: linkDirection,
+          ...(isStructuralLink ? { structural: true } : {}),
+          ...(isStructuralLink || linkTypeId === null ? {} : { link_type_id: linkTypeId }),
+          ...(allowedTargetTypeIds.length > 0 ? { allowed_target_type_ids: allowedTargetTypeIds } : {}),
+        },
+        required: false,
+        position: 0,
+        description: null,
+        inherited: false,
+        defined_on: '',
+        defined_on_name: '',
+        default_value: null,
+        overridden_here: false,
+        description_overridden: false,
+      };
+      const editor = buildLinkValueEditor({
+        networkId,
+        definition: linkDefinition,
+        values: ids.map((target_id) => ({
+          link_id: '',
+          target_id,
+          target_title: null,
+          target_type_id: null,
+          comment: null,
+        })),
+        save: async (next) => {
+          defaultValue = next;
+          return true;
+        },
+      });
+      defaultHost.append(field('Значение по умолчанию (набор целей)', editor));
     } else {
       defaultHost.append(defaultInputFor(vt, defaultValue, (v) => {
         defaultValue = v;
@@ -835,8 +882,9 @@ export function openPropertyManagerEditor(
 
 /**
  * Builds a default-value input matching `valueType`; `read(value)` is called
- * once when the input commits (blur/change). `link` has no default — the
- * value is an edge, not a scalar.
+ * once when the input commits (blur/change). Link defaults (the target-set
+ * chip field, bb67e546) are wired directly in `renderValueTypeExtras` — the
+ * stub below is a defensive fallback, not the editing path.
  */
 function defaultInputFor(
   valueType: PropertyValueType,
@@ -942,6 +990,11 @@ export function buildConfig(
     if (link.showOnMap) config.show_on_map = true;
     if (link.blocksTargetDeletion) config.blocks_target_deletion = true;
     if (link.legacyMultiple) config.multiple = true;
+    // Дефолт свойства-связи — набор целей (bb67e546). Массив идёт как есть
+    // (сервер дедуплицирует и валидирует цели); всё остальное — сброс.
+    if (Array.isArray(defaultValue) && defaultValue.length > 0) {
+      config.default_value = [...new Set(defaultValue)];
+    }
     return config;
   }
   const config: PropertyConfig = {};

@@ -1326,10 +1326,17 @@ async function showLinkChipMenu(
  * `values` — живые рёбра из `LinkPropertyValues.values[]`: подписи чипов
  * берутся из `target_title`, метаданные для облачков — батч-резолвом.
  */
+/**
+ * Чип-поле набора целей свойства-связи: живой поиск, мини-облачка, пикер
+ * «выбрать», очистка (инструкция a47947c8). `ownerType`/`ownerId` заданы —
+ * чип получает контекстное меню операций над ребром владельца; без владельца
+ * (дефолт свойства в редакторе типа/реестре, bb67e546) меню не выводится,
+ * набор живёт целиком в `save`.
+ */
 export function buildLinkValueEditor(opts: {
   networkId: string;
-  ownerType: 'thought' | 'link';
-  ownerId: string;
+  ownerType?: 'thought' | 'link';
+  ownerId?: string;
   definition: EffectiveTypeProperty;
   values: LinkPropertyValueItem[];
   save: (next: unknown) => Promise<boolean>;
@@ -1465,6 +1472,9 @@ export function buildLinkValueEditor(opts: {
       focusLinkRef(networkId, id);
     });
     const openMenu = (): void => {
+      // Без владельца (дефолт свойства в редакторе типа/реестра) операций над
+      // ребром нет — набор живёт только в save (bb67e546).
+      if (ownerType === undefined || ownerId === undefined) return;
       void showLinkChipMenu(
         networkId,
         id,

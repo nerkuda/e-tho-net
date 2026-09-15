@@ -173,8 +173,12 @@ export interface NetworkPropertyUpdateInput {
 
 /** Recognised keys inside a {@link PropertyDefinition.config} JSON blob. */
 export interface PropertyConfig {
-  /** Default value applied to future items of the type (scalar kinds only). */
-  default_value?: string | number | boolean;
+  /**
+   * Default value applied to future items of the type. Scalar kinds use
+   * string/number/boolean; a link property uses `string[]` — the default set
+   * of target thought ids, applied by creating edges (0.8.1, bb67e546).
+   */
+  default_value?: string | number | boolean | string[];
   /**
    * For `value_type = 'link'`: тип связи, обязательный. Проекция —
    * рёбра этого типа.

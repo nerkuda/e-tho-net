@@ -590,13 +590,14 @@ export interface EtnApi {
       orderedIds: string[],
     ): Promise<PropertyDefinition[]>;
     /** L21: set (`value`) or clear (`null`) a type's default-value override
-     *  of a property inherited from an ancestor type. */
+     *  of a property inherited from an ancestor type. A link property's
+     *  default is a target-set — `string[]` of thought ids (bb67e546). */
     setPropertyDefaultOverride(
       networkId: string,
       ownerType: TypeOwnerType,
       typeId: string,
       propertyId: string,
-      value: string | number | boolean | null,
+      value: string | number | boolean | string[] | null,
     ): Promise<void>;
     /** Set (`description`) or clear (`null`) a type's description override of
      *  a property inherited from an ancestor type. */

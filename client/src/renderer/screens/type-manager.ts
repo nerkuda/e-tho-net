@@ -65,6 +65,7 @@ import type {
   LinkTypeUpdateInput,
   TypeOwnerType,
 } from '@etn/shared';
+import { buildLinkValueEditor } from '../editor/properties.js';
 import { typeNameKey } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
@@ -1261,8 +1262,9 @@ function buildStagedPropertySection(opts: {
         // Override buttons exist only for an already-created type: the
         // override row needs a server id to attach to. A mirrored link
         // property (dde92461) has no physical binding to override at all —
-        // its nature lives in the source property's config.
-        const overridable = typeId !== null && def.value_type !== 'link' && def.mirrored !== true;
+        // its nature lives in the source property's config. Own (non-mirror)
+        // link properties carry a target-set default (bb67e546).
+        const overridable = typeId !== null && def.mirrored !== true;
         if (overridable) {
           actions.append(
             button('по умолчанию…', () => showOverrideDialog(def), 'btn small', 'Переопределить значение по умолчанию'),
@@ -1822,19 +1824,29 @@ async function warnDescendantBindings(
 function formatDefault(value: unknown): string {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'boolean') return value ? 'да' : 'нет';
+  if (Array.isArray(value)) {
+    // Дефолт свойства-связи — набор целей (bb67e546): счётчик, подписи в
+    // диалоге.
+    const n = value.length;
+    const form = n % 10 === 1 && n % 100 !== 11 ? 'цель' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'цели' : 'целей';
+    return `${n} ${form}`;
+  }
   return String(value);
 }
 
 /**
  * Builds an input for a "default value" field matching a value type, reading
- * its current value into `read()`. Thought-ref defaults are not supported — a
- * default target makes no sense across thoughts. Shared with the inherited
+ * its current value into `read()`. Link defaults are the unified target-set
+ * chip field (bb67e546, инструкция a47947c8) — `linkContext` supplies the
+ * network + definition it filters by. Thought-ref defaults are not supported —
+ * a default target makes no sense across thoughts. Shared with the inherited
  * default-override dialog (L21).
  */
 function defaultInputFor(
   valueType: PropertyValueType,
   current: unknown,
   read: (value: unknown) => void,
+  linkContext?: { networkId: string; def: EffectiveTypeProperty },
 ): HTMLElement {
   switch (valueType) {
     case 'text':
@@ -1869,8 +1881,29 @@ function defaultInputFor(
       input.addEventListener('change', () => read(input.checked));
       return input;
     }
-    case 'link':
-      return span('не задаётся', 'muted');
+    case 'link': {
+      // Дефолт свойства-связи — набор целей (bb67e546): унифицированное
+      // чип-поле из редактора свойств (инструкция a47947c8) — живой поиск,
+      // мини-облачка, пикер «выбрать». Каждый чип-набор сразу читается в
+      // `value`, «Применить» отправляет его на сервер.
+      if (linkContext === undefined) return span('не задаётся', 'muted');
+      const ids = Array.isArray(current) ? (current as string[]) : [];
+      return buildLinkValueEditor({
+        networkId: linkContext.networkId,
+        definition: linkContext.def,
+        values: ids.map((target_id) => ({
+          link_id: '',
+          target_id,
+          target_title: null,
+          target_type_id: null,
+          comment: null,
+        })),
+        save: async (next) => {
+          read(next);
+          return true;
+        },
+      });
+    }
     case 'thought_ref':
       // Legacy (миграция 040): создание свойств этого типа отвергается
       // рантайм-guard'ом; редактор default-значения недостижим.
@@ -1897,7 +1930,7 @@ function openDefaultOverrideDialog(opts: {
     defaultHost.replaceChildren(
       defaultInputFor(def.value_type, value, (v) => {
         value = v;
-      }),
+      }, { networkId, def }),
     );
   };
   renderDefault();
@@ -1920,7 +1953,7 @@ function openDefaultOverrideDialog(opts: {
         ownerType,
         typeId,
         def.id,
-        (value ?? null) as string | number | boolean | null,
+        (value ?? null) as string | number | boolean | string[] | null,
       );
       onDone();
       close();

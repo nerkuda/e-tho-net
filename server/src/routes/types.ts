@@ -912,15 +912,16 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
             );
           }
           const value = body.value;
-          if (
-            value !== null &&
-            typeof value !== 'string' &&
-            typeof value !== 'number' &&
-            typeof value !== 'boolean'
-          ) {
+          const scalarOk =
+            typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+          // Дефолт свойства-связи — набор целей (bb67e546): массив id мыслей
+          // (пустой массив — сброс дефолта, как null у скаляров).
+          const linkDefaultOk =
+            Array.isArray(value) && value.every((id) => typeof id === 'string' && id !== '');
+          if (value !== null && !scalarOk && !linkDefaultOk) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'value должен быть строкой, числом, булевым или null.',
+              'value должен быть строкой, числом, булевым, массивом id мыслей (свойство-связь) или null.',
               { field: 'value' },
               req.id,
             );

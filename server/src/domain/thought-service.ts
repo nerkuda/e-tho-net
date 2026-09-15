@@ -51,6 +51,7 @@ import {
 import {
   computeThoughtCardWarnings,
   countThoughtRefUsages,
+  filterApplicableLinkDefaultTargets,
   getPropertyValuesResolved,
   listEffectiveTypeProperties,
   setPropertyValueById,
@@ -780,9 +781,23 @@ export function createThought(
     // writing by id avoids a second name resolution.
     if (input.type_id !== undefined && input.type_id !== null) {
       for (const def of listEffectiveTypeProperties(ndb, 'thought_type', input.type_id)) {
-        if (def.default_value !== null) {
-          setPropertyValueById(ndb, 'thought', id, def.property_id, def.default_value, actorUserId);
+        if (def.default_value === null) continue;
+        // Дефолт свойства-связи — набор целей (bb67e546): применение создаёт
+        // рёбра. Цели, ставшие неприменимыми после установки дефолта
+        // (удалены, в корзине, сменили тип), молча пропускаются — создание
+        // мысли не должно падать из-за протухшего дефолта.
+        if (def.value_type === 'link') {
+          const ids = filterApplicableLinkDefaultTargets(
+            ndb,
+            def.config ?? null,
+            Array.isArray(def.default_value) ? def.default_value : [],
+          );
+          if (ids.length > 0) {
+            setPropertyValueById(ndb, 'thought', id, def.property_id, ids, actorUserId);
+          }
+          continue;
         }
+        setPropertyValueById(ndb, 'thought', id, def.property_id, def.default_value, actorUserId);
       }
     }
     // Server-side comment template application (0.4.3): a thought created with
