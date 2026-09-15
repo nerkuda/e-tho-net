@@ -575,9 +575,48 @@ async function unlinkFocus(direction: 'parent' | 'child'): Promise<void> {
 }
 
 /**
+ * Carries the existing focus→id link over to the chosen type (0.8.1,
+ * 6dcd6db7): the `set_only_parents` batch op removes foreign parents and
+ * creates the missing link with `link_type_id`, but deliberately leaves an
+ * already linked pair untouched — the retype goes through the live
+ * `PATCH /links/{id}`. Returns the number of thoughts whose retype failed.
+ */
+export async function retypeFocusLinks(
+  networkId: string,
+  focusId: string,
+  ids: string[],
+  linkTypeId: string | null,
+): Promise<number> {
+  let failed = 0;
+  for (const id of ids) {
+    try {
+      const grouped = await etn.links.listByThought(networkId, id);
+      const links = [
+        ...grouped.by_type.flatMap((g) => g.items.map((i) => i.link)),
+        ...grouped.untyped_parents.map((u) => u.link),
+        ...grouped.untyped_children.map((u) => u.link),
+      ];
+      for (const link of links) {
+        if (link.source_id === focusId && link.target_id === id && link.type_id !== linkTypeId) {
+          await etn.links.update(networkId, link.id, { type_id: linkTypeId }, link.version);
+        }
+      }
+    } catch {
+      failed += 1;
+    }
+  }
+  return failed;
+}
+
+/**
  * Makes the focused thought the only parent of every selected thought: all
  * other incoming links are deleted (with a confirmation), the focus link gets
  * the chosen type.
+ *
+ * 0.8.1 (6dcd6db7): `POST /links` and `DELETE /links/{id}` are removed — the
+ * removal of foreign parents and the creation of the missing link run in ONE
+ * `set_only_parents` batch operation (`link_type_id: null` — «без типа»);
+ * only the retype of an existing focus link stays a per-thought PATCH.
  */
 async function makeFocusOnlyParent(): Promise<void> {
   const focusId = store.state.focus?.focused.id;
@@ -589,46 +628,14 @@ async function makeFocusOnlyParent(): Promise<void> {
   const focusTitle = store.state.focus?.focused.title ?? '';
   const confirmed = await confirmDialog(
     'Сделать единственным родителем',
-    `У ${ids.length} выделённых мыслей будут удалены все входящие связи, кроме связи с мыслью «${focusTitle}». Продолжить?`,
+    `У ${ids.length} выделенных мыслей будут удалены все входящие связи, кроме связи с мыслью «${focusTitle}». Продолжить?`,
     true,
   );
   if (!confirmed) return;
   const networkId = requireNetworkId();
-  let failed = 0;
-  for (const id of ids) {
-    try {
-      const grouped = await etn.links.listByThought(networkId, id);
-      const links = [
-        ...grouped.by_type.flatMap((g) => g.items.map((i) => i.link)),
-        ...grouped.untyped_parents.map((u) => u.link),
-        ...grouped.untyped_children.map((u) => u.link),
-      ];
-      const incoming = links.filter((l) => l.target_id === id);
-      const fromFocus = incoming.filter((l) => l.source_id === focusId);
-      for (const link of incoming) {
-        if (link.source_id === focusId) continue;
-        await etn.links.remove(networkId, link.id, link.version);
-      }
-      if (fromFocus.length > 0) {
-        // Keep exactly one focus link, retyped to the chosen one.
-        const [keep, ...extra] = fromFocus;
-        for (const link of extra) await etn.links.remove(networkId, link.id, link.version);
-        if (keep !== undefined && keep.type_id !== linkTypeId) {
-          await etn.links.update(networkId, keep.id, { type_id: linkTypeId }, keep.version);
-        }
-      } else {
-        await etn.links.create(networkId, {
-          source_id: focusId,
-          target_id: id,
-          type_id: linkTypeId,
-        });
-      }
-    } catch {
-      failed += 1;
-    }
-  }
-  if (failed > 0) notice(`Не удалось обработать ${failed} мыслей.`, 'error');
-  else notice(`Готово: фокус — единственный родитель (${ids.length}).`);
+  const failed = await retypeFocusLinks(networkId, focusId, ids, linkTypeId);
+  await batch({ op: 'set_only_parents', args: { parent_ids: [focusId], link_type_id: linkTypeId } });
+  if (failed > 0) notice(`Не удалось сменить тип связи у ${failed} мыслей.`, 'error');
   scheduleRefresh();
 }
 
