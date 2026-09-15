@@ -285,6 +285,7 @@ describe(
           '039_structural_link_properties.sql',
           '040_thought_ref_to_link_properties.sql',
           '041_type_property_side.sql',
+          '042_unified_property_link_registry.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else
@@ -292,14 +293,16 @@ describe(
         // 034 creates object_locks, пустую при апгрейде чистой базы;
         // 035 — activity_log, тоже пустую; 037 — thought_type_views, пустую
         // при апгрейде чистой базы; 038 пересоздаёт FTS5-таблицы с новым
-        // токенизатором — бэкфилл сохраняет те же строки).
+        // токенизатором — бэкфилл сохраняет те же строки; 042 заводит
+        // свойство голому link_type «lt1», у которого до миграции не было
+        // реестровой строки).
         const after = tableCounts(db);
         assert.deepEqual(after, {
           ...before,
           layers: 1,
           session_layers: 0,
-          properties: 3, // +2 структурных свойства-связи от миграции 039
-          type_properties: 3, // +2 привязки «Родители»/«Потомки» к корню
+          properties: 4, // +2 структурных «Родители»/«Потомки» (039) +1 для голого lt1 (042)
+          type_properties: 4, // +2 «Родители»/«Потомки» (039) +1 привязка голого lt1 (042)
           object_locks: 0,
           activity_log: 0,
           thought_type_views: 0,
