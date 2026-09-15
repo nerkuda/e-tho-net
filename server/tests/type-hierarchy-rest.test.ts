@@ -395,14 +395,36 @@ describe(
         assert.equal(setValRes.statusCode, 200);
 
         // --- filters expand to subtrees: a link-type parent matches --------
+        // 0.8.1, задача d7177d1d: POST /link-types закрыт (422) — создание
+        // типа связи идёт через POST свойства-связи с парой имён.
         const ltRes = await ctx.app.inject({
           method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: {
+            name: 'работает с',
+            value_type: 'link',
+            name_forward: 'работает с',
+            name_reverse: 'работает с кем',
+          },
+        });
+        assert.equal(ltRes.statusCode, 201, ltRes.body?.toString());
+        // Подтверждаем, что link_type создан и его parent_id — корень.
+        // Реестровое свойство содержит config.link_type_id, по нему
+        // достаём сам link-type через GET /link-types.
+        const createdProp = ltRes.json().data as { config: { link_type_id: string } | null };
+        const linkTypeId = createdProp.config?.link_type_id;
+        assert.ok(linkTypeId);
+        const ltList = await ctx.app.inject({
+          method: 'GET',
           url: `/api/v1/networks/${nid}/link-types`,
           headers: h,
-          payload: { name_forward: 'работает с', name_reverse: 'работает с кем' },
         });
-        assert.equal(ltRes.statusCode, 201);
-        const ltParent = ltRes.json().data as { id: string; parent_id: string };
+        assert.equal(ltList.statusCode, 200);
+        const ltParent = (
+          ltList.json().data as Array<{ id: string; parent_id: string }>
+        ).find((t) => t.id === linkTypeId);
+        assert.ok(ltParent);
         assert.equal(ltParent.parent_id, linkRoot.id);
 
         // Search: the thought with type Коллега is found via Персона (ancestor).
@@ -474,25 +496,36 @@ describe(
           return (res.json().data as { id: string }).id;
         };
 
+        // 0.8.1, задача d7177d1d: POST /link-types закрыт — создание типа
+        // связи идёт через POST свойства-связи с парой имён.
         const ltRes = await ctx.app.inject({
           method: 'POST',
-          url: `/api/v1/networks/${nid}/link-types`,
+          url: `/api/v1/networks/${nid}/properties`,
           headers: h,
-          payload: { name_forward: 'работает в', name_reverse: 'сотрудники' },
+          payload: {
+            name: 'работает в',
+            value_type: 'link',
+            name_forward: 'работает в',
+            name_reverse: 'сотрудники',
+          },
         });
         assert.equal(ltRes.statusCode, 201, ltRes.body?.toString());
-        const lt = ltRes.json().data as { id: string; name_forward: string };
+        const ltProp = ltRes.json().data as {
+          id: string;
+          config: { link_type_id: string } | null;
+        };
+        const lt = { id: ltProp.config?.link_type_id, name_forward: 'работает в' };
 
-        // Link property on Персона; Коллега наследует его.
+        // Подключаем уже созданное свойство к Персоне (Коллега наследует).
+        // 0.8.1: POST /thought-types/{id}/properties в форме `property_id`
+        // подключает существующее реестровое свойство — повторно создавать
+        // свойство с тем же config.link_type_id было бы ошибкой
+        // (DUPLICATE — пара (link_type, side) адресует свойство однозначно).
         const propRes = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${nid}/thought-types/${person}/properties`,
           headers: h,
-          payload: {
-            key: 'игнорируется',
-            value_type: 'link',
-            config: { link_type_id: lt.id, direction: 'out' },
-          },
+          payload: { property_id: ltProp.id, required: false },
         });
         assert.equal(propRes.statusCode, 201, propRes.body?.toString());
         const prop = propRes.json().data as { id: string; property_id: string };

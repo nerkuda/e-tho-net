@@ -428,6 +428,31 @@ function validateLinkConfig(
       }
     }
   }
+  // Зеркальное ограничение источника (0.8.1, задача d7177d1d) — для привязок
+  // со стороны target. Семантика и валидация совпадают с
+  // `allowed_target_type_ids`.
+  const allowedSources = cfg.allowed_source_type_ids;
+  if (allowedSources !== undefined) {
+    if (
+      !Array.isArray(allowedSources) ||
+      allowedSources.some((id) => typeof id !== 'string' || id === '')
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'allowed_source_type_ids должен быть массивом id типов мыслей',
+        { field: `${field}.allowed_source_type_ids` },
+      );
+    }
+    for (const id of allowedSources) {
+      const row = ndb.prepare('SELECT id FROM thought_types_v WHERE id = ?').get(id);
+      if (!row) {
+        throw new EtnError('VALIDATION_ERROR', `тип мысли ${id} не найден`, {
+          field: `${field}.allowed_source_type_ids`,
+          id,
+        });
+      }
+    }
+  }
   // Дефолт свойства-связи — набор целей (bb67e546): валидируется целиком,
   // чтобы неработающий дефолт не сохранился в реестр.
   if (cfg.default_value !== undefined && cfg.default_value !== null) {
@@ -1194,9 +1219,13 @@ export function createNetworkProperty(
   // по направлению (требование 38eaa15c). Входной name игнорируется.
   let name: string;
   if (valueType === 'link') {
-    config = validateLinkConfig(ndb, config, 'config');
-    if (!isStructuralLinkProperty(config) && config !== null && !config.link_type_id) {
-      // Единый жизненный цикл: создаём link_type по паре имён (0.8.1).
+    // Единый жизненный цикл свойства-связи ↔ link_type (0.8.1, требование
+    // 09f692ff): при отсутствии config.link_type_id сервер создаёт link_type
+    // по паре имён. Сначала пробуем авто-создание, чтобы не падать в
+    // validateLinkConfig с требованием link_type_id; валидация config
+    // выполняется ниже уже с заполненным link_type_id.
+    const hasLinkTypeId = typeof config?.link_type_id === 'string' && config.link_type_id !== '';
+    if (!isStructuralLinkProperty(config) && !hasLinkTypeId) {
       const forward = (input.name_forward ?? '').trim();
       const reverse = (input.name_reverse ?? '').trim();
       if (forward === '' || reverse === '') {
@@ -1218,8 +1247,9 @@ export function createNetworkProperty(
         },
         actorUserId,
       );
-      config = { ...config, link_type_id: linkType.id };
+      config = { ...(config ?? {}), link_type_id: linkType.id };
     }
+    config = validateLinkConfig(ndb, config, 'config');
     name = isStructuralLinkProperty(config)
       ? validateKey(input.name)
       : linkPropertyDisplayName(

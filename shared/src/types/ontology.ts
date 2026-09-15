@@ -88,6 +88,12 @@ export interface OntologyWriteLinkType {
  * (network-wide). Upsert по `id` XOR `name`. Смена `value_type` использует
  * ту же доменную функцию конверсии, что `PATCH /properties/{id}`; ответ
  * несёт `converted_values` / `dropped_values` по этому свойству.
+ *
+ * Для `value_type="link"` (0.8.1, требование 09f692ff) пара имён
+ * `name_forward`/`name_reverse` запускает автоматическое создание
+ * связанного типа связи; `parent_link_type_id` и поля `link_color`/
+ * `link_style`/`link_width` задают оформление. Для скалярных и
+ * структурных свойств эти поля игнорируются.
  */
 export interface OntologyWriteProperty {
   /** Локальное имя в пределах батча. Используется элементами
@@ -98,6 +104,18 @@ export interface OntologyWriteProperty {
   value_type?: PropertyValueType;
   config?: PropertyConfig | null;
   description?: string | null;
+  /** Пара имён нового типа связи (0.8.1): при `value_type="link"` сервер
+   *  создаёт link_type автоматически. Для скаляров игнорируется. */
+  name_forward?: string;
+  name_reverse?: string;
+  /** Идентификатор родительского типа связи (опционально). */
+  parent_link_type_id?: string | null;
+  /** Цвет линии нового типа связи. */
+  link_color?: string | null;
+  /** Стиль линии нового типа связи. */
+  link_style?: LinkStyle | null;
+  /** Толщина линии нового типа связи (1..20). */
+  link_width?: number | null;
 }
 
 /**

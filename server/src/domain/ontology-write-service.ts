@@ -32,6 +32,7 @@ import {
   TYPE_OWNER_TYPES,
   typeNameKey,
   type IconKind,
+  type LinkPropertySide,
   type LinkStyle,
   type OntologyDeleteAffectedCounts,
   type OntologyDeleteKind,
@@ -165,6 +166,15 @@ interface ResolvedProperty {
   value_type: PropertyValueType | undefined;
   config: PropertyConfig | null | undefined;
   description: string | null | undefined;
+  /** Пара имён типа связи (0.8.1, требование 09f692ff): если задано и
+   *  `value_type === 'link'` — сервер создаст link_type автоматически. */
+  name_forward: string | undefined;
+  name_reverse: string | undefined;
+  /** Опциональные атрибуты оформления нового типа связи (0.8.1). */
+  parent_link_type_id: string | null | undefined;
+  link_color: string | null | undefined;
+  link_style: LinkStyle | null | undefined;
+  link_width: number | null | undefined;
 }
 
 interface ResolvedTypeProperty {
@@ -179,6 +189,8 @@ interface ResolvedTypeProperty {
   property_ref: string | null;
   required: boolean;
   position: number | undefined;
+  /** Сторона привязки свойства-связи (0.8.1, задача d7177d1d). */
+  side: LinkPropertySide | null | undefined;
 }
 
 /**
@@ -483,6 +495,12 @@ function resolveProperties(
       value_type: item.value_type,
       config: item.config,
       description: item.description,
+      name_forward: item.name_forward,
+      name_reverse: item.name_reverse,
+      parent_link_type_id: item.parent_link_type_id,
+      link_color: item.link_color,
+      link_style: item.link_style,
+      link_width: item.link_width,
     });
   }
   return out;
@@ -576,6 +594,7 @@ function resolveTypeProperties(
       property_ref: hasPropertyRef ? (item.property_ref as string) : null,
       required: item.required ?? false,
       position: item.position,
+      side: item.side,
     });
   }
   return out;
@@ -1126,11 +1145,22 @@ export function writeOntology(
             { field: `properties[${item.index}].value_type` },
           );
         }
+        // Единый жизненный цикл свойства-связи ↔ link_type (0.8.1):
+        // для value_type='link' пара имён передаётся в createNetworkProperty
+        // и создаёт link_type автоматически. Для скаляров поля игнорируются.
         const createInput: NetworkPropertyInput = {
           name: item.name,
           value_type: item.value_type,
           ...(item.config !== undefined ? { config: item.config ?? null } : {}),
           ...(item.description !== undefined ? { description: item.description ?? null } : {}),
+          ...(item.name_forward !== undefined ? { name_forward: item.name_forward } : {}),
+          ...(item.name_reverse !== undefined ? { name_reverse: item.name_reverse } : {}),
+          ...(item.parent_link_type_id !== undefined
+            ? { parent_link_type_id: item.parent_link_type_id }
+            : {}),
+          ...(item.link_color !== undefined ? { link_color: item.link_color } : {}),
+          ...(item.link_style !== undefined ? { link_style: item.link_style } : {}),
+          ...(item.link_width !== undefined ? { link_width: item.link_width } : {}),
         };
         const created = createNetworkProperty(ndb, createInput, actorUserId);
         id = created.id;
@@ -1161,6 +1191,13 @@ export function writeOntology(
         if (item.description !== undefined && item.description !== existing.description) {
           updateInput.description = item.description ?? null;
         }
+        // Правка имён/оформления связанного link_type (0.8.1, требование
+        // 09f692ff). Применяется только к value_type='link'.
+        if (item.name_forward !== undefined) updateInput.name_forward = item.name_forward;
+        if (item.name_reverse !== undefined) updateInput.name_reverse = item.name_reverse;
+        if (item.link_color !== undefined) updateInput.link_color = item.link_color;
+        if (item.link_style !== undefined) updateInput.link_style = item.link_style;
+        if (item.link_width !== undefined) updateInput.link_width = item.link_width;
         if (Object.keys(updateInput).length > 0) {
           updateNetworkProperty(ndb, id, updateInput, actorUserId);
           version = readVersion(ndb, 'properties', id);
@@ -1226,6 +1263,7 @@ export function writeOntology(
             description: propRow.description,
             required: item.required,
             ...(item.position !== undefined ? { position: item.position } : {}),
+            ...(item.side !== undefined ? { side: item.side } : {}),
           },
           actorUserId,
         );
@@ -1233,10 +1271,13 @@ export function writeOntology(
         version = readVersion(ndb, 'type_properties', id);
         action = 'created';
       } else {
-        const patch: { required?: boolean; position?: number } = {};
+        const patch: { required?: boolean; position?: number; side?: LinkPropertySide | null } = {};
         if (item.required !== existing.required) patch.required = item.required;
         if (item.position !== undefined && item.position !== existing.position) {
           patch.position = item.position;
+        }
+        if (item.side !== undefined && item.side !== existing.side) {
+          patch.side = item.side;
         }
         if (Object.keys(patch).length > 0) {
           updateTypeProperty(ndb, existing.id, patch, actorUserId);

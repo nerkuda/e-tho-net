@@ -519,10 +519,13 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // Задача c1fa71d4 (0.7.3) re-baselines до 84 000 B для 68
         // инструментов: `etn.views.run` добавляет ~3 500 B (длинное
         // описание контракта + описание `meta.views` в `etn.thoughts.get`).
+        // Задача d7177d1d (0.8.1) re-baselines до 85 000 B: описание
+        // `etn.ontology.write` дополнено стороной привязки и единым
+        // жизненным циклом свойства-связи ↔ link_type.
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
         assert.ok(
-          bytes <= 84_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.7.3 budget of 84000`,
+          bytes <= 85_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.8.1 budget of 85000`,
         );
       } finally {
         await handle.close();

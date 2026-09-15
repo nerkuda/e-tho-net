@@ -5823,6 +5823,16 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       value_type: z.enum(PROPERTY_VALUE_TYPES).optional(),
       config: z.record(z.string(), z.unknown()).nullable().optional(),
       description: z.string().nullable().optional(),
+      // Единый жизненный цикл свойства-связи ↔ link_type (0.8.1, требование
+      // 09f692ff): при `value_type="link"` и непустом `name_forward`+
+      // `name_reverse` сервер сам создаёт тип связи. Остальные поля —
+      // оформление нового типа. Для скалярных свойств игнорируются.
+      name_forward: z.string().min(1).optional(),
+      name_reverse: z.string().min(1).optional(),
+      parent_link_type_id: z.string().min(1).nullable().optional(),
+      link_color: z.string().nullable().optional(),
+      link_style: z.enum(['solid', 'dashed', 'dotted']).nullable().optional(),
+      link_width: z.number().int().min(1).max(20).nullable().optional(),
     })
     .strict();
   const OntologyWriteTypePropertySchema = z
@@ -5834,6 +5844,9 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
       property_ref: z.string().min(1).optional(),
       required: z.boolean().optional(),
       position: z.number().int().min(0).optional(),
+      // Сторона привязки свойства-связи (0.8.1, задача d7177d1d): `source`/
+      // `target`. Для скалярных и структурных свойств игнорируется.
+      side: z.enum(['source', 'target']).nullable().optional(),
     })
     .strict();
   // `type_views[]` (задача c1fa71d4, 0.7.3, ADR 5c44f6a7). Правка отборов
@@ -5876,9 +5889,12 @@ export function registerTools(mcp: McpServer, rt: McpRuntime): void {
         '`thought_type_ref`/`ref_for_update` для отборов) действуют только внутри батча. ' +
         'Цикл `parent_ref` → VALIDATION_ERROR. Смена `value_type` свойства использует ту же доменную ' +
         'функцию конверсии, что `PATCH /properties/{id}`; ответ несёт `converted_values`/`dropped_values`. ' +
-        '`type_views[]` — отборы типов мыслей: `action: create|update|delete`, ' +
-        '`thought_type` XOR `thought_type_ref`. Доменная валидация имени ' +
-        '(уникальность в пределах типа), токенов и `is_default` — как у ' +
+        'Свойство-связь ↔ link_type — единый жизненный цикл (0.8.1, требование 09f692ff): ' +
+        '`properties[]` с `value_type="link"` и парой `name_forward`/`name_reverse` создаёт ' +
+        'связанный link_type автоматически. `type_properties[].side` — `source`/`target`, ' +
+        'сторона привязки свойства-связи. `type_views[]` — отборы типов мыслей: ' +
+        '`action: create|update|delete`, `thought_type` XOR `thought_type_ref`. ' +
+        'Доменная валидация имени (уникальность в пределах типа), токенов и `is_default` — как у ' +
         '`POST /thought-types/{id}/views`. ' +
         'Один write-бюджет + одна строка `audit_log` на ВЕСЬ вызов; real-time события — по одному на ' +
         'изменённую сущность (`thought-type.*`, `link-type.*`, `property-registry.*`, ' +

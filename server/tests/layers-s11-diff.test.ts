@@ -94,14 +94,23 @@ async function removeLink(
 
 /** Create a link type; returns its id. */
 async function postLinkType(ctx: RestTestContext, nameForward: string, nameReverse: string): Promise<string> {
+  // 0.8.1, задача d7177d1d: POST /link-types закрыт (422). Создание типа
+  // связи идёт через POST свойства-связи; достаём link_type_id из конфига.
   const res = await ctx.app.inject({
     method: 'POST',
-    url: `/api/v1/networks/${ctx.networkId}/link-types`,
+    url: `/api/v1/networks/${ctx.networkId}/properties`,
     headers: authHeaders(ctx),
-    payload: { name_forward: nameForward, name_reverse: nameReverse },
+    payload: {
+      name: nameForward,
+      value_type: 'link',
+      name_forward: nameForward,
+      name_reverse: nameReverse,
+    },
   });
   assert.equal(res.statusCode, 201, res.body?.toString());
-  return (res.json().data as { id: string }).id;
+  const data = res.json().data as { config: { link_type_id: string } | null };
+  assert.ok(data.config?.link_type_id, `link_type_id missing in ${res.body}`);
+  return data.config.link_type_id;
 }
 
 /** Fetch the structural diff. */

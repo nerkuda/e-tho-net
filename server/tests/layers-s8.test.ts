@@ -404,9 +404,17 @@ describe(
         for (const name of ['C1', 'C2', 'C3', 'D1', 'D2', 'D3']) {
           children[name] = await thought(ctx, name);
         }
-        const type = await call(ctx, 'POST', '/link-types', { name_forward: 'смотрит на', name_reverse: 'показан в' });
+        // 0.8.1, задача d7177d1d: POST /link-types закрыт — создание типа
+        // связи идёт через POST свойства-связи.
+        const type = await call(ctx, 'POST', '/properties', {
+          name: 'смотрит на',
+          value_type: 'link',
+          name_forward: 'смотрит на',
+          name_reverse: 'показан в',
+        });
         assert.equal(type.statusCode, 201, JSON.stringify(type.json()));
-        const typeId = type.json().data.id as string;
+        const typeId = (type.json().data as { config: { link_type_id: string } | null }).config!
+          .link_type_id;
 
         const linkC1 = await link(ctx, p1, children.C1!);
         const linkC2 = await link(ctx, p1, children.C2!);
@@ -497,8 +505,16 @@ describe(
       try {
         const a = await thought(ctx, 'A');
         const b = await thought(ctx, 'B');
-        const type = await call(ctx, 'POST', '/link-types', { name_forward: 'связан с', name_reverse: 'связан с' });
-        const typeId = type.json().data.id as string;
+        // 0.8.1, задача d7177d1d: POST /link-types закрыт — создание через
+        // POST свойства-связи.
+        const type = await call(ctx, 'POST', '/properties', {
+          name: 'связан с',
+          value_type: 'link',
+          name_forward: 'связан с',
+          name_reverse: 'связан с',
+        });
+        const typeId = (type.json().data as { config: { link_type_id: string } | null }).config!
+          .link_type_id;
 
         const layer = await createLayer(ctx, 'Дубль');
         await selectLayer(ctx, layer.id, WORKER);

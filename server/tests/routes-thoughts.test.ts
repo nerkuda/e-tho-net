@@ -451,14 +451,23 @@ describe(
 
         // args.link_type_id sets the type of the links the op CREATES; the
         // pairs linked above (untyped) are untouched, the new one is typed.
+        // 0.8.1, задача d7177d1d: POST /link-types закрыт — создание типа
+        // связи идёт через POST свойства-связи.
         const lt = await ctx.app.inject({
           method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/link-types`,
+          url: `/api/v1/networks/${ctx.networkId}/properties`,
           headers: authHeaders(ctx),
-          payload: { name_forward: 'Содержит', name_reverse: 'Входит в' },
+          payload: {
+            name: 'Содержит',
+            value_type: 'link',
+            name_forward: 'Содержит',
+            name_reverse: 'Входит в',
+          },
         });
         assert.equal(lt.statusCode, 201);
-        const linkTypeId = (lt.json().data as { id: string }).id;
+        const linkTypeId = (
+          lt.json().data as { config: { link_type_id: string } | null }
+        ).config!.link_type_id;
         const typed = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,

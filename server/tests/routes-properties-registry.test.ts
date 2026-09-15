@@ -135,13 +135,18 @@ describe(
         };
         assert.equal(one.name, 'масса');
 
-        // Delete when unused → 204.
+        // Delete when unused → 200 with `links_becoming_structural` (0.8.1,
+        // задача d7177d1d): для скалярного свойства — null, для свойства-связи
+        // — число ставших структурными рёбер.
         const delRes = await ctx.app.inject({
           method: 'DELETE',
           url: `/api/v1/networks/${ctx.networkId}/properties/${created.id}`,
           headers: h,
         });
-        assert.equal(delRes.statusCode, 204);
+        assert.equal(delRes.statusCode, 200);
+        const delBody = delRes.json().data as { id: string; links_becoming_structural: number | null };
+        assert.equal(delBody.id, created.id);
+        assert.equal(delBody.links_becoming_structural, null);
 
         // Now GET → 404.
         const goneRes = await ctx.app.inject({
@@ -324,7 +329,10 @@ describe(
           url: `/api/v1/networks/${ctx.networkId}/properties/${prop.id}`,
           headers: h,
         });
-        assert.equal(delRes2.statusCode, 204);
+        assert.equal(delRes2.statusCode, 200);
+        const delBody2 = delRes2.json().data as { id: string; links_becoming_structural: number | null };
+        assert.equal(delBody2.id, prop.id);
+        assert.equal(delBody2.links_becoming_structural, null);
       } finally {
         await closeRestContext(ctx);
       }
