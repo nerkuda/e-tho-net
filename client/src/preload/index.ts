@@ -106,11 +106,8 @@ function buildApi(): EtnApi {
     },
     links: {
       get: (networkId, id, atLayerId) => invoke('links.get', networkId, id, atLayerId),
-      create: (networkId, input) => invoke('links.create', networkId, input),
       update: (networkId, id, input, expectedVersion) =>
         invoke('links.update', networkId, id, input, expectedVersion),
-      remove: (networkId, id, expectedVersion) =>
-        invoke('links.remove', networkId, id, expectedVersion),
       listByThought: (networkId, thoughtId, showInactive) =>
         invoke('links.listByThought', networkId, thoughtId, showInactive),
       deletionCheck: (networkId, ids) => invoke('links.deletionCheck', networkId, ids),

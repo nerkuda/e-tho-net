@@ -28,6 +28,7 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import {
@@ -1931,7 +1932,13 @@ function onDragEnd(_event: MouseEvent): void {
   }
 }
 
-/** Creates a link between two thoughts after a successful drop (C4). */
+/**
+ * Creates a link between two thoughts after a successful drop (C4).
+ *
+ * 0.8.1 (6dcd6db7): `POST /links` is removed — the untyped edge is created by
+ * the batch `link_parents` operation; an already linked pair is reported up
+ * front (the batch itself is idempotent and would skip it silently).
+ */
 async function createLinkFromDrop(
   direction: 'parent' | 'child',
   anchorId: string,
@@ -1942,7 +1949,17 @@ async function createLinkFromDrop(
   const sourceId = direction === 'child' ? anchorId : droppedId;
   const targetId = direction === 'child' ? droppedId : anchorId;
   try {
-    await etn.links.create(networkId, { source_id: sourceId, target_id: targetId });
+    const grouped = await etn.links.listByThought(networkId, targetId);
+    const linked = [
+      ...grouped.by_type.flatMap((g) => g.items.map((i) => i.link)),
+      ...grouped.untyped_parents.map((u) => u.link),
+      ...grouped.untyped_children.map((u) => u.link),
+    ];
+    if (linked.some((l) => l.source_id === sourceId && l.target_id === targetId)) {
+      notice('Такая связь уже существует.');
+      return;
+    }
+    throwOnFailures(await ensureLink(networkId, sourceId, targetId));
     // The acting client gets no realtime echo (04-realtime.md §5) — refresh
     // explicitly so the new edge, the zone move and the editor's «Связи»
     // update, and animate the thought flowing into its new zone.
@@ -1950,10 +1967,6 @@ async function createLinkFromDrop(
     scheduleRefresh();
     notice('Связь создана.');
   } catch (err) {
-    if ((err as { code?: string } | null)?.code === 'DUPLICATE') {
-      notice('Такая связь уже существует.');
-      return;
-    }
     notice(
       `Не удалось создать связь: ${err instanceof Error ? err.message : String(err)}`,
       'error',

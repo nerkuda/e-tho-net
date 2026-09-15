@@ -804,18 +804,9 @@ export class RestClient {
   // -------------------------------------------------------------------------
   // §7 Links
   // -------------------------------------------------------------------------
-
-  /** `POST /networks/{nid}/links`. */
-  public async createLink(
-    networkId: string,
-    input: import('@etn/shared').LinkCreateInput,
-    opts?: RequestOptions,
-  ): Promise<import('@etn/shared').Link> {
-    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/links`, {
-      body: input,
-      requestOptions: opts,
-    });
-  }
+  // `POST /links` и `DELETE /links/{id}` сняты 0.8.1 (требование 3ea5c6af,
+  // ошибка 6dcd6db7): создание/удаление рёбер — пакетные операции
+  // `POST /thoughts/batch` и запись свойств-связей.
 
   /** `GET /networks/{nid}/links/{id}` — `?at_layer_id=<id>` открывает связь в конкретном слое. */
   public async getLink(
@@ -842,20 +833,6 @@ export class RestClient {
       'PATCH',
       `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(id)}`,
       { body: input, requestOptions: { ...opts, expectedVersion } },
-    );
-  }
-
-  /** `DELETE /networks/{nid}/links/{id}` — `If-Match` required. */
-  public async deleteLink(
-    networkId: string,
-    id: string,
-    expectedVersion: number,
-    opts?: RequestOptions,
-  ): Promise<void> {
-    await this.request(
-      'DELETE',
-      `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(id)}`,
-      { requestOptions: { ...opts, expectedVersion } },
     );
   }
 

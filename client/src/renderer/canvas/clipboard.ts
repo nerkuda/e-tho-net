@@ -179,6 +179,7 @@ export function thoughtIdLink(thoughtId: string, sourceNetworkId: string, target
 
 import { store } from '../state.js';
 import { etn } from '../lib/etn.js';
+import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { errorDialog } from '../lib/dialog.js';
 import { errText } from '../lib/dom.js';
@@ -267,11 +268,9 @@ export async function pasteTextToCloud(text: string, targetId: string): Promise<
       // doesn't exist on this network).
       try {
         await etn.thoughts.get(networkId, idGuess);
-        await etn.links.create(networkId, {
-          source_id: targetId,
-          target_id: idGuess,
-          type_id: null,
-        });
+        // 0.8.1 (6dcd6db7): `POST /links` снят — нетипизированное ребро
+        // создаётся пакетной операцией (уже связанная пара не дублируется).
+        throwOnFailures(await ensureLink(networkId, targetId, idGuess));
         linked += 1;
         continue;
       } catch {

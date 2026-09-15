@@ -44,6 +44,13 @@ import { type Link, type ThoughtLinksGrouped } from '@etn/shared';
 import { etn } from '../lib/etn.js';
 import { closeMenu } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import {
+  ensureLink,
+  setOnlyParents,
+  throwOnFailures,
+  unlinkChildren,
+  unlinkParents,
+} from '../lib/link-ops.js';
 import { requireNetworkId, scheduleRefresh } from '../app.js';
 import { store } from '../state.js';
 import { DRAG_THRESHOLD_PX, requestZoneAnimation, suppressNextCanvasClick } from './canvas.js';
@@ -610,14 +617,14 @@ export function findDirectedLink(
   return flattenLinks(grouped).find((l) => l.source_id === sourceId && l.target_id === targetId);
 }
 
-function isDupError(err: unknown): boolean {
-  return (err as { code?: string } | null)?.code === 'DUPLICATE';
-}
-
 /**
  * Creates a link from the dragged thought onto `targetId` (mode `parent` → dragged
  * is the source; `child` → targetId is the source). Reuses an existing link; if a
  * reverse link exists it is removed and its type carried over (08-ui-spec §2.3.1).
+ *
+ * 0.8.1 (6dcd6db7): `POST/DELETE /links` are removed — the flip is composed
+ * of batch operations on the destination: `unlink_children` drops the reverse
+ * edge dest→source, `link_parents` creates source→dest with the carried type.
  */
 async function linkToThought(draggedId: string, targetId: string, mode: LinkMode): Promise<void> {
   const networkId = requireNetworkId();
@@ -625,19 +632,18 @@ async function linkToThought(draggedId: string, targetId: string, mode: LinkMode
   const destId = mode === 'parent' ? targetId : draggedId;
   try {
     const grouped = await etn.links.listByThought(networkId, destId);
-    if (findDirectedLink(grouped, sourceId, destId) !== undefined) return; // already linked
-    let typeId: string | null = null;
     const reverse = findDirectedLink(grouped, destId, sourceId);
-    if (reverse !== undefined) {
-      typeId = reverse.type_id;
-      const fresh = await etn.links.get(networkId, reverse.id);
-      await etn.links.remove(networkId, reverse.id, fresh.version);
+    if (reverse === undefined && findDirectedLink(grouped, sourceId, destId) !== undefined) {
+      return; // already linked in the drop direction
     }
-    await etn.links.create(networkId, { source_id: sourceId, target_id: destId, type_id: typeId });
+    const typeId = reverse?.type_id ?? null;
+    if (reverse !== undefined) {
+      throwOnFailures(await unlinkChildren(networkId, destId, [sourceId]));
+    }
+    throwOnFailures(await ensureLink(networkId, sourceId, destId, typeId));
     requestZoneAnimation();
     scheduleRefresh();
   } catch (err) {
-    if (isDupError(err)) return; // race: link appeared meanwhile — treat as no-op
     noticeErr('Создать связь', err);
   }
 }
@@ -647,6 +653,10 @@ async function linkToThought(draggedId: string, targetId: string, mode: LinkMode
  * has with the focused thought, preserving each link's type (08-ui-spec §2.3.1).
  * A thought dragged from a list panel may have no link with the focus at all —
  * the drop then creates one in the zone's direction.
+ *
+ * 0.8.1 (6dcd6db7): both directions to the focus are cleared with batch
+ * `unlink_parents`/`unlink_children`, then one link per carried type is
+ * created in the new direction via `link_parents`/`link_children`.
  */
 async function moveFocusDirection(draggedId: string, toDir: OrderableDir): Promise<void> {
   const networkId = requireNetworkId();
@@ -661,21 +671,17 @@ async function moveFocusDirection(draggedId: string, toDir: OrderableDir): Promi
   // New direction: parents → dragged is the source (dragged→focus); children → focus is.
   const [sourceId, targetId] =
     toDir === 'parents' ? [draggedId, focusId] : [focusId, draggedId];
-  if (both.length === 0) {
-    try {
-      await etn.links.create(networkId, { source_id: sourceId, target_id: targetId, type_id: null });
-    } catch (err) {
-      if (!isDupError(err)) noticeErr('Связать с мыслью в фокусе', err);
+  // No link with the focus yet → a single untyped link in the drop direction;
+  // otherwise every existing type is carried over into the new direction.
+  const types = both.length === 0 ? [null] : [...new Set(both.map((b) => b.typeId))];
+  try {
+    throwOnFailures(await unlinkParents(networkId, draggedId, [focusId]));
+    throwOnFailures(await unlinkChildren(networkId, draggedId, [focusId]));
+    for (const typeId of types) {
+      throwOnFailures(await ensureLink(networkId, sourceId, targetId, typeId));
     }
-  }
-  for (const { linkId, typeId } of both) {
-    try {
-      const fresh = await etn.links.get(networkId, linkId);
-      await etn.links.remove(networkId, linkId, fresh.version);
-      await etn.links.create(networkId, { source_id: sourceId, target_id: targetId, type_id: typeId });
-    } catch (err) {
-      if (!isDupError(err)) noticeErr('Переместить мысль', err);
-    }
+  } catch (err) {
+    noticeErr('Переместить мысль', err);
   }
   requestZoneAnimation();
   scheduleRefresh();
@@ -686,37 +692,25 @@ async function moveFocusDirection(draggedId: string, toDir: OrderableDir): Promi
  * existing parent link of the dragged thought is removed and replaced by a
  * single target→dragged link. The reverse link (dragged→target), if any, is
  * removed first and its type carried over, mirroring {@link linkToThought}.
+ *
+ * 0.8.1 (6dcd6db7): reverse removal — batch `unlink_children`; the rest is one
+ * `set_only_parents` call (drops foreign parents, creates the missing link).
  */
 async function reparentThought(draggedId: string, targetId: string): Promise<void> {
   const networkId = requireNetworkId();
   try {
     const grouped = await etn.links.listByThought(networkId, draggedId);
     const links = flattenLinks(grouped);
-    const existing = links.find((l) => l.source_id === targetId && l.target_id === draggedId);
     const reverse = links.find((l) => l.source_id === draggedId && l.target_id === targetId);
-    const toRemove = links.filter(
-      (l) => l.target_id === draggedId && (existing === undefined || l.id !== existing.id),
-    );
-    if (reverse !== undefined) toRemove.push(reverse);
-    for (const link of toRemove) {
-      try {
-        const fresh = await etn.links.get(networkId, link.id);
-        await etn.links.remove(networkId, link.id, fresh.version);
-      } catch (err) {
-        if (!isDupError(err)) noticeErr('Переместить в подчинение', err);
-      }
+    const typeId = reverse?.type_id ?? null;
+    if (reverse !== undefined) {
+      throwOnFailures(await unlinkChildren(networkId, draggedId, [targetId]));
     }
-    if (existing === undefined) {
-      await etn.links.create(networkId, {
-        source_id: targetId,
-        target_id: draggedId,
-        type_id: reverse?.type_id ?? null,
-      });
-    }
+    throwOnFailures(await setOnlyParents(networkId, draggedId, [targetId], typeId));
     requestZoneAnimation();
     scheduleRefresh();
   } catch (err) {
-    if (!isDupError(err)) noticeErr('Переместить в подчинение', err);
+    noticeErr('Переместить в подчинение', err);
   }
 }
 

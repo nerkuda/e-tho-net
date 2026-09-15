@@ -41,6 +41,7 @@ import { showDialog } from '../lib/dialog.js';
 import { applyFontFlags, button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
+import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
@@ -199,13 +200,13 @@ async function insertIntoCanvas(
     try {
       if (item.kind === 'existing') {
         if (ctx.anchorId !== null) {
+          // 0.8.1 (6dcd6db7): `POST /links` снят — связь с существующей
+          // мыслью создаётся пакетной операцией; уже связанная пара не
+          // дублируется (прежний DUPLICATE больше не ошибка).
           const source = ctx.direction === 'child' ? ctx.anchorId : item.id;
           const target = ctx.direction === 'child' ? item.id : ctx.anchorId;
-          await etn.links.create(networkId, {
-            source_id: source,
-            target_id: target,
-            type_id: result.linkTypeId,
-          });
+          const res = await ensureLink(networkId, source, target, result.linkTypeId);
+          throwOnFailures(res);
         }
         if (firstAddedId === null) firstAddedId = item.id;
       } else {

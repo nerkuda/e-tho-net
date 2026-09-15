@@ -46,7 +46,6 @@ import type {
   HierarchyResponse,
   Link,
   LinkPropertyValues,
-  LinkCreateInput,
   LinkDeletionCheckResult,
   LinkType,
   LinkTypeInput,
@@ -452,14 +451,12 @@ export interface EtnApi {
   links: {
     /** `atLayerId` (опционально) — открыть связь в конкретном слое, не переключая сессию. */
     get(networkId: string, id: string, atLayerId?: string): Promise<Link>;
-    create(networkId: string, input: LinkCreateInput): Promise<Link>;
     update(
       networkId: string,
       id: string,
       input: LinkUpdateInput,
       expectedVersion: number,
     ): Promise<Link>;
-    remove(networkId: string, id: string, expectedVersion: number): Promise<void>;
     /** `showInactive` — передать `preferences.show_inactive` (сервер иначе
      *  фильтрует неактуальные связи/мысли, 03-server-api.md §7.2). */
     listByThought(
