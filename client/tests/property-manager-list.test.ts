@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for the property manager list (task d4e23670).
+ * Pure-logic tests for the property manager list (task d4e23670, fd4d4927).
  *
  * The dialog is the same staged-form pattern as the type managers: the list
  * re-renders from a cached snapshot, search filters without a network round
@@ -7,20 +7,30 @@
  * three helpers — `sortRegistryRows`, `annotateRows` and `filterRegistryRows`
  * — are the only logic exported for testing; the dialog itself is rendered
  * against the live DOM (`happy-dom`).
+ *
+ * 0.8.1: `annotateRows` now also precomputes the link-type side names (so the
+ * search field can hit «родитель» and find the underlying link-property).
+ * The names are pulled from `store.state.linkTypes`; tests pre-fill the store.
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 
-import type { NetworkProperty } from '@etn/shared';
+import type { LinkType, NetworkProperty } from '@etn/shared';
 
 import {
   annotateRows,
   filterRegistryRows,
   sortRegistryRows,
 } from '../src/renderer/screens/property-manager.js';
+import { store } from '../src/renderer/state.js';
 
-type RegistryRow = NetworkProperty & { types_count: number; values_count: number };
+type RegistryRow = NetworkProperty & {
+  types_count: number;
+  values_count: number;
+  types_source_count?: number;
+  types_target_count?: number;
+};
 
 /** Build a minimal registry row for the table-driven tests. */
 function row(
@@ -42,6 +52,29 @@ function row(
     ...overrides,
   };
 }
+
+/** Build a minimal link-type row for the catalogue store snapshot. */
+function linkType(id: string, name_forward: string, name_reverse: string): LinkType {
+  return {
+    id,
+    name_forward,
+    name_reverse,
+    parent_id: null,
+    is_root: true,
+    color: null,
+    style: null,
+    width: null,
+    description: null,
+    created_at: '2025-01-01T00:00:00.000Z',
+    updated_at: '2025-01-01T00:00:00.000Z',
+    version: 1,
+    created_by: 'u-test',
+  };
+}
+
+afterEach(() => {
+  store.update({ linkTypes: [] });
+});
 
 describe('sortRegistryRows', () => {
   it('orders rows alphabetically (ru locale, case-insensitive)', () => {
@@ -71,12 +104,37 @@ describe('annotateRows', () => {
     assert.ok(a !== undefined);
     assert.equal(a.lowerName, 'приоритет');
     assert.equal(a.lowerDescription, 'важно: проверить');
+    assert.equal(a.lowerLinkNames, '');
   });
 
   it('treats a null description as the empty string', () => {
     const [a] = annotateRows([row('1', 'Foo', null)]);
     assert.ok(a !== undefined);
     assert.equal(a.lowerDescription, '');
+  });
+
+  it('pulls link-type side names from the link-type catalogue (0.8.1)', () => {
+    store.update({
+      linkTypes: [linkType('lt-1', 'parent_of', 'has_parent')],
+    });
+    const linkRow = row('p-link', 'component_of', null, {
+      value_type: 'link',
+      config: { direction: 'out', link_type_id: 'lt-1' },
+    });
+    const [a] = annotateRows([linkRow]);
+    assert.ok(a !== undefined);
+    assert.equal(a.lowerLinkNames, 'parent_of\nhas_parent');
+  });
+
+  it('keeps linkNames empty when the link-type is missing from the catalogue', () => {
+    store.update({ linkTypes: [] });
+    const linkRow = row('p-link', 'component_of', null, {
+      value_type: 'link',
+      config: { direction: 'out', link_type_id: 'lt-missing' },
+    });
+    const [a] = annotateRows([linkRow]);
+    assert.ok(a !== undefined);
+    assert.equal(a.lowerLinkNames, '');
   });
 });
 
@@ -125,5 +183,21 @@ describe('filterRegistryRows', () => {
     // A name containing «приоритет» AND a description containing «дата» —
     // no single row satisfies both fragments.
     assert.equal(filterRegistryRows(sample, 'приоритет дата').length, 0);
+  });
+
+  it('matches a link-property by its type-side name (0.8.1)', () => {
+    store.update({
+      linkTypes: [linkType('lt-1', 'родитель', 'потомок')],
+    });
+    const linkRow = row('p-link', 'component_of', null, {
+      value_type: 'link',
+      config: { direction: 'out', link_type_id: 'lt-1' },
+    });
+    const annotated = annotateRows([linkRow]);
+    const hits = filterRegistryRows(annotated, 'родитель');
+    assert.equal(hits.length, 1);
+    const hit = hits[0];
+    assert.ok(hit !== undefined);
+    assert.equal(hit.property.id, 'p-link');
   });
 });

@@ -1239,14 +1239,25 @@ export class RestClient {
 
   /**
    * `GET /networks/{nid}/properties` — registry list (one row per network
-   * property; counter columns `types_count` / `values_count` ride along).
-   * Used by the structures filter panel to populate the property picker
-   * without walking every type (task 171a438e) and by the property manager
-   * dialog (task d4e23670) as the main list source.
+   * property; counter columns `types_count` / `values_count` ride along,
+   * plus `types_source_count` / `types_target_count` for link-properties
+   * — 0.8.1, требование d7177d1d). Used by the structures filter panel to
+   * populate the property picker without walking every type (task
+   * 171a438e) and by the property-manager dialog (task d4e23670, fd4d4927)
+   * as the main list source.
    */
   public async listNetworkProperties(
     networkId: string,
-  ): Promise<Array<import('@etn/shared').NetworkProperty & { types_count: number; values_count: number }>> {
+  ): Promise<
+    Array<
+      import('@etn/shared').NetworkProperty & {
+        types_count: number;
+        values_count: number;
+        types_source_count?: number;
+        types_target_count?: number;
+      }
+    >
+  > {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties`,
@@ -1257,7 +1268,14 @@ export class RestClient {
   public async getNetworkProperty(
     networkId: string,
     id: string,
-  ): Promise<import('@etn/shared').NetworkProperty & { types_count: number; values_count: number }> {
+  ): Promise<
+    import('@etn/shared').NetworkProperty & {
+      types_count: number;
+      values_count: number;
+      types_source_count?: number;
+      types_target_count?: number;
+    }
+  > {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
@@ -1297,12 +1315,18 @@ export class RestClient {
     );
   }
 
-  /** `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound. */
+  /**
+   * `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound.
+   * For link-properties the server returns the number of edges that lose
+   * `type_id` and become structural («Родители»/«Потомки») so the confirm
+   * dialog can quote it directly (0.8.1, требование 09f692ff); for scalar
+   * properties the field is `null`.
+   */
   public async deleteNetworkProperty(
     networkId: string,
     id: string,
-  ): Promise<void> {
-    await this.request(
+  ): Promise<{ id: string; links_becoming_structural: number | null }> {
+    return this.request(
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
     );

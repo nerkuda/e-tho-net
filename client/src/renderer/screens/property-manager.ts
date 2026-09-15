@@ -1,32 +1,55 @@
 /**
- * Network property catalogue management (task d4e23670, element
+ * Network property catalogue management (task d4e23670, fd4d4927, element
  * «Менеджер свойств сети»).
  *
- * Opened from the toolbar «Мыслесеть» menu as «Свойства» — a FLAT list
- * (registry rows are not hierarchical like the type catalogues): every row
- * is one network property, rendered as «name · value type · description ·
- * types count»; alphabetical order; a name/description search box filters
- * the visible rows. «Добавить» opens the editor for a new property, click
- * on a row opens the editor for the existing one, «✕» removes the row.
+ * Two entry points share the same underlying registry (`properties` +
+ * `link_types`) and the same editor (`openPropertyManagerEditor`):
  *
- * The editor mirrors the type-editor property dialog (`openPropertyDialog`
- * inside `type-manager.ts`) — same fields, same UX — but operates on the
- * network-wide registry, not on a `type_properties` binding, so:
+ * - `showPropertyManagerDialog` («Свойства и связи», бывший «Свойства») — a
+ *   FLAT list mixing scalar properties and link-properties in a single
+ *   alphabetical table (registry rows are not hierarchical like the type
+ *   catalogues). Scalar rows show «имя · вид значения · описание · сколько
+ *   типов подключено». Link rows show «имя в источнике / имя в назначении ·
+ *   описание» and the per-side type counters from the server
+ *   (`types_source_count` / `types_target_count`); structural «Родители» /
+ *   «Потомки» are listed with a lock glyph and no «✕».
+ *
+ * - `showLinkTypesTreeDialog` («Типы связей», 0.8.1) — the same property
+ *   editor reached through a tree of `link_types`: each row renders the
+ *   link-type names and the effective line visual (colour/style/width
+ *   inherited along the parent chain, L21). Clicking a row opens the editor
+ *   for the underlying link-property (`config.link_type_id`), not the old
+ *   link-type editor — that one is gone from user flows
+ *   (требование 09f692ff / `465495a9`). Adding a link-type is creating a new
+ *   link-property; structural types are visible but not editable.
+ *
+ * The editor itself mirrors the type-editor property dialog
+ * (`openPropertyDialog` inside `type-manager.ts`) — same fields, same UX —
+ * but operates on the network-wide registry, not on a `type_properties`
+ * binding, so:
  *   * no «обязательное» checkbox (the binding decides required-ness);
  *   * a banner explains that the patch «действует во всех типах сразу» and
  *     shows how many types are bound (a fresh `usage` fetch every open);
  *   * changing `value_type` raises a separate confirmation that points to
- *     the server-side value conversion, plus a notice while it runs.
+ *     the server-side value conversion, plus a notice while it runs;
+ *   * for a link-property deletion the confirm dialog quotes the number of
+ *     edges that lose `type_id` (from `links_becoming_structural` in the
+ *     DELETE response, требование 09f692ff).
  *
- * Deletion is the trickiest path: the registry row stays put while any type
- * attaches it or any value references it (server returns 409 DUPLICATE with
- * `types_count` / `values_count` counters in `details`). The editor shows
- * those numbers and a hint about the cleanup order; the delete button stays
- * enabled only when both counters are zero.
+ * Deletion paths:
+ *   * scalar property — refused with 409 while bound or filled; the editor
+ *     shows `types_count` / `values_count` and a hint about the cleanup
+ *     order;
+ *   * link-property — confirmed with the structural-edges count; on apply
+ *     the property AND its link-type are removed together (0.8.1);
+ *   * structural «Родители» / «Потомки» — never deletable from these
+ *     dialogs (system-seeded, migration 039).
  *
- * Realtime: `property-registry.created`/`updated`/`deleted` reload the list
- * in place (no dialog re-open); the editor itself, if open, refreshes its
- * cached `current` snapshot to keep the version optimistic-lock intact.
+ * Realtime: `property-registry.*` and `link-type.*` events refresh the
+ * cached snapshot in place so two clients editing different rows stay in
+ * sync without forcing a dialog re-open. The editor itself, if open, also
+ * refreshes its cached `current` snapshot to keep the optimistic lock
+ * intact.
  */
 
 import type {
@@ -54,7 +77,17 @@ import { acquireOrShowBlocked, lockHandleFromOutcome, releaseHeld, type LockHand
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
-import { linkTypeOptions, thoughtTypeOptions } from '../lib/type-tree.js';
+import {
+  linkTypeOptions,
+  thoughtTypeOptions,
+  buildTypeTree,
+  flattenTypeTree,
+  resolveLinkTypeVisual,
+  typeSearchVisibleIds,
+  type FlatTypeRow,
+} from '../lib/type-tree.js';
+import type { LinkType } from '@etn/shared';
+import { onRealtimeEvent } from '../realtime.js';
 import { buildChipListField } from './thought-type/value-combo.js';
 import { buildLinkValueEditor } from '../editor/properties.js';
 import {
@@ -75,38 +108,74 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   thought_ref: 'ссылка на мысль (legacy)',
 };
 
-/** A registry row as returned by `GET /networks/{nid}/properties` (with counters). */
-export type RegistryRow = NetworkProperty & { types_count: number; values_count: number };
+/**
+ * A registry row as returned by `GET /networks/{nid}/properties` (with counters).
+ *
+ * For link-properties (0.8.1, требование d7177d1d) the server also returns
+ * `types_source_count` and `types_target_count` so the flat list can render
+ * the per-side usage next to the link-type names. For non-link properties
+ * those fields are absent.
+ */
+export type RegistryRow = NetworkProperty & {
+  types_count: number;
+  values_count: number;
+  types_source_count?: number;
+  types_target_count?: number;
+};
 
 /** One row of the registry list after sorting + filtering. */
 interface PropertyRow {
   property: RegistryRow;
   lowerName: string;
   lowerDescription: string;
+  /** For link-properties only: `name_forward\nname_reverse` of the
+   *  underlying link-type, lowercased. Empty string for scalars so the
+   *  filter's `every` short-circuits the same way as before. */
+  lowerLinkNames: string;
 }
 
 /**
  * Pure helpers (exported for tests). The list is always alphabetised; the
  * filter keeps the rows whose name OR description contains every whitespace-
  * separated fragment of `query`, ignoring case.
+ *
+ * For link-properties (0.8.1, fd4d4927) the haystack also includes the
+ * type-side names (`config.link_type_id` → `name_forward` / `name_reverse`
+ * from the link-type catalogue) so a user can search «родитель» and find
+ * the underlying property too.
  */
 export function sortRegistryRows(rows: RegistryRow[]): RegistryRow[] {
   return [...rows].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 }
 
 export function annotateRows(rows: RegistryRow[]): PropertyRow[] {
-  return rows.map((property) => ({
-    property,
-    lowerName: property.name.toLowerCase(),
-    lowerDescription: (property.description ?? '').toLowerCase(),
-  }));
+  return rows.map((property) => {
+    // Для свойства-связи ищем имена типа связи в каталоге linkTypes
+    // (`store.state.linkTypes` — синхронный снимок realtime-канала, отдельной
+    // инжекции не нужно; тесты предзаполняют стор).
+    const ltId = property.config?.link_type_id;
+    const lt =
+      ltId !== undefined && ltId !== null && ltId !== ''
+        ? store.state.linkTypes.find((t) => t.id === ltId)
+        : null;
+    const lowerLinkNames =
+      lt !== null && lt !== undefined
+        ? `${lt.name_forward}\n${lt.name_reverse}`.toLowerCase()
+        : '';
+    return {
+      property,
+      lowerName: property.name.toLowerCase(),
+      lowerDescription: (property.description ?? '').toLowerCase(),
+      lowerLinkNames,
+    };
+  });
 }
 
 /**
  * Filter the registry list against the search box. Matches every whitespace-
  * separated fragment (case-insensitive) against the property name OR
- * description — same shape as `etn.thoughts.query`'s keyword mini-syntax.
- * Empty query keeps every row.
+ * description OR link-type names — same shape as `etn.thoughts.query`'s
+ * keyword mini-syntax. Empty query keeps every row.
  */
 export function filterRegistryRows(
   annotated: PropertyRow[],
@@ -119,7 +188,7 @@ export function filterRegistryRows(
     .filter((s) => s.length > 0);
   if (fragments.length === 0) return annotated;
   return annotated.filter((row) => {
-    const haystack = `${row.lowerName}\n${row.lowerDescription}`;
+    const haystack = `${row.lowerName}\n${row.lowerDescription}\n${row.lowerLinkNames}`;
     return fragments.every((f) => haystack.includes(f));
   });
 }
@@ -164,6 +233,10 @@ export function showPropertyManagerDialog(): void {
       }
       cachedRows = rows;
     }
+    // Хелпер аннотирования читает имена типа связи из `store.state.linkTypes` —
+    // синхронный доступ к стейту не конфликтует с realtime (каталог типов связей
+    // обновляется через `link-type.*` события, на которые у этого диалога
+    // подписка ниже).
     const annotated = annotateRows(sortRegistryRows(rows));
     const visible = filterRegistryRows(annotated, searchQuery);
     const searching = searchQuery.trim() !== '';
@@ -190,8 +263,44 @@ export function showPropertyManagerDialog(): void {
     for (const row of visible) {
       const property = row.property;
       const tr = el('tr');
-      const nameCell = el('td', undefined, property.name);
+      const isStructuralLink = property.value_type === 'link' && property.config?.structural === true;
+      const isLink = property.value_type === 'link';
+      // Строка свойства-связи: имя свойства, далее имена обеих сторон через
+      // косую черту (как в диалоге «Типы связей»). Структурные «Родители» /
+      // «Потомки» идут без `link_type_id` — показываем системную подпись.
+      const ltId = property.config?.link_type_id;
+      const lt =
+        ltId !== undefined && ltId !== null && ltId !== ''
+          ? store.state.linkTypes.find((t) => t.id === ltId) ?? null
+          : null;
+      const nameCell = el('td');
       nameCell.style.whiteSpace = 'nowrap';
+      if (isLink && lt !== null) {
+        // Превью линии под именем — эффективный цвет/стиль/ширина (L21).
+        const resolved = resolveLinkTypeVisual(store.state.linkTypes, lt.id);
+        const swatch = span('', 'link-type-swatch');
+        swatch.style.borderTop = `${Math.max(1, Math.min(6, resolved.width ?? 2))}px ${
+          resolved.style ?? 'solid'
+        } ${resolved.color ?? '#9aa3b2'}`;
+        swatch.style.display = 'inline-block';
+        swatch.style.width = '32px';
+        swatch.style.marginRight = '8px';
+        swatch.style.verticalAlign = 'middle';
+        nameCell.append(swatch);
+        nameCell.append(
+          span(property.name, 'prop-name'),
+          span(`  (${lt.name_forward} / ${lt.name_reverse})`, 'muted'),
+        );
+        setTooltip(nameCell, 'Свойство-связь — клик откроет редактор свойства.');
+      } else if (isStructuralLink) {
+        nameCell.append(span(property.name, 'prop-name'), span('  🔒 (структурное)', 'muted'));
+        setTooltip(
+          nameCell,
+          'Системное свойство-связь для нетипизированных рёбер «Родители/Потомки». Не редактируется и не удаляется из этого диалога.',
+        );
+      } else {
+        nameCell.append(span(property.name));
+      }
       const typeCell = el('td', 'muted', VALUE_TYPE_LABELS[property.value_type]);
       const descCell = el('td', 'muted', (property.description ?? '').slice(0, 160));
       descCell.style.maxWidth = '280px';
@@ -199,15 +308,35 @@ export function showPropertyManagerDialog(): void {
       descCell.style.textOverflow = 'ellipsis';
       descCell.style.whiteSpace = 'nowrap';
       if (property.description !== null) setTooltip(descCell, property.description);
-      const countCell = el('td', 'muted', String(property.types_count));
+      // Свойство-связь: показываем счётчики сторон («источник»/«назначение»).
+      // Скаляр: единое число типов (как было).
+      const countCell = el('td', 'muted');
       countCell.style.textAlign = 'right';
+      countCell.style.whiteSpace = 'nowrap';
+      if (isLink && !isStructuralLink) {
+        const src = property.types_source_count ?? 0;
+        const tgt = property.types_target_count ?? 0;
+        countCell.append(
+          span(`ист. ${src}`, 'prop-count-side'),
+          span(' / ', 'muted'),
+          span(`назн. ${tgt}`, 'prop-count-side'),
+        );
+        setTooltip(countCell, `Источник: ${src} ${pluralType(src)}. Назначение: ${tgt} ${pluralType(tgt)}.`);
+      } else {
+        countCell.append(String(property.types_count));
+      }
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
-      actions.append(button('✕', () => void removeRow(property), 'btn small', 'Удалить свойство'));
+      // Структурные свойства-связи удалять нельзя (миграция 039).
+      if (!isStructuralLink) {
+        actions.append(button('✕', () => void removeRow(property), 'btn small', 'Удалить свойство'));
+      }
       tr.append(nameCell, typeCell, descCell, countCell, actions);
-      // Clicks on the ✕ button must not open the editor.
+      // Clicks on the ✕ button must not open the editor; structural rows stay
+      // visible but inert — no editor opens on click.
       tr.addEventListener('click', (event) => {
         if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
+        if (isStructuralLink) return;
         openPropertyManagerEditor(property, onChanged);
       });
       tbody.append(tr);
@@ -222,9 +351,28 @@ export function showPropertyManagerDialog(): void {
     void reload(true);
   });
 
-  /** Deletes a property (refused with 409 while bound or filled). */
+  /**
+   * Удаление свойства из плоского списка (fd4d4927). Скалярные свойства
+   * отвергаются сервером с 409 при `types_count > 0` или `values_count > 0`
+   * — диалог ошибки подсказывает порядок. Свойство-связь требует
+   * подтверждения с числом рёбер, которые потеряют `type_id`
+   * (`links_becoming_structural`); сервер возвращает это поле вместе с 200
+   * (требование 09f692ff), но значение известно заранее — для
+   * не-удаляемого случая поможет текущий счётчик рёбер `link-type-counts`,
+   * а для разрешённого — сервер сам кинет окончательное число.
+   *
+   * Здесь `links_becoming_structural` запрашивается на лету через
+   * `link-type-counts` для контекста диалога; фактический счёт возвращает
+   * DELETE-ответ и тосты «Структурных рёбер: N» после применения.
+   */
   async function removeRow(property: RegistryRow): Promise<void> {
-    if (property.types_count > 0 || property.values_count > 0) {
+    const isLink = property.value_type === 'link';
+    const isStructuralLink = isLink && property.config?.structural === true;
+    if (isStructuralLink) {
+      // защита — структурных строк в таблице нет «✕», но на всякий случай:
+      return;
+    }
+    if (!isLink && (property.types_count > 0 || property.values_count > 0)) {
       const parts: string[] = [];
       if (property.types_count > 0) {
         parts.push(`подключено к ${property.types_count} ${pluralType(property.types_count)}`);
@@ -239,15 +387,61 @@ export function showPropertyManagerDialog(): void {
       );
       return;
     }
-    const ok = await confirmDialog(
-      'Удалить свойство',
-      `Удалить свойство «${property.name}»? Это действие необратимо.`,
-      true,
-    );
+    // Предварительный счётчик рёбер для свойства-связи — число рёбер
+    // соответствующего типа связи в сети. Это оценка «сколько рёбер
+    // потенциально потеряют type_id»; точное число приходит в
+    // `links_becoming_structural` ответа DELETE и пере-озвучивается тостом.
+    let linksBecoming = 0;
+    let linkEstimateOk = false;
+    if (isLink) {
+      try {
+        const counts = await etn.types.getLinkTypeCounts(networkId);
+        const ltId = property.config?.link_type_id;
+        if (ltId !== undefined && ltId !== null && ltId !== '') {
+          linksBecoming = counts[ltId] ?? 0;
+          linkEstimateOk = true;
+        }
+      } catch {
+        // оценка недоступна — диалог подтверждения просто опустит деталь.
+      }
+    }
+    let prompt: string;
+    if (isLink) {
+      const lt = (() => {
+        const ltId = property.config?.link_type_id;
+        return ltId !== undefined && ltId !== null && ltId !== ''
+          ? store.state.linkTypes.find((t) => t.id === ltId) ?? null
+          : null;
+      })();
+      const names = lt !== null ? `«${lt.name_forward} / ${lt.name_reverse}»` : `«${property.name}»`;
+      prompt =
+        `Удалить свойство-связь ${names}? ` +
+        (linkEstimateOk && linksBecoming > 0
+          ? `${linksBecoming} ${pluralEdge(linksBecoming)} станут структурными ` +
+            `«Родители/Потомки» и появятся в иерархии мыслей. `
+          : '') +
+        'Это действие необратимо.';
+    } else {
+      prompt = `Удалить свойство «${property.name}»? Это действие необратимо.`;
+    }
+    const ok = await confirmDialog('Удалить свойство', prompt, true);
     if (!ok) return;
     try {
-      await etn.propertyRegistry.remove(networkId, property.id);
+      const result = await etn.propertyRegistry.remove(networkId, property.id);
       cachedRows = null;
+      // Сервер возвращает точный счётчик ставших структурными рёбер (или null
+      // для скаляров) — тостом подтверждаем выполнение.
+      if (typeof result.links_becoming_structural === 'number') {
+        const n = result.links_becoming_structural;
+        if (n > 0) {
+          notice(
+            `Удалено. ${n} ${pluralEdge(n)} ${n === 1 ? 'стало' : 'стали'} структурными ` +
+              '«Родители/Потомки».',
+          );
+        } else {
+          notice('Свойство удалено.');
+        }
+      }
       onChanged();
     } catch (err) {
       errorDialog('Удалить свойство', err);
@@ -255,29 +449,24 @@ export function showPropertyManagerDialog(): void {
   }
 
   showDialog({
-    title: 'Свойства',
+    title: 'Свойства и связи',
     body,
     width: 720,
     buttons: [{ label: 'Закрыть', primary: true }],
   });
 
-  // Realtime: another client may create / update / delete a registry row
-  // while this dialog is open. We re-fetch the snapshot and re-render in
-  // place — never force the user to close the dialog to see fresh data. The
-  // editor (when open on top) handles its own state via `onChanged`, which
-  // drops the editor's local snapshot if the row disappeared.
+  // Realtime: `property-registry.*` инвалидирует кеш; `link-type.*` тоже —
+  // имена сторон (`name_forward` / `name_reverse`) в строке свойства-связи
+  // и предварительная оценка числа рёбер зависят от каталога типов связей.
   const unsubscribe = etn.realtime.onEvent((raw: unknown) => {
-    if (!isPropertyRegistryEvent(raw)) return;
+    if (!isPropertyRegistryOrLinkTypeEvent(raw)) return;
     if (raw.networkId !== networkId) return;
     cachedRows = null;
     void reload();
   });
-  // The dialog stack fires `onClose` for every close path (Esc, ×, footer
-  // button, backdrop) — drop the realtime listener there so a closed dialog
-  // does not keep re-rendering itself.
-  // showDialog does not expose onClose today, so hook into the dialog's
-  // backdrop removal via the body element: when the body detaches from the
-  // DOM (the dialog closed), the listener goes too.
+  // Диалог закрыт — дропаем realtime-подписку иначе закрытый диалог будет
+  // пере-рендериться. `showDialog` не отдаёт onClose; ловим отсоединение
+  // `body` от DOM (mutation observer на родителе).
   const observer = new MutationObserver(() => {
     if (!body.isConnected) {
       unsubscribe();
@@ -292,17 +481,40 @@ export function showPropertyManagerDialog(): void {
 }
 
 /**
- * True when `raw` is a property-registry create/update/delete event (the
- * three flavours that invalidate the cached list). Other events pass through.
+ * True when `raw` is an event that invalidates the cached property list:
+ * `property-registry.*` (a row changed) or `link-type.*` (a link-type row
+ * appeared/disappeared/renamed — the link-rows of the flat list show both
+ * side names). Other events pass through.
  */
-function isPropertyRegistryEvent(raw: unknown): raw is AnyRealtimeEvent & { networkId: string } {
+function isPropertyRegistryOrLinkTypeEvent(
+  raw: unknown,
+): raw is AnyRealtimeEvent & { networkId: string } {
   if (typeof raw !== 'object' || raw === null) return false;
   const evt = raw as { type?: unknown; networkId?: unknown };
   return (
     typeof evt.networkId === 'string' &&
     (evt.type === 'property-registry.created' ||
       evt.type === 'property-registry.updated' ||
-      evt.type === 'property-registry.deleted')
+      evt.type === 'property-registry.deleted' ||
+      evt.type === 'link-type.created' ||
+      evt.type === 'link-type.updated' ||
+      evt.type === 'link-type.deleted')
+  );
+}
+
+/**
+ * True when `raw` is a link-type create/update/delete event — the three
+ * flavours that invalidate the link-types tree cached in
+ * `showLinkTypesTreeDialog`. Other events pass through.
+ */
+function isLinkTypeEvent(raw: unknown): raw is AnyRealtimeEvent & { networkId: string } {
+  if (typeof raw !== 'object' || raw === null) return false;
+  const evt = raw as { type?: unknown; networkId?: unknown };
+  return (
+    typeof evt.networkId === 'string' &&
+    (evt.type === 'link-type.created' ||
+      evt.type === 'link-type.updated' ||
+      evt.type === 'link-type.deleted')
   );
 }
 
@@ -1061,6 +1273,15 @@ function pluralValue(n: number): string {
   return 'значений';
 }
 
+/** Склонение «связь/связи/связей» для подтверждения удаления свойства-связи. */
+function pluralEdge(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'связь';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'связи';
+  return 'связей';
+}
+
 // ---------------------------------------------------------------------------
 // Usage panel — bindings + value counters (in-type vs out-of-type).
 // Wires type rows back to the type editor (`showThoughtTypeEditor` /
@@ -1182,4 +1403,249 @@ function buildMetadataRowsFromProperty(property: RegistryRow): HTMLElement {
     updatedBy: property.updated_by ?? null,
   };
   return buildMetadataRows(fields);
+}
+
+// ---------------------------------------------------------------------------
+// Дерево «Типы связей» — второй вход в единый редактор (fd4d4927).
+// ---------------------------------------------------------------------------
+
+/**
+ * True for the two system-seeded link-types («Родители» / «Потомки»,
+ * migration 039). They live as property rows with `config.structural = true`,
+ * not as `link_types` rows, so the link-type catalogue never carries them.
+ * Listed in the flat property manager as system rows; the tree dialog just
+ * shows whatever `etn.types.listLinkTypes` returns.
+ */
+
+/**
+ * Открывает диалог «Типы связей» — иерархическое дерево типов связей сети
+ * (задача fd4d4927, требование 0f9a53f4). Повторяет механику плоского
+ * списка из {@link showPropertyManagerDialog}, но обзор идёт через типы
+ * связей — единый редактор открывается из строки типа связи и правит
+ * связанное свойство-связь (`config.link_type_id`):
+ *
+ *   * клик по строке → `openPropertyManagerEditor(property, ...)` для
+ *     свойства, у которого `config.link_type_id === type.id`;
+ *   * «Добавить» → новый свойство-связь (`value_type = 'link'`,
+ *     `name_forward`/`name_reverse` заполняет пользователь в том же
+ *     диалоге — требование 09f692ff);
+ *   * поиск — по `name_forward` / `name_reverse` (как в старом дереве);
+ *   * realtime: `link-type.*` инвалидирует кеш и пере-рендерит таблицу;
+ *   * удаление типа связи идёт через удаление его свойства-связи (требование
+ *     09f692ff) — в этом диалоге «✕» убран: пользовательский путь лежит
+ *     через плоский список «Свойства и связи», где видно
+ *     `links_becoming_structural`.
+ */
+export function showLinkTypesTreeDialog(): void {
+  const networkId = requireNetworkId();
+  const errorLine = span('', 'error-text');
+  const tableWrap = div('admin-table-wrap');
+  tableWrap.style.maxHeight = '340px';
+  const body = div('form-stack');
+
+  const toolbar = div('form-row type-list-toolbar');
+  const searchInput = el('input', 'text-input') as HTMLInputElement;
+  searchInput.type = 'text';
+  searchInput.placeholder = 'Поиск по имени…';
+  toolbar.append(
+    // «Добавить» создаёт свойство-связь. `value_type` пользователь выбирает
+    // в форме; пары `name_forward`/`name_reverse` заполняет там же.
+    button('Добавить', () => openPropertyManagerEditor(null, onChanged), 'btn small', 'Создать свойство-связь'),
+    searchInput,
+  );
+  body.append(toolbar, tableWrap, errorLine);
+
+  let expanded = new Set<string>();
+  let searchQuery = '';
+  let cachedTypes: LinkType[] | null = null;
+  let cachedRows: RegistryRow[] | null = null;
+  let cachedCounts: Record<string, number> | null = null;
+
+  const onChanged = (): void => {
+    cachedRows = null;
+    cachedCounts = null;
+    void reload();
+  };
+
+  async function reload(useCache = false): Promise<void> {
+    const scrollTop = tableWrap.scrollTop;
+    let types: LinkType[];
+    let counts: Record<string, number>;
+    let rows: RegistryRow[];
+    if (useCache && cachedTypes !== null && cachedCounts !== null && cachedRows !== null) {
+      types = cachedTypes;
+      counts = cachedCounts;
+      rows = cachedRows;
+    } else {
+      tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+      try {
+        [types, rows] = await Promise.all([
+          etn.types.listLinkTypes(networkId),
+          etn.propertyRegistry.list(networkId),
+        ]);
+        try {
+          counts = await etn.types.getLinkTypeCounts(networkId);
+        } catch {
+          counts = {};
+        }
+      } catch (err) {
+        tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+        return;
+      }
+      cachedTypes = types;
+      cachedRows = rows;
+      cachedCounts = counts;
+    }
+    if (expanded.size === 0) {
+      expanded = new Set(types.filter((t) => t.is_root).map((t) => t.id));
+    }
+    // Map: link_type_id → реестровое свойство (для клика по строке).
+    const propertyByLinkTypeId = new Map<string, RegistryRow>();
+    for (const row of rows) {
+      if (row.value_type !== 'link') continue;
+      const ltId = row.config?.link_type_id;
+      if (ltId !== undefined && ltId !== null && ltId !== '') {
+        propertyByLinkTypeId.set(ltId, row);
+      }
+    }
+    const searching = searchQuery.trim() !== '';
+    const keepIds = typeSearchVisibleIds(types, searchQuery);
+    const rowsOut = (
+      searching
+        ? flattenTypeTree(buildTypeTree(types), new Set(types.map((t) => t.id)))
+        : flattenTypeTree(buildTypeTree(types), expanded)
+    ).filter((row) => keepIds.has(row.type.id));
+
+    const table = el('table', 'table-list');
+    const head = el('thead');
+    const headRow = el('tr');
+    headRow.append(
+      el('th', undefined, 'Имя (от источника к назначению / обратно)'),
+      el('th', undefined, 'Подключено к типам'),
+      el('th'),
+    );
+    head.append(headRow);
+    table.append(head);
+    const tbody = el('tbody');
+    if (rowsOut.length === 0) {
+      const emptyRow = el('tr');
+      const emptyCell = el('td', 'muted', searching ? 'Ничего не найдено.' : 'Нет типов связей.');
+      emptyCell.colSpan = 3;
+      emptyRow.append(emptyCell);
+      tbody.append(emptyRow);
+    }
+    for (const row of rowsOut) {
+      const type = row.type;
+      const tr = el('tr');
+      if (type.is_root) tr.classList.add('type-tree-root');
+      const nameCell = el('td');
+      nameCell.style.whiteSpace = 'nowrap';
+      const nameWrap = span('', 'type-tree-name');
+      nameWrap.style.paddingLeft = `${Math.max(0, row.depth - 1) * 18}px`;
+      nameWrap.append(treeToggle(row, expanded, () => void toggle(type.id), searching));
+      const resolved = resolveLinkTypeVisual(types, type.id);
+      const swatch = span('', 'link-type-swatch');
+      swatch.style.borderTop = `${Math.max(1, Math.min(6, resolved.width ?? 2))}px ${
+        resolved.style ?? 'solid'
+      } ${resolved.color ?? '#9aa3b2'}`;
+      swatch.style.display = 'inline-block';
+      swatch.style.width = '32px';
+      swatch.style.marginRight = '8px';
+      swatch.style.verticalAlign = 'middle';
+      nameWrap.append(swatch, span(` ${type.name_forward} / ${type.name_reverse}`));
+      nameCell.append(nameWrap);
+      // Колонка «Подключено к типам» — сумма обоих сторон свойства-связи
+      // (если оно зарегистрировано). Нет свойства — 0; это «голый» тип связи,
+      // создать рёбра через который нельзя (`etn.links.create` снят в 0.8.1).
+      const prop = propertyByLinkTypeId.get(type.id);
+      const totalAttached =
+        prop !== undefined
+          ? (prop.types_source_count ?? 0) + (prop.types_target_count ?? 0)
+          : 0;
+      const countCell = el('td', 'muted', String(totalAttached));
+      countCell.style.textAlign = 'right';
+      if (prop === undefined) {
+        setTooltip(
+          countCell,
+          'Для этого типа связи ещё нет свойства в реестре. Тип связи без свойства бесполезен — создайте свойство через «Добавить».',
+        );
+      }
+      const actions = el('td');
+      actions.style.whiteSpace = 'nowrap';
+      // Удаления в этом диалоге нет — пользовательский путь лежит через
+      // плоский список «Свойства и связи», где видно
+      // `links_becoming_structural` и подтверждение по числу рёбер
+      // (требование 09f692ff).
+      if (prop === undefined) {
+        actions.append(
+          span('нет свойства', 'muted prop-count-side'),
+        );
+      }
+      tr.append(nameCell, countCell, actions);
+      tr.addEventListener('click', (event) => {
+        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
+        if (prop !== undefined) {
+          openPropertyManagerEditor(prop, onChanged);
+        }
+      });
+      tbody.append(tr);
+    }
+    table.append(tbody);
+    tableWrap.replaceChildren(table);
+    tableWrap.scrollTop = scrollTop;
+  }
+
+  function toggle(typeId: string): void {
+    if (expanded.has(typeId)) expanded.delete(typeId);
+    else expanded.add(typeId);
+    void reload(true);
+  }
+
+  searchInput.addEventListener('input', () => {
+    searchQuery = searchInput.value;
+    void reload(true);
+  });
+
+  showDialog({
+    title: 'Типы связей',
+    body,
+    width: 640,
+    buttons: [{ label: 'Закрыть', primary: true }],
+  });
+
+  // Realtime: `link-type.*` инвалидирует кеш; `property-registry.*` тоже —
+  // клик открывает свойство, и его название/тип значения должны быть
+  // актуальны в момент клика.
+  const unsubscribe = onRealtimeEvent((raw: unknown) => {
+    if (!isPropertyRegistryOrLinkTypeEvent(raw)) return;
+    if (raw.networkId !== networkId) return;
+    cachedTypes = null;
+    cachedRows = null;
+    cachedCounts = null;
+    void reload();
+  });
+  const observer = new MutationObserver(() => {
+    if (!body.isConnected) {
+      unsubscribe();
+      observer.disconnect();
+    }
+  });
+  if (body.parentElement !== null) {
+    observer.observe(body.parentElement, { childList: true });
+  }
+
+  void reload();
+}
+
+/** ▸/▾ expander (скопированная логика из type-manager.ts, локально — чтобы не тащить экспорт). */
+function treeToggle(
+  row: FlatTypeRow<LinkType>,
+  expanded: ReadonlySet<string>,
+  onToggle: () => void,
+  forceOpen = false,
+): HTMLElement {
+  const btn = button('', onToggle, 'btn small type-tree-toggle', row.hasChildren ? 'Развернуть/свернуть' : '');
+  btn.textContent = row.hasChildren ? (forceOpen || expanded.has(row.type.id) ? '▾' : '▸') : '';
+  btn.disabled = !row.hasChildren || forceOpen;
+  return btn;
 }

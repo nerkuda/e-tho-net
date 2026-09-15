@@ -712,13 +712,27 @@ export interface EtnApi {
     list(
       networkId: string,
     ): Promise<
-      Array<NetworkProperty & { types_count: number; values_count: number }>
+      Array<
+        NetworkProperty & {
+          types_count: number;
+          values_count: number;
+          types_source_count?: number;
+          types_target_count?: number;
+        }
+      >
     >;
     /** `GET /networks/{nid}/properties/{id}` — one property with counters. */
     get(
       networkId: string,
       id: string,
-    ): Promise<NetworkProperty & { types_count: number; values_count: number }>;
+    ): Promise<
+      NetworkProperty & {
+        types_count: number;
+        values_count: number;
+        types_source_count?: number;
+        types_target_count?: number;
+      }
+    >;
     /** `POST /networks/{nid}/properties` — create. */
     create(networkId: string, input: NetworkPropertyInput): Promise<NetworkProperty>;
     /**
@@ -731,8 +745,17 @@ export interface EtnApi {
       id: string,
       input: NetworkPropertyUpdateInput,
     ): Promise<{ property: NetworkProperty; converted: number; dropped: number }>;
-    /** `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound. */
-    remove(networkId: string, id: string): Promise<void>;
+    /**
+     * `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound.
+     * For link-properties the server returns the number of edges that lose
+     * `type_id` and become structural («Родители»/«Потомки») so the confirm
+     * dialog can quote it directly (0.8.1, требование 09f692ff); for
+     * scalar properties the field is `null`.
+     */
+    remove(
+      networkId: string,
+      id: string,
+    ): Promise<{ id: string; links_becoming_structural: number | null }>;
     /**
      * `GET /networks/{nid}/properties/{id}/usage` — type bindings, in-type
      * values per binding and out-of-type values count (the two numbers the

@@ -35,8 +35,8 @@ import { toggleEditorVisibility } from '../editor/editor.js';
 import type { WorkspaceHandles } from './workspace.js';
 import { showCreateNetworkDialog } from './networks.js';
 import { showSettingsDialog } from './settings.js';
-import { showLinkTypesDialog, showThoughtTypesDialog } from './type-manager.js';
-import { showPropertyManagerDialog } from './property-manager.js';
+import { showThoughtTypesDialog } from './type-manager.js';
+import { showLinkTypesTreeDialog, showPropertyManagerDialog } from './property-manager.js';
 import { openTrashDialog } from '../trash.js';
 import type { NetworkMember, User } from '@etn/shared';
 
@@ -82,8 +82,8 @@ export function buildNetMenuItems(trashCount = 0): MenuItem[] {
     },
     MENU_SEPARATOR,
     { label: 'Типы мыслей', onClick: () => showThoughtTypesDialog() },
-    { label: 'Типы связей', onClick: () => showLinkTypesDialog() },
-    { label: 'Свойства', onClick: () => showPropertyManagerDialog() },
+    { label: 'Типы связей', onClick: () => showLinkTypesTreeDialog() },
+    { label: 'Свойства и связи', onClick: () => showPropertyManagerDialog() },
     MENU_SEPARATOR,
     {
       label: `Корзина (${trashCount})`,
