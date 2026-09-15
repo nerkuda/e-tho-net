@@ -1012,8 +1012,19 @@ let relatedTitles = new Map<string, string[]>();
 
 /**
  * Maps each displayed thought to the titles of its visible (displayed) related
- * thoughts — parents and children from the `edges` among the visible set
- * (focused + parents + siblings + children, 03-server-api.md §6.2).
+ * thoughts — **only the focused thought** is the source of related titles for
+ * the zone clouds (08-ui-spec.md §2.2.3, requirement cf9601fa): outside the
+ * focus, compound names hide parts equal to the title (or any part of the
+ * title) of the thought in focus, never of any other visible thought.
+ *
+ * `focus.edges` carries every active link among the visible set (focus +
+ * parents + siblings + children, 03-server-api.md §6.2), so it also contains
+ * neighbour↔neighbour links that have nothing to do with the focused thought.
+ * Including those would let a sibling named «Ошибки» make a child named
+ * «Проект А.Ошибки» render as «Проект А» even when the focus is unrelated —
+ * a regression reported in error cbb91b62. Only edges incident to the
+ * focused thought contribute to the map; neighbour↔neighbour edges are
+ * ignored so a thought's display name depends solely on the focus.
  */
 export function visibleRelatedTitles(focus: {
   focused: { id: string; title: string };
@@ -1033,8 +1044,13 @@ export function visibleRelatedTitles(focus: {
     set.add(title);
     related.set(id, set);
   };
+  const focusedId = focus.focused.id;
   for (const edge of focus.edges) {
     if (edge.source_id === edge.target_id) continue;
+    // Requirement cf9601fa — relatedTitles is built from the focus only:
+    // neighbour↔neighbour edges must not pollute the cloud of a thought
+    // whose only link to the focus is via a third party (regression cbb91b62).
+    if (edge.source_id !== focusedId && edge.target_id !== focusedId) continue;
     const sourceTitle = titleOf.get(edge.source_id);
     const targetTitle = titleOf.get(edge.target_id);
     if (sourceTitle === undefined || targetTitle === undefined) continue;

@@ -187,7 +187,15 @@ describe('visibleRelatedTitles (08-ui-spec §2.2.3)', () => {
     assert.deepEqual(result.get('p'), ['Проект А']);
   });
 
-  it('includes neighbour↔neighbour edges', () => {
+  it('ignores neighbour↔neighbour edges (regression cbb91b62)', () => {
+    // `focus.edges` carries every active link between any two visible
+    // thoughts (focus + parents + siblings + children, 03-server-api.md
+    // §6.2) — including neighbour↔neighbour edges that have nothing to
+    // do with the focus. Requirement cf9601fa says the shortener compares
+    // parts only against the focused thought, so such edges must NOT
+    // contribute to `relatedTitles`. See the scenario in error cbb91b62:
+    // a parent named «Проект А» linked to another parent named
+    // «Задачи разработки» must not pollute the related set of either.
     const result = visibleRelatedTitles({
       focused: { id: 'f', title: 'Фокус' },
       parents: [neighbor('p1', 'l1', 'Проект А'), neighbor('p2', 'l2', 'Задачи разработки')],
@@ -195,8 +203,8 @@ describe('visibleRelatedTitles (08-ui-spec §2.2.3)', () => {
       children: [],
       edges: [edge('e1', 'p1', 'p2')],
     });
-    assert.deepEqual(result.get('p1'), ['Задачи разработки']);
-    assert.deepEqual(result.get('p2'), ['Проект А']);
+    assert.equal(result.get('p1'), undefined);
+    assert.equal(result.get('p2'), undefined);
     assert.equal(result.get('f'), undefined);
   });
 
@@ -285,38 +293,79 @@ describe('zone cloud compound name integration (08-ui-spec §2.2.3, cbb91b62)', 
     assert.equal(focusCloudTitle, focusTitle);
   });
 
-  it('falls back to the full name when every part of a compound name matches', () => {
-    // «Ошибки.Проект А» in a zone whose only related thought covers both
-    // parts — must NOT collapse to an empty string, requirement says «все
-    // совпали — показывать полное имя».
+  it('falls back to the full name when every part of a compound name matches the focus', () => {
+    // The focus itself is compound and matches every part of a child name
+    // — must NOT collapse to an empty string, the requirement says «все
+    // совпали — показывать полное имя» (08-ui-spec.md §2.2.3). The only
+    // way to get the shortener to inspect more than one part against the
+    // focus is when the focused thought is itself compound; the related
+    // set is still built from the focus alone (regression cbb91b62).
     const result = visibleRelatedTitles({
-      focused: { id: 'focus', title: 'Внешний' },
-      parents: [
-        neighbor('p1', 'l1', 'Ошибки'),
-        neighbor('p2', 'l2', 'Проект А'),
-      ],
+      focused: { id: 'focus', title: 'Ошибки.Проект А' },
+      parents: [],
       siblings: [],
       children: [neighbor('child', 'lc', 'Ошибки.Проект А')],
-      // The child is linked to both parents but not to the focus.
-      edges: [edge('e1', 'child', 'p1'), edge('e2', 'child', 'p2')],
+      edges: [edge('e1', 'focus', 'child')],
     });
     const title = shortenCompoundName('Ошибки.Проект А', result.get('child') ?? []);
     assert.equal(title, 'Ошибки.Проект А');
   });
 
-  it('hides parts matching a compound parent («ETN.Ошибки» hides both parts)', () => {
-    // Replicates the well-known «ETN.Ошибки» case from the existing pure
-    // suite at the canvas wiring level: the parent is itself compound and
-    // both parts must hide.
+  // Regression guard for the user-reported scenario of cbb91b62:
+  // focus «Ошибки», child «Проект А.Ошибки» is NOT linked to the focus
+  // directly, but a sibling thought «Ошибки» IS on the canvas. The
+  // shortener must compare parts only against the focus (requirement
+  // cf9601fa), so the sibling's title must not hide the matching part of
+  // the child's compound name — the child renders in full as
+  // «Проект А.Ошибки».
+  it('user scenario: child has no edge to focus, but a sibling shares the focus title (cbb91b62)', () => {
     const result = visibleRelatedTitles({
-      focused: { id: 'focus', title: 'Внешний' },
-      parents: [neighbor('p', 'lp', 'ETN.Ошибки')],
-      siblings: [],
-      children: [neighbor('child', 'lc', 'ETN.Ошибки.Отложено на будущее')],
-      edges: [edge('e1', 'child', 'p')],
+      focused: { id: 'focus', title: 'Ошибки' },
+      parents: [],
+      siblings: [neighbor('sibling', 'ls', 'Ошибки')],
+      children: [neighbor('child', 'lc', 'Проект А.Ошибки')],
+      // No edge between focus and child. Sibling is a standalone thought
+      // whose name happens to equal the focus title — that must not leak
+      // into the child's related set.
+      edges: [],
     });
-    const title = shortenCompoundName('ETN.Ошибки.Отложено на будущее', result.get('child') ?? []);
-    assert.equal(title, 'Отложено на будущее');
+    assert.equal(result.get('child'), undefined);
+    assert.equal(shortenCompoundName('Проект А.Ошибки', result.get('child') ?? []), 'Проект А.Ошибки');
+  });
+
+  // Control for the same scenario: with the focus↔child edge in place the
+  // shortener DOES hide the matching part. This is the legacy case from
+  // the original test (kept under a new name to make the contrast
+  // obvious in the report).
+  it('control: focus↔child edge hides the matching part of the child name (cbb91b62)', () => {
+    const result = visibleRelatedTitles({
+      focused: { id: 'focus', title: 'Ошибки' },
+      parents: [],
+      siblings: [],
+      children: [neighbor('child', 'lc', 'Проект А.Ошибки')],
+      edges: [edge('e1', 'focus', 'child')],
+    });
+    assert.deepEqual(result.get('child'), ['Ошибки']);
+    assert.equal(shortenCompoundName('Проект А.Ошибки', result.get('child') ?? []), 'Проект А');
+  });
+
+  // Same as the user scenario but with a neighbour↔neighbour edge present
+  // (e.g. the sibling is itself a parent of the child, with title «Ошибки»).
+  // Under the old `visibleRelatedTitles` this edge would put «Ошибки» into
+  // `relatedTitles[child]` and the shortener would collapse the name — the
+  // exact regression from cbb91b62. The fixed implementation ignores such
+  // edges because they are not incident to the focused thought.
+  it('user scenario: neighbour↔neighbour edge does not leak into the child (cbb91b62)', () => {
+    const result = visibleRelatedTitles({
+      focused: { id: 'focus', title: 'Ошибки' },
+      parents: [],
+      siblings: [neighbor('sibling', 'ls', 'Ошибки')],
+      children: [neighbor('child', 'lc', 'Проект А.Ошибки')],
+      // Sibling → child. Neither endpoint is the focus.
+      edges: [edge('e1', 'sibling', 'child')],
+    });
+    assert.equal(result.get('child'), undefined);
+    assert.equal(shortenCompoundName('Проект А.Ошибки', result.get('child') ?? []), 'Проект А.Ошибки');
   });
 });
 
