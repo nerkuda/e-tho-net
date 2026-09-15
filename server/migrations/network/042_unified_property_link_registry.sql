@@ -29,9 +29,10 @@
 --      типа связи, у которого нет свойства в реестре, появляется
 --      автоматическое свойство вида «связь» с пустыми списками
 --      источников/назначений; имя берётся из `name_forward` типа связи;
---      привязка — к корневому типу мысли (`side='source'`, `required=0`,
---      без дефолта). Существующие рёбра этого типа остаются живыми и
---      становятся видны как внетиповое свойство.
+--      привязки к типам мысли НЕ создаются — свойство существует в
+--      справочнике как внетиповое (`type_properties` пусто), рёбра этого
+--      link_type отображаются в группе «Свойства вне типов» редактора
+--      мысли и доступны к правке (требование e93001ac).
 --   3. МАТЕРИАЛИЗАЦИЯ ЗЕРКАЛ. Для каждого живого свойства-связи с непустым
 --      `config.allowed_target_type_ids` создаются НАСТОЯЩИЕ привязки со
 --      стороны назначения (`side='target'`, `required=0`, без дефолта) у
@@ -234,8 +235,10 @@ DELETE FROM properties WHERE id IN (SELECT loser_id FROM _mig042_losers);
 -- 3. СВОЙСТВО КАЖДОМУ «ГОЛОМУ» ТИПУ СВЯЗИ.
 --    У каждого живого нерутового link_type, у которого нет свойства в
 --    реестре, появляется автоматическое свойство. Имя — name_forward
---    типа связи; уникальный id; привязка к корневому типу мысли
---    (side='source', required=0).
+--    типа связи; уникальный id. Свойство создаётся БЕЗ привязки к типам
+--    мысли — пустые таблицы источников и назначений. Существующие рёбра
+--    этого link_type остаются живыми и видны как внетиповое свойство
+--    («Свойства вне типов» в редакторе мысли; требование e93001ac).
 -- ---------------------------------------------------------------------------
 
 DROP TABLE IF EXISTS _mig042_bare_lt;
@@ -296,27 +299,21 @@ SELECT
     'show_on_map', 0,
     'blocks_target_deletion', 1
   ),
-  'создано миграцией 042 (0.8.1) для голого link_type «' || b.name_forward || '»',
+  'создано миграцией 042 (0.8.1) для голого link_type «' || b.name_forward || '» (без привязки к типам мысли)',
   v.now_iso, v.now_iso, v.author_id, v.author_id,
   v.now_ms, v.now_ms
 FROM _mig042_bare_with_id b, _mig042_vars v;
 
--- Привязка к корневому типу мысли (id из миграции 021) со стороны source.
-INSERT INTO type_properties (
-  id, layer_id, deleted, base_version, owner_type, owner_id, property_id,
-  required, position, side
-)
-SELECT
-  gen_uuid(), b.lt_layer, 0, 0, 'thought_type',
-  '00000000-0000-4000-8000-000000000001',
-  b.prop_id, 0, 0, 'source'
-FROM _mig042_bare_with_id b;
+-- Привязки к типам мысли НЕ создаются: свойство существует в реестре как
+-- внетиповое (type_properties пусто для этого property_id). Рёбра этого
+-- link_type отображаются в редакторе мысли в группе «Свойства вне типов».
 
 INSERT INTO _mig042_report (kind, link_type_id, property_id, layer_id, details, recorded_at)
 SELECT
   'create_property',
   b.lt_id, b.prop_id, b.lt_layer,
-  json_object('reason', 'bare_link_type', 'link_type_name_forward', b.name_forward),
+  json_object('reason', 'bare_link_type', 'link_type_name_forward', b.name_forward,
+              'attached_to_types', 0),
   (SELECT now_iso FROM _mig042_vars)
 FROM _mig042_bare_with_id b;
 

@@ -1444,7 +1444,10 @@ describe(
         );
 
         // Сценарий 2: lt-bare получил автоматическое свойство с
-        // именем lt-bare.name_forward.
+        // именем lt-bare.name_forward. Свойство создаётся БЕЗ привязки к
+        // типам мысли (type_properties пусто) — соответствует требованию
+        // e93001ac «с пустыми таблицами источников и назначений». Рёбра
+        // этого link_type видны как внетиповое свойство.
         const bareProp = db
           .prepare(
             "SELECT id, name, value_type FROM properties " +
@@ -1455,14 +1458,18 @@ describe(
         assert.ok(bareProp !== undefined, 'bare link_type must receive a property');
         assert.equal(bareProp.value_type, 'link');
         assert.ok(bareProp.name.startsWith('рецензирует'));
-        const bareBinding = db
-          .prepare(
-            'SELECT owner_id, side, required FROM type_properties WHERE property_id = ?',
-          )
-          .get(bareProp.id) as { owner_id: string; side: string; required: number };
-        assert.equal(bareBinding.owner_id, ROOT_THOUGHT_TYPE);
-        assert.equal(bareBinding.side, 'source');
-        assert.equal(bareBinding.required, 0);
+        // Привязок к типам мысли быть не должно — свойство существует в
+        // реестре как внетиповое (требование e93001ac).
+        const bareBindingCount = (
+          db
+            .prepare('SELECT COUNT(*) AS c FROM type_properties WHERE property_id = ?')
+            .get(bareProp.id) as { c: number }
+        ).c;
+        assert.equal(
+          bareBindingCount,
+          0,
+          'bare link_type property must have NO type bindings — it lives outside types',
+        );
 
         // Сценарий 3: для p-mirror (allowed_target_type_ids = tt-task,
         // tt-comp) материализованы привязки target. У tt-task уже была

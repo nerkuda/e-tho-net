@@ -302,7 +302,7 @@ describe(
           layers: 1,
           session_layers: 0,
           properties: 4, // +2 структурных «Родители»/«Потомки» (039) +1 для голого lt1 (042)
-          type_properties: 4, // +2 «Родители»/«Потомки» (039) +1 привязка голого lt1 (042)
+          type_properties: 3, // +2 «Родители»/«Потомки» (039); 0 привязка голого lt1 — свойство в реестре без привязки (требование e93001ac)
           object_locks: 0,
           activity_log: 0,
           thought_type_views: 0,

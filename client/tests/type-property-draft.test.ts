@@ -190,6 +190,20 @@ describe('planPropertyDiff', () => {
     ]);
   });
 
+  it('a link property with NO type bindings (source and target both empty) is a no-op — the property stays outside types', () => {
+    // 0.8.1: голый link_type получает свойство в реестре БЕЗ привязки к
+    // типам мысли (требование e93001ac). Свойство существует как
+    // внетиповое (группа «Свойства вне типов» в редакторе мысли). Тип
+    // мысли, к которому привязан этот голый link_type, не получает новых
+    // привязок — план должен быть пустым, никаких attach/unbind не
+    // возникает на стороне редактора типа.
+    const original: PropertyDefinition[] = [];
+    const draft: DraftProperty[] = [];
+    const plan = planPropertyDiff(original, draft, []);
+    assert.deepEqual(plan.ops, []);
+    assert.equal(plan.needsReorder, false);
+  });
+
   it('toggling `required` on an existing binding becomes a `set-role` op with only the changed field', () => {
     const original = [def('p1', 'A', { required: false })];
     const draft: DraftProperty[] = [
