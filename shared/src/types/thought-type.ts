@@ -5,7 +5,7 @@
  * docs/03-server-api.md §8–9. SQLite 0/1 INTEGER columns surface as `boolean`.
  */
 
-import type { IconKind, PropertyValueType, TypeOwnerType } from '../enums.js';
+import type { IconKind, LinkPropertySide, LinkStyle, PropertyValueType, TypeOwnerType } from '../enums.js';
 
 /** User-defined thought type (02-data-model.md §3.3). */
 export interface ThoughtType {
@@ -118,6 +118,14 @@ export interface PropertyDefinition {
   /** Display order. */
   position: number;
   /**
+   * Сторона привязки (0.8.1, задача e1fbf304; требование b9562306): для
+   * свойств-связей — `source` / `target` (направление в привязке), для
+   * скалярных и структурных свойств — `undefined`. Хранится в колонке
+   * `type_properties.side`; для миграционной совместимости выводится из
+   * `config.direction`, если сторона не указана явно.
+   */
+  side?: LinkPropertySide | null;
+  /**
    * Free-form description of the property — what it means and which format
    * its values take. Shown as a hint next to the property in the thought
    * editor and given to AI agents through `etn.types.list`.
@@ -161,6 +169,21 @@ export interface NetworkPropertyInput {
   value_type: PropertyValueType;
   config?: PropertyConfig | null;
   description?: string | null;
+  /**
+   * Пара имён нового типа связи (0.8.1, требование 09f692ff: создание
+   * свойства-связи создаёт тип связи). Если задано для `value_type = 'link'` —
+   * сервер создаёт link_type автоматически и записывает его id в
+   * `config.link_type_id`. Для скалярных свойств игнорируется.
+   */
+  name_forward?: string;
+  name_reverse?: string;
+  /**
+   * Опциональные атрибуты оформления нового типа связи (0.8.1).
+   */
+  parent_link_type_id?: string | null;
+  link_color?: string | null;
+  link_style?: LinkStyle | null;
+  link_width?: number | null;
 }
 
 /** Input accepted by the registry update. `value_type` converts stored values. */
@@ -169,6 +192,19 @@ export interface NetworkPropertyUpdateInput {
   value_type?: PropertyValueType;
   config?: PropertyConfig | null;
   description?: string | null;
+  /**
+   * Новое прямое имя типа связи (0.8.1): правка свойства-связи правит
+   * связанный link_type. Для скалярных и структурных свойств игнорируется.
+   */
+  name_forward?: string;
+  /**
+   * Новое обратное имя типа связи (0.8.1). См. {@link name_forward}.
+   */
+  name_reverse?: string;
+  /** Опциональные атрибуты оформления (0.8.1). */
+  link_color?: string | null;
+  link_style?: LinkStyle | null;
+  link_width?: number | null;
 }
 
 /** Recognised keys inside a {@link PropertyDefinition.config} JSON blob. */
@@ -241,6 +277,9 @@ export interface PropertyDefinitionInput {
   required?: boolean;
   position?: number;
   description?: string | null;
+  /** Сторона привязки для свойства-связи (0.8.1). Если не задана — выводится
+   *  из `config.direction` (fallback для совместимости со старыми вызовами). */
+  side?: LinkPropertySide | null;
 }
 
 /**
@@ -257,6 +296,8 @@ export type AttachPropertyInput =
       property_id: string;
       required?: boolean;
       position?: number;
+      /** Сторона привязки для свойства-связи (0.8.1). */
+      side?: LinkPropertySide | null;
     }
   | {
       mode: 'create';
@@ -266,6 +307,8 @@ export type AttachPropertyInput =
       description?: string | null;
       required?: boolean;
       position?: number;
+      /** Сторона привязки для свойства-связи (0.8.1). */
+      side?: LinkPropertySide | null;
     };
 
 /** Input accepted by `PATCH …/types/{id}/properties/{prop_id}` (03-server-api.md §8). */
@@ -277,6 +320,8 @@ export interface PropertyDefinitionUpdateInput {
   required?: boolean;
   position?: number;
   description?: string | null;
+  /** Сторона привязки для свойства-связи (0.8.1). */
+  side?: LinkPropertySide | null;
 }
 
 /**
@@ -304,6 +349,9 @@ export interface EffectiveTypeProperty extends PropertyDefinition {
   description_overridden: boolean;
   /** `true` — зеркальное свойство-связь (см. {@link PropertyDefinition.mirrored}). */
   mirrored?: boolean;
+  /** Сторона привязки (0.8.1): пробрасывается из `type_properties.side`
+   *  физической строки либо из зеркала. См. {@link PropertyDefinition.side}. */
+  side?: LinkPropertySide | null;
 }
 
 /** Body of `PUT …/types/{id}/properties/{prop_id}/default` (03-server-api.md §8). */
@@ -422,6 +470,10 @@ export interface ResolvedLinkProperty {
   value_type: 'link';
   /** Направление от владельца: `out` — владелец источник, `in` — цель. */
   direction: 'out' | 'in';
+  /** Сторона привязки (0.8.1): `source` для типа-источника, `target` для
+   *  типа-назначения; `undefined` для структурного свойства или когда
+   *  сторона не вычислена. */
+  side?: LinkPropertySide | null;
   /** Id типа связи; `null` — структурное (нетипизированное) свойство-связь. */
   link_type_id: string | null;
   /** `true` — структурное свойство-связь (нетипизированные рёбра). */

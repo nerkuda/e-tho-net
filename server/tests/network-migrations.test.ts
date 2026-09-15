@@ -62,6 +62,7 @@ const EXPECTED_FILES = [
   '038_search_trigram.sql',
   '039_structural_link_properties.sql',
   '040_thought_ref_to_link_properties.sql',
+  '041_type_property_side.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -604,6 +605,7 @@ describe(
           '038_search_trigram.sql',
           '039_structural_link_properties.sql',
           '040_thought_ref_to_link_properties.sql',
+          '041_type_property_side.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged
@@ -885,6 +887,7 @@ describe(
           '038_search_trigram.sql',
           '039_structural_link_properties.sql',
           '040_thought_ref_to_link_properties.sql',
+          '041_type_property_side.sql',
         ]);
 
         const expectedId = propertyValueId('thought', owner, prop);
@@ -951,9 +954,12 @@ describe(
       registerMigrationHelpers(db);
       try {
         const res = runMigrations(db, networkMigrationsDir());
-        assert.equal(res.applied[res.applied.length - 1], '040_thought_ref_to_link_properties.sql');
+        assert.equal(res.applied[res.applied.length - 1], '041_type_property_side.sql');
         // 040 уже применён в прогоне — откатываем запись, сеем данные
         // thought_ref-эпохи и применяем повторно (как апгрейд живой сети).
+        // 041 (DDL — добавление колонки `side`) не откатываем: ALTER TABLE
+        // ADD COLUMN в SQLite 3.46 не идемпотентен, и тест 040 не зависит
+        // от её повторного применения.
         db.prepare(
           "DELETE FROM _migrations WHERE name = '040_thought_ref_to_link_properties.sql'",
         ).run();

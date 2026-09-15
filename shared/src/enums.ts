@@ -44,6 +44,17 @@ export type PropertyValueType = (typeof PROPERTY_VALUE_TYPES)[number];
 export const LINK_PROPERTY_DIRECTIONS = ['out', 'in'] as const;
 export type LinkPropertyDirection = (typeof LINK_PROPERTY_DIRECTIONS)[number];
 
+/** Сторона привязки свойства-связи (0.8.1, задача e1fbf304; требования
+ *  b9562306 «Свойство-связь одно на тип связи; сторона задана привязкой»,
+ *  115e44fa «Привязка со стороны назначения равноправна с привязкой
+ *  источника»). Живёт в колонке `type_properties.side`: `source` — привязка
+ *  к типу-источнику ребра (направление `out`), `target` — к типу-назначения
+ *  (направление `in`). Для скалярных и структурных свойств-связей
+ *  («Родители» / «Потомки») сторона `null` — направление у них атрибут
+ *  реестровой строки `config.direction`, а не привязки. */
+export const LINK_PROPERTY_SIDES = ['source', 'target'] as const;
+export type LinkPropertySide = (typeof LINK_PROPERTY_SIDES)[number];
+
 /** Kinds of comments an entity may own (02-data-model.md §3.8). */
 export const COMMENT_KINDS = ['permanent', 'chronological'] as const;
 export type CommentKind = (typeof COMMENT_KINDS)[number];

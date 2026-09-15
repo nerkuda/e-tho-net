@@ -264,7 +264,8 @@ describe(
 
         // The upgrade: runMigrations applies only the pending layer files
         // (025 + the follow-ups: the S6 trigger fix, session layers, the
-        // switch seq, the live-triple index, property descriptions).
+        // switch seq, the live-triple index, property descriptions, единый
+        // реестр свойств и связей — колонка `side` для привязок 0.8.1).
         const res = runMigrations(db, networkMigrationsDir());
         assert.deepEqual(res.applied, [
           '025_layers.sql',
@@ -283,6 +284,7 @@ describe(
           '038_search_trigram.sql',
           '039_structural_link_properties.sql',
           '040_thought_ref_to_link_properties.sql',
+          '041_type_property_side.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else

@@ -16,7 +16,7 @@
  * живут в `./mcp.ts`; здесь только payload-типы.
  */
 
-import type { IconKind, LinkStyle, PropertyValueType, TypeOwnerType } from '../enums.js';
+import type { IconKind, LinkPropertySide, LinkStyle, PropertyValueType, TypeOwnerType } from '../enums.js';
 import type { PropertyConfig } from './thought-type.js';
 
 // ===========================================================================
@@ -125,6 +125,11 @@ export interface OntologyWriteTypeProperty {
   position?: number;
   /** Значение по умолчанию, пишется как override в `config.default_value`. */
   default_value?: unknown;
+  /** Сторона привязки для свойства-связи (0.8.1, задача e1fbf304): `source`
+   *  для типа-источника ребра, `target` для типа-назначения. Не задано —
+   *  выводится из `config.direction` существующей строки. Для скалярных и
+   *  структурных свойств поле игнорируется. */
+  side?: LinkPropertySide | null;
 }
 
 /**

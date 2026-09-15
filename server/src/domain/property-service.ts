@@ -30,13 +30,17 @@ import { randomUUID } from 'node:crypto';
 import {
   EtnError,
   LINK_PROPERTY_DIRECTIONS,
+  LINK_PROPERTY_SIDES,
+  LINK_STYLES,
   PROPERTY_VALUE_TYPES,
   TYPE_OWNER_TYPES,
   typeNameKey,
   type EffectiveTypeProperty,
   type LinkPropertyDirection,
+  type LinkPropertySide,
   type LinkPropertyValueItem,
   type LinkPropertyValues,
+  type LinkStyle,
   type NetworkProperty,
   type NetworkPropertyInput,
   type NetworkPropertyUpdateInput,
@@ -59,7 +63,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext, materializeShadow } from '../db/layer-write.js';
 import { propertyValueId } from '../db/property-value-id.js';
-import { getLinkType } from './link-type-service.js';
+import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './link-type-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import { rowToThoughtRef } from './thought-service.js';
 import {
@@ -226,12 +230,102 @@ function ownerTypeName(ndb: NetworkDb, ownerType: TypeOwnerType, ownerId: string
 // ===========================================================================
 
 /**
- * Направление свойства-связи из config (по умолчанию `out` — владелец источник).
+ * Направление свойства-связи (0.8.1, задача e1fbf304; требование b9562306):
+ * если передан `side` (из привязки), он имеет приоритет — направление
+ * переехало в привязку. Иначе — fallback на `config.direction` (для
+ * совместимости с привязками, созданными до миграции 041, и для свойств,
+ * у которых `side` не вычислен — скаляры, структурные).
+ *
  * Экспортирована для `query-service.ts` (задача 20effcbd, отбор по свойствам-связям) —
- * единая точка интерпретации `config`, без дублирования логики в движке отбора.
+ * единая точка интерпретации, без дублирования логики в движке отбора.
  */
-export function linkPropertyDirection(config: PropertyConfig | null): LinkPropertyDirection {
+export function linkPropertyDirection(
+  config: PropertyConfig | null,
+  side: LinkPropertySide | null = null,
+): LinkPropertyDirection {
+  if (side === 'source') return 'out';
+  if (side === 'target') return 'in';
   return config?.direction === 'in' ? 'in' : 'out';
+}
+
+/**
+ * Валидировать сторону привязки (`type_properties.side`); для скалярных и
+ * структурных свойств сторона обязана быть `null`. Возвращает нормализованное
+ * значение (`null` для не-link).
+ */
+function validateLinkSide(
+  side: unknown,
+  valueType: PropertyValueType,
+  config: PropertyConfig | null,
+): LinkPropertySide | null {
+  if (valueType !== 'link') {
+    if (side !== null && side !== undefined) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'сторона привязки задаётся только для свойств-связей',
+        { field: 'side', side },
+      );
+    }
+    return null;
+  }
+  // Структурное свойство-связь: направление хранится в `config.direction`,
+  // колонка `side` остаётся пустой (см. миграцию 041).
+  if (config?.structural === true) {
+    if (side !== null && side !== undefined) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'структурное свойство-связь не имеет стороны — направление в config.direction',
+        { field: 'side', side },
+      );
+    }
+    return null;
+  }
+  if (side === null || side === undefined) {
+    return null; // выводится из config.direction вызывающим кодом
+  }
+  if (!(LINK_PROPERTY_SIDES as readonly string[]).includes(side as string)) {
+    throw new EtnError('VALIDATION_ERROR', `invalid side: ${String(side)}`, {
+      field: 'side',
+      allowed: LINK_PROPERTY_SIDES,
+    });
+  }
+  return side as LinkPropertySide;
+}
+
+/**
+ * Вывести сторону привязки из `config.direction` (для обратной совместимости
+ * с привязками, созданными до миграции 041). `out` → `source`, `in` →
+ * `target`. Возвращает `null` для скалярных/структурных свойств.
+ */
+export function linkPropertySideFromConfig(
+  valueType: PropertyValueType,
+  config: PropertyConfig | null,
+): LinkPropertySide | null {
+  if (valueType !== 'link') return null;
+  if (config?.structural === true) return null;
+  return config?.direction === 'in' ? 'target' : 'source';
+}
+
+/**
+ * Прочитать сторону привязки из строки `type_properties` (после JOIN с
+ * реестром). Колонка `side` после миграции 041 заполняется автоматически;
+ * fallback на `config.direction` нужен для строк, существовавших до
+ * миграции, и для теневых копий, не успевших синхронизироваться.
+ */
+export function linkPropertySideFromBinding(row: {
+  side: string | null;
+  value_type: PropertyValueType;
+  config: PropertyConfig | null;
+}): LinkPropertySide | null {
+  if (row.side !== null && row.side !== undefined) {
+    if (row.side === 'source' || row.side === 'target') return row.side;
+  }
+  return linkPropertySideFromConfig(row.value_type, row.config);
+}
+
+/** `source` ↔ `target`. Для вычисления зеркала из исходной стороны. */
+export function oppositeSide(side: LinkPropertySide): LinkPropertyDirection {
+  return side === 'source' ? 'in' : 'out';
 }
 
 /** `true` для структурного свойства-связи (нетипизированные рёбра, `type_id IS NULL`). */
@@ -344,7 +438,7 @@ function validateLinkConfig(
 
 /**
  * Проверить, что в наборе собственных свойств типа нет другого свойства-связи
- * с той же парой (тип связи + направление) (требование 597b1c1a). Проверка —
+ * с той же парой (тип связи + сторона) (0.8.1, требование b9562306). Проверка —
  * при правке онтологии, а не при записи мысли. `exceptPropertyId` исключает
  * само правимое свойство. Внетиповые свойства-связи проверяются отдельно
  * (совпадение типового и внетипового — не ошибка).
@@ -354,17 +448,23 @@ function assertLinkPropertyPairUnique(
   ownerType: TypeOwnerType,
   ownerId: string,
   linkTypeId: string | null,
-  direction: LinkPropertyDirection,
+  side: LinkPropertySide | null,
   exceptPropertyId: string | null,
 ): void {
   const rows = ndb
     .prepare(
-      `SELECT tp.property_id AS property_id, p.config AS config
+      `SELECT tp.property_id AS property_id, tp.side AS side,
+              p.config AS config, p.value_type AS value_type
          FROM type_properties_v tp
          JOIN properties_v p ON p.id = tp.property_id
         WHERE tp.owner_type = ? AND tp.owner_id = ? AND p.value_type = 'link'`,
     )
-    .all(ownerType, ownerId) as Array<{ property_id: string; config: string | null }>;
+    .all(ownerType, ownerId) as Array<{
+    property_id: string;
+    side: string | null;
+    config: string | null;
+    value_type: PropertyValueType;
+  }>;
   for (const row of rows) {
     if (row.property_id === exceptPropertyId) continue;
     let cfg: PropertyConfig | null = null;
@@ -374,15 +474,20 @@ function assertLinkPropertyPairUnique(
       cfg = null;
     }
     if (linkPropertyLinkTypeId(cfg) !== linkTypeId) continue;
-    if (linkPropertyDirection(cfg) !== direction) continue;
+    const rowSide = linkPropertySideFromBinding({
+      side: row.side,
+      value_type: row.value_type,
+      config: cfg,
+    });
+    if (rowSide !== side) continue;
     throw new EtnError(
       'DUPLICATE',
-      'свойство-связь с этим типом связи и направлением уже есть в типе',
+      'свойство-связь с этим типом связи и стороной уже есть в типе',
       {
         owner_type: ownerType,
         owner_id: ownerId,
         link_type_id: linkTypeId,
-        direction,
+        side,
         conflict_property_id: row.property_id,
       },
     );
@@ -451,6 +556,7 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
     description: string | null;
     required: boolean;
     count: number;
+    side: LinkPropertySide | null;
   }
   const byPair = new Map<string, Entry>();
 
@@ -468,13 +574,16 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
     putEntry({
       property_id: def.property_id,
       link_type_id: structural ? null : linkTypeId,
-      direction: linkPropertyDirection(def.config),
+      // Направление задаётся привязкой (0.8.1); fallback на config.direction —
+      // для совместимости с привязками, созданными до миграции 041.
+      direction: linkPropertyDirection(def.config, def.side ?? null),
       structural,
       property_name: def.key,
       outside_type: false,
       description: def.description,
       required: def.required,
       count: 0,
+      side: def.side ?? null,
     });
   };
 
@@ -517,6 +626,7 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
       description: prop.description,
       required: false,
       count: 0,
+      side: direction === 'out' ? 'source' : 'target',
     });
   }
 
@@ -549,6 +659,7 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
       description: null,
       required: false,
       count,
+      side: direction === 'out' ? 'source' : 'target',
     });
   }
 
@@ -570,6 +681,7 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
       property_name: entry.property_name,
       value_type: 'link',
       direction: entry.direction,
+      side: entry.side,
       link_type_id: entry.link_type_id,
       structural: entry.structural,
       count: entry.count,
@@ -1065,6 +1177,11 @@ function assertNameAvailable(ndb: NetworkDb, name: string, exceptId: string | nu
  * Create a registry property (name must be free, case-insensitively). The row
  * lands in the connection's layer; a same-`name_key` tombstone of this layer
  * is woken by the upsert below.
+ *
+ * 0.8.1 (задача e1fbf304, требование 09f692ff): для свойств-связей без
+ * существующего `config.link_type_id` принимает `input.name_forward` и
+ * `input.name_reverse` и создаёт связанный тип связи в этой же
+ * транзакции. Старое поведение (явный `config.link_type_id`) сохранено.
  */
 export function createNetworkProperty(
   ndb: NetworkDb,
@@ -1078,6 +1195,31 @@ export function createNetworkProperty(
   let name: string;
   if (valueType === 'link') {
     config = validateLinkConfig(ndb, config, 'config');
+    if (!isStructuralLinkProperty(config) && config !== null && !config.link_type_id) {
+      // Единый жизненный цикл: создаём link_type по паре имён (0.8.1).
+      const forward = (input.name_forward ?? '').trim();
+      const reverse = (input.name_reverse ?? '').trim();
+      if (forward === '' || reverse === '') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'для свойства-связи без существующего типа связи нужно передать name_forward и name_reverse',
+          { field: 'config.link_type_id' },
+        );
+      }
+      const linkType = createLinkType(
+        ndb,
+        {
+          name_forward: forward,
+          name_reverse: reverse,
+          parent_id: input.parent_link_type_id ?? null,
+          color: input.link_color ?? null,
+          style: input.link_style ?? null,
+          width: input.link_width ?? null,
+        },
+        actorUserId,
+      );
+      config = { ...config, link_type_id: linkType.id };
+    }
     name = isStructuralLinkProperty(config)
       ? validateKey(input.name)
       : linkPropertyDisplayName(
@@ -1131,11 +1273,44 @@ export function createNetworkProperty(
 }
 
 /**
+ * Запрет смены вида значения между скалярной категорией и категорией «связь»
+ * (0.8.1, требование 5a82c709): конверсия бессмысленна — значения связи
+ * живут рёбрами, а не в таблице значений. Внутри скалярной категории конверсия
+ * работает (L6), внутри «связи» — нет необходимости. Тест «был ли link»
+ * опирается на исходный `value_type` (до смены).
+ */
+function assertNoLinkScalarCategorySwitch(
+  currentValueType: PropertyValueType,
+  nextValueType: PropertyValueType,
+): void {
+  if (currentValueType === nextValueType) return;
+  const currentIsLink = currentValueType === 'link';
+  const nextIsLink = nextValueType === 'link';
+  if (currentIsLink !== nextIsLink) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'категория вида значения неизменна: переход скаляр ↔ связь запрещён',
+      {
+        field: 'value_type',
+        from: currentValueType,
+        to: nextValueType,
+        reason:
+          'значения свойства-связи живут рёбрами, а не в property_values — конвертация бессмысленна',
+      },
+    );
+  }
+}
+
+/**
  * Patch a registry property (last-write-wins per field). Changing `value_type`
  * rewrites every stored value of the property in the same transaction:
  * convertible values move to the new column, the rest are cleared (L6, and
  * 02-data-model.md §3.4a). Renaming is safe — values address the property by
  * id, not by name.
+ *
+ * Переход скаляр ↔ «связь» запрещён (0.8.1, требование 5a82c709): свойство
+ * рождается в одной категории вида значения и не меняет её; значения связи
+ * живут рёбрами, конвертировать их бессмысленно.
  */
 export function updateNetworkProperty(
   ndb: NetworkDb,
@@ -1149,6 +1324,9 @@ export function updateNetworkProperty(
   }
   const nextType =
     changes.value_type !== undefined ? validateValueType(changes.value_type) : undefined;
+  if (nextType !== undefined) {
+    assertNoLinkScalarCategorySwitch(current.value_type, nextType);
+  }
   const finalType = nextType ?? current.value_type;
   const finalConfig = changes.config !== undefined ? changes.config : current.config;
 
@@ -1156,6 +1334,7 @@ export function updateNetworkProperty(
   // config/value_type на 'link' валидируется здесь же.
   let validatedConfig: PropertyConfig | null | undefined = undefined;
   let nextName = changes.name !== undefined ? validateKey(changes.name) : undefined;
+  let linkTypeIdForUpdate: string | null = null;
   if (finalType === 'link') {
     validatedConfig = validateLinkConfig(ndb, finalConfig, 'config');
     if (!isStructuralLinkProperty(validatedConfig)) {
@@ -1164,7 +1343,31 @@ export function updateNetworkProperty(
         (validatedConfig.link_type_id as string),
         linkPropertyDirection(validatedConfig),
       );
+      linkTypeIdForUpdate = validatedConfig.link_type_id as string;
     }
+  }
+
+  // Единый жизненный цикл свойства-связи (0.8.1, требование 09f692ff):
+  // правка имён сторон, оформления и т.п. пишет в связанный link_type.
+  // Сбор linkChanges выполняется до основной транзакции — `updateLinkType`
+  // внутри сам откроет свою, но в одной сессии SQLite это нормально
+  // (вложенные SAVEPOINT), если же она конфликтует — вызывающий код
+  // должен ожидать отказ с понятным сообщением.
+  let linkUpdate: { name_forward?: string; name_reverse?: string; color?: string | null; style?: LinkStyle | null; width?: number | null } | null = null;
+  if (
+    linkTypeIdForUpdate !== null &&
+    (changes.name_forward !== undefined ||
+      changes.name_reverse !== undefined ||
+      changes.link_color !== undefined ||
+      changes.link_style !== undefined ||
+      changes.link_width !== undefined)
+  ) {
+    linkUpdate = {};
+    if (changes.name_forward !== undefined) linkUpdate.name_forward = validateKey(changes.name_forward);
+    if (changes.name_reverse !== undefined) linkUpdate.name_reverse = validateKey(changes.name_reverse);
+    if (changes.link_color !== undefined) linkUpdate.color = changes.link_color ?? null;
+    if (changes.link_style !== undefined) linkUpdate.style = changes.link_style ?? null;
+    if (changes.link_width !== undefined) linkUpdate.width = changes.link_width ?? null;
   }
 
   return ndb.transaction(() => {
@@ -1173,6 +1376,27 @@ export function updateNetworkProperty(
     }
     if (nextType !== undefined && nextType !== current.value_type) {
       migratePropertyValues(ndb, id, current.value_type, nextType);
+    }
+    // Правка link_type (0.8.1) — до UPDATE свойства, чтобы новое имя
+    // свойства (вычисляемое из link_type.name_forward/reverse) уже было
+    // доступно при возможном re-read после UPDATE.
+    if (linkUpdate && linkTypeIdForUpdate !== null) {
+      const currentLink = getLinkType(ndb, linkTypeIdForUpdate);
+      if (currentLink === null) {
+        throw new EtnError('NOT_FOUND', `link type ${linkTypeIdForUpdate} not found`, {
+          entity: 'link_type',
+          id: linkTypeIdForUpdate,
+        });
+      }
+      updateLinkType(ndb, linkTypeIdForUpdate, linkUpdate, currentLink.version, actorUserId);
+      // После правки link_type перечитываем имя свойства через него.
+      if (validatedConfig !== undefined) {
+        nextName = linkPropertyDisplayName(
+          ndb,
+          linkTypeIdForUpdate,
+          linkPropertyDirection(validatedConfig),
+        );
+      }
     }
     const sets: string[] = [];
     const args: unknown[] = [];
@@ -1216,8 +1440,23 @@ export function updateNetworkProperty(
  * returns two counters — how many types attach it and how many values are
  * stored — so the client can explain what is holding it
  * (02-data-model.md §3.4a «Удаление свойства блокируется»).
+ *
+ * 0.8.1 (задача e1fbf304, требование 09f692ff): для свойств-связей —
+ * удаление типа связи (принудительно, рёбра обнуляют `type_id` и
+ * становятся структурными «Родители/Потомки»); возвращает число таких
+ * рёбер в `links_becoming_structural`. Для скалярных и структурных
+ * свойств — `null`.
  */
-export function deleteNetworkProperty(ndb: NetworkDb, id: string): void {
+export interface DeletePropertyResult {
+  /** Число рёбер, ставших структурными после удаления типа связи
+   *  (0.8.1, требование 09f692ff). `null` для скалярных и структурных. */
+  links_becoming_structural: number | null;
+}
+
+export function deleteNetworkProperty(
+  ndb: NetworkDb,
+  id: string,
+): DeletePropertyResult {
   const current = getNetworkProperty(ndb, id);
   if (!current) {
     throw new EtnError('NOT_FOUND', `property ${id} not found`, { entity: 'property', id });
@@ -1239,7 +1478,32 @@ export function deleteNetworkProperty(ndb: NetworkDb, id: string): void {
       { property_id: id, types_count: typesCount, values_count: valuesCount },
     );
   }
+  // Для свойств-связей сначала считаем живые рёбра и удаляем link_type
+  // (0.8.1): рёбра обнулят `type_id` и станут структурными.
+  let linksBecomingStructural: number | null = null;
+  if (current.value_type === 'link') {
+    const cfg = current.config ?? {};
+    const linkTypeId = cfg.link_type_id;
+    if (typeof linkTypeId === 'string' && linkTypeId !== '' && cfg.structural !== true) {
+      const linkType = getLinkType(ndb, linkTypeId);
+      if (linkType !== null) {
+        const linkCount = (
+          ndb
+            .prepare(
+              'SELECT COUNT(*) AS c FROM links_v WHERE type_id = ? AND active = 1 AND marked_for_deletion = 0',
+            )
+            .get(linkTypeId) as { c: number }
+        ).c;
+        // Используем force=1 — принудительное удаление с обнулением
+        // `type_id` у рёбер. Постоянные комментарии рёбер сохраняются
+        // (требование 09f692ff).
+        deleteLinkType(ndb, linkTypeId, undefined, { force: true });
+        linksBecomingStructural = linkCount;
+      }
+    }
+  }
   deleteRowLayered(ndb, 'properties', id);
+  return { links_becoming_structural: linksBecomingStructural };
 }
 
 // ===========================================================================
@@ -1254,6 +1518,7 @@ interface BindingRow {
   property_id: string;
   required: number;
   position: number;
+  side: string | null;
   name: string;
   value_type: string;
   config: string | null;
@@ -1262,22 +1527,31 @@ interface BindingRow {
 
 /** Convert a joined binding row into a {@link PropertyDefinition}. */
 function rowToPropertyDefinition(row: BindingRow): PropertyDefinition {
+  const valueType = row.value_type as PropertyValueType;
+  const config = row.config ? (JSON.parse(row.config) as PropertyConfig) : null;
+  const side = linkPropertySideFromBinding({
+    side: row.side,
+    value_type: valueType,
+    config,
+  });
   return {
     id: row.id,
     property_id: row.property_id,
     owner_type: row.owner_type as TypeOwnerType,
     owner_id: row.owner_id,
     key: row.name,
-    value_type: row.value_type as PropertyValueType,
-    config: row.config ? (JSON.parse(row.config) as PropertyConfig) : null,
+    value_type: valueType,
+    config,
     required: row.required === 1,
     position: row.position,
+    side,
     description: row.description,
   };
 }
 
 const BINDING_SELECT = `SELECT tp.id AS id, tp.owner_type AS owner_type, tp.owner_id AS owner_id,
        tp.property_id AS property_id, tp.required AS required, tp.position AS position,
+       tp.side AS side,
        p.name AS name, p.value_type AS value_type, p.config AS config, p.description AS description
   FROM type_properties_v tp
   JOIN properties_v p ON p.id = tp.property_id`;
@@ -1411,6 +1685,14 @@ export function listEffectiveTypeProperties(
         }
       }
       const ownDefault = def.config?.default_value ?? null;
+      // Направление для отображения имени (0.8.1): привязка source/target
+      // через `type_properties.side` имеет приоритет над `config.direction`.
+      // Для встречных свойств, созданных до миграции 041, `side` может быть
+      // не выставлен (NULL) — fallback на config.direction.
+      const effectiveDirection: LinkPropertyDirection = linkPropertyDirection(
+        def.config,
+        def.side ?? null,
+      );
       out.push({
         ...def,
         // Имя свойства-связи вычисляется из типа связи по направлению
@@ -1421,7 +1703,7 @@ export function listEffectiveTypeProperties(
             ? linkPropertyDisplayName(
                 ndb,
                 (def.config?.link_type_id ?? '') as string,
-                linkPropertyDirection(def.config),
+                effectiveDirection,
               )
             : def.key,
         inherited,
@@ -1463,8 +1745,11 @@ function appendMirroredLinkProperties(
   const covered = new Set<string>();
   for (const def of out) {
     if (def.value_type !== 'link') continue;
+    // Направление берём из привязки (side) с fallback на config.direction —
+    // одно и то же для обеих колонок (требование b9562306: пара
+    // (link_type, direction/side) адресует свойство однозначно).
     covered.add(
-      `${linkPropertyLinkTypeId(def.config) ?? ''}|${linkPropertyDirection(def.config)}`,
+      `${linkPropertyLinkTypeId(def.config) ?? ''}|${linkPropertyDirection(def.config, def.side ?? null)}`,
     );
   }
   const ancestorsSelfFirst = typeAncestors(ndb, 'thought_types', ownerId);
@@ -1497,6 +1782,7 @@ function appendMirroredLinkProperties(
       config: { ...cfg, direction },
       required: false,
       position: out.length,
+      side: direction === 'out' ? 'source' : 'target',
       description: prop.description,
       mirrored: true,
       inherited: defining !== ownerId,
@@ -1733,6 +2019,96 @@ export function setTypePropertyDescriptionOverride(
 }
 
 /**
+ * Материализовать зеркальные привязки со стороны назначения для свойства-связи
+ * (0.8.1, требование 115e44fa): при непустом `allowed_target_type_ids` и
+ * создании привязки со стороны источника — для каждого типа из списка
+ * создаётся привязка со стороны назначения (`required = false`, без дефолта).
+ * Уже существующие привязки (в т.ч. в рабочем слое) не дублируются.
+ *
+ * Возвращает число материализованных привязок — для диагностики в логах и
+ * возможного использования вызывающим кодом. Снимается строго в контексте
+ * уже открытой транзакции (вызывающий код управляет коммитом).
+ */
+function materializeMirroredTargetBindings(
+  ndb: NetworkDb,
+  ownerType: TypeOwnerType,
+  ownerId: string,
+  prop: PropertyLike,
+  sourceSide: LinkPropertySide,
+  actorUserId: string,
+): number {
+  if (ownerType !== 'thought_type') return 0;
+  if (sourceSide !== 'source') return 0;
+  if (isStructuralLinkProperty(prop.config)) return 0;
+  const allowed = prop.config?.allowed_target_type_ids ?? [];
+  const targets = allowed.filter((id): id is string => typeof id === 'string' && id !== '');
+  if (targets.length === 0) return 0;
+
+  // Целевой тип должен существовать и не быть удалён/корзинным.
+  const existingRows = ndb
+    .prepare(
+      `SELECT id FROM ${ownerTypeTable(ownerType)}_v WHERE id IN (${targets
+        .map(() => '?')
+        .join(',')})`,
+    )
+    .all(...targets) as Array<{ id: string }>;
+  const liveTargets = existingRows.map((r) => r.id);
+
+  let created = 0;
+  for (const targetTypeId of liveTargets) {
+    // Не материализуем привязку к самому себе (цикл в иерархии типов).
+    if (targetTypeId === ownerId) continue;
+    // Проверяем, нет ли уже живой привязки этого свойства к этому типу
+    // (с любой стороны или в любом слое — мы в одной транзакции, слой один).
+    const existingBinding = ndb
+      .prepare(
+        `SELECT id FROM type_properties_v
+          WHERE owner_type = ? AND owner_id = ? AND property_id = ?`,
+      )
+      .get(ownerType, targetTypeId, prop.id) as { id: string } | undefined;
+    if (existingBinding) continue;
+
+    // Привязка со стороны target: required=false, без дефолта.
+    const position =
+      (
+        ndb
+          .prepare(
+            'SELECT COALESCE(MAX(position), -1) + 1 AS p FROM type_properties_v WHERE owner_type = ? AND owner_id = ?',
+          )
+          .get(ownerType, targetTypeId) as { p: number }
+      ).p + 100; // заведомо после явных привязок типа
+    const bindingId = randomUUID();
+    ndb
+      .prepare(
+        `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, property_id, required, position, side)
+         VALUES (?, ?, ?, ?, ?, 0, ?, 'target')
+         ON CONFLICT (owner_type, owner_id, property_id, layer_id) DO UPDATE SET
+           deleted = 0,
+           side = 'target',
+           required = 0`,
+      )
+      .run(bindingId, ndb.layerId, ownerType, targetTypeId, prop.id, position);
+    created += 1;
+  }
+  if (created > 0) {
+    // Зеркальные привязки — правка настроек целевого типа. Чтение физической
+    // таблицы нужно, чтобы понять, материализовалась ли строка в текущем слое
+    // (а не в любом из цепочки — `type_properties_v` агрегирует по слоям).
+    for (const targetTypeId of liveTargets) {
+      if (targetTypeId === ownerId) continue;
+      const exists = ndb
+        .prepare(
+          `SELECT id FROM type_properties -- layers:physical-read
+            WHERE owner_type = ? AND owner_id = ? AND property_id = ? AND layer_id = ?`,
+        )
+        .get(ownerType, targetTypeId, prop.id, ndb.layerId) as { id: string } | undefined;
+      if (exists) touchType(ndb, ownerType, targetTypeId, actorUserId);
+    }
+  }
+  return created;
+}
+
+/**
  * Create-or-attach: the legacy `POST …/types/{id}/properties` entry point.
  *
  * New model (0.6.5): the property lives in the registry.
@@ -1742,16 +2118,23 @@ export function setTypePropertyDescriptionOverride(
  *     single source of the property's nature;
  *   * otherwise a registry property is created with the given nature first.
  *
- * Then the binding is created with the given `required`/`position`. Attaching
- * to a type whose ANCESTOR already binds the property is rejected with
- * `DUPLICATE` — the property is already inherited. Attaching to a type drops
- * the same property's redundant bindings across the type's whole SUBTREE in
- * the same transaction (02-data-model.md §3.4.1); values are never touched —
- * they address the property, not the binding.
+ * Then the binding is created with the given `required`/`position`/`side`.
+ * Attaching to a type whose ANCESTOR already binds the property is rejected
+ * with `DUPLICATE` — the property is already inherited. Attaching to a type
+ * drops the same property's redundant bindings across the type's whole
+ * SUBTREE in the same transaction (02-data-model.md §3.4.1); values are never
+ * touched — they address the property, not the binding.
  *
  * `position` defaults to one past the current maximum so new properties land
  * last. The binding row lands in the connection's layer; a binding tombstone
  * of this layer is woken by the upsert.
+ *
+ * `side` (0.8.1, задача e1fbf304): для свойств-связей — `source` / `target`,
+ * выводится из `config.direction` если не задан; для скалярных и
+ * структурных свойств всегда `null`. При создании привязки со стороны
+ * источника и непустом `allowed_target_type_ids` материализуются
+ * соответствующие зеркальные привязки со стороны назначения
+ * (требование 115e44fa).
  */
 export function createTypeProperty(
   ndb: NetworkDb,
@@ -1810,16 +2193,20 @@ export function createTypeProperty(
       );
     }
 
-    // Уникальность пары (тип связи + направление) в наборе собственных свойств
-    // типа (требование 597b1c1a). Совпадение с внетиповым свойством — не ошибка.
+    // Сторона привязки (0.8.1): выводится из input.side или из config.direction.
+    const side = validateLinkSide(input.side, prop.value_type, prop.config);
+    const finalSide: LinkPropertySide | null =
+      side ?? linkPropertySideFromConfig(prop.value_type, prop.config);
+
+    // Уникальность пары (тип связи + сторона) в наборе собственных свойств
+    // типа (требование b9562306). Совпадение с внетиповым свойством — не ошибка.
     if (prop.value_type === 'link') {
-      const cfg = prop.config ?? {};
       assertLinkPropertyPairUnique(
         ndb,
         ownerType,
         ownerId,
         linkPropertyLinkTypeId(prop.config),
-        linkPropertyDirection(prop.config),
+        finalSide,
         null,
       );
     }
@@ -1852,19 +2239,37 @@ export function createTypeProperty(
     const bindingId = randomUUID();
     ndb
       .prepare(
-        `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, property_id, required, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, property_id, required, position, side)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (owner_type, owner_id, property_id, layer_id) DO UPDATE SET
            deleted = 0,
            required = excluded.required,
-           position = excluded.position`,
+           position = excluded.position,
+           side = excluded.side`,
       )
-      .run(bindingId, ndb.layerId, ownerType, ownerId, prop.id, input.required ? 1 : 0, position);
+      .run(
+        bindingId,
+        ndb.layerId,
+        ownerType,
+        ownerId,
+        prop.id,
+        input.required ? 1 : 0,
+        position,
+        finalSide,
+      );
     // The conflict arm wakes a same-(owner, property) tombstone of this layer
     // keeping its ORIGINAL id — re-read by (owner, key), never by the fresh uuid.
     // Подключение свойства — это правка настроек типа: обновим авторство
     // самого типа (требование e6d4165e, приравнивание).
     touchType(ndb, ownerType, ownerId, actorUserId);
+
+    // Зеркальные привязки со стороны target (требование 115e44fa) — только
+    // для свойств-связей с непустым allowed_target_type_ids и стороны source.
+    // Без побочного эффекта, если ограничение пустое или тип скалярный.
+    if (finalSide !== null) {
+      materializeMirroredTargetBindings(ndb, ownerType, ownerId, prop, finalSide, actorUserId);
+    }
+
     // Для link-свойства реестровое имя — display-имя из типа связи (входной
     // key игнорируется при создании), поэтому биндинг перечитывается по
     // ФАКТИЧЕСКОМУ имени строки реестра, а не по входному ключу.
@@ -1977,13 +2382,18 @@ function migratePropertyValues(
 
 /**
  * Patch a type property (docs/03-server-api.md §8, legacy surface). The id
- * addresses the BINDING; `required`/`position` edit the binding itself, while
- * `key`/`value_type`/`config`/`description` edit the registry property — and
- * so apply immediately to every type attaching it (0.6.5 semantics).
+ * addresses the BINDING; `required`/`position`/`side` edit the binding itself,
+ * while `key`/`value_type`/`config`/`description` edit the registry property —
+ * and so apply immediately to every type attaching it (0.6.5 semantics).
  *
  * Changing `value_type` rewrites every stored value of the property in the
  * same transaction (see {@link migratePropertyValues}); renaming keeps stored
  * values attached (they reference the property id, not the name).
+ *
+ * `side` (0.8.1, задача e1fbf304) — переезд направления из свойства в
+ * привязку. Значение валидируется: для скалярных/структурных свойств
+ * принимается только `null`; для типизированных свойств-связей — `source`
+ * или `target`. Не задан — сторона остаётся прежней.
  */
 export function updateTypeProperty(
   ndb: NetworkDb,
@@ -2021,6 +2431,19 @@ export function updateTypeProperty(
       sets.push('position = ?');
       args.push(changes.position);
     }
+    let nextSide: LinkPropertySide | null | undefined = undefined;
+    if (changes.side !== undefined) {
+      const refreshedProp = getNetworkProperty(ndb, current.property_id);
+      if (refreshedProp === null) {
+        throw new EtnError('NOT_FOUND', `property ${current.property_id} not found`, {
+          entity: 'property',
+          id: current.property_id,
+        });
+      }
+      nextSide = validateLinkSide(changes.side, refreshedProp.value_type, refreshedProp.config);
+      sets.push('side = ?');
+      args.push(nextSide);
+    }
     let typeTouched = Object.keys(registryChanges).length > 0;
     if (sets.length > 0) {
       // S4 (13-layers.md §5.1): shadow copy on first edit in a working layer;
@@ -2037,17 +2460,16 @@ export function updateTypeProperty(
     if (typeTouched) {
       touchType(ndb, current.owner_type, current.owner_id, actorUserId);
     }
-    // Уникальность пары (тип связи + направление) при правке свойства-связи
-    // (требование 597b1c1a): смена value_type/config могла изменить пару.
+    // Уникальность пары (тип связи + сторона) при правке свойства-связи
+    // (требование b9562306): смена value_type/config/side могла изменить пару.
     const updated = getTypeProperty(ndb, id);
     if (updated !== null && updated.value_type === 'link') {
-      const cfg = updated.config ?? {};
       assertLinkPropertyPairUnique(
         ndb,
         updated.owner_type,
         updated.owner_id,
         linkPropertyLinkTypeId(updated.config),
-        linkPropertyDirection(updated.config),
+        updated.side ?? null,
         updated.property_id,
       );
     }

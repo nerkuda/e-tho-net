@@ -224,13 +224,19 @@ describe(
         createLink(ndb, { source_id: r.id, target_id: c.id, type_id: lt.id }, USER);
 
         // Цель (компонент) получает зеркальное обратное свойство, не внетиповое.
+        // 0.8.1: зеркало материализуется в type_properties при создании source-привязки
+        // (задача e1fbf304; требование 115e44fa), поэтому в карточке — одна запись
+        // (материализованная привязка target), без внетипового дубликата.
         const cLinks = getPropertyValuesResolved(ndb, 'thought', c.id).filter(
           (v): v is ResolvedLinkProperty => v.value_type === 'link' && !(v as ResolvedLinkProperty).structural,
         );
+        // Возвращается 1 запись (материализованная target-привязка); legacy-зеркала
+        // из appendMirroredLinkProperties больше не добавляются — пара уже покрыта.
         assert.equal(cLinks.length, 1);
-        assert.equal(cLinks[0]!.property_name, 'регулируется из');
-        assert.equal(cLinks[0]!.direction, 'in');
-        assert.equal(cLinks[0]!.outside_type, false);
+        const linkProp = cLinks[0]!;
+        assert.equal(linkProp.property_name, 'регулируется из');
+        assert.equal(linkProp.direction, 'in');
+        assert.equal(linkProp.outside_type, false);
       } finally {
         ndb.close();
       }
@@ -388,7 +394,7 @@ describe(
     // отборов зеркало не видели вовсе.
     // -------------------------------------------------------------------------
 
-    it('mirror in type catalogue: allowed type gets the reverse property (mirrored, not own)', () => {
+    it('mirror in type catalogue: allowed type gets the reverse property (materialized as own)', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const lt = createLinkType(
@@ -410,32 +416,41 @@ describe(
           USER,
         );
 
-        // У исходного типа — прямое свойство, без флага mirrored.
+        // У исходного типа — прямое свойство (side=source).
         const taskEffective = listEffectiveTypeProperties(ndb, 'thought_type', task.id);
         const taskLink = taskEffective.find(
-          (p) => p.value_type === 'link' && p.config?.link_type_id === lt.id && !p.mirrored,
+          (p) => p.value_type === 'link' && p.config?.link_type_id === lt.id,
         );
         assert.ok(taskLink !== undefined);
         assert.equal(taskLink!.key, 'версия -> работы');
+        assert.equal(taskLink!.side, 'source');
 
-        // У накрываемого типа — зеркальное обратное, синтетическое (не own).
+        // У накрываемого типа — материализованная зеркальная привязка
+        // (0.8.1, задача e1fbf304; требование 115e44fa). Свойство стало own,
+        // не синтетическое зеркало — пара (link_type, side) адресует ровно одно
+        // свойство (требование b9562306).
         const verEffective = listEffectiveTypeProperties(ndb, 'thought_type', ver.id);
-        const mirrors = verEffective.filter((p) => p.mirrored === true);
-        assert.equal(mirrors.length, 1);
-        const mirror = mirrors[0]!;
-        assert.equal(mirror.key, 'работы версии');
-        assert.equal(mirror.value_type, 'link');
-        assert.equal(mirror.config?.link_type_id, lt.id);
-        assert.equal(mirror.config?.direction, 'in');
-        assert.equal(mirror.inherited, false);
-        assert.equal(mirror.defined_on, ver.id);
-        assert.equal(mirror.required, false);
-        // Кроме зеркала собственных link-привязок у накрываемого типа нет.
+        const verLink = verEffective.find(
+          (p) => p.value_type === 'link' && p.config?.link_type_id === lt.id,
+        );
+        assert.ok(verLink !== undefined);
+        assert.equal(verLink!.key, 'работы версии');
+        assert.equal(verLink!.value_type, 'link');
+        assert.equal(verLink!.config?.link_type_id, lt.id);
+        // Направление задаётся привязкой (side='target' → direction='in');
+        // config.direction остаётся исходным значением свойства-реестра.
+        assert.equal(verLink!.side, 'target');
+        assert.equal(verLink!.inherited, false);
+        assert.equal(verLink!.defined_on, ver.id);
+        assert.equal(verLink!.required, false);
+        // Только эта типизированная link-привязка у ver (структурные
+        // «Родители»/«Потомки» наследуются от корневого типа и здесь
+        // не учитываются — у них `link_type_id` пустой).
         assert.equal(
           verEffective.filter(
-            (p) => p.value_type === 'link' && p.mirrored !== true && !p.inherited,
+            (p) => p.value_type === 'link' && p.config?.link_type_id !== undefined,
           ).length,
-          0,
+          1,
         );
       } finally {
         ndb.close();
@@ -469,14 +484,21 @@ describe(
           USER,
         );
 
-        // Потомок накрываемого типа наследует зеркало; определяющий тип —
-        // сам «КомпонентD» из allowed-списка.
+        // 0.8.1: зеркальная привязка материализуется на comp (target, side='target')
+        // при создании source-привязки на req. Подтип subComp наследует её по цепочке
+        // типов (требование 115e44fa: «привязки назначения наследуются наравне
+        // с привязками источника»), а не через динамически вычисляемое зеркало.
         const subEffective = listEffectiveTypeProperties(ndb, 'thought_type', subComp.id);
-        const mirrors = subEffective.filter((p) => p.mirrored === true);
-        assert.equal(mirrors.length, 1);
-        assert.equal(mirrors[0]!.key, 'регулируется из');
-        assert.equal(mirrors[0]!.inherited, true);
-        assert.equal(mirrors[0]!.defined_on, comp.id);
+        const inherited = subEffective.filter(
+          (p) =>
+            p.value_type === 'link' &&
+            p.config?.link_type_id === lt.id &&
+            p.inherited === true,
+        );
+        assert.equal(inherited.length, 1);
+        assert.equal(inherited[0]!.key, 'регулируется из');
+        assert.equal(inherited[0]!.side, 'target');
+        assert.equal(inherited[0]!.defined_on, comp.id);
       } finally {
         ndb.close();
       }
@@ -492,18 +514,8 @@ describe(
         );
         const req = createThoughtType(ndb, { name: 'ТребованиеU' }, USER);
         const comp = createThoughtType(ndb, { name: 'КомпонентU' }, USER);
-        createTypeProperty(
-          ndb,
-          'thought_type',
-          req.id,
-          {
-            key: 'применяется к',
-            value_type: 'link',
-            config: { link_type_id: lt.id, direction: 'out', allowed_target_type_ids: [comp.id] },
-          },
-          USER,
-        );
-        // Явная привязка той же пары (тип связи, направление in) на целевом типе.
+        // Сначала явная target-привязка на comp.id: в 0.8.1 на одну сторону —
+        // ровно одна привязка пары (link_type, side).
         createTypeProperty(
           ndb,
           'thought_type',
@@ -515,6 +527,20 @@ describe(
           },
           USER,
         );
+        // Source-привязка с allowed_target_type_ids=[comp.id] — зеркало
+        // уже материализовано, повторного создания не происходит (0.8.1,
+        // задача e1fbf304; требование 115e44fa).
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          req.id,
+          {
+            key: 'применяется к',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out', allowed_target_type_ids: [comp.id] },
+          },
+          USER,
+        );
 
         const compEffective = listEffectiveTypeProperties(ndb, 'thought_type', comp.id);
         const samePair = compEffective.filter(
@@ -523,9 +549,9 @@ describe(
             p.config?.link_type_id === lt.id &&
             p.config?.direction === 'in',
         );
-        // Пара адресует ровно одно свойство: явное, зеркала не добавлено.
+        // Пара адресует ровно одно свойство: ни дубликата, ни синтетического зеркала.
         assert.equal(samePair.length, 1);
-        assert.equal(samePair[0]!.mirrored ?? false, false);
+        assert.equal(samePair[0]!.side, 'target');
       } finally {
         ndb.close();
       }
