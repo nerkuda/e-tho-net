@@ -18,7 +18,7 @@ import { describe, it } from 'node:test';
 
 const SRC = {
   graph: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph.ts'),
-  links: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'links-tab.ts'),
+  graphTab: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'graph-tab.ts'),
   css: resolve(import.meta.dirname, '..', 'src', 'renderer', 'styles.css'),
 };
 
@@ -184,15 +184,19 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     );
   });
 
-  it('links-tab резолвит соседей до полных карточек (значки/цвета) для графа', () => {
-    const src = readText(SRC.links);
+  it('graph-tab резолвит соседей до полных карточек (значки/цвета) для графа', () => {
+    const src = readText(SRC.graphTab);
     assert.ok(
-      /etn\.thoughts\.resolve\(\s*networkId,\s*neighbours\.slice\(0, 100\)/.test(src),
+      /etn\.thoughts\.resolve\(\s*networkId,\s*neighbours\.slice\(0,\s*(?:RESOLVE_BATCH|100)\b/.test(src),
       'neighbours are batch-resolved to ThoughtRef before building the graph',
     );
     assert.ok(
       /neighbours: ThoughtRef\[\]/.test(src) || /graphRefs: ThoughtRef\[\]/.test(src),
       'the graph receives full ThoughtRef cards',
+    );
+    assert.ok(
+      src.includes('fillHeight: true'),
+      'graph-tab requests the mini-graph to fill the tab pane',
     );
   });
 });

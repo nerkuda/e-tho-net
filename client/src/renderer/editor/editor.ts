@@ -9,13 +9,18 @@
  *  - link header (when a link is picked): type + active via `links.update`.
  *
  * L7 turns the group stack below the header into tabs (08-ui-spec.md §6.3):
- * «Основное», «Свойства», «Вложения (N)», «Связи», «Хроника (N)»,
- * «Метаданные». A tab's content is built lazily on first activation and cached
- * for the lifetime of one editor render (a signature change rebuilds everything).
- * The active tab survives focus changes (persisted to L4
+ * «Основное», «Свойства», «Вложения (N)», «Упоминания», «Хроника (N)»,
+ * «Граф», «Метаданные». A tab's content is built lazily on first activation and
+ * cached for the lifetime of one editor render (a signature change rebuilds
+ * everything). The active tab survives focus changes (persisted to L4
  * `UI_STATE_KEY.EDITOR_ACTIVE_TAB`). Modules register tab content builders
  * (`registerTabContent`), tab badge counters (`registerTabCount`) and
- * «Основное» sections (`registerMainSection` — collapsible groups).
+ * «Основное» sections (`registerMainSection` — без обёртки-группы: секция
+ * выводится на всю высоту вкладки).
+ *
+ * Если все табы не помещаются по ширине — справа появляется кнопка `▾N`,
+ * открывающая выпадающий список со скрытыми табами (повторное использование
+ * overflow-логики из `screens/tabs/tab-overflow.ts`).
  */
 
 import {
@@ -65,7 +70,13 @@ import { registerCommentSections } from './comments.js';
 import { registerAttachmentsTab } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
 import { registerLinksTab } from './links-tab.js';
+import { registerGraphTab } from './graph-tab.js';
 import { registerMetadataTab } from './metadata-tab.js';
+import {
+  buildOverflowButton,
+  recomputeOverflow,
+  type StripElements,
+} from '../screens/tabs/tab-overflow.js';
 import { showIconDialog, type IconPickResult } from './icon-dialog.js';
 import { editMarkdownField } from './markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
@@ -87,7 +98,14 @@ export interface EditorContext {
 }
 
 /** Editor tab ids (08-ui-spec.md §6.3, задача 8ab775d9). */
-export type EditorTabId = 'main' | 'properties' | 'attachments' | 'links' | 'chrono' | 'metadata';
+export type EditorTabId =
+  | 'main'
+  | 'properties'
+  | 'attachments'
+  | 'links'
+  | 'chrono'
+  | 'graph'
+  | 'metadata';
 
 /** Builds the content of one tab for the current entity. */
 export type TabContentBuilder = (ctx: EditorContext) => HTMLElement;
@@ -103,10 +121,15 @@ const TABS: Array<{ id: EditorTabId; title: string; counted: boolean }> = [
   { id: 'main', title: 'Основное', counted: false },
   { id: 'properties', title: 'Свойства', counted: false },
   { id: 'attachments', title: 'Вложения', counted: true },
-  { id: 'links', title: 'Связи', counted: false },
+  { id: 'links', title: 'Упоминания', counted: false },
   { id: 'chrono', title: 'Хроника', counted: true },
+  { id: 'graph', title: 'Граф', counted: false },
   { id: 'metadata', title: 'Метаданные', counted: false },
 ];
+
+/** Ширины по умолчанию/минимум для overflow-раскладки вкладок редактора. */
+const EDITOR_TAB_W_DEFAULT_PX = 110;
+const EDITOR_TAB_W_MIN_PX = 80;
 
 const tabContentBuilders = new Map<EditorTabId, TabContentBuilder>();
 const tabCountLoaders = new Map<EditorTabId, TabCountLoader>();
@@ -444,6 +467,7 @@ export function mountEditor(editorHost: HTMLElement): void {
     registerCommentSections();
     registerAttachmentsTab();
     registerLinksTab();
+    registerGraphTab();
     registerMetadataTab();
 
     // Pasted-image uploads from any markdown field re-count the «Вложения» tab
@@ -510,12 +534,12 @@ function buildTabPane(id: EditorTabId): HTMLElement {
   const pane = div('tab-pane fixed');
   if (ctx === null) return pane;
   if (id === 'main') {
-    // Структура вкладки (задача 8ab775d9): в «Основное» теперь живёт только
-    // постоянный комментарий мысли на всю высоту вкладки. Свойства переехали
-    // в отдельную вкладку «Свойства». Если когда-то в этой вкладке снова
+    // Структура вкладки (задача 8ab775d9): в «Основное» живёт постоянный
+    // комментарий мысли на всю высоту вкладки, без обёртки-группы. Свойства
+    // переехали в отдельную вкладку «Свойства». Если когда-то здесь снова
     // зарегистрируют верхние секции (как было до 0.8.1), вернётся прежняя
-    // компоновка «top + splitter + bottom»; сейчас же — одиночная секция,
-    // которая и есть комментарий, на всю высоту.
+    // компоновка «top + splitter + bottom»; сейчас — одиночная секция
+    // (комментарий) на всю высоту.
     const specs = mainSectionBuilders
       .map((section) => section(ctx))
       .filter((spec): spec is GroupSpec => spec !== null);
@@ -524,11 +548,17 @@ function buildTabPane(id: EditorTabId): HTMLElement {
       return pane;
     }
     if (specs.length === 1) {
-      // Одиночная секция (сейчас — постоянный комментарий) занимает всю
-      // высоту вкладки. Обёртка `main-full` нужна, чтобы CSS отдельно
-      // управлял растяжением и отсутствием верхнего сплиттера.
+      // Одиночная секция (постоянный комментарий) занимает всю высоту
+      // вкладки напрямую — без сворачиваемой группы и её шапки. Обёртка
+      // `main-full` обеспечивает flex-растяжение и собственную прокрутку
+      // содержимого.
       const wrap = div('main-full');
-      wrap.append(groupSection(specs[0]!));
+      const body = specs[0]!.buildBody();
+      if (body instanceof Promise) {
+        void body.then((el) => wrap.append(el));
+      } else {
+        wrap.append(body);
+      }
       pane.append(wrap);
       return pane;
     }
@@ -806,11 +836,91 @@ async function render(): Promise<void> {
     tabBar.append(tab);
   }
 
+  // Кнопка `[▾N]` для табов, не поместившихся в строку. По умолчанию скрыта
+  // через атрибут `hidden=true`; `recomputeOverflow` сбрасывает его, когда
+  // что-то не влезает. CSS-класс `hidden` НЕ ставим — общий
+  // `.hidden { display: none !important }` (styles.css) принудительно прячет
+  // элемент по классу и перебивает `hidden=false`, из-за чего кнопка остаётся
+  // невидимой даже когда `recomputeOverflow` уже решил её показать (баг
+  // проявился в DevTools: `class="tab-overflow hidden" hidden=""` при
+  // `textContent="▾3"`).
+  const overflowBtn = el('button', 'tab-overflow') as HTMLButtonElement;
+  overflowBtn.type = 'button';
+  overflowBtn.hidden = true;
+  tabBar.append(overflowBtn);
+
+  // Следим за шириной контейнера: при ресайзе окна / панели переразмечаем
+  // видимый набор и текст кнопки.
+  const stripElements: StripElements<(typeof TABS)[number]> = {
+    root: tabBar,
+    visible: Array.from(tabButtons.values()),
+    hidden: [],
+    reserveButton: null,
+    overflowButton: overflowBtn,
+  };
+  // Один раз вешаем обработчик клика через `buildOverflowButton` — он делает
+  // `cloneNode + replaceWith`, после чего оригинальная нода отсоединена.
+  // Дёргать его в observer нельзя: ссылка `overflowBtn` после первого вызова
+  // указывает на отсоединённую ноду, второй вызов привязал бы обработчик к
+  // невидимому клону. Observer ограничиваем только пересчётом раскладки —
+  // `recomputeOverflow` сам обновляет видимость и текст `[▾N]`.
+  const renderEditorOverflowRow = (item: (typeof TABS)[number], close: () => void): HTMLElement => {
+    const row = el('div', 'tab-overflow-row');
+    const label = el('span', 'tab-overflow-label', item.title);
+    label.style.cursor = 'pointer';
+    label.addEventListener('click', (e) => {
+      e.stopPropagation();
+      activateEditorTab(item.id);
+      close();
+    });
+    row.append(label);
+    return row;
+  };
+  const reflowEditorOverflow = (): void => {
+    recomputeOverflow(
+      stripElements,
+      EDITOR_TAB_W_DEFAULT_PX,
+      EDITOR_TAB_W_MIN_PX,
+      TABS,
+    );
+  };
+  const overflowObserver = new ResizeObserver(reflowEditorOverflow);
+  overflowObserver.observe(tabBar);
+  // Первый маунт: `ResizeObserver` сработает только при изменении размера,
+  // а табы могут уже не помещаться в момент открытия редактора. Прогоняем
+  // разметку сразу, чтобы `▾N` появился без ресайза окна. `buildOverflowButton`
+  // возвращает живую ноду-клона (исходная отсоединяется через replaceWith) —
+  // сохраняем ссылку, чтобы последующие `recomputeOverflow` обновляли
+  // именно DOM-кнопку.
+  // Первый маунт: `ResizeObserver` сработает только при изменении размера,
+  // а табы могут уже не помещаться в момент открытия редактора. Прогоняем
+  // разметку сразу, чтобы `▾N` появился без ресайза окна. `buildOverflowButton`
+  // возвращает живую ноду-клона (исходная отсоединяется через replaceWith) —
+  // сохраняем ссылку, чтобы последующие `recomputeOverflow` обновляли
+  // именно DOM-кнопку. Передаём getter `() => stripElements.hidden`, а не
+  // сам массив: на момент первого вызова tabBar ещё не в DOM, `clientWidth=0`
+  // → recomputeOverflow early-return → `hidden=[]`. ResizeObserver потом
+  // заполнит `hidden` реальными элементами, и обработчик должен читать их
+  // на момент клика, а не пустой снимок из замыкания.
+  reflowEditorOverflow();
+  stripElements.overflowButton = buildOverflowButton(
+    overflowBtn,
+    () => stripElements.hidden,
+    renderEditorOverflowRow,
+  );
+
   // --- tab panes (lazily built, cached for this render) ---------------------
   const paneHost = div('tab-pane-root');
   paneHostEl = paneHost;
 
   scrollBox.append(tabBar, paneHost);
+  // Первый `reflowEditorOverflow` выше отработал на отсоединённой `tabBar`
+  // (clientWidth=0 → early return). `ResizeObserver` должен вызвать свой
+  // callback, когда `tabBar` получает реальный размер после append, но на
+  // практике initial observe не всегда срабатывает синхронно в Electron —
+  // гарантируем расчёт через `requestAnimationFrame`, иначе в узком окне
+  // кнопка `▾N` появится с задержкой в кадр.
+  requestAnimationFrame(reflowEditorOverflow);
   activateEditorTab(activeTab);
 
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);

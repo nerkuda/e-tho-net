@@ -2333,7 +2333,6 @@ export function showLinkTypeEditor(
       value: draft.parent_id,
       onChange: (parentId) => {
         draft.parent_id = parentId;
-        if (current === null) props.refreshPreview();
       },
     });
     parentField.append(picker.root);
@@ -2349,15 +2348,9 @@ export function showLinkTypeEditor(
 
   body.append(errorLine);
 
-  // Property sections (L21: link types gained the property table), staged.
-  const props = buildStagedPropertySection({
-    networkId,
-    ownerType: 'link_type',
-    typeId: type?.id ?? null,
-    previewParentId: () => draft.parent_id ?? findRootType(store.state.linkTypes)?.id ?? null,
-    onOverrideApplied: onChanged,
-  });
-  body.append(props.root);
+  // Свойств у типов связей больше нет (0.8.1, тех.проект a94998c6: «Свойства
+  // типов связей упраздняются» — связь, обросшая типизированными атрибутами,
+  // почти всегда невыделенная сущность). Секция свойств здесь не строится.
 
   // Блок «Метаданные» — автор, даты, id сущности (задача 04cd9794). Только
   // при редактировании существующего типа; для нового id ещё не присвоен.
@@ -2443,7 +2436,6 @@ export function showLinkTypeEditor(
           current = await etn.types.updateLinkType(networkId, current.id, input, current.version);
         }
       }
-      if (!(await props.applyChanges(current.id))) return; // error shown, dialog stays
       await refreshLinkTypes();
       scheduleRefresh();
       onChanged();

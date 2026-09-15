@@ -14,6 +14,8 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -311,6 +313,32 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     assert.equal(title.textContent!.length, 201, 'label clipped to 200 chars + ellipsis');
     assert.equal(title.textContent!.endsWith('…'), true, 'clipped label ends with …');
     assert.equal(cloud.title, longTitle, 'tooltip carries the FULL title');
+  });
+
+  it('setAndPersist re-resolves chip metadata so a freshly picked target shows its title, not the id', async () => {
+    // Регрессия: цель, добавленная живым поиском/пикером ПОСЛЕ построения
+    // редактора, приходила одним id — кеш метаданных не пополнялся, чип
+    // рисовался с сырым id до перезагрузки редактора. setAndPersist обязан
+    // дозаполнять кеш (resolveLinkRefs) и перерисовывать по готовности.
+    // Проверка исходника: воспроизведение требует живого дропдауна поиска
+    // (зависающая в shim-среде цепочка, см. шапку файла).
+    const src = readFileSync(
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'properties.ts'),
+      'utf8',
+    );
+    const start = src.indexOf('const setAndPersist = (next: string[]): void => {');
+    assert.ok(start > 0, 'setAndPersist not found');
+    const body = src.slice(start, src.indexOf('};', start));
+    assert.ok(
+      body.includes('resolveLinkRefs('),
+      'every value change re-resolves missing chip metadata',
+    );
+    assert.ok(
+      /resolveLinkRefs\([^)]*\)\s*\.then\(\(\)\s*=>\s*\{\s*if\s*\(root\.isConnected\)\s*render\(\);/.test(
+        body,
+      ),
+      'chips re-render once the resolve settles',
+    );
   });
 });
 

@@ -72,6 +72,11 @@ export interface MiniGraphOptions {
   links: Link[];
   /** Соседи с массовыми связями: id цели → { hidden: number, label: string }. */
   mass: Map<string, { hidden: number; label: string }>;
+  /**
+   * Занять всю доступную высоту родителя (вкладка «Граф»). По умолчанию
+   * `false` — фиксированные 280 px, как в группе «Локальный граф».
+   */
+  fillHeight?: boolean;
 }
 
 /** Узел симуляции: пилюля-облачко. */
@@ -131,6 +136,16 @@ function cloudVisual(ref: ThoughtRef | Thought): CloudVisual {
  */
 export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   const root = div('mini-graph');
+  // В fill-режиме (вкладка «Граф») дублируем CSS-инлайном, чтобы высота
+  // растягивалась даже если Vite не доставил обновление styles.css —
+  // иначе цепочка `.links-local-graph--fill > .mini-graph` обрывается
+  // и viewport получает долю высоты по содержимому, а не всё окно.
+  if (opts.fillHeight === true) {
+    root.style.display = 'flex';
+    root.style.flexDirection = 'column';
+    root.style.flex = '1 1 auto';
+    root.style.minHeight = '0';
+  }
   const center = opts.thought;
 
   const totalNeighbours = opts.neighbours.length;
@@ -502,6 +517,13 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
 
   // --- Контейнер ---------------------------------------------------------------
   const viewport = div('mini-graph-viewport');
+  if (opts.fillHeight === true) {
+    viewport.classList.add('mini-graph-viewport--fill');
+    // Инлайн-страховка от устаревшего CSS-кеша Vite (см. .mini-graph выше).
+    viewport.style.flex = '1 1 auto';
+    viewport.style.minHeight = '0';
+    viewport.style.height = 'auto';
+  }
   viewport.append(svg);
 
   root.append(viewport);

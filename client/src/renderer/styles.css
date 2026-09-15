@@ -2343,6 +2343,15 @@ body.cloud-dragging * {
   padding: 8px 10px 0;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  /* `min-width: 0` — стандартный фикс flexbox для row-flex внутри column-flex
+     родителя: без него flex-item растягивается по min-content (сумма
+     фиксированных кнопок вкладок), его clientWidth раздувается,
+     `recomputeOverflow` думает, что всё помещается, и оставляет строку
+     вкладок длиннее родителя — панель вылезает за пределы редактора.
+     `overflow: hidden` страхует на случай, если даже после пересчёта видимый
+     набор + кнопка `▾N` всё равно не влезают (например, окно очень узкое). */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .editor-tab {
@@ -7413,13 +7422,9 @@ table.activity-table thead th {
   flex: 1 1 auto;
   min-height: 0;
 }
-.main-full > .group {
+.main-full > .comment-permanent {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-.main-full > .group > .group-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
@@ -7598,11 +7603,34 @@ table.activity-table thead th {
   background: var(--surface-2);
 }
 
-/* Вкладка «Связи» — группа «Локальный граф» */
+/* Вкладка «Граф» — мини-граф на всю высоту вкладки. Цепочка
+   flex-растяжения идёт сверху вниз от `.tab-pane.fixed`:
+     .tab-pane.fixed → .graph-tab → .links-local-graph--fill
+                       → .mini-graph → .mini-graph-viewport--fill
+   Каждый уровень обязан быть flex-контейнером column, иначе
+   `flex: 1 1 auto` потомка не на что опереться (CSS растягивает только
+   во flex-родителе). Без правок `.graph-tab` был обычным блоком и
+   `.links-local-graph--fill` оставался на высоте по содержимому; тогда
+   `.mini-graph-viewport--fill` делил эту высоту поровну с `header` и
+   `hint` — отсюда «граф занимает ровно половину вкладки». */
+.graph-tab {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
 .links-local-graph {
   display: flex;
   flex-direction: column;
   min-height: 280px;
+}
+.links-local-graph--fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.links-local-graph--fill > .mini-graph {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .mini-graph {
   display: flex;
@@ -7627,6 +7655,11 @@ table.activity-table thead th {
 }
 .mini-graph-viewport:active {
   cursor: grabbing;
+}
+.mini-graph-viewport--fill {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .mini-graph-canvas {
   display: block;

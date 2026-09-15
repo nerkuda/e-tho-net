@@ -122,6 +122,26 @@ describe('thought-type editor — tabs (задача b8301c16)', () => {
     assert.ok(!linkBody.includes('buildViewsTab'), 'link-type editor must not embed the views tab');
   });
 
+  it('the link-type editor has no property section (0.8.1: свойства типов связей упраздняются, e5cfacb9)', () => {
+    const src = readText(SOURCE_FILES.typeManager);
+    const linkIdx = src.indexOf('export function showLinkTypeEditor');
+    assert.ok(linkIdx > 0, 'showLinkTypeEditor not found');
+    const tailIdx = src.indexOf('function buildMetadataRowsFromLinkType', linkIdx);
+    const linkBody = src.slice(linkIdx, tailIdx > 0 ? tailIdx : src.length);
+    assert.ok(
+      !linkBody.includes('buildStagedPropertySection'),
+      'link-type editor must not build a property section',
+    );
+    assert.ok(
+      !linkBody.includes('Добавить свойство'),
+      'link-type editor must not offer «Добавить свойство»',
+    );
+    assert.ok(
+      !linkBody.includes('props.applyChanges'),
+      'link-type editor must not persist property changes on apply',
+    );
+  });
+
   it('styles.css declares the classes the tab row + panes rely on', () => {
     const css = readText(CSS_PATH);
     const required = [

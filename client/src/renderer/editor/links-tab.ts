@@ -1,26 +1,22 @@
 /**
- * Editor tab «Связи» (задача 8ab775d9, единая модель связей; 08-ui-spec.md
- * §6.7). Для мысли — две сворачиваемые группы, разделённые сплиттером высоты:
- *  - «Упоминания» (свёрнута по умолчанию): «Ссылки на мысль» (явные
- *    `[[#<id>]]` в body_md) и «Упоминания в тексте» (FTS5 по
- *    title/synonyms). Строки открывают упоминающую мысль (focus) или связь
- *    (link editor); активная вкладка не меняется. Realtime
- *    `property-value.*` события перезагружают развёрнутое тело.
- *  - «Локальный граф» (свёрнута по умолчанию): мини-граф — центральная
- *    мысль и все её прямые соседи (любой тип связи, оба направления).
+ * Editor tab «Упоминания» (задача 8ab775d9, единая модель связей;
+ * 08-ui-spec.md §6.7). Для мысли — две плоские сворачиваемые группы,
+ * разделённые сплиттером высоты:
+ *  - «Ссылки на мысль» (явные `[[#<id>]]` в body_md);
+ *  - «Упоминания в тексте» (FTS5 по title/synonyms).
+ * Строки открывают упоминающую мысль (focus) или связь (link editor);
+ * активная вкладка не меняется. Сплиттер и фиксированные высоты действуют
+ * только когда ОБЕ группы развёрнуты — свёрнутая схлопывается до заголовка,
+ * единственная развёрнутая растягивается на всю вкладку.
  *
  * Прямые типизированные связи и структурные «Родители»/«Потомки» живут
- * теперь на вкладке «Свойства» как свойства-связи (счётчики + чипы) —
- * прежние группы «Прямые связи» и «Использование» удалены как дублирование.
+ * на вкладке «Свойства» как свойства-связи (счётчики + чипы). Мини-граф
+ * переехал на отдельную вкладку «Граф».
  *
  * For a link — a single group with its two endpoint thoughts.
  */
 
-import type {
-  Link,
-  MentionHit,
-  ThoughtRef,
-} from '@etn/shared';
+import type { MentionHit, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId, setFocus } from '../app.js';
 import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
@@ -31,19 +27,18 @@ import { store } from '../state.js';
 import { openLinkInEditor, registerTabContent, type EditorContext } from './editor.js';
 import { groupSection } from './group.js';
 import { applyTabGroupClamp } from './list-heights.js';
-import { buildMiniGraph } from './mini-graph.js';
 import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from './wiki-link-resolver.js';
 import { rowSplitter } from './splitter.js';
 
 /** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
 const RESOLVE_BATCH = 100;
 
-/** Registers the links tab content (thoughts and links). */
+/** Registers the «Упоминания» tab content (thoughts and links). */
 export function registerLinksTab(): void {
   registerTabContent('links', buildLinksTab);
 }
 
-/** Builds the whole «Связи» tab pane content for the entity. */
+/** Builds the whole «Упоминания» tab pane content for the entity. */
 function buildLinksTab(ctx: EditorContext): HTMLElement {
   if (ctx.ownerType === 'link' && ctx.link !== null) {
     const root = div('links-tab');
@@ -51,7 +46,7 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
       groupSection(
         {
           id: 'links',
-          title: 'Связи',
+          title: 'Упоминания',
           count: '(2)',
           buildBody: () => buildLinkEndpointsBody(ctx),
         },
@@ -62,30 +57,25 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
 
   const root = div('links-tab');
 
-  // «Упоминания» (task R9): содержит две подсекции — «Ссылки на мысль»
-  // (явные [[#<id>]] в body_md) и «Упоминания в тексте» (FTS5 по
-  // title/synonyms). Свёрнута по умолчанию — пользователь явно решает, что
-  // готов подождать выполнения запроса.
-  const mentions = groupSection(
+  // Две плоские группы на верхнем уровне вкладки — больше нет родительской
+  // группы-обёртки и нет отдельной группы «Локальный граф» (мини-граф
+  // переехал на собственную вкладку «Граф»).
+  const backlinks = groupSection(
     {
-      id: 'mentions',
-      title: 'Упоминания',
+      id: 'links.backlinks',
+      title: 'Ссылки на мысль',
       lazyCount: true,
       defaultCollapsed: true,
-      buildBody: () => buildMentionsParentBody(ctx),
+      buildBody: () => buildBacklinksBody(ctx),
     },
   );
-  // «Локальный граф» (задача 8ab775d9): мини-граф в стиле Obsidian —
-  // центр = редактируемая мысль, вокруг — все прямые соседи. Свёрнут по
-  // умолчанию, чтобы не рендерить SVG до явного запроса пользователя.
-  // Строится лениво при первом разворачивании.
-  const localGraph = groupSection(
+  const textMentions = groupSection(
     {
-      id: 'links.local-graph',
-      title: 'Локальный граф',
+      id: 'links.text-mentions',
+      title: 'Упоминания в текстах',
       lazyCount: true,
       defaultCollapsed: true,
-      buildBody: () => buildLocalGraphBody(ctx),
+      buildBody: () => buildMentionsBody(ctx),
     },
   );
   // Раскладка пары (приёмка 0.8.1): сплиттер и фиксированные высоты действуют
@@ -95,134 +85,20 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
   const bodyOf = (group: HTMLElement): HTMLElement | null =>
     group.querySelector(':scope > .group-body') as HTMLElement | null;
   const relayout = (): void => {
-    const both = bodyOf(mentions) !== null && bodyOf(localGraph) !== null;
-    applyTabGroupClamp(mentions, 'links.mentions', both);
-    applyTabGroupClamp(localGraph, 'links.local-graph', both);
+    const both = bodyOf(backlinks) !== null && bodyOf(textMentions) !== null;
+    applyTabGroupClamp(backlinks, 'links.backlinks', both);
+    applyTabGroupClamp(textMentions, 'links.text-mentions', both);
   };
-  mentions.addEventListener('etn:toggled', () => relayout());
-  localGraph.addEventListener('etn:toggled', () => relayout());
+  backlinks.addEventListener('etn:toggled', () => relayout());
+  textMentions.addEventListener('etn:toggled', () => relayout());
   relayout();
+  // persistKey «links.mentions» сохраняем — это та же высота, что была
+  // между группами «Упоминания» и «Локальный граф» раньше, чтобы пользователь
+  // не потерял настройку при миграции вкладки.
   root.append(
-    mentions,
-    rowSplitter(() => bodyOf(mentions), { min: 50, persistKey: 'links.mentions' }),
-    localGraph,
-  );
-  return root;
-}
-
-/**
- * Тело группы «Локальный граф»: стягивает всех прямых соседей мысли
- * (структурные «Родители»/«Потомки» + типизированные связи в обе стороны)
- * и рисует мини-канвас. Массовые связи (≥10 одинакового типа к одной цели)
- * скрываются за чипом «+N».
- */
-async function buildLocalGraphBody(ctx: EditorContext): Promise<HTMLElement> {
-  const networkId = requireNetworkId();
-  const root = div('links-local-graph');
-  if (ctx.thought === null) {
-    root.append(el('p', 'muted', 'Граф недоступен — мысль ещё загружается.'));
-    return root;
-  }
-  // Параллельно: соседи (оба направления одним вызовом), полный список связей
-  // мысли (для подписей рёбер), сама мысль (уже есть в `ctx.thought`).
-  let neighbours: Array<{ id: string; title: string }> = [];
-  let links: Link[] = [];
-  try {
-    const [parents, children, grouped] = await Promise.all([
-      etn.thoughts.neighbors(networkId, ctx.ownerId, 'parents', 200),
-      etn.thoughts.neighbors(networkId, ctx.ownerId, 'children', 200),
-      etn.links.listByThought(networkId, ctx.ownerId, true),
-    ]);
-    const seen = new Set<string>();
-    const all = [...parents, ...children];
-    for (const item of all) {
-      if (item.id !== ctx.ownerId && !seen.has(item.id)) {
-        seen.add(item.id);
-        neighbours.push({ id: item.id, title: item.title });
-      }
-    }
-    links = [
-      ...grouped.by_type.flatMap((g) => g.items) as unknown as Link[],
-      ...grouped.untyped_parents as unknown as Link[],
-      ...grouped.untyped_children as unknown as Link[],
-    ];
-  } catch (err) {
-    root.append(el('p', 'muted', `Не удалось загрузить граф: ${errText(err)}`));
-    return root;
-  }
-
-  // Считаем массовые связи: для каждой связи с типом группируем по типу,
-  // и если у одной и той же цели несколько связей одного типа — прячем
-  // избыточные рёбра.
-  const massMap = new Map<string, { hidden: number; label: string }>();
-  // Простая эвристика: считаем повторяющиеся пары (type_id, target_id) и
-  // если их >= MASS_LINK_THRESHOLD — считаем массовыми.
-  const pairCounts = new Map<string, { typeName: string; count: number }>();
-  for (const link of links) {
-    const otherId = link.source_id === ctx.ownerId ? link.target_id : link.source_id;
-    if (otherId === ctx.ownerId) continue;
-    const key = `${link.type_id ?? ''}|${otherId}`;
-    const existing = pairCounts.get(key);
-    if (existing === undefined) {
-      const typeName =
-        store.state.linkTypes.find((t) => t.id === link.type_id)?.name_forward ?? 'связь';
-      pairCounts.set(key, { typeName, count: 1 });
-    } else {
-      existing.count += 1;
-    }
-  }
-  for (const [key, info] of pairCounts) {
-    if (info.count >= 10) {
-      const [, otherId] = key.split('|') as [string, string];
-      const target = massMap.get(otherId) ?? { hidden: 0, label: info.typeName };
-      target.hidden += info.count - 1; // одно ребро рисуем, остальные прячем
-      target.label = info.typeName;
-      massMap.set(otherId, target);
-    }
-  }
-
-  if (neighbours.length === 0) {
-    root.append(el('p', 'muted', 'У мысли нет прямых связей.'));
-    return root;
-  }
-
-  // Соседи для мини-графа — полными карточками (значок/цвета/шрифт/пометки,
-  // приёмка 0.8.1 «облачка как везде»): батч-резолв; неудача — нейтральная
-  // карточка из id/title.
-  let graphRefs: ThoughtRef[] = neighbours.map((nb) => ({
-    id: nb.id,
-    title: nb.title,
-    type_id: null,
-    icon: null,
-    icon_kind: 'emoji' as const,
-    icon_attachment_id: null,
-    active: true,
-    marked_for_deletion: false,
-    fg_color: null,
-    bg_color: null,
-    font_bold: null,
-    font_italic: null,
-    font_underline: null,
-    font_strike: null,
-  }));
-  try {
-    const resolved = await etn.thoughts.resolve(
-      networkId,
-      neighbours.slice(0, 100).map((nb) => nb.id),
-    );
-    const byId = new Map(resolved.map((r) => [r.id, r]));
-    graphRefs = graphRefs.map((r) => byId.get(r.id) ?? r);
-  } catch {
-    // Оффлайн-мигание — граф рисуется с нейтральными пилюлями.
-  }
-
-  root.append(
-    buildMiniGraph({
-      thought: ctx.thought,
-      neighbours: graphRefs,
-      links,
-      mass: massMap,
-    }),
+    backlinks,
+    rowSplitter(() => bodyOf(backlinks), { min: 50, persistKey: 'links.mentions' }),
+    textMentions,
   );
   return root;
 }
@@ -256,64 +132,6 @@ function buildLinkEndpointsBody(ctx: EditorContext): HTMLElement {
     }
   }
 
-  return box;
-}
-
-/** Builds the parent «Упоминания» body: container with two child groups. */
-function buildMentionsParentBody(ctx: EditorContext): HTMLElement {
-  const networkId = requireNetworkId();
-  const box = div('mentions-parent-body');
-
-  const childReload: { current: (() => void) | null } = { current: null };
-
-  /** Loads both endpoints in parallel and reports the aggregate count. */
-  async function refreshCounts(): Promise<void> {
-    const [backlinks, mentions] = await Promise.all([
-      etn.thoughts.backlinks(networkId, ctx.ownerId).catch(() => []),
-      etn.thoughts.mentions(networkId, ctx.ownerId).catch(() => []),
-    ]);
-    const visibleBacklinks = backlinks.filter((h) => h.active || store.state.showInactive);
-    const visibleMentions = mentions.filter((h) => h.active || store.state.showInactive);
-    const total = visibleBacklinks.length + visibleMentions.length;
-    box.closest('.group')?.dispatchEvent(
-      new CustomEvent('etn:set-count', { detail: `(${total})` }),
-    );
-  }
-  void refreshCounts();
-
-  // Две дочерние группы — те же groupSection, что и везде.
-  const backlinksSection = groupSection(
-    {
-      id: 'mentions:backlinks',
-      title: 'Ссылки на мысль',
-      lazyCount: true,
-      defaultCollapsed: true,
-      buildBody: () => buildBacklinksBody(ctx),
-    },
-  );
-  const textMentionsSection = groupSection(
-    {
-      id: 'mentions:text',
-      title: 'Упоминания в тексте',
-      lazyCount: true,
-      defaultCollapsed: true,
-      buildBody: () => buildMentionsBody(ctx),
-    },
-  );
-  childReload.current = () => {
-    backlinksSection.replaceWith(
-      groupSection(
-        {
-          id: 'mentions:backlinks',
-          title: 'Ссылки на мысль',
-          lazyCount: true,
-          defaultCollapsed: false,
-          buildBody: () => buildBacklinksBody(ctx),
-        },
-      ),
-    );
-  };
-  box.append(backlinksSection, textMentionsSection);
   return box;
 }
 
@@ -463,8 +281,8 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
       // like the search panel, render it as (escaped, trusted) HTML.
       renderHtml(snippet, hit.snippet);
       item.append(icon, title, snippet);
-      // Stage 3: the row has no per-indicator icons — Ctrl+hover shows the
-      // owner's (thought or link) permanent comment.
+      // Stage 3: no per-indicator icons on an endpoint row — Ctrl+hover shows
+      // the owner's (thought or link) permanent comment.
       if (hit.owner_type === 'thought') markThoughtCommentPreview(item, hit.owner_id, hit.title);
       else markCommentPreview(item, 'link', hit.owner_id, hit.title);
       item.addEventListener('click', () => void open(hit));

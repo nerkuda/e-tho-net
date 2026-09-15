@@ -798,6 +798,76 @@ describe('editor properties — «Свойства вне типа» group (0.6.
   });
 });
 
+describe('editor properties — внетиповые свойства-связи в «Свойства вне типа» (e5cfacb9)', () => {
+  /**
+   * Ошибка e5cfacb9: живое ребро обязано проецироваться в свойство — типовое
+   * или внетиповое. Здесь — таблица отдельной группы с миксом: скаляр вне
+   * типа + свойство-связь вне типа без ключа реестра (легаси-рёбра, чей тип
+   * связи не имеет свойства в реестре).
+   */
+  it('renders an outside-type link property without a registry key as read-only chips', async () => {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const table = propertiesInternals.buildOutsideTypeTable(
+      [
+        {
+          id: 'vOut',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: 'pDropped',
+          property_name: 'Отвалившееся',
+          value_type: 'text',
+          value: 'историческое значение',
+          outside_type: true,
+          updated_at: '2026',
+        },
+        {
+          id: '',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: '',
+          outside_type: true,
+          property_name: 'Сотрудники',
+          value_type: 'link',
+          direction: 'out',
+          link_type_id: 'lt1',
+          structural: false,
+          count: 2,
+          values: [
+            { link_id: 'l1', target_id: 'p1', target_title: 'Иванов', target_type_id: null, comment: null },
+            { link_id: 'l2', target_id: 'p2', target_title: 'Петров', target_type_id: null, comment: null },
+          ],
+        },
+      ],
+      'n1',
+      'thought',
+      't1',
+      () => {},
+    );
+
+    const json = JSON.stringify(table);
+    // Обе строки таблицы: скаляр вне типа и свойство-связь вне типа.
+    assert.ok(json.includes('Отвалившееся'), 'scalar outside-type row is rendered');
+    assert.ok(json.includes('Сотрудники (связь)'), 'outside-type link row is rendered');
+    assert.ok(json.includes('Иванов'), 'edge target chip #1');
+    assert.ok(json.includes('Петров'), 'edge target chip #2');
+    // Read-only для рёбер без ключа реестра: нет маркеров редактора
+    // (кнопки «выбрать»/«очистить») у этой строки.
+    assert.equal(
+      json.includes('link-value-corner'),
+      false,
+      'registry-less link chips must not carry editor corner buttons',
+    );
+  });
+});
+
 describe('property value autocomplete helpers (pure)', () => {
   /** Imports the module (once) with the DOM shims installed. */
   async function loadPropsModule(): Promise<any> {

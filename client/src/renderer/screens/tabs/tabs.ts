@@ -37,32 +37,37 @@ export function mountTabStrip(host: HTMLElement): HTMLDivElement {
   const root = div('tab-strip');
   host.append(root);
 
-  const elements: StripElements = {
+  const elements: StripElements<TabDto> & { reserveButton: HTMLButtonElement } = {
     root,
     visible: [],
     hidden: [],
-    plusButton: el('button', 'tab tab-plus') as HTMLButtonElement,
+    reserveButton: el('button', 'tab tab-plus') as HTMLButtonElement,
     overflowButton: null,
   };
 
-  elements.plusButton.type = 'button';
-  elements.plusButton.title = 'Открыть сеть';
-  elements.plusButton.append(svgIcon('plus', 14));
-  elements.plusButton.addEventListener('click', () => {
+  elements.reserveButton.type = 'button';
+  elements.reserveButton.title = 'Открыть сеть';
+  elements.reserveButton.append(svgIcon('plus', 14));
+  elements.reserveButton.addEventListener('click', () => {
     // In-workspace picker overlay (Q-bugfix): the tab strip stays visible
     // above the overlay, so clicking another tab or «+» again cancels.
     store.update({ pickerOpen: true });
   });
-  root.append(elements.plusButton);
+  root.append(elements.reserveButton);
 
-  const overflowBtn = el('button', 'tab-overflow hidden') as HTMLButtonElement;
+  // Кнопка `[▾N]` для не поместившихся воркспейс-вкладок. Скрыта через
+  // атрибут `hidden`; `recomputeOverflow` сбрасывает его, когда что-то не
+  // влезает. CSS-класс `hidden` НЕ ставим — общий
+  // `.hidden { display: none !important }` (styles.css) перебивает
+  // `hidden=false` и оставляет кнопку невидимой (тот же баг, что в editor.ts).
+  const overflowBtn = el('button', 'tab-overflow') as HTMLButtonElement;
   overflowBtn.type = 'button';
   overflowBtn.hidden = true;
   root.append(overflowBtn);
   elements.overflowButton = overflowBtn;
 
   const observer = new ResizeObserver(() => {
-    recomputeOverflow(elements, TAB_W_DEFAULT_PX, TAB_W_MIN_PX);
+    recomputeOverflow(elements, TAB_W_DEFAULT_PX, TAB_W_MIN_PX, store.state.tabs);
   });
   observer.observe(root);
 
@@ -88,7 +93,7 @@ export async function refreshTabs(): Promise<void> {
 }
 
 /** Re-renders the strip based on the current `store.tabs`. */
-function render(elements: StripElements): void {
+function render(elements: StripElements<TabDto> & { reserveButton: HTMLButtonElement }): void {
   const tabs = store.state.tabs;
   const activeId = store.state.activeTabId;
   const dirty = store.state.dirtyTabIds;
@@ -110,25 +115,51 @@ function render(elements: StripElements): void {
       inaccessible: inaccessible.has(tab.tab_id),
     });
     elements.visible.push(button);
-    elements.root.insertBefore(button, elements.plusButton);
+    elements.root.insertBefore(button, elements.reserveButton);
   }
 
   // The «+» mirrors the picker's open state with a pressed look.
-  elements.plusButton.classList.toggle('tab-active', pickerOpen);
+  elements.reserveButton.classList.toggle('tab-active', pickerOpen);
 
-  recomputeOverflow(elements, TAB_W_DEFAULT_PX, TAB_W_MIN_PX);
+  recomputeOverflow(elements, TAB_W_DEFAULT_PX, TAB_W_MIN_PX, tabs);
   if (elements.overflowButton !== null) {
-    buildOverflowButton(
+    // `buildOverflowButton` отсоединяет старую ноду через `replaceWith` и
+    // возвращает свежий клон — сохраняем ссылку, чтобы последующие вызовы
+    // `recomputeOverflow` обновляли именно DOM-кнопку, а не висящий в
+    // памяти отсоединённый оригинал. Передаём getter `() => elements.hidden`,
+    // а не сам массив: обработчик читает актуальный список на момент клика,
+    // иначе при первом ренде до того, как `recomputeOverflow` обновит
+    // `elements.hidden`, в дропдауне окажется пустой снимок.
+    elements.overflowButton = buildOverflowButton(
       elements.overflowButton,
-      elements.hidden,
-      async (tabId: string) => {
-        await activateTab(tabId);
-      },
-      async (tabId: string) => {
-        await closeTab(tabId);
+      () => elements.hidden,
+      (tab, close) => {
+        const row = el('div', 'tab-overflow-row');
+        const label = el('span', 'tab-overflow-label', networkShort(tab.network_id));
+        const activateBtn = el('button', 'link-btn', 'Активировать') as HTMLButtonElement;
+        activateBtn.type = 'button';
+        activateBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          void activateTab(tab.tab_id);
+          close();
+        });
+        const closeBtn = el('button', 'link-btn', 'Закрыть') as HTMLButtonElement;
+        closeBtn.type = 'button';
+        closeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          void closeTab(tab.tab_id);
+          close();
+        });
+        row.append(label, activateBtn, closeBtn);
+        return row;
       },
     );
   }
+}
+
+/** Short network id for the overflow dropdown label. */
+function networkShort(networkId: string): string {
+  return networkId.length <= 8 ? networkId : `${networkId.slice(0, 8)}…`;
 }
 
 /** Builds the button element for one tab. */

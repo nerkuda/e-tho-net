@@ -108,19 +108,19 @@ describe('always-fixed политика сплиттера (bug 4cc6248c, тре
     }
   });
 
-  it('вкладка «Связи» использует парную раскладку клампов для обеих групп', () => {
+  it('вкладка «Упоминания» использует парную раскладку клампов для обеих групп', () => {
     const src = readText(SRC.links);
     assert.ok(
-      /applyTabGroupClamp\(mentions,\s*'links\.mentions'/.test(src),
-      'mentions group uses applyTabGroupClamp(links.mentions)',
+      /applyTabGroupClamp\(backlinks,\s*'links\.backlinks'/.test(src),
+      'backlinks group uses applyTabGroupClamp(links.backlinks)',
     );
     assert.ok(
-      /applyTabGroupClamp\(localGraph,\s*'links\.local-graph'/.test(src),
-      'localGraph group uses applyTabGroupClamp(links.local-graph)',
+      /applyTabGroupClamp\(textMentions,\s*'links\.text-mentions'/.test(src),
+      'textMentions group uses applyTabGroupClamp(links.text-mentions)',
     );
     assert.ok(
       /persistKey:\s*'links\.mentions'/.test(src),
-      'splitter carries the persistKey for the mentions group',
+      'splitter carries the persistKey for the mentions height',
     );
   });
 

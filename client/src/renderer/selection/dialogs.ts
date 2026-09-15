@@ -11,10 +11,10 @@
  *   rejects a key foreign to the owner's type, so the client filters first).
  */
 
-import type { PropertyDefinition, PropertyValueType, ThoughtRef } from '@etn/shared';
+import type { EffectiveTypeProperty, PropertyValueType, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
-import { buildValueOptionsCaret } from '../editor/properties.js';
+import { buildLinkValueEditor, buildValueOptionsCaret } from '../editor/properties.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
@@ -25,8 +25,9 @@ import { store } from '../state.js';
 
 /** A value editor state row kept until «Применить». */
 interface PropertyRowState {
-  def: PropertyDefinition;
-  /** `null`/undefined — the row is left empty and is not applied. */
+  def: EffectiveTypeProperty;
+  /** `null`/undefined — the row is left empty and is not applied. Свойство-связь
+   *  хранит здесь `string[]` (список целей, инструкция a47947c8) или `null`. */
   value: unknown;
 }
 
@@ -122,7 +123,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
   // Filled by the loader below; «Применить» filters on them so the server only
   // sees (thought, key) pairs the thought's own type defines.
   let selectedRefs: ThoughtRef[] = [];
-  let defsByType = new Map<string, PropertyDefinition[]>();
+  let defsByType = new Map<string, EffectiveTypeProperty[]>();
 
   const applyBtn = {
     label: 'Применить',
@@ -174,7 +175,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     selectedRefs = refs;
     // Property definitions of every thought type met in the selection.
     const typeIds = [...new Set(refs.map((r) => r.type_id).filter((t): t is string => t !== null))];
-    defsByType = new Map<string, PropertyDefinition[]>();
+    defsByType = new Map<string, EffectiveTypeProperty[]>();
     try {
       const perType = await Promise.all(
         typeIds.map(async (typeId) => {
@@ -300,8 +301,23 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       cell.append(select);
       return cell;
     }
-    // Свойство-связь: значение — рёбра, пакетный диалог их не редактирует.
-    cell.append(span('—', 'muted'));
+    // Свойство-связь: унифицированный чип-редактор (инструкция a47947c8) —
+    // тот же компонент, что в редакторе мысли. «Применить» уже пишет по
+    // одному свойству за раз через `etn.properties.set`, поэтому `save`
+    // здесь только буферизует выбор в `state.value` (список id целей или
+    // `null` при пустом наборе) — сеть трогает лишь `applyAll`.
+    const editor = buildLinkValueEditor({
+      networkId,
+      ownerType: 'thought',
+      ownerId: '',
+      definition: def,
+      values: [],
+      save: async (next) => {
+        state.value = next;
+        return true;
+      },
+    });
+    cell.append(editor);
     return cell;
   }
 }

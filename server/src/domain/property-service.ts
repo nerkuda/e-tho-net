@@ -523,15 +523,14 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
   const counts = linkEdgeCounts(ndb, thoughtId);
 
   // 3. Внетиповые: рёбра, чья пара (тип связи + направление) не покрыта
-  //    явным/зеркальным свойством, но у типа связи есть свойство-связь в
-  //    реестре (обратная сторона без ограничения, требование dde92461, либо
-  //    свойство-связь не из типа мысли — dfaacb05).
-  const registryLinkTypes = new Set<string>();
-  for (const prop of listNetworkProperties(ndb)) {
-    if (prop.value_type !== 'link') continue;
-    const linkTypeId = linkPropertyLinkTypeId(prop.config);
-    if (linkTypeId !== null) registryLinkTypes.add(linkTypeId);
-  }
+  //    явным/зеркальным свойством. Принадлежность типа связи реестру не
+  //    проверяется: проекция «ребро → свойство» полная, и живое ребро обязано
+  //    быть видно в свойствах даже когда его тип связи не имеет свойства в
+  //    реестре (легаси-рёбра; ошибка e5cfacb9). Три источника внетиповых
+  //    записей: обратная сторона свойства-связи без ограничения (dde92461),
+  //    свойство-связь не из типа мысли (dfaacb05) и рёбра типов связей без
+  //    реестрового свойства — у всех property_id пуст, запись через ключ
+  //    реестра недоступна, только чтение и удаление самих рёбер.
   for (const [pair, count] of counts) {
     if (count === 0) continue;
     const [linkTypeId, direction] = pair.split('|') as [string, LinkPropertyDirection];
@@ -540,7 +539,6 @@ export function listThoughtLinkProperties(ndb: NetworkDb, thoughtId: string): Re
       e.count = count;
       continue;
     }
-    if (!registryLinkTypes.has(linkTypeId)) continue;
     putEntry({
       property_id: '',
       link_type_id: linkTypeId,
@@ -1867,7 +1865,10 @@ export function createTypeProperty(
     // Подключение свойства — это правка настроек типа: обновим авторство
     // самого типа (требование e6d4165e, приравнивание).
     touchType(ndb, ownerType, ownerId, actorUserId);
-    return getTypePropertyByKey(ndb, ownerType, ownerId, key)!;
+    // Для link-свойства реестровое имя — display-имя из типа связи (входной
+    // key игнорируется при создании), поэтому биндинг перечитывается по
+    // ФАКТИЧЕСКОМУ имени строки реестра, а не по входному ключу.
+    return getTypePropertyByKey(ndb, ownerType, ownerId, prop.name)!;
   });
 }
 
@@ -2258,8 +2259,25 @@ function attachedPropertyIds(
 }
 
 /**
- * Resolve a property by NAME against the registry (names are unique per
- * network since 0.6.5, so the name alone addresses the property).
+ * Resolve a property by the key the READ side shows. Names are unique per
+ * network since 0.6.5, so a scalar name alone addresses the property — but a
+ * link property reads under its DISPLAY name computed from the link type and
+ * direction (требование «имя свойства-связи вычисляется из типа связи»),
+ * which can diverge from the registry row's stored name (миграция 040 named
+ * the link type `upd: …` while keeping the old property name; renaming a link
+ * type later shifts the display name the same way). Resolution order for
+ * thought owners:
+ *
+ *  1. the owner type's effective set — its `key` is exactly what the card and
+ *     the editor show (display names for links, registry names for scalars,
+ *     mirrors included). A pair «link type + direction» is unique in a set, so
+ *     a link hit is unambiguous; a display name clashing with a scalar's name
+ *     surfaces as an explicit ambiguity error;
+ *  2. the registry by stored name (unattached scalars, canonical link names);
+ *  3. link properties of the registry by display name — the outside-type
+ *     write arm (требование dfaacb05: запись значения свойства-связи, не
+ *     подключённого к типу владельца).
+ *
  * Connectivity to the owner's type is NOT checked here — callers decide
  * (writes reject unattached properties with 422, deletes of outside-type
  * values must succeed). Exported for the MCP facade (`etn.properties.set`),
@@ -2268,14 +2286,65 @@ function attachedPropertyIds(
  */
 export function resolveDefinition(
   ndb: NetworkDb,
-  _ownerType: PropertyOwnerType,
-  _ownerId: string,
+  ownerType: PropertyOwnerType,
+  ownerId: string,
   key: string,
 ): PropertyLike | null {
+  if (ownerType === 'thought') {
+    // 1) Эффективный набор типа владельца — ключи, которые отдаёт чтение.
+    const row = ndb
+      .prepare('SELECT type_id FROM thoughts_v WHERE id = ?')
+      .get(ownerId) as { type_id: string | null } | undefined;
+    const typeId = row?.type_id ?? getRootTypeId(ndb, 'thought_types');
+    if (typeId !== null) {
+      const matches = listEffectiveTypeProperties(ndb, 'thought_type', typeId).filter(
+        (d) => d.key === key,
+      );
+      if (matches.length === 1) {
+        const def = matches[0]!;
+        return { id: def.property_id, name: def.key, value_type: def.value_type, config: def.config };
+      }
+      if (matches.length > 1) {
+        throw new EtnError('VALIDATION_ERROR', `property name "${key}" is ambiguous`, {
+          field: 'property',
+          name: key,
+          candidates: matches.map((m) => ({ id: m.property_id, name: m.key })),
+        });
+      }
+    }
+  }
+  // 2) Канонический путь — имя строки реестра.
   const prop = getNetworkPropertyByName(ndb, key);
-  return prop
-    ? { id: prop.id, name: prop.name, value_type: prop.value_type, config: prop.config }
-    : null;
+  if (prop) {
+    return { id: prop.id, name: prop.name, value_type: prop.value_type, config: prop.config };
+  }
+  // 3) Внетиповая запись свойства-связи (dfaacb05): ключ может быть
+  //    display-именем link-свойства реестра, не подключённого к типу владельца.
+  if (ownerType === 'thought') {
+    const byDisplay = new Map<string, NetworkProperty>();
+    for (const p of listNetworkProperties(ndb)) {
+      if (p.value_type !== 'link') continue;
+      const cfg = p.config ?? {};
+      if (isStructuralLinkProperty(cfg)) continue;
+      const ltId = linkPropertyLinkTypeId(cfg);
+      if (ltId === null) continue;
+      if (linkPropertyDisplayName(ndb, ltId, linkPropertyDirection(cfg)) === key) {
+        byDisplay.set(p.id, p);
+      }
+    }
+    if (byDisplay.size === 1) {
+      const p = [...byDisplay.values()][0]!;
+      return { id: p.id, name: p.name, value_type: p.value_type, config: p.config };
+    }
+    if (byDisplay.size > 1) {
+      throw new EtnError('VALIDATION_ERROR', `property name "${key}" is ambiguous`, {
+        field: 'property',
+        name: key,
+        candidates: [...byDisplay.values()].map((p) => ({ id: p.id, name: p.name })),
+      });
+    }
+  }
+  return null;
 }
 
 /**

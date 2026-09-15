@@ -6,8 +6,10 @@
  *    `text`, `number`, `date`, `bool`, `url`, `link` (свойство-связь) — для
  *    `link` используется автокомплит по заголовку мысли и чипы для множественных
  *    значений.
- *  - «Свойства вне типа» (свёрнута по умолчанию) — read-only таблица значений,
- *    чьё свойство больше не подключено к типу владельца (0.6.5).
+ *  - «Свойства вне типа» (свёрнута по умолчанию) — значения, чьё свойство
+ *    не подключено к типу владельца (0.6.5): скаляры read-only, свойства-связи
+ *    (0.8.1, dfaacb05) — редактор для реестровых свойств и read-only чипи для
+ *    рёбер типов связей без свойства в реестре.
  *
  * Значения пишутся через `etn.properties.set` / `remove`; realtime
  * `property-value.*` события перезагружают таблицу (модульный слушатель).
@@ -115,7 +117,9 @@ function buildPropertiesTab(ctx: EditorContext): HTMLElement {
           ctx.ownerType,
           ctx.ownerId,
         );
-        const outside = values.filter((v) => !isLinkPropertyValues(v) && v.outside_type === true);
+        // Скаляры и свойства-связи: внетиповое свойство-связь — тоже значение
+        // вне типа (dfaacb05), сервер отдаёт его формой LinkPropertyValues.
+        const outside = values.filter((v) => v.outside_type === true);
         return outside.length === 0 ? '(0)' : `(${outside.length})`;
       } catch {
         return undefined;
@@ -240,10 +244,10 @@ function buildOutsidePropertiesBody(ctx: EditorContext): HTMLElement {
       return;
     }
     if (box.isConnected) everMounted = true;
-    // Свойства-связи вне типа не бывают: их «значение» — живые рёбра, а не
-    // сохранённые строки property_values. Вне типа остаются только скаляры.
-    const outside: PropertyValue[] = values.filter(
-      (v): v is PropertyValue => !isLinkPropertyValues(v) && v.outside_type === true,
+    // Вне типа — скаляры и свойства-связи вместе (dfaacb05): рёбра,
+    // непокрытые свойствами типа, читаются внетиповыми свойствами-связями.
+    const outside: Array<PropertyValue | LinkPropertyValues> = values.filter(
+      (v) => v.outside_type === true,
     );
     if (outside.length === 0) {
       wrap.replaceChildren(el('p', 'muted', 'Нет значений вне типа.'));
@@ -276,19 +280,21 @@ async function confirmOutsideRemove(name: string): Promise<boolean> {
 }
 
 /**
- * The body of the «Свойства вне типа» group: a headerless read-only table
- * mirroring the main one, with one row per orphaned value. The row carries
- * the property name and value (chips for multiple url, plain text
- * otherwise) — visually identical to the main table,
- * but without any editor widget. The only action is «×» removing the value
- * with a confirmation prompt (the system itself never deletes such values).
+ * The body of the «Свойства вне типа» group: a headerless table mirroring the
+ * main one, with one row per outside-type value. Скаляры — read-only: The only
+ * action is «×» removing the value with a confirmation prompt (the system
+ * itself never deletes such values). Свойства-связи вне типа (dfaacb05):
+ * реестровое свойство (не подключённое к типу владельца) редактируется как в
+ * основной таблице — запись значений внетипового свойства-связи разрешена;
+ * рёбра типа связи без свойства в реестре показываются read-only чипами —
+ * ключа для записи нет.
  *
  * Used by the standalone «Свойства вне типа» group in the «Свойства» tab
  * (task 8ab775d9); no longer rendered below the main table in the
  * «Основное» tab.
  */
 function buildOutsideTypeTable(
-  values: PropertyValue[],
+  values: Array<PropertyValue | LinkPropertyValues>,
   networkId: string,
   ownerType: 'thought' | 'link',
   ownerId: string,
@@ -299,7 +305,7 @@ function buildOutsideTypeTable(
     header.append(span('Свойства вне типа', 'prop-outside-title'));
     header.append(
       span(
-        'Свойство отключено от типа — значение можно только удалить.',
+        'Свойства, не подключённые к типу владельца.',
         'muted prop-outside-hint',
       ),
     );
@@ -308,6 +314,25 @@ function buildOutsideTypeTable(
     const tbody = el('tbody');
     for (const value of values) {
       const row = el('tr');
+      if (isLinkPropertyValues(value)) {
+        const nameCell = el(
+          'td',
+          undefined,
+          `${value.property_name} (${typeName('link')})`,
+        );
+        setTooltip(
+          nameCell,
+          value.property_id !== ''
+            ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
+            : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство, но не редактируется через свойства.',
+        );
+        row.append(nameCell);
+        row.append(
+          buildOutsideLinkCell(value, networkId, ownerType, ownerId, onRemove),
+        );
+        tbody.append(row);
+        continue;
+      }
       const nameCell = el(
         'td',
         undefined,
@@ -324,6 +349,84 @@ function buildOutsideTypeTable(
     table.append(tbody);
     root.append(table);
     return root;
+  }
+
+/**
+ * Ячейка внетипового свойства-связи. Свойство есть в реестре (не подключено
+ * к типу владельца) — полноценный чип-редактор, тот же, что в основной
+ * таблице: запись значения внетипового свойства-связи разрешена (dfaacb05).
+ * Рёбра типа связи без реестрового свойства — read-only чипи: ключа записи
+ * нет, редактирование ушло бы в рёбра напрямую.
+ */
+function buildOutsideLinkCell(
+  value: LinkPropertyValues,
+  networkId: string,
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  onRemove: () => void,
+): HTMLElement {
+    const cell = el('td', 'prop-outside-cell');
+
+    if (value.property_id !== '') {
+      const definition: EffectiveTypeProperty = {
+        id: value.property_id,
+        property_id: value.property_id,
+        owner_type: ownerType === 'thought' ? 'thought_type' : 'link_type',
+        owner_id: '',
+        key: value.property_name,
+        value_type: 'link',
+        config: value.link_type_id !== null
+          ? { link_type_id: value.link_type_id, direction: value.direction }
+          : { direction: value.direction, structural: true },
+        required: false,
+        position: 0,
+        description: value.description ?? null,
+        inherited: false,
+        defined_on: '',
+        defined_on_name: '',
+        default_value: null,
+        overridden_here: false,
+        description_overridden: false,
+      };
+      const save = async (next: unknown): Promise<boolean> => {
+        try {
+          await etn.properties.set(networkId, ownerType, ownerId, definition.key, next);
+          onRemove();
+          return true;
+        } catch (err) {
+          notice(`Не удалось сохранить «${definition.key}»: ${errText(err)}`, 'error');
+          return false;
+        }
+      };
+      cell.append(
+        buildLinkValueEditor({
+          networkId,
+          ownerType,
+          ownerId,
+          definition,
+          values: value.values,
+          save,
+        }),
+      );
+      return cell;
+    }
+
+    const wrap = div('link-value-editor');
+    if (value.values.length === 0) {
+      wrap.append(span('—', 'muted'));
+    }
+    for (const edge of value.values) {
+      const label = edge.target_title ?? `${edge.target_id.slice(0, 8)}…`;
+      const chip = div('prop-ref-cloud');
+      chip.append(el('span', 'prc-title', label));
+      setTooltip(
+        chip,
+        `${label} — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).`,
+      );
+      wrap.append(chip);
+    }
+    cell.append(wrap);
+    return cell;
   }
 
   /** Read-only value cell for an outside-type value: same visuals, no editor. */
@@ -790,7 +893,7 @@ function clearViaBlur(input: HTMLInputElement): void {
 }
 
 /** Test seam for unit tests. */
-export const propertiesInternals = { buildPropertiesBody };
+export const propertiesInternals = { buildPropertiesBody, buildOutsideTypeTable };
 
 /**
  * Type guard: скалярное значение (`PropertyValue`) против формы
@@ -1371,6 +1474,12 @@ export function buildLinkValueEditor(opts: {
   const setAndPersist = (next: string[]): void => {
     current = next;
     render();
+    // Новая цель пришла из живого поиска/пикера одним id — подписи и стиля
+    // облачка в кеше ещё нет, чип рисуется с сырым id. Дозаполняем кеш и
+    // перерисовываем по готовности (при неудаче чип остаётся с id).
+    void resolveLinkRefs(networkId, current, refs).then(() => {
+      if (root.isConnected) render();
+    });
     void persist(current);
   };
 

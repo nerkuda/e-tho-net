@@ -21,6 +21,7 @@ import {
   getPropertyValuesResolved,
   getPropertyValuesWithLinks,
   listEffectiveTypeProperties,
+  setPropertyValue,
 } from '../src/domain/property-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
 import { createLink } from '../src/domain/link-service.js';
@@ -230,6 +231,116 @@ describe(
         assert.equal(cLinks[0]!.property_name, 'регулируется из');
         assert.equal(cLinks[0]!.direction, 'in');
         assert.equal(cLinks[0]!.outside_type, false);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('an edge whose link type has no registry property still projects as outside-type (e5cfacb9)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // Легаси-ребро: тип связи есть, свойства-связи в реестре нет —
+        // проекция «ребро → свойство» полная, связь обязана быть видна
+        // внетиповым свойством-связью (имя — из типа связи).
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'Сотрудники', name_reverse: 'Место работы' },
+          USER,
+        );
+        const org = createThoughtType(ndb, { name: 'Организация' }, USER);
+        const person = createThoughtType(ndb, { name: 'Персона' }, USER);
+        const firm = createThought(ndb, { title: 'Фирма 1С', type_id: org.id }, USER);
+        const p1 = createThought(ndb, { title: 'Иванов', type_id: person.id }, USER);
+        createLink(ndb, { source_id: firm.id, target_id: p1.id, type_id: lt.id }, USER);
+
+        // У источника: внетиповое свойство-связь с прямым именем типа связи.
+        const firmLinks = getPropertyValuesResolved(ndb, 'thought', firm.id).filter(
+          (v): v is ResolvedLinkProperty =>
+            v.value_type === 'link' && !(v as ResolvedLinkProperty).structural,
+        );
+        const firmOut = firmLinks.find((l) => l.outside_type === true && l.link_type_id === lt.id);
+        assert.ok(firmOut !== undefined, 'edge without a registry property is visible');
+        assert.equal(firmOut.direction, 'out');
+        assert.equal(firmOut.property_name, 'Сотрудники');
+        assert.equal(firmOut.property_id, '');
+        assert.equal(firmOut.count, 1);
+
+        // У цели: то же ребро — обратным именем и направлением.
+        const p1Links = getPropertyValuesResolved(ndb, 'thought', p1.id).filter(
+          (v): v is ResolvedLinkProperty =>
+            v.value_type === 'link' && !(v as ResolvedLinkProperty).structural,
+        );
+        const p1Out = p1Links.find((l) => l.outside_type === true && l.link_type_id === lt.id);
+        assert.ok(p1Out !== undefined);
+        assert.equal(p1Out.direction, 'in');
+        assert.equal(p1Out.property_name, 'Место работы');
+
+        // Запрос значений отдаёт рёбра и у внетипового свойства.
+        const values = getPropertyValuesWithLinks(ndb, 'thought', firm.id).find(
+          (v) => v.value_type === 'link' && 'values' in v && v.property_name === 'Сотрудники',
+        );
+        assert.ok(values !== undefined && 'values' in values);
+        assert.equal((values as { values: unknown[] }).values.length, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('a link property with display ≠ registry name is writable under both keys (migration 040 legacy)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        // Пост-миграционное состояние 040: свойство-связь сохранило прежнее
+        // имя реестра («место работы»), а его тип связи называется
+        // «upd: место работы» — чтение отдаёт ключ- display, и запись из
+        // редактора по нему падала NOT_FOUND.
+        const lt = createLinkType(
+          ndb,
+          { name_forward: 'upd: место работы', name_reverse: 'upd: место работы' },
+          USER,
+        );
+        const person = createThoughtType(ndb, { name: 'Персона' }, USER);
+        const def = createTypeProperty(
+          ndb,
+          'thought_type',
+          person.id,
+          {
+            key: 'upd: место работы',
+            value_type: 'link',
+            config: { link_type_id: lt.id, direction: 'out' },
+          },
+          USER,
+        );
+        // Имитация миграции 040: реестровое имя осталось прежним, display
+        // (имя прямое типа связи) расходится с ним.
+        ndb
+          .prepare(
+            `UPDATE properties SET name = ?, name_key = type_name_key(?) WHERE id = ? AND layer_id = ?`,
+          )
+          .run('место работы', 'место работы', def.property_id, ndb.layerId);
+
+        const a = createThought(ndb, { title: 'Иванов', type_id: person.id }, USER);
+        const org = createThoughtType(ndb, { name: 'Организация' }, USER);
+        const firm = createThought(ndb, { title: 'Фирма', type_id: org.id }, USER);
+
+        // Чтение отдаёт ключ-display.
+        const eff = listEffectiveTypeProperties(ndb, 'thought_type', person.id);
+        assert.ok(eff.some((d) => d.key === 'upd: место работы' && d.value_type === 'link'));
+
+        // Запись по display-ключу (путь редактора мысли) создаёт ребро.
+        setPropertyValue(ndb, 'thought', a.id, 'upd: место работы', [firm.id], USER);
+        let values = getPropertyValuesWithLinks(ndb, 'thought', a.id).find(
+          (v) => v.value_type === 'link' && 'values' in v && v.property_name === 'upd: место работы',
+        );
+        assert.ok(values !== undefined && 'values' in values);
+        assert.equal((values as { values: unknown[] }).values.length, 1);
+
+        // Запись по прежнему имени реестра (канонический путь) работает тоже.
+        setPropertyValue(ndb, 'thought', a.id, 'место работы', [firm.id], USER);
+        values = getPropertyValuesWithLinks(ndb, 'thought', a.id).find(
+          (v) => v.value_type === 'link' && 'values' in v && v.property_name === 'upd: место работы',
+        );
+        assert.ok(values !== undefined && 'values' in values);
+        assert.equal((values as { values: unknown[] }).values.length, 1, 'no duplicate edge');
       } finally {
         ndb.close();
       }
