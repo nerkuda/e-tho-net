@@ -33,13 +33,19 @@ import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canv
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { buildValueOptionsCaret } from '../../editor/properties.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
-import { confirmDialog, errorDialog, promptDialog, showDialog } from '../../lib/dialog.js';
+import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
+import {
+  openLinkTypesPicker as openLinkTypesPickerLib,
+  openThoughtTypesPicker as openThoughtTypesPickerLib,
+  openTypePickerDialog,
+} from '../../lib/type-picker.js';
 import { orderedTypeRows, resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../../lib/type-tree.js';
 import { buildUserMultiSelectWidget, buildUserSelectWidget } from '../../lib/users.js';
 import { store } from '../../state.js';
+import { requireNetworkId } from '../../app.js';
 
 /** One property condition row (values kept as strings; typed on the wire). */
 export interface PropertyConditionState {
@@ -1475,10 +1481,7 @@ function renderLinkTypeField(): void {
 }
 
 async function openThoughtTypesPicker(): Promise<void> {
-  const rows = orderedTypeRows(store.state.thoughtTypes)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({ id: row.type.id, label: row.type.name, depth: row.depth - 1 }));
-  const picked = await openTypePickerDialog('Типы мыслей', rows, state.typeIds);
+  const picked = await openThoughtTypesPickerLib(requireNetworkId(), state.typeIds);
   if (picked === null) return;
   state.typeIds = picked;
   touch();
@@ -1486,10 +1489,7 @@ async function openThoughtTypesPicker(): Promise<void> {
 }
 
 async function openLinkTypesPicker(): Promise<void> {
-  const rows = orderedTypeRows(store.state.linkTypes)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 }));
-  const picked = await openTypePickerDialog('Типы связей', rows, state.linkTypeIds);
+  const picked = await openLinkTypesPickerLib(requireNetworkId(), state.linkTypeIds);
   if (picked === null) return;
   state.linkTypeIds = picked;
   touch();
@@ -1526,124 +1526,27 @@ function renderLinkFilterField(): void {
 
 /** Opens the link-type picker for the traversal filter (задача c965ad03). */
 async function openLinkFilterPicker(): Promise<void> {
-  const rows = orderedTypeRows(store.state.linkTypes)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 }));
-  const picked = await openTypePickerDialog('Обход по связям', rows, state.linkFilterTypeIds);
+  const picked = await openLinkFilterPickerLib();
   if (picked === null) return;
   state.linkFilterTypeIds = picked;
   touch();
   renderLinkFilterField();
 }
 
-// ---------------------------------------------------------------------------
-// Type picker dialog (search + multi-column checklist + «Применить», §15.3)
-// ---------------------------------------------------------------------------
-
-/** Minimum column width of a checklist, px (columns fill the dialog width). */
-const CHECK_COL_W = 85;
-/** Column gap, px (must match the CSS column-gap). */
-const CHECK_COL_GAP = 14;
-/** Fixed height of one checklist row, px (must match the CSS row height). */
-const CHECK_ROW_H = 22;
-
-/**
- * Recomputes the column count of a checklist for its current height and width:
- * as many columns as fit the dialog width; when the items need more columns
- * than that, the last column overflows downward and the list scrolls
- * vertically (`column-fill: auto`).
- */
-function applyCheckColumns(list: HTMLElement): void {
-  const rowsPerCol = Math.max(1, Math.floor(list.clientHeight / CHECK_ROW_H));
-  const needed = Math.ceil(list.children.length / rowsPerCol);
-  const maxCols = Math.max(1, Math.floor((list.clientWidth + CHECK_COL_GAP) / (CHECK_COL_W + CHECK_COL_GAP)));
-  const count = Math.max(1, Math.min(needed, maxCols));
-  list.style.columnCount = String(count);
-  list.style.columnFill = needed > count ? 'auto' : 'balance';
-}
-
-/**
- * Modal type picker: a search box filtering as you type, a multi-column
- * checklist (checked first, then alphabetical) and «Отмена»/«Применить».
- * Resolves the picked id list, or `null` when cancelled.
- */
-function openTypePickerDialog(
-  title: string,
-  rows: Array<{ id: string; label: string; depth: number }>,
-  initial: string[],
-): Promise<string[] | null> {
-  return new Promise((resolve) => {
-    const checked = new Set(initial);
-    let needle = '';
-    let settled = false;
-    const finish = (value: string[] | null): void => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-
-    const body = div('st-f-picker');
-    const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
-    searchInput.type = 'text';
-    searchInput.placeholder = 'Найти…';
-    const list = div('st-f-checks st-f-picker-list');
-    const clearBtn = el('button', 'st-f-clear', 'Очистить');
-    clearBtn.type = 'button';
-
-    const renderList = (): void => {
-      clear(list);
-      const filtered = rows.filter((row) => row.label.toLowerCase().includes(needle));
-      const byAlpha = (a: (typeof rows)[number], b: (typeof rows)[number]): number =>
-        a.label.localeCompare(b.label, 'ru');
-      const sorted = [
-        ...filtered.filter((row) => checked.has(row.id)).sort(byAlpha),
-        ...filtered.filter((row) => !checked.has(row.id)).sort(byAlpha),
-      ];
-      if (sorted.length === 0) list.append(el('div', 'st-f-empty', 'Ничего не найдено'));
-      for (const row of sorted) {
-        const line = el('label', 'st-f-check');
-        line.style.paddingLeft = `${Math.max(0, row.depth) * 14}px`;
-        const input = el('input') as HTMLInputElement;
-        input.type = 'checkbox';
-        input.checked = checked.has(row.id);
-        input.addEventListener('change', () => {
-          if (input.checked) checked.add(row.id);
-          else checked.delete(row.id);
-          clearBtn.disabled = checked.size === 0;
-          renderList();
-        });
-        line.append(input, el('span', '', row.label));
-        list.append(line);
-      }
-      if (list.isConnected) applyCheckColumns(list);
-      else requestAnimationFrame(() => applyCheckColumns(list));
-    };
-    searchInput.addEventListener('input', () => {
-      needle = searchInput.value.trim().toLowerCase();
-      renderList();
-    });
-    clearBtn.disabled = checked.size === 0;
-    clearBtn.addEventListener('click', () => {
-      checked.clear();
-      renderList();
-      clearBtn.disabled = true;
-    });
-    body.append(searchInput, list, clearBtn);
-
-    showDialog({
-      title,
-      body,
-      width: 480,
-      buttons: [
-        { label: 'Отмена', onClick: () => finish(null) },
-        { label: 'Применить', primary: true, onClick: () => finish([...checked]) },
-      ],
-      onMount: () => {
-        renderList();
-        searchInput.focus();
-      },
-    });
-  });
+async function openLinkFilterPickerLib(): Promise<string[] | null> {
+  let types = store.state.linkTypes;
+  if (types.length === 0) {
+    const networkId = requireNetworkId();
+    try {
+      types = await etn.types.listLinkTypes(networkId);
+    } catch {
+      types = [];
+    }
+  }
+  const rows = orderedTypeRows(types)
+    .filter((row) => !row.type.is_root)
+    .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 }));
+  return openTypePickerDialog('Обход по связям', rows, state.linkFilterTypeIds);
 }
 
 // ---------------------------------------------------------------------------

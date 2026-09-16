@@ -46,6 +46,10 @@ import { clear, div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { notice } from '../../lib/notice.js';
+import {
+  openLinkTypesPicker as openLinkTypesPickerLib,
+  openThoughtTypesPicker as openThoughtTypesPickerLib,
+} from '../../lib/type-picker.js';
 import { orderedTypeRows } from '../../lib/type-tree.js';
 import { buildUserSelectWidget, listUsers, resolveUserName } from '../../lib/users.js';
 import { store } from '../../state.js';
@@ -1311,107 +1315,11 @@ async function pickParentThoughts(networkId: string, managedIds: string[]): Prom
 }
 
 async function openThoughtTypesPicker(networkId: string, managedIds: string[]): Promise<string[] | null> {
-  let types = store.state.thoughtTypes;
-  if (types.length === 0) {
-    try {
-      types = await etn.types.listThoughtTypes(networkId);
-    } catch {
-      types = [];
-    }
-  }
-  const rows = orderedTypeRows(types)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({ id: row.type.id, label: row.type.name, depth: row.depth - 1 }));
-  return openTypePickerDialog('Типы мыслей', rows, managedIds);
+  return openThoughtTypesPickerLib(networkId, managedIds);
 }
 
 async function openLinkTypesPicker(networkId: string, managedIds: string[]): Promise<string[] | null> {
-  let types = store.state.linkTypes;
-  if (types.length === 0) {
-    try {
-      types = await etn.types.listLinkTypes(networkId);
-    } catch {
-      types = [];
-    }
-  }
-  const rows = orderedTypeRows(types)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 }));
-  return openTypePickerDialog('Типы связей', rows, managedIds);
-}
-
-/**
- * Modal type picker: a search box filtering as you type, a multi-column
- * checklist (checked first, then alphabetical) and «Отмена»/«Применить».
- * Resolves the checked set on Apply, `null` on Cancel/Esc/backdrop (any
- * close path fires `onClose` exactly once — {@link showDialog}).
- */
-function openTypePickerDialog(
-  title: string,
-  rows: Array<{ id: string; label: string; depth: number }>,
-  initial: string[],
-): Promise<string[] | null> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value: string[] | null): void => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-
-    const body = div('st-f-picker');
-    const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
-    searchInput.type = 'text';
-    searchInput.placeholder = 'Найти…';
-    const list = div('st-f-checks st-f-picker-list');
-    const checked = new Set(initial);
-    let needle = '';
-
-    const renderList = (): void => {
-      clear(list);
-      const filtered = rows.filter((row) => row.label.toLowerCase().includes(needle));
-      const byAlpha = (a: (typeof rows)[number], b: (typeof rows)[number]): number =>
-        a.label.localeCompare(b.label, 'ru');
-      const sorted = [
-        ...filtered.filter((row) => checked.has(row.id)).sort(byAlpha),
-        ...filtered.filter((row) => !checked.has(row.id)).sort(byAlpha),
-      ];
-      if (sorted.length === 0) list.append(el('div', 'st-f-empty', 'Ничего не найдено'));
-      for (const row of sorted) {
-        const line = el('label', 'st-f-check');
-        line.style.paddingLeft = `${Math.max(0, row.depth) * 14}px`;
-        const input = el('input') as HTMLInputElement;
-        input.type = 'checkbox';
-        input.checked = checked.has(row.id);
-        input.addEventListener('change', () => {
-          if (input.checked) checked.add(row.id);
-          else checked.delete(row.id);
-          renderList();
-        });
-        line.append(input, el('span', '', row.label));
-        list.append(line);
-      }
-    };
-    searchInput.addEventListener('input', () => {
-      needle = searchInput.value.trim().toLowerCase();
-      renderList();
-    });
-    body.append(searchInput, list);
-    renderList();
-    showDialog({
-      title,
-      body,
-      width: 480,
-      buttons: [
-        { label: 'Отмена' },
-        { label: 'Применить', primary: true, onClick: () => finish([...checked]) },
-      ],
-      onMount: () => {
-        searchInput.focus();
-      },
-      onClose: () => finish(null),
-    });
-  });
+  return openLinkTypesPickerLib(networkId, managedIds);
 }
 
 // ---------------------------------------------------------------------------

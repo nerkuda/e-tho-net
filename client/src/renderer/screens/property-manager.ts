@@ -90,6 +90,8 @@ import {
 } from '../lib/type-tree.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { buildChipListField } from './thought-type/value-combo.js';
+import { pickedThoughtIds, pickThoughtsDialog } from '../canvas/add-dialog.js';
+import { openThoughtTypesPicker } from '../lib/type-picker.js';
 
 /** Human-readable property value-type labels. Вид `thought_ref` упразднён в
  *  0.8.1 (требование 5a82c709) и недоступен в выборе — оставлен только в
@@ -266,6 +268,17 @@ export function showPropertyManagerDialog(): void {
       emptyRow.append(emptyCell);
       tbody.append(emptyRow);
     }
+    /** Имя сторон ссылки (`forward / reverse`) в строке списка — заполняется
+     *  при первом рендере из `store.state.linkTypes` или после догрузки
+     *  `etn.types.getLinkType`. Хранится отдельно, чтобы догрузка могла
+     *  обновить только эту ячейку без полного перерендера. */
+    interface PendingLinkType {
+      ltId: string;
+      nameSpan: HTMLElement;
+      tr: HTMLElement;
+    }
+    const pendingLinkTypes: PendingLinkType[] = [];
+
     for (const row of visible) {
       const property = row.property;
       const tr = el('tr');
@@ -297,6 +310,14 @@ export function showPropertyManagerDialog(): void {
           span(property.name, 'prop-name'),
           span(`  (${lt.name_forward} / ${lt.name_reverse})`, 'muted'),
         );
+        setTooltip(nameCell, 'Свойство-связь — клик откроет редактор свойства.');
+      } else if (isLink && ltId !== undefined && ltId !== '' && lt === null) {
+        // link_type ещё не пришёл из realtime — рендерим заглушку и помечаем
+        // строку как «pending»: после догрузки ниже заменим содержимое ячейки.
+        nameCell.append(span(property.name, 'prop-name'));
+        const pendingSpan = span('  (загрузка…)', 'muted');
+        nameCell.append(pendingSpan);
+        pendingLinkTypes.push({ ltId, nameSpan: pendingSpan, tr });
         setTooltip(nameCell, 'Свойство-связь — клик откроет редактор свойства.');
       } else if (isStructuralLink) {
         nameCell.append(span(property.name, 'prop-name'), span('  🔒 (структурное)', 'muted'));
@@ -350,6 +371,13 @@ export function showPropertyManagerDialog(): void {
     table.append(tbody);
     tableWrap.replaceChildren(table);
     tableWrap.scrollTop = scrollTop;
+    // Догружаем имена сторон для свойств-ссылок, чей link_type ещё не
+    // подтянулся realtime-ом. Без этого строка показывает только
+    // `property.name`, а пользователь видит «Мишени» вместо
+    // «Мишени (мишени / стрелки)».
+    for (const pending of pendingLinkTypes) {
+      void fetchLinkTypeForRow(networkId, pending);
+    }
   }
 
   searchInput.addEventListener('input', () => {
@@ -590,6 +618,60 @@ interface PropertyDraft {
   typeRows: TypeRowDraft[];
 }
 
+/** Скопировать поля link_type в draft (вызывается и при восстановлении из
+ *  store, и при догрузке через `etn.types.getLinkType`). */
+function applyLinkTypeToDraft(lt: LinkType, draft: PropertyDraft): void {
+  draft.nameForward = lt.name_forward;
+  draft.nameReverse = lt.name_reverse;
+  draft.parentLinkTypeId = lt.parent_id ?? null;
+  draft.linkColor = lt.color ?? null;
+  draft.linkStyle = (lt.style ?? null) as LinkStyle | null;
+  draft.linkWidth = lt.width ?? null;
+}
+
+/**
+ * Догрузить link_type по id и применить к draft. Вызывается, когда в
+ * `store.state.linkTypes` нужной записи нет (realtime-канал отстаёт, либо
+ * редактор открывают сразу после создания свойства-связи). При неудаче
+ * оставляем пустые поля — это «голая» запись (миграция 042 оставляет такие),
+ * пользователь увидит сигнал сам.
+ */
+async function loadLinkTypeIntoDraft(
+  networkId: string,
+  ltId: string,
+  draft: PropertyDraft,
+): Promise<void> {
+  try {
+    const lt = await etn.types.getLinkType(networkId, ltId);
+    applyLinkTypeToDraft(lt, draft);
+  } catch {
+    /* догрузка не удалась — пустые поля остаются. */
+  }
+}
+
+/** Поведение `etn.types.getLinkType` с локальным кешем в `store.linkTypes`.
+ *  Используется из плоского списка, чтобы дотянуть имена сторон
+ *  (`forward / reverse`) для свойств-ссылок, чей link_type ещё не пришёл
+ *  realtime-ом. При успехе — дополняем каталог и обновляем заглушку в
+ *  строке; при ошибке — оставляем «(загрузка…)». */
+async function fetchLinkTypeForRow(
+  networkId: string,
+  pending: { ltId: string; nameSpan: HTMLElement; tr: HTMLElement },
+): Promise<void> {
+  try {
+    const lt = await etn.types.getLinkType(networkId, pending.ltId);
+    // Дополняем каталог — следующий перерендер уже возьмёт из store.
+    const exists = store.state.linkTypes.some((t) => t.id === lt.id);
+    if (!exists) store.state.linkTypes.push(lt);
+    if (!pending.nameSpan.isConnected) return;
+    pending.nameSpan.textContent = `  (${lt.name_forward} / ${lt.name_reverse})`;
+  } catch {
+    if (pending.nameSpan.isConnected) {
+      pending.nameSpan.textContent = '  (нет данных)';
+    }
+  }
+}
+
 /** Идентификатор значения категории `value_type`. После первой записи
  *  категория зафиксирована (требование 5a82c709). */
 function lockCategoryFor(existing: PropertyValueType | null): ValueCategory | null {
@@ -717,19 +799,19 @@ export function openPropertyManagerEditor(
 
   // Restore scalar / link extras from the stored config.
   if (draft.valueType === 'link') {
-    const lt = (() => {
-      const ltId = property?.config?.link_type_id;
-      return ltId !== undefined && ltId !== null && ltId !== ''
+    const ltId = property?.config?.link_type_id;
+    const ltInStore =
+      ltId !== undefined && ltId !== null && ltId !== ''
         ? store.state.linkTypes.find((t) => t.id === ltId) ?? null
         : null;
-    })();
-    if (lt !== null) {
-      draft.nameForward = lt.name_forward;
-      draft.nameReverse = lt.name_reverse;
-      draft.parentLinkTypeId = lt.parent_id ?? null;
-      draft.linkColor = lt.color ?? null;
-      draft.linkStyle = (lt.style ?? null) as LinkStyle | null;
-      draft.linkWidth = lt.width ?? null;
+    if (ltInStore !== null) {
+      applyLinkTypeToDraft(ltInStore, draft);
+    } else if (ltId !== undefined && ltId !== null && ltId !== '') {
+      // Каталог типов связей ещё не подтянул эту запись (realtime-канал
+      // отстаёт, либо свойство открывают сразу после создания). Догружаем
+      // link_type по id и заполняем draft + форму; без этого «Имя в
+      // источнике»/«Имя в назначении» остаются пустыми.
+      void loadLinkTypeIntoDraft(networkId, ltId, draft);
     }
     draft.showOnMap = property?.config?.show_on_map === true;
     draft.blocksTargetDeletion = property?.config?.blocks_target_deletion === true;
@@ -921,6 +1003,54 @@ export function openPropertyManagerEditor(
     parentRow.append(parentCombo.root, styleBtn);
     linkBodyHost.append(field('Родительский тип связи', parentRow));
 
+    // Значение по умолчанию свойства-связи — набор целей (требование
+    // 3181389d, инструкция a47947c8): чипы мыслей + пикер «выбрать». Живой
+    // поиск по заголовку через `etn.thoughts.findDuplicates`; пикер через
+    // `pickThoughtsDialog` в режиме «несколько». Источник истины для
+    // значения — массив id, как в конфиге реестра (`default_value`).
+    const targetsHost = div('form-stack');
+    const targetsField = buildChipListField({
+      getValues: () => (Array.isArray(draft.defaultValue) ? (draft.defaultValue as string[]) : []),
+      onChange: (values) => {
+        draft.defaultValue = values.length > 0 ? values : null;
+      },
+      getOptions: async (query) => {
+        const trimmed = query.trim();
+        if (trimmed === '') return [];
+        try {
+          const hits = await etn.thoughts.findDuplicates(networkId, trimmed);
+          return hits.map((h) => ({ value: h.id, label: h.title }));
+        } catch {
+          return [];
+        }
+      },
+      renderLabel: async (id) => {
+        try {
+          const t = await etn.thoughts.get(networkId, id);
+          return t.title;
+        } catch {
+          return `${id.slice(0, 8)}…`;
+        }
+      },
+      placeholder: 'Заголовок мысли-цели…',
+      picker: {
+        label: 'выбрать…',
+        open: async (managed) => {
+          const result = await pickThoughtsDialog({
+            networkId,
+            allowCreate: false,
+            allowLinkType: false,
+            selectedIds: managed,
+            title: 'Выбрать мысли',
+            applyLabel: 'Выбрать',
+          });
+          return result === null ? null : pickedThoughtIds(result);
+        },
+      },
+    });
+    targetsHost.append(field('Цели по умолчанию', targetsField.root));
+    linkBodyHost.append(targetsHost);
+
     // Имя в реестре для свойства-связи — копия `name_forward` (сервер
     // вычисляет `linkPropertyDisplayName`, см. заметку в shared).
     draft.name = draft.nameForward;
@@ -1051,8 +1181,9 @@ export function openPropertyManagerEditor(
     }
 
     async function addRow(): Promise<void> {
-      const thoughtTypeId = await pickThoughtTypeId();
-      if (thoughtTypeId === null) return;
+      const picked = await openThoughtTypesPicker(networkId, []);
+      if (picked === null || picked.length === 0) return;
+      const thoughtTypeId: string = picked[0] as string;
       // Дубль строки (та же сторона для связи) запрещён.
       if (draft.typeRows.some((r) => r.thoughtTypeId === thoughtTypeId && r.side === side)) return;
       draft.typeRows = [
@@ -1074,22 +1205,6 @@ export function openPropertyManagerEditor(
     );
 
     renderTable();
-  }
-
-  /** Простой пикер типов мыслей через `window.prompt`. В задаче 935ec90e
-   *  («Двусторонняя вкладка Свойства») пикер будет переиспользован из
-   *  общего модуля; пока отдельной реализации нет, работает фолбэк —
-   *  список с разделителем «id — имя». */
-  async function pickThoughtTypeId(): Promise<string | null> {
-    const list = store.state.thoughtTypes
-      .map((t) => `${t.id} — ${t.name}`)
-      .join('\n');
-    const choice = window.prompt(
-      `Введите id типа мысли (например: abc-123-…).\n\nДоступно:\n${list}`,
-    );
-    if (choice === null) return null;
-    const found = store.state.thoughtTypes.find((t) => t.id === choice.trim());
-    return found?.id ?? null;
   }
 
   /** Загрузка строк таблицы привязок для существующего свойства: список
