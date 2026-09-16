@@ -1604,27 +1604,35 @@ function buildConfigForCreate(draft: PropertyDraft): { config?: PropertyConfig |
 /** Для PATCH: полный конфиг (даже если он null после очистки полей). */
 function buildConfigForUpdate(draft: PropertyDraft, current: PropertyConfig | null): PropertyConfig | null {
   if (draft.valueType === 'link') {
-    return linkConfigFromDraft(draft);
+    return linkConfigFromDraft(draft, current);
   }
   return scalarConfigFromDraft(draft);
 }
 
 /** Конфиг свойства-связи из черновика. Никогда не `null` — сервер требует
  *  `direction` для ссылки. */
-function linkConfigFromDraft(draft: PropertyDraft): PropertyConfig | null {
+function linkConfigFromDraft(draft: PropertyDraft, current?: PropertyConfig | null): PropertyConfig | null {
   if (draft.valueType !== 'link') return null;
-  // Для уже существующего свойства — сохраняем `link_type_id` из текущего.
-  // Для нового — сервер создаст link_type автоматически (задача dd37a66)
-  // по паре имён сторон, и `config.link_type_id` придёт в ответе на create.
-  return {
-    direction: 'out',
-    show_on_map: draft.showOnMap || undefined,
-    blocks_target_deletion: draft.blocksTargetDeletion || undefined,
-    default_value:
-      Array.isArray(draft.defaultValue) && draft.defaultValue.length > 0
-        ? [...new Set(draft.defaultValue as string[])]
-        : undefined,
-  };
+  // Для уже существующего свойства — сохраняем `link_type_id`/`structural`
+  // из текущего конфига (они задаются на create и не вычисляются из draft).
+  // Без этого PATCH отклоняется сервером: VALIDATION_ERROR «свойство-связь
+  // требует config.link_type_id» (баг cab38479-фикс2). Для нового — сервер
+  // создаст link_type автоматически (задача dd37a66) по паре имён сторон,
+  // и `config.link_type_id` придёт в ответе на create.
+  const cfg: PropertyConfig = {};
+  if (current?.link_type_id !== undefined && current.link_type_id !== '') {
+    cfg.link_type_id = current.link_type_id;
+  }
+  if (current?.structural === true) {
+    cfg.structural = true;
+  }
+  cfg.direction = 'out';
+  if (draft.showOnMap) cfg.show_on_map = true;
+  if (draft.blocksTargetDeletion) cfg.blocks_target_deletion = true;
+  if (Array.isArray(draft.defaultValue) && draft.defaultValue.length > 0) {
+    cfg.default_value = [...new Set(draft.defaultValue as string[])];
+  }
+  return cfg;
 }
 
 /** Конфиг скалярного свойства из черновика. `null` если нечего хранить. */
