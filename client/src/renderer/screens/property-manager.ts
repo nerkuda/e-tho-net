@@ -1003,53 +1003,12 @@ export function openPropertyManagerEditor(
     parentRow.append(parentCombo.root, styleBtn);
     linkBodyHost.append(field('Родительский тип связи', parentRow));
 
-    // Значение по умолчанию свойства-связи — набор целей (требование
-    // 3181389d, инструкция a47947c8): чипы мыслей + пикер «выбрать». Живой
-    // поиск по заголовку через `etn.thoughts.findDuplicates`; пикер через
-    // `pickThoughtsDialog` в режиме «несколько». Источник истины для
-    // значения — массив id, как в конфиге реестра (`default_value`).
-    const targetsHost = div('form-stack');
-    const targetsField = buildChipListField({
-      getValues: () => (Array.isArray(draft.defaultValue) ? (draft.defaultValue as string[]) : []),
-      onChange: (values) => {
-        draft.defaultValue = values.length > 0 ? values : null;
-      },
-      getOptions: async (query) => {
-        const trimmed = query.trim();
-        if (trimmed === '') return [];
-        try {
-          const hits = await etn.thoughts.findDuplicates(networkId, trimmed);
-          return hits.map((h) => ({ value: h.id, label: h.title }));
-        } catch {
-          return [];
-        }
-      },
-      renderLabel: async (id) => {
-        try {
-          const t = await etn.thoughts.get(networkId, id);
-          return t.title;
-        } catch {
-          return `${id.slice(0, 8)}…`;
-        }
-      },
-      placeholder: 'Заголовок мысли-цели…',
-      picker: {
-        label: 'выбрать…',
-        open: async (managed) => {
-          const result = await pickThoughtsDialog({
-            networkId,
-            allowCreate: false,
-            allowLinkType: false,
-            selectedIds: managed,
-            title: 'Выбрать мысли',
-            applyLabel: 'Выбрать',
-          });
-          return result === null ? null : pickedThoughtIds(result);
-        },
-      },
-    });
-    targetsHost.append(field('Цели по умолчанию', targetsField.root));
-    linkBodyHost.append(targetsHost);
+    // Значение по умолчанию для свойства-связи задаётся не здесь, а в
+    // таблицах «Типы источников»/«Типы назначений» (колонка «Значение по
+    // умолчанию», `buildRow` ниже): у каждого типа свой набор целей,
+    // отправляется через `etn.types.setPropertyDefaultOverride` на apply.
+    // Так требует инструкция a47947c8 — унифицированное поле выбора
+    // ссылок в колонке таблицы, а не отдельное поле над ней.
 
     // Имя в реестре для свойства-связи — копия `name_forward` (сервер
     // вычисляет `linkPropertyDisplayName`, см. заметку в shared).
@@ -1151,20 +1110,69 @@ export function openPropertyManagerEditor(
       reqCell.append(reqCheck);
       tr.append(reqCell);
 
-      // Значение по умолчанию
+      // Значение по умолчанию: для скаляра — текстовое поле; для свойства-связи
+      // — унифицированный чип-пикер мыслей (инструкция a47947c8,
+      // требование 3181389d). Хранится в `type_properties.default_value`,
+      // применяется через `etn.types.setPropertyDefaultOverride` на apply.
       const dvCell = el('td');
-      const dvInput = el('input', 'text-input') as HTMLInputElement;
-      dvInput.type = 'text';
-      dvInput.placeholder = '(пусто)';
-      dvInput.value = row.defaultValue === null || row.defaultValue === undefined
-        ? ''
-        : String(row.defaultValue);
-      dvInput.addEventListener('input', () => {
-        const v = dvInput.value.trim();
-        row.defaultValue = v === '' ? null : v;
-        row.dirty = true;
-      });
-      dvCell.append(dvInput);
+      if (isLink) {
+        const linkDefaults = buildChipListField({
+          getValues: () =>
+            Array.isArray(row.defaultValue) ? (row.defaultValue as string[]) : [],
+          onChange: (values) => {
+            row.defaultValue = values.length > 0 ? values : null;
+            row.dirty = true;
+          },
+          getOptions: async (query) => {
+            const trimmed = query.trim();
+            if (trimmed === '') return [];
+            try {
+              const hits = await etn.thoughts.findDuplicates(networkId, trimmed);
+              return hits.map((h) => ({ value: h.id, label: h.title }));
+            } catch {
+              return [];
+            }
+          },
+          renderLabel: async (id) => {
+            try {
+              const t = await etn.thoughts.get(networkId, id);
+              return t.title;
+            } catch {
+              return `${id.slice(0, 8)}…`;
+            }
+          },
+          placeholder: 'Заголовок мысли-цели…',
+          picker: {
+            label: 'выбрать…',
+            open: async (managed) => {
+              const result = await pickThoughtsDialog({
+                networkId,
+                allowCreate: false,
+                allowLinkType: false,
+                selectedIds: managed,
+                title: 'Выбрать мысли',
+                applyLabel: 'Выбрать',
+              });
+              return result === null ? null : pickedThoughtIds(result);
+            },
+          },
+        });
+        dvCell.append(linkDefaults.root);
+      } else {
+        const dvInput = el('input', 'text-input') as HTMLInputElement;
+        dvInput.type = 'text';
+        dvInput.placeholder = '(пусто)';
+        dvInput.value =
+          row.defaultValue === null || row.defaultValue === undefined
+            ? ''
+            : String(row.defaultValue);
+        dvInput.addEventListener('input', () => {
+          const v = dvInput.value.trim();
+          row.defaultValue = v === '' ? null : v;
+          row.dirty = true;
+        });
+        dvCell.append(dvInput);
+      }
       tr.append(dvCell);
 
       // Удалить строку
@@ -1428,41 +1436,81 @@ export function openPropertyManagerEditor(
 
   /** Сохранение строк таблицы привязок. На входе — черновик; на выходе —
    *  строки применены через `etn.types.createTypeProperty/updateTypeProperty/
-   *  removeTypeProperty`. */
+   *  removeTypeProperty`. Для свойства-связи дополнительно — `default_value`
+   *  через `etn.types.setPropertyDefaultOverride` (требование 3181389d,
+   *  инструкция a47947c8): набор целей `string[]` хранится в
+   *  `type_properties.default_value` и применяется созданием рёбер при
+   *  создании мысли. */
   async function applyTypeRows(propertyId: string): Promise<void> {
     if (draft.typeRows.length === 0 && !hasRemovedRows()) return;
-    const rowsById = new Map<string, TypeRowDraft>();
-    // Снимок «было» по id — для отслеживания удалённых строк.
-    // (в loadTypeRowsFor заполняется; новые строки имеют id === null.)
+    const isLink = draft.valueType === 'link';
     const ops: Promise<unknown>[] = [];
+    const created = new Map<string, TypeRowDraft>();
     for (const row of draft.typeRows) {
       if (row.id === null) {
-        // Создание.
+        // Создание: сначала привязка, затем (для связи) — её default.
         ops.push(
-          etn.types.createTypeProperty(
-            networkId,
-            'thought_type',
-            row.thoughtTypeId,
-            {
-              mode: 'attach',
-              property_id: propertyId,
-              required: row.required,
-              ...(row.side !== null ? { side: row.side } : {}),
-            },
-          ),
+          (async (): Promise<void> => {
+            const def = await etn.types.createTypeProperty(
+              networkId,
+              'thought_type',
+              row.thoughtTypeId,
+              {
+                mode: 'attach',
+                property_id: propertyId,
+                required: row.required,
+                ...(row.side !== null ? { side: row.side } : {}),
+              },
+            );
+            if (isLink) {
+              await etn.types.setPropertyDefaultOverride(
+                networkId,
+                'thought_type',
+                row.thoughtTypeId,
+                def.id,
+                linkDefaultPayload(row.defaultValue),
+              );
+            }
+            created.set(def.id, row);
+          })(),
         );
       } else if (row.dirty) {
-        rowsById.set(row.id, row);
         ops.push(
-          etn.types.updateTypeProperty(networkId, 'thought_type', row.thoughtTypeId, row.id, {
-            required: row.required,
-          }),
+          (async (): Promise<void> => {
+            await etn.types.updateTypeProperty(
+              networkId,
+              'thought_type',
+              row.thoughtTypeId,
+              row.id as string,
+              { required: row.required },
+            );
+            if (isLink) {
+              await etn.types.setPropertyDefaultOverride(
+                networkId,
+                'thought_type',
+                row.thoughtTypeId,
+                row.id as string,
+                linkDefaultPayload(row.defaultValue),
+              );
+            }
+          })(),
         );
       }
     }
     await Promise.all(ops).catch((err) => {
       throw err;
     });
+  }
+
+  /** Преобразует черновое значение колонки «Значение по умолчанию» в
+   *  формат `etn.types.setPropertyDefaultOverride` для свойства-связи:
+   *  `string[]` (набор id целей) или `null` (очистить). */
+  function linkDefaultPayload(value: unknown): string[] | null {
+    if (Array.isArray(value)) {
+      const ids = value.filter((v): v is string => typeof v === 'string' && v !== '');
+      return ids.length > 0 ? ids : null;
+    }
+    return null;
   }
 
   /** Возвращает `true`, если среди исходных строк есть удалённые (мы их
