@@ -13,7 +13,7 @@
  * Registered as a realtime listener in `app.boot`.
  */
 
-import type { AnyRealtimeEvent } from '@etn/shared';
+import { PREF_KEY, parseStoredCanvasLinkFilter, type AnyRealtimeEvent } from '@etn/shared';
 
 import { resyncAfterLayerSwitch, scheduleRefresh } from './app.js';
 import { invalidateIndicators, invalidateRef } from './canvas/canvas.js';
@@ -174,6 +174,13 @@ export function applyRealtimeToUi(evt: AnyRealtimeEvent): void {
         store.update({ showInactive: evt.data.value === true });
         scheduleRefresh();
         scheduleStructuresRefresh();
+      } else if (evt.data.key === PREF_KEY.CANVAS_LINK_FILTER) {
+        // Another client (or the filter dialog itself) changed the canvas
+        // link-type filter (0.8.1) — pick up the new value and re-render the
+        // map. `scheduleRefresh` re-fetches `focus()`, which the server
+        // resolves against the just-updated preference.
+        store.update({ canvasLinkFilter: parseStoredCanvasLinkFilter(evt.data.value) });
+        scheduleRefresh();
       }
       break;
 

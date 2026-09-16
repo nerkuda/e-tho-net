@@ -529,12 +529,13 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     const stripEl = harness.findStrip();
     assert.ok(stripEl !== null && !stripEl.classList.contains('hidden'));
     const btns = (stripEl as ShimElement).querySelectorAll('.canvas-filter-strip-btn');
-    assert.equal(btns.length, 5, 'Потомки + 2 views + ⋯ + +');
+    assert.equal(btns.length, 6, 'Потомки + 2 views + ⋯ + + + фильтр');
     assert.equal(btns[0]!.textContent, 'Потомки');
     assert.equal(btns[1]!.textContent, 'A-просмотр');
     assert.equal(btns[2]!.textContent, 'Z-просмотр');
     assert.equal(btns[3]!.textContent, '⋯');
     assert.equal(btns[4]!.textContent, '+');
+    assert.ok(btns[5]!.classList.contains('canvas-filter-strip-filter'));
   });
 
   it('preserves server order for inherited views instead of interleaving levels (ошибка 9792d55a)', async () => {
@@ -558,7 +559,7 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     const stripEl = harness.findStrip();
     assert.ok(stripEl !== null && !stripEl.classList.contains('hidden'));
     const btns = (stripEl as ShimElement).querySelectorAll('.canvas-filter-strip-btn');
-    assert.equal(btns.length, 7, 'Потомки + 4 views + ⋯ + +');
+    assert.equal(btns.length, 8, 'Потомки + 4 views + ⋯ + + + фильтр');
     assert.equal(btns[0]!.textContent, 'Потомки');
     assert.equal(btns[1]!.textContent, 'Root A');
     assert.equal(btns[2]!.textContent, 'Root B');
@@ -566,6 +567,7 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     assert.equal(btns[4]!.textContent, 'Own B');
     assert.equal(btns[5]!.textContent, '⋯');
     assert.equal(btns[6]!.textContent, '+');
+    assert.ok(btns[7]!.classList.contains('canvas-filter-strip-filter'));
   });
 
   it('«+» is disabled for type-less thoughts (requirement 23e0f78e)', async () => {
@@ -938,8 +940,8 @@ describe('focus-filter-strip (task 02ba2ae7)', () => {
     const stripEl = harness.findStrip();
     assert.ok(stripEl !== null);
     const all = (stripEl as ShimElement).querySelectorAll('.canvas-filter-strip-btn');
-    // 6 view buttons + Потомки + ⋯ + +
-    assert.equal(all.length, 9);
+    // 6 view buttons + Потомки + ⋯ + + + фильтр
+    assert.equal(all.length, 10);
     const overflow = all.find((b) => b.classList.contains('canvas-filter-strip-overflow'));
     assert.ok(overflow !== null);
     // Stub a `window` so `lib/menu.ts:showMenuAt` can compute coordinates

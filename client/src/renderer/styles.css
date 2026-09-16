@@ -1640,6 +1640,12 @@ body.resizing-h {
   font-weight: 600;
 }
 
+/* Кнопка-воронка фильтра типов связей (0.8.1) — только иконка, тот же
+ * компактный паддинг, что у «+» и «⋯». */
+.canvas-filter-strip-btn.canvas-filter-strip-filter {
+  padding: 4px 8px;
+}
+
 .canvas-filter-strip-btn:disabled {
   cursor: not-allowed;
   opacity: 0.4;
@@ -4506,6 +4512,19 @@ body.cloud-dragging * {
 
 .st-f-picker-list {
   height: 320px;
+}
+
+/* Canvas link-type filter dialog (0.8.1, «Диалог фильтра типов связей на
+ * карте»): toolbar row of «Пометить все»/«Снять все пометки»/«Вернуть
+ * умолчания», reusing the `.st-f-clear` button look. */
+.link-filter-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.link-filter-list {
+  height: 280px;
 }
 
 /* Resizable seam of the filter panel (§15.2): a 1px seam line that turns into

@@ -142,6 +142,13 @@ export const WS_PONG_TIMEOUT_MS = 60_000;
  */
 export const PREF_KEY = {
   SHOW_INACTIVE: 'show_inactive',
+  /**
+   * Canvas link-type filter (task «Фильтр типов связей на карте мыслей»,
+   * 0.8.1): `{ type_ids: string[], include_structural: boolean } | null`.
+   * `null`/absent — the client derives the live default from `show_on_map`
+   * (see requirement «Дефолт и хранение фильтра типов связей на карте»).
+   */
+  CANVAS_LINK_FILTER: 'canvas_link_filter',
 } as const satisfies Record<string, string>;
 export type PrefKey = (typeof PREF_KEY)[keyof typeof PREF_KEY];
 

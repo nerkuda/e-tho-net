@@ -8,6 +8,7 @@
 import { EtnError } from '../errors.js';
 import type { LinkStyle } from '../enums.js';
 import type { ThoughtRef } from './thought.js';
+import type { NetworkProperty } from './thought-type.js';
 
 /**
  * Фильтр обхода графа по типам связей (задача c965ad03, 0.8.1, требование
@@ -103,6 +104,48 @@ export function parseLinkTypeFilterValue(
   const out: LinkTypeFilterInput = {};
   if (typeIds !== undefined && typeIds.length > 0) out.type_ids = typeIds;
   if (includeStructural !== undefined) out.include_structural = includeStructural;
+  return out;
+}
+
+/**
+ * Non-throwing parse of a stored `PREF_KEY.CANVAS_LINK_FILTER` value (requirement
+ * «Дефолт и хранение фильтра типов связей на карте», 0.8.1): `null`/`undefined`
+ * (no explicit preference — use {@link computeDefaultCanvasLinkFilter}) or a
+ * garbled value both resolve to `null`; a well-formed object is validated the
+ * same way as the wire `link_filter` and returned as-is.
+ */
+export function parseStoredCanvasLinkFilter(raw: unknown): LinkTypeFilterInput | null {
+  if (raw === null || raw === undefined) return null;
+  try {
+    return parseLinkTypeFilterValue(raw) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Default canvas link-type filter derived from the property registry
+ * (requirement «Дефолт и хранение фильтра типов связей на карте», 0.8.1):
+ * structural links (свойства «Родители»/«Потомки») are always included, plus
+ * every link-property flagged `config.show_on_map === true`. Used server-side
+ * to resolve the effective filter for `POST /thoughts/{id}/focus` when the
+ * user has no stored preference, and client-side to pre-check the filter
+ * dialog's default state.
+ */
+export function computeDefaultCanvasLinkFilter(
+  properties: readonly NetworkProperty[],
+): LinkTypeFilterInput {
+  const typeIds = properties
+    .filter(
+      (p) =>
+        p.value_type === 'link' &&
+        p.config?.structural !== true &&
+        p.config?.show_on_map === true,
+    )
+    .map((p) => p.config?.link_type_id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+  const out: LinkTypeFilterInput = { include_structural: true };
+  if (typeIds.length > 0) out.type_ids = typeIds;
   return out;
 }
 
