@@ -408,25 +408,121 @@ function buildOutsideLinkCell(
           save,
         }),
       );
+      // Крестик «×» очищает значение внетипового свойства-связи целиком
+      // (cab38479): без него у пользователя нет способа снять значение из
+      // группы «Свойства вне типа»; сервер при `set(key, null)` отзовёт
+      // рёбра и real-time события уберут их с карты (если связь видима).
+      const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
+      clearBtn.type = 'button';
+      clearBtn.title = 'Удалить значение';
+      clearBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void (async () => {
+          const ok = await confirmOutsideRemove(value.property_name);
+          if (!ok) return;
+          try {
+            await etn.properties.set(networkId, ownerType, ownerId, value.property_name, null);
+            onRemove();
+          } catch (err) {
+            notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
+          }
+        })();
+      });
+      cell.append(clearBtn);
       return cell;
     }
 
+    // Read-only рёбра вне типа (тип связи без реестрового свойства): те же
+    // оформление и обработчики, что у чипа основной таблицы (фон/границы/
+    // иконка, Ctrl+hover, клик/двойной клик) — cab38479.
     const wrap = div('link-value-editor');
     if (value.values.length === 0) {
       wrap.append(span('—', 'muted'));
     }
+    const refs = new Map<string, ThoughtRef>();
     for (const edge of value.values) {
-      const label = edge.target_title ?? `${edge.target_id.slice(0, 8)}…`;
-      const chip = div('prop-ref-cloud');
-      chip.append(el('span', 'prc-title', label));
-      setTooltip(
-        chip,
-        `${label} — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).`,
-      );
-      wrap.append(chip);
+      wrap.append(buildOutsideReadonlyEdgeChip(networkId, edge, refs));
     }
     cell.append(wrap);
+    // Подтянем стили/иконки батчем (cb73f8d6, как в buildLinkValueEditor);
+    // без этого чипы рендерятся с дефолтной иконкой и без цвета мысли.
+    if (value.values.length > 0) {
+      void etn.thoughts
+        .resolve(
+          networkId,
+          value.values.map((edge) => edge.target_id).slice(0, RESOLVE_BATCH),
+        )
+        .then((resolved) => {
+          if (!wrap.isConnected) return;
+          for (const ref of resolved) refs.set(ref.id, ref);
+          wrap.replaceChildren(
+            ...value.values.map((edge) => buildOutsideReadonlyEdgeChip(networkId, edge, refs)),
+          );
+        })
+        .catch(() => undefined);
+    }
     return cell;
+  }
+
+  /**
+   * Read-only мини-облачко для ребра внетипового свойства (cab38479): тот же
+   * визуал и те же обработчики, что у редактируемого чипа в основной таблице
+   * (`buildLinkValueEditor.buildCloud`), за вычетом контекстного меню и
+   * крестика удаления — ключа для записи нет, ребро правится через
+   * `etn.links.*`.
+   */
+function buildOutsideReadonlyEdgeChip(
+  networkId: string,
+  edge: LinkPropertyValueItem,
+  refs: Map<string, ThoughtRef>,
+): HTMLElement {
+    const ref = refs.get(edge.target_id);
+    const fullTitle = edge.target_title ?? ref?.title ?? `${edge.target_id.slice(0, 8)}…`;
+    const known = fullTitle.length > TITLE_CLIP ? `${fullTitle.slice(0, TITLE_CLIP)}…` : fullTitle;
+    const chip = div('prop-ref-cloud');
+    chip.dataset['id'] = edge.target_id;
+    if (ref !== undefined) applyCloudStyle(chip, resolveCloudStyle(ref));
+    if (ref?.active === false || ref?.marked_for_deletion === true) {
+      chip.classList.add('dim');
+    }
+    const icon = el('span', 'mini-icon');
+    if (ref !== undefined) applyThoughtIcon(icon, ref);
+    else icon.textContent = '💭';
+    chip.append(icon, el('span', 'prc-title', known));
+    setTooltip(
+      chip,
+      `${fullTitle} — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).`,
+    );
+    markThoughtCommentPreview(chip, edge.target_id, fullTitle);
+    chip.tabIndex = 0;
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('aria-label', known);
+    let pendingClick: { cancel: () => void } | null = null;
+    chip.addEventListener('click', (event) => {
+      event.preventDefault();
+      pendingClick?.cancel();
+      pendingClick = deferSingleClick(() => {
+        pendingClick = null;
+        openLinkRefInEditor(networkId, edge.target_id);
+      });
+    });
+    chip.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      pendingClick?.cancel();
+      pendingClick = null;
+      focusLinkRef(networkId, edge.target_id);
+    });
+    chip.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        openLinkRefInEditor(networkId, edge.target_id);
+      } else if (event.key === ' ' || event.key === 'Spacebar') {
+        event.preventDefault();
+        focusLinkRef(networkId, edge.target_id);
+      }
+    });
+    return chip;
   }
 
   /** Read-only value cell for an outside-type value: same visuals, no editor. */
