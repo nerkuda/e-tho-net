@@ -329,6 +329,11 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     g.append(rect);
 
     // Значок: эмодзи — текст, картинка — <image> (icon хранит data: URL).
+    // SVG <text> без явного `fill` рисуется чёрным по умолчанию — на тёмном
+    // фоне облачка (наследуемый bg_color мысли) эмодзи пропадает; тот же
+    // fill, что у заголовка, держит иконку видимой на любом фоне.
+    // `dominant-baseline` дублируем атрибутом — CSS-вариант не во всех
+    // движках SVG применяется к <text> (links.ts использует тот же приём).
     const iconLabel =
       node.title.length > CLOUD_TITLE_CLIP
         ? `${node.title.slice(0, CLOUD_TITLE_CLIP)}…`
@@ -337,7 +342,11 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     if (node.ref.icon !== null && node.ref.icon !== '') {
       if (node.ref.icon_kind === 'image') {
         const img = svgEl('image');
+        // `href` поддерживается современными браузерами; `xlink:href`
+        // дублируем ради старых сборок Chromium/Electron, где один из
+        // вариантов может игнорироваться.
         img.setAttribute('href', node.ref.icon);
+        img.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', node.ref.icon);
         img.setAttribute('width', '16');
         img.setAttribute('height', '16');
         img.setAttribute('x', String(iconX + 1));
@@ -349,6 +358,8 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
         icon.setAttribute('x', String(iconX + 9));
         icon.setAttribute('y', '0');
         icon.setAttribute('text-anchor', 'middle');
+        icon.setAttribute('dominant-baseline', 'middle');
+        if (v.fg !== '') icon.setAttribute('fill', v.fg);
         icon.textContent = node.ref.icon;
         g.append(icon);
       }
