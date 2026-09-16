@@ -155,9 +155,24 @@ export function buildOverflowButton<T>(
     }
     const rect = clone.getBoundingClientRect();
     dropdown.style.position = 'fixed';
-    dropdown.style.left = `${rect.left}px`;
     dropdown.style.top = `${rect.bottom + 4}px`;
+    // The `▾N` button sits at the right edge of its strip (right after the
+    // last visible tab), so anchoring the dropdown by its LEFT edge (old
+    // `dropdown.style.left = rect.left`) pushed it mostly off-screen when the
+    // strip itself was near the window's right border — only the sliver up
+    // to the window edge was visible, the rest was clipped by the OS window
+    // boundary. Measure the real width first (min-width: 220px in CSS, but
+    // workspace rows with «Активировать»/«Закрыть» buttons can be wider) and
+    // anchor the RIGHT edge to the button's right edge instead, clamping
+    // both sides to a 4px viewport margin so a narrow window never clips it.
+    dropdown.style.visibility = 'hidden';
     document.body.append(dropdown);
+    const dropdownWidth = dropdown.getBoundingClientRect().width;
+    const viewportWidth = document.documentElement.clientWidth;
+    let left = rect.right - dropdownWidth;
+    left = Math.max(4, Math.min(left, viewportWidth - dropdownWidth - 4));
+    dropdown.style.left = `${left}px`;
+    dropdown.style.visibility = '';
     document.addEventListener('click', onDocClick, true);
   });
 
