@@ -3764,7 +3764,6 @@ body.cloud-dragging * {
 
 .prop-outside-table {
   width: 100%;
-  table-layout: fixed;
 }
 
 .prop-outside-table td {
@@ -3773,7 +3772,6 @@ body.cloud-dragging * {
 }
 
 .prop-outside-table td:first-child {
-  width: 40%;
   color: var(--text-muted, var(--muted, #666));
   word-break: break-word;
 }
