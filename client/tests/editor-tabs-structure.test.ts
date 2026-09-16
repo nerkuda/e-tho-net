@@ -248,6 +248,28 @@ describe('overflow-меню вкладок редактора (приёмка 0.
     assert.ok(/\.tab-overflow-row\s*\{/.test(css), '.tab-overflow-row style');
   });
 
+  it('регрессия: `.editor-tab[hidden]` и `.tab[hidden]` явно задают `display: none`', () => {
+    // Настоящая причина того, что 4 предыдущих попытки не дали визуального
+    // эффекта: `recomputeOverflow` прячет не поместившиеся вкладки атрибутом
+    // `hidden`, но `[hidden] { display: none }` — правило user-agent
+    // normal-приоритета, а `.editor-tab { display: inline-flex }` /
+    // `.tab { display: inline-flex }` — author normal-приоритета. Author
+    // ВСЕГДА перебивает user-agent при равном приоритете важности,
+    // независимо от специфичности селектора — сам атрибут `hidden` без
+    // явного `[hidden] { display: none }` в author-стилях эффекта не даёт.
+    // Раньше это правило добавили только для `.tab-overflow` (кнопки
+    // дропдауна), но не для самих кнопок вкладок — они оставались видимыми
+    // и просто обрезались `.editor-tabs { overflow: hidden }`.
+    const css = readText(SRC.css);
+    for (const selector of ['.editor-tab', '.tab']) {
+      const escaped = selector.replace('.', '\\.');
+      const rule = new RegExp(`${escaped}\\[hidden\\]\\s*\\{[^}]*\\}`);
+      const block = css.match(rule);
+      assert.ok(block !== null, `${selector}[hidden] rule found`);
+      assert.ok(/display:\s*none\b/.test(block![0]), `${selector}[hidden] sets display: none`);
+    }
+  });
+
   it('регрессия: `.editor-tabs` имеет `min-width: 0` и `overflow: hidden` (flexbox overflow)', () => {
     // Без `min-width: 0` flex-item в column-flex родителе раздувается по
     // min-content (сумма фиксированных кнопок), `recomputeOverflow` видит

@@ -622,6 +622,15 @@ textarea {
   user-select: none;
 }
 
+/* Тот же баг, что у `.editor-tab[hidden]` выше: `.tab { display: inline-flex }`
+   (author normal) перебивает браузерное `[hidden] { display: none }`
+   (user-agent normal) независимо от специфичности — без этого правила
+   `recomputeOverflow` (tab-overflow.ts) выставляет `hidden=true` не
+   поместившимся вкладкам воркспейса, но они остаются видимыми. */
+.tab[hidden] {
+  display: none;
+}
+
 .tab:hover {
   background: var(--surface-3, var(--surface));
 }
@@ -2373,6 +2382,20 @@ body.cloud-dragging * {
   color: var(--text-dim);
   cursor: pointer;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+/* Настоящая причина того, что overflow-меню не работало визуально несмотря
+   на 4 предыдущих попытки: `recomputeOverflow` (tab-overflow.ts) прячет не
+   поместившиеся вкладки атрибутом `button.hidden = true`, но браузерное
+   `[hidden] { display: none }` — правило user-agent normal-приоритета, а
+   `.editor-tab { display: inline-flex }` — author normal-приоритета; author
+   ВСЕГДА перебивает user-agent при равном/любом приоритете важности,
+   независимо от специфичности. Раньше исправляли только оверфлоу-кнопку
+   (`.tab-overflow[hidden]`, ниже), а сами кнопки вкладок оставались видимыми
+   при hidden=true — они просто вылезали за `.editor-tabs { overflow: hidden }`
+   и обрезались, дропдаун не появлялся. */
+.editor-tab[hidden] {
+  display: none;
 }
 
 .editor-tab:hover {
