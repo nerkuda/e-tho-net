@@ -13,7 +13,7 @@
  * Здесь нет сворачиваемой группы: вкладка одна, мини-граф заполняет всё
  * доступное место (`fillHeight: true`).
  */
-import type { Link, ThoughtRef } from '@etn/shared';
+import type { Link, ThoughtRef, ThoughtType } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
 import { div, el, errText } from '../lib/dom.js';
@@ -26,6 +26,30 @@ import { buildMiniGraph } from './mini-graph.js';
 const RESOLVE_BATCH = 100;
 /** Порог «массовости» пары (тип, цель): прячем избыточные рёбра за чипом «+N». */
 const MASS_LINK_THRESHOLD = 10;
+
+/**
+ * Подтягивает с типа визуальные поля, которые мысль наследует, а не хранит
+ * собственные (`icon`, цвета, шрифт). Используется только для соседей
+ * мини-графа: центральная мысль приходит из `ctx.thought` уже с вычисленными
+ * значениями. Без этого пилюли соседей рендерятся нейтрально, даже когда у
+ * типа есть иконка и стиль.
+ */
+function inheritFromType(ref: ThoughtRef, typeById: Map<string, ThoughtType>): ThoughtRef {
+  if (ref.type_id === null) return ref;
+  const tt = typeById.get(ref.type_id);
+  if (tt === undefined) return ref;
+  return {
+    ...ref,
+    icon: ref.icon ?? tt.icon,
+    icon_kind: ref.icon === null ? tt.icon_kind : ref.icon_kind,
+    fg_color: ref.fg_color ?? tt.fg_color,
+    bg_color: ref.bg_color ?? tt.bg_color,
+    font_bold: ref.font_bold ?? tt.font_bold,
+    font_italic: ref.font_italic ?? tt.font_italic,
+    font_underline: ref.font_underline ?? tt.font_underline,
+    font_strike: ref.font_strike ?? tt.font_strike,
+  };
+}
 
 /** Registers the graph tab content (a single mini-graph that fills the pane). */
 export function registerGraphTab(): void {
@@ -161,6 +185,14 @@ async function buildGraphBody(ctx: EditorContext): Promise<HTMLElement> {
   } catch {
     // Оффлайн-мигание — граф рисуется с нейтральными пилюлями.
   }
+  // Серверный `thoughts.resolve` возвращает собственные icon/цвета/шрифт
+  // мысли (`null`, если заданы на типе); центральная мысль приходит из
+  // `ctx.thought` с уже вычисленными значениями, а соседи — нет. Подтягиваем
+  // наследуемые поля с типа, чтобы пилюли соседей выглядели как везде
+  // (приёмка 0.8.1 «облачка как везде»; баг — иконка/цвета видны только у
+  // центра).
+  const typeById = new Map(store.state.thoughtTypes.map((t) => [t.id, t]));
+  graphRefs = graphRefs.map((r) => inheritFromType(r, typeById));
 
   root.append(
     buildMiniGraph({
