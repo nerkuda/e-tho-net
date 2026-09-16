@@ -301,25 +301,16 @@ function buildOutsideTypeTable(
   onRemove: () => void,
 ): HTMLElement {
     const root = div('prop-outside');
-    const header = div('prop-outside-header');
-    header.append(span('Свойства вне типа', 'prop-outside-title'));
-    header.append(
-      span(
-        'Свойства, не подключённые к типу владельца.',
-        'muted prop-outside-hint',
-      ),
-    );
-    root.append(header);
+    // Шапку группы рисует `groupSection` выше; внутренний `prop-outside-header`
+    // дублировал её и читался как «заголовок колонок таблицы». Таблица
+    // без `<thead>` — только строки значений; первая колонка содержит имя
+    // свойства, вторая — редактор/чип/крестик.
     const table = el('table', 'table-list prop-outside-table');
     const tbody = el('tbody');
     for (const value of values) {
       const row = el('tr');
       if (isLinkPropertyValues(value)) {
-        const nameCell = el(
-          'td',
-          undefined,
-          `${value.property_name} (${typeName('link')})`,
-        );
+        const nameCell = el('td', undefined, `${value.property_name} (связь)`);
         setTooltip(
           nameCell,
           value.property_id !== ''
@@ -333,11 +324,7 @@ function buildOutsideTypeTable(
         tbody.append(row);
         continue;
       }
-      const nameCell = el(
-        'td',
-        undefined,
-        `${value.property_name} (${typeName(value.value_type)})`,
-      );
+      const nameCell = el('td', undefined, `${value.property_name} (${typeName(value.value_type)})`);
       setTooltip(
         nameCell,
         'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
@@ -465,11 +452,13 @@ function buildOutsideLinkCell(
   }
 
   /**
-   * Read-only мини-облачко для ребра внетипового свойства (cab38479): тот же
-   * визуал и те же обработчики, что у редактируемого чипа в основной таблице
-   * (`buildLinkValueEditor.buildCloud`), за вычетом контекстного меню и
-   * крестика удаления — ключа для записи нет, ребро правится через
-   * `etn.links.*`.
+   * Read-only мини-облачко для ребра внетипового свойства (cab38479): те же
+   * визуал и обработчики (клик, двойной клик, Ctrl+Click → панель выбранных,
+   * ПКМ/Shift+F10 → контекстное меню), что у редактируемого чипа в основной
+   * таблице (`buildLinkValueEditor.buildCloud`). Крестика «×» здесь нет:
+   * ребро управляется через `etn.properties.*` ключа типа связи, а у типа
+   * связи в этом случае реестрового свойства нет (0.8.1: `links.create`/
+   * `links.remove` сняты, добавление/удаление — через свойства).
    */
 function buildOutsideReadonlyEdgeChip(
   networkId: string,
@@ -500,6 +489,12 @@ function buildOutsideReadonlyEdgeChip(
     let pendingClick: { cancel: () => void } | null = null;
     chip.addEventListener('click', (event) => {
       event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        pendingClick?.cancel();
+        pendingClick = null;
+        toggleSelection([edge.target_id]);
+        return;
+      }
       pendingClick?.cancel();
       pendingClick = deferSingleClick(() => {
         pendingClick = null;
@@ -513,7 +508,39 @@ function buildOutsideReadonlyEdgeChip(
       pendingClick = null;
       focusLinkRef(networkId, edge.target_id);
     });
+    const openReadonlyMenu = (): void => {
+      const items: MenuItem[] = [
+        {
+          label: 'Открыть в редакторе',
+          onClick: () => openLinkRefInEditor(networkId, edge.target_id),
+        },
+        {
+          label: 'В фокус',
+          onClick: () => focusLinkRef(networkId, edge.target_id),
+        },
+        {
+          label: 'Копировать ID',
+          onClick: () => {
+            void navigator.clipboard.writeText(edge.target_id).then(
+              () => notice('ID мысли скопирован.'),
+              () => notice('Не удалось скопировать ID.', 'error'),
+            );
+          },
+        },
+      ];
+      const rect = chip.getBoundingClientRect();
+      showMenuAt(rect.left, rect.bottom + 2, items);
+    };
+    chip.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      openReadonlyMenu();
+    });
     chip.addEventListener('keydown', (event) => {
+      if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+        event.preventDefault();
+        openReadonlyMenu();
+        return;
+      }
       if (event.key === 'Enter') {
         event.preventDefault();
         openLinkRefInEditor(networkId, edge.target_id);
