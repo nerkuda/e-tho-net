@@ -87,6 +87,7 @@ import {
   resolveLinkTypeVisual,
   typeSearchVisibleIds,
   type FlatTypeRow,
+  expandTypeIdsToSubtree,
 } from '../lib/type-tree.js';
 import { onRealtimeEvent } from '../realtime.js';
 import { buildChipListField } from './thought-type/value-combo.js';
@@ -629,6 +630,29 @@ function applyLinkTypeToDraft(lt: LinkType, draft: PropertyDraft): void {
   draft.linkWidth = lt.width ?? null;
 }
 
+/** Кросс-фильтр типов для поля «Значение по умолчанию» свойства-связи:
+ *  список `thoughtTypeId` из **противоположной** стороны таблицы привязок.
+ *  Пустой массив означает «фильтр не задан» (противоположная таблица пуста —
+ *  можно выбирать любые мысли). Раскрытие иерархии делает вызывающий код
+ *  через `expandTypeIdsToSubtree(store.state.thoughtTypes, …)`. */
+function collectOppositeSideTypeIds(
+  rows: readonly TypeRowDraft[],
+  side: 'source' | 'target' | null,
+): string[] {
+  const opposite: 'source' | 'target' | null =
+    side === 'source' ? 'target' : side === 'target' ? 'source' : null;
+  if (opposite === null) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const row of rows) {
+    if (row.side !== opposite) continue;
+    if (row.thoughtTypeId === '' || seen.has(row.thoughtTypeId)) continue;
+    seen.add(row.thoughtTypeId);
+    out.push(row.thoughtTypeId);
+  }
+  return out;
+}
+
 /**
  * Догрузить link_type по id и применить к draft. Вызывается, когда в
  * `store.state.linkTypes` нужной записи нет (realtime-канал отстаёт, либо
@@ -1114,8 +1138,16 @@ export function openPropertyManagerEditor(
       // — унифицированный чип-пикер мыслей (инструкция a47947c8,
       // требование 3181389d). Хранится в `type_properties.default_value`,
       // применяется через `etn.types.setPropertyDefaultOverride` на apply.
+      // Фильтр по типам целей — из **противоположной** таблицы (с раскрытием
+      // иерархии): типы «источников» ограничивают поиск целей в строках
+      // «назначений», и наоборот. Если противоположная таблица пуста — фильтра
+      // нет (можно выбирать любые мысли).
       const dvCell = el('td');
       if (isLink) {
+        const oppositeIds = collectOppositeSideTypeIds(draft.typeRows, side);
+        const filterIds = oppositeIds.length > 0
+          ? expandTypeIdsToSubtree(store.state.thoughtTypes, oppositeIds)
+          : [];
         const linkDefaults = buildChipListField({
           getValues: () =>
             Array.isArray(row.defaultValue) ? (row.defaultValue as string[]) : [],
@@ -1127,7 +1159,12 @@ export function openPropertyManagerEditor(
             const trimmed = query.trim();
             if (trimmed === '') return [];
             try {
-              const hits = await etn.thoughts.findDuplicates(networkId, trimmed);
+              const hits = await etn.thoughts.findDuplicates(
+                networkId,
+                trimmed,
+                undefined,
+                filterIds.length > 0 ? filterIds : undefined,
+              );
               return hits.map((h) => ({ value: h.id, label: h.title }));
             } catch {
               return [];
@@ -1149,6 +1186,8 @@ export function openPropertyManagerEditor(
                 networkId,
                 allowCreate: false,
                 allowLinkType: false,
+                searchTypeIds: filterIds.length > 0 ? filterIds : undefined,
+                defaultNewThoughtTypeId: filterIds[0] ?? null,
                 selectedIds: managed,
                 title: 'Выбрать мысли',
                 applyLabel: 'Выбрать',
