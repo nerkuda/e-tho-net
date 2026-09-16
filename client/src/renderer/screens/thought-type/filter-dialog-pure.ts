@@ -106,6 +106,14 @@ export function buildTokensForField(
   if (propertyValueType === 'bool') {
     out.push({ text: '$thought.active', label: '$thought.active', section: 'Поля мысли' });
   }
+  // Свойство-связь (0.8.1) и legacy `thought_ref`: значение — id мысли,
+  // поэтому естественный токен для сравнения — `$thought` (= id мысли в
+  // фокусе). Сервер (`thought-type-view-tokens.ts`) его принимает, а UI
+  // раньше в пикере значения не предлагал — отбор с целью-токеном можно
+  // было сохранить только прямым POST (ошибка fad9f28c-…).
+  if (propertyValueType === 'link' || propertyValueType === 'thought_ref') {
+    out.push({ text: '$thought', label: '$thought — id мысли в фокусе', section: 'Поля мысли' });
+  }
 
   // Property tokens (one section per ancestor level).
   for (const level of chainProps) {

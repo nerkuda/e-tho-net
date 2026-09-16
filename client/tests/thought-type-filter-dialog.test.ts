@@ -221,6 +221,21 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     assert.ok(labels.includes('$now'));
   });
 
+  it('token-picker offers $thought for link value type (error fad9f28c-…)', () => {
+    // Сервер (`thought-type-view-tokens.ts`) принимает `$thought` как
+    // значение свойства-связи; UI пикер должен его предлагать, чтобы
+    // отбор с целью-токеном можно было собрать через диалог, а не прямым
+    // POST. Так же покрываем legacy `thought_ref`.
+    const chainProps = [{ type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! }];
+    const linkTokens = module.buildTokensForField(chainProps, 'link', 'eq');
+    const linkTexts = linkTokens.map((t) => t.text);
+    assert.ok(linkTexts.includes('$thought'), '$thought доступен для свойства-связи');
+
+    const legacyTokens = module.buildTokensForField(chainProps, 'thought_ref', 'eq');
+    const legacyTexts = legacyTokens.map((t) => t.text);
+    assert.ok(legacyTexts.includes('$thought'), '$thought доступен для legacy thought_ref');
+  });
+
   it('token-picker special fields: keywords / thought_type / link_type / author / editor', () => {
     const chainProps = [
       { type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! },
