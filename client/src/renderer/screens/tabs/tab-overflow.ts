@@ -1,12 +1,13 @@
 /**
  * Overflow computation for a tab strip.
  *
- * The strip is a flex row of fixed-width tab buttons (caller-supplied default
- * and minimum widths). When the row doesn't fit, trailing items collapse into
- * a `[▾N]` dropdown button positioned at the right of the strip — the
- * overflow button is always visible when any item is hidden. Both the
- * workspace tab strip (`screens/tabs/tabs.ts`) and the editor tab strip
- * (`editor/editor.ts`) reuse this layout.
+ * The strip is a flex row of tab buttons. When the row doesn't fit, trailing
+ * items collapse into a `[▾N]` dropdown button positioned at the right of the
+ * strip — the overflow button is always visible when any item is hidden. Both
+ * the workspace tab strip (`screens/tabs/tabs.ts`) and the editor tab strip
+ * (`editor/editor.ts`) reuse this layout; their button widths differ and are
+ * described by {@link TabLayout} (equal fixed widths for the workspace,
+ * content-sized buttons for the editor).
  *
  * The function is fully generic over the item type: callers pass `allItems`
  * (the source of truth — e.g. `store.state.tabs` or the editor's TABS array)
@@ -31,49 +32,120 @@ export interface StripElements<T> {
 }
 
 /**
+ * Ширина кнопки `[▾N]` — запас, который оставляем под неё, когда что-то
+ * скрывается. Оценка снизу: кнопка узкая (`▾12`), плюс промежуток строки.
+ */
+const OVERFLOW_BTN_PX = 32;
+
+/**
+ * Как раскладываются кнопки полосы вкладок.
+ *
+ * - `fixed` — все кнопки одной ширины: сначала `defaultWidth`, при нехватке
+ *   места сжимаются, но не ниже `minWidth`; не поместившиеся уходят в `[▾N]`.
+ *   Так живут вкладки рабочего стола — там важна одинаковая ширина.
+ * - `content` — ширина каждой кнопки по её содержимому (заголовок + счётчик
+ *   «(N)»), `minWidth` — только нижняя граница для коротких заголовков.
+ *   Кнопки не сжимаются: не поместившиеся уходят в `[▾N]`. Так живёт панель
+ *   вкладок редактора: заголовки разной длины («Комментарий» против «Граф»),
+ *   и при фиксированной ширине длинный заголовок вылезал за кнопку.
+ */
+export type TabLayout =
+  | { kind: 'fixed'; defaultWidth: number; minWidth: number }
+  | { kind: 'content'; minWidth?: number };
+
+/**
+ * Ширина, реально доступная кнопкам полосы: content-box без внутренних
+ * отступов контейнера.
+ *
+ * `clientWidth` включает padding (у `.editor-tabs` это 10 px с каждой стороны),
+ * и раскладка по нему оставляла бы кнопке `[▾N]` меньше места, чем нужно, —
+ * она уезжала бы под `overflow: hidden` полосы, а скрытые вкладки становились
+ * бы недоступны. У полосы рабочего стола отступов нет — там результат прежний.
+ */
+function contentBoxWidth(root: HTMLElement): number {
+  const styles = getComputedStyle(root);
+  const paddingX =
+    (Number.parseFloat(styles.paddingLeft) || 0) + (Number.parseFloat(styles.paddingRight) || 0);
+  return Math.max(0, root.clientWidth - paddingX);
+}
+
+/**
  * Lays out the strip so visible items plus reserved controls fit in
  * `root.clientWidth`. Toggles each item's `hidden` attribute, rebuilds
  * `elements.hidden`, and shows/hides the overflow button.
+ *
+ * Кнопки `elements.visible` обязаны быть flex-элементами без растягивания
+ * (`flex: 0 0 auto` в CSS) — иначе в режиме `content` браузер сжимает их
+ * меньше содержимого, и замеренные ширины перестают быть «нужными».
  */
 export function recomputeOverflow<T>(
   elements: StripElements<T>,
-  defaultItemWidth: number,
-  minItemWidth: number,
   allItems: readonly T[],
+  layout: TabLayout,
 ): void {
   const root = elements.root;
   if (root.clientWidth === 0) return;
+  const boxWidth = contentBoxWidth(root);
 
-  const reserveForAccessory = elements.reserveButton !== null && elements.reserveButton !== undefined
-    ? elements.reserveButton.getBoundingClientRect().width || 32
-    : 0;
+  const reserveForAccessory =
+    elements.reserveButton !== null && elements.reserveButton !== undefined
+      ? elements.reserveButton.getBoundingClientRect().width || 32
+      : 0;
   const overflowBtn = elements.overflowButton;
-  const reserveForOverflow = overflowBtn !== null && !overflowBtn.hidden ? 32 : 0;
+  const reserveForOverflow = overflowBtn !== null && !overflowBtn.hidden ? OVERFLOW_BTN_PX : 0;
 
-  // Pick the largest item width that lets all items fit alongside the
-  // reserved controls.
   const visibleButtons = elements.visible;
   const total = visibleButtons.length;
-  const available = root.clientWidth - reserveForAccessory - reserveForOverflow;
-  let itemWidth = defaultItemWidth;
-  if (total * itemWidth > available) {
-    itemWidth = Math.max(minItemWidth, Math.floor(available / Math.max(total, 1)));
-  }
-
-  // Reserve width for the overflow button if any item would otherwise overflow.
   let visibleCount = total;
   let needsOverflow = false;
-  const visibleWidth = (n: number): number => n * itemWidth + reserveForAccessory;
-  while (visibleCount > 0 && visibleWidth(visibleCount) + (needsOverflow ? 32 : 0) > root.clientWidth) {
-    visibleCount -= 1;
-    needsOverflow = true;
+
+  if (layout.kind === 'fixed') {
+    // Pick the largest item width that lets all items fit alongside the
+    // reserved controls.
+    const available = boxWidth - reserveForAccessory - reserveForOverflow;
+    let itemWidth = layout.defaultWidth;
+    if (total * itemWidth > available) {
+      itemWidth = Math.max(layout.minWidth, Math.floor(available / Math.max(total, 1)));
+    }
+    for (const button of visibleButtons) button.style.width = `${itemWidth}px`;
+
+    // Reserve width for the overflow button if any item would otherwise overflow.
+    const visibleWidth = (n: number): number => n * itemWidth + reserveForAccessory;
+    while (
+      visibleCount > 0 &&
+      visibleWidth(visibleCount) + (needsOverflow ? OVERFLOW_BTN_PX : 0) > boxWidth
+    ) {
+      visibleCount -= 1;
+      needsOverflow = true;
+    }
+  } else {
+    // Ширина — по содержимому: снимаем прежнюю фиксированную ширину, задаём
+    // нижнюю границу и раскладываем строку целиком, а затем читаем фактические
+    // края кнопок: их разница и есть нужные ширины вместе с промежутками
+    // (gap строки). Скрытие идёт после замера и на ширину оставшихся не влияет
+    // — кнопки не растягиваются.
+    for (const button of visibleButtons) {
+      button.style.width = 'auto';
+      if (layout.minWidth !== undefined) button.style.minWidth = `${layout.minWidth}px`;
+      button.hidden = false;
+    }
+    const rects = visibleButtons.map((button) => button.getBoundingClientRect());
+    const first = rects[0];
+    const chainWidth = (n: number): number =>
+      n <= 0 || first === undefined ? 0 : rects[n - 1]!.right - first.left;
+    const limit = boxWidth - reserveForAccessory;
+    while (
+      visibleCount > 0 &&
+      chainWidth(visibleCount) + (needsOverflow ? OVERFLOW_BTN_PX : 0) > limit
+    ) {
+      visibleCount -= 1;
+      needsOverflow = true;
+    }
   }
 
   // Apply visibility.
   for (let i = 0; i < visibleButtons.length; i += 1) {
-    const button = visibleButtons[i]!;
-    button.style.width = `${itemWidth}px`;
-    button.hidden = i >= visibleCount;
+    visibleButtons[i]!.hidden = i >= visibleCount;
   }
 
   // Hidden = the trailing items.

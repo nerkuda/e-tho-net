@@ -143,6 +143,10 @@ function shimDom(): void {
     cb();
     return 0;
   };
+  // recomputeOverflow считает доступную ширину по content-box (`.editor-tabs`
+  // имеет внутренние отступы, а `clientWidth` их включает) и читает отступы
+  // через getComputedStyle. Шиму достаточно нулевых отступов.
+  (globalThis as any).getComputedStyle = () => ({ paddingLeft: '0px', paddingRight: '0px' });
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),

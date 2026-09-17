@@ -168,13 +168,18 @@ describe('overflow-меню вкладок редактора (приёмка 0.
     );
   });
 
-  it('объявлены ширины по умолчанию и минимум для раскладки вкладок', () => {
+  it('ширины вкладок адаптивные — по заголовку, с нижней границей', () => {
     const editorSrc = readText(SRC.editor);
-    // Спецификация «Вкладки и группы редактора»: EDITOR_TAB_W_DEFAULT_PX = 110,
-    // EDITOR_TAB_W_MIN_PX = 80. Эти имена — часть контракта, по ним проверяют
-    // и внешние тесты визуальной раскладки.
-    assert.match(editorSrc, /EDITOR_TAB_W_DEFAULT_PX\s*=\s*110/);
-    assert.match(editorSrc, /EDITOR_TAB_W_MIN_PX\s*=\s*80/);
+    // Спецификация «Вкладки и группы редактора»: ширины вкладок редактора
+    // считаются по содержимому кнопки (заголовок + счётчик «(N)»), а
+    // EDITOR_TAB_MIN_W_PX = 80 — только пол для коротких заголовков.
+    // Фиксированной ширины (110 со сжатием до 80) больше нет: в сжатой кнопке
+    // «Комментарий» не помещался и вылезал за её пределы.
+    assert.match(editorSrc, /EDITOR_TAB_MIN_W_PX\s*=\s*80/);
+    assert.ok(
+      !/EDITOR_TAB_W_DEFAULT_PX/.test(editorSrc),
+      'the fixed default width must be gone — widths are content-sized now',
+    );
   });
 
   it('overflow-кнопка добавляется в tabBar и подписана на recomputeOverflow', () => {
@@ -233,12 +238,24 @@ describe('overflow-меню вкладок редактора (приёмка 0.
     );
     // Полный набор вкладок сущности передаётся в recomputeOverflow для расчёта
     // раскладки (0.8.1: набор выбирается по типу сущности — локальная `tabs`
-    // из `tabsFor(ctx)`, а не общая константа).
-    assert.ok(
-      /recomputeOverflow\(\s*stripElements,\s*EDITOR_TAB_W_DEFAULT_PX,\s*EDITOR_TAB_W_MIN_PX,\s*tabs,?\s*\)/.test(
-        editorSrc,
-      ),
-      'recomputeOverflow uses the entity tab set as the source of truth',
+    // из `tabsFor(ctx)`, а не общая константа), и раскладка идёт в режиме
+    // `content` — ширина кнопки по заголовку.
+    assert.match(
+      editorSrc,
+      /recomputeOverflow\(\s*stripElements,\s*tabs,\s*\{[\s\S]{0,200}?kind:\s*'content'/,
+      'recomputeOverflow uses the entity tab set and content-sized buttons',
+    );
+    assert.match(
+      editorSrc,
+      /kind:\s*'content',\s*minWidth:\s*EDITOR_TAB_MIN_W_PX/,
+      'the content layout keeps the minimum width floor',
+    );
+    // Счётчик «(N)» расширяет кнопку — раскладку нужно пересчитать, иначе
+    // вкладка остаётся обрезанной или зря скрытой.
+    assert.match(
+      editorSrc,
+      /badge\.classList\.remove\('hidden'\)[\s\S]{0,600}?reflowEditorOverflow\(\)/,
+      'a late counter «(N)» triggers a layout recompute',
     );
   });
 
@@ -248,6 +265,17 @@ describe('overflow-меню вкладок редактора (приёмка 0.
     assert.ok(/\.tab-overflow\[hidden\]/.test(css), '.tab-overflow[hidden] rule');
     assert.ok(/\.tab-overflow-dropdown\s*\{/.test(css), '.tab-overflow-dropdown style');
     assert.ok(/\.tab-overflow-row\s*\{/.test(css), '.tab-overflow-row style');
+  });
+
+  it('CSS вкладок редактора: кнопка по содержимому, без сжатия и переноса', () => {
+    const css = readText(SRC.css);
+    const rule = /\.editor-tab\s*\{[^}]*\}/.exec(css);
+    assert.ok(rule !== null, '.editor-tab rule present');
+    // Раскладка `content` в recomputeOverflow меряет «нужную» ширину кнопки —
+    // без `flex: 0 0 auto` браузер сжимал бы кнопку меньше содержимого, и текст
+    // снова вылез бы за её пределы.
+    assert.ok(/flex:\s*0\s+0\s+auto/.test(rule[0]), '.editor-tab must not shrink');
+    assert.ok(/white-space:\s*nowrap/.test(rule[0]), '.editor-tab title must not wrap');
   });
 
   it('регрессия: `.editor-tab[hidden]` и `.tab[hidden]` явно задают `display: none`', () => {

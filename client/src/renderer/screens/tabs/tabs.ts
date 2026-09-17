@@ -26,8 +26,11 @@ import {
 } from './tab-overflow.js';
 import { wireTabDrag } from './tab-dnd.js';
 
-const TAB_W_DEFAULT_PX = 180;
-const TAB_W_MIN_PX = 120;
+/**
+ * Ширина вкладки рабочего стола: одна на все — так строка выглядит ровной
+ * (в отличие от адаптивных вкладок редактора, см. TabLayout).
+ */
+const TAB_LAYOUT = { kind: 'fixed', defaultWidth: 180, minWidth: 120 } as const;
 
 /**
  * Mounts the tab strip into `host`. Returns the root element so the caller
@@ -67,7 +70,7 @@ export function mountTabStrip(host: HTMLElement): HTMLDivElement {
   elements.overflowButton = overflowBtn;
 
   const observer = new ResizeObserver(() => {
-    recomputeOverflow(elements, TAB_W_DEFAULT_PX, TAB_W_MIN_PX, store.state.tabs);
+    recomputeOverflow(elements, store.state.tabs, TAB_LAYOUT);
   });
   observer.observe(root);
 
@@ -121,7 +124,7 @@ function render(elements: StripElements<TabDto> & { reserveButton: HTMLButtonEle
   // The «+» mirrors the picker's open state with a pressed look.
   elements.reserveButton.classList.toggle('tab-active', pickerOpen);
 
-  recomputeOverflow(elements, TAB_W_DEFAULT_PX, TAB_W_MIN_PX, tabs);
+  recomputeOverflow(elements, tabs, TAB_LAYOUT);
   if (elements.overflowButton !== null) {
     // `buildOverflowButton` отсоединяет старую ноду через `replaceWith` и
     // возвращает свежий клон — сохраняем ссылку, чтобы последующие вызовы

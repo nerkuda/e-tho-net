@@ -165,9 +165,17 @@ function isKnownTabId(id: string): id is EditorTabId {
   return TABS_THOUGHT.some((t) => t.id === id) || TABS_LINK.some((t) => t.id === id);
 }
 
-/** Ширины по умолчанию/минимум для overflow-раскладки вкладок редактора. */
-const EDITOR_TAB_W_DEFAULT_PX = 110;
-const EDITOR_TAB_W_MIN_PX = 80;
+/**
+ * Нижняя граница ширины кнопки вкладки редактора, px.
+ *
+ * Ширины вкладок адаптивные — по длине заголовка (со счётчиком «(N)»), поэтому
+ * константа задаёт только пол: короткие заголовки («Граф») не выглядят
+ * огрызками, а длинные («Комментарий») получают столько, сколько нужно.
+ * Не поместившиеся вкладки уходят в `[▾N]` вместо сжатия — при фиксированной
+ * ширине 110/80 (как было до этого) «Комментарий» в сжатой кнопке не
+ * помещался и вылезал за её пределы.
+ */
+const EDITOR_TAB_MIN_W_PX = 80;
 
 const tabContentBuilders = new Map<EditorTabId, TabContentBuilder>();
 const tabCountLoaders = new Map<EditorTabId, TabCountLoader>();
@@ -894,6 +902,11 @@ async function render(): Promise<void> {
           if (n !== undefined && tab.isConnected) {
             badge.textContent = `(${n})`;
             badge.classList.remove('hidden');
+            // Счётчик расширил кнопку — раскладка по содержимому должна узнать
+            // об этом (иначе вкладка останется обрезанной или зря скрытой).
+            // Вызов асинхронный: к этому моменту `reflowEditorOverflow` уже
+            // определён ниже в этой же сборке редактора.
+            reflowEditorOverflow();
           }
         });
       }
@@ -943,14 +956,17 @@ async function render(): Promise<void> {
     row.append(label);
     return row;
   };
-  const reflowEditorOverflow = (): void => {
-    recomputeOverflow(
-      stripElements,
-      EDITOR_TAB_W_DEFAULT_PX,
-      EDITOR_TAB_W_MIN_PX,
-      tabs,
-    );
-  };
+  function reflowEditorOverflow(): void {
+    // Раскладка по содержимому: ширина кнопки — по заголовку (см.
+    // EDITOR_TAB_MIN_W_PX). Счётчик «(N)» приходит асинхронно и расширяет
+    // кнопку — его загрузчик выше (см. `tabCountLoaders`) зовёт пересчёт
+    // повторно. Объявлено функцией, а не константой: вызов из загрузчика идёт
+    // из замыкания, заведённого раньше по коду.
+    recomputeOverflow(stripElements, tabs, {
+      kind: 'content',
+      minWidth: EDITOR_TAB_MIN_W_PX,
+    });
+  }
   const overflowObserver = new ResizeObserver(reflowEditorOverflow);
   overflowObserver.observe(tabBar);
   // Первый маунт: `ResizeObserver` сработает только при изменении размера,
