@@ -156,7 +156,10 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       'cloud colours/fonts come from resolveCloudStyle',
     );
     assert.ok(
-      !src.includes('node.ref.icon') && !src.includes('ref.bg_color ??'),
+      !src.includes('node.ref.icon !== null') &&
+        !src.includes('node.ref.icon_kind') &&
+        !src.includes('ref.bg_color') &&
+        !src.includes('ref.fg_color'),
       'the pill does not read the ref visual fields directly',
     );
     // graph-tab больше не достраивает наследование руками — иначе два разных

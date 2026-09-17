@@ -19,7 +19,8 @@
  *  - облачка мыс­лей — как везде: значок (свой, иначе унаследованный от типа по
  *    цепочке предков, иначе 💭) и цвета/шрифт мысли, неактуальная бледная,
  *    помеченная на удаление — с меткой корзины;
- *  - Ctrl+hover — предпросмотр постоянного комментария (как на карте);
+ *  - Ctrl+hover — предпросмотр постоянного комментария (как на карте), а на
+ *    иконке-картинке — «лупа» с полной картинкой (как везде, `lib/image-zoom`);
  *  - клик — открыть в редакторе, двойной — в фокус (с активацией карты),
  *    правый/Shift+F10 — контекстное меню облачка.
  *
@@ -363,6 +364,14 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       img.setAttribute('height', '16');
       img.setAttribute('x', String(iconX + 1));
       img.setAttribute('y', String(-CLOUD_H / 2 + 4));
+      // Тот же контракт, что у applyThoughtIcon (L16): иконка-картинка с
+      // вложением несёт id мысли и вложения — по ним Ctrl+наведение («лупа»)
+      // показывает полную картинку, а не превью размера иконки.
+      const attachmentId = node.ref.icon_attachment_id ?? null;
+      if (attachmentId !== null) {
+        img.dataset['zoomThought'] = node.ref.id;
+        img.dataset['zoomAttachment'] = attachmentId;
+      }
       g.append(img);
     } else {
       const icon = svgEl('text');
