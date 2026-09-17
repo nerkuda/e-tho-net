@@ -15,14 +15,16 @@
  * is interactive, so hovering a cloud never "surfaces" the links passing
  * beneath it and cloud hover/click always work. The link currently hovered
  * or sticky-selected is re-rendered in a top overlay **above** the clouds,
- * with a popover (type name + 📝/📅/📎 counts) and highlighted ellipses
- * on both endpoints. The popover is itself a hover island: it can be entered
- * with the cursor (`pointer-events: auto`), its position is frozen while it
- * stays open for the same bundle, and it hides 0.3 s after the cursor left
- * both the line and the popover (unless the link is sticky-selected). Click
- * opens the link in the editor (single) or a picker (bundle) and leaves it
- * selected until a click elsewhere — including clicks that land on the
- * popover itself, which are forwarded to the line's click handler.
+ * with a popover (type names only) and highlighted ellipses on both
+ * endpoints. The popover is itself a hover island: it can be entered with the
+ * cursor (`pointer-events: auto`), its position is frozen while it stays open
+ * for the same bundle, and it hides 0.3 s after the cursor left both the line
+ * and the popover (unless the link is sticky-selected). Ctrl+hover over the
+ * popover previews the link's permanent comment, if it has one (a bundle has
+ * no single owner edge, so it carries no preview marker). Click opens the link
+ * in the editor (single) or a picker (bundle) and leaves it selected until a
+ * click elsewhere — including clicks that land on the popover itself, which
+ * are forwarded to the line's click handler.
  *
  * Redrawn (rAF-debounced) on canvas renders, scrolling, resizes and focus
  * changes; positions come from `getBoundingClientRect` relative to the host.
@@ -33,11 +35,7 @@ import type { FocusEdge, FocusResponse, LinkType } from '@etn/shared';
 import { closeMenu, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { div, el } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
-import {
-  markAttachmentsPreview,
-  markChronoPreview,
-  markCommentPreview,
-} from '../lib/hover-preview.js';
+import { markCommentPreview } from '../lib/hover-preview.js';
 import { ELLIPSE_INSIDE } from '../lib/pure.js';
 import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
 import { resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../lib/type-tree.js';
@@ -97,8 +95,6 @@ let svgTop: SVGSVGElement | null = null;
  *  line and survives the redraws that rebuild svgTop. */
 let svgDrag: SVGSVGElement | null = null;
 let popover: HTMLElement | null = null;
-/** Bundle whose popover is open (to refresh counts on invalidation). */
-let activePopoverBundle: Bundle | null = null;
 let opener: LinkEditorOpener | null = null;
 /** Bundle key currently under the cursor (transient). */
 let hoveredKey: string | null = null;
@@ -146,9 +142,6 @@ export function setDragLinkLine(
 }
 /** Endpoint ellipses currently highlighted, to clear on the next redraw. */
 let highlightedEllipses: HTMLElement[] = [];
-
-/** Comment/chronology/attachment counts of a single link, cached per hover. */
-const linkCountsCache = new Map<string, { comments: number; chrono: number; attachments: number }>();
 
 /**
  * Mounts the link overlay onto a canvas host. Returns the redraw trigger;
@@ -862,8 +855,9 @@ function schedulePopoverHide(): void {
  * the curve's t=0.5 point once. While the popover stays open for the SAME
  * bundle (`popover.dataset['key']` matches) the position is FROZEN: redraws
  * and re-hovers must not move the box under the cursor — the user may be
- * inside it, hovering the 📝/📅/📎 indicators (the popover is interactive,
- * `pointer-events: auto`, so the Ctrl-hover preview engine works inside it).
+ * inside it, Ctrl-hovering it for the permanent-comment preview (the popover
+ * is interactive, `pointer-events: auto`, so the Ctrl-hover preview engine
+ * works inside it).
  */
 function ensurePopover(
   bundle: Bundle,
@@ -893,15 +887,20 @@ function bundleTypeNames(bundle: Bundle): string {
     .join(' · ');
 }
 
-/** Builds the popover content for a bundle (type names + comment/attachment counts). */
+/** Builds the popover content for a bundle (type names only). */
 function showPopover(bundle: Bundle): void {
   hidePopover();
   popover = div('link-popover');
   popover.dataset['key'] = bundle.key;
-  activePopoverBundle = bundle;
-  popover.append(el('div', 'link-popover-types', bundleTypeNames(bundle)));
-  const counts = div('link-popover-counts');
-  popover.append(counts);
+  const title = bundleTypeNames(bundle);
+  popover.append(el('div', 'link-popover-types', title));
+  // Single-link bundles carry the Ctrl-hover preview marker for the link's
+  // permanent comment (the engine shows nothing when it has none). A bundle of
+  // several links has no single owner edge, so it stays plain names.
+  const single = bundle.edges.length === 1 ? bundle.edges[0] : undefined;
+  if (single !== undefined) {
+    markCommentPreview(popover, 'link', single.id, title);
+  }
   // The popover is a "hover island" (pointer-events: auto, styles.css): a
   // leave from the hit line only SCHEDULES the hide — entering the popover
   // cancels it (and keeps the top-line highlight alive, as the hover would),
@@ -923,86 +922,23 @@ function showPopover(bundle: Bundle): void {
     drawActive();
   });
   // The popover sits ON the curve's midpoint, where the hit line runs beneath
-  // it. Clicks that don't land on a preview indicator (those keep their own
-  // Ctrl-hover meaning) are forwarded to the line's handler, so the
-  // sticky-select / editor-open / bundle-picker behaviour of clicking the
-  // line works exactly as before the popover became interactive.
-  // `stopPropagation` keeps document-level listeners (e.g. a menu's
-  // close-on-outside-click) from eating the very click that opened the picker.
+  // it. Clicks are forwarded to the line's handler, so the sticky-select /
+  // editor-open / bundle-picker behaviour of clicking the line works exactly
+  // as before the popover became interactive. `stopPropagation` keeps
+  // document-level listeners (e.g. a menu's close-on-outside-click) from
+  // eating the very click that opened the picker.
   popover.addEventListener('click', (event) => {
-    const onIndicator = (event.target as HTMLElement | null)?.closest('[data-hp-kind]') != null;
-    if (onIndicator) return;
     event.stopPropagation();
     void onLineClick(bundle, event);
   });
   document.body.append(popover);
-  void loadLinkCounts(bundle, counts);
 }
 
 function hidePopover(): void {
   cancelPopoverHide();
   popover?.remove();
   popover = null;
-  activePopoverBundle = null;
   popoverInside = false;
-}
-
-/**
- * Drops the cached popover counts of one link (all links when `linkId` is
- * null). A popover that is currently open for the affected link re-fetches its
- * counts at once — the popover stays visible while the link is sticky-selected
- * and its owner (comments/attachments) changes in the editor or via realtime.
- */
-export function invalidateLinkCounts(linkId: string | null): void {
-  if (linkId === null) {
-    linkCountsCache.clear();
-  } else {
-    linkCountsCache.delete(linkId);
-  }
-  const bundle = activePopoverBundle;
-  if (popover === null || bundle === null || bundle.edges.length !== 1) return;
-  const edge = bundle.edges[0];
-  if (edge === undefined) return;
-  if (linkId !== null && edge.id !== linkId) return;
-  const counts = popover.querySelector('.link-popover-counts');
-  if (counts instanceof HTMLElement) void loadLinkCounts(bundle, counts);
-}
-
-/** Lazily fetches comment/chronology/attachment counts for a bundle. Each
- *  count renders as its own Ctrl-hoverable indicator, same as the canvas
- *  cloud (§15.4) — a bundle of several links has no single owner to preview,
- *  so it stays a plain count. */
-async function loadLinkCounts(bundle: Bundle, target: HTMLElement): Promise<void> {
-  const networkId = store.state.networkId;
-  if (networkId === null) return;
-  if (bundle.edges.length !== 1) {
-    target.textContent = `связей: ${bundle.edges.length}`;
-    return;
-  }
-  const linkId = bundle.edges[0]?.id;
-  if (linkId === undefined) return;
-  let cached = linkCountsCache.get(linkId);
-  if (cached === undefined) {
-    try {
-      const comments = await etn.comments.list(networkId, 'link', linkId);
-      const attachments = await etn.attachments.list(networkId, 'link', linkId);
-      const chrono = comments.filter((c) => c.kind === 'chronological').length;
-      const perm = comments.filter((c) => c.kind === 'permanent').length;
-      cached = { comments: perm, chrono, attachments: attachments.length };
-      linkCountsCache.set(linkId, cached);
-    } catch {
-      cached = { comments: 0, chrono: 0, attachments: 0 };
-    }
-  }
-  if (popover === null || popover.dataset['key'] !== bundle.key) return;
-  const title = bundleTypeNames(bundle);
-  const perm = el('span', 'link-popover-ind', `📝 ${cached.comments}`);
-  const chrono = el('span', 'link-popover-ind', `📅 ${cached.chrono}`);
-  const att = el('span', 'link-popover-ind', `📎 ${cached.attachments}`);
-  markCommentPreview(perm, 'link', linkId, title);
-  markChronoPreview(chrono, 'link', linkId, title);
-  markAttachmentsPreview(att, 'link', linkId, title);
-  target.replaceChildren(perm, ' · ', chrono, ' · ', att);
 }
 
 // ---------------------------------------------------------------------------

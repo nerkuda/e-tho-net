@@ -1745,10 +1745,6 @@ body.resizing-h {
 }
 .link-popover-types {
   font-weight: 600;
-  margin-bottom: 2px;
-}
-.link-popover-counts {
-  color: var(--text-dim);
 }
 
 .link-label-text {
@@ -3657,12 +3653,6 @@ body.cloud-dragging * {
 }
 .hover-preview-popup .hp-attachment-item:hover {
   background: none;
-}
-
-/* Link popover counts (canvas/links.ts): each count is its own Ctrl-hover
-   trigger now, styled like the canvas cloud indicators. */
-.link-popover-ind {
-  cursor: default;
 }
 
 /* Ctrl-hover preview of links inside comment text (stage 2/3, lib/hover-
