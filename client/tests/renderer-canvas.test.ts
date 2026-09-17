@@ -12,7 +12,8 @@ import { canvasInternals, visibleRelatedTitles } from '../src/renderer/canvas/ca
 import { shortenCompoundName } from '../src/renderer/lib/pure.js';
 import { store } from '../src/renderer/state.js';
 
-const { groupByThought, resolveCloudStyle, canvasRenderKey, selectionKey } = canvasInternals;
+const { groupByThought, resolveCloudStyle, resolveThoughtIcon, canvasRenderKey, selectionKey } =
+  canvasInternals;
 
 function thought(id: string, title = id): Thought {
   return {
@@ -170,6 +171,45 @@ describe('resolveCloudStyle', () => {
     const style = resolveCloudStyle(ref({ type_id: 'type1', font_bold: false }));
     assert.equal(style.bold, false);
     store.update({ thoughtTypes: [] });
+  });
+});
+
+describe('resolveThoughtIcon (требование «Наследование визуального стиля мысли от её типа»)', () => {
+  // Контракт, на который опирается любое облачко/пилюля: своя иконка → иконка
+  // типа по цепочке предков (для мысли без типа — корневого) → нет иконки
+  // (вызывающий код рисует дефолт 💭).
+  const chain = [
+    type({ id: 'root', name: 'основной тип', is_root: true, icon: '🌳' }),
+    type({ id: 'person', name: 'Персона', parent_id: 'root', is_root: false, icon: '🧑' }),
+    type({ id: 'mate', name: 'Коллега', parent_id: 'person', is_root: false }),
+  ];
+
+  it('своя иконка побеждает типовую — вместе со своим видом', () => {
+    store.update({ thoughtTypes: chain });
+    const icon = resolveThoughtIcon(ref({ type_id: 'person', icon: '⭐', icon_kind: 'emoji' }));
+    assert.deepEqual(icon, { icon: '⭐', kind: 'emoji' });
+    store.update({ thoughtTypes: [] });
+  });
+
+  it('наследует иконку типа — по цепочке предков, а не с непосредственного типа', () => {
+    store.update({ thoughtTypes: chain });
+    // У типа «Коллега» своей иконки нет — она берётся у «Персоны».
+    assert.deepEqual(resolveThoughtIcon(ref({ type_id: 'mate' })), {
+      icon: '🧑',
+      kind: 'emoji',
+    });
+    store.update({ thoughtTypes: [] });
+  });
+
+  it('мысль без типа получает иконку корневого типа', () => {
+    store.update({ thoughtTypes: chain });
+    assert.deepEqual(resolveThoughtIcon(ref({ type_id: null })), { icon: '🌳', kind: 'emoji' });
+    store.update({ thoughtTypes: [] });
+  });
+
+  it('иконки нет нигде — отдаёт null (вызывающий рисует 💭)', () => {
+    store.update({ thoughtTypes: [] });
+    assert.deepEqual(resolveThoughtIcon(ref()), { icon: null, kind: 'emoji' });
   });
 });
 

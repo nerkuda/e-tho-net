@@ -1801,6 +1801,7 @@ function applyIndicators(id: string, info: IndicatorInfo): void {
 export const canvasInternals = {
   groupByThought,
   resolveCloudStyle,
+  resolveThoughtIcon,
   refCache,
   indicatorCache,
   canvasRenderKey,

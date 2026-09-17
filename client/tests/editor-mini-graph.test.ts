@@ -117,7 +117,7 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
   it('облачка мыс­лей — как везде: значок (эмодзи/картинка), цвета, шрифт, dim, корзина', () => {
     const src = readText(SRC.graph);
     for (const anchor of [
-      'cloudVisual', // SVG-зеркало applyCloudStyle (fg/bg/font_*)
+      'cloudVisual', // вид пилюли (fg/bg/font_*)
       "svgEl('image')", // иконка-картинка рисуется как SVG <image>
       'mini-node-icon',
       'mini-node-trash', // помеченная на удаление
@@ -128,6 +128,42 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     assert.ok(
       src.includes('markThoughtCommentPreview'),
       'Ctrl+hover preview is wired on nodes',
+    );
+  });
+
+  it('значок и цвет пилюли разрешает общий слой канваса, а не чтение полей ref', () => {
+    // Регрессия: пилюля читала `ref.icon`/`ref.bg_color` напрямую, из-за чего
+    // своя иконка показывалась всегда, типовая — не всегда (наследование
+    // подтягивалось вручную и только с непосредственного типа, без цепочки
+    // предков), а дефолт приложения 💭 — никогда.
+    const src = readText(SRC.graph);
+    assert.ok(
+      /import \{[\s\S]*?resolveCloudStyle[\s\S]*?resolveThoughtIcon[\s\S]*?\} from '\.\.\/canvas\/canvas\.js'/.test(
+        src,
+      ),
+      'pill visuals are resolved by the shared canvas helpers',
+    );
+    assert.ok(
+      src.includes('resolveThoughtIcon(node.ref)'),
+      'the node icon is resolved (own → type chain → app default)',
+    );
+    assert.ok(
+      src.includes("resolvedIcon.icon ?? '💭'"),
+      'the app default icon is drawn when neither the thought nor its type sets one',
+    );
+    assert.ok(
+      /const style = resolveCloudStyle\(ref\);/.test(src),
+      'cloud colours/fonts come from resolveCloudStyle',
+    );
+    assert.ok(
+      !src.includes('node.ref.icon') && !src.includes('ref.bg_color ??'),
+      'the pill does not read the ref visual fields directly',
+    );
+    // graph-tab больше не достраивает наследование руками — иначе два разных
+    // правила наследования снова разъедутся.
+    assert.ok(
+      !readText(SRC.graphTab).includes('inheritFromType'),
+      'graph-tab does not hand-roll type inheritance',
     );
   });
 

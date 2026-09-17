@@ -16,8 +16,9 @@
  *    связанные мысли получают оранжевую рамку и всплывают наверх (важно,
  *    когда облачка перекрывают друг друга);
  *  - стрелки на линиях показывают направление (исходящая/входящая от центра);
- *  - облачка мыс­лей — как везде: значок (эмодзи/картинка), цвета и шрифт
- *    мысли, неактуальная бледная, помеченная на удаление — с меткой корзины;
+ *  - облачка мыс­лей — как везде: значок (свой, иначе унаследованный от типа по
+ *    цепочке предков, иначе 💭) и цвета/шрифт мысли, неактуальная бледная,
+ *    помеченная на удаление — с меткой корзины;
  *  - Ctrl+hover — предпросмотр постоянного комментария (как на карте);
  *  - клик — открыть в редакторе, двойной — в фокус (с активацией карты),
  *    правый/Shift+F10 — контекстное меню облачка.
@@ -43,9 +44,9 @@ import { select } from 'd3-selection';
 import { zoom, type D3ZoomEvent } from 'd3-zoom';
 
 import { div, span } from '../lib/dom.js';
-import { notice } from '../lib/notice.js';
+import { contrastText } from '../lib/pure.js';
 import { store } from '../state.js';
-import { deferSingleClick } from '../canvas/canvas.js';
+import { deferSingleClick, resolveCloudStyle, resolveThoughtIcon } from '../canvas/canvas.js';
 import { toggleSelection } from '../selection/selection.js';
 
 /** Mass-link threshold: ≥10 ребер одного типа к одной цели скрываются за чипом. */
@@ -105,7 +106,7 @@ function svgEl<K extends keyof SVGElementTagNameMap>(tag: K): SVGElementTagNameM
   return document.createElementNS('http://www.w3.org/2000/svg', tag);
 }
 
-/** Стиль мысли → атрибуты пилюли (SVG-зеркало applyCloudStyle). */
+/** Стиль мысли → атрибуты пилюли. */
 interface CloudVisual {
   bg: string;
   fg: string;
@@ -116,16 +117,23 @@ interface CloudVisual {
   dim: boolean;
 }
 
+/**
+ * Разрешает вид пилюли теми же хелперами, что и облачко на карте
+ * (`resolveCloudStyle`), — иначе пилюля не наследовала бы вид типа по цепочке
+ * предков и расходилась бы с облачком той же мысли на холсте (требование
+ * «Наследование визуального стиля мысли от её типа»).
+ */
 function cloudVisual(ref: ThoughtRef | Thought): CloudVisual {
-  const bg = ref.bg_color ?? 'var(--surface-2)';
-  const fg = ref.fg_color ?? (ref.bg_color !== null ? '#ffffff' : 'var(--text)');
+  const style = resolveCloudStyle(ref);
   return {
-    bg,
-    fg,
-    bold: ref.font_bold === true,
-    italic: ref.font_italic === true,
-    underline: ref.font_underline === true,
-    strike: ref.font_strike === true,
+    bg: style.bg ?? 'var(--surface-2)',
+    // Как в applyCloudStyle: явный fg побеждает, иначе — контрастный к фону,
+    // иначе цвет текста темы.
+    fg: style.fg ?? (style.bg !== null ? contrastText(style.bg) : 'var(--text)'),
+    bold: style.bold,
+    italic: style.italic,
+    underline: style.underline,
+    strike: style.strike,
     dim: ref.active === false || ref.marked_for_deletion === true,
   };
 }
@@ -329,6 +337,10 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
     g.append(rect);
 
     // Значок: эмодзи — текст, картинка — <image> (icon хранит data: URL).
+    // Разрешается как везде (canvas.applyThoughtIcon): своя иконка, иначе
+    // иконка типа по цепочке предков (корневого — для мысли без типа), иначе
+    // дефолт приложения 💭. Прямое чтение `ref.icon` показывало только личные
+    // иконки: типовая наследовалась не всегда, дефолт — никогда.
     // SVG <text> без явного `fill` рисуется чёрным по умолчанию — на тёмном
     // фоне облачка (наследуемый bg_color мысли) эмодзи пропадает; тот же
     // fill, что у заголовка, держит иконку видимой на любом фоне.
@@ -339,30 +351,29 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
         ? `${node.title.slice(0, CLOUD_TITLE_CLIP)}…`
         : node.title;
     const iconX = -node.w / 2 + 4;
-    if (node.ref.icon !== null && node.ref.icon !== '') {
-      if (node.ref.icon_kind === 'image') {
-        const img = svgEl('image');
-        // `href` поддерживается современными браузерами; `xlink:href`
-        // дублируем ради старых сборок Chromium/Electron, где один из
-        // вариантов может игнорироваться.
-        img.setAttribute('href', node.ref.icon);
-        img.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', node.ref.icon);
-        img.setAttribute('width', '16');
-        img.setAttribute('height', '16');
-        img.setAttribute('x', String(iconX + 1));
-        img.setAttribute('y', String(-CLOUD_H / 2 + 4));
-        g.append(img);
-      } else {
-        const icon = svgEl('text');
-        icon.setAttribute('class', 'mini-node-icon');
-        icon.setAttribute('x', String(iconX + 9));
-        icon.setAttribute('y', '0');
-        icon.setAttribute('text-anchor', 'middle');
-        icon.setAttribute('dominant-baseline', 'middle');
-        if (v.fg !== '') icon.setAttribute('fill', v.fg);
-        icon.textContent = node.ref.icon;
-        g.append(icon);
-      }
+    const resolvedIcon = resolveThoughtIcon(node.ref);
+    if (resolvedIcon.kind === 'image' && resolvedIcon.icon !== null) {
+      const img = svgEl('image');
+      // `href` поддерживается современными браузерами; `xlink:href`
+      // дублируем ради старых сборок Chromium/Electron, где один из
+      // вариантов может игнорироваться.
+      img.setAttribute('href', resolvedIcon.icon);
+      img.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', resolvedIcon.icon);
+      img.setAttribute('width', '16');
+      img.setAttribute('height', '16');
+      img.setAttribute('x', String(iconX + 1));
+      img.setAttribute('y', String(-CLOUD_H / 2 + 4));
+      g.append(img);
+    } else {
+      const icon = svgEl('text');
+      icon.setAttribute('class', 'mini-node-icon');
+      icon.setAttribute('x', String(iconX + 9));
+      icon.setAttribute('y', '0');
+      icon.setAttribute('text-anchor', 'middle');
+      icon.setAttribute('dominant-baseline', 'middle');
+      if (v.fg !== '') icon.setAttribute('fill', v.fg);
+      icon.textContent = resolvedIcon.icon ?? '💭';
+      g.append(icon);
     }
 
     const text = svgEl('text');
