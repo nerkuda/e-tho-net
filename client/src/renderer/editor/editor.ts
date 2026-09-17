@@ -8,9 +8,11 @@
  *    сохраняются через `thoughts.update` с `If-Match`;
  *  - link header (when a link is picked): type + active via `links.update`.
  *
- * L7 turns the group stack below the header into tabs (08-ui-spec.md §6.3):
+ * L7 turns the group stack below the header into tabs (08-ui-spec.md §6.3).
+ * The set depends on the edited entity (0.8.1, задача 95775cfd): у мысли —
  * «Основное», «Свойства», «Вложения (N)», «Упоминания», «Хроника (N)»,
- * «Граф», «Метаданные». A tab's content is built lazily on first activation and
+ * «Граф», «Метаданные»; у связи — «Основное», «Мысли», «Метаданные». A tab's
+ * content is built lazily on first activation and
  * cached for the lifetime of one editor render (a signature change rebuilds
  * everything). The active tab survives focus changes (persisted to L4
  * `UI_STATE_KEY.EDITOR_ACTIVE_TAB`). Modules register tab content builders
@@ -118,7 +120,17 @@ export type TabCountLoader = (ctx: EditorContext) => Promise<number | undefined>
 export type MainSectionBuilder = (ctx: EditorContext) => GroupSpec | null;
 
 /** Static tab bar definition; badges come from registered count loaders. */
-const TABS: Array<{ id: EditorTabId; title: string; counted: boolean }> = [
+interface EditorTabDef {
+  id: EditorTabId;
+  title: string;
+  counted: boolean;
+}
+
+/**
+ * Tab set of the thought editor — the full set, порядок фиксирован
+ * (08-ui-spec.md §6.3). Не менять порядок: на него опираются тесты вёрстки.
+ */
+const TABS_THOUGHT: EditorTabDef[] = [
   { id: 'main', title: 'Основное', counted: false },
   { id: 'properties', title: 'Свойства', counted: false },
   { id: 'attachments', title: 'Вложения', counted: true },
@@ -127,6 +139,31 @@ const TABS: Array<{ id: EditorTabId; title: string; counted: boolean }> = [
   { id: 'graph', title: 'Граф', counted: false },
   { id: 'metadata', title: 'Метаданные', counted: false },
 ];
+
+/**
+ * Tab set of the link editor (задача 95775cfd, 08-ui-spec.md §6.3): у одиночного
+ * ребра нет собственных свойств, вложений, хроники и локального графа, а два
+ * его конца живут на вкладке «Мысли» (id `links` — тот же, что у «Упоминаний»
+ * мысли, чтобы предпочтение активной вкладки не сбрасывалось).
+ */
+const TABS_LINK: EditorTabDef[] = [
+  { id: 'main', title: 'Основное', counted: false },
+  { id: 'links', title: 'Мысли', counted: false },
+  { id: 'metadata', title: 'Метаданные', counted: false },
+];
+
+/**
+ * Набор вкладок зависит от редактируемой сущности (0.8.1, задача 95775cfd):
+ * у связи — только её три вкладки, у мысли — полный набор.
+ */
+function tabsFor(ctx: EditorContext): EditorTabDef[] {
+  return ctx.ownerType === 'link' ? TABS_LINK : TABS_THOUGHT;
+}
+
+/** Id, входящие в любой из наборов вкладок (валидация предпочтения из L4). */
+function isKnownTabId(id: string): id is EditorTabId {
+  return TABS_THOUGHT.some((t) => t.id === id) || TABS_LINK.some((t) => t.id === id);
+}
 
 /** Ширины по умолчанию/минимум для overflow-раскладки вкладок редактора. */
 const EDITOR_TAB_W_DEFAULT_PX = 110;
@@ -141,6 +178,10 @@ const mainSectionBuilders: MainSectionBuilder[] = [];
  *  (задача 8ab775d9), so reopening the editor restores the same tab the
  *  user was on. The module-level shadow stays in sync with `persistActiveTab`. */
 let activeTab: EditorTabId = 'main';
+/** What is actually shown right now. Differs from `activeTab` when the saved
+ *  preference is absent from the current entity's set (e.g. «Хроника» on a
+ *  link → «Основное» is displayed while the preference stays untouched). */
+let shownTab: EditorTabId = 'main';
 let activeTabLoaded = false;
 
 /** Loads the persisted active tab id once. Safe to call repeatedly. */
@@ -151,8 +192,10 @@ async function loadActiveTab(): Promise<void> {
   if (networkId === null) return;
   try {
     const raw = await etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_ACTIVE_TAB);
-    if (typeof raw === 'string' && (TABS.find((t) => t.id === raw) ?? null) !== null) {
-      activeTab = raw as EditorTabId;
+    // Принимаем id, входящие в любой из наборов: предпочтение одно на весь
+    // редактор, и «Хроника» мысли не должна сбрасываться, пока открыта связь.
+    if (typeof raw === 'string' && isKnownTabId(raw)) {
+      activeTab = raw;
     }
   } catch {
     // Ошибка чтения (нет сети, нет значения) — оставляем дефолт 'main'.
@@ -518,7 +561,10 @@ export function mountEditor(editorHost: HTMLElement): void {
   // render so the user lands on the tab they left on, not always «Основное».
   void loadActiveTab().then(() => {
     if (host?.isConnected === true && paneHostEl !== null) {
-      activateEditorTab(activeTab);
+      // Guarded draw: если сохранённой вкладки нет в наборе текущей сущности,
+      // показываем «Основное», само предпочтение не перезаписываем.
+      const ctx = currentEditorContext();
+      displayInitialTab(ctx === null ? TABS_THOUGHT : tabsFor(ctx));
     }
   });
   void render();
@@ -594,11 +640,16 @@ function buildTabPane(id: EditorTabId): HTMLElement {
   return pane;
 }
 
-/** Activates a tab: (re)builds its pane on first activation, caches it after. */
-function activateEditorTab(id: EditorTabId): void {
+/**
+ * Displays a tab without touching the saved preference: highlights its button,
+ * (re)builds its pane on first activation, caches it and swaps the pane host
+ * content. Used both for a user pick (through {@link activateEditorTab}) and
+ * for the guarded initial draw when the saved tab is absent from the entity's
+ * set (тогда показываем «Основное», предпочтение не перезаписываем).
+ */
+function displayTab(id: EditorTabId): void {
   if (paneHostEl === null) return;
-  const changed = activeTab !== id;
-  activeTab = id;
+  shownTab = id;
   for (const [tabId, tab] of tabButtons) {
     tab.classList.toggle('active', tabId === id);
   }
@@ -608,6 +659,19 @@ function activateEditorTab(id: EditorTabId): void {
     builtPanes.set(id, pane);
   }
   paneHostEl.replaceChildren(pane);
+}
+
+/** Picks the tab the editor should draw first (saved preference, else «Основное»). */
+function displayInitialTab(tabs: EditorTabDef[]): void {
+  const initial = tabs.some((t) => t.id === activeTab) ? activeTab : 'main';
+  displayTab(initial);
+}
+
+/** User-activated tab: remembers the preference, then displays it. */
+function activateEditorTab(id: EditorTabId): void {
+  const changed = activeTab !== id;
+  activeTab = id;
+  displayTab(id);
   if (changed) persistActiveTab();
 }
 
@@ -621,7 +685,7 @@ function activateEditorTab(id: EditorTabId): void {
  */
 function invalidateMainPane(): void {
   builtPanes.delete('main');
-  if (activeTab === 'main') activateEditorTab('main');
+  if (shownTab === 'main') displayTab('main');
 }
 
 /** Updates the panel title text + trash marker for the current context. */
@@ -812,9 +876,11 @@ async function render(): Promise<void> {
   if (headerEl !== null) scrollBox.append(headerEl);
 
   // --- tab bar (L7) ---------------------------------------------------------
+  // Набор вкладок зависит от сущности: у связи — свои три, у мысли — полный.
+  const tabs = tabsFor(ctx);
   const tabBar = div('editor-tabs');
   tabBarEl = tabBar;
-  for (const def of TABS) {
+  for (const def of tabs) {
     const tab = el('button', 'editor-tab') as HTMLButtonElement;
     tab.type = 'button';
     tab.append(span(def.title, 'editor-tab-title'));
@@ -852,7 +918,7 @@ async function render(): Promise<void> {
 
   // Следим за шириной контейнера: при ресайзе окна / панели переразмечаем
   // видимый набор и текст кнопки.
-  const stripElements: StripElements<(typeof TABS)[number]> = {
+  const stripElements: StripElements<EditorTabDef> = {
     root: tabBar,
     visible: Array.from(tabButtons.values()),
     hidden: [],
@@ -865,7 +931,7 @@ async function render(): Promise<void> {
   // указывает на отсоединённую ноду, второй вызов привязал бы обработчик к
   // невидимому клону. Observer ограничиваем только пересчётом раскладки —
   // `recomputeOverflow` сам обновляет видимость и текст `[▾N]`.
-  const renderEditorOverflowRow = (item: (typeof TABS)[number], close: () => void): HTMLElement => {
+  const renderEditorOverflowRow = (item: EditorTabDef, close: () => void): HTMLElement => {
     const row = el('div', 'tab-overflow-row');
     const label = el('span', 'tab-overflow-label', item.title);
     label.style.cursor = 'pointer';
@@ -882,7 +948,7 @@ async function render(): Promise<void> {
       stripElements,
       EDITOR_TAB_W_DEFAULT_PX,
       EDITOR_TAB_W_MIN_PX,
-      TABS,
+      tabs,
     );
   };
   const overflowObserver = new ResizeObserver(reflowEditorOverflow);
@@ -922,7 +988,10 @@ async function render(): Promise<void> {
   // гарантируем расчёт через `requestAnimationFrame`, иначе в узком окне
   // кнопка `▾N` появится с задержкой в кадр.
   requestAnimationFrame(reflowEditorOverflow);
-  activateEditorTab(activeTab);
+  // Guarded initial draw: сохранённая вкладка, которой нет в наборе текущей
+  // сущности (например «Хроника» у связи), уступает «Основному» — само
+  // предпочтение в L4 не перезаписывается.
+  displayInitialTab(tabs);
 
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
 }
@@ -964,7 +1033,7 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
  */
 function focusEditorComment(): void {
   if (scrollBox === null) return;
-  if (activeTab !== 'main') {
+  if (shownTab !== 'main') {
     // The first tab button is «Основное» — click reuses the regular lazy
     // pane activation instead of duplicating it here (synchronous: by the
     // next line the main pane is the active one).

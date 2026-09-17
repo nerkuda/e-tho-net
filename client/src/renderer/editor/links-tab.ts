@@ -13,18 +13,29 @@
  * на вкладке «Свойства» как свойства-связи (счётчики + чипы). Мини-граф
  * переехал на отдельную вкладку «Граф».
  *
- * For a link — a single group with its two endpoint thoughts.
+ * For a link the tab is «Мысли» (задача 95775cfd): два блока — «Источник»
+ * (`link.source_id`) и «Назначение» (`link.target_id`), в каждом подпись-роль
+ * и под ней облачко мысли, ведущее себя как облачко мысли в любом другом
+ * месте клиента (клик/двойной клик/Ctrl+клик/Ctrl+наведение/правая кнопка/
+ * Enter). Счётчиков-иконок 📝/📅/📎 у этих облачков нет.
  */
 
 import type { MentionHit, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId, setFocus } from '../app.js';
-import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
-import { div, el, errText, renderHtml, span } from '../lib/dom.js';
+import { applyCloudStyle, applyThoughtIcon, deferSingleClick, resolveCloudStyle } from '../canvas/canvas.js';
+import { showThoughtContextMenu } from '../canvas/context-menu.js';
+import { div, el, errText, renderHtml, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
+import { toggleSelection } from '../selection/selection.js';
 import { store } from '../state.js';
-import { openLinkInEditor, registerTabContent, type EditorContext } from './editor.js';
+import {
+  openLinkInEditor,
+  openThoughtInEditor,
+  registerTabContent,
+  type EditorContext,
+} from './editor.js';
 import { groupSection } from './group.js';
 import { applyTabGroupClamp } from './list-heights.js';
 import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from './wiki-link-resolver.js';
@@ -38,21 +49,10 @@ export function registerLinksTab(): void {
   registerTabContent('links', buildLinksTab);
 }
 
-/** Builds the whole «Упоминания» tab pane content for the entity. */
+/** Builds the whole tab pane content for the entity. */
 function buildLinksTab(ctx: EditorContext): HTMLElement {
   if (ctx.ownerType === 'link' && ctx.link !== null) {
-    const root = div('links-tab');
-    root.append(
-      groupSection(
-        {
-          id: 'links',
-          title: 'Упоминания',
-          count: '(2)',
-          buildBody: () => buildLinkEndpointsBody(ctx),
-        },
-      ),
-    );
-    return root;
+    return buildLinkThoughtsTab(ctx);
   }
 
   const root = div('links-tab');
@@ -103,36 +103,109 @@ function buildLinksTab(ctx: EditorContext): HTMLElement {
   return root;
 }
 
-/** Builds the links group body for a link: its source and target thoughts. */
-function buildLinkEndpointsBody(ctx: EditorContext): HTMLElement {
+/**
+ * Builds the «Мысли» tab of a link (задача 95775cfd): the two thoughts the
+ * edited link connects, as full thought clouds — «Источник» (`source_id`) and
+ * «Назначение» (`target_id`). Both cards come from one `thoughts.resolve`
+ * batch; an endpoint that fails to resolve gets no block at all.
+ */
+function buildLinkThoughtsTab(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
-  const box = div('links-body');
-  if (ctx.link === null) return box;
+  const root = div('link-thoughts-tab');
+  if (ctx.link === null) return root;
   const link = ctx.link;
   void reload();
 
   async function reload(): Promise<void> {
-    box.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    root.replaceChildren(el('span', 'muted', 'Загрузка…'));
     let refs: ThoughtRef[];
     try {
       refs = await etn.thoughts.resolve(networkId, [link.source_id, link.target_id]);
     } catch (err) {
-      box.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      root.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
-    box.replaceChildren();
     const byId = new Map(refs.map((r) => [r.id, r]));
     const source = byId.get(link.source_id);
     const target = byId.get(link.target_id);
-    if (source !== undefined) {
-      box.append(endpointRow('источник', source, () => setFocus(source.id)));
+    if (source === undefined && target === undefined) {
+      root.replaceChildren(
+        el('p', 'muted', 'Концы связи не найдены — возможно, мысли удалены.'),
+      );
+      return;
     }
-    if (target !== undefined) {
-      box.append(endpointRow('назначение', target, () => setFocus(target.id)));
-    }
+    root.replaceChildren();
+    if (source !== undefined) root.append(endpointBlock('Источник', source));
+    if (target !== undefined) root.append(endpointBlock('Назначение', target));
   }
 
-  return box;
+  return root;
+}
+
+/** One endpoint block of the link «Мысли» tab: role caption + thought cloud. */
+function endpointBlock(label: string, ref: ThoughtRef): HTMLElement {
+  const block = div('link-endpoint');
+  block.append(el('div', 'link-endpoint-label', label), buildThoughtCloud(ref));
+  return block;
+}
+
+/**
+ * A thought cloud in the link «Мысли» tab — the same representation and
+ * behaviour as a thought cloud anywhere else in the client (canvas,
+ * structures): single click opens the thought in the editor without moving
+ * the canvas focus (deferred via {@link deferSingleClick} so a double click
+ * cancels it), double click focuses, Ctrl/Cmd+click toggles the shared
+ * selection, Ctrl+hover previews the permanent comment, right-click opens the
+ * thought context menu, Enter acts as a click. No indicator icons (📝/📅/📎) —
+ * the comment opens with Ctrl+hover, like a pinned-thought chip.
+ */
+function buildThoughtCloud(ref: ThoughtRef): HTMLElement {
+  const cloud = div('cloud');
+  cloud.dataset['id'] = ref.id;
+  cloud.tabIndex = 0;
+  applyCloudStyle(cloud, resolveCloudStyle(ref));
+  if (!ref.active) cloud.classList.add('dim');
+
+  const iconBox = div('cloud-icon');
+  applyThoughtIcon(iconBox, ref);
+  const title = div('cloud-title');
+  title.textContent = ref.title;
+  setTooltip(title, ref.title);
+  const main = div('cloud-main');
+  main.append(title);
+
+  cloud.append(iconBox, main);
+  markThoughtCommentPreview(cloud, ref.id, ref.title);
+
+  let pendingClick: { cancel: () => void } | null = null;
+  cloud.addEventListener('click', (event) => {
+    if (event.ctrlKey || event.metaKey) {
+      pendingClick?.cancel();
+      pendingClick = null;
+      toggleSelection([ref.id]);
+      return;
+    }
+    pendingClick?.cancel();
+    pendingClick = deferSingleClick(() => {
+      pendingClick = null;
+      openThoughtInEditor(ref.id);
+    });
+  });
+  cloud.addEventListener('dblclick', (event) => {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    pendingClick?.cancel();
+    pendingClick = null;
+    void setFocus(ref.id);
+  });
+  cloud.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showThoughtContextMenu(event, { id: ref.id, title: ref.title, dir: 'siblings' });
+  });
+  cloud.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') openThoughtInEditor(ref.id);
+  });
+  return cloud;
 }
 
 /** Builds the «Ссылки на мысль» body — explicit `[[#<id>]]` references. */
@@ -304,20 +377,4 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
   }
 
   return box;
-}
-
-/** A labelled endpoint row (used in the link editor: source / target). */
-function endpointRow(label: string, other: ThoughtRef, onOpen: () => void): HTMLElement {
-  const row = div('link-group-item');
-  row.append(span(label, 'muted link-item-label'));
-  const icon = span('', 'mini-icon');
-  applyThoughtIcon(icon, other);
-  const title = el('span', 'link-item-title', other.title);
-  if (!other.active) row.classList.add('dim');
-  row.append(icon, title);
-  // Stage 3: no per-indicator icons on an endpoint row — Ctrl+hover shows the
-  // endpoint thought's permanent comment.
-  markThoughtCommentPreview(row, other.id, other.title);
-  row.addEventListener('click', () => onOpen());
-  return row;
 }

@@ -231,12 +231,14 @@ describe('overflow-меню вкладок редактора (приёмка 0.
       /activateEditorTab\(item\.id\)/.test(editorSrc),
       'overflow row activates the clicked hidden tab',
     );
-    // Полный набор вкладок передаётся в recomputeOverflow для расчёта раскладки.
+    // Полный набор вкладок сущности передаётся в recomputeOverflow для расчёта
+    // раскладки (0.8.1: набор выбирается по типу сущности — локальная `tabs`
+    // из `tabsFor(ctx)`, а не общая константа).
     assert.ok(
-      /recomputeOverflow\(\s*stripElements,\s*EDITOR_TAB_W_DEFAULT_PX,\s*EDITOR_TAB_W_MIN_PX,\s*TABS,?\s*\)/.test(
+      /recomputeOverflow\(\s*stripElements,\s*EDITOR_TAB_W_DEFAULT_PX,\s*EDITOR_TAB_W_MIN_PX,\s*tabs,?\s*\)/.test(
         editorSrc,
       ),
-      'recomputeOverflow uses TABS array as the source of truth',
+      'recomputeOverflow uses the entity tab set as the source of truth',
     );
   });
 
@@ -282,6 +284,139 @@ describe('overflow-меню вкладок редактора (приёмка 0.
     const body = block![0];
     assert.ok(/min-width:\s*0\b/.test(body), '.editor-tabs has min-width: 0');
     assert.ok(/overflow:\s*hidden\b/.test(body), '.editor-tabs has overflow: hidden');
+  });
+});
+
+/** Source slice of a `const <name> … ];` array literal. */
+function sliceConst(src: string, name: string): string {
+  const start = src.indexOf(`const ${name}`);
+  assert.ok(start >= 0, `${name} is declared`);
+  const end = src.indexOf('];', start);
+  assert.ok(end > start, `${name} array literal is closed`);
+  return src.slice(start, end);
+}
+
+describe('набор вкладок зависит от сущности (0.8.1, задача 95775cfd)', () => {
+  it('TABS_LINK — только «Основное», «Мысли», «Метаданные»', () => {
+    const src = readText(SRC.editor);
+    const link = sliceConst(src, 'TABS_LINK');
+    assert.ok(link.includes("title: 'Основное'"), '«Основное» present in the link set');
+    assert.ok(link.includes("title: 'Мысли'"), '«Мысли» present in the link set');
+    assert.ok(link.includes("title: 'Метаданные'"), '«Метаданные» present in the link set');
+    // Вкладок, осмысленных только для мысли, у связи нет.
+    for (const gone of ["'Свойства'", "'Вложения'", "'Хроника'", "'Граф'", "'Упоминания'"]) {
+      assert.ok(!link.includes(gone), `link tab set must not contain ${gone}`);
+    }
+    // id вкладки «Мысли» — тот же `links`, что у «Упоминаний» мысли: id-контракт
+    // не плодится, предпочтение активной вкладки не сбрасывается.
+    assert.ok(
+      /id:\s*'links',\s*title:\s*'Мысли'/.test(link),
+      '«Мысли» reuses the `links` tab id',
+    );
+    assert.ok(!/counted:\s*true/.test(link), 'no counted tabs in the link set');
+  });
+
+  it('набор выбирается по типу сущности через tabsFor(ctx)', () => {
+    const src = readText(SRC.editor);
+    assert.ok(src.includes('function tabsFor('), 'tabsFor is declared');
+    assert.ok(
+      /function tabsFor\(ctx: EditorContext\): EditorTabDef\[\]\s*\{[\s\S]*?return ctx\.ownerType === 'link' \? TABS_LINK : TABS_THOUGHT/.test(
+        src,
+      ),
+      'tabsFor returns TABS_LINK for a link, TABS_THOUGHT otherwise',
+    );
+    assert.ok(src.includes('const tabs = tabsFor(ctx)'), 'render() takes its tab set from tabsFor');
+  });
+
+  it('сохранённая вкладка вне набора сущности не перезаписывает предпочтение', () => {
+    const src = readText(SRC.editor);
+    // Защищённая отрисовка: вкладка вне набора → «Основное», без persist.
+    assert.ok(
+      /const initial = tabs\.some\(\(t\) => t\.id === activeTab\) \? activeTab : 'main'/.test(src),
+      'the guarded initial draw falls back to «Основное»',
+    );
+    assert.ok(src.includes('displayInitialTab('), 'the guarded draw is a shared helper');
+    // Только явный пользовательский выбор пишет предпочтение в L4.
+    assert.ok(
+      /function activateEditorTab\([\s\S]*?persistActiveTab\(\)/.test(src),
+      'only the user-activated tab persists the preference',
+    );
+    // Чтение L4 принимает id из ЛЮБОГО набора вкладок.
+    assert.ok(src.includes('isKnownTabId(raw)'), 'loadActiveTab accepts ids of both tab sets');
+  });
+
+  it('displayTab отделён от activateEditorTab и ведёт shownTab', () => {
+    const src = readText(SRC.editor);
+    assert.ok(/function displayTab\(/.test(src), 'displayTab is declared');
+    assert.ok(/let shownTab: EditorTabId/.test(src), 'shownTab tracks the actually displayed tab');
+    assert.ok(
+      /if \(shownTab === 'main'\) displayTab\('main'\)/.test(src),
+      'invalidateMainPane reads shownTab (not activeTab)',
+    );
+    assert.ok(/if \(shownTab !== 'main'\)/.test(src), 'focusEditorComment reads shownTab');
+  });
+});
+
+describe('вкладка «Мысли» редактора связи — облачка концов (0.8.1, задача 95775cfd)', () => {
+  it('строит link-thoughts-tab с блоками «Источник»/«Назначение»', () => {
+    const src = readText(SRC.links);
+    assert.ok(src.includes("div('link-thoughts-tab')"), 'link-thoughts-tab container');
+    assert.ok(
+      src.includes("endpointBlock('Источник'") && src.includes("endpointBlock('Назначение'"),
+      'both role blocks are built',
+    );
+    assert.ok(src.includes("div('link-endpoint')"), 'endpoint block wrapper');
+    assert.ok(src.includes("'link-endpoint-label'"), 'endpoint role caption');
+    // Один батч resolve на оба конца связи.
+    assert.ok(
+      /etn\.thoughts\.resolve\(\s*networkId,\s*\[link\.source_id,\s*link\.target_id\]/.test(src),
+      'both endpoints are resolved in one call',
+    );
+  });
+
+  it('облачко размечено и ведёт себя как облачко на холсте', () => {
+    const src = readText(SRC.links);
+    for (const anchor of [
+      "div('cloud')",
+      'applyCloudStyle(',
+      'resolveCloudStyle(',
+      'applyThoughtIcon(',
+      'setTooltip(',
+      'markThoughtCommentPreview(cloud',
+      'deferSingleClick(',
+      'openThoughtInEditor(',
+      'setFocus(',
+      'toggleSelection(',
+      'showThoughtContextMenu(',
+    ]) {
+      assert.ok(src.includes(anchor), `cloud behaviour anchor missing: ${anchor}`);
+    }
+    // Полное название в тултипе + бледность неактуальной мысли.
+    assert.ok(src.includes("classList.add('dim')"), 'inactive endpoint cloud is dimmed');
+  });
+
+  it('у облачков концов нет строки счётчиков 📝/📅/📎 (class cloud-ind)', () => {
+    const src = readText(SRC.links);
+    assert.ok(!src.includes('cloud-ind'), 'no indicator row on the «Мысли» tab');
+    assert.ok(!src.includes('buildLinkEndpointsBody'), 'old flat endpoints body removed');
+    assert.ok(!src.includes('endpointRow'), 'old endpointRow helper removed');
+    // Ветка мысли (две группы со сплиттером) не тронута.
+    assert.ok(
+      src.includes("applyTabGroupClamp(backlinks, 'links.backlinks'") &&
+        src.includes("persistKey: 'links.mentions'"),
+      'the thought «Упоминания» branch is intact',
+    );
+  });
+
+  it('CSS даёт блокам колонку, подписи — приглушённый вид, облачку — растяжение', () => {
+    const css = readText(SRC.css);
+    assert.ok(/\.link-thoughts-tab\s*\{/.test(css), '.link-thoughts-tab style');
+    assert.ok(/\.link-endpoint\s*\{/.test(css), '.link-endpoint style');
+    assert.ok(/\.link-endpoint-label\s*\{/.test(css), '.link-endpoint-label style');
+    assert.ok(
+      /\.link-endpoint\s+\.cloud\s*\{[^}]*width:\s*auto/.test(css),
+      'endpoint cloud stretches to the panel width',
+    );
   });
 });
 

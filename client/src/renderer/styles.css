@@ -2621,6 +2621,37 @@ body.cloud-dragging * {
   overflow-y: auto;
 }
 
+/* --- Вкладка «Мысли» редактора связи (задача 95775cfd, 08-ui-spec.md §6.3) --
+   Два блока фиксированной высоты по содержимому: подпись-роль и под ней
+   облачко мысли. Сворачиваемых групп и сплиттеров на вкладке нет. */
+.link-thoughts-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 4px;
+  overflow-y: auto;
+}
+
+.link-endpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.link-endpoint-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Облачко внутри вкладки растягивается по ширине панели: базовый `.cloud`
+   жёстко 200px (`--cloud-width`), здесь ширина — по контейнеру. */
+.link-endpoint .cloud {
+  width: auto;
+  max-width: 100%;
+}
+
 /* Mention snippets carry server-side <mark> highlights (same look as the
    search panel). */
 .mention-snippet {
