@@ -639,12 +639,12 @@ function wireNodeInteractions(g: SVGGElement, node: GNode, wasPanned: () => bool
     if (wasPanned()) return;
     event.preventDefault();
     event.stopPropagation();
-    void showCloudContextMenu(node.id, g);
+    void showCloudContextMenu(node, g);
   });
   g.addEventListener('keydown', (event) => {
     if (event.key === 'F10' && event.shiftKey) {
       event.preventDefault();
-      void showCloudContextMenu(node.id, g);
+      void showCloudContextMenu(node, g);
     } else if (event.key === 'Enter') {
       event.preventDefault();
       void openLinkRefInEditor(node.id);
@@ -685,29 +685,34 @@ async function focusLinkRef(id: string): Promise<void> {
   await setFocus(id);
 }
 
-async function showCloudContextMenu(id: string, anchor: Element): Promise<void> {
+/**
+ * Контекстное меню пилюли локального графа. Набор команд — общий с холстом
+ * (спецификация «Контекстное меню мысли»): меню строит тот же конструктор, что
+ * у облачка на карте и у чипов свойств; здесь заданы только отличия контекста
+ * редактора — «Открыть в редакторе» без смены фокуса холста и «В фокус».
+ */
+async function showCloudContextMenu(node: GNode, anchor: Element): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const { isPinned, togglePinned } = await import('../pinned/pins.js');
-  const { addToSelection, removeFromSelection } = await import('../selection/selection.js');
-  const { showMenuAt } = await import('../lib/menu.js');
-  const inSelection = store.state.selection.includes(id);
-  const items = [
-    { label: 'Открыть в редакторе', onClick: () => void openLinkRefInEditor(id) },
-    { label: 'В фокус', onClick: () => void focusLinkRef(id) },
+  // Ленивый импорт: статический замкнул бы цикл
+  // canvas/context-menu → editor/editor → editor/mini-graph.
+  const { showThoughtMenuUnder, resolveSiblingParentId } =
+    await import('../canvas/context-menu.js');
+  showThoughtMenuUnder(
+    anchor,
     {
-      label: inSelection ? 'Убрать из выделенных' : 'Добавить к выделению',
-      onClick: () => {
-        if (inSelection) removeFromSelection([id]);
-        else addToSelection([id]);
-      },
+      id: node.id,
+      title: node.title,
+      dir: 'siblings',
+      // Пилюля не в зоне холста — родителя для «налево (родственник)»
+      // резолвим запросом (на холсте он приходит с ответом фокуса).
+      siblingParentId: await resolveSiblingParentId(networkId, node.id),
+      trashed: node.ref.marked_for_deletion === true,
     },
     {
-      label: isPinned(id) ? 'Открепить мысль' : 'Закрепить мысль',
-      onClick: () => togglePinned(id),
+      openLabel: 'Открыть в редакторе',
+      openHandler: (id) => void openLinkRefInEditor(id),
+      focusHandler: () => void focusLinkRef(node.id),
     },
-  ];
-  const rect = anchor.getBoundingClientRect();
-  showMenuAt(rect.left, rect.bottom + 2, items);
-  void networkId; // сеть уже в store; идентификатор не нужен меню
+  );
 }

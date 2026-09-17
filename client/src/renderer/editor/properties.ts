@@ -39,7 +39,7 @@ import {
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
-import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import { type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { markThoughtCommentPreview } from '../lib/hover-preview.js';
@@ -509,27 +509,16 @@ function buildOutsideReadonlyEdgeChip(
       focusLinkRef(networkId, edge.target_id);
     });
     const openReadonlyMenu = (): void => {
-      const items: MenuItem[] = [
-        {
-          label: 'Открыть в редакторе',
-          onClick: () => openLinkRefInEditor(networkId, edge.target_id),
-        },
-        {
-          label: 'В фокус',
-          onClick: () => focusLinkRef(networkId, edge.target_id),
-        },
-        {
-          label: 'Копировать ID',
-          onClick: () => {
-            void navigator.clipboard.writeText(edge.target_id).then(
-              () => notice('ID мысли скопирован.'),
-              () => notice('Не удалось скопировать ID.', 'error'),
-            );
-          },
-        },
-      ];
-      const rect = chip.getBoundingClientRect();
-      showMenuAt(rect.left, rect.bottom + 2, items);
+      // Набор команд — общий с холстом; «Убрать из значения» у внетипового
+      // ребра нет: оно управляется через свойства типа связи, а не из
+      // таблицы значений владельца (cab38479).
+      void openThoughtCloudMenu({
+        networkId,
+        id: edge.target_id,
+        title: fullTitle,
+        trashed: ref?.marked_for_deletion === true,
+        anchor: chip,
+      });
     };
     chip.addEventListener('contextmenu', (event) => {
       event.preventDefault();
@@ -1487,45 +1476,77 @@ function focusLinkRef(networkId: string, id: string): void {
 }
 
 /**
- * Контекстное меню мини-облачка ссылки (задача 8ab775d9). Идентично
- * контекстному меню облачка на холсте — единый набор команд во всех местах
- * (редактор, мини-граф, панель «Упоминания»).
+ * Контекстное меню мысли для мини-облачка в редакторе: ровно та же композиция,
+ * что у облачка на холсте (`canvas/context-menu.ts`), плюс команды контекста
+ * редактора, которых на холсте нет:
+ *
+ * - «Открыть в редакторе» — мысль открывается в текущем редакторе, фокус холста
+ *   не меняется (на холсте открытие идёт через фокус — там редактор следует за
+ *   фокусом);
+ * - «В фокус» — поставить мысль в фокус и показать карту;
+ * - команды значения (`extraItems`) — например «Убрать из значения».
+ *
+ * Холст тянем лениво: статический импорт замкнул бы цикл
+ * `canvas/context-menu → editor/editor → editor/properties` (так же поступают
+ * соседние помощники этого файла).
+ */
+async function openThoughtCloudMenu(opts: {
+  networkId: string;
+  id: string;
+  title: string;
+  trashed: boolean;
+  extraItems?: MenuItem[];
+  anchor: Element;
+}): Promise<void> {
+  const { showThoughtMenuUnder, resolveSiblingParentId } =
+    await import('../canvas/context-menu.js');
+  showThoughtMenuUnder(
+    opts.anchor,
+    {
+      id: opts.id,
+      title: opts.title,
+      dir: 'siblings',
+      // Чип не живёт в зоне холста — родителя для «налево (родственник)»
+      // резолвим запросом (на холсте он приходит с ответом фокуса).
+      siblingParentId: await resolveSiblingParentId(opts.networkId, opts.id),
+      trashed: opts.trashed,
+    },
+    {
+      openLabel: 'Открыть в редакторе',
+      openHandler: (id) => openLinkRefInEditor(opts.networkId, id),
+      focusHandler: () => focusLinkRef(opts.networkId, opts.id),
+      ...(opts.extraItems !== undefined ? { extraItems: opts.extraItems } : {}),
+    },
+  );
+}
+
+/**
+ * Контекстное меню мини-облачка значения свойства-связи. Набор команд — общий с
+ * холстом (спецификация «Контекстное меню мысли»), поэтому меню строится тем же
+ * конструктором; отличие значения — «Убрать из значения».
  */
 async function showLinkChipMenu(
   networkId: string,
   id: string,
-  ownerType: 'thought' | 'link',
-  ownerId: string,
-  propertyKey: string,
+  title: string,
+  trashed: boolean,
   currentValue: string[],
   onChange: (next: string[]) => void,
-  anchor: HTMLElement,
+  anchor: Element,
 ): Promise<void> {
-  const items: MenuItem[] = [
-    {
-      label: 'Открыть в редакторе',
-      onClick: () => openLinkRefInEditor(networkId, id),
-    },
-    {
-      label: 'В фокус',
-      onClick: () => focusLinkRef(networkId, id),
-    },
-    {
-      label: 'Копировать ID',
-      onClick: () => {
-        void navigator.clipboard.writeText(id).then(
-          () => notice('ID мысли скопирован.'),
-          () => notice('Не удалось скопировать ID.', 'error'),
-        );
+  await openThoughtCloudMenu({
+    networkId,
+    id,
+    title,
+    trashed,
+    anchor,
+    extraItems: [
+      {
+        label: 'Убрать из значения',
+        onClick: () => onChange(currentValue.filter((v) => v !== id)),
       },
-    },
-    {
-      label: 'Убрать из значения',
-      onClick: () => onChange(currentValue.filter((v) => v !== id)),
-    },
-  ];
-  const rect = anchor.getBoundingClientRect();
-  showMenuAt(rect.left, rect.bottom + 2, items);
+    ],
+  });
 }
 
 /**
@@ -1710,9 +1731,8 @@ export function buildLinkValueEditor(opts: {
       void showLinkChipMenu(
         networkId,
         id,
-        ownerType,
-        ownerId,
-        definition.key,
+        fullTitle,
+        ref?.marked_for_deletion === true,
         current,
         setAndPersist,
         cloud,

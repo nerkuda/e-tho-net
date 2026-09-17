@@ -1485,57 +1485,57 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
 }
 
 /**
- * Подменю «Действия» в шапке редактора (задача 8ab775d9). Команды зеркалят
- * контекстное меню облачка мысли на холсте: «В фокус», toggle выделения,
- * toggle закрепления. Меню вызывается и с клавиатуры (Enter/Space на кнопке
- * «Действия ▾»).
+ * Меню «Действия ▾» в шапке редактора: тот же набор команд, что у облачка
+ * мысли в значениях свойств и на холсте (спецификация «Контекстное меню
+ * мысли»), — единый конструктор `canvas/context-menu.ts`, без второго списка
+ * команд. Отличия контекста:
+ *
+ * - команды открытия нет — мысль уже открыта в редакторе;
+ * - «Добавить вложение» ведёт не в редактор (он и так открыт), а на вкладку
+ *   «Вложения» этой мысли;
+ * - «В фокус» ставит мысль в фокус холста.
+ *
+ * Меню вызывается и с клавиатуры (Enter/Space на кнопке «Действия ▾»).
  */
 async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElement): Promise<void> {
   const networkId = requireNetworkId();
   // Импортируем лениво, чтобы не тащить холст в редактор и не плодить
   // циклические зависимости (canvas ↔ editor ↔ canvas/context-menu).
-  const { isPinned, togglePinned } = await import('../pinned/pins.js');
-  const { addToSelection, removeFromSelection } = await import('../selection/selection.js');
+  const { showThoughtMenuUnder, resolveSiblingParentId } =
+    await import('../canvas/context-menu.js');
   const { setFocus } = await import('../app.js');
-  const inSelection = store.state.selection.includes(thought.id);
-  const items: MenuItem[] = [
+  showThoughtMenuUnder(
+    anchor,
     {
-      label: 'В фокус',
-      onClick: () => {
+      id: thought.id,
+      title: thought.title,
+      dir: 'siblings',
+      // Мысль не в зоне холста — родителя для «налево (родственник)» резолвим
+      // запросом (на холсте он приходит с ответом фокуса).
+      siblingParentId: await resolveSiblingParentId(networkId, thought.id),
+      trashed: thought.marked_for_deletion,
+    },
+    {
+      hideOpenCommand: true,
+      focusHandler: () => {
         if (!canSave()) {
           offlineNotice();
           return;
         }
         void setFocus(thought.id);
       },
-    },
-    {
-      label: inSelection ? 'Убрать из выделенных' : 'Добавить к выделению',
-      onClick: () => {
-        if (inSelection) removeFromSelection([thought.id]);
-        else addToSelection([thought.id]);
+      attachmentHandler: (id) => {
+        // Мысль уже открыта в редакторе: «Добавить вложение» ведёт прямо на её
+        // вкладку «Вложения». Для чужой мысли (или если вкладки нет — например,
+        // редактор показывает связь) открываем её в редакторе, как на холсте.
+        if (id === thought.id && tabButtons.has('attachments')) {
+          activateEditorTab('attachments');
+          return;
+        }
+        openThoughtInEditor(id);
       },
     },
-    {
-      label: isPinned(thought.id) ? 'Открепить мысль' : 'Закрепить мысль',
-      onClick: () => void togglePinned(thought.id),
-    },
-    {
-      label: 'Копировать ID',
-      onClick: () => {
-        void navigator.clipboard.writeText(thought.id).then(
-          () => notice('ID мысли скопирован.'),
-          () => notice('Не удалось скопировать ID.', 'error'),
-        );
-      },
-    },
-    {
-      label: thought.active ? 'Сделать неактуальной' : 'Сделать актуальной',
-      onClick: () => void saveThought({ active: !thought.active }),
-    },
-  ];
-  const rect = anchor.getBoundingClientRect();
-  showMenuAt(rect.left, rect.bottom + 2, items);
+  );
 }
 
 /** Opens the thought settings dialog (colours + font style + reset). */

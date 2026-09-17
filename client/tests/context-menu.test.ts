@@ -102,6 +102,91 @@ function focusFor(opts: {
   };
 }
 
+describe('buildThoughtMenuItems — контекст редактора (спецификация «Контекстное меню мысли»)', () => {
+  /** Ровно те опции, с которыми меню зовут чипы свойств, мини-граф и «Действия». */
+  const editorOpts = {
+    openLabel: 'Открыть в редакторе',
+    openHandler: () => undefined,
+    focusHandler: () => undefined,
+  } as const;
+
+  it('отличается от холста только подписью открытия и командой «В фокус»', () => {
+    store.update({ focus: null });
+    const canvas = labels(buildThoughtMenuItems('net', target));
+    const editor = labels(buildThoughtMenuItems('net', target, editorOpts));
+    // Единственная разница: «Открыть редактор» → «Открыть в редакторе» (мысль
+    // открывается в текущем редакторе, фокус холста не меняется), сразу за ним —
+    // «В фокус». Состав команд обязан совпадать с холстом: иначе меню снова
+    // разъедутся.
+    const at = canvas.indexOf('Открыть редактор');
+    assert.ok(at >= 0, 'the canvas menu must have «Открыть редактор»');
+    const expected = [
+      ...canvas.slice(0, at),
+      'Открыть в редакторе',
+      'В фокус',
+      ...canvas.slice(at + 1),
+    ];
+    assert.deepEqual(editor, expected);
+  });
+
+  it('«hideOpenCommand» убирает команду открытия, оставляя «В фокус» и тип', () => {
+    store.update({ focus: null });
+    const editor = labels(
+      buildThoughtMenuItems('net', target, { ...editorOpts, hideOpenCommand: true }),
+    );
+    assert.ok(!editor.includes('Открыть редактор'), 'no plain canvas opener');
+    assert.ok(!editor.includes('Открыть в редакторе'), 'the open command is hidden');
+    assert.ok(editor.includes('В фокус'), '«В фокус» stays available');
+    assert.ok(editor.includes('Изменить тип'), 'the rest of the command set is untouched');
+  });
+
+  it('«extraItems» идут отдельным блоком перед «Удалить»', () => {
+    store.update({ focus: null });
+    const editor = labels(
+      buildThoughtMenuItems('net', target, {
+        ...editorOpts,
+        extraItems: [{ label: 'Убрать из значения', onClick: () => undefined }],
+      }),
+    );
+    assert.deepEqual(editor.slice(-4), ['—', 'Убрать из значения', '—', 'Удалить']);
+  });
+
+  it('«siblingParentId» задаёт «налево (родственник)» вне холста', () => {
+    // Чип редактора не живёт в зоне холста: родителя резолвит вызывающий.
+    store.update({ focus: null });
+    const withoutParent = buildThoughtMenuItems(
+      'net',
+      { ...target, siblingParentId: null },
+      editorOpts,
+    );
+    const sibling = withoutParent
+      .find((i) => i.label === 'Добавить')
+      ?.submenu?.find((i) => i.label === 'налево (родственник)');
+    assert.equal(sibling?.disabled, true, 'без родителя команда неактивна');
+
+    const withParent = buildThoughtMenuItems(
+      'net',
+      { ...target, siblingParentId: 'p1' },
+      editorOpts,
+    );
+    const sibling2 = withParent
+      .find((i) => i.label === 'Добавить')
+      ?.submenu?.find((i) => i.label === 'налево (родственник)');
+    assert.equal(sibling2?.disabled, false, 'с родителем команда доступна');
+  });
+
+  it('«trashed» из цели даёт «Удалить/восстановить» вне холста', () => {
+    // Кеш облачков холста пуст — флаг помеченной мысли передаёт вызывающий.
+    store.update({ focus: null });
+    const marked = labels(
+      buildThoughtMenuItems('net', { ...target, trashed: true }, editorOpts),
+    );
+    assert.ok(marked.includes('Удалить/восстановить'), 'marked thought offers the restore wording');
+    const plain = labels(buildThoughtMenuItems('net', { ...target, trashed: false }, editorOpts));
+    assert.ok(plain.includes('Удалить'), 'unmarked thought keeps «Удалить»');
+  });
+});
+
 describe('buildThoughtMenuItems — «Найти на карте мыслей» (L23)', () => {
   it('hides the command when no handler is passed (canvas/selection/pinned menus)', () => {
     assert.ok(!labels(buildThoughtMenuItems('net', target)).includes('Найти на карте мыслей'));

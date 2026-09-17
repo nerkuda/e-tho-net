@@ -161,44 +161,39 @@ describe('editor thought header — placeholder preserves three-row geometry (8a
     assert.ok(headerRow !== undefined, 'row 3 (editor-header-row) is present');
   });
 
-  it('«Действия ▾» submenu items mirror the canvas cloud context menu (контракт)', () => {
-    // Контракт подменю «Действия» в шапке редактора (задача 8ab775d9):
-    // команды зеркалят контекстное меню облачка мысли на холсте:
-    //   • «В фокус»
-    //   • toggle выделения: «Добавить к выделению» / «Убрать из выделенных»
-    //   • toggle закрепления: «Закрепить мысль» / «Открепить мысль»
-    //   • «Сделать неактуальной» / «Сделать актуальной»
-    //   • «Копировать ID»
-    //
-    // Полная проверка требует доступа к openThoughtActionsMenu
-    // (editorInternals не экспортирует); smoke ниже фиксирует наличие
-    // ожидаемых строковых меток в production-коде editor.ts, чтобы случайная
-    // правка не убрала одну из команд без явного намерения.
+  it('«Действия ▾» собирается общим конструктором меню мысли (контракт)', () => {
+    // Контракт меню «Действия ▾» (спецификация «Контекстное меню мысли»):
+    // свой список команд в редакторе запрещён — меню строится тем же
+    // конструктором, что у облачка на холсте (`canvas/context-menu.ts`), и
+    // отличается только опциями контекста. Здесь фиксируем ровно это: редактор
+    // зовёт общий конструктор, а состав команд проверяется unit-тестами
+    // конструктора (`context-menu.test.ts`), где живёт композиция.
     const editorSrc = readFileSync(
       join(__dirname, '..', 'src', 'renderer', 'editor', 'editor.ts'),
       'utf8',
     );
-    // Подменю «Действия» собирается в `openThoughtActionsMenu` (см. сигнатуру).
-    const requiredLabels = [
-      'В фокус',
-      'Добавить к выделению',
-      'Убрать из выделенных',
-      'Закрепить мысль',
-      'Открепить мысль',
-      'Сделать неактуальной',
-      'Сделать актуальной',
-      'Копировать ID',
-    ];
-    for (const label of requiredLabels) {
-      // Лейблы могут быть как прямыми (`label: 'X'`), так и в тернарном
-      // выражении (`label: cond ? 'X' : 'Y'`). Достаточно наличия строки
-      // в одинарных кавычках — внутри menu builder-блока `openThoughtActionsMenu`.
-      // Ищем все вхождения строки в editor.ts — нас интересует только их
-      // наличие в принципе (контракт не обязывает быть единственным).
-      const quoted = `'${label}'`;
+    const start = editorSrc.indexOf('async function openThoughtActionsMenu');
+    assert.ok(start >= 0, 'openThoughtActionsMenu must be defined');
+    const body = editorSrc.slice(start, editorSrc.indexOf('\n}\n', start));
+    assert.ok(
+      body.includes("'../canvas/context-menu.js'") && body.includes('showThoughtMenuUnder('),
+      '«Действия ▾» must delegate to the shared thought menu builder',
+    );
+    assert.ok(
+      body.includes('hideOpenCommand: true'),
+      'the edited thought is already open — the open command must be hidden',
+    );
+    assert.ok(body.includes('focusHandler'), '«В фокус» must come from the shared builder');
+    assert.ok(
+      body.includes('attachmentHandler'),
+      '«Добавить вложение» in the editor must lead to the attachments tab',
+    );
+    // Своих label-ов команд в редакторе быть не должно: единственный источник —
+    // конструктор меню.
+    for (const label of ['Закрепить мысль', 'Открепить мысль', 'Добавить к выделению']) {
       assert.ok(
-        editorSrc.includes(quoted),
-        `«Действия ▾» menu must contain «${label}» (контракт задачи 8ab775d9)`,
+        !body.includes(`'${label}'`),
+        `«Действия ▾» must not hand-roll the «${label}» command (shared builder owns it)`,
       );
     }
   });
