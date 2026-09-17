@@ -17,6 +17,7 @@ import DatabaseConstructor from 'better-sqlite3';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import {
   createTypeProperty,
   clearThoughtRefUsages,
@@ -53,10 +54,7 @@ describe(
       const ndb: NetworkDb = createInMemoryNetworkDb();
       try {
         const type = createThoughtType(ndb, { name: 'Проект' }, 'u');
-        createTypeProperty(ndb, 'thought_type', type.id, {
-          key: 'см. также',
-          value_type: 'thought_ref',
-        }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', type.id, 'см. также', {}, USER);
         const a = createThought(ndb, { title: 'A' }, 'u');
         const b = createThought(ndb, { title: 'B', type_id: type.id }, 'u');
         setPropertyValue(ndb, 'thought', b.id, 'см. также', a.id, USER);
@@ -103,7 +101,7 @@ describe(
       const ndb: NetworkDb = createInMemoryNetworkDb();
       try {
         const type = createThoughtType(ndb, { name: 'Задача' }, 'u');
-        createTypeProperty(ndb, 'thought_type', type.id, { key: 'исполнитель', value_type: 'thought_ref' }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', type.id, 'исполнитель', {}, USER);
         const target = createThought(ndb, { title: 'T' }, 'u');
         const ref = createThought(ndb, { title: 'R', type_id: type.id }, 'u');
         setPropertyValue(ndb, 'thought', ref.id, 'исполнитель', target.id, USER);
@@ -170,6 +168,49 @@ describe(
           { purged: 1, skipped: 0 },
         );
         assert.equal(listTrash(ndb).links.length, 0);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('purges only the listed ids; unlisted/unmarked requested ids are skipped (8b4b7a7e)', () => {
+      const ndb: NetworkDb = createInMemoryNetworkDb();
+      try {
+        const a = createThought(ndb, { title: 'A' }, 'u');
+        const b = createThought(ndb, { title: 'B' }, 'u'); // purged; no links touch it
+        const live = createThought(ndb, { title: 'live' }, 'u');
+        const d = createThought(ndb, { title: 'D' }, 'u');
+        // Both links avoid b, so deleting the thought cannot cascade them away.
+        const linkKeep = createLink(ndb, { source_id: a.id, target_id: d.id }, 'u');
+        const linkGone = createLink(ndb, { source_id: a.id, target_id: live.id }, 'u');
+        updateThought(ndb, a.id, { marked_for_deletion: true }, undefined, 'u');
+        updateThought(ndb, b.id, { marked_for_deletion: true }, undefined, 'u');
+        updateLink(ndb, linkKeep.id, { marked_for_deletion: true }, undefined, 'u');
+        updateLink(ndb, linkGone.id, { marked_for_deletion: true }, undefined, 'u');
+        assert.equal(listTrash(ndb).thoughts.length, 2);
+        assert.equal(listTrash(ndb).links.length, 2);
+
+        // Targeted sweep: b + linkGone + one id that is not in the trash at all.
+        const outcome = purgeTrash(ndb, [b.id, linkGone.id, live.id]);
+        assert.equal(outcome.purged, 2);
+        assert.equal(outcome.skipped, 1); // `live` is not marked
+        assert.deepEqual(outcome.deleted_thought_ids, [b.id]);
+        assert.deepEqual(outcome.deleted_link_ids, [linkGone.id]);
+
+        // Everything unlisted survives the sweep.
+        const rest = listTrash(ndb);
+        assert.deepEqual(
+          rest.thoughts.map((t) => t.id),
+          [a.id],
+        );
+        assert.deepEqual(
+          rest.links.map((l) => l.id),
+          [linkKeep.id],
+        );
+
+        // A full purge afterwards still cleans the remainder.
+        assert.equal(purgeTrash(ndb).purged, 2);
+        assert.equal(listTrash(ndb).thoughts.length + listTrash(ndb).links.length, 0);
       } finally {
         ndb.close();
       }

@@ -804,18 +804,9 @@ export class RestClient {
   // -------------------------------------------------------------------------
   // §7 Links
   // -------------------------------------------------------------------------
-
-  /** `POST /networks/{nid}/links`. */
-  public async createLink(
-    networkId: string,
-    input: import('@etn/shared').LinkCreateInput,
-    opts?: RequestOptions,
-  ): Promise<import('@etn/shared').Link> {
-    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/links`, {
-      body: input,
-      requestOptions: opts,
-    });
-  }
+  // `POST /links` и `DELETE /links/{id}` сняты 0.8.1 (требование 3ea5c6af,
+  // ошибка 6dcd6db7): создание/удаление рёбер — пакетные операции
+  // `POST /thoughts/batch` и запись свойств-связей.
 
   /** `GET /networks/{nid}/links/{id}` — `?at_layer_id=<id>` открывает связь в конкретном слое. */
   public async getLink(
@@ -842,20 +833,6 @@ export class RestClient {
       'PATCH',
       `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(id)}`,
       { body: input, requestOptions: { ...opts, expectedVersion } },
-    );
-  }
-
-  /** `DELETE /networks/{nid}/links/{id}` — `If-Match` required. */
-  public async deleteLink(
-    networkId: string,
-    id: string,
-    expectedVersion: number,
-    opts?: RequestOptions,
-  ): Promise<void> {
-    await this.request(
-      'DELETE',
-      `/networks/${encodeURIComponent(networkId)}/links/${encodeURIComponent(id)}`,
-      { requestOptions: { ...opts, expectedVersion } },
     );
   }
 
@@ -1083,7 +1060,7 @@ export class RestClient {
     ownerType: TypeOwnerType,
     typeId: string,
     propertyId: string,
-    value: string | number | boolean | null,
+    value: string | number | boolean | string[] | null,
     opts?: RequestOptions,
   ): Promise<void> {
     await this.request(
@@ -1262,14 +1239,25 @@ export class RestClient {
 
   /**
    * `GET /networks/{nid}/properties` — registry list (one row per network
-   * property; counter columns `types_count` / `values_count` ride along).
-   * Used by the structures filter panel to populate the property picker
-   * without walking every type (task 171a438e) and by the property manager
-   * dialog (task d4e23670) as the main list source.
+   * property; counter columns `types_count` / `values_count` ride along,
+   * plus `types_source_count` / `types_target_count` for link-properties
+   * — 0.8.1, требование d7177d1d). Used by the structures filter panel to
+   * populate the property picker without walking every type (task
+   * 171a438e) and by the property-manager dialog (task d4e23670, fd4d4927)
+   * as the main list source.
    */
   public async listNetworkProperties(
     networkId: string,
-  ): Promise<Array<import('@etn/shared').NetworkProperty & { types_count: number; values_count: number }>> {
+  ): Promise<
+    Array<
+      import('@etn/shared').NetworkProperty & {
+        types_count: number;
+        values_count: number;
+        types_source_count?: number;
+        types_target_count?: number;
+      }
+    >
+  > {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties`,
@@ -1280,7 +1268,14 @@ export class RestClient {
   public async getNetworkProperty(
     networkId: string,
     id: string,
-  ): Promise<import('@etn/shared').NetworkProperty & { types_count: number; values_count: number }> {
+  ): Promise<
+    import('@etn/shared').NetworkProperty & {
+      types_count: number;
+      values_count: number;
+      types_source_count?: number;
+      types_target_count?: number;
+    }
+  > {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
@@ -1320,12 +1315,18 @@ export class RestClient {
     );
   }
 
-  /** `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound. */
+  /**
+   * `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound.
+   * For link-properties the server returns the number of edges that lose
+   * `type_id` and become structural («Родители»/«Потомки») so the confirm
+   * dialog can quote it directly (0.8.1, требование 09f692ff); for scalar
+   * properties the field is `null`.
+   */
   public async deleteNetworkProperty(
     networkId: string,
     id: string,
-  ): Promise<void> {
-    await this.request(
+  ): Promise<{ id: string; links_becoming_structural: number | null }> {
+    return this.request(
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/properties/${encodeURIComponent(id)}`,
     );
@@ -1869,7 +1870,7 @@ export class RestClient {
     });
   }
 
-  /** `GET /networks/{nid}/thoughts/{id}/usage` — reverse thought_ref lookup (L7). */
+  /** `GET /networks/{nid}/thoughts/{id}/usage` — reverse link-property lookup (L7). */
   public async getThoughtUsage(
     networkId: string,
     thoughtId: string,
@@ -1929,11 +1930,18 @@ export class RestClient {
   }
 
   /** `POST /networks/{nid}/trash/purge` (03-server-api.md §14b). */
+  /**
+   * `POST /networks/{nid}/trash/purge` — physically delete unblocked marked
+   * rows; `ids` narrows the sweep to the listed rows (ошибка 8b4b7a7e:
+   * per-item «Удалить совсем» of a link — `DELETE /links/{id}` снят 0.8.1).
+   */
   public async purgeTrash(
     networkId: string,
+    ids?: string[],
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').TrashPurgeResult> {
     return this.request('POST', `/networks/${encodeURIComponent(networkId)}/trash/purge`, {
+      body: ids === undefined ? {} : { ids },
       requestOptions: opts,
     });
   }
@@ -2051,7 +2059,7 @@ export class RestClient {
   /**
    * `GET /networks/{nid}/thoughts/duplicates` — live duplicate lookup powering
    * the add-thought dialog (H14, docs/03-server-api.md §6.3, 08-ui-spec.md §4.4)
-   * and the thought_ref property pickers (`type_ids` filter).
+   * and the link-property pickers (`type_ids` filter).
    */
   public async findDuplicates(
     networkId: string,

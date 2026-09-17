@@ -22,9 +22,10 @@
  * §5.3).
  */
 
-import { MCP_DEFAULTS, TRAVERSAL_DEFAULTS } from '@etn/shared';
+import { MCP_DEFAULTS, TRAVERSAL_DEFAULTS, type LinkTypeFilterInput } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { linkTypeFilterClause } from './type-hierarchy.js';
 
 /** Which edge direction BFS steps through. */
 export type TraverseDirection = 'parents' | 'children' | 'both';
@@ -37,6 +38,13 @@ export interface TraversalBounds {
   maxNodes?: number;
   /** Whether inactive (`active=0`) thoughts are walked. Default `false`. */
   showInactive?: boolean;
+  /**
+   * Traversal link-type filter (задача c965ad03, 0.8.1): restrict the edges
+   * the walk steps through — typed ids expand to their `link_types` subtrees,
+   * untyped (structural) links join only with `include_structural: true`.
+   * Absent — every edge walks, the historical behaviour.
+   */
+  linkFilter?: LinkTypeFilterInput;
 }
 
 /** Result of a bounded traversal. */
@@ -63,6 +71,12 @@ export function traverse(
   const maxDepth = bounds.maxDepth ?? TRAVERSAL_DEFAULTS.MAX_DEPTH;
   const maxNodes = bounds.maxNodes ?? MCP_DEFAULTS.MAX_NODES_PER_SUBGRAPH;
   const showInactive = bounds.showInactive === true ? 1 : 0;
+  // Задача c965ad03: ограничение рёбер обхода по типам связей. Условие
+  // дописывается в WHERE каждого соседнего запроса; без фильтра — прежний
+  // обход по всем рёбрам.
+  const typeClause = linkTypeFilterClause(ndb, bounds.linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
 
   const visited = new Set<string>();
   const queue: Array<{ id: string; depth: number }> = seedIds.map((id) => ({ id, depth: 0 }));
@@ -72,11 +86,11 @@ export function traverse(
 
   const neighborOf = ndb.prepare(
     direction === 'parents'
-      ? `SELECT source_id AS nid FROM links_v WHERE target_id = ? AND (active = 1 OR ?)`
+      ? `SELECT l.source_id AS nid FROM links_v l WHERE l.target_id = ? AND (l.active = 1 OR ?)${typeSql}`
       : direction === 'children'
-        ? `SELECT target_id AS nid FROM links_v WHERE source_id = ? AND (active = 1 OR ?)`
-        : `SELECT CASE WHEN source_id = ? THEN target_id ELSE source_id END AS nid
-             FROM links_v WHERE (source_id = ? OR target_id = ?) AND (active = 1 OR ?)`,
+        ? `SELECT l.target_id AS nid FROM links_v l WHERE l.source_id = ? AND (l.active = 1 OR ?)${typeSql}`
+        : `SELECT CASE WHEN l.source_id = ? THEN l.target_id ELSE l.source_id END AS nid
+             FROM links_v l WHERE (l.source_id = ? OR l.target_id = ?) AND (l.active = 1 OR ?)${typeSql}`,
   );
 
   while (queue.length > 0) {
@@ -95,8 +109,8 @@ export function traverse(
 
     const rows = (
       direction === 'both'
-        ? neighborOf.all(id, id, id, showInactive)
-        : neighborOf.all(id, showInactive)
+        ? neighborOf.all(id, id, id, showInactive, ...typeParams)
+        : neighborOf.all(id, showInactive, ...typeParams)
     ) as Array<{ nid: string }>;
     for (const { nid } of rows) {
       if (!visited.has(nid)) {
@@ -128,22 +142,30 @@ export function subgraph(
     maxDepth: radius,
     maxNodes: bounds.maxNodes,
     showInactive: bounds.showInactive,
+    linkFilter: bounds.linkFilter,
   });
 
   if (ids.length === 0) {
     return { nodes: [], edges: [], truncated };
   }
 
+  // Задача c965ad03: с фильтром обхода рёбра других типов не попадают в
+  // выдачу — обход их "не видит", и линия между узлами подграфа не должна
+  // появляться из ниоткуда.
+  const typeClause = linkTypeFilterClause(ndb, bounds.linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
+
   const placeholders = ids.map(() => '?').join(',');
   const edges = ndb
     .prepare(
-      `SELECT id, source_id, target_id, type_id
-         FROM links_v
-        WHERE active = 1
-          AND source_id IN (${placeholders})
-          AND target_id IN (${placeholders})`,
+      `SELECT l.id, l.source_id, l.target_id, l.type_id
+         FROM links_v l
+        WHERE l.active = 1
+          AND l.source_id IN (${placeholders})
+          AND l.target_id IN (${placeholders})${typeSql}`,
     )
-    .all(...ids, ...ids) as Array<{
+    .all(...ids, ...ids, ...typeParams) as Array<{
     id: string;
     source_id: string;
     target_id: string;
@@ -164,22 +186,28 @@ export function findPath(
   fromId: string,
   toId: string,
   maxDepth: number = TRAVERSAL_DEFAULTS.MAX_DEPTH,
+  linkFilter?: LinkTypeFilterInput,
 ): string[] | null {
   if (fromId === toId) return [fromId];
 
+  // Задача c965ad03: путь ищется только по рёбрам, прошедшим фильтр типов.
+  const typeClause = linkTypeFilterClause(ndb, linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
+
   const visited = new Set<string>([fromId]);
   const queue: Array<{ id: string; path: string[] }> = [{ id: fromId, path: [fromId] }];
+
+  const neighborsOf = ndb.prepare(
+    `SELECT CASE WHEN l.source_id = ? THEN l.target_id ELSE l.source_id END AS nid
+       FROM links_v l WHERE (l.source_id = ? OR l.target_id = ?) AND l.active = 1${typeSql}`,
+  );
 
   while (queue.length > 0) {
     const { id, path } = queue.shift() as { id: string; path: string[] };
     if (path.length - 1 >= maxDepth) continue;
 
-    const neighbors = ndb
-      .prepare(
-        `SELECT CASE WHEN source_id = ? THEN target_id ELSE source_id END AS nid
-           FROM links_v WHERE (source_id = ? OR target_id = ?) AND active = 1`,
-      )
-      .all(id, id, id) as Array<{ nid: string }>;
+    const neighbors = neighborsOf.all(id, id, id, ...typeParams) as Array<{ nid: string }>;
 
     for (const { nid } of neighbors) {
       if (visited.has(nid)) continue;

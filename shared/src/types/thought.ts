@@ -202,11 +202,11 @@ export interface ThoughtRef {
 
 /**
  * One group of the usage response: thoughts referencing the target thought
- * through one `thought_ref` property (03-server-api.md §9.1).
+ * through one link-property / stored property value (03-server-api.md §9.1).
  */
 export interface ThoughtUsageGroup {
   property_id: string;
-  /** Property name (`type_properties.key`). */
+  /** Property name (registry `properties.name`). */
   key: string;
   thoughts: ThoughtRef[];
 }
@@ -429,9 +429,9 @@ export interface ThoughtMeta {
   /** Хронологические комментарии мысли. */
   chrono_count: number;
   /**
-   * Сколько раз мысль используется как `thought_ref`-значение свойств
-   * других мыслей (формальные связи, «Использование» в редакторе —
-   * 03-server-api.md §9.1).
+   * Сколько раз мысль используется как цель ссылок других мыслей
+   * (формальные связи через свойства-связи и значения свойств,
+   * «Использование» в редакторе — 03-server-api.md §9.1).
    */
   usage_count: number;
   /**
@@ -529,9 +529,9 @@ export interface ThoughtMetaFull {
   attachments_count: number;
   chrono_count: number;
   /**
-   * Сколько раз мысль используется как `thought_ref`-значение свойств
-   * других мыслей (формальные связи, «Использование» в редакторе —
-   * 03-server-api.md §9.1).
+   * Сколько раз мысль используется как цель ссылок других мыслей
+   * (формальные связи через свойства-связи и значения свойств,
+   * «Использование» в редакторе — 03-server-api.md §9.1).
    */
   usage_count: number;
   /** Полный текст постоянного комментария; `null`, когда его нет. */
@@ -621,9 +621,10 @@ export interface ThoughtCard {
    * id, name, AI-facing description. `null`, когда тип не назначен.
    */
   type: import('./mcp.js').ThoughtTypeRef | null;
-  /** Свойства мысли в форме `etn.thoughts.get` (резолвнутые `thought_ref`,
-   *  пометка `outside_type` для значений вне L21-цепочки). */
-  properties: import('./thought-type.js').ResolvedPropertyValue[];
+  /** Свойства мысли в форме `etn.thoughts.get` (пометка `outside_type`
+   *  для значений вне L21-цепочки; свойства-связи — счётчиком `count`,
+   *  0.8.1). */
+  properties: (import('./thought-type.js').ResolvedPropertyValue | import('./thought-type.js').ResolvedLinkProperty)[];
   /** «Сигналы полноты» (см. {@link ThoughtMeta}). */
   meta: ThoughtMeta;
   /** Полнотекстовый постоянный комментарий либо `null`. */

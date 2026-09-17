@@ -264,7 +264,8 @@ describe(
 
         // The upgrade: runMigrations applies only the pending layer files
         // (025 + the follow-ups: the S6 trigger fix, session layers, the
-        // switch seq, the live-triple index, property descriptions).
+        // switch seq, the live-triple index, property descriptions, единый
+        // реестр свойств и связей — колонка `side` для привязок 0.8.1).
         const res = runMigrations(db, networkMigrationsDir());
         assert.deepEqual(res.applied, [
           '025_layers.sql',
@@ -281,6 +282,10 @@ describe(
           '036_property_values_deterministic_id.sql',
           '037_thought_type_views.sql',
           '038_search_trigram.sql',
+          '039_structural_link_properties.sql',
+          '040_thought_ref_to_link_properties.sql',
+          '041_type_property_side.sql',
+          '042_unified_property_link_registry.sql',
         ]);
 
         // 1. Row counts unchanged (the layers table is new, everything else
@@ -288,13 +293,16 @@ describe(
         // 034 creates object_locks, пустую при апгрейде чистой базы;
         // 035 — activity_log, тоже пустую; 037 — thought_type_views, пустую
         // при апгрейде чистой базы; 038 пересоздаёт FTS5-таблицы с новым
-        // токенизатором — бэкфилл сохраняет те же строки).
+        // токенизатором — бэкфилл сохраняет те же строки; 042 заводит
+        // свойство голому link_type «lt1», у которого до миграции не было
+        // реестровой строки).
         const after = tableCounts(db);
         assert.deepEqual(after, {
           ...before,
           layers: 1,
           session_layers: 0,
-          properties: 1,
+          properties: 4, // +2 структурных «Родители»/«Потомки» (039) +1 для голого lt1 (042)
+          type_properties: 3, // +2 «Родители»/«Потомки» (039); 0 привязка голого lt1 — свойство в реестре без привязки (требование e93001ac)
           object_locks: 0,
           activity_log: 0,
           thought_type_views: 0,
@@ -391,7 +399,12 @@ describe(
           assert.ok(total > 0 && total === distinct, `${table}.id not unique after backfill`);
         }
 
-        // 6. FTS rebuilt: same counts, base layer, same texts, rowid joins intact.
+        // 6. FTS rebuilt: names unchanged, total comment texts unchanged,
+        //    rowid joins intact. Миграция 040 (задача 9542b640) переносит
+        //    хроно-комментарии рёбер на мысли-источники — это легитимно
+        //    двигает строки из fts_link_texts в fts_thought_texts (UPDATE на
+        //    comments → DELETE+INSERT триггеры FTS), но общий счётчик и
+        //    rowid-связи сохраняются.
         const fts = {
           names: (
             db.prepare('SELECT COUNT(*) AS c FROM fts_thought_names').get() as { c: number }
@@ -403,7 +416,12 @@ describe(
             db.prepare('SELECT COUNT(*) AS c FROM fts_link_texts').get() as { c: number }
           ).c,
         };
-        assert.deepEqual(fts, beforeFts);
+        assert.equal(fts.names, beforeFts.names, 'FTS names count must be preserved');
+        assert.equal(
+          fts.texts + fts.links,
+          beforeFts.texts + beforeFts.links,
+          'total FTS comment-text rows must be preserved across migration 040 retargeting',
+        );
         const nameRow = db
           .prepare("SELECT layer_id, text FROM fts_thought_names WHERE thought_id = 't1'")
           .get() as { layer_id: string; text: string };

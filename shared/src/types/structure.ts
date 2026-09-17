@@ -14,6 +14,7 @@ import type {
   StructureSort,
 } from '../enums.js';
 import type { FocusEdge, ThoughtRef } from './thought.js';
+import type { LinkTypeFilterInput } from './link.js';
 
 /** A single scalar of a property condition (shape depends on the value type). */
 export type StructurePropertyValue = string | number | boolean;
@@ -22,8 +23,8 @@ export type StructurePropertyValue = string | number | boolean;
  * One property condition of a filter. `value` is a scalar for scalar
  * operations and an array for `in`/`not_in` (OR inside the list).
  * Allowed ops per property `value_type` (03-server-api.md §6.10):
- * text/url — contains|eq|in|not_in; number/date — eq|gt|lt; bool — eq;
- * thought_ref — eq|in|not_in.
+ * text/url — contains|eq|in|not_in; number/date — eq|gt|lt; bool — eq.
+ * Свойства-связи отбора не имеют (значения — рёбра).
  */
 export interface StructurePropertyCondition {
   property_id: string;
@@ -69,6 +70,16 @@ export interface StructureFilter {
    * the roots themselves are excluded — only their descendants match).
    */
   parent_ids?: string[];
+  /**
+   * Фильтр обхода по типам связей (задача c965ad03, 0.8.1): ограничивает
+   * рёбра, по которым раскрывается `parent_ids` (и одноуровневое расширение
+   * дерева «Структур»). Задан — типы раскрываются с потомками,
+   * нетипизированные связи участвуют только при `include_structural: true`;
+   * не задан — обход по всем рёбрам, как раньше. Не путать с
+   * {@link link_type_ids} — тот отбирает мысли, у которых есть связь
+   * перечисленных типов, но поддерево не ограничивает.
+   */
+  link_filter?: LinkTypeFilterInput;
   /** Thought types (OR inside the list). */
   type_ids?: string[];
   /** The thought has an active link of any of these types in either direction. */

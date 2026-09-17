@@ -175,12 +175,12 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
   top.append(drop, list, actions);
 
   const bottom = div('attachment-viewer-area');
-  // Resizes the list only; the drop zone and the button stay fixed. The top
-  // area never grows past its natural content (one attachment row minimum).
-  // The drag is remembered as the list's max height (ee745368).
+  // Resizes the list only; the drop zone and the button stay fixed. The drag
+  // is remembered as the list's exact fixed height (ee745368, 4cc6248c) — it
+  // never depends on the current row count.
   root.append(
     top,
-    rowSplitter(() => list, { min: 48, max: () => list.scrollHeight, persistKey: 'attachments' }),
+    rowSplitter(() => list, { min: 48, persistKey: 'attachments' }),
     bottom,
   );
 
@@ -192,7 +192,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
   void reload();
 
   // Pastes from OTHER markdown fields (e.g. the permanent comment on the
-  // «Основное» tab) add attachments behind this list's back — reload when the
+  // «Комментарий» tab) add attachments behind this list's back — reload when the
   // owner matches. The listener self-unregisters once the pane is gone.
   const onExternalChange = (event: Event): void => {
     if (!root.isConnected) {

@@ -45,7 +45,7 @@ import type {
   HealthResponse,
   HierarchyResponse,
   Link,
-  LinkCreateInput,
+  LinkPropertyValues,
   LinkDeletionCheckResult,
   LinkType,
   LinkTypeInput,
@@ -350,7 +350,7 @@ export interface EtnApi {
     backlinks(networkId: string, id: string): Promise<MentionHit[]>;
     /** `POST /mentions/scan` — thought mentions in caller-supplied text (§21, L24). */
     mentionsScan(networkId: string, request: MentionsScanRequest): Promise<MentionsScanResponse>;
-    /** `GET /thoughts/{id}/usage` — thoughts referencing this one via thought_ref (L7). */
+    /** `GET /thoughts/{id}/usage` — thoughts referencing this one through link-property edges (L7). */
     usage(networkId: string, id: string): Promise<ThoughtUsage>;
     /**
      * `POST /thoughts/deletion-check-batch` — blocking check before physical
@@ -360,14 +360,14 @@ export interface EtnApi {
       networkId: string,
       ids: string[],
     ): Promise<Record<string, ThoughtDeletionCheckResult>>;
-    /** `POST /thoughts/{id}/usage/clear` — null every thought_ref referencing this (S13). */
+    /** `POST /thoughts/{id}/usage/clear` — trash every blocking link-property edge to this thought (S13). */
     usageClear(networkId: string, id: string): Promise<UsageClearResult>;
     /** `GET /thoughts/duplicates` — live duplicate candidates for the add dialog (H14). */
     findDuplicates(
       networkId: string,
       title: string,
       synonyms?: string[],
-      /** Optional thought-type filter (thought_ref property pickers). */
+      /** Optional thought-type filter (link-property pickers). */
       typeIds?: string[],
     ): Promise<DuplicateHit[]>;
     setFocusPreferences(
@@ -451,14 +451,12 @@ export interface EtnApi {
   links: {
     /** `atLayerId` (опционально) — открыть связь в конкретном слое, не переключая сессию. */
     get(networkId: string, id: string, atLayerId?: string): Promise<Link>;
-    create(networkId: string, input: LinkCreateInput): Promise<Link>;
     update(
       networkId: string,
       id: string,
       input: LinkUpdateInput,
       expectedVersion: number,
     ): Promise<Link>;
-    remove(networkId: string, id: string, expectedVersion: number): Promise<void>;
     /** `showInactive` — передать `preferences.show_inactive` (сервер иначе
      *  фильтрует неактуальные связи/мысли, 03-server-api.md §7.2). */
     listByThought(
@@ -475,8 +473,12 @@ export interface EtnApi {
   trash: {
     /** `GET /trash` — marked-for-deletion thoughts/links with precomputed blocking (S13). */
     list(networkId: string): Promise<TrashListResult>;
-    /** `POST /trash/purge` — delete every unblocked marked row (S13). */
-    purge(networkId: string): Promise<TrashPurgeResult>;
+    /**
+     * `POST /trash/purge` — physically delete unblocked marked rows. `ids`
+     * narrows the sweep to the listed rows (ошибка 8b4b7a7e: per-item
+     * «Удалить совсем» of a link — `DELETE /links/{id}` снят 0.8.1).
+     */
+    purge(networkId: string, ids?: string[]): Promise<TrashPurgeResult>;
   };
   /**
    * Activity-log REST bridge (задачи f2eca5a4, 6bcccd2b;
@@ -585,13 +587,14 @@ export interface EtnApi {
       orderedIds: string[],
     ): Promise<PropertyDefinition[]>;
     /** L21: set (`value`) or clear (`null`) a type's default-value override
-     *  of a property inherited from an ancestor type. */
+     *  of a property inherited from an ancestor type. A link property's
+     *  default is a target-set — `string[]` of thought ids (bb67e546). */
     setPropertyDefaultOverride(
       networkId: string,
       ownerType: TypeOwnerType,
       typeId: string,
       propertyId: string,
-      value: string | number | boolean | null,
+      value: string | number | boolean | string[] | null,
     ): Promise<void>;
     /** Set (`description`) or clear (`null`) a type's description override of
      *  a property inherited from an ancestor type. */
@@ -673,11 +676,17 @@ export interface EtnApi {
     }>;
   };
   properties: {
+    /**
+     * `GET /networks/{nid}/thoughts|links/{id}/properties`. Для скалярных
+     * свойств — `PropertyValue`; свойства-связи (0.8.1) приходят формой
+     * `LinkPropertyValues` (счётчик + рёбра `values[]` с `target_id`/
+     * `target_title`) — поля `.value` у них нет.
+     */
     get(
       networkId: string,
       ownerType: 'thought' | 'link',
       ownerId: string,
-    ): Promise<PropertyValue[]>;
+    ): Promise<(PropertyValue | LinkPropertyValues)[]>;
     set(
       networkId: string,
       ownerType: 'thought' | 'link',
@@ -703,13 +712,27 @@ export interface EtnApi {
     list(
       networkId: string,
     ): Promise<
-      Array<NetworkProperty & { types_count: number; values_count: number }>
+      Array<
+        NetworkProperty & {
+          types_count: number;
+          values_count: number;
+          types_source_count?: number;
+          types_target_count?: number;
+        }
+      >
     >;
     /** `GET /networks/{nid}/properties/{id}` — one property with counters. */
     get(
       networkId: string,
       id: string,
-    ): Promise<NetworkProperty & { types_count: number; values_count: number }>;
+    ): Promise<
+      NetworkProperty & {
+        types_count: number;
+        values_count: number;
+        types_source_count?: number;
+        types_target_count?: number;
+      }
+    >;
     /** `POST /networks/{nid}/properties` — create. */
     create(networkId: string, input: NetworkPropertyInput): Promise<NetworkProperty>;
     /**
@@ -722,8 +745,17 @@ export interface EtnApi {
       id: string,
       input: NetworkPropertyUpdateInput,
     ): Promise<{ property: NetworkProperty; converted: number; dropped: number }>;
-    /** `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound. */
-    remove(networkId: string, id: string): Promise<void>;
+    /**
+     * `DELETE /networks/{nid}/properties/{id}` — refused with 409 when bound.
+     * For link-properties the server returns the number of edges that lose
+     * `type_id` and become structural («Родители»/«Потомки») so the confirm
+     * dialog can quote it directly (0.8.1, требование 09f692ff); for
+     * scalar properties the field is `null`.
+     */
+    remove(
+      networkId: string,
+      id: string,
+    ): Promise<{ id: string; links_becoming_structural: number | null }>;
     /**
      * `GET /networks/{nid}/properties/{id}/usage` — type bindings, in-type
      * values per binding and out-of-type values count (the two numbers the

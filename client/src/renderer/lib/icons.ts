@@ -31,7 +31,8 @@ export type IconName =
   | 'plus'
   | 'trash'
   | 'layers'
-  | 'loader';
+  | 'loader'
+  | 'filter';
 
 /**
  * Trusted static inner-SVG markup per icon (lucide geometry, MIT). Assigned
@@ -99,6 +100,9 @@ const PATHS: Record<IconName, string> = {
     '<line x1="18" x2="22" y1="12" y2="12"/>' +
     '<line x1="4.93" x2="7.76" y1="19.07" y2="16.24"/>' +
     '<line x1="16.24" x2="19.07" y1="7.76" y2="4.93"/>',
+  // Canvas link-type filter button (задача «Фильтр типов связей на карте
+  // мыслей», 0.8.1): lucide «filter» — a literal funnel, per user request.
+  filter: '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
 };
 
 /**

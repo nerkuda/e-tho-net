@@ -143,6 +143,10 @@ export function groupSection(spec: GroupSpec): HTMLElement {
     collapseChange?.(spec.id, collapsed);
     if (!collapsed && lazy && !countLoaded) updateCount();
     apply();
+    // Вкладка слушает и пересчитывает раскладку соседних групп и сплиттеров
+    // (приёмка 0.8.1): свёрнутая группа не держит место, освободившееся
+    // пространство забирает соседняя развёрнутая группа.
+    root.dispatchEvent(new CustomEvent('etn:toggled', { detail: collapsed }));
   });
 
   apply();

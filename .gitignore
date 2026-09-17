@@ -50,3 +50,6 @@ desktop.ini
 # Test / coverage
 coverage/
 .nyc_output/
+
+# Local scratch / migration test beds
+.tmp/

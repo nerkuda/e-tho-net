@@ -15,16 +15,45 @@ export const NETWORK_ROLES = ['owner', 'member'] as const;
 export type NetworkRole = (typeof NETWORK_ROLES)[number];
 
 /** Value types accepted by a {@link PropertyDefinition} (02-data-model.md §3.4).
- *  `url` (a web address or a file link) is stored in `value_text` like `text`. */
+ *  `url` (a web address or a file link) is stored in `value_text` like `text`.
+ *  `link` (0.8.1) — свойство-связь: значение вычисляется из рёбер `links` и в
+ *  `property_values` не хранится (ADR «свойство-связь — проекция ребра»).
+ *  `thought_ref` (0.8.1) — legacy: упразднён ADR «вид значения thought_ref
+ *  упраздняется», миграция 040 перевела все унаследованные свойства-ссылки в
+ *  свойства-связи с материализацией рёбер. Запись свойства с этим видом
+ *  значения отвергается рантайм-guard'ом (PROPERTY_VALUE_TYPES_WRITABLE);
+ *  маркер оставлен в типах, чтобы юнит-тесты, упражняющие value-handling и
+ *  резолв `value_thought_ref` (на изолированных тестовых БД), продолжали
+ *  компилироваться и зеленели без каскадной переделки. Удаление маркера —
+ *  задача a469f1b9 «Пересмотр правил сети и описаний типов после запуска
+ *  модели связей». */
 export const PROPERTY_VALUE_TYPES = [
   'text',
   'date',
   'number',
   'bool',
-  'thought_ref',
   'url',
+  'link',
+  'thought_ref',
 ] as const;
 export type PropertyValueType = (typeof PROPERTY_VALUE_TYPES)[number];
+
+/** Направление свойства-связи от владельца (0.8.1): `out` — владелец является
+ *  источником ребра (свойство читается прямым именем `name_forward`), `in` —
+ *  владелец является целью (обратным именем `name_reverse`). */
+export const LINK_PROPERTY_DIRECTIONS = ['out', 'in'] as const;
+export type LinkPropertyDirection = (typeof LINK_PROPERTY_DIRECTIONS)[number];
+
+/** Сторона привязки свойства-связи (0.8.1, задача e1fbf304; требования
+ *  b9562306 «Свойство-связь одно на тип связи; сторона задана привязкой»,
+ *  115e44fa «Привязка со стороны назначения равноправна с привязкой
+ *  источника»). Живёт в колонке `type_properties.side`: `source` — привязка
+ *  к типу-источнику ребра (направление `out`), `target` — к типу-назначения
+ *  (направление `in`). Для скалярных и структурных свойств-связей
+ *  («Родители» / «Потомки») сторона `null` — направление у них атрибут
+ *  реестровой строки `config.direction`, а не привязки. */
+export const LINK_PROPERTY_SIDES = ['source', 'target'] as const;
+export type LinkPropertySide = (typeof LINK_PROPERTY_SIDES)[number];
 
 /** Kinds of comments an entity may own (02-data-model.md §3.8). */
 export const COMMENT_KINDS = ['permanent', 'chronological'] as const;

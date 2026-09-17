@@ -26,6 +26,7 @@ import { MCP_TOOL_NAMES } from '@etn/shared';
 import { closeNetworkDb, openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createTypeProperty } from '../src/domain/property-service.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import { NetworkServiceImpl } from '../src/domain/network-service.js';
 import { generateApiKey, hashApiKey } from '../src/auth/api-key.js';
 import { createLogger } from '../src/logger.js';
@@ -443,13 +444,7 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
     try {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const type = createThoughtType(ndb, { name: 'TRefHolder' }, ctx.adminId);
-      createTypeProperty(
-        ndb,
-        'thought_type',
-        type.id,
-        { key: 'related', value_type: 'thought_ref' },
-        ctx.adminId,
-      );
+      seedThoughtRefProperty(ndb, 'thought_type', type.id, 'related', {}, ctx.adminId);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -524,10 +519,13 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // Задача c1fa71d4 (0.7.3) re-baselines до 84 000 B для 68
         // инструментов: `etn.views.run` добавляет ~3 500 B (длинное
         // описание контракта + описание `meta.views` в `etn.thoughts.get`).
+        // Задача d7177d1d (0.8.1) re-baselines до 85 000 B: описание
+        // `etn.ontology.write` дополнено стороной привязки и единым
+        // жизненным циклом свойства-связи ↔ link_type.
         const bytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
         assert.ok(
-          bytes <= 84_000,
-          `tools/list JSON is ${bytes} bytes — over the 0.7.3 budget of 84000`,
+          bytes <= 85_000,
+          `tools/list JSON is ${bytes} bytes — over the 0.8.1 budget of 85000`,
         );
       } finally {
         await handle.close();

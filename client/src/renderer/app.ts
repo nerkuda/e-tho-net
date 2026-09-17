@@ -26,7 +26,7 @@ import {
 import { closeMenu } from './lib/menu.js';
 import { notice } from './lib/notice.js';
 import { logUiEvent } from './lib/ui-log.js';
-import { UI_STATE_KEY, PREF_KEY } from '@etn/shared';
+import { UI_STATE_KEY, PREF_KEY, parseStoredCanvasLinkFilter } from '@etn/shared';
 import { applyCanvasZoom } from './canvas/canvas-zoom.js';
 import { getCanvasCursor, resetCanvasCursor } from './canvas/kbd-nav.js';
 import {
@@ -93,6 +93,11 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
   const showInactivePref = prefs.find((p) => p.key === PREF_KEY.SHOW_INACTIVE);
   const showInactive =
     typeof showInactivePref?.value === 'boolean' ? showInactivePref.value : false;
+  // Requirement «Дефолт и хранение фильтра типов связей на карте» (0.8.1):
+  // `null` — no explicit preference, the server (and the filter dialog)
+  // fall back to the live `show_on_map` default.
+  const canvasLinkFilterPref = prefs.find((p) => p.key === PREF_KEY.CANVAS_LINK_FILTER);
+  const canvasLinkFilter = parseStoredCanvasLinkFilter(canvasLinkFilterPref?.value);
 
   const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw, activeViewRaw, pinsRaw, heightsRaw, chronicleHeightsRaw] =
     await Promise.all([
@@ -140,6 +145,7 @@ export async function openNetwork(networkId: string, tabId?: string): Promise<vo
     network,
     networkId,
     showInactive,
+    canvasLinkFilter,
     cloudWidth: parseCloudWidth(cloudWidthRaw),
     cloudGap: parseCloudGap(cloudGapRaw),
     canvasZoom: parseCanvasZoom(canvasZoomRaw),

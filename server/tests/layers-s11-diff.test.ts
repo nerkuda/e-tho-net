@@ -22,6 +22,7 @@ import {
 
 import { openNetworkDb } from '../src/db/network-db.js';
 import { materializeShadow } from '../src/db/layer-write.js';
+import { createLink, deleteLink } from '../src/domain/link-service.js';
 import {
   authHeaders,
   buildRestContext,
@@ -65,43 +66,51 @@ async function postThought(ctx: RestTestContext, title: string): Promise<string>
   return (res.json().data as { id: string }).id;
 }
 
-/** Create a link source → target; returns its id. */
+/** Create a link source → target (domain, 0.8.1: POST /links снят); returns its id. */
 async function postLink(
   ctx: RestTestContext,
   sourceId: string,
   targetId: string,
-  typeId?: string,
+  layerId: string = BASE_LAYER_ID,
 ): Promise<string> {
-  const res = await ctx.app.inject({
-    method: 'POST',
-    url: `/api/v1/networks/${ctx.networkId}/links`,
-    headers: authHeaders(ctx),
-    payload: { source_id: sourceId, target_id: targetId, ...(typeId !== undefined ? { type_id: typeId } : {}) },
-  });
-  assert.equal(res.statusCode, 201, res.body?.toString());
-  return (res.json().data as { id: string }).id;
+  const ndb = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layerId);
+  return createLink(ndb, { source_id: sourceId, target_id: targetId }, 'system').id;
 }
 
-/** Delete a link. */
-async function deleteLink(ctx: RestTestContext, linkId: string): Promise<void> {
-  const res = await ctx.app.inject({
-    method: 'DELETE',
-    url: `/api/v1/networks/${ctx.networkId}/links/${linkId}`,
-    headers: authHeaders(ctx),
-  });
-  assert.equal(res.statusCode, 204, res.body?.toString());
+/** Физически удалить связь source → target в слое (домен; DELETE /links снят). */
+async function removeLink(
+  ctx: RestTestContext,
+  sourceId: string,
+  targetId: string,
+  layerId: string,
+): Promise<void> {
+  const ndb = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layerId);
+  const row = ndb
+    .prepare('SELECT id FROM links_v WHERE source_id = ? AND target_id = ?')
+    .get(sourceId, targetId) as { id: string } | undefined;
+  assert.ok(row, `link ${sourceId}→${targetId} не найдена`);
+  deleteLink(ndb, row.id, undefined);
 }
 
 /** Create a link type; returns its id. */
 async function postLinkType(ctx: RestTestContext, nameForward: string, nameReverse: string): Promise<string> {
+  // 0.8.1, задача d7177d1d: POST /link-types закрыт (422). Создание типа
+  // связи идёт через POST свойства-связи; достаём link_type_id из конфига.
   const res = await ctx.app.inject({
     method: 'POST',
-    url: `/api/v1/networks/${ctx.networkId}/link-types`,
+    url: `/api/v1/networks/${ctx.networkId}/properties`,
     headers: authHeaders(ctx),
-    payload: { name_forward: nameForward, name_reverse: nameReverse },
+    payload: {
+      name: nameForward,
+      value_type: 'link',
+      name_forward: nameForward,
+      name_reverse: nameReverse,
+    },
   });
   assert.equal(res.statusCode, 201, res.body?.toString());
-  return (res.json().data as { id: string }).id;
+  const data = res.json().data as { config: { link_type_id: string } | null };
+  assert.ok(data.config?.link_type_id, `link_type_id missing in ${res.body}`);
+  return data.config.link_type_id;
 }
 
 /** Fetch the structural diff. */
@@ -166,12 +175,13 @@ describe(
         const bcRow = baseNdb
           .prepare('SELECT id FROM links_v WHERE source_id = ? AND target_id = ?')
           .get(b, c) as { id: string };
-        await deleteLink(ctx, bcRow.id);
+        void bcRow;
+        await removeLink(ctx, b, c, layer.id);
 
-        await postLink(ctx, a, c);
+        await postLink(ctx, a, c, layer.id);
 
         const d = await postThought(ctx, 'Г');
-        await postLink(ctx, c, d);
+        await postLink(ctx, c, d, layer.id);
 
         // Reorder: bump the A→E link's position directly (position is T1 —
         // not surfaced in the API yet; the diff must still see it). The row

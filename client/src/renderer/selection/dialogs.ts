@@ -11,12 +11,10 @@
  *   rejects a key foreign to the owner's type, so the client filters first).
  */
 
-import type { PropertyDefinition, PropertyValueType, ThoughtRef } from '@etn/shared';
+import type { EffectiveTypeProperty, PropertyValueType, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
-import { firstPickedThoughtId, pickThoughtsDialog } from '../canvas/add-dialog.js';
-import { buildMultiThoughtRefEditor, buildValueOptionsCaret } from '../editor/properties.js';
-import { wireThoughtRefSearch } from '../editor/thought-picker.js';
+import { buildLinkValueEditor, buildValueOptionsCaret } from '../editor/properties.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
@@ -27,8 +25,9 @@ import { store } from '../state.js';
 
 /** A value editor state row kept until «Применить». */
 interface PropertyRowState {
-  def: PropertyDefinition;
-  /** `null`/undefined — the row is left empty and is not applied. */
+  def: EffectiveTypeProperty;
+  /** `null`/undefined — the row is left empty and is not applied. Свойство-связь
+   *  хранит здесь `string[]` (список целей, инструкция a47947c8) или `null`. */
   value: unknown;
 }
 
@@ -124,7 +123,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
   // Filled by the loader below; «Применить» filters on them so the server only
   // sees (thought, key) pairs the thought's own type defines.
   let selectedRefs: ThoughtRef[] = [];
-  let defsByType = new Map<string, PropertyDefinition[]>();
+  let defsByType = new Map<string, EffectiveTypeProperty[]>();
 
   const applyBtn = {
     label: 'Применить',
@@ -176,7 +175,7 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
     selectedRefs = refs;
     // Property definitions of every thought type met in the selection.
     const typeIds = [...new Set(refs.map((r) => r.type_id).filter((t): t is string => t !== null))];
-    defsByType = new Map<string, PropertyDefinition[]>();
+    defsByType = new Map<string, EffectiveTypeProperty[]>();
     try {
       const perType = await Promise.all(
         typeIds.map(async (typeId) => {
@@ -224,20 +223,6 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       table,
     );
   })();
-  /** Metadata of picked thought_ref values (resolved once, then cached). */
-  const refTitles = new Map<string, ThoughtRef>();
-
-  /** Resolves a thought ref for a thought_ref input. */
-  async function ensureRefTitle(id: string): Promise<void> {
-    if (refTitles.has(id)) return;
-    try {
-      const resolved = await etn.thoughts.resolve(networkId, [id]);
-      const ref = resolved[0];
-      if (ref !== undefined) refTitles.set(id, ref);
-    } catch {
-      // The raw id is shown when resolve fails.
-    }
-  }
 
   /** Builds the value editor cell for one property row. */
   function buildValueCell(state: PropertyRowState): HTMLTableCellElement {
@@ -316,90 +301,23 @@ export function showSelectionPropertiesDialog(ids: string[]): void {
       cell.append(select);
       return cell;
     }
-    // thought_ref: the field doubles as a live candidate search (with the
-    // definition's type filter), exactly like the editor's properties table;
-    // only a picked candidate becomes the value. Multiple definitions
-    // (config.multiple) get the chip-list editor with the multi-mode dialog.
-    const rebuild = (): void => {
-      cell.replaceChildren();
-      const filterIds = (
-        def.config?.allowed_type_ids ??
-        (def.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
-      ).filter((id) => id !== '');
-      if (def.config?.multiple === true) {
-        const ids = Array.isArray(state.value)
-          ? state.value
-          : typeof state.value === 'string'
-            ? [state.value]
-            : [];
-        cell.append(
-          buildMultiThoughtRefEditor({
-            networkId,
-            filterIds,
-            refs: refTitles,
-            ids,
-            save: (next) => {
-              state.value = next.length > 0 ? next : null;
-              rebuild();
-            },
-          }),
-        );
-        return;
-      }
-      const input = el('input', 'text-input prop-editor');
-      input.type = 'text';
-      input.autocomplete = 'off';
-      const storedId = typeof state.value === 'string' ? state.value : null;
-      input.value = storedId !== null ? (refTitles.get(storedId)?.title ?? storedId) : '';
-      input.placeholder = 'введите название для поиска…';
-      wireThoughtRefSearch(input, {
-        networkId,
-        typeIds: filterIds,
-        onPick: async (id) => {
-          state.value = id;
-          await ensureRefTitle(id);
-          rebuild();
-        },
-      });
-      const row = div('form-row');
-      row.style.marginBottom = '0';
-      row.append(
-        input,
-        button(
-          'выбрать',
-          () => {
-            void pickThoughtsDialog({
-              networkId,
-              allowCreate: false,
-              allowLinkType: false,
-              searchTypeIds: filterIds,
-            }).then(async (result) => {
-              const id = firstPickedThoughtId(result);
-              if (id === null) return;
-              state.value = id;
-              await ensureRefTitle(id);
-              rebuild();
-            });
-          },
-          'btn small',
-        ),
-      );
-      if (storedId !== null) {
-        row.append(
-          button(
-            '✕',
-            () => {
-              state.value = null;
-              rebuild();
-            },
-            'btn small',
-            'Очистить значение',
-          ),
-        );
-      }
-      cell.append(row);
-    };
-    rebuild();
+    // Свойство-связь: унифицированный чип-редактор (инструкция a47947c8) —
+    // тот же компонент, что в редакторе мысли. «Применить» уже пишет по
+    // одному свойству за раз через `etn.properties.set`, поэтому `save`
+    // здесь только буферизует выбор в `state.value` (список id целей или
+    // `null` при пустом наборе) — сеть трогает лишь `applyAll`.
+    const editor = buildLinkValueEditor({
+      networkId,
+      ownerType: 'thought',
+      ownerId: '',
+      definition: def,
+      values: [],
+      save: async (next) => {
+        state.value = next;
+        return true;
+      },
+    });
+    cell.append(editor);
     return cell;
   }
 }

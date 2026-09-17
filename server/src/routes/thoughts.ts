@@ -27,9 +27,12 @@ import {
   PREF_KEY,
   SORT_KINDS,
   SORT_ORDERS,
+  computeDefaultCanvasLinkFilter,
+  parseStoredCanvasLinkFilter,
   type FocusDir,
   type FocusOrderInput,
   type FocusPreferencesInput,
+  type LinkTypeFilterInput,
   type SortKind,
   type SortOrder,
   type ThoughtBatchFailure,
@@ -51,16 +54,22 @@ import {
   openRouteNetworkDb,
   parseIconKind,
   parseIfMatch,
+  parseLinkTypeFilter,
+  parseLinkTypeFilterQuery,
   queryBoolean,
   queryInt,
   queryStrings,
   requestBody,
   type RouteDeps,
 } from './helpers.js';
-import { openNetworkDb } from '../db/network-db.js';
+import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import { setFocusOrder, setFocusPreferences } from '../domain/focus-service.js';
 import { createLink, deleteLink, findLinksBetween, incomingLinksOf } from '../domain/link-service.js';
-import { clearThoughtRefUsages, findThoughtUsage } from '../domain/property-service.js';
+import {
+  clearThoughtRefUsages,
+  findThoughtUsage,
+  listNetworkProperties,
+} from '../domain/property-service.js';
 import { findBacklinks } from '../domain/backlinks-service.js';
 import { findDuplicates, findMentions } from '../domain/search-service.js';
 import {
@@ -409,6 +418,31 @@ function resolveShowInactive(
   return pref?.value === true;
 }
 
+/**
+ * Resolve the effective canvas link-type filter (requirement «Дефолт и
+ * хранение фильтра типов связей на карте», 0.8.1): an explicit request-level
+ * `link_filter` wins; otherwise the user's stored `PREF_KEY.CANVAS_LINK_FILTER`
+ * preference; otherwise the live default computed from `show_on_map` in the
+ * property registry (structural links «Родители»/«Потомки» always included).
+ */
+function resolveCanvasLinkFilter(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  ndb: NetworkDb,
+  networkId: string,
+  override?: LinkTypeFilterInput,
+): LinkTypeFilterInput {
+  if (override !== undefined) return override;
+  const pref = app.systemDb.getNetworkPreference(
+    req.auth!.user.id,
+    networkId,
+    PREF_KEY.CANVAS_LINK_FILTER,
+  );
+  const stored = parseStoredCanvasLinkFilter(pref?.value);
+  if (stored !== null) return stored;
+  return computeDefaultCanvasLinkFilter(listNetworkProperties(ndb));
+}
+
 /** `/api/v1/networks*` thought routes plugin factory. */
 export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
   return async (app: FastifyInstance) => {
@@ -448,7 +482,19 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         const override = fieldBoolean(body, 'show_inactive', req.id);
         const showInactive = resolveShowInactive(app, req, networkId, override);
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const response = focus(ndb, req.auth!.user.id, id, { showInactive });
+        // Задача c965ad03: фильтр обхода по типам связей — зоны, рёбра и
+        // индикаторы направлений ограничиваются выбранными типами. Задача
+        // «Фильтр типов связей на карте мыслей» (0.8.1): без явного
+        // request-level override резолвится из сохранённого предпочтения
+        // пользователя, а без него — из `show_on_map` реестра свойств.
+        const linkFilter = resolveCanvasLinkFilter(
+          app,
+          req,
+          ndb,
+          networkId,
+          parseLinkTypeFilter(body, req.id),
+        );
+        const response = focus(ndb, req.auth!.user.id, id, { showInactive, linkFilter });
         deps.emit(req, networkId, 'thought-view.updated', {
           thought_id: id,
           last_viewed_at: new Date().toISOString(),
@@ -638,6 +684,9 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           );
         }
         const typeId = queryStrings(query.type_id)[0];
+        // Задача c965ad03: фильтр обхода по типам связей (repeatable
+        // `link_type_id` + `include_structural`).
+        const linkFilter = parseLinkTypeFilterQuery(query, req.id);
         const limit = queryInt(query.limit, 50, { field: 'limit', min: 1, requestId: req.id });
         const offset = queryInt(query.offset, 0, { field: 'offset', min: 0, requestId: req.id });
 
@@ -653,6 +702,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           sort: sortRaw as SortKind | undefined,
           order: orderRaw as SortOrder | undefined,
           typeId,
+          linkFilter,
         };
         const neighbors = getNeighbors(ndb, id, dirRaw as FocusDir, { ...neighborOpts, limit, offset });
         // Bug fix (0.6.3, thought f2c7c7d3): `total` used to echo the
@@ -1063,7 +1113,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
     // --- Copy-batch (workplan L26, task bb8277f6) ----------------------------
     // Paste a clipboard snapshot under `parent_thought_id` in this network.
     // Type and link-type resolution falls back to "drop the type" per spec
-    // when nothing fits; thought_ref values are re-resolved by id → title.
+    // when nothing fits; scalar property values pass through verbatim.
     // The whole batch is one transaction — partial failure rolls back.
 
     app.post(
@@ -1153,7 +1203,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
       },
     );
 
-    // --- Usage: reverse thought_ref lookup (03-server-api.md §9.1, L7) ------
+    // --- Usage: reverse link-property lookup (03-server-api.md §9.1, L7) ----
 
     app.get(
       '/networks/:networkId/thoughts/:id/usage',
@@ -1198,7 +1248,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         }
         // Synonyms: repeatable ?synonyms=a&synonyms=b or a comma-separated value.
         const synonyms = queryStrings(query.synonyms).flatMap((value) => value.split(','));
-        // Optional thought-type filter (thought_ref property pickers): repeatable
+        // Optional thought-type filter (link-property pickers): repeatable
         // ?type_ids=… or a comma-separated value.
         const typeIds = queryStrings(query.type_ids).flatMap((value) => value.split(','));
         const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);

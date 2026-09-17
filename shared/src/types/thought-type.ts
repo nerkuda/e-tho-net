@@ -5,7 +5,7 @@
  * docs/03-server-api.md §8–9. SQLite 0/1 INTEGER columns surface as `boolean`.
  */
 
-import type { IconKind, PropertyValueType, TypeOwnerType } from '../enums.js';
+import type { IconKind, LinkPropertySide, LinkStyle, PropertyValueType, TypeOwnerType } from '../enums.js';
 
 /** User-defined thought type (02-data-model.md §3.3). */
 export interface ThoughtType {
@@ -109,20 +109,36 @@ export interface PropertyDefinition {
   key: string;
   value_type: PropertyValueType;
   /**
-   * JSON config. Commonly `{ allowed_type_id }` constraining the target of a
-   * `thought_ref` property. Kept as an opaque map; the storage layer persists
-   * it as JSON text.
+   * JSON config of the property's value type (e.g. `options` for `text`,
+   * `link_type_id`/`direction` для свойства-связи). Kept as an opaque map;
+   * the storage layer persists it as JSON text.
    */
   config: PropertyConfig | null;
   required: boolean;
   /** Display order. */
   position: number;
   /**
+   * Сторона привязки (0.8.1, задача e1fbf304; требование b9562306): для
+   * свойств-связей — `source` / `target` (направление в привязке), для
+   * скалярных и структурных свойств — `undefined`. Хранится в колонке
+   * `type_properties.side`; для миграционной совместимости выводится из
+   * `config.direction`, если сторона не указана явно.
+   */
+  side?: LinkPropertySide | null;
+  /**
    * Free-form description of the property — what it means and which format
    * its values take. Shown as a hint next to the property in the thought
    * editor and given to AI agents through `etn.types.list`.
    */
   description: string | null;
+  /**
+   * `true` для зеркального свойства-связи (требование dde92461): свойство не
+   * привязано к типу явно — оно синтезируется при чтении из чужого
+   * свойства-связи, чей `allowed_target_type_ids` покрывает этот тип. У
+   * физических привязок `type_properties` флаг отсутствует (`undefined`);
+   * направление зеркала противоположно направлению исходного свойства.
+   */
+  mirrored?: boolean;
 }
 
 /** A network-wide property of the `properties` registry (02-data-model.md §3.4a). */
@@ -153,6 +169,21 @@ export interface NetworkPropertyInput {
   value_type: PropertyValueType;
   config?: PropertyConfig | null;
   description?: string | null;
+  /**
+   * Пара имён нового типа связи (0.8.1, требование 09f692ff: создание
+   * свойства-связи создаёт тип связи). Если задано для `value_type = 'link'` —
+   * сервер создаёт link_type автоматически и записывает его id в
+   * `config.link_type_id`. Для скалярных свойств игнорируется.
+   */
+  name_forward?: string;
+  name_reverse?: string;
+  /**
+   * Опциональные атрибуты оформления нового типа связи (0.8.1).
+   */
+  parent_link_type_id?: string | null;
+  link_color?: string | null;
+  link_style?: LinkStyle | null;
+  link_width?: number | null;
 }
 
 /** Input accepted by the registry update. `value_type` converts stored values. */
@@ -161,19 +192,66 @@ export interface NetworkPropertyUpdateInput {
   value_type?: PropertyValueType;
   config?: PropertyConfig | null;
   description?: string | null;
+  /**
+   * Новое прямое имя типа связи (0.8.1): правка свойства-связи правит
+   * связанный link_type. Для скалярных и структурных свойств игнорируется.
+   */
+  name_forward?: string;
+  /**
+   * Новое обратное имя типа связи (0.8.1). См. {@link name_forward}.
+   */
+  name_reverse?: string;
+  /** Опциональные атрибуты оформления (0.8.1). */
+  link_color?: string | null;
+  link_style?: LinkStyle | null;
+  link_width?: number | null;
 }
 
 /** Recognised keys inside a {@link PropertyDefinition.config} JSON blob. */
 export interface PropertyConfig {
-  /** Default value applied to future items of the type (not `thought_ref`). */
-  default_value?: string | number | boolean;
-  /** For `value_type = 'thought_ref'`: restrict the referenced thought type
-   *  (legacy single form; superseded by `allowed_type_ids`). */
-  allowed_type_id?: string;
-  /** For `value_type = 'thought_ref'`: restrict picking to thoughts of these
-   *  type ids (absent/empty = any type). Stored values are never reprocessed
-   *  when the filter changes. */
-  allowed_type_ids?: string[];
+  /**
+   * Default value applied to future items of the type. Scalar kinds use
+   * string/number/boolean; a link property uses `string[]` — the default set
+   * of target thought ids, applied by creating edges (0.8.1, bb67e546).
+   */
+  default_value?: string | number | boolean | string[];
+  /**
+   * For `value_type = 'link'`: тип связи, обязательный. Проекция —
+   * рёбра этого типа.
+   */
+  link_type_id?: string;
+  /**
+   * For `value_type = 'link'`: структурное (нетипизированное) свойство-связь —
+   * проецирует нетипизированные рёбра (`type_id IS NULL`). Взаимоисключающе с
+   * `link_type_id`: у структурного свойства типа связи нет, имя хранится в
+   * реестре («Родители»/«Потомки»), а не вычисляется из типа связи.
+   */
+  structural?: boolean;
+  /**
+   * For `value_type = 'link'`: направление от владельца свойства — `out`
+   * (владелец — источник ребра, имя `name_forward`) или `in` (владелец —
+   * цель, имя `name_reverse`). По умолчанию `out`.
+   */
+  direction?: 'out' | 'in';
+  /**
+   * For `value_type = 'link'`: опциональное ограничение типов
+   * противоположной стороны; раскрывается до поддеревьев типов. При
+   * заполнении у допустимых типов появляется зеркальное обратное свойство.
+   */
+  allowed_target_type_ids?: string[];
+  /**
+   * For `value_type = 'link'`: симметричное ограничение типов источника
+   * (0.8.1, задача d7177d1d) — для привязок со стороны назначения
+   * (`side = 'target'`). При заполнении у допустимых источников появляется
+   * встречное свойство. `null`/`[]` — снять ограничение.
+   */
+  allowed_source_type_ids?: string[];
+  /** For `value_type = 'link'`: рисовать ли связь на карте по умолчанию
+   *  (по умолчанию `false`). */
+  show_on_map?: boolean;
+  /** For `value_type = 'link'`: блокирует ли ссылка физическое удаление
+   *  цели (по умолчанию `false`). */
+  blocks_target_deletion?: boolean;
   /** For `value_type = 'text'`: predefined values to pick from — an input aid,
    *  not a restriction: arbitrary typed values stay allowed. */
   options?: string[];
@@ -182,9 +260,9 @@ export interface PropertyConfig {
    *   * `value_type = 'text'` with `options` — a comma-separated list of
    *     predefined values may be picked; the stored shape is a single string,
    *     not an array.
-   *   * `value_type = 'thought_ref'` — an array of referenced thoughts; each
-   *     element is a thought id, the value is stored as a JSON array in
-   *     `value_thought_ref` (02-data-model.md §3.4–3.5).
+   *   * `value_type = 'link'` — набор целей не ограничен (сколько рёбер типа
+   *     существует, столько и значений); флаг сохранён миграцией 040 из
+   *     бывшего `thought_ref`.
    *   * `value_type = 'url'` — an array of URL/file-path strings; the value is
    *     stored as a JSON array in `value_text` (02-data-model.md §3.4–3.5). A
    *     JSON-array payload is used (not comma-join as for `text`) because URLs
@@ -206,6 +284,9 @@ export interface PropertyDefinitionInput {
   required?: boolean;
   position?: number;
   description?: string | null;
+  /** Сторона привязки для свойства-связи (0.8.1). Если не задана — выводится
+   *  из `config.direction` (fallback для совместимости со старыми вызовами). */
+  side?: LinkPropertySide | null;
 }
 
 /**
@@ -222,6 +303,8 @@ export type AttachPropertyInput =
       property_id: string;
       required?: boolean;
       position?: number;
+      /** Сторона привязки для свойства-связи (0.8.1). */
+      side?: LinkPropertySide | null;
     }
   | {
       mode: 'create';
@@ -231,6 +314,8 @@ export type AttachPropertyInput =
       description?: string | null;
       required?: boolean;
       position?: number;
+      /** Сторона привязки для свойства-связи (0.8.1). */
+      side?: LinkPropertySide | null;
     };
 
 /** Input accepted by `PATCH …/types/{id}/properties/{prop_id}` (03-server-api.md §8). */
@@ -242,6 +327,8 @@ export interface PropertyDefinitionUpdateInput {
   required?: boolean;
   position?: number;
   description?: string | null;
+  /** Сторона привязки для свойства-связи (0.8.1). */
+  side?: LinkPropertySide | null;
 }
 
 /**
@@ -267,6 +354,11 @@ export interface EffectiveTypeProperty extends PropertyDefinition {
    * definition's own. This flag tells the two apart.
    */
   description_overridden: boolean;
+  /** `true` — зеркальное свойство-связь (см. {@link PropertyDefinition.mirrored}). */
+  mirrored?: boolean;
+  /** Сторона привязки (0.8.1): пробрасывается из `type_properties.side`
+   *  физической строки либо из зеркала. См. {@link PropertyDefinition.side}. */
+  side?: LinkPropertySide | null;
 }
 
 /** Body of `PUT …/types/{id}/properties/{prop_id}/default` (03-server-api.md §8). */
@@ -278,18 +370,29 @@ export interface PropertyDefaultOverrideInput {
 /**
  * Union of all value payloads that may be stored against a property. Exactly
  * one of the storage columns (`value_text`/`value_date`/`value_number`/
- * `value_bool`/`value_thought_ref`) is populated; the API exposes a single
- * `value` field whose runtime type matches {@link PropertyValueType}.
+ * `value_bool`) is populated; the API exposes a single `value` field whose
+ * runtime type matches {@link PropertyValueType}. Свойство-связь (`link`)
+ * значений в `property_values` не хранит — его значение читается из рёбер
+ * (ADR «свойство-связь — проекция ребра»).
  *
- * `string[]` is the multiple form of two property kinds (definitions with
- * `config.multiple = true`, 02-data-model.md §3.4–3.5):
- *   * `thought_ref` — an array of thought ids, stored as a JSON array inside
- *     `value_thought_ref`;
- *   * `url` — an array of URL/file-path strings, stored as a JSON array inside
- *     `value_text` (task 0.6.2). A JSON-array payload is used (not comma-join
- *     as for `text`) because URLs may contain commas.
+ * `string[]` is the multiple form of `url` (definitions with
+ * `config.multiple = true`, 02-data-model.md §3.4–3.5): an array of
+ * URL/file-path strings, stored as a JSON array inside `value_text`
+ * (task 0.6.2). A JSON-array payload is used (not comma-join as for `text`)
+ * because URLs may contain commas.
  */
 export type PropertyValueValue = string | number | boolean | string[] | null;
+
+/**
+ * Резолвнутая форма legacy `thought_ref` для MCP-чтения (задача N4, миграция
+ * 040): одиночный id → `{id, title}`, JSON-массив id → массив таких же.
+ * `title: null` означает висячую ссылку на удалённую мысль. Используется
+ * только в {@link ResolvedPropertyValue.value}; EAV-форма {@link PropertyValueValue}
+ * остаётся прежней (запись идёт строкой/JSON-массивом в `value_thought_ref`).
+ */
+export type ResolvedThoughtRefValue =
+  | { id: string; title: string | null }
+  | Array<{ id: string; title: string | null }>;
 
 /** A stored property value — polymorphic EAV (02-data-model.md §3.5). */
 export interface PropertyValue {
@@ -325,20 +428,77 @@ export interface PropertyValue {
   updated_at_ms?: number;
 }
 
-/** `thought_ref`-значение в MCP-чтении (task N4): ссылка на мысль,
- * резолвнутая в `{id, title}` одним JOIN. `title: null` — висячая ссылка
- * (мысль удалена; `value_thought_ref` без SQL FK). */
-export interface ResolvedThoughtRefValue {
-  id: string;
-  title: string | null;
+/**
+ * PropertyValue MCP-чтения (task N4): форма совпадает с {@link PropertyValue},
+ * но `value` для legacy `thought_ref` расширен до {@link ResolvedThoughtRefValue}
+ * — агенту не нужны отдельные вызовы `etn.thoughts.get` на каждую ссылку.
+ * Тип сохранён как элемент союза со {@link ResolvedLinkProperty} в карточке мысли.
+ */
+export interface ResolvedPropertyValue extends Omit<PropertyValue, 'value'> {
+  value: PropertyValue['value'] | ResolvedThoughtRefValue;
 }
 
-/** PropertyValue MCP-чтения (task N4): `thought_ref`-значения резолвнуты
- * в {@link ResolvedThoughtRefValue} (одиночные) либо в массив
- * {@link ResolvedThoughtRefValue} (множественные, `config.multiple`);
- * REST-контракт не меняется. */
-export interface ResolvedPropertyValue extends Omit<PropertyValue, 'value'> {
-  value: PropertyValueValue | ResolvedThoughtRefValue | ResolvedThoughtRefValue[];
+/**
+ * Одно значение свойства-связи — живое ребро `links` (0.8.1). Возвращается
+ * запросом значений свойства-связи (REST `GET …/properties`); карточка мысли
+ * вместо списка отдаёт счётчик {@link ResolvedLinkProperty.count}.
+ */
+export interface LinkPropertyValueItem {
+  /** Id ребра — адрес для `etn.links.get` и операций записи связи. */
+  link_id: string;
+  /** Id цели (противоположный конец ребра от владельца свойства). */
+  target_id: string;
+  /** Заголовок цели; `null` — цель удалена. */
+  target_title: string | null;
+  /** Тип цели; `null` — без типа. */
+  target_type_id: string | null;
+  /** Полный текст постоянного комментария ребра; `null` — комментария нет. */
+  comment: string | null;
+}
+
+/**
+ * Свойство-связь в карточке мысли (0.8.1): связи отдаются счётчиком
+ * {@link count}, а не списком целей. Скаляры — значениями, связи — счётчиками.
+ * Полный список рёбер — отдельным запросом значений ({@link LinkPropertyValues}).
+ */
+export interface ResolvedLinkProperty {
+  /** Id свойства реестра. */
+  id: string;
+  owner_type: 'thought' | 'link';
+  owner_id: string;
+  property_id: string;
+  /**
+   * `true`, когда свойство не подключено к типу владельца: внетиповое
+   * свойство-связь либо зеркало без ограничения типа цели.
+   */
+  outside_type: boolean;
+  /** Имя свойства, вычисленное из типа связи по направлению (не хранится). */
+  property_name: string;
+  value_type: 'link';
+  /** Направление от владельца: `out` — владелец источник, `in` — цель. */
+  direction: 'out' | 'in';
+  /** Сторона привязки (0.8.1): `source` для типа-источника, `target` для
+   *  типа-назначения; `undefined` для структурного свойства или когда
+   *  сторона не вычислена. */
+  side?: LinkPropertySide | null;
+  /** Id типа связи; `null` — структурное (нетипизированное) свойство-связь. */
+  link_type_id: string | null;
+  /** `true` — структурное свойство-связь (нетипизированные рёбра). */
+  structural: boolean;
+  /** Счётчик живых рёбер, проецируемых в это свойство. */
+  count: number;
+  /** Собственное описание свойства (уточняет применение для типа). */
+  description?: string | null;
+}
+
+/**
+ * Значения свойства-связи в ответе на запрос значений (REST
+ * `GET …/properties`, 0.8.1): список живых рёбер {@link LinkPropertyValueItem}
+ * плюс счётчик. Отличается от {@link ResolvedLinkProperty} наличием `values`.
+ */
+export interface LinkPropertyValues extends ResolvedLinkProperty {
+  /** Рёбра в порядке убывания новизны. */
+  values: LinkPropertyValueItem[];
 }
 
 /** Body of `PUT …/{id}/properties/{key}` (03-server-api.md §9). */

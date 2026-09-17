@@ -60,6 +60,10 @@ const EXPECTED_FILES = [
   '036_property_values_deterministic_id.sql',
   '037_thought_type_views.sql',
   '038_search_trigram.sql',
+  '039_structural_link_properties.sql',
+  '040_thought_ref_to_link_properties.sql',
+  '041_type_property_side.sql',
+  '042_unified_property_link_registry.sql',
 ];
 
 /** All `data.db` tables that must exist after migration (FTS5 shadow tables excluded). */
@@ -600,11 +604,16 @@ describe(
           '036_property_values_deterministic_id.sql',
           '037_thought_type_views.sql',
           '038_search_trigram.sql',
+          '039_structural_link_properties.sql',
+          '040_thought_ref_to_link_properties.sql',
+          '041_type_property_side.sql',
+          '042_unified_property_link_registry.sql',
         ]);
 
         // 18 definitions became 15 properties: three groups merged
         // («Плановый срок» d5+d9, «слой» d8+d18, «путь»/«Путь» d12+d15),
-        // zero renames.
+        // zero renames. Плюс 2 структурных свойства-связи «Родители»/«Потомки»
+        // от миграции 039.
         const props = db
           .prepare('SELECT id, name, name_key, value_type, config FROM properties ORDER BY name')
           .all() as Array<{
@@ -614,7 +623,7 @@ describe(
           value_type: string;
           config: string | null;
         }>;
-        assert.equal(props.length, 15, '18 − 3 merged = 15');
+        assert.equal(props.length, 17, '18 − 3 merged + 2 structural = 17');
         const names = props.map((p) => p.name);
         for (const expected of [
           'URL',
@@ -648,7 +657,9 @@ describe(
         const bindings = db
           .prepare('SELECT id, owner_id, property_id FROM type_properties ORDER BY id')
           .all() as Array<{ id: string; owner_id: string; property_id: string }>;
-        assert.equal(bindings.length, 18);
+        // 18 старых определений → 18 привязок; + 2 структурных «Родители»/
+        // «Потомки» на корневом типе от миграции 039.
+        assert.equal(bindings.length, 20);
         const byId = new Map(bindings.map((b) => [b.id, b.property_id]));
         assert.equal(byId.get('d5'), 'd5');
         assert.equal(byId.get('d9'), 'd5');
@@ -732,22 +743,46 @@ describe(
         const props = db
           .prepare('SELECT id, name, value_type, config FROM properties ORDER BY name')
           .all() as Array<{ id: string; name: string; value_type: string; config: string | null }>;
-        // 5 definitions − 1 merge (a4+a5) = 4 registry properties.
-        assert.equal(props.length, 4);
+        // 5 definitions − 1 merge (a4+a5) = 4 registry properties; плюс 2
+        // структурных свойства-связи «Родители»/«Потомки» от миграции 039;
+        // плюс 1 свойство для голого lt-1 от миграции 042 (lt-1 сидирован
+        // вручную, у него нет своего свойства — 040 создал свой lt для a3,
+        // так что lt-1 остался голым и 042 заводит ему свойство «связан с»
+        // с пустым allowed_target_type_ids).
+        assert.equal(props.length, 7);
 
         // The earliest definition (a1) keeps the plain name; the others get
         // composite names from their owner types (link type → forward name).
         const byName = new Map(props.map((p) => [p.name, p]));
         assert.equal(byName.get('подсистема')!.id, 'a1');
         assert.equal(byName.get('задача2.подсистема')!.value_type, 'number');
-        assert.equal(byName.get('связан с.подсистема')!.value_type, 'thought_ref');
+        // 040 конвертирует thought_ref-свойства в свойства-связи.
+        assert.equal(byName.get('связан с.подсистема')!.value_type, 'link');
         assert.equal(byName.get('связь')!.id, 'a4');
 
-        // Merged thought_ref property: allowed ids unioned across both forms.
+        // Merged thought_ref property: allowed ids unioned across both forms;
+        // 040 конвертирует в свойство-связь — multiple сохранён, объединённый
+        // allowed_type_ids переехал в allowed_target_type_ids.
         const svyaz = byName.get('связь')!;
-        const cfg = JSON.parse(svyaz.config!) as { multiple?: boolean; allowed_type_ids?: string[] };
-        assert.equal(cfg.multiple, true);
-        assert.deepEqual([...(cfg.allowed_type_ids ?? [])].sort(), ['t-problem', 't-zadacha']);
+        const cfg = JSON.parse(svyaz.config!) as {
+          multiple?: number | boolean;
+          allowed_target_type_ids?: string[];
+          link_type_id?: string;
+          direction?: string;
+          show_on_map?: boolean;
+          blocks_target_deletion?: boolean;
+        };
+        assert.equal(cfg.multiple, 1);
+        // direction снимается миграцией 042 (требование b9562306) —
+        // сторона теперь живёт в type_properties.side, не в config.
+        assert.equal(cfg.direction, undefined);
+        // Флаги — настоящие JSON-булевы: потребители (`computeDefaultCanvasLinkFilter`,
+        // `listBlockingLinkProperties`, клиентский редактор) сравнивают строго `=== true`.
+        // thought_ref-свойство после 040 на карте не рисуется (ADR), но блокирует удаление.
+        assert.equal(cfg.show_on_map, false);
+        assert.equal(cfg.blocks_target_deletion, true);
+        assert.ok(typeof cfg.link_type_id === 'string' && cfg.link_type_id.length > 0);
+        assert.deepEqual([...(cfg.allowed_target_type_ids ?? [])].sort(), ['t-problem', 't-zadacha']);
 
         // Bindings: a5 attaches to the surviving a4.
         const a5 = db
@@ -861,6 +896,10 @@ describe(
           '036_property_values_deterministic_id.sql',
           '037_thought_type_views.sql',
           '038_search_trigram.sql',
+          '039_structural_link_properties.sql',
+          '040_thought_ref_to_link_properties.sql',
+          '041_type_property_side.sql',
+          '042_unified_property_link_registry.sql',
         ]);
 
         const expectedId = propertyValueId('thought', owner, prop);
@@ -916,6 +955,625 @@ describe(
           propertyValueId('thought', owner2, prop),
           'other natural key gets its OWN deterministic id',
         );
+      } finally {
+        db.close();
+      }
+    });
+
+    it('040 converts thought_ref properties to link properties with materialised edges', () => {
+      const db = new Database(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      try {
+        const res = runMigrations(db, networkMigrationsDir());
+        assert.equal(res.applied[res.applied.length - 1], '042_unified_property_link_registry.sql');
+        // 040 уже применён в прогоне — откатываем запись, сеем данные
+        // thought_ref-эпохи и применяем повторно (как апгрейд живой сети).
+        // 041 (DDL — добавление колонки `side`) и 042 (DML — снятие direction,
+        // материализация зеркал) не откатываем: ALTER TABLE ADD COLUMN в
+        // SQLite 3.46 не идемпотентен, а повторный 040 перезаписывает config
+        // (включая direction) на месте, и финальное состояние совпадает с
+        // состоянием после первого прогона.
+        db.prepare(
+          "DELETE FROM _migrations WHERE name = '040_thought_ref_to_link_properties.sql'",
+        ).run();
+        const now = '2026-09-13T00:00:00Z';
+        const BASE = '00000000-0000-4000-8000-0000000000ba5e';
+
+        const insThought = db.prepare(
+          `INSERT INTO thoughts (id, layer_id, title, title_norm, active, created_at, updated_at, created_by, updated_by, created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, ?, 1, ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        insThought.run('ta', BASE, 'Мысль A', 'мысль a', now, now);
+        insThought.run('tb', BASE, 'Мысль B', 'мысль b', now, now);
+        insThought.run('tc', BASE, 'Мысль C', 'мысль c', now, now);
+
+        const insProp = db.prepare(
+          `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, type_name_key(?), 'thought_ref', ?, ?, ?, 'u1', 'u1')`,
+        );
+        insProp.run('p1', BASE, 'версия', 'версия', '{"allowed_type_ids":["tt1"]}', now, now);
+        insProp.run('p2', BASE, 'подсистемы', 'подсистемы', '{"multiple":true}', now, now);
+
+        const insVal = db.prepare(
+          `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, value_thought_ref, updated_at, created_by, updated_by, created_at_ms, updated_at_ms)
+           VALUES (?, ?, 'thought', ?, ?, ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        insVal.run('v1', BASE, 'ta', 'p1', 'tb', now); // одиночная
+        insVal.run('v2', BASE, 'tc', 'p2', '["ta","tb"]', now); // multiple: порядок → position
+        insVal.run('v3', BASE, 'ta', 'p2', '["tb","tz"]', now); // цель tz не существует — призрак
+
+        // Второй слой со своим thought_ref-свойством и значением.
+        db.prepare(
+          `INSERT INTO layers (id, parent_id, title, comment, git_branch, is_service, is_base, depth, created_by, updated_by, created_at, last_activity_at, created_at_ms, updated_at_ms, version)
+           VALUES ('lay1', ?, 'слой', NULL, NULL, 0, 0, 1, 'u1', 'u1', ?, ?, 0, 0, 1)`,
+        ).run(BASE, now, now);
+        insProp.run('p3', 'lay1', 'источник', 'источник', null, now, now);
+        insVal.run('v4', 'lay1', 'tb', 'p3', 'ta', now);
+
+        // Ребро с хроно-комментарием, вложением, значением свойства на ребре,
+        // постоянным комментарием и привязкой свойства к типу связи.
+        db.prepare(
+          `INSERT INTO links (id, layer_id, source_id, target_id, type_id, position, active, version, created_at, updated_at, created_by, updated_by)
+           VALUES ('lnk1', ?, 'ta', 'tb', NULL, 0, 1, 1, ?, ?, 'u1', 'u1')`,
+        ).run(BASE, now, now);
+        const insComment = db.prepare(
+          `INSERT INTO comments (id, layer_id, owner_type, owner_id, kind, title, body_md, body_html, valid_from, version, created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, ?, 'u1', 'u1')`,
+        );
+        insComment.run('cch', BASE, 'link', 'lnk1', 'chronological', 'хроника ребра', '<p>x</p>', now, now, now);
+        insComment.run('cper', BASE, 'link', 'lnk1', 'permanent', 'постоянный', '<p>x</p>', now, now, now);
+        db.prepare(
+          `INSERT INTO attachments (id, layer_id, owner_type, owner_id, kind, url, title, position, created_at, created_by)
+           VALUES ('at1', ?, 'link', 'lnk1', 'url', 'https://x', 'вложение', 0, ?, 'u1')`,
+        ).run(BASE, now);
+        db.prepare(
+          `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, created_at, updated_at, created_by, updated_by)
+           VALUES ('p9', ?, 'путь', type_name_key('путь'), 'text', NULL, ?, ?, 'u1', 'u1')`,
+        ).run(BASE, now, now);
+        db.prepare(
+          `INSERT INTO property_values (id, layer_id, owner_type, owner_id, property_id, value_text, updated_at, created_by, updated_by, created_at_ms, updated_at_ms)
+           VALUES ('v5', ?, 'link', 'lnk1', 'p9', ' docs/x.md ', ?, 'u1', 'u1', 0, 0)`,
+        ).run(BASE, now);
+        db.prepare(
+          `INSERT INTO type_properties (id, layer_id, owner_type, owner_id, property_id, required, position)
+           VALUES ('tp9', ?, 'link_type', '00000000-0000-4000-8000-000000000002', 'p9', 0, 0)`,
+        ).run(BASE);
+
+        const res2 = runMigrations(db, networkMigrationsDir());
+        assert.deepEqual(res2.applied, ['040_thought_ref_to_link_properties.sql']);
+
+        // Виды связи: по одному на якорь каждого свойства, в слое якоря.
+        const lts = db
+          .prepare(
+            "SELECT id, name_forward, layer_id FROM link_types WHERE name_forward LIKE 'upd: %'",
+          )
+          .all() as Array<{ id: string; name_forward: string; layer_id: string }>;
+        assert.equal(lts.length, 3, JSON.stringify(lts));
+        const ltNames = lts.map((l) => `${l.name_forward}@${l.layer_id === BASE ? 'base' : 'lay1'}`);
+        for (const expected of ['upd: версия@base', 'upd: подсистемы@base', 'upd: источник@lay1']) {
+          assert.ok(ltNames.includes(expected), `missing ${expected}`);
+        }
+
+        // Определения сконвертированы на месте (id сохранены), config по АДР.
+        const props = db
+          .prepare("SELECT id, value_type, config FROM properties WHERE id IN ('p1','p2','p3')")
+          .all() as Array<{ id: string; value_type: string; config: string }>;
+        assert.equal(props.length, 3);
+        const cfg1 = JSON.parse(props.find((p) => p.id === 'p1')!.config!);
+        assert.equal(props.find((p) => p.id === 'p1')!.value_type, 'link');
+        assert.ok(typeof cfg1.link_type_id === 'string' && cfg1.link_type_id.length > 0);
+        assert.equal(cfg1.direction, 'out');
+        // Флаги — настоящие JSON-булевы (0.8.1-доработка): строгие проверки
+        // `=== true` в shared/домене не срабатывают на числе 1.
+        assert.equal(cfg1.show_on_map, false);
+        assert.equal(cfg1.blocks_target_deletion, true);
+        assert.deepEqual(cfg1.allowed_target_type_ids, ['tt1']);
+        assert.equal(cfg1.multiple, undefined);
+        const cfg2 = JSON.parse(props.find((p) => p.id === 'p2')!.config!);
+        assert.equal(cfg2.multiple, 1);
+        assert.equal(cfg2.allowed_target_type_ids, undefined);
+
+        // Значения → рёбра в тех же слоях; position хранит порядок массива.
+        const edges = db
+          .prepare(
+            `SELECT source_id, target_id, layer_id, position FROM links
+              WHERE type_id IN (SELECT id FROM link_types WHERE name_forward LIKE 'upd: %')
+              ORDER BY source_id, position`,
+          )
+          .all() as Array<{ source_id: string; target_id: string; layer_id: string; position: number }>;
+        assert.equal(edges.length, 4, JSON.stringify(edges));
+        const e1 = edges.find((e) => e.source_id === 'ta' && e.target_id === 'tb');
+        assert.ok(e1 !== undefined && e1.layer_id === BASE && e1.position === 0);
+        const tcEdges = edges.filter((e) => e.source_id === 'tc');
+        assert.deepEqual(
+          tcEdges.map((e) => [e.target_id, e.position]),
+          [
+            ['ta', 0],
+            ['tb', 1],
+          ],
+        );
+        const layEdge = edges.find((e) => e.layer_id === 'lay1');
+        assert.ok(layEdge !== undefined && layEdge.source_id === 'tb' && layEdge.target_id === 'ta');
+
+        // Призрак с несуществующей целью остался строкой; остальные значения удалены.
+        const ghost = db
+          .prepare("SELECT owner_id, value_thought_ref FROM property_values WHERE id = 'v3'")
+          .get() as { owner_id: string; value_thought_ref: string };
+        assert.equal(ghost.owner_id, 'ta');
+        assert.equal(ghost.value_thought_ref, '["tb","tz"]');
+        assert.equal(
+          (db.prepare('SELECT COUNT(*) AS c FROM property_values').get() as { c: number }).c,
+          1,
+        );
+
+        // Хроно-комментарий переподчинён источнику с пометкой о переносе.
+        const chrono = db
+          .prepare("SELECT owner_type, owner_id, body_md, body_html FROM comments WHERE id = 'cch'")
+          .get() as { owner_type: string; owner_id: string; body_md: string; body_html: string };
+        assert.equal(chrono.owner_type, 'thought');
+        assert.equal(chrono.owner_id, 'ta');
+        assert.ok(
+          chrono.body_md.startsWith('*(перенесено с связи «Мысль A» → «Мысль B»'),
+          chrono.body_md,
+        );
+        assert.ok(chrono.body_md.endsWith('хроника ребра'));
+        assert.equal(chrono.body_html, '', 'body_html пересоберёт markdown-sweep');
+
+        // Вложение ребра переподчинено источнику.
+        const att = db
+          .prepare("SELECT owner_type, owner_id FROM attachments WHERE id = 'at1'")
+          .get() as { owner_type: string; owner_id: string };
+        assert.equal(att.owner_type, 'thought');
+        assert.equal(att.owner_id, 'ta');
+
+        // Значение свойства на ребре дописано в постоянный комментарий
+        // (markdown-списком), строка значения удалена.
+        const perm = db
+          .prepare("SELECT body_md FROM comments WHERE id = 'cper'")
+          .get() as { body_md: string };
+        assert.ok(perm.body_md.startsWith('постоянный'), perm.body_md);
+        assert.ok(perm.body_md.includes('- путь: docs/x.md'), perm.body_md);
+        assert.equal(
+          (
+            db
+              .prepare("SELECT COUNT(*) AS c FROM property_values WHERE owner_type = 'link'")
+              .get() as { c: number }
+          ).c,
+          0,
+        );
+
+        // Привязка свойства к типу связи удалена.
+        assert.equal(
+          (
+            db
+              .prepare("SELECT COUNT(*) AS c FROM type_properties WHERE owner_type = 'link_type'")
+              .get() as { c: number }
+          ).c,
+          0,
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    // ------------------------------------------------------------------
+    // 042: миграция единого реестра свойств и связей (0.8.1 — задача
+    // f7633481, сценарий e93001ac). Пять сценариев:
+    //   1) слияние встречных свойств (прямое + обратное на один link_type);
+    //   2) свойство каждому «голому» типу связи;
+    //   3) материализация зеркал для свойств с непустым
+    //      `allowed_target_type_ids`;
+    //   4) снятие `direction` из config;
+    //   5) восстановление висячих `link_type_id`.
+    // Все правки — в одной транзакции; рёбра живы.
+    // ------------------------------------------------------------------
+
+    /** Apply migrations up to (excluding) 042 and return the prepared db. */
+    function pre042Db(): Database.Database {
+      const dir = mkdtempSync(path.join(tmpdir(), 'etn-mig-'));
+      for (const f of readdirSync(networkMigrationsDir()).filter(
+        (f) => f.endsWith('.sql') && f < '042',
+      )) {
+        cpSync(path.join(networkMigrationsDir(), f), path.join(dir, f));
+      }
+      const db = new Database(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, dir);
+      rmSync(dir, { recursive: true, force: true });
+      return db;
+    }
+
+    const ROOT_THOUGHT_TYPE = '00000000-0000-4000-8000-000000000001';
+
+    it('042 merges reciprocal properties, materialises mirrors, restores bare/dangling link types and drops direction', () => {
+      const db = pre042Db();
+      try {
+        const now = '2026-09-15T00:00:00Z';
+
+        // Два типа мыслей и два типа связи.
+        const insType = db.prepare(
+          `INSERT INTO thought_types
+             (id, layer_id, name, name_key, parent_id, is_root, icon_kind, version,
+              created_at, updated_at, created_by, updated_by,
+              created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, type_name_key(?), ?, ?, 'emoji', 1, ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        insType.run('tt-task', BASE, 'задача', 'задача', ROOT_THOUGHT_TYPE, 0, now, now);
+        insType.run('tt-comp', BASE, 'компонент', 'компонент', ROOT_THOUGHT_TYPE, 0, now, now);
+
+        const insLinkType = db.prepare(
+          `INSERT INTO link_types
+             (id, layer_id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+              parent_id, is_root, style, width, style_set, width_set, version,
+              created_at, updated_at, created_by, updated_by,
+              created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, type_name_key(?), ?, type_name_key(?),
+                   '00000000-0000-4000-8000-000000000002', 0, 'solid', 1, 1, 1, 1,
+                   ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        insLinkType.run(
+          'lt-reciprocal',
+          BASE,
+          'зависит от',
+          'зависит от',
+          'блокирует',
+          'блокирует',
+          now,
+          now,
+        );
+        insLinkType.run(
+          'lt-mirror',
+          BASE,
+          'блокирует',
+          'блокирует',
+          'блокируется',
+          'блокируется',
+          now,
+          now,
+        );
+        insLinkType.run(
+          'lt-bare',
+          BASE,
+          'рецензирует',
+          'рецензирует',
+          'рецензент',
+          'рецензент',
+          now,
+          now,
+        );
+
+        // Мысли и рёбра — на момент миграции 042 у каждого link_type
+        // минимум одно живое ребро (проверка «ни одно ребро не теряется»).
+        const insThought = db.prepare(
+          `INSERT INTO thoughts
+             (id, layer_id, type_id, title, title_norm, active, version,
+              created_at, updated_at, created_by, updated_by,
+              created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        insThought.run('th-task-1', BASE, 'tt-task', 'Задача 1', 'задача 1', now, now);
+        insThought.run('th-task-2', BASE, 'tt-task', 'Задача 2', 'задача 2', now, now);
+        insThought.run('th-comp-1', BASE, 'tt-comp', 'Компонент 1', 'компонент 1', now, now);
+
+        const insLink = db.prepare(
+          `INSERT INTO links
+             (id, layer_id, source_id, target_id, type_id, position, active, version,
+              created_at, updated_at, created_by, updated_by,
+              created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        insLink.run('lnk-reciprocal', BASE, 'th-task-1', 'th-task-2', 'lt-reciprocal', 0, now, now);
+        insLink.run('lnk-bare', BASE, 'th-task-1', 'th-comp-1', 'lt-bare', 0, now, now);
+
+        // Сценарий 1: встречные свойства на `lt-reciprocal`. Прямое (out)
+        // с минимальным pk — `p-forward`. Обратное (in) — `p-backward`,
+        // у него расходящийся show_on_map.
+        const insProp = db.prepare(
+          `INSERT INTO properties
+             (id, layer_id, name, name_key, value_type, config, description,
+              created_at, updated_at, created_by, updated_by,
+              created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, type_name_key(?), ?, ?, NULL, ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        insProp.run(
+          'p-forward',
+          BASE,
+          'зависит от',
+          'зависит от',
+          'link',
+          JSON.stringify({
+            link_type_id: 'lt-reciprocal',
+            direction: 'out',
+            show_on_map: 1,
+            blocks_target_deletion: 1,
+          }),
+          now,
+          now,
+        );
+        insProp.run(
+          'p-backward',
+          BASE,
+          'обратная: зависит от',
+          'обратная: зависит от',
+          'link',
+          JSON.stringify({
+            link_type_id: 'lt-reciprocal',
+            direction: 'in',
+            show_on_map: 0,
+            blocks_target_deletion: 1,
+          }),
+          now,
+          now,
+        );
+
+        const insTp = db.prepare(
+          `INSERT INTO type_properties
+             (id, layer_id, owner_type, owner_id, property_id, required, position, side)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        // Прямая сторона: p-forward привязан к tt-task со стороны source.
+        insTp.run(
+          'tp-fwd-task',
+          BASE,
+          'thought_type',
+          'tt-task',
+          'p-forward',
+          0,
+          0,
+          'source',
+        );
+        // Обратная сторона: p-backward привязан к tt-task со стороны
+        // target — должна переехать на p-forward с side='target'.
+        insTp.run(
+          'tp-bwd-task',
+          BASE,
+          'thought_type',
+          'tt-task',
+          'p-backward',
+          0,
+          1,
+          'target',
+        );
+        // Обратная сторона: p-backward привязан к tt-comp со стороны
+          // target — должна переехать на p-forward с side='target'.
+        insTp.run(
+          'tp-bwd-comp',
+          BASE,
+          'thought_type',
+          'tt-comp',
+          'p-backward',
+          0,
+          0,
+          'target',
+        );
+
+        // Сценарий 3: свойство с непустым allowed_target_type_ids и
+        // привязкой только со стороны source. Зеркало-назначение должно
+        // материализоваться.
+        insProp.run(
+          'p-mirror',
+          BASE,
+          'блокирует',
+          'блокирует',
+          'link',
+          JSON.stringify({
+            link_type_id: 'lt-mirror',
+            direction: 'out',
+            show_on_map: 0,
+            blocks_target_deletion: 1,
+            allowed_target_type_ids: ['tt-task', 'tt-comp'],
+          }),
+          now,
+          now,
+        );
+        insTp.run(
+          'tp-mirror-fwd',
+          BASE,
+          'thought_type',
+          'tt-task',
+          'p-mirror',
+          0,
+          0,
+          'source',
+        );
+
+        // Сценарий 5: свойство с висячим link_type_id (указывает на
+        // удалённый link_type). Должен восстановиться новый link_type.
+        insProp.run(
+          'p-dangling',
+          BASE,
+          'устаревшая связь',
+          'устаревшая связь',
+          'link',
+          JSON.stringify({
+            link_type_id: 'lt-deleted-ghost',
+            direction: 'out',
+            show_on_map: 0,
+            blocks_target_deletion: 1,
+          }),
+          now,
+          now,
+        );
+        insTp.run(
+          'tp-dangling',
+          BASE,
+          'thought_type',
+          'tt-task',
+          'p-dangling',
+          0,
+          0,
+          'source',
+        );
+
+        const res = runMigrations(db, networkMigrationsDir());
+        assert.deepEqual(res.applied, ['042_unified_property_link_registry.sql']);
+
+        // Сценарий 1: p-backward удалён, его привязки перенесены на
+        // p-forward с side='target'. У p-forward осталась своя привязка
+        // source на tt-task; добавились две привязки target на tt-task и
+        // tt-comp.
+        const fwd = db
+          .prepare("SELECT id, config FROM properties WHERE id = 'p-forward'")
+          .get() as { id: string; config: string };
+        assert.ok(fwd !== undefined, 'winner property p-forward must survive');
+        const fwdCfg = JSON.parse(fwd.config) as Record<string, unknown>;
+        assert.equal(
+          fwdCfg.direction,
+          undefined,
+          'direction must be removed from non-structural link property config',
+        );
+        assert.equal(fwdCfg.link_type_id, 'lt-reciprocal');
+        assert.equal(fwdCfg.show_on_map, 1, 'winner config kept');
+        assert.equal(
+          (db.prepare("SELECT COUNT(*) AS c FROM properties WHERE id = 'p-backward'").get() as {
+            c: number;
+          }).c,
+          0,
+          'loser property p-backward must be deleted',
+        );
+
+        const fwdBindings = db
+          .prepare(
+            "SELECT owner_id, side FROM type_properties WHERE property_id = 'p-forward' ORDER BY owner_id, side",
+          )
+          .all() as Array<{ owner_id: string; side: string }>;
+        // У tt-task уже была source-привязка p-forward (tp-fwd-task) — она
+        // покрывает оба направления; target-привязка tp-bwd-task
+        // отбрасывается как дубликат. Target остаётся только для tt-comp,
+        // где привязки p-forward раньше не было.
+        assert.deepEqual(
+          fwdBindings.map((b) => `${b.owner_id}:${b.side}`).sort(),
+          ['tt-comp:target', 'tt-task:source'],
+        );
+
+        // Сценарий 2: lt-bare получил автоматическое свойство с
+        // именем lt-bare.name_forward. Свойство создаётся БЕЗ привязки к
+        // типам мысли (type_properties пусто) — соответствует требованию
+        // e93001ac «с пустыми таблицами источников и назначений». Рёбра
+        // этого link_type видны как внетиповое свойство.
+        const bareProp = db
+          .prepare(
+            "SELECT id, name, value_type, config FROM properties " +
+              "WHERE json_extract(config, '$.link_type_id') = 'lt-bare' " +
+              "AND (json_extract(config, '$.structural') IS NULL OR json_extract(config, '$.structural') = 0)",
+          )
+          .get() as { id: string; name: string; value_type: string; config: string };
+        assert.ok(bareProp !== undefined, 'bare link_type must receive a property');
+        assert.equal(bareProp.value_type, 'link');
+        assert.ok(bareProp.name.startsWith('рецензирует'));
+        // Рёбра голого link_type рисовались на карте до 0.8.1 — авто-свойство
+        // получает `show_on_map = true`, иначе миграция молча убрала бы их с карты
+        // (флаг стал дефолтом клиентского фильтра, требование ce399a5f).
+        // Значение — настоящий JSON-boolean, а не 1: `computeDefaultCanvasLinkFilter`
+        // сравнивает строго `config.show_on_map === true`.
+        const bareCfg = JSON.parse(bareProp.config) as {
+          show_on_map?: unknown;
+          blocks_target_deletion?: unknown;
+          link_type_id?: string;
+        };
+        assert.equal(bareCfg.show_on_map, true, 'bare link_type property must show on map');
+        assert.equal(bareCfg.blocks_target_deletion, true);
+        // Страховка от числового представления (json_object('show_on_map', 1)).
+        assert.equal(typeof bareCfg.show_on_map, 'boolean');
+        // Привязок к типам мысли быть не должно — свойство существует в
+        // реестре как внетиповое (требование e93001ac).
+        const bareBindingCount = (
+          db
+            .prepare('SELECT COUNT(*) AS c FROM type_properties WHERE property_id = ?')
+            .get(bareProp.id) as { c: number }
+        ).c;
+        assert.equal(
+          bareBindingCount,
+          0,
+          'bare link_type property must have NO type bindings — it lives outside types',
+        );
+
+        // Сценарий 3: для p-mirror (allowed_target_type_ids = tt-task,
+        // tt-comp) материализованы привязки target. У tt-task уже была
+        // source — добавление target для того же типа было бы дублированием
+        // (одна привязка уже покрывает тип). У tt-comp — добавлена target.
+        const mirrorBindings = db
+          .prepare(
+            "SELECT owner_id, side FROM type_properties WHERE property_id = 'p-mirror' ORDER BY owner_id, side",
+          )
+          .all() as Array<{ owner_id: string; side: string }>;
+        assert.deepEqual(
+          mirrorBindings.map((b) => `${b.owner_id}:${b.side}`).sort(),
+          ['tt-comp:target', 'tt-task:source'],
+        );
+
+        // Сценарий 4: у всех живых link-свойств (включая только что
+        // созданное bare) `direction` отсутствует в config.
+        const dirLeftovers = (
+          db
+            .prepare(
+              "SELECT COUNT(*) AS c FROM properties " +
+                "WHERE value_type = 'link' " +
+                "AND deleted = 0 " +
+                "AND (json_extract(config, '$.structural') IS NULL OR json_extract(config, '$.structural') = 0) " +
+                "AND json_extract(config, '$.direction') IS NOT NULL",
+            )
+            .get() as { c: number }
+        ).c;
+        assert.equal(dirLeftovers, 0, 'direction must be removed from every non-structural link property');
+
+        // Структурные свойства-связи не трогаются.
+        const structuralDirs = db
+          .prepare(
+            "SELECT id, json_extract(config, '$.direction') AS d FROM properties " +
+              "WHERE json_extract(config, '$.structural') = 1",
+          )
+          .all() as Array<{ id: string; d: string }>;
+        assert.ok(structuralDirs.length >= 2);
+        for (const s of structuralDirs) {
+          assert.ok(s.d === 'in' || s.d === 'out', `structural property ${s.id} keeps direction`);
+        }
+
+        // Сценарий 5: висячее свойство p-dangling переадресовано на
+        // новый link_type; новый тип связи создан с name_forward = «устаревшая связь».
+        const dangling = db
+          .prepare("SELECT config FROM properties WHERE id = 'p-dangling'")
+          .get() as { config: string };
+        const newLtId = JSON.parse(dangling.config).link_type_id as string;
+        assert.notEqual(newLtId, 'lt-deleted-ghost');
+        const newLt = db
+          .prepare(
+            'SELECT id, name_forward, name_reverse FROM link_types WHERE id = ?',
+          )
+          .get(newLtId) as { id: string; name_forward: string; name_reverse: string };
+        assert.ok(newLt !== undefined, 'dangling link_type must be recreated');
+        assert.equal(newLt.name_forward, 'устаревшая связь');
+        assert.ok(newLt.name_reverse.startsWith('обратная сторона'));
+
+        // Ни одно ребро не потеряно и не сменило типа.
+        const links = db
+          .prepare('SELECT id, type_id FROM links WHERE deleted = 0 ORDER BY id')
+          .all() as Array<{ id: string; type_id: string }>;
+        assert.deepEqual(links, [
+          { id: 'lnk-bare', type_id: 'lt-bare' },
+          { id: 'lnk-reciprocal', type_id: 'lt-reciprocal' },
+        ]);
+
+        // Имя свойства висячей связи теперь разрешается (не деградирует
+        // до id): name_forward у восстановленного link_type.
+        assert.equal(newLt.name_forward, 'устаревшая связь');
+
+        // Каждый link_type (включая восстановленный) имеет ровно одно
+        // свойство — структурные не в счёт.
+        const propCounts = db
+          .prepare(
+            'SELECT json_extract(p.config, \'$.link_type_id\') AS lt_id, COUNT(*) AS cnt ' +
+              'FROM properties p ' +
+              "WHERE p.value_type = 'link' AND p.deleted = 0 " +
+              'AND (json_extract(p.config, \'$.structural\') IS NULL OR json_extract(p.config, \'$.structural\') = 0) ' +
+              'GROUP BY lt_id',
+          )
+          .all() as Array<{ lt_id: string; cnt: number }>;
+        for (const r of propCounts) {
+          assert.equal(r.cnt, 1, `link_type ${r.lt_id} must have exactly one property (got ${r.cnt})`);
+        }
       } finally {
         db.close();
       }

@@ -65,6 +65,7 @@ import type {
   LinkTypeUpdateInput,
   TypeOwnerType,
 } from '@etn/shared';
+import { buildLinkValueEditor } from '../editor/properties.js';
 import { typeNameKey } from '@etn/shared';
 
 import { requireNetworkId, scheduleRefresh } from '../app.js';
@@ -116,8 +117,11 @@ const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
   number: 'число',
   date: 'дата',
   bool: 'булево',
-  thought_ref: 'ссылка на мысль',
   url: 'URL (сайт или файл)',
+  link: 'связь',
+  // Legacy (миграция 040): в живой БД таких свойств не остаётся, но в
+  // типах маркер оставлен для компиляции тестов и импорта архивов.
+  thought_ref: 'ссылка на мысль (legacy)',
 };
 
 /** Reloads the thought-type catalogue (selects and cloud styles read it). */
@@ -504,9 +508,12 @@ function buildParentPicker(opts: {
 }
 
 /**
- * Extra options of the type editors ({@link showThoughtTypeEditor},
- * {@link showLinkTypeEditor}) for the quick type creation flow: the type
- * combobox passes the typed query so the new type's name starts prefilled.
+ * Extra options of the type editors ({@link showThoughtTypeEditor}) for the
+ * quick type creation flow: the type combobox passes the typed query so the
+ * new type's name starts prefilled. Редактор типа связи упразднён в 0.8.1
+ * (требование 09f692ff, задача 09201bd4): пользователь создаёт тип связи
+ * через единый диалог свойства (`openPropertyManagerEditor` со значением
+ * `value_type='link'`).
  */
 export interface TypeEditorExtras {
   /** Prefills the name of a NEW type (its forward name for link types). */
@@ -1015,14 +1022,28 @@ function buildStagedPropertySection(opts: {
   const label = el('p', 'muted', 'Свойства');
   label.style.margin = '8px 0 2px';
   box.append(label, tableWrap, errorLine);
-  box.append(
+  // Кнопки добавления свойства. Двусторонняя вкладка (задача 935ec90e):
+  // обе кнопки сначала спрашивают сторону привязки (источник/назначение),
+  // затем открывают соответствующий поток — пикер реестра («Добавить…»)
+  // или единый диалог свойства/связи («Создать…»).
+  const actions = div('form-row');
+  actions.style.gap = '8px';
+  actions.style.flexWrap = 'wrap';
+  actions.append(
     button(
-      'Добавить свойство',
-      () => void openAttachPropertyDialog(),
+      'Добавить свойство…',
+      () => void askSideThen('attach'),
       'btn small',
-      'Подключить свойство из справочника сети',
+      'Подключить существующее свойство из справочника сети',
+    ),
+    button(
+      'Создать свойство…',
+      () => void askSideThen('create'),
+      'btn small',
+      'Создать новое свойство через единый диалог свойства/связи',
     ),
   );
+  box.append(actions);
 
   /** Server-side snapshot of the type's OWN bindings (kept in sync after
    *  every applied op — the base the next diff is computed against). */
@@ -1046,9 +1067,10 @@ function buildStagedPropertySection(opts: {
    * «Добавить свойство» dialog: pick an existing registry property (или
    * создать новое в общем редакторе свойства и затем выбрать его). Returns
    * the staged row the caller appends to {@link ownDraft} (or `null` when
-   * the user cancelled).
+   * the user cancelled). `side` — сторона привязки (`source`/`target`)
+   * для свойств-связей; `null` для скаляров (сторона неприменима).
    */
-  async function openAttachPropertyDialog(): Promise<void> {
+  async function openAttachPropertyDialog(side: 'source' | 'target' | null): Promise<void> {
     // The warning's «descendants» check needs the edited type's id and name;
     // both exist only for an already-created type.
     const editedType =
@@ -1068,8 +1090,13 @@ function buildStagedPropertySection(opts: {
           : 'name' in editedType
             ? editedType.name
             : editedType.name_forward,
-      existingPropertyIds: new Set(ownDraft.map((d) => d.property_id)),
+      existingPropertyIds: new Set(
+        ownDraft
+          .filter((d) => side === null || d.side === side)
+          .map((d) => d.property_id),
+      ),
       inheritedPropertyIds: new Set(inherited.map((d) => d.property_id)),
+      side,
     });
     if (picked === null) return;
     // Merge the picked property into the section's own registry snapshot
@@ -1082,6 +1109,92 @@ function buildStagedPropertySection(opts: {
     ownDraft = [...ownDraft, picked.draft];
     draftTouched = true;
     render();
+  }
+
+  /**
+   * Диалог выбора стороны привязки для «Добавить свойство…» / «Создать
+   * свойство…» (задача 935ec90e — двусторонняя вкладка «Свойства»).
+   * Скалярные свойства не имеют стороны — для них поток не меняется.
+   *
+   * Поведение:
+   *   * `kind === 'attach'` — после выбора стороны открывает пикер реестра
+   *     ({@link openAttachPropertyDialog}) с указанной стороной.
+   *   * `kind === 'create'` — после выбора стороны открывает единый диалог
+   *     свойства/связи ({@link openPropertyManagerEditor}) с предзаполненной
+   *     таблицей текущей стороны.
+   */
+  async function askSideThen(kind: 'attach' | 'create'): Promise<void> {
+    const side = await pickBindingSide();
+    if (side === 'cancel') return;
+    if (kind === 'attach') {
+      await openAttachPropertyDialog(side);
+    } else {
+      if (typeId === null) {
+        // Новый тип ещё не имеет id — единый диалог всё равно примет
+        // initialThoughtTypeId, но он будет бесполезен до apply. Делегируем
+        // тот же поток, что и для attach — пикер реестра; пользователь
+        // сможет выбрать существующее свойство или создать новое через
+        // «Добавить…» внутри пикера.
+        await openAttachPropertyDialog(side);
+        return;
+      }
+      openPropertyManagerEditor(
+        null,
+        () => void reload(),
+        undefined,
+        { initialThoughtTypeId: typeId, initialSide: side },
+      );
+    }
+  }
+
+  /**
+   * Маленький диалог «с какой стороны подключить свойство-связь»:
+   * «Источник» / «Назначение» / «Отмена». Возвращает выбранную сторону
+   * или `'cancel'`. Для скалярных свойств (`value_type !== 'link'`) шаг
+   * не имеет смысла, но единая точка входа сейчас этого не различает —
+   * диалог короткий, а при создании скаляра пользователь всё равно
+   * проходит мимо лишней кнопки (выбор запоминается как `null`).
+   */
+  function pickBindingSide(): Promise<'source' | 'target' | 'cancel'> {
+    return new Promise((resolve) => {
+      const errorLine = span('', 'error-text');
+      const hint = el(
+        'p',
+        'muted',
+        'Для свойства-связи выберите сторону привязки к этому типу: ' +
+          '«Источник» — имя `name_forward`, «Назначение» — имя `name_reverse`.',
+      );
+      hint.style.margin = '0 0 8px';
+      const body = div('form-stack');
+      body.append(hint, errorLine);
+      const choose = (side: 'source' | 'target' | null): void => {
+        close();
+        if (side === null) resolve('cancel');
+        else resolve(side);
+      };
+      const close = showDialog({
+        title: 'Сторона привязки',
+        body,
+        width: 460,
+        buttons: [
+          {
+            label: 'Отмена',
+            onClick: () => choose(null),
+          },
+          {
+            label: 'Источник',
+            keepOpen: true,
+            onClick: () => choose('source'),
+          },
+          {
+            label: 'Назначение',
+            primary: true,
+            keepOpen: true,
+            onClick: () => choose('target'),
+          },
+        ],
+      });
+    });
   }
 
   /** The list of types that the «already bound to a descendant» warning
@@ -1231,13 +1344,19 @@ function buildStagedPropertySection(opts: {
       for (const def of inherited) {
         const row = el('tr');
         const nameCell = el('td', undefined, def.key);
-        if (def.description !== null) {
-          setTooltip(nameCell, def.description);
+        const hint = def.mirrored === true
+          ? `Зеркальное свойство-связь: порождено свойством «${def.key}» другого типа через ограничение типов цели. Тип связи и направление не редактируются здесь.`
+          : def.description;
+        if (hint !== null) {
+          setTooltip(nameCell, hint);
           nameCell.append(span(' ⓘ', 'muted'));
         }
         row.append(nameCell);
         row.append(el('td', 'muted', VALUE_TYPE_LABELS[def.value_type]));
-        row.append(el('td', 'muted', def.defined_on_name));
+        const sourceLabel = def.mirrored === true
+          ? `зеркало · ${def.defined_on_name}`
+          : def.defined_on_name;
+        row.append(el('td', 'muted', sourceLabel));
         row.append(
           el(
             'td',
@@ -1250,13 +1369,17 @@ function buildStagedPropertySection(opts: {
         const actions = el('td');
         actions.style.whiteSpace = 'nowrap';
         // Override buttons exist only for an already-created type: the
-        // override row needs a server id to attach to.
-        if (typeId !== null && def.value_type !== 'thought_ref') {
+        // override row needs a server id to attach to. A mirrored link
+        // property (dde92461) has no physical binding to override at all —
+        // its nature lives in the source property's config. Own (non-mirror)
+        // link properties carry a target-set default (bb67e546).
+        const overridable = typeId !== null && def.mirrored !== true;
+        if (overridable) {
           actions.append(
             button('по умолчанию…', () => showOverrideDialog(def), 'btn small', 'Переопределить значение по умолчанию'),
           );
         }
-        if (typeId !== null) {
+        if (typeId !== null && def.mirrored !== true) {
           actions.append(
             button('описание…', () => showDescriptionOverrideDialog(def), 'btn small', 'Переопределить описание свойства'),
           );
@@ -1287,7 +1410,9 @@ function buildStagedPropertySection(opts: {
     headRow.append(
       el('th', undefined, 'Имя'),
       el('th', undefined, 'Тип'),
+      el('th', undefined, 'Сторона'),
       el('th', undefined, 'Обязательное'),
+      el('th', undefined, 'По умолчанию'),
       el('th'),
     );
     head.append(headRow);
@@ -1295,13 +1420,19 @@ function buildStagedPropertySection(opts: {
     const tbody = el('tbody');
     for (const row of ownDraft) {
       const tr = el('tr');
-      const nameCell = el('td', undefined, row.key);
+      // Имя: для свойств-связей выводится имя соответствующей стороны
+      // (`name_forward` для источника, `name_reverse` для назначения);
+      // унаследованные привязки и бывшие зеркальные — также под обратным
+      // именем (задача 935ec90e, требование 15b88319).
+      const displayName = displayNameForSide(row);
+      const nameCell = el('td', undefined, displayName);
       if (row.description !== null) {
         setTooltip(nameCell, row.description);
         nameCell.append(span(' ⓘ', 'muted'));
       }
       tr.append(nameCell);
       tr.append(el('td', 'muted', VALUE_TYPE_LABELS[row.value_type]));
+      tr.append(el('td', 'muted', sideLabel(row.side)));
       const requiredCell = el('td');
       const requiredCheck = el('input') as HTMLInputElement;
       requiredCheck.type = 'checkbox';
@@ -1311,18 +1442,25 @@ function buildStagedPropertySection(opts: {
       });
       requiredCell.append(requiredCheck);
       tr.append(requiredCell);
+      tr.append(el('td', 'muted', formatDefault(row.config?.default_value ?? null)));
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
+      // Порядок (▲/▼) — в пределах стороны источника, как сейчас
+      // (требование 15b88319: «порядок — в пределах стороны источника»).
+      if (row.side !== 'target') {
+        actions.append(
+          button('▲', () => move(row.id, -1), 'btn small', 'Выше'),
+          button('▼', () => move(row.id, 1), 'btn small', 'Ниже'),
+        );
+      }
       actions.append(
-        button('▲', () => move(row.id, -1), 'btn small', 'Выше'),
-        button('▼', () => move(row.id, 1), 'btn small', 'Ниже'),
         button(
           '✎',
           () => editNature(row),
           'btn small',
           'Править природу свойства (имя, тип значения, описание) — действует во всех типах сразу',
         ),
-        button('✕', () => void unbind(row), 'btn small', 'Отключить свойство от типа'),
+        button('✕', () => void unbind(row), 'btn small', 'Снять привязку свойства — значения не удаляются'),
       );
       tr.append(actions);
       tbody.append(tr);
@@ -1332,6 +1470,27 @@ function buildStagedPropertySection(opts: {
     if (ownDraft.length === 0 && inherited.length === 0) {
       tableWrap.append(el('p', 'muted', 'У типа нет свойств.'));
     }
+  }
+
+  /** Имя свойства в строке таблицы: для свойств-связей — имя стороны
+   *  (`name_forward` для `source`, `name_reverse` для `target`); для
+   *  скаляров и структурных — `key`. Использует кеш реестра и каталог
+   *  типов связей. */
+  function displayNameForSide(row: DraftProperty): string {
+    if (row.value_type !== 'link' || row.side === null) return row.key;
+    const linkTypeId = row.config?.link_type_id;
+    if (typeof linkTypeId !== 'string' || linkTypeId === '') return row.key;
+    const lt = store.state.linkTypes.find((t) => t.id === linkTypeId);
+    if (lt === undefined) return row.key;
+    return row.side === 'source' ? lt.name_forward : lt.name_reverse;
+  }
+
+  /** Подпись стороны для колонки «Сторона»: «источник» / «назначение» /
+   *  «—» (для скаляров и структурных). */
+  function sideLabel(side: DraftProperty['side']): string {
+    if (side === 'source') return 'источник';
+    if (side === 'target') return 'назначение';
+    return '—';
   }
 
   /** Drops the type's default-value override (back to the ancestor default). */
@@ -1372,8 +1531,12 @@ function buildStagedPropertySection(opts: {
       registryCache = new Map(registryRows.map((row) => [row.id, row]));
       if (typeId !== null) {
         // An existing type: own rows seed the draft (once), inherited shown.
-        originalOwn = defs.filter((d) => !d.inherited);
-        inherited = defs.filter((d) => d.inherited);
+        // Mirrored link properties (dde92461) are synthesized by the server —
+        // they have no `type_properties` binding, so they must never seed the
+        // own draft (the diff planner would try to attach them); they render
+        // in the inherited table with a «зеркало» source label instead.
+        originalOwn = defs.filter((d) => !d.inherited && d.mirrored !== true);
+        inherited = defs.filter((d) => d.inherited || d.mirrored === true);
         if (ownDraft.length === 0 && deletedIds.length === 0 && !draftTouched) {
           ownDraft = draftPropertiesFrom(originalOwn);
         }
@@ -1530,8 +1693,11 @@ async function openAttachDialog(opts: {
   /** Property ids inherited from the type's ancestors (or the picked parent's
    *  whole set for a new type) — shown as «унаследовано», not pickable. */
   inheritedPropertyIds: ReadonlySet<string>;
+  /** Side of the binding (`source`/`target`) for link-properties; `null`
+   *  for scalar properties or when the dialog is opened generically. */
+  side: 'source' | 'target' | null;
 }): Promise<AttachDialogResult | null> {
-  const { networkId, ownerType, types, typeId, editedTypeName, existingPropertyIds, inheritedPropertyIds } = opts;
+  const { networkId, ownerType, types, typeId, editedTypeName, existingPropertyIds, inheritedPropertyIds, side } = opts;
   let registryRows: RegistryRow[];
   try {
     registryRows = await etn.propertyRegistry.list(networkId);
@@ -1680,7 +1846,7 @@ async function openAttachDialog(opts: {
         if (!ok) return;
       }
       close();
-      resolve({ draft: attachDraftFromExisting(selected), registry: selected });
+      resolve({ draft: attachDraftFromExisting(selected, side), registry: selected });
     }
 
     const body = div('form-stack');
@@ -1730,12 +1896,14 @@ async function openAttachDialog(opts: {
 }
 
 /** Builds the draft row for «attach existing» — `property_id` set, nature
- *  snapshot copied from the registry row. */
-function attachDraftFromExisting(row: RegistryRow): DraftProperty {
+ *  snapshot copied from the registry row. `side` — выбранная сторона
+ *  (`source`/`target`) для свойств-связей; `null` для скаляров. */
+function attachDraftFromExisting(row: RegistryRow, side: 'source' | 'target' | null): DraftProperty {
   return {
     id: nextDraftPropertyId(),
     isNew: true,
     property_id: row.id,
+    side,
     required: false,
     key: row.name,
     value_type: row.value_type,
@@ -1806,19 +1974,29 @@ async function warnDescendantBindings(
 function formatDefault(value: unknown): string {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'boolean') return value ? 'да' : 'нет';
+  if (Array.isArray(value)) {
+    // Дефолт свойства-связи — набор целей (bb67e546): счётчик, подписи в
+    // диалоге.
+    const n = value.length;
+    const form = n % 10 === 1 && n % 100 !== 11 ? 'цель' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'цели' : 'целей';
+    return `${n} ${form}`;
+  }
   return String(value);
 }
 
 /**
  * Builds an input for a "default value" field matching a value type, reading
- * its current value into `read()`. Thought-ref defaults are not supported — a
- * default target makes no sense across thoughts. Shared with the inherited
+ * its current value into `read()`. Link defaults are the unified target-set
+ * chip field (bb67e546, инструкция a47947c8) — `linkContext` supplies the
+ * network + definition it filters by. Thought-ref defaults are not supported —
+ * a default target makes no sense across thoughts. Shared with the inherited
  * default-override dialog (L21).
  */
 function defaultInputFor(
   valueType: PropertyValueType,
   current: unknown,
   read: (value: unknown) => void,
+  linkContext?: { networkId: string; def: EffectiveTypeProperty },
 ): HTMLElement {
   switch (valueType) {
     case 'text':
@@ -1853,8 +2031,33 @@ function defaultInputFor(
       input.addEventListener('change', () => read(input.checked));
       return input;
     }
+    case 'link': {
+      // Дефолт свойства-связи — набор целей (bb67e546): унифицированное
+      // чип-поле из редактора свойств (инструкция a47947c8) — живой поиск,
+      // мини-облачка, пикер «выбрать». Каждый чип-набор сразу читается в
+      // `value`, «Применить» отправляет его на сервер.
+      if (linkContext === undefined) return span('не задаётся', 'muted');
+      const ids = Array.isArray(current) ? (current as string[]) : [];
+      return buildLinkValueEditor({
+        networkId: linkContext.networkId,
+        definition: linkContext.def,
+        values: ids.map((target_id) => ({
+          link_id: '',
+          target_id,
+          target_title: null,
+          target_type_id: null,
+          comment: null,
+        })),
+        save: async (next) => {
+          read(next);
+          return true;
+        },
+      });
+    }
     case 'thought_ref':
-      return span('не задаётся', 'muted');
+      // Legacy (миграция 040): создание свойств этого типа отвергается
+      // рантайм-guard'ом; редактор default-значения недостижим.
+      return span('упразднено', 'muted');
   }
 }
 
@@ -1877,7 +2080,7 @@ function openDefaultOverrideDialog(opts: {
     defaultHost.replaceChildren(
       defaultInputFor(def.value_type, value, (v) => {
         value = v;
-      }),
+      }, { networkId, def }),
     );
   };
   renderDefault();
@@ -1900,7 +2103,7 @@ function openDefaultOverrideDialog(opts: {
         ownerType,
         typeId,
         def.id,
-        (value ?? null) as string | number | boolean | null,
+        (value ?? null) as string | number | boolean | string[] | null,
       );
       onDone();
       close();
@@ -2027,430 +2230,6 @@ function openDescriptionOverrideDialog(opts: {
         : []),
       { label: 'Применить', primary: true, keepOpen: true, onClick: (close) => void apply(close) },
     ],
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Link types: tree list + editor
-// ---------------------------------------------------------------------------
-
-/** Opens the link-types tree dialog (L6/L21). */
-export function showLinkTypesDialog(): void {
-  const networkId = requireNetworkId();
-  const errorLine = span('', 'error-text');
-  const tableWrap = div('admin-table-wrap');
-  tableWrap.style.maxHeight = '340px';
-  const body = div('form-stack');
-
-  // Toolbar (task «Улучшить диалог…»): «Добавить» and the name-search box
-  // (no collapse buttons here — same search behaviour as the thought types:
-  // matches + ancestor chain stay visible, branches auto-expand).
-  const toolbar = div('form-row type-list-toolbar');
-  const searchInput = el('input', 'text-input') as HTMLInputElement;
-  searchInput.type = 'text';
-  searchInput.placeholder = 'Поиск по названию…';
-  toolbar.append(
-    button('Добавить', () => showLinkTypeEditor(null, onChanged), 'btn small', 'Создать тип'),
-    searchInput,
-  );
-  body.append(toolbar, tableWrap, errorLine);
-
-  let expanded = new Set<string>();
-  let searchQuery = '';
-  // Last loaded catalogue — tree toggles/search re-render from this cache
-  // (see the thought-types dialog for the reasoning: no flicker, no scroll
-  // jump).
-  let cachedTypes: LinkType[] | null = null;
-  let cachedCounts: Record<string, number> | null = null;
-
-  const onChanged = (): void => void reload();
-
-  async function reload(useCache = false): Promise<void> {
-    const scrollTop = tableWrap.scrollTop;
-    let types: LinkType[];
-    let counts: Record<string, number>;
-    if (useCache && cachedTypes !== null && cachedCounts !== null) {
-      types = cachedTypes;
-      counts = cachedCounts;
-    } else {
-      tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
-      try {
-        [types, counts] = await Promise.all([
-          etn.types.listLinkTypes(networkId),
-          etn.types.getLinkTypeCounts(networkId),
-        ]);
-      } catch (err) {
-        tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
-        return;
-      }
-      cachedTypes = types;
-      cachedCounts = counts;
-    }
-    if (expanded.size === 0) {
-      expanded = new Set(types.filter((t) => t.is_root).map((t) => t.id));
-    }
-    const aggregated = aggregateTypeCounts(types, counts);
-    const searching = searchQuery.trim() !== '';
-    const keepIds = typeSearchVisibleIds(types, searchQuery);
-    // Searching shows every matched branch fully expanded, as in the
-    // thought-types list; otherwise the manual expand/collapse state applies.
-    const rows = (
-      searching ? flattenTypeTree(buildTypeTree(types), new Set(types.map((t) => t.id))) : visibleRows(types, expanded)
-    ).filter((row) => keepIds.has(row.type.id));
-    const table = el('table', 'table-list');
-    const head = el('thead');
-    const headRow = el('tr');
-    headRow.append(
-      el('th', undefined, 'Имя (от источника к назначению / обратно)'),
-      el('th', undefined, 'Комментарий'),
-      el('th', undefined, 'Количество'),
-      el('th'),
-    );
-    head.append(headRow);
-    table.append(head);
-    const tbody = el('tbody');
-    if (rows.length === 0) {
-      const emptyRow = el('tr');
-      const emptyCell = el('td', 'muted', searching ? 'Ничего не найдено.' : 'Нет типов.');
-      emptyCell.colSpan = 4;
-      emptyRow.append(emptyCell);
-      tbody.append(emptyRow);
-    }
-    for (const row of rows) {
-      const type = row.type;
-      const tr = el('tr');
-      if (type.is_root) tr.classList.add('type-tree-root');
-      const nameCell = el('td');
-      nameCell.style.whiteSpace = 'nowrap';
-      const nameWrap = span('', 'type-tree-name');
-      nameWrap.style.paddingLeft = `${Math.max(0, row.depth - 1) * 18}px`;
-      nameWrap.append(treeToggle(row, expanded, () => void toggle(type.id), searching));
-      // Line swatch: effective colour/dash/width of the type chain (L21).
-      const swatch = span('', 'link-type-swatch');
-      const resolved = resolveLinkTypeVisual(types, type.id);
-      swatch.style.borderTop = `${Math.max(1, Math.min(6, resolved.width))}px ${resolved.style} ${resolved.color ?? '#9aa3b2'}`;
-      nameWrap.append(swatch, span(` ${type.name_forward} / ${type.name_reverse}`));
-      nameCell.append(nameWrap);
-      const descCell = el('td', 'muted', (type.description ?? '').slice(0, 120));
-      descCell.style.maxWidth = '260px';
-      descCell.style.overflow = 'hidden';
-      descCell.style.textOverflow = 'ellipsis';
-      descCell.style.whiteSpace = 'nowrap';
-      const countCell = el('td', 'muted', String(aggregated[type.id] ?? 0));
-      countCell.style.textAlign = 'right';
-      const actions = el('td');
-      actions.style.whiteSpace = 'nowrap';
-      if (!type.is_root) {
-        actions.append(button('✕', () => void removeRow(type), 'btn small', 'Удалить тип'));
-      }
-      tr.append(nameCell, descCell, countCell, actions);
-      // Clicks on the ▸/▾ toggle or the ✕ button must not open the editor.
-      tr.addEventListener('click', (event) => {
-        if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return;
-        showLinkTypeEditor(type, onChanged);
-      });
-      tbody.append(tr);
-    }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
-    tableWrap.scrollTop = scrollTop;
-  }
-
-  /** Expands/collapses a node and re-renders from the cache (no round-trip). */
-  function toggle(typeId: string): void {
-    if (expanded.has(typeId)) expanded.delete(typeId);
-    else expanded.add(typeId);
-    void reload(true);
-  }
-
-  searchInput.addEventListener('input', () => {
-    searchQuery = searchInput.value;
-    void reload(true);
-  });
-
-  /** Deletes a link type (forced: links stay, become untyped). */
-  async function removeRow(type: LinkType): Promise<void> {
-    const ok = await confirmDialog(
-      'Удалить тип связи',
-      `Удалить тип «${type.name_forward} / ${type.name_reverse}»? Связи этого типа останутся ` +
-        'и станут без типа; значения свойств этого типа будут удалены.',
-      true,
-    );
-    if (!ok) return;
-    try {
-      await etn.types.removeLinkType(networkId, type.id, type.version, true);
-      await refreshLinkTypes();
-      scheduleRefresh();
-      onChanged();
-    } catch (err) {
-      errorDialog('Удалить тип связи', err);
-    }
-  }
-
-  showDialog({
-    title: 'Типы связей',
-    body,
-    width: 640,
-    buttons: [{ label: 'Закрыть', primary: true }],
-  });
-  void reload();
-}
-
-/**
- * Opens the link-type editor; `type === null` edits a NEW type (L6/L21).
- *
- * Same staged form as the thought-type editor (task «Улучшить диалог
- * редактирования типов мыслей и связей»): line style, parent, description and
- * the own property definitions are editable right away, nothing touches the
- * server until «Применить и закрыть», and «Отмена» discards the whole draft.
- * Reparenting validation is unchanged (client-side picker filters + the
- * server re-checks on apply).
- *
- * `extras.initialName` prefills the forward name of a new type (the
- * type-combobox «Создать новый» row); the reverse name stays empty for the
- * user to fill. The returned promise resolves when the dialog closes: with
- * the id of the type created in this session, or `null` otherwise.
- */
-export function showLinkTypeEditor(
-  type: LinkType | null,
-  onChanged: () => void,
-  extras?: TypeEditorExtras,
-): Promise<string | null> {
-  const networkId = requireNetworkId();
-  // The type as last seen by the SERVER (see showThoughtTypeEditor).
-  let current: LinkType | null = type;
-  let createdId: string | null = null;
-  // Auto-acquire the type lock (task 4f141756). Same rationale as
-  // `showThoughtTypeEditor` — for new types there is no id yet, so we
-  // skip acquire and let create race against anyone editing the same name.
-  let editLock: LockHandle | null = null;
-  if (type !== null) {
-    void acquireOrShowBlocked('link_type', type.id).then((outcome) => {
-      editLock = lockHandleFromOutcome('link_type', type.id, outcome);
-    });
-  }
-  const errorLine = span('', 'error-text');
-  const body = div('form-stack');
-
-  // Duplicate-pair guard: a link type is identified by its forward/reverse
-  // name pair, unique ignoring case (08-ui-spec.md §8.4). The catalogue is
-  // loaded once on open; the server re-checks on apply.
-  const DUP_PAIR_MSG = 'Тип связи с такими именами уже существует.';
-  let allTypes: LinkType[] = [];
-  let applyBtn: HTMLButtonElement | null = null;
-
-  // ---- The staged draft ----
-  const draft = {
-    name_forward: type?.name_forward ?? extras?.initialName ?? '',
-    name_reverse: type?.name_reverse ?? '',
-    parent_id: type !== null && type.parent_id !== null ? type.parent_id : null,
-    color: type?.color ?? null,
-    style: type?.style ?? null,
-    width: type?.width ?? null,
-    description: type?.description ?? '',
-  };
-
-  // Top row: forward · reverse names · settings (⚙) — active from the start.
-  const namesRow = div('form-row type-editor-row');
-  const forwardInput = el('input', 'text-input');
-  forwardInput.type = 'text';
-  forwardInput.value = draft.name_forward;
-  forwardInput.maxLength = 200;
-  forwardInput.placeholder = 'От источника к назначению (обязательно)';
-  const reverseInput = el('input', 'text-input');
-  reverseInput.type = 'text';
-  reverseInput.value = draft.name_reverse;
-  reverseInput.maxLength = 200;
-  reverseInput.placeholder = 'От назначения к источнику (обязательно)';
-  const settingsBtn = button('', openStyle, 'icon-btn', 'Настройки типа');
-  settingsBtn.append(svgIcon('settings', 14));
-  namesRow.append(forwardInput, reverseInput, settingsBtn);
-  body.append(namesRow);
-
-  // Parent picker (L21), same rules as the thought-type editor.
-  const parentField = div('field');
-  if (type?.is_root === true) {
-    const rootNote = el('p', 'muted', 'Корневой тип — родителя не имеет.');
-    rootNote.style.margin = '0';
-    parentField.append(rootNote);
-  } else {
-    const picker = buildParentPicker({
-      kinds: 'link',
-      currentId: () => current?.id ?? null,
-      value: draft.parent_id,
-      onChange: (parentId) => {
-        draft.parent_id = parentId;
-        if (current === null) props.refreshPreview();
-      },
-    });
-    parentField.append(picker.root);
-  }
-  body.append(parentField);
-
-  // Comment (type description / usage rules) — placeholder only, no label.
-  const descArea = el('textarea', 'textarea-input');
-  descArea.value = draft.description;
-  descArea.rows = 3;
-  descArea.placeholder = 'Комментарий: описание типа, правила применения…';
-  body.append(descArea);
-
-  body.append(errorLine);
-
-  // Property sections (L21: link types gained the property table), staged.
-  const props = buildStagedPropertySection({
-    networkId,
-    ownerType: 'link_type',
-    typeId: type?.id ?? null,
-    previewParentId: () => draft.parent_id ?? findRootType(store.state.linkTypes)?.id ?? null,
-    onOverrideApplied: onChanged,
-  });
-  body.append(props.root);
-
-  // Блок «Метаданные» — автор, даты, id сущности (задача 04cd9794). Только
-  // при редактировании существующего типа; для нового id ещё не присвоен.
-  if (type !== null) {
-    body.append(buildMetadataRowsFromLinkType(type));
-  }
-
-  /** Existing type with the same normalized name pair (self excluded). */
-  function pairClash(forward: string, reverse: string): LinkType | null {
-    const fwdKey = typeNameKey(forward);
-    const revKey = typeNameKey(reverse);
-    return (
-      allTypes.find(
-        (t) =>
-          t.id !== (current?.id ?? null) &&
-          typeNameKey(t.name_forward) === fwdKey &&
-          typeNameKey(t.name_reverse) === revKey,
-      ) ?? null
-    );
-  }
-
-  /** Live duplicate check on the name fields: warn + disable the apply button. */
-  function revalidateNames(): void {
-    if (pairClash(forwardInput.value, reverseInput.value) !== null) {
-      errorLine.textContent = DUP_PAIR_MSG;
-      if (applyBtn !== null) applyBtn.disabled = true;
-    } else {
-      if (errorLine.textContent === DUP_PAIR_MSG) errorLine.textContent = '';
-      if (applyBtn !== null) applyBtn.disabled = false;
-    }
-  }
-
-  // Fresh catalogue for the live duplicate check (the server re-checks anyway).
-  void etn.types
-    .listLinkTypes(networkId)
-    .then((list) => {
-      allTypes = list;
-      revalidateNames();
-    })
-    .catch(() => {});
-  forwardInput.addEventListener('input', revalidateNames);
-  reverseInput.addEventListener('input', revalidateNames);
-
-  /** Applies the whole draft to the server, then closes the dialog. */
-  async function apply(close: () => void): Promise<void> {
-    const nameForward = forwardInput.value.trim();
-    const nameReverse = reverseInput.value.trim();
-    if (nameForward === '' || nameReverse === '') {
-      errorLine.textContent = 'Оба имени обязательны.';
-      return;
-    }
-    if (pairClash(nameForward, nameReverse) !== null) {
-      errorLine.textContent = DUP_PAIR_MSG;
-      return;
-    }
-    const description = descArea.value.trim();
-    try {
-      if (current === null) {
-        // New type: one create carries every staged field at once.
-        current = await etn.types.createLinkType(networkId, {
-          name_forward: nameForward,
-          name_reverse: nameReverse,
-          parent_id: draft.parent_id,
-          color: draft.color,
-          style: draft.style,
-          width: draft.width,
-          description: description === '' ? null : description,
-        });
-        createdId = current.id;
-      } else {
-        // Existing type: patch only the changed fields (If-Match version).
-        const input: LinkTypeUpdateInput = {};
-        if (nameForward !== current.name_forward) input.name_forward = nameForward;
-        if (nameReverse !== current.name_reverse) input.name_reverse = nameReverse;
-        if (draft.parent_id !== (current.parent_id ?? null)) input.parent_id = draft.parent_id;
-        if (draft.color !== current.color) input.color = draft.color;
-        if (draft.style !== current.style) input.style = draft.style;
-        if (draft.width !== current.width) input.width = draft.width;
-        if ((description === '' ? null : description) !== current.description) {
-          input.description = description === '' ? null : description;
-        }
-        if (Object.keys(input).length > 0) {
-          current = await etn.types.updateLinkType(networkId, current.id, input, current.version);
-        }
-      }
-      if (!(await props.applyChanges(current.id))) return; // error shown, dialog stays
-      await refreshLinkTypes();
-      scheduleRefresh();
-      onChanged();
-      close();
-    } catch (err) {
-      errorLine.textContent = errText(err);
-    }
-  }
-
-  function openStyle(): void {
-    // Show the effective line style (resolved along the chain, L21): the
-    // draft's own value, else the picked parent's chain.
-    const resolved = resolveLinkTypeVisual(
-      store.state.linkTypes,
-      current?.id ?? draft.parent_id ?? null,
-    );
-    showLinkStyleDialog({
-      resolved: {
-        color: draft.color,
-        style: draft.style ?? resolved.style,
-        width: draft.width ?? resolved.width,
-      },
-      mode: 'type',
-      // Patches the local draft only; the server sees it on «Применить и
-      // закрыть». A reset returns null = inherit from the parent chain.
-      onApply: (patch) => {
-        if (patch.color !== undefined) draft.color = patch.color;
-        if (patch.style !== undefined) draft.style = patch.style;
-        if (patch.width !== undefined) draft.width = patch.width;
-        return Promise.resolve();
-      },
-    });
-  }
-
-  // The promise resolves on dialog close (`onClose` fires from the
-  // backdrop's remove event — Esc, × and both footer buttons all land there).
-  return new Promise<string | null>((resolve) => {
-    showDialog({
-      title: type === null ? 'Новый тип связи' : 'Тип связи',
-      body,
-      width: 560,
-      buttons: [
-        { label: 'Отмена' },
-        {
-          label: 'Применить и закрыть',
-          primary: true,
-          keepOpen: true,
-          onClick: (close) => void apply(close),
-          ref: (btn) => {
-            applyBtn = btn;
-          },
-        },
-      ],
-      onMount: () => forwardInput.focus(),
-      onClose: () => {
-        void releaseHeld(editLock);
-        editLock = null;
-        resolve(createdId);
-      },
-    });
   });
 }
 

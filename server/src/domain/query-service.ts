@@ -19,14 +19,11 @@
  *     (type, key) pair — one id addresses the property on every thought
  *     type that has attached it;
  *   * the storage column (`value_text` / `value_date` / `value_number` /
- *     `value_bool` / `value_thought_ref`) is selected from the property's
+ *     `value_bool`) is selected from the property's
  *     `value_type`, never from the runtime type of the supplied value —
  *     `eq "согласовано"` on a `text` property hits `value_text`, the same
  *     payload on a `date` property would hit `value_date` and likely match
  *     nothing;
- *   * `eq` on `thought_ref` also matches ids inside the JSON arrays of
- *     `multiple` thought_ref values (02-data-model.md §3.5), same as the
- *     structures filter.
  * An unknown `property_id` simply matches nothing for that condition — the
  * registry row may have been deleted after the filter was saved.
  */
@@ -36,6 +33,8 @@ import {
   TRAVERSAL_DEFAULTS,
   buildLikePattern,
   parseFilterKeywords,
+  type LinkPropertyDirection,
+  type PropertyConfig,
   type PropertyQueryCondition,
   type PropertyQueryOperator,
   type PropertyValueType,
@@ -47,9 +46,14 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { resolvePropertyIdByName } from './property-service.js';
+import {
+  isStructuralLinkProperty,
+  linkPropertyDirection,
+  linkPropertyLinkTypeId,
+  resolvePropertyIdByName,
+} from './property-service.js';
 import { resolveThoughtTypeIdByName } from './thought-type-service.js';
-import { expandTypeIdsToSubtree } from './type-hierarchy.js';
+import { expandTypeIdsToSubtree, linkTypeFilterClause } from './type-hierarchy.js';
 
 /**
  * Title/synonym match clause of one keyword — the same shape as
@@ -91,15 +95,23 @@ function clampPaging(limit: number | undefined, offset: number | undefined): {
  * Walk the directed subtree of `seedId` (source → target edges, active only)
  * breadth-first, keeping each node's depth. `null` when no seed is given
  * (meaning «no subtree restriction»).
+ *
+ * Задача c965ad03: `linkFilter` ограничивает рёбра, по которым спуск
+ * происходит (типы с потомками + опционально структурные); без фильтра —
+ * все рёбра, как раньше.
  */
 function walkSubtree(ndb: NetworkDb, seedId: string | undefined, opts: {
   maxDepth: number;
   maxNodes: number;
+  linkFilter?: ThoughtQueryRequest['link_filter'];
 }): WalkResult {
   if (seedId === undefined) {
     return { depths: null, truncated: false, reason: null };
   }
   const { maxDepth, maxNodes } = opts;
+  const typeClause = linkTypeFilterClause(ndb, opts.linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
   const visited = new Set<string>();
   const depths = new Map<string, number>();
   const queue: Array<{ id: string; depth: number }> = [{ id: seedId, depth: 0 }];
@@ -107,7 +119,7 @@ function walkSubtree(ndb: NetworkDb, seedId: string | undefined, opts: {
   let reason: WalkResult['reason'] = null;
 
   const childrenOf = ndb.prepare(
-    'SELECT target_id AS nid FROM links_v WHERE source_id = ? AND active = 1',
+    `SELECT l.target_id AS nid FROM links_v l WHERE l.source_id = ? AND l.active = 1${typeSql}`,
   );
 
   while (queue.length > 0) {
@@ -121,7 +133,7 @@ function walkSubtree(ndb: NetworkDb, seedId: string | undefined, opts: {
     visited.add(id);
     depths.set(id, depth);
     if (depth >= maxDepth) continue;
-    const rows = childrenOf.all(id) as Array<{ nid: string }>;
+    const rows = childrenOf.all(id, ...typeParams) as Array<{ nid: string }>;
     for (const { nid } of rows) {
       if (!visited.has(nid)) {
         queue.push({ id: nid, depth: depth + 1 });
@@ -136,10 +148,6 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
-/** LIKE pattern matching a stored id inside a JSON array of ids. */
-function refLikePattern(id: string): string {
-  return `%"${id.replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`;
-}
 
 /** A WHERE clause fragment plus its bind parameters, in order. */
 interface Clause {
@@ -228,7 +236,10 @@ function dateRangeClause(
 }
 
 /** SQL comparison for each supported operator (no string interpolation of user input). */
-const SQL_OPS: Record<Exclude<PropertyQueryOperator, 'contains'>, string> = {
+const SQL_OPS: Record<
+  Exclude<PropertyQueryOperator, 'contains' | 'any_of' | 'all_of' | 'none_of'>,
+  string
+> = {
   eq: '=',
   ne: '<>',
   gt: '>',
@@ -245,20 +256,40 @@ const VALUE_COLUMN: Record<PropertyValueType, string> = {
   date: 'value_date',
   number: 'value_number',
   bool: 'value_bool',
+  // Свойство-связь значений в property_values не хранит (ADR «проекция
+  // ребра»); значение недостижимо — условие уходит в linkPropertyClause.
+  link: 'value_text',
+  // Legacy thought_ref (миграция 040): в живой БД таких свойств быть не
+  // должно, но value-handling (тесты, унаследованные архивы) ходит по этому
+  // столбцу — одиночный id или JSON-массив id.
   thought_ref: 'value_thought_ref',
 };
 
-/** SQL operator per `value_type` × `PropertyQueryOperator` (the query subset of
- *  `structure-service.OPS_BY_VALUE_TYPE` — `in`/`not_in`/`is_empty`/`not_empty`
- *  belong only to the structures filter). `null` means the operator is not
- *  meaningful for the value type. */
+/**
+ * SQL operator per `value_type` × `PropertyQueryOperator` (the query subset of
+ * `structure-service.OPS_BY_VALUE_TYPE` — `in`/`not_in`/`is_empty`/`not_empty`
+ * belong only to the structures filter, not to `etn.thoughts.query`).
+ *
+ * Задача 20effcbd (0.8.1): `link` получает `eq`/`ne` (конкретная цель id
+ * строкой, либо наличие/отсутствие связи такого типа boolean-значением —
+ * {@link linkPropertyClause}) и три оператора для наборов. Те же три
+ * оператора доступны `url` — обычному множественному свойству
+ * (`config.multiple`, требование 92b9c55b): выразить «значение — одно из
+ * списка» или «значение — все из списка».
+ */
 const SUPPORTED_OPS: Record<PropertyValueType, ReadonlySet<PropertyQueryOperator>> = {
   text: new Set(['eq', 'ne', 'contains']),
-  url: new Set(['eq', 'ne', 'contains']),
+  url: new Set(['eq', 'ne', 'contains', 'any_of', 'all_of', 'none_of']),
   date: new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte']),
   number: new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte']),
   bool: new Set(['eq', 'ne']),
-  thought_ref: new Set(['eq', 'ne']),
+  link: new Set(['eq', 'ne', 'any_of', 'all_of', 'none_of']),
+  // Legacy thought_ref (миграция 040): свойств этого типа в живой БД не
+  // остаётся, но value-handling в тестах и при импорте архивов пользуется
+  // тем же набором операторов, что и `url`: eq/ne сравнивает с одиночным
+  // id (или ищет внутри JSON-массива), три оператора наборов работают по
+  // элементам массива (одиночный id тоже считается массивом из одного).
+  thought_ref: new Set(['eq', 'ne', 'any_of', 'all_of', 'none_of']),
 };
 
 /** Minimal registry row read in one batched lookup of all conditions. */
@@ -266,6 +297,197 @@ interface RegistryPropertyRow {
   id: string;
   name: string;
   value_type: string;
+  /** Raw JSON `config` (§3.4a) — parsed lazily, only for `value_type: 'link'`. */
+  config: string | null;
+}
+
+/** Parse a registry property's stored `config` JSON; malformed/absent → `null`. */
+function parsePropertyConfig(raw: string | null): PropertyConfig | null {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as PropertyConfig;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Non-empty array of non-empty strings required by `any_of`/`all_of`/`none_of`
+ * (задача 20effcbd) — mirrors the `in`/`not_in` validation of the structures
+ * filter (`structure-service.ts`).
+ */
+function coerceValueList(
+  value: PropertyQueryCondition['value'],
+  operator: PropertyQueryOperator,
+  requestId?: string,
+): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Для операции ${operator} нужен непустой массив значений.`,
+      { field: 'value', operator },
+      requestId,
+    );
+  }
+  if (value.some((v) => typeof v !== 'string' || v === '')) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Массив значений операции ${operator} должен состоять из непустых строк.`,
+      { field: 'value', operator },
+      requestId,
+    );
+  }
+  return [...new Set(value)];
+}
+
+/**
+ * Раскрыть значение множественного свойства (`property_values.<column>`) в
+ * набор элементов (задача 20effcbd). Множественное значение хранится JSON-
+ * массивом строк (`["a","b"]`, 02-data-model.md §3.5), одиночное — обычным
+ * скаляром — «форма хранения важнее флага `multiple`» (та же оговорка, что у
+ * `readValue` в `property-service.ts`). `json_each` требует валидный JSON-
+ * массив на входе, поэтому скаляр оборачивается в массив из одного элемента;
+ * `json_quote` корректно эскейпит кавычки/спецсимволы при оборачивании.
+ */
+function multipleValueElementsSql(column: string): string {
+  return `json_each(CASE WHEN pv.${column} LIKE '[%' THEN pv.${column} ELSE '[' || json_quote(pv.${column}) || ']' END)`;
+}
+
+/**
+ * Клауза `any_of`/`all_of`/`none_of` по множественному свойству `url`
+ * (`config.multiple`, задача 20effcbd). `any_of`/`none_of` — один `EXISTS`/`NOT EXISTS` с
+ * `IN (...)`; `all_of` — конъюнкция по одному `EXISTS` на каждое искомое
+ * значение (пересечение не выразить одним `IN`).
+ */
+function multipleValueSetClause(
+  propertyId: string,
+  column: string,
+  operator: 'any_of' | 'all_of' | 'none_of',
+  value: PropertyQueryCondition['value'],
+  requestId?: string,
+): Clause {
+  const values = coerceValueList(value, operator, requestId);
+  const elementsSql = multipleValueElementsSql(column);
+  const existsOne = (v: string): Clause => ({
+    sql: `EXISTS (
+      SELECT 1 FROM property_values_v pv, ${elementsSql} je
+      WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+        AND pv.${column} IS NOT NULL AND je.value = ?)`,
+    params: [propertyId, v],
+  });
+  if (operator === 'all_of') {
+    const parts: string[] = [];
+    const params: unknown[] = [];
+    for (const v of values) {
+      const one = existsOne(v);
+      parts.push(one.sql);
+      params.push(...one.params);
+    }
+    return { sql: parts.join(' AND '), params };
+  }
+  const placeholders = values.map(() => '?').join(',');
+  const any: Clause = {
+    sql: `EXISTS (
+      SELECT 1 FROM property_values_v pv, ${elementsSql} je
+      WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
+        AND pv.${column} IS NOT NULL AND je.value IN (${placeholders}))`,
+    params: [propertyId, ...values],
+  };
+  return operator === 'any_of' ? any : { sql: `NOT ${any.sql}`, params: any.params };
+}
+
+/**
+ * Клауза условия по свойству-связи (`value_type: 'link'`, задача 20effcbd,
+ * требование 9f42fc25) — транслируется в запрос по рёбрам (`links_v`), а не
+ * по `property_values`: значения свойства-связи там не хранятся (ADR
+ * «свойство-связь — проекция ребра»). Направление свойства (`out`/`in`) и
+ * тип связи/структурность читаются из `config` тем же кодом, что использует
+ * чтение карточки (`property-service.linkPropertyDirection` и соседи) —
+ * единая точка интерпретации.
+ *
+ * Операторы:
+ *   * `eq`/`ne` со строкой — «связь с конкретной целью» (id мысли);
+ *   * `eq`/`ne` с boolean — «связь такого типа есть/отсутствует» независимо
+ *     от цели (`eq true` / `ne false` — есть; `eq false` / `ne true` — нет);
+ *   * `any_of`/`all_of`/`none_of` — набор целей рёбер против перечисленных id.
+ *
+ * Работает в обе стороны: `direction: 'in'` считает рёбра, где владелец —
+ * цель (`l.target_id = t.id`), сравнение идёт по `l.source_id`.
+ */
+function linkPropertyClause(
+  def: RegistryPropertyRow,
+  cond: PropertyQueryCondition,
+  requestId?: string,
+): Clause {
+  const config = parsePropertyConfig(def.config);
+  const structural = isStructuralLinkProperty(config);
+  const linkTypeId = structural ? null : linkPropertyLinkTypeId(config);
+  if (!structural && linkTypeId === null) {
+    // Свойство-связь без корректного config (валидируется при правке
+    // онтологии — сюда не должно доходить) — условие не матчит ничего.
+    return { sql: '0', params: [] };
+  }
+  const direction: LinkPropertyDirection = linkPropertyDirection(config);
+  const ownerCol = direction === 'out' ? 'source_id' : 'target_id';
+  const targetCol = direction === 'out' ? 'target_id' : 'source_id';
+  const typeSql = linkTypeId === null ? 'l.type_id IS NULL' : 'l.type_id = ?';
+  const typeParams = linkTypeId === null ? [] : [linkTypeId];
+  const existsSql = (extraSql: string, extraParams: unknown[]): Clause => ({
+    sql: `EXISTS (
+      SELECT 1 FROM links_v l
+      WHERE l.${ownerCol} = t.id AND ${typeSql} AND l.active = 1 AND l.marked_for_deletion = 0${extraSql})`,
+    params: [...typeParams, ...extraParams],
+  });
+
+  switch (cond.operator) {
+    case 'eq':
+    case 'ne': {
+      const value = cond.value;
+      if (typeof value === 'boolean') {
+        const presence = existsSql('', []);
+        const wantPresent = cond.operator === 'eq' ? value : !value;
+        return wantPresent ? presence : { sql: `NOT ${presence.sql}`, params: presence.params };
+      }
+      if (typeof value !== 'string' || value === '') {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'Значение условия по свойству-связи для eq/ne должно быть id мысли (строка) или boolean.',
+          { field: 'value' },
+          requestId,
+        );
+      }
+      const specific = existsSql(` AND l.${targetCol} = ?`, [value]);
+      return cond.operator === 'eq'
+        ? specific
+        : { sql: `NOT ${specific.sql}`, params: specific.params };
+    }
+    case 'any_of':
+    case 'none_of': {
+      const ids = coerceValueList(cond.value, cond.operator, requestId);
+      const placeholders = ids.map(() => '?').join(',');
+      const any = existsSql(` AND l.${targetCol} IN (${placeholders})`, ids);
+      return cond.operator === 'any_of' ? any : { sql: `NOT ${any.sql}`, params: any.params };
+    }
+    case 'all_of': {
+      const ids = coerceValueList(cond.value, cond.operator, requestId);
+      const parts: string[] = [];
+      const params: unknown[] = [];
+      for (const id of ids) {
+        const one = existsSql(` AND l.${targetCol} = ?`, [id]);
+        parts.push(one.sql);
+        params.push(...one.params);
+      }
+      return { sql: parts.join(' AND '), params };
+    }
+    default:
+      // Недостижимо — SUPPORTED_OPS['link'] ограничивает набор операторов выше.
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `Операция ${cond.operator} недопустима для свойства-связи.`,
+        { field: 'operator' },
+        requestId,
+      );
+  }
 }
 
 /**
@@ -297,7 +519,7 @@ function propertyClauses(
   const placeholders = ids.map(() => '?').join(',');
   const rows = ndb
     .prepare(
-      `SELECT id, name, value_type FROM properties_v WHERE id IN (${placeholders})`,
+      `SELECT id, name, value_type, config FROM properties_v WHERE id IN (${placeholders})`,
     )
     .all(...ids) as RegistryPropertyRow[];
   const byId = new Map(rows.map((r) => [r.id, r] as const));
@@ -320,8 +542,23 @@ function propertyClauses(
         requestId,
       );
     }
+
+    // Свойство-связь (задача 20effcbd): условие переводится в запрос по
+    // рёбрам, а не по `property_values` — значения там не хранятся.
+    if (valueType === 'link') {
+      out.push(linkPropertyClause(def, cond, requestId));
+      continue;
+    }
+
     const column = VALUE_COLUMN[valueType];
-    const refMultiple = valueType === 'thought_ref';
+
+    // Операторы наборов (задача 20effcbd) — `url` с `config.multiple`:
+    // значение может быть одиночным скаляром или JSON-массивом (§3.5) —
+    // {@link multipleValueSetClause} раскрывает обе формы.
+    if (cond.operator === 'any_of' || cond.operator === 'all_of' || cond.operator === 'none_of') {
+      out.push(multipleValueSetClause(def.id, column, cond.operator, cond.value, requestId));
+      continue;
+    }
 
     if (cond.operator === 'contains') {
       // Only `text`/`url` allow `contains` per SUPPORTED_OPS — `value_text`
@@ -340,32 +577,23 @@ function propertyClauses(
     const cmp = SQL_OPS[cond.operator];
     const scalar = coerceScalar(valueType, cond.value, requestId);
 
-    if (refMultiple && cond.operator === 'eq') {
-      // thought_ref single id + ids inside the JSON arrays of multiple
-      // thought_ref values (§3.5).
+    // Legacy thought_ref (миграция 040): значение в `value_thought_ref` —
+    // одиночный id или JSON-массив. `eq`/`ne` должны ловить и то, и другое
+    // (одиночное равенство или вхождение в массив) — отдельная клауза через
+    // `json_each`, без неё `eq` на массиве вернёт «нет» даже при наличии id.
+    if (valueType === 'thought_ref') {
+      const cmpStr = cmp === '=' ? '=' : '<>';
+      const elementsSql = multipleValueElementsSql(column);
       out.push({
         sql: `EXISTS (
-          SELECT 1 FROM property_values_v pv
+          SELECT 1 FROM property_values_v pv, ${elementsSql} je
           WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-            AND (pv.${column} = ? OR pv.${column} LIKE ? ESCAPE '\\'))`,
-        params: [def.id, scalar, refLikePattern(String(scalar))],
+            AND pv.${column} IS NOT NULL AND je.value ${cmpStr} ?)`,
+        params: [def.id, scalar as string],
       });
       continue;
     }
-    if (refMultiple && cond.operator === 'ne') {
-      // `ne` only excludes the exact single id; ids inside JSON arrays are
-      // matched only by `eq`. A «не равно» semantic over multiple-ref values
-      // would require scanning JSON, which we deliberately do not do — the
-      // accepted behaviour mirrors the structures filter's `eq` arm.
-      out.push({
-        sql: `EXISTS (
-          SELECT 1 FROM property_values_v pv
-          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
-            AND pv.${column} ${cmp} ?)`,
-        params: [def.id, scalar],
-      });
-      continue;
-    }
+
     out.push({
       sql: `EXISTS (
         SELECT 1 FROM property_values_v pv
@@ -377,12 +605,26 @@ function propertyClauses(
   return out;
 }
 
-/** Coerce a wire value to the SQL scalar form its `value_*` column expects. */
+/**
+ * Coerce a wire value to the SQL scalar form its `value_*` column expects.
+ * Only reached for `eq`/`ne`/`gt`/`gte`/`lt`/`lte` on non-`link` properties —
+ * `any_of`/`all_of`/`none_of` (array `value`) and `link` (own clause builder)
+ * are handled before this call, so `value` is always a scalar here despite
+ * the wire type allowing an array too.
+ */
 function coerceScalar(
   valueType: PropertyValueType,
-  value: string | number | boolean,
+  value: PropertyQueryCondition['value'],
   requestId?: string,
 ): string | number {
+  if (Array.isArray(value)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Значение свойства ${valueType} не может быть массивом для этого оператора.`,
+      { field: 'value' },
+      requestId,
+    );
+  }
   switch (valueType) {
     case 'number':
       if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -417,6 +659,14 @@ function coerceScalar(
         );
       }
       return value;
+    case 'link':
+      // Недостижимо (SUPPORTED_OPS['link'] пуст), но для полноты.
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'Свойство-связь не фильтруется скалярным оператором.',
+        { field: 'value' },
+        requestId,
+      );
   }
 }
 
@@ -484,6 +734,7 @@ export function queryThoughts(
   const walk = walkSubtree(ndb, request.in_subtree_of, {
     maxDepth,
     maxNodes: bounds.maxNodes,
+    linkFilter: request.link_filter,
   });
 
   const active: ThoughtQueryActive = request.active ?? 'true';

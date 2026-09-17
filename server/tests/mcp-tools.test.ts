@@ -19,6 +19,7 @@ import { openNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
 import { createTypeProperty, setTypePropertyDescriptionOverride } from '../src/domain/property-service.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import { ICON_DATA_URL_PLACEHOLDER } from '../src/mcp/catalogs.js';
 import {
   buildMcpContext,
@@ -1930,92 +1931,6 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
     }
   });
 
-  it('etn.links.create resolves a link type by forward/reverse name; ambiguous name errors (O4)', async () => {
-    const ctx = await buildMcpContext();
-    try {
-      const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
-      const blocks = createLinkType(
-        ndb,
-        { name_forward: 'блокирует', name_reverse: 'заблокирован' },
-        ctx.adminId,
-      );
-      // A second type whose reverse label collides with the first type's forward label
-      // ("блокирует"); its own forward label ("связан с") does not collide with anything.
-      createLinkType(ndb, { name_forward: 'связан с', name_reverse: 'блокирует' }, ctx.adminId);
-      // NB: do not close — shared connection with the MCP server.
-
-      const handle = await connectMcpClient(ctx, ctx.adminKey);
-      try {
-        const a = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Мысль А (links.create)' },
-        });
-        const aId = toolJson<{ id: string }>(a).id;
-        const b = await handle.client.callTool({
-          name: 'etn.thoughts.create',
-          arguments: { network_id: ctx.networkId, title: 'Мысль Б (links.create)' },
-        });
-        const bId = toolJson<{ id: string }>(b).id;
-
-        // "блокирует" is `blocks.name_forward` AND the second type's
-        // `name_reverse` — genuinely ambiguous.
-        const ambiguous = await handle.client.callTool({
-          name: 'etn.links.create',
-          arguments: {
-            network_id: ctx.networkId,
-            source_id: aId,
-            target_id: bId,
-            type: 'блокирует',
-          },
-        });
-        assert.equal(ambiguous.isError, true);
-        assert.match(toolText(ambiguous), /VALIDATION_ERROR/);
-        assert.match(toolText(ambiguous), /candidates/);
-
-        // "заблокирован" only matches `blocks.name_reverse` — unambiguous.
-        const created = await handle.client.callTool({
-          name: 'etn.links.create',
-          arguments: {
-            network_id: ctx.networkId,
-            source_id: aId,
-            target_id: bId,
-            type: 'заблокирован',
-          },
-        });
-        assert.equal(created.isError, undefined, toolText(created));
-        const link = await handle.client.callTool({
-          name: 'etn.links.get',
-          arguments: { network_id: ctx.networkId, link_id: toolJson<{ id: string }>(created).id },
-        });
-        assert.equal(toolJson<{ type_id: string | null }>(link).type_id, blocks.id);
-
-        // Unknown name and both forms at once are rejected too.
-        const unknown = await handle.client.callTool({
-          name: 'etn.links.create',
-          arguments: { network_id: ctx.networkId, source_id: aId, target_id: bId, type: 'нет такой связи' },
-        });
-        assert.equal(unknown.isError, true);
-        assert.match(toolText(unknown), /NOT_FOUND/);
-
-        const both = await handle.client.callTool({
-          name: 'etn.links.create',
-          arguments: {
-            network_id: ctx.networkId,
-            source_id: aId,
-            target_id: bId,
-            type_id: blocks.id,
-            type: 'блокирует',
-          },
-        });
-        assert.equal(both.isError, true);
-      } finally {
-        await handle.close();
-      }
-    } finally {
-      await closeMcpContext(ctx);
-    }
-  });
-
   it('etn.thoughts.upsert_bundle resolves thought.type and links[].type by name (O4)', async () => {
     const ctx = await buildMcpContext();
     try {
@@ -2488,11 +2403,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       // Seed a multiple thought_ref property (direct inserts).
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const bookType = createThoughtType(ndb, { name: 'BookMR' }, ctx.adminId);
-      const def = createTypeProperty(ndb, 'thought_type', bookType.id, {
-        key: 'authors',
-        value_type: 'thought_ref',
-        config: { multiple: true },
-      }, USER);
+      const def = seedThoughtRefProperty(ndb, 'thought_type', bookType.id, 'authors', { multiple: true }, USER);
 
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
@@ -2544,10 +2455,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
 
         // An array on a single-valued property is rejected.
         const personType = createThoughtType(ndb, { name: 'PersonMR' }, ctx.adminId);
-        createTypeProperty(ndb, 'thought_type', personType.id, {
-          key: 'ref',
-          value_type: 'thought_ref',
-        }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', personType.id, 'ref', {}, USER);
         const owner = await handle.client.callTool({
           name: 'etn.thoughts.create',
           arguments: { network_id: ctx.networkId, title: 'Владелец', type_id: personType.id },
@@ -2841,10 +2749,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
       const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
       const typeA = createThoughtType(ndb, { name: 'UseA' }, ctx.adminId);
       const typeB = createThoughtType(ndb, { name: 'UseB' }, ctx.adminId);
-      const defA = createTypeProperty(ndb, 'thought_type', typeA.id, {
-        key: 'refersto',
-        value_type: 'thought_ref',
-      }, USER);
+      const defA = seedThoughtRefProperty(ndb, 'thought_type', typeA.id, 'refersto', {}, USER);
       // Attach the SAME registry property to typeB by name — re-attaching an
       // already-bound property to a sibling type shares the registry id and
       // (after 0.6.5) is rejected as DUPLICATE (an ancestor owns it). So we

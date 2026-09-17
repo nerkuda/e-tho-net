@@ -1,5 +1,5 @@
 /**
- * Regression test for duplicate «Основное» sections (editor, renderer).
+ * Regression test for duplicate «Комментарий» sections (editor, renderer).
  *
  * The editor registers its sections, tabs and the attachments-changed document
  * listener inside `mountEditor`. The workspace screen is rebuilt from scratch
@@ -37,6 +37,7 @@ class ShimElement {
   checked = false;
   title = '';
   placeholder = '';
+  hidden = false;
   isConnected = true;
   innerHTML = '';
   parent: ShimElement | null = null;
@@ -73,8 +74,8 @@ class ShimElement {
   remove(): void {
     if (this.parent !== null) {
       this.parent.children = this.parent.children.filter((c) => c !== this);
+      this.parent = null;
     }
-    this.parent = null;
   }
   addEventListener(): void {}
   removeEventListener(): void {}
@@ -87,6 +88,25 @@ class ShimElement {
   setAttribute(): void {}
   getBoundingClientRect() {
     return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 };
+  }
+  // Overflow button uses `cloneNode(true) + replaceWith(clone)` to reset its
+  // wired handler — mountEditor runs again on every network open and the
+  // first mount's overflow click handler stays attached without this reset.
+  cloneNode(_deep = true): ShimElement {
+    const clone = new ShimElement(this.tagName, this.className, this.textContent);
+    clone.hidden = this.hidden;
+    clone.title = this.title;
+    clone.dataset = { ...this.dataset };
+    clone.type = this.type;
+    return clone;
+  }
+  replaceWith(node: ShimElement): void {
+    if (this.parent === null) return;
+    const idx = this.parent.children.indexOf(this);
+    if (idx === -1) return;
+    this.parent.children[idx] = node;
+    node.parent = this.parent;
+    this.parent = null;
   }
 }
 
@@ -108,6 +128,25 @@ class ShimElement {
 function shimDom(): void {
   // `render` runs `activeElement instanceof HTMLElement` — provide the class.
   (globalThis as any).HTMLElement = class {};
+  // editor.ts attaches a ResizeObserver to the tab strip; the real DOM has it,
+  // the shim doesn't. A no-op observer is enough — it just never fires.
+  (globalThis as any).ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  };
+  // editor.ts schedules a recomputeOverflow via requestAnimationFrame after
+  // appending the tab strip to the DOM (Electron's initial-observe timing is
+  // unreliable). The shim has no animation loop; run the callback synchronously
+  // so any overflow-related state stays observable within the same test turn.
+  (globalThis as any).requestAnimationFrame = (cb: () => void): number => {
+    cb();
+    return 0;
+  };
+  // recomputeOverflow считает доступную ширину по content-box (`.editor-tabs`
+  // имеет внутренние отступы, а `clientWidth` их включает) и читает отступы
+  // через getComputedStyle. Шиму достаточно нулевых отступов.
+  (globalThis as any).getComputedStyle = () => ({ paddingLeft: '0px', paddingRight: '0px' });
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
@@ -131,7 +170,7 @@ function shimDom(): void {
 }
 
 describe('editor mount (DOM-shimmed)', () => {
-  it('registers «Основное» sections only once across network re-opens', async () => {
+  it('registers «Комментарий» sections only once across network re-opens', async () => {
     shimDom();
     const { mountEditor, editorInternals } = await import('../src/renderer/editor/editor.js');
     const { store } = await import('../src/renderer/state.js');
@@ -139,7 +178,9 @@ describe('editor mount (DOM-shimmed)', () => {
 
     mountEditor(new ShimElement('div') as any);
     const countAfterFirstMount = editorInternals.mainSectionCount();
-    assert.equal(countAfterFirstMount, 2, '«Свойства» + «Комментарий» on the first mount');
+    // Только «Комментарий» — «Свойства» переехали в собственную вкладку
+    // (задача 8ab775d9); мини-граф живёт на отдельной вкладке «Граф».
+    assert.equal(countAfterFirstMount, 1, '«Комментарий» only — properties moved to their own tab (8ab775d9)');
 
     // Two more network opens rebuild the workspace and re-run mountEditor.
     mountEditor(new ShimElement('div') as any);

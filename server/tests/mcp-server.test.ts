@@ -213,7 +213,15 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         };
         assert.equal(thought.id, ctx.homeId);
         assert.equal(thought.title, 'HOME');
-        assert.deepEqual(thought.properties, []);
+        // Структурные «Родители»/«Потомки» присутствуют у каждой мысли (count 0);
+        // скалярных свойств у HOME нет.
+        const props = thought.properties as Array<{
+          value_type: string;
+          count?: number;
+          structural?: boolean;
+        }>;
+        assert.deepEqual(props.filter((p) => p.value_type !== 'link'), []);
+        assert.ok(props.some((p) => p.structural === true && p.count === 0));
       } finally {
         await handle.close();
       }
@@ -429,10 +437,10 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         // P3 (задача e488f4c1): +4 (`copy_subtree`, `mentions_scan`,
         // `import.dry_run`, `import.subgraph`) → 67.
         // Задача c1fa71d4 / 0.7.3: +1 (`etn.views.run`, readOnlyHint) → 68.
-        assert.equal(annotated, 68);
-        assert.equal(hintReadOnly, 35);
-        assert.equal(hintDestructive, 14);
-        assert.equal(hintIdempotent, 12);
+        assert.equal(annotated, 66);
+        assert.equal(hintReadOnly, 33);
+        assert.equal(hintDestructive, 13);
+        assert.equal(hintIdempotent, 14);
       } finally {
         await handle.close();
       }

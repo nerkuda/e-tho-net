@@ -106,7 +106,12 @@ export function buildTokensForField(
   if (propertyValueType === 'bool') {
     out.push({ text: '$thought.active', label: '$thought.active', section: 'Поля мысли' });
   }
-  if (propertyValueType === 'thought_ref') {
+  // Свойство-связь (0.8.1) и legacy `thought_ref`: значение — id мысли,
+  // поэтому естественный токен для сравнения — `$thought` (= id мысли в
+  // фокусе). Сервер (`thought-type-view-tokens.ts`) его принимает, а UI
+  // раньше в пикере значения не предлагал — отбор с целью-токеном можно
+  // было сохранить только прямым POST (ошибка fad9f28c-…).
+  if (propertyValueType === 'link' || propertyValueType === 'thought_ref') {
     out.push({ text: '$thought', label: '$thought — id мысли в фокусе', section: 'Поля мысли' });
   }
 
@@ -123,12 +128,7 @@ export function buildTokensForField(
         label: `${tokenText}${labelSuffix} — ${def.value_type}`,
         section: sectionName,
       };
-      if (
-        (def.value_type === 'thought_ref' ||
-          def.value_type === 'url' ||
-          def.value_type === 'text') &&
-        multiple
-      ) {
+      if ((def.value_type === 'url' || def.value_type === 'text') && multiple) {
         token.listOnly = true;
       }
       if (
@@ -294,12 +294,6 @@ function propertyMatches(
   if (defMultiple) return true;
   if (defType === condType) return true;
   if ((defType === 'text' || defType === 'url') && (condType === 'text' || condType === 'url')) {
-    return true;
-  }
-  // Текстовое/url-свойство может хранить id мысли (задача 68ec0b5b):
-  // резолвер подставит значение «как есть» без проверки соответствия
-  // типов, поэтому его разрешено выбирать для условия по `thought_ref`.
-  if ((defType === 'text' || defType === 'url') && condType === 'thought_ref') {
     return true;
   }
   return false;

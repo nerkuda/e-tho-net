@@ -9,8 +9,9 @@
  * Resolution rules:
  *  - thought type: by id → by name (catching NOT_FOUND) → null;
  *  - link type: by id → by `name_forward` → by `name_reverse` → null;
- *  - `thought_ref` property values: a lookup by id, then by title in the
- *    destination network; unresolvable refs are dropped silently per spec.
+ *  - значения свойств проходят как есть (клиент обязан отправлять значения
+ *    под типы целевой сети); ссылки — рёбра в снапшоте `links`, их типы
+ *    резолвятся правилом выше (0.8.1, thought_ref упразднён миграцией 040).
  *
  * The client is responsible for rewriting wiki-links in permanent comments
  * (`[[#<id>]]` → `[[n:<source_network_id>#<id>]]`) when the source and
@@ -43,7 +44,7 @@ import { createAttachment } from './attachment-service.js';
 import { createComment } from './comment-service.js';
 import { createLink } from './link-service.js';
 import { resolveLinkTypeIdByName } from './link-type-service.js';
-import { listEffectiveTypeProperties, setPropertyValues } from './property-service.js';
+import { setPropertyValues } from './property-service.js';
 import { resolveThoughtTypeIdByName } from './thought-type-service.js';
 import { createThought, getThoughtOrThrow } from './thought-service.js';
 
@@ -112,60 +113,13 @@ function resolveByNames(
 }
 
 /**
- * Resolve a `thought_ref` value for a property. The client may send either
- * the raw id (string) or a `{ id, title }` shape — we tolerate both.
- * Resolution is by id first, then by exact-title match (normalised) in the
- * destination network. Returns `null` when nothing fits, which the caller
- * treats as "drop the value".
- */
-function resolveThoughtRefValue(
-  ndb: NetworkDb,
-  raw: unknown,
-): string | null {
-  const candidate = normaliseRefCandidate(raw);
-  if (candidate === null) return null;
-  const { id, title } = candidate;
-  if (id !== null && id !== '') {
-    const row = ndb.prepare('SELECT id FROM thoughts_v WHERE id = ? LIMIT 1').get(id) as
-      | { id: string }
-      | undefined;
-    if (row !== undefined) return row.id;
-  }
-  if (title !== null && title.trim() !== '') {
-    const normalised = title.trim().toLowerCase();
-    const row = ndb
-      .prepare('SELECT id FROM thoughts_v WHERE title_norm = ? LIMIT 1')
-      .get(normalised) as { id: string } | undefined;
-    if (row !== undefined) return row.id;
-  }
-  return null;
-}
-
-/** Accept either a plain string id or `{ id, title }`; strip anything else. */
-function normaliseRefCandidate(
-  raw: unknown,
-): { id: string | null; title: string | null } | null {
-  if (typeof raw === 'string') return { id: raw, title: null };
-  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
-    const r = raw as { id?: unknown; title?: unknown };
-    const id = typeof r.id === 'string' ? r.id : null;
-    const title = typeof r.title === 'string' ? r.title : null;
-    if (id === null && title === null) return null;
-    return { id, title };
-  }
-  return null;
-}
-
-/**
- * Resolve a map of property values, dropping `thought_ref`s that point at
- * no thought on the destination. Other value types are passed through
- * verbatim — the property service rejects anything that doesn't fit the
- * destination type's `value_type`.
- *
- * Multiple `thought_ref` values (arrays of ids, `config.multiple`) are
- * resolved element-wise. When the destination definition is single-valued,
- * only the first resolvable id survives (the property service would reject
- * an array without the flag).
+ * Write a map of property values to a newly created thought. Values are
+ * passed through verbatim — the property service rejects anything that does
+ * not fit the destination type's `value_type` (per-key write errors degrade
+ * silently for the rest of the batch, see `copyThoughtsBatch`). Значения
+ * свойств-связей сюда не попадают: ссылки — рёбра снапшота, они копируются
+ * механикой рёбер с резолвом типа связи (0.8.1, миграция 040 упразднила
+ * `thought_ref`).
  */
 function resolveProperties(
   ndb: NetworkDb,
@@ -173,52 +127,8 @@ function resolveProperties(
   raw: Record<string, PropertyValueValue>,
   actorUserId: string,
 ): void {
-  // Look up the thought's effective type once so we know which keys are
-  // `thought_ref` (and which of them allow multiple values). Other value
-  // types skip this branch. 0.6.5: the property set is resolved through the
-  // EFFECTIVE (chain-inherited) list, not only the type's own bindings — a
-  // copied thought keeps `thought_ref` values of properties its type
-  // inherited from ancestors, too.
-  const row = ndb.prepare('SELECT type_id FROM thoughts_v WHERE id = ?').get(thoughtId) as
-    | { type_id: string | null }
-    | undefined;
-  if (row === undefined) return;
-  const thoughtTypeId = row.type_id;
-
-  const refKeys = new Map<string, boolean>();
-  if (thoughtTypeId !== null) {
-    for (const def of listEffectiveTypeProperties(ndb, 'thought_type', thoughtTypeId)) {
-      if (def.value_type === 'thought_ref') {
-        refKeys.set(def.key, def.config?.multiple === true);
-      }
-    }
-  }
-
-  const resolved: Record<string, PropertyValueValue> = {};
-  for (const [key, value] of Object.entries(raw)) {
-    const multiple = refKeys.get(key);
-    if (multiple !== undefined) {
-      if (Array.isArray(value)) {
-        const ids = value
-          .map((item) => resolveThoughtRefValue(ndb, item))
-          .filter((id): id is string => id !== null);
-        const unique = [...new Set(ids)];
-        if (unique.length === 0) continue;
-        resolved[key] = unique;
-        continue;
-      }
-      const id = resolveThoughtRefValue(ndb, value);
-      if (id === null) continue;
-      // Keep the array shape on multiple definitions (the property service
-      // normalizes anyway, but stay shape-honest).
-      resolved[key] = multiple ? [id] : id;
-    } else {
-      resolved[key] = value;
-    }
-  }
-
-  if (Object.keys(resolved).length === 0) return;
-  setPropertyValues(ndb, 'thought', thoughtId, resolved, actorUserId);
+  if (Object.keys(raw).length === 0) return;
+  setPropertyValues(ndb, 'thought', thoughtId, raw, actorUserId);
 }
 
 // ---------------------------------------------------------------------------

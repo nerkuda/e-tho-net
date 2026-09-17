@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { EtnError, type PropertyDefinition } from '@etn/shared';
+import { EtnError, type PropertyDefinition, type ResolvedPropertyValue } from '@etn/shared';
 
 import DatabaseConstructor from 'better-sqlite3';
 
@@ -40,6 +40,7 @@ import {
 } from '../src/domain/property-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -50,6 +51,11 @@ function nativeAvailable(): boolean {
   } catch {
     return false;
   }
+}
+
+/** Скалярные эффективные свойства типа — без структурных «Родители»/«Потомки». */
+function scalarProps(ndb: NetworkDb, ownerType: 'thought_type' | 'link_type', ownerId: string) {
+  return listEffectiveTypeProperties(ndb, ownerType, ownerId).filter((d) => d.value_type !== 'link');
 }
 
 /** Seed a typed thought and return its id. */
@@ -188,129 +194,7 @@ describe(
       }
     });
 
-    it('thought_ref enforces allowed_type_id from config', () => {
-      const ndb = createInMemoryNetworkDb();
-      try {
-        const author = createThoughtType(ndb, { name: 'Author' }, USER);
-        const book = createThoughtType(ndb, { name: 'Book2' }, USER);
-        createTypeProperty(ndb, 'thought_type', book.id, {
-          key: 'author',
-          value_type: 'thought_ref',
-          config: { allowed_type_id: author.id },
-        }, USER);
-        const goodAuthor = seedTypedThought(ndb, author.id);
-        const wrongType = seedTypedThought(ndb, book.id);
-        const bookThought = seedTypedThought(ndb, book.id);
 
-        // Correct type passes.
-        setPropertyValue(ndb, 'thought', bookThought, 'author', goodAuthor, USER);
-        // Wrong type is rejected.
-        assert.throws(
-          () => setPropertyValue(ndb, 'thought', bookThought, 'author', wrongType, USER),
-          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
-        );
-        // Missing target is rejected.
-        assert.throws(
-          () => setPropertyValue(ndb, 'thought', bookThought, 'author', 'no-such-thought', USER),
-          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
-        );
-      } finally {
-        ndb.close();
-      }
-    });
-
-    it('thought_ref enforces the allowed_type_ids list from config', () => {
-      const ndb = createInMemoryNetworkDb();
-      try {
-        const author = createThoughtType(ndb, { name: 'AuthorL' }, USER);
-        const editor = createThoughtType(ndb, { name: 'EditorL' }, USER);
-        const book = createThoughtType(ndb, { name: 'BookL' }, USER);
-        createTypeProperty(ndb, 'thought_type', book.id, {
-          key: 'author',
-          value_type: 'thought_ref',
-          config: { allowed_type_ids: [author.id, editor.id] },
-        }, USER);
-        const goodAuthor = seedTypedThought(ndb, author.id);
-        const goodEditor = seedTypedThought(ndb, editor.id);
-        const wrongType = seedTypedThought(ndb, book.id);
-        const bookThought = seedTypedThought(ndb, book.id);
-
-        // Both listed types pass.
-        setPropertyValue(ndb, 'thought', bookThought, 'author', goodAuthor, USER);
-        setPropertyValue(ndb, 'thought', bookThought, 'author', goodEditor, USER);
-        // A type outside the list is rejected.
-        assert.throws(
-          () => setPropertyValue(ndb, 'thought', bookThought, 'author', wrongType, USER),
-          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
-        );
-      } finally {
-        ndb.close();
-      }
-    });
-
-    it('thought_ref with an empty filter list accepts any type', () => {
-      const ndb = createInMemoryNetworkDb();
-      try {
-        const ta = createThoughtType(ndb, { name: 'AnyA' }, USER);
-        const tb = createThoughtType(ndb, { name: 'AnyB' }, USER);
-        createTypeProperty(ndb, 'thought_type', ta.id, {
-          key: 'ref',
-          value_type: 'thought_ref',
-          config: { allowed_type_ids: [] },
-        }, USER);
-        const owner = seedTypedThought(ndb, ta.id);
-        const other = seedTypedThought(ndb, tb.id);
-        setPropertyValue(ndb, 'thought', owner, 'ref', other, USER);
-        assert.equal(getPropertyValues(ndb, 'thought', owner)[0]!.value, other);
-      } finally {
-        ndb.close();
-      }
-    });
-
-    it('getPropertyValuesResolved resolves thought_ref to {id, title} (N4)', () => {
-      const ndb = createInMemoryNetworkDb();
-      try {
-        const author = createThoughtType(ndb, { name: 'AuthorR' }, USER);
-        const book = createThoughtType(ndb, { name: 'BookR' }, USER);
-        createTypeProperty(ndb, 'thought_type', book.id, {
-          key: 'author',
-          value_type: 'thought_ref',
-        }, USER);
-        const authorThought = seedTypedThought(ndb, author.id);
-        const bookThought = seedTypedThought(ndb, book.id);
-        // A plain text value must pass through untouched.
-        createTypeProperty(ndb, 'thought_type', book.id, { key: 'note', value_type: 'text' }, USER);
-        setPropertyValue(ndb, 'thought', bookThought, 'author', authorThought, USER);
-        setPropertyValue(ndb, 'thought', bookThought, 'note', 'hello', USER);
-
-        const resolved = getPropertyValuesResolved(ndb, 'thought', bookThought);
-        assert.equal(resolved.length, 2);
-        const ref = resolved.find((v) => typeof v.value === 'object' && v.value !== null);
-        const note = resolved.find((v) => v.value === 'hello');
-        assert.deepEqual(ref?.value, { id: authorThought, title: 'T' });
-        assert.equal(note?.value, 'hello');
-
-        // A dangling reference (no SQL FK) resolves to title: null.
-        const orphan = seedTypedThought(ndb, book.id);
-        ndb
-          .prepare(
-            `INSERT INTO property_values (id, owner_type, owner_id, property_id, value_thought_ref, updated_at)
-             VALUES (?, 'thought', ?, ?, ?, '2024')`,
-          )
-          .run(randomUUID(), orphan, ref?.property_id, 'no-such-thought');
-        const dangling = getPropertyValuesResolved(ndb, 'thought', orphan).find(
-          (v) =>
-            !Array.isArray(v.value) &&
-            typeof v.value === 'object' &&
-            v.value !== null &&
-            'title' in v.value &&
-            v.value.title === null,
-        );
-        assert.deepEqual(dangling?.value, { id: 'no-such-thought', title: null });
-      } finally {
-        ndb.close();
-      }
-    });
 
     it('upserts on repeated set and deletes (idempotent on missing value)', () => {
       const ndb = createInMemoryNetworkDb();
@@ -405,8 +289,8 @@ describe(
       try {
         const person = createThoughtType(ndb, { name: 'Person' }, USER);
         const book = createThoughtType(ndb, { name: 'BookU' }, USER);
-        createTypeProperty(ndb, 'thought_type', book.id, { key: 'author', value_type: 'thought_ref' }, USER);
-        createTypeProperty(ndb, 'thought_type', book.id, { key: 'editor', value_type: 'thought_ref' }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', book.id, 'author', {}, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', book.id, 'editor', {}, USER);
         const target = seedTypedThought(ndb, person.id);
         const other = seedTypedThought(ndb, person.id);
         const b1 = seedTypedThought(ndb, book.id);
@@ -464,11 +348,7 @@ describe(
     } {
       const person = createThoughtType(ndb, { name: 'PersonM' }, USER);
       const book = createThoughtType(ndb, { name: 'BookM' }, USER);
-      const def = createTypeProperty(ndb, 'thought_type', book.id, {
-        key: 'authors',
-        value_type: 'thought_ref',
-        config: { multiple: true, ...config },
-      }, USER);
+      const def = seedThoughtRefProperty(ndb, 'thought_type', book.id, 'authors', { multiple: true, ...config }, USER);
       return {
         def,
         a: seedTypedThought(ndb, person.id),
@@ -505,11 +385,14 @@ describe(
       try {
         const authorType = createThoughtType(ndb, { name: 'AuthorMM' }, USER);
         const bookType = createThoughtType(ndb, { name: 'BookMM' }, USER);
-        const def = createTypeProperty(ndb, 'thought_type', bookType.id, {
-          key: 'authors',
-          value_type: 'thought_ref',
-          config: { multiple: true, allowed_type_ids: [authorType.id] },
-        }, USER);
+        const def = seedThoughtRefProperty(
+          ndb,
+          'thought_type',
+          bookType.id,
+          'authors',
+          { multiple: true, allowed_type_ids: [authorType.id] },
+          USER,
+        );
         const good = seedTypedThought(ndb, authorType.id);
         const wrongType = seedTypedThought(ndb, bookType.id);
         const owner = seedTypedThought(ndb, bookType.id);
@@ -539,7 +422,7 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         const tt = createThoughtType(ndb, { name: 'Single' }, USER);
-        createTypeProperty(ndb, 'thought_type', tt.id, { key: 'ref', value_type: 'thought_ref' }, USER);
+        seedThoughtRefProperty(ndb, 'thought_type', tt.id, 'ref', {}, USER);
         const target = seedTypedThought(ndb, tt.id);
         const owner = seedTypedThought(ndb, tt.id);
         assert.throws(
@@ -602,7 +485,9 @@ describe(
           .prepare('UPDATE property_values SET value_thought_ref = ? WHERE owner_id = ? AND property_id = ?')
           .run(JSON.stringify([a, 'gone', b]), owner, def.property_id);
 
-        const resolved = getPropertyValuesResolved(ndb, 'thought', owner);
+        const resolved = getPropertyValuesResolved(ndb, 'thought', owner).filter(
+          (v): v is ResolvedPropertyValue => v.value_type !== 'link',
+        );
         assert.deepEqual(resolved[0]!.value, [
           { id: a, title: 'T' },
           { id: 'gone', title: null },
@@ -648,12 +533,15 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         const tt = createThoughtType(ndb, { name: 'ReqMulti' }, USER);
-        const def = createTypeProperty(ndb, 'thought_type', tt.id, {
-          key: 'refs',
-          value_type: 'thought_ref',
-          required: true,
-          config: { multiple: true },
-        }, USER);
+        const def = seedThoughtRefProperty(
+          ndb,
+          'thought_type',
+          tt.id,
+          'refs',
+          { multiple: true },
+          USER,
+          { required: true },
+        );
         const target = seedTypedThought(ndb, tt.id);
         const owner = seedTypedThought(ndb, tt.id);
         // Hand-made empty array row (writes normalize empty to a clear).
@@ -1043,7 +931,7 @@ describe(
         const child = createThoughtType(ndb, { name: 'DescChild', parent_id: parent.id }, USER);
 
         // Inherited as-is: the effective description equals the definition's.
-        let effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        let effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective.length, 1);
         assert.equal(effective[0]!.description, 'кто отвечает за элемент');
         assert.equal(effective[0]!.description_overridden, false);
@@ -1052,18 +940,18 @@ describe(
 
         // The child overrides the description for itself.
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, 'исполнитель задачи', USER);
-        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.description, 'исполнитель задачи');
         assert.equal(effective[0]!.description_overridden, true);
 
         // The parent's own list is untouched by the child's override.
-        const parentEffective = listEffectiveTypeProperties(ndb, 'thought_type', parent.id);
+        const parentEffective = scalarProps(ndb, 'thought_type', parent.id);
         assert.equal(parentEffective[0]!.description, 'кто отвечает за элемент');
         assert.equal(parentEffective[0]!.description_overridden, false);
 
         // Clearing the override falls back to the definition's description.
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, null, USER);
-        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.description, 'кто отвечает за элемент');
         assert.equal(effective[0]!.description_overridden, false);
       } finally {
@@ -1086,7 +974,7 @@ describe(
         // Override BOTH the default and the description.
         setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, 5, USER);
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, 'размер в паллетах', USER);
-        let effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        let effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.default_value, 5);
         assert.equal(effective[0]!.overridden_here, true);
         assert.equal(effective[0]!.description, 'размер в паллетах');
@@ -1094,7 +982,7 @@ describe(
 
         // Resetting the DEFAULT keeps the description override.
         setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, null, USER);
-        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.default_value, 1);
         assert.equal(effective[0]!.overridden_here, false);
         assert.equal(effective[0]!.description, 'размер в паллетах');
@@ -1102,7 +990,7 @@ describe(
 
         // Resetting the DESCRIPTION removes the row entirely (nothing left).
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, null, USER);
-        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.description, 'размер в штуках');
         assert.equal(effective[0]!.description_overridden, false);
         const rows = ndb
@@ -1114,7 +1002,7 @@ describe(
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, 'размер в ящиках', USER);
         setTypePropertyDefaultOverride(ndb, 'thought_type', child.id, prop.id, 9, USER);
         setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, prop.id, null, USER);
-        effective = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        effective = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(effective[0]!.default_value, 9);
         assert.equal(effective[0]!.overridden_here, true);
         assert.equal(effective[0]!.description, 'размер в штуках');
@@ -1190,14 +1078,18 @@ describe(
         }, USER);
         createTypeProperty(ndb, 'link_type', lt.id, { key: 'приоритет', value_type: 'number' }, USER);
 
-        assert.equal(listNetworkProperties(ndb).length, 1, 'one registry property');
+        assert.equal(
+          listNetworkProperties(ndb).filter((p) => p.value_type !== 'link').length,
+          1,
+          'one registry property',
+        );
         assert.equal(onB.value_type, 'number', 'registry nature wins');
         for (const [ownerType, ownerId] of [
           ['thought_type', a.id],
           ['thought_type', b.id],
           ['link_type', lt.id],
         ] as const) {
-          const eff = listEffectiveTypeProperties(ndb, ownerType, ownerId);
+          const eff = scalarProps(ndb, ownerType, ownerId);
           assert.equal(eff.length, 1);
           assert.equal(eff[0]!.key, 'приоритет');
           assert.equal(eff[0]!.value_type, 'number');
@@ -1218,7 +1110,7 @@ describe(
         }, USER);
         const th = seedTypedThought(ndb, child.id);
         setPropertyValue(ndb, 'thought', th, 'статус', 'в работе', USER);
-        assert.equal(listEffectiveTypeProperties(ndb, 'thought_type', child.id).length, 1);
+        assert.equal(scalarProps(ndb, 'thought_type', child.id).length, 1);
 
         // Attach the SAME property to the parent: the child's binding is
         // redundant and must be dropped in the same transaction.
@@ -1229,7 +1121,7 @@ describe(
         assert.equal(parentBinding.property_id, childBinding.property_id);
         assert.equal(bindingCount(ndb, child.id, childBinding.property_id), 0);
         // The property is still effective for the child — by inheritance now.
-        const eff = listEffectiveTypeProperties(ndb, 'thought_type', child.id);
+        const eff = scalarProps(ndb, 'thought_type', child.id);
         assert.equal(eff.length, 1);
         assert.equal(eff[0]!.inherited, true);
         assert.equal(eff[0]!.defined_on, parent.id);
@@ -1369,7 +1261,7 @@ describe(
         deleteTypeProperty(ndb, held.id, USER);
         deletePropertyValue(ndb, 'thought', th, 'счётчик', USER);
         deleteNetworkProperty(ndb, held.property_id);
-        assert.equal(listNetworkProperties(ndb).length, 0);
+        assert.equal(listNetworkProperties(ndb).filter((p) => p.value_type !== 'link').length, 0);
       } finally {
         ndb.close();
       }
@@ -1444,18 +1336,18 @@ describe(
 
         // The middle type overrides; the leaf inherits the override.
         setTypePropertyDefaultOverride(ndb, 'thought_type', mid.id, def.id, 5, USER);
-        let eff = listEffectiveTypeProperties(ndb, 'thought_type', leaf.id);
+        let eff = scalarProps(ndb, 'thought_type', leaf.id);
         assert.equal(eff[0]!.default_value, 5);
         assert.equal(eff[0]!.overridden_here, false, 'stored on the ancestor, not the leaf');
 
         // The leaf re-overrides for itself.
         setTypePropertyDefaultOverride(ndb, 'thought_type', leaf.id, def.id, 9, USER);
-        eff = listEffectiveTypeProperties(ndb, 'thought_type', leaf.id);
+        eff = scalarProps(ndb, 'thought_type', leaf.id);
         assert.equal(eff[0]!.default_value, 9);
         assert.equal(eff[0]!.overridden_here, true);
 
         // The middle keeps its own view.
-        eff = listEffectiveTypeProperties(ndb, 'thought_type', mid.id);
+        eff = scalarProps(ndb, 'thought_type', mid.id);
         assert.equal(eff[0]!.default_value, 5);
         assert.equal(eff[0]!.overridden_here, true);
       } finally {

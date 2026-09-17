@@ -57,7 +57,10 @@ interface PreferenceKeyParams {
 }
 
 /** Keys accepted by `PUT /networks/:id/preferences/:key` (11-settings-and-state.md §2.1 L3). */
-const SUPPORTED_PREFERENCE_KEYS = new Set<string>([PREF_KEY.SHOW_INACTIVE]);
+const SUPPORTED_PREFERENCE_KEYS = new Set<string>([
+  PREF_KEY.SHOW_INACTIVE,
+  PREF_KEY.CANVAS_LINK_FILTER,
+]);
 
 /** Build the public member DTO from a joined row. */
 function memberDto(m: NetworkMember & { username: string; display_name: string | null }) {

@@ -1,8 +1,12 @@
 /**
- * Pins the «Мыслесеть» submenu composition (task d4e23670, spec thought
- * 328d0f98 «Подменю «Мыслесеть»»): the «Свойства» entry sits immediately
- * below «Типы связей», separated from the network section by a separator
- * (it shares the catalogue group with the type managers).
+ * Pins the «Мыслесеть» submenu composition (task d4e23670, fd4d4927,
+ * spec thought 328d0f98 «Подменю «Мыслесеть»»): the «Свойства и связи» entry
+ * sits immediately below «Типы связей», separated from the network section by
+ * a separator (it shares the catalogue group with the type managers).
+ *
+ * 0.8.1: «Свойства» was renamed to «Свойства и связи» and now opens the flat
+ * registry list mixing scalars + link-properties. «Типы связей» is now a
+ * tree that opens the editor for the underlying link-property.
  */
 
 import assert from 'node:assert/strict';
@@ -20,8 +24,8 @@ afterEach(() => {
   store.update({ network: null, me: null });
 });
 
-describe('«Мыслесеть» menu — «Свойства» entry (d4e23670)', () => {
-  it('lists «Свойства» right after «Типы связей» for an open network', () => {
+describe('«Мыслесеть» menu — «Свойства и связи» entry (d4e23670, fd4d4927)', () => {
+  it('lists «Свойства и связи» right after «Типы связей» for an open network', () => {
     store.update({
       network: {
         id: 'net-1',
@@ -44,13 +48,18 @@ describe('«Мыслесеть» menu — «Свойства» entry (d4e23670)'
     });
     const ls = labels();
     const idxLinkTypes = ls.indexOf('Типы связей');
-    const idxProps = ls.indexOf('Свойства');
+    const idxProps = ls.indexOf('Свойства и связи');
     assert.ok(idxLinkTypes >= 0, '«Типы связей» must be in the menu');
-    assert.ok(idxProps >= 0, '«Свойства» must be in the menu');
-    assert.equal(idxProps, idxLinkTypes + 1, '«Свойства» must follow «Типы связей» directly');
+    assert.ok(idxProps >= 0, '«Свойства и связи» must be in the menu');
+    assert.equal(idxProps, idxLinkTypes + 1, '«Свойства и связи» must follow «Типы связей» directly');
+    assert.equal(
+      ls.indexOf('Свойства'),
+      -1,
+      'Old single-word «Свойства» label must be gone (replaced by «Свойства и связи» in 0.8.1)',
+    );
   });
 
-  it('still shows «Свойства» for a non-owner (it is a network-wide setting)', () => {
+  it('still shows «Свойства и связи» for a non-owner (it is a network-wide setting)', () => {
     store.update({
       network: {
         id: 'net-1',
@@ -72,7 +81,7 @@ describe('«Мыслесеть» menu — «Свойства» entry (d4e23670)'
       },
     });
     const ls = labels();
-    assert.ok(ls.includes('Свойства'));
+    assert.ok(ls.includes('Свойства и связи'));
     assert.ok(ls.includes('Типы связей'));
   });
 });

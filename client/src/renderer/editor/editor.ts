@@ -3,18 +3,26 @@
  *
  * H8 ships the shell and the header:
  *  - position switcher (left/right/top/bottom/hidden → L4 `editor_position`);
- *  - thought header: title, synonyms (comma string), type, icon (emoji),
- *    active, fg/bg colors, four font-style toggles — every change saves via
- *    `thoughts.update` with `If-Match`;
+ *  - thought header (3 строки, задача 8ab775d9): иконка/заголовок, синонимы,
+ *    тип ▾ + «актуально» + подменю «Действия» + «Настройки мысли» ⚙; все правки
+ *    сохраняются через `thoughts.update` с `If-Match`;
  *  - link header (when a link is picked): type + active via `links.update`.
  *
- * L7 turns the group stack below the header into tabs (08-ui-spec.md §6.3):
- * «Основное», «Вложения (N)», «Связи», «Хроника (N)». A tab's content is
- * built lazily on first activation and cached for the lifetime of one editor
- * render (a signature change rebuilds everything). The active tab survives
- * focus changes. Modules register tab content builders (`registerTabContent`),
- * tab badge counters (`registerTabCount`) and «Основное» sections
- * (`registerMainSection` — collapsible groups).
+ * L7 turns the group stack below the header into tabs (08-ui-spec.md §6.3).
+ * The set depends on the edited entity (0.8.1, задача 95775cfd): у мысли —
+ * «Комментарий», «Свойства», «Вложения (N)», «Упоминания», «Хроника (N)»,
+ * «Граф», «Метаданные»; у связи — «Комментарий», «Мысли», «Метаданные». A tab's
+ * content is built lazily on first activation and
+ * cached for the lifetime of one editor render (a signature change rebuilds
+ * everything). The active tab survives focus changes (persisted to L4
+ * `UI_STATE_KEY.EDITOR_ACTIVE_TAB`). Modules register tab content builders
+ * (`registerTabContent`), tab badge counters (`registerTabCount`) and
+ * «Комментарий» sections (`registerMainSection` — без обёртки-группы: секция
+ * выводится на всю высоту вкладки).
+ *
+ * Если все табы не помещаются по ширине — справа появляется кнопка `▾N`,
+ * открывающая выпадающий список со скрытыми табами (повторное использование
+ * overflow-логики из `screens/tabs/tab-overflow.ts`).
  */
 
 import {
@@ -64,11 +72,18 @@ import { registerCommentSections } from './comments.js';
 import { registerAttachmentsTab } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
 import { registerLinksTab } from './links-tab.js';
+import { registerGraphTab } from './graph-tab.js';
 import { registerMetadataTab } from './metadata-tab.js';
+import {
+  buildOverflowButton,
+  recomputeOverflow,
+  type StripElements,
+} from '../screens/tabs/tab-overflow.js';
 import { showIconDialog, type IconPickResult } from './icon-dialog.js';
 import { editMarkdownField } from './markdown-field.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
-import { showLinkTypeEditor, showThoughtTypeEditor } from '../screens/type-manager.js';
+import { showThoughtTypeEditor } from '../screens/type-manager.js';
+import { openPropertyManagerEditor } from '../screens/property-manager.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import {
   acquireOrShowBlocked,
@@ -85,8 +100,15 @@ export interface EditorContext {
   link: Link | null;
 }
 
-/** Editor tab ids (08-ui-spec.md §6.3). */
-export type EditorTabId = 'main' | 'attachments' | 'links' | 'chrono' | 'metadata';
+/** Editor tab ids (08-ui-spec.md §6.3, задача 8ab775d9). */
+export type EditorTabId =
+  | 'main'
+  | 'properties'
+  | 'attachments'
+  | 'links'
+  | 'chrono'
+  | 'graph'
+  | 'metadata';
 
 /** Builds the content of one tab for the current entity. */
 export type TabContentBuilder = (ctx: EditorContext) => HTMLElement;
@@ -94,24 +116,113 @@ export type TabContentBuilder = (ctx: EditorContext) => HTMLElement;
 /** Resolves a tab's `(N)` badge count for the current entity. */
 export type TabCountLoader = (ctx: EditorContext) => Promise<number | undefined>;
 
-/** Builds one collapsible group of the «Основное» tab (or null to skip). */
+/** Builds one collapsible group of the «Комментарий» tab (or null to skip). */
 export type MainSectionBuilder = (ctx: EditorContext) => GroupSpec | null;
 
 /** Static tab bar definition; badges come from registered count loaders. */
-const TABS: Array<{ id: EditorTabId; title: string; counted: boolean }> = [
-  { id: 'main', title: 'Основное', counted: false },
+interface EditorTabDef {
+  id: EditorTabId;
+  title: string;
+  counted: boolean;
+}
+
+/**
+ * Tab set of the thought editor — the full set, порядок фиксирован
+ * (08-ui-spec.md §6.3). Не менять порядок: на него опираются тесты вёрстки.
+ */
+const TABS_THOUGHT: EditorTabDef[] = [
+  { id: 'main', title: 'Комментарий', counted: false },
+  { id: 'properties', title: 'Свойства', counted: false },
   { id: 'attachments', title: 'Вложения', counted: true },
-  { id: 'links', title: 'Связи', counted: false },
+  { id: 'links', title: 'Упоминания', counted: false },
   { id: 'chrono', title: 'Хроника', counted: true },
+  { id: 'graph', title: 'Граф', counted: false },
   { id: 'metadata', title: 'Метаданные', counted: false },
 ];
+
+/**
+ * Tab set of the link editor (задача 95775cfd, 08-ui-spec.md §6.3): у одиночного
+ * ребра нет собственных свойств, вложений, хроники и локального графа, а два
+ * его конца живут на вкладке «Мысли» (id `links` — тот же, что у «Упоминаний»
+ * мысли, чтобы предпочтение активной вкладки не сбрасывалось).
+ */
+const TABS_LINK: EditorTabDef[] = [
+  { id: 'main', title: 'Комментарий', counted: false },
+  { id: 'links', title: 'Мысли', counted: false },
+  { id: 'metadata', title: 'Метаданные', counted: false },
+];
+
+/**
+ * Набор вкладок зависит от редактируемой сущности (0.8.1, задача 95775cfd):
+ * у связи — только её три вкладки, у мысли — полный набор.
+ */
+function tabsFor(ctx: EditorContext): EditorTabDef[] {
+  return ctx.ownerType === 'link' ? TABS_LINK : TABS_THOUGHT;
+}
+
+/** Id, входящие в любой из наборов вкладок (валидация предпочтения из L4). */
+function isKnownTabId(id: string): id is EditorTabId {
+  return TABS_THOUGHT.some((t) => t.id === id) || TABS_LINK.some((t) => t.id === id);
+}
+
+/**
+ * Нижняя граница ширины кнопки вкладки редактора, px.
+ *
+ * Ширины вкладок адаптивные — по длине заголовка (со счётчиком «(N)»), поэтому
+ * константа задаёт только пол: короткие заголовки («Граф») не выглядят
+ * огрызками, а длинные («Комментарий») получают столько, сколько нужно.
+ * Не поместившиеся вкладки уходят в `[▾N]` вместо сжатия — при фиксированной
+ * ширине 110/80 (как было до этого) «Комментарий» в сжатой кнопке не
+ * помещался и вылезал за её пределы.
+ */
+const EDITOR_TAB_MIN_W_PX = 80;
 
 const tabContentBuilders = new Map<EditorTabId, TabContentBuilder>();
 const tabCountLoaders = new Map<EditorTabId, TabCountLoader>();
 const mainSectionBuilders: MainSectionBuilder[] = [];
 
-/** The active tab — module-level so it survives focus/entity changes (L7). */
+/** The active tab — module-level so it survives focus/entity changes (L7).
+ *  Initial value is loaded from the persisted L4 `EDITOR_ACTIVE_TAB` slot
+ *  (задача 8ab775d9), so reopening the editor restores the same tab the
+ *  user was on. The module-level shadow stays in sync with `persistActiveTab`. */
 let activeTab: EditorTabId = 'main';
+/** What is actually shown right now. Differs from `activeTab` when the saved
+ *  preference is absent from the current entity's set (e.g. «Хроника» on a
+ *  link → «Комментарий» is displayed while the preference stays untouched). */
+let shownTab: EditorTabId = 'main';
+let activeTabLoaded = false;
+
+/** Loads the persisted active tab id once. Safe to call repeatedly. */
+async function loadActiveTab(): Promise<void> {
+  if (activeTabLoaded) return;
+  activeTabLoaded = true;
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  try {
+    const raw = await etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_ACTIVE_TAB);
+    // Принимаем id, входящие в любой из наборов: предпочтение одно на весь
+    // редактор, и «Хроника» мысли не должна сбрасываться, пока открыта связь.
+    if (typeof raw === 'string' && isKnownTabId(raw)) {
+      activeTab = raw;
+    }
+  } catch {
+    // Ошибка чтения (нет сети, нет значения) — оставляем дефолт 'main'.
+  }
+}
+
+let persistActiveTabTimer: number | null = null;
+/** Persists the active tab id to the local DB (debounced). */
+function persistActiveTab(): void {
+  if (persistActiveTabTimer !== null) window.clearTimeout(persistActiveTabTimer);
+  persistActiveTabTimer = window.setTimeout(() => {
+    persistActiveTabTimer = null;
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    void etn.ui
+      .setState(networkId, UI_STATE_KEY.EDITOR_ACTIVE_TAB, activeTab)
+      .catch(() => undefined);
+  }, 200);
+}
 
 /** Registers a tab content builder (L7). */
 export function registerTabContent(id: EditorTabId, builder: TabContentBuilder): void {
@@ -123,7 +234,7 @@ export function registerTabCount(id: EditorTabId, loader: TabCountLoader): void 
   tabCountLoaders.set(id, loader);
 }
 
-/** Registers a collapsible section of the «Основное» tab (L7). */
+/** Registers a collapsible section of the «Комментарий» tab (L7). */
 export function registerMainSection(builder: MainSectionBuilder): void {
   mainSectionBuilders.push(builder);
 } /** Opens a link in the editor without changing the focus (H6/H11). */
@@ -303,7 +414,7 @@ let builtPanes = new Map<EditorTabId, HTMLElement>();
  * Guards the one-time module registrations (sections, tabs, the document
  * listener). `mountEditor` runs again on every network open — `showScreen`
  * rebuilds the whole workspace — and re-registering would append duplicate
- * «Основное» sections («Свойства», «Комментарий») for each open.
+ * sections of the «Комментарий» tab for each open.
  */
 let registrationsDone = false;
 
@@ -408,6 +519,7 @@ export function mountEditor(editorHost: HTMLElement): void {
     registerCommentSections();
     registerAttachmentsTab();
     registerLinksTab();
+    registerGraphTab();
     registerMetadataTab();
 
     // Pasted-image uploads from any markdown field re-count the «Вложения» tab
@@ -453,12 +565,22 @@ export function mountEditor(editorHost: HTMLElement): void {
     }
     void render();
   });
+  // Restore the persisted active tab id (задача 8ab775d9) before the first
+  // render so the user lands on the tab they left on, not always «Комментарий».
+  void loadActiveTab().then(() => {
+    if (host?.isConnected === true && paneHostEl !== null) {
+      // Guarded draw: если сохранённой вкладки нет в наборе текущей сущности,
+      // показываем «Комментарий», само предпочтение не перезаписываем.
+      const ctx = currentEditorContext();
+      displayInitialTab(ctx === null ? TABS_THOUGHT : tabsFor(ctx));
+    }
+  });
   void render();
 }
 
 /**
  * Builds one tab's pane content against the CURRENT `renderCtx` (not a
- * closure-captured one — `invalidateMainPane` may rebuild the «Основное» pane
+ * closure-captured one — `invalidateMainPane` may rebuild the «Комментарий» pane
  * from a `patchHeader` call that ran after the original full render, when a
  * newer `ctx` is already current).
  */
@@ -467,15 +589,32 @@ function buildTabPane(id: EditorTabId): HTMLElement {
   const pane = div('tab-pane fixed');
   if (ctx === null) return pane;
   if (id === 'main') {
-    // Two areas with a single boundary (L7, 08-ui-spec.md §6.3.1): the
-    // table sections on top, the view/edit section filling the rest of the
-    // tab. The last section is always the view/edit one (the permanent
-    // comment; for a link it is the only section and fills the whole tab).
+    // Структура вкладки (задача 8ab775d9): вкладка целиком занята постоянным
+    // комментарием сущности, без обёртки-группы. Свойства переехали в
+    // отдельную вкладку «Свойства». Если когда-то здесь снова зарегистрируют
+    // верхние секции (как было до 0.8.1), вернётся прежняя компоновка
+    // «top + splitter + bottom»; сейчас — одиночная секция (комментарий) на
+    // всю высоту.
     const specs = mainSectionBuilders
       .map((section) => section(ctx))
       .filter((spec): spec is GroupSpec => spec !== null);
     if (specs.length === 0) {
       pane.append(el('p', 'muted', 'Нет содержимого.'));
+      return pane;
+    }
+    if (specs.length === 1) {
+      // Одиночная секция (постоянный комментарий) занимает всю высоту
+      // вкладки напрямую — без сворачиваемой группы и её шапки. Обёртка
+      // `main-full` обеспечивает flex-растяжение и собственную прокрутку
+      // содержимого.
+      const wrap = div('main-full');
+      const body = specs[0]!.buildBody();
+      if (body instanceof Promise) {
+        void body.then((el) => wrap.append(el));
+      } else {
+        wrap.append(body);
+      }
+      pane.append(wrap);
       return pane;
     }
     const topSpecs = specs.slice(0, -1);
@@ -509,10 +648,16 @@ function buildTabPane(id: EditorTabId): HTMLElement {
   return pane;
 }
 
-/** Activates a tab: (re)builds its pane on first activation, caches it after. */
-function activateEditorTab(id: EditorTabId): void {
+/**
+ * Displays a tab without touching the saved preference: highlights its button,
+ * (re)builds its pane on first activation, caches it and swaps the pane host
+ * content. Used both for a user pick (through {@link activateEditorTab}) and
+ * for the guarded initial draw when the saved tab is absent from the entity's
+ * set (тогда показываем «Комментарий», предпочтение не перезаписываем).
+ */
+function displayTab(id: EditorTabId): void {
   if (paneHostEl === null) return;
-  activeTab = id;
+  shownTab = id;
   for (const [tabId, tab] of tabButtons) {
     tab.classList.toggle('active', tabId === id);
   }
@@ -524,17 +669,31 @@ function activateEditorTab(id: EditorTabId): void {
   paneHostEl.replaceChildren(pane);
 }
 
+/** Picks the tab the editor should draw first (saved preference, else «Комментарий»). */
+function displayInitialTab(tabs: EditorTabDef[]): void {
+  const initial = tabs.some((t) => t.id === activeTab) ? activeTab : 'main';
+  displayTab(initial);
+}
+
+/** User-activated tab: remembers the preference, then displays it. */
+function activateEditorTab(id: EditorTabId): void {
+  const changed = activeTab !== id;
+  activeTab = id;
+  displayTab(id);
+  if (changed) persistActiveTab();
+}
+
 /**
- * Drops the cached «Основное» pane so it rebuilds from the current `ctx` on
+ * Drops the cached «Комментарий» pane so it rebuilds from the current `ctx` on
  * next activation (bug 6b757336): a thought's type change can add/remove
  * properties, so the cached properties+comment pane can no longer be trusted
- * as-is. If «Основное» is the active tab this rebuilds it right away — the
+ * as-is. If «Комментарий» is the active tab this rebuilds it right away — the
  * comment's CodeMirror instance is destroyed in that case, same as before
  * this fix, but only for an actual type change, not for every header save.
  */
 function invalidateMainPane(): void {
   builtPanes.delete('main');
-  if (activeTab === 'main') activateEditorTab('main');
+  if (shownTab === 'main') displayTab('main');
 }
 
 /** Updates the panel title text + trash marker for the current context. */
@@ -588,7 +747,7 @@ function patchHeader(ctx: EditorContext): void {
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
 
   // A thought's type change can add/remove properties (and NULL visual
-  // fields inherit new defaults) — the cached «Основное» pane must rebuild.
+  // fields inherit new defaults) — the cached «Комментарий» pane must rebuild.
   // Every other header field (title/synonyms/icon/active/style) leaves the
   // property set and the comment untouched, so no pane invalidation.
   const typeChanged =
@@ -725,9 +884,11 @@ async function render(): Promise<void> {
   if (headerEl !== null) scrollBox.append(headerEl);
 
   // --- tab bar (L7) ---------------------------------------------------------
+  // Набор вкладок зависит от сущности: у связи — свои три, у мысли — полный.
+  const tabs = tabsFor(ctx);
   const tabBar = div('editor-tabs');
   tabBarEl = tabBar;
-  for (const def of TABS) {
+  for (const def of tabs) {
     const tab = el('button', 'editor-tab') as HTMLButtonElement;
     tab.type = 'button';
     tab.append(span(def.title, 'editor-tab-title'));
@@ -741,6 +902,11 @@ async function render(): Promise<void> {
           if (n !== undefined && tab.isConnected) {
             badge.textContent = `(${n})`;
             badge.classList.remove('hidden');
+            // Счётчик расширил кнопку — раскладка по содержимому должна узнать
+            // об этом (иначе вкладка останется обрезанной или зря скрытой).
+            // Вызов асинхронный: к этому моменту `reflowEditorOverflow` уже
+            // определён ниже в этой же сборке редактора.
+            reflowEditorOverflow();
           }
         });
       }
@@ -750,12 +916,98 @@ async function render(): Promise<void> {
     tabBar.append(tab);
   }
 
+  // Кнопка `[▾N]` для табов, не поместившихся в строку. По умолчанию скрыта
+  // через атрибут `hidden=true`; `recomputeOverflow` сбрасывает его, когда
+  // что-то не влезает. CSS-класс `hidden` НЕ ставим — общий
+  // `.hidden { display: none !important }` (styles.css) принудительно прячет
+  // элемент по классу и перебивает `hidden=false`, из-за чего кнопка остаётся
+  // невидимой даже когда `recomputeOverflow` уже решил её показать (баг
+  // проявился в DevTools: `class="tab-overflow hidden" hidden=""` при
+  // `textContent="▾3"`).
+  const overflowBtn = el('button', 'tab-overflow') as HTMLButtonElement;
+  overflowBtn.type = 'button';
+  overflowBtn.hidden = true;
+  tabBar.append(overflowBtn);
+
+  // Следим за шириной контейнера: при ресайзе окна / панели переразмечаем
+  // видимый набор и текст кнопки.
+  const stripElements: StripElements<EditorTabDef> = {
+    root: tabBar,
+    visible: Array.from(tabButtons.values()),
+    hidden: [],
+    reserveButton: null,
+    overflowButton: overflowBtn,
+  };
+  // Один раз вешаем обработчик клика через `buildOverflowButton` — он делает
+  // `cloneNode + replaceWith`, после чего оригинальная нода отсоединена.
+  // Дёргать его в observer нельзя: ссылка `overflowBtn` после первого вызова
+  // указывает на отсоединённую ноду, второй вызов привязал бы обработчик к
+  // невидимому клону. Observer ограничиваем только пересчётом раскладки —
+  // `recomputeOverflow` сам обновляет видимость и текст `[▾N]`.
+  const renderEditorOverflowRow = (item: EditorTabDef, close: () => void): HTMLElement => {
+    const row = el('div', 'tab-overflow-row');
+    const label = el('span', 'tab-overflow-label', item.title);
+    label.style.cursor = 'pointer';
+    label.addEventListener('click', (e) => {
+      e.stopPropagation();
+      activateEditorTab(item.id);
+      close();
+    });
+    row.append(label);
+    return row;
+  };
+  function reflowEditorOverflow(): void {
+    // Раскладка по содержимому: ширина кнопки — по заголовку (см.
+    // EDITOR_TAB_MIN_W_PX). Счётчик «(N)» приходит асинхронно и расширяет
+    // кнопку — его загрузчик выше (см. `tabCountLoaders`) зовёт пересчёт
+    // повторно. Объявлено функцией, а не константой: вызов из загрузчика идёт
+    // из замыкания, заведённого раньше по коду.
+    recomputeOverflow(stripElements, tabs, {
+      kind: 'content',
+      minWidth: EDITOR_TAB_MIN_W_PX,
+    });
+  }
+  const overflowObserver = new ResizeObserver(reflowEditorOverflow);
+  overflowObserver.observe(tabBar);
+  // Первый маунт: `ResizeObserver` сработает только при изменении размера,
+  // а табы могут уже не помещаться в момент открытия редактора. Прогоняем
+  // разметку сразу, чтобы `▾N` появился без ресайза окна. `buildOverflowButton`
+  // возвращает живую ноду-клона (исходная отсоединяется через replaceWith) —
+  // сохраняем ссылку, чтобы последующие `recomputeOverflow` обновляли
+  // именно DOM-кнопку.
+  // Первый маунт: `ResizeObserver` сработает только при изменении размера,
+  // а табы могут уже не помещаться в момент открытия редактора. Прогоняем
+  // разметку сразу, чтобы `▾N` появился без ресайза окна. `buildOverflowButton`
+  // возвращает живую ноду-клона (исходная отсоединяется через replaceWith) —
+  // сохраняем ссылку, чтобы последующие `recomputeOverflow` обновляли
+  // именно DOM-кнопку. Передаём getter `() => stripElements.hidden`, а не
+  // сам массив: на момент первого вызова tabBar ещё не в DOM, `clientWidth=0`
+  // → recomputeOverflow early-return → `hidden=[]`. ResizeObserver потом
+  // заполнит `hidden` реальными элементами, и обработчик должен читать их
+  // на момент клика, а не пустой снимок из замыкания.
+  reflowEditorOverflow();
+  stripElements.overflowButton = buildOverflowButton(
+    overflowBtn,
+    () => stripElements.hidden,
+    renderEditorOverflowRow,
+  );
+
   // --- tab panes (lazily built, cached for this render) ---------------------
   const paneHost = div('tab-pane-root');
   paneHostEl = paneHost;
 
   scrollBox.append(tabBar, paneHost);
-  activateEditorTab(activeTab);
+  // Первый `reflowEditorOverflow` выше отработал на отсоединённой `tabBar`
+  // (clientWidth=0 → early return). `ResizeObserver` должен вызвать свой
+  // callback, когда `tabBar` получает реальный размер после append, но на
+  // практике initial observe не всегда срабатывает синхронно в Electron —
+  // гарантируем расчёт через `requestAnimationFrame`, иначе в узком окне
+  // кнопка `▾N` появится с задержкой в кадр.
+  requestAnimationFrame(reflowEditorOverflow);
+  // Guarded initial draw: сохранённая вкладка, которой нет в наборе текущей
+  // сущности (например «Хроника» у связи), уступает «Основному» — само
+  // предпочтение в L4 не перезаписывается.
+  displayInitialTab(tabs);
 
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
 }
@@ -786,7 +1038,7 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
 }
 
 /**
- * Moves the caret into the permanent-comment field of the «Основное» tab —
+ * Moves the caret into the permanent-comment field of the «Комментарий» tab —
  * the continuation after a type created from the header type picker was
  * applied (карточка ETN «Быстрое создание типа из поля ввода»): the user
  * goes on writing the comment. Activates the tab and expands the collapsed
@@ -797,8 +1049,8 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
  */
 function focusEditorComment(): void {
   if (scrollBox === null) return;
-  if (activeTab !== 'main') {
-    // The first tab button is «Основное» — click reuses the regular lazy
+  if (shownTab !== 'main') {
+    // The first tab button is «Комментарий» — click reuses the regular lazy
     // pane activation instead of duplicating it here (synchronous: by the
     // next line the main pane is the active one).
     const tab = scrollBox.querySelector<HTMLButtonElement>('.editor-tab');
@@ -1037,6 +1289,11 @@ function synonymsEqual(a: string[], b: string[]): boolean {
 /**
  * Builds the thought header form (08-ui-spec.md §6.2.1).
  *
+ * Структура — три строки (задача 8ab775d9):
+ *   1. иконка · заголовок · ⚙ (Настройки мысли)
+ *   2. синонимы
+ *   3. тип ▾ · «актуально» · подменю «Действия»
+ *
  * Bug fix (editor shaking on Tab after a title edit): `blur` on the synonyms
  * field used to save unconditionally, even when the field was untouched.
  * Renaming a thought via Tab triggers an async `saveThought` that, on
@@ -1055,8 +1312,7 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   const box = div('editor-fields');
   const networkId = requireNetworkId();
 
-  // Top row: clickable icon box + large multiline title (no field labels —
-  // placeholders only, 08-ui-spec.md §6.2).
+  // --- Строка 1: иконка · заголовок · ⚙ (Настройки мысли) -----------------
   const topRow = div('editor-top-row');
 
   const iconBox = el('button', 'editor-icon-box') as HTMLButtonElement;
@@ -1158,10 +1414,14 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     }
   });
 
-  topRow.append(iconBox, titleArea);
+  const settingsBtn = button('', () => openThoughtSettings(thought), 'icon-btn', 'Цвет и стиль');
+  settingsBtn.append(svgIcon('settings', 14));
+  settingsBtn.setAttribute('aria-label', 'Настройки мысли');
+
+  topRow.append(iconBox, titleArea, settingsBtn);
   box.append(topRow);
 
-  // Synonyms (single line, comma-separated).
+  // --- Строка 2: синонимы -------------------------------------------------
   const synonymsInput = el('input', 'text-input synonyms-input');
   synonymsInput.type = 'text';
   synonymsInput.value = thought.synonyms.join(', ');
@@ -1184,7 +1444,7 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   });
   box.append(synonymsInput);
 
-  // Bottom row: type + settings (⚙) + active toggle.
+  // --- Строка 3: тип ▾ · «актуально» · подменю «Действия» -----------------
   const row = div('editor-header-row');
 
   // Searchable type picker (L6/L21): the type tree without the hierarchy
@@ -1216,9 +1476,6 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
     },
   });
 
-  const settingsBtn = button('', () => openThoughtSettings(thought), 'icon-btn', 'Цвет и стиль');
-  settingsBtn.append(svgIcon('settings', 14));
-
   const activeLabel = el('label', 'checkbox-row');
   const activeCheck = el('input');
   activeCheck.type = 'checkbox';
@@ -1229,12 +1486,72 @@ function buildThoughtHeader(thought: Thought): HTMLElement {
   });
   activeLabel.append(activeCheck, span('актуально'));
 
-  row.append(typeCombo.root, settingsBtn, activeLabel);
+  // Подменю «Действия» — задача 8ab775d9. Команды зеркалят контекстное меню
+  // облачка: «В фокус», toggle выделения, toggle закрепления. Меню открывается
+  // и с клавиатуры (Enter/Space).
+  const actionsBtn = button('Действия ▾', () => void openThoughtActionsMenu(thought, actionsBtn), 'btn small');
+  actionsBtn.type = 'button';
+
+  row.append(typeCombo.root, activeLabel, actionsBtn);
   box.append(row);
 
   // The title height depends on layout; size it once mounted.
   queueMicrotask(resizeTitle);
   return box;
+}
+
+/**
+ * Меню «Действия ▾» в шапке редактора: тот же набор команд, что у облачка
+ * мысли в значениях свойств и на холсте (спецификация «Контекстное меню
+ * мысли»), — единый конструктор `canvas/context-menu.ts`, без второго списка
+ * команд. Отличия контекста:
+ *
+ * - команды открытия нет — мысль уже открыта в редакторе;
+ * - «Добавить вложение» ведёт не в редактор (он и так открыт), а на вкладку
+ *   «Вложения» этой мысли;
+ * - «В фокус» ставит мысль в фокус холста.
+ *
+ * Меню вызывается и с клавиатуры (Enter/Space на кнопке «Действия ▾»).
+ */
+async function openThoughtActionsMenu(thought: Thought, anchor: HTMLButtonElement): Promise<void> {
+  const networkId = requireNetworkId();
+  // Импортируем лениво, чтобы не тащить холст в редактор и не плодить
+  // циклические зависимости (canvas ↔ editor ↔ canvas/context-menu).
+  const { showThoughtMenuUnder, resolveSiblingParentId } =
+    await import('../canvas/context-menu.js');
+  const { setFocus } = await import('../app.js');
+  showThoughtMenuUnder(
+    anchor,
+    {
+      id: thought.id,
+      title: thought.title,
+      dir: 'siblings',
+      // Мысль не в зоне холста — родителя для «налево (родственник)» резолвим
+      // запросом (на холсте он приходит с ответом фокуса).
+      siblingParentId: await resolveSiblingParentId(networkId, thought.id),
+      trashed: thought.marked_for_deletion,
+    },
+    {
+      hideOpenCommand: true,
+      focusHandler: () => {
+        if (!canSave()) {
+          offlineNotice();
+          return;
+        }
+        void setFocus(thought.id);
+      },
+      attachmentHandler: (id) => {
+        // Мысль уже открыта в редакторе: «Добавить вложение» ведёт прямо на её
+        // вкладку «Вложения». Для чужой мысли (или если вкладки нет — например,
+        // редактор показывает связь) открываем её в редакторе, как на холсте.
+        if (id === thought.id && tabButtons.has('attachments')) {
+          activateEditorTab('attachments');
+          return;
+        }
+        openThoughtInEditor(id);
+      },
+    },
+  );
 }
 
 /** Opens the thought settings dialog (colours + font style + reset). */
@@ -1394,10 +1711,24 @@ function buildLinkHeader(link: Link): HTMLElement {
       });
     },
     onCreateNew: async (query) => {
-      const id = await showLinkTypeEditor(null, () => undefined, { initialName: query });
-      if (id === null) return null;
-      focusCommentAfterTypeSave = true;
-      return id;
+      // Создание типа связи теперь идёт через единый диалог свойства
+      // (требование 09f692ff, задача 09201bd4): пользователь выбирает
+      // `value_type = 'link'`, вводит имена сторон, сервер автоматически
+      // создаёт связанный link_type. `query` подсказывает имя в поле
+      // «Имя в источнике» как начальное значение.
+      return new Promise<string | null>((resolve) => {
+        openPropertyManagerEditor(
+          null,
+          () => undefined,
+          (created) => {
+            focusCommentAfterTypeSave = true;
+            resolve(created.id);
+          },
+          // initialName от вызывающей стороны; в новой форме — это имя
+          // первой стороны (name_forward).
+          { initialSide: 'source' },
+        );
+      });
     },
   });
 
@@ -1442,7 +1773,7 @@ function openLinkSettings(link: Link): void {
 
 /** Test hooks (renderer editor-mount regression test); not part of the app API. */
 export const editorInternals = {
-  /** Registered «Основное» sections — must not grow per `mountEditor` call. */
+  /** Registered «Комментарий» sections — must not grow per `mountEditor` call. */
   mainSectionCount: (): number => mainSectionBuilders.length,
   /** Comma-separated synonyms field parser (editor-shaking regression). */
   parseSynonymsField,

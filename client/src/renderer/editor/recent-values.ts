@@ -1,31 +1,26 @@
 /**
- * Recent-values suggestions for single `text` and `thought_ref` property
- * editors (task «Помощь с заполнением значений свойств», 2026-09-02).
+ * Recent-values suggestions for single `text` property editors (task
+ * «Помощь с заполнением значений свойств», 2026-09-02; ссылочные значения
+ * удалены вместе с видом `thought_ref` — миграция 040).
  *
  * When editing homogeneous thoughts the same property values repeat; this
  * module keeps a client-LOCAL history (localStorage, key = network id +
  * property id — the server and the API are untouched) and offers it as a
  * dropdown under the value field:
  *  - focusing an EMPTY field — or clearing it back to empty — opens the list
- *    of the 10 most recently saved values of that property (for `thought_ref`
- *    the stored thought ids are resolved to titles; unresolvable entries are
- *    skipped, never shown raw);
+ *    of the 10 most recently saved values of that property;
  *  - ↑/↓ move the highlight, Enter picks the highlighted row (without a
  *    highlight — the first one, the same rule as the candidate search);
  *    Escape and outside clicks close the list without touching the field;
  *  - typing closes the list so the field's regular behaviour takes over (for
- *    `thought_ref` — the live candidate search; for `text` with predefined
- *    options — the options dropdown).
+ *    `text` with predefined options — the options dropdown).
  *
  * The history is recorded by the properties editor on every successful save
- * of a single text/thought_ref value. Multiple-value properties
- * (`config.multiple`) keep no history at all.
+ * of a single text value. Multiple-value properties (`config.multiple`) keep
+ * no history at all.
  */
 
-import type { ThoughtRef } from '@etn/shared';
-
 import { div, el, positionBodyDropdown } from '../lib/dom.js';
-import { etn } from '../lib/etn.js';
 
 /** History length per property (the agreed product decision: 10 entries). */
 export const RECENT_VALUES_MAX = 10;
@@ -108,34 +103,6 @@ export interface RecentValueEntry {
   label: string;
 }
 
-/**
- * Loads the history of a single `thought_ref` property as pickable entries:
- * the stored ids resolve through the shared ref cache (filled by the
- * properties table), the missing ones via one `thoughts.resolve` call; ids
- * that do not resolve (deleted thoughts) are skipped, never shown raw.
- */
-export async function loadRecentRefEntries(
-  networkId: string,
-  propertyId: string,
-  refs: Map<string, ThoughtRef>,
-): Promise<RecentValueEntry[]> {
-  const ids = loadRecentValues(networkId, propertyId);
-  if (ids.length === 0) return [];
-  const missing = ids.filter((id) => !refs.has(id));
-  if (missing.length > 0) {
-    try {
-      for (const ref of await etn.thoughts.resolve(networkId, missing)) refs.set(ref.id, ref);
-    } catch {
-      // Offline blips — show whatever the cache already knows.
-    }
-  }
-  const entries: RecentValueEntry[] = [];
-  for (const id of ids) {
-    const ref = refs.get(id);
-    if (ref !== undefined) entries.push({ value: id, label: ref.title });
-  }
-  return entries;
-}
 
 /** Pure index math for ↑/↓ over the rows (the same rule as the candidate search). */
 function navIndex(cursor: number | null, count: number, delta: 1 | -1): number | null {

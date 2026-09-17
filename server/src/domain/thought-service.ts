@@ -28,6 +28,7 @@ import {
   type FocusNeighbor,
   type FocusResponse,
   type IconKind,
+  type LinkTypeFilterInput,
   type ResolveResult,
   type SortKind,
   type SortOrder,
@@ -50,11 +51,13 @@ import {
 import {
   computeThoughtCardWarnings,
   countThoughtRefUsages,
+  filterApplicableLinkDefaultTargets,
   getPropertyValuesResolved,
   listEffectiveTypeProperties,
   setPropertyValueById,
 } from './property-service.js';
 import { assertThoughtTypeAssignable, getThoughtType } from './thought-type-service.js';
+import { linkTypeFilterClause } from './type-hierarchy.js';
 
 import { getAttachment } from './attachment-service.js';
 import { getEdgesAmong, getLinkDirections } from './link-service.js';
@@ -410,7 +413,7 @@ export function resolveThoughts(ndb: NetworkDb, ids: string[]): ThoughtRef[] {
  *
  * На одну мысль:
  *  * `synonyms` — из `thought_synonyms_v`;
- *  * `properties` — резолвнутые `thought_ref`, помеченные `outside_type`,
+ *  * `properties` — значения свойств, помеченные `outside_type`,
  *    в форме `etn.thoughts.get` (используется общий с `etn.thoughts.get`
  *    сервис `getPropertyValuesResolved`);
  *  * `meta` — счётчики + превью постоянного комментария (используется общий
@@ -778,9 +781,23 @@ export function createThought(
     // writing by id avoids a second name resolution.
     if (input.type_id !== undefined && input.type_id !== null) {
       for (const def of listEffectiveTypeProperties(ndb, 'thought_type', input.type_id)) {
-        if (def.default_value !== null) {
-          setPropertyValueById(ndb, 'thought', id, def.property_id, def.default_value, actorUserId);
+        if (def.default_value === null) continue;
+        // Дефолт свойства-связи — набор целей (bb67e546): применение создаёт
+        // рёбра. Цели, ставшие неприменимыми после установки дефолта
+        // (удалены, в корзине, сменили тип), молча пропускаются — создание
+        // мысли не должно падать из-за протухшего дефолта.
+        if (def.value_type === 'link') {
+          const ids = filterApplicableLinkDefaultTargets(
+            ndb,
+            def.config ?? null,
+            Array.isArray(def.default_value) ? def.default_value : [],
+          );
+          if (ids.length > 0) {
+            setPropertyValueById(ndb, 'thought', id, def.property_id, ids, actorUserId);
+          }
+          continue;
         }
+        setPropertyValueById(ndb, 'thought', id, def.property_id, def.default_value, actorUserId);
       }
     }
     // Server-side comment template application (0.4.3): a thought created with
@@ -1018,7 +1035,7 @@ function countOrphanedChildren(ndb: NetworkDb, thoughtId: string): number {
 
 /**
  * Check whether a thought can be physically deleted (docs/03-server-api.md
- * §6.5a). Blocking arms: "использование в свойствах" (`thought_ref` from other
+ * §6.5a). Blocking arms: "использование в свойствах" (link-property edges,
  * thoughts) and live (`deleted = 0`) shadow rows of the thought itself or of
  * links where it is an endpoint in layers other than the connection's own,
  * plus — when the check runs in a working layer — a live row of the thought in
@@ -1101,7 +1118,7 @@ export function deleteThought(
       return;
     }
     // S13: refuse physical deletion while other thoughts reference this one
-    // through a thought_ref property, or while a non-base layer holds a live
+    // through a blocking link-property edge, or while a non-base layer holds a live
     // shadow row of it / of a link where it is an endpoint
     // (02-data-model.md §3.1.2).
     const check = checkThoughtDeletion(ndb, id);
@@ -1201,6 +1218,13 @@ export interface NeighborOptions {
   offset?: number;
   /** Restrict neighbours to thoughts of this type (03-server-api.md §6.7). */
   typeId?: string;
+  /**
+   * Фильтр обхода по типам связей (задача c965ad03, 0.8.1): сосед держится за
+   * фокус только связью, прошедшей фильтр. Для `siblings` фильтруется весь
+   * путь — и связь сиблинга с общим родителем (`l`), и связь родителя с
+   * фокусом (`lp`).
+   */
+  linkFilter?: LinkTypeFilterInput;
 }
 
 /** Read a user's sort preference for a (focus, dir) zone, or null if unset. */
@@ -1282,6 +1306,7 @@ function orderByClause(sort: SortKind, order: SortOrder, dir: FocusDir): string 
  * bind via `?` placeholders returned alongside the SQL.
  */
 function buildNeighborsQuery(
+  ndb: NetworkDb,
   dir: FocusDir,
   sort: SortKind,
   order: SortOrder,
@@ -1350,6 +1375,22 @@ function buildNeighborsQuery(
     where.push('t.type_id = ?');
     params.push(opts.typeId);
   }
+  // Задача c965ad03 (0.8.1): фильтр обхода по типам связей. Сосед виден, когда
+  // связь, которой он держится за фокус (`l`), проходит фильтр; для siblings
+  // путь идёт через общего родителя, поэтому фильтруется и связь фокуса с
+  // родителем (`lp`) — оба ребра пути должны пройти фильтр, как в BFS-обходе.
+  const lClause = linkTypeFilterClause(ndb, opts.linkFilter, 'l');
+  if (lClause !== null) {
+    where.push(lClause.sql);
+    params.push(...lClause.params);
+  }
+  if (dir === 'siblings') {
+    const lpClause = linkTypeFilterClause(ndb, opts.linkFilter, 'lp');
+    if (lpClause !== null) {
+      where.push(lpClause.sql);
+      params.push(...lpClause.params);
+    }
+  }
 
   const sqlParts = [select, 'FROM links_v l', ...joins.map((j) => j.trimStart())];
   sqlParts.push('WHERE ' + where.join(' AND '));
@@ -1381,7 +1422,7 @@ export function getNeighbors(
   const limit = opts.limit ?? 50;
   const offset = opts.offset ?? 0;
 
-  const { sql, params } = buildNeighborsQuery(dir, sort, order, opts, thoughtId);
+  const { sql, params } = buildNeighborsQuery(ndb, dir, sort, order, opts, thoughtId);
   const rows = ndb
     .prepare(`${sql} LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as NeighborRow[];
@@ -1412,7 +1453,7 @@ export function countNeighbors(
     throw new EtnError('VALIDATION_ERROR', `invalid dir: ${String(dir)}`, { field: 'dir' });
   }
   const { sort, order } = resolveSortOrder(opts);
-  const { sql, params } = buildNeighborsQuery(dir, sort, order, opts, thoughtId);
+  const { sql, params } = buildNeighborsQuery(ndb, dir, sort, order, opts, thoughtId);
   const row = ndb.prepare(`SELECT COUNT(*) AS c FROM (${sql})`).get(...params) as { c: number };
   return row.c;
 }
@@ -1421,6 +1462,12 @@ export function countNeighbors(
 export interface FocusOptions {
   /** Include inactive thoughts/links when true (preferences.show_inactive). */
   showInactive?: boolean;
+  /**
+   * Фильтр обхода по типам связей (задача c965ad03, 0.8.1): зоны фокуса
+   * наполняются только по рёбрам выбранных типов (+структурные при
+   * `include_structural`), рёбра и индикаторы направлений — те же типы.
+   */
+  linkFilter?: LinkTypeFilterInput;
 }
 
 /**
@@ -1481,6 +1528,7 @@ export function focus(
       showInactive,
       sort: prefs[dir]?.sort,
       order: prefs[dir]?.order,
+      linkFilter: opts.linkFilter,
     });
   }
   // Zone exclusivity (08-ui-spec.md §2.1): a thought may appear in at most one
@@ -1506,7 +1554,7 @@ export function focus(
     ...grouped.children.map((n) => n.id),
     ...grouped.siblings.map((n) => n.id),
   ];
-  const edges = getEdgesAmong(ndb, visibleIds, showInactive).map((l) => ({
+  const edges = getEdgesAmong(ndb, visibleIds, showInactive, opts.linkFilter).map((l) => ({
     id: l.id,
     source_id: l.source_id,
     target_id: l.target_id,
@@ -1518,7 +1566,7 @@ export function focus(
   }));
   // Whether each visible thought has any incoming/outgoing link at all —
   // drives the top/bottom ellipse fill so chains are visible off-screen.
-  const directions = getLinkDirections(ndb, visibleIds);
+  const directions = getLinkDirections(ndb, visibleIds, opts.linkFilter);
   const annotate = (n: FocusNeighbor): FocusNeighbor => {
     const d = directions.get(n.id) ?? { has_in: false, has_out: false };
     return { ...n, has_incoming: d.has_in, has_outgoing: d.has_out };

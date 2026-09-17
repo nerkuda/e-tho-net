@@ -21,6 +21,7 @@ import {
   type LinkCreateInput,
   type LinkDeletionCheckResult,
   type LinkStyle,
+  type LinkTypeFilterInput,
   type LinkUpdateInput,
   type ThoughtLinkItem,
   type ThoughtLinksGrouped,
@@ -35,6 +36,7 @@ import { purgeOwnerDependants, tombstoneOwnerDependants } from './owner-cleanup.
 import { assertLinkTypeAssignable } from './link-type-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import { setPropertyValues } from './property-service.js';
+import { linkTypeFilterClause } from './type-hierarchy.js';
 
 import {
   FONT_BOLD_BIT,
@@ -235,17 +237,29 @@ export function incomingLinksOf(ndb: NetworkDb, thoughtId: string): Link[] {
  * Returns every link whose both ends are in `ids` (the visible thoughts of a
  * focus response), optionally including inactive ones. Used to draw all links
  * among the visible clouds — not just those incident to the focus.
+ *
+ * Задача c965ad03 (0.8.1): `linkFilter` ограничивает типы возвращаемых рёбер
+ * (типы с потомками + опционально структурные) — фокус-ответ с фильтром не
+ * должен рисовать линии, которые обход отфильтровал.
  */
-export function getEdgesAmong(ndb: NetworkDb, ids: string[], showInactive: boolean): Link[] {
+export function getEdgesAmong(
+  ndb: NetworkDb,
+  ids: string[],
+  showInactive: boolean,
+  linkFilter?: LinkTypeFilterInput,
+): Link[] {
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(',');
+  const typeClause = linkTypeFilterClause(ndb, linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
   const rows = ndb
     .prepare(
-      `SELECT * FROM links_v
-       WHERE source_id IN (${placeholders}) AND target_id IN (${placeholders})
-         AND (active = 1 OR ?)`,
+      `SELECT l.* FROM links_v l
+       WHERE l.source_id IN (${placeholders}) AND l.target_id IN (${placeholders})
+         AND (l.active = 1 OR ?)${typeSql}`,
     )
-    .all(...ids, ...ids, showInactive ? 1 : 0) as LinkRow[];
+    .all(...ids, ...ids, showInactive ? 1 : 0, ...typeParams) as LinkRow[];
   return rows.map(rowToLink);
 }
 
@@ -253,21 +267,29 @@ export function getEdgesAmong(ndb: NetworkDb, ids: string[], showInactive: boole
  * For each id, whether it has any active incoming / outgoing link at all —
  * drives the top/bottom ellipse fill of a cloud so the user can see that a
  * thought continues the chain even when its other links are off-screen.
+ *
+ * Задача c965ad03 (0.8.1): `linkFilter` ограничивает типы учитываемых рёбер —
+ * с фильтром эллипсы показывают раскрываемость по тем же типам, по которым
+ * ходит обход.
  */
 export function getLinkDirections(
   ndb: NetworkDb,
   ids: string[],
+  linkFilter?: LinkTypeFilterInput,
 ): Map<string, { has_in: boolean; has_out: boolean }> {
   const result = new Map<string, { has_in: boolean; has_out: boolean }>();
   if (ids.length === 0) return result;
   for (const id of ids) result.set(id, { has_in: false, has_out: false });
   const placeholders = ids.map(() => '?').join(',');
+  const typeClause = linkTypeFilterClause(ndb, linkFilter, 'l');
+  const typeSql = typeClause === null ? '' : ` AND ${typeClause.sql}`;
+  const typeParams = typeClause === null ? [] : typeClause.params;
   const rows = ndb
     .prepare(
-      `SELECT source_id, target_id FROM links_v WHERE active = 1
-         AND (source_id IN (${placeholders}) OR target_id IN (${placeholders}))`,
+      `SELECT l.source_id, l.target_id FROM links_v l WHERE l.active = 1
+         AND (l.source_id IN (${placeholders}) OR l.target_id IN (${placeholders}))${typeSql}`,
     )
-    .all(...ids, ...ids) as Array<{ source_id: string; target_id: string }>;
+    .all(...ids, ...ids, ...typeParams) as Array<{ source_id: string; target_id: string }>;
   for (const row of rows) {
     const src = result.get(row.source_id);
     if (src !== undefined) src.has_out = true;
@@ -336,10 +358,10 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
     const now = new Date(nowMs).toISOString();
     ndb
       .prepare(
-        `INSERT INTO links (id, layer_id, source_id, target_id, type_id, color, style, width, active, version,
+        `INSERT INTO links (id, layer_id, source_id, target_id, type_id, position, color, style, width, active, version,
                             created_at, updated_at, created_by, updated_by,
                             created_at_ms, updated_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -347,6 +369,7 @@ export function createLink(ndb: NetworkDb, input: LinkCreateInput, actorUserId: 
         input.source_id,
         input.target_id,
         typeId,
+        input.position ?? 0,
         input.color ?? null,
         input.style ?? null,
         input.width ?? null,
@@ -645,7 +668,7 @@ function repointLinkInLayer(
 
 /**
  * Check whether a link can be physically deleted (docs/03-server-api.md §6.5a).
- * Links have no `thought_ref` usage and no children, so the only blocking arm
+ * Links have no property usage and no children, so the only blocking arm
  * is a live (`deleted = 0`) shadow row of the link in a non-base layer
  * (02-data-model.md §3.1.2 п.3; until layers are created via S7 the list is
  * always empty).
@@ -827,10 +850,11 @@ export interface LinkFillingFlags {
 /**
  * For each id in `linkIds`, return `{has_properties, has_comment}`.
  *
- * `has_properties` — the link has at least one stored value whose
- * value column (`value_text` / `value_number` / `value_bool` / `value_date` /
- * `value_thought_ref`) is non-NULL. Tombstoned rows are excluded by the
- * `property_values_v` view (13-layers.md §4.2).
+ * `has_properties` — the link has at least one stored value whose value
+ * column (`value_text` / `value_number` / `value_bool` / `value_date`) is
+ * non-NULL. Tombstoned rows are excluded by the `property_values_v` view
+ * (13-layers.md §4.2). После миграции 040 значений на рёбрах нет (свернуты в
+ * постоянный комментарий ребра), флаг остаётся для совместимости контракта.
  *
  * `has_comment` — at least one comment of any kind (`permanent` or
  * `chronological`) is attached to the link as primary owner OR via the
@@ -859,8 +883,7 @@ export function getLinkFillingFlags(
 
   // `has_properties`: a stored value whose value column is non-NULL on at
   // least one row for this owner_type/id pair. `value_text` covers both text
-  // and url (02-data-model.md §3.5); `value_thought_ref` covers both single
-  // and the JSON-array multiple form (parsed separately by the reader).
+  // and url (02-data-model.md §3.5).
   const propRows = ndb
     .prepare(
       `SELECT owner_id AS link_id
@@ -870,8 +893,7 @@ export function getLinkFillingFlags(
           AND (value_text IS NOT NULL
             OR value_number IS NOT NULL
             OR value_bool IS NOT NULL
-            OR value_date IS NOT NULL
-            OR value_thought_ref IS NOT NULL)
+            OR value_date IS NOT NULL)
         GROUP BY owner_id`,
     )
     .all(...uniqueIds) as Array<{ link_id: string }>;

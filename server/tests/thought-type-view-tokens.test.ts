@@ -29,6 +29,7 @@ import type { NetworkDb } from '../src/db/network-db.js';
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createTypeProperty, setPropertyValue } from '../src/domain/property-service.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 import {
   createThoughtTypeView,
   updateThoughtTypeView,
@@ -447,13 +448,7 @@ describe(
     function setup(): { ndb: NetworkDb; typeId: string } {
       const ndb = createInMemoryNetworkDb();
       const tt = createThoughtType(ndb, { name: 'task' }, USER);
-      createTypeProperty(
-        ndb,
-        'thought_type',
-        tt.id,
-        { key: 'Версия', value_type: 'thought_ref' },
-        USER,
-      );
+      seedThoughtRefProperty(ndb, 'thought_type', tt.id, 'Версия', {}, USER);
       createTypeProperty(
         ndb,
         'thought_type',

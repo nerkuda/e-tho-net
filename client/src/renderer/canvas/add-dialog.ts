@@ -24,7 +24,7 @@
  *   - `allowCreate: false` forbids new thoughts and hides the type field;
  *   - `allowLinkType: false` hides the link-type field;
  *   - `selectedIds` prefills the list (multi mode switches on automatically);
- *   - `searchTypeIds` narrows the live search (thought_ref type configs).
+ *   - `searchTypeIds` narrows the live search (link-property type configs).
  *
  * Also handles the drop of files/URLs onto the canvas (08-ui-spec.md §7):
  * the zone drop handlers create thoughts with an attachment.
@@ -41,6 +41,7 @@ import { showDialog } from '../lib/dialog.js';
 import { applyFontFlags, button, div, el, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
+import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { parseAddLines, parseTitleWithSynonyms, parseThoughtIdQuery, isNotFoundError } from '../lib/pure.js';
 import { createTypeCombobox } from '../lib/type-combobox.js';
@@ -74,8 +75,15 @@ export interface ThoughtPickerOptions {
   allowCreate?: boolean;
   /** Show the link-type field (default true — the canvas add flows). */
   allowLinkType?: boolean;
-  /** Restrict the live search to these thought types (thought_ref configs). */
+  /** Restrict the live search to these thought types (link-property configs). */
   searchTypeIds?: string[];
+  /**
+   * Preselect the thought type for NEW thoughts (the type field stays
+   * editable). Used by link-property pickers whose definition restricts the
+   * target types: the first allowed type is the sensible default for a
+   * thought created right from the property editor.
+   */
+  defaultNewThoughtTypeId?: string | null;
   /** Prefill the list with these thoughts; multi mode switches on. */
   selectedIds?: string[];
   /**
@@ -192,13 +200,13 @@ async function insertIntoCanvas(
     try {
       if (item.kind === 'existing') {
         if (ctx.anchorId !== null) {
+          // 0.8.1 (6dcd6db7): `POST /links` снят — связь с существующей
+          // мыслью создаётся пакетной операцией; уже связанная пара не
+          // дублируется (прежний DUPLICATE больше не ошибка).
           const source = ctx.direction === 'child' ? ctx.anchorId : item.id;
           const target = ctx.direction === 'child' ? item.id : ctx.anchorId;
-          await etn.links.create(networkId, {
-            source_id: source,
-            target_id: target,
-            type_id: result.linkTypeId,
-          });
+          const res = await ensureLink(networkId, source, target, result.linkTypeId);
+          throwOnFailures(res);
         }
         if (firstAddedId === null) firstAddedId = item.id;
       } else {
@@ -293,11 +301,13 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     // Type of the created thought(s) — searchable picker over the catalogue
     // tree (L6/L21): rows carry the type's icon and style; the hierarchy root
     // is not offered (it only lives in «Типы мыслей»). Hidden when creation is
-    // forbidden (the picker mode never changes existing thoughts).
-    let newThoughtTypeId: string | null = null;
+    // forbidden (the picker mode never changes existing thoughts). The
+    // `defaultNewThoughtTypeId` option preselects a type (link-property
+    // pickers pass the first allowed target type).
+    let newThoughtTypeId: string | null = opts.defaultNewThoughtTypeId ?? null;
     const thoughtTypeCombo = createTypeCombobox({
       options: () => thoughtTypeOptions(store.state.thoughtTypes),
-      value: null,
+      value: opts.defaultNewThoughtTypeId ?? null,
       placeholder: 'без типа',
       emptyLabel: 'без типа',
       onChange: (typeId) => {

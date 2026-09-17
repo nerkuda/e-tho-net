@@ -1,6 +1,6 @@
 {
   "name": "@etn/client",
-  "version": "0.7.5",
+  "version": "0.8.1",
   "private": true,
   "type": "module",
   "description": "ETN — The Endless Thought Network desktop client",
@@ -42,6 +42,10 @@
     "@lezer/highlight": "^1.2.3",
     "@lezer/markdown": "^1.7.2",
     "better-sqlite3": "11.10.0",
+    "d3-drag": "^3.0.0",
+    "d3-force": "^3.0.0",
+    "d3-selection": "^3.0.0",
+    "d3-zoom": "^3.0.0",
     "electron-updater": "^6.3.9",
     "mermaid": "^11.16.1",
     "ws": "^8.21.3"
@@ -49,6 +53,10 @@
   "devDependencies": {
     "@electron/rebuild": "^3.6.0",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/d3-drag": "^3.0.7",
+    "@types/d3-force": "^3.0.10",
+    "@types/d3-selection": "^3.0.11",
+    "@types/d3-zoom": "^3.0.8",
     "@types/node": "^20.14.0",
     "@types/ws": "^8.18.1",
     "electron": "31.7.7",

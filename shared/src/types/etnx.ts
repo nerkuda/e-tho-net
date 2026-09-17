@@ -75,6 +75,16 @@ export interface EtnxManifestType {
 }
 
 /**
+ * Property row of a `.etnx` manifest. Archives exported before 0.8.1 may
+ * carry `value_type: 'thought_ref'` — the kind is absent from the live
+ * registry (миграция 040), but the importer must still accept and convert
+ * such rows (см. `convertLegacyThoughtRefProperty` в import-service).
+ */
+export type EtnxManifestProperty = Omit<NetworkProperty, 'value_type'> & {
+  value_type: NetworkProperty['value_type'] | 'thought_ref';
+};
+
+/**
  * Full manifest object. The server writes this verbatim as `manifest.json`
  * inside the `.etnx` archive; the importer reads it back through
  * `parseManifest`.
@@ -93,7 +103,7 @@ export interface EtnxManifest {
   /** Property registry (`properties` table, 0.6.5): the network-wide nature
    *  of each property referenced by the included bindings. Unique by `name`
    *  case-insensitively — the importer merges duplicates on import. */
-  properties: NetworkProperty[];
+  properties: EtnxManifestProperty[];
   /** Property bindings (per-type role: required, position). The
    *  `property_id` of every entry references one of the rows above. */
   type_properties: PropertyDefinition[];

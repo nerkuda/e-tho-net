@@ -176,6 +176,79 @@ describe(
       }
     });
 
+    it('focus applies the show_on_map default filter to typed links (0.8.1)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        // Two link-properties: one flagged show_on_map=true, the other false.
+        const mkProp = async (name: string, showOnMap: boolean): Promise<string> => {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/properties`,
+            headers: authHeaders(ctx),
+            payload: {
+              name,
+              value_type: 'link',
+              name_forward: `${name} →`,
+              name_reverse: `→ ${name}`,
+              config: { show_on_map: showOnMap },
+            },
+          });
+          assert.equal(res.statusCode, 201);
+          const cfg = (res.json().data as { config: { link_type_id: string } | null }).config;
+          assert.ok(cfg !== null && typeof cfg.link_type_id === 'string');
+          return cfg.link_type_id;
+        };
+        const shownTypeId = await mkProp('Показываемая', true);
+        const hiddenTypeId = await mkProp('Скрываемая', false);
+
+        // Two children of HOME, linked with the typed (non-structural) links.
+        const shownChild = await createThought(ctx, { title: 'Видимый ребёнок' });
+        const hiddenChild = await createThought(ctx, { title: 'Скрытый ребёнок' });
+        const linkTyped = async (childId: string, linkTypeId: string): Promise<void> => {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,
+            headers: authHeaders(ctx),
+            payload: {
+              ids: [childId],
+              op: 'link_parents',
+              args: { parent_ids: [ctx.homeId], link_type_id: linkTypeId },
+            },
+          });
+          assert.equal(res.statusCode, 200);
+        };
+        await linkTyped(shownChild, shownTypeId);
+        await linkTyped(hiddenChild, hiddenTypeId);
+
+        // Default: show_on_map=false type is excluded, =true type included.
+        const focusRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/focus`,
+          headers: authHeaders(ctx),
+          payload: {},
+        });
+        assert.equal(focusRes.statusCode, 200);
+        const children = (focusRes.json().data as { children: Array<{ id: string }> }).children;
+        assert.ok(children.some((c) => c.id === shownChild), 'shown child stays visible');
+        assert.ok(!children.some((c) => c.id === hiddenChild), 'hidden child is filtered out');
+
+        // Request-level link_filter overrides the default.
+        const explicitRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/focus`,
+          headers: authHeaders(ctx),
+          payload: { link_filter: { type_ids: [hiddenTypeId], include_structural: true } },
+        });
+        assert.equal(explicitRes.statusCode, 200);
+        const explicitChildren = (explicitRes.json().data as {
+          children: Array<{ id: string }>;
+        }).children;
+        assert.ok(explicitChildren.some((c) => c.id === hiddenChild));
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('neighbors: dir/sort/type_id filtering', async () => {
       const ctx = await buildRestContext();
       try {
@@ -340,14 +413,14 @@ describe(
         const x = await createThought(ctx, { title: 'Отобранная X' });
         const y = await createThought(ctx, { title: 'Отобранная Y' });
 
-        // A foreign incoming link parent2 → x (typed with no type).
+        // A foreign incoming link parent2 → x (структурная, через «Потомки»).
         const seed = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
+          method: 'PUT',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${parent2}/properties/${encodeURIComponent('Потомки')}`,
           headers: authHeaders(ctx),
-          payload: { source_id: parent2, target_id: x },
+          payload: { value: [x] },
         });
-        assert.equal(seed.statusCode, 201);
+        assert.equal(seed.statusCode, 200);
 
         const parentsOf = async (id: string): Promise<string[]> => {
           const res = await ctx.app.inject({
@@ -451,14 +524,23 @@ describe(
 
         // args.link_type_id sets the type of the links the op CREATES; the
         // pairs linked above (untyped) are untouched, the new one is typed.
+        // 0.8.1, задача d7177d1d: POST /link-types закрыт — создание типа
+        // связи идёт через POST свойства-связи.
         const lt = await ctx.app.inject({
           method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/link-types`,
+          url: `/api/v1/networks/${ctx.networkId}/properties`,
           headers: authHeaders(ctx),
-          payload: { name_forward: 'Содержит', name_reverse: 'Входит в' },
+          payload: {
+            name: 'Содержит',
+            value_type: 'link',
+            name_forward: 'Содержит',
+            name_reverse: 'Входит в',
+          },
         });
         assert.equal(lt.statusCode, 201);
-        const linkTypeId = (lt.json().data as { id: string }).id;
+        const linkTypeId = (
+          lt.json().data as { config: { link_type_id: string } | null }
+        ).config!.link_type_id;
         const typed = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/batch`,

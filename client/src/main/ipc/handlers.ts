@@ -557,12 +557,9 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       requireRest(deps).getLink(networkId, id, atLayerId),
     ),
   );
-  handlers.set(
-    'links.create',
-    bind((networkId: string, input: Parameters<RestClient['createLink']>[1]) =>
-      requireRest(deps).createLink(networkId, input),
-    ),
-  );
+  // `links.create` / `links.remove` сняты 0.8.1 (требование 3ea5c6af,
+  // ошибка 6dcd6db7): создание/удаление рёбер — пакетные операции
+  // `thoughts.batch` (lib/link-ops.ts) и запись свойств-связей.
   handlers.set(
     'links.update',
     bind(
@@ -572,12 +569,6 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         input: Parameters<RestClient['updateLink']>[2],
         expectedVersion: number,
       ) => requireRest(deps).updateLink(networkId, id, input, expectedVersion),
-    ),
-  );
-  handlers.set(
-    'links.remove',
-    bind((networkId: string, id: string, expectedVersion: number) =>
-      requireRest(deps).deleteLink(networkId, id, expectedVersion),
     ),
   );
   handlers.set(
@@ -600,7 +591,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'trash.purge',
-    bind((networkId: string) => requireRest(deps).purgeTrash(networkId)),
+    bind((networkId: string, ids?: string[]) => requireRest(deps).purgeTrash(networkId, ids)),
   );
 
   // --- activity log (задачи f2eca5a4, 6bcccd2b; docs/03-server-api.md §13d) -
@@ -2005,9 +1996,7 @@ const SELF_MUTATING_IPC_METHODS: ReadonlySet<string> = new Set([
   'thoughts.batch',
   'thoughts.copyBatch',
   'thoughts.usageClear',
-  'links.create',
   'links.update',
-  'links.remove',
   'properties.set',
   'properties.remove',
   'comments.create',

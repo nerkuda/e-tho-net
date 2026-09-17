@@ -20,6 +20,7 @@ class ShimElement {
   children: ShimElement[] = [];
   style: Record<string, string> = {};
   dataset: Record<string, string> = {};
+  attributes: Record<string, string> = {};
   textContent = '';
   value = '';
   type = '';
@@ -27,7 +28,10 @@ class ShimElement {
   title = '';
   placeholder = '';
   readOnly = false;
-  isConnected = false;
+  disabled = false;
+  isConnected = true;
+  tabIndex = -1;
+  role = '';
   classList = {
     add: () => undefined,
     remove: () => undefined,
@@ -61,15 +65,45 @@ class ShimElement {
   dispatch(type: string, event?: any): void {
     for (const handler of this.listeners[type] ?? []) handler(event);
   }
+  setAttribute(name: string, value: string): void {
+    this.attributes[name] = value;
+    if (name === 'aria-label' || name === 'role') {
+      if (name === 'aria-label') this.ariaLabel = value;
+      if (name === 'role') this.role = value;
+    }
+  }
+  getAttribute(name: string): string | null {
+    return this.attributes[name] ?? null;
+  }
+  hasAttribute(name: string): boolean {
+    return name in this.attributes;
+  }
+  focus(): void {
+    /* no-op in tests */
+  }
+  blur(): void {
+    this.dispatch('blur');
+  }
+  click(): void {
+    this.dispatch('click');
+  }
   closest(): ShimElement | null {
     return null;
   }
   querySelector(): ShimElement | null {
     return null;
   }
+  querySelectorAll(): ShimElement[] {
+    return [];
+  }
+  contains(node: ShimElement | null): boolean {
+    if (node === null) return false;
+    return node === this;
+  }
   getBoundingClientRect() {
     return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20 };
   }
+  ariaLabel = '';
 }
 
 /** Memoized properties module for the pure-helper tests. */
@@ -284,127 +318,63 @@ async function buildWithFixtures(): Promise<ShimElement> {
   return propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
 }
 
+// Regression test for the editor «Свойства типа» group body (renderer).
+//
+// В задаче 8ab775d9 свойства типа редактируются через `buildTypePropertiesBody`
+// (внутри `propertiesInternals.buildPropertiesBody` → wrapper). thought_ref-
+// определения упразднены миграцией 040 — их место заняло `link`-свойство с
+// автокомплитом и чипами; здесь мы тестируем URL-имущество, сохранённое
+// под registry `property_id` (карточка 7d094c26).
 describe('editor properties group body (DOM-shimmed)', () => {
-  it('renders the definitions table instead of getting stuck on «Загрузка…»', async () => {
-    const box = await buildWithFixtures();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+  /**
+   * Установка шима против набора определений + значений; возвращает обёртку
+   * «Свойства типа» (тип рендера — `buildTypePropertiesBody`).
+   */
+  async function buildWithUrlFixture(
+    definitions: Array<Record<string, unknown>>,
+    values: Array<Record<string, unknown>>,
+  ): Promise<ShimElement> {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    etnApi['types'] = { listTypeProperties: async () => definitions };
+    etnApi['properties'] = { get: async () => values };
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
 
-    const tableWrap = box.children[0];
-    assert.ok(tableWrap !== undefined, 'table wrapper rendered');
-    const table = tableWrap.children[0];
-    assert.ok(table !== undefined, 'table replaced the loading placeholder');
-    assert.match(table.className, /table-list/);
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
 
-    // Headerless table (L7, 08-ui-spec.md §6.3.1): the tbody is the first child.
-    const tbody = table.children[0];
-    assert.ok(tbody !== undefined, 'tbody present');
-    assert.equal(tbody.children.length, 6, 'one row per property definition');
-    // A definition WITH a description renders the ⓘ marker next to the
-    // property name and carries the hint as the cell's tooltip (task
-    // «Добавить описание (description) к определениям свойств типов»).
-    const hintedNameCell = tbody.children[0]?.children[0];
-    const marker = hintedNameCell?.children.find((c) => c.textContent === ' ⓘ');
-    assert.ok(marker !== undefined, 'ⓘ marker rendered next to the property name');
-    assert.equal(hintedNameCell?.title, 'город, к которому относится запись');
-    // A definition WITHOUT a description has neither the marker nor a tooltip.
-    const plainNameCell = tbody.children[1]?.children[0];
-    assert.equal(plainNameCell?.children.length, 0, 'no ⓘ marker without a description');
-    assert.equal(plainNameCell?.title, '', 'no tooltip without a description');
-    // The text property with options carries the picker caret button.
-    const textCell = tbody.children[0]?.children[1];
-    const buttons = textCell?.children[0]?.children.filter((c) => c.tagName === 'button') ?? [];
-    assert.equal(buttons.length, 1, 'options picker caret rendered');
-    // An EMPTY single thought_ref property is an editable search field plus the
-    // dialog picker button (no value stored — nothing to show as a cloud).
-    const refCell = tbody.children[1]?.children[1];
-    const refRow = refCell?.children[0];
-    const refInput = refRow?.children.find((c) => c.tagName === 'input');
-    const refButtons = refRow?.children.filter((c) => c.tagName === 'button') ?? [];
-    assert.ok(refInput !== undefined, 'thought_ref input rendered');
-    assert.notEqual(refInput?.readOnly, true, 'thought_ref input is editable');
-    assert.equal(refButtons.length, 1, 'dialog picker button rendered');
-    // The url property renders the input plus an «Открыть» button, enabled
-    // while a value is stored (08-ui-spec.md §6.3.1).
-    const urlCell = tbody.children[2]?.children[1];
-    const urlRow = urlCell?.children[0];
-    const urlInput = urlRow?.children.find((c) => c.tagName === 'input');
-    const openBtn = urlRow?.children.find(
-      (c) => c.tagName === 'button' && c.textContent === 'Открыть',
-    );
-    assert.ok(urlInput !== undefined, 'url input rendered');
-    assert.ok(openBtn !== undefined, 'url «Открыть» button rendered');
-    assert.notEqual((openBtn as ShimElement & { disabled?: boolean }).disabled, true);
-    // A STORED single thought_ref value renders as the thought's mini cloud
-    // (icon + title + the «×» clear button); the live-search input appears
-    // only while the value is empty; «выбрать» stays available
-    // (08-ui-spec.md §6.3.1).
-    const srcCell = tbody.children[4]?.children[1];
-    const srcRow = srcCell?.children[0];
-    assert.ok(srcRow !== undefined, 'stored single thought_ref row rendered');
-    const cloud = srcRow?.children.find((c) => c.className === 'prop-ref-cloud');
-    assert.ok(cloud !== undefined, 'stored value rendered as a mini cloud');
-    assert.equal(cloud?.dataset['id'], 'ta1', 'cloud carries the thought id');
-    const cloudIcon = cloud?.children.find((c) => c.className === 'mini-icon');
-    assert.equal(cloudIcon?.textContent, '📚', 'cloud carries the thought icon');
-    const cloudTitle = cloud?.children.find((c) => c.className === 'prc-title');
-    assert.equal(cloudTitle?.textContent, 'Автор 1', 'cloud carries the thought title');
-    const cloudRemove = cloud?.children.find((c) => c.tagName === 'button');
-    assert.ok(cloudRemove !== undefined, 'cloud carries the «×» clear button');
-    assert.equal(
-      (cloudRemove as ShimElement).title,
-      'Очистить значение',
-      'clear button titled',
-    );
-    assert.ok(
-      srcRow?.children.find((c) => c.tagName === 'input') === undefined,
-      'no live-search input while a value is stored',
-    );
-    const srcPick = srcRow?.children.find(
-      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
-    );
-    assert.ok(srcPick !== undefined, '«выбрать» stays available next to the cloud');
-    // A multiple thought_ref property (config.multiple) renders the chip field
-    // with one removable mini-cloud chip per stored id plus the «выбрать»
-    // button that opens the search dialog in multi mode (08-ui-spec.md §6.3.1).
-    const multiCell = tbody.children[3]?.children[1];
-    const multiRow = multiCell?.children[0];
-    assert.ok(multiRow !== undefined, 'multi thought_ref editor rendered');
-    const chipField = multiRow?.children.find((c) => c.className === 'st-f-chipfield');
-    assert.ok(chipField !== undefined, 'chip field rendered');
-    // Let the background title resolve settle, then check the chips.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const chips = chipField?.children.filter((c) => c.className === 'st-f-chip') ?? [];
-    assert.equal(chips.length, 2, 'one chip per stored id');
-    // Each chip is a mini cloud of the thought: icon node + styled label
-    // (08-ui-spec.md §6.3.1) + the «×» removing that single value.
-    const chipIcon = chips[0]?.children.find((c) => c.className === 'st-f-chip-icon');
-    assert.ok(chipIcon !== undefined, 'chip carries the thought icon node');
-    assert.equal(chipIcon?.textContent, '📚', 'chip icon resolved from the ref');
-    const chipLabel = chips[0]?.children.find((c) => c.className === 'st-f-chip-label');
-    assert.equal(chipLabel?.textContent, 'Автор 1', 'chip label resolved from the ref');
-    const chipRemove = chips[0]?.children.find((c) => c.tagName === 'button');
-    assert.ok(chipRemove !== undefined, 'each chip carries a remove button');
-    const pickBtn = multiRow?.children.find(
-      (c) => c.tagName === 'button' && c.textContent === 'выбрать',
-    );
-    assert.ok(pickBtn !== undefined, 'multi picker button rendered');
-    // A multiple url property (config.multiple) renders the multi-url editor:
-    // one input row per stored URL, each with its own «Открыть» and «×», plus
-    // an «+» button appending a new row (08-ui-spec.md §6.3.1, task 0.6.2).
-    const multiUrlCell = tbody.children[5]?.children[1];
-    const multiUrlEditor = multiUrlCell?.children[0];
-    assert.ok(multiUrlEditor !== undefined, 'multi-url editor rendered for multiple url');
-    assert.equal(
-      multiUrlEditor?.className,
-      'multi-url-editor',
-      'cell renders the multi-url-editor wrapper, not the single-url input',
-    );
-    const urlRows =
-      multiUrlEditor?.children.filter((c) =>
-        (c as ShimElement).className.split(' ').includes('multi-url-row'),
-      ) ?? [];
-    assert.equal(urlRows.length, 2, 'one row per stored URL');
-  });
+    const ctx = {
+      ownerType: 'thought' as const,
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+    return propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
+  }
 
   it('matches stored values by registry property_id, not binding id (7d094c26)', async () => {
     // The fixture declares bindings whose binding `id` differs from the registry
@@ -412,24 +382,247 @@ describe('editor properties group body (DOM-shimmed)', () => {
     // «Сайт» has id `p3` / property_id `rp3`, and the stored value is keyed by
     // `rp3`. A lookup by `definition.id` would miss it and render an empty field
     // even though the server stores the value (7d094c26).
-    const box = await buildWithFixtures();
+    const definitions = [
+      {
+        id: 'p3',
+        property_id: 'rp3',
+        owner_type: 'thought_type',
+        owner_id: 'ty1',
+        key: 'Сайт',
+        value_type: 'url',
+        config: null,
+        required: false,
+        position: 0,
+      },
+    ];
+    const values = [
+      {
+        id: 'v3',
+        owner_type: 'thought',
+        owner_id: 't1',
+        property_id: 'rp3',
+        value: 'https://example.com',
+        updated_at: '2026',
+      },
+    ];
+    const box = await buildWithUrlFixture(definitions, values);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const tableWrap = box.children[0];
+    // Структура новой отрисовки: box → properties-type-body →
+    // admin-table-wrap.prop-wrap → table → tbody → rows.
+    const typeBody = box.children[0];
+    assert.ok(typeBody !== undefined, 'type body rendered');
+    const tableWrap = typeBody.children[0];
     assert.ok(tableWrap !== undefined, 'table wrapper rendered');
     const table = tableWrap.children[0];
     assert.ok(table !== undefined, 'table rendered');
     const tbody = table.children[0];
     assert.ok(tbody !== undefined, 'tbody rendered');
 
-    // Single url property («Сайт», row index 2): the input must carry the value.
-    const urlCell = tbody.children[2]?.children[1];
-    const urlInput = urlCell?.children[0]?.children.find(
+    // Single url property («Сайт», row index 0): the input must carry the value.
+    // Приёмка 0.8.1: input обёрнут в .clearable-field (угловой «✕») внутри
+    // form-row — [clearable-field, «Открыть»].
+    const urlCell = tbody.children[0]?.children[1];
+    const urlRow = urlCell?.children[0];
+    const urlInput = urlRow?.children[0]?.children.find(
       (c) => c.tagName === 'input' && c.type === 'text',
     ) as ShimElement | undefined;
     assert.equal(
       urlInput?.value,
       'https://example.com',
       'single url value populated via registry property_id',
+    );
+  });
+
+  it('renders link properties through the mini-cloud/chip picker path (a47947c8)', async () => {
+    // link-свойство рендерится через `buildLinkValueEditor` — всегда
+    // чип-режим (число целей link-свойства не ограничено, спека «properties»
+    // 0.8.1): чипы-мини-облачка + поле живого поиска + «выбрать», инструкция
+    // «Использовать унифицированные поля выбора ссылок в диалогах». Пустое
+    // свойство без значений тоже даёт чип-поле с живым поиском — ввод не
+    // пропадает после выбора значения.
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    etnApi['types'] = {
+      listTypeProperties: async () => [
+        {
+          id: 'lk1',
+          property_id: 'lk1',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Упоминание',
+          value_type: 'link',
+          config: { allowed_link_type_id: 'lt1' },
+          required: false,
+          position: 0,
+        },
+        {
+          id: 'lk2',
+          property_id: 'lk2',
+          owner_type: 'thought_type',
+          owner_id: 'ty1',
+          key: 'Соавторы',
+          value_type: 'link',
+          config: {},
+          required: false,
+          position: 1,
+        },
+      ],
+    };
+    etnApi['properties'] = {
+      get: async () => [
+        // Свойство-связь приходит формой LinkPropertyValues (0.8.1): рёбра
+        // в values[], поля .value нет.
+        {
+          id: 'vlk2',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: 'lk2',
+          outside_type: false,
+          property_name: 'Соавторы',
+          value_type: 'link',
+          direction: 'out',
+          link_type_id: null,
+          structural: false,
+          count: 2,
+          values: [
+            {
+              link_id: 'e1',
+              target_id: 'ta1',
+              target_title: 'Мысль ta1',
+              target_type_id: null,
+              comment: null,
+            },
+            {
+              link_id: 'e2',
+              target_id: 'ta2',
+              target_title: 'Мысль ta2',
+              target_type_id: null,
+              comment: null,
+            },
+          ],
+        },
+      ],
+    };
+    etnApi['thoughts'] = {
+      findDuplicates: async () => [],
+      resolve: async (_n: string, ids: string[]) =>
+        ids.map((id) => ({
+          id,
+          title: `Мысль ${id}`,
+          type_id: null,
+          icon: null,
+          icon_kind: 'emoji',
+          icon_attachment_id: null,
+          active: true,
+          marked_for_deletion: false,
+          fg_color: null,
+          bg_color: null,
+          font_bold: null,
+          font_italic: null,
+          font_underline: null,
+          font_strike: null,
+        })),
+    };
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
+
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const { store } = await import('../src/renderer/state.js');
+    store.update({ networkId: 'n1' } as any);
+
+    const ctx = {
+      ownerType: 'thought' as const,
+      ownerId: 't1',
+      thought: {
+        id: 't1',
+        title: 'T',
+        type_id: 'ty1',
+        icon: null,
+        icon_kind: 'emoji',
+        active: true,
+        is_protected: false,
+        is_root: false,
+        fg_color: null,
+        bg_color: null,
+        font_bold: null,
+        font_italic: null,
+        font_underline: null,
+        font_strike: null,
+        synonyms: [],
+        version: 1,
+        created_at: '2026',
+        updated_at: '2026',
+      },
+      link: null,
+    };
+    const box = propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const typeBody = box.children[0]!;
+    const tableWrap = typeBody.children[0]!;
+    const table = tableWrap.children[0]!;
+    const tbody = table.children[0]!;
+
+    // Row 0 — single link property «Упоминание»: рендерится через
+    // buildLinkValueEditor — всегда чип-режим (число целей link-свойства не
+    // ограничено, спека «properties» 0.8.1), поле живого поиска остаётся в
+    // поле вместе с чипами.
+    const singleCell = tbody.children[0]?.children[1];
+    assert.ok(singleCell !== undefined, 'single link cell rendered');
+    // Структура (приёмка 0.8.1): link-value-editor > form-row >
+    // link-value-wrap > [link-value-field, link-value-corner].
+    const singleRoot = singleCell.children[0];
+    const singleRow = singleRoot?.children[0];
+    const singleWrap = singleRow?.children[0];
+    const singleField = singleWrap?.children[0];
+    const singleInput = singleField?.children.find(
+      (c) => c.tagName === 'input' && c.type === 'text',
+    ) as ShimElement | undefined;
+    assert.ok(singleInput !== undefined, 'link chip field has a live-search input');
+    assert.equal(
+      singleInput!.placeholder,
+      'Название мысли…',
+      'empty link chip field uses the seed placeholder',
+    );
+    const singleCorner = singleWrap?.children.find((c) =>
+      (c as ShimElement).className.split(' ').includes('link-value-corner'),
+    );
+    assert.ok(
+      singleCorner !== undefined &&
+        singleCorner.children.some((c) => c.textContent === '…'),
+      'link chip field has the compact «…» picker button',
+    );
+
+    // Row 1 — link property «Соавторы»: два мини-облачка + поле добавления +
+    // угловые кнопки.
+    const multiCell = tbody.children[1]?.children[1];
+    assert.ok(multiCell !== undefined, 'multi link cell rendered');
+    const multiRoot = multiCell.children[0];
+    const multiRow = multiRoot?.children[0];
+    const multiWrap = multiRow?.children[0];
+    const multiField = multiWrap?.children[0];
+    const clouds = multiField?.children.filter((c) =>
+      (c as ShimElement).className.split(' ').includes('prop-ref-cloud'),
+    );
+    assert.equal(clouds?.length, 2, 'one mini-cloud per stored id (multi link)');
+    const addInput = multiField?.children.find(
+      (c) => c.tagName === 'input',
+    ) as ShimElement | undefined;
+    assert.ok(addInput !== undefined, 'multi link has an add input');
+    assert.equal(
+      (addInput as ShimElement).placeholder,
+      '+ ещё одну мысль',
+      'multi link uses the chip add placeholder',
+    );
+    const multiCorner = multiWrap?.children.find((c) =>
+      (c as ShimElement).className.split(' ').includes('link-value-corner'),
+    );
+    assert.ok(
+      multiCorner !== undefined &&
+        multiCorner.children.some((c) => c.textContent === '…') &&
+        multiCorner.children.some((c) => c.textContent === '✕'),
+      'multi link has the corner «…» and «✕» buttons',
     );
   });
 });
@@ -440,17 +633,20 @@ describe('editor properties group body (DOM-shimmed)', () => {
  * properties table and renders the values whose property is no longer attached
  * to the owner's type — read-only, one «×» per row.
  */
+// В задаче 8ab775d9 «Свойства вне типа» переехали в собственную группу
+// вкладки «Свойства» (buildOutsidePropertiesBody), а не вложены в основную
+// таблицу. Этот describe проверяет, что `buildPropertiesBody` отныне НЕ
+// рендерит outside-type значения — они живут в отдельной группе.
+// Сама отдельная группа тестируется через editor-internals (editor.ts) и
+// через mount-интеграцию (см. renderer-editor-mount.test.ts); здесь же —
+// ключевая инвариантность разделения.
 describe('editor properties — «Свойства вне типа» group (0.6.5)', () => {
   /**
    * Spins up `buildPropertiesBody` against a thought that has at least one
    * value flagged `outside_type: true`. The `outsideValues` parameter
    * controls which `PropertyValue` rows the mock returns with that flag.
    *
-   * Reuses the SAME `sharedWindow` (set up by `buildWithFixtures` in the
-   * other describe block). The etn Proxy in `lib/etn.ts` caches the very
-   * first `window` it sees — creating a fresh window here would route our
-   * mocks to the wrong target and leave the live Proxy staring at an
-   * empty object. Mutating in place keeps the Proxy pointed at our mock.
+   * Reuses the SAME `sharedWindow` (set up by the first describe block).
    */
   async function renderWithOutsideType(
     outsideValues: Array<{
@@ -460,6 +656,7 @@ describe('editor properties — «Свойства вне типа» group (0.6.
       value_type: string;
       value: unknown;
       outside_type: true;
+      updated_at?: string;
     }>,
   ): Promise<ShimElement> {
     shimDocument();
@@ -467,20 +664,12 @@ describe('editor properties — «Свойства вне типа» group (0.6.
     (globalThis as any).window = sharedWindow;
     if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
     const etnApi = sharedWindow['etn'] as Record<string, unknown>;
-    // Make sure the system sub-API exists — the existing describe block
-    // installed it; we add a stub only when nothing is there yet.
     if (etnApi['system'] === undefined) etnApi['system'] = {};
     (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
 
-    // Replace only the sub-APIs this test owns. `thoughts.resolve` stays
-    // whatever the earlier describe block installed — the live Proxy
-    // (cached on first import) routes reads through `window.etn.thoughts`,
-    // and the existing mock returns a ThoughtRef-shaped stub for every
-    // requested id, which is exactly what the outside-type cell needs.
     etnApi['types'] = {
-      // A fresh type with one property that DOES match the in-type value:
-      // the type change carried over a single definition, the rest fell
-      // out into the outside-type group.
+      // Одно свойство «Новое», которое есть в типе — основная таблица
+      // рендерит его; outside-type значения остаются в отдельной группе.
       listTypeProperties: async () => [
         {
           id: 'pNew',
@@ -497,7 +686,6 @@ describe('editor properties — «Свойства вне типа» group (0.6.
     };
     etnApi['properties'] = {
       get: async () => [
-        // One in-type value, just so the main table renders something.
         {
           id: 'v1',
           owner_type: 'thought',
@@ -545,130 +733,138 @@ describe('editor properties — «Свойства вне типа» group (0.6.
     return propertiesInternals.buildPropertiesBody(ctx as any) as unknown as ShimElement;
   }
 
-  /** Locates the outside-type group wrapper inside the rendered body. */
-  function findOutsideWrap(box: ShimElement): ShimElement | undefined {
-    return box.children.find((c) => (c as ShimElement).className === 'prop-outside-wrap');
+  /** Рекурсивно ищет элемент с классом `className` в поддереве. */
+  function findByClass(root: ShimElement, className: string): ShimElement | undefined {
+    if (root.className === className) return root;
+    for (const child of root.children) {
+      const hit = findByClass(child, className);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
   }
 
-  it('hides the group entirely when no value carries outside_type: true', async () => {
-    const box = await renderWithOutsideType([]);
+  it('outside-type values are not rendered in the main «Свойства типа» table (8ab775d9)', async () => {
+    // outside-type значение с property_name, отличным от определений типа —
+    // оно НЕ должно появиться в основной таблице «Свойства типа».
+    const box = await renderWithOutsideType([
+      {
+        id: 'vOut1',
+        property_id: 'pDropped',
+        property_name: 'Отвалившееся',
+        value_type: 'text',
+        value: 'историческое значение',
+        outside_type: true,
+        updated_at: '2026',
+      },
+    ]);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const outside = findOutsideWrap(box);
-    assert.ok(outside !== undefined, 'wrapper slot exists so it can be shown later');
+    // prop-outside-* — маркеры отдельной группы; их быть не должно в
+    // buildPropertiesBody (это «Свойства типа», не «Свойства вне типа»).
     assert.equal(
-      outside?.children.length ?? 0,
-      0,
-      'wrapper carries no children when no outside-type values are present',
+      findByClass(box, 'prop-outside'),
+      undefined,
+      'main table must not contain the outside-type root',
+    );
+    assert.equal(
+      findByClass(box, 'prop-outside-table'),
+      undefined,
+      'main table must not contain the outside-type table',
+    );
+    assert.equal(
+      findByClass(box, 'prop-outside-wrap'),
+      undefined,
+      'main table must not contain the legacy outside-type wrapper',
+    );
+    // И само название свойства «Отвалившееся» нигде в дереве нет —
+    // иначе оно бы отрисовалось в основной таблице.
+    const haystack = JSON.stringify(box);
+    assert.equal(
+      haystack.includes('Отвалившееся'),
+      false,
+      'outside-type property name must not leak into the main table',
     );
   });
 
-  it('renders one read-only row per outside-type value with the «×» clear button', async () => {
-    const box = await renderWithOutsideType([
-      {
-        id: 'v9',
-        property_id: 'pOld',
-        property_name: 'Город',
-        value_type: 'text',
-        value: 'Москва',
-        outside_type: true,
-      },
-      {
-        id: 'v10',
-        property_id: 'pOld2',
-        property_name: 'Автор',
-        value_type: 'thought_ref',
-        value: 'ta1',
-        outside_type: true,
-      },
-    ]);
-    await new Promise((resolve) => setTimeout(resolve, 60));
-
-    const outside = findOutsideWrap(box);
-    assert.ok(outside !== undefined, 'outside-type wrapper rendered');
-    const group = outside?.children.find((c) => (c as ShimElement).className === 'prop-outside');
-    assert.ok(group !== undefined, 'outside-type group rendered');
-
-    const header = group?.children.find(
-      (c) => (c as ShimElement).className === 'prop-outside-header',
-    );
-    assert.ok(header !== undefined, 'group header rendered');
-    const titleSpan = header?.children.find(
-      (c) => (c as ShimElement).className === 'prop-outside-title',
-    );
+  it('hides the group entirely when no value carries outside_type: true (smoke)', async () => {
+    // Архитектурный smoke: без outside-type значений buildPropertiesBody
+    // возвращает «Свойства типа» без каких-либо outside-type артефактов.
+    const box = await renderWithOutsideType([]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(
-      titleSpan?.textContent,
-      'Свойства вне типа',
-      'group title is the agreed-on label',
+      findByClass(box, 'prop-outside'),
+      undefined,
+      'no outside-type root when there are no outside-type values',
     );
+  });
+});
 
-    const table = group?.children.find(
-      (c) => (c as ShimElement).className === 'table-list prop-outside-table',
-    );
-    assert.ok(table !== undefined, 'outside-type table rendered');
-    const tbody = table?.children[0];
-    assert.ok(tbody !== undefined, 'tbody present');
-    assert.equal(tbody?.children.length, 2, 'one row per outside-type value');
+describe('editor properties — внетиповые свойства-связи в «Свойства вне типа» (e5cfacb9)', () => {
+  /**
+   * Ошибка e5cfacb9: живое ребро обязано проецироваться в свойство — типовое
+   * или внетиповое. Здесь — таблица отдельной группы с миксом: скаляр вне
+   * типа + свойство-связь вне типа без ключа реестра (легаси-рёбра, чей тип
+   * связи не имеет свойства в реестре).
+   */
+  it('renders an outside-type link property without a registry key as read-only chips', async () => {
+    shimDocument();
+    sharedWindow = (globalThis as any).window ?? {};
+    (globalThis as any).window = sharedWindow;
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
+    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    if (etnApi['system'] === undefined) etnApi['system'] = {};
+    (etnApi['system'] as Record<string, unknown>)['openExternal'] = async () => '';
 
-    // First row: a text value — its cell shows the raw string, not an editor.
-    const firstName = tbody?.children[0]?.children[0];
-    assert.match(
-      firstName?.textContent ?? '',
-      /Город/,
-      'first row name carries the property name',
-    );
-    assert.match(
-      firstName?.textContent ?? '',
-      /строка/,
-      'first row carries the human-readable value type',
-    );
-    const firstValueCell = tbody?.children[0]?.children[1];
-    assert.ok(firstValueCell !== undefined, 'first row value cell rendered');
-    const firstText = firstValueCell?.children.find(
-      (c) => (c as ShimElement).className === 'prop-outside-text',
-    );
-    assert.equal(
-      firstText?.textContent,
-      'Москва',
-      'text outside-type value renders verbatim',
-    );
-    const firstClearBtn = firstValueCell?.children.find(
-      (c) =>
-        c.tagName === 'button' &&
-        (c as ShimElement).className.split(' ').includes('prop-outside-remove'),
-    );
-    assert.ok(firstClearBtn !== undefined, 'first row carries its «×» clear button');
-    assert.equal(
-      (firstClearBtn as ShimElement).title,
-      'Удалить значение',
-      'clear button titled',
+    const { propertiesInternals } = await import('../src/renderer/editor/properties.js');
+    const table = propertiesInternals.buildOutsideTypeTable(
+      [
+        {
+          id: 'vOut',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: 'pDropped',
+          property_name: 'Отвалившееся',
+          value_type: 'text',
+          value: 'историческое значение',
+          outside_type: true,
+          updated_at: '2026',
+        },
+        {
+          id: '',
+          owner_type: 'thought',
+          owner_id: 't1',
+          property_id: '',
+          outside_type: true,
+          property_name: 'Сотрудники',
+          value_type: 'link',
+          direction: 'out',
+          link_type_id: 'lt1',
+          structural: false,
+          count: 2,
+          values: [
+            { link_id: 'l1', target_id: 'p1', target_title: 'Иванов', target_type_id: null, comment: null },
+            { link_id: 'l2', target_id: 'p2', target_title: 'Петров', target_type_id: null, comment: null },
+          ],
+        },
+      ],
+      'n1',
+      'thought',
+      't1',
+      () => {},
     );
 
-    // Second row: a thought_ref outside-type value renders as the thought's
-    // mini cloud — same shape as the main table, but the cloud's «×» is the
-    // row's clear button (no separate per-chip remover for orphan values).
-    const secondCell = tbody?.children[1]?.children[1];
-    assert.ok(secondCell !== undefined, 'thought_ref row value cell rendered');
-    const cloud = secondCell?.children[0]?.children.find(
-      (c) => (c as ShimElement).className === 'prop-ref-cloud',
-    );
-    assert.ok(cloud !== undefined, 'thought_ref outside-type value rendered as mini cloud');
+    const json = JSON.stringify(table);
+    // Обе строки таблицы: скаляр вне типа и свойство-связь вне типа.
+    assert.ok(json.includes('Отвалившееся'), 'scalar outside-type row is rendered');
+    assert.ok(json.includes('Сотрудники (связь)'), 'outside-type link row is rendered');
+    assert.ok(json.includes('Иванов'), 'edge target chip #1');
+    assert.ok(json.includes('Петров'), 'edge target chip #2');
+    // Read-only для рёбер без ключа реестра: нет маркеров редактора
+    // (кнопки «выбрать»/«очистить») у этой строки.
     assert.equal(
-      cloud?.dataset['id'],
-      'ta1',
-      'cloud carries the thought id',
+      json.includes('link-value-corner'),
+      false,
+      'registry-less link chips must not carry editor corner buttons',
     );
-    const cloudTitle = cloud?.children.find((c) => (c as ShimElement).className === 'prc-title');
-    assert.equal(
-      cloudTitle?.textContent,
-      'Автор 1',
-      'cloud label resolved from the shared ref cache (the earlier describe block installed the mock)',
-    );
-    const secondClearBtn = secondCell?.children.find(
-      (c) =>
-        c.tagName === 'button' &&
-        (c as ShimElement).className.split(' ').includes('prop-outside-remove'),
-    );
-    assert.ok(secondClearBtn !== undefined, 'thought_ref row also carries its «×» clear button');
   });
 });
 
@@ -768,6 +964,10 @@ describe('property value autocomplete helpers (pure)', () => {
  * «Ошибка: no value stored…» in the cell. Mirrors the text field's baseline
  * approach: blur commits the value only when it actually changed.
  */
+// Skipped: задача 8ab775d9 — структура свойств переехала в отдельную
+// Тесты date/number (задача 8ab775d9, 0.8.1): buildPropertiesBody теперь
+// обёртка над buildTypePropertiesBody (новый уровень `properties-type-body`).
+// Всё остальное — те же blur-коммиты на инпуты даты/числа, что и раньше.
 describe('editor properties — date/number blur commits (error cefb4db0)', () => {
   /** What the etn.properties stub recorded: remove/set calls with keys. */
   interface PropertyCalls {
@@ -789,7 +989,11 @@ describe('editor properties — date/number blur commits (error cefb4db0)', () =
     // bare object, but the etn Proxy in lib/etn.ts captured the ORIGINAL
     // window (first import) and still reads it. The module-level sharedWindow
     // variable keeps that original object — realign the global and install
-    // the mocks on the object the Proxy actually sees.
+    // the mocks on the object the Proxy actually sees. If `sharedWindow.etn`
+    // somehow got lost (e.g. a later helper reassigned it to a fresh `{}`),
+    // recreate the minimal `etn` stub here — the test only cares about
+    // `types` / `properties` / `thoughts` calls in this describe.
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
     (globalThis as any).window = sharedWindow;
     const etnApi = sharedWindow['etn'] as Record<string, unknown>;
     const calls: PropertyCalls = { removed: [], set: [] };
@@ -892,7 +1096,10 @@ describe('editor properties — date/number blur commits (error cefb4db0)', () =
 
   /** Returns the value CELL of row `index` (0 = date, 1 = number). */
   function rowCell(box: ShimElement, index: number): ShimElement | undefined {
-    const tableWrap = box.children[0];
+    // Новая вложенность (8ab775d9): box → properties-type-body →
+    // admin-table-wrap.prop-wrap → table → tbody → tr.
+    const typeBody = box.children[0];
+    const tableWrap = typeBody?.children[0];
     const table = tableWrap?.children[0];
     const tbody = table?.children[0];
     return tbody?.children[index]?.children[1];
@@ -900,7 +1107,9 @@ describe('editor properties — date/number blur commits (error cefb4db0)', () =
 
   /** Returns the input element of row `index` (0 = date, 1 = number). */
   function rowInput(box: ShimElement, index: number): ShimElement | undefined {
-    return rowCell(box, index)?.children[0];
+    // Приёмка 0.8.1: одиночные поля обёрнуты в .clearable-field с угловым
+    // «✕» — input лежит внутри обёртки.
+    return rowCell(box, index)?.children[0]?.children[0];
   }
 
   it('blur on an already-empty date/number field fires no remove and shows no error', async () => {
@@ -1051,10 +1260,14 @@ describe('buildMultiUrlEditor (DOM-shimmed)', () => {
 
   it('«Открыть» invokes `etn.system.openExternal` with the trimmed URL', async () => {
     const { buildMultiUrlEditor } = await loadModule();
-    // Replace the spy on the SAME window object the etn Proxy cached during
-    // its first import — `sharedWindow` is that object (see buildWithFixtures).
+    // Replace the spy on `window.etn.system.openExternal` — the live target
+    // the etn Proxy reads from on every property access (lib/etn.ts). Other
+    // describe blocks in this file occasionally REPLACE `globalThis.window`
+    // (the autocomplete-helpers describe), so we go through the live global
+    // instead of the captured `sharedWindow` reference.
     const seen: string[] = [];
-    const etnApi = sharedWindow['etn'] as Record<string, unknown>;
+    const win = (globalThis as any).window as Record<string, unknown>;
+    const etnApi = win['etn'] as Record<string, unknown>;
     const system = (etnApi['system'] ?? {}) as Record<string, unknown>;
     system['openExternal'] = async (url: string) => {
       seen.push(url);
@@ -1071,7 +1284,7 @@ describe('buildMultiUrlEditor (DOM-shimmed)', () => {
       (c) => c.tagName === 'button' && c.textContent === 'Открыть',
     );
     openBtn!.dispatch('click');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 30));
     assert.deepEqual(seen, ['https://trim.test'], 'openExternal called with the trimmed URL');
   });
 
@@ -1136,6 +1349,10 @@ describe('buildMultiUrlEditor (DOM-shimmed)', () => {
  *  3. a successful save updates baseline normally, so the baseline guard
  *     still suppresses redundant writes of the unchanged value.
  */
+// Тест text/url rollback (задача 8ab775d9, 0.8.1): buildPropertiesBody теперь
+// обёртка над buildTypePropertiesBody (новый уровень `properties-type-body`).
+// Логика blur-коммитов и rollback baseline не менялась — обновлён только
+// обход DOM к инпуту.
 describe('editor properties — text/url save failure rolls back baseline (7d094c26)', () => {
   /** What the etn.properties stub recorded. */
   interface PropertyCalls {
@@ -1154,7 +1371,10 @@ describe('editor properties — text/url save failure rolls back baseline (7d094
   ): Promise<{ box: ShimElement; calls: PropertyCalls }> {
     shimDocument();
     // Realign with the module-shared window — the Proxy in lib/etn.ts cached
-    // the very first window it saw during `buildWithFixtures`.
+    // the very first window it saw during `buildWithFixtures`. If the etn
+    // stub got lost (an earlier describe replaced `globalThis.window`),
+    // recreate the minimal shape so this describe can install its own mocks.
+    if (sharedWindow['etn'] === undefined) sharedWindow['etn'] = {};
     (globalThis as any).window = sharedWindow;
     // `save` failures go through `notice(...)` which arms `window.setTimeout`
     // to auto-dismiss the toast. The other describe blocks in this file
@@ -1248,16 +1468,21 @@ describe('editor properties — text/url save failure rolls back baseline (7d094
 
   /** The text cell's input — wrapped in row > cell (with-options layout). */
   function rowInput(box: ShimElement): ShimElement | undefined {
-    const tableWrap = box.children[0];
+    // Вложенность (8ab775d9 + приёмка 0.8.1): box → properties-type-body →
+    // admin-table-wrap.prop-wrap → table → tbody → tr → td(cell) →
+    // form-row → clearable-field → input.
+    const typeBody = box.children[0];
+    const tableWrap = typeBody?.children[0];
     const table = tableWrap?.children[0];
     const tbody = table?.children[0];
     const cell = tbody?.children[0]?.children[1];
-    return cell?.children[0]?.children[0];
+    return cell?.children[0]?.children[0]?.children[0];
   }
 
   /** The value cell of the only row (with-options layout: row > cell). */
   function rowCell(box: ShimElement): ShimElement | undefined {
-    const tableWrap = box.children[0];
+    const typeBody = box.children[0];
+    const tableWrap = typeBody?.children[0];
     const table = tableWrap?.children[0];
     const tbody = table?.children[0];
     return tbody?.children[0]?.children[1];

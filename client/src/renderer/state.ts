@@ -24,6 +24,7 @@ import {
   type LayerEcho,
   type Link,
   type LinkType,
+  type LinkTypeFilterInput,
   type Network,
   type NetworkListItem,
   type SortKind,
@@ -70,6 +71,14 @@ export interface AppState {
   focus: FocusResponse | null;
   /** L3 `show_inactive` preference of the open network. */
   showInactive: boolean;
+  /**
+   * L3 `canvas_link_filter` preference of the open network — the user's
+   * explicit canvas link-type filter, or `null` when unset (the effective
+   * filter is then the live `show_on_map`-derived default). See module
+   * `canvas/canvas-link-filter.ts` and requirement «Дефолт и хранение
+   * фильтра типов связей на карте».
+   */
+  canvasLinkFilter: LinkTypeFilterInput | null;
   /** L4 `cloud_width`, px. */
   cloudWidth: number;
   /** L4 `cloud_gap`, px. */
@@ -192,6 +201,7 @@ const initial: AppState = {
   networkId: null,
   focus: null,
   showInactive: false,
+  canvasLinkFilter: null,
   cloudWidth: CLOUD_WIDTH_DEFAULT,
   cloudGap: CLOUD_GAP_DEFAULT,
   canvasZoom: CANVAS_ZOOM_DEFAULT,
@@ -270,6 +280,8 @@ class Store {
       network: null,
       networkId: null,
       focus: null,
+      showInactive: false,
+      canvasLinkFilter: null,
       selection: [],
       selectedLinkId: null,
       editorTarget: null,

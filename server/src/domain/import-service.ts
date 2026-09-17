@@ -39,6 +39,7 @@ import {
   ETNX_MAX_BYTES,
   type Comment,
   type EtnxManifest,
+  type EtnxManifestProperty,
   type ImportPreview,
   type ImportSummary,
   type Link,
@@ -345,6 +346,103 @@ function insertLinkType(ndb: NetworkDb, row: LinkType): { created: boolean } {
 }
 
 /**
+ * Find or create the link type `upd: <name>` (symmetric names) in the base
+ * layer — the import counterpart of migration 040 for legacy `thought_ref`
+ * properties of pre-0.8.1 archives. Returns the type id.
+ */
+function upsertUpdLinkType(
+  ndb: NetworkDb,
+  propName: string,
+  actorUserId: string,
+  now: string,
+): string {
+  const name = `upd: ${propName}`;
+  const nameKey = name.trim().toLowerCase();
+  const existing = ndb
+    .prepare(
+      `SELECT id FROM link_types WHERE layer_id = '00000000-0000-4000-8000-0000000000ba5e' /* layers:physical-read — ищем существующий «upd:»-вид связи строго в слое основы */
+         AND name_forward_key = ? AND name_reverse_key = ? AND deleted = 0 LIMIT 1`,
+    )
+    .get(nameKey, nameKey) as { id: string } | undefined;
+  if (existing !== undefined) return existing.id;
+  const id = randomUUID();
+  ndb
+    .prepare(
+      `INSERT INTO link_types (
+         id, layer_id, deleted, base_version, name_forward, name_forward_key,
+         name_reverse, name_reverse_key, parent_id, is_root, color, style, width,
+         style_set, width_set, description, version, created_at, updated_at, created_by,
+         updated_by, created_at_ms, updated_at_ms
+       ) VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', 0, 0, ?, ?, ?, ?,
+         '00000000-0000-4000-8000-000000000002', 0, NULL, 'solid', 1, 1, 1,
+         ?, 1, ?, ?, ?, ?, 0, 0)`,
+    )
+    .run(
+      id,
+      name,
+      nameKey,
+      name,
+      nameKey,
+      `создано импортом из thought_ref-свойства «${propName}» — переименуйте в осмысленное`,
+      now,
+      now,
+      actorUserId,
+      actorUserId,
+    );
+  return id;
+}
+
+/** `config.link_type_id` свойства-связи по id реестровой строки; `null` —
+ *  строка не свойство-связь (или конфиг бит). */
+function readLinkPropertyTypeId(ndb: NetworkDb, propertyId: string): string | null {
+  const row = ndb
+    .prepare("SELECT config FROM properties WHERE id = ? AND deleted = 0 LIMIT 1")
+    .get(propertyId) as { config: string | null } | undefined;
+  if (row?.config === undefined || row.config === null) return null;
+  try {
+    const cfg = JSON.parse(row.config) as { link_type_id?: unknown };
+    return typeof cfg.link_type_id === 'string' && cfg.link_type_id !== ''
+      ? cfg.link_type_id
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Convert a legacy `thought_ref` property of a pre-0.8.1 archive into a link
+ * property — the import counterpart of migration 040. `allowed_type_ids`
+ * (and the legacy single `allowed_type_id`) become `allowed_target_type_ids`,
+ * the `multiple` flag is preserved; values are later materialised as edges by
+ * {@link insertLegacyRefEdges}.
+ */
+function convertLegacyThoughtRefProperty(
+  ndb: NetworkDb,
+  prop: EtnxManifestProperty,
+  actorUserId: string,
+  now: string,
+): NetworkProperty {
+  const linkTypeId = upsertUpdLinkType(ndb, prop.name, actorUserId, now);
+  const oldCfg = (prop.config ?? {}) as Record<string, unknown>;
+  const config: Record<string, unknown> = {
+    link_type_id: linkTypeId,
+    direction: 'out',
+    show_on_map: false,
+    blocks_target_deletion: true,
+  };
+  const allowed = Array.isArray(oldCfg['allowed_type_ids'])
+    ? (oldCfg['allowed_type_ids'] as unknown[]).filter(
+        (v): v is string => typeof v === 'string' && v !== '',
+      )
+    : typeof oldCfg['allowed_type_id'] === 'string' && oldCfg['allowed_type_id'] !== ''
+      ? [oldCfg['allowed_type_id'] as string]
+      : [];
+  if (allowed.length > 0) config['allowed_target_type_ids'] = allowed;
+  if (oldCfg['multiple'] === true) config['multiple'] = true;
+  return { ...prop, value_type: 'link', config: config as NetworkProperty['config'] };
+}
+
+/**
  * Insert one registry property from the manifest. The registry is keyed by
  * `name_key` (case-insensitive), not by id — two manifest rows of the same
  * name collapse onto the first-inserted id. Each call records the SURVIVING
@@ -355,13 +453,26 @@ function insertLinkType(ndb: NetworkDb, row: LinkType): { created: boolean } {
  * from a foreign network may collide with an id already used in the target.
  * Merge-by-name is the same rule migration 032 applies to the live base, so
  * the import semantics mirror the in-place migration exactly.
+ *
+ * Legacy `thought_ref` properties (pre-0.8.1 archives) are converted to link
+ * properties on the fly (ADR «вид значения thought_ref упраздняется»): the
+ * manifest id is recorded in `legacyRefProps` so the value phase materialises
+ * edges instead of `property_values` rows.
  */
 function insertProperty(
   ndb: NetworkDb,
-  prop: NetworkProperty,
+  prop: EtnxManifestProperty,
   remap: Map<string, string>,
+  legacyRefProps: Set<string>,
+  actorUserId: string,
+  now: string,
 ): string {
-  const now = new Date().toISOString();
+  const effective =
+    prop.value_type === 'thought_ref'
+      ? convertLegacyThoughtRefProperty(ndb, prop, actorUserId, now)
+      : prop;
+  if (prop.value_type === 'thought_ref') legacyRefProps.add(prop.id);
+  prop = effective;
   const configJson = prop.config === null ? null : JSON.stringify(prop.config);
   // First insert with the manifest id; on `name_key` collision, an existing
   // row wins and the INSERT is a no-op.
@@ -674,7 +785,7 @@ function insertPropertyValue(
     .prepare(
       `INSERT INTO property_values (
          id, owner_type, owner_id, property_id,
-         value_text, value_date, value_number, value_bool, value_thought_ref,
+         value_text, value_date, value_number, value_bool,
          updated_at
        ) VALUES (?, ?, ?, ?, ${colInit(column)}, ?)
        ON CONFLICT(owner_type, owner_id, property_id, layer_id) DO UPDATE SET
@@ -682,7 +793,6 @@ function insertPropertyValue(
          value_date = NULL,
          value_number = NULL,
          value_bool = NULL,
-         value_thought_ref = NULL,
          ${colSet(column)},
          updated_at = excluded.updated_at`,
     )
@@ -696,15 +806,15 @@ function insertPropertyValue(
     );
 }
 
-/** Map a property value to its canonical storage column. */
+/** Map a property value to its canonical storage column. Множественные
+ *  `url`-значения (JSON-массив строк) лежат в `value_text`, как и в
+ *  рантайме (02-data-model.md §3.5); легаси thought_ref-массивы сюда не
+ *  доходят — они материализуются рёбрами до insertPropertyValue. */
 function columnFor(
   value: PropertyValueValue,
-): 'value_text' | 'value_number' | 'value_bool' | 'value_thought_ref' {
+): 'value_text' | 'value_number' | 'value_bool' {
   if (typeof value === 'number') return 'value_number';
   if (typeof value === 'boolean') return 'value_bool';
-  // Multiple thought_ref values are stored as a JSON array of ids
-  // (02-data-model.md §3.5).
-  if (Array.isArray(value)) return 'value_thought_ref';
   return 'value_text';
 }
 
@@ -716,21 +826,19 @@ function coerce(value: PropertyValueValue): string | number | null {
   return value;
 }
 
-/** SQL fragment for the five value_* slots of the INSERT clause — the chosen
+/** SQL fragment for the value_* slots of the INSERT clause — the chosen
  * column's placeholder stands in its own position, the rest are NULL. */
 function colInit(column: string): string {
-  if (column === 'value_text') return '?, NULL, NULL, NULL, NULL';
-  if (column === 'value_number') return 'NULL, NULL, ?, NULL, NULL';
-  if (column === 'value_bool') return 'NULL, NULL, NULL, ?, NULL';
-  return 'NULL, NULL, NULL, NULL, ?';
+  if (column === 'value_text') return '?, NULL, NULL, NULL';
+  if (column === 'value_number') return 'NULL, NULL, ?, NULL';
+  return 'NULL, NULL, NULL, ?';
 }
 
 /** SQL fragment for the UPDATE clause (same idea, but written with `excluded.`). */
 function colSet(column: string): string {
   if (column === 'value_text') return 'value_text = excluded.value_text';
   if (column === 'value_number') return 'value_number = excluded.value_number';
-  if (column === 'value_bool') return 'value_bool = excluded.value_bool';
-  return 'value_thought_ref = excluded.value_thought_ref';
+  return 'value_bool = excluded.value_bool';
 }
 
 /** Argument slot for the column (others stay NULL). */
@@ -848,6 +956,9 @@ export function applyManifest(
     const typeIdRemap = new Map<string, string>();
     const linkTypeIdRemap = new Map<string, string>();
     const propertyIdRemap = new Map<string, string>();
+    /** Manifest property ids, конвертированные из легаси `thought_ref` (0.8.1):
+     *  их значения материализуются рёбрами, а не строками property_values. */
+    const legacyRefProps = new Set<string>();
     const createdThoughtIds: string[] = [];
     const createdLinkIds: string[] = [];
     const updatedCommentIds: string[] = [];
@@ -883,9 +994,18 @@ export function applyManifest(
       // Insert every registry property by NAME first so subsequent bindings
       // and values resolve through `propertyIdRemap`. Manifest ids are not
       // authoritative — a same-named row already in the target wins, and the
-      // remap carries the surviving id.
+      // remap carries the surviving id. Легаси `thought_ref`-свойства (архивы
+      // до 0.8.1) конвертируются в свойства-связи, их значения фазой 8
+      // материализуются рёбрами.
       for (const prop of manifest.properties) {
-        const inserted = insertProperty(ndb, prop, propertyIdRemap);
+        const inserted = insertProperty(
+          ndb,
+          prop,
+          propertyIdRemap,
+          legacyRefProps,
+          opts.actorUserId,
+          now,
+        );
         if (inserted === prop.id) summary.properties_created += 1;
       }
 
@@ -1065,6 +1185,49 @@ export function applyManifest(
           ? thoughtIdRemap.get(pv.owner_id)
           : undefined; // link-typed values are not yet rewritten (no link remap table)
       if (resolvedOwnerId === undefined) continue;
+      // Легаси `thought_ref`-значение (архив до 0.8.1): свойство уже
+      // сконвертировано в свойство-связь — материализуем ребро (зеркало
+      // миграции 040). Нерезолвнутые цели молча пропускаются.
+      if (legacyRefProps.has(pv.property_id)) {
+        const linkTypeId = readLinkPropertyTypeId(ndb, resolvedPropertyId);
+        if (linkTypeId === null) continue;
+        const targets = Array.isArray(pv.value)
+          ? pv.value.filter((v): v is string => typeof v === 'string' && v !== '')
+          : typeof pv.value === 'string' && pv.value !== ''
+            ? [pv.value]
+            : [];
+        let position = 0;
+        for (const targetId of targets) {
+          const resolvedTargetId = thoughtIdRemap.get(targetId) ?? targetId;
+          const exists = ndb
+            .prepare('SELECT 1 FROM thoughts_v WHERE id = ? AND deleted = 0 LIMIT 1')
+            .get(resolvedTargetId);
+          if (exists === undefined) continue;
+          const result = ndb
+            .prepare(
+              `INSERT OR IGNORE INTO links (
+                 id, source_id, target_id, type_id, position, active, version,
+                 created_at, updated_at, created_by, updated_by
+               ) VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?)`,
+            )
+            .run(
+              randomUUID(),
+              resolvedOwnerId,
+              resolvedTargetId,
+              linkTypeId,
+              position,
+              now,
+              now,
+              opts.actorUserId,
+              opts.actorUserId,
+            );
+          if (result.changes > 0) {
+            summary.links_created += 1;
+            position += 1;
+          }
+        }
+        continue;
+      }
       insertPropertyValue(
         ndb,
         { ...pv, property_id: resolvedPropertyId },

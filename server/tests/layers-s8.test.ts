@@ -32,6 +32,7 @@ import { BASE_LAYER_ID, type Layer, type LayerMergeReport } from '@etn/shared';
 
 import { openNetworkDb } from '../src/db/network-db.js';
 import { materializeShadow } from '../src/db/layer-write.js';
+import { createLink, deleteLink } from '../src/domain/link-service.js';
 import {
   authHeaders,
   buildRestContext,
@@ -39,6 +40,7 @@ import {
   nativeAvailable,
   type RestTestContext,
 } from './rest-helpers.js';
+import { seedThoughtRefProperty } from './seed-thought-ref.js';
 
 /** Methods used by this suite; `inject`'s `method` (light-my-request) rejects
  * fastify's wider `HTTPMethods` union (no `trace`), so keep a local one. */
@@ -71,23 +73,22 @@ async function thought(ctx: RestTestContext, title: string, clientId?: string): 
   return (res.json().data as { id: string }).id;
 }
 
-/** Create a link and return its id. */
+/** Create a link and return its id. 0.8.1: создание через домен (POST /links снят);
+ *  `layerId` — в какой слой писать (по умолчанию основа). */
 async function link(
   ctx: RestTestContext,
   sourceId: string,
   targetId: string,
   typeId?: string,
-  clientId?: string,
+  layerId?: string,
 ): Promise<string> {
-  const res = await call(
-    ctx,
-    'POST',
-    '/links',
-    { source_id: sourceId, target_id: targetId, ...(typeId !== undefined ? { type_id: typeId } : {}) },
-    { clientId },
+  const ndb = layerId === undefined ? ctx.ndb : openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layerId);
+  const l = createLink(
+    ndb,
+    { source_id: sourceId, target_id: targetId, type_id: typeId ?? null },
+    'system',
   );
-  assert.equal(res.statusCode, 201, res.body?.toString());
-  return (res.json().data as { id: string }).id;
+  return l.id;
 }
 
 /** Create a layer (base-layer session) and return the DTO. */
@@ -149,7 +150,7 @@ describe(
         const patchA = await call(ctx, 'PATCH', `/thoughts/${a}`, { title: 'A (слой)' }, { clientId: WORKER });
         assert.equal(patchA.statusCode, 200);
         const c = await thought(ctx, 'C', WORKER);
-        const ab = await link(ctx, a, b, undefined, WORKER);
+        const ab = await link(ctx, a, b, undefined, layer.id);
         const d = await thought(ctx, 'D', WORKER);
         const delD = await call(ctx, 'DELETE', `/thoughts/${d}`, undefined, { clientId: WORKER });
         assert.equal(delD.statusCode, 204);
@@ -262,7 +263,7 @@ describe(
         const layer = await createLayer(ctx, 'Частичное');
         await selectLayer(ctx, layer.id, WORKER);
         const x = await thought(ctx, 'X (слой)', WORKER);
-        const ab = await link(ctx, a, x, undefined, WORKER);
+        const ab = await link(ctx, a, x, undefined, layer.id);
 
         // Selecting the link alone leaves X outside both the merge and the
         // parent — the set is not closed (§8.1).
@@ -307,23 +308,11 @@ describe(
         // touched by the layer) — exactly the production shape that used to
         // fail closure: value_thought_ref holds a JSON array, and the whole
         // JSON text was passed as one "thought id".
-        const prop = await call(ctx, 'POST', '/properties', {
-          name: 'связанные задачи',
-          value_type: 'thought_ref',
-          config: { multiple: true },
-        });
-        assert.equal(prop.statusCode, 201, prop.body?.toString());
-        const propertyId = (prop.json().data as { id: string }).id;
-
+        // 0.8.1: thought_ref больше не создаётся через реестр — сеем напрямую.
         const type = await call(ctx, 'POST', '/thought-types', { name: 'Носитель свойств' });
         assert.equal(type.statusCode, 201, type.body?.toString());
         const typeId = (type.json().data as { id: string }).id;
-
-        const attach = await call(ctx, 'POST', `/thought-types/${typeId}/properties`, {
-          mode: 'attach',
-          property_id: propertyId,
-        });
-        assert.equal(attach.statusCode, 201, attach.body?.toString());
+        seedThoughtRefProperty(ctx.ndb, 'thought_type', typeId, 'связанные задачи', { multiple: true });
 
         const t1 = await thought(ctx, 'Цель 1');
         const t2 = await thought(ctx, 'Цель 2');
@@ -415,9 +404,17 @@ describe(
         for (const name of ['C1', 'C2', 'C3', 'D1', 'D2', 'D3']) {
           children[name] = await thought(ctx, name);
         }
-        const type = await call(ctx, 'POST', '/link-types', { name_forward: 'смотрит на', name_reverse: 'показан в' });
+        // 0.8.1, задача d7177d1d: POST /link-types закрыт — создание типа
+        // связи идёт через POST свойства-связи.
+        const type = await call(ctx, 'POST', '/properties', {
+          name: 'смотрит на',
+          value_type: 'link',
+          name_forward: 'смотрит на',
+          name_reverse: 'показан в',
+        });
         assert.equal(type.statusCode, 201, JSON.stringify(type.json()));
-        const typeId = type.json().data.id as string;
+        const typeId = (type.json().data as { config: { link_type_id: string } | null }).config!
+          .link_type_id;
 
         const linkC1 = await link(ctx, p1, children.C1!);
         const linkC2 = await link(ctx, p1, children.C2!);
@@ -444,9 +441,9 @@ describe(
         const repointedId = repoint.json().data.id as string;
         assert.notEqual(repointedId, linkC2);
 
-        // (c) delete a link — a tombstone;
-        const del = await call(ctx, 'DELETE', `/links/${linkC3}`, undefined, { clientId: WORKER });
-        assert.equal(del.statusCode, 204);
+        // (c) delete a link — a tombstone (0.8.1: через домен, DELETE /links снят);
+        const delNdb = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layer.id);
+        deleteLink(delNdb, linkC3, undefined);
 
         // (d) reorder the D-children — position-only writes on three rows.
         const layerNdb = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layer.id);
@@ -508,13 +505,21 @@ describe(
       try {
         const a = await thought(ctx, 'A');
         const b = await thought(ctx, 'B');
-        const type = await call(ctx, 'POST', '/link-types', { name_forward: 'связан с', name_reverse: 'связан с' });
-        const typeId = type.json().data.id as string;
+        // 0.8.1, задача d7177d1d: POST /link-types закрыт — создание через
+        // POST свойства-связи.
+        const type = await call(ctx, 'POST', '/properties', {
+          name: 'связан с',
+          value_type: 'link',
+          name_forward: 'связан с',
+          name_reverse: 'связан с',
+        });
+        const typeId = (type.json().data as { config: { link_type_id: string } | null }).config!
+          .link_type_id;
 
         const layer = await createLayer(ctx, 'Дубль');
         await selectLayer(ctx, layer.id, WORKER);
         // The layer creates A→B of type T first…
-        const layerLinkId = await link(ctx, a, b, typeId, WORKER);
+        const layerLinkId = await link(ctx, a, b, typeId, layer.id);
         const layerNdb = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, layer.id);
         layerNdb
           .prepare('UPDATE links SET position = ? WHERE id = ? AND layer_id = ?')
@@ -557,7 +562,7 @@ describe(
         // L1 creates a link onto B; a sibling layer L2 deletes B.
         const l1 = await createLayer(ctx, 'Связь');
         await selectLayer(ctx, l1.id, 'worker-1');
-        const ab = await link(ctx, a, b, undefined, 'worker-1');
+        const ab = await link(ctx, a, b, undefined, l1.id);
 
         const l2 = await createLayer(ctx, 'Удаление B');
         await selectLayer(ctx, l2.id, 'worker-2');

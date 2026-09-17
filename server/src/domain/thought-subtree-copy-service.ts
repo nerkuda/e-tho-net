@@ -8,7 +8,9 @@
  * `POST /thoughts/copy-batch`. То есть:
  *
  *   * типы резолвятся по id → по имени (как у `copyThoughtsBatch`);
- *   * `thought_ref` свойства резолвятся по id → по title;
+ *   * ссылки — рёбра снапшота: их типы резолвятся по id → по имени в целевой
+ *     сети (включая рёбра свойств-связей, 0.8.1 — thought_ref упразднён
+ *     миграцией 040);
  *   * файлы вложений не копируются — только видимые поля;
  *   * ссылки на root of target создаются автоматически от `parent_thought_id`.
  *
@@ -296,9 +298,8 @@ function collectSnapshot(
     if (includeProperties) {
       const rows = src
         .prepare(
-          `SELECT pv.value_text, pv.value_number, pv.value_bool, pv.value_date, pv.value_thought_ref,
-                  pv.property_id, p.name AS property_key, p.value_type AS property_value_type,
-                  p.config AS property_config
+          `SELECT pv.value_text, pv.value_number, pv.value_bool, pv.value_date,
+                  pv.property_id, p.name AS property_key, p.value_type AS property_value_type
              FROM property_values_v pv
              JOIN properties_v p ON p.id = pv.property_id
             WHERE pv.owner_type = 'thought' AND pv.owner_id = ?`,
@@ -308,10 +309,8 @@ function collectSnapshot(
         value_number: number | null;
         value_bool: number | null;
         value_date: string | null;
-        value_thought_ref: string | null;
         property_key: string;
         property_value_type: string;
-        property_config: string | null;
       }>;
       for (const r of rows) {
         properties[r.property_key] = decodePropertyValue(
@@ -319,9 +318,7 @@ function collectSnapshot(
           r.value_number,
           r.value_bool,
           r.value_date,
-          r.value_thought_ref,
           r.property_value_type,
-          r.property_config,
         );
       }
     }
@@ -399,15 +396,15 @@ function collectSnapshot(
   return { thoughts, links };
 }
 
-/** Преобразовать строку БД в PropertyValueValue с учётом value_type. */
+/** Преобразовать строку БД в PropertyValueValue с учётом value_type.
+ *  Свойства-связи (`link`) значений в `property_values` не хранят — их
+ *  рёбра копируются механикой рёбер снапшота (0.8.1). */
 function decodePropertyValue(
   text: string | null,
   number: number | null,
   bool: number | null,
   date: string | null,
-  thoughtId: string | null,
   valueType: string,
-  configJson: string | null,
 ): PropertyValueValue {
   switch (valueType) {
     case 'text':
@@ -419,22 +416,9 @@ function decodePropertyValue(
       return bool === 1;
     case 'date':
       return date;
-    case 'thought_ref': {
-      const multiple = configJson !== null && /"multiple"\s*:\s*true/.test(configJson);
-      if (multiple) {
-        // Multiple `thought_ref` хранится в value_text как JSON-массив id'ов
-        // (задача 0.6.2).
-        if (text === null) return [];
-        try {
-          const parsed = JSON.parse(text);
-          if (Array.isArray(parsed)) return parsed as string[];
-        } catch {
-          // fall through — вернём как одиночное значение.
-        }
-        return [];
-      }
-      return thoughtId ?? text;
-    }
+    case 'link':
+      // строка-призрак (остаток миграции 040) — в копию не переносится
+      return null;
     default:
       return text ?? number ?? date;
   }

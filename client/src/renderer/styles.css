@@ -315,6 +315,16 @@ textarea {
   align-items: center;
 }
 
+/* Двухколоночный grid единого редактора свойства/связи
+ * (`property-manager.ts` — секции «Скалярное свойство» и «Свойство связь»).
+ * По умолчанию `.form-row` центрирует колонки по вертикали — при разной
+ * высоте (одна колонка содержит длинный список типов, другая — несколько
+ * чекбоксов) группы «прыгают». `flex-start` фиксирует выравнивание по
+ * верхнему краю. */
+.two-col-row {
+  align-items: flex-start;
+}
+
 /* Text input with a side action button (add-attachment dialog, §6.5). */
 .input-with-btn {
   display: flex;
@@ -610,6 +620,15 @@ textarea {
   overflow: hidden;
   cursor: pointer;
   user-select: none;
+}
+
+/* Тот же баг, что у `.editor-tab[hidden]` выше: `.tab { display: inline-flex }`
+   (author normal) перебивает браузерное `[hidden] { display: none }`
+   (user-agent normal) независимо от специфичности — без этого правила
+   `recomputeOverflow` (tab-overflow.ts) выставляет `hidden=true` не
+   поместившимся вкладкам воркспейса, но они остаются видимыми. */
+.tab[hidden] {
+  display: none;
 }
 
 .tab:hover {
@@ -1621,6 +1640,12 @@ body.resizing-h {
   font-weight: 600;
 }
 
+/* Кнопка-воронка фильтра типов связей (0.8.1) — только иконка, тот же
+ * компактный паддинг, что у «+» и «⋯». */
+.canvas-filter-strip-btn.canvas-filter-strip-filter {
+  padding: 4px 8px;
+}
+
 .canvas-filter-strip-btn:disabled {
   cursor: not-allowed;
   opacity: 0.4;
@@ -1720,10 +1745,6 @@ body.resizing-h {
 }
 .link-popover-types {
   font-weight: 600;
-  margin-bottom: 2px;
-}
-.link-popover-counts {
-  color: var(--text-dim);
 }
 
 .link-label-text {
@@ -2343,6 +2364,15 @@ body.cloud-dragging * {
   padding: 8px 10px 0;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  /* `min-width: 0` — стандартный фикс flexbox для row-flex внутри column-flex
+     родителя: без него flex-item растягивается по min-content (сумма
+     фиксированных кнопок вкладок), его clientWidth раздувается,
+     `recomputeOverflow` думает, что всё помещается, и оставляет строку
+     вкладок длиннее родителя — панель вылезает за пределы редактора.
+     `overflow: hidden` страхует на случай, если даже после пересчёта видимый
+     набор + кнопка `▾N` всё равно не влезают (например, окно очень узкое). */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .editor-tab {
@@ -2354,6 +2384,27 @@ body.cloud-dragging * {
   color: var(--text-dim);
   cursor: pointer;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  /* Ширина кнопки — по заголовку: не сжимается (`flex: 0 0 auto`) и текст не
+     переносится, поэтому «Комментарий» (имя после переименования «Основного»)
+     целиком помещается в свою кнопку. Не влезающие вкладки уходят в `[▾N]`
+     (`recomputeOverflow`, режим `content`) — раньше ширина была фиксированной
+     (110 → 80 при нехватке места), и длинный заголовок вылезал за кнопку. */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Настоящая причина того, что overflow-меню не работало визуально несмотря
+   на 4 предыдущих попытки: `recomputeOverflow` (tab-overflow.ts) прячет не
+   поместившиеся вкладки атрибутом `button.hidden = true`, но браузерное
+   `[hidden] { display: none }` — правило user-agent normal-приоритета, а
+   `.editor-tab { display: inline-flex }` — author normal-приоритета; author
+   ВСЕГДА перебивает user-agent при равном/любом приоритете важности,
+   независимо от специфичности. Раньше исправляли только оверфлоу-кнопку
+   (`.tab-overflow[hidden]`, ниже), а сами кнопки вкладок оставались видимыми
+   при hidden=true — они просто вылезали за `.editor-tabs { overflow: hidden }`
+   и обрезались, дропдаун не появлялся. */
+.editor-tab[hidden] {
+  display: none;
 }
 
 .editor-tab:hover {
@@ -2382,7 +2433,7 @@ body.cloud-dragging * {
   padding: 10px;
 }
 
-/* «Основное» flows naturally (the editor panel scrolls); the other tabs are
+/* «Комментарий» flows naturally (the editor panel scrolls); the other tabs are
    fixed flex columns whose inner areas scroll on their own. */
 .tab-pane {
   width: 100%;
@@ -2435,7 +2486,7 @@ body.cloud-dragging * {
   font-size: 12px;
 }
 
-/* --- Tab «Основное» (L7, §6.3.1): table sections on top, the view/edit
+/* --- Tab «Комментарий» (L7, §6.3.1): table sections on top, the view/edit
    section fills the rest of the tab; the splitter redistributes. ---------- */
 
 /* Top areas never grow or shrink on their own — only the splitter sizes them
@@ -2575,6 +2626,37 @@ body.cloud-dragging * {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+}
+
+/* --- Вкладка «Мысли» редактора связи (задача 95775cfd, 08-ui-spec.md §6.3) --
+   Два блока фиксированной высоты по содержимому: подпись-роль и под ней
+   облачко мысли. Сворачиваемых групп и сплиттеров на вкладке нет. */
+.link-thoughts-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 4px;
+  overflow-y: auto;
+}
+
+.link-endpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.link-endpoint-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Облачко внутри вкладки растягивается по ширине панели: базовый `.cloud`
+   жёстко 200px (`--cloud-width`), здесь ширина — по контейнеру. */
+.link-endpoint .cloud {
+  width: auto;
+  max-width: 100%;
 }
 
 /* Mention snippets carry server-side <mark> highlights (same look as the
@@ -3611,12 +3693,6 @@ body.cloud-dragging * {
   background: none;
 }
 
-/* Link popover counts (canvas/links.ts): each count is its own Ctrl-hover
-   trigger now, styled like the canvas cloud indicators. */
-.link-popover-ind {
-  cursor: default;
-}
-
 /* Ctrl-hover preview of links inside comment text (stage 2/3, lib/hover-
    preview.ts's wireCommentLinksInDom): cross-network wiki-link badge, plain
    URL text and file previews (image / text / name-only fallback). */
@@ -3722,7 +3798,6 @@ body.cloud-dragging * {
 
 .prop-outside-table {
   width: 100%;
-  table-layout: fixed;
 }
 
 .prop-outside-table td {
@@ -3731,7 +3806,6 @@ body.cloud-dragging * {
 }
 
 .prop-outside-table td:first-child {
-  width: 40%;
   color: var(--text-muted, var(--muted, #666));
   word-break: break-word;
 }
@@ -4466,6 +4540,19 @@ body.cloud-dragging * {
 
 .st-f-picker-list {
   height: 320px;
+}
+
+/* Canvas link-type filter dialog (0.8.1, «Диалог фильтра типов связей на
+ * карте»): toolbar row of «Пометить все»/«Снять все пометки»/«Вернуть
+ * умолчания», reusing the `.st-f-clear` button look. */
+.link-filter-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.link-filter-list {
+  height: 280px;
 }
 
 /* Resizable seam of the filter panel (§15.2): a 1px seam line that turns into
@@ -7383,4 +7470,366 @@ table.activity-table thead th {
 .views-tab-empty {
   padding: 8px 0;
   color: var(--text-dim);
+}
+
+/* ---------------------------------------------------------------------------
+ * Адаптация редактора под единую модель связей (задача 8ab775d9)
+ * --------------------------------------------------------------------------- */
+
+/* Шапка — три строки: иконка · заголовок · ⚙ / синонимы / тип ▾ · актуально · Действия */
+.editor-top-row .editor-icon-box {
+  flex: 0 0 auto;
+}
+.editor-top-row .editor-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.editor-top-row > .icon-btn {
+  flex: 0 0 auto;
+}
+
+/* Подменю «Действия» в шапке */
+.editor-header-row .btn.small {
+  flex: 0 0 auto;
+}
+
+/* Вкладка «Комментарий» — единая зона комментария на всю высоту */
+.main-full {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.main-full > .comment-permanent {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Плейсхолдер пустого комментария */
+.md-field-placeholder {
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 12px 4px;
+}
+
+/* Вкладка «Свойства» */
+.properties-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Группы — прямые дети вкладки; развёрнутая (с body) заполняет остаток
+   высоты вместе с прочими развёрнутыми, сплиттер клампит группу выше себя
+   (max-height) — тот же контракт, что у .links-tab (08-ui-spec.md §6.3). */
+.properties-tab > .group {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.properties-tab > .group:has(> .group-body) {
+  flex-grow: 1;
+}
+.properties-tab > .group > .group-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Внутри вкладки высотой управляет сплиттер группы, а не фиксированная
+   высота таблицы (`--clamp-props` — legacy-канал вкладки «Комментарий»):
+   таблица естественной высоты, скроллит тело группы. */
+.properties-tab .prop-wrap {
+  height: auto;
+  max-height: none;
+}
+.properties-body,
+.properties-outside-body {
+  padding: 4px 0;
+}
+.link-value-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/* Обёртка чип-поля с угловыми кнопками «…» (диалог) и «✕» (очистить) —
+ * приёмка пользователя 0.8.1: кнопки компактные, в правом верхнем углу
+ * поля, не отъедают ширину у списка значений. */
+.link-value-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 220px;
+}
+.link-value-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  /* Приёмка 0.8.1: поле не растягивает таблицу — максимум 10 строк чипов
+   * (~28px на строку с gap), дальше внутренняя прокрутка; прокрутка
+   * колесом над полем крутит поле, над именами полей — таблицу. */
+  max-height: 280px;
+  overflow-y: auto;
+  /* Свободная полоса под угловыми кнопками, чтобы последний чип не уходил
+   * под них при прокрутке. */
+  padding-right: 56px;
+}
+.link-value-corner {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  gap: 2px;
+  z-index: 2;
+}
+.link-value-corner-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.link-value-corner-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.link-value-add {
+  flex: 1 1 120px;
+  min-width: 120px;
+}
+/* Поле ввода с угловым «✕» очистки значения (приёмка 0.8.1) — обёртка
+ * любого одиночного поля таблицы свойств (text/number/date/url). */
+.clearable-field {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+}
+.clearable-field .text-input {
+  width: 100%;
+  padding-right: 22px;
+}
+.clearable-clear {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+.clearable-clear:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+/* Имя свойства в таблице: липнет к верхней кромке прокручиваемой области,
+ * пока его (возможно многострочная) ячейка значения не проскроллится
+ * целиком (приёмка 0.8.1). Фон обязателен — под ним проплывают чипы. */
+.properties-type-body .prop-table td.prop-name-cell {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  vertical-align: top;
+}
+.prop-hint {
+  margin-left: 2px;
+  cursor: help;
+}
+/* Список URL-значений: угловая кнопка «✕» очистки всех значений. */
+.multi-url-editor {
+  position: relative;
+  padding-right: 26px;
+}
+.multi-url-clear {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+.multi-url-clear:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
+/* Вкладка «Граф» — мини-граф на всю высоту вкладки. Цепочка
+   flex-растяжения идёт сверху вниз от `.tab-pane.fixed`:
+     .tab-pane.fixed → .graph-tab → .links-local-graph--fill
+                       → .mini-graph → .mini-graph-viewport--fill
+   Каждый уровень обязан быть flex-контейнером column, иначе
+   `flex: 1 1 auto` потомка не на что опереться (CSS растягивает только
+   во flex-родителе). Без правок `.graph-tab` был обычным блоком и
+   `.links-local-graph--fill` оставался на высоте по содержимому; тогда
+   `.mini-graph-viewport--fill` делил эту высоту поровну с `header` и
+   `hint` — отсюда «граф занимает ровно половину вкладки». */
+.graph-tab {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.links-local-graph {
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+}
+.links-local-graph--fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.links-local-graph--fill > .mini-graph {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.mini-graph {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+.mini-graph-header {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mini-graph-viewport {
+  position: relative;
+  width: 100%;
+  height: 280px;
+  overflow: hidden;
+  background: var(--bg-soft, rgba(0, 0, 0, 0.04));
+  border-radius: 4px;
+  cursor: grab;
+}
+.mini-graph-viewport:active {
+  cursor: grabbing;
+}
+.mini-graph-viewport--fill {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.mini-graph-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* --- Локальный граф на d3 (приёмка 0.8.1): линии и облачка живут в одном
+   SVG-пространстве, зум/пан двигают их вместе. --- */
+
+.mini-graph-edge {
+  stroke: var(--border-strong);
+  stroke-width: 1.2;
+  pointer-events: none;
+}
+.mini-graph-edge.hovered {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.mini-graph-edge-arrow {
+  fill: var(--border-strong);
+  pointer-events: none;
+}
+.mini-graph-edge-arrow.hovered {
+  fill: var(--accent);
+}
+/* Постоянная подпись типа связи на середине ребра (приёмка 0.8.1). */
+.mini-graph-edge-label {
+  fill: var(--text-dim);
+  font-size: 9px;
+  pointer-events: none;
+  user-select: none;
+  paint-order: stroke;
+  stroke: var(--surface, #fff);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+/* Прозрачная толстая линия — зона наведения для tooltip/подсветки. */
+.mini-graph-edge-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: help;
+}
+
+.mini-node {
+  cursor: pointer;
+}
+.mini-node:focus {
+  outline: none;
+}
+.mini-node:focus .mini-node-cloud,
+.mini-node:hover .mini-node-cloud {
+  stroke: var(--accent);
+}
+.mini-node-cloud {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.mini-node-center .mini-node-cloud {
+  stroke: var(--accent);
+  stroke-width: 1.6;
+}
+.mini-node.dim {
+  opacity: 0.55;
+}
+/* Hover на связи: связанные мысли — оранжевая рамка и поверх остальных
+   (узлы подняты append'ом в mini-graph.ts). */
+.mini-node.edge-hi .mini-node-cloud {
+  stroke: #e8871e;
+  stroke-width: 2;
+}
+.mini-node-title {
+  font-size: 11px;
+  dominant-baseline: middle;
+  pointer-events: none;
+  user-select: none;
+}
+.mini-node-icon {
+  font-size: 12px;
+  dominant-baseline: middle;
+  text-anchor: middle;
+  pointer-events: none;
+}
+.mini-node-trash {
+  font-size: 10px;
+  pointer-events: none;
+}
+.mini-graph-mass-chip text {
+  font-size: 10px;
+  fill: var(--text-dim);
+}
+.mini-graph-hint {
+  font-size: 11px;
 }

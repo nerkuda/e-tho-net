@@ -22,7 +22,6 @@ describe('selfMutationNetwork (realtime:selfmut flag)', () => {
     assert.equal(selfMutationNetwork('comments.create', [net, 'thought', 't1', {}]), net);
     assert.equal(selfMutationNetwork('comments.createMulti', [net, [], {}]), net);
     assert.equal(selfMutationNetwork('properties.set', [net, 'thought', 't1', 'k', 1]), net);
-    assert.equal(selfMutationNetwork('links.remove', [net, 'l1', 3]), net);
     assert.equal(selfMutationNetwork('attachments.add', [net, {}]), net);
     assert.equal(selfMutationNetwork('trash.purge', [net]), net);
     assert.equal(selfMutationNetwork('system.importEtnx', [net, 'parent', 'x'.repeat(8)]), net);

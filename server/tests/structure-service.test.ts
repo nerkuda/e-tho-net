@@ -152,6 +152,31 @@ function seedProperty(ndb: NetworkDb, _ownerId: string, key: string, valueType: 
   return id;
 }
 
+/**
+ * Insert a registry property whose `config` declares a non-structural
+ * property-link: `link_type_id` + `direction` (default `out`). The
+ * `structure-service` filter parses `config` through the same helpers as
+ * `query-service` (`property-service.linkPropertyDirection` and т. д.), so
+ * here достаточно минимума: id типа связи + направление.
+ */
+function seedLinkProperty(
+  ndb: NetworkDb,
+  _ownerId: string,
+  key: string,
+  linkTypeId: string,
+  direction: 'out' | 'in' = 'out',
+): string {
+  const id = randomUUID();
+  const config = JSON.stringify({ link_type_id: linkTypeId, direction });
+  ndb
+    .prepare(
+      `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+       VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', ?, lower(?), 'link', ?, NULL, '2024', '2024')`,
+    )
+    .run(id, key, key, config);
+  return id;
+}
+
 /** Insert a comment row for a thought owner (`permanent` or `chronological`). */
 function seedComment(
   ndb: NetworkDb,
@@ -856,6 +881,209 @@ describe(
             empty.items.map((t) => t.id).sort(),
             [bare, dev1, home, withEmptyArray, withNullArray].sort(),
           );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('link eq/in/not_in/is_empty/not_empty route to links_v (bug fix 31a05292)', () => {
+        // Тип свойства-связи задаёт направление (`out`) и тип ребра.
+        // Значение хранится в `links`, не в `property_values` — фильтр
+        // должен идти через `links_v`, иначе мысли не подберутся вообще.
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const type = seedThoughtType(ndb, 'Задача');
+          const lt = seedLinkType(ndb, 'зависит от');
+          const dependsOn = seedLinkProperty(ndb, type, 'зависит от', lt, 'out');
+
+          const tgt1 = seedThought(ndb, { title: 'Цель 1' });
+          const tgt2 = seedThought(ndb, { title: 'Цель 2' });
+          const withTgt1 = seedThought(ndb, { title: 'Зависит от 1', type_id: type });
+          seedLink(ndb, withTgt1, tgt1, { type_id: lt });
+          const withTgt2 = seedThought(ndb, { title: 'Зависит от 2', type_id: type });
+          seedLink(ndb, withTgt2, tgt2, { type_id: lt });
+          // Связь другого типа не должна участвовать в отборе.
+          const withWrongLink = seedThought(ndb, { title: 'Другая связь', type_id: type });
+          const otherLt = seedLinkType(ndb, 'см. также');
+          seedLink(ndb, withWrongLink, tgt1, { type_id: otherLt });
+          // Неактивная связь нужного типа — тоже мимо.
+          const withInactive = seedThought(ndb, { title: 'Спящая', type_id: type });
+          seedLink(ndb, withInactive, tgt1, { type_id: lt, active: 0 });
+          const bare = seedThought(ndb, { title: 'Без свойства', type_id: type });
+          const home = (
+            ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1').get() as { id: string }
+          ).id;
+
+          // eq конкретной цели.
+          const eqTgt1 = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: dependsOn, op: 'eq', value: tgt1 }],
+          }));
+          assert.deepEqual(eqTgt1.items.map((t) => t.id), [withTgt1]);
+
+          // in: в списке целей — обе «зависит от» мысли.
+          const inList = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: dependsOn, op: 'in', value: [tgt1, tgt2] }],
+          }));
+          assert.deepEqual(
+            inList.items.map((t) => t.id).sort(),
+            [withTgt1, withTgt2].sort(),
+          );
+
+          // not_in: связь с указанной целью отсутствует (у остальных —
+          // либо ребра нет вообще, либо оно ведёт в другую цель, либо
+          // не того типа, либо неактивно). withTgt1 — единственный, у
+          // кого ребро нужного типа ведёт в tgt1.
+          const notInTgt1 = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: dependsOn, op: 'not_in', value: [tgt1] }],
+          }));
+          assert.deepEqual(
+            notInTgt1.items.map((t) => t.id).sort(),
+            [bare, home, tgt1, tgt2, withInactive, withTgt2, withWrongLink].sort(),
+          );
+
+          // not_empty: есть активное ребро нужного типа (withTgt1, withTgt2).
+          const notEmpty = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: dependsOn, op: 'not_empty', value: '' }],
+          }));
+          assert.deepEqual(
+            notEmpty.items.map((t) => t.id).sort(),
+            [withTgt1, withTgt2].sort(),
+          );
+
+          // is_empty: нет активного ребра нужного типа — это и просто
+          // отсутствие ребра (Home, цели, bare), и ребро не того типа
+          // (withWrongLink), и неактивное ребро (withInactive).
+          const empty = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: dependsOn, op: 'is_empty', value: '' }],
+          }));
+          assert.deepEqual(
+            empty.items.map((t) => t.id).sort(),
+            [bare, home, tgt1, tgt2, withInactive, withWrongLink].sort(),
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('link eq/in/not_in honour the property direction (in vs out) (bug fix 31a05292)', () => {
+        // Зеркальное свойство (direction: 'in'): значение — входящее ребро,
+        // т. е. мысль — цель ребра, а не источник. Условие должно
+        // переворачивать колонки сравнения (target ↔ source).
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const lt = seedLinkType(ndb, 'блокирует');
+          const blockedBy = seedLinkProperty(ndb, '00000000-0000-4000-8000-0000000000ba6',
+                                              'блокирует', lt, 'in');
+
+          const blocker = seedThought(ndb, { title: 'Блокировщик' });
+          const blocked = seedThought(ndb, { title: 'Заблокирован' });
+          seedLink(ndb, blocker, blocked, { type_id: lt });
+          const unrelated = seedThought(ndb, { title: 'Посторонний' });
+
+          // eq конкретного источника: «найди тех, кого блокирует blocker».
+          const eqSource = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: blockedBy, op: 'eq', value: blocker }],
+          }));
+          assert.deepEqual(eqSource.items.map((t) => t.id), [blocked]);
+
+          // not_empty: у `blocked` есть входящее ребро нужного типа; у
+          // остальных — нет.
+          const notEmpty = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: blockedBy, op: 'not_empty', value: '' }],
+          }));
+          assert.deepEqual(notEmpty.items.map((t) => t.id), [blocked]);
+
+          // is_empty — наоборот.
+          const empty = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: blockedBy, op: 'is_empty', value: '' }],
+          }));
+          const home = (
+            ndb.prepare('SELECT id FROM thoughts WHERE is_root = 1').get() as { id: string }
+          ).id;
+          assert.deepEqual(
+            empty.items.map((t) => t.id).sort(),
+            [blocker, home, unrelated].sort(),
+          );
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('link eq rejects empty / non-string value with VALIDATION_ERROR (bug fix 31a05292)', () => {
+        // Защита от молчаливого провала: пустая строка или число — не
+        // валидное id цели, нужно явное сообщение.
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const lt = seedLinkType(ndb, 'X');
+          const prop = seedLinkProperty(ndb, 't', 'X', lt);
+
+          for (const bad of ['', 42, true]) {
+            assert.throws(
+              () =>
+                queryThoughts(ndb, USER, query({
+                  properties: [{ property_id: prop, op: 'eq', value: bad as string }],
+                })),
+              (e: unknown) =>
+                e instanceof EtnError && e.code === 'VALIDATION_ERROR' &&
+                (e as { details?: { field?: string } }).details?.field === 'value',
+              `expected VALIDATION_ERROR for eq value=${JSON.stringify(bad)}`,
+            );
+          }
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('link in / not_in require a non-empty array (bug fix 31a05292)', () => {
+        // Та же защита, что у thought_ref ниже — пустой массив даёт
+        // VALIDATION_ERROR, иначе SQL `IN ()` невалиден.
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          const lt = seedLinkType(ndb, 'Y');
+          const prop = seedLinkProperty(ndb, 't', 'Y', lt);
+
+          for (const op of ['in', 'not_in'] as const) {
+            assert.throws(
+              () =>
+                queryThoughts(ndb, USER, query({
+                  properties: [{ property_id: prop, op, value: [] }],
+                })),
+              (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+              `expected VALIDATION_ERROR for ${op} value=[]`,
+            );
+          }
+        } finally {
+          ndb.close();
+        }
+      });
+
+      it('link property with invalid config never matches (bug fix 31a05292)', () => {
+        // config без link_type_id и не структурное: условие не должно
+        // тихо вернуть «все» или «никого» — мы возвращаем `0`, фильтр
+        // отдаёт пустой результат (это безопасный дефолт).
+        const ndb = createInMemoryNetworkDb();
+        try {
+          seedThought(ndb, { title: 'Home', is_root: 1 });
+          // Хак: создаём registry-строку с value_type='link', но
+          // пустым config (валидация онтологии это зарежет, но
+          // structure-service не должен падать, если такое дошло).
+          const id = randomUUID();
+          ndb
+            .prepare(
+              `INSERT INTO properties (id, layer_id, name, name_key, value_type, config, description, created_at, updated_at)
+               VALUES (?, '00000000-0000-4000-8000-0000000000ba5e', ?, lower(?), 'link', NULL, NULL, '2024', '2024')`,
+            )
+            .run(id, 'broken', 'broken');
+
+          const result = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: id, op: 'is_empty', value: '' }],
+          }));
+          // Ни одна мысль не матчит — `0` в WHERE.
+          assert.equal(result.total, 0);
         } finally {
           ndb.close();
         }

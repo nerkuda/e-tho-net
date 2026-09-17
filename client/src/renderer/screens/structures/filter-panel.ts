@@ -14,6 +14,7 @@
 
 import {
   STRUCTURE_AUTHOR_OPS,
+  type LinkTypeFilterInput,
   type NetworkProperty,
   type PropertyConfig,
   type PropertyValueType,
@@ -31,15 +32,20 @@ import {
 import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../../canvas/canvas.js';
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { buildValueOptionsCaret } from '../../editor/properties.js';
-import { wireThoughtRefSearch } from '../../editor/thought-picker.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
-import { confirmDialog, errorDialog, promptDialog, showDialog } from '../../lib/dialog.js';
+import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
+import {
+  openLinkTypesPicker as openLinkTypesPickerLib,
+  openThoughtTypesPicker as openThoughtTypesPickerLib,
+  openTypePickerDialog,
+} from '../../lib/type-picker.js';
 import { orderedTypeRows, resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../../lib/type-tree.js';
 import { buildUserMultiSelectWidget, buildUserSelectWidget } from '../../lib/users.js';
 import { store } from '../../state.js';
+import { requireNetworkId } from '../../app.js';
 
 /** One property condition row (values kept as strings; typed on the wire). */
 export interface PropertyConditionState {
@@ -71,6 +77,15 @@ export interface FilterState {
   parentIds: string[];
   typeIds: string[];
   linkTypeIds: string[];
+  /**
+   * Задача c965ad03 «Фильтр обхода по типам связей»: типы связей, по которым
+   * раскрывается `parentIds` (поддерево). Отличие от `linkTypeIds`: тот
+   * отбирает мысли, у которых есть связь перечисленных типов, а этот
+   * ограничивает рёбра обхода.
+   */
+  linkFilterTypeIds: string[];
+  /** Включить нетипизированные (структурные) связи в обход. */
+  linkFilterStructural: boolean;
   properties: PropertyConditionState[];
   hasProperties: TriState;
   hasComment: TriState;
@@ -168,10 +183,21 @@ export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropert
     { op: 'is_empty', label: 'не заполнено' },
   ],
   bool: [{ op: 'eq', label: 'равно' }],
-  thought_ref: [
+  // Свойство-связь (0.8.1): значение хранится в рёбрах, не в property_values.
+  // На сервере поддержан тот же набор, что у legacy `thought_ref` ниже —
+  // паритет между `OPS_BY_TYPE` здесь и `OPS_BY_VALUE_TYPE` в
+  // `server/src/domain/structure-service.ts` обязателен, иначе UI предложит
+  // операцию, которую сервер отвергнет (ошибка 31a05292).
+  link: [
     { op: 'eq', label: 'равно' },
     { op: 'in', label: 'в списке' },
     { op: 'not_in', label: 'не в списке' },
+    { op: 'not_empty', label: 'заполнено' },
+    { op: 'is_empty', label: 'не заполнено' },
+  ],
+  // Legacy (миграция 040): таких свойств в живой БД не остаётся;
+  // присутствие проверяется теми же кнопками «заполнено»/«не заполнено».
+  thought_ref: [
     { op: 'not_empty', label: 'заполнено' },
     { op: 'is_empty', label: 'не заполнено' },
   ],
@@ -187,6 +213,8 @@ function defaultState(): FilterState {
     parentIds: [],
     typeIds: [],
     linkTypeIds: [],
+    linkFilterTypeIds: [],
+    linkFilterStructural: false,
     properties: [],
     hasProperties: null,
     hasComment: null,
@@ -235,6 +263,7 @@ let keywordsInput: HTMLInputElement | null = null;
 let parentFieldBox: HTMLElement | null = null;
 let typeFieldBox: HTMLElement | null = null;
 let linkTypeFieldBox: HTMLElement | null = null;
+let linkFilterFieldBox: HTMLElement | null = null;
 let conditionsBox: HTMLElement | null = null;
 let sortSelect: HTMLSelectElement | null = null;
 let orderSelect: HTMLSelectElement | null = null;
@@ -389,6 +418,19 @@ export function buildExtraFilter(): Pick<
   if (state.createdBefore.trim() !== '') out.created_before = state.createdBefore.trim();
   if (state.updatedAfter.trim() !== '') out.updated_after = state.updatedAfter.trim();
   if (state.updatedBefore.trim() !== '') out.updated_before = state.updatedBefore.trim();
+  return out;
+}
+
+/**
+ * Wire `link_filter` обхода (задача c965ad03): ограничивает рёбра, по которым
+ * `parent_ids` раскрывается в поддерево. `undefined` — без ограничения (обход
+ * по всем рёбрам, прежнее поведение).
+ */
+export function buildTraversalFilter(): LinkTypeFilterInput | undefined {
+  if (state.linkFilterTypeIds.length === 0 && !state.linkFilterStructural) return undefined;
+  const out: LinkTypeFilterInput = {};
+  if (state.linkFilterTypeIds.length > 0) out.type_ids = state.linkFilterTypeIds;
+  if (state.linkFilterStructural) out.include_structural = true;
   return out;
 }
 
@@ -746,6 +788,7 @@ let kwTitle: HTMLElement | null = null;
 let parentTitle: HTMLElement | null = null;
 let ttTitle: HTMLElement | null = null;
 let ltTitle: HTMLElement | null = null;
+let lftTitle: HTMLElement | null = null;
 let propsTitle: HTMLElement | null = null;
 let extraTitle: HTMLElement | null = null;
 let datesTitle: HTMLElement | null = null;
@@ -761,6 +804,10 @@ function refreshGroupTitles(): void {
   parentTitle?.classList.toggle('st-f-title-active', state.parentIds.length > 0);
   ttTitle?.classList.toggle('st-f-title-active', state.typeIds.length > 0);
   ltTitle?.classList.toggle('st-f-title-active', state.linkTypeIds.length > 0);
+  lftTitle?.classList.toggle(
+    'st-f-title-active',
+    state.linkFilterTypeIds.length > 0 || state.linkFilterStructural,
+  );
   propsTitle?.classList.toggle('st-f-title-active', state.properties.length > 0);
   extraTitle?.classList.toggle(
     'st-f-title-active',
@@ -943,6 +990,49 @@ function renderPanel(): void {
   lt.body.append(ltRow);
   scroll.append(lt.box);
   renderLinkTypeField();
+
+  // --- обход по связям (задача c965ad03) -------------------------------------
+  // Ограничивает рёбра, по которым `parent_ids` раскрывается в поддерево:
+  // перечисленные типы связей (+ структурные по флагу). Не путать с «Типы
+  // связей» выше — тот отбирает мысли, у которых есть связь этих типов.
+  const lf = block('Обход по связям');
+  lftTitle = lf.head;
+  linkFilterFieldBox = div('st-f-chipfield');
+  linkFilterFieldBox.tabIndex = 0;
+  setTooltip(linkFilterFieldBox, 'Ограничить рёбра, по которым раскрывается отбор (клик — выбрать)');
+  linkFilterFieldBox.addEventListener('click', () => void openLinkFilterPicker());
+  linkFilterFieldBox.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void openLinkFilterPicker();
+  });
+  const lfClear = el('button', 'st-f-clear-inline', '×');
+  lfClear.type = 'button';
+  setTooltip(lfClear, 'Очистить');
+  lfClear.addEventListener('click', (event) => {
+    event.stopPropagation();
+    state.linkFilterTypeIds = [];
+    touch();
+    renderLinkFilterField();
+  });
+  const lfRow = div('st-f-fieldrow');
+  lfRow.append(linkFilterFieldBox, lfClear);
+  lf.body.append(lfRow);
+
+  const lfStructRow = div('st-f-tri-row');
+  const lfStructLabel = el('label', 'checkbox-row');
+  const lfStructCheck = el('input');
+  lfStructCheck.type = 'checkbox';
+  lfStructCheck.checked = state.linkFilterStructural;
+  setTooltip(lfStructLabel, 'Включить нетипизированные (структурные) связи в обход');
+  lfStructCheck.addEventListener('change', () => {
+    state.linkFilterStructural = lfStructCheck.checked;
+    touch();
+  });
+  lfStructLabel.append(lfStructCheck, span('структурные связи'));
+  lfStructRow.append(el('span', 'st-f-tri-label', 'Структура'), lfStructLabel);
+  lf.body.append(lfStructRow);
+
+  scroll.append(lf.box);
+  renderLinkFilterField();
 
   // --- property conditions (collapsible, §15.3) ------------------------------
   // --- authorship (задача 59119797, эволюция операторов) -------------------
@@ -1391,10 +1481,7 @@ function renderLinkTypeField(): void {
 }
 
 async function openThoughtTypesPicker(): Promise<void> {
-  const rows = orderedTypeRows(store.state.thoughtTypes)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({ id: row.type.id, label: row.type.name, depth: row.depth - 1 }));
-  const picked = await openTypePickerDialog('Типы мыслей', rows, state.typeIds);
+  const picked = await openThoughtTypesPickerLib(requireNetworkId(), state.typeIds);
   if (picked === null) return;
   state.typeIds = picked;
   touch();
@@ -1402,124 +1489,64 @@ async function openThoughtTypesPicker(): Promise<void> {
 }
 
 async function openLinkTypesPicker(): Promise<void> {
-  const rows = orderedTypeRows(store.state.linkTypes)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 }));
-  const picked = await openTypePickerDialog('Типы связей', rows, state.linkTypeIds);
+  const picked = await openLinkTypesPickerLib(requireNetworkId(), state.linkTypeIds);
   if (picked === null) return;
   state.linkTypeIds = picked;
   touch();
   renderLinkTypeField();
 }
 
-// ---------------------------------------------------------------------------
-// Type picker dialog (search + multi-column checklist + «Применить», §15.3)
-// ---------------------------------------------------------------------------
-
-/** Minimum column width of a checklist, px (columns fill the dialog width). */
-const CHECK_COL_W = 85;
-/** Column gap, px (must match the CSS column-gap). */
-const CHECK_COL_GAP = 14;
-/** Fixed height of one checklist row, px (must match the CSS row height). */
-const CHECK_ROW_H = 22;
-
-/**
- * Recomputes the column count of a checklist for its current height and width:
- * as many columns as fit the dialog width; when the items need more columns
- * than that, the last column overflows downward and the list scrolls
- * vertically (`column-fill: auto`).
- */
-function applyCheckColumns(list: HTMLElement): void {
-  const rowsPerCol = Math.max(1, Math.floor(list.clientHeight / CHECK_ROW_H));
-  const needed = Math.ceil(list.children.length / rowsPerCol);
-  const maxCols = Math.max(1, Math.floor((list.clientWidth + CHECK_COL_GAP) / (CHECK_COL_W + CHECK_COL_GAP)));
-  const count = Math.max(1, Math.min(needed, maxCols));
-  list.style.columnCount = String(count);
-  list.style.columnFill = needed > count ? 'auto' : 'balance';
+/** Renders the «Обход по связям» chips (задача c965ad03). */
+function renderLinkFilterField(): void {
+  if (linkFilterFieldBox === null) return;
+  renderChips(
+    linkFilterFieldBox,
+    state.linkFilterTypeIds.flatMap((id) => {
+      const type = store.state.linkTypes.find((t) => t.id === id);
+      if (type === undefined) return [];
+      const visual = resolveLinkTypeVisual(store.state.linkTypes, type.id);
+      return [
+        {
+          key: id,
+          label: type.name_forward,
+          icon: null,
+          style: {
+            fg: visual.color,
+            bg: null,
+            bold: false,
+            italic: false,
+            underline: false,
+            strike: false,
+          },
+        },
+      ];
+    }),
+  );
 }
 
-/**
- * Modal type picker: a search box filtering as you type, a multi-column
- * checklist (checked first, then alphabetical) and «Отмена»/«Применить».
- * Resolves the picked id list, or `null` when cancelled.
- */
-function openTypePickerDialog(
-  title: string,
-  rows: Array<{ id: string; label: string; depth: number }>,
-  initial: string[],
-): Promise<string[] | null> {
-  return new Promise((resolve) => {
-    const checked = new Set(initial);
-    let needle = '';
-    let settled = false;
-    const finish = (value: string[] | null): void => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
+/** Opens the link-type picker for the traversal filter (задача c965ad03). */
+async function openLinkFilterPicker(): Promise<void> {
+  const picked = await openLinkFilterPickerLib();
+  if (picked === null) return;
+  state.linkFilterTypeIds = picked;
+  touch();
+  renderLinkFilterField();
+}
 
-    const body = div('st-f-picker');
-    const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
-    searchInput.type = 'text';
-    searchInput.placeholder = 'Найти…';
-    const list = div('st-f-checks st-f-picker-list');
-    const clearBtn = el('button', 'st-f-clear', 'Очистить');
-    clearBtn.type = 'button';
-
-    const renderList = (): void => {
-      clear(list);
-      const filtered = rows.filter((row) => row.label.toLowerCase().includes(needle));
-      const byAlpha = (a: (typeof rows)[number], b: (typeof rows)[number]): number =>
-        a.label.localeCompare(b.label, 'ru');
-      const sorted = [
-        ...filtered.filter((row) => checked.has(row.id)).sort(byAlpha),
-        ...filtered.filter((row) => !checked.has(row.id)).sort(byAlpha),
-      ];
-      if (sorted.length === 0) list.append(el('div', 'st-f-empty', 'Ничего не найдено'));
-      for (const row of sorted) {
-        const line = el('label', 'st-f-check');
-        line.style.paddingLeft = `${Math.max(0, row.depth) * 14}px`;
-        const input = el('input') as HTMLInputElement;
-        input.type = 'checkbox';
-        input.checked = checked.has(row.id);
-        input.addEventListener('change', () => {
-          if (input.checked) checked.add(row.id);
-          else checked.delete(row.id);
-          clearBtn.disabled = checked.size === 0;
-          renderList();
-        });
-        line.append(input, el('span', '', row.label));
-        list.append(line);
-      }
-      if (list.isConnected) applyCheckColumns(list);
-      else requestAnimationFrame(() => applyCheckColumns(list));
-    };
-    searchInput.addEventListener('input', () => {
-      needle = searchInput.value.trim().toLowerCase();
-      renderList();
-    });
-    clearBtn.disabled = checked.size === 0;
-    clearBtn.addEventListener('click', () => {
-      checked.clear();
-      renderList();
-      clearBtn.disabled = true;
-    });
-    body.append(searchInput, list, clearBtn);
-
-    showDialog({
-      title,
-      body,
-      width: 480,
-      buttons: [
-        { label: 'Отмена', onClick: () => finish(null) },
-        { label: 'Применить', primary: true, onClick: () => finish([...checked]) },
-      ],
-      onMount: () => {
-        renderList();
-        searchInput.focus();
-      },
-    });
-  });
+async function openLinkFilterPickerLib(): Promise<string[] | null> {
+  let types = store.state.linkTypes;
+  if (types.length === 0) {
+    const networkId = requireNetworkId();
+    try {
+      types = await etn.types.listLinkTypes(networkId);
+    } catch {
+      types = [];
+    }
+  }
+  const rows = orderedTypeRows(types)
+    .filter((row) => !row.type.is_root)
+    .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 }));
+  return openTypePickerDialog('Обход по связям', rows, state.linkFilterTypeIds);
 }
 
 // ---------------------------------------------------------------------------
@@ -1613,8 +1640,7 @@ function buildConditionRow(cond: PropertyConditionState, index: number): HTMLEle
  * Builds the value editor for the condition's current value type (§15.3).
  *
  * The editor mirrors the thought editor (§6.3): text properties with
- * predefined options get the options dropdown, `thought_ref` gets the live
- * candidate search plus the dialog picker. Every handler reads the CURRENT
+ * predefined options get the options dropdown. Every handler reads the CURRENT
  * condition row from the state (`live()`), never the closure-captured one —
  * the «+ значение» button must not lose values typed into earlier rows.
  */
@@ -1665,9 +1691,6 @@ function buildValueEditor(
       select.value = live().values[i] === 'false' ? 'false' : 'true';
       select.addEventListener('change', () => setValue(i, select.value));
       return select;
-    }
-    if (valueType === 'thought_ref') {
-      return buildThoughtRefEditor(def, index, i);
     }
     const input = el('input', 'st-f-input') as HTMLInputElement;
     input.type = 'text';
@@ -1735,99 +1758,6 @@ function buildValueEditor(
   };
   renderList();
   return box;
-}
-
-/**
- * Thought-ref value editor, same as the thought editor (§6.3): the field
- * doubles as a live candidate search and a dialog picker button; only an
- * explicitly picked thought writes the value (its id), the field shows the
- * thought's title.
- */
-function buildThoughtRefEditor(
-  def: { config?: PropertyConfig | null } | undefined,
-  index: number,
-  valueIndex: number,
-): HTMLElement {
-  const networkId = store.state.networkId;
-  const row = div('st-f-ref-row');
-  const live = (): PropertyConditionState => state.properties[index]!;
-  const setValue = (v: string): void => {
-    const current = live();
-    const values = [...current.values];
-    while (values.length <= valueIndex) values.push('');
-    values[valueIndex] = v;
-    state.properties[index] = { ...current, values };
-    touch();
-  };
-
-  const input = el('input', 'st-f-input') as HTMLInputElement;
-  input.type = 'text';
-  input.autocomplete = 'off';
-  input.placeholder = 'введите название для поиска…';
-
-  const storedId = live().values[valueIndex] ?? '';
-  if (storedId !== '') {
-    const title = refTitles.get(storedId) ?? 'Мысль…';
-    input.value = title;
-    if (networkId !== null && !refTitles.has(storedId)) {
-      // The stored id may have no title cached (restored from a saved
-      // filter) — resolve it asynchronously.
-      void etn.thoughts
-        .resolve(networkId, [storedId])
-        .then((refs) => {
-          const ref = refs[0];
-          if (ref !== undefined) {
-            refTitles.set(ref.id, ref.title);
-            if (input.isConnected) input.value = ref.title;
-          }
-        })
-        .catch(() => undefined);
-    }
-  }
-
-  if (networkId !== null) {
-    const filterIds = (
-      def?.config?.allowed_type_ids ??
-      (def?.config?.allowed_type_id !== undefined ? [def.config.allowed_type_id] : [])
-    ).filter((id) => id !== '');
-    wireThoughtRefSearch(input, {
-      networkId,
-      typeIds: filterIds,
-      onPick: (id) => {
-        refTitles.set(id, input.value);
-        setValue(id);
-      },
-    });
-    const pick = el('button', 'st-f-add st-f-ref-pick', 'выбрать') as HTMLButtonElement;
-    pick.type = 'button';
-    pick.addEventListener('click', () => {
-      void pickThoughtsDialog({
-        networkId,
-        allowCreate: false,
-        allowLinkType: false,
-        searchTypeIds: filterIds,
-      }).then(async (result) => {
-        const id = firstPickedThoughtId(result);
-        if (id === null) return;
-        try {
-          const [ref] = await etn.thoughts.resolve(networkId, [id]);
-          if (ref !== undefined) {
-            refTitles.set(ref.id, ref.title);
-            input.value = ref.title;
-          } else {
-            input.value = 'Мысль…';
-          }
-        } catch {
-          input.value = 'Мысль…';
-        }
-        setValue(id);
-      });
-    });
-    row.append(input, pick);
-  } else {
-    row.append(input);
-  }
-  return row;
 }
 
 // ---------------------------------------------------------------------------
@@ -1912,6 +1842,8 @@ function applySavedFilter(filter: SavedFilter): void {
     parentIds: def.parent_ids ?? [],
     typeIds: def.type_ids ?? [],
     linkTypeIds: def.link_type_ids ?? [],
+    linkFilterTypeIds: def.link_filter?.type_ids ?? [],
+    linkFilterStructural: def.link_filter?.include_structural ?? false,
     properties: (def.properties ?? []).map((c) => ({
       propertyId: c.property_id,
       op: c.op,
@@ -1955,12 +1887,14 @@ async function saveCurrentFilter(): Promise<void> {
     return;
   }
   const keywordScope = buildKeywordScope();
+  const traversalFilter = buildTraversalFilter();
   const definition = {
     ...(state.keywords.trim() !== '' ? { keywords: state.keywords.trim() } : {}),
     ...(state.keywords.trim() !== '' && keywordScope !== undefined ? { keyword_scope: keywordScope } : {}),
     ...(state.parentIds.length > 0 ? { parent_ids: state.parentIds } : {}),
     ...(state.typeIds.length > 0 ? { type_ids: state.typeIds } : {}),
     ...(state.linkTypeIds.length > 0 ? { link_type_ids: state.linkTypeIds } : {}),
+    ...(traversalFilter !== undefined ? { link_filter: traversalFilter } : {}),
     ...(buildConditions().length > 0 ? { properties: buildConditions() } : {}),
     ...buildExtraFilter(),
     ...(store.state.showInactive ? { show_inactive: true } : {}),

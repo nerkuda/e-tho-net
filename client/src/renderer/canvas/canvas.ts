@@ -28,6 +28,7 @@ import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
 import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import {
@@ -59,7 +60,6 @@ import { store } from '../state.js';
 import {
   initLinksOverlay,
   drawLinksNow,
-  invalidateLinkCounts,
   setEllipseHover,
   setDragLinkLine,
   LINK_LABEL_FONT_BASE,
@@ -424,8 +424,6 @@ export function setAddDialogOpener(opener: ((ctx: AddDialogContext) => void) | n
 /**
  * Invalidates cached indicator counts and re-fetches them, patching the
  * rendered clouds (called after comment/attachment changes and realtime events).
- * The link-popover counts cache (links.ts) is dropped for the same id too —
- * for a link owner the id is the link id, for `null` the whole cache goes.
  */
 export function invalidateIndicators(id: string | null): void {
   if (id === null) {
@@ -436,7 +434,6 @@ export function invalidateIndicators(id: string | null): void {
     indicatorCache.delete(id);
     queueIndicatorLoad(id);
   }
-  invalidateLinkCounts(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -1011,8 +1008,19 @@ let relatedTitles = new Map<string, string[]>();
 
 /**
  * Maps each displayed thought to the titles of its visible (displayed) related
- * thoughts — parents and children from the `edges` among the visible set
- * (focused + parents + siblings + children, 03-server-api.md §6.2).
+ * thoughts — **only the focused thought** is the source of related titles for
+ * the zone clouds (08-ui-spec.md §2.2.3, requirement cf9601fa): outside the
+ * focus, compound names hide parts equal to the title (or any part of the
+ * title) of the thought in focus, never of any other visible thought.
+ *
+ * `focus.edges` carries every active link among the visible set (focus +
+ * parents + siblings + children, 03-server-api.md §6.2), so it also contains
+ * neighbour↔neighbour links that have nothing to do with the focused thought.
+ * Including those would let a sibling named «Ошибки» make a child named
+ * «Проект А.Ошибки» render as «Проект А» even when the focus is unrelated —
+ * a regression reported in error cbb91b62. Only edges incident to the
+ * focused thought contribute to the map; neighbour↔neighbour edges are
+ * ignored so a thought's display name depends solely on the focus.
  */
 export function visibleRelatedTitles(focus: {
   focused: { id: string; title: string };
@@ -1032,8 +1040,13 @@ export function visibleRelatedTitles(focus: {
     set.add(title);
     related.set(id, set);
   };
+  const focusedId = focus.focused.id;
   for (const edge of focus.edges) {
     if (edge.source_id === edge.target_id) continue;
+    // Requirement cf9601fa — relatedTitles is built from the focus only:
+    // neighbour↔neighbour edges must not pollute the cloud of a thought
+    // whose only link to the focus is via a third party (regression cbb91b62).
+    if (edge.source_id !== focusedId && edge.target_id !== focusedId) continue;
     const sourceTitle = titleOf.get(edge.source_id);
     const targetTitle = titleOf.get(edge.target_id);
     if (sourceTitle === undefined || targetTitle === undefined) continue;
@@ -1788,6 +1801,7 @@ function applyIndicators(id: string, info: IndicatorInfo): void {
 export const canvasInternals = {
   groupByThought,
   resolveCloudStyle,
+  resolveThoughtIcon,
   refCache,
   indicatorCache,
   canvasRenderKey,
@@ -1931,7 +1945,13 @@ function onDragEnd(_event: MouseEvent): void {
   }
 }
 
-/** Creates a link between two thoughts after a successful drop (C4). */
+/**
+ * Creates a link between two thoughts after a successful drop (C4).
+ *
+ * 0.8.1 (6dcd6db7): `POST /links` is removed — the untyped edge is created by
+ * the batch `link_parents` operation; an already linked pair is reported up
+ * front (the batch itself is idempotent and would skip it silently).
+ */
 async function createLinkFromDrop(
   direction: 'parent' | 'child',
   anchorId: string,
@@ -1942,7 +1962,17 @@ async function createLinkFromDrop(
   const sourceId = direction === 'child' ? anchorId : droppedId;
   const targetId = direction === 'child' ? droppedId : anchorId;
   try {
-    await etn.links.create(networkId, { source_id: sourceId, target_id: targetId });
+    const grouped = await etn.links.listByThought(networkId, targetId);
+    const linked = [
+      ...grouped.by_type.flatMap((g) => g.items.map((i) => i.link)),
+      ...grouped.untyped_parents.map((u) => u.link),
+      ...grouped.untyped_children.map((u) => u.link),
+    ];
+    if (linked.some((l) => l.source_id === sourceId && l.target_id === targetId)) {
+      notice('Такая связь уже существует.');
+      return;
+    }
+    throwOnFailures(await ensureLink(networkId, sourceId, targetId));
     // The acting client gets no realtime echo (04-realtime.md §5) — refresh
     // explicitly so the new edge, the zone move and the editor's «Связи»
     // update, and animate the thought flowing into its new zone.
@@ -1950,10 +1980,6 @@ async function createLinkFromDrop(
     scheduleRefresh();
     notice('Связь создана.');
   } catch (err) {
-    if ((err as { code?: string } | null)?.code === 'DUPLICATE') {
-      notice('Такая связь уже существует.');
-      return;
-    }
     notice(
       `Не удалось создать связь: ${err instanceof Error ? err.message : String(err)}`,
       'error',

@@ -1,7 +1,11 @@
 /**
- * Integration tests for the /links routes (task D2, D8) via app.inject:
- * CRUD with If-Match, duplicate/self-loop invariants and the grouped editor
- * listing (`GET /thoughts/:id/links?group=type`).
+ * Integration tests for the /links routes (task D2, D8) via app.inject.
+ *
+ * 0.8.1 (требование 3ea5c6af): создание и удаление связей отдельными операциями
+ * упразднено — `POST /links` и `DELETE /links/{id}` сняты, они ушли в операции
+ * над свойствами-связями. Здесь тестируем оставшийся контур: создание связи
+ * через свойство (`PUT /thoughts/:id/properties/:key`), чтение `GET /links/:id`,
+ * `PATCH /links/:id` (active + If-Match) и группированный список редактора.
  */
 
 import assert from 'node:assert/strict';
@@ -27,127 +31,34 @@ async function createThought(ctx: RestTestContext, title: string): Promise<strin
   return (res.json().data as { id: string }).id;
 }
 
+/** Set a link property value on a thought (creates/removes edges). */
+async function setProperty(
+  ctx: RestTestContext,
+  thoughtId: string,
+  key: string,
+  value: unknown,
+): Promise<number> {
+  const res = await ctx.app.inject({
+    method: 'PUT',
+    url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/properties/${encodeURIComponent(key)}`,
+    headers: authHeaders(ctx),
+    payload: { value },
+  });
+  return res.statusCode;
+}
+
 describe(
   '/links routes',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
   () => {
-    it('CRUD a link with If-Match; duplicate and self-loop rejected', async () => {
+    it('создание связи через свойство, чтение и PATCH (If-Match)', async () => {
       const ctx = await buildRestContext();
       try {
-        const a = await createThought(ctx, 'Исток');
-        const b = await createThought(ctx, 'Цель');
+        const child = await createThought(ctx, 'Цель');
+        // Структурная связь HOME → child через «Потомки».
+        assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', [child]), 200);
 
-        const created = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
-          headers: authHeaders(ctx),
-          payload: { source_id: a, target_id: b },
-        });
-        assert.equal(created.statusCode, 201);
-        const link = created.json().data as { id: string; version: number; active: boolean };
-        assert.equal(link.version, 1);
-
-        // Duplicate untyped pair → 409.
-        const dup = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
-          headers: authHeaders(ctx),
-          payload: { source_id: a, target_id: b },
-        });
-        assert.equal(dup.statusCode, 409);
-        assert.equal(dup.json().error.code, 'DUPLICATE');
-
-        // Self-loop → 422.
-        const loop = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
-          headers: authHeaders(ctx),
-          payload: { source_id: a, target_id: a },
-        });
-        assert.equal(loop.statusCode, 422);
-
-        // Unknown endpoint → 404.
-        const unknown = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
-          headers: authHeaders(ctx),
-          payload: { source_id: a, target_id: '00000000-0000-0000-0000-000000000000' },
-        });
-        assert.equal(unknown.statusCode, 404);
-
-        // PATCH active=false with correct If-Match.
-        const patched = await ctx.app.inject({
-          method: 'PATCH',
-          url: `/api/v1/networks/${ctx.networkId}/links/${link.id}`,
-          headers: { ...authHeaders(ctx), 'if-match': '1' },
-          payload: { active: false },
-        });
-        assert.equal(patched.statusCode, 200);
-        assert.equal((patched.json().data as { version: number }).version, 2);
-
-        // Stale If-Match → 409.
-        const conflict = await ctx.app.inject({
-          method: 'PATCH',
-          url: `/api/v1/networks/${ctx.networkId}/links/${link.id}`,
-          headers: { ...authHeaders(ctx), 'if-match': '1' },
-          payload: { active: true },
-        });
-        assert.equal(conflict.statusCode, 409);
-
-        // Delete → 204, then 404 on GET.
-        const del = await ctx.app.inject({
-          method: 'DELETE',
-          url: `/api/v1/networks/${ctx.networkId}/links/${link.id}`,
-          headers: { ...authHeaders(ctx), 'if-match': '2' },
-        });
-        assert.equal(del.statusCode, 204);
-
-        const gone = await ctx.app.inject({
-          method: 'GET',
-          url: `/api/v1/networks/${ctx.networkId}/links/${link.id}`,
-          headers: authHeaders(ctx),
-        });
-        assert.equal(gone.statusCode, 404);
-      } finally {
-        await closeRestContext(ctx);
-      }
-    });
-
-    it('grouped listing: typed groups and untyped parents/children', async () => {
-      const ctx = await buildRestContext();
-      try {
-        const child = await createThought(ctx, 'Ребёнок для группировки');
-        const lt = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/link-types`,
-          headers: authHeaders(ctx),
-          payload: { name_forward: 'содержит', name_reverse: 'входит в' },
-        });
-        const linkTypeId = (lt.json().data as { id: string }).id;
-
-        // Typed link HOME → child.
-        const typed = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
-          headers: authHeaders(ctx),
-          payload: { source_id: ctx.homeId, target_id: child, type_id: linkTypeId },
-        });
-        assert.equal(typed.statusCode, 201);
-        assert.equal(
-          (typed.json().data as { type_id: string | null }).type_id,
-          linkTypeId,
-          'POST /links must apply type_id from the body',
-        );
-
-        // Untyped link child → HOME (child acts as a parent of HOME).
-        const untyped = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
-          headers: authHeaders(ctx),
-          payload: { source_id: child, target_id: ctx.homeId },
-        });
-        assert.equal(untyped.statusCode, 201);
-
+        // Группированный список: ребёнок — в untyped_children.
         const grouped = await ctx.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/links?group=type`,
@@ -155,93 +66,133 @@ describe(
         });
         assert.equal(grouped.statusCode, 200);
         const data = grouped.json().data as {
-          by_type: Array<{ type_id: string; items: unknown[] }>;
+          by_type: Array<{ items: unknown[] }>;
           untyped_parents: unknown[];
-          untyped_children: unknown[];
+          untyped_children: Array<{ link: { id: string } }>;
         };
-        assert.equal(data.by_type.length, 1);
-        assert.equal(data.by_type[0]!.type_id, linkTypeId);
-        assert.equal(data.by_type[0]!.items.length, 1);
-        assert.equal(data.untyped_parents.length, 1);
-        assert.equal(data.untyped_children.length, 0);
+        assert.equal(data.untyped_children.length, 1);
+        const linkId = data.untyped_children[0]!.link.id;
 
-        const badGroup = await ctx.app.inject({
+        // Чтение отдельной связи.
+        const got = await ctx.app.inject({
           method: 'GET',
-          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/links?group=flat`,
+          url: `/api/v1/networks/${ctx.networkId}/links/${linkId}`,
           headers: authHeaders(ctx),
         });
-        assert.equal(badGroup.statusCode, 422);
+        assert.equal(got.statusCode, 200);
+
+        // PATCH active=false с корректным If-Match.
+        const patched = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/links/${linkId}`,
+          headers: { ...authHeaders(ctx), 'if-match': '1' },
+          payload: { active: false },
+        });
+        assert.equal(patched.statusCode, 200);
+        assert.equal((patched.json().data as { version: number }).version, 2);
+
+        // Устаревший If-Match → 409.
+        const conflict = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/links/${linkId}`,
+          headers: { ...authHeaders(ctx), 'if-match': '1' },
+          payload: { active: true },
+        });
+        assert.equal(conflict.statusCode, 409);
+
+        // POST /links снят → 404.
+        const post = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/links`,
+          headers: authHeaders(ctx),
+          payload: { source_id: ctx.homeId, target_id: child },
+        });
+        assert.equal(post.statusCode, 404);
+
+        // DELETE /links/{id} снят → 404.
+        const del = await ctx.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${ctx.networkId}/links/${linkId}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(del.statusCode, 404);
       } finally {
         await closeRestContext(ctx);
       }
     });
 
-    it('POST /links applies type_id from the body (regression: bug b1f560f3)', async () => {
-      // Regression guard for error b1f560f3: prior to the fix the REST handler
-      // silently dropped `type_id` from the request body, so callers following
-      // the spec got untyped links without any diagnostic. With the fix in
-      // place the type must reach the domain layer: a valid type persists on
-      // the new link, an unknown type fails fast with 404 (NOT_FOUND, the
-      // project convention for a missing referenced entity), and a duplicate
-      // typed pair hits the UNIQUE `(source_id, target_id, type_id)` arm with
-      // 409 (so the same triple cannot be inserted twice).
+    it('удаление из набора помечает ребро в корзину (значение не читается)', async () => {
       const ctx = await buildRestContext();
       try {
-        const a = await createThought(ctx, 'A');
-        const b = await createThought(ctx, 'B');
+        const child = await createThought(ctx, 'Ребёнок для удаления');
+        assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', [child]), 200);
 
-        const lt = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/link-types`,
-          headers: authHeaders(ctx),
-          payload: { name_forward: 'содержит', name_reverse: 'входит в' },
-        });
-        assert.equal(lt.statusCode, 201);
-        const linkTypeId = (lt.json().data as { id: string }).id;
+        // Очистить набор — ребро в корзину.
+        assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', []), 200);
 
-        // 1) Valid type_id must be applied to the new link.
-        const created = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
+        // В значениях свойства «Потомки» помеченного ребра нет.
+        const props = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/properties`,
           headers: authHeaders(ctx),
-          payload: { source_id: a, target_id: b, type_id: linkTypeId },
         });
-        assert.equal(created.statusCode, 201);
-        assert.equal(
-          (created.json().data as { type_id: string | null }).type_id,
-          linkTypeId,
-          'POST /links must persist type_id from the body (bug b1f560f3)',
-        );
+        assert.equal(props.statusCode, 200);
+        const values = props.json().data as Array<{ property_name: string; values?: unknown[] }>;
+        const potomki = values.find((v) => v.property_name === 'Потомки');
+        assert.ok(potomki !== undefined);
+        assert.deepEqual(potomki.values, []);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
 
-        // 2) Unknown type_id must surface as an error, not a silent untyped
-        // insert. The project convention for "referenced entity missing" is
-        // 404 (NOT_FOUND), used for unknown thoughts / link types / thought
-        // types alike — `assertLinkTypeAssignable` throws `NOT_FOUND` for an
-        // unknown id, mirroring `assertThoughtTypeAssignable`.
-        const unknown = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
-          headers: authHeaders(ctx),
-          payload: {
-            source_id: b,
-            target_id: a,
-            type_id: '00000000-0000-0000-0000-000000000000',
-          },
-        });
-        assert.equal(unknown.statusCode, 404);
-        assert.equal(unknown.json().error.code, 'NOT_FOUND');
+    it('«удалить совсем» одной связи: пометка + точечный purge по ids (8b4b7a7e)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const keep = await createThought(ctx, 'Останется в корзине');
+        const gone = await createThought(ctx, 'Уйдёт совсем');
+        assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', [keep, gone]), 200);
 
-        // 3) UNIQUE invariant: the same typed pair cannot be inserted twice.
-        // Without the fix this slipped through, producing silent duplicate
-        // links; with the fix the duplicate guard fires on the typed triple.
-        const dup = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
+        // Оба ребра в корзину через набор свойства (модель 0.8.1).
+        assert.equal(await setProperty(ctx, ctx.homeId, 'Потомки', []), 200);
+        const trash = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/trash`,
           headers: authHeaders(ctx),
-          payload: { source_id: a, target_id: b, type_id: linkTypeId },
         });
-        assert.equal(dup.statusCode, 409);
-        assert.equal(dup.json().error.code, 'DUPLICATE');
+        assert.equal(trash.statusCode, 200);
+        const links = (trash.json().data as { links: Array<{ id: string; target_id: string }> })
+          .links;
+        assert.equal(links.length, 2);
+        const goneLink = links.find((l) => l.target_id === gone)!;
+
+        // Пустой ids — ошибка валидации (не «очистить всё» по ошибке).
+        const emptyIds = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/trash/purge`,
+          headers: authHeaders(ctx),
+          payload: { ids: [] },
+        });
+        assert.equal(emptyIds.statusCode, 422);
+
+        // Точечная очистка: уходит только ребро к «Уйдёт совсем».
+        const purge = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/trash/purge`,
+          headers: authHeaders(ctx),
+          payload: { ids: [goneLink.id] },
+        });
+        assert.equal(purge.statusCode, 200, purge.body?.toString());
+        assert.deepEqual(purge.json().data as Record<string, number>, { purged: 1, skipped: 0 });
+
+        const rest = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/trash`,
+          headers: authHeaders(ctx),
+        });
+        const restLinks = (rest.json().data as { links: Array<{ id: string }> }).links;
+        assert.equal(restLinks.length, 1);
+        assert.notEqual(restLinks[0]!.id, goneLink.id);
       } finally {
         await closeRestContext(ctx);
       }

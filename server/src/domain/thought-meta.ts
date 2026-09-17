@@ -32,11 +32,6 @@ import type { NetworkDb } from '../db/network-db.js';
 import { linkTypeCatalog } from '../mcp/catalogs.js';
 import { getEffectiveViewsForThought } from './thought-type-views-service.js';
 
-/** Escape a thought id for a LIKE pattern (paired with `ESCAPE '\'`). */
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
-}
-
 /** Options for {@link getThoughtMeta}. */
 export interface ThoughtMetaOptions {
   /** Return the permanent comment in full (no `chars_*`/`truncated`).
@@ -66,15 +61,41 @@ function buildCounters(ndb: NetworkDb, thoughtId: string): {
     "comments_v WHERE owner_type = 'thought' AND owner_id = ? AND kind = 'chronological'",
     thoughtId,
   );
-  // Multiple thought_ref values are stored as a JSON array of ids
-  // (02-data-model.md §3.5) — the LIKE arm matches ids inside such arrays.
-  const usage_count = count(
-    "property_values_v WHERE owner_type = 'thought'" +
-      " AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')",
+  // Использование — два плеча (миграция 040):
+  //   * новое: рёбра блокирующих свойств-связей (0.8.1, dbf1e4aa). Направление
+  //     свойства задаёт блокируемый конец: `out` — цель ребра, `in` — источник;
+  //   * legacy: в живой БД thought_ref-свойств быть не должно, но value-handling
+  //     (тесты, унаследованные архивы) считает и одиночные значения, и
+  //     вхождения id в JSON-массив `value_thought_ref` — иначе счётчик прыгает
+  //     после миграции и удаление цели не блокируется.
+  // (Зеркало countThoughtRefUsages в property-service; прямой импорт невозможен
+  // из-за цикла thought-service → thought-meta.)
+  const legacyUsageCount = count(
+    `property_values_v
+     WHERE owner_type = 'thought'
+       AND value_thought_ref IS NOT NULL
+       AND (value_thought_ref = ? OR value_thought_ref LIKE ? ESCAPE '\\')`,
     thoughtId,
-    `%"${escapeLike(thoughtId)}"%`,
+    `%"${thoughtId.replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`,
   );
-  return { parents_count, children_count, attachments_count, chrono_count, usage_count };
+  const linkUsageCount = count(
+    `links_v l JOIN properties_v p
+        ON p.value_type = 'link' AND p.config IS NOT NULL
+       AND json_extract(p.config, '$.blocks_target_deletion') = 1
+       AND l.type_id = json_extract(p.config, '$.link_type_id')
+     WHERE l.active = 1 AND l.marked_for_deletion = 0
+       AND ((COALESCE(json_extract(p.config, '$.direction'), 'out') = 'out' AND l.target_id = ?)
+         OR (json_extract(p.config, '$.direction') = 'in' AND l.source_id = ?))`,
+    thoughtId,
+    thoughtId,
+  );
+  return {
+    parents_count,
+    children_count,
+    attachments_count,
+    chrono_count,
+    usage_count: legacyUsageCount + linkUsageCount,
+  };
 }
 
 /**

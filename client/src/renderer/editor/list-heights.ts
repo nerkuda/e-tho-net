@@ -1,13 +1,14 @@
 /**
  * Persistent fixed heights of the editor lists and the chronicle screen areas
- * (bug ee745368; always-fixed policy since bug 6b757336).
+ * (bug ee745368; always-fixed policy since bug 6b757336; bug 4cc6248c extended
+ * the policy to every group with a `persistKey` rowSplitter).
  *
  * A manual splitter drag is remembered as the area's **fixed** height
  * (08-ui-spec.md §6.3, §17.1): on every content refresh the visible height
  * stays exactly this value regardless of the row count — fewer rows leave
  * empty space, more rows scroll. This is deliberate: an area whose height
  * tracked the row count used to collapse and jump back on every reload
- * (thought_ref property edits, chronicle/attachments refresh) or on
+ * (property edits, chronicle/attachments refresh) or on
  * switching between thoughts with a different amount of content — the
  * visible "jitter" reported in bug 6b757336. The values are global per
  * screen (not per entity/record), live in the store-free module map and are
@@ -24,13 +25,13 @@
  *    editor scroll box — the property survives the editor re-renders (the
  *    scroll box is only cleared, never replaced), and the CSS fallback keeps
  *    the spec default (five rows) until the user drags;
- *  - areas that are stable for the whole mount are set inline (height +
- *    `flex-grow: 0`, so the area keeps its fixed height instead of
- *    flex-filling the remaining space): whole-group targets of the «Связи»
- *    tab (re-applied on every tab rebuild, see applyGroupClamp — still
- *    content-following there, see its own doc comment) and the chronicle
- *    screen areas (one clamp per mount in mountChronicle — the elements
- *    persist, only their content is re-rendered).
+ *  - groups with a `persistKey` rowSplitter (the «Связи» tab groups, the
+ *    «Свойства типа» group, the chronicle screen areas) read the fixed
+ *    height inline via `applyGroupClamp` — the inline `height` is re-applied
+ *    on every tab rebuild and is paired with `flex-grow: 0` so the area
+ *    keeps its saved size instead of flex-filling the remaining space (bug
+ *    4cc6248c: was a `max-height` cap, so dragging was content-bound and the
+ *    user could never grow the group past its current rows).
  */
 
 import { UI_STATE_KEY } from '@etn/shared';
@@ -42,11 +43,15 @@ import { store } from '../state.js';
 const PERSIST_DEBOUNCE_MS = 300;
 
 /**
- * Keys whose target element reads the cap from a CSS custom property. The
+ * Keys whose target element reads the height from a CSS custom property. The
  * variable is set on the editor scroll box (see {@link setClampRoot}); the
  * stylesheet provides the default (five visible rows) via `var(..., fallback)`.
+ * Since bug 4cc6248c the splitter drag range is content-unbounded for these
+ * keys too: the variable is consumed as an exact `height`, so a value larger
+ * than the current content just leaves empty space (more rows scroll inside)
+ * — the visible size still never depends on the row count.
  */
-const CSS_VAR_KEYS: Record<string, string> = {
+export const CSS_VAR_KEYS: Record<string, string> = {
   props: '--clamp-props',
   chrono: '--clamp-chrono',
   attachments: '--clamp-attachments',
@@ -143,21 +148,62 @@ function applyClampVars(): void {
 
 /**
  * Applies a saved height to an area that lives for the whole mount
- * («Связи» tab groups, rebuilt with the tab; chronicle screen areas, rebuilt
- * by mountChronicle on every network open): inline `max-height` plus
- * `flex-grow: 0`, so the area's height equals its content (never more than
- * the saved cap) instead of flex-filling the remaining space. No-op when the
- * user has never dragged this splitter.
+ * («Связи» tab groups, the «Свойства типа» group, the chronicle screen
+ * areas — rebuilt with the tab / on every network open): inline `height`
+ * plus `flex-grow: 0` and `flex-basis: auto`, so the area keeps the exact
+ * size the user dragged (more rows scroll inside, fewer leave empty space)
+ * instead of flex-filling the remaining space. No-op when the user has
+ * never dragged this splitter — the area keeps the CSS-default flex layout.
  *
- * Unlike the CSS-var channel above, «Связи» tab groups are NOT covered by
- * the always-fixed policy (bug 6b757336 fixed only `props`/`chrono`/
- * `attachments`): several sibling groups here share the tab's height by
- * flex-filling it, and giving every one of them a hard default would break
- * that layout without a saved value. This stays content-bound intentionally.
+ * Always-fixed policy (bug 6b757336, bug 4cc6248c): the inline `height` is
+ * re-applied on every tab rebuild, so the saved size survives entity
+ * changes and restarts. Any stale `max-height` (the older «cap» channel) is
+ * cleared so a leftover inline cap cannot clip the new fixed `height`.
  */
 export function applyGroupClamp(group: HTMLElement, key: string): void {
   const px = clamps[key];
   if (px === undefined) return;
-  group.style.maxHeight = `${px}px`;
+  group.style.height = `${px}px`;
   group.style.flexGrow = '0';
+  group.style.flexBasis = 'auto';
+  group.style.maxHeight = '';
+  // Кламп на теле группы (приёмка 0.8.1): сама группа-родитель тоже не
+  // должна flex-fill вкладку, иначе под зафиксированным телом останется
+  // пустота. `closest` безопасен для прочих вызовов (экран хроники) — там
+  // родительской `.group` нет, и стиль не трогается.
+  const owner = group.closest<HTMLElement>('.group');
+  if (owner !== null && owner !== group) {
+    owner.style.flexGrow = '0';
+    owner.style.flexBasis = 'auto';
+  }
+}
+
+/**
+ * Раскладка пары групп вкладки со сплиттером (приёмка 0.8.1): сплиттер и
+ * фиксированная высота действуют, ТОЛЬКО когда обе группы развёрнуты;
+ * свёрнутая группа не держит место (кламп снимается, группа схлопывается до
+ * заголовка), а единственная развёрнутая группа растягивается на всю вкладку
+ * — независимо от сохранённой высоты. Значение при этом не теряется: как
+ * только обе группы снова развёрнуты, кламп применяется заново.
+ *
+ * `active = false` снимает кламп с тела и возвращает группе CSS-растяжение;
+ * для свёрнутой группы (тела нет) — no-op, кроме возврата инлайнов.
+ */
+export function applyTabGroupClamp(group: HTMLElement, key: string, active: boolean): void {
+  const body = group.querySelector<HTMLElement>(':scope > .group-body');
+  if (!active || body === null) {
+    if (body !== null) {
+      body.style.height = '';
+      body.style.maxHeight = '';
+      body.style.flexGrow = '';
+      body.style.flexBasis = '';
+    }
+    group.style.flexGrow = '';
+    group.style.flexBasis = '';
+    return;
+  }
+  applyGroupClamp(body, key);
+  const clamped = clamps[key] !== undefined;
+  group.style.flexGrow = clamped ? '0' : '';
+  group.style.flexBasis = clamped ? 'auto' : '';
 }

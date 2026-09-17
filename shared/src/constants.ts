@@ -142,6 +142,13 @@ export const WS_PONG_TIMEOUT_MS = 60_000;
  */
 export const PREF_KEY = {
   SHOW_INACTIVE: 'show_inactive',
+  /**
+   * Canvas link-type filter (task «Фильтр типов связей на карте мыслей»,
+   * 0.8.1): `{ type_ids: string[], include_structural: boolean } | null`.
+   * `null`/absent — the client derives the live default from `show_on_map`
+   * (see requirement «Дефолт и хранение фильтра типов связей на карте»).
+   */
+  CANVAS_LINK_FILTER: 'canvas_link_filter',
 } as const satisfies Record<string, string>;
 export type PrefKey = (typeof PREF_KEY)[keyof typeof PREF_KEY];
 
@@ -160,6 +167,9 @@ export const UI_STATE_KEY = {
   EDITOR_POSITION: 'editor_position',
   EDITOR_COLLAPSED_GROUPS: 'editor_collapsed_groups',
   EDITOR_LIST_HEIGHTS: 'editor_list_heights',
+  /** Active editor tab id («Основное» / «Свойства» / «Связи» / etc.), задача
+   *  8ab775d9 — переживает переоткрытие редактора и смену мысли. */
+  EDITOR_ACTIVE_TAB: 'editor_active_tab',
   WINDOW_LAYOUT: 'window_layout',
   CANVAS_LAYOUT: 'canvas_layout',
   CANVAS_ZOOM: 'canvas_zoom',

@@ -212,26 +212,6 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     assert.equal(module.VIEW_DESCRIPTION_MAX, 1000);
   });
 
-  it('token-picker lists thought-field tokens + each type chain property', () => {
-    const chainProps = [
-      { type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! },
-      { type: TYPES[1]!, props: TYPE_PROPS[ANCESTOR_TYPE_ID]! },
-    ];
-    const tokens = module.buildTokensForField(chainProps, 'thought_ref', 'eq');
-    const labels = tokens.map((t) => t.text);
-    assert.ok(labels.includes('$thought'), 'thought id token for thought_ref');
-    assert.ok(labels.includes('$thought.[версия]'), 'own property token');
-    // The `теги` property is thought_ref + multiple: appears, marked listOnly.
-    assert.ok(labels.includes('$thought.[теги]'), 'inherited multiple property token');
-    // The `метка` property is text — задача 68ec0b5b: текстовое свойство
-    // может хранить id мысли, резолвер подставит его без проверки типа.
-    assert.ok(labels.includes('$thought.[метка]'), 'text property offered for thought_ref');
-    // Multi-valued property token is marked listOnly so the picker dims it.
-    const tags = tokens.find((t) => t.text === '$thought.[теги]');
-    assert.equal(tags?.listOnly, true);
-    const version = tokens.find((t) => t.text === '$thought.[версия]');
-    assert.notEqual(version?.listOnly, true);
-  });
 
   it('token-picker global section includes $today/$now for date fields', () => {
     const chainProps = [{ type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! }];
@@ -239,6 +219,21 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     const labels = tokens.map((t) => t.text);
     assert.ok(labels.includes('$today'));
     assert.ok(labels.includes('$now'));
+  });
+
+  it('token-picker offers $thought for link value type (error fad9f28c-…)', () => {
+    // Сервер (`thought-type-view-tokens.ts`) принимает `$thought` как
+    // значение свойства-связи; UI пикер должен его предлагать, чтобы
+    // отбор с целью-токеном можно было собрать через диалог, а не прямым
+    // POST. Так же покрываем legacy `thought_ref`.
+    const chainProps = [{ type: TYPES[0]!, props: TYPE_PROPS[FOCUS_TYPE_ID]! }];
+    const linkTokens = module.buildTokensForField(chainProps, 'link', 'eq');
+    const linkTexts = linkTokens.map((t) => t.text);
+    assert.ok(linkTexts.includes('$thought'), '$thought доступен для свойства-связи');
+
+    const legacyTokens = module.buildTokensForField(chainProps, 'thought_ref', 'eq');
+    const legacyTexts = legacyTokens.map((t) => t.text);
+    assert.ok(legacyTexts.includes('$thought'), '$thought доступен для legacy thought_ref');
   });
 
   it('token-picker special fields: keywords / thought_type / link_type / author / editor', () => {
@@ -283,15 +278,6 @@ describe('thought-type view editor dialog — wire format & tokens (задача
     assert.ok(editorTexts.includes('$user'));
   });
 
-  it('list operations keep listOnly tokens (scalar ops hide them)', () => {
-    const chainProps = [{ type: TYPES[1]!, props: TYPE_PROPS[ANCESTOR_TYPE_ID]! }];
-    const tokensScalar = module.buildTokensForField(chainProps, 'thought_ref', 'eq');
-    const tagsScalar = tokensScalar.find((t) => t.text === '$thought.[теги]');
-    assert.equal(tagsScalar?.listOnly, true);
-    const tokensList = module.buildTokensForField(chainProps, 'thought_ref', 'in');
-    const tagsList = tokensList.find((t) => t.text === '$thought.[теги]');
-    assert.equal(tagsList?.listOnly, true);
-  });
 
   it('multiple text property is listOnly for scalar ops and excluded from scalar special fields (задача 68ec0b5b)', () => {
     // Свойство «теги-текст» — text + multiple=true: токен-список несовместим

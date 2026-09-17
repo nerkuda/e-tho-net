@@ -26,6 +26,7 @@ import { canSave, offlineNotice } from '../drafts.js';
 import { applyCommentTemplateIfEmpty } from '../lib/comment-template.js';
 import { errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice } from '../lib/notice.js';
 import { replaceLegacyWikiLinks } from '../lib/pure.js';
 import { findWikiCreateContext, type WikiCreateCommentContext } from '../lib/wiki-create-context.js';
@@ -94,11 +95,9 @@ export async function tryCreateThoughtFromLegacyLink(
   for (const item of result.items) {
     try {
       if (item.kind === 'existing') {
-        await etn.links.create(networkId, {
-          source_id: parentId,
-          target_id: item.id,
-          type_id: result.linkTypeId,
-        });
+        // 0.8.1 (6dcd6db7): `POST /links` снят — связь с существующей мыслью
+        // создаётся пакетной операцией (уже связанная пара не дублируется).
+        throwOnFailures(await ensureLink(networkId, parentId, item.id, result.linkTypeId));
         if (firstAddedId === null) firstAddedId = item.id;
       } else {
         const newThought = await etn.thoughts.create(networkId, {

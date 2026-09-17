@@ -20,7 +20,7 @@ import { sendList, sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
 import {
   deletePropertyValue,
-  getPropertyValues,
+  getPropertyValuesWithLinks,
   setPropertyValue,
 } from '../domain/property-service.js';
 import { recordOwnerActivity } from '../domain/activity-service.js';
@@ -53,7 +53,7 @@ export function createPropertiesRoutes(deps: RouteDeps): FastifyPluginAsync {
         async (req: FastifyRequest, reply) => {
           const { networkId, id } = req.params as OwnerParams;
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          const values = getPropertyValues(ndb, ownerType, id);
+          const values = getPropertyValuesWithLinks(ndb, ownerType, id);
           sendList(reply, values, values.length, 0, values.length);
         },
       );

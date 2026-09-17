@@ -340,21 +340,34 @@ describe(
           const targetId = await mkThought('Цель связи');
           const copyTargetId = await mkThought('Получатель вложения');
 
+          // 0.8.1: связь создаётся через свойство-связь (структурные «Потомки»).
           const linkRes = await handle.client.callTool({
-            name: 'etn.links.create',
-            arguments: { network_id: ctx.networkId, source_id: sourceId, target_id: targetId },
+            name: 'etn.properties.add',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: sourceId,
+              key: 'Потомки',
+              value: targetId,
+            },
           });
           assert.equal(linkRes.isError, undefined, toolText(linkRes));
-          const linkId = toolJson<{ id: string }>(linkRes).id;
+          const linkId = toolJson<{ link_id: string }>(linkRes).link_id;
 
-          const trashed = await handle.client.callTool({
-            name: 'etn.links.trash',
-            arguments: { network_id: ctx.networkId, link_id: linkId, trashed: true },
+          const removed = await handle.client.callTool({
+            name: 'etn.properties.remove',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: sourceId,
+              key: 'Потомки',
+              value: targetId,
+            },
           });
-          assert.equal(trashed.isError, undefined, toolText(trashed));
+          assert.equal(removed.isError, undefined, toolText(removed));
           const restored = await handle.client.callTool({
-            name: 'etn.links.trash',
-            arguments: { network_id: ctx.networkId, link_id: linkId, trashed: false },
+            name: 'etn.links.restore',
+            arguments: { network_id: ctx.networkId, link_id: linkId },
           });
           assert.equal(restored.isError, undefined, toolText(restored));
 
@@ -385,16 +398,10 @@ describe(
           const copiedId = toolJson<Array<{ id: string }>>(copyRes)[0]?.id;
           assert.ok(copiedId !== undefined);
 
-          const linkDelete = await handle.client.callTool({
-            name: 'etn.links.delete',
-            arguments: { network_id: ctx.networkId, link_id: linkId },
-          });
-          assert.equal(linkDelete.isError, undefined, toolText(linkDelete));
-
           const linkRows = rowsOf(ctx, 'link', linkId);
           assert.deepEqual(
             linkRows.map((r) => r.action),
-            ['created', 'trashed', 'restored', 'deleted'],
+            ['created', 'trashed', 'restored'],
           );
           // Снимок связи — концы в формате REST («связь <id> → <id>»).
           for (const row of linkRows) {

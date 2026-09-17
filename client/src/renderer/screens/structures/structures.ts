@@ -66,6 +66,7 @@ import {
   buildConditions,
   buildExtraFilter,
   buildKeywordScope,
+  buildTraversalFilter,
   FILTER_W_MAX,
   FILTER_W_MIN,
   getFilterState,
@@ -206,6 +207,10 @@ function parseFilterState(raw: string): FilterState {
       linkTypeIds: Array.isArray(parsed.linkTypeIds)
         ? parsed.linkTypeIds.filter((v): v is string => typeof v === 'string')
         : [],
+      linkFilterTypeIds: Array.isArray(parsed.linkFilterTypeIds)
+        ? parsed.linkFilterTypeIds.filter((v): v is string => typeof v === 'string')
+        : [],
+      linkFilterStructural: parsed.linkFilterStructural === true,
       properties: Array.isArray(parsed.properties)
         ? parsed.properties.filter(
             (c): c is FilterState['properties'][number] =>
@@ -275,6 +280,8 @@ function buildFilter(): StructureFilter {
   }
   if (state.typeIds.length > 0) filter.type_ids = state.typeIds;
   if (state.linkTypeIds.length > 0) filter.link_type_ids = state.linkTypeIds;
+  const linkFilter = buildTraversalFilter();
+  if (linkFilter !== undefined) filter.link_filter = linkFilter;
   const conditions = buildConditionsFromPanel();
   if (conditions.length > 0) filter.properties = conditions;
   if (store.state.showInactive) filter.show_inactive = true;

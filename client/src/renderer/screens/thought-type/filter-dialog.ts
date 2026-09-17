@@ -46,6 +46,10 @@ import { clear, div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { notice } from '../../lib/notice.js';
+import {
+  openLinkTypesPicker as openLinkTypesPickerLib,
+  openThoughtTypesPicker as openThoughtTypesPickerLib,
+} from '../../lib/type-picker.js';
 import { orderedTypeRows } from '../../lib/type-tree.js';
 import { buildUserSelectWidget, listUsers, resolveUserName } from '../../lib/users.js';
 import { store } from '../../state.js';
@@ -968,9 +972,6 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
     if (valueType === 'bool') {
       return buildBoolSelect(live().values[i] ?? '', (v) => setValue(i, v));
     }
-    if (valueType === 'thought_ref') {
-      return buildThoughtRefInput(networkId, def, live().values[i] ?? '', cond.op, (v) => setValue(i, v));
-    }
     // text/url: free input + token button.
     return buildTextValueRow(networkId, live().values[i] ?? '', valueType, cond.op, (v) => setValue(i, v));
   };
@@ -981,8 +982,7 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
   }
 
   // List editor: chip-модель (задача 27472616) — несколько литералов и
-  // токенов свободно смешиваются; для `thought_ref` дополнительно доступен
-  // поиск мыслей и модальный пикер, ограниченный `allowed_type_ids`.
+  // токенов свободно смешиваются.
   const chipField = buildChipListField({
     getValues: () => live().values.filter((v) => v !== ''),
     onChange: (values) => {
@@ -993,10 +993,6 @@ function buildConditionValueEditor(opts: ConditionValueOpts): HTMLElement {
     getOptions: (query) => propertyValueComboOptions(networkId, valueType, cond.op, def, query),
     renderLabel: (value) => propertyValueChipLabel(networkId, valueType, value),
     placeholder: 'Добавить значение…',
-    picker:
-      valueType === 'thought_ref'
-        ? { label: 'выбрать…', open: (managed) => pickThoughtRefValues(networkId, def, managed) }
-        : undefined,
   });
   box.append(chipField.root);
   return box;
@@ -1050,78 +1046,9 @@ function buildTextValueRow(
 /** Кэш id → название мысли для отображения ссылочных значений (e8365d29). */
 const refTitleCache = new Map<string, string>();
 
-/** Value editor for `thought_ref` conditions: freely editable (id or token,
- *  живой поиск мыслей и токенов в одном поле) + «выбрать» (thought picker
- *  respecting `allowed_type_ids`). */
-function buildThoughtRefInput(
-  networkId: string,
-  def: NetworkProperty | undefined,
-  value: string,
-  op: StructurePropertyOp,
-  onChange: (v: string) => void,
-): HTMLElement {
-  const row = div('st-f-ref-row');
-  const input = el('input', 'st-f-input') as HTMLInputElement;
-  input.type = 'text';
-  input.placeholder = 'id мысли, название или токен ($thought)…';
-  input.value = value;
-  input.addEventListener('input', () => onChange(input.value));
-  // Ссылочное значение хранится как id, но показываем название мысли
-  // (асинхронно резолвим); токены (`$…`) показываем текстом.
-  resolveRefTitleForDisplay(networkId, input, value);
-
-  const allowedIds = allowedTypeIdsOf(def);
-  wireTokenCombo({
-    input,
-    getOptions: async (query) => {
-      const tokenOpts = filterComboOptions(
-        getTokenOptions({ kind: 'property', valueType: 'thought_ref', op }, query),
-        query,
-      );
-      if (query.trim() === '') return tokenOpts;
-      const hits = await findThoughtCandidates(networkId, query, allowedIds);
-      return [...tokenOpts, ...hits];
-    },
-    onPick: (picked) => {
-      if (picked.startsWith('$')) {
-        replaceComboValue(input, picked, onChange);
-        return;
-      }
-      const cached = refTitleCache.get(picked);
-      input.value = cached ?? picked;
-      onChange(picked);
-    },
-  });
-
-  const pick = el('button', 'st-f-add st-f-ref-pick', 'выбрать') as HTMLButtonElement;
-  pick.type = 'button';
-  pick.addEventListener('click', () => {
-    void pickThoughtsDialog({
-      networkId,
-      allowCreate: false,
-      allowLinkType: false,
-      searchTypeIds: allowedIds,
-    }).then(async (result) => {
-      const id = firstPickedThoughtId(result);
-      if (id === null) return;
-      try {
-        const [ref] = await etn.thoughts.resolve(networkId, [id]);
-        const title = ref !== undefined ? ref.title : id;
-        refTitleCache.set(id, title);
-        input.value = title;
-      } catch {
-        input.value = id;
-      }
-      onChange(id);
-    });
-  });
-  row.append(input, pick);
-  return row;
-}
-
-/** Live-search кандидаты мыслей для комбобокса значения `thought_ref`
- *  (задача 27472616): найденные заголовки резолвятся в `refTitleCache`, а
- *  сам поиск честно ищет по подстроке — тот же движок, что у «выбрать». */
+/** Live-search кандидаты мыслей для комбобоксов (задача 27472616):
+ *  найденные заголовки резолвятся в `refTitleCache`, а сам поиск честно
+ *  ищет по подстроке — тот же движок, что у «выбрать». */
 async function findThoughtCandidates(
   networkId: string,
   query: string,
@@ -1136,33 +1063,6 @@ async function findThoughtCandidates(
   } catch {
     return [];
   }
-}
-
-/** Показывает название мысли вместо id в поле ссылочного значения. */
-function resolveRefTitleForDisplay(networkId: string, input: HTMLInputElement, value: string): void {
-  if (value === '' || value.startsWith('$')) return;
-  const cached = refTitleCache.get(value);
-  if (cached !== undefined) {
-    input.value = cached;
-    return;
-  }
-  void etn.thoughts
-    .resolve(networkId, [value])
-    .then((refs) => {
-      const ref = refs[0];
-      if (ref === undefined) return;
-      refTitleCache.set(ref.id, ref.title);
-      // Обновляем только если пользователь не начал редактировать поле.
-      if (input.isConnected && input.value === value) input.value = ref.title;
-    })
-    .catch(() => undefined);
-}
-
-/** `allowed_type_ids` / `allowed_type_id` свойства, без пустых. */
-function allowedTypeIdsOf(def: NetworkProperty | undefined): string[] {
-  const config = def?.config as { allowed_type_ids?: string[]; allowed_type_id?: string } | undefined;
-  const ids = config?.allowed_type_ids ?? (config?.allowed_type_id !== undefined ? [config.allowed_type_id] : []);
-  return ids.filter((id) => id !== '');
 }
 
 /** Value editor for `date` conditions: literal ISO date or token with ±Nd. */
@@ -1370,10 +1270,27 @@ const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; la
     { op: 'is_empty', label: 'не заполнено' },
   ],
   bool: [{ op: 'eq', label: 'равно' }],
-  thought_ref: [
+  // Свойство-связь (0.8.1): значение хранится в рёбрах, не в property_values.
+  // На сервере поддержан тот же набор, что у legacy `thought_ref` ниже.
+  // Паритет с `OPS_BY_TYPE` в `filter-panel.ts` обязателен — иначе UI
+  // предложит операцию, которую сервер отвергнет (ошибка 31a05292), а
+  // `buildConditionRow` упадёт на пустом списке при открытии существующего
+  // отбора с условием на `link`.
+  link: [
     { op: 'eq', label: 'равно' },
     { op: 'in', label: 'в списке' },
     { op: 'not_in', label: 'не в списке' },
+    { op: 'not_empty', label: 'заполнено' },
+    { op: 'is_empty', label: 'не заполнено' },
+  ],
+  // Legacy (миграция 040): таких свойств в живой БД не остаётся;
+  // присутствие проверяется теми же кнопками «заполнено»/«не заполнено».
+  // Должно совпадать с `OPS_BY_TYPE` в `filter-panel.ts` — иначе при открытии
+  // диалога по существующему отбору с условием на legacy-`thought_ref`
+  // падает «Cannot read properties of undefined (reading 'op')» (ошибка
+  // f7080aea): `OPS_BY_TYPE['thought_ref']` пуст, а `buildConditionRow` берёт
+  // `ops[0]!.op` для восстановления валидной операции.
+  thought_ref: [
     { op: 'not_empty', label: 'заполнено' },
     { op: 'is_empty', label: 'не заполнено' },
   ],
@@ -1398,130 +1315,11 @@ async function pickParentThoughts(networkId: string, managedIds: string[]): Prom
 }
 
 async function openThoughtTypesPicker(networkId: string, managedIds: string[]): Promise<string[] | null> {
-  let types = store.state.thoughtTypes;
-  if (types.length === 0) {
-    try {
-      types = await etn.types.listThoughtTypes(networkId);
-    } catch {
-      types = [];
-    }
-  }
-  const rows = orderedTypeRows(types)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({ id: row.type.id, label: row.type.name, depth: row.depth - 1 }));
-  return openTypePickerDialog('Типы мыслей', rows, managedIds);
+  return openThoughtTypesPickerLib(networkId, managedIds);
 }
 
 async function openLinkTypesPicker(networkId: string, managedIds: string[]): Promise<string[] | null> {
-  let types = store.state.linkTypes;
-  if (types.length === 0) {
-    try {
-      types = await etn.types.listLinkTypes(networkId);
-    } catch {
-      types = [];
-    }
-  }
-  const rows = orderedTypeRows(types)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 }));
-  return openTypePickerDialog('Типы связей', rows, managedIds);
-}
-
-/**
- * Modal type picker: a search box filtering as you type, a multi-column
- * checklist (checked first, then alphabetical) and «Отмена»/«Применить».
- * Resolves the checked set on Apply, `null` on Cancel/Esc/backdrop (any
- * close path fires `onClose` exactly once — {@link showDialog}).
- */
-function openTypePickerDialog(
-  title: string,
-  rows: Array<{ id: string; label: string; depth: number }>,
-  initial: string[],
-): Promise<string[] | null> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value: string[] | null): void => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-
-    const body = div('st-f-picker');
-    const searchInput = el('input', 'st-f-input st-f-search') as HTMLInputElement;
-    searchInput.type = 'text';
-    searchInput.placeholder = 'Найти…';
-    const list = div('st-f-checks st-f-picker-list');
-    const checked = new Set(initial);
-    let needle = '';
-
-    const renderList = (): void => {
-      clear(list);
-      const filtered = rows.filter((row) => row.label.toLowerCase().includes(needle));
-      const byAlpha = (a: (typeof rows)[number], b: (typeof rows)[number]): number =>
-        a.label.localeCompare(b.label, 'ru');
-      const sorted = [
-        ...filtered.filter((row) => checked.has(row.id)).sort(byAlpha),
-        ...filtered.filter((row) => !checked.has(row.id)).sort(byAlpha),
-      ];
-      if (sorted.length === 0) list.append(el('div', 'st-f-empty', 'Ничего не найдено'));
-      for (const row of sorted) {
-        const line = el('label', 'st-f-check');
-        line.style.paddingLeft = `${Math.max(0, row.depth) * 14}px`;
-        const input = el('input') as HTMLInputElement;
-        input.type = 'checkbox';
-        input.checked = checked.has(row.id);
-        input.addEventListener('change', () => {
-          if (input.checked) checked.add(row.id);
-          else checked.delete(row.id);
-          renderList();
-        });
-        line.append(input, el('span', '', row.label));
-        list.append(line);
-      }
-    };
-    searchInput.addEventListener('input', () => {
-      needle = searchInput.value.trim().toLowerCase();
-      renderList();
-    });
-    body.append(searchInput, list);
-    renderList();
-    showDialog({
-      title,
-      body,
-      width: 480,
-      buttons: [
-        { label: 'Отмена' },
-        { label: 'Применить', primary: true, onClick: () => finish([...checked]) },
-      ],
-      onMount: () => {
-        searchInput.focus();
-      },
-      onClose: () => finish(null),
-    });
-  });
-}
-
-async function pickThoughtRefValues(
-  networkId: string,
-  def: NetworkProperty | undefined,
-  managedIds: string[],
-): Promise<string[] | null> {
-  const result = await pickThoughtsDialog({
-    networkId,
-    allowCreate: false,
-    allowLinkType: false,
-    searchTypeIds: allowedTypeIdsOf(def),
-    selectedIds: managedIds,
-  });
-  if (result === null) return null;
-  const ids = pickedThoughtIds(result);
-  for (const id of ids) {
-    void etn.thoughts.resolve(networkId, [id]).then((refs) => {
-      const ref = refs[0];
-      if (ref !== undefined) refTitleCache.set(ref.id, ref.title);
-    });
-  }
-  return ids;
+  return openLinkTypesPickerLib(networkId, managedIds);
 }
 
 // ---------------------------------------------------------------------------
@@ -1608,7 +1406,7 @@ function typeChipLabel(kind: 'thought' | 'link', value: string): string {
 }
 
 /** Живой поиск для списочных условий по свойству (`in`/`not_in`): токены +
- *  для `thought_ref` — поиск мыслей, ограниченный `allowed_type_ids`. */
+ *  свойства со списочными операторами). */
 async function propertyValueComboOptions(
   networkId: string,
   valueType: PropertyValueType,
@@ -1616,18 +1414,17 @@ async function propertyValueComboOptions(
   def: NetworkProperty | undefined,
   query: string,
 ): Promise<ComboOption[]> {
-  const tokenOpts = getTokenOptions({ kind: 'property', valueType, op }, query);
-  if (valueType !== 'thought_ref' || query.trim() === '') return tokenOpts;
-  return [...tokenOpts, ...(await findThoughtCandidates(networkId, query, allowedTypeIdsOf(def)))];
+  void def;
+  return getTokenOptions({ kind: 'property', valueType, op }, query);
 }
 
-/** Подпись чипа списочного условия: для `thought_ref` — название мысли
- *  (резолвится асинхронно), для остальных типов — значение как есть. */
+/** Подпись чипа списочного условия: значение как есть. */
 function propertyValueChipLabel(
   networkId: string,
   valueType: PropertyValueType,
   value: string,
 ): string | Promise<string> {
-  if (valueType !== 'thought_ref') return value;
-  return resolveParentChipLabel(networkId, value);
+  void networkId;
+  void valueType;
+  return value;
 }

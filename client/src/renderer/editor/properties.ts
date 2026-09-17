@@ -1,90 +1,78 @@
 /**
- * Editor group: properties (H11, 08-ui-spec.md §6.3; 09-scenarios.md D4).
+ * Editor tab «Свойства» (задача 8ab775d9, тех.проект a94998c6 — единая модель
+ * связей). Две сворачиваемые группы:
+ *  - «Свойства типа» (развёрнута по умолчанию) — таблица редактирования
+ *    значений всех типов из определений свойств типа владельца. Поддерживает
+ *    `text`, `number`, `date`, `bool`, `url`, `link` (свойство-связь) — для
+ *    `link` используется автокомплит по заголовку мысли и чипы для множественных
+ *    значений.
+ *  - «Свойства вне типа» (свёрнута по умолчанию) — значения, чьё свойство
+ *    не подключено к типу владельца (0.6.5): скаляры read-only, свойства-связи
+ *    (0.8.1, dfaacb05) — редактор для реестровых свойств и read-only чипи для
+ *    рёбер типов связей без свойства в реестре.
  *
- * Thought-only. When the thought has a type with property definitions, a table
- * of value editors is rendered per `value_type`:
- *  - text/number/date → inputs, saved on blur (empty → remove); a text value
- *    with predefined options also gets a suggestion dropdown that filters as
- *    the user types (an input aid, never a restriction);
- *  - url → input plus an «Открыть» button that hands the value to the OS
- *    default handler (http/https, file://, local paths, registered protocols);
- *  - bool → checkbox;
- *  - thought_ref → the stored thought is shown as a mini cloud of itself
- *    (icon + title in the thought's own colours/font, `applyCloudStyle`, dimmed
- *    when inactive/marked, red trash glyph when marked — the same reading as
- *    the history bar and the selection panel): single form with no value is an
- *    editable field doubling as a live candidate search (plus the
- *    duplicate-search dialog picker) — a picked value turns into the cloud;
- *    with `config.multiple` the cell is a chip list of mini clouds (the same
- *    chip styling as the structures filter panel). The «×» on a cloud removes
- *    the thought from the value; clicking the cloud (not the «×») switches to
- *    the map view, focuses the thought and opens it in the editor (the editor
- *    follows the focus).
+ * Значения пишутся через `etn.properties.set` / `remove`; realtime
+ * `property-value.*` события перезагружают таблицу (модульный слушатель).
  *
- * Values are written with `properties.set`, cleared with `properties.remove`;
- * realtime `property-value.*` events reload the table when the open entity is
- * the owner (a single module-level listener keeps closures bounded).
- *
- * Single text and thought_ref values also keep a client-local history of the
- * 10 last saved values per property (localStorage, `recent-values.ts`):
- * focusing the empty field — or clearing it back to empty — offers the
- * history as a dropdown; typing closes it so the field's regular behaviour
- * takes over. Multiple-value properties (`config.multiple`) keep no history.
+ * Single text values also keep a client-local history of the 10 last saved
+ * values per property (localStorage, `recent-values.ts`).
  */
 
-import type { EffectiveTypeProperty, PropertyValue, ThoughtRef } from '@etn/shared';
+import type {
+  EffectiveTypeProperty,
+  LinkPropertyValueItem,
+  LinkPropertyValues,
+  PropertyValue,
+  ThoughtRef,
+} from '@etn/shared';
 
 import { onRealtimeEvent } from '../realtime.js';
-import { button, div, el, errText, positionBodyDropdown, setTooltip, span } from '../lib/dom.js';
+import {
+  button,
+  div,
+  el,
+  errText,
+  positionBodyDropdown,
+  setTooltip,
+  span,
+} from '../lib/dom.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/icons.js';
+import { type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
+import { markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { expandTypeIdsToSubtree } from '../lib/type-tree.js';
-import { requireNetworkId, setFocus } from '../app.js';
-import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
-import { setActiveView } from '../screens/active-view.js';
+import {
+  applyCloudStyle,
+  applyThoughtIcon,
+  deferSingleClick,
+  resolveCloudStyle,
+} from '../canvas/canvas.js';
+import { pickThoughtsDialog } from '../canvas/add-dialog.js';
+import { toggleSelection } from '../selection/selection.js';
+import { requireNetworkId } from '../app.js';
 import { store } from '../state.js';
-import { registerMainSection, type EditorContext } from './editor.js';
-import {
-  loadRecentRefEntries,
-  loadRecentValues,
-  recordRecentValue,
-  wireRecentValues,
-} from './recent-values.js';
+import { registerTabContent, type EditorContext } from './editor.js';
+import { groupSection } from './group.js';
+import { applyTabGroupClamp } from './list-heights.js';
+import { rowSplitter } from './splitter.js';
+import { loadRecentValues, recordRecentValue, wireRecentValues } from './recent-values.js';
 import { wireThoughtRefSearch } from './thought-picker.js';
-import {
-  firstPickedThoughtId,
-  pickThoughtsDialog,
-  pickedThoughtIds,
-} from '../canvas/add-dialog.js';
 
 /** Reload callback of the currently mounted properties table (or null). */
 let currentReload: (() => void) | null = null;
 let wired = false;
 
 /**
- * Registers the properties section of the «Основное» tab (thoughts and links):
- * the main type-driven table of values, and the read-only «Свойства вне типа»
- * group underneath for values whose property is no longer attached to the
- * owner's type (0.6.5; спека «Значения вне типа сохраняются»).
+ * Registers the «Свойства» tab (task 8ab775d9). Replaces the previous
+ * «Свойства» section in the «Комментарий» tab — values now live in their own
+ * tab with two collapsible groups, leaving «Комментарий» to the permanent
+ * comment full-height editor.
  */
 export function registerPropertiesGroup(): void {
-  registerMainSection((ctx) => {
-    // Both owners share the same section: the underlying render path
-    // (buildPropertiesBody) is ownerType-driven. An owner without a type
-    // resolves the catalogue root, just like untyped thoughts already do
-    // (L21).
-    const typeId = resolveEditorTypeId(ctx);
-    if (typeId === null) return null;
-    return {
-      id: 'properties',
-      title: 'Свойства',
-      loadCount: () => countProperties(ctx),
-      buildBody: () => buildPropertiesBody(ctx),
-    };
-  });
+  registerTabContent('properties', buildPropertiesTab);
   if (!wired) {
     wired = true;
     onRealtimeEvent((evt) => {
@@ -93,6 +81,72 @@ export function registerPropertiesGroup(): void {
       }
     });
   }
+}
+
+/** Builds the «Свойства» tab content (two collapsible groups). */
+function buildPropertiesTab(ctx: EditorContext): HTMLElement {
+  const box = div('properties-tab');
+  // No type → no properties at all (an owner with no type resolves the root,
+  // but a network mid-migration might have no root either — show empty state).
+  const typeId = resolveEditorTypeId(ctx);
+  if (typeId === null) {
+    box.append(el('p', 'muted', 'Свойства недоступны — нет подходящего типа.'));
+    return box;
+  }
+  // Group 1 — «Свойства типа» (expanded by default). Read-only outside-type
+  // values are rendered inline as a second group further down.
+  const typeGroup = groupSection({
+    id: 'properties.type',
+    title: 'Свойства типа',
+    defaultCollapsed: false,
+    buildBody: () => buildPropertiesBody(ctx),
+  });
+  // Group 2 — «Свойства вне типа» (collapsed by default). Hidden entirely
+  // when there are no such values (rendered inside the main body once the
+  // reload pass resolves).
+  const outsideGroup = groupSection({
+    id: 'properties.outside',
+    title: 'Свойства вне типа',
+    defaultCollapsed: true,
+    lazyCount: true,
+    loadCount: async () => {
+      try {
+        const networkId = requireNetworkId();
+        const values = await etn.properties.get(
+          networkId,
+          ctx.ownerType,
+          ctx.ownerId,
+        );
+        // Скаляры и свойства-связи: внетиповое свойство-связь — тоже значение
+        // вне типа (dfaacb05), сервер отдаёт его формой LinkPropertyValues.
+        const outside = values.filter((v) => v.outside_type === true);
+        return outside.length === 0 ? '(0)' : `(${outside.length})`;
+      } catch {
+        return undefined;
+      }
+    },
+    buildBody: () => buildOutsidePropertiesBody(ctx),
+  });
+  // Раскладка пары (приёмка 0.8.1): сплиттер и фиксированные высоты действуют
+  // только когда ОБЕ группы развёрнуты; свёрнутая группа схлопывается до
+  // заголовка, единственная развёрнутая растягивается на всю вкладку,
+  // сплиттер над свёрнутой группой инертен (тела нет — bodyOf → null).
+  const bodyOf = (group: HTMLElement): HTMLElement | null =>
+    group.querySelector(':scope > .group-body') as HTMLElement | null;
+  const relayout = (): void => {
+    const both = bodyOf(typeGroup) !== null && bodyOf(outsideGroup) !== null;
+    applyTabGroupClamp(typeGroup, 'properties.type', both);
+    applyTabGroupClamp(outsideGroup, 'properties.outside', both);
+  };
+  typeGroup.addEventListener('etn:toggled', () => relayout());
+  outsideGroup.addEventListener('etn:toggled', () => relayout());
+  relayout();
+  box.append(
+    typeGroup,
+    rowSplitter(() => bodyOf(typeGroup), { min: 50, persistKey: 'properties.type' }),
+    outsideGroup,
+  );
+  return box;
 }
 
 /** Counts the type's effective property definitions for the group badge. */
@@ -137,16 +191,14 @@ function rootTypeIdFor(ownerType: 'thought' | 'link'): string | null {
 }
 
 /**
- * Builds the properties group body for the current owner — thoughts and
- * links share the same render path. The main table shows in-type values;
- * the read-only «Свойства вне типа» group underneath lists values whose
- * property is no longer attached to the owner's type (0.6.5; спека
- * «Значения вне типа сохраняются»).
+ * Builds the «Свойства типа» body for the current owner — thoughts and links
+ * share the same render path. The main table shows in-type values; outside-type
+ * values are now in a separate group below.
  */
 function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   const networkId = requireNetworkId();
-  const ownerId = ctx.ownerId;
   const ownerType = ctx.ownerType;
+  const ownerId = ctx.ownerId;
   const typeOwner = ownerTypeOf(ctx);
   const typeId = resolveEditorTypeId(ctx);
 
@@ -155,181 +207,130 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     box.append(el('p', 'muted', 'Свойства недоступны.'));
     return box;
   }
-  // Guarded above; the fallback is unreachable but keeps closure typing honest.
+  // Delegate the actual rendering to the standalone builder; this wrapper
+  // exists for the legacy `propertiesInternals.buildPropertiesBody` test seam
+  // (still called by `renderer-properties.test.ts`).
   const typedId: string = typeId;
+  const typeBody = buildTypePropertiesBody(networkId, ownerType, ownerId, typeOwner, typedId);
+  box.append(typeBody);
+  return box;
+}
 
-  const tableWrap = div('admin-table-wrap prop-wrap');
-  // No column headers and at most five visible rows — vertical scroll beyond
-  // that (08-ui-spec.md §6.3.1).
-  tableWrap.append(el('span', 'muted', 'Загрузка…'));
-  box.append(tableWrap);
+/**
+ * Builds the «Свойства вне типа» body — read-only table for values whose
+ * property is no longer attached to the owner's type (0.6.5; спека «Значения
+ * вне типа сохраняются»). The group is hidden entirely when no such values
+ * exist (`loadCount` returns `(0)` and the section is rendered empty).
+ */
+function buildOutsidePropertiesBody(ctx: EditorContext): HTMLElement {
+  const networkId = requireNetworkId();
+  const ownerId = ctx.ownerId;
+  const ownerType = ctx.ownerType;
 
-  // The read-only «Свойства вне типа» group: hidden until the reload pass
-  // finds at least one such value. The render happens inside the same
-  // `reload()` so a freshly-deleted value refreshes both views at once.
-  const outsideWrap = div('prop-outside-wrap');
+  const box = div('properties-outside-body');
+  const wrap = div('admin-table-wrap prop-wrap');
+  wrap.append(el('span', 'muted', 'Загрузка…'));
+  box.append(wrap);
 
-  // Full metadata of every referenced thought (single ids and multiple-ref
-  // arrays alike) — titles, icon, colours and flags for the mini clouds.
-  const refCache = new Map<string, ThoughtRef>();
-  // Declared BEFORE the initial reload() call below: reload is a hoisted
-  // function declaration, and reading this from inside it during the call at
-  // the `void reload()` line would hit the temporal dead zone.
   let everMounted = false;
-  currentReload = () => void reload();
-  void reload();
-
-  /** Loads definitions + values and renders the table. */
-  async function reload(): Promise<void> {
-    // The first reload starts before the group mounts this box — it must
-    // proceed detached. Skip only bodies that were mounted and then replaced
-    // by a newer editor render.
+  const reload = async (): Promise<void> => {
     if (everMounted && !box.isConnected) return;
-    const startedAt = Date.now();
-    tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
-    outsideWrap.replaceChildren();
-    let definitions: EffectiveTypeProperty[];
-    let values: PropertyValue[];
+    wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    let values: Array<PropertyValue | LinkPropertyValues>;
     try {
-      [definitions, values] = await Promise.all([
-        etn.types.listTypeProperties(networkId, typeOwner, typedId),
-        etn.properties.get(networkId, ownerType, ownerId),
-      ]);
-      // Full metadata of every referenced thought — single ids and
-      // multiple-ref arrays alike (one resolve call, capped at 100 ids) —
-      // cached for the mini-cloud rendering (title, icon, styles, flags).
-      const refIds = [
-        ...new Set(
-          values.flatMap((v) =>
-            typeof v.value === 'string'
-              ? [v.value]
-              : Array.isArray(v.value)
-                ? v.value
-                : [],
-          ),
-        ),
-      ];
-      if (refIds.length > 0) {
-        const resolved = await etn.thoughts.resolve(networkId, refIds.slice(0, 100));
-        for (const ref of resolved) refCache.set(ref.id, ref);
-      }
+      values = await etn.properties.get(networkId, ownerType, ownerId);
     } catch (err) {
-      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      wrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
     if (box.isConnected) everMounted = true;
-    if (definitions.length === 0) {
-      tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
-      renderOutsideType(values);
-      return;
-    }
-
-    // Значение адресуется реестровым id свойства (`PropertyValue.property_id`
-    // = `properties.id`), а НЕ id строки привязки (`type_properties.id`).
-    // У легаси-привязок (созданных до реестра свойств 0.6.5) эти id разошлись,
-    // поэтому сопоставление по `definition.id` теряло значения и поля на
-    // клиенте выглядели пустыми, хотя на сервере хранились (баг 7d094c26).
-    const valueByProp = new Map(values.map((v) => [v.property_id, v]));
-    const table = el('table', 'table-list prop-table');
-    // Headerless table (08-ui-spec.md §6.3.1): rows only.
-    const tbody = el('tbody');
-    for (const definition of definitions) {
-      const value = valueByProp.get(definition.property_id);
-      const row = el('tr');
-      const source = definition.inherited
-        ? ` · из «${definition.defined_on_name}»`
-        : '';
-      const nameCell = el(
-        'td',
-        undefined,
-        `${definition.key}${definition.required ? ' *' : ''} (${typeName(definition.value_type)})${source}`,
-      );
-      // Property description (task «Добавить описание (description) к
-      // определениям свойств типов»): a hint next to the property name —
-      // the ⓘ marker shows one is there, the tooltip carries the text
-      // (override-aware: the effective description of the L21 chain).
-      const hint = propertyHint(definition);
-      if (hint !== null) {
-        setTooltip(nameCell, hint);
-        nameCell.append(span(' ⓘ', 'muted'));
-      }
-      row.append(nameCell);
-      row.append(buildEditorCell(definition, value));
-      tbody.append(row);
-    }
-    table.append(tbody);
-    tableWrap.replaceChildren(table);
-    // The outside-type group lives BELOW the main table (08-ui-spec.md
-    // §6.3.1, спека «Значения вне типа сохраняются»). The two are
-    // re-rendered together so a delete in either place refreshes the other.
-    renderOutsideType(values);
-    // Milestone journal mark (task 92b89e6f): the properties table really
-    // rendered — the closing bracket of the «stuck "Загрузка…"» symptom path.
-    logUiEvent('ui.editor.props.loaded', {
-      id: ownerId,
-      ms: Date.now() - startedAt,
-      definitions: definitions.length,
-    });
-  }
-
-  /** Confirmed deletion of an outside-type value (custom confirmation dialog). */
-  async function confirmOutsideRemove(name: string): Promise<boolean> {
-    return confirmDialog(
-      'Удалить значение свойства',
-      `Свойство «${name}» больше не подключено к типу. Удалить сохранённое значение? Действие необратимо — таких значений система сама не очищает.`,
-      true,
+    // Вне типа — скаляры и свойства-связи вместе (dfaacb05): рёбра,
+    // непокрытые свойствами типа, читаются внетиповыми свойствами-связями.
+    const outside: Array<PropertyValue | LinkPropertyValues> = values.filter(
+      (v) => v.outside_type === true,
     );
-  }
-
-  /**
-   * Renders the «Свойства вне типа» group under the main table. Hidden
-   * entirely when no values carry `outside_type: true` — the group's mere
-   * presence would otherwise hint at non-existent clutter (08-ui-spec.md
-   * §6.3.1, спека «Значения вне типа сохраняются»).
-   */
-  function renderOutsideType(values: PropertyValue[]): void {
-    const outside = values.filter((v) => v.outside_type === true);
     if (outside.length === 0) {
-      outsideWrap.replaceChildren();
+      wrap.replaceChildren(el('p', 'muted', 'Нет значений вне типа.'));
       return;
     }
-    outsideWrap.replaceChildren(buildOutsideTypeTable(outside));
-  }
+    wrap.replaceChildren(buildOutsideTypeTable(outside, networkId, ownerType, ownerId, () => void reload()));
+  };
+  void reload();
+  // Keep the outside-type body in sync with the main properties reload (a
+  // delete in either group should refresh the other). The realtime listener
+  // already invokes `currentReload` for both groups; piggy-back on it by
+  // re-rendering ourselves whenever it fires.
+  onRealtimeEvent((evt) => {
+    if (evt.type === 'property-value.set' || evt.type === 'property-value.deleted') {
+      if (box.isConnected) void reload();
+    }
+  });
+  return box;
+}
 
-  /**
-   * The body of the «Свойства вне типа» group: a headerless read-only table
-   * mirroring the main one, with one row per orphaned value. The row carries
-   * the property name and value (mini-cloud for thought_ref, chips for
-   * multiple, plain text otherwise) — visually identical to the main table,
-   * but without any editor widget. The only action is «×» removing the value
-   * with a confirmation prompt (the system itself never deletes such values).
-   */
-  function buildOutsideTypeTable(values: PropertyValue[]): HTMLElement {
+/**
+ * Confirmed deletion of an outside-type value (custom confirmation dialog).
+ */
+async function confirmOutsideRemove(name: string): Promise<boolean> {
+  return confirmDialog(
+    'Удалить значение свойства',
+    `Свойство «${name}» больше не подключено к типу. Удалить сохранённое значение? Действие необратимо — таких значений система сама не очищает.`,
+    true,
+  );
+}
+
+/**
+ * The body of the «Свойства вне типа» group: a headerless table mirroring the
+ * main one, with one row per outside-type value. Скаляры — read-only: The only
+ * action is «×» removing the value with a confirmation prompt (the system
+ * itself never deletes such values). Свойства-связи вне типа (dfaacb05):
+ * реестровое свойство (не подключённое к типу владельца) редактируется как в
+ * основной таблице — запись значений внетипового свойства-связи разрешена;
+ * рёбра типа связи без свойства в реестре показываются read-only чипами —
+ * ключа для записи нет.
+ *
+ * Used by the standalone «Свойства вне типа» group in the «Свойства» tab
+ * (task 8ab775d9); no longer rendered below the main table in the
+ * «Комментарий» tab.
+ */
+function buildOutsideTypeTable(
+  values: Array<PropertyValue | LinkPropertyValues>,
+  networkId: string,
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  onRemove: () => void,
+): HTMLElement {
     const root = div('prop-outside');
-    const header = div('prop-outside-header');
-    header.append(span('Свойства вне типа', 'prop-outside-title'));
-    header.append(
-      span(
-        'Свойство отключено от типа — значение можно только удалить.',
-        'muted prop-outside-hint',
-      ),
-    );
-    root.append(header);
+    // Шапку группы рисует `groupSection` выше; внутренний `prop-outside-header`
+    // дублировал её и читался как «заголовок колонок таблицы». Таблица
+    // без `<thead>` — только строки значений; первая колонка содержит имя
+    // свойства, вторая — редактор/чип/крестик.
     const table = el('table', 'table-list prop-outside-table');
     const tbody = el('tbody');
     for (const value of values) {
       const row = el('tr');
-      const nameCell = el(
-        'td',
-        undefined,
-        `${value.property_name} (${typeName(value.value_type)})`,
-      );
+      if (isLinkPropertyValues(value)) {
+        const nameCell = el('td', undefined, `${value.property_name} (связь)`);
+        setTooltip(
+          nameCell,
+          value.property_id !== ''
+            ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
+            : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство, но не редактируется через свойства.',
+        );
+        row.append(nameCell);
+        row.append(
+          buildOutsideLinkCell(value, networkId, ownerType, ownerId, onRemove),
+        );
+        tbody.append(row);
+        continue;
+      }
+      const nameCell = el('td', undefined, `${value.property_name} (${typeName(value.value_type)})`);
       setTooltip(
         nameCell,
         'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
       );
       row.append(nameCell);
-      row.append(buildOutsideValueCell(value));
+      row.append(buildOutsideValueCell(value, networkId, ownerType, ownerId, onRemove));
       tbody.append(row);
     }
     table.append(tbody);
@@ -337,20 +338,225 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     return root;
   }
 
+/**
+ * Ячейка внетипового свойства-связи. Свойство есть в реестре (не подключено
+ * к типу владельца) — полноценный чип-редактор, тот же, что в основной
+ * таблице: запись значения внетипового свойства-связи разрешена (dfaacb05).
+ * Рёбра типа связи без реестрового свойства — read-only чипи: ключа записи
+ * нет, редактирование ушло бы в рёбра напрямую.
+ */
+function buildOutsideLinkCell(
+  value: LinkPropertyValues,
+  networkId: string,
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  onRemove: () => void,
+): HTMLElement {
+    const cell = el('td', 'prop-outside-cell');
+
+    if (value.property_id !== '') {
+      const definition: EffectiveTypeProperty = {
+        id: value.property_id,
+        property_id: value.property_id,
+        owner_type: ownerType === 'thought' ? 'thought_type' : 'link_type',
+        owner_id: '',
+        key: value.property_name,
+        value_type: 'link',
+        config: value.link_type_id !== null
+          ? { link_type_id: value.link_type_id, direction: value.direction }
+          : { direction: value.direction, structural: true },
+        required: false,
+        position: 0,
+        description: value.description ?? null,
+        inherited: false,
+        defined_on: '',
+        defined_on_name: '',
+        default_value: null,
+        overridden_here: false,
+        description_overridden: false,
+      };
+      const save = async (next: unknown): Promise<boolean> => {
+        try {
+          await etn.properties.set(networkId, ownerType, ownerId, definition.key, next);
+          onRemove();
+          return true;
+        } catch (err) {
+          notice(`Не удалось сохранить «${definition.key}»: ${errText(err)}`, 'error');
+          return false;
+        }
+      };
+      cell.append(
+        buildLinkValueEditor({
+          networkId,
+          ownerType,
+          ownerId,
+          definition,
+          values: value.values,
+          save,
+        }),
+      );
+      // Крестик «×» очищает значение внетипового свойства-связи целиком
+      // (cab38479): без него у пользователя нет способа снять значение из
+      // группы «Свойства вне типа»; сервер при `set(key, null)` отзовёт
+      // рёбра и real-time события уберут их с карты (если связь видима).
+      const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
+      clearBtn.type = 'button';
+      clearBtn.title = 'Удалить значение';
+      clearBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void (async () => {
+          const ok = await confirmOutsideRemove(value.property_name);
+          if (!ok) return;
+          try {
+            await etn.properties.set(networkId, ownerType, ownerId, value.property_name, null);
+            onRemove();
+          } catch (err) {
+            notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
+          }
+        })();
+      });
+      cell.append(clearBtn);
+      return cell;
+    }
+
+    // Read-only рёбра вне типа (тип связи без реестрового свойства): те же
+    // оформление и обработчики, что у чипа основной таблицы (фон/границы/
+    // иконка, Ctrl+hover, клик/двойной клик) — cab38479.
+    const wrap = div('link-value-editor');
+    if (value.values.length === 0) {
+      wrap.append(span('—', 'muted'));
+    }
+    const refs = new Map<string, ThoughtRef>();
+    for (const edge of value.values) {
+      wrap.append(buildOutsideReadonlyEdgeChip(networkId, edge, refs));
+    }
+    cell.append(wrap);
+    // Подтянем стили/иконки батчем (cb73f8d6, как в buildLinkValueEditor);
+    // без этого чипы рендерятся с дефолтной иконкой и без цвета мысли.
+    if (value.values.length > 0) {
+      void etn.thoughts
+        .resolve(
+          networkId,
+          value.values.map((edge) => edge.target_id).slice(0, RESOLVE_BATCH),
+        )
+        .then((resolved) => {
+          if (!wrap.isConnected) return;
+          for (const ref of resolved) refs.set(ref.id, ref);
+          wrap.replaceChildren(
+            ...value.values.map((edge) => buildOutsideReadonlyEdgeChip(networkId, edge, refs)),
+          );
+        })
+        .catch(() => undefined);
+    }
+    return cell;
+  }
+
+  /**
+   * Read-only мини-облачко для ребра внетипового свойства (cab38479): те же
+   * визуал и обработчики (клик, двойной клик, Ctrl+Click → панель выбранных,
+   * ПКМ/Shift+F10 → контекстное меню), что у редактируемого чипа в основной
+   * таблице (`buildLinkValueEditor.buildCloud`). Крестика «×» здесь нет:
+   * ребро управляется через `etn.properties.*` ключа типа связи, а у типа
+   * связи в этом случае реестрового свойства нет (0.8.1: `links.create`/
+   * `links.remove` сняты, добавление/удаление — через свойства).
+   */
+function buildOutsideReadonlyEdgeChip(
+  networkId: string,
+  edge: LinkPropertyValueItem,
+  refs: Map<string, ThoughtRef>,
+): HTMLElement {
+    const ref = refs.get(edge.target_id);
+    const fullTitle = edge.target_title ?? ref?.title ?? `${edge.target_id.slice(0, 8)}…`;
+    const known = fullTitle.length > TITLE_CLIP ? `${fullTitle.slice(0, TITLE_CLIP)}…` : fullTitle;
+    const chip = div('prop-ref-cloud');
+    chip.dataset['id'] = edge.target_id;
+    if (ref !== undefined) applyCloudStyle(chip, resolveCloudStyle(ref));
+    if (ref?.active === false || ref?.marked_for_deletion === true) {
+      chip.classList.add('dim');
+    }
+    const icon = el('span', 'mini-icon');
+    if (ref !== undefined) applyThoughtIcon(icon, ref);
+    else icon.textContent = '💭';
+    chip.append(icon, el('span', 'prc-title', known));
+    setTooltip(
+      chip,
+      `${fullTitle} — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).`,
+    );
+    markThoughtCommentPreview(chip, edge.target_id, fullTitle);
+    chip.tabIndex = 0;
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('aria-label', known);
+    let pendingClick: { cancel: () => void } | null = null;
+    chip.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        pendingClick?.cancel();
+        pendingClick = null;
+        toggleSelection([edge.target_id]);
+        return;
+      }
+      pendingClick?.cancel();
+      pendingClick = deferSingleClick(() => {
+        pendingClick = null;
+        openLinkRefInEditor(networkId, edge.target_id);
+      });
+    });
+    chip.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      pendingClick?.cancel();
+      pendingClick = null;
+      focusLinkRef(networkId, edge.target_id);
+    });
+    const openReadonlyMenu = (): void => {
+      // Набор команд — общий с холстом; «Убрать из значения» у внетипового
+      // ребра нет: оно управляется через свойства типа связи, а не из
+      // таблицы значений владельца (cab38479).
+      void openThoughtCloudMenu({
+        networkId,
+        id: edge.target_id,
+        title: fullTitle,
+        trashed: ref?.marked_for_deletion === true,
+        anchor: chip,
+      });
+    };
+    chip.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      openReadonlyMenu();
+    });
+    chip.addEventListener('keydown', (event) => {
+      if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+        event.preventDefault();
+        openReadonlyMenu();
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        openLinkRefInEditor(networkId, edge.target_id);
+      } else if (event.key === ' ' || event.key === 'Spacebar') {
+        event.preventDefault();
+        focusLinkRef(networkId, edge.target_id);
+      }
+    });
+    return chip;
+  }
+
   /** Read-only value cell for an outside-type value: same visuals, no editor. */
-  function buildOutsideValueCell(value: PropertyValue): HTMLElement {
+function buildOutsideValueCell(
+  value: PropertyValue,
+  networkId: string,
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  onRemove: () => void,
+): HTMLElement {
     const cell = el('td', 'prop-outside-cell');
     const remove = (): void => {
       void (async () => {
         const ok = await confirmOutsideRemove(value.property_name);
         if (!ok) return;
         try {
-          // The only allowed write against an outside-type value (02-data-
-          // model.md §3.5a): removal. The server resolves the property by
-          // `property_name` (a UUID would also work) so a stale name no
-          // longer breaks the call.
           await etn.properties.remove(networkId, ownerType, ownerId, value.property_name);
-          void reload();
+          onRemove();
         } catch (err) {
           notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
         }
@@ -359,33 +565,6 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
 
     const stored = value.value;
     switch (value.value_type) {
-      case 'thought_ref': {
-        if (Array.isArray(stored)) {
-          cell.append(
-            buildMultiThoughtRefReadonly({
-              ids: stored,
-              refs: refCache,
-              onOpen: openThoughtRefTarget,
-            }),
-          );
-        } else if (typeof stored === 'string') {
-          const row = div('form-row');
-          row.style.marginBottom = '0';
-          row.append(
-            buildThoughtRefCloud(stored, {
-              refs: refCache,
-              onOpen: openThoughtRefTarget,
-              // The cloud's «×» removes the value — the only write path
-              // outside-type values support. The same confirmation covers it.
-              onRemove: remove,
-            }),
-          );
-          cell.append(row);
-        } else {
-          cell.append(span('—', 'muted'));
-        }
-        break;
-      }
       case 'text':
       case 'url':
       case 'number':
@@ -411,8 +590,6 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         cell.append(span('—', 'muted'));
     }
 
-    // The «×» on every row — same convention as the main table's mini cloud
-    // «×», so the action reads the same regardless of which group it's in.
     const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
     clearBtn.type = 'button';
     clearBtn.title = 'Удалить значение';
@@ -433,7 +610,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
   }
 
   /** Read-only «Открыть» button for a single URL value. */
-  function buildUrlOpenBtn(value: string): HTMLButtonElement {
+function buildUrlOpenBtn(value: string): HTMLButtonElement {
     const btn = button(
       'Открыть',
       () => void openOneUrl(value),
@@ -444,46 +621,108 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
     return btn;
   }
 
-  // The outside-type group is appended AFTER the main table once, so the
-  // layout (main on top, outside below) stays stable across reloads. The
-  // group's content is replaced inside `renderOutsideType`.
-  box.append(outsideWrap);
+/** Builds the «Свойства типа» body — основная таблица редактирования. */
+function buildTypePropertiesBody(networkId: string, ownerType: 'thought' | 'link', ownerId: string, typeOwner: 'thought_type' | 'link_type', typedId: string): HTMLElement {
+  const box = div('properties-type-body');
+  const tableWrap = div('admin-table-wrap prop-wrap');
+  tableWrap.append(span('Загрузка…', 'muted'));
+  box.append(tableWrap);
 
-  /**
-   * Opens a thought referenced by a property value (08-ui-spec.md §6.3.1):
-   * switches to the map view, then focuses the thought — the editor follows
-   * the focus and opens it (the same landing rule as deep links,
-   * 12-wiki-id-refs.md §7.4). An inactive thought with «скрывать неактуальное»
-   * on is refused with the same notice as wiki-links (§6.4).
-   */
-  function openThoughtRefTarget(id: string): void {
-    const ref = refCache.get(id);
-    if (ref !== undefined && !ref.active && !store.state.showInactive) {
-      notice('Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.', 'error');
+  let everMounted = false;
+  currentReload = () => void reload();
+  void reload();
+
+  async function reload(): Promise<void> {
+    if (everMounted && !box.isConnected) return;
+    const startedAt = Date.now();
+    tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    let definitions: EffectiveTypeProperty[];
+    try {
+      definitions = await etn.types.listTypeProperties(networkId, typeOwner, typedId);
+    } catch (err) {
+      tableWrap.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
       return;
     }
-    setActiveView('map');
-    void setFocus(id).catch((err: unknown) => {
-      notice(`Не удалось открыть мысль: ${errText(err)}`, 'error');
+    if (box.isConnected) everMounted = true;
+    if (definitions.length === 0) {
+      tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
+      return;
+    }
+    let values: Array<PropertyValue | LinkPropertyValues> = [];
+    try {
+      values = await etn.properties.get(networkId, ownerType, ownerId);
+    } catch {
+      // The main table still renders even if the values fetch fails.
+    }
+    const valueByProp = new Map(values.map((v) => [v.property_id, v]));
+    const table = el('table', 'table-list prop-table');
+    const tbody = el('tbody');
+    for (const definition of definitions) {
+      const value = valueByProp.get(definition.property_id);
+      const row = el('tr');
+      // Заголовок при заполнении: имя (+ « *» обязательности) и число значений
+      // у множественных свойств; тип значения и место определения здесь не
+      // нужны — это информация редактора типа (приёмка пользователя 0.8.1).
+      // ⓘ несёт tooltip с описанием свойства.
+      const count = valueCountOf(definition, value);
+      const nameCell = el(
+        'td',
+        'prop-name-cell',
+        `${definition.key}${definition.required ? ' *' : ''}${count === null ? '' : ` (${count})`}`,
+      );
+      const hint = propertyHint(definition);
+      if (hint !== null) {
+        const info = span('ⓘ', 'muted prop-hint');
+        setTooltip(info, hint);
+        nameCell.append(info);
+      }
+      row.append(nameCell);
+      row.append(
+        buildEditorCell({
+          networkId,
+          ownerType,
+          ownerId,
+          definition,
+          current: value,
+        }),
+      );
+      tbody.append(row);
+    }
+    table.append(tbody);
+    tableWrap.replaceChildren(table);
+    logUiEvent('ui.editor.props.loaded', {
+      id: ownerId,
+      ms: Date.now() - startedAt,
+      definitions: definitions.length,
     });
   }
 
-  /** Builds the value editor cell for one property. */
-  function buildEditorCell(
+  return box;
+}
+
+/** Builds the value editor cell for one property. */
+function buildEditorCell(opts: {
+    networkId: string;
+    ownerType: 'thought' | 'link';
+    ownerId: string;
     definition: EffectiveTypeProperty,
-    current: PropertyValue | undefined,
-  ): HTMLElement {
+    current: PropertyValue | LinkPropertyValues | undefined,
+  }): HTMLElement {
+    const { networkId, ownerType, ownerId, definition, current } = opts;
     const cell = el('td');
-    const stored = current?.value ?? null;
+    const stored = current !== undefined && current.value_type !== 'link' ? current.value : null;
 
     const save = async (value: unknown | null): Promise<boolean> => {
       try {
-        if (value === null) {
+        if (value === null && definition.value_type !== 'link') {
           await etn.properties.remove(networkId, ownerType, ownerId, definition.key);
         } else {
+          // Свойство-связь очищается тоже через set: `set(null)` убирает все
+          // рёбра свойства (normalizeLinkTargets → []), а DELETE /properties
+          // для связей — no-op (в property_values ничего не хранится).
           await etn.properties.set(networkId, ownerType, ownerId, definition.key, value);
           // A successful save feeds the client-local recent-values history of
-          // single text/thought_ref properties (recent-values.ts).
+          // single text properties (recent-values.ts).
           if (typeof value === 'string' && tracksRecentValues(definition)) {
             recordRecentValue(networkId, definition.property_id, value);
           }
@@ -587,7 +826,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           const row = div('form-row');
           row.style.marginBottom = '0';
           row.append(
-            input,
+            wrapClearable(input, () => clearViaBlur(input)),
             buildValueOptionsCaret(
               input,
               options,
@@ -620,10 +859,10 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
           syncOpenBtn();
           const row = div('form-row');
           row.style.marginBottom = '0';
-          row.append(input, openBtn);
+          row.append(wrapClearable(input, () => clearViaBlur(input)), openBtn);
           cell.append(row);
         } else {
-          cell.append(input);
+          cell.append(wrapClearable(input, () => clearViaBlur(input)));
         }
         break;
       }
@@ -656,7 +895,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
             if (!ok) baseline = prev;
           });
         });
-        cell.append(input);
+        cell.append(wrapClearable(input, () => clearViaBlur(input)));
         break;
       }
       case 'date': {
@@ -679,7 +918,7 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
             if (!ok) baseline = prev;
           });
         });
-        cell.append(input);
+        cell.append(wrapClearable(input, () => clearViaBlur(input)));
         break;
       }
       case 'bool': {
@@ -690,120 +929,30 @@ function buildPropertiesBody(ctx: EditorContext): HTMLElement {
         cell.append(input);
         break;
       }
-      case 'thought_ref': {
-        // Type filter from the definition config (list form supersedes the
-        // legacy single id); an input aid — stored values are untouched.
-        // L21: the filter expands to whole subtrees — a parent type matches
-        // its descendants (mirror of the server-side validation).
-        const filterIds = expandTypeIdsToSubtree(
-          store.state.thoughtTypes,
-          (
-            definition.config?.allowed_type_ids ??
-            (definition.config?.allowed_type_id !== undefined
-              ? [definition.config.allowed_type_id]
-              : [])
-          ).filter((id) => id !== ''),
-        );
-        /** Opens the duplicate-search dialog picker (single mode). */
-        const openSinglePicker = (): void => {
-          void pickThoughtsDialog({
+      case 'link': {
+        // Свойство-связь (задача 8ab775d9, единая модель связей): сервер
+        // отдаёт его формой LinkPropertyValues — значения это живые рёбра
+        // (`values[].target_id`), поля `.value` у формы нет. Редактор всегда
+        // чип-режим: число целей свойства-связи не ограничено (спека
+        // «properties», модель 0.8.1), `config.multiple` для link не
+        // существует.
+        const edges =
+          current !== undefined && isLinkPropertyValues(current) ? current.values : [];
+        cell.append(
+          buildLinkValueEditor({
             networkId,
-            allowCreate: false,
-            allowLinkType: false,
-            searchTypeIds: filterIds,
-          }).then(async (result) => {
-            const id = firstPickedThoughtId(result);
-            if (id !== null && (await save(id))) void reload();
-          });
-        };
-        // Multiple form (02-data-model.md §3.4): a chip list of mini clouds
-        // (the same chip styling as the structures filter panel); the dialog
-        // picker runs in multi mode (prefilled), each chip is removable
-        // (08-ui-spec.md §6.3.1).
-        if (definition.config?.multiple === true) {
-          const storedIds = Array.isArray(stored)
-            ? stored
-            : typeof stored === 'string'
-              ? [stored]
-              : [];
-          cell.append(
-            buildMultiThoughtRefEditor({
-              networkId,
-              filterIds,
-              refs: refCache,
-              ids: storedIds,
-              onOpen: openThoughtRefTarget,
-              save: async (ids) => {
-                const ok = await save(ids.length > 0 ? ids : null);
-                if (ok) void reload();
-              },
-            }),
-          );
-          break;
-        }
-        const storedId = typeof stored === 'string' ? stored : null;
-        // A stored value renders as the thought's mini cloud (icon + title in
-        // its own colours/font): the «×» on the cloud clears the value and
-        // brings the live-search field back, a click opens the thought on the
-        // map (08-ui-spec.md §6.3.1).
-        if (storedId !== null) {
-          const row = div('form-row');
-          row.style.marginBottom = '0';
-          row.append(
-            buildThoughtRefCloud(storedId, {
-              refs: refCache,
-              onOpen: openThoughtRefTarget,
-              onRemove: () => {
-                void save(null).then((ok) => {
-                  if (ok) void reload();
-                });
-              },
-            }),
-            button('выбрать', openSinglePicker, 'btn small'),
-          );
-          cell.append(row);
-          break;
-        }
-        const input = el('input', 'text-input prop-editor');
-        input.type = 'text';
-        input.autocomplete = 'off';
-        input.placeholder = 'введите название для поиска…';
-        // The field doubles as a live search: typing lists candidates (with
-        // the type filter applied); only a picked candidate writes the value.
-        // The modal picker stays as an alternative way to choose.
-        wireThoughtRefSearch(input, {
-          networkId,
-          typeIds: filterIds,
-          // No realtime echo to the actor (04-realtime.md §5) — reload the
-          // table after a successful save so the mini cloud appears at once.
-          onPick: async (id) => {
-            if (await save(id)) void reload();
-          },
-        });
-        // Recent-values suggestions (recent-values.ts): focusing the empty
-        // field — or clearing it back to empty — offers the 10 last saved
-        // values as resolved titles; typing closes the list so the live
-        // candidate search takes over.
-        wireRecentValues(input, {
-          load: () => loadRecentRefEntries(networkId, definition.property_id, refCache),
-          onPick: (entry) => {
-            void save(entry.value).then((ok) => {
-              if (ok) void reload();
-            });
-          },
-        });
-        const row = div('form-row');
-        row.style.marginBottom = '0';
-        row.append(input, button('выбрать', openSinglePicker, 'btn small'));
-        cell.append(row);
+            ownerType,
+            ownerId,
+            definition,
+            values: edges,
+            save,
+          }),
+        );
         break;
       }
     }
     return cell;
   }
-
-  return box;
-}
 
 /** Human-readable property type name (used by both the main table and the
  * «Свойства вне типа» group, so it lives at module scope). */
@@ -817,17 +966,58 @@ function typeName(valueType: string): string {
       return 'дата';
     case 'bool':
       return 'да/нет';
-    case 'thought_ref':
-      return 'мысль';
     case 'url':
       return 'URL';
+    case 'link':
+      return 'связь';
     default:
       return valueType;
   }
 }
 
+/**
+ * Оборачивает поле ввода с кнопкой «✕» очистки значения в правом верхнем
+ * углу (приёмка пользователя 0.8.1): у любого поля ввода должен быть
+ * однозначный способ убрать значение целиком.
+ */
+function wrapClearable(input: HTMLElement, onClear: () => void): HTMLElement {
+  const wrap = div('clearable-field');
+  wrap.append(input);
+  const btn = el('button', 'clearable-clear', '✕');
+  btn.type = 'button';
+  btn.title = 'Очистить';
+  btn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    onClear();
+  });
+  wrap.append(btn);
+  return wrap;
+}
+
+/**
+ * Очистка полей с blur-коммитом: пустое значение + программный blur —
+ * переиспользует существующие обработчики поля (пустое → `null` → удаление
+ * значения на сервере, с rollback baseline при неудаче).
+ */
+function clearViaBlur(input: HTMLInputElement): void {
+  input.value = '';
+  input.dispatchEvent(new Event('blur'));
+}
+
 /** Test seam for unit tests. */
-export const propertiesInternals = { buildPropertiesBody };
+export const propertiesInternals = { buildPropertiesBody, buildOutsideTypeTable };
+
+/**
+ * Type guard: скалярное значение (`PropertyValue`) против формы
+ * свойства-связи (`LinkPropertyValues`, без поля `.value`, зато со счётчиком
+ * и рёбрами `values[]`). Сужение по `value_type` ненадёжно — `"link"`
+ * встречается в обоих union-членах, поэтому различаем по форме.
+ */
+export function isLinkPropertyValues(
+  v: PropertyValue | LinkPropertyValues,
+): v is LinkPropertyValues {
+  return 'values' in v && 'count' in v;
+}
 
 /**
  * The hint shown next to a property name in the thought editor (task
@@ -842,200 +1032,38 @@ export function propertyHint(definition: EffectiveTypeProperty): string | null {
 }
 
 /**
+ * Число текущих значений для заголовка множественного свойства (приёмка
+ * пользователя 0.8.1: «Работы версии (4)»): свойства-связи множественны по
+ * природе (число целей не ограничено) — счётчик берётся из формы
+ * `LinkPropertyValues`; `url`/`text` с `config.multiple` считают элементы
+ * массива / фрагменты запятой. `null` — свойство одиночное, счётчик не нужен.
+ */
+function valueCountOf(
+  definition: EffectiveTypeProperty,
+  value: PropertyValue | LinkPropertyValues | undefined,
+): number | null {
+  if (definition.value_type === 'link') {
+    return value !== undefined && isLinkPropertyValues(value) ? value.count : 0;
+  }
+  if (definition.config?.multiple === true) {
+    const stored = value !== undefined && !isLinkPropertyValues(value) ? value.value : null;
+    if (Array.isArray(stored)) return stored.length;
+    if (definition.value_type === 'text' && typeof stored === 'string') {
+      return splitMultiValue(stored).length;
+    }
+    return stored === null || stored === undefined ? 0 : 1;
+  }
+  return null;
+}
+
+/**
  * Whether a property definition keeps the client-local recent-values history
- * (recent-values.ts): single `text` and `thought_ref` properties only —
- * multiple-value properties (`config.multiple`) and the other value types
- * (number/date/bool/url) are out of scope.
+ * (recent-values.ts): single `text` properties only — multiple-value
+ * properties (`config.multiple`) and the other value types are out of scope.
  */
 function tracksRecentValues(definition: EffectiveTypeProperty): boolean {
   if (definition.config?.multiple === true) return false;
-  return definition.value_type === 'text' || definition.value_type === 'thought_ref';
-}
-
-// ---------------------------------------------------------------------------
-// thought_ref mini clouds (08-ui-spec.md §6.3.1)
-// ---------------------------------------------------------------------------
-
-/**
- * Builds the mini cloud of a stored single `thought_ref` value: icon + title
- * in the thought's own colours/font (`applyCloudStyle`), dimmed when the
- * thought is inactive/marked, the red trash glyph when marked — the same
- * reading as the history-bar chips (§11.1). Clicking the cloud calls
- * {@link opts.onOpen}; the «×» inside it calls {@link opts.onRemove} without
- * triggering the open.
- */
-export function buildThoughtRefCloud(
-  id: string,
-  opts: {
-    /** Shared id → resolved ref cache: label, icon, styles, flags. */
-    refs: Map<string, ThoughtRef>;
-    /** Click-to-open handler (map view + focus). */
-    onOpen: (id: string) => void;
-    /** «×» handler — removes the value. */
-    onRemove: () => void;
-  },
-): HTMLElement {
-  const ref = opts.refs.get(id);
-  const cloud = div('prop-ref-cloud');
-  cloud.dataset['id'] = id;
-  if (ref !== undefined) applyCloudStyle(cloud, resolveCloudStyle(ref));
-  if (ref?.active === false || ref?.marked_for_deletion === true) {
-    cloud.classList.add('dim');
-  }
-  const icon = el('span', 'mini-icon');
-  if (ref !== undefined) applyThoughtIcon(icon, ref);
-  else icon.textContent = '💭';
-  const title = ref?.title ?? id;
-  cloud.append(icon, el('span', 'prc-title', title));
-  setTooltip(cloud, title);
-  // A thought in the trash (S13, §5a.2): the cloud dims and carries the red
-  // trash glyph — the same marked reading as the history bar, chip-sized.
-  if (ref?.marked_for_deletion === true) {
-    const mark = span('', 'list-trash-mark');
-    mark.append(svgIcon('trash', 10));
-    cloud.append(mark);
-  }
-  cloud.addEventListener('click', () => opts.onOpen(id));
-  const removeBtn = el('button', 'st-f-clear-inline', '✕');
-  removeBtn.type = 'button';
-  removeBtn.title = 'Очистить значение';
-  // The cloud's own click opens the thought — stop it here.
-  removeBtn.addEventListener('click', (event) => {
-    event.stopPropagation();
-    opts.onRemove();
-  });
-  cloud.append(removeBtn);
-  return cloud;
-}
-
-// ---------------------------------------------------------------------------
-// Multiple thought_ref picker (08-ui-spec.md §6.3.1)
-// ---------------------------------------------------------------------------
-
-/**
- * Builds the multi-value `thought_ref` editor (definitions with
- * `config.multiple`): a chip field listing the selected thoughts as mini
- * clouds (icon + title in the thought's own colours/font — the same chip
- * styling as the structures filter panel) plus a «выбрать» button. Clicking
- * the field or «выбрать» opens the universal thought picker in **multi mode**
- * (prefilled with the current ids, honouring the definition's type filter);
- * applying writes the full replacement list through `save`. Every chip has a
- * «×» removing that single value; removing the last one clears the property.
- * When {@link opts.onOpen} is given (the editor's properties table), clicking
- * a chip navigates to the thought instead of bubbling into the picker.
- *
- * Missing chip metadata is resolved in the background via `thoughts.resolve`
- * into the shared `refs` cache, then the chips re-render.
- *
- * Also reused by the selection panel's property-values dialog: there `save`
- * writes the list into the dialog state instead of saving it immediately and
- * `onOpen` is omitted, so chip clicks keep opening the picker.
- */
-export function buildMultiThoughtRefEditor(opts: {
-  networkId: string;
-  /** Thought-type filter of the definition config (input aid). */
-  filterIds: string[];
-  /** Shared id → resolved ref cache: chip labels, icons and styles. */
-  refs: Map<string, ThoughtRef>;
-  /** Currently selected thought ids. */
-  ids: string[];
-  /** Writes the full replacement list; an empty list clears the value. */
-  save: (ids: string[]) => Promise<unknown> | unknown;
-  /** Click-to-open handler of a chip (map view + focus); omitted → picker. */
-  onOpen?: (id: string) => void;
-}): HTMLElement {
-  const field = div('st-f-chipfield');
-  field.tabIndex = 0;
-  field.title = 'Выбрать мысли (несколько)';
-
-  const renderChips = (): void => {
-    field.replaceChildren();
-    if (opts.ids.length === 0) {
-      field.append(span('— не задано —', 'st-f-chip-empty'));
-      return;
-    }
-    opts.ids.forEach((id, index) => {
-      const ref = opts.refs.get(id);
-      const chip = div('st-f-chip');
-      const icon = div('st-f-chip-icon');
-      applyThoughtIcon(icon, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
-      chip.append(icon);
-      const label = span(ref?.title ?? id, 'st-f-chip-label');
-      label.title = ref?.title ?? id;
-      if (ref !== undefined) applyCloudStyle(label, resolveCloudStyle(ref));
-      chip.append(label);
-      // A thought in the trash (S13, §5a.2): the chip dims and carries the
-      // red trash glyph — the same marked reading as everywhere else.
-      if (ref?.active === false || ref?.marked_for_deletion === true) {
-        chip.classList.add('dim');
-      }
-      if (ref?.marked_for_deletion === true) {
-        const mark = span('', 'list-trash-mark');
-        mark.append(svgIcon('trash', 10));
-        chip.append(mark);
-      }
-      const removeBtn = el('button', 'st-f-clear-inline', '×');
-      removeBtn.type = 'button';
-      removeBtn.title = 'Убрать значение';
-      removeBtn.addEventListener('click', (event) => {
-        // The field's own click opens the picker — stop it here.
-        event.stopPropagation();
-        void opts.save(opts.ids.filter((_, i) => i !== index));
-      });
-      chip.append(removeBtn);
-      // With an open handler the chip navigates to the thought instead of
-      // bubbling into the picker (08-ui-spec.md §6.3.1).
-      chip.addEventListener('click', (event) => {
-        if (opts.onOpen === undefined) return;
-        event.stopPropagation();
-        opts.onOpen(id);
-      });
-      field.append(chip);
-    });
-  };
-
-  const openPicker = (): void => {
-    void pickThoughtsDialog({
-      networkId: opts.networkId,
-      allowCreate: false,
-      allowLinkType: false,
-      searchTypeIds: opts.filterIds,
-      // Prefill switches the dialog into multi mode automatically.
-      selectedIds: opts.ids,
-      title: 'Выбрать мысли',
-      applyLabel: 'Выбрать',
-    }).then((result) => {
-      if (result === null) return;
-      void opts.save(pickedThoughtIds(result));
-    });
-  };
-
-  field.addEventListener('click', openPicker);
-  field.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') openPicker();
-  });
-
-  // Resolve chip metadata that is not in the cache yet (fresh picks), then
-  // re-render; the raw id stays visible when resolve fails.
-  const missing = opts.ids.filter((id) => !opts.refs.has(id));
-  if (missing.length > 0) {
-    void etn.thoughts
-      .resolve(opts.networkId, missing)
-      .then((refs) => {
-        for (const ref of refs) opts.refs.set(ref.id, ref);
-        renderChips();
-      })
-      .catch(() => undefined);
-  }
-
-  renderChips();
-  const row = div('form-row');
-  row.style.marginBottom = '0';
-  row.append(
-    field,
-    button('выбрать', openPicker, 'btn small', 'Выбрать мысли (несколько)'),
-  );
-  return row;
+  return definition.value_type === 'text';
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,9 +1076,8 @@ export function buildMultiThoughtRefEditor(opts: {
  * text input + «Открыть» button + «×» removing that single value. The bottom
  * of the editor carries an «+» button that appends a new empty row and
  * immediately focuses it. Every edit is debounced and committed through
- * {@link opts.save}; an empty value list clears the property (the same
- * semantics as `thought_ref`'s multi editor). URL/file-path strings are
- * stored verbatim — no parsing, no comma-join (02-data-model.md §3.5).
+ * {@link opts.save}; an empty value list clears the property. URL/file-path
+ * strings are stored verbatim — no parsing, no comma-join (02-data-model.md §3.5).
  */
 export function buildMultiUrlEditor(opts: {
   /** Currently stored URLs (already normalized server-side: `string[]`). */
@@ -1063,6 +1090,21 @@ export function buildMultiUrlEditor(opts: {
   // baseline diff stays meaningful (the host calls `save` with the latest
   // trimmed non-empty list and reloads once the write succeeds).
   let current: string[] = [...opts.urls];
+  // Угловая кнопка «✕» — очистка всего списка (приёмка 0.8.1). Пересоздаётся
+  // в каждом renderRows: replaceChildren() внутри стирает её вместе со строками.
+  const buildClearCorner = (): HTMLElement => {
+    const btn = el('button', 'multi-url-clear', '✕');
+    btn.type = 'button';
+    btn.title = 'Очистить все значения';
+    btn.addEventListener('click', (event) => {
+      event?.stopPropagation?.();
+      current = [];
+      collapseTrailingEmpty();
+      renderRows();
+      void opts.save([]);
+    });
+    return btn;
+  };
 
   const renderRows = (): void => {
     root.replaceChildren();
@@ -1133,6 +1175,7 @@ export function buildMultiUrlEditor(opts: {
     addBtn.title = 'Добавить ещё одно значение';
     addBtn.type = 'button';
     root.append(addBtn);
+    root.append(buildClearCorner());
   };
 
   /** Drop trailing empty rows so a freshly-added «+» row collapses on blur. */
@@ -1156,53 +1199,8 @@ export function buildMultiUrlEditor(opts: {
 
 // ---------------------------------------------------------------------------
 // Outside-type read-only renderers (08-ui-spec.md §6.3.1, 0.6.5 «Значения вне
-// типа сохраняются»)
+// типа сохраняются»; thought_ref-рендеры удалены вместе с видом значения)
 // ---------------------------------------------------------------------------
-
-/**
- * Read-only chip list for a multi-value `thought_ref` outside-type value:
- * same chip styling as the main editor (icon + title in the thought's own
- * colours/font, dimmed when inactive/marked, trash glyph when marked), but
- * without the «×» removing the value (the only removal action lives on the
- * row's clear button). Clicking a chip still navigates to the thought via
- * {@link opts.onOpen}.
- */
-export function buildMultiThoughtRefReadonly(opts: {
-  ids: string[];
-  refs: Map<string, ThoughtRef>;
-  onOpen: (id: string) => void;
-}): HTMLElement {
-  const field = div('st-f-chipfield prop-outside-chipfield');
-  if (opts.ids.length === 0) {
-    field.append(span('—', 'st-f-chip-empty'));
-    return field;
-  }
-  for (const id of opts.ids) {
-    const ref = opts.refs.get(id);
-    const chip = div('st-f-chip');
-    const icon = div('st-f-chip-icon');
-    applyThoughtIcon(icon, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
-    chip.append(icon);
-    const label = span(ref?.title ?? id, 'st-f-chip-label');
-    label.title = ref?.title ?? id;
-    if (ref !== undefined) applyCloudStyle(label, resolveCloudStyle(ref));
-    chip.append(label);
-    if (ref?.active === false || ref?.marked_for_deletion === true) {
-      chip.classList.add('dim');
-    }
-    if (ref?.marked_for_deletion === true) {
-      const mark = span('', 'list-trash-mark');
-      mark.append(svgIcon('trash', 10));
-      chip.append(mark);
-    }
-    chip.addEventListener('click', (event) => {
-      event.stopPropagation();
-      opts.onOpen(id);
-    });
-    field.append(chip);
-  }
-  return field;
-}
 
 /**
  * Read-only list of URL strings for an outside-type multi-`url` value: one
@@ -1410,4 +1408,422 @@ export function buildValueOptionsCaret(
     'btn small',
     multiple ? 'Выбрать несколько значений' : 'Выбрать значение из списка',
   );
+}
+
+// ---------------------------------------------------------------------------
+// Link value editor (задача 8ab775d9, единая модель связей)
+// ---------------------------------------------------------------------------
+
+/** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
+const RESOLVE_BATCH = 100;
+
+/**
+ * Максимум символов заголовка в подписи чипа (приёмка пользователя 0.8.1):
+ * длинные имена обрезаются с «…», полный текст — в tooltip и Ctrl-hover
+ * предпросмотре.
+ */
+const TITLE_CLIP = 200;
+
+/**
+ * Дозаполняет кеш метаданных целей (значок, цвета, active, пометка) батч-резолвом
+ * `etn.thoughts.resolve`. Подписи уже есть в рёбрах (`target_title`); этот
+ * запрос нужен только для отрисовки мини-облачков. Неудача не фатальна —
+ * облачко показывает сырой id.
+ */
+async function resolveLinkRefs(
+  networkId: string,
+  ids: string[],
+  refs: Map<string, ThoughtRef>,
+): Promise<void> {
+  const missing = ids.filter((id) => !refs.has(id));
+  if (missing.length === 0) return;
+  try {
+    const resolved = await etn.thoughts.resolve(networkId, missing.slice(0, RESOLVE_BATCH));
+    for (const ref of resolved) refs.set(ref.id, ref);
+  } catch {
+    // Оффлайн-мигание — чипы останутся с подписями из рёбер.
+  }
+}
+
+/**
+ * Открывает мысль в редакторе без смены фокуса (как облачко на холсте). На
+ * ошибке показывает тост.
+ */
+function openLinkRefInEditor(networkId: string, id: string): void {
+  void Promise.resolve()
+    .then(async () => {
+      const { openThoughtInEditor } = await import('./editor.js');
+      openThoughtInEditor(id);
+    })
+    .catch((err: unknown) => notice(errText(err), 'error'));
+}
+
+/**
+ * Ставит мысль в фокус и активирует экран «Карта мыслей» — фокус без
+ * переключения на карту незаметен, если пользователь находится на другом
+ * экране (структуры, хроника): пункт «В фокус» контекстного меню чипа
+ * обязан привести и карту, и фокус.
+ */
+function focusLinkRef(networkId: string, id: string): void {
+  void Promise.resolve()
+    .then(async () => {
+      const { setFocus } = await import('../app.js');
+      const { setActiveView } = await import('../screens/active-view.js');
+      setActiveView('map');
+      await setFocus(id);
+    })
+    .catch((err: unknown) => notice(errText(err), 'error'));
+}
+
+/**
+ * Контекстное меню мысли для мини-облачка в редакторе: ровно та же композиция,
+ * что у облачка на холсте (`canvas/context-menu.ts`), плюс команды контекста
+ * редактора, которых на холсте нет:
+ *
+ * - «Открыть в редакторе» — мысль открывается в текущем редакторе, фокус холста
+ *   не меняется (на холсте открытие идёт через фокус — там редактор следует за
+ *   фокусом);
+ * - «В фокус» — поставить мысль в фокус и показать карту;
+ * - команды значения (`extraItems`) — например «Убрать из значения».
+ *
+ * Холст тянем лениво: статический импорт замкнул бы цикл
+ * `canvas/context-menu → editor/editor → editor/properties` (так же поступают
+ * соседние помощники этого файла).
+ */
+async function openThoughtCloudMenu(opts: {
+  networkId: string;
+  id: string;
+  title: string;
+  trashed: boolean;
+  extraItems?: MenuItem[];
+  anchor: Element;
+}): Promise<void> {
+  const { showThoughtMenuUnder, resolveSiblingParentId } =
+    await import('../canvas/context-menu.js');
+  showThoughtMenuUnder(
+    opts.anchor,
+    {
+      id: opts.id,
+      title: opts.title,
+      dir: 'siblings',
+      // Чип не живёт в зоне холста — родителя для «налево (родственник)»
+      // резолвим запросом (на холсте он приходит с ответом фокуса).
+      siblingParentId: await resolveSiblingParentId(opts.networkId, opts.id),
+      trashed: opts.trashed,
+    },
+    {
+      openLabel: 'Открыть в редакторе',
+      openHandler: (id) => openLinkRefInEditor(opts.networkId, id),
+      focusHandler: () => focusLinkRef(opts.networkId, opts.id),
+      ...(opts.extraItems !== undefined ? { extraItems: opts.extraItems } : {}),
+    },
+  );
+}
+
+/**
+ * Контекстное меню мини-облачка значения свойства-связи. Набор команд — общий с
+ * холстом (спецификация «Контекстное меню мысли»), поэтому меню строится тем же
+ * конструктором; отличие значения — «Убрать из значения».
+ */
+async function showLinkChipMenu(
+  networkId: string,
+  id: string,
+  title: string,
+  trashed: boolean,
+  currentValue: string[],
+  onChange: (next: string[]) => void,
+  anchor: Element,
+): Promise<void> {
+  await openThoughtCloudMenu({
+    networkId,
+    id,
+    title,
+    trashed,
+    anchor,
+    extraItems: [
+      {
+        label: 'Убрать из значения',
+        onClick: () => onChange(currentValue.filter((v) => v !== id)),
+      },
+    ],
+  });
+}
+
+/**
+ * Редактор значения свойства-связи (задача 8ab775d9) — паттерн «Таблица
+ * свойств редактора» (08-ui-spec.md §6.3.1) и инструкции «Использовать
+ * унифицированные поля выбора ссылок в диалогах».
+ *
+ * Всегда чип-режим, без «одиночного» варианта: по спеке «properties —
+ * справочник свойств сети» (раздел «Модель 0.8.1») число целей
+ * свойства-связи НИКОГДА не ограничено — значение это проекция рёбер, а не
+ * скалярная запись, поэтому `config.multiple` для `link` не существует и
+ * ветвление по нему было ошибкой (баг: структурные «Родители»/«Потомки»,
+ * миграция 039, не задают `multiple` в конфиге вовсе и попадали в
+ * одиночный режим, хотя у мысли может быть сколько угодно потомков).
+ *
+ * Устройство: чипы-мини-облачка (значок, цвета, шрифт; неактуальная —
+ * бледная, помеченная на удаление — с корзиной) с «✕» на каждом + поле
+ * живого поиска для добавления + кнопка «выбрать» (`pickThoughtsDialog` в
+ * режиме «несколько», предзаполнен; применение перезаписывает список).
+ * Живой поиск (клик/Enter по кандидату) учитывает отбор по типам из
+ * конфига свойства (`allowed_target_type_ids`, с потомками — L21); набранный
+ * текст сам по себе значение не меняет — только явный выбор.
+ *
+ * `values` — живые рёбра из `LinkPropertyValues.values[]`: подписи чипов
+ * берутся из `target_title`, метаданные для облачков — батч-резолвом.
+ */
+/**
+ * Чип-поле набора целей свойства-связи: живой поиск, мини-облачка, пикер
+ * «выбрать», очистка (инструкция a47947c8). `ownerType`/`ownerId` заданы —
+ * чип получает контекстное меню операций над ребром владельца; без владельца
+ * (дефолт свойства в редакторе типа/реестре, bb67e546) меню не выводится,
+ * набор живёт целиком в `save`.
+ */
+export function buildLinkValueEditor(opts: {
+  networkId: string;
+  ownerType?: 'thought' | 'link';
+  ownerId?: string;
+  definition: EffectiveTypeProperty;
+  values: LinkPropertyValueItem[];
+  save: (next: unknown) => Promise<boolean>;
+}): HTMLElement {
+  const { networkId, ownerType, ownerId, definition } = opts;
+  let current: string[] = opts.values.map((edge) => edge.target_id);
+
+  // Отбор по типам — input aid из конфига свойства-связи: список
+  // `allowed_target_type_ids` расширяется до поддеревьев типов (L21) —
+  // зеркало серверной валидации; сохранённые значения фильтром не трогаются.
+  const filterIds = expandTypeIdsToSubtree(
+    store.state.thoughtTypes,
+    ((definition.config?.allowed_target_type_ids as string[] | undefined) ?? []).filter(
+      (id) => id !== '',
+    ),
+  );
+
+  // Кеш метаданных целей: подписи есть в рёбрах, значок/цвета/флаги —
+  // резолвом; чипы перерисовываются по готовности.
+  const refs = new Map<string, ThoughtRef>();
+  const labels = new Map<string, string>();
+  for (const edge of opts.values) {
+    if (edge.target_title !== null) labels.set(edge.target_id, edge.target_title);
+  }
+
+  const root = div('link-value-editor');
+
+  const persist = async (next: string[]): Promise<void> => {
+    await opts.save(next.length > 0 ? next : null);
+  };
+
+  const setAndPersist = (next: string[]): void => {
+    current = next;
+    render();
+    // Новая цель пришла из живого поиска/пикера одним id — подписи и стиля
+    // облачка в кеше ещё нет, чип рисуется с сырым id. Дозаполняем кеш и
+    // перерисовываем по готовности (при неудаче чип остаётся с id).
+    void resolveLinkRefs(networkId, current, refs).then(() => {
+      if (root.isConnected) render();
+    });
+    void persist(current);
+  };
+
+  /**
+   * Кнопка «выбрать» — диалог поиска/добавления мыслей (приёмка 0.8.1):
+   * создание новых разрешено — тип связи и направление известны из
+   * определения свойства, а при отборе по типам цели тип новой мысли
+   * предустановлен первым типом из списка (в диалоге его можно сменить).
+   */
+  const openPicker = (): void => {
+    void pickThoughtsDialog({
+      networkId,
+      allowCreate: true,
+      allowLinkType: false,
+      searchTypeIds: filterIds,
+      defaultNewThoughtTypeId: filterIds[0] ?? null,
+      selectedIds: current,
+      title: 'Выбрать или создать мысли',
+      applyLabel: 'Выбрать',
+    }).then(async (result) => {
+      if (result === null) return;
+      const ids: string[] = [];
+      for (const item of result.items) {
+        if (item.kind === 'existing') {
+          ids.push(item.id);
+          continue;
+        }
+        try {
+          const created = await etn.thoughts.create(networkId, {
+            title: item.title,
+            synonyms: item.synonyms,
+            type_id: result.thoughtTypeId ?? filterIds[0] ?? null,
+          });
+          ids.push(created.id);
+        } catch (err) {
+          notice(`Не удалось создать «${item.title}»: ${errText(err)}`, 'error');
+        }
+      }
+      setAndPersist(ids);
+    });
+  };
+
+  /** Мини-облачко цели: значок + подпись в цветах/шрифте мысли (§6.3.1). */
+  const buildCloud = (id: string, onRemove: () => void): HTMLElement => {
+    const ref = refs.get(id);
+    // Полный заголовок — в tooltip и Ctrl-hover предпросмотре; подпись чипа
+    // обрезается до TITLE_CLIP символов, чтобы длинные имена не растягивали
+    // чип-поле в горизонтальную прокрутку (приёмка пользователя 0.8.1).
+    const fullTitle = ref?.title ?? labels.get(id) ?? `${id.slice(0, 8)}…`;
+    const known =
+      fullTitle.length > TITLE_CLIP ? `${fullTitle.slice(0, TITLE_CLIP)}…` : fullTitle;
+    const cloud = div('prop-ref-cloud');
+    cloud.dataset['id'] = id;
+    if (ref !== undefined) applyCloudStyle(cloud, resolveCloudStyle(ref));
+    if (ref?.active === false || ref?.marked_for_deletion === true) {
+      cloud.classList.add('dim');
+    }
+    const icon = el('span', 'mini-icon');
+    if (ref !== undefined) applyThoughtIcon(icon, ref);
+    else icon.textContent = '💭';
+    cloud.append(icon, el('span', 'prc-title', known));
+    setTooltip(cloud, fullTitle);
+    // Стандартное поведение чипов мыслей: Ctrl+hover — предпросмотр
+    // постоянного комментария цели, если он есть (как в истории, упоминаниях,
+    // мини-графе).
+    markThoughtCommentPreview(cloud, id, fullTitle);
+    // Мысль в корзине (S13, §5a.2): облачко бледное + красная метка корзины.
+    if (ref?.marked_for_deletion === true) {
+      const mark = span('', 'list-trash-mark');
+      mark.append(svgIcon('trash', 10));
+      cloud.append(mark);
+    }
+    cloud.tabIndex = 0;
+    cloud.setAttribute('role', 'button');
+    cloud.setAttribute('aria-label', known);
+    // Клики как на канвасе (08-ui-spec.md): Ctrl/Cmd+клик — добавить/убрать
+    // из панели выбранных; одиночный клик отложен на SINGLE_CLICK_DELAY_MS,
+    // чтобы двойной клик (в фокус) успевал до открытия редактора.
+    let pendingClick: { cancel: () => void } | null = null;
+    cloud.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        pendingClick?.cancel();
+        pendingClick = null;
+        toggleSelection([id]);
+        return;
+      }
+      pendingClick?.cancel();
+      pendingClick = deferSingleClick(() => {
+        pendingClick = null;
+        openLinkRefInEditor(networkId, id);
+      });
+    });
+    cloud.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      pendingClick?.cancel();
+      pendingClick = null;
+      focusLinkRef(networkId, id);
+    });
+    const openMenu = (): void => {
+      // Без владельца (дефолт свойства в редакторе типа/реестра) операций над
+      // ребром нет — набор живёт только в save (bb67e546).
+      if (ownerType === undefined || ownerId === undefined) return;
+      void showLinkChipMenu(
+        networkId,
+        id,
+        fullTitle,
+        ref?.marked_for_deletion === true,
+        current,
+        setAndPersist,
+        cloud,
+      );
+    };
+    cloud.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      openMenu();
+    });
+    cloud.addEventListener('keydown', (event) => {
+      if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+        event.preventDefault();
+        openMenu();
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        openLinkRefInEditor(networkId, id);
+      } else if (event.key === ' ' || event.key === 'Spacebar') {
+        event.preventDefault();
+        focusLinkRef(networkId, id);
+      }
+    });
+    // «✕» удаляет из значения, не открывая мысль (§6.3.1).
+    const removeBtn = el('button', 'st-f-clear-inline', '✕');
+    removeBtn.type = 'button';
+    removeBtn.title = 'Убрать из значения';
+    removeBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      onRemove();
+    });
+    cloud.append(removeBtn);
+    return cloud;
+  };
+
+  const render = (): void => {
+    root.replaceChildren();
+    const field = div('st-f-chipfield link-value-field');
+    // Чипы всегда в алфавитном порядке подписи (приёмка 0.8.1) — легче
+    // искать глазами. Сортируется только ОТОБРАЖЕНИЕ: порядок данных
+    // (`current`) не трогаем — он несёт смысл (структурный порядок детей
+    // «Потомков» задаёт позиции), persist всегда шлёт исходный порядок.
+    const displayTitle = (id: string): string =>
+      refs.get(id)?.title ?? labels.get(id) ?? id;
+    const ordered = [...current].sort((a, b) =>
+      displayTitle(a).localeCompare(displayTitle(b), 'ru'),
+    );
+    for (const id of ordered) {
+      field.append(
+        buildCloud(id, () => setAndPersist(current.filter((v) => v !== id))),
+      );
+    }
+    const addInput = el('input', 'value-combo-add link-value-add') as HTMLInputElement;
+    addInput.type = 'text';
+    addInput.placeholder = current.length === 0 ? 'Название мысли…' : '+ ещё одну мысль';
+    wireThoughtRefSearch(addInput, {
+      networkId,
+      typeIds: filterIds,
+      onPick: (id) => {
+        if (!current.includes(id)) setAndPersist([...current, id]);
+      },
+    });
+    field.append(addInput);
+    // Клик по свободному месту поля — фокус в живой поиск.
+    field.addEventListener('click', (event) => {
+      if (event.target === field) addInput.focus();
+    });
+    // Обёртка с угловыми кнопками (приёмка 0.8.1): «…» — диалог
+    // поиска/добавления (compact, не отъедает ширину поля), «✕» — очистка
+    // всего значения. Поле ограничено десятью строками чипов, дальше
+    // внутренняя прокрутка (CSS max-height) — таблица свойств больше не
+    // растягивается на высоту списка.
+    const corner = div('link-value-corner');
+    corner.append(
+      button('…', openPicker, 'link-value-corner-btn', 'Выбрать или создать мысли'),
+      button('✕', () => setAndPersist([]), 'link-value-corner-btn', 'Очистить значение'),
+    );
+    const wrap = div('link-value-wrap');
+    wrap.append(field, corner);
+    const row = div('form-row');
+    row.style.marginBottom = '0';
+    row.append(wrap);
+    root.append(row);
+  };
+
+  // Метаданные облачков: батч-резолв недостающих, затем перерисовка (при
+  // неудаче облачко остаётся с подписью из ребра/сырым id).
+  void resolveLinkRefs(networkId, current, refs).then(() => {
+    if (root.isConnected) render();
+  });
+
+  render();
+  return root;
 }

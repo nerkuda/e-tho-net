@@ -13,6 +13,12 @@
  *
  * Registration happens through canvas hooks (`setCloudContextMenuHandler`,
  * `setZoneContextMenuHandler`, `setCloudDragHandlers`).
+ *
+ * The thought menu lives here, but it is not canvas-only: `showThoughtMenuUnder`
+ * + `ThoughtMenuOptions` let the editor (property-value chips, the local graph
+ * and the «Действия» button) show the very same command set — a second
+ * hand-rolled menu in the editor always drifts away from the canvas one
+ * (спецификация «Контекстное меню мысли»).
  */
 
 import type { FocusDir, Link } from '@etn/shared';
@@ -133,6 +139,21 @@ interface CloudMenuTarget {
   id: string;
   title: string;
   dir: ZoneDir;
+  /**
+   * Родитель мысли — якорь команды «налево (родственник)»: новая мысль
+   * создаётся ребёнком того же родителя. На холсте родитель уже есть в ответе
+   * фокуса (`focus.parents[0]`, зона «Родственники»); чипы и кнопка «Действия»
+   * в редакторе задают его сами, потому что в зоне холста не живут. Поле не
+   * задано — работает прежнее поведение (родитель фокуса); `null` — родителя
+   * нет, команда неактивна.
+   */
+  siblingParentId?: string | null;
+  /**
+   * Мысль помечена на удаление — подпись «Удалить/восстановить» (S13). На холсте
+   * флаг берётся из фокуса/кеша облачков, вне холста кеш пуст — передаёт
+   * вызывающий, у которого есть `ThoughtRef`.
+   */
+  trashed?: boolean;
 }
 
 /** Thought ids that may be reordered (parents/children only). */
@@ -256,25 +277,81 @@ export async function deleteLink(networkId: string, linkId: string): Promise<voi
   await openLinkDeleteDialog(networkId, linkId);
 }
 
+/**
+ * Опции контекстного меню мысли: чем контекст отличается от холста.
+ *
+ * Одна композиция команд на все места, где есть облачко мысли (холст, панель
+ * выделения, дерево «Структур», чипы истории и закреплённых, чипы значений
+ * свойств и мини-граф редактора, кнопка «Действия»). Отличия контекста
+ * выражаются этими опциями, а не вторым конструктором меню — иначе меню
+ * расходятся (см. спецификацию «Контекстное меню мысли»).
+ */
+export interface ThoughtMenuOptions {
+  hideSelectionCommand?: boolean;
+  /** Куда открывать мысль вне холста. Без обработчика — фокус холста. */
+  openHandler?: (id: string) => void;
+  /** Куда ведёт «Добавить вложение» (редактор: вкладка «Вложения» мысли). */
+  attachmentHandler?: (id: string) => void;
+  findOnMapHandler?: (id: string) => void;
+  /**
+   * Подпись команды открытия. На холсте — «Открыть редактор» (мысль уходит в
+   * фокус, редактор следует за фокусом); в редакторе и его чипах —
+   * «Открыть в редакторе» (мысль открывается в текущем редакторе, фокус холста
+   * не меняется).
+   */
+  openLabel?: string;
+  /** Спрятать команду открытия: мысль уже открыта в редакторе. */
+  hideOpenCommand?: boolean;
+  /** Вставить команду «В фокус» рядом с открытием (контексты редактора). */
+  focusHandler?: () => void;
+  /** Команды конкретного контекста (значение свойства) — блоком перед «Удалить». */
+  extraItems?: MenuItem[];
+}
+
 /** Opens the thought context menu at the event position. */
 export function showThoughtContextMenu(
   event: MouseEvent,
   target: CloudMenuTarget,
-  opts: {
-    openHandler?: (id: string) => void;
-    findOnMapHandler?: (id: string) => void;
-  } = {},
+  opts: ThoughtMenuOptions = {},
 ): void {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  showMenuAt(
-    event.clientX,
-    event.clientY,
-    buildThoughtMenuItems(networkId, target, {
-      openHandler: opts.openHandler,
-      findOnMapHandler: opts.findOnMapHandler,
-    }),
-  );
+  showMenuAt(event.clientX, event.clientY, buildThoughtMenuItems(networkId, target, opts));
+}
+
+/**
+ * Opens the thought menu under an anchor element (chip, header button) — the
+ * same positioning the editor chips use: flush under the anchor's bottom edge.
+ * Shared entry point for every cloud outside the canvas so the command set
+ * cannot drift between the canvas and the editor.
+ */
+export function showThoughtMenuUnder(
+  anchor: Element,
+  target: CloudMenuTarget,
+  opts: ThoughtMenuOptions = {},
+): void {
+  const networkId = store.state.networkId;
+  if (networkId === null) return;
+  const rect = anchor.getBoundingClientRect();
+  showMenuAt(rect.left, rect.bottom + 2, buildThoughtMenuItems(networkId, target, opts));
+}
+
+/**
+ * Родитель мысли — якорь команды «налево (родственник)» — для меню вне холста:
+ * мини-облачко чипа и пилюля мини-графа не живут в зоне холста, где родитель
+ * приходит с ответом фокуса, поэтому его спрашивают у сервера. Неудача —
+ * `null`: команда просто неактивна (меню важнее, чем её один пункт).
+ */
+export async function resolveSiblingParentId(
+  networkId: string,
+  id: string,
+): Promise<string | null> {
+  try {
+    const parents = await etn.thoughts.neighbors(networkId, id, 'parents', 1);
+    return parents[0]?.id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -292,19 +369,23 @@ export function showSelectionThoughtContextMenu(event: MouseEvent, target: Cloud
   );
 }
 
-/** Builds the thought menu items (08-ui-spec.md §2.6). */
-function buildThoughtMenuItems(
+/**
+ * Builds the thought menu items (08-ui-spec.md §2.6, спецификация
+ * «Контекстное меню мысли»). Единственный конструктор меню мысли: холст,
+ * панель выделения, дерево «Структур», чипы редактора и кнопка «Действия»
+ * зовут его же — отличия контекста передаются `ThoughtMenuOptions`.
+ */
+export function buildThoughtMenuItems(
   networkId: string,
   target: CloudMenuTarget,
-  opts: {
-    hideSelectionCommand?: boolean;
-    openHandler?: (id: string) => void;
-    findOnMapHandler?: (id: string) => void;
-  } = {},
+  opts: ThoughtMenuOptions = {},
 ): MenuItem[] {
   const focus = store.state.focus;
-  const focusHasParent = focus !== null && focus.parents.length > 0;
-  const siblingParentId = focus?.parents[0]?.id;
+  // «налево (родственник)»: на холсте — родитель фокуса (зона «Родственники»),
+  // вне холста — родитель самой мысли, который резолвит вызывающий.
+  const siblingParentId =
+    target.siblingParentId !== undefined ? target.siblingParentId : (focus?.parents[0]?.id ?? null);
+  const canAddSibling = siblingParentId !== null;
   const inSelection = store.state.selection.includes(target.id);
   // Manual order is only available in the parents/children zones while the
   // active sort is «ручной» (08-ui-spec.md §2.7, docs/03-server-api.md §6.2).
@@ -333,9 +414,11 @@ function buildThoughtMenuItems(
   // the focus cloud, the resolved ThoughtRef for the zone clouds — so the
   // label is always in step with the 🗑 badge.
   const trashed =
-    focus !== null && focus.focused.id === target.id
-      ? focus.focused.marked_for_deletion
-      : getRef(target.id)?.marked_for_deletion === true;
+    target.trashed !== undefined
+      ? target.trashed
+      : focus !== null && focus.focused.id === target.id
+        ? focus.focused.marked_for_deletion
+        : getRef(target.id)?.marked_for_deletion === true;
 
   const selectionItem: MenuItem[] =
     opts.hideSelectionCommand === true
@@ -361,9 +444,9 @@ function buildThoughtMenuItems(
         },
         {
           label: 'налево (родственник)',
-          disabled: !focusHasParent || siblingParentId === undefined,
+          disabled: !canAddSibling,
           onClick: () => {
-            if (siblingParentId !== undefined) {
+            if (siblingParentId !== null) {
               openAddDialog({ anchorId: siblingParentId, direction: 'child' });
             }
           },
@@ -434,20 +517,29 @@ function buildThoughtMenuItems(
     {
       // In the structures view (L15) both commands open the editor without
       // switching the canvas focus; on the canvas they focus the thought.
+      // В редакторе мысль уже открыта — контекст ведёт на вкладку «Вложения».
       label: 'Добавить вложение',
       onClick: () => {
-        if (opts.openHandler !== undefined) opts.openHandler(target.id);
+        if (opts.attachmentHandler !== undefined) opts.attachmentHandler(target.id);
+        else if (opts.openHandler !== undefined) opts.openHandler(target.id);
         else void setFocus(target.id);
       },
     },
     MENU_SEPARATOR,
-    {
-      label: 'Открыть редактор',
-      onClick: () => {
-        if (opts.openHandler !== undefined) opts.openHandler(target.id);
-        else void setFocus(target.id);
-      },
-    },
+    ...(opts.hideOpenCommand === true
+      ? []
+      : [
+          {
+            label: opts.openLabel ?? 'Открыть редактор',
+            onClick: () => {
+              if (opts.openHandler !== undefined) opts.openHandler(target.id);
+              else void setFocus(target.id);
+            },
+          } satisfies MenuItem,
+        ]),
+    ...(opts.focusHandler !== undefined
+      ? [{ label: 'В фокус', onClick: () => opts.focusHandler?.() } satisfies MenuItem]
+      : []),
     {
       label: 'Экспорт…',
       onClick: () => void exportSingleThought(networkId, target.id),
@@ -493,6 +585,11 @@ function buildThoughtMenuItems(
       },
     },
     MENU_SEPARATOR,
+    // Команды контекста (значение свойства: «Убрать из значения») — отдельным
+    // блоком перед удалением: это операции над местом, откуда меню вызвано.
+    ...(opts.extraItems !== undefined && opts.extraItems.length > 0
+      ? [...opts.extraItems, MENU_SEPARATOR]
+      : []),
     {
       // For a thought already in the trash the label becomes
       // «Удалить/восстановить» (S13, 08-ui-spec.md §2.6) — the action is the
@@ -661,6 +758,9 @@ function makeSnapshotDeps(networkId: string): SnapshotDeps {
       ]);
       const out: Record<string, unknown> = {};
       for (const v of values) {
+        // Свойства-связи приходят формой LinkPropertyValues (без .value) —
+        // в шаблоны подставляются только скаляры.
+        if ('values' in v) continue;
         const key = keys.get(v.property_id);
         if (key === undefined) continue;
         out[key] = v.value;

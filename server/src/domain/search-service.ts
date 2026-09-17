@@ -1084,7 +1084,7 @@ function norm(value: string): string {
  *
  * @param title - proposed thought title.
  * @param synonyms - optional proposed synonyms.
- * @param typeIds - optional thought-type filter (property `thought_ref`
+ * @param typeIds - optional thought-type filter (link property pickers,
  *   pickers): only thoughts of these types are returned.
  */
 export function findDuplicates(
@@ -1096,7 +1096,7 @@ export function findDuplicates(
   const titleTerms = [title.trim(), ...synonyms.map((s) => s.trim())].filter((t) => t !== '');
   if (titleTerms.length === 0) return [];
 
-  // Type filter (thought_ref pickers): parameterised IN-list applied to every
+  // Type filter (property pickers): parameterised IN-list applied to every
   // query below. L21: the list is expanded to whole subtrees, so picking a
   // parent type also offers its descendants. The direct thoughts queries use
   // `type_id`, the synonym join aliases the table as `t`.

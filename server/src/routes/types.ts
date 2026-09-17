@@ -22,8 +22,10 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import {
   EtnError,
-  type LinkTypeInput,
+  LINK_PROPERTY_SIDES,
+  type LinkPropertySide,
   type LinkTypeUpdateInput,
+  type PropertyConfig,
   type PropertyDefinitionInput,
   type ThoughtTypeInput,
   type ThoughtTypeUpdateInput,
@@ -46,8 +48,6 @@ import {
   type RouteDeps,
 } from './helpers.js';
 import {
-  createLinkType,
-  deleteLinkType,
   listLinkTypeCounts,
   listLinkTypes,
   updateLinkType,
@@ -191,49 +191,32 @@ function parseThoughtTypeUpdateBody(
   return changes;
 }
 
-/** Parse the body of `POST /link-types`. */
-function parseLinkTypeBody(body: Record<string, unknown>, requestId: string): LinkTypeInput {
-  const nameForward = fieldString(body, 'name_forward', requestId);
-  const nameReverse = fieldString(body, 'name_reverse', requestId);
-  if (
-    nameForward === undefined ||
-    nameForward.trim() === '' ||
-    nameReverse === undefined ||
-    nameReverse.trim() === ''
-  ) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'name_forward и name_reverse обязательны.',
-      { field: 'name_forward' },
-      requestId,
-    );
-  }
-  return {
-    name_forward: nameForward,
-    name_reverse: nameReverse,
-    parent_id: fieldParentId(body, requestId) ?? null,
-    color: fieldNullableString(body, 'color', requestId),
-    style:
-      body.style === null
-        ? null
-        : (fieldString(body, 'style', requestId) as LinkTypeInput['style']),
-    width: body.width === null ? null : typeof body.width === 'number' ? body.width : undefined,
-    description: fieldNullableString(body, 'description', requestId),
-  };
-}
+/** Parse the body of `POST /link-types` (служебный, 0.8.1). */
 
-/** Parse the body of `PATCH /link-types/:id`. */
+/**
+ * Parse the body of `PATCH /link-types/:id` (0.8.1, задача d7177d1d):
+ * `/link-types` — служебный CRUD, пользовательские операции идут через
+ * свойство-связь. PATCH принимает только оформление (`color`, `style`,
+ * `width`) и иерархию (`parent_id`). Правка `name_forward`/`name_reverse`
+ * через этот эндпоинт — `422`: имена живут вместе со свойством-связью
+ * (`PATCH /networks/{nid}/properties/{id}`).
+ */
 function parseLinkTypeUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): LinkTypeUpdateInput {
+  if (body.name_forward !== undefined || body.name_reverse !== undefined) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'PATCH /link-types/{id} не меняет имена — редактируйте свойство-связь (PATCH /networks/{nid}/properties/{id}).',
+      {
+        field: body.name_forward !== undefined ? 'name_forward' : 'name_reverse',
+        hint: 'PATCH /networks/{nid}/properties/{id}',
+      },
+      requestId,
+    );
+  }
   const changes: LinkTypeUpdateInput = {};
-  if (body.name_forward !== undefined) {
-    changes.name_forward = fieldString(body, 'name_forward', requestId);
-  }
-  if (body.name_reverse !== undefined) {
-    changes.name_reverse = fieldString(body, 'name_reverse', requestId);
-  }
   const parentId = fieldParentId(body, requestId);
   if (parentId !== undefined) {
     changes.parent_id = parentId;
@@ -257,9 +240,6 @@ function parseLinkTypeUpdateBody(
       );
     }
     changes.width = body.width as number | null;
-  }
-  if (body.description !== undefined) {
-    changes.description = fieldNullableString(body, 'description', requestId);
   }
   return changes;
 }
@@ -368,32 +348,106 @@ function readStringDetail(details: unknown, key: string): string | null {
 }
 
 /**
- * Body of `PATCH …/types/:id/properties/{propertyId}` (task 75404197): only
- * the **binding's** role (`required`, `position`). Anything else (name, value
- * type, config, description) is a property-level field and must be edited in
- * the registry; passing it here is a 422.
+ * Body of `PATCH …/types/{id}/properties/{propertyId}` (0.8.1, задача d7177d1d):
+ * только роль привязки в типе. Помимо `required`/`position` принимает:
+ *   * `side` — `source`/`target`, для привязок свойств-связей;
+ *   * `allowed_target_type_ids` — список id типов, которые могут быть целью
+ *     (для привязки со стороны источника; null/[] — снять ограничение);
+ *   * `allowed_source_type_ids` — то же для привязки со стороны назначения
+ *     (миграция 0.8.1 — зеркало, симметрично `allowed_target_type_ids`).
+ *
+ * Поля свойства (`name`/`value_type`/`config`/`description`) правятся в
+ * справочнике; их передача сюда — `422`. Контракт действует только для
+ * `owner_type="thought_type"`.
  */
 function parseTypePropertyUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
-): { required: boolean; position: number | undefined } {
-  const allowed = ['required', 'position'];
+): {
+  required: boolean;
+  position: number | undefined;
+  side?: LinkPropertySide | null;
+  allowedTargetTypeIds?: string[] | null;
+  allowedSourceTypeIds?: string[] | null;
+} {
+  const allowed = [
+    'required',
+    'position',
+    'side',
+    'allowed_target_type_ids',
+    'allowed_source_type_ids',
+  ];
   const rejected = Object.keys(body).filter((k) => !allowed.includes(k));
   if (rejected.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `PATCH …/properties/{id} меняет только роль в типе (required, position); нельзя: ${rejected.join(', ')}.`,
+      `PATCH …/properties/{id} меняет только роль в типе (required, position, side, allowed_target_type_ids, allowed_source_type_ids); нельзя: ${rejected.join(', ')}.`,
       { field: rejected[0], allowed },
       requestId,
     );
   }
-  return {
+  const result: ReturnType<typeof parseTypePropertyUpdateBody> = {
     required: fieldBoolean(body, 'required', requestId) ?? false,
     position:
       typeof body.position === 'number' && Number.isFinite(body.position)
         ? Math.trunc(body.position)
         : undefined,
   };
+  if (body.side !== undefined) {
+    if (
+      body.side !== null &&
+      !(LINK_PROPERTY_SIDES as readonly string[]).includes(body.side as string)
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `side должен быть одним из: ${LINK_PROPERTY_SIDES.join(', ')} или null.`,
+        { field: 'side', allowed: LINK_PROPERTY_SIDES },
+        requestId,
+      );
+    }
+    result.side = (body.side === null ? null : (body.side as LinkPropertySide));
+  }
+  if (body.allowed_target_type_ids !== undefined) {
+    const ids = body.allowed_target_type_ids;
+    if (ids !== null && !Array.isArray(ids)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'allowed_target_type_ids должен быть массивом id или null.',
+        { field: 'allowed_target_type_ids' },
+        requestId,
+      );
+    }
+    if (Array.isArray(ids) && ids.some((id) => typeof id !== 'string' || id === '')) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'allowed_target_type_ids должен содержать только непустые строки.',
+        { field: 'allowed_target_type_ids' },
+        requestId,
+      );
+    }
+    result.allowedTargetTypeIds = ids as string[] | null;
+  }
+  if (body.allowed_source_type_ids !== undefined) {
+    const ids = body.allowed_source_type_ids;
+    if (ids !== null && !Array.isArray(ids)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'allowed_source_type_ids должен быть массивом id или null.',
+        { field: 'allowed_source_type_ids' },
+        requestId,
+      );
+    }
+    if (Array.isArray(ids) && ids.some((id) => typeof id !== 'string' || id === '')) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'allowed_source_type_ids должен содержать только непустые строки.',
+        { field: 'allowed_source_type_ids' },
+        requestId,
+      );
+    }
+    result.allowedSourceTypeIds = ids as string[] | null;
+  }
+  return result;
 }
 
 /** `/api/v1/networks*` type routes plugin factory. */
@@ -583,24 +637,22 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
     app.post(
       '/networks/:networkId/link-types',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
-      async (req: FastifyRequest, reply) => {
-        const { networkId } = req.params as TypeIdParams;
-        const input = parseLinkTypeBody(requestBody(req), req.id);
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const type = createLinkType(ndb, input, req.auth!.user.id);
-        deps.emit(req, networkId, 'link-type.created', { type });
-        recordLinkTypeActivity(ndb, {
-          networkId,
-          userId: req.auth!.user.id,
-          action: 'created',
-          type,
-          layerId: req.layerEcho?.id ?? null,
-        });
-        sendCreated(reply, type, {
-          version: type.version,
-          updated_at: type.updated_at,
-          request_id: req.id,
-        });
+      async (_req: FastifyRequest, reply) => {
+        // 0.8.1, задача d7177d1d: /link-types — служебный CRUD. Создание
+        // пользовательского типа связи идёт через POST свойства-связи:
+        //   POST /networks/{nid}/properties  { value_type: 'link',
+        //                                      name_forward, name_reverse, ... }
+        // Здесь — 422 со ссылкой на правильный контракт.
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'создание типа связи идёт через свойство-связь — POST /networks/{nid}/properties с value_type="link" и парой name_forward/name_reverse.',
+          {
+            field: 'endpoint',
+            hint: 'POST /networks/{nid}/properties',
+            required: ['name', 'value_type', 'name_forward', 'name_reverse'],
+          },
+          reply.request.id,
+        );
       },
     );
 
@@ -658,25 +710,23 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
     app.delete(
       '/networks/:networkId/link-types/:id',
       { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
-      async (req: FastifyRequest, reply) => {
-        const { networkId, id } = req.params as TypeIdParams;
-        const expectedVersion = parseIfMatch(req.headers['if-match'], req.id);
-        const query = req.query as Record<string, unknown>;
-        const force = queryBoolean(query.force, 'force', req.id) === true;
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-        const existing = getLinkType(ndb, id);
-        deleteLinkType(ndb, id, expectedVersion, { force, actorUserId: req.auth!.user.id });
-        deps.emit(req, networkId, 'link-type.deleted', { id });
-        if (existing) {
-          recordLinkTypeActivity(ndb, {
-            networkId,
-            userId: req.auth!.user.id,
-            action: 'deleted',
-            type: existing,
-            layerId: req.layerEcho?.id ?? null,
-          });
-        }
-        reply.code(204).send();
+      async (_req: FastifyRequest, reply) => {
+        // 0.8.1, задача d7177d1d: /link-types — служебный CRUD. Удаление
+        // пользовательского типа связи идёт через DELETE свойства-связи:
+        //   DELETE /networks/{nid}/properties/{id}
+        // Ответ — 422 со ссылкой на правильный контракт. Рёбра при таком
+        // удалении обнуляют `type_id` и становятся структурными
+        // (требование 09f692ff).
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'удаление типа связи идёт через свойство-связь — DELETE /networks/{nid}/properties/{id}.',
+          {
+            field: 'endpoint',
+            hint: 'DELETE /networks/{nid}/properties/{id}',
+            note: 'рёбра теряют type_id и становятся структурными',
+          },
+          reply.request.id,
+        );
       },
     );
 
@@ -819,13 +869,51 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           const changes = parseTypePropertyUpdateBody(requestBody(req), req.id);
           // The binding id from the path is forwarded to the service, which
           // maps it back to the underlying registry property. PATCH changes
-          // the BINDING only — `key`/`value_type`/`config`/`description` are
-          // rejected up front by `parseTypePropertyUpdateBody`.
+          // the BINDING only — `key`/`value_type`/`description` are rejected
+          // up front by `parseTypePropertyUpdateBody`. `config` сюда передаём
+          // собранным из `allowed_target_type_ids`/`allowed_source_type_ids` —
+          // они редактируются по стороне привязки (0.8.1, задача d7177d1d).
           const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
-          const prop = updateTypeProperty(ndb, propertyId, {
-            required: changes.required,
-            position: changes.position,
-          }, req.auth!.user.id);
+          let configPatch: PropertyConfig | null | undefined = undefined;
+          if (
+            changes.allowedTargetTypeIds !== undefined ||
+            changes.allowedSourceTypeIds !== undefined
+          ) {
+            const current = getTypeProperty(ndb, propertyId);
+            if (current === null) {
+              throw new EtnError('NOT_FOUND', `property ${propertyId} not found`, {
+                entity: 'type_property',
+                id: propertyId,
+              }, req.id);
+            }
+            const baseConfig: PropertyConfig = { ...(current.config ?? {}) };
+            if (changes.allowedTargetTypeIds !== undefined) {
+              if (changes.allowedTargetTypeIds === null) {
+                delete baseConfig.allowed_target_type_ids;
+              } else {
+                baseConfig.allowed_target_type_ids = changes.allowedTargetTypeIds;
+              }
+            }
+            if (changes.allowedSourceTypeIds !== undefined) {
+              if (changes.allowedSourceTypeIds === null) {
+                delete baseConfig.allowed_source_type_ids;
+              } else {
+                baseConfig.allowed_source_type_ids = changes.allowedSourceTypeIds;
+              }
+            }
+            configPatch = baseConfig;
+          }
+          const prop = updateTypeProperty(
+            ndb,
+            propertyId,
+            {
+              required: changes.required,
+              position: changes.position,
+              ...(changes.side !== undefined ? { side: changes.side } : {}),
+              ...(configPatch !== undefined ? { config: configPatch } : {}),
+            },
+            req.auth!.user.id,
+          );
           deps.emit(req, networkId, 'property-definition.updated', {
             id: propertyId,
             changes,
@@ -912,15 +1000,16 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
             );
           }
           const value = body.value;
-          if (
-            value !== null &&
-            typeof value !== 'string' &&
-            typeof value !== 'number' &&
-            typeof value !== 'boolean'
-          ) {
+          const scalarOk =
+            typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+          // Дефолт свойства-связи — набор целей (bb67e546): массив id мыслей
+          // (пустой массив — сброс дефолта, как null у скаляров).
+          const linkDefaultOk =
+            Array.isArray(value) && value.every((id) => typeof id === 'string' && id !== '');
+          if (value !== null && !scalarOk && !linkDefaultOk) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'value должен быть строкой, числом, булевым или null.',
+              'value должен быть строкой, числом, булевым, массивом id мыслей (свойство-связь) или null.',
               { field: 'value' },
               req.id,
             );

@@ -1,373 +1,211 @@
 /**
- * Editor tab «Связи» (H11/H12 → L7, 08-ui-spec.md §6.7).
+ * Editor tab «Упоминания» (задача 8ab775d9, единая модель связей;
+ * 08-ui-spec.md §6.7). Для мысли — две плоские сворачиваемые группы,
+ * разделённые сплиттером высоты:
+ *  - «Ссылки на мысль» (явные `[[#<id>]]` в body_md);
+ *  - «Упоминания в тексте» (FTS5 по title/synonyms).
+ * Строки открывают упоминающую мысль (focus) или связь (link editor);
+ * активная вкладка не меняется. Сплиттер и фиксированные высоты действуют
+ * только когда ОБЕ группы развёрнуты — свёрнутая схлопывается до заголовка,
+ * единственная развёрнутая растягивается на всю вкладку.
  *
- * For a thought — three collapsible groups separated by splitters:
- *  - «Прямые связи (N)» (expanded): links grouped by type; the type sections
- *    are themselves collapsible compact sub-groups (a long employee list no
- *    longer buries the other types). The list shows at most 15 rows, then
- *    scrolls. Rows keep the L5 context menu (open / change link type /
- *    delete link / delete thought).
- *  - «Упоминания …» (collapsed): the search runs on the first expansion; the
- *    `…` badge becomes `(N)`. Rows open the mentioning thought (focus) or link
- *    (link editor); the active tab never changes.
- *  - «Использование …» (collapsed): thoughts referencing this one through
- *    `thought_ref` property values (03-server-api.md §9.1), grouped by
- *    property name into collapsible sub-groups. Rows focus the referencing
- *    thought. Realtime `property-value.*` events reload an expanded body.
+ * Прямые типизированные связи и структурные «Родители»/«Потомки» живут
+ * на вкладке «Свойства» как свойства-связи (счётчики + чипы). Мини-граф
+ * переехал на отдельную вкладку «Граф».
  *
- * Inactive thoughts/links appear in every list according to the
- * `show_inactive` preference and are dimmed like on the map (§2.2).
- *
- * For a link — a single group with its two endpoint thoughts.
+ * For a link the tab is «Мысли» (задача 95775cfd): два блока — «Источник»
+ * (`link.source_id`) и «Назначение» (`link.target_id`), в каждом подпись-роль
+ * и под ней облачко мысли, ведущее себя как облачко мысли в любом другом
+ * месте клиента (клик/двойной клик/Ctrl+клик/Ctrl+наведение/правая кнопка/
+ * Enter). Счётчиков-иконок 📝/📅/📎 у этих облачков нет.
  */
 
-import type {
-  Link,
-  MentionHit,
-  ThoughtLinksByTypeGroup,
-  ThoughtLinksGrouped,
-  ThoughtRef,
-  ThoughtUsage,
-} from '@etn/shared';
+import type { MentionHit, ThoughtRef } from '@etn/shared';
 
 import { requireNetworkId, setFocus } from '../app.js';
-import { applyCloudStyle, applyThoughtIcon, resolveCloudStyle } from '../canvas/canvas.js';
-import { pickThoughtsDialog } from '../canvas/add-dialog.js';
-import { openLinkDeleteDialog, openThoughtDeleteDialog } from '../trash.js';
-import { onRealtimeEvent } from '../realtime.js';
-import { errorDialog, field, showDialog } from '../lib/dialog.js';
-import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
+import { applyCloudStyle, applyThoughtIcon, deferSingleClick, resolveCloudStyle } from '../canvas/canvas.js';
+import { showThoughtContextMenu } from '../canvas/context-menu.js';
+import { div, el, errText, renderHtml, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
-import { MENU_SEPARATOR, showMenuAt, type MenuItem } from '../lib/menu.js';
-import { notice } from '../lib/notice.js';
-import { createTypeCombobox } from '../lib/type-combobox.js';
-import { linkTypeOptions } from '../lib/type-tree.js';
-import { patchFocusEdge, store } from '../state.js';
-import { openLinkInEditor, registerTabContent, type EditorContext } from './editor.js';
-import { groupSection, type GroupSpec } from './group.js';
-import { applyGroupClamp } from './list-heights.js';
+import { toggleSelection } from '../selection/selection.js';
+import { store } from '../state.js';
+import {
+  openLinkInEditor,
+  openThoughtInEditor,
+  registerTabContent,
+  type EditorContext,
+} from './editor.js';
+import { groupSection } from './group.js';
+import { applyTabGroupClamp } from './list-heights.js';
 import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from './wiki-link-resolver.js';
 import { rowSplitter } from './splitter.js';
 
 /** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
 const RESOLVE_BATCH = 100;
 
-/** Registers the links tab content (thoughts and links). */
+/** Registers the «Упоминания» tab content (thoughts and links). */
 export function registerLinksTab(): void {
   registerTabContent('links', buildLinksTab);
-  wireUsageRealtime();
 }
 
-/** Builds the whole «Связи» tab pane content for the entity. */
+/** Builds the whole tab pane content for the entity. */
 function buildLinksTab(ctx: EditorContext): HTMLElement {
   if (ctx.ownerType === 'link' && ctx.link !== null) {
-    const root = div('links-tab');
-    root.append(
-      groupSection(
-        {
-          id: 'links',
-          title: 'Связи',
-          count: '(2)',
-          buildBody: () => buildLinkEndpointsBody(ctx),
-        },
-      ),
-    );
-    return root;
+    return buildLinkThoughtsTab(ctx);
   }
 
   const root = div('links-tab');
 
-  // Mutable ref so the action button can trigger a body reload after a link
-  // is created. The body sets this when it first builds.
-  let reloadLinks: (() => void) | null = null;
-  const actionsBtn = button('Действия ▾', () => {
-    const rect = actionsBtn.getBoundingClientRect();
-    showMenuAt(rect.left, rect.bottom + 2, [
-      {
-        label: 'Добавить родительские мысли…',
-        onClick: () => void addDirectLinks(ctx, 'parents', () => reloadLinks?.()),
-      },
-      {
-        label: 'Добавить подчинённые мысли…',
-        onClick: () => void addDirectLinks(ctx, 'children', () => reloadLinks?.()),
-      },
-    ]);
-  }, 'btn small');
-
-  const direct = groupSection(
+  // Две плоские группы на верхнем уровне вкладки — больше нет родительской
+  // группы-обёртки и нет отдельной группы «Локальный граф» (мини-граф
+  // переехал на собственную вкладку «Граф»).
+  const backlinks = groupSection(
     {
-      id: 'links',
-      title: 'Прямые связи',
-      loadCount: () => countLinks(ctx),
-      buildBody: () => buildDirectLinksBody(ctx, (reload) => { reloadLinks = reload; }),
-      actions: [actionsBtn],
-    },
-  );
-  // Parent «Упоминания» (task R9): содержит две подсекции — «Ссылки на мысль»
-  // (явные [[#<id>]] в body_md) и «Упоминания в тексте» (FTS5 по title/synonyms).
-  // Обе подсекции свёрнуты по умолчанию — пользователь явно решает, что готов
-  // подождать выполнения запроса.
-  const mentions = groupSection(
-    {
-      id: 'mentions',
-      title: 'Упоминания',
-      lazyCount: true,
-      defaultCollapsed: true,
-      buildBody: () => buildMentionsParentBody(ctx),
-    },
-  );
-  const usage = groupSection(
-    {
-      id: 'usage',
-      title: 'Использование',
-      lazyCount: true,
-      defaultCollapsed: true,
-      buildBody: () => buildUsageBody(ctx),
-    },
-  );
-  // Splitters clamp the whole group above them (header + body) — expanded
-  // groups flex-fill the tab, so a clamp must stop the group itself, not just
-  // its body. A collapsed group (no body) is not resizable: its splitter is
-  // inert and never leaves a stale clamp behind (08-ui-spec.md §6.3).
-  // The drag is remembered as the group's max height: a clamped group shrinks
-  // to its content (flex-grow 0) instead of filling the tab, and the cap
-  // survives entity changes and restarts (ee745368, list-heights.ts).
-  const resizable = (group: HTMLElement): HTMLElement | null =>
-    group.querySelector(':scope > .group-body') !== null ? group : null;
-  applyGroupClamp(direct, 'links.direct');
-  applyGroupClamp(mentions, 'links.mentions');
-  root.append(
-    direct,
-    rowSplitter(() => resizable(direct), { min: 50, persistKey: 'links.direct' }),
-    mentions,
-    rowSplitter(() => resizable(mentions), { min: 50, persistKey: 'links.mentions' }),
-    usage,
-  );
-  return root;
-}
-
-/** Counts a thought's links for the group badge. */
-async function countLinks(ctx: EditorContext): Promise<string | undefined> {
-  const networkId = requireNetworkId();
-  try {
-    const grouped = await etn.links.listByThought(
-      networkId,
-      ctx.ownerId,
-      store.state.showInactive,
-    );
-    const n =
-      grouped.by_type.reduce((sum, g) => sum + g.items.length, 0) +
-      grouped.untyped_parents.length +
-      grouped.untyped_children.length;
-    return `(${n})`;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * The type-group heading read from the edited thought's point of view (L6):
- * all links outgoing → `name_forward`, all incoming → `name_reverse`, mixed →
- * both names.
- */
-function groupName(ownerId: string, group: ThoughtLinksByTypeGroup): string {
-  const type = store.state.linkTypes.find((t) => t.id === group.type_id);
-  if (type === undefined) return group.type_name;
-  const outgoing = group.items.filter((i) => i.link.source_id === ownerId).length;
-  if (outgoing === group.items.length) return type.name_forward;
-  if (outgoing === 0) return type.name_reverse;
-  return `${type.name_forward} / ${type.name_reverse}`;
-}
-
-/** Builds the direct-links group body: collapsible per-type sections (L7). */
-function buildDirectLinksBody(
-  ctx: EditorContext,
-  onReady?: (reload: () => void) => void,
-): HTMLElement {
-  const networkId = requireNetworkId();
-  const box = div('links-body');
-  void reload();
-
-  /** Re-reads the grouped links; called after row-menu changes too (L5). */
-  async function reload(): Promise<void> {
-    box.replaceChildren(el('span', 'muted', 'Загрузка…'));
-    let grouped: ThoughtLinksGrouped;
-    try {
-      grouped = await etn.links.listByThought(networkId, ctx.ownerId, store.state.showInactive);
-    } catch (err) {
-      box.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
-      return;
-    }
-    box.replaceChildren();
-
-    // A row-menu change (delete link/thought, link type) re-groups the list.
-    const refresh = (): void => {
-      void reload();
-    };
-    // The group body itself is the scroll area (CSS caps it at 15 rows,
-    // 08-ui-spec.md §6.7); sub-groups are rebuilt on every reload, their
-    // collapsed state persisting globally per group id through groupSection.
-    const appendSection = (spec: GroupSpec): void => {
-      box.append(groupSection(spec));
-    };
-
-    let count = 0;
-
-    for (const group of grouped.by_type) {
-      count += group.items.length;
-      if (group.items.length === 0) continue;
-      const items = group.items;
-      appendSection({
-        id: `links:type:${group.type_id}`,
-        title: groupName(ctx.ownerId, group),
-        count: `(${items.length})`,
-        compact: true,
-        buildBody: () => {
-          const body = div('link-group-rows');
-          for (const item of items) {
-            const outgoing = item.link.source_id === ctx.ownerId;
-            body.append(linkRow(item.link, item.target_thought, outgoing, refresh));
-          }
-          return body;
-        },
-      });
-    }
-    if (grouped.untyped_parents.length > 0) {
-      count += grouped.untyped_parents.length;
-      const items = grouped.untyped_parents;
-      appendSection({
-        id: 'links:type:__parents',
-        title: 'Источники',
-        count: `(${items.length})`,
-        compact: true,
-        buildBody: () => {
-          const body = div('link-group-rows');
-          for (const item of items) {
-            const other = item.source_thought ?? item.target_thought;
-            if (other !== undefined) body.append(linkRow(item.link, other, false, refresh));
-          }
-          return body;
-        },
-      });
-    }
-    if (grouped.untyped_children.length > 0) {
-      count += grouped.untyped_children.length;
-      const items = grouped.untyped_children;
-      appendSection({
-        id: 'links:type:__children',
-        title: 'Назначения',
-        count: `(${items.length})`,
-        compact: true,
-        buildBody: () => {
-          const body = div('link-group-rows');
-          for (const item of items) {
-            const other = item.target_thought ?? item.source_thought;
-            if (other !== undefined) body.append(linkRow(item.link, other, true, refresh));
-          }
-          return body;
-        },
-      });
-    }
-    if (count === 0) box.append(el('p', 'muted', 'Связей нет.'));
-    // Tell the group header to refresh its count badge.
-    box.closest('.group')?.dispatchEvent(new CustomEvent('etn:refresh-count'));
-  }
-
-  // Expose the reload function so the group-header actions button can trigger
-  // a refresh after adding links without collapsing/rebuilding the body.
-  onReady?.(() => void reload());
-  return box;
-}
-
-/** Builds the links group body for a link: its source and target thoughts. */
-function buildLinkEndpointsBody(ctx: EditorContext): HTMLElement {
-  const networkId = requireNetworkId();
-  const box = div('links-body');
-  if (ctx.link === null) return box;
-  const link = ctx.link;
-  void reload();
-
-  async function reload(): Promise<void> {
-    box.replaceChildren(el('span', 'muted', 'Загрузка…'));
-    let refs: ThoughtRef[];
-    try {
-      refs = await etn.thoughts.resolve(networkId, [link.source_id, link.target_id]);
-    } catch (err) {
-      box.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
-      return;
-    }
-    box.replaceChildren();
-    const byId = new Map(refs.map((r) => [r.id, r]));
-    const source = byId.get(link.source_id);
-    const target = byId.get(link.target_id);
-    if (source !== undefined) {
-      box.append(endpointRow('источник', source, () => setFocus(source.id)));
-    }
-    if (target !== undefined) {
-      box.append(endpointRow('назначение', target, () => setFocus(target.id)));
-    }
-  }
-
-  return box;
-}
-
-/** Builds the parent «Упоминания» body: container with two child groups. */
-function buildMentionsParentBody(ctx: EditorContext): HTMLElement {
-  const networkId = requireNetworkId();
-  const box = div('mentions-parent-body');
-
-  const childReload: { current: (() => void) | null } = { current: null };
-
-  /** Loads both endpoints in parallel and reports the aggregate count. */
-  async function refreshCounts(): Promise<void> {
-    const [backlinks, mentions] = await Promise.all([
-      etn.thoughts.backlinks(networkId, ctx.ownerId).catch(() => []),
-      etn.thoughts.mentions(networkId, ctx.ownerId).catch(() => []),
-    ]);
-    const visibleBacklinks = backlinks.filter((h) => h.active || store.state.showInactive);
-    const visibleMentions = mentions.filter((h) => h.active || store.state.showInactive);
-    const total = visibleBacklinks.length + visibleMentions.length;
-    box.closest('.group')?.dispatchEvent(
-      new CustomEvent('etn:set-count', { detail: `(${total})` }),
-    );
-  }
-  void refreshCounts();
-
-  // Две дочерние группы — те же groupSection, что и везде.
-  const backlinksSection = groupSection(
-    {
-      id: 'mentions:backlinks',
+      id: 'links.backlinks',
       title: 'Ссылки на мысль',
       lazyCount: true,
       defaultCollapsed: true,
       buildBody: () => buildBacklinksBody(ctx),
     },
   );
-  const textMentionsSection = groupSection(
+  const textMentions = groupSection(
     {
-      id: 'mentions:text',
-      title: 'Упоминания в тексте',
+      id: 'links.text-mentions',
+      title: 'Упоминания в текстах',
       lazyCount: true,
       defaultCollapsed: true,
       buildBody: () => buildMentionsBody(ctx),
     },
   );
-  childReload.current = () => {
-    backlinksSection.replaceWith(
-      groupSection(
-        {
-          id: 'mentions:backlinks',
-          title: 'Ссылки на мысль',
-          lazyCount: true,
-          defaultCollapsed: false,
-          buildBody: () => buildBacklinksBody(ctx),
-        },
-      ),
-    );
+  // Раскладка пары (приёмка 0.8.1): сплиттер и фиксированные высоты действуют
+  // только когда ОБЕ группы развёрнуты; свёрнутая группа схлопывается до
+  // заголовка, единственная развёрнутая растягивается на всю вкладку,
+  // сплиттер над свёрнутой группой инертен (тела нет — resizable → null).
+  const bodyOf = (group: HTMLElement): HTMLElement | null =>
+    group.querySelector(':scope > .group-body') as HTMLElement | null;
+  const relayout = (): void => {
+    const both = bodyOf(backlinks) !== null && bodyOf(textMentions) !== null;
+    applyTabGroupClamp(backlinks, 'links.backlinks', both);
+    applyTabGroupClamp(textMentions, 'links.text-mentions', both);
   };
-  box.append(backlinksSection, textMentionsSection);
-  return box;
+  backlinks.addEventListener('etn:toggled', () => relayout());
+  textMentions.addEventListener('etn:toggled', () => relayout());
+  relayout();
+  // persistKey «links.mentions» сохраняем — это та же высота, что была
+  // между группами «Упоминания» и «Локальный граф» раньше, чтобы пользователь
+  // не потерял настройку при миграции вкладки.
+  root.append(
+    backlinks,
+    rowSplitter(() => bodyOf(backlinks), { min: 50, persistKey: 'links.mentions' }),
+    textMentions,
+  );
+  return root;
+}
+
+/**
+ * Builds the «Мысли» tab of a link (задача 95775cfd): the two thoughts the
+ * edited link connects, as full thought clouds — «Источник» (`source_id`) and
+ * «Назначение» (`target_id`). Both cards come from one `thoughts.resolve`
+ * batch; an endpoint that fails to resolve gets no block at all.
+ */
+function buildLinkThoughtsTab(ctx: EditorContext): HTMLElement {
+  const networkId = requireNetworkId();
+  const root = div('link-thoughts-tab');
+  if (ctx.link === null) return root;
+  const link = ctx.link;
+  void reload();
+
+  async function reload(): Promise<void> {
+    root.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    let refs: ThoughtRef[];
+    try {
+      refs = await etn.thoughts.resolve(networkId, [link.source_id, link.target_id]);
+    } catch (err) {
+      root.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
+      return;
+    }
+    const byId = new Map(refs.map((r) => [r.id, r]));
+    const source = byId.get(link.source_id);
+    const target = byId.get(link.target_id);
+    if (source === undefined && target === undefined) {
+      root.replaceChildren(
+        el('p', 'muted', 'Концы связи не найдены — возможно, мысли удалены.'),
+      );
+      return;
+    }
+    root.replaceChildren();
+    if (source !== undefined) root.append(endpointBlock('Источник', source));
+    if (target !== undefined) root.append(endpointBlock('Назначение', target));
+  }
+
+  return root;
+}
+
+/** One endpoint block of the link «Мысли» tab: role caption + thought cloud. */
+function endpointBlock(label: string, ref: ThoughtRef): HTMLElement {
+  const block = div('link-endpoint');
+  block.append(el('div', 'link-endpoint-label', label), buildThoughtCloud(ref));
+  return block;
+}
+
+/**
+ * A thought cloud in the link «Мысли» tab — the same representation and
+ * behaviour as a thought cloud anywhere else in the client (canvas,
+ * structures): single click opens the thought in the editor without moving
+ * the canvas focus (deferred via {@link deferSingleClick} so a double click
+ * cancels it), double click focuses, Ctrl/Cmd+click toggles the shared
+ * selection, Ctrl+hover previews the permanent comment, right-click opens the
+ * thought context menu, Enter acts as a click. No indicator icons (📝/📅/📎) —
+ * the comment opens with Ctrl+hover, like a pinned-thought chip.
+ */
+function buildThoughtCloud(ref: ThoughtRef): HTMLElement {
+  const cloud = div('cloud');
+  cloud.dataset['id'] = ref.id;
+  cloud.tabIndex = 0;
+  applyCloudStyle(cloud, resolveCloudStyle(ref));
+  if (!ref.active) cloud.classList.add('dim');
+
+  const iconBox = div('cloud-icon');
+  applyThoughtIcon(iconBox, ref);
+  const title = div('cloud-title');
+  title.textContent = ref.title;
+  setTooltip(title, ref.title);
+  const main = div('cloud-main');
+  main.append(title);
+
+  cloud.append(iconBox, main);
+  markThoughtCommentPreview(cloud, ref.id, ref.title);
+
+  let pendingClick: { cancel: () => void } | null = null;
+  cloud.addEventListener('click', (event) => {
+    if (event.ctrlKey || event.metaKey) {
+      pendingClick?.cancel();
+      pendingClick = null;
+      toggleSelection([ref.id]);
+      return;
+    }
+    pendingClick?.cancel();
+    pendingClick = deferSingleClick(() => {
+      pendingClick = null;
+      openThoughtInEditor(ref.id);
+    });
+  });
+  cloud.addEventListener('dblclick', (event) => {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    pendingClick?.cancel();
+    pendingClick = null;
+    void setFocus(ref.id);
+  });
+  cloud.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showThoughtContextMenu(event, { id: ref.id, title: ref.title, dir: 'siblings' });
+  });
+  cloud.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') openThoughtInEditor(ref.id);
+  });
+  return cloud;
 }
 
 /** Builds the «Ссылки на мысль» body — explicit `[[#<id>]]` references. */
@@ -516,8 +354,8 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
       // like the search panel, render it as (escaped, trusted) HTML.
       renderHtml(snippet, hit.snippet);
       item.append(icon, title, snippet);
-      // Stage 3: the row has no per-indicator icons — Ctrl+hover shows the
-      // owner's (thought or link) permanent comment.
+      // Stage 3: no per-indicator icons on an endpoint row — Ctrl+hover shows
+      // the owner's (thought or link) permanent comment.
       if (hit.owner_type === 'thought') markThoughtCommentPreview(item, hit.owner_id, hit.title);
       else markCommentPreview(item, 'link', hit.owner_id, hit.title);
       item.addEventListener('click', () => void open(hit));
@@ -539,285 +377,4 @@ function buildMentionsBody(ctx: EditorContext): HTMLElement {
   }
 
   return box;
-}
-
-/** Reload callback of the currently mounted usage body (realtime hook). */
-let usageReload: (() => void) | null = null;
-let usageWired = false;
-
-/** Reloads the usage body on foreign `property-value.*` events. */
-function wireUsageRealtime(): void {
-  if (usageWired) return;
-  usageWired = true;
-  onRealtimeEvent((evt) => {
-    if (evt.type === 'property-value.set' || evt.type === 'property-value.deleted') {
-      usageReload?.();
-    }
-  });
-}
-
-/** Builds the usage body: referencing thoughts grouped by property (L7). */
-function buildUsageBody(ctx: EditorContext): HTMLElement {
-  const networkId = requireNetworkId();
-  const box = div('usage-body');
-  // Declared BEFORE the initial reload() call: reload is a hoisted function
-  // declaration, and reading this from inside it during the call would hit
-  // the temporal dead zone (same pattern as properties.ts).
-  let everMounted = false;
-  usageReload = () => void reload();
-  void reload();
-
-  async function reload(): Promise<void> {
-    // The first reload starts before the group mounts this box — proceed
-    // detached; skip only bodies that were mounted and then replaced (a
-    // newer editor render rebuilt the group and installed its own hook).
-    if (everMounted && !box.isConnected) return;
-    box.replaceChildren(el('span', 'muted', 'Поиск использования…'));
-    let usage: ThoughtUsage;
-    try {
-      usage = await etn.thoughts.usage(networkId, ctx.ownerId);
-    } catch (err) {
-      box.replaceChildren(span(`Ошибка: ${errText(err)}`, 'error-text'));
-      return;
-    }
-    if (box.isConnected) everMounted = true;
-    // Inactive referencing thoughts follow the `show_inactive` setting; the
-    // badge counts what is actually shown, not the server's raw total.
-    const groups = usage.groups
-      .map((g) => ({ ...g, thoughts: g.thoughts.filter((t) => t.active || store.state.showInactive) }))
-      .filter((g) => g.thoughts.length > 0);
-    const total = groups.reduce((sum, g) => sum + g.thoughts.length, 0);
-    box.closest('.group')?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${total})` }));
-    box.replaceChildren();
-    if (groups.length === 0) {
-      box.append(el('p', 'muted', 'Мысль не используется в свойствах.'));
-      return;
-    }
-    for (const group of groups) {
-      const thoughts = group.thoughts;
-      box.append(
-        groupSection(
-          {
-            id: `usage:${group.property_id}`,
-            title: group.key,
-            count: `(${thoughts.length})`,
-            compact: true,
-            defaultCollapsed: true,
-            buildBody: () => {
-              const body = div('link-group-rows');
-              for (const thought of thoughts) {
-                const row = div('link-group-item usage-row');
-                if (!thought.active) row.classList.add('dim');
-                const icon = span('', 'mini-icon');
-                applyThoughtIcon(icon, thought);
-                const title = el('span', 'link-item-title', thought.title);
-                row.append(icon, title);
-                // Stage 3: no per-indicator icons on a usage row — Ctrl+hover
-                // shows the referencing thought's permanent comment.
-                markThoughtCommentPreview(row, thought.id, thought.title);
-                row.addEventListener('click', () => setFocus(thought.id));
-                body.append(row);
-              }
-              return body;
-            },
-          },
-        ),
-      );
-    }
-  }
-
-  return box;
-}
-
-/** A clickable opposite-thought row: click → focus, right-click → menu (L5). */
-function linkRow(
-  link: Link,
-  other: ThoughtRef,
-  outgoing: boolean,
-  onChanged: () => void,
-): HTMLElement {
-  const row = div('link-group-item');
-  const arrow = span(outgoing ? '→' : '←', 'muted');
-  const icon = span('', 'mini-icon');
-  applyThoughtIcon(icon, other);
-  const title = el('span', 'link-item-title', other.title);
-  // Same semantics as the canvas clouds: dim on an inactive thought OR link.
-  if (!other.active || !link.active) row.classList.add('dim');
-  row.append(arrow, icon, title);
-  // Stage 3: no per-indicator icons on a direct-link row — Ctrl+hover shows
-  // the other thought's permanent comment.
-  markThoughtCommentPreview(row, other.id, other.title);
-  row.addEventListener('click', () => setFocus(other.id));
-  row.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-    showMenuAt(event.clientX, event.clientY, buildRowMenuItems(link, other, onChanged));
-  });
-  return row;
-}
-
-// ---------------------------------------------------------------------------
-// Direct-link add commands (bd8fb4d8 — «Действия» in the group header)
-// ---------------------------------------------------------------------------
-
-/**
- * Opens the thought picker and adds parent/child links to the edited thought.
- * Works the same as the analogous commands in the Structures panel (§15.3):
- *   — the link-type and thought-type fields are shown;
- *   — new thoughts are created inline before the link is established.
- */
-async function addDirectLinks(
-  ctx: EditorContext,
-  dir: 'parents' | 'children',
-  refresh: () => void,
-): Promise<void> {
-  const networkId = requireNetworkId();
-  const result = await pickThoughtsDialog({
-    networkId,
-    allowCreate: true,
-    allowLinkType: true,
-    title: dir === 'parents' ? 'Родительские мысли' : 'Подчинённые мысли',
-    applyLabel: 'Добавить',
-  });
-  if (result === null) return;
-
-  let added = 0;
-  let failed = 0;
-  for (const item of result.items) {
-    try {
-      if (item.kind === 'new') {
-        // Create the new thought and attach it in one server round-trip.
-        await etn.thoughts.create(networkId, {
-          title: item.title,
-          synonyms: item.synonyms,
-          type_id: result.thoughtTypeId,
-          create_link: {
-            // create_link.direction names the role of ownerId (the target)
-            // relative to the new thought: 'parent' — ownerId becomes the
-            // new thought's parent (new thought under ownerId, i.e. new
-            // thought is ownerId's CHILD); 'child' — the new thought becomes
-            // ownerId's parent. We want the opposite of dir here: dir ===
-            // 'parents' means the new thought must become a PARENT of
-            // ownerId → direction 'child'; dir === 'children' means the new
-            // thought must become ownerId's CHILD → direction 'parent'.
-            direction: dir === 'parents' ? 'child' : 'parent',
-            target_thought_id: ctx.ownerId,
-            type_id: result.linkTypeId,
-          },
-        });
-      } else {
-        // Existing thought: create the link directly.
-        // Parent links: item → ownerId (source is the parent).
-        // Child  links: ownerId → item (ownerId is the parent).
-        const sourceId = dir === 'parents' ? item.id : ctx.ownerId;
-        const targetId = dir === 'parents' ? ctx.ownerId : item.id;
-        await etn.links.create(networkId, {
-          source_id: sourceId,
-          target_id: targetId,
-          type_id: result.linkTypeId,
-        });
-      }
-      added++;
-    } catch {
-      failed++;
-    }
-  }
-  if (failed > 0) notice(`Добавлено: ${added}, ошибок: ${failed}.`, 'error');
-  else if (added > 0) notice(`Добавлено: ${added}.`);
-  refresh();
-}
-
-// ---------------------------------------------------------------------------
-// Row context menu (L5)
-// ---------------------------------------------------------------------------
-
-/** Builds the row menu items: open / change link type / delete link or thought. */
-function buildRowMenuItems(link: Link, other: ThoughtRef, onChanged: () => void): MenuItem[] {
-  return [
-    { label: 'Открыть', onClick: () => setFocus(other.id) },
-    MENU_SEPARATOR,
-    { label: 'Изменить тип связи…', onClick: () => void changeLinkType(link, onChanged) },
-    MENU_SEPARATOR,
-    { label: 'Удалить связь', danger: true, onClick: () => void removeLink(link, onChanged) },
-    { label: 'Удалить мысль', danger: true, onClick: () => void removeThought(other, onChanged) },
-  ];
-}
-
-/** Opens the two-phase delete dialog for the link, then reloads the body. */
-async function removeLink(link: Link, onChanged: () => void): Promise<void> {
-  const networkId = requireNetworkId();
-  await openLinkDeleteDialog(networkId, link.id, onChanged);
-}
-
-/** Opens the two-phase delete dialog for the thought, then reloads. */
-async function removeThought(other: ThoughtRef, onChanged: () => void): Promise<void> {
-  const networkId = requireNetworkId();
-  await openThoughtDeleteDialog(networkId, { id: other.id, title: other.title }, onChanged);
-}
-
-/** Opens the link-type dialog and saves the picked type (L5). */
-async function changeLinkType(link: Link, onChanged: () => void): Promise<void> {
-  const networkId = requireNetworkId();
-  const value = await pickLinkType(link.type_id);
-  // `undefined` — cancelled; `null` — "no type".
-  if (value === undefined || value === link.type_id) return;
-  try {
-    const updated = await etn.links.update(networkId, link.id, { type_id: value }, link.version);
-    // Repaint the line at once — the actor gets no realtime echo
-    // (04-realtime.md §5); the group body reloads via the callback.
-    patchFocusEdge(updated);
-    onChanged();
-  } catch (err) {
-    errorDialog('Изменить тип связи', err);
-  }
-}
-
-/**
- * Link-type picker dialog (searchable, L6): resolves the type id, `null` for
- * "no type", or `undefined` when cancelled.
- */
-function pickLinkType(current: string | null): Promise<string | null | undefined> {
-  return new Promise((resolve) => {
-    let picked: string | null | undefined = undefined;
-    const combo = createTypeCombobox({
-      options: () => linkTypeOptions(store.state.linkTypes),
-      value: current,
-      placeholder: 'без типа',
-      emptyLabel: 'без типа',
-      onChange: (typeId) => {
-        picked = typeId;
-      },
-    });
-
-    const body = div('form-stack');
-    body.append(field('Тип связи', combo.root));
-    showDialog({
-      title: 'Изменить тип связи',
-      body,
-      buttons: [
-        { label: 'Отмена', onClick: () => resolve(undefined) },
-        {
-          label: 'OK',
-          primary: true,
-          onClick: () => resolve(picked ?? current),
-        },
-      ],
-      onMount: () => combo.root.querySelector('input')?.focus(),
-    });
-  });
-}
-
-/** A labelled endpoint row (used in the link editor: source / target). */
-function endpointRow(label: string, other: ThoughtRef, onOpen: () => void): HTMLElement {
-  const row = div('link-group-item');
-  row.append(span(label, 'muted link-item-label'));
-  const icon = span('', 'mini-icon');
-  applyThoughtIcon(icon, other);
-  const title = el('span', 'link-item-title', other.title);
-  if (!other.active) row.classList.add('dim');
-  row.append(icon, title);
-  // Stage 3: no per-indicator icons on an endpoint row — Ctrl+hover shows the
-  // endpoint thought's permanent comment.
-  markThoughtCommentPreview(row, other.id, other.title);
-  row.addEventListener('click', () => onOpen());
-  return row;
 }

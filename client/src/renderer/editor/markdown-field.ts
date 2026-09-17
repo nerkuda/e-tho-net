@@ -14,7 +14,7 @@ import type { MentionsScanThought } from '@etn/shared';
 
 import { requireNetworkId } from '../app.js';
 import { invalidateIndicators } from '../canvas/canvas.js';
-import { div, errText, renderHtml } from '../lib/dom.js';
+import { div, el, errText, renderHtml } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
@@ -109,6 +109,12 @@ export function createMarkdownField(opts: {
     /** Вызывается после успешной замены ссылок (обновить таблицу хроно и т.п.). */
     onLinksReplaced?: () => void;
   };
+  /**
+   * Плейсхолдер для пустого комментария (задача 8ab775d9). Показывается
+   * серым курсивом поверх пустого view-поля; исчезает при первом
+   * редактировании или при сохранении непустого значения.
+   */
+  placeholder?: string;
   minRows?: number;
 }): HTMLElement {
   const root = div('md-field');
@@ -192,6 +198,10 @@ export function createMarkdownField(opts: {
       // `wiki-link-deleted` class) lazily at hover time, well after that
       // promise settles.
       wireCommentLinksInDom(view);
+    } else if (opts.placeholder !== undefined && opts.placeholder !== '') {
+      // Пустой комментарий — показываем плейсхолдер (задача 8ab775d9).
+      const ph = el('div', 'md-field-placeholder', opts.placeholder);
+      view.append(ph);
     }
   };
 

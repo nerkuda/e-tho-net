@@ -29,9 +29,11 @@ import type { FocusResponse, ThoughtRef, ThoughtTypeView } from '@etn/shared';
 import type { StructureSort, SortOrder } from '@etn/shared';
 
 import { openViewEditorDialog } from '../screens/thought-type/filter-dialog.js';
+import { openCanvasLinkFilterDialog } from './link-filter-dialog.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
 import { div, span } from '../lib/dom.js';
+import { svgIcon } from '../lib/icons.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
 import { showMenuAt, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
@@ -300,6 +302,7 @@ export async function renderStrip(focus: FocusResponse | null): Promise<void> {
   overflowBtn = buildOverflowButton(views, mode);
   buttonsEl.append(overflowBtn);
   buttonsEl.append(buildAddButton());
+  buttonsEl.append(buildFilterButton());
   stripEl.classList.remove('hidden');
   layoutStrip(views);
 }
@@ -561,6 +564,24 @@ function buildAddButton(): HTMLButtonElement {
         notifyModeChange();
       },
     });
+  });
+  return btn;
+}
+
+/** Кнопка-воронка фильтра типов связей на карте (0.8.1, задача «Фильтр
+ *  типов связей на карте мыслей», элемент интерфейса «Диалог фильтра типов
+ *  связей на карте»). В отличие от «+» доступна всегда — фильтр является
+ *  настройкой сети, а не типа мысли в фокусе. */
+function buildFilterButton(): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'canvas-filter-strip-btn canvas-filter-strip-filter';
+  btn.append(svgIcon('filter', 14));
+  btn.title = 'Фильтр типов связей на карте';
+  btn.addEventListener('click', () => {
+    const networkId = store.state.networkId;
+    if (networkId === null) return;
+    openCanvasLinkFilterDialog(networkId);
   });
   return btn;
 }

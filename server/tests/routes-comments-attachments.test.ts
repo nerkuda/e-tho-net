@@ -103,14 +103,23 @@ describe(
         });
         assert.equal(del.statusCode, 204);
 
-        // Comments on links work too.
-        const linkRes = await ctx.app.inject({
-          method: 'POST',
-          url: `/api/v1/networks/${ctx.networkId}/links`,
+        // Comments on links work too (0.8.1: связь создаётся через свойство).
+        const setLink = await ctx.app.inject({
+          method: 'PUT',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/properties/${encodeURIComponent('Потомки')}`,
           headers: authHeaders(ctx),
-          payload: { source_id: ctx.homeId, target_id: thoughtId },
+          payload: { value: [thoughtId] },
         });
-        const linkId = (linkRes.json().data as { id: string }).id;
+        assert.equal(setLink.statusCode, 200);
+        const propsRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/properties`,
+          headers: authHeaders(ctx),
+        });
+        const potomki = (propsRes.json().data as Array<{ property_name: string; values?: Array<{ link_id: string }> }>).find(
+          (p) => p.property_name === 'Потомки',
+        );
+        const linkId = potomki!.values![0]!.link_id;
         const linkComment = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${ctx.networkId}/links/${linkId}/comments`,

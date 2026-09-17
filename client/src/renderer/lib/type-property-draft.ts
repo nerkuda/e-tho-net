@@ -26,6 +26,7 @@
 
 import type {
   AttachPropertyInput,
+  LinkPropertySide,
   PropertyConfig,
   PropertyDefinition,
   PropertyValueType,
@@ -40,12 +41,22 @@ import type {
  * row — brand-new properties are created through the shared property editor
  * first (0.6.5 приёмка: один диалог редактирования свойства), then attached
  * from the pick list.
+ *
+ * `side` reflects the binding's role for link-properties (0.8.1, задача
+ * `935ec90e` — двусторонняя вкладка «Свойства»): `source` (тип — источник
+ * ребра, имя свойства = `name_forward`) или `target` (тип — назначение,
+ * имя свойства = `name_reverse`). Для скаляров и структурных привязок —
+ * `null`. Меняется только при создании; `set-role` (toggle required) сторону
+ * не трогает.
  */
 export interface DraftProperty {
   id: string;
   isNew: boolean;
   /** Registry property id this binding attaches. */
   property_id: string;
+  /** Сторона привязки для свойств-связей (`source`/`target`); `null` для
+   *  скаляров и структурных строк. Фиксируется при создании. */
+  side: LinkPropertySide | null;
   /** Whether the property is required on this type's records (the binding's
    *  only editable aspect through the type editor). */
   required: boolean;
@@ -71,6 +82,7 @@ export function draftPropertiesFrom(own: readonly PropertyDefinition[]): DraftPr
     id: d.id,
     isNew: false,
     property_id: d.property_id,
+    side: d.side ?? null,
     required: d.required,
     key: d.key,
     value_type: d.value_type,
@@ -87,6 +99,7 @@ export type PropertyDiffOp =
       draftId: string;
       property_id: string;
       required: boolean;
+      side: LinkPropertySide | null;
     }
   | { kind: 'set-role'; id: string; required: boolean };
 
@@ -126,6 +139,8 @@ export function planPropertyDiff(
 
   // 2. New rows — always attach an existing registry property (brand-new
   //    properties are created through the shared property editor first).
+  //    `side` пробрасывается: для скаляров `null`, для свойств-связей —
+  //    выбранная сторона (`source`/`target`) из черновика.
   let anyNew = false;
   for (const d of draft) {
     if (!d.isNew) continue;
@@ -135,6 +150,7 @@ export function planPropertyDiff(
       draftId: d.id,
       property_id: d.property_id,
       required: d.required,
+      side: d.side,
     });
   }
 
@@ -163,9 +179,16 @@ export function planPropertyDiff(
   return { ops, needsReorder: anyNew || orderChanged };
 }
 
-/** Builds the body of `POST /types/{id}/properties` for one plan op. Pure. */
+/** Builds the body of `POST /types/{id}/properties` for one plan op. Pure.
+ *  `side` пробрасывается для свойств-связей (`source`/`target`) — null
+ *  для скаляров и структурных строк. */
 export function opToAttachInput(op: Extract<PropertyDiffOp, { kind: 'attach' }>): AttachPropertyInput {
-  return { mode: 'attach', property_id: op.property_id, required: op.required };
+  return {
+    mode: 'attach',
+    property_id: op.property_id,
+    required: op.required,
+    side: op.side,
+  };
 }
 
 /**
