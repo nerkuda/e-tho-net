@@ -239,6 +239,19 @@ DELETE FROM properties WHERE id IN (SELECT loser_id FROM _mig042_losers);
 --    мысли — пустые таблицы источников и назначений. Существующие рёбра
 --    этого link_type остаются живыми и видны как внетиповое свойство
 --    («Свойства вне типов» в редакторе мысли; требование e93001ac).
+--
+--    `show_on_map` = true. До 0.8.1 рёбра этих типов рисовались на карте
+--    всегда; флаг становится дефолтом клиентского фильтра типов связей
+--    (требование ce399a5f), поэтому `false` молча убрал бы с карты все
+--    ранее видимые типизированные связи — регресс. Массовые ссылки,
+--    конвертированные из `thought_ref` (миграция 040), остаются с
+--    `show_on_map = false` по ADR «вид значения thought_ref упраздняется».
+--
+--    Флаги пишутся настоящими JSON-булевыми (`json('true')`, не `1`):
+--    потребители сравнивают их строго (`config.show_on_map === true` —
+--    shared `computeDefaultCanvasLinkFilter`, клиентский редактор), а
+--    `json_object('show_on_map', 1)` даёт число, на котором строгая
+--    проверка не срабатывает.
 -- ---------------------------------------------------------------------------
 
 DROP TABLE IF EXISTS _mig042_bare_lt;
@@ -296,8 +309,8 @@ SELECT
   'link',
   json_object(
     'link_type_id', b.lt_id,
-    'show_on_map', 0,
-    'blocks_target_deletion', 1
+    'show_on_map', json('true'),
+    'blocks_target_deletion', json('true')
   ),
   'создано миграцией 042 (0.8.1) для голого link_type «' || b.name_forward || '» (без привязки к типам мысли)',
   v.now_iso, v.now_iso, v.author_id, v.author_id,

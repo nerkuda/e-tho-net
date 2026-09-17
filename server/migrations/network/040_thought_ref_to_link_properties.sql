@@ -320,8 +320,17 @@ UPDATE properties AS p SET
   config = (
     SELECT json_patch(
              json_patch(
+               -- Флаги — настоящие JSON-булевы (не 1/0): потребители
+               -- сравнивают строго (`config.show_on_map === true`,
+               -- `config.blocks_target_deletion === true` — shared
+               -- `computeDefaultCanvasLinkFilter`, доменный
+               -- `listBlockingLinkProperties`), а число на строгой
+               -- проверке не срабатывает. Массовые ссылки не рисуются
+               -- на карте (show_on_map=false, ADR «вид значения
+               -- thought_ref упраздняется»), но блокируют удаление цели
+               -- так же, как блокировал прежний `thought_ref`.
                json_object('link_type_id', m.lt_id, 'direction', 'out',
-                           'show_on_map', 0, 'blocks_target_deletion', 1),
+                           'show_on_map', json('false'), 'blocks_target_deletion', json('true')),
                CASE WHEN COALESCE(
                       NULLIF(CAST(json_extract(a.prop_config, '$.allowed_type_ids') AS TEXT), '[]'),
                       CASE WHEN json_extract(a.prop_config, '$.allowed_type_id') IS NOT NULL

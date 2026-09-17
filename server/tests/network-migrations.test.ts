@@ -769,15 +769,18 @@ describe(
           allowed_target_type_ids?: string[];
           link_type_id?: string;
           direction?: string;
-          show_on_map?: number;
-          blocks_target_deletion?: number;
+          show_on_map?: boolean;
+          blocks_target_deletion?: boolean;
         };
         assert.equal(cfg.multiple, 1);
         // direction снимается миграцией 042 (требование b9562306) —
         // сторона теперь живёт в type_properties.side, не в config.
         assert.equal(cfg.direction, undefined);
-        assert.equal(cfg.show_on_map, 0);
-        assert.equal(cfg.blocks_target_deletion, 1);
+        // Флаги — настоящие JSON-булевы: потребители (`computeDefaultCanvasLinkFilter`,
+        // `listBlockingLinkProperties`, клиентский редактор) сравнивают строго `=== true`.
+        // thought_ref-свойство после 040 на карте не рисуется (ADR), но блокирует удаление.
+        assert.equal(cfg.show_on_map, false);
+        assert.equal(cfg.blocks_target_deletion, true);
         assert.ok(typeof cfg.link_type_id === 'string' && cfg.link_type_id.length > 0);
         assert.deepEqual([...(cfg.allowed_target_type_ids ?? [])].sort(), ['t-problem', 't-zadacha']);
 
@@ -1061,8 +1064,10 @@ describe(
         assert.equal(props.find((p) => p.id === 'p1')!.value_type, 'link');
         assert.ok(typeof cfg1.link_type_id === 'string' && cfg1.link_type_id.length > 0);
         assert.equal(cfg1.direction, 'out');
-        assert.equal(cfg1.show_on_map, 0);
-        assert.equal(cfg1.blocks_target_deletion, 1);
+        // Флаги — настоящие JSON-булевы (0.8.1-доработка): строгие проверки
+        // `=== true` в shared/домене не срабатывают на числе 1.
+        assert.equal(cfg1.show_on_map, false);
+        assert.equal(cfg1.blocks_target_deletion, true);
         assert.deepEqual(cfg1.allowed_target_type_ids, ['tt1']);
         assert.equal(cfg1.multiple, undefined);
         const cfg2 = JSON.parse(props.find((p) => p.id === 'p2')!.config!);
@@ -1450,14 +1455,28 @@ describe(
         // этого link_type видны как внетиповое свойство.
         const bareProp = db
           .prepare(
-            "SELECT id, name, value_type FROM properties " +
+            "SELECT id, name, value_type, config FROM properties " +
               "WHERE json_extract(config, '$.link_type_id') = 'lt-bare' " +
               "AND (json_extract(config, '$.structural') IS NULL OR json_extract(config, '$.structural') = 0)",
           )
-          .get() as { id: string; name: string; value_type: string };
+          .get() as { id: string; name: string; value_type: string; config: string };
         assert.ok(bareProp !== undefined, 'bare link_type must receive a property');
         assert.equal(bareProp.value_type, 'link');
         assert.ok(bareProp.name.startsWith('рецензирует'));
+        // Рёбра голого link_type рисовались на карте до 0.8.1 — авто-свойство
+        // получает `show_on_map = true`, иначе миграция молча убрала бы их с карты
+        // (флаг стал дефолтом клиентского фильтра, требование ce399a5f).
+        // Значение — настоящий JSON-boolean, а не 1: `computeDefaultCanvasLinkFilter`
+        // сравнивает строго `config.show_on_map === true`.
+        const bareCfg = JSON.parse(bareProp.config) as {
+          show_on_map?: unknown;
+          blocks_target_deletion?: unknown;
+          link_type_id?: string;
+        };
+        assert.equal(bareCfg.show_on_map, true, 'bare link_type property must show on map');
+        assert.equal(bareCfg.blocks_target_deletion, true);
+        // Страховка от числового представления (json_object('show_on_map', 1)).
+        assert.equal(typeof bareCfg.show_on_map, 'boolean');
         // Привязок к типам мысли быть не должно — свойство существует в
         // реестре как внетиповое (требование e93001ac).
         const bareBindingCount = (
