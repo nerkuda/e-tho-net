@@ -2426,7 +2426,7 @@ body.cloud-dragging * {
   padding: 10px;
 }
 
-/* «Основное» flows naturally (the editor panel scrolls); the other tabs are
+/* «Комментарий» flows naturally (the editor panel scrolls); the other tabs are
    fixed flex columns whose inner areas scroll on their own. */
 .tab-pane {
   width: 100%;
@@ -2479,7 +2479,7 @@ body.cloud-dragging * {
   font-size: 12px;
 }
 
-/* --- Tab «Основное» (L7, §6.3.1): table sections on top, the view/edit
+/* --- Tab «Комментарий» (L7, §6.3.1): table sections on top, the view/edit
    section fills the rest of the tab; the splitter redistributes. ---------- */
 
 /* Top areas never grow or shrink on their own — only the splitter sizes them
@@ -7486,7 +7486,7 @@ table.activity-table thead th {
   flex: 0 0 auto;
 }
 
-/* Вкладка «Основное» — единая зона комментария на всю высоту */
+/* Вкладка «Комментарий» — единая зона комментария на всю высоту */
 .main-full {
   display: flex;
   flex-direction: column;
@@ -7533,7 +7533,7 @@ table.activity-table thead th {
   overflow-y: auto;
 }
 /* Внутри вкладки высотой управляет сплиттер группы, а не фиксированная
-   высота таблицы (`--clamp-props` — legacy-канал вкладки «Основное»):
+   высота таблицы (`--clamp-props` — legacy-канал вкладки «Комментарий»):
    таблица естественной высоты, скроллит тело группы. */
 .properties-tab .prop-wrap {
   height: auto;

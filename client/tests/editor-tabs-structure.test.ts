@@ -297,10 +297,10 @@ function sliceConst(src: string, name: string): string {
 }
 
 describe('набор вкладок зависит от сущности (0.8.1, задача 95775cfd)', () => {
-  it('TABS_LINK — только «Основное», «Мысли», «Метаданные»', () => {
+  it('TABS_LINK — только «Комментарий», «Мысли», «Метаданные»', () => {
     const src = readText(SRC.editor);
     const link = sliceConst(src, 'TABS_LINK');
-    assert.ok(link.includes("title: 'Основное'"), '«Основное» present in the link set');
+    assert.ok(link.includes("title: 'Комментарий'"), '«Комментарий» present in the link set');
     assert.ok(link.includes("title: 'Мысли'"), '«Мысли» present in the link set');
     assert.ok(link.includes("title: 'Метаданные'"), '«Метаданные» present in the link set');
     // Вкладок, осмысленных только для мысли, у связи нет.
@@ -330,10 +330,10 @@ describe('набор вкладок зависит от сущности (0.8.1,
 
   it('сохранённая вкладка вне набора сущности не перезаписывает предпочтение', () => {
     const src = readText(SRC.editor);
-    // Защищённая отрисовка: вкладка вне набора → «Основное», без persist.
+    // Защищённая отрисовка: вкладка вне набора → «Комментарий», без persist.
     assert.ok(
       /const initial = tabs\.some\(\(t\) => t\.id === activeTab\) \? activeTab : 'main'/.test(src),
-      'the guarded initial draw falls back to «Основное»',
+      'the guarded initial draw falls back to «Комментарий»',
     );
     assert.ok(src.includes('displayInitialTab('), 'the guarded draw is a shared helper');
     // Только явный пользовательский выбор пишет предпочтение в L4.

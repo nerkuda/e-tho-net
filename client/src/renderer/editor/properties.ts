@@ -67,8 +67,8 @@ let wired = false;
 
 /**
  * Registers the «Свойства» tab (task 8ab775d9). Replaces the previous
- * «Свойства» section in the «Основное» tab — values now live in their own
- * tab with two collapsible groups, leaving «Основное» to the permanent
+ * «Свойства» section in the «Комментарий» tab — values now live in their own
+ * tab with two collapsible groups, leaving «Комментарий» to the permanent
  * comment full-height editor.
  */
 export function registerPropertiesGroup(): void {
@@ -291,7 +291,7 @@ async function confirmOutsideRemove(name: string): Promise<boolean> {
  *
  * Used by the standalone «Свойства вне типа» group in the «Свойства» tab
  * (task 8ab775d9); no longer rendered below the main table in the
- * «Основное» tab.
+ * «Комментарий» tab.
  */
 function buildOutsideTypeTable(
   values: Array<PropertyValue | LinkPropertyValues>,

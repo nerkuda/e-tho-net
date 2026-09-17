@@ -192,7 +192,7 @@ function buildAttachmentsTab(ctx: EditorContext): HTMLElement {
   void reload();
 
   // Pastes from OTHER markdown fields (e.g. the permanent comment on the
-  // «Основное» tab) add attachments behind this list's back — reload when the
+  // «Комментарий» tab) add attachments behind this list's back — reload when the
   // owner matches. The listener self-unregisters once the pane is gone.
   const onExternalChange = (event: Event): void => {
     if (!root.isConnected) {

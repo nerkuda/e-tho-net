@@ -1,5 +1,5 @@
 /**
- * Regression test for duplicate «Основное» sections (editor, renderer).
+ * Regression test for duplicate «Комментарий» sections (editor, renderer).
  *
  * The editor registers its sections, tabs and the attachments-changed document
  * listener inside `mountEditor`. The workspace screen is rebuilt from scratch
@@ -166,7 +166,7 @@ function shimDom(): void {
 }
 
 describe('editor mount (DOM-shimmed)', () => {
-  it('registers «Основное» sections only once across network re-opens', async () => {
+  it('registers «Комментарий» sections only once across network re-opens', async () => {
     shimDom();
     const { mountEditor, editorInternals } = await import('../src/renderer/editor/editor.js');
     const { store } = await import('../src/renderer/state.js');

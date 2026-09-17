@@ -2,7 +2,7 @@
  * Editor: the permanent comment (H9, 08-ui-spec.md §6.3.1, §6.4;
  * 09-scenarios.md D1).
  *
- * A collapsible group of the «Основное» tab. View mode renders the
+ * A collapsible group of the «Комментарий» tab. View mode renders the
  * server-produced `body_html`; edit mode uses a textarea over `body_md`; save
  * creates or updates the permanent comment (`If-Match` on update). Applies to
  * thoughts and links; the canvas 📝 indicator cache is invalidated after every

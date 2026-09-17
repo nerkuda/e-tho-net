@@ -10,14 +10,14 @@
  *
  * L7 turns the group stack below the header into tabs (08-ui-spec.md §6.3).
  * The set depends on the edited entity (0.8.1, задача 95775cfd): у мысли —
- * «Основное», «Свойства», «Вложения (N)», «Упоминания», «Хроника (N)»,
- * «Граф», «Метаданные»; у связи — «Основное», «Мысли», «Метаданные». A tab's
+ * «Комментарий», «Свойства», «Вложения (N)», «Упоминания», «Хроника (N)»,
+ * «Граф», «Метаданные»; у связи — «Комментарий», «Мысли», «Метаданные». A tab's
  * content is built lazily on first activation and
  * cached for the lifetime of one editor render (a signature change rebuilds
  * everything). The active tab survives focus changes (persisted to L4
  * `UI_STATE_KEY.EDITOR_ACTIVE_TAB`). Modules register tab content builders
  * (`registerTabContent`), tab badge counters (`registerTabCount`) and
- * «Основное» sections (`registerMainSection` — без обёртки-группы: секция
+ * «Комментарий» sections (`registerMainSection` — без обёртки-группы: секция
  * выводится на всю высоту вкладки).
  *
  * Если все табы не помещаются по ширине — справа появляется кнопка `▾N`,
@@ -116,7 +116,7 @@ export type TabContentBuilder = (ctx: EditorContext) => HTMLElement;
 /** Resolves a tab's `(N)` badge count for the current entity. */
 export type TabCountLoader = (ctx: EditorContext) => Promise<number | undefined>;
 
-/** Builds one collapsible group of the «Основное» tab (or null to skip). */
+/** Builds one collapsible group of the «Комментарий» tab (or null to skip). */
 export type MainSectionBuilder = (ctx: EditorContext) => GroupSpec | null;
 
 /** Static tab bar definition; badges come from registered count loaders. */
@@ -131,7 +131,7 @@ interface EditorTabDef {
  * (08-ui-spec.md §6.3). Не менять порядок: на него опираются тесты вёрстки.
  */
 const TABS_THOUGHT: EditorTabDef[] = [
-  { id: 'main', title: 'Основное', counted: false },
+  { id: 'main', title: 'Комментарий', counted: false },
   { id: 'properties', title: 'Свойства', counted: false },
   { id: 'attachments', title: 'Вложения', counted: true },
   { id: 'links', title: 'Упоминания', counted: false },
@@ -147,7 +147,7 @@ const TABS_THOUGHT: EditorTabDef[] = [
  * мысли, чтобы предпочтение активной вкладки не сбрасывалось).
  */
 const TABS_LINK: EditorTabDef[] = [
-  { id: 'main', title: 'Основное', counted: false },
+  { id: 'main', title: 'Комментарий', counted: false },
   { id: 'links', title: 'Мысли', counted: false },
   { id: 'metadata', title: 'Метаданные', counted: false },
 ];
@@ -180,7 +180,7 @@ const mainSectionBuilders: MainSectionBuilder[] = [];
 let activeTab: EditorTabId = 'main';
 /** What is actually shown right now. Differs from `activeTab` when the saved
  *  preference is absent from the current entity's set (e.g. «Хроника» on a
- *  link → «Основное» is displayed while the preference stays untouched). */
+ *  link → «Комментарий» is displayed while the preference stays untouched). */
 let shownTab: EditorTabId = 'main';
 let activeTabLoaded = false;
 
@@ -226,7 +226,7 @@ export function registerTabCount(id: EditorTabId, loader: TabCountLoader): void 
   tabCountLoaders.set(id, loader);
 }
 
-/** Registers a collapsible section of the «Основное» tab (L7). */
+/** Registers a collapsible section of the «Комментарий» tab (L7). */
 export function registerMainSection(builder: MainSectionBuilder): void {
   mainSectionBuilders.push(builder);
 } /** Opens a link in the editor without changing the focus (H6/H11). */
@@ -406,7 +406,7 @@ let builtPanes = new Map<EditorTabId, HTMLElement>();
  * Guards the one-time module registrations (sections, tabs, the document
  * listener). `mountEditor` runs again on every network open — `showScreen`
  * rebuilds the whole workspace — and re-registering would append duplicate
- * «Основное» sections («Свойства», «Комментарий») for each open.
+ * sections of the «Комментарий» tab for each open.
  */
 let registrationsDone = false;
 
@@ -558,11 +558,11 @@ export function mountEditor(editorHost: HTMLElement): void {
     void render();
   });
   // Restore the persisted active tab id (задача 8ab775d9) before the first
-  // render so the user lands on the tab they left on, not always «Основное».
+  // render so the user lands on the tab they left on, not always «Комментарий».
   void loadActiveTab().then(() => {
     if (host?.isConnected === true && paneHostEl !== null) {
       // Guarded draw: если сохранённой вкладки нет в наборе текущей сущности,
-      // показываем «Основное», само предпочтение не перезаписываем.
+      // показываем «Комментарий», само предпочтение не перезаписываем.
       const ctx = currentEditorContext();
       displayInitialTab(ctx === null ? TABS_THOUGHT : tabsFor(ctx));
     }
@@ -572,7 +572,7 @@ export function mountEditor(editorHost: HTMLElement): void {
 
 /**
  * Builds one tab's pane content against the CURRENT `renderCtx` (not a
- * closure-captured one — `invalidateMainPane` may rebuild the «Основное» pane
+ * closure-captured one — `invalidateMainPane` may rebuild the «Комментарий» pane
  * from a `patchHeader` call that ran after the original full render, when a
  * newer `ctx` is already current).
  */
@@ -581,12 +581,12 @@ function buildTabPane(id: EditorTabId): HTMLElement {
   const pane = div('tab-pane fixed');
   if (ctx === null) return pane;
   if (id === 'main') {
-    // Структура вкладки (задача 8ab775d9): в «Основное» живёт постоянный
-    // комментарий мысли на всю высоту вкладки, без обёртки-группы. Свойства
-    // переехали в отдельную вкладку «Свойства». Если когда-то здесь снова
-    // зарегистрируют верхние секции (как было до 0.8.1), вернётся прежняя
-    // компоновка «top + splitter + bottom»; сейчас — одиночная секция
-    // (комментарий) на всю высоту.
+    // Структура вкладки (задача 8ab775d9): вкладка целиком занята постоянным
+    // комментарием сущности, без обёртки-группы. Свойства переехали в
+    // отдельную вкладку «Свойства». Если когда-то здесь снова зарегистрируют
+    // верхние секции (как было до 0.8.1), вернётся прежняя компоновка
+    // «top + splitter + bottom»; сейчас — одиночная секция (комментарий) на
+    // всю высоту.
     const specs = mainSectionBuilders
       .map((section) => section(ctx))
       .filter((spec): spec is GroupSpec => spec !== null);
@@ -645,7 +645,7 @@ function buildTabPane(id: EditorTabId): HTMLElement {
  * (re)builds its pane on first activation, caches it and swaps the pane host
  * content. Used both for a user pick (through {@link activateEditorTab}) and
  * for the guarded initial draw when the saved tab is absent from the entity's
- * set (тогда показываем «Основное», предпочтение не перезаписываем).
+ * set (тогда показываем «Комментарий», предпочтение не перезаписываем).
  */
 function displayTab(id: EditorTabId): void {
   if (paneHostEl === null) return;
@@ -661,7 +661,7 @@ function displayTab(id: EditorTabId): void {
   paneHostEl.replaceChildren(pane);
 }
 
-/** Picks the tab the editor should draw first (saved preference, else «Основное»). */
+/** Picks the tab the editor should draw first (saved preference, else «Комментарий»). */
 function displayInitialTab(tabs: EditorTabDef[]): void {
   const initial = tabs.some((t) => t.id === activeTab) ? activeTab : 'main';
   displayTab(initial);
@@ -676,10 +676,10 @@ function activateEditorTab(id: EditorTabId): void {
 }
 
 /**
- * Drops the cached «Основное» pane so it rebuilds from the current `ctx` on
+ * Drops the cached «Комментарий» pane so it rebuilds from the current `ctx` on
  * next activation (bug 6b757336): a thought's type change can add/remove
  * properties, so the cached properties+comment pane can no longer be trusted
- * as-is. If «Основное» is the active tab this rebuilds it right away — the
+ * as-is. If «Комментарий» is the active tab this rebuilds it right away — the
  * comment's CodeMirror instance is destroyed in that case, same as before
  * this fix, but only for an actual type change, not for every header save.
  */
@@ -739,7 +739,7 @@ function patchHeader(ctx: EditorContext): void {
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
 
   // A thought's type change can add/remove properties (and NULL visual
-  // fields inherit new defaults) — the cached «Основное» pane must rebuild.
+  // fields inherit new defaults) — the cached «Комментарий» pane must rebuild.
   // Every other header field (title/synonyms/icon/active/style) leaves the
   // property set and the comment untouched, so no pane invalidation.
   const typeChanged =
@@ -1022,7 +1022,7 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
 }
 
 /**
- * Moves the caret into the permanent-comment field of the «Основное» tab —
+ * Moves the caret into the permanent-comment field of the «Комментарий» tab —
  * the continuation after a type created from the header type picker was
  * applied (карточка ETN «Быстрое создание типа из поля ввода»): the user
  * goes on writing the comment. Activates the tab and expands the collapsed
@@ -1034,7 +1034,7 @@ function restoreEditorFocus(prev: HTMLElement, root: HTMLElement): void {
 function focusEditorComment(): void {
   if (scrollBox === null) return;
   if (shownTab !== 'main') {
-    // The first tab button is «Основное» — click reuses the regular lazy
+    // The first tab button is «Комментарий» — click reuses the regular lazy
     // pane activation instead of duplicating it here (synchronous: by the
     // next line the main pane is the active one).
     const tab = scrollBox.querySelector<HTMLButtonElement>('.editor-tab');
@@ -1757,7 +1757,7 @@ function openLinkSettings(link: Link): void {
 
 /** Test hooks (renderer editor-mount regression test); not part of the app API. */
 export const editorInternals = {
-  /** Registered «Основное» sections — must not grow per `mountEditor` call. */
+  /** Registered «Комментарий» sections — must not grow per `mountEditor` call. */
   mainSectionCount: (): number => mainSectionBuilders.length,
   /** Comma-separated synonyms field parser (editor-shaking regression). */
   parseSynonymsField,
