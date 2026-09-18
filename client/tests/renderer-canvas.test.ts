@@ -11,9 +11,10 @@ import type { FocusEdge, FocusNeighbor, FocusResponse, Thought, ThoughtRef, Thou
 import { canvasInternals, visibleRelatedTitles } from '../src/renderer/canvas/canvas.js';
 import { shortenCompoundName } from '../src/renderer/lib/pure.js';
 import { store } from '../src/renderer/state.js';
+// Канон стиля и значка мысли живёт в общей фабрике облачка (веха 2).
+import { resolveCloudStyle, resolveThoughtIcon } from '../src/renderer/lib/thought-cloud.js';
 
-const { groupByThought, resolveCloudStyle, resolveThoughtIcon, canvasRenderKey, selectionKey } =
-  canvasInternals;
+const { groupByThought, canvasRenderKey, selectionKey } = canvasInternals;
 
 function thought(id: string, title = id): Thought {
   return {

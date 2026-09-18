@@ -28,13 +28,6 @@ import {
   type ThoughtCloudInput,
   type ThoughtCloudOptions,
 } from '../src/renderer/lib/thought-cloud.js';
-import {
-  applyCloudStyle as canvasApplyCloudStyle,
-  applyThoughtIcon as canvasApplyThoughtIcon,
-  canvasInternals,
-  resolveCloudStyle as canvasResolveCloudStyle,
-  resolveThoughtIcon as canvasResolveThoughtIcon,
-} from '../src/renderer/canvas/canvas.js';
 
 // ---------------------------------------------------------------------------
 // Минимальный DOM-шим
@@ -639,15 +632,20 @@ describe('канон стиля/значка', () => {
     }
   });
 
-  it('canvas.ts реэкспортирует канон из фабрики (тот же объект)', () => {
-    assert.equal(canvasResolveCloudStyle, resolveCloudStyle);
-    assert.equal(canvasApplyCloudStyle, factoryApplyCloudStyle);
-    assert.equal(canvasResolveThoughtIcon, resolveThoughtIcon);
-    assert.equal(canvasApplyThoughtIcon, applyThoughtIcon);
-    assert.equal(typeof canvasInternals.deferSingleClick, 'function');
-    assert.equal(typeof canvasInternals.SINGLE_CLICK_DELAY_MS, 'number');
-    assert.equal(canvasInternals.resolveCloudStyle, resolveCloudStyle);
-    assert.equal(canvasInternals.resolveThoughtIcon, resolveThoughtIcon);
+  it('канон стиля/значка живёт только в фабрике — холст его не реэкспортирует', () => {
+    // После перевода всех мест на фабрику (веха 2) холст больше не
+    // реэкспортирует канон: единственный публичный путь к нему — сам модуль
+    // `lib/thought-cloud.ts` (нарушения ловит сторож guard-thought-cloud).
+    const src = fs.readFileSync(
+      path.resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'canvas.ts'),
+      'utf8',
+    );
+    assert.ok(
+      !/export\s*\{\s*[\s\S]*?(?:applyCloudStyle|applyThoughtIcon|resolveCloudStyle|resolveThoughtIcon)/.test(
+        src,
+      ),
+      'canvas.ts must not re-export the cloud canon',
+    );
   });
 });
 

@@ -30,7 +30,6 @@ import { clear, div, el, setTooltip, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
-import { logUiEvent } from '../lib/ui-log.js';
 import {
   closeHoverPreview,
   markAttachmentsPreview,
@@ -44,16 +43,13 @@ import {
 import { svgIcon } from '../lib/icons.js';
 import { notice } from '../lib/notice.js';
 // Канон стиля/значка облачка и отложенный одиночный клик живут в общей
-// фабрике (задача b28ab6d6); здесь — реэкспорт для совместимости, холст
-// продолжает работать без изменения поведения.
+// фабрике (задача b28ab6d6): облачка холста собирает `createThoughtCloud`,
+// `deferSingleClick`/`SINGLE_CLICK_DELAY_MS` реэкспортируются для
+// совместимости.
 import {
-  applyCloudStyle,
-  applyThoughtIcon,
+  createThoughtCloud,
   deferSingleClick,
-  resolveCloudStyle,
-  resolveThoughtIcon,
   SINGLE_CLICK_DELAY_MS,
-  type CloudStyle,
 } from '../lib/thought-cloud.js';
 import {
   CLOUD_TITLE_LINES_MIN,
@@ -92,17 +88,11 @@ import {
 } from './focus-filter-strip.js';
 import { openThoughtDeleteDialog } from '../trash.js';
 
-// Канон облачка перенесён в lib/thought-cloud.ts (задача b28ab6d6) —
-// реэкспорт сохраняет прежний импортный контракт холста для всех потребителей.
-export {
-  applyCloudStyle,
-  applyThoughtIcon,
-  deferSingleClick,
-  resolveCloudStyle,
-  resolveThoughtIcon,
-  SINGLE_CLICK_DELAY_MS,
-};
-export type { CloudStyle };
+// Канон облачка перенесён в lib/thought-cloud.ts (задача b28ab6d6): облачка
+// холста (фокус и зоны) собирает `createThoughtCloud`; здесь остаётся только
+// реэкспорт отложенного одиночного клика для совместимости (тесты и
+// соседние модули холста).
+export { deferSingleClick, SINGLE_CLICK_DELAY_MS };
 
 /** Zone directions of the canvas (parents/siblings/children). */
 export type ZoneDir = 'parents' | 'siblings' | 'children';
@@ -735,28 +725,6 @@ export function requestZoneAnimation(): void {
 }
 
 /**
- * Mark-for-deletion badge (S13, 08-ui-spec.md §2.2): shown on any visible
- * cloud whose thought is in the trash, regardless of the `trashed` filter
- * (the canvas never hides marked thoughts — only search/query results do).
- * A marked cloud is also dimmed like an inactive one (§2.2). The badge circle
- * is 70% larger than the position badge and carries a bright-red trash glyph;
- * a click opens the single-delete dialog (restore/delete) directly from the
- * badge.
- */
-function buildTrashBadge(id: string, title: string): HTMLElement {
-  const badge = span('', 'cloud-trash-badge');
-  badge.append(svgIcon('trash', 17));
-  setTooltip(badge, 'Мысль находится в корзине. Нажмите для удаления/восстановления');
-  badge.addEventListener('click', (event) => {
-    event.stopPropagation();
-    const networkId = store.state.networkId;
-    if (networkId === null) return;
-    void openThoughtDeleteDialog(networkId, { id, title });
-  });
-  return badge;
-}
-
-/**
  * Object-lock badge: a small 🔒 rendered on top of the cloud when another
  * user (or this user — soft highlight) holds the lock (task 4f141756, UI
  * element 8e3703ee). Tooltip is «редактирует <имя>» / «вы редактируете».
@@ -863,7 +831,10 @@ function markOverriddenCloud(cloud: HTMLElement, id: string): void {
 
 /**
  * Renders the focus cloud (08-ui-spec.md §2.2.2): variable width, up to 3
- * title lines, ellipses filled when incoming/outgoing links exist.
+ * title lines, ellipses filled when incoming/outgoing links exist. The base
+ * cloud (icon, colours, font, dim/trash state, gestures) comes from the shared
+ * factory; the canvas adds its domain pieces — ellipses, indicators, layer and
+ * lock badges.
  */
 function renderFocusRow(focus: FocusResponse): void {
   if (focusRow === null) return;
@@ -871,13 +842,42 @@ function renderFocusRow(focus: FocusResponse): void {
   const thought = focus.focused;
   focusCloudEl = null;
 
-  const cloud = div('cloud focus-cloud');
-  cloud.dataset['id'] = thought.id;
-  // A marked (trashed) thought is dimmed exactly like an inactive one
-  // (08-ui-spec.md §2.2): both states read as "faded", the trash badge on
-  // top is what tells them apart.
-  if (!thought.active || thought.marked_for_deletion) cloud.classList.add('dim');
-  applyCloudStyle(cloud, resolveCloudStyle(thought));
+  const cloud = createThoughtCloud(thought, {
+    profile: 'canvas',
+    actions: {
+      onClick: (id) => {
+        // The cloud drag gesture suppresses the click that follows a real drag
+        // (suppressNextCanvasClick, drag-cloud.ts) — same guard the hand-rolled
+        // handler had.
+        if (suppressNextClick) {
+          suppressNextClick = false;
+          return;
+        }
+        // Click sets the keyboard cursor on this cloud so subsequent arrows
+        // (and Ctrl+Shift+←/→ in manual mode) move from the just-clicked
+        // cloud, not from wherever the cursor happened to be. The editor halo
+        // and the cursor frame are independent — both follow this click.
+        setCursor(id);
+        openThoughtInEditor(id);
+      },
+      // A click on the focus cloud returns the editor to the focused thought
+      // (same as a click on empty canvas space); a double-click would refocus
+      // the same thought — a no-op. The factory's deferred single click lets a
+      // quick second click cancel it instead of triggering two editor
+      // navigations back-to-back (the "editor shaking" the bug reports
+      // describe) — the dblclick action is intentionally absent.
+      onCtrlClick: (id) => selectionHooks?.onCloudClick(id),
+      onContextMenu: (event, id) => {
+        showThoughtContextMenu(event, { id, title: thought.title, dir: 'siblings' });
+      },
+      onTrashBadgeClick: (id) => {
+        const networkId = store.state.networkId;
+        if (networkId === null) return;
+        void openThoughtDeleteDialog(networkId, { id, title: thought.title });
+      },
+    },
+  });
+  cloud.classList.add('focus-cloud');
 
   const parents = groupByThought(focus.parents).length;
   const children = groupByThought(focus.children).length;
@@ -893,12 +893,7 @@ function renderFocusRow(focus: FocusResponse): void {
   markNeighborsPreview(topEllipse, thought.id, neighborsDirForEllipse('top'), thought.title);
   markNeighborsPreview(bottomEllipse, thought.id, neighborsDirForEllipse('bottom'), thought.title);
 
-  const iconBox = div('cloud-icon');
-  // Same resolution as zone clouds: the thought's own icon wins, else the
-  // thought type's default icon (so a typed focus shows the type icon too).
-  applyThoughtIcon(iconBox, thought);
-  const title = el('div', 'cloud-title', thought.title);
-  setTooltip(title, thought.title.slice(0, 400));
+  // Indicator row identical to the zone clouds: 📝/📅/📎 under the title.
   const ind = div('cloud-ind');
   const focusPerm = span('📝', 'ind dim');
   const focusChrono = span('📅', 'ind dim');
@@ -907,57 +902,15 @@ function renderFocusRow(focus: FocusResponse): void {
   markChronoPreview(focusChrono, 'thought', thought.id, thought.title);
   markAttachmentsPreview(focusAtt, 'thought', thought.id, thought.title);
   ind.append(focusPerm, focusChrono, focusAtt);
-  const main = div('cloud-main');
-  main.append(title, ind);
+  const main = cloud.querySelector<HTMLElement>(':scope > .cloud-main');
+  main?.append(ind);
 
-  cloud.append(topEllipse, iconBox, main, bottomEllipse);
-  if (thought.marked_for_deletion) {
-    cloud.append(buildTrashBadge(thought.id, thought.title));
-  }
+  cloud.prepend(topEllipse);
+  cloud.append(bottomEllipse);
   markOverriddenCloud(cloud, thought.id);
+  refreshCloudLockBadges(cloud, 'thought', thought.id);
   focusRow.append(cloud);
   focusCloudEl = cloud;
-  // A click on the focus cloud returns the editor to the focused thought
-  // (same as a click on empty canvas space); a double-click would refocus
-  // the same thought — a no-op, so the single-click action is deferred so a
-  // quick second click cancels it instead of triggering two editor
-  // navigations back-to-back. Without the delay the first click already
-  // pushed the editor target, then the dblclick handler tried to focus
-  // the same thought on top of it, producing the "editor shaking" the bug
-  // reports describe.
-  let pendingClick: { cancel: () => void } | null = null;
-  cloud.addEventListener('click', (event) => {
-    if (suppressNextClick) {
-      suppressNextClick = false;
-      return;
-    }
-    logUiEvent('ui.cloud.click', { id: thought.id });
-    if (event.ctrlKey || event.metaKey) {
-      pendingClick?.cancel();
-      pendingClick = null;
-      selectionHooks?.onCloudClick(thought.id);
-      return;
-    }
-    // Click sets the keyboard cursor on this cloud so subsequent arrows
-    // (and Ctrl+Shift+←/→ in manual mode) move from the just-clicked
-    // cloud, not from wherever the cursor happened to be. The editor halo
-    // and the cursor frame are independent — both follow this click.
-    pendingClick?.cancel();
-    pendingClick = deferSingleClick(() => {
-      pendingClick = null;
-      setCursor(thought.id);
-      openThoughtInEditor(thought.id);
-    });
-  });
-  cloud.addEventListener('dblclick', (event) => {
-    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-    pendingClick?.cancel();
-    pendingClick = null;
-  });
-  cloud.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-    showThoughtContextMenu(event, { id: thought.id, title: thought.title, dir: 'siblings' });
-  });
   queueIndicatorLoad(thought.id);
 }
 
@@ -1320,22 +1273,64 @@ function buildCloud(
   position: number | null,
 ): HTMLElement {
   const ref = entry.ref;
-  const cloud = div('cloud');
-  cloud.dataset['id'] = entry.id;
-  cloud.dataset['dir'] = dir;
-
   // The live neighbour carries a fresh `active` flag in every focus response —
   // prefer it over the cached ref, which can lag after a local toggle until the
   // ref is re-resolved (no realtime echo to the actor, 04-realtime.md §5).
   // `marked_for_deletion` lives only on the ref (FocusNeighbor does not carry
-  // it), so the trash state follows the ref cache — refreshed via
-  // invalidateRef() + scheduleRefresh() right after a mark/restore.
-  const isMarked = ref?.marked_for_deletion === true;
+  // it) — the factory reads it from the ref and paints the trash badge itself.
   const isInactive = (entry.links[0]?.active ?? ref?.active) === false;
-  // Marked (trashed) clouds are dimmed like inactive ones (08-ui-spec.md
-  // §2.2); when both states combine the cloud is simply dim with the badge
-  // on top.
-  if (isInactive || isMarked) cloud.classList.add('dim');
+  // Prefer the live neighbour title (fresh from the focus response) over the
+  // cached ref, which can lag behind after a rename until re-resolved.
+  const cloudTitleFull = entry.links[0]?.title ?? ref?.title ?? '—';
+  // Outside the focus, compound names hide the parts matching visible related
+  // thoughts (08-ui-spec.md §2.2.3); the tooltip keeps the full name.
+  const cloudTitle = shortenCompoundName(cloudTitleFull, relatedTitles.get(entry.id) ?? []);
+
+  // The base cloud (icon, colours, font, dim/trash states, deferred click,
+  // Ctrl+click, context menu) comes from the shared factory; the canvas adds
+  // its domain pieces — ellipses, indicators, position badge, drag, cursor.
+  const cloud = createThoughtCloud(
+    {
+      ...(ref ?? { icon: null, icon_kind: 'emoji' as const, type_id: null }),
+      id: entry.id,
+      title: cloudTitle,
+      active: isInactive ? false : (ref?.active ?? true),
+    },
+    {
+      profile: 'canvas',
+      actions: {
+        onClick: (id) => {
+          if (suppressNextClick) {
+            suppressNextClick = false;
+            return;
+          }
+          // Click selects the cloud as the keyboard cursor so subsequent arrows
+          // (and Ctrl+Shift+←/→ in manual mode) move from the just-clicked
+          // cloud, not from whichever cloud the cursor happened to be on. The
+          // editor halo and the cursor frame are independent — both follow this
+          // click.
+          setCursor(id);
+          openThoughtInEditor(id);
+        },
+        onDoubleClick: (id) => void setFocus(id),
+        onCtrlClick: (id) => selectionHooks?.onCloudClick(id),
+        onContextMenu: (event, id) => {
+          event.stopPropagation();
+          showThoughtContextMenu(event, {
+            id,
+            title: entry.ref?.title ?? entry.id,
+            dir,
+          });
+        },
+        onTrashBadgeClick: (id) => {
+          const networkId = store.state.networkId;
+          if (networkId === null) return;
+          void openThoughtDeleteDialog(networkId, { id, title: cloudTitleFull });
+        },
+      },
+    },
+  );
+  cloud.dataset['dir'] = dir;
   if (store.state.selection.includes(entry.id)) cloud.classList.add('selected');
   // Halo: the thought is open in the editor (§2.2.4) — a single click, Enter
   // or a pick from the structures/chronicle view.
@@ -1343,19 +1338,9 @@ function buildCloud(
   if (editorTarget?.kind === 'thought' && editorTarget.id === entry.id) {
     cloud.classList.add('halo');
   }
-
-  const style = resolveCloudStyle(
-    ref ?? {
-      type_id: null,
-      fg_color: null,
-      bg_color: null,
-      font_bold: false,
-      font_italic: false,
-      font_underline: false,
-      font_strike: false,
-    },
-  );
-  applyCloudStyle(cloud, style);
+  // Полное имя — подсказкой на названии (фабрика ставит сокращённое).
+  const titleEl = cloud.querySelector<HTMLElement>(':scope > .cloud-main > .cloud-title');
+  if (titleEl !== null) setTooltip(titleEl, cloudTitleFull);
 
   // Ellipses are filled by whether the thought has ANY incoming/outgoing link
   // (so a chain continues off-screen), not by which zone it sits in.
@@ -1370,17 +1355,6 @@ function buildCloud(
   setTooltip(bottomEllipse, hasOut ? 'Есть исходящие связи' : 'Исходящих связей нет');
   wireEllipseDrag(topEllipse, entry.id, 'parent');
   wireEllipseDrag(bottomEllipse, entry.id, 'child');
-
-  const iconBox = div('cloud-icon');
-  applyThoughtIcon(iconBox, ref ?? { icon: null, icon_kind: 'emoji', type_id: null });
-  // Prefer the live neighbour title (fresh from the focus response) over the
-  // cached ref, which can lag behind after a rename until re-resolved.
-  const cloudTitleFull = entry.links[0]?.title ?? ref?.title ?? '—';
-  // Outside the focus, compound names hide the parts matching visible related
-  // thoughts (08-ui-spec.md §2.2.3); the tooltip keeps the full name.
-  const cloudTitle = shortenCompoundName(cloudTitleFull, relatedTitles.get(entry.id) ?? []);
-  const title = el('div', 'cloud-title', cloudTitle);
-  setTooltip(title, cloudTitleFull);
   markNeighborsPreview(topEllipse, entry.id, neighborsDirForEllipse('top'), cloudTitleFull);
   markNeighborsPreview(bottomEllipse, entry.id, neighborsDirForEllipse('bottom'), cloudTitleFull);
 
@@ -1393,8 +1367,8 @@ function buildCloud(
   markAttachmentsPreview(att, 'thought', entry.id, cloudTitleFull);
   ind.append(perm, chrono, att);
 
-  const main = div('cloud-main');
-  main.append(title, ind);
+  const main = cloud.querySelector<HTMLElement>(':scope > .cloud-main');
+  main?.append(ind);
 
   // Manual-order position indicator (08-ui-spec.md §2.2): small black badge
   // in the right-bottom corner, number = position+1 (1-based). Shown only when
@@ -1410,67 +1384,13 @@ function buildCloud(
     posBadge.title = `Позиция в зоне: ${position + 1}`;
   }
 
-  cloud.append(topEllipse, iconBox, main, bottomEllipse, posBadge);
-  if (isMarked) {
-    cloud.append(buildTrashBadge(entry.id, cloudTitleFull));
-  }
+  cloud.prepend(topEllipse);
+  cloud.append(bottomEllipse, posBadge);
   // Object-lock badge (task 4f141756, UI element 8e3703ee): mounted once on
   // build, then re-painted by `refreshCloudLockBadges()` on every store
   // tick — see the `lockCacheTick` bump in `lib/lock-cache.ts`.
   refreshCloudLockBadges(cloud, 'thought', entry.id);
   markOverriddenCloud(cloud, entry.id);
-
-  // Single click → open the thought in the editor + halo (§2.2.4); double
-  // click → focus (B1); Ctrl+click toggles selection (H16); right-click opens
-  // the context menu (H15). The cloud stays tab-focusable (clouds re-enable
-  // the pointer inside the pointer-transparent grids) — Enter and the arrows
-  // are handled by the canvas keyboard navigation (kbd-nav.ts).
-  cloud.tabIndex = 0;
-  // The single-click action is deferred so the browser can deliver a
-  // matching `dblclick` first — every double-click fires two `click` events
-  // first, and processing the first one used to push the editor target
-  // twice in a row (once for the click, once for the focus that the
-  // dblclick triggers), producing the "double-click handled as two events"
-  // shake. The deferred click is cancelled by the dblclick handler below.
-  let pendingClick: { cancel: () => void } | null = null;
-  cloud.addEventListener('click', (event) => {
-    if (suppressNextClick) {
-      suppressNextClick = false;
-      return;
-    }
-    logUiEvent('ui.cloud.click', { id: entry.id });
-    if (event.ctrlKey || event.metaKey) {
-      pendingClick?.cancel();
-      pendingClick = null;
-      selectionHooks?.onCloudClick(entry.id);
-      return;
-    }
-    // Click selects the cloud as the keyboard cursor so subsequent arrows
-    // (and Ctrl+Shift+←/→ in manual mode) move from the just-clicked cloud,
-    // not from whichever cloud the cursor happened to be on. The editor
-    // halo and the cursor frame are independent — both follow this click.
-    pendingClick?.cancel();
-    pendingClick = deferSingleClick(() => {
-      pendingClick = null;
-      setCursor(entry.id);
-      openThoughtInEditor(entry.id);
-    });
-  });
-  cloud.addEventListener('dblclick', (event) => {
-    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-    pendingClick?.cancel();
-    pendingClick = null;
-    void setFocus(entry.id);
-  });
-  cloud.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    showThoughtContextMenu(event, {
-      id: entry.id,
-      title: entry.ref?.title ?? entry.id,
-      dir,
-    });
-  });
 
   return cloud;
 }
@@ -1479,11 +1399,8 @@ function buildCloud(
 // Ctrl-hover ellipse neighbours preview (task «Распространить предпросмотр с
 // зажатым Ctrl на эллипсы облачков мыслей») — registers a `neighbors` content
 // resolver with the shared `lib/hover-preview.ts` engine. Lives here (not in
-// hover-preview.ts itself) because it needs `applyCloudStyle`/
-// `resolveCloudStyle`/`applyThoughtIcon`, and hover-preview.ts must not import
-// canvas.ts (module doc comment there) — canvas.ts already imports
-// hover-preview.ts for the mark* trigger helpers, so importing back would
-// close a cycle.
+// hover-preview.ts itself) because canvas.ts already imports hover-preview.ts
+// for the mark* trigger helpers, so importing back would close a cycle.
 // ---------------------------------------------------------------------------
 
 /** Resolves a batch of thought ids into full `ThoughtRef`s, chunked at the
@@ -1498,41 +1415,31 @@ async function resolveNeighborRefs(networkId: string, ids: string[]): Promise<Th
 }
 
 /** One row of the neighbours-preview list — same visual pattern as
- *  `editor/links-tab.ts`'s `endpointRow`/`linkRow`: icon + own/type style,
- *  dimmed when inactive, no indicators of its own, nested Ctrl-hover shows
- *  the row's own permanent comment. A click/double-click navigates AND closes
- *  this popup (a lingering popup over content that just changed reads as a
- *  bug — no existing precedent does this navigate-from-inside-a-popup
- *  gesture, so the close is explicit here). */
+ *  `editor/links-tab.ts`'s `endpointRow`/`linkRow`: a factory-built mini-cloud
+ *  (icon + own/type style, dimmed when inactive, no indicators of its own),
+ *  nested Ctrl-hover shows the row's own permanent comment. A click/double-
+ *  click navigates AND closes this popup (a lingering popup over content that
+ *  just changed reads as a bug — no existing precedent does this
+ *  navigate-from-inside-a-popup gesture, so the close is explicit here). */
 function neighborPreviewRow(ref: ThoughtRef): HTMLElement {
-  const row = div('link-group-item');
-  applyCloudStyle(row, resolveCloudStyle(ref));
-  const icon = span('', 'mini-icon');
-  applyThoughtIcon(icon, ref);
-  const title = el('span', 'link-item-title', ref.title);
-  if (!ref.active) row.classList.add('dim');
-  row.append(icon, title);
+  const row = createThoughtCloud(ref, {
+    profile: 'chip',
+    actions: {
+      // Same single/double-click interplay as the clouds themselves: the first
+      // click defers the "open in editor" action so a quick second click
+      // cancels it and the dblclick focus action runs instead.
+      onClick: (id) => {
+        closeHoverPreview();
+        openThoughtInEditor(id);
+      },
+      onDoubleClick: (id) => {
+        closeHoverPreview();
+        void setFocus(id);
+      },
+    },
+  });
+  row.classList.add('link-group-item');
   markThoughtCommentPreview(row, ref.id, ref.title);
-  // Same single/double-click interplay as the clouds themselves: the first
-  // click defers the "open in editor" action so a quick second click cancels
-  // it and the dblclick focus action runs instead — an immediate single-click
-  // handler would close the popup on the first click and kill the dblclick.
-  let pendingClick: { cancel: () => void } | null = null;
-  row.addEventListener('click', () => {
-    logUiEvent('ui.cloud.click', { id: ref.id });
-    pendingClick?.cancel();
-    pendingClick = deferSingleClick(() => {
-      pendingClick = null;
-      closeHoverPreview();
-      openThoughtInEditor(ref.id);
-    });
-  });
-  row.addEventListener('dblclick', () => {
-    pendingClick?.cancel();
-    pendingClick = null;
-    closeHoverPreview();
-    void setFocus(ref.id);
-  });
   return row;
 }
 
@@ -1674,8 +1581,6 @@ function applyIndicators(id: string, info: IndicatorInfo): void {
 /** Test seam for unit tests. */
 export const canvasInternals = {
   groupByThought,
-  resolveCloudStyle,
-  resolveThoughtIcon,
   refCache,
   indicatorCache,
   canvasRenderKey,
