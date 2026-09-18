@@ -92,7 +92,7 @@ import {
 import { onRealtimeEvent } from '../realtime.js';
 import { buildChipListField } from './thought-type/value-combo.js';
 import { pickedThoughtIds, pickThoughtsDialog } from '../canvas/add-dialog.js';
-import { openThoughtTypesPicker } from '../lib/type-picker.js';
+import { pickEntitiesModal } from '../lib/entity-picker.js';
 
 /** Human-readable property value-type labels. Вид `thought_ref` упразднён в
  *  0.8.1 (требование 5a82c709) и недоступен в выборе — оставлен только в
@@ -1258,7 +1258,12 @@ export function openPropertyManagerEditor(
     }
 
     async function addRow(): Promise<void> {
-      const picked = await openThoughtTypesPicker(networkId, []);
+      const picked = await pickEntitiesModal({
+        networkId,
+        kind: 'thought-types',
+        title: 'Типы мыслей',
+        single: true,
+      });
       if (picked === null || picked.length === 0) return;
       const thoughtTypeId: string = picked[0] as string;
       // Дубль строки (та же сторона для связи) запрещён.

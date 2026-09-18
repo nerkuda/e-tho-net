@@ -46,10 +46,7 @@ import { clear, div, el, errText, span, setTooltip } from '../../lib/dom.js';
 import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { notice } from '../../lib/notice.js';
-import {
-  openLinkTypesPicker as openLinkTypesPickerLib,
-  openThoughtTypesPicker as openThoughtTypesPickerLib,
-} from '../../lib/type-picker.js';
+import { pickEntitiesModal } from '../../lib/entity-picker.js';
 import { orderedTypeRows } from '../../lib/type-tree.js';
 import { buildUserSelectWidget, listUsers, resolveUserName } from '../../lib/users.js';
 import { store } from '../../state.js';
@@ -1315,11 +1312,21 @@ async function pickParentThoughts(networkId: string, managedIds: string[]): Prom
 }
 
 async function openThoughtTypesPicker(networkId: string, managedIds: string[]): Promise<string[] | null> {
-  return openThoughtTypesPickerLib(networkId, managedIds);
+  return pickEntitiesModal({
+    networkId,
+    kind: 'thought-types',
+    title: 'Типы мыслей',
+    currentIds: managedIds,
+  });
 }
 
 async function openLinkTypesPicker(networkId: string, managedIds: string[]): Promise<string[] | null> {
-  return openLinkTypesPickerLib(networkId, managedIds);
+  return pickEntitiesModal({
+    networkId,
+    kind: 'link-types',
+    title: 'Типы связей',
+    currentIds: managedIds,
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -4450,19 +4450,6 @@ body.cloud-dragging * {
   height: 320px;
 }
 
-/* Canvas link-type filter dialog (0.8.1, «Диалог фильтра типов связей на
- * карте»): toolbar row of «Пометить все»/«Снять все пометки»/«Вернуть
- * умолчания», reusing the `.st-f-clear` button look. */
-.link-filter-toolbar {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.link-filter-list {
-  height: 280px;
-}
-
 /* Resizable seam of the filter panel (§15.2): a 1px seam line that turns into
  * a wide orange grip while hovering or dragging. */
 .st-splitter {
@@ -6084,17 +6071,6 @@ body.cloud-dragging * {
 }
 
 /* Scrollable thought-type checklist — thought_ref property type filter (L6). */
-.type-filter-box {
-  max-height: 140px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 /* Link-type line swatch in list dialogs (L6). */
 .link-type-swatch {
   display: inline-block;

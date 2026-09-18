@@ -25,13 +25,12 @@ import { pickThoughtsDialog, pickedThoughtIds } from '../../canvas/add-dialog.js
 // значок, цвета, начертание и бледность — как в любом списке клиента.
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
 import { button, div, el, span, setTooltip } from '../../lib/dom.js';
-import { showDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { markThoughtCommentPreview } from '../../lib/hover-preview.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import { errText } from '../../lib/dom.js';
-import { orderedTypeRows } from '../../lib/type-tree.js';
+import { pickEntitiesModal } from '../../lib/entity-picker.js';
 import { buildUserMultiSelectWidget, buildUserSelectWidget } from '../../lib/users.js';
 import { store } from '../../state.js';
 import { DEFAULT_FILTER, fromDefinition, toDefinition } from './state.js';
@@ -282,87 +281,24 @@ function refreshTypeButtons(): void {
 
 /**
  * Checkbox-list dialog of thought/link types — several types are ticked in
- * one pass (instead of toggling single choices from a menu). «OK» commits
- * the ticks to the filter; «Очистить» untick everything.
+ * one pass (instead of toggling single choices from a menu). Rendered by the
+ * common entity picker (ADR «выбор сущности — один пикер»): «Применить»
+ * commits the ticks to the filter; «Очистить» untick everything.
  */
 function showTypesDialog(kind: 'thought' | 'link'): void {
-  const list = div('type-filter-box');
-  list.style.maxHeight = '260px';
-  const selected = new Set(kind === 'thought' ? filter.typeIds : filter.linkTypeIds);
-  const thoughtTypes = store.state.thoughtTypes;
-  const linkTypes = store.state.linkTypes;
-
-  const render = (): void => {
-    list.replaceChildren();
-    const renderRow = (id: string, label: string, swatchColor: string | null, depth: number): void => {
-      const lab = el('label', 'checkbox-row');
-      lab.style.marginLeft = `${Math.max(0, depth - 1) * 14}px`;
-      const check = el('input');
-      check.type = 'checkbox';
-      check.checked = selected.has(id);
-      check.addEventListener('change', () => {
-        if (check.checked) selected.add(id);
-        else selected.delete(id);
-      });
-      if (swatchColor !== null) {
-        const swatch = span('', 'link-type-swatch');
-        swatch.style.borderTopColor = swatchColor;
-        lab.append(check, swatch);
-      } else {
-        lab.append(check);
-      }
-      lab.append(span(label));
-      list.append(lab);
-    };
-    if (kind === 'thought') {
-      if (thoughtTypes.length === 0) {
-        list.append(el('p', 'muted', 'В сети ещё нет типов мыслей.'));
-        return;
-      }
-      // L21: the type tree with indents; the root is not selectable.
-      for (const row of orderedTypeRows(thoughtTypes)) {
-        if (row.type.is_root) continue;
-        renderRow(row.type.id, row.type.name, null, row.depth - 1);
-      }
-    } else {
-      if (linkTypes.length === 0) {
-        list.append(el('p', 'muted', 'В сети ещё нет типов связей.'));
-        return;
-      }
-      for (const row of orderedTypeRows(linkTypes)) {
-        if (row.type.is_root) continue;
-        renderRow(row.type.id, row.type.name_forward, row.type.color, row.depth - 1);
-      }
-    }
-  };
-  render();
-
-  showDialog({
+  void pickEntitiesModal({
+    networkId: requireNetworkId(),
+    kind: kind === 'thought' ? 'thought-types' : 'link-types',
     title: kind === 'thought' ? 'Типы мыслей' : 'Типы связей',
-    body: list,
+    currentIds: kind === 'thought' ? filter.typeIds : filter.linkTypeIds,
     width: 400,
-    buttons: [
-      {
-        label: 'Очистить',
-        keepOpen: true,
-        onClick: () => {
-          selected.clear();
-          render();
-        },
-      },
-      { label: 'Отмена' },
-      {
-        label: 'OK',
-        primary: true,
-        onClick: () => {
-          filter = {
-            ...filter,
-            ...(kind === 'thought' ? { typeIds: [...selected] } : { linkTypeIds: [...selected] }),
-          };
-          repaintControls();
-        },
-      },
-    ],
+  }).then((picked) => {
+    if (picked === null) return;
+    filter = {
+      ...filter,
+      ...(kind === 'thought' ? { typeIds: picked } : { linkTypeIds: picked }),
+    };
+    repaintControls();
   });
 }
 

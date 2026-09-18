@@ -39,12 +39,8 @@ import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
-import {
-  openLinkTypesPicker as openLinkTypesPickerLib,
-  openThoughtTypesPicker as openThoughtTypesPickerLib,
-  openTypePickerDialog,
-} from '../../lib/type-picker.js';
-import { orderedTypeRows, resolveLinkTypeVisual } from '../../lib/type-tree.js';
+import { pickEntitiesModal } from '../../lib/entity-picker.js';
+import { resolveLinkTypeVisual } from '../../lib/type-tree.js';
 import { buildUserMultiSelectWidget, buildUserSelectWidget } from '../../lib/users.js';
 import { store } from '../../state.js';
 import { requireNetworkId } from '../../app.js';
@@ -1447,7 +1443,12 @@ function renderLinkTypeField(): void {
 }
 
 async function openThoughtTypesPicker(): Promise<void> {
-  const picked = await openThoughtTypesPickerLib(requireNetworkId(), state.typeIds);
+  const picked = await pickEntitiesModal({
+    networkId: requireNetworkId(),
+    kind: 'thought-types',
+    title: 'Типы мыслей',
+    currentIds: state.typeIds,
+  });
   if (picked === null) return;
   state.typeIds = picked;
   touch();
@@ -1455,7 +1456,12 @@ async function openThoughtTypesPicker(): Promise<void> {
 }
 
 async function openLinkTypesPicker(): Promise<void> {
-  const picked = await openLinkTypesPickerLib(requireNetworkId(), state.linkTypeIds);
+  const picked = await pickEntitiesModal({
+    networkId: requireNetworkId(),
+    kind: 'link-types',
+    title: 'Типы связей',
+    currentIds: state.linkTypeIds,
+  });
   if (picked === null) return;
   state.linkTypeIds = picked;
   touch();
@@ -1486,19 +1492,12 @@ async function openLinkFilterPicker(): Promise<void> {
 }
 
 async function openLinkFilterPickerLib(): Promise<string[] | null> {
-  let types = store.state.linkTypes;
-  if (types.length === 0) {
-    const networkId = requireNetworkId();
-    try {
-      types = await etn.types.listLinkTypes(networkId);
-    } catch {
-      types = [];
-    }
-  }
-  const rows = orderedTypeRows(types)
-    .filter((row) => !row.type.is_root)
-    .map((row) => ({ id: row.type.id, label: row.type.name_forward, depth: row.depth - 1 }));
-  return openTypePickerDialog('Обход по связям', rows, state.linkFilterTypeIds);
+  return pickEntitiesModal({
+    networkId: requireNetworkId(),
+    kind: 'link-types',
+    title: 'Обход по связям',
+    currentIds: state.linkFilterTypeIds,
+  });
 }
 
 // ---------------------------------------------------------------------------
