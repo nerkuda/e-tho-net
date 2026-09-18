@@ -195,7 +195,7 @@ function edge(id: string, title: string | null = null) {
 describe('buildLinkValueEditor — всегда чип-режим, поле живого поиска не пропадает', () => {
   it('empty value renders the chip field with a live-search input + «выбрать» button', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -240,7 +240,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     // конфиге вовсе — по спеке модели 0.8.1 у link-свойств числа целей нет,
     // редактор обязан всегда работать в чип-режиме.
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -271,7 +271,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
 
   it('«✕» corner button clears the whole value set at once', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const saved: unknown[] = [];
     const editor = buildLinkValueEditor({
       networkId: 'n1',
@@ -300,7 +300,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     // подсчётом символов»): в DOM лежит полное имя, видимая длина режется
     // CSS-многоточием профиля `chip`, а полный текст — в подсказке.
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const longTitle = 'Д'.repeat(500);
     const editor = buildLinkValueEditor({
       networkId: 'n1',
@@ -325,7 +325,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
     // Проверка исходника: воспроизведение требует живого дропдауна поиска
     // (зависающая в shim-среде цепочка, см. шапку файла).
     const src = readFileSync(
-      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'properties.ts'),
+      resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'value-editor.ts'),
       'utf8',
     );
     const start = src.indexOf('const setAndPersist = (next: string[]): void => {');
@@ -347,7 +347,7 @@ describe('buildLinkValueEditor — всегда чип-режим, поле жи
 describe('buildLinkValueEditor — чип-режим мини-облачков (a47947c8)', () => {
   it('renders one mini-cloud per stored id with a «+ ещё одну мысль» add input', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -389,7 +389,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
 
   it('empty multi-mode renders the «Название мысли…» seed placeholder', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -413,7 +413,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
 
   it('cloud registers click / dblclick / contextmenu / keydown listeners', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -435,7 +435,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
 
   it('cloud click handler is wired (smoke: dispatch does not throw)', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -457,7 +457,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
 
   it('«✕» on a chip cloud removes only that id and persists the rest', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const saved: unknown[] = [];
     const editor = buildLinkValueEditor({
       networkId: 'n1',
@@ -490,7 +490,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
     // LinkPropertyValues — готовый target_title подставляется в облачко
     // сразу, синхронно с первым рендером.
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',
@@ -523,7 +523,7 @@ describe('buildLinkValueEditor — чип-режим мини-облачков (
 
   it('resolves full metadata (icon/colours/active) for every current id via etn.thoughts.resolve', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     buildLinkValueEditor({
       networkId: 'n1',
       ownerType: 'thought',

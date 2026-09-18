@@ -33,7 +33,7 @@ import {
 // стилизует подписи чипов типов связей (у типов связей нет своей фабрики).
 import { applyCloudStyle, createThoughtCloud } from '../../lib/thought-cloud.js';
 import { firstPickedThoughtId, pickedThoughtIds, pickThoughtsDialog } from '../../canvas/add-dialog.js';
-import { buildValueOptionsCaret } from '../../editor/properties.js';
+import { buildValueOptionsCaret } from '../../editor/value-editor.js';
 import { clear, div, el, setTooltip, span } from '../../lib/dom.js';
 import { confirmDialog, errorDialog, promptDialog } from '../../lib/dialog.js';
 import { etn } from '../../lib/etn.js';

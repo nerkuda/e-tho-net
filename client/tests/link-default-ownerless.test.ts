@@ -160,7 +160,7 @@ const definition = {
 describe('buildLinkValueEditor — owner-less режим (дефолт свойства-связи, bb67e546)', () => {
   it('renders the target-set chips without an owner', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       definition: definition as any,
@@ -181,7 +181,7 @@ describe('buildLinkValueEditor — owner-less режим (дефолт свой�
 
   it('chip ✕ and clear-all persist the remaining set via save (null when empty)', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const saved: unknown[] = [];
     const editor = buildLinkValueEditor({
       networkId: 'n1',
@@ -216,7 +216,7 @@ describe('buildLinkValueEditor — owner-less режим (дефолт свой�
 
   it('chip context menu is suppressed without an owner (no edge operations)', async () => {
     installShim();
-    const { buildLinkValueEditor } = await import('../src/renderer/editor/properties.js');
+    const { buildLinkValueEditor } = await import('../src/renderer/editor/value-editor.js');
     const editor = buildLinkValueEditor({
       networkId: 'n1',
       definition: definition as any,

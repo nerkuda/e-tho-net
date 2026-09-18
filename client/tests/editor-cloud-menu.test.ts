@@ -19,7 +19,9 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 const SRC = {
-  properties: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'properties.ts'),
+  // Чипы значений свойств (редактируемые и внетиповые) живут в общем
+  // редакторе значения свойства (задача 77e7cafd, веха 4).
+  valueEditor: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'value-editor.ts'),
   miniGraph: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph.ts'),
   contextMenu: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'context-menu.ts'),
 };
@@ -72,7 +74,7 @@ describe('меню облачка в редакторе — единый кон�
   });
 
   it('чип значения свойства зовёт общий конструктор и добавляет «Убрать из значения»', () => {
-    const src = readText(SRC.properties);
+    const src = readText(SRC.valueEditor);
     const chip = functionBody(src, 'async function showLinkChipMenu(');
     assert.ok(
       chip.includes('await openThoughtCloudMenu(') && chip.includes("label: 'Убрать из значения'"),
@@ -108,7 +110,7 @@ describe('меню облачка в редакторе — единый кон�
   });
 
   it('внетиповое ребро («Свойства вне типа») зовёт тот же конструктор без «Убрать из значения»', () => {
-    const src = readText(SRC.properties);
+    const src = readText(SRC.valueEditor);
     const helper = functionBody(src, 'async function openReadonlyChipMenu(');
     assert.ok(helper.includes('openThoughtCloudMenu('), 'delegates to the shared menu');
     assert.ok(
