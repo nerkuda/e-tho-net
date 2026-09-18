@@ -5964,6 +5964,63 @@ body.cloud-dragging * {
   font-weight: 600;
 }
 
+/* Общий пикер сущностей (0.8.2, веха 3): встроенное комбо-поле —
+ * облачко выбранного + строка живого поиска + каретка полного списка. */
+.entity-combo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.entity-combo-value {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  max-width: 55%;
+  min-width: 0;
+}
+
+.entity-combo-value .muted {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.entity-combo-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.entity-combo-caret {
+  color: var(--text-faint);
+  flex: none;
+}
+
+/* Модальный чек-лист пикера: чипы выбранных мыслей. */
+.entity-pick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 22px;
+}
+
+.entity-pick-chips .muted {
+  font-size: 12px;
+}
+
+/* Строка чек-листа типов: облачко-чип занимает остаток строки. */
+.st-f-check.entity-pick-row {
+  gap: 6px;
+}
+
+.st-f-check.entity-pick-row .prop-ref-cloud {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Inline tree-checkbox type picker (0.6.5: thought_ref `allowed_type_ids`
  * filter in the property editor) — search on top, tree rows with icons and
  * inherited styles below, same visual shape as the combobox dropdown. */
