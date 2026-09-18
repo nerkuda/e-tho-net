@@ -45,9 +45,12 @@ import { select } from 'd3-selection';
 import { zoom, type D3ZoomEvent } from 'd3-zoom';
 
 import { div, span } from '../lib/dom.js';
-import { contrastText } from '../lib/pure.js';
+// Пилюли-узлы мини-графа собирает общая фабрика облачка (профиль `graph`):
+// значок, цвета, начертание, бледность, метка корзины и обрезка названия
+// раскладкой с подсказкой — те же, что во всех списках клиента. HTML-облачко
+// кладётся в SVG через <foreignObject> («поверх SVG»).
+import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { store } from '../state.js';
-import { deferSingleClick, resolveCloudStyle, resolveThoughtIcon } from '../canvas/canvas.js';
 import { toggleSelection } from '../selection/selection.js';
 
 /** Mass-link threshold: ≥10 ребер одного типа к одной цели скрываются за чипом. */
@@ -56,11 +59,11 @@ const MASS_LINK_THRESHOLD = 10;
 /** Скрываем периферийных соседей, если их больше этого числа. */
 const PERIPHERY_CAP = 40;
 
-/** Геометрия пилюли-облачка: высота и максимальная ширина, px (мир графа). */
+/** Геометрия пилюли-облачка: высота и границы ширины, px (мир графа). */
 const CLOUD_H = 24;
 const CLOUD_MAX_W = 220;
-/** Обрезка заголовка в пилюле; полный текст — в tooltip. */
-const CLOUD_TITLE_CLIP = 28;
+/** Минимальная ширина пилюли — узкие названия не схлопываются в точку. */
+const CLOUD_MIN_W = 48;
 /** Размер стрелки направления на ребре, px. */
 const ARROW_LEN = 9;
 const ARROW_W = 7;
@@ -107,36 +110,18 @@ function svgEl<K extends keyof SVGElementTagNameMap>(tag: K): SVGElementTagNameM
   return document.createElementNS('http://www.w3.org/2000/svg', tag);
 }
 
-/** Стиль мысли → атрибуты пилюли. */
-interface CloudVisual {
-  bg: string;
-  fg: string;
-  bold: boolean;
-  italic: boolean;
-  underline: boolean;
-  strike: boolean;
-  dim: boolean;
-}
-
 /**
- * Разрешает вид пилюли теми же хелперами, что и облачко на карте
- * (`resolveCloudStyle`), — иначе пилюля не наследовала бы вид типа по цепочке
- * предков и расходилась бы с облачком той же мысли на холсте (требование
- * «Наследование визуального стиля мысли от её типа»).
+ * Ширина пилюли узла: ограничена раскладкой фабричного облачка (текст
+ * обрезается многоточием внутри), а не подсчётом символов (ADR «Обрезка
+ * текста — раскладкой, а не подсчётом символов»). Облачко собирается заранее
+ * и замеряется в скрытом пробнике — симуляция получает реальную ширину.
  */
-function cloudVisual(ref: ThoughtRef | Thought): CloudVisual {
-  const style = resolveCloudStyle(ref);
-  return {
-    bg: style.bg ?? 'var(--surface-2)',
-    // Как в applyCloudStyle: явный fg побеждает, иначе — контрастный к фону,
-    // иначе цвет текста темы.
-    fg: style.fg ?? (style.bg !== null ? contrastText(style.bg) : 'var(--text)'),
-    bold: style.bold,
-    italic: style.italic,
-    underline: style.underline,
-    strike: style.strike,
-    dim: ref.active === false || ref.marked_for_deletion === true,
-  };
+function measureCloudWidth(probeHost: HTMLElement, input: Parameters<typeof createThoughtCloud>[0]): number {
+  const probe = createThoughtCloud(input, { profile: 'graph' });
+  probeHost.append(probe);
+  const w = probe.offsetWidth;
+  probe.remove();
+  return Math.min(CLOUD_MAX_W, Math.max(CLOUD_MIN_W, w));
 }
 
 /**
@@ -162,14 +147,18 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   const hiddenNeighbours = totalNeighbours - visibleNeighbours.length;
 
   // --- Модель симуляции -----------------------------------------------------
+  // Скрытый пробник для замера реальной ширины фабричных облачков (раскладка
+  // ограничивает видимую длину названия, а не подсчёт символов).
+  const probeHost = div('mini-graph-probe');
+  probeHost.style.cssText = 'position:fixed;left:-10000px;top:0;visibility:hidden;pointer-events:none;';
+  document.body.append(probeHost);
+
   const nodes: GNode[] = [];
-  const widthOf = (title: string): number =>
-    Math.min(CLOUD_MAX_W, 30 + Math.min(title.length, CLOUD_TITLE_CLIP) * 6.6);
   nodes.push({
     id: center.id,
     title: center.title,
     ref: center,
-    w: widthOf(center.title),
+    w: measureCloudWidth(probeHost, center),
     center: true,
     x: 0,
     y: 0,
@@ -181,7 +170,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       id: nb.id,
       title: nb.title,
       ref: nb,
-      w: widthOf(nb.title),
+      w: measureCloudWidth(probeHost, nb),
       center: false,
       x: 120 * Math.cos(angle),
       y: 90 * Math.sin(angle),
@@ -231,7 +220,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
 
   // pannedSinceDown: жест правой кнопкой был панорамированием (движение), а
   // не кликом — узел в contextmenu не открывает меню после пана. Объявлено
-  // до отрисовки узлов: wireNodeInteractions замыкает wasPanned.
+  // до отрисовки узлов: обработчик контекстного меню облачка замыкает wasPanned.
   let pannedSinceDown = false;
   const wasPanned = (): boolean => {
     const moved = pannedSinceDown;
@@ -311,107 +300,85 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   }
 
   // --- Узлы: пилюли-облачка --------------------------------------------------
-  const byId = new Map<string, { node: GNode; g: SVGGElement }>();
+  const byId = new Map<string, { node: GNode; g: SVGGElement; cloud: HTMLElement }>();
   for (const node of nodes) {
     const g = svgEl('g');
     g.setAttribute('class', node.center ? 'mini-node mini-node-center' : 'mini-node');
-    g.setAttribute('tabindex', '0');
-    g.setAttribute('role', 'button');
-    const v = cloudVisual(node.ref);
-    if (v.dim) g.classList.add('dim');
 
-    const title = svgEl('title');
-    title.textContent = node.title;
-    g.append(title);
-
-    const rect = svgEl('rect');
-    rect.setAttribute('class', 'mini-node-cloud');
-    rect.setAttribute('height', String(CLOUD_H));
-    rect.setAttribute('rx', String(CLOUD_H / 2));
-    rect.setAttribute('width', String(node.w));
-    // Пилюля центрирована на узле: rect по умолчанию рисуется от (0,0)
-    // вправо-вниз — без x/y заголовок и иконка (координаты от центра)
-    // оказываются «рядом» с облачком, а не внутри него.
-    rect.setAttribute('x', String(-node.w / 2));
-    rect.setAttribute('y', String(-CLOUD_H / 2));
-    rect.setAttribute('fill', v.bg);
-    g.append(rect);
-
-    // Значок: эмодзи — текст, картинка — <image> (icon хранит data: URL).
-    // Разрешается как везде (canvas.applyThoughtIcon): своя иконка, иначе
-    // иконка типа по цепочке предков (корневого — для мысли без типа), иначе
-    // дефолт приложения 💭. Прямое чтение `ref.icon` показывало только личные
-    // иконки: типовая наследовалась не всегда, дефолт — никогда.
-    // SVG <text> без явного `fill` рисуется чёрным по умолчанию — на тёмном
-    // фоне облачка (наследуемый bg_color мысли) эмодзи пропадает; тот же
-    // fill, что у заголовка, держит иконку видимой на любом фоне.
-    // `dominant-baseline` дублируем атрибутом — CSS-вариант не во всех
-    // движках SVG применяется к <text> (links.ts использует тот же приём).
-    const iconLabel =
-      node.title.length > CLOUD_TITLE_CLIP
-        ? `${node.title.slice(0, CLOUD_TITLE_CLIP)}…`
-        : node.title;
-    const iconX = -node.w / 2 + 4;
-    const resolvedIcon = resolveThoughtIcon(node.ref);
-    if (resolvedIcon.kind === 'image' && resolvedIcon.icon !== null) {
-      const img = svgEl('image');
-      // `href` поддерживается современными браузерами; `xlink:href`
-      // дублируем ради старых сборок Chromium/Electron, где один из
-      // вариантов может игнорироваться.
-      img.setAttribute('href', resolvedIcon.icon);
-      img.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', resolvedIcon.icon);
-      img.setAttribute('width', '16');
-      img.setAttribute('height', '16');
-      img.setAttribute('x', String(iconX + 1));
-      img.setAttribute('y', String(-CLOUD_H / 2 + 4));
-      // Тот же контракт, что у applyThoughtIcon (L16): иконка-картинка с
-      // вложением несёт id мысли и вложения — по ним Ctrl+наведение («лупа»)
-      // показывает полную картинку, а не превью размера иконки.
-      const attachmentId = node.ref.icon_attachment_id ?? null;
-      if (attachmentId !== null) {
-        img.dataset['zoomThought'] = node.ref.id;
-        img.dataset['zoomAttachment'] = attachmentId;
+    // Пилюля — HTML-облачко общей фабрики (профиль `graph`), положенное в SVG
+    // через <foreignObject>: значок, цвета, начертание, бледность, метка
+    // корзины и обрезка названия раскладкой с подсказкой — как во всех
+    // списках клиента. Класс `mini-node-cloud` переносит на контейнер рамки
+    // hover/focus/центра/edge-hi из styles.css (SVG stroke).
+    const cloud = createThoughtCloud(node.ref, {
+      profile: 'graph',
+      actions: {
+        // Клики как на канвасе (08-ui-spec.md): Ctrl/Cmd+клик — панель
+        // выбранных; одиночный клик отложен фабрикой, чтобы двойной клик
+        // (в фокус) успевал; после реального перетаскивания клик подавляется.
+        onClick: (id) => {
+          if (draggedByDrag.has(cloud)) {
+            draggedByDrag.delete(cloud);
+            return;
+          }
+          void openLinkRefInEditor(id);
+        },
+        onDoubleClick: (id) => void focusLinkRef(id),
+        onCtrlClick: (id) => toggleSelection([id]),
+        onContextMenu: (event) => {
+          // После панорамирования правой кнопкой меню не открываем (движение было).
+          if (wasPanned()) return;
+          event.stopPropagation();
+          void showCloudContextMenu(node, cloud);
+        },
+      },
+    });
+    cloud.classList.add('mini-node-cloud');
+    // Клавиатура — доменная часть узла (Enter — открыть, пробел — в фокус,
+    // Shift+F10 — общее меню мысли).
+    cloud.addEventListener('keydown', (event) => {
+      if (event.key === 'F10' && event.shiftKey) {
+        event.preventDefault();
+        void showCloudContextMenu(node, cloud);
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        void openLinkRefInEditor(node.id);
+      } else if (event.key === ' ' || event.key === 'Spacebar') {
+        event.preventDefault();
+        void focusLinkRef(node.id);
       }
-      g.append(img);
-    } else {
-      const icon = svgEl('text');
-      icon.setAttribute('class', 'mini-node-icon');
-      icon.setAttribute('x', String(iconX + 9));
-      icon.setAttribute('y', '0');
-      icon.setAttribute('text-anchor', 'middle');
-      icon.setAttribute('dominant-baseline', 'middle');
-      if (v.fg !== '') icon.setAttribute('fill', v.fg);
-      icon.textContent = resolvedIcon.icon ?? '💭';
-      g.append(icon);
-    }
+    });
+    // Ctrl+hover — предпросмотр постоянного комментария (общий механизм
+    // hover-preview: читает data-атрибуты делегированно).
+    g.addEventListener('mouseover', async (event) => {
+      if (!event.ctrlKey) return;
+      const networkId = store.state.networkId;
+      if (networkId === null) return;
+      try {
+        const { markThoughtCommentPreview } = await import('../lib/hover-preview.js');
+        const { etn } = await import('../lib/etn.js');
+        const t = await etn.thoughts.get(networkId, node.id);
+        markThoughtCommentPreview(cloud, t.id, t.title);
+      } catch {
+        // нет превью — игнор
+      }
+    });
 
-    const text = svgEl('text');
-    text.setAttribute('class', 'mini-node-title');
-    text.setAttribute('x', String(iconX + 22));
-    text.setAttribute('y', '0');
-    if (v.fg !== '') text.setAttribute('fill', v.fg);
-    if (v.bold) text.setAttribute('font-weight', '700');
-    if (v.italic) text.setAttribute('font-style', 'italic');
-    if (v.underline) text.setAttribute('text-decoration', 'underline');
-    if (v.strike) text.setAttribute('text-decoration', 'line-through');
-    text.textContent = iconLabel;
-    g.append(text);
-
-    // Помеченная на удаление — метка-корзина (S13).
-    if (node.ref.marked_for_deletion === true) {
-      const trash = svgEl('text');
-      trash.setAttribute('class', 'mini-node-trash');
-      trash.setAttribute('x', String(node.w / 2 - 8));
-      trash.setAttribute('y', '-4');
-      trash.textContent = '🗑';
-      g.append(trash);
-    }
+    const fo = svgEl('foreignObject');
+    fo.setAttribute('width', String(node.w));
+    fo.setAttribute('height', String(CLOUD_H + 6));
+    // Пилюля центрирована на узле (как прежний rect): без x/y контейнер
+    // рисовался бы от точки узла вправо-вниз, а облачко отклеивалось бы.
+    fo.setAttribute('x', String(-node.w / 2));
+    fo.setAttribute('y', String(-(CLOUD_H + 6) / 2));
+    fo.append(cloud);
+    g.append(fo);
 
     node.g = g;
-    byId.set(node.id, { node, g });
+    byId.set(node.id, { node, g, cloud });
     nodesG.append(g);
-    wireNodeInteractions(g, node, wasPanned);
   }
+  probeHost.remove();
   // Массовые чипы «+N» — рядом с узлом, позиция обновляется в tick.
   const massChips: Array<{ g: SVGGElement; node: GNode }> = [];
   for (const nb of visibleNeighbours) {
@@ -520,7 +487,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
 
   // --- Drag узлов ------------------------------------------------------------
   for (const entry of byId.values()) {
-    const { node, g } = entry;
+    const { node, g, cloud } = entry;
     select(g)
       .datum(node)
       .call(
@@ -534,7 +501,9 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
             // d3-drag стартует уже на mousedown — помечаем «было
             // перетаскивание» только при реальном движении, иначе любой
             // клик с микросдвигом подавлялся бы как drag (приёмка 0.8.1).
-            draggedByDrag.add(g);
+            // Метка на облачке: клик, который браузер отправит сразу после
+            // drag, подавляется в onClick фабричных действий.
+            draggedByDrag.add(cloud);
             node.fx = event.x;
             node.fy = event.y;
           })
@@ -601,75 +570,6 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
  * отправит сразу после drag, подавляется (не открывает редактор).
  */
 const draggedByDrag = new WeakSet<Element>();
-
-/** Интерактив узла: клики/меню/Ctrl-hover (SVG-версия wireCloudInteractions). */
-function wireNodeInteractions(g: SVGGElement, node: GNode, wasPanned: () => boolean): void {
-  // Клики как на канвасе (08-ui-spec.md): Ctrl/Cmd+клик — добавить/убрать из
-  // панели выбранных; одиночный клик отложен на SINGLE_CLICK_DELAY_MS, чтобы
-  // двойной клик (в фокус) успевал до открытия редактора.
-  let pendingClick: { cancel: () => void } | null = null;
-  g.addEventListener('click', (event) => {
-    if (draggedByDrag.has(g)) {
-      draggedByDrag.delete(g);
-      event.stopPropagation();
-      return;
-    }
-    event.preventDefault();
-    if (event.ctrlKey || event.metaKey) {
-      pendingClick?.cancel();
-      pendingClick = null;
-      toggleSelection([node.id]);
-      return;
-    }
-    pendingClick?.cancel();
-    pendingClick = deferSingleClick(() => {
-      pendingClick = null;
-      void openLinkRefInEditor(node.id);
-    });
-  });
-  g.addEventListener('dblclick', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    pendingClick?.cancel();
-    pendingClick = null;
-    void focusLinkRef(node.id);
-  });
-  g.addEventListener('contextmenu', (event) => {
-    // После панорамирования правой кнопкой меню не открываем (движение было).
-    if (wasPanned()) return;
-    event.preventDefault();
-    event.stopPropagation();
-    void showCloudContextMenu(node, g);
-  });
-  g.addEventListener('keydown', (event) => {
-    if (event.key === 'F10' && event.shiftKey) {
-      event.preventDefault();
-      void showCloudContextMenu(node, g);
-    } else if (event.key === 'Enter') {
-      event.preventDefault();
-      void openLinkRefInEditor(node.id);
-    } else if (event.key === ' ' || event.key === 'Spacebar') {
-      event.preventDefault();
-      void focusLinkRef(node.id);
-    }
-  });
-  // Ctrl+hover — предпросмотр постоянного комментария (общий механизм
-  // hover-preview: читает data-атрибуты делегированно; SVG-элементы
-  // совместимы — dataset у них есть).
-  g.addEventListener('mouseover', async (event) => {
-    if (!event.ctrlKey) return;
-    const networkId = store.state.networkId;
-    if (networkId === null) return;
-    try {
-      const { markThoughtCommentPreview } = await import('../lib/hover-preview.js');
-      const { etn } = await import('../lib/etn.js');
-      const t = await etn.thoughts.get(networkId, node.id);
-      markThoughtCommentPreview(g as unknown as HTMLElement, t.id, t.title);
-    } catch {
-      // нет превью — игнор
-    }
-  });
-}
 
 async function openLinkRefInEditor(id: string): Promise<void> {
   const { openThoughtInEditor } = await import('./editor.js');

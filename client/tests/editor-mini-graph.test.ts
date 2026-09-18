@@ -114,14 +114,13 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     );
   });
 
-  it('облачка мыс­лей — как везде: значок (эмодзи/картинка), цвета, шрифт, dim, корзина', () => {
+  it('облачка мыс­лей — фабричные HTML-облачка в <foreignObject>: значок, цвета, шрифт, dim, корзина', () => {
     const src = readText(SRC.graph);
     for (const anchor of [
-      'cloudVisual', // вид пилюли (fg/bg/font_*)
-      "svgEl('image')", // иконка-картинка рисуется как SVG <image>
-      'mini-node-icon',
-      'mini-node-trash', // помеченная на удаление
-      "classList.add('dim')", // неактуальная — бледная
+      'createThoughtCloud(', // пилюля собирается общей фабрикой
+      "profile: 'graph'", // профиль узла мини-графа
+      'foreignObject', // HTML-облачко положено в SVG поверх линий
+      'measureCloudWidth', // ширина пилюли замеряется по раскладке, не по символам
     ]) {
       assert.ok(src.includes(anchor), `node rendering includes ${anchor}`);
     }
@@ -131,29 +130,15 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     );
   });
 
-  it('значок и цвет пилюли разрешает общий слой канваса, а не чтение полей ref', () => {
+  it('пилюлю собирает общая фабрика облачка, а не чтение визуальных полей ref', () => {
     // Регрессия: пилюля читала `ref.icon`/`ref.bg_color` напрямую, из-за чего
-    // своя иконка показывалась всегда, типовая — не всегда (наследование
-    // подтягивалось вручную и только с непосредственного типа, без цепочки
-    // предков), а дефолт приложения 💭 — никогда.
+    // своя иконка показывалась всегда, типовая — не всегда, а дефолт 💭 —
+    // никогда. Теперь облачко строит фабрика (веха 2) — она же резолвит
+    // значок по цепочке типов и рисует состояние/начертание.
     const src = readText(SRC.graph);
     assert.ok(
-      /import \{[\s\S]*?resolveCloudStyle[\s\S]*?resolveThoughtIcon[\s\S]*?\} from '\.\.\/canvas\/canvas\.js'/.test(
-        src,
-      ),
-      'pill visuals are resolved by the shared canvas helpers',
-    );
-    assert.ok(
-      src.includes('resolveThoughtIcon(node.ref)'),
-      'the node icon is resolved (own → type chain → app default)',
-    );
-    assert.ok(
-      src.includes("resolvedIcon.icon ?? '💭'"),
-      'the app default icon is drawn when neither the thought nor its type sets one',
-    );
-    assert.ok(
-      /const style = resolveCloudStyle\(ref\);/.test(src),
-      'cloud colours/fonts come from resolveCloudStyle',
+      src.includes("import { createThoughtCloud } from '../lib/thought-cloud.js'"),
+      'node clouds come from the shared factory',
     );
     assert.ok(
       !src.includes('node.ref.icon !== null') &&
@@ -170,33 +155,33 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
     );
   });
 
-  it('пилюля центрирована на узле (rect x/y) — заголовок и иконка внутри неё', () => {
-    // Регрессия: rect без x/y рисуется от (0,0) вправо-вниз, а текст/иконка
-    // позиционированы от центра — облачко «отклеивалось» от содержимого.
+  it('пилюля центрирована на узле (foreignObject x/y) — облачко внутри неё', () => {
+    // Регрессия: контейнер без x/y рисуется от (0,0) вправо-вниз, а точка
+    // узла — центр: облачко «отклеивалось» бы от позиции симуляции.
     const src = readText(SRC.graph);
     assert.ok(
-      src.includes("rect.setAttribute('x', String(-node.w / 2))"),
-      'cloud rect is centered horizontally',
+      src.includes("fo.setAttribute('x', String(-node.w / 2))"),
+      'cloud container is centered horizontally',
     );
     assert.ok(
-      src.includes("rect.setAttribute('y', String(-CLOUD_H / 2))"),
-      'cloud rect is centered vertically',
+      src.includes("fo.setAttribute('y', String(-(CLOUD_H + 6) / 2))"),
+      'cloud container is centered vertically',
     );
   });
 
   it('клики как на канвасе: Ctrl+клик — выделение, одиночный отложен (dblclick успевает)', () => {
     const src = readText(SRC.graph);
     assert.ok(
-      src.includes('deferSingleClick'),
-      'single click is deferred so dblclick (focus) wins the race',
+      src.includes('actions: {'),
+      'node gestures come from the factory actions',
     );
     assert.ok(
-      src.includes('toggleSelection([node.id])'),
+      src.includes('toggleSelection([id])'),
       'Ctrl+click toggles the selection panel membership',
     );
     assert.ok(
-      src.includes('event.ctrlKey || event.metaKey'),
-      'Ctrl and Cmd are both honoured',
+      src.includes('onCtrlClick'),
+      'Ctrl/Cmd+click action is wired through the factory',
     );
     // d3-drag стартует на mousedown: подавление клика — только при реальном
     // движении, иначе каждый клик глох как drag (баг приёмки 0.8.1).
@@ -205,7 +190,7 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       'the drag-suppression flag is NOT set on drag start (mousedown)',
     );
     assert.ok(
-      /on\('drag', \(event\) => \{[\s\S]*?draggedByDrag\.add\(g\)/.test(src),
+      /on\('drag', \(event\) => \{[\s\S]*?draggedByDrag\.add\(cloud\)/.test(src),
       'the drag-suppression flag is set on actual movement only',
     );
   });
