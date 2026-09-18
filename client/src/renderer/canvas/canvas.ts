@@ -22,7 +22,7 @@
  */
 
 import { THOUGHT_RESOLVE_MAX_IDS } from '@etn/shared';
-import type { FocusEdge, FocusNeighbor, FocusResponse, IconKind, ThoughtRef } from '@etn/shared';
+import type { FocusEdge, FocusNeighbor, FocusResponse, ThoughtRef } from '@etn/shared';
 
 import { scheduleRefresh, setFocus } from '../app.js';
 import { openThoughtInEditor } from '../editor/editor.js';
@@ -43,12 +43,22 @@ import {
 } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/icons.js';
 import { notice } from '../lib/notice.js';
-import { resolveThoughtTypeVisual } from '../lib/type-tree.js';
+// Канон стиля/значка облачка и отложенный одиночный клик живут в общей
+// фабрике (задача b28ab6d6); здесь — реэкспорт для совместимости, холст
+// продолжает работать без изменения поведения.
+import {
+  applyCloudStyle,
+  applyThoughtIcon,
+  deferSingleClick,
+  resolveCloudStyle,
+  resolveThoughtIcon,
+  SINGLE_CLICK_DELAY_MS,
+  type CloudStyle,
+} from '../lib/thought-cloud.js';
 import {
   CLOUD_TITLE_LINES_MIN,
   cloudGeom,
   cloudHeight,
-  contrastText,
   neighborsDirForEllipse,
   neighborsPreviewBounds,
   neighborsPreviewHeading,
@@ -82,6 +92,18 @@ import {
 } from './focus-filter-strip.js';
 import { openThoughtDeleteDialog } from '../trash.js';
 
+// Канон облачка перенесён в lib/thought-cloud.ts (задача b28ab6d6) —
+// реэкспорт сохраняет прежний импортный контракт холста для всех потребителей.
+export {
+  applyCloudStyle,
+  applyThoughtIcon,
+  deferSingleClick,
+  resolveCloudStyle,
+  resolveThoughtIcon,
+  SINGLE_CLICK_DELAY_MS,
+};
+export type { CloudStyle };
+
 /** Zone directions of the canvas (parents/siblings/children). */
 export type ZoneDir = 'parents' | 'siblings' | 'children';
 
@@ -97,16 +119,6 @@ export interface IndicatorInfo {
   permanent: boolean;
   chrono: number;
   attachments: number;
-}
-
-/** Resolved visual style of a cloud (own values win over type defaults). */
-export interface CloudStyle {
-  fg: string | null;
-  bg: string | null;
-  bold: boolean;
-  italic: boolean;
-  underline: boolean;
-  strike: boolean;
 }
 
 /** Overlap rows rendered beyond the visible window (virtualization). */
@@ -163,41 +175,6 @@ let redrawLinks: (() => void) | null = null;
  *  click handler) — set by the cloud drag gesture (drag-cloud.ts). */
 export function suppressNextCanvasClick(): void {
   suppressNextClick = true;
-}
-
-/**
- * How long a single click on a cloud waits for a sibling double-click before
- * it fires its own action (open the thought in the editor). The browser fires
- * two `click` events for every double-click; without this delay the first
- * click would already start the editor render only for the second click to
- * refocus the same thought (or for a no-op duplicate `openThoughtInEditor`
- * to bounce the panel), which the user reads as a "double-click handled as
- * two single clicks". Mirrors the OS-level double-click threshold.
- */
-const SINGLE_CLICK_DELAY_MS = 220;
-
-/**
- * Defers a single-click action until the browser has had a chance to emit a
- * matching `dblclick`. The first click schedules the action; a second click
- * inside {@link SINGLE_CLICK_DELAY_MS} cancels it and the element's
- * `dblclick` handler runs instead.
- *
- * The returned `cancel` is exposed for tests and for callers that need to
- * drop a pending action on tear-down (cloud rebuild on focus change, etc.).
- */
-export function deferSingleClick(action: () => void): { cancel: () => void } {
-  let timer: number | null = window.setTimeout(() => {
-    timer = null;
-    action();
-  }, SINGLE_CLICK_DELAY_MS);
-  return {
-    cancel(): void {
-      if (timer !== null) {
-        window.clearTimeout(timer);
-        timer = null;
-      }
-    },
-  };
 }
 
 /** Selection click hooks (H16): Ctrl+click on clouds and ellipses. */
@@ -1335,109 +1312,6 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
 // ---------------------------------------------------------------------------
 // Clouds
 // ---------------------------------------------------------------------------
-
-/**
- * Resolves the visual style of a thought: own values win, then the type chain
- * defaults (L21: the type inherits unset fields from its ancestors; a thought
- * without a type resolves the root type «основной тип»), 08-ui-spec.md §2.2.
- */
-export function resolveCloudStyle(
-  thought: Pick<
-    ThoughtRef,
-    | 'fg_color'
-    | 'bg_color'
-    | 'font_bold'
-    | 'font_italic'
-    | 'font_underline'
-    | 'font_strike'
-    | 'type_id'
-  >,
-): CloudStyle {
-  const type = resolveThoughtTypeVisual(store.state.thoughtTypes, thought.type_id);
-  return {
-    fg: thought.fg_color ?? type.fg_color,
-    bg: thought.bg_color ?? type.bg_color,
-    // font_* use null-coalesce (NOT OR): a manual `false` must override a `true`
-    // type default, which `||` would wrongly collapse (02-data-model.md §3.1.1).
-    bold: thought.font_bold ?? type.font_bold ?? false,
-    italic: thought.font_italic ?? type.font_italic ?? false,
-    underline: thought.font_underline ?? type.font_underline ?? false,
-    strike: thought.font_strike ?? type.font_strike ?? false,
-  };
-}
-
-/** Applies a resolved style to a cloud element (also used by the structures tree, L15). */
-export function applyCloudStyle(cloud: HTMLElement, style: CloudStyle): void {
-  if (style.fg !== null) {
-    cloud.style.color = style.fg;
-  } else if (style.bg !== null) {
-    // Only the background is set — pick a readable text colour for it (L12,
-    // 08-ui-spec.md §2.2); an explicit fg always wins.
-    cloud.style.color = contrastText(style.bg);
-  } else {
-    cloud.style.color = '';
-  }
-  if (style.bg !== null) cloud.style.background = style.bg;
-  cloud.classList.toggle('font-bold', style.bold);
-  cloud.classList.toggle('font-italic', style.italic);
-  cloud.classList.toggle('font-underline', style.underline);
-  cloud.classList.toggle('font-strike', style.strike);
-}
-
-/**
- * Resolves a thought's icon: its own icon wins, else the default icon resolved
- * along the type chain (L21; a thought without a type resolves the root type),
- * else none (the caller falls back to 💬). Returns the icon value together
- * with its kind (02-data-model.md §3.1.1).
- */
-export function resolveThoughtIcon(thought: {
-  icon: string | null;
-  icon_kind: IconKind;
-  type_id: string | null;
-}): { icon: string | null; kind: IconKind } {
-  if (thought.icon !== null) {
-    return { icon: thought.icon, kind: thought.icon_kind };
-  }
-  const type = resolveThoughtTypeVisual(store.state.thoughtTypes, thought.type_id);
-  if (type.icon !== null) {
-    return { icon: type.icon, kind: type.icon_kind };
-  }
-  return { icon: null, kind: 'emoji' };
-}
-
-/**
- * Renders a thought's resolved icon into an element: an `<img>` for an
- * `image`-kind icon, otherwise the glyph (own/type default, else 💬). When the
- * icon is backed by an attachment (L16), the `<img>` carries the thought and
- * attachment ids so the Ctrl-hover magnifier shows the attachment's full
- * picture instead of the icon-sized preview.
- */
-export function applyThoughtIcon(
-  iconBox: HTMLElement,
-  thought: {
-    icon: string | null;
-    icon_kind: IconKind;
-    type_id: string | null;
-    /** Thought id — required together with {@link icon_attachment_id} for zoom. */
-    id?: string;
-    icon_attachment_id?: string | null;
-  },
-): void {
-  const ic = resolveThoughtIcon(thought);
-  iconBox.replaceChildren();
-  if (ic.kind === 'image' && ic.icon !== null) {
-    const img = el('img');
-    img.src = ic.icon;
-    img.alt = '';
-    if (thought.id !== undefined && (thought.icon_attachment_id ?? null) !== null) {
-      img.dataset['zoomThought'] = thought.id;
-      img.dataset['zoomAttachment'] = thought.icon_attachment_id ?? '';
-    }
-    iconBox.append(img);
-  } else {
-    iconBox.textContent = ic.icon ?? '💭';
-  }
-}
 
 /** Builds one zone cloud element. */
 function buildCloud(
