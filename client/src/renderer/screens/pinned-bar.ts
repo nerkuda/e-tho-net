@@ -288,8 +288,9 @@ function buildDropdownIcon(ref: ThoughtRef | undefined): HTMLElement {
 function buildChip(id: string, ref: ThoughtRef | undefined): HTMLElement {
   // Мини-облачко собирает общая фабрика (профиль `chip`): значок, цвета,
   // начертание, бледность, метка корзины и обрезка названия раскладкой с
-  // подсказкой. Класс `pinned-chip` сохраняет раскладку панели и таргетинг
-  // дропа (resolvePinTarget ищет `.pinned-chip[data-id]`).
+  // подсказкой. Класс `pinned-chip` сохраняет раскладку панели (модификатор
+  // `.prop-ref-cloud.pinned-chip` в styles.css: несжимаемый чип с пределом
+  // 260px) и таргетинг дропа (resolvePinTarget ищет `.pinned-chip[data-id]`).
   const chip = createThoughtCloud(
     ref ?? { id, title: id },
     {
@@ -304,11 +305,6 @@ function buildChip(id: string, ref: ThoughtRef | undefined): HTMLElement {
     },
   );
   chip.classList.add('pinned-chip');
-  // Предел ширины чипа панели (домен раскладки закреплённых): фабричный класс
-  // `.prop-ref-cloud` объявляет `max-width: 100%` позже `.pinned-chip` в
-  // styles.css, поэтому предел восстанавливаем инлайном (чистка дублей CSS —
-  // отдельная задача).
-  chip.style.maxWidth = '260px';
   // Stage 3: no per-indicator icons on a pinned chip — Ctrl+hover on the whole
   // chip shows the thought's permanent comment.
   markThoughtCommentPreview(chip, id, ref?.title ?? id);

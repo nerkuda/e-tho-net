@@ -304,8 +304,9 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
   // Мини-облачко собирает общая фабрика (профиль `chip`): значок, цвета,
   // начертание, бледность неактуальной/помеченной, метка корзины и обрезка
   // названия раскладкой с подсказкой полного имени. Класс `history-cloud`
-  // сохраняет раскладку полосы (flex: 0 0 auto — чипы отчитываются о своей
-  // естественной ширине для planHistoryChips).
+  // сохраняет раскладку полосы: модификатор `.prop-ref-cloud.history-cloud`
+  // в styles.css держит чип несжимаемым (flex: 0 0 auto — чипы отчитываются
+  // о своей естественной ширине для planHistoryChips) с пределом 170px.
   const chip = createThoughtCloud(
     ref ?? { id, title: id },
     {
@@ -316,11 +317,6 @@ function buildChip(id: string, ref: import('@etn/shared').ThoughtRef | undefined
     },
   );
   chip.classList.add('history-cloud');
-  // Предел ширины чипа полосы (домен раскладки истории): фабричный класс
-  // `.prop-ref-cloud` объявляет `max-width: 100%` позже `.history-cloud` в
-  // styles.css, поэтому предел восстанавливаем инлайном (чистка дублей CSS —
-  // отдельная задача).
-  chip.style.maxWidth = '170px';
   // Stage 3 (same as the pinned bar's `buildChip`): no per-indicator icons on
   // a history mini-cloud — Ctrl+hover on the whole chip shows the thought's
   // permanent comment.

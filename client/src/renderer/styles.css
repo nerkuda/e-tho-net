@@ -857,35 +857,14 @@ textarea {
   overflow: hidden;
 }
 
-.pinned-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+/* Чип закреплённой мысли — фабричное мини-облачко (профиль `chip`, класс
+   `.prop-ref-cloud`) плюс модификатор раскладки панели: несжимаемый, с
+   пределом ширины 260px; таргетинг дропа ищет `.pinned-chip[data-id]`.
+   Остальное — пилюля, hover, начертание и бледность — общие правила
+   `.prop-ref-cloud` (чистка дублей, a6055d05). */
+.prop-ref-cloud.pinned-chip {
   flex: 0 0 auto;
   max-width: 260px;
-  padding: 1px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--surface-2);
-  cursor: pointer;
-  overflow: hidden;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.pinned-chip:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.pinned-chip .pc-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pinned-chip.dim {
-  opacity: 0.5;
-  font-style: italic;
 }
 
 .pinned-more {
@@ -1255,55 +1234,15 @@ textarea {
    * «Ошибки в панели истории на Карте мыслей»). */
 }
 
-.history-cloud {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 170px;
-  /* Never shrink on the strip: the bar plans the visible chip set from real
-   * measured widths (history-bar.ts::layoutChips), so a chip must report its
-   * natural width. A shrinking chip would make the strip look "full" while
-   * every chip is actually crushed into it (regressions 3ccacc1c-… and
-   * a1c7c8dc-…). */
+/* Чип истории — фабричное мини-облачко (профиль `chip`, класс
+   `.prop-ref-cloud`) плюс модификатор раскладки полосы: чип не сжимается
+   (план видимого набора считает реальные ширины, history-bar.ts::layoutChips,
+   регрессии 3ccacc1c-… и a1c7c8dc-…) и не растягивается шире 170px.
+   Остальное — пилюля, hover, начертание и бледность — общие правила
+   `.prop-ref-cloud` (чистка дублей, a6055d05). */
+.prop-ref-cloud.history-cloud {
   flex: 0 0 auto;
-  padding: 1px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--surface-2);
-  cursor: pointer;
-  overflow: hidden;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.history-cloud:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.history-cloud .hc-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Thought font/fg/bg styles — mirror the on-canvas cloud and the search
- * list (08-ui-spec.md §6.7, §11.1) so the chip respects bold/italic/etc. */
-.history-cloud.font-bold .hc-title {
-  font-weight: 700;
-}
-.history-cloud.font-italic .hc-title {
-  font-style: italic;
-}
-.history-cloud.font-underline .hc-title {
-  text-decoration: underline;
-}
-.history-cloud.font-strike .hc-title {
-  text-decoration: line-through;
-}
-
-.history-cloud.dim {
-  opacity: 0.55;
-  font-style: italic;
+  max-width: 170px;
 }
 
 .history-more {
@@ -2220,11 +2159,18 @@ body.cloud-dragging * {
 }
 
 .cloud.font-underline .cloud-title {
-  text-decoration: underline;
+  text-decoration-line: underline;
 }
 
 .cloud.font-strike .cloud-title {
-  text-decoration: line-through;
+  text-decoration-line: line-through;
+}
+
+/* Оба начертания сразу: `text-decoration-line` принимает список значений —
+   без объединённого правила более позднее из двух одиночных перекрывало бы
+   первое, и «подчёркнутый + зачёркнутый» терял бы одно начертание (a6055d05). */
+.cloud.font-underline.font-strike .cloud-title {
+  text-decoration-line: underline line-through;
 }
 
 /* --- focus cloud (H5) ----------------------------------------------------- */
@@ -3878,7 +3824,7 @@ body.cloud-dragging * {
   text-overflow: ellipsis;
 }
 
-/* Thought font styles respect the same class set as the history chips. */
+/* Начертание мысли — тот же набор классов, что у облачка холста. */
 .prop-ref-cloud.font-bold .prc-title {
   font-weight: 700;
 }
@@ -3888,11 +3834,16 @@ body.cloud-dragging * {
 }
 
 .prop-ref-cloud.font-underline .prc-title {
-  text-decoration: underline;
+  text-decoration-line: underline;
 }
 
 .prop-ref-cloud.font-strike .prc-title {
-  text-decoration: line-through;
+  text-decoration-line: line-through;
+}
+
+/* Оба начертания сразу (см. `.cloud.font-underline.font-strike`). */
+.prop-ref-cloud.font-underline.font-strike .prc-title {
+  text-decoration-line: underline line-through;
 }
 
 .prop-ref-cloud.dim {
@@ -3928,18 +3879,6 @@ body.cloud-dragging * {
 
 .link-group-item:hover {
   background: var(--surface-2);
-}
-
-.link-item-title {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.link-item-label {
-  font-size: 12px;
-  min-width: 70px;
 }
 
 .mention-item {
@@ -4023,6 +3962,9 @@ body.cloud-dragging * {
   background: var(--surface-2);
 }
 
+/* Хиты-мысли собирает общая фабрика облачка (начертание и бледность — на
+   корне `.cloud`, классы `font-*` на `.search-hit` больше не навешиваются);
+   `hit-title` остаётся только у простых строк связей/хроники (a6055d05). */
 .search-hit .hit-title {
   font-weight: 600;
 }
@@ -4049,25 +3991,6 @@ body.cloud-dragging * {
   color: var(--text);
   padding: 0 1px;
   border-radius: 2px;
-}
-
-/* Thought-hit cloud style (icon/colour/font) — mirrors the canvas cloud so
- * the search list matches what the user sees on the map (08-ui-spec.md §2.2,
- * §6.7). `.dim` is shared with `.cloud.dim`/`.mention-item.dim` etc. */
-.search-hit.font-bold .hit-title {
-  font-weight: 700;
-}
-.search-hit.font-italic .hit-title {
-  font-style: italic;
-}
-.search-hit.font-underline .hit-title {
-  text-decoration: underline;
-}
-.search-hit.font-strike .hit-title {
-  text-decoration: line-through;
-}
-.search-hit.dim {
-  opacity: 0.55;
 }
 
 .search-empty {
@@ -4124,21 +4047,6 @@ body.cloud-dragging * {
 
 .selection-item:hover {
   background: var(--surface-2);
-}
-
-.selection-item .sel-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A thought in the trash (S13, 08-ui-spec.md §5a.2): its selection row dims
- * and carries the red trash glyph between the icon and the title — the same
- * marked reading as the canvas badge, scaled down to the list. The glyph
- * itself is the shared `.list-trash-mark` (see the group-delete dialog). */
-.selection-item.dim {
-  opacity: 0.55;
 }
 
 /* Top menu bar of the selection panel (Выделение / Действия / Свойства).
@@ -5100,11 +5008,8 @@ body.cloud-dragging * {
   color: var(--accent);
 }
 
-/* Thought font/fg/bg styles inside the menu — applied to rows that mirror
- * the search-panel rendering (08-ui-spec.md §6.7, §11.1: history dropdown
- * «оформляются так же, как строки результатов поиска»). The classes are
- * added explicitly only by callers that want them, so other menus are
- * unaffected. */
+/* Начертание мысли в строках меню (дропдаун истории: applyCloudStyle
+   навешивает те же классы, что и на облачка) — другие меню не затронуты. */
 .menu-item.font-bold .menu-item-label {
   font-weight: 700;
 }
@@ -5112,10 +5017,14 @@ body.cloud-dragging * {
   font-style: italic;
 }
 .menu-item.font-underline .menu-item-label {
-  text-decoration: underline;
+  text-decoration-line: underline;
 }
 .menu-item.font-strike .menu-item-label {
-  text-decoration: line-through;
+  text-decoration-line: line-through;
+}
+/* Оба начертания сразу (см. `.cloud.font-underline.font-strike`). */
+.menu-item.font-underline.font-strike .menu-item-label {
+  text-decoration-line: underline line-through;
 }
 .menu-item.dim {
   opacity: 0.55;
@@ -5316,46 +5225,18 @@ body.cloud-dragging * {
   text-align: right;
 }
 
-/* Первая колонка — мини-облачко: иконка + заголовок с настоящими цветами и
- * начертанием мысли (applyCloudStyle пишет их инлайн-стилями). Помеченная на
- * удаление мысль — бледная, с красной меткой-корзиной, как на карте (§2.2). */
-.group-delete-cloud {
-  display: flex;
-  align-items: center;
+/* Первая колонка — фабричное мини-облачко мысли (профиль `chip`, класс
+ * `.prop-ref-cloud`) с модификатором строки таблицы: отступ в ячейке, лёгкая
+ * рамка и скругление как у облачка карты. Цвета, начертание, бледность и
+ * метка корзины — общие правила `.prop-ref-cloud` (§2.2, S13; чистка
+ * дублей, a6055d05). */
+.prop-ref-cloud.group-delete-cloud {
   gap: 6px;
   min-width: 0;
   margin: 4px 6px;
   padding: 3px 10px;
-  border: 1px solid var(--border);
+  border-color: var(--border);
   border-radius: var(--radius-cloud);
-  background: var(--surface-2);
-}
-
-.group-delete-cloud.dim {
-  opacity: 0.55;
-}
-
-.group-delete-cloud-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.group-delete-cloud.font-bold .group-delete-cloud-title {
-  font-weight: 700;
-}
-
-.group-delete-cloud.font-italic .group-delete-cloud-title {
-  font-style: italic;
-}
-
-.group-delete-cloud.font-underline .group-delete-cloud-title {
-  text-decoration: underline;
-}
-
-.group-delete-cloud.font-strike .group-delete-cloud-title {
-  text-decoration: line-through;
 }
 
 /* Вторая колонка — переключатель строки, визуально отделён от облачка
@@ -5770,30 +5651,6 @@ body.cloud-dragging * {
 /* Keyboard selection (↑/↓, Ctrl+↑/↓, Ctrl+Enter in the thought picker). */
 .dup-item.selected {
   background: var(--accent-soft);
-}
-
-.dup-item .dup-icon {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  line-height: 1;
-  flex: none;
-  overflow: hidden;
-}
-
-.dup-item .dup-icon img {
-  max-width: 16px;
-  max-height: 16px;
-}
-
-.dup-item .dup-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* The parent's title (first 60 chars) under/next to equal titles —
@@ -7786,45 +7643,29 @@ table.activity-table thead th {
 .mini-node {
   cursor: pointer;
 }
-.mini-node:focus {
+/* Рамки подсветки узла. Класс `mini-node-cloud` перенесён с <rect> на
+   HTML-облачко фабрики внутри <foreignObject> (задача 1b9dccc5): свойство
+   `stroke` на HTML-элементе не действует, а внешняя рамка срезается краем
+   foreignObject. Подсветку рисует граница самого облачка: border следует за
+   border-radius, рамка остаётся скруглённой (чистка дублей, a6055d05).
+   Фокус приходит на облачко (tabindex фабрики), а не на SVG-группу. */
+.mini-node:hover .mini-node-cloud,
+.mini-node:focus .mini-node-cloud {
+  border-color: var(--accent);
+}
+.mini-node-cloud:focus {
   outline: none;
-}
-.mini-node:focus .mini-node-cloud,
-.mini-node:hover .mini-node-cloud {
-  stroke: var(--accent);
-}
-.mini-node-cloud {
-  stroke: var(--border);
-  stroke-width: 1;
+  border-color: var(--accent);
 }
 .mini-node-center .mini-node-cloud {
-  stroke: var(--accent);
-  stroke-width: 1.6;
-}
-.mini-node.dim {
-  opacity: 0.55;
+  border-color: var(--accent);
+  border-width: 1.6px;
 }
 /* Hover на связи: связанные мысли — оранжевая рамка и поверх остальных
    (узлы подняты append'ом в mini-graph.ts). */
 .mini-node.edge-hi .mini-node-cloud {
-  stroke: #e8871e;
-  stroke-width: 2;
-}
-.mini-node-title {
-  font-size: 11px;
-  dominant-baseline: middle;
-  pointer-events: none;
-  user-select: none;
-}
-.mini-node-icon {
-  font-size: 12px;
-  dominant-baseline: middle;
-  text-anchor: middle;
-  pointer-events: none;
-}
-.mini-node-trash {
-  font-size: 10px;
-  pointer-events: none;
+  border-color: #e8871e;
+  border-width: 2px;
 }
 .mini-graph-mass-chip text {
   font-size: 10px;
