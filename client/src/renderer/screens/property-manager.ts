@@ -571,7 +571,7 @@ function categoryOf(valueType: PropertyValueType): ValueCategory {
 /** Строка таблицы «Типы мыслей» (и зеркальных «Типы источников» / «Типов
  *  назначений»). Для скаляров и связи единая форма — одинаковый набор
  *  колонок (тип · обязательное · значение по умолчанию). */
-interface TypeRowDraft {
+export interface TypeRowDraft {
   /** Id привязки (`type_properties.id`). `null` для ещё не сохранённой
    *  строки — она появится только после `apply` и POST на сервер. */
   id: string | null;
@@ -581,13 +581,19 @@ interface TypeRowDraft {
   /** Сторона привязки для свойства-связи (`source`/`target`) — для скаляра
    *  всегда `null`. Сохраняется в `type_properties.side`. */
   side: 'source' | 'target' | null;
+  /** Id типа, НА КОТОРОМ определена привязка (`defined_on` эффективного
+   *  списка). Равен `thoughtTypeId` — собственная привязка; иной id —
+   *  унаследованная (её per-type дефолт правится через
+   *  `setPropertyDefaultOverride`); `null` — строка ещё не сохранена
+   *  (собственная после apply). */
+  definedOn: string | null;
   /** Снимок текущего состояния на сервере — для отслеживания изменений
    *  при `apply`. */
   dirty: boolean;
 }
 
 /** Единый черновик единого диалога (задача 09201bd4, спека 465495a9). */
-interface PropertyDraft {
+export interface PropertyDraft {
   name: string;
   description: string;
   valueType: PropertyValueType;
@@ -628,6 +634,15 @@ function applyLinkTypeToDraft(lt: LinkType, draft: PropertyDraft): void {
   draft.linkColor = lt.color ?? null;
   draft.linkStyle = (lt.style ?? null) as LinkStyle | null;
   draft.linkWidth = lt.width ?? null;
+}
+
+/** True, когда привязка строки УНАСЛЕДОВАНА (определена на типе-предке) и её
+ *  per-type дефолт целей можно править через `setPropertyDefaultOverride`.
+ *  Собственные привязки — включая только что созданные (`definedOn: null`) —
+ *  сервер отклоняет с 422 «собственные свойства правятся в справочнике»
+ *  (ошибка 9f579e69: безусловный вызов ронял apply). */
+export function shouldSetLinkDefaultOverride(row: TypeRowDraft): boolean {
+  return row.definedOn !== null && row.definedOn !== row.thoughtTypeId;
 }
 
 /** Кросс-фильтр типов для поля «Значение по умолчанию» свойства-связи:
@@ -748,6 +763,22 @@ function twoColumns(left: HTMLElement, right: HTMLElement): HTMLElement {
   return row;
 }
 
+/** Поле «Описание» редактора свойства: textarea, зеркалящая ввод в
+ *  `draft.description` на каждый `input` (ошибка 9f579e69: без слушателя
+ *  черновик хранил прежний текст, и «Применить и закрыть» уходил с пустым
+ *  PATCH). Вынесено в функцию ради юнит-теста слушателя. */
+export function buildDescriptionField(draft: PropertyDraft): HTMLElement {
+  const descArea = el('textarea', 'textarea-input') as HTMLTextAreaElement;
+  descArea.value = draft.description;
+  descArea.rows = 3;
+  descArea.placeholder =
+    'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)';
+  descArea.addEventListener('input', () => {
+    draft.description = descArea.value;
+  });
+  return descArea;
+}
+
 // ---------------------------------------------------------------------------
 // Основной диалог
 // ---------------------------------------------------------------------------
@@ -861,6 +892,7 @@ export function openPropertyManagerEditor(
         required: false,
         defaultValue: null,
         side: options.initialSide ?? null,
+        definedOn: null,
         dirty: true,
       },
     ];
@@ -891,12 +923,10 @@ export function openPropertyManagerEditor(
   }
 
   // ---- Описание ----------------------------------------------------------
-  const descArea = el('textarea', 'textarea-input') as HTMLTextAreaElement;
-  descArea.value = draft.description;
-  descArea.rows = 3;
-  descArea.placeholder =
-    'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)';
-  body.append(field('Описание', descArea));
+  // Поле вынесено в {@link buildDescriptionField}: textarea обязана зеркалить
+  // ввод в draft.description — иначе PATCH уходит со старым описанием
+  // (ошибка 9f579e69: «не сохраняется комментарий свойства»).
+  body.append(field('Описание', buildDescriptionField(draft)));
 
   // ---- Хосты секций -----------------------------------------------------
   const linkFlagsHost = div('form-row');
@@ -1241,6 +1271,7 @@ export function openPropertyManagerEditor(
           required: false,
           defaultValue: null,
           side,
+          definedOn: null,
           dirty: true,
         },
       ];
@@ -1274,6 +1305,7 @@ export function openPropertyManagerEditor(
               required: def.required === true,
               defaultValue: def.default_value ?? null,
               side: (def.side ?? null) as 'source' | 'target' | null,
+              definedOn: def.defined_on ?? null,
               dirty: false,
             });
           }
@@ -1415,19 +1447,9 @@ export function openPropertyManagerEditor(
         await applyTypeRows(created.id);
         onCreated?.(created);
       } else {
-        const changes: NetworkPropertyUpdateInput = { name };
-        if (draft.valueType !== current.value_type) changes.value_type = draft.valueType;
-        const newDescription = draft.description.trim() === '' ? null : draft.description.trim();
-        if (newDescription !== (current.description ?? null)) changes.description = newDescription;
-        const newConfig = buildConfigForUpdate(draft, current.config);
-        if (!sameConfig(newConfig, current.config)) changes.config = newConfig;
-        if (draft.valueType === 'link') {
-          if (draft.nameForward.trim() !== '') changes.name_forward = draft.nameForward.trim();
-          if (draft.nameReverse.trim() !== '') changes.name_reverse = draft.nameReverse.trim();
-          if (draft.linkColor !== null) changes.link_color = draft.linkColor;
-          if (draft.linkStyle !== null) changes.link_style = draft.linkStyle;
-          if (draft.linkWidth !== null) changes.link_width = draft.linkWidth;
-        }
+        // Сбор PATCH-тела вынесен в чистую функцию {@link buildUpdateChanges}
+        // (регрессионный тест property-manager-apply.test.ts).
+        const changes = buildUpdateChanges(draft, current);
         if (Object.keys(changes).length === 0) {
           // Применим только привязки (если есть dirty), потом закроем.
           await applyTypeRows(current.id);
@@ -1487,7 +1509,11 @@ export function openPropertyManagerEditor(
     const created = new Map<string, TypeRowDraft>();
     for (const row of draft.typeRows) {
       if (row.id === null) {
-        // Создание: сначала привязка, затем (для связи) — её default.
+        // Создание собственной привязки. Per-type дефолт через
+        // `setPropertyDefaultOverride` здесь НЕ вызывается: сервер отвечает
+        // 422 «собственные свойства правятся в справочнике» (override — только
+        // для унаследованных). Прежний безусловный вызов ронял apply, и кнопка
+        // «Применить и закрыть» не давала эффекта (ошибка 9f579e69).
         ops.push(
           (async (): Promise<void> => {
             const def = await etn.types.createTypeProperty(
@@ -1501,15 +1527,6 @@ export function openPropertyManagerEditor(
                 ...(row.side !== null ? { side: row.side } : {}),
               },
             );
-            if (isLink) {
-              await etn.types.setPropertyDefaultOverride(
-                networkId,
-                'thought_type',
-                row.thoughtTypeId,
-                def.id,
-                linkDefaultPayload(row.defaultValue),
-              );
-            }
             created.set(def.id, row);
           })(),
         );
@@ -1523,7 +1540,9 @@ export function openPropertyManagerEditor(
               row.id as string,
               { required: row.required },
             );
-            if (isLink) {
+            // Дефолт целей — только для унаследованной привязки; собственная
+            // правится в справочнике (см. {@link shouldSetLinkDefaultOverride}).
+            if (isLink && shouldSetLinkDefaultOverride(row)) {
               await etn.types.setPropertyDefaultOverride(
                 networkId,
                 'thought_type',
@@ -1607,6 +1626,37 @@ function buildConfigForUpdate(draft: PropertyDraft, current: PropertyConfig | nu
     return linkConfigFromDraft(draft, current);
   }
   return scalarConfigFromDraft(draft);
+}
+
+/**
+ * Собирает тело `PATCH /networks/{nid}/properties/{id}` из черновика
+ * (ошибка 9f579e69: тело собиралось инлайн в `apply`, что не давало
+ * регрессионного теста; вынос ничего не меняет, кроме читаемости).
+ *
+ * Для свойства-связи включает имена сторон и оформление — их принимает
+ * серверный PATCH (единый жизненный цикл, 0.8.1) и применяет к связанному
+ * типу связи. `name` для связи вычисляется из `name_forward` (сервер
+ * пересчитывает отображаемое имя из link_type).
+ */
+export function buildUpdateChanges(
+  draft: PropertyDraft,
+  current: RegistryRow,
+): NetworkPropertyUpdateInput {
+  const name = draft.valueType === 'link' ? draft.nameForward.trim() : draft.name.trim();
+  const changes: NetworkPropertyUpdateInput = { name };
+  if (draft.valueType !== current.value_type) changes.value_type = draft.valueType;
+  const newDescription = draft.description.trim() === '' ? null : draft.description.trim();
+  if (newDescription !== (current.description ?? null)) changes.description = newDescription;
+  const newConfig = buildConfigForUpdate(draft, current.config);
+  if (!sameConfig(newConfig, current.config)) changes.config = newConfig;
+  if (draft.valueType === 'link') {
+    if (draft.nameForward.trim() !== '') changes.name_forward = draft.nameForward.trim();
+    if (draft.nameReverse.trim() !== '') changes.name_reverse = draft.nameReverse.trim();
+    if (draft.linkColor !== null) changes.link_color = draft.linkColor;
+    if (draft.linkStyle !== null) changes.link_style = draft.linkStyle;
+    if (draft.linkWidth !== null) changes.link_width = draft.linkWidth;
+  }
+  return changes;
 }
 
 /** Конфиг свойства-связи из черновика. Никогда не `null` — сервер требует

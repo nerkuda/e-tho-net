@@ -710,6 +710,100 @@ describe(
       }
     });
 
+    it('PATCH свойства-связи правит имена сторон и оформление link_type (ошибка 9f579e69)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+
+        // Свойство-связь: один POST = свойство + тип связи.
+        const createRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: {
+            name: 'работает в',
+            value_type: 'link',
+            name_forward: 'работает в',
+            name_reverse: 'сотрудники',
+          },
+        });
+        assert.equal(createRes.statusCode, 201, createRes.body?.toString());
+        const created = createRes.json().data as {
+          id: string;
+          config: { link_type_id: string } | null;
+        };
+        const ltId = created.config?.link_type_id;
+        assert.ok(ltId, 'config.link_type_id заполнен');
+
+        // PATCH с именами сторон и оформлением — раньше поля молча
+        // отбрасывались `parseUpdateBody`, и «Применить и закрыть» терял их.
+        const patchRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/properties/${created.id}`,
+          headers: h,
+          payload: {
+            name_forward: 'состоит в',
+            name_reverse: 'включает',
+            link_color: '#123456',
+            link_style: 'dashed',
+            link_width: 3,
+          },
+        });
+        assert.equal(patchRes.statusCode, 200, patchRes.body?.toString());
+        const patched = patchRes.json().data as { name: string };
+        // Отображаемое имя свойства пересчитано из нового name_forward.
+        assert.equal(patched.name, 'состоит в');
+
+        // Тип связи пережил правку: имена и оформление видны после
+        // переоткрытия каталога (GET /link-types).
+        const ltList = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/link-types`,
+          headers: h,
+        });
+        assert.equal(ltList.statusCode, 200);
+        const lt = (ltList.json().data as Array<{
+          id: string;
+          name_forward: string;
+          name_reverse: string;
+          color: string | null;
+          style: string | null;
+          width: number | null;
+        }>).find((t) => t.id === ltId);
+        assert.ok(lt, 'тип связи присутствует');
+        assert.equal(lt.name_forward, 'состоит в');
+        assert.equal(lt.name_reverse, 'включает');
+        assert.equal(lt.color, '#123456');
+        assert.equal(lt.style, 'dashed');
+        assert.equal(lt.width, 3);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('PATCH link-полей на скалярное свойство → 422 VALIDATION_ERROR', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const scalar = await createRegistryProperty(ctx, {
+          name: 'вес',
+          value_type: 'number',
+        });
+        const patchRes = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/properties/${scalar.id}`,
+          headers: h,
+          payload: { name_forward: 'некуда писать' },
+        });
+        assert.equal(patchRes.statusCode, 422, patchRes.body?.toString());
+        const err = patchRes.json() as { error: { code: string } };
+        assert.equal(err.error.code, 'VALIDATION_ERROR');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('DELETE a property value with nothing stored is an idempotent 204 (error cefb4db0)', async () => {
       const ctx = await buildRestContext();
       try {

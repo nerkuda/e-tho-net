@@ -381,6 +381,91 @@ describe(
       }
     });
 
+    it('POST /thought-types/{id}/properties с side создаёт привязку с указанной стороной (ошибка 9f579e69)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+
+        const mkType = async (name: string): Promise<string> => {
+          const res = await ctx.app.inject({
+            method: 'POST',
+            url: `/api/v1/networks/${nid}/thought-types`,
+            headers: h,
+            payload: { name },
+          });
+          assert.equal(res.statusCode, 201);
+          return (res.json().data as { id: string }).id;
+        };
+        const source = await mkType('Источник');
+        const target = await mkType('Назначение');
+
+        const propRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: {
+            name: 'связь',
+            value_type: 'link',
+            name_forward: 'связь',
+            name_reverse: 'обратная',
+          },
+        });
+        assert.equal(propRes.statusCode, 201);
+        const prop = (propRes.json().data as { id: string }).id;
+
+        // «Добавить тип» в таблицу «Типы источников»: side='source'.
+        const attachSrc = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types/${source}/properties`,
+          headers: h,
+          payload: { property_id: prop, required: false, side: 'source' },
+        });
+        assert.equal(attachSrc.statusCode, 201, attachSrc.body?.toString());
+        const srcSide = (attachSrc.json().data as { side: string | null }).side;
+        assert.equal(srcSide, 'source');
+
+        // Та же привязка со стороны назначения: side='target'.
+        const attachTgt = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types/${target}/properties`,
+          headers: h,
+          payload: { property_id: prop, required: true, side: 'target' },
+        });
+        assert.equal(attachTgt.statusCode, 201, attachTgt.body?.toString());
+        const tgtSide = (attachTgt.json().data as { side: string | null }).side;
+        assert.equal(tgtSide, 'target');
+
+        // Переоткрытие: стороны видны в эффективном списке типа.
+        const listRes = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/thought-types/${target}/properties`,
+          headers: h,
+        });
+        assert.equal(listRes.statusCode, 200);
+        const rows = listRes.json().data as Array<{
+          property_id: string;
+          side: string | null;
+          required: boolean;
+        }>;
+        const row = rows.find((r) => r.property_id === prop);
+        assert.ok(row, 'привязка видна в списке');
+        assert.equal(row.side, 'target');
+        assert.equal(row.required, true);
+
+        // Невалидная сторона → 422.
+        const badSide = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/thought-types/${source}/properties`,
+          headers: h,
+          payload: { property_id: prop, side: 'sideways' },
+        });
+        assert.equal(badSide.statusCode, 422, badSide.body?.toString());
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('PATCH value_type скаляр ↔ связь возвращает 422 VALIDATION_ERROR (требование 5a82c709)', async () => {
       const ctx = await buildRestContext();
       try {

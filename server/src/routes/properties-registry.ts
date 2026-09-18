@@ -230,6 +230,13 @@ function parseCreateBody(
 /**
  * Parse the body of `PATCH /networks/{nid}/properties/{id}`. Every field is
  * optional; an absent `config` keeps the current value (use `null` to clear).
+ *
+ * Для свойства-связи (0.8.1, единый жизненный цикл [[#09f692ff-8338-4948-a4a2-0f356485ad09]])
+ * PATCH принимает и поля типа связи — `name_forward`/`name_reverse` и
+ * оформление (`link_color`/`link_style`/`link_width`): они пробрасываются в
+ * доменный `updateNetworkProperty`, который правит связанный `link_type` в
+ * той же транзакции. Применимость к `value_type="link"` проверяет маршрут по
+ * текущему свойству (сам `value_type` в теле PATCH необязателен).
  */
 function parseUpdateBody(
   body: Record<string, unknown>,
@@ -267,7 +274,79 @@ function parseUpdateBody(
   if (body.description !== undefined) {
     changes.description = fieldNullableString(body, 'description', requestId) ?? null;
   }
+  if (body.name_forward !== undefined) {
+    if (typeof body.name_forward !== 'string' || body.name_forward.trim() === '') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'name_forward должен быть непустой строкой.',
+        { field: 'name_forward' },
+        requestId,
+      );
+    }
+    changes.name_forward = body.name_forward.trim();
+  }
+  if (body.name_reverse !== undefined) {
+    if (typeof body.name_reverse !== 'string' || body.name_reverse.trim() === '') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'name_reverse должен быть непустой строкой.',
+        { field: 'name_reverse' },
+        requestId,
+      );
+    }
+    changes.name_reverse = body.name_reverse.trim();
+  }
+  if (body.link_color !== undefined) {
+    if (body.link_color !== null && typeof body.link_color !== 'string') {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'link_color должен быть строкой или null.',
+        { field: 'link_color' },
+        requestId,
+      );
+    }
+    changes.link_color = body.link_color as string | null;
+  }
+  if (body.link_style !== undefined) {
+    if (
+      body.link_style !== null &&
+      !(LINK_STYLES as readonly string[]).includes(body.link_style as string)
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `link_style должен быть одним из: ${LINK_STYLES.join(', ')}.`,
+        { field: 'link_style', allowed: LINK_STYLES },
+        requestId,
+      );
+    }
+    changes.link_style = body.link_style as LinkStyle | null;
+  }
+  if (body.link_width !== undefined) {
+    if (
+      body.link_width !== null &&
+      (typeof body.link_width !== 'number' || !Number.isFinite(body.link_width as number))
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'link_width должен быть числом или null.',
+        { field: 'link_width' },
+        requestId,
+      );
+    }
+    changes.link_width = body.link_width as number | null;
+  }
   return changes;
+}
+
+/** True when the PATCH body carries link-type fields (имена сторон/оформление). */
+function hasLinkTypeFields(changes: NetworkPropertyUpdateInput): boolean {
+  return (
+    changes.name_forward !== undefined ||
+    changes.name_reverse !== undefined ||
+    changes.link_color !== undefined ||
+    changes.link_style !== undefined ||
+    changes.link_width !== undefined
+  );
 }
 
 // ===========================================================================
@@ -565,6 +644,17 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
             entity: 'property',
             id,
           }, req.id);
+        }
+        // Поля типа связи (имена сторон/оформление) — только для свойств-связей
+        // (0.8.1, единый жизненный цикл): у скалярного свойства связанного
+        // link_type нет, молча игнорировать поля нельзя.
+        if (hasLinkTypeFields(changes) && current.value_type !== 'link') {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'name_forward/name_reverse/link_color/link_style/link_width применимы только к value_type="link".',
+            { field: 'value_type', actual: current.value_type },
+            req.id,
+          );
         }
         // Predict the migration footprint before delegating to the service:
         // `updateNetworkProperty` rewrites the values in a single transaction,

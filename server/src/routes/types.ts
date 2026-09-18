@@ -252,8 +252,9 @@ function parseLinkTypeUpdateBody(
  *     property in this layer and attach it (raises `409 DUPLICATE` with
  *     `details.property_id` when the name is already taken).
  *
- * `required`/`position` belong to the binding, so they are accepted in both
- * shapes. Returned as a discriminated input that the route consumes directly.
+ * `required`/`position`/`side` belong to the binding and are accepted in both
+ * shapes. `side` (0.8.1, задача d7177d1d) — сторона привязки свойства-связи
+ * (`source`/`target`); для скаляров — `null`.
  */
 type AttachPropertyInput =
   | {
@@ -261,6 +262,7 @@ type AttachPropertyInput =
       property_id: string;
       required: boolean;
       position: number | undefined;
+      side?: LinkPropertySide | null;
     }
   | {
       mode: 'create';
@@ -270,6 +272,7 @@ type AttachPropertyInput =
       description: PropertyDefinitionInput['description'];
       required: boolean;
       position: number | undefined;
+      side?: LinkPropertySide | null;
     };
 
 function parseAttachBody(
@@ -281,6 +284,23 @@ function parseAttachBody(
     typeof body.position === 'number' && Number.isFinite(body.position)
       ? Math.trunc(body.position)
       : undefined;
+
+  // Сторона привязки свойства-связи (0.8.1): 'source'/'target' или null.
+  let side: LinkPropertySide | null | undefined;
+  if (body.side !== undefined) {
+    if (
+      body.side !== null &&
+      !(LINK_PROPERTY_SIDES as readonly string[]).includes(body.side as string)
+    ) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `side должен быть одним из: ${LINK_PROPERTY_SIDES.join(', ')} или null.`,
+        { field: 'side', allowed: LINK_PROPERTY_SIDES },
+        requestId,
+      );
+    }
+    side = body.side === null ? null : (body.side as LinkPropertySide);
+  }
 
   if (body.property_id !== undefined) {
     if (typeof body.property_id !== 'string' || body.property_id.trim() === '') {
@@ -306,7 +326,7 @@ function parseAttachBody(
         requestId,
       );
     }
-    return { mode: 'attach', property_id: body.property_id, required, position };
+    return { mode: 'attach', property_id: body.property_id, required, position, ...(side !== undefined ? { side } : {}) };
   }
 
   const key = fieldString(body, 'key', requestId);
@@ -334,6 +354,7 @@ function parseAttachBody(
     description,
     required,
     position,
+    ...(side !== undefined ? { side } : {}),
   };
 }
 
@@ -779,6 +800,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
                 description: registry.description,
                 required: input.required,
                 position: input.position,
+                ...(input.side !== undefined ? { side: input.side } : {}),
               }, req.auth!.user.id);
             } else {
               // The `{ key, value_type }` form promises to CREATE a registry
@@ -801,6 +823,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
                 description: input.description,
                 required: input.required,
                 position: input.position,
+                ...(input.side !== undefined ? { side: input.side } : {}),
               }, req.auth!.user.id);
             }
             deps.emit(req, networkId, 'property-definition.created', { definition: prop });
