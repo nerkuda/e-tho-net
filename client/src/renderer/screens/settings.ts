@@ -41,10 +41,11 @@ import {
   UI_STATE_KEY,
 } from '@etn/shared';
 
-import { scheduleRefresh } from '../app.js';
+import { scheduleRefresh, requireNetworkId } from '../app.js';
 import { createMarkdownField } from '../editor/markdown-field.js';
 import { showDialog } from '../lib/dialog.js';
 import { button, div, el, errText, span } from '../lib/dom.js';
+import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { clip } from '../lib/pure.js';
@@ -418,48 +419,37 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     }
     paintTabs();
 
-    // Node-section type dropdown (O5). The list comes from the in-memory
+    // Node-section type field (O5). The catalogue comes from the in-memory
     // store (refreshed on type changes by realtime); `null` means "no
-    // structure".
-    const typeSelect = el('select', 'text-input');
-    typeSelect.disabled = !isOwner;
-    const noneOption = el('option');
-    noneOption.value = '';
-    noneOption.textContent = '— не задано —';
-    typeSelect.append(noneOption);
-    const thoughtTypes = store.state.thoughtTypes ?? [];
-    for (const t of thoughtTypes) {
-      const opt = el('option');
-      opt.value = t.id;
-      opt.textContent = t.name;
-      typeSelect.append(opt);
-    }
-    typeSelect.value = draft.networkNodeSectionTypeId ?? '';
-    typeSelect.addEventListener('change', () => {
-      draft.networkNodeSectionTypeId = typeSelect.value === '' ? null : typeSelect.value;
-      markDirty();
+    // structure". Rendered by the common entity picker (ADR «выбор сущности —
+    // один пикер»): значок и цвета типа, живой поиск, «— не задано —».
+    const typeCombo = buildEntityCombo({
+      networkId: requireNetworkId(),
+      kind: 'thought-types',
+      value: draft.networkNodeSectionTypeId,
+      emptyLabel: '— не задано —',
+      placeholder: 'Тип мысли…',
+      disabled: !isOwner,
+      onChange: (typeId) => {
+        draft.networkNodeSectionTypeId = typeId;
+        markDirty();
+      },
     });
 
-    // Instructions-type dropdown (0.7.2, ADR `46d17a91` + ADR `717f04df`).
+    // Instructions-type field (0.7.2, ADR `46d17a91` + ADR `717f04df`).
     // Same shape as `table_of_contents` but writes into `type_roles.instructions`
     // — required for the `etn.instructions` showcase-tool to return anything.
-    const instructionsTypeSelect = el('select', 'text-input');
-    instructionsTypeSelect.disabled = !isOwner;
-    const instructionsNoneOption = el('option');
-    instructionsNoneOption.value = '';
-    instructionsNoneOption.textContent = '— не задано —';
-    instructionsTypeSelect.append(instructionsNoneOption);
-    for (const t of thoughtTypes) {
-      const opt = el('option');
-      opt.value = t.id;
-      opt.textContent = t.name;
-      instructionsTypeSelect.append(opt);
-    }
-    instructionsTypeSelect.value = draft.networkInstructionsTypeId ?? '';
-    instructionsTypeSelect.addEventListener('change', () => {
-      draft.networkInstructionsTypeId =
-        instructionsTypeSelect.value === '' ? null : instructionsTypeSelect.value;
-      markDirty();
+    const instructionsTypeCombo = buildEntityCombo({
+      networkId: requireNetworkId(),
+      kind: 'thought-types',
+      value: draft.networkInstructionsTypeId,
+      emptyLabel: '— не задано —',
+      placeholder: 'Тип мысли…',
+      disabled: !isOwner,
+      onChange: (typeId) => {
+        draft.networkInstructionsTypeId = typeId;
+        markDirty();
+      },
     });
 
     const showInactiveCheckbox = el('input');
@@ -494,13 +484,13 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
         'muted',
         'Узловой тип раздела определяет структуру сети (читается через `etn.networks.structure`). Все активные мысли выбранного типа становятся разделами. Тип, выбранный здесь, нельзя удалить, пока ссылка не снята.',
       ),
-      field('Узловой тип раздела', typeSelect),
+      field('Узловой тип раздела', typeCombo.root),
       el(
         'p',
         'muted',
         'Тип инструкций агентам задаёт, какие мысли отдаются витриной `etn.instructions` (ADR 717f04df). Без выбора витрина отвечает пустым списком. Тип, выбранный здесь, защищён от удаления так же, как узловой.',
       ),
-      field('Тип инструкций агентам', instructionsTypeSelect),
+      field('Тип инструкций агентам', instructionsTypeCombo.root),
       el('p', 'muted', ownerHint),
       el('h3', 'settings-section-title settings-section-title-spaced', 'Видимость'),
       showInactiveLabel,

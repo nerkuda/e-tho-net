@@ -35,7 +35,7 @@ import { button, div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { isNotFoundError, parseThoughtIdQuery } from '../lib/pure.js';
-import { orderedTypeRows } from '../lib/type-tree.js';
+import { buildEntityCombo } from '../lib/entity-picker.js';
 import { buildUserSelectWidget } from '../lib/users.js';
 import {
   UI_STATE_KEY,
@@ -755,50 +755,34 @@ function buildOptionsRow(row: HTMLElement): void {
     return wrap;
   };
 
-  const typeSelect = el('select', 'select-input');
-  typeSelect.style.width = '170px';
-  const typePlaceholder = el('option', undefined, 'Типы мыслей: все');
-  typePlaceholder.value = '';
-  typeSelect.append(typePlaceholder);
-  // L21: the type tree with indent dots; the root type is not selectable (it
-  // would mean «every type»). Selecting a parent matches its whole subtree —
-  // the server expands type filters (docs/03-server-api.md §12).
-  for (const row of orderedTypeRows(store.state.thoughtTypes)) {
-    if (row.type.is_root) continue;
-    const option = el('option', undefined, `${'· '.repeat(Math.max(0, row.depth - 2))}${row.type.name}`);
-    option.value = row.type.id;
-    typeSelect.append(option);
-  }
-  typeSelect.value = options.typeIds[0] ?? '';
-  typeSelect.addEventListener('change', () => {
-    options = { ...options, typeIds: typeSelect.value === '' ? [] : [typeSelect.value] };
-    persistState();
-    refreshSearchIfVisible();
+  // L21: the type tree; the root type is not selectable (it would mean
+  // «every type»). Selecting a parent matches its whole subtree — the server
+  // expands type filters (docs/03-server-api.md §12). Both fields render via
+  // the common entity picker (ADR «выбор сущности — один пикер»).
+  const typeCombo = buildEntityCombo({
+    networkId: requireNetworkId(),
+    kind: 'thought-types',
+    value: options.typeIds[0] ?? null,
+    emptyLabel: 'Типы мыслей: все',
+    placeholder: 'Тип мысли…',
+    onChange: (typeId) => {
+      options = { ...options, typeIds: typeId === null ? [] : [typeId] };
+      persistState();
+      refreshSearchIfVisible();
+    },
   });
 
-  const linkTypeSelect = el('select', 'select-input');
-  linkTypeSelect.style.width = '170px';
-  const linkPlaceholder = el('option', undefined, 'Типы связей: все');
-  linkPlaceholder.value = '';
-  linkTypeSelect.append(linkPlaceholder);
-  for (const row of orderedTypeRows(store.state.linkTypes)) {
-    if (row.type.is_root) continue;
-    const option = el(
-      'option',
-      undefined,
-      `${'· '.repeat(Math.max(0, row.depth - 2))}${row.type.name_forward}`,
-    );
-    option.value = row.type.id;
-    linkTypeSelect.append(option);
-  }
-  linkTypeSelect.value = options.linkTypeIds[0] ?? '';
-  linkTypeSelect.addEventListener('change', () => {
-    options = {
-      ...options,
-      linkTypeIds: linkTypeSelect.value === '' ? [] : [linkTypeSelect.value],
-    };
-    persistState();
-    refreshSearchIfVisible();
+  const linkTypeCombo = buildEntityCombo({
+    networkId: requireNetworkId(),
+    kind: 'link-types',
+    value: options.linkTypeIds[0] ?? null,
+    emptyLabel: 'Типы связей: все',
+    placeholder: 'Тип связи…',
+    onChange: (typeId) => {
+      options = { ...options, linkTypeIds: typeId === null ? [] : [typeId] };
+      persistState();
+      refreshSearchIfVisible();
+    },
   });
 
   const inactiveLabel = el('label', 'checkbox-row');
@@ -851,8 +835,8 @@ function buildOptionsRow(row: HTMLElement): void {
     mkGroupCheck('мысли', 'onlyThoughts'),
     mkGroupCheck('связи', 'onlyLinks'),
     mkGroupCheck('хронологию', 'onlyChrono'),
-    typeSelect,
-    linkTypeSelect,
+    typeCombo.root,
+    linkTypeCombo.root,
     authorSelect,
     editorSelect,
     inactiveLabel,
