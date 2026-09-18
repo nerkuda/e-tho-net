@@ -1,0 +1,339 @@
+/**
+ * Единая выпадашка подсказок под полем ввода — один модуль на все поля
+ * значения, строку поиска и пикер сущностей (ADR «одна выпадашка-подсказчик,
+ * источник вариантов — её параметр»; элемент интерфейса «Выпадашка подсказок:
+ * история и поиск»; задача 9a2e30b1, веха 3 версии 0.8.2).
+ *
+ * Источник вариантов — параметр компонента, а не повод написать ещё одну
+ * выпадашку:
+ *
+ * | Источник                            | `when`   | Когда показывается                          |
+ * |-------------------------------------|----------|---------------------------------------------|
+ * | история последних значений (до 10)  | `empty`  | поле пустое, пользователь ещё не печатал    |
+ * | результаты живого поиска            | `typed`  | введён хотя бы один символ                  |
+ * | закрытый список `config.options`    | `typed`  | при вводе (сужается по фрагменту); полный   |
+ * |                                     |          | список — вручную через `handle.open()`      |
+ * | произвольный список                 | `always` | при любом содержимом поля                   |
+ *
+ * Клавиатура одна на все источники: ↑/↓ — перебор, Enter — выбрать
+ * выделенное (без выделения — первую строку), клик — выбрать, Esc —
+ * закрыть список, НЕ закрывая диалог, потеря фокуса — закрыть.
+ *
+ * Защита диалога от Esc повторяет приём type-combobox.ts: capture-слушатель
+ * на `window` регистрируется в момент подключения — раньше, чем `showDialog`
+ * добавит свой capture-обработчик Esc, — поэтому `stopImmediatePropagation`
+ * гасит нажатие до диалога (на одном узле capture-слушатели выполняются в
+ * порядке регистрации). Повторы Esc тоже гасятся: зажатый Esc не должен
+ * закрыть список и тут же диалог.
+ *
+ * Модуль не подключает себя к полям — подключение делает веха 4 (задача
+ * 77e7cafd). Потолок истории «10 значений» — дело источника
+ * (`RECENT_VALUES_MAX` в editor/recent-values.ts), модуль рендерит всё, что
+ * вернул `load`. Множественный выбор (галочки, «Готово») остаётся вне
+ * контракта: это отдельный режим ввода, а не подсказка.
+ */
+
+import { div, el, positionBodyDropdown } from './dom.js';
+
+/** Одна выбираемая строка выпадашки. */
+export interface SuggestEntry {
+  /** Значение, которое подставляется в поле при выборе. */
+  value: string;
+  /** Подпись строки (может отличаться от значения: id → название). */
+  label: string;
+}
+
+/** Когда источник участвует в списке. */
+export type SuggestWhen =
+  /** Пустое поле: фокус на пустом поле или очистка до пустой строки (история). */
+  | 'empty'
+  /** Введён хотя бы один символ (живой поиск). */
+  | 'typed'
+  /** При любом содержимом поля. */
+  | 'always';
+
+/** Источник вариантов — параметр компонента (ADR: не повод писать выпадашку). */
+export interface SuggestSource {
+  /** Когда источник участвует в списке. */
+  when: SuggestWhen;
+  /**
+   * Заголовок группы строк (не обязателен); показывается, только когда у
+   * источника есть хотя бы одна строка.
+   */
+  header?: string;
+  /**
+   * Варианты для текущего текста поля. Можно синхронно или асинхронно
+   * (запрос к серверу); ответы устаревших вызовов отбрасываются.
+   */
+  load(query: string): SuggestEntry[] | Promise<SuggestEntry[]>;
+}
+
+/** Параметры {@link wireSuggest}. */
+export interface WireSuggestOptions {
+  /** Источники в порядке отображения; строки всех активных источников — один список. */
+  sources: readonly SuggestSource[];
+  /** Выбрана строка (клик или Enter). Список к этому моменту уже закрыт. */
+  onPick(entry: SuggestEntry): void;
+}
+
+/** Управление подключённой выпадашкой (для кнопки ▾ и перерисовок редактора). */
+export interface SuggestHandle {
+  /** Принудительно открывает список со всеми источниками, игнорируя `when`. */
+  open(): void;
+  /** Закрывает список без выбора. */
+  close(): void;
+  /** Закрывает список и снимает все слушатели (перерисовка редактора). */
+  dispose(): void;
+}
+
+/** Выполняется ли условие показа источника при данном тексте поля. */
+function matchesWhen(when: SuggestWhen, query: string): boolean {
+  if (when === 'empty') return query === '';
+  if (when === 'typed') return query !== '';
+  return true;
+}
+
+/** Индексная арифметика ↑/↓ по строкам (то же правило, что у recent-values). */
+function navIndex(cursor: number | null, count: number, delta: 1 | -1): number | null {
+  if (count === 0) return null;
+  const base = cursor === null || cursor >= count ? (delta === 1 ? -1 : count) : cursor;
+  return Math.min(count - 1, Math.max(0, base + delta));
+}
+
+/**
+ * Подключает выпадашку подсказок к полю ввода.
+ *
+ * Список открывается сам: фокус на поле (для `empty`/`always`) и каждый ввод
+ * (`typed`/`always`; очистка до пустой строки возвращает `empty`-источники).
+ * Пока поле печатается, список остаётся на экране и перерисовывается новыми
+ * вариантами; строк без вариантов нет — пустой ответ закрывает список.
+ *
+ * Классы строк — `type-combo-list`/`type-combo-item`/`type-combo-label`, та же
+ * механика и внешний вид, что у существующих пикеров (выбор строки не
+ * забирает фокус из поля: mousedown по строке предотвращается).
+ */
+export function wireSuggest(input: HTMLInputElement, opts: WireSuggestOptions): SuggestHandle {
+  let list: HTMLDivElement | null = null;
+  /** Строки в порядке отображения (заголовки групп не считаются). */
+  let rows: HTMLElement[] = [];
+  /** Вариант каждой строки — параллельно {@link rows}. */
+  let rowEntries: SuggestEntry[] = [];
+  /** Выделенная строка: null — без выделения, Enter берёт первую. */
+  let cursor: number | null = null;
+  /** Фокус в поле: асинхронная загрузка, устаревшая после blur, не открывается. */
+  let focused = false;
+  /** Порядковый номер запроса: побеждает только последний. */
+  let seq = 0;
+
+  const close = (): void => {
+    if (list !== null) {
+      list.remove();
+      list = null;
+    }
+    rows = [];
+    rowEntries = [];
+    cursor = null;
+  };
+
+  const paint = (): void => {
+    rows.forEach((row, i) => row.classList.toggle('active', i === cursor));
+    if (cursor !== null) rows[cursor]?.scrollIntoView({ block: 'nearest' });
+  };
+
+  /** Рисует (или перерисовывает) список; пустой результат закрывает его. */
+  const render = (groups: Array<{ source: SuggestSource; entries: SuggestEntry[] }>): void => {
+    const nonEmpty = groups.filter((group) => group.entries.length > 0);
+    if (nonEmpty.length === 0) {
+      close();
+      return;
+    }
+    const fresh = list === null;
+    let box: HTMLDivElement;
+    if (list === null) {
+      box = div('type-combo-list');
+      list = box;
+      cursor = null;
+    } else {
+      box = list;
+      box.replaceChildren();
+    }
+    rows = [];
+    rowEntries = [];
+    for (const group of nonEmpty) {
+      if (group.source.header !== undefined) {
+        box.append(el('p', 'muted type-combo-empty', group.source.header));
+      }
+      for (const entry of group.entries) {
+        const row = div('type-combo-item');
+        const label = el('span', 'type-combo-label', entry.label);
+        label.title = entry.label;
+        label.style.flex = '1';
+        row.append(label);
+        // Фокус остаётся в поле — нет blur-коммита во время выбора.
+        row.addEventListener('mousedown', (event) => event.preventDefault());
+        row.addEventListener('click', () => {
+          close();
+          opts.onPick(entry);
+        });
+        box.append(row);
+        rows.push(row);
+        rowEntries.push(entry);
+      }
+    }
+    if (fresh) {
+      document.body.append(box);
+      positionBodyDropdown(box, input);
+    }
+    if (cursor !== null) cursor = Math.min(cursor, rowEntries.length - 1);
+    paint();
+  };
+
+  /**
+   * Пересчитывает список по текущему состоянию поля. `force` — ручное
+   * открытие (`handle.open`): участвуют все источники независимо от `when`.
+   * Порядковый номер растёт при каждом вызове — в том числе когда источников
+   * не осталось и список закрывается: устаревший асинхронный ответ,
+   * пришедший после ввода, открыть список не должен.
+   */
+  const refresh = (force: boolean): void => {
+    const query = input.value;
+    const run = ++seq;
+    const sources = force
+      ? [...opts.sources]
+      : opts.sources.filter((source) => matchesWhen(source.when, query));
+    if (sources.length === 0) {
+      close();
+      return;
+    }
+    void Promise.all(
+      sources.map((source) =>
+        Promise.resolve()
+          .then(() => source.load(query))
+          .catch(() => [])
+          .then((entries: SuggestEntry[]) => ({ source, entries })),
+      ),
+    ).then((groups) => {
+      if (run !== seq || (!force && !focused) || !input.isConnected) return;
+      render(groups);
+    });
+  };
+
+  /** Клик мимо (вне поля и списка) закрывает список. */
+  const onWinDown = (event: MouseEvent): void => {
+    if (list === null) return;
+    if (event.target === input) return;
+    if (event.target !== null && list.contains(event.target as Node)) return;
+    close();
+  };
+
+  /** Esc: пока список открыт, нажатие принадлежит списку, не диалогу. */
+  const onWinKey = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape') return;
+    if (list !== null || event.repeat) {
+      // Регистрация при подключении ставит этот capture-слушатель раньше
+      // диалогового — диалог до события не дойдёт (приём type-combobox.ts).
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      if (list !== null) close();
+    }
+  };
+
+  const onFocus = (): void => {
+    focused = true;
+    refresh(false);
+  };
+  const onInput = (): void => {
+    refresh(false);
+  };
+  const onBlur = (): void => {
+    focused = false;
+    close();
+  };
+  const onKey = (event: KeyboardEvent): void => {
+    if (list === null) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (rowEntries.length === 0) return;
+      event.preventDefault();
+      const next = navIndex(cursor, rowEntries.length, event.key === 'ArrowDown' ? 1 : -1);
+      if (next === null) return;
+      cursor = next;
+      paint();
+      return;
+    }
+    if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.metaKey) {
+      // Enter (и Ctrl+Enter) выбирает выделенную строку — как и остальные
+      // выпадашки клиента; без выделения побеждает первая.
+      if (rowEntries.length === 0) return;
+      event.preventDefault();
+      const entry = rowEntries[cursor ?? 0];
+      if (entry !== undefined) {
+        close();
+        opts.onPick(entry);
+      }
+    }
+  };
+
+  input.addEventListener('focus', onFocus);
+  input.addEventListener('input', onInput);
+  input.addEventListener('keydown', onKey);
+  input.addEventListener('blur', onBlur);
+  window.addEventListener('mousedown', onWinDown, true);
+  window.addEventListener('keydown', onWinKey, true);
+
+  const dispose = (): void => {
+    close();
+    input.removeEventListener('focus', onFocus);
+    input.removeEventListener('input', onInput);
+    input.removeEventListener('keydown', onKey);
+    input.removeEventListener('blur', onBlur);
+    window.removeEventListener('mousedown', onWinDown, true);
+    window.removeEventListener('keydown', onWinKey, true);
+  };
+
+  return { open: () => refresh(true), close, dispose };
+}
+
+/**
+ * Стандартный источник «история последних значений»: активен на пустом поле
+ * (фокус или очистка), заголовок «Последние значения». Ограничение истории —
+ * у переданного `load` (RECENT_VALUES_MAX = 10).
+ */
+export function historySuggestSource(opts: {
+  load: () => SuggestEntry[] | Promise<SuggestEntry[]>;
+  header?: string;
+}): SuggestSource {
+  return {
+    when: 'empty',
+    header: opts.header ?? 'Последние значения',
+    load: () => opts.load(),
+  };
+}
+
+/** Стандартный источник «живой поиск»: активен после первого символа. */
+export function searchSuggestSource(opts: {
+  load: (query: string) => SuggestEntry[] | Promise<SuggestEntry[]>;
+  header?: string;
+}): SuggestSource {
+  return { when: 'typed', header: opts.header, load: opts.load };
+}
+
+/**
+ * Стандартный источник «закрытый список config.options»: активен при вводе,
+ * сужается по фрагменту без учёта регистра (то же правило, что у прежнего
+ * пикера вариантов); полный список — через `handle.open()` (кнопка ▾).
+ */
+export function optionsSuggestSource(
+  options: readonly string[],
+  opts: { header?: string } = {},
+): SuggestSource {
+  return {
+    when: 'typed',
+    header: opts.header,
+    load: (query) => {
+      const fragment = query.trim().toLowerCase();
+      const visible =
+        fragment === '' ? options : options.filter((o) => o.toLowerCase().includes(fragment));
+      return visible.map((o) => ({ value: o, label: o }));
+    },
+  };
+}
